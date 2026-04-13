@@ -1,15 +1,17 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
-import { fetchAgents, fetchWalletMe, fetchRuns } from '../api'
+import { fetchAgents, fetchWalletMe, fetchRuns, fetchAllJobs } from '../api'
 
 const Ctx = createContext(null)
 
 export function MarketProvider({ apiKey, children }) {
-  const [agents, setAgents]           = useState([])
-  const [wallet, setWallet]           = useState(null)
-  const [runs,   setRuns]             = useState([])
-  const [loading, setLoading]         = useState(true)
-  const [toast, setToast]             = useState(null)
-  const toastTimer                    = useRef(null)
+  const [agents, setAgents]     = useState([])
+  const [wallet, setWallet]     = useState(null)
+  const [runs,   setRuns]       = useState([])
+  const [jobs,   setJobs]       = useState([])
+  const [loading, setLoading]   = useState(true)
+  const [toast,   setToast]     = useState(null)
+  const toastTimer              = useRef(null)
+  const lastRefreshError        = useRef('')
 
   const showToast = useCallback((msg, type = 'info') => {
     clearTimeout(toastTimer.current)
@@ -17,22 +19,50 @@ export function MarketProvider({ apiKey, children }) {
     toastTimer.current = setTimeout(() => setToast(null), 3500)
   }, [])
 
+  const reportRefreshError = useCallback((err, fallbackMsg) => {
+    const msg = (err && err.message) ? err.message : fallbackMsg
+    if (lastRefreshError.current !== msg) {
+      showToast(msg, 'error')
+      lastRefreshError.current = msg
+    }
+  }, [showToast])
+
   const refresh = useCallback(async () => {
     try {
-      const [ag, wl, ru] = await Promise.all([
+      const [ag, wl, ru, jb] = await Promise.all([
         fetchAgents(apiKey),
         fetchWalletMe(apiKey),
         fetchRuns(apiKey),
+        fetchAllJobs(apiKey, { pageSize: 100, maxPages: 10 }),
       ])
       setAgents(ag.agents ?? [])
       setWallet(wl)
       setRuns(ru.runs ?? [])
-    } catch {}
-  }, [apiKey])
+      setJobs(jb.jobs ?? [])
+      lastRefreshError.current = ''
+    } catch (err) {
+      reportRefreshError(err, 'Failed to refresh dashboard data.')
+    }
+  }, [apiKey, reportRefreshError])
 
   const refreshWallet = useCallback(async () => {
-    try { setWallet(await fetchWalletMe(apiKey)) } catch {}
-  }, [apiKey])
+    try {
+      setWallet(await fetchWalletMe(apiKey))
+      lastRefreshError.current = ''
+    } catch (err) {
+      reportRefreshError(err, 'Failed to refresh wallet.')
+    }
+  }, [apiKey, reportRefreshError])
+
+  const refreshJobs = useCallback(async () => {
+    try {
+      const jb = await fetchAllJobs(apiKey, { pageSize: 100, maxPages: 10 })
+      setJobs(jb.jobs ?? [])
+      lastRefreshError.current = ''
+    } catch (err) {
+      reportRefreshError(err, 'Failed to refresh jobs.')
+    }
+  }, [apiKey, reportRefreshError])
 
   useEffect(() => {
     refresh().finally(() => setLoading(false))
@@ -40,8 +70,16 @@ export function MarketProvider({ apiKey, children }) {
     return () => clearInterval(id)
   }, [refresh])
 
+  useEffect(() => {
+    return () => clearTimeout(toastTimer.current)
+  }, [])
+
   return (
-    <Ctx.Provider value={{ apiKey, agents, wallet, runs, loading, toast, showToast, refresh, refreshWallet }}>
+    <Ctx.Provider value={{
+      apiKey, agents, wallet, runs, jobs,
+      loading, toast, showToast,
+      refresh, refreshWallet, refreshJobs,
+    }}>
       {children}
     </Ctx.Provider>
   )
