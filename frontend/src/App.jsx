@@ -6,16 +6,22 @@ import Dashboard from './components/Dashboard'
 
 export default function App() {
   const [apiKey, setApiKey] = useState(() => localStorage.getItem('agentmarket_key') ?? '')
+  const [user, setUser] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('agentmarket_user') ?? 'null') } catch { return null }
+  })
   const [view, setView] = useState(apiKey ? 'dashboard' : 'landing')
 
-  const handleConnect = (key) => {
+  const handleConnect = (key, userInfo) => {
     setApiKey(key)
+    if (userInfo) setUser(userInfo)
     setView('dashboard')
   }
 
   const handleSignOut = () => {
     localStorage.removeItem('agentmarket_key')
+    localStorage.removeItem('agentmarket_user')
     setApiKey('')
+    setUser(null)
     setView('landing')
   }
 
@@ -27,7 +33,7 @@ export default function App() {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          transition={{ duration: 0.25 }}
+          transition={{ duration: 0.22 }}
         >
           <LandingPage onEnterDashboard={handleConnect} />
         </motion.div>
@@ -37,11 +43,11 @@ export default function App() {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          transition={{ duration: 0.25 }}
+          transition={{ duration: 0.22 }}
           style={{ height: '100vh' }}
         >
           <MarketProvider apiKey={apiKey}>
-            <Dashboard onSignOut={handleSignOut} />
+            <Dashboard onSignOut={handleSignOut} user={user} />
           </MarketProvider>
         </motion.div>
       )}

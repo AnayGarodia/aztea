@@ -7,6 +7,7 @@ investment brief as a Python dict. All prompt logic lives here.
 
 import json
 import re
+import groq as _groq
 from groq import Groq
 
 BRIEF_SCHEMA = {
@@ -48,10 +49,23 @@ Filing text (first ~20,000 characters):
 """
 
 
+# Models to try in order — largest/best first, fall back when rate-limited
+_MODELS = [
+    "llama-3.3-70b-versatile",
+    "llama-3.1-70b-versatile",
+    "llama3-70b-8192",
+    "mixtral-8x7b-32768",
+    "gemma2-9b-it",
+    "llama-3.1-8b-instant",
+]
+
+
 def synthesize_brief(filing_data: dict) -> dict:
     """
     Call Groq with the filing text and return a parsed investment brief dict.
+    Tries each model in _MODELS in order, skipping to the next on rate-limit.
     Raises ValueError if the response cannot be parsed as JSON.
+    Raises groq.RateLimitError if every model is rate-limited.
     """
     client = Groq()
 
@@ -64,27 +78,35 @@ def synthesize_brief(filing_data: dict) -> dict:
         schema=schema_str,
         filing_text=filing_data["text"],
     )
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user_prompt},
+    ]
 
-    completion = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        max_tokens=1024,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ],
-    )
+    last_rate_limit_err = None
+    for model in _MODELS:
+        try:
+            completion = client.chat.completions.create(
+                model=model,
+                max_tokens=1024,
+                messages=messages,
+            )
+        except _groq.RateLimitError as e:
+            last_rate_limit_err = e
+            continue  # try next model
 
-    raw = completion.choices[0].message.content.strip()
+        raw = completion.choices[0].message.content.strip()
+        raw = _strip_fences(raw)
 
-    # Strip markdown fences if the model wraps the JSON despite instructions
-    raw = _strip_fences(raw)
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"Model {model} returned non-JSON response: {e}\n\nRaw:\n{raw[:500]}"
+            ) from e
 
-    try:
-        brief = json.loads(raw)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Model returned non-JSON response: {e}\n\nRaw:\n{raw[:500]}") from e
-
-    return brief
+    # All models exhausted
+    raise last_rate_limit_err
 
 
 def _strip_fences(text: str) -> str:
