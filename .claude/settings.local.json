@@ -2,7 +2,36 @@
   "permissions": {
     "allow": [
       "Bash(python:*)",
-      "Bash(pip install:*)"
+      "Bash(pip install:*)",
+      "Bash(uvicorn server:app --host 0.0.0.0 --port 8000)",
+      "Bash(curl -s http://localhost:8000/health)",
+      "Bash(uvicorn server:app --port 8000)",
+      "Bash(curl -s http://localhost:8000/registry/agents -H 'Authorization: Bearer __TRACKED_VAR__')",
+      "Bash(curl -s -X POST http://localhost:8000/registry/agents/00000000-0000-0000-0000-000000000001/call -H 'Content-Type: application/json' -H 'Authorization: Bearer a096498c66c371f78a4dc47cad653eb8dfd77bfe94ba6a8ff7be69a14a82234a' -d '{\"ticker\": \"NVDA\"}')",
+      "Bash(curl -s -X POST http://localhost:8000/registry/agents/00000000-0000-0000-0000-000000000001/call -H 'Content-Type: application/json' -H 'Authorization: Bearer __TRACKED_VAR__' -d '{\"ticker\": \"AAPL\"}')",
+      "Bash(curl -s -X POST http://localhost:8000/wallets/deposit -H 'Content-Type: application/json' -H 'Authorization: Bearer a096498c66c371f78a4dc47cad653eb8dfd77bfe94ba6a8ff7be69a14a82234a' -d '{\"wallet_id\": \"44728552-fd14-43d9-9a9b-e1e4dda38892\", \"amount_cents\": 500}')",
+      "Bash(curl -s -X POST http://localhost:8000/analyze -H 'Content-Type: application/json' -H 'Authorization: Bearer a096498c66c371f78a4dc47cad653eb8dfd77bfe94ba6a8ff7be69a14a82234a' -d '{\"ticker\": \"AAPL\"}')",
+      "Bash(python3:*)",
+      "Bash(sqlite3:*)",
+      "Bash(uvicorn server:app --port 8000 --log-level warning)",
+      "Bash(npm install:*)",
+      "Bash(npm run:*)",
+      "Bash(curl -s http://localhost:5173/)",
+      "Bash(curl -s -I -X OPTIONS http://localhost:8000/registry/agents -H 'Origin: http://localhost:5173' -H 'Access-Control-Request-Method: GET')",
+      "Bash(open:*)",
+      "Bash(npx vite:*)",
+      "Bash(pkill -f \"vite\")",
+      "WebSearch",
+      "WebFetch(domain:console.groq.com)",
+      "WebFetch(domain:api.groq.com)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)",
+      "Bash(git push:*)",
+      "Bash(curl:*)",
+      "Bash(ps:*)",
+      "Bash(kill 32094)",
+      "Bash(nohup uvicorn:*)",
+      "Bash(echo \"PID: $!\")"
     ]
   }
 }
