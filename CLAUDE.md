@@ -10,7 +10,7 @@ The first listing on the marketplace is this **financial research agent**: give 
 
 The long-term arc:
 - Add more specialized agents (legal doc summarizer, competitive analysis agent, earnings call parser).
-- Build a registry (agents list themselves with pricing, latency SLAs, input/output schemas).
+- ~~Build a registry~~ — Done. `registry.py` stores agent listings with pricing, live latency, and success-rate stats.
 - Add a billing layer so agents can pay each other (e.g., a meta-agent orchestrating several sub-agents).
 - Expose a unified `/invoke` endpoint that routes to the right agent by capability tag.
 
@@ -21,44 +21,68 @@ The long-term arc:
 ```
 agentmarket/
   main.py          # CLI entry point — wires fetcher → synthesizer → logger
+  server.py        # FastAPI HTTP server — /analyze, /registry/*, /wallets/* routes
+  client.py        # Reference HTTP client — calls /analyze, reads API_KEY from .env
   fetcher.py       # SEC EDGAR data retrieval (CIK lookup, filing fetch, HTML strip)
-  synthesizer.py   # Claude call — turns raw filing text into a structured brief
+  synthesizer.py   # Groq call — turns raw filing text into a structured brief
+  registry.py      # SQLite-backed agent registry (CRUD + call stats)
+  payments.py      # Payment ledger — wallets + transactions tables, call lifecycle
   logger.py        # Appends one JSON line per run to runs.jsonl
   CLAUDE.md        # This file
   README.md        # User-facing quickstart
-  requirements.txt # groq, requests
+  requirements.txt # groq, requests, fastapi, uvicorn, slowapi, python-dotenv
+  .env             # GROQ_API_KEY + API_KEY + SERVER_BASE_URL (never committed)
+  .env.example     # Template for new contributors
   runs.jsonl       # Auto-created; one record per invocation (not committed)
+  registry.db      # Auto-created SQLite DB; agents + wallets + transactions (not committed)
 ```
 
-### Data flow
+### Data flows
 
+**CLI path:**
 ```
-User: python main.py AAPL
-         │
-         ▼
-main.py: run(ticker)
-         │
-         ├─► fetcher.get_filing_data(ticker)
-         │       ├─ GET https://www.sec.gov/files/company_tickers.json  → CIK
-         │       ├─ GET https://data.sec.gov/submissions/CIK{cik}.json → most recent 10-K/10-Q metadata
-         │       └─ GET https://www.sec.gov/Archives/edgar/...          → filing HTML → stripped text
-         │
-         ├─► synthesizer.synthesize_brief(filing_data)
-         │       └─ POST https://api.groq.com/... (llama-3.3-70b-versatile)
-         │           → returns JSON brief
-         │
-         └─► logger.log_run(ticker, brief, latency)
-                 └─ appends to runs.jsonl
-         │
-         ▼
-stdout: JSON brief
+python main.py AAPL
+  └─► fetcher.get_filing_data()   — 3 SEC EDGAR HTTP calls → filing text
+  └─► synthesizer.synthesize_brief() — Groq LLM → structured JSON
+  └─► logger.log_run()            — append to runs.jsonl
+  └─► stdout: JSON brief
+```
+
+**HTTP direct path:**
+```
+POST /analyze  {"ticker": "AAPL"}
+  └─► _require_api_key()          — Bearer token check
+  └─► main.run(ticker)            — same as CLI path above
+  └─► JSONResponse: brief
+```
+
+**Registry discovery + proxy path (with payments):**
+```
+GET  /registry/agents?tag=financial-research  → list from registry.db
+GET  /registry/agents/{id}                    → single listing
+POST /registry/agents/{id}/call  {"ticker": "AAPL"}
+  └─► registry.get_agent(id)              — lookup price + endpoint_url
+  └─► payments.get_or_create_wallet()     — ensure caller/agent/platform wallets exist
+  └─► payments.pre_call_charge()          — TX1: deduct price from caller (402 if broke)
+  └─► http.post(endpoint_url)             — proxy to /analyze (no DB lock held)
+  └─► registry.update_call_stats()        — update avg_latency_ms, success_rate
+  └─► payments.post_call_payout()         — TX2a success: +90% agent, +10% platform
+   OR payments.post_call_refund()         — TX2b failure: full refund to caller
+  └─► JSONResponse: brief (pass-through)
+
+POST /wallets/deposit  {"wallet_id": "...", "amount_cents": 1000}  → credit wallet
+GET  /wallets/{wallet_id}                → balance + last 20 transactions
 ```
 
 ### What each file does
 
 - **main.py** — Parses the CLI argument, calls `run()`, prints the brief, handles errors. All orchestration; no business logic.
+- **client.py** — Reference HTTP client. Reads `API_KEY` from `.env` and calls `POST /analyze`. The canonical example of how one agent programmatically calls another.
+- **server.py** — FastAPI app hosting all routes. Lifespan inits both DBs and self-registers the financial research agent. `registry_call` orchestrates the full payment lifecycle between registry and payments modules.
+- **registry.py** — SQLite-backed store for agent listings. Six functions: `init_db`, `register_agent`, `get_agents`, `get_agent`, `agent_exists_by_name`, `update_call_stats`. No ORM, no external dependencies.
+- **payments.py** — Payment ledger in the same `registry.db`. Tables: `wallets` (balance cache) and `transactions` (insert-only). Key functions: `pre_call_charge` (TX1 — check + deduct), `post_call_payout` (TX2a — 90% agent + 10% platform), `post_call_refund` (TX2b — full refund). All amounts are integer cents; no floats cross into this module.
 - **fetcher.py** — Three SEC EDGAR API calls: ticker→CIK lookup, CIK→filing metadata, filing document download. Includes an HTML tag stripper that uses only stdlib `re`.
-- **synthesizer.py** — Builds the prompt, calls Claude (`claude-opus-4-6`), parses the JSON response. All prompt logic lives here — nowhere else.
+- **synthesizer.py** — Builds the prompt, calls Groq (`llama-3.3-70b-versatile`), parses the JSON response. All prompt logic lives here — nowhere else.
 - **logger.py** — Single function `log_run()`. Appends a JSONL record with timestamp, ticker, latency, and full output.
 
 ---
@@ -85,15 +109,63 @@ stdout: JSON brief
 
 ```bash
 pip install -r requirements.txt
-export GROQ_API_KEY=gsk_...
+cp .env.example .env   # then fill in your keys
 ```
 
-### Run
+`.env` requires:
+```
+GROQ_API_KEY=gsk_...         # free at console.groq.com
+API_KEY=<hex string>         # generate: python -c "import secrets; print(secrets.token_hex(32))"
+SERVER_BASE_URL=http://localhost:8000  # used to self-register in the registry
+```
+
+### CLI
 
 ```bash
 python main.py AAPL
 python main.py MSFT
-python main.py NVDA
+```
+
+### HTTP server
+
+```bash
+uvicorn server:app --host 0.0.0.0 --port 8000
+```
+
+```bash
+# Health check
+curl http://localhost:8000/health
+
+# Analyze a ticker (Python client — recommended)
+python client.py AAPL
+python client.py MSFT --host http://localhost:8000
+
+# Analyze a ticker (curl — must be one line, no trailing spaces after \)
+curl -X POST http://localhost:8000/analyze -H "Content-Type: application/json" -H "Authorization: Bearer <your-API_KEY>" -d '{"ticker": "AAPL"}'
+```
+
+Rate limits: 10/min for writes and proxy calls, 60/min for reads. Exceeding returns HTTP 429.
+
+### Registry
+
+```bash
+# List all agents
+python client.py --registry-list
+
+# List by tag
+curl http://localhost:8000/registry/agents?tag=financial-research -H "Authorization: Bearer <key>"
+
+# Call an agent via the registry (proxied)
+curl -X POST http://localhost:8000/registry/agents/00000000-0000-0000-0000-000000000001/call \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <key>" \
+  -d '{"ticker": "AAPL"}'
+
+# Register a new agent
+curl -X POST http://localhost:8000/registry/register \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <key>" \
+  -d '{"name": "My Agent", "description": "...", "endpoint_url": "http://...", "price_per_call_usd": 0.05, "tags": ["my-tag"]}'
 ```
 
 ### Output
@@ -123,13 +195,15 @@ cat runs.jsonl | python -c "import sys,json; [print(json.dumps({'ticker':r['tick
 
 ## Next steps after this agent works
 
-1. **Wrap in a FastAPI endpoint** (`POST /invoke` with `{"ticker": "AAPL"}`) so other agents can call it over HTTP. Add an API key check so only authorized callers can use it.
+1. ~~**Wrap in a FastAPI endpoint**~~ — Done. `server.py` exposes `POST /analyze` with Bearer auth and per-key rate limiting.
 
-2. **Write an agent manifest** (`manifest.json`) describing this agent's input schema, output schema, pricing per call, average latency, and capability tags (`["financial-research", "sec-filings", "equity-analysis"]`). This becomes the marketplace listing.
+2. ~~**Build the registry**~~ — Done. `registry.py` + `/registry/*` routes handle agent listings, discovery by tag, and proxied calls with automatic stat tracking.
 
-3. **Build the registry** — a simple service that stores manifests and exposes `GET /agents` and `GET /agents/{id}`. A meta-agent can query this to discover what agents exist and what they cost.
+3. **Add a second agent** (e.g., an earnings call transcript parser) to validate that the registry protocol generalizes. Two agents calling each other is the first real marketplace transaction.
 
-4. **Add a second agent** (e.g., an earnings call transcript parser) to validate that the manifest format and invocation protocol generalizes. Two agents working together is the first real marketplace transaction.
+4. ~~**Add billing**~~ — Done. `payments.py` charges callers, pays out agents (90%), and takes a platform fee (10%). Full refund on failed calls.
+
+5. **Add real money rails** — swap `POST /wallets/deposit` for a Stripe or crypto on-ramp. The ledger is already production-ready; only the top-up source changes.
 
 5. **Add caching** — store filing text in a local SQLite cache keyed by `(cik, accession_number)` so repeated calls for the same filing don't re-fetch from SEC. This cuts latency and reduces load on EDGAR.
 
