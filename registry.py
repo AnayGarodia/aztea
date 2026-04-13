@@ -1,47 +1,75 @@
 """
 registry.py — SQLite-backed agent registry for the agentmarket platform.
 
-Stores agent listings (metadata, pricing, live stats) and provides functions
-to register agents, query them, and update call statistics after every proxied
-invocation. No ORM — raw sqlite3 only.
-
-Schema note: `successful_calls` is stored in the DB but not exposed in the
-public dict. `success_rate` is derived on read (successful_calls / total_calls).
+Production notes:
+  - WAL mode enabled for concurrent read performance under load.
+  - Thread-local connections (SQLite is not thread-safe across connections;
+    each thread gets its own handle).
+  - Indexes on tags and name for fast filtered lookups.
+  - input_schema stored as JSON; describes the fields a caller must supply.
 """
 
 import json
 import os
 import sqlite3
+import threading
 import uuid
 from datetime import datetime, timezone
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "registry.db")
+_local = threading.local()
 
+
+# ---------------------------------------------------------------------------
+# Connection
+# ---------------------------------------------------------------------------
 
 def _conn() -> sqlite3.Connection:
-    """Open a new SQLite connection for the calling thread."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    """
+    Return a thread-local SQLite connection.
+    Opens a new one if this thread doesn't have one yet, and enables WAL mode.
+    """
+    if not getattr(_local, "conn", None):
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("PRAGMA foreign_keys=ON")
+        _local.conn = conn
+    return _local.conn
 
 
 def init_db() -> None:
-    """Create the agents table if it does not already exist."""
+    """Create the agents table and indexes if they do not already exist."""
     with _conn() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS agents (
                 agent_id            TEXT PRIMARY KEY,
-                name                TEXT NOT NULL,
+                name                TEXT NOT NULL UNIQUE,
                 description         TEXT NOT NULL,
                 endpoint_url        TEXT NOT NULL,
-                price_per_call_usd  REAL NOT NULL,
+                price_per_call_usd  REAL NOT NULL CHECK(price_per_call_usd >= 0),
                 avg_latency_ms      REAL NOT NULL DEFAULT 0.0,
                 total_calls         INTEGER NOT NULL DEFAULT 0,
                 successful_calls    INTEGER NOT NULL DEFAULT 0,
                 tags                TEXT NOT NULL DEFAULT '[]',
+                input_schema        TEXT NOT NULL DEFAULT '{}',
                 created_at          TEXT NOT NULL
             )
         """)
+        # Migrate: add input_schema if an older DB doesn't have it
+        try:
+            conn.execute("ALTER TABLE agents ADD COLUMN input_schema TEXT NOT NULL DEFAULT '{}'")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_agents_name ON agents(name)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_agents_created ON agents(created_at)"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -51,8 +79,9 @@ def init_db() -> None:
 def _row_to_dict(row: sqlite3.Row) -> dict:
     d = dict(row)
     d["tags"] = json.loads(d["tags"])
+    d["input_schema"] = json.loads(d.get("input_schema") or "{}")
     total = d["total_calls"]
-    successful = d.pop("successful_calls")  # internal only; not in public schema
+    successful = d.pop("successful_calls")
     d["success_rate"] = round(successful / total, 4) if total > 0 else 1.0
     return d
 
@@ -68,6 +97,7 @@ def register_agent(
     price_per_call_usd: float,
     tags: list,
     agent_id: str | None = None,
+    input_schema: dict | None = None,
 ) -> str:
     """
     Insert a new agent listing. Returns the agent_id.
@@ -76,16 +106,17 @@ def register_agent(
     """
     aid = agent_id or str(uuid.uuid4())
     created_at = datetime.now(timezone.utc).isoformat()
+    schema_json = json.dumps(input_schema or {})
     with _conn() as conn:
         conn.execute(
             """
             INSERT INTO agents
                 (agent_id, name, description, endpoint_url,
-                 price_per_call_usd, tags, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                 price_per_call_usd, tags, input_schema, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (aid, name, description, endpoint_url,
-             price_per_call_usd, json.dumps(tags), created_at),
+             price_per_call_usd, json.dumps(tags), schema_json, created_at),
         )
     return aid
 
@@ -93,26 +124,19 @@ def register_agent(
 def update_call_stats(agent_id: str, latency_ms: float, success: bool) -> None:
     """
     Increment total_calls, update running avg_latency_ms, and conditionally
-    increment successful_calls. Called after every proxied invocation.
+    increment successful_calls. Uses a single UPDATE with arithmetic to avoid
+    a read-modify-write race.
     """
     with _conn() as conn:
-        row = conn.execute(
-            "SELECT avg_latency_ms, total_calls FROM agents WHERE agent_id = ?",
-            (agent_id,),
-        ).fetchone()
-        if row is None:
-            return
-        new_total = row["total_calls"] + 1
-        new_avg = (row["avg_latency_ms"] * row["total_calls"] + latency_ms) / new_total
         conn.execute(
             """
             UPDATE agents
-            SET total_calls      = ?,
-                avg_latency_ms   = ?,
+            SET total_calls    = total_calls + 1,
+                avg_latency_ms = (avg_latency_ms * total_calls + ?) / (total_calls + 1),
                 successful_calls = successful_calls + ?
             WHERE agent_id = ?
             """,
-            (new_total, round(new_avg, 2), 1 if success else 0, agent_id),
+            (latency_ms, 1 if success else 0, agent_id),
         )
 
 
@@ -123,14 +147,12 @@ def update_call_stats(agent_id: str, latency_ms: float, success: bool) -> None:
 def get_agents(tag: str | None = None) -> list:
     """
     Return all agent listings, optionally filtered by tag.
-    Tag filter uses exact match (tags are stored as a JSON array of strings).
+    Tag matching uses exact JSON-array membership to avoid substring false-positives.
     """
     with _conn() as conn:
         if tag:
-            # Wrap in quotes to match exact tags, not substrings.
-            # e.g. tag="fin" will NOT match "financial-research".
             rows = conn.execute(
-                'SELECT * FROM agents WHERE tags LIKE ? ORDER BY created_at',
+                "SELECT * FROM agents WHERE tags LIKE ? ORDER BY created_at",
                 (f'%"{tag}"%',),
             ).fetchall()
         else:

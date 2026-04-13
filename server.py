@@ -2,7 +2,7 @@
 server.py — FastAPI HTTP server for the agentmarket platform
 
 Run:
-    uvicorn server:app --host 0.0.0.0 --port 8000
+    uvicorn server:app --host 0.0.0.0 --port 8000 --reload
 """
 
 import json
@@ -25,44 +25,180 @@ from slowapi.errors import RateLimitExceeded
 
 import groq as _groq
 
+import agent_codereview
+import agent_textintel
+import agent_wiki
 import auth as _auth
 import payments
 import registry
-from main import run
+from main import run as _run_financial
 
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
-# Master key from env — always valid, used by the server itself for agent proxying
 _MASTER_KEY = os.environ.get("API_KEY")
 if not _MASTER_KEY:
     raise RuntimeError("API_KEY is not set. Add it to your .env file.")
 
 _SERVER_BASE_URL = os.environ.get("SERVER_BASE_URL", "http://localhost:8000")
-_FINANCIAL_AGENT_ID = "00000000-0000-0000-0000-000000000001"
+
+# Deterministic UUIDs for built-in agents
+_FINANCIAL_AGENT_ID  = "00000000-0000-0000-0000-000000000001"
+_CODEREVIEW_AGENT_ID = "00000000-0000-0000-0000-000000000002"
+_TEXTINTEL_AGENT_ID  = "00000000-0000-0000-0000-000000000003"
+_WIKI_AGENT_ID       = "00000000-0000-0000-0000-000000000004"
+
+_MAX_BODY_BYTES = 512 * 1024  # 512 KB
 
 
 # ---------------------------------------------------------------------------
-# Startup
+# Startup — register built-in agents
 # ---------------------------------------------------------------------------
 
-def _register_self() -> None:
-    if registry.agent_exists_by_name("Financial Research Agent"):
-        return
-    registry.register_agent(
-        agent_id=_FINANCIAL_AGENT_ID,
-        name="Financial Research Agent",
-        description=(
-            "Fetches the most recent SEC 10-K or 10-Q for any public company "
-            "and returns a structured investment brief (signal, risks, highlights) "
-            "synthesized by an LLM."
-        ),
-        endpoint_url=f"{_SERVER_BASE_URL}/analyze",
-        price_per_call_usd=0.01,
-        tags=["financial-research", "sec-filings", "equity-analysis"],
-    )
+def _register_agents() -> None:
+    agents = [
+        {
+            "agent_id": _FINANCIAL_AGENT_ID,
+            "name": "Financial Research Agent",
+            "description": (
+                "Fetches the most recent SEC 10-K or 10-Q for any public company "
+                "and returns a structured investment brief (signal, risks, highlights) "
+                "synthesized by an LLM."
+            ),
+            "endpoint_url": f"{_SERVER_BASE_URL}/agents/financial",
+            "price_per_call_usd": 0.01,
+            "tags": ["financial-research", "sec-filings", "equity-analysis"],
+            "input_schema": {
+                "fields": [
+                    {
+                        "name": "ticker",
+                        "type": "text",
+                        "label": "Ticker symbol",
+                        "placeholder": "AAPL",
+                        "required": True,
+                        "max_length": 5,
+                        "transform": "uppercase",
+                        "hint": "Any NYSE or NASDAQ ticker (e.g. AAPL, MSFT, TSLA)",
+                    }
+                ]
+            },
+        },
+        {
+            "agent_id": _CODEREVIEW_AGENT_ID,
+            "name": "Code Review Agent",
+            "description": (
+                "Reviews any code snippet for bugs, security vulnerabilities, "
+                "performance issues, and style problems. Returns a scored report "
+                "with specific, actionable fixes."
+            ),
+            "endpoint_url": f"{_SERVER_BASE_URL}/agents/code-review",
+            "price_per_call_usd": 0.005,
+            "tags": ["code-review", "security", "developer-tools"],
+            "input_schema": {
+                "fields": [
+                    {
+                        "name": "code",
+                        "type": "textarea",
+                        "label": "Code",
+                        "placeholder": "Paste your code here…",
+                        "required": True,
+                        "hint": "Up to ~12,000 characters",
+                    },
+                    {
+                        "name": "language",
+                        "type": "select",
+                        "label": "Language",
+                        "required": False,
+                        "default": "auto",
+                        "options": [
+                            "auto", "python", "javascript", "typescript",
+                            "go", "rust", "java", "cpp", "c", "ruby", "php",
+                            "swift", "kotlin", "sql",
+                        ],
+                    },
+                    {
+                        "name": "focus",
+                        "type": "select",
+                        "label": "Review focus",
+                        "required": False,
+                        "default": "all",
+                        "options": ["all", "security", "performance", "bugs", "style"],
+                    },
+                ]
+            },
+        },
+        {
+            "agent_id": _TEXTINTEL_AGENT_ID,
+            "name": "Text Intelligence Agent",
+            "description": (
+                "Analyzes any text for sentiment, key entities, topics, and readability. "
+                "Returns a structured NLP brief with summary, quotes, and scores. "
+                "Works on articles, reviews, reports, emails, or any prose."
+            ),
+            "endpoint_url": f"{_SERVER_BASE_URL}/agents/text-intel",
+            "price_per_call_usd": 0.003,
+            "tags": ["nlp", "sentiment-analysis", "text-analytics"],
+            "input_schema": {
+                "fields": [
+                    {
+                        "name": "text",
+                        "type": "textarea",
+                        "label": "Text to analyze",
+                        "placeholder": "Paste any text here — article, review, report…",
+                        "required": True,
+                        "hint": "Up to ~10,000 characters",
+                    },
+                    {
+                        "name": "mode",
+                        "type": "select",
+                        "label": "Analysis depth",
+                        "required": False,
+                        "default": "full",
+                        "options": ["full", "quick"],
+                        "hint": "quick = sentiment + summary only",
+                    },
+                ]
+            },
+        },
+        {
+            "agent_id": _WIKI_AGENT_ID,
+            "name": "Wikipedia Research Agent",
+            "description": (
+                "Fetches the Wikipedia article for any topic and returns a "
+                "structured research brief: summary, key facts, related topics, "
+                "and content classification."
+            ),
+            "endpoint_url": f"{_SERVER_BASE_URL}/agents/wiki",
+            "price_per_call_usd": 0.003,
+            "tags": ["research", "knowledge-base", "wikipedia"],
+            "input_schema": {
+                "fields": [
+                    {
+                        "name": "topic",
+                        "type": "text",
+                        "label": "Topic",
+                        "placeholder": "e.g. Quantum computing",
+                        "required": True,
+                        "hint": "Any Wikipedia-resolvable topic",
+                    }
+                ]
+            },
+        },
+    ]
+
+    for a in agents:
+        if not registry.agent_exists_by_name(a["name"]):
+            registry.register_agent(
+                agent_id=a["agent_id"],
+                name=a["name"],
+                description=a["description"],
+                endpoint_url=a["endpoint_url"],
+                price_per_call_usd=a["price_per_call_usd"],
+                tags=a["tags"],
+                input_schema=a["input_schema"],
+            )
 
 
 @asynccontextmanager
@@ -70,7 +206,7 @@ async def lifespan(app: FastAPI):
     registry.init_db()
     payments.init_payments_db()
     _auth.init_auth_db()
-    _register_self()
+    _register_agents()
     yield
 
 
@@ -81,21 +217,56 @@ async def lifespan(app: FastAPI):
 def _key_from_request(request: Request) -> str:
     auth = request.headers.get("Authorization", "")
     if auth.startswith("Bearer "):
-        return auth[7:][:32]   # truncate for safety
-    return request.client.host
+        return auth[7:][:32]
+    host = request.client.host if request.client else "unknown"
+    return host
 
 
 limiter = Limiter(key_func=_key_from_request)
 app = FastAPI(title="agentmarket", lifespan=lifespan)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# CORS — allow Vite dev server and common local ports
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://localhost:3000",
+        "http://127.0.0.1:5173",
+    ],
     allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+    max_age=600,
 )
+
+
+# ---------------------------------------------------------------------------
+# Middleware — security headers + request size cap
+# ---------------------------------------------------------------------------
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    return response
+
+
+@app.middleware("http")
+async def limit_body_size(request: Request, call_next):
+    cl = request.headers.get("content-length")
+    if cl and int(cl) > _MAX_BODY_BYTES:
+        return JSONResponse(
+            {"detail": f"Request body too large (max {_MAX_BODY_BYTES // 1024} KB)."},
+            status_code=413,
+        )
+    return await call_next(request)
 
 
 # ---------------------------------------------------------------------------
@@ -103,11 +274,6 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 
 def _resolve_caller(request: Request) -> dict | None:
-    """
-    Returns a dict describing the caller, or None if the key is invalid.
-    - Master key → {"type": "master", "owner_id": <raw_key>}
-    - User key   → {"type": "user",   "owner_id": "user:<user_id>", "user": {...}}
-    """
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
         return None
@@ -125,8 +291,10 @@ def _require_api_key(request: Request) -> dict:
     if caller is None:
         auth = request.headers.get("Authorization", "")
         if not auth.startswith("Bearer "):
-            raise HTTPException(status_code=401,
-                detail="Authorization header missing. Expected: Bearer <key>")
+            raise HTTPException(
+                status_code=401,
+                detail="Authorization header missing. Expected: Bearer <key>",
+            )
         raise HTTPException(status_code=403, detail="Invalid API key.")
     return caller
 
@@ -140,8 +308,59 @@ def _caller_owner_id(request: Request) -> str:
 # Request schemas
 # ---------------------------------------------------------------------------
 
-class AnalyzeRequest(BaseModel):
+class FinancialRequest(BaseModel):
     ticker: str
+
+
+class CodeReviewRequest(BaseModel):
+    code: str
+    language: str = "auto"
+    focus: str = "all"
+
+    @field_validator("code")
+    @classmethod
+    def code_not_empty(cls, v):
+        if not v.strip():
+            raise ValueError("code must not be empty")
+        return v
+
+    @field_validator("focus")
+    @classmethod
+    def focus_valid(cls, v):
+        valid = {"all", "security", "performance", "bugs", "style"}
+        if v not in valid:
+            raise ValueError(f"focus must be one of: {', '.join(sorted(valid))}")
+        return v
+
+
+class TextIntelRequest(BaseModel):
+    text: str
+    mode: str = "full"
+
+    @field_validator("text")
+    @classmethod
+    def text_not_empty(cls, v):
+        if not v.strip():
+            raise ValueError("text must not be empty")
+        return v
+
+    @field_validator("mode")
+    @classmethod
+    def mode_valid(cls, v):
+        if v not in ("full", "quick"):
+            raise ValueError("mode must be 'full' or 'quick'")
+        return v
+
+
+class WikiRequest(BaseModel):
+    topic: str
+
+    @field_validator("topic")
+    @classmethod
+    def topic_not_empty(cls, v):
+        if not v.strip():
+            raise ValueError("topic must not be empty")
+        return v.strip()
 
 
 class AgentRegisterRequest(BaseModel):
@@ -150,6 +369,7 @@ class AgentRegisterRequest(BaseModel):
     endpoint_url: str
     price_per_call_usd: float
     tags: list[str] = []
+    input_schema: dict = {}
 
 
 class DepositRequest(BaseModel):
@@ -192,6 +412,15 @@ class UserLoginRequest(BaseModel):
 
 class CreateKeyRequest(BaseModel):
     name: str = "New key"
+
+
+# ---------------------------------------------------------------------------
+# Health
+# ---------------------------------------------------------------------------
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "agents": len(registry.get_agents())}
 
 
 # ---------------------------------------------------------------------------
@@ -274,33 +503,93 @@ def auth_revoke_key(
 
 
 # ---------------------------------------------------------------------------
-# Core agent routes
+# Agent endpoints — direct calls (used by proxy and CLI client)
 # ---------------------------------------------------------------------------
 
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-
-
-@app.post("/analyze")
+@app.post("/agents/financial")
 @limiter.limit("10/minute")
-def analyze(
+def agent_financial(
     request: Request,
-    body: AnalyzeRequest,
+    body: FinancialRequest,
     _: dict = Depends(_require_api_key),
 ) -> JSONResponse:
     ticker = body.ticker.strip().upper()
     if not ticker.isalpha() or len(ticker) > 5:
         raise HTTPException(status_code=422, detail=f"Invalid ticker symbol: '{ticker}'")
     try:
-        brief = run(ticker)
+        brief = _run_financial(ticker)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except _groq.RateLimitError as e:
-        raise HTTPException(status_code=503, detail=f"LLM rate limit reached. ({e})")
+        raise HTTPException(status_code=503, detail=f"All LLM models rate-limited. ({e})")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     return JSONResponse(content=brief)
+
+
+# Keep /analyze as an alias for backwards compatibility
+@app.post("/analyze")
+@limiter.limit("10/minute")
+def analyze_alias(
+    request: Request,
+    body: FinancialRequest,
+    caller: dict = Depends(_require_api_key),
+) -> JSONResponse:
+    return agent_financial(request, body, caller)
+
+
+@app.post("/agents/code-review")
+@limiter.limit("10/minute")
+def agent_code_review(
+    request: Request,
+    body: CodeReviewRequest,
+    _: dict = Depends(_require_api_key),
+) -> JSONResponse:
+    try:
+        result = agent_codereview.run(body.code, body.language, body.focus)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except _groq.RateLimitError as e:
+        raise HTTPException(status_code=503, detail=f"All LLM models rate-limited. ({e})")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return JSONResponse(content=result)
+
+
+@app.post("/agents/text-intel")
+@limiter.limit("15/minute")
+def agent_text_intel(
+    request: Request,
+    body: TextIntelRequest,
+    _: dict = Depends(_require_api_key),
+) -> JSONResponse:
+    try:
+        result = agent_textintel.run(body.text, body.mode)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except _groq.RateLimitError as e:
+        raise HTTPException(status_code=503, detail=f"All LLM models rate-limited. ({e})")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return JSONResponse(content=result)
+
+
+@app.post("/agents/wiki")
+@limiter.limit("15/minute")
+def agent_wiki_endpoint(
+    request: Request,
+    body: WikiRequest,
+    _: dict = Depends(_require_api_key),
+) -> JSONResponse:
+    try:
+        result = agent_wiki.run(body.topic)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except _groq.RateLimitError as e:
+        raise HTTPException(status_code=503, detail=f"All LLM models rate-limited. ({e})")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return JSONResponse(content=result)
 
 
 # ---------------------------------------------------------------------------
@@ -320,6 +609,7 @@ def registry_register(
         endpoint_url=body.endpoint_url,
         price_per_call_usd=body.price_per_call_usd,
         tags=body.tags,
+        input_schema=body.input_schema,
     )
     return JSONResponse(
         content={"agent_id": agent_id, "message": "Agent registered successfully."},
@@ -357,12 +647,12 @@ def registry_call(
     request: Request,
     agent_id: str,
     body: Any = Body(default={}),
-    _: dict = Depends(_require_api_key),
+    caller: dict = Depends(_require_api_key),
 ) -> JSONResponse:
     """
     Proxy a call to the registered agent with full payment lifecycle:
       1. Deduct price (402 if broke).
-      2. HTTP call to agent endpoint.
+      2. HTTP POST to agent endpoint.
       3a. Success → payout 90% agent / 10% platform.
       3b. Failure → full refund to caller.
     """
@@ -370,7 +660,7 @@ def registry_call(
     if agent is None:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
 
-    price_cents = round(agent["price_per_call_usd"] * 100)
+    price_cents     = round(agent["price_per_call_usd"] * 100)
     caller_wallet   = payments.get_or_create_wallet(_caller_owner_id(request))
     agent_wallet    = payments.get_or_create_wallet(f"agent:{agent_id}")
     platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
@@ -485,6 +775,7 @@ def get_runs(
     limit: int = 50,
     _: dict = Depends(_require_api_key),
 ) -> JSONResponse:
+    limit = min(max(1, limit), 200)
     runs_file = os.path.join(os.path.dirname(__file__), "runs.jsonl")
     if not os.path.exists(runs_file):
         return JSONResponse(content={"runs": []})
