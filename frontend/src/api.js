@@ -1,104 +1,249 @@
-const BASE = '/api'
+const RAW_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').trim()
+const BASE = (RAW_BASE || '/api').replace(/\/+$/, '')
 
-function headers(key) {
-  return {
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${key}`,
+function requestHeaders(key, { idempotencyKey } = {}) {
+  const out = { 'Content-Type': 'application/json' }
+  if (key) out.Authorization = `Bearer ${key}`
+  if (idempotencyKey) out['Idempotency-Key'] = idempotencyKey
+  return out
+}
+
+function detailToString(detail) {
+  if (typeof detail === 'string' && detail.trim()) return detail
+  if (detail == null) return null
+  if (typeof detail === 'number' || typeof detail === 'boolean') return String(detail)
+  if (Array.isArray(detail)) {
+    const joined = detail.map(item => detailToString(item) ?? '').filter(Boolean).join(', ')
+    return joined || null
+  }
+  if (typeof detail === 'object') {
+    if (typeof detail.error === 'string' && detail.error) return detail.error
+    return JSON.stringify(detail)
+  }
+  return null
+}
+
+async function parseResponseBody(response) {
+  const contentType = (response.headers.get('content-type') || '').toLowerCase()
+  if (contentType.includes('application/json')) {
+    return response.json().catch(() => null)
+  }
+  const text = await response.text().catch(() => '')
+  if (!text) return null
+  try {
+    return JSON.parse(text)
+  } catch {
+    return text
   }
 }
 
-// ── Auth ─────────────────────────────────────────────────────────────────────
+function makeApiError(response, parsedBody) {
+  const detail = parsedBody && typeof parsedBody === 'object' ? parsedBody.detail : null
+  const message =
+    detailToString(detail) ??
+    (typeof parsedBody === 'string' && parsedBody.trim() ? parsedBody : null) ??
+    `HTTP ${response.status}`
+  const err = new Error(message)
+  err.status = response.status
+  err.body = parsedBody
+  return err
+}
+
+async function request(path, {
+  method = 'GET',
+  key,
+  body,
+  idempotencyKey,
+  throwOnError = true,
+} = {}) {
+  const response = await fetch(`${BASE}${path}`, {
+    method,
+    headers: requestHeaders(key, { idempotencyKey }),
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  const parsedBody = await parseResponseBody(response)
+  if (!response.ok && throwOnError) throw makeApiError(response, parsedBody)
+  return {
+    ok: response.ok,
+    status: response.status,
+    body: parsedBody,
+    headers: response.headers,
+  }
+}
+
+// ── Auth ──────────────────────────────────────────────────────────────────────
 
 export async function authRegister(username, email, password) {
-  const r = await fetch(`${BASE}/auth/register`, {
+  const { body } = await request('/auth/register', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, email, password }),
+    body: { username, email, password },
   })
-  const body = await r.json().catch(() => ({}))
-  if (!r.ok) throw new Error(body.detail || `${r.status}`)
-  return body  // { user_id, username, email, raw_api_key, key_id, key_prefix }
+  return body
 }
 
 export async function authLogin(email, password) {
-  const r = await fetch(`${BASE}/auth/login`, {
+  const { body } = await request('/auth/login', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password }),
+    body: { email, password },
   })
-  const body = await r.json().catch(() => ({}))
-  if (!r.ok) throw new Error(body.detail || `${r.status}`)
-  return body  // { user_id, username, email, raw_api_key, key_id, key_prefix }
+  return body
 }
 
 export async function authMe(key) {
-  const r = await fetch(`${BASE}/auth/me`, { headers: headers(key) })
-  if (!r.ok) throw new Error(`${r.status}`)
-  return r.json()  // { user_id, username, email }
+  const { body } = await request('/auth/me', { key })
+  return body
 }
+
+export async function fetchAuthKeys(key) {
+  const { body } = await request('/auth/keys', { key })
+  return body
+}
+
+export async function createAuthKey(key, name, scopes = ['caller', 'worker']) {
+  const { body } = await request('/auth/keys', {
+    method: 'POST',
+    key,
+    body: { name, scopes },
+  })
+  return body
+}
+
+export async function rotateAuthKey(key, keyId, payload = {}) {
+  const { body } = await request(`/auth/keys/${keyId}/rotate`, {
+    method: 'POST',
+    key,
+    body: payload,
+  })
+  return body
+}
+
+export async function deleteAuthKey(key, keyId) {
+  const { body } = await request(`/auth/keys/${keyId}`, {
+    method: 'DELETE',
+    key,
+  })
+  return body
+}
+
+// ── Health ────────────────────────────────────────────────────────────────────
 
 export async function fetchHealth(key) {
-  const r = await fetch(`${BASE}/health`, { headers: headers(key) })
-  if (!r.ok) throw new Error(`${r.status}`)
-  return r.json()
+  const { body } = await request('/health', { key })
+  return body
 }
 
-export async function fetchAgents(key) {
-  const r = await fetch(`${BASE}/registry/agents`, { headers: headers(key) })
-  if (!r.ok) throw new Error(`${r.status}`)
-  return r.json()  // { agents: [...], count: N }
-}
+// ── Registry ──────────────────────────────────────────────────────────────────
 
-export async function fetchWalletMe(key) {
-  const r = await fetch(`${BASE}/wallets/me`, { headers: headers(key) })
-  if (!r.ok) throw new Error(`${r.status}`)
-  return r.json()  // { wallet_id, owner_id, balance_cents, created_at, transactions: [...] }
-}
-
-export async function fetchWallet(key, walletId) {
-  const r = await fetch(`${BASE}/wallets/${walletId}`, { headers: headers(key) })
-  if (!r.ok) throw new Error(`${r.status}`)
-  return r.json()
-}
-
-export async function depositToWallet(key, walletId, amountCents, memo = 'dashboard deposit') {
-  const r = await fetch(`${BASE}/wallets/deposit`, {
-    method: 'POST',
-    headers: headers(key),
-    body: JSON.stringify({ wallet_id: walletId, amount_cents: amountCents, memo }),
-  })
-  if (!r.ok) {
-    const body = await r.json().catch(() => ({}))
-    throw new Error(body.detail || `${r.status}`)
-  }
-  return r.json()  // { tx_id, wallet_id, balance_cents }
-}
-
-export async function callAgent(key, agentId, payload) {
-  const r = await fetch(`${BASE}/registry/agents/${agentId}/call`, {
-    method: 'POST',
-    headers: headers(key),
-    body: JSON.stringify(payload),
-  })
-  const body = await r.json().catch(() => ({}))
-  return { status: r.status, ok: r.ok, body }
-}
-
-export async function fetchRuns(key, limit = 50) {
-  const r = await fetch(`${BASE}/runs?limit=${limit}`, { headers: headers(key) })
-  if (!r.ok) return { runs: [] }
-  return r.json()  // { runs: [...] }
+export async function fetchAgents(key, tag, { rankBy = 'trust' } = {}) {
+  const params = new URLSearchParams()
+  if (tag) params.set('tag', tag)
+  if (rankBy) params.set('rank_by', rankBy)
+  const suffix = params.toString() ? `?${params.toString()}` : ''
+  const { body } = await request(`/registry/agents${suffix}`, { key })
+  return body
 }
 
 export async function registerAgent(key, data) {
-  const r = await fetch(`${BASE}/registry/register`, {
+  const { body } = await request('/registry/register', {
     method: 'POST',
-    headers: headers(key),
-    body: JSON.stringify(data),
+    key,
+    body: data,
   })
-  if (!r.ok) {
-    const body = await r.json().catch(() => ({}))
-    throw new Error(body.detail || `${r.status}`)
+  return body
+}
+
+// ── Calls (sync) ──────────────────────────────────────────────────────────────
+
+export async function callAgent(key, agentId, payload) {
+  const result = await request(`/registry/agents/${agentId}/call`, {
+    method: 'POST',
+    key,
+    body: payload,
+    throwOnError: false,
+  })
+  return { status: result.status, ok: result.ok, body: result.body }
+}
+
+// ── Jobs (async) ──────────────────────────────────────────────────────────────
+
+export async function createJob(key, agentId, inputPayload, maxAttempts = 3) {
+  const { body } = await request('/jobs', {
+    method: 'POST',
+    key,
+    body: { agent_id: agentId, input_payload: inputPayload, max_attempts: maxAttempts },
+  })
+  return body
+}
+
+export async function fetchJobs(key, { limit = 50, status, cursor } = {}) {
+  const params = new URLSearchParams({ limit: String(limit) })
+  if (status) params.set('status', status)
+  if (cursor) params.set('cursor', cursor)
+  const { body } = await request(`/jobs?${params.toString()}`, { key })
+  return body
+}
+
+export async function fetchAllJobs(key, { status, pageSize = 100, maxPages = 5 } = {}) {
+  let cursor = null
+  const jobs = []
+  for (let page = 0; page < maxPages; page += 1) {
+    const data = await fetchJobs(key, { limit: pageSize, status, cursor })
+    jobs.push(...(data.jobs ?? []))
+    cursor = data.next_cursor || null
+    if (!cursor) break
   }
-  return r.json()
+  return { jobs, next_cursor: cursor }
+}
+
+export async function getJob(key, jobId) {
+  const { body } = await request(`/jobs/${jobId}`, { key })
+  return body
+}
+
+export async function getJobMessages(key, jobId, sinceId) {
+  const suffix = sinceId != null ? `?since=${encodeURIComponent(String(sinceId))}` : ''
+  const { body } = await request(`/jobs/${jobId}/messages${suffix}`, { key })
+  return body
+}
+
+export async function postJobMessage(key, jobId, payload) {
+  const { body } = await request(`/jobs/${jobId}/messages`, {
+    method: 'POST',
+    key,
+    body: payload,
+  })
+  return body
+}
+
+export async function rateJob(key, jobId, rating, { idempotencyKey } = {}) {
+  const { body } = await request(`/jobs/${jobId}/rating`, {
+    method: 'POST',
+    key,
+    body: { rating },
+    idempotencyKey,
+  })
+  return body
+}
+
+// ── Wallet ────────────────────────────────────────────────────────────────────
+
+export async function fetchWalletMe(key) {
+  const { body } = await request('/wallets/me', { key })
+  return body
+}
+
+export async function depositToWallet(key, walletId, amountCents, memo = 'dashboard deposit') {
+  const { body } = await request('/wallets/deposit', {
+    method: 'POST',
+    key,
+    body: { wallet_id: walletId, amount_cents: amountCents, memo },
+  })
+  return body
+}
+
+// ── Runs ──────────────────────────────────────────────────────────────────────
+
+export async function fetchRuns(key, limit = 50) {
+  const { body } = await request(`/runs?limit=${encodeURIComponent(String(limit))}`, { key })
+  return body
 }

@@ -16,9 +16,9 @@ import time
 from dotenv import load_dotenv
 load_dotenv()
 
-from fetcher import get_filing_data
-from synthesizer import synthesize_brief
-from logger import log_run
+from agents.financial.fetcher import get_filing_data
+from agents.financial.synthesizer import synthesize_brief
+from core.logger import log_run
 
 
 def run(ticker: str) -> dict:
