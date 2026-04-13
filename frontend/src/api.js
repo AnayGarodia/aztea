@@ -7,6 +7,36 @@ function headers(key) {
   }
 }
 
+// ── Auth ─────────────────────────────────────────────────────────────────────
+
+export async function authRegister(username, email, password) {
+  const r = await fetch(`${BASE}/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, email, password }),
+  })
+  const body = await r.json().catch(() => ({}))
+  if (!r.ok) throw new Error(body.detail || `${r.status}`)
+  return body  // { user_id, username, email, raw_api_key, key_id, key_prefix }
+}
+
+export async function authLogin(email, password) {
+  const r = await fetch(`${BASE}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  })
+  const body = await r.json().catch(() => ({}))
+  if (!r.ok) throw new Error(body.detail || `${r.status}`)
+  return body  // { user_id, username, email, raw_api_key, key_id, key_prefix }
+}
+
+export async function authMe(key) {
+  const r = await fetch(`${BASE}/auth/me`, { headers: headers(key) })
+  if (!r.ok) throw new Error(`${r.status}`)
+  return r.json()  // { user_id, username, email }
+}
+
 export async function fetchHealth(key) {
   const r = await fetch(`${BASE}/health`, { headers: headers(key) })
   if (!r.ok) throw new Error(`${r.status}`)
