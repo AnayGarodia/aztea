@@ -13,6 +13,7 @@ export default function RegisterAgentModal({ onClose }) {
     endpoint_url: '',
     price_per_call_usd: '0.010',
     tags: '',
+    input_schema: '{"fields":[]}',
   })
   const [working, setWorking] = useState(false)
   const [error, setError] = useState('')
@@ -24,12 +25,24 @@ export default function RegisterAgentModal({ onClose }) {
     setError(''); setWorking(true)
     try {
       const tags = form.tags.split(',').map(t => t.trim()).filter(Boolean)
+      let parsedSchema = {}
+      if (form.input_schema.trim()) {
+        try {
+          parsedSchema = JSON.parse(form.input_schema)
+        } catch {
+          throw new Error('input_schema must be valid JSON.')
+        }
+        if (typeof parsedSchema !== 'object' || parsedSchema === null || Array.isArray(parsedSchema)) {
+          throw new Error('input_schema must be a JSON object.')
+        }
+      }
       await registerAgent(apiKey, {
         name: form.name.trim(),
         description: form.description.trim(),
         endpoint_url: form.endpoint_url.trim(),
         price_per_call_usd: parseFloat(form.price_per_call_usd),
         tags,
+        input_schema: parsedSchema,
       })
       await refresh()
       showToast('Agent registered successfully', 'success')
@@ -175,6 +188,22 @@ export default function RegisterAgentModal({ onClose }) {
                   </button>
                 ))}
               </div>
+            </div>
+
+            <div>
+              <label style={labelStyle}>Input schema (JSON object)</label>
+              <textarea
+                value={form.input_schema}
+                onChange={set('input_schema')}
+                rows={4}
+                style={{ ...inputStyle, resize: 'vertical', lineHeight: 1.5, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+              />
+              <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 5 }}>
+                Example:{' '}
+                <code style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>
+                  {"{\"fields\":[{\"name\":\"prompt\",\"type\":\"textarea\",\"required\":true}]}"}
+                </code>
+              </p>
             </div>
 
             {error && (

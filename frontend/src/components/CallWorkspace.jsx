@@ -3,6 +3,29 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { useMarket } from '../context/MarketContext'
 import { callAgent, createJob, getJob } from '../api'
 
+function detailToText(detail) {
+  if (typeof detail === 'string' && detail.trim()) return detail
+  if (detail == null) return null
+  if (Array.isArray(detail)) {
+    const joined = detail.map(item => detailToText(item) ?? '').filter(Boolean).join(', ')
+    return joined || null
+  }
+  if (typeof detail === 'object') {
+    if (typeof detail.error === 'string' && detail.error) return detail.error
+    return JSON.stringify(detail)
+  }
+  return String(detail)
+}
+
+function formatCallError(status, body) {
+  if (body && typeof body === 'object' && body.detail !== undefined) {
+    const detailMsg = detailToText(body.detail)
+    if (detailMsg) return detailMsg
+  }
+  if (typeof body === 'string' && body.trim()) return body
+  return status > 0 ? `HTTP ${status}` : 'Network error'
+}
+
 // ── Signal badge ──────────────────────────────────────────────────────────────
 function SignalBadge({ signal }) {
   const map = {
@@ -294,13 +317,17 @@ function WikiResult({ result }) {
 }
 
 function GenericResult({ result }) {
+  const rendered =
+    typeof result === 'string'
+      ? result
+      : JSON.stringify(result, null, 2)
   return (
     <CardShell>
       <div style={{ padding: '12px 18px', borderBottom: '1px solid var(--border)', fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
         Response
       </div>
       <pre style={{ padding: 18, fontSize: 12, fontFamily: 'var(--font-mono)', color: 'var(--text-primary)', overflowX: 'auto', lineHeight: 1.7, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-        {JSON.stringify(result, null, 2)}
+        {rendered}
       </pre>
     </CardShell>
   )
@@ -359,7 +386,7 @@ function JobTracker({ jobId, agent }) {
     poll()
     pollRef.current = setInterval(poll, 3000)
     return () => clearInterval(pollRef.current)
-  }, [apiKey, jobId])
+  }, [apiKey, jobId, refreshJobs, refreshWallet])
 
   if (!job) return (
     <CardShell>
@@ -546,32 +573,35 @@ export default function CallWorkspace({ agent }) {
   const handleSubmit = async payload => {
     setLoading(true); setResult(null)
     try {
-      if (mode === 'async') {
-        const job = await createJob(apiKey, agent.agent_id, payload)
-        setResult({ jobId: job.job_id })
-        showToast('Job submitted', 'info')
-      } else {
-        const { status, ok, body } = await callAgent(apiKey, agent.agent_id, payload)
-        if (ok) {
-          setResult({ data: body })
-          showToast('Agent returned successfully', 'success')
-        } else if (status === 402) {
-          const d = body.detail ?? {}
-          setResult({ error: `Insufficient balance. Have $${((d.balance_cents ?? 0) / 100).toFixed(2)}, need $${((d.required_cents ?? 1) / 100).toFixed(2)}.`, status })
-          showToast('Not enough balance — add funds', 'error')
+        if (mode === 'async') {
+          const job = await createJob(apiKey, agent.agent_id, payload)
+          setResult({ jobId: job.job_id })
+          showToast('Job submitted', 'info')
         } else {
-          const msg = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail)
-          setResult({ error: msg, status })
-          showToast(`Call failed (${status})`, 'error')
+          const { status, ok, body } = await callAgent(apiKey, agent.agent_id, payload)
+          if (ok) {
+            setResult({ data: body })
+            showToast('Agent returned successfully', 'success')
+          } else if (status === 402 && body && typeof body === 'object' && typeof body.detail === 'object') {
+            const d = body.detail
+            setResult({
+              error: `Insufficient balance. Have $${((d.balance_cents ?? 0) / 100).toFixed(2)}, need $${((d.required_cents ?? 1) / 100).toFixed(2)}.`,
+              status,
+            })
+            showToast('Not enough balance — add funds', 'error')
+          } else {
+            const msg = formatCallError(status, body)
+            setResult({ error: msg, status })
+            showToast(`Call failed (${status})`, 'error')
+          }
         }
+      } catch (err) {
+        setResult({ error: err.message || 'Network error', status: err.status || 0 })
+        showToast(err.message || 'Network error', 'error')
+      } finally {
+        setLoading(false)
+        setTimeout(() => { refreshWallet(); refresh() }, 500)
       }
-    } catch (err) {
-      setResult({ error: err.message, status: 0 })
-      showToast('Network error', 'error')
-    } finally {
-      setLoading(false)
-      setTimeout(() => { refreshWallet(); refresh() }, 500)
-    }
   }
 
   return (

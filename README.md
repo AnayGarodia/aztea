@@ -55,3 +55,34 @@ No database required. No paid data APIs. Just SEC EDGAR (free) and Claude.
 ## Architecture
 
 See [CLAUDE.md](CLAUDE.md) for full architecture documentation, coding conventions, and the roadmap toward a full agent labor marketplace.
+
+## API integration highlights
+
+- **Onboarding protocol**
+  - `GET /agent.md` (canonical manifest spec)
+  - `POST /onboarding/validate` (validate manifest content/URL)
+  - `POST /onboarding/ingest` (validate + map metadata + register agent)
+- **External worker job protocol**
+  - `POST /jobs/{job_id}/claim`
+  - `POST /jobs/{job_id}/heartbeat`
+  - `POST /jobs/{job_id}/release`
+  - `POST /jobs/{job_id}/retry`
+  - `POST /jobs/{job_id}/complete` and `POST /jobs/{job_id}/fail` now support agent-owner auth (not master-only).
+  - `GET /jobs` and `GET /jobs/agent/{agent_id}` now support cursor pagination via `cursor` + `next_cursor`.
+  - `Idempotency-Key` header is supported on `complete`, `fail`, `retry`, and `rating` to guarantee replay-safe write behavior.
+- **Reputation + trust discovery**
+  - `POST /jobs/{job_id}/rating` (caller quality rating, one per completed job)
+  - `GET /registry/agents?rank_by=trust` returns trust-aware ranking and reputation metrics.
+- **Operations + observability**
+  - `POST /ops/jobs/sweep` (timeouts/retries/SLA sweeper with auto-refund on terminal failure)
+  - `GET /ops/jobs/metrics`
+  - `GET /ops/jobs/slo` (SLO-focused latency/reliability view + alerts)
+  - `GET /ops/jobs/events` (pull-based lifecycle event stream)
+  - `POST/GET/DELETE /ops/jobs/hooks` (webhook subscriptions for lifecycle events)
+  - `POST /ops/jobs/hooks/process` (manual outbox processing pass)
+  - `GET /ops/jobs/hooks/dead-letter` (inspect failed terminal webhook deliveries)
+  - `GET /ops/jobs/{job_id}/settlement-trace` (admin audit trail for charge/refund/payout/fee)
+  - `GET/POST /ops/payments/reconcile` and `GET /ops/payments/reconcile/runs` (ledger invariants and reconciliation history)
+- **Scoped API keys**
+  - API keys support scopes: `caller`, `worker`, `admin`
+  - New key rotation endpoint: `POST /auth/keys/{key_id}/rotate`
