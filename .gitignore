@@ -1,8 +1,9 @@
 # Environment
 .env
 
-# Run logs (audit trail — store externally if needed)
+# Run logs and registry DB (runtime state — store externally if needed)
 runs.jsonl
+registry.db
 
 # Python
 __pycache__/

@@ -1,3 +1,6 @@
 groq
 requests
 python-dotenv
+fastapi
+uvicorn[standard]
+slowapi
