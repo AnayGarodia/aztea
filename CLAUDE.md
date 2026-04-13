@@ -27,6 +27,7 @@ agentmarket/
   synthesizer.py   # Groq call — turns raw filing text into a structured brief
   registry.py      # SQLite-backed agent registry (CRUD + call stats)
   payments.py      # Payment ledger — wallets + transactions tables, call lifecycle
+  jobs.py          # Async jobs + messages for long-running agent work
   logger.py        # Appends one JSON line per run to runs.jsonl
   CLAUDE.md        # This file
   README.md        # User-facing quickstart
@@ -74,6 +75,20 @@ POST /wallets/deposit  {"wallet_id": "...", "amount_cents": 1000}  → credit wa
 GET  /wallets/{wallet_id}                → balance + last 20 transactions
 ```
 
+**Async job path (long-running):**
+```
+POST /jobs  {"agent_id": "...", "input_payload": {...}}
+  └─► payments.pre_call_charge()   — charge caller immediately
+  └─► jobs.create_job()            — status=pending, returns job_id
+
+GET  /jobs/{job_id}                → poll status + output when ready
+POST /jobs/{job_id}/complete       → agent settles payout + marks complete
+POST /jobs/{job_id}/fail           → agent refunds caller + marks failed
+
+POST /jobs/{job_id}/messages       → clarification thread
+GET  /jobs/{job_id}/messages       → poll messages (since=ID)
+```
+
 ### What each file does
 
 - **main.py** — Parses the CLI argument, calls `run()`, prints the brief, handles errors. All orchestration; no business logic.
@@ -81,6 +96,7 @@ GET  /wallets/{wallet_id}                → balance + last 20 transactions
 - **server.py** — FastAPI app hosting all routes. Lifespan inits both DBs and self-registers the financial research agent. `registry_call` orchestrates the full payment lifecycle between registry and payments modules.
 - **registry.py** — SQLite-backed store for agent listings. Six functions: `init_db`, `register_agent`, `get_agents`, `get_agent`, `agent_exists_by_name`, `update_call_stats`. No ORM, no external dependencies.
 - **payments.py** — Payment ledger in the same `registry.db`. Tables: `wallets` (balance cache) and `transactions` (insert-only). Key functions: `pre_call_charge` (TX1 — check + deduct), `post_call_payout` (TX2a — 90% agent + 10% platform), `post_call_refund` (TX2b — full refund). All amounts are integer cents; no floats cross into this module.
+- **jobs.py** — Async jobs + message thread. Charges on creation, settles on completion, supports long-running work with clarifications.
 - **fetcher.py** — Three SEC EDGAR API calls: ticker→CIK lookup, CIK→filing metadata, filing document download. Includes an HTML tag stripper that uses only stdlib `re`.
 - **synthesizer.py** — Builds the prompt, calls Groq (`llama-3.3-70b-versatile`), parses the JSON response. All prompt logic lives here — nowhere else.
 - **logger.py** — Single function `log_run()`. Appends a JSONL record with timestamp, ticker, latency, and full output.

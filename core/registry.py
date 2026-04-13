@@ -459,14 +459,14 @@ def agent_exists_by_name(name: str) -> bool:
 
 def get_agents_with_reputation(tag: str | None = None) -> list:
     """Return listings enriched with trust/reputation fields for ranking."""
-    import reputation
+    from core import reputation
 
     return reputation.enrich_agent_records(get_agents(tag=tag))
 
 
 def get_agent_with_reputation(agent_id: str) -> dict | None:
     """Return one enriched listing by agent_id, or None if missing."""
-    import reputation
+    from core import reputation
 
     agent = get_agent(agent_id)
     return reputation.enrich_agent_record(agent) if agent else None
