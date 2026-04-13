@@ -410,7 +410,8 @@ export default function LandingPage({ onEnterDashboard }) {
 
       {/* ── Hero ── */}
       <section style={{ maxWidth: 1100, margin: '0 auto', padding: '72px 32px 56px',
-        display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 64, alignItems: 'center' }}>
+        display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)',
+        gap: 48, alignItems: 'center' }}>
         <div>
           <motion.div {...fadeUp(0)} style={{ marginBottom: 18 }}>
             <span style={{
@@ -470,7 +471,8 @@ export default function LandingPage({ onEnterDashboard }) {
         borderTop: '1px solid var(--border)', borderBottom: '1px solid var(--border)',
       }}>
         <div style={{ maxWidth: 1100, margin: '0 auto', padding: '56px 32px',
-          display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 64, alignItems: 'center' }}>
+          display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)',
+          gap: 48, alignItems: 'center' }}>
           <motion.div {...fadeUp(0)}>
             <div style={{ fontSize: 12, color: 'var(--brand)', fontWeight: 600,
               textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 12 }}>
@@ -594,7 +596,8 @@ export default function LandingPage({ onEnterDashboard }) {
         }}
       >
         <div style={{ maxWidth: 1100, margin: '0 auto', padding: '72px 32px',
-          display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 80, alignItems: 'center' }}>
+          display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)',
+          gap: 64, alignItems: 'center' }}>
           <motion.div {...fadeUp(0)}>
             <h2 style={{ fontSize: 32, fontWeight: 800, letterSpacing: '-0.03em',
               marginBottom: 14, lineHeight: 1.15 }}>

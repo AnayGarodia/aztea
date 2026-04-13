@@ -19,17 +19,20 @@ Design rules:
     as the ledger insert that caused it to change.
   - The HTTP call to the downstream agent happens BETWEEN two short DB transactions
     so we never hold a write lock during network I/O.
+  - WAL mode enabled; thread-local connections.
 """
 
 import os
 import sqlite3
+import threading
 import uuid
 from datetime import datetime, timezone
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "registry.db")
-
 PLATFORM_OWNER_ID = "platform"
 PLATFORM_FEE_PCT = 10  # percent
+
+_local = threading.local()
 
 
 class InsufficientBalanceError(Exception):
@@ -46,10 +49,16 @@ class InsufficientBalanceError(Exception):
 # ---------------------------------------------------------------------------
 
 def _conn() -> sqlite3.Connection:
-    """Open a new SQLite connection for the calling thread."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    """Return a thread-local SQLite connection with WAL mode."""
+    if not getattr(_local, "conn", None):
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("PRAGMA foreign_keys=ON")
+        _local.conn = conn
+    return _local.conn
 
 
 def _now() -> str:
@@ -61,7 +70,7 @@ def _now() -> str:
 # ---------------------------------------------------------------------------
 
 def init_payments_db() -> None:
-    """Create wallets and transactions tables if they do not already exist."""
+    """Create wallets and transactions tables and indexes if needed."""
     with _conn() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS wallets (
@@ -83,12 +92,17 @@ def init_payments_db() -> None:
                 created_at    TEXT NOT NULL
             )
         """)
-    # Ensure the platform wallet always exists.
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tx_wallet ON transactions(wallet_id, created_at DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_wallet_owner ON wallets(owner_id)"
+        )
     get_or_create_wallet(PLATFORM_OWNER_ID)
 
 
 # ---------------------------------------------------------------------------
-# Internal ledger primitive — always called inside an open `with _conn()` block
+# Internal ledger primitive
 # ---------------------------------------------------------------------------
 
 def _insert_tx(
@@ -102,8 +116,7 @@ def _insert_tx(
 ) -> str:
     """
     Insert one transaction row and update the wallet balance cache atomically.
-    `conn` must be an active connection whose transaction will be committed by
-    the caller's `with _conn() as conn:` block.
+    `conn` must be an active connection managed by the caller's `with _conn()` block.
     Returns the new tx_id.
     """
     tx_id = str(uuid.uuid4())
@@ -141,20 +154,24 @@ def get_or_create_wallet(owner_id: str) -> dict:
         created_at = _now()
         try:
             conn.execute(
-                "INSERT INTO wallets (wallet_id, owner_id, balance_cents, created_at) VALUES (?, ?, 0, ?)",
+                "INSERT INTO wallets (wallet_id, owner_id, balance_cents, created_at)"
+                " VALUES (?, ?, 0, ?)",
                 (wallet_id, owner_id, created_at),
             )
         except sqlite3.IntegrityError:
-            # Lost a race with another thread creating the same wallet.
             row = conn.execute(
                 "SELECT * FROM wallets WHERE owner_id = ?", (owner_id,)
             ).fetchone()
             return dict(row)
-        return {"wallet_id": wallet_id, "owner_id": owner_id, "balance_cents": 0, "created_at": created_at}
+        return {
+            "wallet_id": wallet_id,
+            "owner_id": owner_id,
+            "balance_cents": 0,
+            "created_at": created_at,
+        }
 
 
 def get_wallet(wallet_id: str) -> dict | None:
-    """Return wallet dict or None if not found."""
     with _conn() as conn:
         row = conn.execute(
             "SELECT * FROM wallets WHERE wallet_id = ?", (wallet_id,)
@@ -172,18 +189,17 @@ def get_wallet_transactions(wallet_id: str, limit: int = 20) -> list:
             ORDER BY created_at DESC
             LIMIT ?
             """,
-            (wallet_id, limit),
+            (wallet_id, min(limit, 100)),  # cap at 100 for safety
         ).fetchall()
     return [dict(r) for r in rows]
 
 
 def deposit(wallet_id: str, amount_cents: int, memo: str = "manual deposit") -> str:
-    """
-    Credit a wallet. Returns tx_id.
-    Raises ValueError for bad inputs.
-    """
+    """Credit a wallet. Returns tx_id. Raises ValueError for bad inputs."""
     if amount_cents <= 0:
         raise ValueError(f"Deposit amount must be positive, got {amount_cents}¢.")
+    if amount_cents > 1_000_000:
+        raise ValueError("Single deposit capped at 1,000,000¢ (10,000 USD).")
     with _conn() as conn:
         wallet = conn.execute(
             "SELECT wallet_id FROM wallets WHERE wallet_id = ?", (wallet_id,)
@@ -194,16 +210,14 @@ def deposit(wallet_id: str, amount_cents: int, memo: str = "manual deposit") -> 
 
 
 # ---------------------------------------------------------------------------
-# Call lifecycle — two short transactions bracketing the HTTP call
+# Call lifecycle
 # ---------------------------------------------------------------------------
 
 def pre_call_charge(caller_wallet_id: str, price_cents: int, agent_id: str) -> str:
     """
     Transaction 1 (pre-call): check balance, deduct charge, update cache.
-
-    Returns charge_tx_id.
-    Raises InsufficientBalanceError if balance < price_cents.
-    The DB lock is held only for this short read-check-write sequence.
+    Returns charge_tx_id. Raises InsufficientBalanceError if underfunded.
+    DB lock held only for this short read-check-write sequence.
     """
     with _conn() as conn:
         row = conn.execute(
@@ -242,22 +256,12 @@ def post_call_payout(
 
     with _conn() as conn:
         _insert_tx(
-            conn,
-            agent_wallet_id,
-            "payout",
-            agent_cents,
-            agent_id,
-            charge_tx_id,
-            f"Payout 90% for call {charge_tx_id[:8]}",
+            conn, agent_wallet_id, "payout", agent_cents, agent_id,
+            charge_tx_id, f"Payout 90% for call {charge_tx_id[:8]}",
         )
         _insert_tx(
-            conn,
-            platform_wallet_id,
-            "fee",
-            fee_cents,
-            agent_id,
-            charge_tx_id,
-            f"Platform fee 10% for call {charge_tx_id[:8]}",
+            conn, platform_wallet_id, "fee", fee_cents, agent_id,
+            charge_tx_id, f"Platform fee 10% for call {charge_tx_id[:8]}",
         )
 
 
@@ -268,16 +272,11 @@ def post_call_refund(
     agent_id: str,
 ) -> None:
     """
-    Transaction 2b (failure): refund full price back to caller.
-    Links to the original charge via related_tx_id for audit trail.
+    Transaction 2b (failure): refund full price to caller.
+    Links to original charge via related_tx_id for audit trail.
     """
     with _conn() as conn:
         _insert_tx(
-            conn,
-            caller_wallet_id,
-            "refund",
-            price_cents,
-            agent_id,
-            charge_tx_id,
-            f"Refund for failed call {charge_tx_id[:8]}",
+            conn, caller_wallet_id, "refund", price_cents, agent_id,
+            charge_tx_id, f"Refund for failed call {charge_tx_id[:8]}",
         )
