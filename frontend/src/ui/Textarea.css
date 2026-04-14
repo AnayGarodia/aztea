@@ -4,7 +4,7 @@
   font-family: var(--font-sans);
   font-size: 0.875rem;
   color: var(--ink);
-  background: rgba(8, 13, 27, 0.82);
+  background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--r-sm);
   outline: none;
@@ -17,7 +17,7 @@
 .textarea::placeholder { color: var(--ink-faint); }
 .textarea:focus {
   border-color: var(--accent-line);
-  background: rgba(8, 13, 27, 0.95);
+  background: var(--surface);
   box-shadow: var(--focus-ring);
 }
 .textarea--mono { font-family: var(--font-mono); font-size: 0.8125rem; }

@@ -2,8 +2,7 @@
   display: flex;
   height: 100vh;
   overflow: hidden;
-  background: transparent;
-  position: relative;
+  background: var(--canvas);
 }
 .shell__main {
   flex: 1;
@@ -11,33 +10,7 @@
   flex-direction: column;
   min-width: 0;
   overflow: hidden;
-  background: rgba(5, 9, 21, 0.36);
-  position: relative;
-  z-index: 1;
-}
-
-.shell__ambient {
-  position: absolute;
-  border-radius: 50%;
-  filter: blur(90px);
-  pointer-events: none;
-  z-index: 0;
-}
-
-.shell__ambient--a {
-  width: 360px;
-  height: 360px;
-  top: -110px;
-  left: 180px;
-  background: rgba(104, 93, 255, 0.2);
-}
-
-.shell__ambient--b {
-  width: 320px;
-  height: 320px;
-  bottom: -120px;
-  right: 30%;
-  background: rgba(80, 245, 216, 0.14);
+  background: var(--canvas);
 }
 
 @media (max-width: 768px) {
