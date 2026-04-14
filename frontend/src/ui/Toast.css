@@ -13,10 +13,11 @@
   box-shadow: var(--shadow-lg);
   font-size: 0.875rem;
   font-weight: 500;
-  max-width: 480px;
+  max-width: 520px;
   white-space: nowrap;
+  backdrop-filter: blur(10px);
 }
-.toast--success { background: var(--positive-wash); color: var(--positive); border-color: var(--positive-line); }
-.toast--error   { background: var(--negative-wash); color: var(--negative); border-color: var(--negative-line); }
-.toast--info    { background: var(--surface);       color: var(--ink);      border-color: var(--line); }
-.toast--warn    { background: var(--warn-wash);     color: var(--warn);     border-color: var(--warn-line); }
+.toast--success { background: rgba(12, 38, 29, 0.9); color: var(--positive); border-color: var(--positive-line); }
+.toast--error   { background: rgba(43, 14, 26, 0.9); color: var(--negative); border-color: var(--negative-line); }
+.toast--info    { background: rgba(17, 26, 45, 0.9); color: var(--ink);      border-color: var(--line); }
+.toast--warn    { background: rgba(45, 30, 12, 0.9); color: var(--warn);     border-color: var(--warn-line); }

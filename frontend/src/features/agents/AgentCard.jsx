@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import Pill from '../../ui/Pill'
+import AgentAvatar from '../../brand/AgentAvatar'
 import './AgentCard.css'
 
 export default function AgentCard({ agent, index = 0 }) {
@@ -16,7 +17,10 @@ export default function AgentCard({ agent, index = 0 }) {
     >
       <Link to={`/agents/${agent.agent_id}`} className="agent-card">
         <div className="agent-card__header">
-          <p className="agent-card__name">{agent.name}</p>
+          <div className="agent-card__identity">
+            <AgentAvatar name={agent.name} size="sm" />
+            <p className="agent-card__name">{agent.name}</p>
+          </div>
           <span className="agent-card__price">${Number(agent.price_per_call_usd).toFixed(2)}</span>
         </div>
         <p className="agent-card__desc">{agent.description}</p>

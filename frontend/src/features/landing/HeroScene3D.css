@@ -1,0 +1,14 @@
+.hero-scene {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: auto;
+}
+
+.hero-scene canvas {
+  width: 100% !important;
+  height: 100% !important;
+  mix-blend-mode: normal;
+  opacity: 0.9;
+  filter: saturate(1.08) contrast(1.02);
+}

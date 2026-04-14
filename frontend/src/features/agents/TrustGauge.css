@@ -1,0 +1,75 @@
+.tg {
+  display: flex;
+  gap: var(--sp-5);
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+/* Arc gauge */
+.tg__gauge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+}
+.tg__gauge svg { display: block; }
+.tg__gauge-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+
+/* Stats column */
+.tg__stats {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  min-width: 140px;
+  justify-content: center;
+  padding-top: var(--sp-2);
+}
+
+.tg__stat {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.tg__stat-val {
+  font-family: var(--font-mono);
+  font-size: 1.0625rem;
+  font-weight: 600;
+  color: var(--ink);
+  font-feature-settings: 'tnum';
+  line-height: 1;
+}
+
+.tg__stat-key {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+
+/* Progress bar for supplementary metrics */
+.tg__bar-wrap {
+  margin-top: 5px;
+}
+
+.tg__bar-track {
+  height: 3px;
+  background: var(--line);
+  border-radius: var(--r-pill);
+  overflow: hidden;
+}
+
+.tg__bar-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: var(--r-pill);
+}

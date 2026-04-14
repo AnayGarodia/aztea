@@ -2,20 +2,21 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 0.75rem;
-  font-weight: 500;
+  font-size: 0.6875rem;
+  font-weight: 600;
   line-height: 1;
-  padding: 4px 10px;
+  padding: 3px 9px;
   border-radius: var(--r-pill);
   border: 1px solid var(--line);
-  background: var(--canvas-sunk);
-  color: var(--ink-soft);
+  background: rgba(18, 26, 46, 0.88);
+  color: var(--ink-mute);
   cursor: default;
   user-select: none;
   white-space: nowrap;
-  transition: background var(--duration-sm) var(--ease), border-color var(--duration-sm) var(--ease), color var(--duration-sm) var(--ease);
+  letter-spacing: 0.01em;
+  transition: background var(--duration-sm), border-color var(--duration-sm), color var(--duration-sm);
 }
 .pill--interactive { cursor: pointer; }
 .pill--interactive:hover { background: var(--surface-hover); border-color: var(--line-strong); color: var(--ink); }
 .pill--active { background: var(--accent-wash); border-color: var(--accent-line); color: var(--accent); }
-.pill--sm { padding: 3px 8px; font-size: 0.6875rem; }
+.pill--sm { padding: 2px 7px; font-size: 0.625rem; }

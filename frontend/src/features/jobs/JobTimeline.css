@@ -1,0 +1,99 @@
+.jtl {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: var(--sp-4) 0;
+}
+
+/* Each step = dot + label stacked, plus the connector line */
+.jtl__step {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex: 1;
+  /* On mobile let it wrap naturally */
+}
+
+/* Connector line between steps */
+.jtl__line {
+  flex: 1;
+  height: 2px;
+  background: var(--line);
+  position: relative;
+  overflow: hidden;
+  min-width: 24px;
+}
+.jtl__line--filled { background: var(--line); }
+.jtl__line--fail   { background: var(--line); }
+
+.jtl__line-fill {
+  position: absolute;
+  inset: 0;
+  background: var(--accent);
+  transform-origin: left center;
+}
+.jtl__line-fill--fail {
+  background: var(--negative);
+}
+
+/* Step dot + label wrapper — stacked vertically */
+.jtl__dot {
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  background: var(--line);
+  border: 2px solid var(--line-strong);
+  transition: background var(--duration-sm), border-color var(--duration-sm);
+}
+
+.jtl__dot--past {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.jtl__dot--active {
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-wash);
+}
+
+.jtl__dot--future {
+  background: var(--canvas);
+  border-color: var(--line-strong);
+}
+
+.jtl__dot--fail {
+  background: var(--negative);
+  border-color: var(--negative);
+  box-shadow: 0 0 0 4px var(--negative-wash);
+}
+
+.jtl__pulse {
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  background: var(--accent);
+  pointer-events: none;
+}
+
+.jtl__label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  white-space: nowrap;
+  margin-left: 6px;
+}
+
+.jtl__label--past   { color: var(--ink-mute); }
+.jtl__label--active { color: var(--accent); }
+.jtl__label--future { color: var(--ink-faint); }
+.jtl__label--fail   { color: var(--negative); }
+
+/* Only first step has label on left */
+.jtl__step:first-child .jtl__label { margin-left: 6px; }

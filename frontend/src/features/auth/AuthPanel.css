@@ -1,10 +1,11 @@
 .auth-panel {
-  background: var(--surface);
+  background: rgba(9, 15, 30, 0.78);
   border: 1px solid var(--line);
   border-radius: var(--r-xl);
   box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(16px);
   width: 100%;
-  max-width: 440px;
+  max-width: 460px;
   overflow: hidden;
 }
 .auth-panel__tabs {
@@ -13,32 +14,37 @@
   border-bottom: 1px solid var(--line);
 }
 .auth-panel__tab {
-  padding: var(--sp-4);
-  font-size: 0.875rem;
-  font-weight: 500;
+  padding: 16px;
+  font-size: 0.8125rem;
+  font-weight: 600;
   color: var(--ink-mute);
   cursor: pointer;
   text-align: center;
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
-  transition: color var(--duration-sm) var(--ease), border-color var(--duration-sm) var(--ease);
+  background: none;
+  border-left: none;
+  border-right: none;
+  border-top: none;
+  font-family: var(--font-sans);
+  transition: color var(--duration-sm), border-color var(--duration-sm), background var(--duration-sm);
 }
-.auth-panel__tab:hover { color: var(--ink-soft); }
-.auth-panel__tab--active { color: var(--ink); border-bottom-color: var(--accent); }
-.auth-panel__body { padding: var(--sp-6); }
-.auth-panel__form { display: flex; flex-direction: column; gap: var(--sp-4); }
-.auth-panel__title { font-size: 1.125rem; font-weight: 600; color: var(--ink); margin-bottom: var(--sp-1); }
-.auth-panel__sub { font-size: 0.875rem; color: var(--ink-mute); }
+.auth-panel__tab:hover { color: var(--ink); background: rgba(25, 35, 60, 0.25); }
+.auth-panel__tab--active { color: var(--accent); border-bottom-color: var(--accent); background: rgba(14, 21, 40, 0.4); }
+.auth-panel__body { padding: 26px; }
+.auth-panel__form { display: flex; flex-direction: column; gap: 16px; }
+.auth-panel__title { font-size: 1rem; font-weight: 700; color: var(--ink); margin-bottom: 2px; letter-spacing: -0.01em; }
+.auth-panel__sub { font-size: 0.8125rem; color: var(--ink-mute); }
 .auth-panel__error {
   background: var(--negative-wash);
   color: var(--negative);
   border: 1px solid var(--negative-line);
   border-radius: var(--r-sm);
-  padding: var(--sp-3) var(--sp-4);
-  font-size: 0.875rem;
+  padding: 10px 14px;
+  font-size: 0.8125rem;
 }
 .auth-panel__hint {
-  font-size: 0.75rem;
+  font-size: 0.6875rem;
   color: var(--ink-mute);
   text-align: center;
   line-height: 1.5;

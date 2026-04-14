@@ -1,18 +1,22 @@
 .topbar {
   height: var(--topbar-h);
   border-bottom: 1px solid var(--line);
-  background: var(--surface);
+  background: var(--canvas-raised);
   display: flex;
   align-items: center;
   gap: var(--sp-4);
-  padding: 0 var(--sp-6);
+  padding: 0 var(--sp-5);
   flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  z-index: 12;
 }
+
 .topbar__breadcrumb {
   display: flex;
   align-items: center;
-  gap: var(--sp-2);
-  font-size: 0.875rem;
+  gap: 6px;
+  font-size: 0.8125rem;
   color: var(--ink-mute);
   flex: 1;
   min-width: 0;
@@ -23,9 +27,13 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.topbar__breadcrumb a { color: var(--ink-soft); text-decoration: none; }
+.topbar__breadcrumb a {
+  color: var(--ink-mute);
+  text-decoration: none;
+  transition: color var(--duration-sm);
+}
 .topbar__breadcrumb a:hover { color: var(--ink); }
-.topbar__breadcrumb-current { color: var(--ink); font-weight: 500; }
+.topbar__breadcrumb-current { color: var(--ink); font-weight: 600; }
 
 .topbar__actions {
   display: flex;
@@ -36,25 +44,32 @@
 .topbar__balance {
   display: flex;
   align-items: center;
-  gap: var(--sp-2);
-  background: var(--canvas-sunk);
-  border: 1px solid var(--line);
+  gap: 7px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
   border-radius: var(--r-pill);
   padding: 5px 12px;
   font-family: var(--font-mono);
-  font-size: 0.8125rem;
-  font-weight: 500;
-  color: var(--ink-soft);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--ink);
   cursor: pointer;
   text-decoration: none;
-  transition: background var(--duration-sm) var(--ease), border-color var(--duration-sm) var(--ease), color var(--duration-sm) var(--ease);
+  transition: background var(--duration-sm), border-color var(--duration-sm), color var(--duration-sm);
   font-feature-settings: 'tnum';
 }
 .topbar__balance:hover { background: var(--surface-hover); border-color: var(--line-strong); color: var(--ink); }
+
 .topbar__balance-dot {
-  width: 6px; height: 6px;
+  width: 5px; height: 5px;
   border-radius: 50%;
   background: var(--accent);
   flex-shrink: 0;
+  animation: balance-pulse 2.5s ease-in-out infinite;
 }
 .topbar__balance--low .topbar__balance-dot { background: var(--warn); }
+
+@keyframes balance-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}

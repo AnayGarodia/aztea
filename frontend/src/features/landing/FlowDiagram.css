@@ -1,0 +1,117 @@
+.flow {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  position: relative;
+}
+
+/* Mobile: stack vertically */
+@media (max-width: 640px) {
+  .flow { flex-direction: column; }
+}
+
+/* Each step + its connector */
+.flow__node-group {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+}
+
+@media (max-width: 640px) {
+  .flow__node-group {
+    flex-direction: column;
+    align-items: flex-start;
+    width: 100%;
+  }
+}
+
+/* The card */
+.flow__node {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: var(--sp-6) var(--sp-5);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow var(--duration-md) var(--ease), border-color var(--duration-md) var(--ease), transform var(--duration-md) var(--ease);
+  cursor: default;
+  min-width: 0;
+}
+.flow__node:hover {
+  box-shadow: var(--shadow-md);
+  border-color: var(--accent-line);
+  transform: translateY(-2px);
+}
+
+.flow__num {
+  font-family: var(--font-display);
+  font-size: 2.75rem;
+  font-weight: 400;
+  color: var(--accent);
+  line-height: 1;
+  letter-spacing: -0.04em;
+  opacity: 0.7;
+}
+
+.flow__icon {
+  width: 44px; height: 44px;
+  background: var(--accent-wash);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+}
+
+.flow__title {
+  font-weight: 700;
+  font-size: 1.0625rem;
+  color: var(--ink);
+  letter-spacing: -0.01em;
+}
+
+.flow__body {
+  font-size: 0.875rem;
+  color: var(--ink-soft);
+  line-height: 1.65;
+}
+
+/* Connector arrow between nodes */
+.flow__arrow-wrap {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 0 var(--sp-3);
+  margin-top: -40px; /* align with card center */
+  position: relative;
+}
+
+@media (max-width: 640px) {
+  .flow__arrow-wrap {
+    transform: rotate(90deg);
+    margin: var(--sp-2) 0;
+    margin-left: var(--sp-5);
+  }
+}
+
+.flow__arrow-line {
+  width: 48px;
+  height: 1.5px;
+  background: var(--accent-line);
+  transform-origin: left center;
+}
+
+.flow__arrow-head {
+  width: 0; height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 7px solid var(--accent-line);
+  margin-left: -1px;
+  flex-shrink: 0;
+}

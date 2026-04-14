@@ -1,7 +1,9 @@
 import { NavLink, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, Bot, Briefcase, Wallet, Settings, LogOut, Radio } from 'lucide-react'
+import { LayoutDashboard, Bot, Briefcase, Wallet, Settings, LogOut } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
+import { useMarket } from '../context/MarketContext'
 import Avatar from '../ui/Avatar'
+import AgentAvatar from '../brand/AgentAvatar'
 import './Sidebar.css'
 
 const NAV = [
@@ -14,6 +16,7 @@ const NAV = [
 
 export default function Sidebar() {
   const { user, disconnect } = useAuth()
+  const { agents = [] } = useMarket()
   const navigate = useNavigate()
 
   const handleSignOut = () => {
@@ -24,9 +27,7 @@ export default function Sidebar() {
   return (
     <aside className="sidebar">
       <NavLink to="/overview" className="sidebar__brand">
-        <div className="sidebar__logo">
-          <Radio size={14} />
-        </div>
+        <div className="sidebar__logo">AM</div>
         <span className="sidebar__wordmark">agentmarket</span>
       </NavLink>
 
@@ -43,6 +44,26 @@ export default function Sidebar() {
             {label}
           </NavLink>
         ))}
+
+        {agents.length > 0 && (
+          <div className="sidebar__agents-strip">
+            <p className="sidebar__agents-title">City pulse</p>
+            <div className="sidebar__agents-list">
+              {agents.slice(0, 4).map((agent) => (
+                <button
+                  key={agent.agent_id}
+                  type="button"
+                  className="sidebar__agent-chip"
+                  onClick={() => navigate(`/agents/${agent.agent_id}`)}
+                  title={agent.name}
+                >
+                  <AgentAvatar name={agent.name} size="xs" />
+                  <span>{agent.name}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </nav>
 
       <div
