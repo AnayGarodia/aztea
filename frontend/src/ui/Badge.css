@@ -20,7 +20,7 @@
 }
 
 /* variants */
-.badge--default  { background: rgba(18, 26, 46, 0.88); color: var(--ink-soft); border-color: var(--line); }
+.badge--default  { background: var(--surface); color: var(--ink-soft); border-color: var(--line); }
 .badge--positive { background: var(--positive-wash);    color: var(--positive);  border-color: var(--positive-line); }
 .badge--negative { background: var(--negative-wash);    color: var(--negative);  border-color: var(--negative-line); }
 .badge--warn     { background: var(--warn-wash);        color: var(--warn);      border-color: var(--warn-line); }

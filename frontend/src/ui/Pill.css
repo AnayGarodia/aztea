@@ -8,7 +8,7 @@
   padding: 3px 9px;
   border-radius: var(--r-pill);
   border: 1px solid var(--line);
-  background: rgba(18, 26, 46, 0.88);
+  background: var(--surface);
   color: var(--ink-mute);
   cursor: default;
   user-select: none;

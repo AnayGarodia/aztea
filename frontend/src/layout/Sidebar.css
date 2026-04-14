@@ -93,8 +93,8 @@
 
 .sidebar__agent-chip:hover {
   color: var(--ink);
-  background: rgba(23, 33, 58, 0.75);
-  border-color: rgba(126, 225, 255, 0.26);
+  background: var(--surface-hover);
+  border-color: var(--line-strong);
 }
 
 .sidebar__link {

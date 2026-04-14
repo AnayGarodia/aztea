@@ -1,9 +1,8 @@
 .auth-panel {
-  background: rgba(9, 15, 30, 0.78);
+  background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--r-xl);
   box-shadow: var(--shadow-lg);
-  backdrop-filter: blur(16px);
   width: 100%;
   max-width: 460px;
   overflow: hidden;
@@ -29,8 +28,8 @@
   font-family: var(--font-sans);
   transition: color var(--duration-sm), border-color var(--duration-sm), background var(--duration-sm);
 }
-.auth-panel__tab:hover { color: var(--ink); background: rgba(25, 35, 60, 0.25); }
-.auth-panel__tab--active { color: var(--accent); border-bottom-color: var(--accent); background: rgba(14, 21, 40, 0.4); }
+.auth-panel__tab:hover { color: var(--ink); background: var(--canvas-raised); }
+.auth-panel__tab--active { color: var(--accent); border-bottom-color: var(--accent); background: var(--accent-wash); }
 .auth-panel__body { padding: 26px; }
 .auth-panel__form { display: flex; flex-direction: column; gap: 16px; }
 .auth-panel__title { font-size: 1rem; font-weight: 700; color: var(--ink); margin-bottom: 2px; letter-spacing: -0.01em; }
