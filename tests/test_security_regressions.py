@@ -184,6 +184,24 @@ def test_wallet_deposit_blocks_cross_owner_topup(client):
     assert master_ok.json()["balance_cents"] == 50
 
 
+def test_registry_register_blocks_private_endpoint_urls(client):
+    user = _register_user()
+    resp = client.post(
+        "/registry/register",
+        headers=_auth_headers(user["raw_api_key"]),
+        json={
+            "name": f"Private endpoint {uuid.uuid4().hex[:6]}",
+            "description": "should be blocked",
+            "endpoint_url": "http://localhost:8000/analyze",
+            "price_per_call_usd": 0.05,
+            "tags": ["security"],
+            "input_schema": {"type": "object"},
+        },
+    )
+    assert resp.status_code == 400
+    assert "localhost" in resp.json()["detail"].lower()
+
+
 def test_rate_limit_keying_groups_invalid_rotating_bearer_tokens(monkeypatch):
     monkeypatch.setattr(server, "_MASTER_KEY", TEST_MASTER_KEY)
     monkeypatch.setattr(server._auth, "verify_api_key", lambda _: None)
