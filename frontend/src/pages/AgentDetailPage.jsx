@@ -1,35 +1,19 @@
 import { useMemo, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
+import { motion } from 'framer-motion'
 import Topbar from '../layout/Topbar'
 import Card from '../ui/Card'
 import Button from '../ui/Button'
 import Badge from '../ui/Badge'
 import Pill from '../ui/Pill'
 import EmptyState from '../ui/EmptyState'
+import AgentAvatar from '../brand/AgentAvatar'
 import AgentInputForm from '../features/agents/AgentInputForm'
 import ResultRenderer from '../features/agents/results/ResultRenderer'
+import TrustGauge from '../features/agents/TrustGauge'
 import { callAgent, createJob } from '../api'
 import { useMarket } from '../context/MarketContext'
-import { ArrowLeft, ArrowUpRight } from 'lucide-react'
-
-function StatChip({ label, value }) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 80 }}>
-      <span style={{
-        fontFamily: 'var(--font-mono)', fontSize: '0.9375rem',
-        fontWeight: 500, color: 'var(--ink)', fontFeatureSettings: '"tnum"',
-      }}>
-        {value}
-      </span>
-      <span style={{
-        fontSize: '0.6875rem', fontWeight: 600, letterSpacing: '0.05em',
-        textTransform: 'uppercase', color: 'var(--ink-mute)',
-      }}>
-        {label}
-      </span>
-    </div>
-  )
-}
+import { ArrowLeft, ArrowUpRight, Code } from 'lucide-react'
 
 export default function AgentDetailPage() {
   const { id } = useParams()
@@ -83,10 +67,6 @@ export default function AgentDetailPage() {
     )
   }
 
-  const successPct = agent.success_rate != null ? `${Math.round(agent.success_rate * 100)}%` : '—'
-  const latency = agent.avg_latency_ms != null ? `${(agent.avg_latency_ms / 1000).toFixed(1)}s` : '—'
-  const calls = agent.total_calls ?? 0
-
   return (
     <main style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
       <Topbar crumbs={[{ to: '/agents', label: 'Agents' }, { label: agent.name }]} />
@@ -100,6 +80,12 @@ export default function AgentDetailPage() {
             gap: 'var(--sp-5)', flexWrap: 'wrap', marginBottom: 'var(--sp-4)',
           }}>
             <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', marginBottom: 8 }}>
+                <AgentAvatar name={agent.name} size="md" />
+                <span style={{ fontSize: '0.75rem', color: 'var(--ink-mute)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600 }}>
+                  Agent profile
+                </span>
+              </div>
               <h1 style={{
                 fontFamily: 'var(--font-display)',
                 fontSize: '1.75rem', fontWeight: 400,
@@ -132,16 +118,27 @@ export default function AgentDetailPage() {
             </div>
           </div>
 
-          {/* Stats */}
-          <div style={{
-            display: 'flex', gap: 'var(--sp-6)', padding: 'var(--sp-4) var(--sp-5)',
-            background: 'var(--canvas-sunk)', border: '1px solid var(--line)',
-            borderRadius: 'var(--r-md)', flexWrap: 'wrap',
-          }}>
-            <StatChip label="Success rate" value={successPct} />
-            <StatChip label="Avg latency" value={latency} />
-            <StatChip label="Total calls" value={calls.toLocaleString()} />
-          </div>
+          {/* Trust gauge */}
+          <motion.div
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.15, duration: 0.4 }}
+            style={{
+              padding: 'var(--sp-5)',
+              background: 'var(--surface)',
+              border: '1px solid var(--line)',
+              borderRadius: 'var(--r-lg)',
+              boxShadow: 'var(--shadow-xs)',
+            }}
+          >
+            <p style={{
+              fontSize: '0.6875rem', fontWeight: 700, letterSpacing: '0.07em',
+              textTransform: 'uppercase', color: 'var(--ink-mute)', marginBottom: 'var(--sp-4)',
+            }}>
+              Reputation
+            </p>
+            <TrustGauge agent={agent} />
+          </motion.div>
         </div>
 
         {/* Two-column: invoke + output */}

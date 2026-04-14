@@ -6,6 +6,7 @@ import Badge from '../ui/Badge'
 import Button from '../ui/Button'
 import Skeleton from '../ui/Skeleton'
 import EmptyState from '../ui/EmptyState'
+import AgentAvatar from '../brand/AgentAvatar'
 import { useMarket } from '../context/MarketContext'
 import { ArrowUpRight } from 'lucide-react'
 
@@ -36,9 +37,12 @@ function JobRow({ job, agents }) {
       }}
     >
       <div style={{ minWidth: 0 }}>
-        <p style={{ fontSize: '0.875rem', fontWeight: 500, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {agent?.name ?? 'Unknown agent'}
-        </p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
+          <AgentAvatar name={agent?.name ?? 'Unknown'} size="xs" />
+          <p style={{ fontSize: '0.875rem', fontWeight: 500, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {agent?.name ?? 'Unknown agent'}
+          </p>
+        </div>
         <p style={{ fontSize: '0.75rem', color: 'var(--ink-mute)', fontFamily: 'var(--font-mono)' }}>
           {job.job_id.slice(0, 8)}…
         </p>
@@ -77,9 +81,12 @@ function AgentQuickLink({ agent }) {
       onMouseLeave={e => { e.currentTarget.style.background = 'var(--surface)'; e.currentTarget.style.borderColor = 'var(--line)' }}
     >
       <div style={{ minWidth: 0 }}>
-        <p style={{ fontSize: '0.875rem', fontWeight: 500, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {agent.name}
-        </p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
+          <AgentAvatar name={agent.name} size="xs" />
+          <p style={{ fontSize: '0.875rem', fontWeight: 500, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {agent.name}
+          </p>
+        </div>
         <p style={{ fontSize: '0.75rem', color: 'var(--ink-mute)', fontFamily: 'var(--font-mono)', fontFeatureSettings: '"tnum"' }}>
           ${Number(agent.price_per_call_usd).toFixed(2)} / call
         </p>

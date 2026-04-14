@@ -5,6 +5,7 @@ import Card from '../ui/Card'
 import Badge from '../ui/Badge'
 import EmptyState from '../ui/EmptyState'
 import Skeleton from '../ui/Skeleton'
+import AgentAvatar from '../brand/AgentAvatar'
 import { useMarket } from '../context/MarketContext'
 import { ChevronRight } from 'lucide-react'
 
@@ -55,9 +56,12 @@ function JobRow({ job, agents }) {
     >
       {/* Agent + ID */}
       <div style={{ minWidth: 0 }}>
-        <p style={{ fontSize: '0.875rem', fontWeight: 500, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {agent?.name ?? <span style={{ color: 'var(--ink-mute)' }}>Unknown agent</span>}
-        </p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
+          <AgentAvatar name={agent?.name ?? 'Unknown'} size="xs" />
+          <p style={{ fontSize: '0.875rem', fontWeight: 500, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {agent?.name ?? <span style={{ color: 'var(--ink-mute)' }}>Unknown agent</span>}
+          </p>
+        </div>
         <p style={{ fontSize: '0.75rem', color: 'var(--ink-mute)', fontFamily: 'var(--font-mono)' }}>
           {job.job_id.slice(0, 12)}…
         </p>

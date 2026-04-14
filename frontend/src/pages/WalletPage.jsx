@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import Topbar from '../layout/Topbar'
 import Card from '../ui/Card'
-import Input from '../ui/Input'
 import Button from '../ui/Button'
 import Badge from '../ui/Badge'
 import EmptyState from '../ui/EmptyState'
+import SpendChart from '../features/analytics/SpendChart'
 import { depositToWallet } from '../api'
 import { useMarket } from '../context/MarketContext'
 import { ArrowDownLeft, ArrowUpRight, Plus } from 'lucide-react'
@@ -133,7 +133,7 @@ export default function WalletPage() {
           )}
         </div>
 
-        <div style={{ display: 'grid', gap: 'var(--sp-5)', gridTemplateColumns: '320px 1fr', alignItems: 'start' }}>
+        <div style={{ display: 'grid', gap: 'var(--sp-5)', gridTemplateColumns: '300px 1fr', alignItems: 'start' }}>
 
           {/* Add funds */}
           <Card>
@@ -210,25 +210,38 @@ export default function WalletPage() {
             </Card.Body>
           </Card>
 
-          {/* Transaction history */}
-          <Card>
-            <Card.Header>
-              <span style={{ fontWeight: 600, fontSize: '0.9375rem' }}>
-                Transactions {transactions.length > 0 && `(${transactions.length})`}
-              </span>
-            </Card.Header>
-            <Card.Body>
-              {transactions.length === 0 ? (
-                <EmptyState title="No transactions" sub="Deposits and charges will appear here." />
-              ) : (
-                <div>
-                  {transactions.map((tx, i) => (
-                    <TxRow key={tx.tx_id ?? i} tx={tx} />
-                  ))}
-                </div>
-              )}
-            </Card.Body>
-          </Card>
+          {/* Right column: chart + transactions stacked */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' }}>
+            {transactions.length > 0 && (
+              <Card>
+                <Card.Header>
+                  <span style={{ fontWeight: 600, fontSize: '0.9375rem' }}>14-day spend</span>
+                </Card.Header>
+                <Card.Body>
+                  <SpendChart transactions={transactions} />
+                </Card.Body>
+              </Card>
+            )}
+
+            <Card>
+              <Card.Header>
+                <span style={{ fontWeight: 600, fontSize: '0.9375rem' }}>
+                  Transactions {transactions.length > 0 && `(${transactions.length})`}
+                </span>
+              </Card.Header>
+              <Card.Body>
+                {transactions.length === 0 ? (
+                  <EmptyState title="No transactions" sub="Deposits and charges will appear here." />
+                ) : (
+                  <div>
+                    {transactions.map((tx, i) => (
+                      <TxRow key={tx.tx_id ?? i} tx={tx} />
+                    ))}
+                  </div>
+                )}
+              </Card.Body>
+            </Card>
+          </div>
         </div>
       </div>
     </main>

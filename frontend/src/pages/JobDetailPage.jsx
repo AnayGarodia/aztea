@@ -5,9 +5,11 @@ import Card from '../ui/Card'
 import Badge from '../ui/Badge'
 import Button from '../ui/Button'
 import EmptyState from '../ui/EmptyState'
+import AgentAvatar from '../brand/AgentAvatar'
 import ResultRenderer from '../features/agents/results/ResultRenderer'
 import { getJobMessages } from '../api'
 import { useMarket } from '../context/MarketContext'
+import JobTimeline from '../features/jobs/JobTimeline'
 import { ArrowLeft, RefreshCw } from 'lucide-react'
 
 function fmtDate(str) {
@@ -143,14 +145,15 @@ export default function JobDetailPage() {
         {/* Job header */}
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 'var(--sp-4)', marginBottom: 'var(--sp-6)', flexWrap: 'wrap' }}>
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', marginBottom: 8 }}>
-              <Badge label={job.status} dot />
-              {agent && (
-                <Link to={`/agents/${agent.agent_id}`} style={{ fontSize: '0.875rem', color: 'var(--accent)', textDecoration: 'none', fontWeight: 500 }}>
-                  {agent.name}
-                </Link>
-              )}
-            </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', marginBottom: 8 }}>
+                <Badge label={job.status} dot />
+                {agent && (
+                  <Link to={`/agents/${agent.agent_id}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: '0.875rem', color: 'var(--accent)', textDecoration: 'none', fontWeight: 500 }}>
+                    <AgentAvatar name={agent.name} size="xs" />
+                    {agent.name}
+                  </Link>
+                )}
+              </div>
             <p style={{ fontFamily: 'var(--font-mono)', fontSize: '0.875rem', color: 'var(--ink-mute)' }}>
               {job.job_id}
             </p>
@@ -166,6 +169,24 @@ export default function JobDetailPage() {
               Refresh
             </Button>
           )}
+        </div>
+
+        {/* Timeline */}
+        <div style={{
+          background: 'var(--surface)',
+          border: '1px solid var(--line)',
+          borderRadius: 'var(--r-lg)',
+          padding: 'var(--sp-4) var(--sp-5)',
+          marginBottom: 'var(--sp-5)',
+          boxShadow: 'var(--shadow-xs)',
+        }}>
+          <p style={{
+            fontSize: '0.6875rem', fontWeight: 700, letterSpacing: '0.07em',
+            textTransform: 'uppercase', color: 'var(--ink-mute)', marginBottom: 'var(--sp-1)',
+          }}>
+            Progress
+          </p>
+          <JobTimeline status={job.status} />
         </div>
 
         <div style={{ display: 'grid', gap: 'var(--sp-5)' }}>

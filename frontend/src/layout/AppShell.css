@@ -2,7 +2,8 @@
   display: flex;
   height: 100vh;
   overflow: hidden;
-  background: var(--canvas);
+  background: transparent;
+  position: relative;
 }
 .shell__main {
   flex: 1;
@@ -10,13 +11,34 @@
   flex-direction: column;
   min-width: 0;
   overflow: hidden;
+  background: rgba(5, 9, 21, 0.36);
+  position: relative;
+  z-index: 1;
 }
-.shell__content {
-  flex: 1;
-  overflow-y: auto;
-  padding: var(--sp-6);
+
+.shell__ambient {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(90px);
+  pointer-events: none;
+  z-index: 0;
 }
-.shell__content--full { padding: 0; }
+
+.shell__ambient--a {
+  width: 360px;
+  height: 360px;
+  top: -110px;
+  left: 180px;
+  background: rgba(104, 93, 255, 0.2);
+}
+
+.shell__ambient--b {
+  width: 320px;
+  height: 320px;
+  bottom: -120px;
+  right: 30%;
+  background: rgba(80, 245, 216, 0.14);
+}
 
 @media (max-width: 768px) {
   .sidebar { display: none; }

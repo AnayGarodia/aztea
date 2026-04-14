@@ -3,30 +3,33 @@
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(14px);
 }
 
-.card--flat { box-shadow: none; }
+.card--flat { }
 .card--raised { box-shadow: var(--shadow-md); }
 .card--xl { border-radius: var(--r-xl); }
 .card--interactive {
   cursor: pointer;
-  transition: box-shadow var(--duration-sm) var(--ease),
-              border-color var(--duration-sm) var(--ease),
-              transform var(--duration-sm) var(--ease);
+  transition:
+    border-color var(--duration-sm) var(--ease),
+    background var(--duration-sm) var(--ease),
+    transform var(--duration-sm) var(--ease);
 }
 .card--interactive:hover {
-  box-shadow: var(--shadow-md);
+  background: var(--surface-hover);
   border-color: var(--line-strong);
+  transform: translateY(-2px);
 }
 
 .card__header {
-  padding: var(--sp-5);
+  padding: 14px 20px;
   border-bottom: 1px solid var(--line);
 }
-.card__body { padding: var(--sp-5); }
+.card__body { padding: 20px; }
 .card__footer {
-  padding: var(--sp-4) var(--sp-5);
+  padding: 12px 20px;
   border-top: 1px solid var(--line);
-  background: var(--canvas-sunk);
+  background: rgba(8, 13, 26, 0.55);
   border-radius: 0 0 var(--r-md) var(--r-md);
 }
