@@ -32,6 +32,8 @@ from datetime import datetime, timezone
 DB_PATH = os.path.join(os.path.dirname(__file__), "registry.db")
 PLATFORM_OWNER_ID = "platform"
 PLATFORM_FEE_PCT = 10  # percent
+DISPUTE_ESCROW_OWNER_PREFIX = "dispute_escrow:"
+DISPUTE_RETURN_PLATFORM_FEE_ON_CALLER_WINS = True
 
 _local = threading.local()
 
@@ -341,6 +343,445 @@ def post_call_refund(
             )
         except sqlite3.IntegrityError:
             pass  # idempotency: refund already recorded
+
+
+def _get_or_create_wallet_id_conn(conn: sqlite3.Connection, owner_id: str) -> str:
+    row = conn.execute(
+        "SELECT wallet_id FROM wallets WHERE owner_id = ?",
+        (owner_id,),
+    ).fetchone()
+    if row is not None:
+        return str(row["wallet_id"])
+    wallet_id = str(uuid.uuid4())
+    conn.execute(
+        """
+        INSERT INTO wallets (wallet_id, owner_id, balance_cents, created_at)
+        VALUES (?, ?, 0, ?)
+        """,
+        (wallet_id, owner_id, _now()),
+    )
+    return wallet_id
+
+
+def _wallet_balance_conn(conn: sqlite3.Connection, wallet_id: str) -> int:
+    row = conn.execute(
+        "SELECT balance_cents FROM wallets WHERE wallet_id = ?",
+        (wallet_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"Wallet '{wallet_id}' not found.")
+    return int(row["balance_cents"])
+
+
+def _debit_wallet_conn(
+    conn: sqlite3.Connection,
+    wallet_id: str,
+    amount_cents: int,
+    *,
+    agent_id: str | None,
+    related_tx_id: str,
+    memo: str,
+) -> None:
+    if amount_cents < 0:
+        raise ValueError("amount_cents must be non-negative.")
+    if amount_cents == 0:
+        return
+    updated = conn.execute(
+        """
+        UPDATE wallets
+        SET balance_cents = balance_cents - ?
+        WHERE wallet_id = ? AND balance_cents >= ?
+        """,
+        (amount_cents, wallet_id, amount_cents),
+    ).rowcount
+    if updated == 0:
+        balance = _wallet_balance_conn(conn, wallet_id)
+        raise InsufficientBalanceError(balance, amount_cents)
+    _insert_tx_only(
+        conn,
+        wallet_id,
+        "charge",
+        -amount_cents,
+        agent_id,
+        related_tx_id,
+        memo,
+    )
+
+
+def _credit_wallet_conn(
+    conn: sqlite3.Connection,
+    wallet_id: str,
+    amount_cents: int,
+    *,
+    tx_type: str,
+    agent_id: str | None,
+    related_tx_id: str,
+    memo: str,
+) -> None:
+    if amount_cents < 0:
+        raise ValueError("amount_cents must be non-negative.")
+    _insert_tx(
+        conn,
+        wallet_id,
+        tx_type,
+        amount_cents,
+        agent_id,
+        related_tx_id,
+        memo,
+    )
+
+
+def _dispute_context_conn(conn: sqlite3.Connection, dispute_id: str) -> sqlite3.Row:
+    row = conn.execute(
+        """
+        SELECT
+            d.dispute_id,
+            d.job_id,
+            d.status AS dispute_status,
+            d.outcome AS dispute_outcome,
+            j.agent_id,
+            j.price_cents,
+            j.charge_tx_id,
+            j.caller_wallet_id,
+            j.agent_wallet_id,
+            j.platform_wallet_id,
+            j.settled_at
+        FROM disputes d
+        JOIN jobs j ON j.job_id = d.job_id
+        WHERE d.dispute_id = ?
+        """,
+        (dispute_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"Dispute '{dispute_id}' not found.")
+    return row
+
+
+def _related_sum_conn(conn: sqlite3.Connection, *, related_tx_id: str, wallet_id: str, tx_type: str) -> int:
+    row = conn.execute(
+        """
+        SELECT COALESCE(SUM(amount_cents), 0) AS total
+        FROM transactions
+        WHERE related_tx_id = ? AND wallet_id = ? AND type = ?
+        """,
+        (related_tx_id, wallet_id, tx_type),
+    ).fetchone()
+    return int(row["total"] or 0)
+
+
+def lock_dispute_funds(dispute_id: str) -> dict:
+    """
+    Lock dispute funds into escrow.
+    If payout already happened, claw back from agent/platform into dispute escrow.
+    If payout has not happened yet, charge remains held and no extra movement is needed.
+    """
+    with _conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        ctx = _dispute_context_conn(conn, dispute_id)
+        escrow_wallet_id = _get_or_create_wallet_id_conn(conn, f"{DISPUTE_ESCROW_OWNER_PREFIX}{dispute_id}")
+
+        already_locked = _related_sum_conn(
+            conn,
+            related_tx_id=dispute_id,
+            wallet_id=escrow_wallet_id,
+            tx_type="deposit",
+        )
+        if already_locked > 0:
+            return {
+                "dispute_id": dispute_id,
+                "escrow_wallet_id": escrow_wallet_id,
+                "locked_cents": already_locked,
+            }
+
+        charge_tx_id = str(ctx["charge_tx_id"])
+        agent_wallet_id = str(ctx["agent_wallet_id"])
+        platform_wallet_id = str(ctx["platform_wallet_id"])
+        agent_id = str(ctx["agent_id"])
+
+        agent_paid = _related_sum_conn(
+            conn,
+            related_tx_id=charge_tx_id,
+            wallet_id=agent_wallet_id,
+            tx_type="payout",
+        )
+        platform_paid = _related_sum_conn(
+            conn,
+            related_tx_id=charge_tx_id,
+            wallet_id=platform_wallet_id,
+            tx_type="fee",
+        )
+        total_locked = agent_paid + platform_paid
+
+        if total_locked > 0:
+            _debit_wallet_conn(
+                conn,
+                agent_wallet_id,
+                agent_paid,
+                agent_id=agent_id,
+                related_tx_id=dispute_id,
+                memo=f"Dispute clawback from agent for {dispute_id[:8]}",
+            )
+            _debit_wallet_conn(
+                conn,
+                platform_wallet_id,
+                platform_paid,
+                agent_id=agent_id,
+                related_tx_id=dispute_id,
+                memo=f"Dispute clawback from platform for {dispute_id[:8]}",
+            )
+            _credit_wallet_conn(
+                conn,
+                escrow_wallet_id,
+                total_locked,
+                tx_type="deposit",
+                agent_id=agent_id,
+                related_tx_id=dispute_id,
+                memo=f"Dispute escrow lock for {dispute_id[:8]}",
+            )
+
+        return {
+            "dispute_id": dispute_id,
+            "escrow_wallet_id": escrow_wallet_id,
+            "locked_cents": total_locked,
+        }
+
+
+def post_dispute_settlement(
+    dispute_id: str,
+    outcome: str,
+    split_caller_cents: int | None = None,
+    split_agent_cents: int | None = None,
+) -> dict:
+    """
+    Apply final ledger movements for a dispute outcome.
+    """
+    normalized_outcome = str(outcome or "").strip().lower()
+    if normalized_outcome not in {"caller_wins", "agent_wins", "split", "void"}:
+        raise ValueError("Invalid dispute outcome.")
+
+    with _conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        ctx = _dispute_context_conn(conn, dispute_id)
+        agent_id = str(ctx["agent_id"])
+        price_cents = int(ctx["price_cents"])
+        charge_tx_id = str(ctx["charge_tx_id"])
+        caller_wallet_id = str(ctx["caller_wallet_id"])
+        agent_wallet_id = str(ctx["agent_wallet_id"])
+        platform_wallet_id = str(ctx["platform_wallet_id"])
+        escrow_wallet_id = _get_or_create_wallet_id_conn(conn, f"{DISPUTE_ESCROW_OWNER_PREFIX}{dispute_id}")
+
+        finalized = conn.execute(
+            """
+            SELECT 1
+            FROM transactions
+            WHERE related_tx_id = ? AND wallet_id = ? AND memo = ?
+            LIMIT 1
+            """,
+            (dispute_id, escrow_wallet_id, f"Dispute final settlement ({normalized_outcome})"),
+        ).fetchone()
+        if finalized is not None:
+            return {
+                "dispute_id": dispute_id,
+                "outcome": normalized_outcome,
+                "caller_delta_cents": 0,
+                "agent_delta_cents": 0,
+                "platform_delta_cents": 0,
+            }
+
+        escrow_balance = _wallet_balance_conn(conn, escrow_wallet_id)
+        fee_cents = price_cents * PLATFORM_FEE_PCT // 100
+        default_agent_cents = price_cents - fee_cents
+
+        caller_delta = 0
+        agent_delta = 0
+        platform_delta = 0
+
+        if normalized_outcome == "caller_wins":
+            if escrow_balance > 0:
+                payout_cents = min(price_cents, escrow_balance)
+                _debit_wallet_conn(
+                    conn,
+                    escrow_wallet_id,
+                    payout_cents,
+                    agent_id=agent_id,
+                    related_tx_id=dispute_id,
+                    memo=f"Dispute release to caller for {dispute_id[:8]}",
+                )
+                _credit_wallet_conn(
+                    conn,
+                    caller_wallet_id,
+                    payout_cents,
+                    tx_type="refund",
+                    agent_id=agent_id,
+                    related_tx_id=dispute_id,
+                    memo=f"Dispute caller win refund for {dispute_id[:8]}",
+                )
+                caller_delta += payout_cents
+            else:
+                _credit_wallet_conn(
+                    conn,
+                    caller_wallet_id,
+                    price_cents,
+                    tx_type="refund",
+                    agent_id=agent_id,
+                    related_tx_id=dispute_id,
+                    memo=f"Dispute caller win refund for {dispute_id[:8]}",
+                )
+                caller_delta += price_cents
+
+        elif normalized_outcome == "agent_wins":
+            if escrow_balance > 0:
+                payout_cents = min(default_agent_cents, escrow_balance)
+                fee_release_cents = min(fee_cents, max(0, escrow_balance - payout_cents))
+                release_total = payout_cents + fee_release_cents
+                if release_total > 0:
+                    _debit_wallet_conn(
+                        conn,
+                        escrow_wallet_id,
+                        release_total,
+                        agent_id=agent_id,
+                        related_tx_id=dispute_id,
+                        memo=f"Dispute release to agent/platform for {dispute_id[:8]}",
+                    )
+                if payout_cents > 0:
+                    _credit_wallet_conn(
+                        conn,
+                        agent_wallet_id,
+                        payout_cents,
+                        tx_type="payout",
+                        agent_id=agent_id,
+                        related_tx_id=dispute_id,
+                        memo=f"Dispute agent win payout for {dispute_id[:8]}",
+                    )
+                    agent_delta += payout_cents
+                if fee_release_cents > 0:
+                    _credit_wallet_conn(
+                        conn,
+                        platform_wallet_id,
+                        fee_release_cents,
+                        tx_type="fee",
+                        agent_id=agent_id,
+                        related_tx_id=dispute_id,
+                        memo=f"Dispute agent win platform fee for {dispute_id[:8]}",
+                    )
+                    platform_delta += fee_release_cents
+            else:
+                _credit_wallet_conn(
+                    conn,
+                    agent_wallet_id,
+                    default_agent_cents,
+                    tx_type="payout",
+                    agent_id=agent_id,
+                    related_tx_id=dispute_id,
+                    memo=f"Dispute agent win payout for {dispute_id[:8]}",
+                )
+                _credit_wallet_conn(
+                    conn,
+                    platform_wallet_id,
+                    fee_cents,
+                    tx_type="fee",
+                    agent_id=agent_id,
+                    related_tx_id=dispute_id,
+                    memo=f"Dispute agent win platform fee for {dispute_id[:8]}",
+                )
+                agent_delta += default_agent_cents
+                platform_delta += fee_cents
+
+        elif normalized_outcome == "split":
+            if split_caller_cents is None or split_agent_cents is None:
+                raise ValueError("split outcomes require split_caller_cents and split_agent_cents.")
+            caller_share = int(split_caller_cents)
+            agent_share = int(split_agent_cents)
+            if caller_share < 0 or agent_share < 0:
+                raise ValueError("split shares must be non-negative.")
+            if caller_share + agent_share > price_cents:
+                raise ValueError("split shares cannot exceed job price.")
+            platform_share = price_cents - caller_share - agent_share
+
+            total_release = caller_share + agent_share + platform_share
+            if escrow_balance >= total_release and total_release > 0:
+                _debit_wallet_conn(
+                    conn,
+                    escrow_wallet_id,
+                    total_release,
+                    agent_id=agent_id,
+                    related_tx_id=dispute_id,
+                    memo=f"Dispute split release for {dispute_id[:8]}",
+                )
+
+            if caller_share > 0:
+                _credit_wallet_conn(
+                    conn,
+                    caller_wallet_id,
+                    caller_share,
+                    tx_type="refund",
+                    agent_id=agent_id,
+                    related_tx_id=dispute_id,
+                    memo=f"Dispute split caller portion for {dispute_id[:8]}",
+                )
+                caller_delta += caller_share
+            if agent_share > 0:
+                _credit_wallet_conn(
+                    conn,
+                    agent_wallet_id,
+                    agent_share,
+                    tx_type="payout",
+                    agent_id=agent_id,
+                    related_tx_id=dispute_id,
+                    memo=f"Dispute split agent portion for {dispute_id[:8]}",
+                )
+                agent_delta += agent_share
+            if platform_share > 0:
+                _credit_wallet_conn(
+                    conn,
+                    platform_wallet_id,
+                    platform_share,
+                    tx_type="fee",
+                    agent_id=agent_id,
+                    related_tx_id=dispute_id,
+                    memo=f"Dispute split platform portion for {dispute_id[:8]}",
+                )
+                platform_delta += platform_share
+
+        else:  # void
+            if escrow_balance > 0:
+                _debit_wallet_conn(
+                    conn,
+                    escrow_wallet_id,
+                    escrow_balance,
+                    agent_id=agent_id,
+                    related_tx_id=dispute_id,
+                    memo=f"Dispute void release for {dispute_id[:8]}",
+                )
+                _credit_wallet_conn(
+                    conn,
+                    caller_wallet_id,
+                    escrow_balance,
+                    tx_type="refund",
+                    agent_id=agent_id,
+                    related_tx_id=dispute_id,
+                    memo=f"Dispute void refund for {dispute_id[:8]}",
+                )
+                caller_delta += escrow_balance
+
+        _insert_tx_only(
+            conn,
+            escrow_wallet_id,
+            "fee",
+            0,
+            agent_id,
+            dispute_id,
+            f"Dispute final settlement ({normalized_outcome})",
+        )
+
+        return {
+            "dispute_id": dispute_id,
+            "outcome": normalized_outcome,
+            "caller_delta_cents": caller_delta,
+            "agent_delta_cents": agent_delta,
+            "platform_delta_cents": platform_delta,
+            "charge_tx_id": charge_tx_id,
+        }
 
 
 def get_settlement_transactions(charge_tx_id: str) -> list:

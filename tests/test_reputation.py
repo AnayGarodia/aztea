@@ -7,6 +7,7 @@ import pytest
 from core import jobs
 from core import registry
 from core import reputation
+from core import disputes
 
 
 def _close_module_conn(module) -> None:
@@ -23,7 +24,7 @@ def _close_module_conn(module) -> None:
 @pytest.fixture
 def isolated_db(monkeypatch):
     db_path = Path(__file__).resolve().parent / f"test-reputation-{uuid.uuid4().hex}.db"
-    modules = (registry, jobs, reputation)
+    modules = (registry, jobs, reputation, disputes)
 
     for module in modules:
         _close_module_conn(module)

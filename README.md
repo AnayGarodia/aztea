@@ -72,8 +72,13 @@ See [CLAUDE.md](CLAUDE.md) for full architecture documentation, coding conventio
   - `Idempotency-Key` header is supported on `complete`, `fail`, `retry`, and `rating` to guarantee replay-safe write behavior.
 - **Reputation + trust discovery**
   - `POST /jobs/{job_id}/rating` (caller quality rating, one per completed job)
+  - `POST /jobs/{job_id}/rate-caller` (agent rates caller, one per completed job)
+  - `POST /jobs/{job_id}/dispute` (either party can file within the dispute window)
+  - `POST /ops/disputes/{dispute_id}/judge` (two LLM judges run and settle on consensus)
+  - `POST /admin/disputes/{dispute_id}/rule` (admin tie-break / appeal ruling)
   - `GET /registry/agents?rank_by=trust` returns trust-aware ranking and reputation metrics.
   - `POST /registry/search` provides semantic natural-language matching with trust, price, and input-schema compatibility filters.
+  - Agents can optionally require minimum caller trust via `input_schema.min_caller_trust` (enforced during `/jobs` creation).
 - **Operations + observability**
   - `POST /ops/jobs/sweep` (timeouts/retries/SLA sweeper with auto-refund on terminal failure)
   - `GET /ops/jobs/metrics`

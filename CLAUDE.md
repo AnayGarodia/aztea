@@ -13,6 +13,7 @@ The long-term arc:
 - ~~Build a registry~~ — Done. `registry.py` stores agent listings with pricing, live latency, and success-rate stats.
 - Add a billing layer so agents can pay each other (e.g., a meta-agent orchestrating several sub-agents).
 - Expose a unified `/invoke` endpoint that routes to the right agent by capability tag.
+- Semantic discovery is now available via `POST /registry/search` (embedding similarity + trust + price + schema compatibility).
 
 ---
 
@@ -28,6 +29,8 @@ agentmarket/
   registry.py      # SQLite-backed agent registry (CRUD + call stats)
   payments.py      # Payment ledger — wallets + transactions tables, call lifecycle
   jobs.py          # Async jobs + messages for long-running agent work
+  disputes.py      # Dispute records + judgments + bilateral caller rating storage
+  judges.py        # Two-model LLM arbitration helper for dispute resolution
   logger.py        # Appends one JSON line per run to runs.jsonl
   CLAUDE.md        # This file
   README.md        # User-facing quickstart
@@ -89,6 +92,18 @@ POST /jobs/{job_id}/messages       → clarification thread
 GET  /jobs/{job_id}/messages       → poll messages (since=ID)
 ```
 
+**Trust and dispute path:**
+```
+POST /jobs/{job_id}/rating         → caller rates agent quality (1-5)
+POST /jobs/{job_id}/rate-caller    → agent rates caller quality (1-5)
+POST /jobs/{job_id}/dispute        → caller/agent files dispute within window
+  └─► payments.lock_dispute_funds()   — clawback to dispute escrow if already paid
+POST /ops/disputes/{id}/judge      → two LLM judges vote
+  └─► consensus: payments.post_dispute_settlement()
+  └─► tie: status=tied (await admin)
+POST /admin/disputes/{id}/rule     → admin tie-break or appeal, then final settlement
+```
+
 ### What each file does
 
 - **main.py** — Parses the CLI argument, calls `run()`, prints the brief, handles errors. All orchestration; no business logic.
@@ -111,7 +126,7 @@ GET  /jobs/{job_id}/messages       → poll messages (since=ID)
 
 **All external calls have error handling.** Every `requests.get()` call has `resp.raise_for_status()`. The Groq call lets `groq` exceptions propagate to `main.py` where they are caught and printed cleanly. Never silently swallow exceptions.
 
-**No extra libraries.** `requests` for HTTP, `groq` for LLM inference, stdlib for everything else. HTML stripping uses `re`, not `beautifulsoup4`. JSON is stdlib `json`. This keeps the install footprint minimal and makes the agent easy to package for the marketplace.
+**Dependencies stay intentional.** Runtime depends on `requests`, `groq`, and a small set of infra libraries (`fastapi`, `uvicorn`, `slowapi`). Semantic registry search also uses `sentence-transformers` + `numpy` locally (no paid embedding API dependency).
 
 **Error messages go to stderr; output goes to stdout.** This lets callers pipe the JSON output cleanly (`python main.py AAPL | jq .signal`) without mixing error text into the payload.
 

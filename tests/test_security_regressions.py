@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request
 
 from core import auth
+from core import disputes
 from core import jobs
 from core import payments
 from core import registry
@@ -67,7 +68,7 @@ def _make_request(auth_header: str | None, host: str = "203.0.113.10") -> Reques
 @pytest.fixture
 def isolated_db(monkeypatch):
     db_path = Path(__file__).resolve().parent / f"test-security-{uuid.uuid4().hex}.db"
-    modules = (registry, payments, auth, jobs)
+    modules = (registry, payments, auth, jobs, disputes)
 
     for module in modules:
         _close_module_conn(module)
@@ -161,6 +162,28 @@ def test_wallet_endpoint_authorization_allows_owner_and_master_only(client):
     assert master_ok.json()["wallet_id"] == wallet_b["wallet_id"]
 
 
+def test_wallet_deposit_blocks_cross_owner_topup(client):
+    user_a = _register_user()
+    user_b = _register_user()
+    wallet_b = payments.get_or_create_wallet(f"user:{user_b['user_id']}")
+
+    denied = client.post(
+        "/wallets/deposit",
+        headers=_auth_headers(user_a["raw_api_key"]),
+        json={"wallet_id": wallet_b["wallet_id"], "amount_cents": 50, "memo": "unauthorized topup"},
+    )
+    assert denied.status_code == 403
+    assert denied.json()["detail"] == "Not authorized to deposit into this wallet."
+
+    master_ok = client.post(
+        "/wallets/deposit",
+        headers=_auth_headers(TEST_MASTER_KEY),
+        json={"wallet_id": wallet_b["wallet_id"], "amount_cents": 50, "memo": "admin topup"},
+    )
+    assert master_ok.status_code == 200, master_ok.text
+    assert master_ok.json()["balance_cents"] == 50
+
+
 def test_rate_limit_keying_groups_invalid_rotating_bearer_tokens(monkeypatch):
     monkeypatch.setattr(server, "_MASTER_KEY", TEST_MASTER_KEY)
     monkeypatch.setattr(server._auth, "verify_api_key", lambda _: None)
@@ -172,6 +195,18 @@ def test_rate_limit_keying_groups_invalid_rotating_bearer_tokens(monkeypatch):
     assert key1 == "203.0.113.10"
     assert key2 == "203.0.113.10"
     assert key3 == "203.0.113.10"
+
+
+def test_invalid_content_length_header_returns_400(client):
+    resp = client.get(
+        "/health",
+        headers={
+            "Authorization": f"Bearer {TEST_MASTER_KEY}",
+            "Content-Length": "abc",
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Invalid Content-Length header."
 
 
 def test_registry_init_db_migrates_legacy_agents_table(isolated_db):

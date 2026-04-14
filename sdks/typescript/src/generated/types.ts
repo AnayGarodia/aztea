@@ -606,6 +606,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/jobs/{job_id}/rate-caller": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Jobs Rate Caller */
+        post: operations["jobs_rate_caller_jobs__job_id__rate_caller_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{job_id}/dispute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Jobs Dispute */
+        post: operations["jobs_dispute_jobs__job_id__dispute_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ops/disputes/{dispute_id}/judge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Disputes Judge */
+        post: operations["disputes_judge_ops_disputes__dispute_id__judge_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/disputes/{dispute_id}/rule": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Disputes Admin Rule */
+        post: operations["disputes_admin_rule_admin_disputes__dispute_id__rule_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/ops/jobs/{job_id}/settlement-trace": {
         parameters: {
             query?: never;
@@ -868,6 +936,28 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
+         * AdminDisputeRuleRequest
+         * @example {
+         *       "outcome": "split",
+         *       "reasoning": "Both parties partially met obligations.",
+         *       "split_agent_cents": 4,
+         *       "split_caller_cents": 6
+         *     }
+         */
+        AdminDisputeRuleRequest: {
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "caller_wins" | "agent_wins" | "split" | "void";
+            /** Split Caller Cents */
+            split_caller_cents?: number | null;
+            /** Split Agent Cents */
+            split_agent_cents?: number | null;
+            /** Reasoning */
+            reasoning: string;
+        };
+        /**
          * AgentRegisterRequest
          * @example {
          *       "description": "Summarizes SEC 10-Q filings into investment briefs.",
@@ -922,6 +1012,8 @@ export interface components {
             input_schema?: {
                 [key: string]: components["schemas"]["JsonValue"];
             };
+            /** Caller Trust Min */
+            caller_trust_min?: number | null;
         } & {
             [key: string]: unknown;
         };
@@ -1097,6 +1189,62 @@ export interface components {
              */
             memo: string;
         };
+        /** DisputeJudgeResponse */
+        DisputeJudgeResponse: {
+            dispute: components["schemas"]["DisputeResponse"];
+            /** Settlement */
+            settlement?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            } | null;
+        };
+        /** DisputeJudgmentResponse */
+        DisputeJudgmentResponse: {
+            /** Judgment Id */
+            judgment_id: string;
+            /** Dispute Id */
+            dispute_id: string;
+            /** Judge Kind */
+            judge_kind: string;
+            /** Verdict */
+            verdict: string;
+            /** Reasoning */
+            reasoning: string;
+            /** Model */
+            model?: string | null;
+            /** Admin User Id */
+            admin_user_id?: string | null;
+            /** Created At */
+            created_at: string;
+        };
+        /** DisputeResponse */
+        DisputeResponse: {
+            /** Dispute Id */
+            dispute_id: string;
+            /** Job Id */
+            job_id: string;
+            /** Filed By Owner Id */
+            filed_by_owner_id: string;
+            /** Side */
+            side: string;
+            /** Reason */
+            reason: string;
+            /** Evidence */
+            evidence?: string | null;
+            /** Status */
+            status: string;
+            /** Outcome */
+            outcome?: string | null;
+            /** Split Caller Cents */
+            split_caller_cents?: number | null;
+            /** Split Agent Cents */
+            split_agent_cents?: number | null;
+            /** Filed At */
+            filed_at: string;
+            /** Resolved At */
+            resolved_at?: string | null;
+            /** Judgments */
+            judgments?: components["schemas"]["DisputeJudgmentResponse"][];
+        };
         /** DynamicObjectResponse */
         DynamicObjectResponse: {
             [key: string]: unknown;
@@ -1139,6 +1287,17 @@ export interface components {
              * @default 50
              */
             limit: number;
+        };
+        /** JobCallerRatingResponse */
+        JobCallerRatingResponse: {
+            /** Rating */
+            rating: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Caller Reputation */
+            caller_reputation: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
         };
         /**
          * JobClaimRequest
@@ -1192,6 +1351,19 @@ export interface components {
              * @default 3
              */
             max_attempts: number;
+        };
+        /**
+         * JobDisputeRequest
+         * @example {
+         *       "evidence": "https://example.com/evidence/filing-risk-section",
+         *       "reason": "Output missed key risk factors from the filing."
+         *     }
+         */
+        JobDisputeRequest: {
+            /** Reason */
+            reason: string;
+            /** Evidence */
+            evidence?: string | null;
         };
         /**
          * JobEventHookCreateRequest
@@ -1311,6 +1483,19 @@ export interface components {
         JobMessagesResponse: {
             /** Messages */
             messages: components["schemas"]["JobMessageResponse"][];
+        };
+        /**
+         * JobRateCallerRequest
+         * @example {
+         *       "comment": "Clear requirements and fast responses.",
+         *       "rating": 4
+         *     }
+         */
+        JobRateCallerRequest: {
+            /** Rating */
+            rating: number;
+            /** Comment */
+            comment?: string | null;
         };
         /**
          * JobRatingRequest
@@ -1567,7 +1752,8 @@ export interface components {
          *       "query": "I need to summarize a 10-K filing for AAPL",
          *       "required_input_fields": [
          *         "ticker"
-         *       ]
+         *       ],
+         *       "respect_caller_trust_min": true
          *     }
          */
         RegistrySearchRequest: {
@@ -1587,6 +1773,11 @@ export interface components {
             max_price_cents?: number | null;
             /** Required Input Fields */
             required_input_fields?: string[] | null;
+            /**
+             * Respect Caller Trust Min
+             * @default false
+             */
+            respect_caller_trust_min: boolean;
         };
         /** RegistrySearchResponse */
         RegistrySearchResponse: {
@@ -1704,6 +1895,8 @@ export interface components {
             owner_id: string;
             /** Balance Cents */
             balance_cents: number;
+            /** Caller Trust */
+            caller_trust?: number | null;
             /** Transactions */
             transactions?: {
                 [key: string]: components["schemas"]["JsonValue"];
@@ -4580,6 +4773,385 @@ export interface operations {
             };
         };
     };
+    jobs_rate_caller_jobs__job_id__rate_caller_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JobRateCallerRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobCallerRatingResponse"];
+                };
+            };
+            /** @description Bad request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid authorization header. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Rate limit exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Internal server error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    jobs_dispute_jobs__job_id__dispute_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JobDisputeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DisputeResponse"];
+                };
+            };
+            /** @description Bad request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid authorization header. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Rate limit exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Internal server error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    disputes_judge_ops_disputes__dispute_id__judge_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dispute_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DisputeJudgeResponse"];
+                };
+            };
+            /** @description Bad request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid authorization header. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Rate limit exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Internal server error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    disputes_admin_rule_admin_disputes__dispute_id__rule_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dispute_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminDisputeRuleRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DisputeJudgeResponse"];
+                };
+            };
+            /** @description Bad request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid authorization header. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Rate limit exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Internal server error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     jobs_settlement_trace_ops_jobs__job_id__settlement_trace_get: {
         parameters: {
             query?: never;
@@ -5529,6 +6101,15 @@ export interface operations {
             };
             /** @description Forbidden. */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found. */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
