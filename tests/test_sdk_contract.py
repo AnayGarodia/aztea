@@ -16,6 +16,7 @@ os.environ.setdefault("API_KEY", "test-master-key")
 os.environ.setdefault("SERVER_BASE_URL", "http://localhost:8000")
 
 from core import auth
+from core import disputes
 from core import jobs
 from core import payments
 from core import registry
@@ -50,7 +51,7 @@ def _free_tcp_port() -> int:
 @pytest.fixture
 def sdk_server(monkeypatch):
     db_path = Path(__file__).resolve().parent / f"test-sdk-contract-{uuid.uuid4().hex}.db"
-    modules = (registry, payments, auth, jobs, reputation)
+    modules = (registry, payments, auth, jobs, reputation, disputes)
     for module in modules:
         _close_module_conn(module)
         monkeypatch.setattr(module, "DB_PATH", str(db_path))

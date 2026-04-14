@@ -345,6 +345,78 @@ class JobRatingRequest(BaseModel):
     rating: int = Field(ge=1, le=5)
 
 
+class JobDisputeRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "reason": "Output missed key risk factors from the filing.",
+                "evidence": "https://example.com/evidence/filing-risk-section",
+            }
+        }
+    )
+
+    reason: str
+    evidence: str | None = None
+
+    @field_validator("reason")
+    @classmethod
+    def dispute_reason_not_empty(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("reason must not be empty")
+        return text
+
+
+class JobRateCallerRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={"example": {"rating": 4, "comment": "Clear requirements and fast responses."}}
+    )
+
+    rating: int = Field(ge=1, le=5)
+    comment: str | None = None
+
+    @field_validator("comment")
+    @classmethod
+    def caller_comment_normalize(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        text = value.strip()
+        return text or None
+
+
+class AdminDisputeRuleRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "outcome": "split",
+                "split_caller_cents": 6,
+                "split_agent_cents": 4,
+                "reasoning": "Both parties partially met obligations.",
+            }
+        }
+    )
+
+    outcome: Literal["caller_wins", "agent_wins", "split", "void"]
+    split_caller_cents: int | None = Field(default=None, ge=0)
+    split_agent_cents: int | None = Field(default=None, ge=0)
+    reasoning: str
+
+    @field_validator("reasoning")
+    @classmethod
+    def rule_reasoning_not_empty(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("reasoning must not be empty")
+        return text
+
+    @model_validator(mode="after")
+    def validate_split_fields(self) -> "AdminDisputeRuleRequest":
+        if self.outcome == "split":
+            if self.split_caller_cents is None or self.split_agent_cents is None:
+                raise ValueError("split outcomes require split_caller_cents and split_agent_cents")
+        return self
+
+
 class ClarificationRequestPayload(BaseModel):
     question: str
     schema: JSONObject | None = None
@@ -800,6 +872,7 @@ class RegistrySearchRequest(BaseModel):
                 "min_trust": 0.2,
                 "max_price_cents": 50,
                 "required_input_fields": ["ticker"],
+                "respect_caller_trust_min": True,
             }
         }
     )
@@ -809,6 +882,7 @@ class RegistrySearchRequest(BaseModel):
     min_trust: float = Field(default=0.0, ge=0.0, le=1.0)
     max_price_cents: int | None = Field(default=None, ge=0)
     required_input_fields: list[str] | None = None
+    respect_caller_trust_min: bool = False
 
     @field_validator("query")
     @classmethod
@@ -953,6 +1027,7 @@ class AgentResponse(BaseModel):
     price_per_call_usd: float
     tags: list[str] = Field(default_factory=list)
     input_schema: JSONObject = Field(default_factory=dict)
+    caller_trust_min: float | None = None
 
 
 class RegistryRegisterResponse(BaseModel):
@@ -1031,6 +1106,43 @@ class JobRatingResponse(BaseModel):
     agent_reputation: JSONObject
 
 
+class JobCallerRatingResponse(BaseModel):
+    rating: JSONObject
+    caller_reputation: JSONObject
+
+
+class DisputeJudgmentResponse(BaseModel):
+    judgment_id: str
+    dispute_id: str
+    judge_kind: str
+    verdict: str
+    reasoning: str
+    model: str | None = None
+    admin_user_id: str | None = None
+    created_at: str
+
+
+class DisputeResponse(BaseModel):
+    dispute_id: str
+    job_id: str
+    filed_by_owner_id: str
+    side: str
+    reason: str
+    evidence: str | None = None
+    status: str
+    outcome: str | None = None
+    split_caller_cents: int | None = None
+    split_agent_cents: int | None = None
+    filed_at: str
+    resolved_at: str | None = None
+    judgments: list[DisputeJudgmentResponse] = Field(default_factory=list)
+
+
+class DisputeJudgeResponse(BaseModel):
+    dispute: DisputeResponse
+    settlement: JSONObject | None = None
+
+
 class JobSettlementTraceResponse(BaseModel):
     job_id: str
     agent_id: str
@@ -1071,6 +1183,7 @@ class WalletResponse(BaseModel):
     wallet_id: str
     owner_id: str
     balance_cents: int
+    caller_trust: float | None = None
     transactions: list[JSONObject] = Field(default_factory=list)
 
 

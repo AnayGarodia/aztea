@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from core import auth
+from core import disputes
 from core import jobs
 from core import payments
 from core import registry
@@ -92,7 +93,7 @@ def fake_embeddings(monkeypatch):
 @pytest.fixture
 def isolated_db(monkeypatch, fake_embeddings):
     db_path = Path(__file__).resolve().parent / f"test-registry-{uuid.uuid4().hex}.db"
-    modules = (registry, reputation, payments, auth, jobs)
+    modules = (registry, reputation, payments, auth, jobs, disputes)
 
     for module in modules:
         _close_module_conn(module)

@@ -9,6 +9,7 @@ import math
 import os
 import sqlite3
 import threading
+import uuid
 from datetime import datetime, timezone
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "registry.db")
@@ -170,6 +171,34 @@ def init_reputation_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_job_quality_caller ON job_quality_ratings(caller_owner_id, created_at DESC)"
         )
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS caller_ratings (
+                rating_id         TEXT PRIMARY KEY,
+                job_id            TEXT NOT NULL UNIQUE,
+                caller_owner_id   TEXT NOT NULL,
+                agent_owner_id    TEXT NOT NULL,
+                rating            INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5),
+                comment           TEXT,
+                created_at        TEXT NOT NULL
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_caller_ratings_caller_created ON caller_ratings(caller_owner_id, created_at DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_caller_ratings_agent_created ON caller_ratings(agent_owner_id, created_at DESC)"
+        )
+
+
+def _job_has_dispute_conn(conn: sqlite3.Connection, job_id: str) -> bool:
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM disputes WHERE job_id = ? LIMIT 1",
+            (job_id,),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return False
+    return row is not None
 
 
 def get_job_quality_rating(job_id: str) -> dict | None:
@@ -211,6 +240,8 @@ def record_job_quality_rating(job_id: str, caller_owner_id: str, rating: int) ->
             raise ValueError("Only completed jobs can be rated.")
         if job["caller_owner_id"] != caller_owner_id:
             raise ValueError("Only the job caller can submit a quality rating.")
+        if _job_has_dispute_conn(conn, job_id):
+            raise ValueError("Ratings are locked once a dispute is filed.")
 
         try:
             conn.execute(
@@ -231,6 +262,78 @@ def record_job_quality_rating(job_id: str, caller_owner_id: str, rating: int) ->
             raise ValueError(f"Job '{job_id}' already has a quality rating.") from e
 
     created = get_job_quality_rating(job_id)
+    return created if created else {}
+
+
+def get_job_caller_rating(job_id: str) -> dict | None:
+    init_reputation_db()
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM caller_ratings WHERE job_id = ?",
+            (job_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def record_caller_rating(
+    job_id: str,
+    agent_owner_id: str,
+    rating: int,
+    comment: str | None = None,
+) -> dict:
+    """
+    Store an agent's rating of the caller on one completed job.
+    Exactly one caller rating is allowed per job.
+    """
+    validated_rating = _validate_rating(rating)
+    init_reputation_db()
+    normalized_comment = str(comment or "").strip() or None
+
+    with _conn() as conn:
+        try:
+            job = conn.execute(
+                """
+                SELECT job_id, caller_owner_id, agent_owner_id, status
+                FROM jobs
+                WHERE job_id = ?
+                """,
+                (job_id,),
+            ).fetchone()
+        except sqlite3.OperationalError as e:
+            raise RuntimeError(
+                "jobs table is not initialized. Call jobs.init_jobs_db() first."
+            ) from e
+
+        if job is None:
+            raise ValueError(f"Job '{job_id}' not found.")
+        if job["status"] != "complete":
+            raise ValueError("Only completed jobs can be rated.")
+        if job["agent_owner_id"] != agent_owner_id:
+            raise ValueError("Only the job's agent owner can rate this caller.")
+        if _job_has_dispute_conn(conn, job_id):
+            raise ValueError("Ratings are locked once a dispute is filed.")
+
+        try:
+            conn.execute(
+                """
+                INSERT INTO caller_ratings
+                    (rating_id, job_id, caller_owner_id, agent_owner_id, rating, comment, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    job_id,
+                    job["caller_owner_id"],
+                    job["agent_owner_id"],
+                    validated_rating,
+                    normalized_comment,
+                    _now(),
+                ),
+            )
+        except sqlite3.IntegrityError as e:
+            raise ValueError(f"Job '{job_id}' already has a caller rating.") from e
+
+    created = get_job_caller_rating(job_id)
     return created if created else {}
 
 
@@ -307,6 +410,29 @@ def _load_agent_stats_map(agent_ids: list[str]) -> dict[str, tuple[int, int, flo
             row["avg_latency_ms"],
         )
     return stats_map
+
+
+def _get_caller_quality_summary_map(caller_owner_ids: list[str]) -> dict[str, dict]:
+    init_reputation_db()
+    if not caller_owner_ids:
+        return {}
+    placeholders = ",".join(["?"] * len(caller_owner_ids))
+    query = f"""
+        SELECT caller_owner_id, COUNT(*) AS rating_count, AVG(rating) AS average_rating
+        FROM caller_ratings
+        WHERE caller_owner_id IN ({placeholders})
+        GROUP BY caller_owner_id
+    """
+    with _conn() as conn:
+        rows = conn.execute(query, tuple(caller_owner_ids)).fetchall()
+
+    summary: dict[str, dict] = {}
+    for row in rows:
+        summary[row["caller_owner_id"]] = {
+            "rating_count": int(row["rating_count"] or 0),
+            "average_rating": float(row["average_rating"]) if row["average_rating"] is not None else None,
+        }
+    return summary
 
 
 def _load_agent_stats(agent_id: str) -> tuple[int, int, float]:
@@ -419,3 +545,32 @@ def rank_agents_by_trust(agents: list[dict], descending: bool = True) -> list[di
     """Return enriched agents sorted by trust_score."""
     enriched = enrich_agent_records(agents)
     return sorted(enriched, key=lambda item: item.get("trust_score", 0.0), reverse=descending)
+
+
+def compute_caller_trust_metrics(caller_owner_id: str) -> dict:
+    """
+    Compute caller trust based on bilateral caller ratings, using the same
+    Bayesian prior used for agent quality.
+    """
+    normalized_owner_id = str(caller_owner_id or "").strip()
+    if not normalized_owner_id:
+        raise ValueError("caller_owner_id must be a non-empty string.")
+
+    summary = _get_caller_quality_summary_map([normalized_owner_id]).get(
+        normalized_owner_id,
+        {"rating_count": 0, "average_rating": None},
+    )
+    rating_count = int(summary["rating_count"])
+    average_rating = summary["average_rating"]
+    quality_score = _compute_quality_score(average_rating, rating_count)
+    confidence = _clamp01(rating_count / (rating_count + _QUALITY_PRIOR_WEIGHT))
+    trust_raw = (_NEUTRAL_TRUST * (1.0 - confidence)) + (quality_score * confidence)
+    return {
+        "caller_owner_id": normalized_owner_id,
+        "trust_score": round(trust_raw * 100.0, 2),
+        "trust_score_normalized": round(trust_raw, 6),
+        "quality_score": round(quality_score, 4),
+        "rating_count": rating_count,
+        "average_rating": round(float(average_rating), 4) if average_rating is not None else None,
+        "confidence_score": round(confidence, 4),
+    }

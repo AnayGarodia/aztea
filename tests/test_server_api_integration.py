@@ -19,6 +19,7 @@ import uvicorn
 from fastapi.testclient import TestClient
 
 from core import auth
+from core import disputes
 from core import jobs
 from core import payments
 from core import registry
@@ -143,7 +144,7 @@ Bearer API key auth is required.
 @pytest.fixture
 def isolated_db(monkeypatch):
     db_path = Path(__file__).resolve().parent / f"test-server-integration-{uuid.uuid4().hex}.db"
-    modules = (registry, payments, auth, jobs, reputation)
+    modules = (registry, payments, auth, jobs, reputation, disputes)
 
     for module in modules:
         _close_module_conn(module)

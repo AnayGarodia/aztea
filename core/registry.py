@@ -787,6 +787,27 @@ def _input_schema_field_names(schema: dict) -> set[str]:
     return set()
 
 
+def _input_schema_caller_trust_min(schema: dict) -> float | None:
+    if not isinstance(schema, dict):
+        return None
+    candidate = schema.get("min_caller_trust")
+    if candidate is None and isinstance(schema.get("metadata"), dict):
+        candidate = schema["metadata"].get("min_caller_trust")
+    if candidate is None:
+        return None
+    try:
+        value = float(candidate)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(value):
+        return None
+    if value > 1.0 and value <= 100.0:
+        value = value / 100.0
+    if value < 0.0 or value > 1.0:
+        return None
+    return value
+
+
 def _query_terms(query: str) -> list[str]:
     terms = re.findall(r"[a-z0-9-]+", query.lower())
     return [term for term in terms if term not in _QUERY_STOP_WORDS]
@@ -818,6 +839,8 @@ def _match_reasons(
     trust: float,
     required_fields: set[str],
     supported_fields: set[str],
+    caller_trust: float | None,
+    caller_trust_min: float | None,
 ) -> list[str]:
     reasons: list[str] = []
     haystack = " ".join(
@@ -838,6 +861,8 @@ def _match_reasons(
             ordered = ", ".join(sorted(supported_fields))
             reasons.append(f"supports input fields: {ordered}")
     reasons.append(f"trust {trust:.2f}")
+    if caller_trust is not None and caller_trust_min is not None:
+        reasons.append(f"caller trust {caller_trust:.2f} meets minimum {caller_trust_min:.2f}")
     return reasons
 
 
@@ -847,6 +872,7 @@ def search_agents(
     min_trust: float = 0.0,
     max_price_cents: int | None = None,
     required_input_fields: list[str] | None = None,
+    caller_trust: float | None = None,
 ) -> list[dict]:
     normalized_query = str(query or "").strip()
     if not normalized_query:
@@ -857,6 +883,9 @@ def search_agents(
         raise ValueError("max_price_cents must be >= 0 when provided.")
 
     trust_floor = _normalize_min_trust(min_trust)
+    normalized_caller_trust = None
+    if caller_trust is not None:
+        normalized_caller_trust = _normalize_min_trust(caller_trust)
     required_fields = _required_input_fields_set(required_input_fields)
     query_vector = np.asarray(embeddings.embed_text(normalized_query), dtype=np.float32)
     vectors_by_agent = _load_embeddings_cache()
@@ -876,7 +905,14 @@ def search_agents(
 
         schema = _parse_input_schema(agent.get("input_schema"))
         supported_fields = _input_schema_field_names(schema)
+        caller_trust_min = _input_schema_caller_trust_min(schema)
         if required_fields and not required_fields.issubset(supported_fields):
+            continue
+        if (
+            normalized_caller_trust is not None
+            and caller_trust_min is not None
+            and normalized_caller_trust < caller_trust_min
+        ):
             continue
 
         trust = _normalize_trust_score(agent.get("trust_score"))
@@ -900,6 +936,7 @@ def search_agents(
                 "trust": trust,
                 "price_cents": price_cents,
                 "supported_fields": supported_fields,
+                "caller_trust_min": caller_trust_min,
             }
         )
 
@@ -943,6 +980,8 @@ def search_agents(
             candidate["trust"],
             required_fields,
             candidate["supported_fields"],
+            normalized_caller_trust,
+            candidate["caller_trust_min"],
         )
 
     ranked = sorted(

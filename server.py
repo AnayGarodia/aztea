@@ -45,6 +45,8 @@ from core import onboarding
 from core import payments
 from core import registry
 from core import jobs
+from core import disputes
+from core import judges
 from core import models as core_models
 from core import reputation
 from main import run as _run_financial
@@ -61,11 +63,14 @@ from core.models import (
     JobEventHookCreateRequest,
     JobFailRequest,
     JobHeartbeatRequest,
+    JobDisputeRequest,
     JobMessageRequest,
+    JobRateCallerRequest,
     JobRatingRequest,
     JobReleaseRequest,
     JobRetryRequest,
     JobsSweepRequest,
+    AdminDisputeRuleRequest,
     OnboardingValidateRequest,
     ReconciliationRunRequest,
     RegistrySearchRequest,
@@ -124,6 +129,8 @@ _DEFAULT_HOOK_DELIVERY_BATCH_SIZE = 50
 _DEFAULT_HOOK_DELIVERY_MAX_ATTEMPTS = 5
 _DEFAULT_HOOK_DELIVERY_BASE_DELAY_SECONDS = 5
 _DEFAULT_HOOK_DELIVERY_MAX_DELAY_SECONDS = 300
+_DEFAULT_DISPUTE_FILE_WINDOW_SECONDS = 7 * 24 * 3600
+_DEFAULT_DISPUTE_JUDGE_INTERVAL_SECONDS = 0
 
 
 def _env_int(name: str, default: int, minimum: int | None = None, maximum: int | None = None) -> int:
@@ -213,6 +220,19 @@ _HOOK_DELIVERY_MAX_DELAY_SECONDS = _env_int(
 if _HOOK_DELIVERY_MAX_DELAY_SECONDS < _HOOK_DELIVERY_BASE_DELAY_SECONDS:
     raise RuntimeError("HOOK_DELIVERY_MAX_DELAY_SECONDS must be >= HOOK_DELIVERY_BASE_DELAY_SECONDS.")
 _HOOK_DELIVERY_ENABLED = _HOOK_DELIVERY_INTERVAL_SECONDS > 0
+_DISPUTE_FILE_WINDOW_SECONDS = _env_int(
+    "DISPUTE_FILE_WINDOW_SECONDS",
+    _DEFAULT_DISPUTE_FILE_WINDOW_SECONDS,
+    minimum=3600,
+    maximum=30 * 24 * 3600,
+)
+_DISPUTE_JUDGE_INTERVAL_SECONDS = _env_int(
+    "DISPUTE_JUDGE_INTERVAL_SECONDS",
+    _DEFAULT_DISPUTE_JUDGE_INTERVAL_SECONDS,
+    minimum=0,
+    maximum=3600,
+)
+_DISPUTE_JUDGE_ENABLED = _DISPUTE_JUDGE_INTERVAL_SECONDS > 0
 _SLO_CLAIM_P95_TARGET_MS = _env_int(
     "SLO_CLAIM_P95_TARGET_MS",
     60_000,
@@ -563,6 +583,7 @@ async def lifespan(app: FastAPI):
     payments.init_payments_db()
     _auth.init_auth_db()
     jobs.init_jobs_db()
+    disputes.init_disputes_db()
     reputation.init_reputation_db()
     _init_ops_db()
     _register_agents()
@@ -658,11 +679,16 @@ async def security_headers(request: Request, call_next):
 @app.middleware("http")
 async def limit_body_size(request: Request, call_next):
     cl = request.headers.get("content-length")
-    if cl and int(cl) > _MAX_BODY_BYTES:
-        return JSONResponse(
-            {"detail": f"Request body too large (max {_MAX_BODY_BYTES // 1024} KB)."},
-            status_code=413,
-        )
+    if cl:
+        try:
+            content_length = int(cl)
+        except ValueError:
+            return JSONResponse({"detail": "Invalid Content-Length header."}, status_code=400)
+        if content_length > _MAX_BODY_BYTES:
+            return JSONResponse(
+                {"detail": f"Request body too large (max {_MAX_BODY_BYTES // 1024} KB)."},
+                status_code=413,
+            )
     return await call_next(request)
 
 
@@ -768,11 +794,44 @@ def _proxy_response(resp: http.Response) -> Response:
     return Response(content=resp.content, status_code=resp.status_code, headers=headers)
 
 
+def _extract_caller_trust_min(input_schema: dict | None) -> float | None:
+    if not isinstance(input_schema, dict):
+        return None
+    candidate = input_schema.get("min_caller_trust")
+    if candidate is None and isinstance(input_schema.get("metadata"), dict):
+        candidate = input_schema["metadata"].get("min_caller_trust")
+    if candidate is None:
+        return None
+    try:
+        value = float(candidate)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(value):
+        return None
+    if value > 1.0 and value <= 100.0:
+        value = value / 100.0
+    if value < 0.0 or value > 1.0:
+        return None
+    return value
+
+
+def _caller_trust_score(owner_id: str) -> float:
+    try:
+        metrics = reputation.compute_caller_trust_metrics(owner_id)
+    except Exception:
+        return 0.5
+    return float(metrics.get("trust_score_normalized") or 0.5)
+
+
 def _agent_response(agent: dict, caller: core_models.CallerContext) -> dict:
+    min_caller_trust = _extract_caller_trust_min(agent.get("input_schema"))
     if caller.get("type") == "master":
-        return agent
+        out = dict(agent)
+        out["caller_trust_min"] = min_caller_trust
+        return out
     redacted = dict(agent)
     redacted.pop("owner_id", None)
+    redacted["caller_trust_min"] = min_caller_trust
     return redacted
 
 
@@ -1946,6 +2005,8 @@ def _list_job_events(caller: core_models.CallerContext, since: int | None = None
 
 def _settle_successful_job(job: dict, actor_owner_id: str) -> dict:
     newly_settled = False
+    if disputes.has_dispute_for_job(job["job_id"]):
+        return jobs.get_job(job["job_id"]) or job
     if not job["settled_at"]:
         payments.post_call_payout(
             job["agent_wallet_id"],
@@ -1989,6 +2050,73 @@ def _settle_failed_job(job: dict, actor_owner_id: str, event_type: str = "job.fa
             payload={"status": settled["status"], "error_message": settled.get("error_message")},
         )
     return settled
+
+
+def _parse_iso_datetime(value: str | None) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _dispute_view(dispute_row: dict) -> dict:
+    payload = dict(dispute_row)
+    payload["judgments"] = disputes.get_judgments(payload["dispute_id"])
+    return payload
+
+
+def _dispute_side_for_caller(caller: core_models.CallerContext, job: dict) -> str:
+    if caller["type"] == "master":
+        raise HTTPException(status_code=403, detail="Master key cannot file disputes.")
+    owner_id = caller["owner_id"]
+    if owner_id == job["caller_owner_id"]:
+        return "caller"
+    if jobs.is_worker_authorized(job, owner_id):
+        return "agent"
+    raise HTTPException(status_code=403, detail="Only the caller or agent owner can file this dispute.")
+
+
+def _resolve_dispute_with_judges(dispute_id: str, actor_owner_id: str) -> tuple[dict, dict | None]:
+    result = judges.run_judgment(dispute_id)
+    status = str(result.get("status") or "").strip().lower()
+    outcome = result.get("outcome")
+    settlement = None
+
+    if status == "consensus" and outcome:
+        dispute_row = disputes.get_dispute(dispute_id)
+        if dispute_row is None:
+            raise HTTPException(status_code=404, detail=f"Dispute '{dispute_id}' not found.")
+        settlement = payments.post_dispute_settlement(
+            dispute_id,
+            outcome=outcome,
+            split_caller_cents=dispute_row.get("split_caller_cents"),
+            split_agent_cents=dispute_row.get("split_agent_cents"),
+        )
+        disputes.finalize_dispute(
+            dispute_id,
+            status="resolved",
+            outcome=outcome,
+            split_caller_cents=dispute_row.get("split_caller_cents"),
+            split_agent_cents=dispute_row.get("split_agent_cents"),
+        )
+    elif status == "tied":
+        disputes.set_dispute_status(dispute_id, "tied")
+
+    latest = disputes.get_dispute(dispute_id)
+    if latest is None:
+        raise HTTPException(status_code=404, detail=f"Dispute '{dispute_id}' not found.")
+    job = jobs.get_job(latest["job_id"])
+    if job is not None:
+        _record_job_event(
+            job,
+            "job.dispute_judged",
+            actor_owner_id=actor_owner_id,
+            payload={"dispute_id": dispute_id, "status": latest["status"], "outcome": latest.get("outcome")},
+        )
+    return _dispute_view(latest), settlement
 
 
 def _sweep_jobs(
@@ -2749,12 +2877,16 @@ def registry_search(
     The legacy GET /registry/agents?tag=... route remains supported for backward compatibility.
     """
     try:
+        caller_trust = None
+        if body.respect_caller_trust_min and caller["type"] != "master":
+            caller_trust = _caller_trust_score(caller["owner_id"])
         ranked = registry.search_agents(
             query=body.query,
             limit=body.limit,
             min_trust=body.min_trust,
             max_price_cents=body.max_price_cents,
             required_input_fields=body.required_input_fields,
+            caller_trust=caller_trust,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -2887,8 +3019,23 @@ def jobs_create(
     if agent is None:
         raise HTTPException(status_code=404, detail=f"Agent '{body.agent_id}' not found.")
 
+    caller_owner_id = _caller_owner_id(request)
+    min_caller_trust = _extract_caller_trust_min(agent.get("input_schema"))
+    if min_caller_trust is not None and caller["type"] != "master":
+        caller_trust = _caller_trust_score(caller_owner_id)
+        if caller_trust < min_caller_trust:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "CALLER_TRUST_BELOW_MINIMUM",
+                    "caller_trust": round(caller_trust, 6),
+                    "required_min_caller_trust": round(min_caller_trust, 6),
+                    "agent_id": agent["agent_id"],
+                },
+            )
+
     price_cents = _usd_to_cents(agent["price_per_call_usd"])
-    caller_wallet = payments.get_or_create_wallet(_caller_owner_id(request))
+    caller_wallet = payments.get_or_create_wallet(caller_owner_id)
     agent_wallet = payments.get_or_create_wallet(f"agent:{agent['agent_id']}")
     platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
 
@@ -2910,7 +3057,7 @@ def jobs_create(
     try:
         job = jobs.create_job(
             agent_id=agent["agent_id"],
-            caller_owner_id=_caller_owner_id(request),
+            caller_owner_id=caller_owner_id,
             caller_wallet_id=caller_wallet["wallet_id"],
             agent_wallet_id=agent_wallet["wallet_id"],
             platform_wallet_id=platform_wallet["wallet_id"],
@@ -3557,6 +3704,8 @@ def jobs_rate(
             raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
         if job["caller_owner_id"] != caller["owner_id"]:
             raise HTTPException(status_code=403, detail="Only the original caller can rate this job.")
+        if disputes.has_dispute_for_job(job_id):
+            raise HTTPException(status_code=409, detail="Ratings are locked once a dispute is filed.")
 
         try:
             rating = reputation.record_job_quality_rating(job_id, caller["owner_id"], body.rating)
@@ -3582,6 +3731,212 @@ def jobs_rate(
         payload={"rating": body.rating},
         operation=_operation,
     )
+
+
+@app.post(
+    "/jobs/{job_id}/rate-caller",
+    status_code=201,
+    response_model=core_models.JobCallerRatingResponse,
+    responses=_error_responses(400, 401, 403, 404, 409, 429, 500),
+)
+@limiter.limit("30/minute")
+def jobs_rate_caller(
+    request: Request,
+    job_id: str,
+    body: JobRateCallerRequest,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.JobCallerRatingResponse:
+    _require_scope(caller, "worker")
+    if caller["type"] == "master":
+        raise HTTPException(status_code=403, detail="Master key cannot submit caller ratings.")
+
+    job = jobs.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+    if not jobs.is_worker_authorized(job, caller["owner_id"]):
+        raise HTTPException(status_code=403, detail="Only the job's agent owner can rate the caller.")
+
+    try:
+        rating = reputation.record_caller_rating(
+            job_id=job_id,
+            agent_owner_id=caller["owner_id"],
+            rating=body.rating,
+            comment=body.comment,
+        )
+    except ValueError as exc:
+        message = str(exc)
+        if "already has a caller rating" in message:
+            raise HTTPException(status_code=409, detail=message)
+        raise HTTPException(status_code=400, detail=message)
+
+    caller_reputation = reputation.compute_caller_trust_metrics(job["caller_owner_id"])
+    _record_job_event(
+        job,
+        "job.caller_rated",
+        actor_owner_id=caller["owner_id"],
+        payload={"rating": body.rating},
+    )
+    return JSONResponse(content={"rating": rating, "caller_reputation": caller_reputation}, status_code=201)
+
+
+@app.post(
+    "/jobs/{job_id}/dispute",
+    status_code=201,
+    response_model=core_models.DisputeResponse,
+    responses=_error_responses(400, 401, 403, 404, 409, 429, 500),
+)
+@limiter.limit("20/minute")
+def jobs_dispute(
+    request: Request,
+    job_id: str,
+    body: JobDisputeRequest,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DisputeResponse:
+    if not (_caller_has_scope(caller, "caller") or _caller_has_scope(caller, "worker")):
+        raise HTTPException(status_code=403, detail="This endpoint requires caller or worker scope.")
+    job = jobs.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+    if job.get("status") != "complete" or not job.get("completed_at"):
+        raise HTTPException(status_code=400, detail="Disputes can only be filed for completed jobs.")
+
+    completed_at = _parse_iso_datetime(job.get("completed_at"))
+    if completed_at is None:
+        raise HTTPException(status_code=400, detail="Job completion timestamp is invalid.")
+    if (datetime.now(timezone.utc) - completed_at) > timedelta(seconds=_DISPUTE_FILE_WINDOW_SECONDS):
+        raise HTTPException(status_code=400, detail="Dispute window has expired for this job.")
+
+    side = _dispute_side_for_caller(caller, job)
+    if reputation.get_job_quality_rating(job_id) is not None:
+        raise HTTPException(status_code=409, detail="Disputes must be filed before the caller submits a rating.")
+    if disputes.has_dispute_for_job(job_id):
+        raise HTTPException(status_code=409, detail="A dispute already exists for this job.")
+
+    try:
+        created = disputes.create_dispute(
+            job_id=job_id,
+            filed_by_owner_id=caller["owner_id"],
+            side=side,
+            reason=body.reason,
+            evidence=body.evidence,
+        )
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=409, detail="A dispute already exists for this job.")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    try:
+        lock_summary = payments.lock_dispute_funds(created["dispute_id"])
+    except payments.InsufficientBalanceError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "DISPUTE_CLAWBACK_INSUFFICIENT_BALANCE",
+                "balance_cents": exc.balance_cents,
+                "required_cents": exc.required_cents,
+            },
+        )
+    _record_job_event(
+        job,
+        "job.dispute_filed",
+        actor_owner_id=caller["owner_id"],
+        payload={"dispute_id": created["dispute_id"], "side": side, "lock": lock_summary},
+    )
+    return JSONResponse(content=_dispute_view(created), status_code=201)
+
+
+@app.post(
+    "/ops/disputes/{dispute_id}/judge",
+    response_model=core_models.DisputeJudgeResponse,
+    responses=_error_responses(400, 401, 403, 404, 429, 500),
+)
+@limiter.limit("30/minute")
+def disputes_judge(
+    request: Request,
+    dispute_id: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DisputeJudgeResponse:
+    _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
+    if disputes.get_dispute(dispute_id) is None:
+        raise HTTPException(status_code=404, detail=f"Dispute '{dispute_id}' not found.")
+    try:
+        dispute_payload, settlement = _resolve_dispute_with_judges(dispute_id, actor_owner_id=caller["owner_id"])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return JSONResponse(content={"dispute": dispute_payload, "settlement": settlement})
+
+
+@app.post(
+    "/admin/disputes/{dispute_id}/rule",
+    response_model=core_models.DisputeJudgeResponse,
+    responses=_error_responses(400, 401, 403, 404, 409, 429, 500),
+)
+@limiter.limit("30/minute")
+def disputes_admin_rule(
+    request: Request,
+    dispute_id: str,
+    body: AdminDisputeRuleRequest,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DisputeJudgeResponse:
+    _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
+    dispute_row = disputes.get_dispute(dispute_id)
+    if dispute_row is None:
+        raise HTTPException(status_code=404, detail=f"Dispute '{dispute_id}' not found.")
+
+    if dispute_row["status"] in {"resolved", "consensus"}:
+        disputes.set_dispute_status(dispute_id, "appealed")
+
+    admin_user_id = None
+    if caller["type"] == "user":
+        admin_user_id = caller["user"]["user_id"]
+
+    try:
+        disputes.record_judgment(
+            dispute_id,
+            judge_kind="human_admin",
+            verdict=body.outcome,
+            reasoning=body.reasoning,
+            admin_user_id=admin_user_id,
+        )
+        settlement = payments.post_dispute_settlement(
+            dispute_id,
+            outcome=body.outcome,
+            split_caller_cents=body.split_caller_cents,
+            split_agent_cents=body.split_agent_cents,
+        )
+        finalized = disputes.finalize_dispute(
+            dispute_id,
+            status="final",
+            outcome=body.outcome,
+            split_caller_cents=body.split_caller_cents,
+            split_agent_cents=body.split_agent_cents,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except payments.InsufficientBalanceError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "DISPUTE_SETTLEMENT_INSUFFICIENT_BALANCE",
+                "balance_cents": exc.balance_cents,
+                "required_cents": exc.required_cents,
+            },
+        )
+
+    if finalized is None:
+        raise HTTPException(status_code=404, detail=f"Dispute '{dispute_id}' not found.")
+
+    job = jobs.get_job(finalized["job_id"])
+    if job is not None:
+        _record_job_event(
+            job,
+            "job.dispute_finalized",
+            actor_owner_id=caller["owner_id"],
+            payload={"dispute_id": dispute_id, "outcome": body.outcome},
+        )
+    return JSONResponse(content={"dispute": _dispute_view(finalized), "settlement": settlement})
 
 
 @app.get(
@@ -3842,15 +4197,20 @@ def payments_reconcile_runs(
 @app.post(
     "/wallets/deposit",
     response_model=core_models.WalletDepositResponse,
-    responses=_error_responses(400, 401, 403, 429, 500),
+    responses=_error_responses(400, 401, 403, 404, 429, 500),
 )
 @limiter.limit("20/minute")
 def wallet_deposit(
     request: Request,
     body: DepositRequest,
-    _: core_models.CallerContext = Depends(_require_api_key),
+    caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.WalletDepositResponse:
-    _require_scope(_, "caller")
+    _require_scope(caller, "caller")
+    wallet = payments.get_wallet(body.wallet_id)
+    if wallet is None:
+        raise HTTPException(status_code=404, detail=f"Wallet '{body.wallet_id}' not found.")
+    if caller["type"] != "master" and wallet["owner_id"] != caller["owner_id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to deposit into this wallet.")
     try:
         tx_id = payments.deposit(body.wallet_id, body.amount_cents, body.memo)
     except ValueError as e:
@@ -3872,9 +4232,11 @@ def wallet_me(
     request: Request,
     _: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.WalletResponse:
-    wallet = payments.get_or_create_wallet(_caller_owner_id(request))
+    owner_id = _caller_owner_id(request)
+    wallet = payments.get_or_create_wallet(owner_id)
     txs = payments.get_wallet_transactions(wallet["wallet_id"], limit=50)
-    return JSONResponse(content={**wallet, "transactions": txs})
+    caller_trust = _caller_trust_score(owner_id)
+    return JSONResponse(content={**wallet, "caller_trust": caller_trust, "transactions": txs})
 
 
 @app.get(
