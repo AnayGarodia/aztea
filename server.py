@@ -1561,6 +1561,41 @@ def _validate_hook_url(target_url: str) -> str:
     return _validate_outbound_url(target_url, "target_url")
 
 
+def _effective_port(scheme: str, port: int | None) -> int:
+    if port is not None:
+        return port
+    return 443 if scheme == "https" else 80
+
+
+def _allow_loopback_same_origin(request: Request, target_url: str) -> bool:
+    parsed = urlparse(target_url.strip())
+    target_host = (parsed.hostname or "").strip().lower()
+    if target_host not in {"localhost", "127.0.0.1", "::1"}:
+        return False
+
+    request_host = (request.url.hostname or "").strip().lower()
+    if request_host not in {"localhost", "127.0.0.1", "::1"}:
+        return False
+
+    target_scheme = (parsed.scheme or "").strip().lower()
+    request_scheme = (request.url.scheme or "").strip().lower()
+    if target_scheme != request_scheme:
+        return False
+
+    target_port = _effective_port(target_scheme, parsed.port)
+    request_port = _effective_port(request_scheme, request.url.port)
+    return target_port == request_port
+
+
+def _validate_agent_endpoint_url(request: Request, endpoint_url: str) -> str:
+    try:
+        return _validate_outbound_url(endpoint_url, "endpoint_url")
+    except ValueError:
+        if _allow_loopback_same_origin(request, endpoint_url):
+            return endpoint_url.strip()
+        raise
+
+
 def _create_job_event_hook(owner_id: str, target_url: str, secret: str | None = None) -> dict:
     hook_id = str(uuid.uuid4())
     now = _utc_now_iso()
@@ -2519,10 +2554,11 @@ def onboarding_ingest(
     manifest_content, source = _load_manifest_content(body.manifest_content, body.manifest_url)
     try:
         payload = onboarding.build_registration_payload_from_manifest(manifest_content, source=source)
+        safe_endpoint_url = _validate_agent_endpoint_url(request, payload["endpoint_url"])
         agent_id = registry.register_agent(
             name=payload["name"],
             description=payload["description"],
-            endpoint_url=payload["endpoint_url"],
+            endpoint_url=safe_endpoint_url,
             price_per_call_usd=payload["price_per_call_usd"],
             tags=payload["tags"],
             input_schema=payload["input_schema"],
@@ -2818,10 +2854,11 @@ def registry_register(
 ) -> core_models.RegistryRegisterResponse:
     _require_scope(caller, "worker")
     try:
+        safe_endpoint_url = _validate_agent_endpoint_url(request, body.endpoint_url)
         agent_id = registry.register_agent(
             name=body.name,
             description=body.description,
-            endpoint_url=body.endpoint_url,
+            endpoint_url=safe_endpoint_url,
             price_per_call_usd=body.price_per_call_usd,
             tags=body.tags,
             input_schema=body.input_schema,
