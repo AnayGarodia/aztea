@@ -1,0 +1,23 @@
+.shell {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--canvas);
+}
+.shell__main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+.shell__content {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--sp-6);
+}
+.shell__content--full { padding: 0; }
+
+@media (max-width: 768px) {
+  .sidebar { display: none; }
+}

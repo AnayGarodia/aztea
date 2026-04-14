@@ -1,0 +1,27 @@
+{
+  "name": "@agentmarket/sdk",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for AgentMarket APIs",
+  "type": "module",
+  "main": "dist/cjs/index.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js"
+    }
+  },
+  "scripts": {
+    "clean": "rm -rf dist",
+    "generate:types": "openapi-typescript ../../openapi.json -o src/generated/types.ts",
+    "build": "npm run clean && tsc -p tsconfig.esm.json && tsc -p tsconfig.cjs.json",
+    "typecheck": "tsc --noEmit -p tsconfig.esm.json",
+    "test": "tsc --noEmit -p tsconfig.test.json"
+  },
+  "devDependencies": {
+    "openapi-typescript": "^7.6.1",
+    "typescript": "^5.6.3"
+  }
+}

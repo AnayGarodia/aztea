@@ -1,0 +1,22 @@
+.toast {
+  position: fixed;
+  top: var(--sp-5);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-5);
+  border-radius: var(--r-pill);
+  border: 1px solid transparent;
+  box-shadow: var(--shadow-lg);
+  font-size: 0.875rem;
+  font-weight: 500;
+  max-width: 480px;
+  white-space: nowrap;
+}
+.toast--success { background: var(--positive-wash); color: var(--positive); border-color: var(--positive-line); }
+.toast--error   { background: var(--negative-wash); color: var(--negative); border-color: var(--negative-line); }
+.toast--info    { background: var(--surface);       color: var(--ink);      border-color: var(--line); }
+.toast--warn    { background: var(--warn-wash);     color: var(--warn);     border-color: var(--warn-line); }

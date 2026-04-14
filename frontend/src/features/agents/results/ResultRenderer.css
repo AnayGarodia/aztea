@@ -1,0 +1,139 @@
+.result { display: flex; flex-direction: column; gap: var(--sp-4); }
+
+.result-section { display: flex; flex-direction: column; gap: var(--sp-2); }
+.result-section__label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+.result-section__body { font-size: 0.875rem; color: var(--ink-soft); line-height: 1.65; }
+
+.result-list { display: flex; flex-direction: column; gap: 6px; }
+.result-list__item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  font-size: 0.875rem;
+  color: var(--ink-soft);
+  line-height: 1.55;
+}
+.result-list__bullet {
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+  margin-top: 7px;
+}
+
+.result-box {
+  padding: var(--sp-4);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+  background: var(--canvas-sunk);
+}
+.result-box--positive { background: var(--positive-wash); border-color: var(--positive-line); }
+.result-box--negative { background: var(--negative-wash); border-color: var(--negative-line); }
+.result-box--warn     { background: var(--warn-wash);     border-color: var(--warn-line);     }
+.result-box--accent   { background: var(--accent-wash);   border-color: var(--accent-line);   }
+
+.result-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+}
+.result-header__title { font-weight: 600; font-size: 1.125rem; color: var(--ink); }
+.result-header__sub   { font-size: 0.8125rem; color: var(--ink-mute); margin-top: 2px; }
+
+.result-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-4);
+  padding: var(--sp-4);
+  background: var(--canvas-sunk);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+}
+.result-meta__item { display: flex; flex-direction: column; gap: 2px; }
+.result-meta__val  { font-family: var(--font-mono); font-size: 0.9375rem; font-weight: 500; color: var(--ink); font-feature-settings: 'tnum'; }
+.result-meta__key  { font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-mute); font-weight: 500; }
+
+.result-timestamp { font-size: 0.75rem; color: var(--ink-mute); text-align: right; font-family: var(--font-mono); }
+
+.result-score {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.result-score__bar {
+  flex: 1;
+  height: 6px;
+  background: var(--line);
+  border-radius: var(--r-pill);
+  overflow: hidden;
+}
+.result-score__fill {
+  height: 100%;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  transition: width 0.6s var(--ease);
+}
+.result-score__num {
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+  font-feature-settings: 'tnum';
+}
+
+.result-issue {
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.result-issue__header { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.result-issue__desc { font-size: 0.875rem; color: var(--ink-soft); line-height: 1.5; }
+.result-issue__fix { font-size: 0.8125rem; color: var(--ink-mute); font-style: italic; }
+
+.result-sentiment-bar {
+  height: 8px;
+  border-radius: var(--r-pill);
+  background: var(--line);
+  overflow: hidden;
+  position: relative;
+}
+.result-sentiment-bar__fill {
+  position: absolute;
+  top: 0; bottom: 0;
+  border-radius: var(--r-pill);
+  transition: all 0.6s var(--ease);
+}
+.result-sentiment-bar__midline {
+  position: absolute;
+  top: 0; bottom: 0;
+  left: 50%;
+  width: 2px;
+  background: var(--line-strong);
+}
+
+.result-json {
+  background: var(--canvas-sunk);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: var(--sp-4);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--ink-soft);
+  overflow: auto;
+  max-height: 480px;
+  white-space: pre;
+  line-height: 1.6;
+}

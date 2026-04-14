@@ -1,0 +1,66 @@
+import { createContext, useContext, useState, useEffect, useCallback } from 'react'
+import { authMe } from '../api'
+
+const Ctx = createContext(null)
+
+export function AuthProvider({ children }) {
+  const [apiKey, setApiKey] = useState(() => localStorage.getItem('agentmarket_key') ?? '')
+  const [user, setUser] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('agentmarket_user') ?? 'null') } catch { return null }
+  })
+  const [booting, setBooting] = useState(true)
+
+  useEffect(() => {
+    let active = true
+    const bootstrap = async () => {
+      if (!apiKey) {
+        if (active) setBooting(false)
+        return
+      }
+      try {
+        const profile = await authMe(apiKey)
+        if (!active) return
+        const merged = {
+          user_id: profile.user_id ?? user?.user_id,
+          username: profile.username ?? user?.username ?? 'Agent',
+          email: profile.email ?? user?.email ?? '',
+          scopes: profile.scopes ?? user?.scopes ?? [],
+        }
+        localStorage.setItem('agentmarket_user', JSON.stringify(merged))
+        setUser(merged)
+      } catch {
+        if (!active) return
+        localStorage.removeItem('agentmarket_key')
+        localStorage.removeItem('agentmarket_user')
+        setApiKey('')
+        setUser(null)
+      } finally {
+        if (active) setBooting(false)
+      }
+    }
+    bootstrap()
+    return () => { active = false }
+  }, [apiKey]) // eslint-disable-line
+
+  const connect = useCallback((key, userInfo) => {
+    localStorage.setItem('agentmarket_key', key)
+    if (userInfo) localStorage.setItem('agentmarket_user', JSON.stringify(userInfo))
+    setApiKey(key)
+    if (userInfo) setUser(userInfo)
+  }, [])
+
+  const disconnect = useCallback(() => {
+    localStorage.removeItem('agentmarket_key')
+    localStorage.removeItem('agentmarket_user')
+    setApiKey('')
+    setUser(null)
+  }, [])
+
+  return (
+    <Ctx.Provider value={{ apiKey, user, booting, connect, disconnect }}>
+      {children}
+    </Ctx.Provider>
+  )
+}
+
+export const useAuth = () => useContext(Ctx)

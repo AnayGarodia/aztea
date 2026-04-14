@@ -7,15 +7,47 @@ clarifications without holding open HTTP connections.
 """
 
 import json
+import hashlib
 import os
+import queue
 import sqlite3
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 
+from core import models as _models
+
 DB_PATH = os.path.join(os.path.dirname(__file__), "registry.db")
 _local = threading.local()
 _CANONICAL_CREATED_AT = "1970-01-01T00:00:00+00:00"
+DEFAULT_LEASE_SECONDS = 300
+_CLAIM_EVENT_MSG_TYPE = "claim_event"
+_CLAIM_EVENT_ACTOR = "system:jobs"
+_ACTIVE_CLAIM_EVENT_TYPES = {
+    "claim_acquired",
+    "claim_reclaimed",
+    "claim_heartbeat",
+    "claim_lease_extended",
+}
+_LEASE_BEHAVIOR_EXTEND = "extend"
+_LEASE_BEHAVIOR_EXTEND_AND_MARK_AWAITING = "extend_and_mark_awaiting"
+_LEASE_BEHAVIOR_EXTEND_AND_RESUME_RUNNING = "extend_and_resume_running"
+MESSAGE_TYPE_LEASE_BEHAVIOR = {
+    "clarification_request": _LEASE_BEHAVIOR_EXTEND_AND_MARK_AWAITING,
+    "clarification_response": _LEASE_BEHAVIOR_EXTEND_AND_RESUME_RUNNING,
+    "progress": _LEASE_BEHAVIOR_EXTEND,
+    "partial_result": _LEASE_BEHAVIOR_EXTEND,
+    "artifact": _LEASE_BEHAVIOR_EXTEND,
+    "tool_call": _LEASE_BEHAVIOR_EXTEND,
+    "tool_result": _LEASE_BEHAVIOR_EXTEND,
+    "note": _LEASE_BEHAVIOR_EXTEND,
+}
+_LEGACY_MESSAGE_TYPE_LEASE_BEHAVIOR = {
+    "clarification_needed": _LEASE_BEHAVIOR_EXTEND_AND_MARK_AWAITING,
+    "clarification": _LEASE_BEHAVIOR_EXTEND_AND_RESUME_RUNNING,
+}
+_JOB_MESSAGE_SUBSCRIBERS_LOCK = threading.Lock()
+_JOB_MESSAGE_SUBSCRIBERS: dict[str, set[queue.Queue]] = {}
 
 VALID_STATUSES = {
     "pending",
@@ -159,6 +191,91 @@ def _normalize_optional_json(value) -> str | None:
     return None
 
 
+def _claim_token_sha256(token: str | None) -> str | None:
+    cleaned = _clean_optional_text(token)
+    if cleaned is None:
+        return None
+    return hashlib.sha256(cleaned.encode("utf-8")).hexdigest()
+
+
+def _insert_job_message_row(
+    conn: sqlite3.Connection,
+    job_id: str,
+    from_id: str,
+    msg_type: str,
+    payload: dict,
+    correlation_id: str | None,
+    created_at: str,
+) -> int:
+    cur = conn.execute(
+        """
+        INSERT INTO job_messages (job_id, from_id, type, payload, correlation_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (job_id, from_id, msg_type, json.dumps(payload), correlation_id, created_at),
+    )
+    return int(cur.lastrowid)
+
+
+def _insert_claim_event_row(
+    conn: sqlite3.Connection,
+    job_id: str,
+    *,
+    event_type: str,
+    claim_owner_id: str | None,
+    claim_token: str | None,
+    lease_started_at: str | None,
+    lease_expires_at: str | None,
+    actor_id: str | None = None,
+    metadata: dict | None = None,
+    created_at: str | None = None,
+) -> int:
+    payload: dict = {
+        "event_type": event_type,
+        "claim_owner_id": _clean_optional_text(claim_owner_id),
+        "claim_token_sha256": _claim_token_sha256(claim_token),
+        "lease_started_at": _clean_optional_text(lease_started_at),
+        "lease_expires_at": _clean_optional_text(lease_expires_at),
+    }
+    if metadata:
+        payload["metadata"] = metadata
+    return _insert_job_message_row(
+        conn,
+        job_id=job_id,
+        from_id=(actor_id or _CLAIM_EVENT_ACTOR),
+        msg_type=_CLAIM_EVENT_MSG_TYPE,
+        payload=payload,
+        correlation_id=None,
+        created_at=created_at or _now(),
+    )
+
+
+def _publish_job_message(job_id: str, message: dict | None) -> None:
+    if message is None:
+        return
+    with _JOB_MESSAGE_SUBSCRIBERS_LOCK:
+        subscribers = list(_JOB_MESSAGE_SUBSCRIBERS.get(job_id, set()))
+    for subscriber in subscribers:
+        subscriber.put_nowait(message)
+
+
+def subscribe_job_messages(job_id: str) -> queue.Queue:
+    subscriber: queue.Queue = queue.Queue()
+    with _JOB_MESSAGE_SUBSCRIBERS_LOCK:
+        _JOB_MESSAGE_SUBSCRIBERS.setdefault(job_id, set()).add(subscriber)
+    return subscriber
+
+
+def unsubscribe_job_messages(job_id: str, subscriber: queue.Queue) -> None:
+    with _JOB_MESSAGE_SUBSCRIBERS_LOCK:
+        subscribers = _JOB_MESSAGE_SUBSCRIBERS.get(job_id)
+        if subscribers is None:
+            return
+        subscribers.discard(subscriber)
+        if not subscribers:
+            _JOB_MESSAGE_SUBSCRIBERS.pop(job_id, None)
+
+
 def _jobs_table_exists(conn: sqlite3.Connection) -> bool:
     row = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'jobs'"
@@ -217,9 +334,24 @@ def _create_job_messages_table(conn: sqlite3.Connection) -> None:
             from_id      TEXT NOT NULL,
             type         TEXT NOT NULL,
             payload      TEXT NOT NULL,
+            correlation_id TEXT,
             created_at   TEXT NOT NULL
         )
     """)
+
+
+def _job_messages_columns(conn: sqlite3.Connection) -> dict:
+    return {
+        row["name"]: row
+        for row in conn.execute("PRAGMA table_info(job_messages)").fetchall()
+    }
+
+
+def _ensure_job_messages_schema(conn: sqlite3.Connection) -> None:
+    _create_job_messages_table(conn)
+    cols = _job_messages_columns(conn)
+    if "correlation_id" not in cols:
+        conn.execute("ALTER TABLE job_messages ADD COLUMN correlation_id TEXT")
 
 
 def _ensure_jobs_indexes(conn: sqlite3.Connection) -> None:
@@ -417,16 +549,22 @@ def _migrate_jobs_table(conn: sqlite3.Connection) -> None:
 
 
 def init_jobs_db() -> None:
-    """Create or migrate jobs + job_messages tables and indexes."""
+    """Create or migrate jobs tables and indexes."""
     with _conn() as conn:
         if not _jobs_table_exists(conn):
             _create_jobs_table(conn)
         elif _needs_jobs_migration(conn):
             _migrate_jobs_table(conn)
-        _create_job_messages_table(conn)
+        _ensure_job_messages_schema(conn)
         _ensure_jobs_indexes(conn)
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_job_messages_job ON job_messages(job_id, message_id)"
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_job_messages_job_correlation
+            ON job_messages(job_id, correlation_id, message_id)
+            """
         )
 
 
@@ -606,7 +744,7 @@ def _lease_is_expired(job_row: dict, now_dt: datetime) -> bool:
 def claim_job(
     job_id: str,
     claim_owner_id: str,
-    lease_seconds: int = 300,
+    lease_seconds: int = DEFAULT_LEASE_SECONDS,
     require_authorized_owner: bool = True,
 ) -> dict | None:
     owner_id = (claim_owner_id or "").strip()
@@ -682,6 +820,22 @@ def claim_job(
                 job_id,
             ),
         )
+        event_type = "claim_reclaimed" if current_owner == owner_id else "claim_acquired"
+        _insert_claim_event_row(
+            conn,
+            job_id,
+            event_type=event_type,
+            claim_owner_id=owner_id,
+            claim_token=claim_token,
+            lease_started_at=now,
+            lease_expires_at=lease_expires_at,
+            actor_id=owner_id,
+            metadata={
+                "status_after": next_status,
+                "attempt_count": attempt_count,
+            },
+            created_at=now,
+        )
 
     return get_job(job_id)
 
@@ -689,7 +843,7 @@ def claim_job(
 def heartbeat_job_lease(
     job_id: str,
     claim_owner_id: str,
-    lease_seconds: int = 300,
+    lease_seconds: int = DEFAULT_LEASE_SECONDS,
     claim_token: str | None = None,
     require_authorized_owner: bool = True,
 ) -> dict | None:
@@ -754,6 +908,24 @@ def heartbeat_job_lease(
         if result.rowcount == 0:
             return None
 
+        new_expiry = _parse_ts(lease_expires_at)
+        if existing_expiry and new_expiry and existing_expiry > new_expiry:
+            effective_expiry = existing_expiry.isoformat()
+        else:
+            effective_expiry = lease_expires_at
+        _insert_claim_event_row(
+            conn,
+            job_id,
+            event_type="claim_heartbeat",
+            claim_owner_id=owner_id,
+            claim_token=_clean_optional_text(raw.get("claim_token")),
+            lease_started_at=now,
+            lease_expires_at=effective_expiry,
+            actor_id=owner_id,
+            metadata={"lease_seconds": lease_seconds},
+            created_at=now,
+        )
+
     return get_job(job_id)
 
 
@@ -786,6 +958,8 @@ def release_job_claim(
         if claim_token is not None and _clean_optional_text(raw.get("claim_token")) != claim_token:
             return None
 
+        previous_claim_token = _clean_optional_text(raw.get("claim_token"))
+        previous_lease_expires_at = _clean_optional_text(raw.get("lease_expires_at"))
         conn.execute(
             """
             UPDATE jobs
@@ -798,6 +972,18 @@ def release_job_claim(
             WHERE job_id = ?
             """,
             (now, job_id),
+        )
+        _insert_claim_event_row(
+            conn,
+            job_id,
+            event_type="claim_released",
+            claim_owner_id=owner_id,
+            claim_token=previous_claim_token,
+            lease_started_at=now,
+            lease_expires_at=previous_lease_expires_at,
+            actor_id=owner_id,
+            metadata={},
+            created_at=now,
         )
 
     return get_job(job_id)
@@ -912,6 +1098,9 @@ def mark_job_timeout(
         if not _lease_is_expired(raw, now_dt):
             return None
 
+        previous_claim_owner_id = _clean_optional_text(raw.get("claim_owner_id"))
+        previous_claim_token = _clean_optional_text(raw.get("claim_token"))
+        previous_lease_expires_at = _clean_optional_text(raw.get("lease_expires_at"))
         attempt_count = _to_non_negative_int(raw.get("attempt_count"), default=0)
         max_attempts = max(1, _to_non_negative_int(raw.get("max_attempts"), default=3))
         retry_count = _to_non_negative_int(raw.get("retry_count"), default=0) + 1
@@ -953,6 +1142,21 @@ def mark_job_timeout(
                 now,
                 job_id,
             ),
+        )
+        _insert_claim_event_row(
+            conn,
+            job_id,
+            event_type="claim_timed_out",
+            claim_owner_id=previous_claim_owner_id,
+            claim_token=previous_claim_token,
+            lease_started_at=now,
+            lease_expires_at=previous_lease_expires_at,
+            metadata={
+                "status_after": next_status,
+                "retry_count": retry_count,
+                "timeout_count": timeout_count,
+            },
+            created_at=now,
         )
 
     return get_job(job_id)
@@ -1081,18 +1285,267 @@ def mark_settled(job_id: str) -> bool:
     return result.rowcount > 0
 
 
-def add_message(job_id: str, from_id: str, msg_type: str, payload: dict) -> dict:
+def _message_correlation_exists_conn(
+    conn: sqlite3.Connection,
+    job_id: str,
+    correlation_id: str,
+    msg_type: str | None = None,
+) -> bool:
+    correlation = _clean_optional_text(correlation_id)
+    if correlation is None:
+        return False
+    if msg_type is not None:
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM job_messages
+            WHERE job_id = ? AND correlation_id = ? AND type = ?
+            LIMIT 1
+            """,
+            (job_id, correlation, msg_type),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM job_messages
+            WHERE job_id = ? AND correlation_id = ?
+            LIMIT 1
+            """,
+            (job_id, correlation),
+        ).fetchone()
+    return row is not None
+
+
+def message_correlation_exists(
+    job_id: str,
+    correlation_id: str,
+    msg_type: str | None = None,
+) -> bool:
+    with _conn() as conn:
+        return _message_correlation_exists_conn(
+            conn,
+            job_id=job_id,
+            correlation_id=correlation_id,
+            msg_type=msg_type,
+        )
+
+
+def tool_call_correlation_exists(job_id: str, correlation_id: str) -> bool:
+    return message_correlation_exists(job_id, correlation_id, msg_type="tool_call")
+
+
+def _resolve_message_lease_behavior(raw_type: str, canonical_type: str) -> str | None:
+    if canonical_type in MESSAGE_TYPE_LEASE_BEHAVIOR:
+        return MESSAGE_TYPE_LEASE_BEHAVIOR[canonical_type]
+    return _LEGACY_MESSAGE_TYPE_LEASE_BEHAVIOR.get(raw_type)
+
+
+def add_message(
+    job_id: str,
+    from_id: str,
+    msg_type: str,
+    payload: dict,
+    lease_seconds: int = DEFAULT_LEASE_SECONDS,
+    correlation_id: str | None = None,
+) -> dict:
+    if lease_seconds <= 0:
+        raise ValueError("lease_seconds must be > 0.")
+
+    normalized = _models.normalize_job_message_body(
+        msg_type=msg_type,
+        payload=payload,
+        correlation_id=correlation_id,
+        allow_legacy=True,
+    )
+    normalized_type = normalized["type"]
+    canonical_type = normalized["canonical_type"]
+    normalized_payload = normalized["payload"]
+    normalized_correlation_id = _clean_optional_text(normalized.get("correlation_id"))
+    lease_behavior = _resolve_message_lease_behavior(normalized_type, canonical_type)
+
+    should_extend_lease = lease_behavior in {
+        _LEASE_BEHAVIOR_EXTEND,
+        _LEASE_BEHAVIOR_EXTEND_AND_MARK_AWAITING,
+        _LEASE_BEHAVIOR_EXTEND_AND_RESUME_RUNNING,
+    }
+    status_target: str | None = None
+    if lease_behavior == _LEASE_BEHAVIOR_EXTEND_AND_MARK_AWAITING:
+        status_target = "awaiting_clarification"
+    elif lease_behavior == _LEASE_BEHAVIOR_EXTEND_AND_RESUME_RUNNING:
+        status_target = "running"
+
+    now_dt = _now_dt()
+    now = now_dt.isoformat()
+
+    with _conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if canonical_type == "tool_result":
+            if normalized_correlation_id is None:
+                raise ValueError("tool_result messages require a correlation_id.")
+            if not _message_correlation_exists_conn(
+                conn,
+                job_id=job_id,
+                correlation_id=normalized_correlation_id,
+                msg_type="tool_call",
+            ):
+                raise ValueError(
+                    f"tool_result correlation_id '{normalized_correlation_id}' has no matching tool_call."
+                )
+
+        row = conn.execute(
+            "SELECT * FROM jobs WHERE job_id = ?",
+            (job_id,),
+        ).fetchone()
+        message_id = _insert_job_message_row(
+            conn,
+            job_id=job_id,
+            from_id=from_id,
+            msg_type=normalized_type,
+            payload=normalized_payload,
+            correlation_id=normalized_correlation_id,
+            created_at=now,
+        )
+
+        if row is not None and (should_extend_lease or status_target is not None):
+            raw = dict(row)
+            completed = _clean_optional_text(raw.get("completed_at")) is not None
+            settled = _clean_optional_text(raw.get("settled_at")) is not None
+            should_update_status = status_target is not None and not completed and not settled
+
+            claim_owner_id = _clean_optional_text(raw.get("claim_owner_id"))
+            claim_token = _clean_optional_text(raw.get("claim_token"))
+            lease_extended = (
+                should_extend_lease and claim_owner_id is not None and claim_token is not None
+            )
+            next_lease_expires_at = None
+            if lease_extended:
+                existing_expiry = _parse_ts(_clean_optional_text(raw.get("lease_expires_at")))
+                base_dt = existing_expiry if existing_expiry and existing_expiry > now_dt else now_dt
+                next_lease_expires_at = (base_dt + timedelta(seconds=lease_seconds)).isoformat()
+
+            if should_update_status or lease_extended:
+                conn.execute(
+                    """
+                    UPDATE jobs
+                    SET status = CASE WHEN ? = 1 THEN ? ELSE status END,
+                        lease_expires_at = CASE WHEN ? = 1 THEN ? ELSE lease_expires_at END,
+                        last_heartbeat_at = CASE WHEN ? = 1 THEN ? ELSE last_heartbeat_at END,
+                        updated_at = ?
+                    WHERE job_id = ?
+                    """,
+                    (
+                        1 if should_update_status else 0,
+                        status_target,
+                        1 if lease_extended else 0,
+                        next_lease_expires_at,
+                        1 if lease_extended else 0,
+                        now,
+                        now,
+                        job_id,
+                    ),
+                )
+
+            if lease_extended:
+                _insert_claim_event_row(
+                    conn,
+                    job_id,
+                    event_type="claim_lease_extended",
+                    claim_owner_id=claim_owner_id,
+                    claim_token=claim_token,
+                    lease_started_at=now,
+                    lease_expires_at=next_lease_expires_at,
+                    actor_id=from_id,
+                    metadata={
+                        "message_type": normalized_type,
+                        "canonical_message_type": canonical_type,
+                        "status_after": status_target if should_update_status else raw.get("status"),
+                    },
+                    created_at=now,
+                )
+
+    message = get_message(job_id, message_id)
+    _publish_job_message(job_id, message)
+    return message
+
+
+def add_claim_event(
+    job_id: str,
+    event_type: str,
+    *,
+    claim_owner_id: str | None = None,
+    claim_token: str | None = None,
+    lease_expires_at: str | None = None,
+    actor_id: str | None = None,
+    metadata: dict | None = None,
+) -> dict | None:
     now = _now()
     with _conn() as conn:
-        cur = conn.execute(
-            """
-            INSERT INTO job_messages (job_id, from_id, type, payload, created_at)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (job_id, from_id, msg_type, json.dumps(payload), now),
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT 1 FROM jobs WHERE job_id = ?",
+            (job_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        message_id = _insert_claim_event_row(
+            conn,
+            job_id,
+            event_type=event_type,
+            claim_owner_id=claim_owner_id,
+            claim_token=claim_token,
+            lease_started_at=now,
+            lease_expires_at=lease_expires_at,
+            actor_id=actor_id,
+            metadata=metadata,
+            created_at=now,
         )
-        message_id = cur.lastrowid
-    return get_message(job_id, message_id)
+    message = get_message(job_id, message_id)
+    _publish_job_message(job_id, message)
+    return message
+
+
+def claim_token_was_recently_active(
+    job_id: str,
+    claim_owner_id: str,
+    claim_token: str,
+    within_seconds: int = DEFAULT_LEASE_SECONDS,
+) -> bool:
+    owner_id = _clean_optional_text(claim_owner_id)
+    token_hash = _claim_token_sha256(claim_token)
+    if owner_id is None or token_hash is None or within_seconds <= 0:
+        return False
+
+    cutoff = _now_dt() - timedelta(seconds=within_seconds)
+    with _conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT payload
+            FROM job_messages
+            WHERE job_id = ?
+              AND type = ?
+            ORDER BY message_id DESC
+            LIMIT 500
+            """,
+            (job_id, _CLAIM_EVENT_MSG_TYPE),
+        ).fetchall()
+
+    for row in rows:
+        payload = _decode_json(row["payload"], default={})
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("event_type") not in _ACTIVE_CLAIM_EVENT_TYPES:
+            continue
+        if payload.get("claim_token_sha256") != token_hash:
+            continue
+        if _clean_optional_text(payload.get("claim_owner_id")) != owner_id:
+            continue
+        lease_expires_at = _parse_ts(_clean_optional_text(payload.get("lease_expires_at")))
+        if lease_expires_at is None:
+            continue
+        if lease_expires_at >= cutoff:
+            return True
+    return False
 
 
 def get_message(job_id: str, message_id: int) -> dict | None:
@@ -1131,6 +1584,22 @@ def get_messages(job_id: str, since_id: int | None = None, limit: int = 100) -> 
                 (job_id, limit),
             ).fetchall()
     return [_msg_to_dict(r) for r in rows]
+
+
+def get_latest_message_id(job_id: str) -> int | None:
+    with _conn() as conn:
+        row = conn.execute(
+            """
+            SELECT MAX(message_id) AS latest_message_id
+            FROM job_messages
+            WHERE job_id = ?
+            """,
+            (job_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    latest = row["latest_message_id"]
+    return int(latest) if latest is not None else None
 
 
 def _decode_json(raw, default):
