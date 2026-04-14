@@ -791,6 +791,51 @@ class RegistryCallRequest(RootModel[JSONObject]):
     model_config = ConfigDict(json_schema_extra={"example": {"ticker": "AAPL"}})
 
 
+class RegistrySearchRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "query": "I need to summarize a 10-K filing for AAPL",
+                "limit": 10,
+                "min_trust": 0.2,
+                "max_price_cents": 50,
+                "required_input_fields": ["ticker"],
+            }
+        }
+    )
+
+    query: str
+    limit: int = Field(default=10, ge=1, le=50)
+    min_trust: float = Field(default=0.0, ge=0.0, le=1.0)
+    max_price_cents: int | None = Field(default=None, ge=0)
+    required_input_fields: list[str] | None = None
+
+    @field_validator("query")
+    @classmethod
+    def query_not_empty(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("query must not be empty")
+        return text
+
+    @field_validator("required_input_fields")
+    @classmethod
+    def required_fields_non_empty(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            field_name = str(item).strip()
+            if not field_name:
+                raise ValueError("required_input_fields entries must be non-empty strings")
+            if field_name in seen:
+                continue
+            seen.add(field_name)
+            normalized.append(field_name)
+        return normalized
+
+
 class ErrorResponse(BaseModel):
     detail: JSONValue
 
@@ -918,6 +963,19 @@ class RegistryRegisterResponse(BaseModel):
 
 class RegistryAgentsResponse(BaseModel):
     agents: list[AgentResponse]
+    count: int
+
+
+class RegistrySearchResult(BaseModel):
+    agent: AgentResponse
+    similarity: float
+    trust: float
+    blended_score: float
+    match_reasons: list[str]
+
+
+class RegistrySearchResponse(BaseModel):
+    results: list[RegistrySearchResult]
     count: int
 
 

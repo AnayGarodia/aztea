@@ -68,6 +68,7 @@ from core.models import (
     JobsSweepRequest,
     OnboardingValidateRequest,
     ReconciliationRunRequest,
+    RegistrySearchRequest,
     RotateKeyRequest,
     TextIntelRequest,
     UserLoginRequest,
@@ -552,6 +553,7 @@ def _register_agents() -> None:
                 tags=a["tags"],
                 input_schema=a["input_schema"],
                 owner_id="master",
+                embed_listing=False,
             )
 
 
@@ -2728,6 +2730,46 @@ def registry_list(
     agents = registry.get_agents_with_reputation(tag=tag) if include_reputation else registry.get_agents(tag=tag)
     agents = _sorted_agents(agents, rank_by=rank_by)
     return JSONResponse(content={"agents": [_agent_response(a, caller) for a in agents], "count": len(agents)})
+
+
+@app.post(
+    "/registry/search",
+    response_model=core_models.RegistrySearchResponse,
+    responses=_error_responses(400, 401, 403, 422, 429, 500),
+)
+@limiter.limit("60/minute")
+def registry_search(
+    request: Request,
+    body: RegistrySearchRequest,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.RegistrySearchResponse:
+    """
+    Recommended discovery endpoint.
+    Performs semantic natural-language matching with trust, pricing, and input-schema compatibility checks.
+    The legacy GET /registry/agents?tag=... route remains supported for backward compatibility.
+    """
+    try:
+        ranked = registry.search_agents(
+            query=body.query,
+            limit=body.limit,
+            min_trust=body.min_trust,
+            max_price_cents=body.max_price_cents,
+            required_input_fields=body.required_input_fields,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    results = [
+        {
+            "agent": _agent_response(item["agent"], caller),
+            "similarity": item["similarity"],
+            "trust": item["trust"],
+            "blended_score": item["blended_score"],
+            "match_reasons": item["match_reasons"],
+        }
+        for item in ranked
+    ]
+    return JSONResponse(content={"results": results, "count": len(results)})
 
 
 @app.get(

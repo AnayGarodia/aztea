@@ -4,3 +4,5 @@ python-dotenv
 fastapi
 uvicorn[standard]
 slowapi
+numpy<2
+sentence-transformers
