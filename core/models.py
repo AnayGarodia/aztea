@@ -2,7 +2,19 @@
 api_models.py — Request body schemas shared by server routes.
 """
 
-from pydantic import BaseModel, Field, field_validator
+from typing import Annotated, Any, Literal, NotRequired, TypeAlias, TypedDict
+
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    RootModel,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from core import auth as _auth
 
@@ -10,13 +22,73 @@ DEFAULT_LEASE_SECONDS = 300
 DEFAULT_RETRY_DELAY_SECONDS = 30
 DEFAULT_SLA_SECONDS = 900
 DEFAULT_HOOK_DELIVERY_BATCH_SIZE = 50
+JSONValue: TypeAlias = JsonValue
+JSONObject: TypeAlias = dict[str, JsonValue]
+
+
+class AuthUser(TypedDict):
+    key_id: str
+    user_id: str
+    username: str
+    email: str
+    key_name: str
+    scopes: list[str]
+
+
+class CallerContext(TypedDict):
+    type: Literal["master", "user"]
+    owner_id: str
+    scopes: list[str]
+    user: NotRequired[AuthUser]
+LEGACY_JOB_MESSAGE_TYPE_ALIASES = {
+    "clarification_needed": "clarification_request",
+    "clarification": "clarification_response",
+}
+TYPED_JOB_MESSAGE_TYPES = frozenset(
+    {
+        "clarification_request",
+        "clarification_response",
+        "progress",
+        "partial_result",
+        "artifact",
+        "tool_call",
+        "tool_result",
+        "note",
+    }
+)
+
+
+def _normalize_message_type(value: str) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        raise ValueError("type must not be empty")
+    return text
+
+
+def _normalize_optional_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 class FinancialRequest(BaseModel):
+    model_config = ConfigDict(json_schema_extra={"example": {"ticker": "AAPL"}})
+
     ticker: str
 
 
 class CodeReviewRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "code": "def add(a, b):\n    return a + b\n",
+                "language": "python",
+                "focus": "bugs",
+            }
+        }
+    )
+
     code: str
     language: str = "auto"
     focus: str = "all"
@@ -38,6 +110,15 @@ class CodeReviewRequest(BaseModel):
 
 
 class TextIntelRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "text": "Revenue grew 30% year-over-year while margins compressed.",
+                "mode": "quick",
+            }
+        }
+    )
+
     text: str
     mode: str = "full"
 
@@ -57,6 +138,8 @@ class TextIntelRequest(BaseModel):
 
 
 class WikiRequest(BaseModel):
+    model_config = ConfigDict(json_schema_extra={"example": {"topic": "Capital asset pricing model"}})
+
     topic: str
 
     @field_validator("topic")
@@ -68,21 +151,48 @@ class WikiRequest(BaseModel):
 
 
 class AgentRegisterRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "name": "Financial Filing Analyst",
+                "description": "Summarizes SEC 10-Q filings into investment briefs.",
+                "endpoint_url": "https://example.com/analyze",
+                "price_per_call_usd": 0.05,
+                "tags": ["financial-research", "sec"],
+                "input_schema": {"type": "object", "properties": {"ticker": {"type": "string"}}},
+            }
+        }
+    )
+
     name: str
     description: str
     endpoint_url: str
     price_per_call_usd: float
     tags: list[str] = Field(default_factory=list)
-    input_schema: dict = Field(default_factory=dict)
+    input_schema: JSONObject = Field(default_factory=dict)
 
 
 class DepositRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={"example": {"wallet_id": "user:abc123", "amount_cents": 5000, "memo": "initial funding"}}
+    )
+
     wallet_id: str
     amount_cents: int
     memo: str = "manual deposit"
 
 
 class UserRegisterRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "username": "agent_builder",
+                "email": "builder@example.com",
+                "password": "password123",
+            }
+        }
+    )
+
     username: str
     email: str
     password: str
@@ -110,11 +220,17 @@ class UserRegisterRequest(BaseModel):
 
 
 class UserLoginRequest(BaseModel):
+    model_config = ConfigDict(json_schema_extra={"example": {"email": "builder@example.com", "password": "password123"}})
+
     email: str
     password: str
 
 
 class CreateKeyRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={"example": {"name": "Worker key", "scopes": ["worker", "caller"]}}
+    )
+
     name: str = "New key"
     scopes: list[str] = Field(default_factory=lambda: list(_auth.DEFAULT_KEY_SCOPES))
 
@@ -135,6 +251,10 @@ class CreateKeyRequest(BaseModel):
 
 
 class RotateKeyRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={"example": {"name": "Rotated worker key", "scopes": ["worker"]}}
+    )
+
     name: str | None = None
     scopes: list[str] | None = None
 
@@ -157,69 +277,744 @@ class RotateKeyRequest(BaseModel):
 
 
 class JobCreateRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "agent_id": "00000000-0000-0000-0000-000000000001",
+                "input_payload": {"ticker": "AAPL"},
+                "max_attempts": 3,
+            }
+        }
+    )
+
     agent_id: str
-    input_payload: dict = Field(default_factory=dict)
+    input_payload: JSONObject = Field(default_factory=dict)
     max_attempts: int = Field(default=3, ge=1, le=10)
 
 
 class JobCompleteRequest(BaseModel):
-    output_payload: dict
+    model_config = ConfigDict(
+        json_schema_extra={"example": {"output_payload": {"signal": "positive"}, "claim_token": "claim-token-123"}}
+    )
+
+    output_payload: JSONObject
     claim_token: str | None = None
 
 
 class JobFailRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={"example": {"error_message": "Unable to parse filing", "claim_token": "claim-token-123"}}
+    )
+
     error_message: str | None = None
     claim_token: str | None = None
 
 
 class JobRetryRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={"example": {"error_message": "Dependency timeout", "retry_delay_seconds": 30}}
+    )
+
     error_message: str | None = None
     retry_delay_seconds: int = Field(default=DEFAULT_RETRY_DELAY_SECONDS, ge=0, le=3600)
     claim_token: str | None = None
 
 
 class JobClaimRequest(BaseModel):
+    model_config = ConfigDict(json_schema_extra={"example": {"lease_seconds": 300}})
+
     lease_seconds: int = Field(default=DEFAULT_LEASE_SECONDS, ge=1, le=3600)
 
 
 class JobHeartbeatRequest(BaseModel):
+    model_config = ConfigDict(json_schema_extra={"example": {"lease_seconds": 300, "claim_token": "claim-token-123"}})
+
     lease_seconds: int = Field(default=DEFAULT_LEASE_SECONDS, ge=1, le=3600)
     claim_token: str | None = None
 
 
 class JobReleaseRequest(BaseModel):
+    model_config = ConfigDict(json_schema_extra={"example": {"claim_token": "claim-token-123"}})
+
     claim_token: str | None = None
 
 
 class JobRatingRequest(BaseModel):
+    model_config = ConfigDict(json_schema_extra={"example": {"rating": 5}})
+
     rating: int = Field(ge=1, le=5)
 
 
+class ClarificationRequestPayload(BaseModel):
+    question: str
+    schema: JSONObject | None = None
+
+    @field_validator("question")
+    @classmethod
+    def question_not_empty(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("question must not be empty")
+        return text
+
+
+class ClarificationResponsePayload(BaseModel):
+    answer: JSONObject | str
+    request_message_id: int = Field(ge=1)
+
+    @field_validator("answer")
+    @classmethod
+    def answer_valid(cls, value: JSONObject | str) -> JSONObject | str:
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                raise ValueError("answer must not be empty")
+            return text
+        return value
+
+
+class LegacyClarificationResponsePayload(BaseModel):
+    answer: JSONObject | str
+    request_message_id: int | None = Field(default=None, ge=1)
+
+    @field_validator("answer")
+    @classmethod
+    def legacy_answer_valid(cls, value: JSONObject | str) -> JSONObject | str:
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                raise ValueError("answer must not be empty")
+            return text
+        return value
+
+
+class ProgressPayload(BaseModel):
+    percent: int = Field(ge=0, le=100)
+    note: str | None = None
+
+    @field_validator("note")
+    @classmethod
+    def normalize_note(cls, value: str | None) -> str | None:
+        return _normalize_optional_text(value)
+
+
+class PartialResultPayload(BaseModel):
+    payload: JSONObject = Field(default_factory=dict)
+    is_final: Literal[False] = False
+
+
+class ArtifactPayload(BaseModel):
+    name: str
+    mime: str
+    url_or_base64: str
+    size_bytes: int = Field(ge=0)
+
+    @field_validator("name", "mime", "url_or_base64")
+    @classmethod
+    def text_fields_not_empty(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("value must not be empty")
+        return text
+
+
+class ToolCallPayload(BaseModel):
+    tool_name: str
+    args: JSONObject = Field(default_factory=dict)
+    correlation_id: str | None = None
+
+    @field_validator("tool_name")
+    @classmethod
+    def tool_name_not_empty(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("tool_name must not be empty")
+        return text
+
+    @field_validator("correlation_id")
+    @classmethod
+    def normalize_correlation(cls, value: str | None) -> str | None:
+        return _normalize_optional_text(value)
+
+
+class ToolResultPayload(BaseModel):
+    correlation_id: str
+    payload: JSONObject = Field(default_factory=dict)
+    error: str | None = None
+
+    @field_validator("correlation_id")
+    @classmethod
+    def correlation_required(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("correlation_id must not be empty")
+        return text
+
+    @field_validator("error")
+    @classmethod
+    def normalize_error(cls, value: str | None) -> str | None:
+        return _normalize_optional_text(value)
+
+
+class NotePayload(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    text: str
+
+    @field_validator("text")
+    @classmethod
+    def text_not_empty(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("text must not be empty")
+        return text
+
+
+class _TypedJobMessageBase(BaseModel):
+    correlation_id: str | None = None
+
+    @field_validator("correlation_id")
+    @classmethod
+    def normalize_message_correlation(cls, value: str | None) -> str | None:
+        return _normalize_optional_text(value)
+
+
+class ClarificationRequestMessage(_TypedJobMessageBase):
+    type: Literal["clarification_request"]
+    payload: ClarificationRequestPayload
+
+
+class ClarificationResponseMessage(_TypedJobMessageBase):
+    type: Literal["clarification_response"]
+    payload: ClarificationResponsePayload
+
+
+class ProgressMessage(_TypedJobMessageBase):
+    type: Literal["progress"]
+    payload: ProgressPayload
+
+
+class PartialResultMessage(_TypedJobMessageBase):
+    type: Literal["partial_result"]
+    payload: PartialResultPayload
+
+
+class ArtifactMessage(_TypedJobMessageBase):
+    type: Literal["artifact"]
+    payload: ArtifactPayload
+
+
+class ToolCallMessage(_TypedJobMessageBase):
+    type: Literal["tool_call"]
+    payload: ToolCallPayload
+
+    @model_validator(mode="after")
+    def sync_correlation_id(self):
+        corr = _normalize_optional_text(self.correlation_id or self.payload.correlation_id)
+        self.correlation_id = corr
+        self.payload.correlation_id = corr
+        return self
+
+
+class ToolResultMessage(_TypedJobMessageBase):
+    type: Literal["tool_result"]
+    payload: ToolResultPayload
+
+    @model_validator(mode="after")
+    def sync_correlation_id(self):
+        corr = _normalize_optional_text(self.correlation_id or self.payload.correlation_id)
+        if corr is None:
+            raise ValueError("correlation_id is required for tool_result messages")
+        self.correlation_id = corr
+        self.payload.correlation_id = corr
+        return self
+
+
+class NoteMessage(_TypedJobMessageBase):
+    type: Literal["note"]
+    payload: NotePayload
+
+
+TypedJobMessage = Annotated[
+    (
+        ClarificationRequestMessage
+        | ClarificationResponseMessage
+        | ProgressMessage
+        | PartialResultMessage
+        | ArtifactMessage
+        | ToolCallMessage
+        | ToolResultMessage
+        | NoteMessage
+    ),
+    Field(discriminator="type"),
+]
+
+_TYPED_JOB_MESSAGE_ADAPTER = TypeAdapter(TypedJobMessage)
+
+
+def parse_typed_job_message(message_body: JSONObject) -> TypedJobMessage:
+    if not isinstance(message_body, dict):
+        raise ValueError("message_body must be an object.")
+    return _TYPED_JOB_MESSAGE_ADAPTER.validate_python(message_body)
+
+
+def canonical_job_message_type(msg_type: str, *, allow_legacy: bool = True) -> str:
+    normalized_type = _normalize_message_type(msg_type)
+    if not allow_legacy:
+        return normalized_type
+    return LEGACY_JOB_MESSAGE_TYPE_ALIASES.get(normalized_type, normalized_type)
+
+
+def _normalize_typed_payload_for_compat(msg_type: str, payload: JSONObject) -> JSONObject:
+    normalized = dict(payload)
+
+    if msg_type == "clarification_request":
+        question = str(normalized.get("question") or "").strip()
+        if not question:
+            raise ValueError("clarification_request payload.question is required.")
+        normalized["question"] = question
+        schema = normalized.get("schema")
+        if schema is not None and not isinstance(schema, dict):
+            raise ValueError("clarification_request payload.schema must be an object.")
+        return normalized
+
+    if msg_type == "clarification_response":
+        answer = normalized.get("answer")
+        if isinstance(answer, str):
+            answer = answer.strip()
+        if answer in (None, ""):
+            raise ValueError("clarification_response payload.answer is required.")
+        normalized["answer"] = answer
+        return normalized
+
+    if msg_type == "progress":
+        percent_raw = normalized.get("percent")
+        if percent_raw is None:
+            raise ValueError("progress payload.percent is required.")
+        try:
+            percent = int(percent_raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("progress payload.percent must be an integer between 0 and 100.") from exc
+        if percent < 0 or percent > 100:
+            raise ValueError("progress payload.percent must be an integer between 0 and 100.")
+        normalized["percent"] = percent
+        note = str(normalized.get("note") or normalized.get("message") or "").strip()
+        if note:
+            normalized["note"] = note
+        return normalized
+
+    if msg_type == "partial_result":
+        partial_payload = normalized.get("payload")
+        if partial_payload is None:
+            normalized["payload"] = {}
+        elif not isinstance(partial_payload, dict):
+            raise ValueError("partial_result payload.payload must be an object.")
+        if "is_final" not in normalized:
+            normalized["is_final"] = False
+        return normalized
+
+    if msg_type == "note":
+        text = str(normalized.get("text") or normalized.get("note") or normalized.get("message") or "").strip()
+        if not text:
+            raise ValueError("note payload.text is required.")
+        normalized["text"] = text
+        return normalized
+
+    if msg_type == "tool_call":
+        tool_name = str(normalized.get("tool_name") or normalized.get("name") or "").strip()
+        if not tool_name:
+            raise ValueError("tool_call payload.tool_name is required.")
+        normalized["tool_name"] = tool_name
+        args = normalized.get("args")
+        if args is None:
+            args = normalized.get("arguments")
+        if args is None:
+            normalized["args"] = {}
+        elif not isinstance(args, dict):
+            raise ValueError("tool_call payload.args must be an object.")
+        else:
+            normalized["args"] = args
+        corr = _normalize_optional_text(normalized.get("correlation_id"))
+        if corr is None:
+            normalized.pop("correlation_id", None)
+        else:
+            normalized["correlation_id"] = corr
+        return normalized
+
+    if msg_type == "tool_result":
+        corr = _normalize_optional_text(normalized.get("correlation_id"))
+        if corr is None:
+            raise ValueError("tool_result payload.correlation_id is required.")
+        normalized["correlation_id"] = corr
+        tool_payload = normalized.get("payload")
+        if tool_payload is None:
+            tool_payload = normalized.get("result")
+        if tool_payload is None:
+            normalized["payload"] = {}
+        elif not isinstance(tool_payload, dict):
+            raise ValueError("tool_result payload.payload must be an object.")
+        else:
+            normalized["payload"] = tool_payload
+        return normalized
+
+    return normalized
+
+
+def normalize_job_message_body(
+    *,
+    msg_type: str,
+    payload: JSONObject | None = None,
+    correlation_id: str | None = None,
+    allow_legacy: bool = True,
+) -> dict:
+    normalized_type = _normalize_message_type(msg_type)
+    normalized_payload = payload if payload is not None else {}
+    if not isinstance(normalized_payload, dict):
+        raise ValueError("payload must be an object.")
+
+    normalized_correlation = _normalize_optional_text(correlation_id)
+    canonical_type = canonical_job_message_type(normalized_type, allow_legacy=allow_legacy)
+
+    if normalized_type == "clarification_needed" and allow_legacy:
+        payload_model = ClarificationRequestPayload.model_validate(normalized_payload)
+        return {
+            "type": normalized_type,
+            "canonical_type": canonical_type,
+            "payload": payload_model.model_dump(),
+            "correlation_id": normalized_correlation,
+        }
+
+    if normalized_type == "clarification" and allow_legacy:
+        if "request_message_id" in normalized_payload:
+            payload_model = ClarificationResponsePayload.model_validate(normalized_payload)
+            normalized_data = payload_model.model_dump()
+        else:
+            payload_model = LegacyClarificationResponsePayload.model_validate(normalized_payload)
+            normalized_data = payload_model.model_dump(exclude_none=True)
+        return {
+            "type": normalized_type,
+            "canonical_type": canonical_type,
+            "payload": normalized_data,
+            "correlation_id": normalized_correlation,
+        }
+
+    if canonical_type in TYPED_JOB_MESSAGE_TYPES:
+        typed_payload = _normalize_typed_payload_for_compat(canonical_type, normalized_payload)
+        try:
+            parsed = parse_typed_job_message(
+                {
+                    "type": canonical_type,
+                    "payload": typed_payload,
+                    "correlation_id": normalized_correlation,
+                }
+            )
+        except ValidationError as exc:
+            raise ValueError(str(exc)) from exc
+        dumped = parsed.model_dump()
+        return {
+            "type": normalized_type,
+            "canonical_type": dumped["type"],
+            "payload": dumped["payload"],
+            "correlation_id": dumped.get("correlation_id"),
+        }
+
+    if not allow_legacy:
+        raise ValueError(f"Unsupported job message type: {normalized_type}")
+
+    return {
+        "type": normalized_type,
+        "canonical_type": canonical_type,
+        "payload": normalized_payload,
+        "correlation_id": normalized_correlation,
+    }
+
+
 class JobMessageRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "type": "progress",
+                "payload": {"percent": 42, "note": "Working on sections 2 and 3"},
+                "from_id": "user:worker-id",
+                "correlation_id": None,
+            }
+        }
+    )
+
     type: str
-    payload: dict = Field(default_factory=dict)
+    payload: JSONObject = Field(default_factory=dict)
     from_id: str | None = None
+    correlation_id: str | None = None
 
 
 class OnboardingValidateRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={"example": {"manifest_url": "https://example.com/agent.md"}}
+    )
+
     manifest_content: str | None = None
     manifest_url: str | None = None
 
 
 class JobEventHookCreateRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={"example": {"target_url": "https://hooks.example.com/job-events", "secret": "hook_secret"}}
+    )
+
     target_url: str
     secret: str | None = None
 
 
 class HookDeliveryProcessRequest(BaseModel):
+    model_config = ConfigDict(json_schema_extra={"example": {"limit": 50}})
+
     limit: int = Field(default=DEFAULT_HOOK_DELIVERY_BATCH_SIZE, ge=1, le=500)
 
 
 class JobsSweepRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={"example": {"retry_delay_seconds": 30, "sla_seconds": 900, "limit": 100}}
+    )
+
     retry_delay_seconds: int = Field(default=DEFAULT_RETRY_DELAY_SECONDS, ge=0, le=3600)
     sla_seconds: int = Field(default=DEFAULT_SLA_SECONDS, ge=60, le=7 * 24 * 3600)
     limit: int = Field(default=100, ge=1, le=500)
 
 
 class ReconciliationRunRequest(BaseModel):
+    model_config = ConfigDict(json_schema_extra={"example": {"max_mismatches": 100}})
+
     max_mismatches: int = Field(default=100, ge=1, le=1000)
+
+
+class RegistryCallRequest(RootModel[JSONObject]):
+    model_config = ConfigDict(json_schema_extra={"example": {"ticker": "AAPL"}})
+
+
+class ErrorResponse(BaseModel):
+    detail: JSONValue
+
+
+class DynamicObjectResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+
+class DynamicListResponse(BaseModel):
+    items: list[JSONObject]
+
+
+class HealthResponse(BaseModel):
+    status: str
+    agents: int
+
+
+class ManifestSectionResponse(BaseModel):
+    heading: str
+    content: str
+
+
+class ManifestValidationResponse(BaseModel):
+    source: str
+    sections: dict[str, ManifestSectionResponse]
+    registration_metadata: JSONObject
+
+
+class OnboardingIngestResponse(BaseModel):
+    agent_id: str
+    source: str
+    registration_payload: JSONObject
+    agent: JSONObject
+    message: str
+
+
+class AuthRegisterResponse(BaseModel):
+    user_id: str
+    username: str
+    email: str
+    raw_api_key: str
+    key_id: str
+    key_prefix: str
+
+
+class AuthLoginResponse(BaseModel):
+    user_id: str
+    username: str
+    email: str
+    created_at: str
+    raw_api_key: str
+    key_id: str
+    key_prefix: str
+
+
+class AuthMeMasterResponse(BaseModel):
+    type: Literal["master"]
+    user_id: None = None
+    username: str
+    scopes: list[str]
+
+
+class AuthMeUserResponse(BaseModel):
+    user_id: str
+    username: str
+    email: str
+    scopes: list[str]
+
+
+AuthMeResponse = AuthMeMasterResponse | AuthMeUserResponse
+
+
+class ApiKeyMetadataResponse(BaseModel):
+    key_id: str
+    key_prefix: str
+    name: str
+    scopes: list[str]
+    created_at: str
+    last_used_at: str | None = None
+    is_active: int
+
+
+class ApiKeyListResponse(BaseModel):
+    keys: list[ApiKeyMetadataResponse]
+
+
+class ApiKeyCreateResponse(BaseModel):
+    raw_key: str
+    key_id: str
+    key_prefix: str
+    name: str
+    scopes: list[str]
+
+
+class ApiKeyRotateResponse(BaseModel):
+    rotated_key_id: str
+    new_key_id: str
+    raw_key: str
+    key_prefix: str
+    name: str
+    scopes: list[str]
+
+
+class ApiKeyRevokeResponse(BaseModel):
+    revoked: bool
+
+
+class AgentResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    agent_id: str
+    name: str
+    description: str
+    endpoint_url: str
+    price_per_call_usd: float
+    tags: list[str] = Field(default_factory=list)
+    input_schema: JSONObject = Field(default_factory=dict)
+
+
+class RegistryRegisterResponse(BaseModel):
+    agent_id: str
+    message: str
+    agent: AgentResponse | None = None
+
+
+class RegistryAgentsResponse(BaseModel):
+    agents: list[AgentResponse]
+    count: int
+
+
+class JobResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    job_id: str
+    agent_id: str
+    status: str
+    price_cents: int
+    input_payload: JSONObject
+    output_payload: JSONObject | None = None
+    error_message: str | None = None
+    created_at: str
+    updated_at: str
+    completed_at: str | None = None
+    claim_owner_id: str | None = None
+    claim_token: str | None = None
+    claimed_at: str | None = None
+    lease_expires_at: str | None = None
+    last_heartbeat_at: str | None = None
+    attempt_count: int
+    max_attempts: int
+    retry_count: int
+    next_retry_at: str | None = None
+    last_retry_at: str | None = None
+    timeout_count: int
+    last_timeout_at: str | None = None
+    latest_message_id: int | None = None
+
+
+class JobsListResponse(BaseModel):
+    jobs: list[JobResponse]
+    next_cursor: str | None = None
+
+
+class JobMessageResponse(BaseModel):
+    message_id: int
+    job_id: str
+    from_id: str
+    type: str
+    payload: JSONObject
+    correlation_id: str | None = None
+    created_at: str
+
+
+class JobMessagesResponse(BaseModel):
+    messages: list[JobMessageResponse]
+
+
+class JobRatingResponse(BaseModel):
+    rating: JSONObject
+    agent_reputation: JSONObject
+
+
+class JobSettlementTraceResponse(BaseModel):
+    job_id: str
+    agent_id: str
+    status: str
+    charge_tx_id: str
+    price_cents: int
+    expected_agent_payout_cents: int
+    expected_platform_fee_cents: int
+    settled_at: str | None = None
+    transactions: list[JSONObject]
+
+
+class JobEventsResponse(BaseModel):
+    events: list[JSONObject]
+
+
+class JobEventHookListResponse(BaseModel):
+    hooks: list[JSONObject]
+
+
+class JobEventHookDeleteResponse(BaseModel):
+    deleted: bool
+    hook_id: str
+
+
+class JobEventHookDeadLetterResponse(BaseModel):
+    deliveries: list[JSONObject]
+    count: int
+
+
+class WalletDepositResponse(BaseModel):
+    tx_id: str
+    wallet_id: str
+    balance_cents: int
+
+
+class WalletResponse(BaseModel):
+    wallet_id: str
+    owner_id: str
+    balance_cents: int
+    transactions: list[JSONObject] = Field(default_factory=list)
+
+
+class RunsResponse(BaseModel):
+    runs: list[JSONObject]

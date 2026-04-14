@@ -1,0 +1,23 @@
+.invoke-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.invoke-panel__price-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--canvas-sunk);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+}
+.invoke-panel__price-label { font-size: 0.8125rem; color: var(--ink-mute); }
+.invoke-panel__price-val {
+  font-family: var(--font-mono);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--accent);
+  font-feature-settings: 'tnum';
+}
+.invoke-panel__submit { width: 100%; }

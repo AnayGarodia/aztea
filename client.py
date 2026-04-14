@@ -1,28 +1,31 @@
-"""
-client.py — Reference HTTP client for the agentmarket /analyze endpoint.
+"""Thin compatibility CLI wrapper around the new `agentmarket` Python SDK."""
 
-Demonstrates how another agent (or human) calls this agent over HTTP.
-Reads API_KEY from .env so it works out of the box locally.
-
-Usage:
-    python client.py AAPL
-    python client.py MSFT --host http://localhost:8000
-"""
 import argparse
 import json
 import os
 import sys
+from pathlib import Path
 
-import requests
 from dotenv import load_dotenv
 
 load_dotenv()
 
+try:
+    from agentmarket import AgentmarketClient
+    from agentmarket.errors import APIError, AgentmarketError
+except ModuleNotFoundError:
+    sdk_root = Path(__file__).resolve().parent / "sdks" / "python"
+    sys.path.insert(0, str(sdk_root))
+    from agentmarket import AgentmarketClient
+    from agentmarket.errors import APIError, AgentmarketError
+
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Call the agentmarket /analyze endpoint.")
-    parser.add_argument("ticker", help="Stock ticker symbol (e.g. AAPL)")
+    parser = argparse.ArgumentParser(description="Call AgentMarket endpoints via the Python SDK.")
+    parser.add_argument("ticker", nargs="?", help="Stock ticker symbol (e.g. AAPL)")
     parser.add_argument("--host", default="http://localhost:8000", help="Server base URL")
+    parser.add_argument("--registry-list", action="store_true", help="List registered agents.")
+    parser.add_argument("--tag", default=None, help="Optional registry tag filter for --registry-list.")
     args = parser.parse_args()
 
     api_key = os.environ.get("API_KEY")
@@ -30,25 +33,29 @@ def main() -> None:
         print("Error: API_KEY not set in .env", file=sys.stderr)
         sys.exit(1)
 
+    if not args.registry_list and not args.ticker:
+        parser.error("ticker is required unless --registry-list is provided.")
+
+    client = AgentmarketClient(base_url=args.host, api_key=api_key)
     try:
-        resp = requests.post(
-            f"{args.host}/analyze",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}",
-            },
-            json={"ticker": args.ticker},
-            timeout=120,
-        )
-    except requests.RequestException as e:
-        print(f"Network error: {e}", file=sys.stderr)
+        if args.registry_list:
+            result = client.registry.list(tag=args.tag)
+        else:
+            result = client._request_json(  # compatibility path for existing examples
+                "POST",
+                "/analyze",
+                json_body={"ticker": args.ticker},
+            )
+    except APIError as exc:
+        print(f"Error {exc.status_code}: {exc.detail}", file=sys.stderr)
         sys.exit(1)
-
-    if resp.status_code != 200:
-        print(f"Error {resp.status_code}: {resp.text}", file=sys.stderr)
+    except AgentmarketError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
+    finally:
+        client.close()
 
-    print(json.dumps(resp.json(), indent=2))
+    print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,23 @@
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: var(--sp-3);
+  padding: var(--sp-8) var(--sp-5);
+  color: var(--ink-mute);
+}
+.empty__icon {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--r-md);
+  background: var(--canvas-sunk);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-faint);
+  margin-bottom: var(--sp-1);
+}
+.empty__title { font-size: 0.9375rem; font-weight: 600; color: var(--ink-soft); }
+.empty__sub   { font-size: 0.875rem; max-width: 300px; line-height: 1.5; }

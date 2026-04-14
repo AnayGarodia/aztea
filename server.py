@@ -11,11 +11,13 @@ import base64
 import math
 import hmac
 import hashlib
+import logging
 import ipaddress
 import sqlite3
 import threading
 import time
 import uuid
+from queue import Empty, Queue
 from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 from decimal import Decimal, ROUND_HALF_UP
@@ -29,7 +31,7 @@ load_dotenv()
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
@@ -43,6 +45,7 @@ from core import onboarding
 from core import payments
 from core import registry
 from core import jobs
+from core import models as core_models
 from core import reputation
 from main import run as _run_financial
 from core.models import (
@@ -71,6 +74,8 @@ from core.models import (
     UserRegisterRequest,
     WikiRequest,
 )
+
+_LOG = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +267,26 @@ _HOOK_WORKER_STATE = {
     "last_run_at": None,
     "last_summary": None,
     "last_error": None,
+}
+_JOB_STREAM_HEARTBEAT_SECONDS = 15
+_JOB_TERMINAL_STATUSES = {"complete", "failed"}
+_LEGACY_JOB_MESSAGE_TYPES = {
+    "question",
+    "partial_result",
+    "clarification",
+    "clarification_needed",
+    "final_result",
+    "note",
+}
+_TYPED_JOB_MESSAGE_TYPES = {
+    "clarification_request",
+    "clarification_response",
+    "progress",
+    "partial_result",
+    "artifact",
+    "note",
+    "tool_call",
+    "tool_result",
 }
 
 
@@ -643,7 +668,7 @@ async def limit_body_size(request: Request, call_next):
 # Auth helpers
 # ---------------------------------------------------------------------------
 
-def _resolve_caller(request: Request) -> dict | None:
+def _resolve_caller(request: Request) -> core_models.CallerContext | None:
     cached = getattr(request.state, "_caller", _CALLER_CACHE_MISSING)
     if cached is not _CALLER_CACHE_MISSING:
         return cached
@@ -679,7 +704,7 @@ def _resolve_caller(request: Request) -> dict | None:
     return None
 
 
-def _require_api_key(request: Request) -> dict:
+def _require_api_key(request: Request) -> core_models.CallerContext:
     caller = _resolve_caller(request)
     if caller is None:
         auth = request.headers.get("Authorization", "")
@@ -699,7 +724,7 @@ def _caller_owner_id(request: Request) -> str:
     return caller["owner_id"]
 
 
-def _caller_has_scope(caller: dict, required_scope: str) -> bool:
+def _caller_has_scope(caller: core_models.CallerContext, required_scope: str) -> bool:
     if caller["type"] == "master":
         return True
     scopes = {str(scope).strip().lower() for scope in (caller.get("scopes") or []) if str(scope).strip()}
@@ -708,7 +733,7 @@ def _caller_has_scope(caller: dict, required_scope: str) -> bool:
     return required_scope in scopes
 
 
-def _require_scope(caller: dict, required_scope: str, detail: str | None = None) -> None:
+def _require_scope(caller: core_models.CallerContext, required_scope: str, detail: str | None = None) -> None:
     if _caller_has_scope(caller, required_scope):
         return
     scope_name = required_scope.strip().lower()
@@ -741,7 +766,7 @@ def _proxy_response(resp: http.Response) -> Response:
     return Response(content=resp.content, status_code=resp.status_code, headers=headers)
 
 
-def _agent_response(agent: dict, caller: dict) -> dict:
+def _agent_response(agent: dict, caller: core_models.CallerContext) -> dict:
     if caller.get("type") == "master":
         return agent
     redacted = dict(agent)
@@ -749,7 +774,7 @@ def _agent_response(agent: dict, caller: dict) -> dict:
     return redacted
 
 
-def _job_response(job: dict, caller: dict) -> dict:
+def _job_response(job: dict, caller: core_models.CallerContext) -> dict:
     if caller.get("type") == "master":
         return job
 
@@ -773,14 +798,14 @@ def _job_response(job: dict, caller: dict) -> dict:
     return result
 
 
-def _caller_can_view_job(caller: dict, job: dict) -> bool:
+def _caller_can_view_job(caller: core_models.CallerContext, job: dict) -> bool:
     if caller["type"] == "master":
         return True
     owner_id = caller["owner_id"]
     return owner_id == job["caller_owner_id"] or jobs.is_worker_authorized(job, owner_id)
 
 
-def _caller_can_manage_agent(caller: dict, agent: dict) -> bool:
+def _caller_can_manage_agent(caller: core_models.CallerContext, agent: dict) -> bool:
     if caller["type"] == "master":
         return True
     return caller["owner_id"] == agent.get("owner_id")
@@ -796,6 +821,137 @@ def _assert_worker_claim(job: dict, worker_owner_id: str, claim_token: str | Non
         raise HTTPException(status_code=409, detail="Job claim token is missing.")
     if not claim_token or claim_token != stored_token:
         raise HTTPException(status_code=403, detail="Invalid or missing claim_token.")
+
+
+def _to_non_negative_int(value: Any, default: int = 0) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    if parsed < 0:
+        return default
+    return parsed
+
+
+def _job_attempts_remaining(job: dict) -> bool:
+    attempt_count = _to_non_negative_int(job.get("attempt_count"), default=0)
+    max_attempts = max(1, _to_non_negative_int(job.get("max_attempts"), default=1))
+    return attempt_count < max_attempts
+
+
+def _job_has_stale_active_lease(job: dict) -> bool:
+    if job.get("status") not in {"running", "awaiting_clarification"}:
+        return False
+    if not (job.get("claim_owner_id") or "").strip():
+        return False
+    lease_expires_at = _parse_iso_datetime(job.get("lease_expires_at"))
+    if lease_expires_at is None:
+        return False
+    return lease_expires_at <= datetime.now(timezone.utc)
+
+
+def _job_supports_late_worker_grace(job: dict) -> bool:
+    if (job.get("claim_owner_id") or "").strip():
+        return False
+    if job.get("status") not in {"pending", "failed"}:
+        return False
+    if _to_non_negative_int(job.get("timeout_count"), default=0) <= 0:
+        return False
+    return _job_attempts_remaining(job)
+
+
+def _audit_master_claim_bypass(job: dict, action: str, claim_token: str | None) -> None:
+    jobs.add_claim_event(
+        job["job_id"],
+        event_type="master_claim_bypass",
+        claim_owner_id=job.get("claim_owner_id"),
+        claim_token=claim_token,
+        lease_expires_at=job.get("lease_expires_at"),
+        actor_id="master",
+        metadata={"action": action, "status": job.get("status")},
+    )
+
+
+def _assert_settlement_claim_or_grace(
+    job: dict,
+    caller: core_models.CallerContext,
+    claim_token: str | None,
+    action: str,
+) -> None:
+    actor_owner_id = caller["owner_id"]
+    if caller["type"] == "master":
+        _audit_master_claim_bypass(job, action=action, claim_token=claim_token)
+        return
+
+    if not jobs.is_worker_authorized(job, actor_owner_id):
+        raise HTTPException(status_code=403, detail="Not authorized for this agent job.")
+
+    if (job.get("claim_owner_id") or "").strip() == actor_owner_id:
+        _assert_worker_claim(job, actor_owner_id, claim_token)
+        return
+
+    if not _job_supports_late_worker_grace(job):
+        raise HTTPException(status_code=409, detail="Job is not currently claimed by this worker.")
+    if not claim_token:
+        raise HTTPException(status_code=403, detail="Invalid or missing claim_token.")
+    if not jobs.claim_token_was_recently_active(
+        job["job_id"],
+        claim_owner_id=actor_owner_id,
+        claim_token=claim_token,
+        within_seconds=_DEFAULT_LEASE_SECONDS,
+    ):
+        raise HTTPException(status_code=403, detail="Invalid or stale claim_token.")
+
+    jobs.add_claim_event(
+        job["job_id"],
+        event_type="late_worker_grace",
+        claim_owner_id=actor_owner_id,
+        claim_token=claim_token,
+        lease_expires_at=job.get("lease_expires_at"),
+        actor_id=actor_owner_id,
+        metadata={"action": action, "status": job.get("status")},
+    )
+
+
+def _timeout_stale_lease_at_touchpoint(job: dict, actor_owner_id: str, touchpoint: str) -> dict | None:
+    if not _job_has_stale_active_lease(job):
+        return None
+
+    updated = jobs.mark_job_timeout(
+        job["job_id"],
+        retry_delay_seconds=_SWEEPER_RETRY_DELAY_SECONDS,
+    )
+    if updated is None:
+        return None
+
+    jobs.add_claim_event(
+        job["job_id"],
+        event_type="touchpoint_timeout",
+        claim_owner_id=job.get("claim_owner_id"),
+        claim_token=job.get("claim_token"),
+        lease_expires_at=job.get("lease_expires_at"),
+        actor_id=actor_owner_id,
+        metadata={"touchpoint": touchpoint, "status_after": updated.get("status")},
+    )
+
+    if updated["status"] == "failed":
+        return _settle_failed_job(
+            updated,
+            actor_owner_id=actor_owner_id,
+            event_type="job.timeout_terminal",
+        )
+
+    _record_job_event(
+        updated,
+        "job.timeout_retry_scheduled",
+        actor_owner_id=actor_owner_id,
+        payload={
+            "retry_count": updated["retry_count"],
+            "next_retry_at": updated["next_retry_at"],
+            "touchpoint": touchpoint,
+        },
+    )
+    return updated
 
 
 def _job_latency_ms(job: dict) -> float:
@@ -850,14 +1006,270 @@ def _decode_jobs_cursor(cursor: str | None) -> tuple[str, str] | tuple[None, Non
     return created_at, job_id
 
 
-_JOB_MESSAGE_TYPES = {
-    "question",
-    "partial_result",
-    "clarification",
-    "clarification_needed",
-    "final_result",
-    "note",
-}
+def _normalize_job_message_protocol(
+    raw_type: str,
+    raw_payload: dict,
+    correlation_id: str | None = None,
+) -> dict:
+    msg_type = str(raw_type or "").strip().lower()
+    if not msg_type:
+        raise ValueError("type must not be empty")
+    if not isinstance(raw_payload, dict):
+        raise ValueError("payload must be an object.")
+
+    parsed = _parse_job_message_protocol_from_models(msg_type, raw_payload, correlation_id)
+    if parsed is None:
+        parsed = _parse_job_message_protocol_fallback(msg_type, raw_payload, correlation_id)
+
+    normalized_type = str(parsed.get("type") or "").strip().lower()
+    payload = parsed.get("payload", {})
+    normalized_correlation = parsed.get("correlation_id")
+    if not normalized_type:
+        raise ValueError("type must not be empty")
+    if not isinstance(payload, dict):
+        raise ValueError("payload must be an object.")
+
+    if normalized_type in _LEGACY_JOB_MESSAGE_TYPES:
+        _LOG.warning(
+            "Deprecated legacy job message contract used for type '%s'; prefer typed protocol.",
+            normalized_type,
+        )
+        return {
+            "type": normalized_type,
+            "payload": payload,
+            "correlation_id": normalized_correlation,
+            "legacy_type": normalized_type,
+        }
+
+    if normalized_type in _TYPED_JOB_MESSAGE_TYPES:
+        return {
+            "type": normalized_type,
+            "payload": payload,
+            "correlation_id": normalized_correlation,
+            "legacy_type": None,
+        }
+
+    return _map_unknown_legacy_message_to_note(normalized_type, payload, normalized_correlation)
+
+
+def _parse_job_message_protocol_from_models(
+    msg_type: str,
+    payload: dict,
+    correlation_id: str | None,
+) -> dict | None:
+    normalize_helper = getattr(core_models, "normalize_job_message_body", None)
+    if not callable(normalize_helper):
+        return None
+
+    try:
+        normalized = normalize_helper(
+            msg_type=msg_type,
+            payload=payload,
+            correlation_id=correlation_id,
+            allow_legacy=True,
+        )
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError(str(exc)) from exc
+
+    normalized_type = str(normalized.get("type") or msg_type).strip().lower()
+    canonical_type = str(normalized.get("canonical_type") or normalized_type).strip().lower()
+    normalized_payload = normalized.get("payload", payload)
+    normalized_correlation = normalized.get("correlation_id")
+    if not isinstance(normalized_payload, dict):
+        raise ValueError("payload must be an object.")
+
+    if normalized_type in _LEGACY_JOB_MESSAGE_TYPES:
+        return {
+            "type": normalized_type,
+            "payload": normalized_payload,
+            "correlation_id": normalized_correlation,
+        }
+    return {
+        "type": canonical_type,
+        "payload": normalized_payload,
+        "correlation_id": normalized_correlation,
+    }
+
+
+def _parse_job_message_protocol_fallback(
+    msg_type: str,
+    payload: dict,
+    correlation_id: str | None,
+) -> dict:
+    normalized_correlation = None
+    if correlation_id is not None:
+        text = str(correlation_id).strip()
+        normalized_correlation = text or None
+
+    if msg_type in _TYPED_JOB_MESSAGE_TYPES:
+        validated_payload = _validate_typed_job_message_payload(msg_type, payload)
+        return {
+            "type": msg_type,
+            "payload": validated_payload,
+            "correlation_id": normalized_correlation,
+        }
+
+    if msg_type in _LEGACY_JOB_MESSAGE_TYPES:
+        return {"type": msg_type, "payload": dict(payload), "correlation_id": normalized_correlation}
+
+    return _map_unknown_legacy_message_to_note(msg_type, dict(payload), normalized_correlation)
+
+
+def _map_unknown_legacy_message_to_note(
+    legacy_type: str,
+    payload: dict,
+    correlation_id: str | None = None,
+) -> dict:
+    _LOG.warning(
+        "Deprecated unknown legacy job message type '%s' mapped to note.",
+        legacy_type,
+    )
+    note_text = str(
+        payload.get("text")
+        or payload.get("note")
+        or payload.get("message")
+        or f"Legacy message type '{legacy_type}'"
+    ).strip()
+    if not note_text:
+        note_text = f"Legacy message type '{legacy_type}'"
+    return {
+        "type": "note",
+        "payload": {
+            "text": note_text,
+            "legacy_type": legacy_type,
+            "legacy_payload": payload,
+        },
+        "correlation_id": correlation_id,
+        "legacy_type": legacy_type,
+    }
+
+
+def _validate_typed_job_message_payload(msg_type: str, payload: dict) -> dict:
+    normalized = dict(payload)
+
+    def _required_text(field: str, label: str | None = None) -> str:
+        key = label or field
+        value = str(normalized.get(field, "")).strip()
+        if not value:
+            raise ValueError(f"{msg_type} payload.{key} is required.")
+        return value
+
+    if msg_type == "clarification_request":
+        normalized["question"] = _required_text("question")
+        return normalized
+
+    if msg_type == "clarification_response":
+        normalized["answer"] = _required_text("answer")
+        return normalized
+
+    if msg_type == "note":
+        text = str(
+            normalized.get("message")
+            or normalized.get("note")
+            or normalized.get("text")
+            or ""
+        ).strip()
+        if not text:
+            raise ValueError("note payload.text is required.")
+        normalized["text"] = text
+        return normalized
+
+    if msg_type == "progress":
+        percent_raw = normalized.get("percent")
+        if percent_raw is None:
+            raise ValueError("progress payload.percent is required.")
+        if percent_raw is not None:
+            try:
+                percent = int(percent_raw)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("progress payload.percent must be an integer between 0 and 100.") from exc
+            if percent < 0 or percent > 100:
+                raise ValueError("progress payload.percent must be an integer between 0 and 100.")
+            normalized["percent"] = percent
+        note = str(normalized.get("note") or "").strip()
+        if note:
+            normalized["note"] = note
+        return normalized
+
+    if msg_type == "tool_call":
+        tool_name = str(normalized.get("tool_name") or normalized.get("name") or "").strip()
+        if not tool_name:
+            raise ValueError("tool_call payload.tool_name is required.")
+        normalized["tool_name"] = tool_name
+        args = normalized.get("args")
+        if args is None:
+            normalized["args"] = {}
+        elif not isinstance(args, dict):
+            raise ValueError("tool_call payload.args must be an object.")
+        correlation_id = str(normalized.get("correlation_id") or "").strip()
+        if correlation_id:
+            normalized["correlation_id"] = correlation_id
+        else:
+            normalized.pop("correlation_id", None)
+        return normalized
+
+    if msg_type == "tool_result":
+        correlation_id = str(normalized.get("correlation_id") or "").strip()
+        if not correlation_id:
+            raise ValueError("tool_result payload.correlation_id is required.")
+        normalized["correlation_id"] = correlation_id
+        result_payload = normalized.get("payload")
+        if result_payload is None:
+            normalized["payload"] = {}
+        elif not isinstance(result_payload, dict):
+            raise ValueError("tool_result payload.payload must be an object.")
+        return normalized
+
+    raise ValueError(f"Unsupported typed message type: {msg_type}")
+
+
+def _job_has_tool_call_correlation(job_id: str, correlation_id: str) -> bool:
+    helper = getattr(jobs, "tool_call_correlation_exists", None)
+    if callable(helper):
+        try:
+            return bool(helper(job_id, correlation_id))
+        except Exception:
+            pass
+
+    since_id: int | None = None
+    while True:
+        batch = jobs.get_messages(job_id, since_id=since_id, limit=200)
+        if not batch:
+            return False
+        for item in batch:
+            if item.get("type") != "tool_call":
+                continue
+            payload = item.get("payload") or {}
+            if not isinstance(payload, dict):
+                continue
+            if str(payload.get("correlation_id") or "").strip() == correlation_id:
+                return True
+        if len(batch) < 200:
+            return False
+        since_id = int(batch[-1]["message_id"])
+
+
+def _subscribe_job_stream(job_id: str) -> Queue:
+    return jobs.subscribe_job_messages(job_id)
+
+
+def _unsubscribe_job_stream(job_id: str, subscriber: Queue) -> None:
+    jobs.unsubscribe_job_messages(job_id, subscriber)
+
+
+def _job_message_to_sse(message: dict) -> str:
+    event_id = message.get("message_id")
+    payload = json.dumps(message, separators=(",", ":"), default=str)
+    lines: list[str] = []
+    if event_id is not None:
+        lines.append(f"id: {event_id}")
+    lines.append("event: message")
+    for line in payload.splitlines():
+        lines.append(f"data: {line}")
+    lines.append("")
+    return "\n".join(lines) + "\n"
 
 
 def _event_row_to_dict(row: sqlite3.Row) -> dict:
@@ -923,7 +1335,7 @@ def _stable_json_text(payload: Any) -> str:
 
 def _idempotency_begin(
     request: Request,
-    caller: dict,
+    caller: core_models.CallerContext,
     scope: str,
     payload: Any,
 ) -> dict | None:
@@ -1032,7 +1444,7 @@ def _idempotency_abort(idempotency_state: dict | None) -> None:
 
 def _run_idempotent_json_response(
     request: Request,
-    caller: dict,
+    caller: core_models.CallerContext,
     scope: str,
     payload: Any,
     operation: Callable[[], tuple[Any, int]],
@@ -1505,7 +1917,7 @@ def _list_hook_deliveries(
     return [dict(row) for row in rows]
 
 
-def _list_job_events(caller: dict, since: int | None = None, limit: int = 100) -> list[dict]:
+def _list_job_events(caller: core_models.CallerContext, since: int | None = None, limit: int = 100) -> list[dict]:
     limit = min(max(1, limit), 200)
     params: list[Any] = []
     where_clauses = []
@@ -1876,15 +2288,51 @@ def _sorted_agents(agents: list[dict], rank_by: str | None = None) -> list[dict]
 
 
 # ---------------------------------------------------------------------------
+# OpenAPI response helpers
+# ---------------------------------------------------------------------------
+
+_OPENAPI_ERROR_RESPONSES: dict[int, dict[str, Any]] = {
+    400: {"model": core_models.ErrorResponse, "description": "Bad request."},
+    401: {"model": core_models.ErrorResponse, "description": "Missing or invalid authorization header."},
+    402: {"model": core_models.ErrorResponse, "description": "Insufficient balance."},
+    403: {"model": core_models.ErrorResponse, "description": "Forbidden."},
+    404: {"model": core_models.ErrorResponse, "description": "Resource not found."},
+    409: {"model": core_models.ErrorResponse, "description": "Conflict."},
+    410: {"model": core_models.ErrorResponse, "description": "Lease expired."},
+    413: {"model": core_models.ErrorResponse, "description": "Payload too large."},
+    422: {"model": core_models.ErrorResponse, "description": "Validation error."},
+    429: {"model": core_models.ErrorResponse, "description": "Rate limit exceeded."},
+    500: {"model": core_models.ErrorResponse, "description": "Internal server error."},
+    502: {"model": core_models.ErrorResponse, "description": "Upstream request failed."},
+    503: {"model": core_models.ErrorResponse, "description": "Upstream service unavailable."},
+}
+
+
+def _error_responses(*codes: int) -> dict[int, dict[str, Any]]:
+    return {code: _OPENAPI_ERROR_RESPONSES[code] for code in codes if code in _OPENAPI_ERROR_RESPONSES}
+
+
+# ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
 
-@app.get("/health")
-def health():
+@app.get(
+    "/health",
+    response_model=core_models.HealthResponse,
+    responses=_error_responses(429, 500),
+)
+def health() -> core_models.HealthResponse:
     return {"status": "ok", "agents": len(registry.get_agents())}
 
 
-@app.get("/agent.md")
+@app.get(
+    "/agent.md",
+    response_model=str,
+    responses={
+        200: {"content": {"text/markdown": {"schema": {"type": "string"}}}},
+        **_error_responses(404, 429, 500),
+    },
+)
 def onboarding_manifest_spec() -> Response:
     spec_path = os.path.join(os.path.dirname(__file__), "agent.md")
     if not os.path.exists(spec_path):
@@ -1894,18 +2342,29 @@ def onboarding_manifest_spec() -> Response:
     return Response(content=content, media_type="text/markdown")
 
 
-@app.get("/onboarding/spec")
+@app.get(
+    "/onboarding/spec",
+    response_model=str,
+    responses={
+        200: {"content": {"text/markdown": {"schema": {"type": "string"}}}},
+        **_error_responses(404, 429, 500),
+    },
+)
 def onboarding_spec_alias() -> Response:
     return onboarding_manifest_spec()
 
 
-@app.post("/onboarding/validate")
+@app.post(
+    "/onboarding/validate",
+    response_model=core_models.ManifestValidationResponse,
+    responses=_error_responses(401, 403, 422, 429, 500),
+)
 @limiter.limit("20/minute")
 def onboarding_validate(
     request: Request,
     body: OnboardingValidateRequest,
-    _: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    _: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.ManifestValidationResponse:
     manifest_content, source = _load_manifest_content(body.manifest_content, body.manifest_url)
     try:
         validated = onboarding.validate_manifest_content(manifest_content, source=source)
@@ -1914,13 +2373,18 @@ def onboarding_validate(
     return JSONResponse(content=validated)
 
 
-@app.post("/onboarding/ingest", status_code=201)
+@app.post(
+    "/onboarding/ingest",
+    status_code=201,
+    response_model=core_models.OnboardingIngestResponse,
+    responses=_error_responses(400, 401, 403, 422, 429, 500),
+)
 @limiter.limit("10/minute")
 def onboarding_ingest(
     request: Request,
     body: OnboardingValidateRequest,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.OnboardingIngestResponse:
     _require_scope(caller, "worker")
     manifest_content, source = _load_manifest_content(body.manifest_content, body.manifest_url)
     try:
@@ -1956,9 +2420,14 @@ def onboarding_ingest(
 # Auth routes  (public — no key required)
 # ---------------------------------------------------------------------------
 
-@app.post("/auth/register", status_code=201)
+@app.post(
+    "/auth/register",
+    status_code=201,
+    response_model=core_models.AuthRegisterResponse,
+    responses=_error_responses(400, 429, 500),
+)
 @limiter.limit("10/minute")
-def auth_register(request: Request, body: UserRegisterRequest) -> JSONResponse:
+def auth_register(request: Request, body: UserRegisterRequest) -> core_models.AuthRegisterResponse:
     """Create a new user account. Returns the initial API key (shown once)."""
     try:
         result = _auth.register_user(body.username, body.email, body.password)
@@ -1967,9 +2436,13 @@ def auth_register(request: Request, body: UserRegisterRequest) -> JSONResponse:
     return JSONResponse(content=result, status_code=201)
 
 
-@app.post("/auth/login")
+@app.post(
+    "/auth/login",
+    response_model=core_models.AuthLoginResponse,
+    responses=_error_responses(401, 429, 500),
+)
 @limiter.limit("20/minute")
-def auth_login(request: Request, body: UserLoginRequest) -> JSONResponse:
+def auth_login(request: Request, body: UserLoginRequest) -> core_models.AuthLoginResponse:
     """Verify credentials. Returns a fresh API key valid for this session."""
     result = _auth.login_user(body.email, body.password)
     if result is None:
@@ -1977,9 +2450,13 @@ def auth_login(request: Request, body: UserLoginRequest) -> JSONResponse:
     return JSONResponse(content=result)
 
 
-@app.get("/auth/me")
+@app.get(
+    "/auth/me",
+    response_model=core_models.AuthMeResponse,
+    responses=_error_responses(401, 403, 429, 500),
+)
 @limiter.limit("60/minute")
-def auth_me(request: Request, caller: dict = Depends(_require_api_key)) -> JSONResponse:
+def auth_me(request: Request, caller: core_models.CallerContext = Depends(_require_api_key)) -> core_models.AuthMeResponse:
     """Return the authenticated user's profile."""
     if caller["type"] == "master":
         return JSONResponse(content={
@@ -1997,9 +2474,13 @@ def auth_me(request: Request, caller: dict = Depends(_require_api_key)) -> JSONR
     })
 
 
-@app.get("/auth/keys")
+@app.get(
+    "/auth/keys",
+    response_model=core_models.ApiKeyListResponse,
+    responses=_error_responses(401, 403, 429, 500),
+)
 @limiter.limit("30/minute")
-def auth_list_keys(request: Request, caller: dict = Depends(_require_api_key)) -> JSONResponse:
+def auth_list_keys(request: Request, caller: core_models.CallerContext = Depends(_require_api_key)) -> core_models.ApiKeyListResponse:
     """List the caller's API keys (metadata only — raw keys never returned after creation)."""
     if caller["type"] == "master":
         raise HTTPException(status_code=403, detail="Not available for master key.")
@@ -2007,13 +2488,18 @@ def auth_list_keys(request: Request, caller: dict = Depends(_require_api_key)) -
     return JSONResponse(content={"keys": keys})
 
 
-@app.post("/auth/keys", status_code=201)
+@app.post(
+    "/auth/keys",
+    status_code=201,
+    response_model=core_models.ApiKeyCreateResponse,
+    responses=_error_responses(400, 401, 403, 429, 500),
+)
 @limiter.limit("10/minute")
 def auth_create_key(
     request: Request,
     body: CreateKeyRequest,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.ApiKeyCreateResponse:
     """Create a new named API key for the authenticated user."""
     if caller["type"] == "master":
         raise HTTPException(status_code=403, detail="Not available for master key.")
@@ -2024,14 +2510,19 @@ def auth_create_key(
     return JSONResponse(content=result, status_code=201)
 
 
-@app.post("/auth/keys/{key_id}/rotate", status_code=201)
+@app.post(
+    "/auth/keys/{key_id}/rotate",
+    status_code=201,
+    response_model=core_models.ApiKeyRotateResponse,
+    responses=_error_responses(400, 401, 403, 404, 429, 500),
+)
 @limiter.limit("10/minute")
 def auth_rotate_key(
     request: Request,
     key_id: str,
     body: RotateKeyRequest,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.ApiKeyRotateResponse:
     if caller["type"] == "master":
         raise HTTPException(status_code=403, detail="Not available for master key.")
     try:
@@ -2048,13 +2539,18 @@ def auth_rotate_key(
     return JSONResponse(content=result, status_code=201)
 
 
-@app.delete("/auth/keys/{key_id}", status_code=200)
+@app.delete(
+    "/auth/keys/{key_id}",
+    status_code=200,
+    response_model=core_models.ApiKeyRevokeResponse,
+    responses=_error_responses(401, 403, 404, 429, 500),
+)
 @limiter.limit("10/minute")
 def auth_revoke_key(
     request: Request,
     key_id: str,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.ApiKeyRevokeResponse:
     """Revoke an API key by ID."""
     if caller["type"] == "master":
         raise HTTPException(status_code=403, detail="Not available for master key.")
@@ -2068,13 +2564,17 @@ def auth_revoke_key(
 # Agent endpoints — direct calls (used by proxy and CLI client)
 # ---------------------------------------------------------------------------
 
-@app.post("/agents/financial")
+@app.post(
+    "/agents/financial",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(400, 401, 403, 422, 429, 500, 503),
+)
 @limiter.limit("10/minute")
 def agent_financial(
     request: Request,
     body: FinancialRequest,
-    _: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    _: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
     ticker = body.ticker.strip().upper()
     if not ticker.isalpha() or len(ticker) > 5:
         raise HTTPException(status_code=422, detail=f"Invalid ticker symbol: '{ticker}'")
@@ -2090,23 +2590,31 @@ def agent_financial(
 
 
 # Keep /analyze as an alias for backwards compatibility
-@app.post("/analyze")
+@app.post(
+    "/analyze",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(400, 401, 403, 422, 429, 500, 503),
+)
 @limiter.limit("10/minute")
 def analyze_alias(
     request: Request,
     body: FinancialRequest,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
     return agent_financial(request, body, caller)
 
 
-@app.post("/agents/code-review")
+@app.post(
+    "/agents/code-review",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(400, 401, 403, 429, 500, 503),
+)
 @limiter.limit("10/minute")
 def agent_code_review(
     request: Request,
     body: CodeReviewRequest,
-    _: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    _: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
     try:
         result = agent_codereview.run(body.code, body.language, body.focus)
     except ValueError as e:
@@ -2118,13 +2626,17 @@ def agent_code_review(
     return JSONResponse(content=result)
 
 
-@app.post("/agents/text-intel")
+@app.post(
+    "/agents/text-intel",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(400, 401, 403, 429, 500, 503),
+)
 @limiter.limit("15/minute")
 def agent_text_intel(
     request: Request,
     body: TextIntelRequest,
-    _: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    _: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
     try:
         result = agent_textintel.run(body.text, body.mode)
     except ValueError as e:
@@ -2136,13 +2648,17 @@ def agent_text_intel(
     return JSONResponse(content=result)
 
 
-@app.post("/agents/wiki")
+@app.post(
+    "/agents/wiki",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(400, 401, 403, 429, 500, 503),
+)
 @limiter.limit("15/minute")
 def agent_wiki_endpoint(
     request: Request,
     body: WikiRequest,
-    _: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    _: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
     try:
         result = agent_wiki.run(body.topic)
     except ValueError as e:
@@ -2158,13 +2674,18 @@ def agent_wiki_endpoint(
 # Registry routes
 # ---------------------------------------------------------------------------
 
-@app.post("/registry/register", status_code=201)
+@app.post(
+    "/registry/register",
+    status_code=201,
+    response_model=core_models.RegistryRegisterResponse,
+    responses=_error_responses(400, 401, 403, 409, 429, 500),
+)
 @limiter.limit("20/minute")
 def registry_register(
     request: Request,
     body: AgentRegisterRequest,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.RegistryRegisterResponse:
     _require_scope(caller, "worker")
     try:
         agent_id = registry.register_agent(
@@ -2191,40 +2712,52 @@ def registry_register(
     )
 
 
-@app.get("/registry/agents")
+@app.get(
+    "/registry/agents",
+    response_model=core_models.RegistryAgentsResponse,
+    responses=_error_responses(401, 403, 422, 429, 500),
+)
 @limiter.limit("60/minute")
 def registry_list(
     request: Request,
     tag: str | None = None,
     rank_by: str | None = None,
     include_reputation: bool = True,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.RegistryAgentsResponse:
     agents = registry.get_agents_with_reputation(tag=tag) if include_reputation else registry.get_agents(tag=tag)
     agents = _sorted_agents(agents, rank_by=rank_by)
     return JSONResponse(content={"agents": [_agent_response(a, caller) for a in agents], "count": len(agents)})
 
 
-@app.get("/registry/agents/{agent_id}")
+@app.get(
+    "/registry/agents/{agent_id}",
+    response_model=core_models.AgentResponse,
+    responses=_error_responses(401, 403, 404, 429, 500),
+)
 @limiter.limit("60/minute")
 def registry_get(
     request: Request,
     agent_id: str,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.AgentResponse:
     agent = registry.get_agent_with_reputation(agent_id)
     if agent is None:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
     return JSONResponse(content=_agent_response(agent, caller))
 
 
-@app.post("/registry/agents/{agent_id}/call")
+@app.post(
+    "/registry/agents/{agent_id}/call",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(400, 401, 402, 403, 404, 429, 500, 502, 503),
+)
 @limiter.limit("10/minute")
 def registry_call(
     request: Request,
     agent_id: str,
-    body: Any = Body(default={}),
-    caller: dict = Depends(_require_api_key),
+    body: core_models.RegistryCallRequest | None = Body(default=None),
+    caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> Response:
     """
     Proxy a call to the registered agent with full payment lifecycle:
@@ -2262,7 +2795,7 @@ def registry_call(
     try:
         resp = http.post(
             agent["endpoint_url"],
-            json=body,
+            json=(body.root if body is not None else {}),
             headers=_proxy_headers_for_agent(agent),
             timeout=120,
         )
@@ -2295,13 +2828,18 @@ def registry_call(
 # Jobs routes
 # ---------------------------------------------------------------------------
 
-@app.post("/jobs", status_code=201)
+@app.post(
+    "/jobs",
+    status_code=201,
+    response_model=core_models.JobResponse,
+    responses=_error_responses(400, 401, 402, 403, 404, 429, 500),
+)
 @limiter.limit("20/minute")
 def jobs_create(
     request: Request,
     body: JobCreateRequest,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.JobResponse:
     _require_scope(caller, "caller")
     agent = registry.get_agent(body.agent_id)
     if agent is None:
@@ -2355,15 +2893,19 @@ def jobs_create(
     return JSONResponse(content=_job_response(job, caller), status_code=201)
 
 
-@app.get("/jobs")
+@app.get(
+    "/jobs",
+    response_model=core_models.JobsListResponse,
+    responses=_error_responses(401, 403, 422, 429, 500),
+)
 @limiter.limit("60/minute")
 def jobs_list(
     request: Request,
     status: str | None = None,
     limit: int = 50,
     cursor: str | None = None,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.JobsListResponse:
     if status and status not in jobs.VALID_STATUSES:
         raise HTTPException(status_code=422, detail=f"Invalid status: {status}")
     page_size = min(max(1, limit), 200)
@@ -2391,22 +2933,32 @@ def jobs_list(
     )
 
 
-@app.get("/jobs/{job_id}")
+@app.get(
+    "/jobs/{job_id}",
+    response_model=core_models.JobResponse,
+    responses=_error_responses(401, 403, 404, 429, 500),
+)
 @limiter.limit("60/minute")
 def jobs_get(
     request: Request,
     job_id: str,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.JobResponse:
     job = jobs.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
     if not _caller_can_view_job(caller, job):
         raise HTTPException(status_code=403, detail="Not authorized to view this job.")
-    return JSONResponse(content=_job_response(job, caller))
+    response = _job_response(job, caller)
+    response["latest_message_id"] = jobs.get_latest_message_id(job_id)
+    return JSONResponse(content=response)
 
 
-@app.get("/jobs/agent/{agent_id}")
+@app.get(
+    "/jobs/agent/{agent_id}",
+    response_model=core_models.JobsListResponse,
+    responses=_error_responses(401, 403, 404, 422, 429, 500),
+)
 @limiter.limit("60/minute")
 def jobs_list_for_agent(
     request: Request,
@@ -2414,8 +2966,8 @@ def jobs_list_for_agent(
     status: str | None = None,
     limit: int = 50,
     cursor: str | None = None,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.JobsListResponse:
     _require_scope(caller, "worker")
     agent = registry.get_agent(agent_id)
     if agent is None:
@@ -2448,14 +3000,18 @@ def jobs_list_for_agent(
     )
 
 
-@app.post("/jobs/{job_id}/claim")
+@app.post(
+    "/jobs/{job_id}/claim",
+    response_model=core_models.JobResponse,
+    responses=_error_responses(401, 403, 404, 409, 429, 500),
+)
 @limiter.limit("60/minute")
 def jobs_claim(
     request: Request,
     job_id: str,
     body: JobClaimRequest,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.JobResponse:
     _require_scope(caller, "worker")
     job = jobs.get_job(job_id)
     if job is None:
@@ -2484,20 +3040,32 @@ def jobs_claim(
     return JSONResponse(content=_job_response(claimed, caller))
 
 
-@app.post("/jobs/{job_id}/heartbeat")
+@app.post(
+    "/jobs/{job_id}/heartbeat",
+    response_model=core_models.JobResponse,
+    responses=_error_responses(401, 403, 404, 409, 410, 429, 500),
+)
 @limiter.limit("120/minute")
 def jobs_heartbeat(
     request: Request,
     job_id: str,
     body: JobHeartbeatRequest,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.JobResponse:
     _require_scope(caller, "worker")
     job = jobs.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
 
     worker_owner_id = caller["owner_id"]
+    timed_out = _timeout_stale_lease_at_touchpoint(
+        job,
+        actor_owner_id=worker_owner_id,
+        touchpoint="heartbeat",
+    )
+    if timed_out is not None:
+        return JSONResponse(content=_job_response(timed_out, caller), status_code=410)
+
     if caller["type"] != "master":
         _assert_worker_claim(job, worker_owner_id, body.claim_token)
 
@@ -2520,20 +3088,32 @@ def jobs_heartbeat(
     return JSONResponse(content=_job_response(heartbeat, caller))
 
 
-@app.post("/jobs/{job_id}/release")
+@app.post(
+    "/jobs/{job_id}/release",
+    response_model=core_models.JobResponse,
+    responses=_error_responses(401, 403, 404, 409, 410, 429, 500),
+)
 @limiter.limit("60/minute")
 def jobs_release(
     request: Request,
     job_id: str,
     body: JobReleaseRequest,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.JobResponse:
     _require_scope(caller, "worker")
     job = jobs.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
 
     worker_owner_id = caller["owner_id"]
+    timed_out = _timeout_stale_lease_at_touchpoint(
+        job,
+        actor_owner_id=worker_owner_id,
+        touchpoint="release",
+    )
+    if timed_out is not None:
+        return JSONResponse(content=_job_response(timed_out, caller), status_code=410)
+
     if caller["type"] != "master":
         _assert_worker_claim(job, worker_owner_id, body.claim_token)
 
@@ -2555,14 +3135,18 @@ def jobs_release(
     return JSONResponse(content=_job_response(released, caller))
 
 
-@app.post("/jobs/{job_id}/complete")
+@app.post(
+    "/jobs/{job_id}/complete",
+    response_model=core_models.JobResponse,
+    responses=_error_responses(401, 403, 404, 409, 410, 429, 500),
+)
 @limiter.limit("30/minute")
 def jobs_complete(
     request: Request,
     job_id: str,
     body: JobCompleteRequest,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.JobResponse:
     _require_scope(caller, "worker")
     def _operation() -> tuple[dict, int]:
         job = jobs.get_job(job_id)
@@ -2570,11 +3154,28 @@ def jobs_complete(
             raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
 
         actor_owner_id = caller["owner_id"]
-        if caller["type"] != "master":
-            _assert_worker_claim(job, actor_owner_id, body.claim_token)
+        if caller["type"] != "master" and not jobs.is_worker_authorized(job, actor_owner_id):
+            raise HTTPException(status_code=403, detail="Not authorized for this agent job.")
+        timed_out = _timeout_stale_lease_at_touchpoint(
+            job,
+            actor_owner_id=actor_owner_id,
+            touchpoint="complete",
+        )
+        if timed_out is not None:
+            return _job_response(timed_out, caller), 410
 
         if job["settled_at"]:
             return _job_response(job, caller), 200
+        if job["status"] == "complete" and job.get("completed_at"):
+            settled = _settle_successful_job(job, actor_owner_id=actor_owner_id)
+            return _job_response(settled, caller), 200
+
+        _assert_settlement_claim_or_grace(
+            job,
+            caller=caller,
+            claim_token=body.claim_token,
+            action="complete",
+        )
 
         updated = jobs.update_job_status(
             job_id, "complete", output_payload=body.output_payload, completed=True
@@ -2593,14 +3194,18 @@ def jobs_complete(
     )
 
 
-@app.post("/jobs/{job_id}/fail")
+@app.post(
+    "/jobs/{job_id}/fail",
+    response_model=core_models.JobResponse,
+    responses=_error_responses(401, 403, 404, 409, 410, 429, 500),
+)
 @limiter.limit("30/minute")
 def jobs_fail(
     request: Request,
     job_id: str,
     body: JobFailRequest,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.JobResponse:
     _require_scope(caller, "worker")
     def _operation() -> tuple[dict, int]:
         job = jobs.get_job(job_id)
@@ -2608,11 +3213,32 @@ def jobs_fail(
             raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
 
         actor_owner_id = caller["owner_id"]
-        if caller["type"] != "master":
-            _assert_worker_claim(job, actor_owner_id, body.claim_token)
+        if caller["type"] != "master" and not jobs.is_worker_authorized(job, actor_owner_id):
+            raise HTTPException(status_code=403, detail="Not authorized for this agent job.")
+        timed_out = _timeout_stale_lease_at_touchpoint(
+            job,
+            actor_owner_id=actor_owner_id,
+            touchpoint="fail",
+        )
+        if timed_out is not None:
+            return _job_response(timed_out, caller), 410
 
         if job["settled_at"]:
             return _job_response(job, caller), 200
+        if job["status"] == "failed" and job.get("error_message") == body.error_message:
+            settled = _settle_failed_job(
+                job,
+                actor_owner_id=actor_owner_id,
+                event_type="job.failed",
+            )
+            return _job_response(settled, caller), 200
+
+        _assert_settlement_claim_or_grace(
+            job,
+            caller=caller,
+            claim_token=body.claim_token,
+            action="fail",
+        )
 
         updated = jobs.update_job_status(
             job_id, "failed", error_message=body.error_message, completed=True
@@ -2631,14 +3257,18 @@ def jobs_fail(
     )
 
 
-@app.post("/jobs/{job_id}/retry")
+@app.post(
+    "/jobs/{job_id}/retry",
+    response_model=core_models.JobResponse,
+    responses=_error_responses(401, 403, 404, 409, 422, 429, 500),
+)
 @limiter.limit("30/minute")
 def jobs_retry(
     request: Request,
     job_id: str,
     body: JobRetryRequest,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.JobResponse:
     _require_scope(caller, "worker")
     def _operation() -> tuple[dict, int]:
         job = jobs.get_job(job_id)
@@ -2690,55 +3320,103 @@ def jobs_retry(
     )
 
 
-@app.post("/jobs/{job_id}/messages")
+@app.post(
+    "/jobs/{job_id}/messages",
+    response_model=core_models.JobMessageResponse,
+    responses=_error_responses(400, 401, 403, 404, 429, 500),
+)
 @limiter.limit("60/minute")
 def jobs_message_create(
     request: Request,
     job_id: str,
     body: JobMessageRequest,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
-    if body.type not in _JOB_MESSAGE_TYPES:
-        raise HTTPException(status_code=422, detail=f"Invalid message type: {body.type}")
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.JobMessageResponse:
+    """
+    Post a message to a job thread.
+
+    Deprecated: the legacy free-form contract (`question`, `partial_result`,
+    `clarification`, `clarification_needed`, `final_result`, `note`) remains
+    accepted for one compatibility window. New integrations should use the
+    typed protocol message shapes.
+    """
     job = jobs.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
     if not _caller_can_view_job(caller, job):
         raise HTTPException(status_code=403, detail="Not authorized to post to this job.")
 
-    if caller["type"] == "master":
-        from_id = body.from_id or f"agent:{job['agent_id']}"
-    elif caller["owner_id"] == job["caller_owner_id"]:
-        from_id = body.from_id or job["caller_owner_id"]
-    else:
-        from_id = body.from_id or caller["owner_id"]
+    raw_type = body.type
+    raw_payload = body.payload
+    raw_correlation_id = body.correlation_id
+    raw_from_id = body.from_id
+    from_id_override = None
+    if raw_from_id is not None:
+        from_id_override = str(raw_from_id).strip() or None
 
-    msg = jobs.add_message(job_id, from_id, body.type, body.payload)
+    try:
+        parsed = _normalize_job_message_protocol(
+            raw_type,
+            raw_payload,
+            correlation_id=raw_correlation_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    msg_type = parsed["type"]
+    payload = parsed["payload"]
+
+    if caller["type"] == "master":
+        from_id = from_id_override or f"agent:{job['agent_id']}"
+    elif caller["owner_id"] == job["caller_owner_id"]:
+        from_id = from_id_override or job["caller_owner_id"]
+    else:
+        from_id = from_id_override or caller["owner_id"]
+
+    if msg_type == "tool_call":
+        correlation_id = str(payload.get("correlation_id") or "").strip()
+        if not correlation_id:
+            payload["correlation_id"] = str(uuid.uuid4())
+    elif msg_type == "tool_result":
+        correlation_id = str(payload.get("correlation_id") or "").strip()
+        if not correlation_id:
+            raise HTTPException(status_code=400, detail="tool_result payload.correlation_id is required.")
+        if not _job_has_tool_call_correlation(job_id, correlation_id):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown tool_result correlation_id '{correlation_id}'.",
+            )
+
+    msg = jobs.add_message(
+        job_id,
+        from_id,
+        msg_type,
+        payload,
+        lease_seconds=_DEFAULT_LEASE_SECONDS,
+    )
+    updated_job = jobs.get_job(job_id) or job
     _record_job_event(
-        job,
+        updated_job,
         "job.message_added",
         actor_owner_id=caller["owner_id"],
-        payload={"type": body.type, "message_id": msg["message_id"]},
+        payload={"type": msg_type, "message_id": msg["message_id"]},
     )
-
-    if body.type == "clarification_needed":
-        updated = jobs.update_job_status(job_id, "awaiting_clarification")
-        _record_job_event(updated, "job.awaiting_clarification", actor_owner_id=caller["owner_id"], payload={})
-    if body.type == "clarification":
-        updated = jobs.update_job_status(job_id, "running")
-        _record_job_event(updated, "job.running", actor_owner_id=caller["owner_id"], payload={})
 
     return JSONResponse(content=msg, status_code=201)
 
 
-@app.get("/jobs/{job_id}/messages")
+@app.get(
+    "/jobs/{job_id}/messages",
+    response_model=core_models.JobMessagesResponse,
+    responses=_error_responses(401, 403, 404, 429, 500),
+)
 @limiter.limit("60/minute")
 def jobs_message_list(
     request: Request,
     job_id: str,
     since: int | None = None,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.JobMessagesResponse:
     job = jobs.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
@@ -2748,18 +3426,85 @@ def jobs_message_list(
     return JSONResponse(content={"messages": items})
 
 
+@app.get(
+    "/jobs/{job_id}/stream",
+    response_model=str,
+    responses={
+        200: {"content": {"text/event-stream": {"schema": {"type": "string"}}}},
+        **_error_responses(401, 403, 404, 429, 500),
+    },
+)
+@limiter.limit("60/minute")
+def jobs_message_stream(
+    request: Request,
+    job_id: str,
+    since: int | None = None,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> StreamingResponse:
+    job = jobs.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+    if not _caller_can_view_job(caller, job):
+        raise HTTPException(status_code=403, detail="Not authorized to view messages.")
+
+    def _iter_events():
+        subscriber = _subscribe_job_stream(job_id)
+        last_seen = since
+        try:
+            yield ": heartbeat\n\n"
+            while True:
+                batch = jobs.get_messages(job_id, since_id=last_seen, limit=200)
+                if batch:
+                    for item in batch:
+                        message_id = int(item["message_id"])
+                        if last_seen is not None and message_id <= last_seen:
+                            continue
+                        last_seen = message_id
+                        yield _job_message_to_sse(item)
+                    continue
+
+                latest_job = jobs.get_job(job_id)
+                if latest_job is None or latest_job.get("status") in _JOB_TERMINAL_STATUSES:
+                    break
+
+                try:
+                    queued = subscriber.get(timeout=_JOB_STREAM_HEARTBEAT_SECONDS)
+                except Empty:
+                    yield ": heartbeat\n\n"
+                    latest_job = jobs.get_job(job_id)
+                    if latest_job is None or latest_job.get("status") in _JOB_TERMINAL_STATUSES:
+                        break
+                    continue
+
+                queued_id = int(queued.get("message_id") or 0)
+                if last_seen is not None and queued_id <= last_seen:
+                    continue
+                last_seen = queued_id
+                yield _job_message_to_sse(queued)
+        finally:
+            _unsubscribe_job_stream(job_id, subscriber)
+
+    headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    return StreamingResponse(_iter_events(), media_type="text/event-stream", headers=headers)
+
+
 # ---------------------------------------------------------------------------
 # Reputation + operations routes
 # ---------------------------------------------------------------------------
 
-@app.post("/jobs/{job_id}/rating", status_code=201)
+@app.post(
+    "/jobs/{job_id}/rating",
+    status_code=201,
+    response_model=core_models.JobRatingResponse,
+    responses=_error_responses(400, 401, 403, 404, 409, 429, 500),
+)
 @limiter.limit("30/minute")
 def jobs_rate(
     request: Request,
     job_id: str,
     body: JobRatingRequest,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.JobRatingResponse:
     _require_scope(caller, "caller")
     def _operation() -> tuple[dict, int]:
         if caller["type"] == "master":
@@ -2797,13 +3542,17 @@ def jobs_rate(
     )
 
 
-@app.get("/ops/jobs/{job_id}/settlement-trace")
+@app.get(
+    "/ops/jobs/{job_id}/settlement-trace",
+    response_model=core_models.JobSettlementTraceResponse,
+    responses=_error_responses(401, 403, 404, 429, 500),
+)
 @limiter.limit("60/minute")
 def jobs_settlement_trace(
     request: Request,
     job_id: str,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.JobSettlementTraceResponse:
     _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
     job = jobs.get_job(job_id)
     if job is None:
@@ -2826,24 +3575,33 @@ def jobs_settlement_trace(
     )
 
 
-@app.get("/ops/jobs/events")
+@app.get(
+    "/ops/jobs/events",
+    response_model=core_models.JobEventsResponse,
+    responses=_error_responses(401, 403, 429, 500),
+)
 @limiter.limit("60/minute")
 def jobs_events(
     request: Request,
     since: int | None = None,
     limit: int = 100,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.JobEventsResponse:
     return JSONResponse(content={"events": _list_job_events(caller, since=since, limit=limit)})
 
 
-@app.post("/ops/jobs/hooks", status_code=201)
+@app.post(
+    "/ops/jobs/hooks",
+    status_code=201,
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(401, 403, 409, 422, 429, 500),
+)
 @limiter.limit("20/minute")
 def job_event_hook_create(
     request: Request,
     body: JobEventHookCreateRequest,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
     try:
         hook = _create_job_event_hook(caller["owner_id"], body.target_url, body.secret)
     except ValueError as exc:
@@ -2853,25 +3611,33 @@ def job_event_hook_create(
     return JSONResponse(content=hook, status_code=201)
 
 
-@app.get("/ops/jobs/hooks")
+@app.get(
+    "/ops/jobs/hooks",
+    response_model=core_models.JobEventHookListResponse,
+    responses=_error_responses(401, 403, 429, 500),
+)
 @limiter.limit("60/minute")
 def job_event_hook_list(
     request: Request,
     include_inactive: bool = False,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.JobEventHookListResponse:
     owner_id = None if caller["type"] == "master" else caller["owner_id"]
     hooks = _list_job_event_hooks(owner_id=owner_id, include_inactive=include_inactive)
     return JSONResponse(content={"hooks": hooks})
 
 
-@app.delete("/ops/jobs/hooks/{hook_id}")
+@app.delete(
+    "/ops/jobs/hooks/{hook_id}",
+    response_model=core_models.JobEventHookDeleteResponse,
+    responses=_error_responses(401, 403, 404, 429, 500),
+)
 @limiter.limit("20/minute")
 def job_event_hook_delete(
     request: Request,
     hook_id: str,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.JobEventHookDeleteResponse:
     owner_id = None if caller["type"] == "master" else caller["owner_id"]
     ok = _deactivate_job_event_hook(hook_id, owner_id=owner_id)
     if not ok:
@@ -2879,37 +3645,49 @@ def job_event_hook_delete(
     return JSONResponse(content={"deleted": True, "hook_id": hook_id})
 
 
-@app.post("/ops/jobs/hooks/process")
+@app.post(
+    "/ops/jobs/hooks/process",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(401, 403, 429, 500),
+)
 @limiter.limit("60/minute")
 def job_event_hook_process(
     request: Request,
     body: HookDeliveryProcessRequest,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
     _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
     summary = _process_due_hook_deliveries(limit=body.limit)
     return JSONResponse(content=summary)
 
 
-@app.get("/ops/jobs/hooks/dead-letter")
+@app.get(
+    "/ops/jobs/hooks/dead-letter",
+    response_model=core_models.JobEventHookDeadLetterResponse,
+    responses=_error_responses(401, 403, 429, 500),
+)
 @limiter.limit("60/minute")
 def job_event_hook_dead_letter(
     request: Request,
     limit: int = 100,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.JobEventHookDeadLetterResponse:
     owner_id = None if _caller_has_scope(caller, "admin") else caller["owner_id"]
     deliveries = _list_hook_deliveries(owner_id=owner_id, status="dead_letter", limit=limit)
     return JSONResponse(content={"deliveries": deliveries, "count": len(deliveries)})
 
 
-@app.post("/ops/jobs/sweep")
+@app.post(
+    "/ops/jobs/sweep",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(401, 403, 422, 429, 500),
+)
 @limiter.limit("20/minute")
 def jobs_sweep(
     request: Request,
     body: JobsSweepRequest,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
     _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
     try:
         summary = _sweep_jobs(
@@ -2923,26 +3701,34 @@ def jobs_sweep(
     return JSONResponse(content=summary)
 
 
-@app.get("/ops/jobs/metrics")
+@app.get(
+    "/ops/jobs/metrics",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(401, 403, 422, 429, 500),
+)
 @limiter.limit("60/minute")
 def jobs_metrics(
     request: Request,
     sla_seconds: int = _DEFAULT_SLA_SECONDS,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
     _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
     if sla_seconds <= 0:
         raise HTTPException(status_code=422, detail="sla_seconds must be > 0.")
     return JSONResponse(content=_jobs_metrics(sla_seconds=sla_seconds))
 
 
-@app.get("/ops/jobs/slo")
+@app.get(
+    "/ops/jobs/slo",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(401, 403, 422, 429, 500),
+)
 @limiter.limit("60/minute")
 def jobs_slo(
     request: Request,
     sla_seconds: int = _DEFAULT_SLA_SECONDS,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
     _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
     if sla_seconds <= 0:
         raise HTTPException(status_code=422, detail="sla_seconds must be > 0.")
@@ -2954,13 +3740,17 @@ def jobs_slo(
 # Payments ops routes
 # ---------------------------------------------------------------------------
 
-@app.get("/ops/payments/reconcile")
+@app.get(
+    "/ops/payments/reconcile",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(401, 403, 422, 429, 500),
+)
 @limiter.limit("60/minute")
 def payments_reconcile_preview(
     request: Request,
     max_mismatches: int = 100,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
     _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
     if max_mismatches <= 0:
         raise HTTPException(status_code=422, detail="max_mismatches must be > 0.")
@@ -2968,25 +3758,34 @@ def payments_reconcile_preview(
     return JSONResponse(content=summary)
 
 
-@app.post("/ops/payments/reconcile", status_code=201)
+@app.post(
+    "/ops/payments/reconcile",
+    status_code=201,
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(401, 403, 429, 500),
+)
 @limiter.limit("30/minute")
 def payments_reconcile_run(
     request: Request,
     body: ReconciliationRunRequest,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
     _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
     summary = payments.record_reconciliation_run(max_mismatches=body.max_mismatches)
     return JSONResponse(content=summary, status_code=201)
 
 
-@app.get("/ops/payments/reconcile/runs")
+@app.get(
+    "/ops/payments/reconcile/runs",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(401, 403, 422, 429, 500),
+)
 @limiter.limit("60/minute")
 def payments_reconcile_runs(
     request: Request,
     limit: int = 20,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
     _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
     if limit <= 0:
         raise HTTPException(status_code=422, detail="limit must be > 0.")
@@ -2998,13 +3797,17 @@ def payments_reconcile_runs(
 # Wallet routes
 # ---------------------------------------------------------------------------
 
-@app.post("/wallets/deposit")
+@app.post(
+    "/wallets/deposit",
+    response_model=core_models.WalletDepositResponse,
+    responses=_error_responses(400, 401, 403, 429, 500),
+)
 @limiter.limit("20/minute")
 def wallet_deposit(
     request: Request,
     body: DepositRequest,
-    _: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    _: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.WalletDepositResponse:
     _require_scope(_, "caller")
     try:
         tx_id = payments.deposit(body.wallet_id, body.amount_cents, body.memo)
@@ -3017,24 +3820,32 @@ def wallet_deposit(
     })
 
 
-@app.get("/wallets/me")
+@app.get(
+    "/wallets/me",
+    response_model=core_models.WalletResponse,
+    responses=_error_responses(401, 403, 429, 500),
+)
 @limiter.limit("60/minute")
 def wallet_me(
     request: Request,
-    _: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    _: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.WalletResponse:
     wallet = payments.get_or_create_wallet(_caller_owner_id(request))
     txs = payments.get_wallet_transactions(wallet["wallet_id"], limit=50)
     return JSONResponse(content={**wallet, "transactions": txs})
 
 
-@app.get("/wallets/{wallet_id}")
+@app.get(
+    "/wallets/{wallet_id}",
+    response_model=core_models.WalletResponse,
+    responses=_error_responses(401, 403, 404, 429, 500),
+)
 @limiter.limit("60/minute")
 def wallet_get(
     request: Request,
     wallet_id: str,
-    caller: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.WalletResponse:
     wallet = payments.get_wallet(wallet_id)
     if wallet is None:
         raise HTTPException(status_code=404, detail=f"Wallet '{wallet_id}' not found.")
@@ -3048,13 +3859,17 @@ def wallet_get(
 # Run history
 # ---------------------------------------------------------------------------
 
-@app.get("/runs")
+@app.get(
+    "/runs",
+    response_model=core_models.RunsResponse,
+    responses=_error_responses(401, 403, 429, 500),
+)
 @limiter.limit("30/minute")
 def get_runs(
     request: Request,
     limit: int = 50,
-    _: dict = Depends(_require_api_key),
-) -> JSONResponse:
+    _: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.RunsResponse:
     limit = min(max(1, limit), 200)
     runs_file = os.path.join(os.path.dirname(__file__), "runs.jsonl")
     if not os.path.exists(runs_file):
