@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import Input from '../../ui/Input'
 import Textarea from '../../ui/Textarea'
 import Select from '../../ui/Select'
@@ -12,11 +12,39 @@ const MODE_OPTIONS = [
   { value: 'async', label: 'Async' },
 ]
 
+// Support both legacy {fields:[]} format and standard JSON Schema {properties:{}}
+function deriveFields(schema) {
+  if (Array.isArray(schema?.fields) && schema.fields.length > 0) return schema.fields
+  if (!schema?.properties) return []
+  const required = new Set(schema.required ?? [])
+  return Object.entries(schema.properties).map(([name, def]) => {
+    const label = name.charAt(0).toUpperCase() + name.slice(1).replace(/_/g, ' ')
+    let type = 'text'
+    if (def.enum) type = 'select'
+    else if (['code', 'text', 'content', 'body', 'source'].includes(name)) type = 'textarea'
+    return {
+      name, label, type,
+      options: def.enum,
+      required: required.has(name),
+      placeholder: def.example ?? def.examples?.[0] ?? '',
+      hint: def.description,
+      transform: ['ticker', 'symbol'].includes(name) ? 'uppercase' : undefined,
+      default: def.default ?? '',
+      max_length: def.maxLength,
+    }
+  })
+}
+
 export default function AgentInputForm({ agent, onSubmit, loading, mode, onModeChange }) {
-  const fields = agent?.input_schema?.fields ?? []
+  const fields = useMemo(() => deriveFields(agent?.input_schema), [agent])
   const [values, setValues] = useState(() =>
     Object.fromEntries(fields.map(f => [f.name, f.default ?? '']))
   )
+
+  // Reset form when agent changes
+  useEffect(() => {
+    setValues(Object.fromEntries(fields.map(f => [f.name, f.default ?? ''])))
+  }, [fields])
 
   const set = (name, val) => setValues(v => ({ ...v, [name]: val }))
 
@@ -35,6 +63,12 @@ export default function AgentInputForm({ agent, onSubmit, loading, mode, onModeC
 
   return (
     <form className="invoke-panel" onSubmit={handleSubmit}>
+      {fields.length === 0 && (
+        <p style={{ fontSize: '0.8125rem', color: 'var(--ink-mute)', padding: 'var(--sp-3)', background: 'var(--canvas-sunk)', borderRadius: 'var(--r-sm)', border: '1px solid var(--line)' }}>
+          This agent has no defined input schema. Check its documentation.
+        </p>
+      )}
+
       {fields.map(f => {
         if (f.type === 'textarea') {
           return (
@@ -47,6 +81,7 @@ export default function AgentInputForm({ agent, onSubmit, loading, mode, onModeC
               onChange={e => set(f.name, e.target.value)}
               required={f.required}
               maxLength={f.max_length}
+              style={{ minHeight: 120 }}
             />
           )
         }
