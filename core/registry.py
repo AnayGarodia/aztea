@@ -15,8 +15,14 @@ import os
 import re
 import sqlite3
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal, ROUND_HALF_UP
+
+import numpy as np
+
+from core import embeddings
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "registry.db")
 _local = threading.local()
@@ -39,6 +45,30 @@ _REQUIRED_COLUMNS = {
     "input_schema",
     "created_at",
 }
+_EMBEDDING_CACHE_TTL_SECONDS = 60
+SEMANTIC_SIMILARITY_WEIGHT = 0.5
+TRUST_SCORE_WEIGHT = 0.3
+INVERSE_PRICE_WEIGHT = 0.2
+_TRUST_PERCENT_SCALE = 100.0
+_QUERY_STOP_WORDS = {
+    "a",
+    "an",
+    "the",
+    "to",
+    "for",
+    "of",
+    "and",
+    "or",
+    "in",
+    "on",
+    "with",
+    "i",
+    "need",
+}
+
+_embeddings_cache_lock = threading.Lock()
+_embeddings_cache_expires_at = 0.0
+_embeddings_cache: dict[str, np.ndarray] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -80,12 +110,26 @@ def _create_agents_table(conn: sqlite3.Connection, table_name: str = "agents") -
         """)
 
 
+def _create_agent_embeddings_table(conn: sqlite3.Connection) -> None:
+    conn.execute("""
+            CREATE TABLE IF NOT EXISTS agent_embeddings (
+                agent_id     TEXT PRIMARY KEY REFERENCES agents(agent_id) ON DELETE CASCADE,
+                embedding    BLOB NOT NULL,
+                source_text  TEXT NOT NULL,
+                embedded_at  TEXT NOT NULL
+            )
+        """)
+
+
 def _ensure_agents_indexes(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_agents_name ON agents(name)"
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_agents_created ON agents(created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_agent_embeddings_embedded_at ON agent_embeddings(embedded_at DESC)"
     )
 
 
@@ -211,6 +255,131 @@ def _normalize_input_schema_json(raw_schema) -> str:
     return json.dumps(parsed)
 
 
+def _parse_tags(raw_tags) -> list[str]:
+    if isinstance(raw_tags, str):
+        try:
+            parsed = json.loads(raw_tags)
+        except json.JSONDecodeError:
+            parsed = []
+    elif isinstance(raw_tags, list):
+        parsed = raw_tags
+    else:
+        parsed = []
+    return [str(tag).strip() for tag in parsed if str(tag).strip()]
+
+
+def _parse_input_schema(raw_schema) -> dict:
+    if isinstance(raw_schema, str):
+        try:
+            parsed = json.loads(raw_schema)
+        except json.JSONDecodeError:
+            parsed = {}
+    elif isinstance(raw_schema, dict):
+        parsed = raw_schema
+    else:
+        parsed = {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _build_embedding_source_text(name: str, description: str, tags: list[str], input_schema: dict) -> str:
+    clean_name = str(name or "").strip()
+    clean_description = str(description or "").strip()
+    clean_tags = [str(tag).strip() for tag in tags if str(tag).strip()]
+    schema_text = json.dumps(input_schema if isinstance(input_schema, dict) else {}, sort_keys=True)
+    return f"{clean_name}. {clean_description}. Tags: {', '.join(clean_tags)}. Input: {schema_text}"
+
+
+def _embedding_source_from_agent(agent: dict) -> str:
+    return _build_embedding_source_text(
+        str(agent.get("name") or ""),
+        str(agent.get("description") or ""),
+        _parse_tags(agent.get("tags")),
+        _parse_input_schema(agent.get("input_schema")),
+    )
+
+
+def _pack_embedding(vector: list[float] | np.ndarray) -> bytes:
+    arr = np.asarray(vector, dtype=np.float32).reshape(-1)
+    if arr.size != embeddings.EMBEDDING_DIM:
+        raise ValueError(
+            f"embedding vector must have dimension {embeddings.EMBEDDING_DIM}, got {arr.size}"
+        )
+    return arr.tobytes()
+
+
+def _unpack_embedding(blob: bytes | bytearray | memoryview) -> np.ndarray:
+    arr = np.frombuffer(blob, dtype=np.float32)
+    if arr.size != embeddings.EMBEDDING_DIM:
+        raise ValueError(
+            f"embedding blob dimension must be {embeddings.EMBEDDING_DIM}, got {arr.size}"
+        )
+    return arr.astype(np.float32, copy=True)
+
+
+def _upsert_agent_embedding_row(
+    conn: sqlite3.Connection,
+    agent_id: str,
+    source_text: str,
+    embedding_vector: list[float] | np.ndarray | None = None,
+) -> bool:
+    existing = conn.execute(
+        "SELECT source_text FROM agent_embeddings WHERE agent_id = ?",
+        (agent_id,),
+    ).fetchone()
+    if existing and existing["source_text"] == source_text:
+        return False
+
+    vector = embedding_vector if embedding_vector is not None else embeddings.embed_text(source_text)
+    conn.execute(
+        """
+        INSERT INTO agent_embeddings (agent_id, embedding, source_text, embedded_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(agent_id)
+        DO UPDATE SET
+            embedding = excluded.embedding,
+            source_text = excluded.source_text,
+            embedded_at = excluded.embedded_at
+        """,
+        (
+            agent_id,
+            _pack_embedding(vector),
+            source_text,
+            datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+    return True
+
+
+def _invalidate_embeddings_cache() -> None:
+    global _embeddings_cache_expires_at, _embeddings_cache
+    with _embeddings_cache_lock:
+        _embeddings_cache = {}
+        _embeddings_cache_expires_at = 0.0
+
+
+def _load_embeddings_cache() -> dict[str, np.ndarray]:
+    global _embeddings_cache_expires_at, _embeddings_cache
+    now = time.monotonic()
+    with _embeddings_cache_lock:
+        if now < _embeddings_cache_expires_at:
+            return dict(_embeddings_cache)
+
+    # TODO: switch this full-table scan to sqlite-vec when the marketplace exceeds ~10k agents.
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT agent_id, embedding FROM agent_embeddings"
+        ).fetchall()
+
+    loaded: dict[str, np.ndarray] = {}
+    for row in rows:
+        loaded[row["agent_id"]] = _unpack_embedding(row["embedding"])
+
+    with _embeddings_cache_lock:
+        _embeddings_cache = loaded
+        _embeddings_cache_expires_at = now + _EMBEDDING_CACHE_TTL_SECONDS
+        return dict(_embeddings_cache)
+
+
 def _dedupe_name(base_name: str, used_names: set) -> str:
     if base_name not in used_names:
         used_names.add(base_name)
@@ -313,6 +482,7 @@ def init_db() -> None:
             _create_agents_table(conn)
         elif _needs_agents_migration(conn):
             _migrate_agents_table(conn)
+        _create_agent_embeddings_table(conn)
         _ensure_agents_indexes(conn)
 
 
@@ -353,10 +523,12 @@ def register_agent(
     agent_id: str | None = None,
     input_schema: dict | None = None,
     owner_id: str | None = None,
+    embed_listing: bool = True,
 ) -> str:
     """
     Insert a new agent listing. Returns the agent_id.
     Pass agent_id explicitly for deterministic IDs (e.g. self-registration).
+    By default this also writes an embedding row in the same request.
     Raises sqlite3.IntegrityError if agent_id already exists.
     """
     try:
@@ -373,7 +545,15 @@ def register_agent(
     if not normalized_owner_id:
         raise ValueError("owner_id must be a non-empty string.")
     created_at = datetime.now(timezone.utc).isoformat()
-    schema_json = json.dumps(input_schema or {})
+    normalized_tags = _parse_tags(tags)
+    normalized_schema = _parse_input_schema(input_schema)
+    schema_json = json.dumps(normalized_schema, sort_keys=True)
+    tags_json = json.dumps(normalized_tags)
+    source_text = ""
+    embedding_vector: list[float] | None = None
+    if embed_listing:
+        source_text = _build_embedding_source_text(name, description, normalized_tags, normalized_schema)
+        embedding_vector = embeddings.embed_text(source_text)
     with _conn() as conn:
         conn.execute(
             """
@@ -383,8 +563,17 @@ def register_agent(
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (aid, normalized_owner_id, name, description, endpoint_url,
-              price, json.dumps(tags), schema_json, created_at),
+              price, tags_json, schema_json, created_at),
         )
+        if embed_listing and embedding_vector is not None:
+            _upsert_agent_embedding_row(
+                conn,
+                agent_id=aid,
+                source_text=source_text,
+                embedding_vector=embedding_vector,
+            )
+    if embed_listing:
+        _invalidate_embeddings_cache()
     return aid
 
 
@@ -455,6 +644,328 @@ def agent_exists_by_name(name: str) -> bool:
             "SELECT 1 FROM agents WHERE name = ?", (name,)
         ).fetchone()
     return row is not None
+
+
+def sync_agent_embedding(agent_id: str) -> bool:
+    """
+    Re-embed one agent if its current source_text has changed.
+    This is the helper future update paths should call after mutating
+    name/description/tags/input_schema.
+    """
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM agents WHERE agent_id = ?",
+            (agent_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"Agent '{agent_id}' not found.")
+
+        agent = _row_to_dict(row)
+        source_text = _embedding_source_from_agent(agent)
+        changed = _upsert_agent_embedding_row(conn, agent_id, source_text)
+    if changed:
+        _invalidate_embeddings_cache()
+    return changed
+
+
+def backfill_missing_embeddings(limit: int | None = None) -> dict[str, int]:
+    """
+    Embed existing agents that do not yet have rows in agent_embeddings.
+    Safe to run repeatedly (idempotent).
+    """
+    if limit is not None and limit < 1:
+        raise ValueError("limit must be >= 1 when provided.")
+
+    with _conn() as conn:
+        query = """
+            SELECT a.*
+            FROM agents AS a
+            LEFT JOIN agent_embeddings AS e ON e.agent_id = a.agent_id
+            WHERE e.agent_id IS NULL
+            ORDER BY a.created_at, a.agent_id
+        """
+        params: tuple[int, ...] = ()
+        if limit is not None:
+            query += " LIMIT ?"
+            params = (limit,)
+        rows = conn.execute(query, params).fetchall()
+
+    to_embed: list[tuple[str, str, list[float]]] = []
+    for row in rows:
+        agent = _row_to_dict(row)
+        source_text = _embedding_source_from_agent(agent)
+        to_embed.append(
+            (
+                str(agent["agent_id"]),
+                source_text,
+                embeddings.embed_text(source_text),
+            )
+        )
+
+    embedded = 0
+    if to_embed:
+        with _conn() as conn:
+            for agent_id, source_text, vector in to_embed:
+                if _upsert_agent_embedding_row(
+                    conn,
+                    agent_id=agent_id,
+                    source_text=source_text,
+                    embedding_vector=vector,
+                ):
+                    embedded += 1
+    if embedded > 0:
+        _invalidate_embeddings_cache()
+
+    return {"scanned": len(rows), "embedded": embedded}
+
+
+def _normalize_trust_score(value: float | int | None) -> float:
+    trust = _to_non_negative_float(value, default=0.0)
+    if trust > 1.0:
+        trust = trust / _TRUST_PERCENT_SCALE
+    return max(0.0, min(1.0, trust))
+
+
+def _normalize_min_trust(value: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        raise ValueError("min_trust must be between 0.0 and 1.0.")
+    if not math.isfinite(parsed):
+        raise ValueError("min_trust must be between 0.0 and 1.0.")
+    if parsed < 0.0:
+        raise ValueError("min_trust must be between 0.0 and 1.0.")
+    if parsed > 1.0 and parsed <= _TRUST_PERCENT_SCALE:
+        parsed = parsed / _TRUST_PERCENT_SCALE
+    if parsed < 0.0 or parsed > 1.0:
+        raise ValueError("min_trust must be between 0.0 and 1.0.")
+    return parsed
+
+
+def _price_usd_to_cents(value: float | int | str | None) -> int:
+    try:
+        amount = Decimal(str(value))
+    except Exception:
+        return 0
+    if amount < 0:
+        return 0
+    cents = int((amount * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    if amount > 0 and cents == 0:
+        return 1
+    return cents
+
+
+def _required_input_fields_set(required_input_fields: list[str] | None) -> set[str]:
+    if not required_input_fields:
+        return set()
+    fields: set[str] = set()
+    for field in required_input_fields:
+        value = str(field).strip()
+        if not value:
+            raise ValueError("required_input_fields entries must be non-empty strings.")
+        fields.add(value)
+    return fields
+
+
+def _input_schema_field_names(schema: dict) -> set[str]:
+    if not isinstance(schema, dict):
+        return set()
+
+    properties = schema.get("properties")
+    if isinstance(properties, dict):
+        return {str(name) for name in properties.keys()}
+
+    fields = schema.get("fields")
+    if isinstance(fields, list):
+        names: set[str] = set()
+        for field in fields:
+            if isinstance(field, dict):
+                candidate = str(field.get("name") or "").strip()
+                if candidate:
+                    names.add(candidate)
+        return names
+    return set()
+
+
+def _query_terms(query: str) -> list[str]:
+    terms = re.findall(r"[a-z0-9-]+", query.lower())
+    return [term for term in terms if term not in _QUERY_STOP_WORDS]
+
+
+def _matched_phrase(query: str, haystack: str) -> str | None:
+    terms = _query_terms(query)
+    if not terms:
+        return None
+
+    lowered = haystack.lower()
+    for width in (3, 2):
+        if len(terms) < width:
+            continue
+        for idx in range(0, len(terms) - width + 1):
+            phrase = " ".join(terms[idx: idx + width])
+            if phrase in lowered:
+                return phrase
+
+    for term in terms:
+        if len(term) >= 4 and term in lowered:
+            return term
+    return None
+
+
+def _match_reasons(
+    agent: dict,
+    query: str,
+    trust: float,
+    required_fields: set[str],
+    supported_fields: set[str],
+) -> list[str]:
+    reasons: list[str] = []
+    haystack = " ".join(
+        [
+            str(agent.get("name") or ""),
+            str(agent.get("description") or ""),
+            " ".join(_parse_tags(agent.get("tags"))),
+        ]
+    )
+    phrase = _matched_phrase(query, haystack)
+    if phrase:
+        reasons.append(f"matched '{phrase}' in description")
+    if required_fields:
+        if len(required_fields) == 1:
+            field = sorted(required_fields)[0]
+            reasons.append(f"supports {field} input field")
+        else:
+            ordered = ", ".join(sorted(supported_fields))
+            reasons.append(f"supports input fields: {ordered}")
+    reasons.append(f"trust {trust:.2f}")
+    return reasons
+
+
+def search_agents(
+    query: str,
+    limit: int = 10,
+    min_trust: float = 0.0,
+    max_price_cents: int | None = None,
+    required_input_fields: list[str] | None = None,
+) -> list[dict]:
+    normalized_query = str(query or "").strip()
+    if not normalized_query:
+        raise ValueError("query must be a non-empty string.")
+    if limit < 1:
+        raise ValueError("limit must be >= 1.")
+    if max_price_cents is not None and max_price_cents < 0:
+        raise ValueError("max_price_cents must be >= 0 when provided.")
+
+    trust_floor = _normalize_min_trust(min_trust)
+    required_fields = _required_input_fields_set(required_input_fields)
+    query_vector = np.asarray(embeddings.embed_text(normalized_query), dtype=np.float32)
+    vectors_by_agent = _load_embeddings_cache()
+    agents = get_agents_with_reputation()
+
+    missing_embeddings: list[tuple[str, str, list[float]]] = []
+    candidates: list[dict] = []
+
+    for agent in agents:
+        agent_id = str(agent.get("agent_id") or "").strip()
+        if not agent_id:
+            continue
+
+        price_cents = _price_usd_to_cents(agent.get("price_per_call_usd"))
+        if max_price_cents is not None and price_cents > max_price_cents:
+            continue
+
+        schema = _parse_input_schema(agent.get("input_schema"))
+        supported_fields = _input_schema_field_names(schema)
+        if required_fields and not required_fields.issubset(supported_fields):
+            continue
+
+        trust = _normalize_trust_score(agent.get("trust_score"))
+        if trust < trust_floor:
+            continue
+
+        vector = vectors_by_agent.get(agent_id)
+        if vector is None:
+            source_text = _embedding_source_from_agent(agent)
+            vector_list = embeddings.embed_text(source_text)
+            vector = np.asarray(vector_list, dtype=np.float32)
+            vectors_by_agent[agent_id] = vector
+            missing_embeddings.append((agent_id, source_text, vector_list))
+
+        similarity = float(embeddings.cosine(query_vector, vector))
+        semantic_similarity = max(0.0, min(1.0, similarity))
+        candidates.append(
+            {
+                "agent": agent,
+                "similarity": semantic_similarity,
+                "trust": trust,
+                "price_cents": price_cents,
+                "supported_fields": supported_fields,
+            }
+        )
+
+    if missing_embeddings:
+        with _conn() as conn:
+            changed = False
+            for agent_id, source_text, vector_list in missing_embeddings:
+                if _upsert_agent_embedding_row(
+                    conn,
+                    agent_id=agent_id,
+                    source_text=source_text,
+                    embedding_vector=vector_list,
+                ):
+                    changed = True
+        if changed:
+            _invalidate_embeddings_cache()
+
+    if not candidates:
+        return []
+
+    price_values = [c["price_cents"] for c in candidates]
+    min_price = min(price_values)
+    max_price = max(price_values)
+
+    for candidate in candidates:
+        if max_price == min_price:
+            inverse_price = 1.0
+        else:
+            normalized_price = (candidate["price_cents"] - min_price) / (max_price - min_price)
+            inverse_price = 1.0 - normalized_price
+
+        blended_score = (
+            SEMANTIC_SIMILARITY_WEIGHT * candidate["similarity"]
+            + TRUST_SCORE_WEIGHT * candidate["trust"]
+            + INVERSE_PRICE_WEIGHT * inverse_price
+        )
+        candidate["blended_score"] = blended_score
+        candidate["match_reasons"] = _match_reasons(
+            candidate["agent"],
+            normalized_query,
+            candidate["trust"],
+            required_fields,
+            candidate["supported_fields"],
+        )
+
+    ranked = sorted(
+        candidates,
+        key=lambda item: (
+            item["blended_score"],
+            item["similarity"],
+            item["trust"],
+            -item["price_cents"],
+        ),
+        reverse=True,
+    )
+
+    return [
+        {
+            "agent": item["agent"],
+            "similarity": round(item["similarity"], 6),
+            "trust": round(item["trust"], 6),
+            "blended_score": round(item["blended_score"], 6),
+            "match_reasons": item["match_reasons"],
+        }
+        for item in ranked[:limit]
+    ]
 
 
 def get_agents_with_reputation(tag: str | None = None) -> list:

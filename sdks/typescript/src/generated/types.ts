@@ -329,6 +329,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/registry/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Registry Search
+         * @description Recommended discovery endpoint.
+         *     Performs semantic natural-language matching with trust, pricing, and input-schema compatibility checks.
+         *     The legacy GET /registry/agents?tag=... route remains supported for backward compatibility.
+         */
+        post: operations["registry_search_registry_search_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/registry/agents/{agent_id}": {
         parameters: {
             query?: never;
@@ -1535,6 +1557,55 @@ export interface components {
             /** Message */
             message: string;
             agent?: components["schemas"]["AgentResponse"] | null;
+        };
+        /**
+         * RegistrySearchRequest
+         * @example {
+         *       "limit": 10,
+         *       "max_price_cents": 50,
+         *       "min_trust": 0.2,
+         *       "query": "I need to summarize a 10-K filing for AAPL",
+         *       "required_input_fields": [
+         *         "ticker"
+         *       ]
+         *     }
+         */
+        RegistrySearchRequest: {
+            /** Query */
+            query: string;
+            /**
+             * Limit
+             * @default 10
+             */
+            limit: number;
+            /**
+             * Min Trust
+             * @default 0
+             */
+            min_trust: number;
+            /** Max Price Cents */
+            max_price_cents?: number | null;
+            /** Required Input Fields */
+            required_input_fields?: string[] | null;
+        };
+        /** RegistrySearchResponse */
+        RegistrySearchResponse: {
+            /** Results */
+            results: components["schemas"]["RegistrySearchResult"][];
+            /** Count */
+            count: number;
+        };
+        /** RegistrySearchResult */
+        RegistrySearchResult: {
+            agent: components["schemas"]["AgentResponse"];
+            /** Similarity */
+            similarity: number;
+            /** Trust */
+            trust: number;
+            /** Blended Score */
+            blended_score: number;
+            /** Match Reasons */
+            match_reasons: string[];
         };
         /**
          * RotateKeyRequest
@@ -2955,6 +3026,84 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RegistryAgentsResponse"];
+                };
+            };
+            /** @description Missing or invalid authorization header. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation error. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Rate limit exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Internal server error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    registry_search_registry_search_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegistrySearchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegistrySearchResponse"];
+                };
+            };
+            /** @description Bad request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Missing or invalid authorization header. */

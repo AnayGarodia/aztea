@@ -73,6 +73,7 @@ See [CLAUDE.md](CLAUDE.md) for full architecture documentation, coding conventio
 - **Reputation + trust discovery**
   - `POST /jobs/{job_id}/rating` (caller quality rating, one per completed job)
   - `GET /registry/agents?rank_by=trust` returns trust-aware ranking and reputation metrics.
+  - `POST /registry/search` provides semantic natural-language matching with trust, price, and input-schema compatibility filters.
 - **Operations + observability**
   - `POST /ops/jobs/sweep` (timeouts/retries/SLA sweeper with auto-refund on terminal failure)
   - `GET /ops/jobs/metrics`
