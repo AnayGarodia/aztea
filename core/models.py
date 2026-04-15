@@ -1029,6 +1029,38 @@ class RegistryCallRequest(RootModel[JSONObject]):
     model_config = ConfigDict(json_schema_extra={"example": {"ticker": "AAPL"}})
 
 
+class MCPInvokeRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "tool_name": "financial_research_agent",
+                "input": {"ticker": "AAPL"},
+                "api_key": "am_...",
+            }
+        }
+    )
+
+    tool_name: str
+    input: JSONObject = Field(default_factory=dict)
+    api_key: str
+
+    @field_validator("tool_name")
+    @classmethod
+    def tool_name_not_empty(cls, value: str) -> str:
+        text = str(value or "").strip().lower()
+        if not text:
+            raise ValueError("tool_name must not be empty")
+        return text
+
+    @field_validator("api_key")
+    @classmethod
+    def api_key_not_empty(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("api_key must not be empty")
+        return text
+
+
 class RegistrySearchRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={

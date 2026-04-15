@@ -191,15 +191,15 @@ export default function AgentsPage() {
         const data = await searchAgents(apiKey, query)
         if (cancelled) return
         const normalized = (data?.results ?? []).map(item => {
-          const reasonFromList = Array.isArray(item?.match_reasons)
-            ? item.match_reasons.find(reason => typeof reason === 'string' && reason.trim())
-            : null
-          const matchReason = (typeof item?.match_reason === 'string' && item.match_reason.trim())
-            ? item.match_reason.trim()
-            : (reasonFromList || null)
+          const matchReasons = Array.isArray(item?.match_reasons)
+            ? item.match_reasons
+              .map(reason => (typeof reason === 'string' ? reason.trim() : ''))
+              .filter(Boolean)
+            : []
           return {
             ...(item?.agent ?? {}),
-            match_reason: matchReason,
+            match_reasons: matchReasons,
+            _from_search: true,
           }
         })
         setSearchResults(normalized)
@@ -210,7 +210,7 @@ export default function AgentsPage() {
       } finally {
         if (!cancelled) setSearchLoading(false)
       }
-    }, 250)
+    }, 300)
 
     return () => {
       cancelled = true
