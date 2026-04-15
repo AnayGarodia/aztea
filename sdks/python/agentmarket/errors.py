@@ -79,6 +79,8 @@ def _extract_response_body(response: requests.Response) -> Any:
 
 
 def _extract_detail(body: Any) -> Any:
+    if isinstance(body, dict) and "error" in body and "message" in body:
+        return body.get("data") if isinstance(body.get("data"), dict) else body
     if isinstance(body, dict) and "detail" in body:
         return body["detail"]
     return body
@@ -90,7 +92,10 @@ def raise_for_error_response(response: requests.Response) -> None:
 
     body = _extract_response_body(response)
     detail = _extract_detail(body)
-    message = str(detail)
+    if isinstance(body, dict) and "message" in body:
+        message = str(body.get("message") or "")
+    else:
+        message = str(detail)
     code = response.status_code
 
     if code == 401:

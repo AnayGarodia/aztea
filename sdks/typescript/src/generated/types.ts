@@ -295,6 +295,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/agents/negotiation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Agent Negotiation Endpoint */
+        post: operations["agent_negotiation_endpoint_agents_negotiation_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agents/scenario": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Agent Scenario Endpoint */
+        post: operations["agent_scenario_endpoint_agents_scenario_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agents/product-strategy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Agent Product Strategy Endpoint */
+        post: operations["agent_product_strategy_endpoint_agents_product_strategy_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agents/portfolio": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Agent Portfolio Endpoint */
+        post: operations["agent_portfolio_endpoint_agents_portfolio_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agents/quality-judge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Agent Quality Judge Endpoint */
+        post: operations["agent_quality_judge_endpoint_agents_quality_judge_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/registry/register": {
         parameters: {
             query?: never;
@@ -362,6 +447,57 @@ export interface paths {
         get: operations["registry_get_registry_agents__agent_id__get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/registry/agents/{agent_id}/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Registry Agent Key Create */
+        post: operations["registry_agent_key_create_registry_agents__agent_id__keys_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/agents/{agent_id}/suspend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Admin Agent Suspend */
+        post: operations["admin_agent_suspend_admin_agents__agent_id__suspend_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/agents/{agent_id}/ban": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Admin Agent Ban */
+        post: operations["admin_agent_ban_admin_agents__agent_id__ban_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -958,6 +1094,32 @@ export interface components {
             reasoning: string;
         };
         /**
+         * AgentKeyCreateRequest
+         * @example {
+         *       "name": "Agent worker key"
+         *     }
+         */
+        AgentKeyCreateRequest: {
+            /**
+             * Name
+             * @default Agent worker key
+             */
+            name: string;
+        };
+        /** AgentKeyCreateResponse */
+        AgentKeyCreateResponse: {
+            /** Key Id */
+            key_id: string;
+            /** Agent Id */
+            agent_id: string;
+            /** Raw Key */
+            raw_key: string;
+            /** Key Prefix */
+            key_prefix: string;
+            /** Created At */
+            created_at: string;
+        };
+        /**
          * AgentRegisterRequest
          * @example {
          *       "description": "Summarizes SEC 10-Q filings into investment briefs.",
@@ -971,6 +1133,15 @@ export interface components {
          *         "type": "object"
          *       },
          *       "name": "Financial Filing Analyst",
+         *       "output_schema": {
+         *         "properties": {
+         *           "summary": {
+         *             "type": "string"
+         *           }
+         *         },
+         *         "type": "object"
+         *       },
+         *       "output_verifier_url": "https://example.com/verify",
          *       "price_per_call_usd": 0.05,
          *       "tags": [
          *         "financial-research",
@@ -993,6 +1164,12 @@ export interface components {
             input_schema?: {
                 [key: string]: components["schemas"]["JsonValue"];
             };
+            /** Output Schema */
+            output_schema?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Output Verifier Url */
+            output_verifier_url?: string | null;
         };
         /** AgentResponse */
         AgentResponse: {
@@ -1012,6 +1189,17 @@ export interface components {
             input_schema?: {
                 [key: string]: components["schemas"]["JsonValue"];
             };
+            /** Output Schema */
+            output_schema?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Output Verifier Url */
+            output_verifier_url?: string | null;
+            /**
+             * Status
+             * @default active
+             */
+            status: string;
             /** Caller Trust Min */
             caller_trust_min?: number | null;
         } & {
@@ -1251,7 +1439,14 @@ export interface components {
         };
         /** ErrorResponse */
         ErrorResponse: {
-            detail: components["schemas"]["JsonValue"];
+            /** Error */
+            error: string;
+            /** Message */
+            message: string;
+            /** Data */
+            data?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
         };
         /**
          * FinancialRequest
@@ -1351,6 +1546,11 @@ export interface components {
              * @default 3
              */
             max_attempts: number;
+            /**
+             * Dispute Window Hours
+             * @default 72
+             */
+            dispute_window_hours: number;
         };
         /**
          * JobDisputeRequest
@@ -1580,6 +1780,16 @@ export interface components {
             last_timeout_at?: string | null;
             /** Latest Message Id */
             latest_message_id?: number | null;
+            /** Dispute Window Hours */
+            dispute_window_hours?: number | null;
+            /** Dispute Outcome */
+            dispute_outcome?: string | null;
+            /** Judge Verdict */
+            judge_verdict?: string | null;
+            /** Quality Score */
+            quality_score?: number | null;
+            /** Judge Agent Id */
+            judge_agent_id?: string | null;
         } & {
             [key: string]: unknown;
         };
@@ -1677,6 +1887,34 @@ export interface components {
                 [key: string]: components["schemas"]["JsonValue"];
             };
         };
+        /**
+         * NegotiationRequest
+         * @example {
+         *       "constraints": [
+         *         "No discount above 10%",
+         *         "Need 24-month commitment"
+         *       ],
+         *       "context": "Incumbent vendor status but increased competitive pressure.",
+         *       "counterparty_profile": "Procurement-led buyer with strict legal review.",
+         *       "objective": "Renew enterprise contract with +15% ARR and annual prepay."
+         *     }
+         */
+        NegotiationRequest: {
+            /** Objective */
+            objective: string;
+            /**
+             * Counterparty Profile
+             * @default
+             */
+            counterparty_profile: string;
+            /** Constraints */
+            constraints?: string[] | string;
+            /**
+             * Context
+             * @default
+             */
+            context: string;
+        };
         /** OnboardingIngestResponse */
         OnboardingIngestResponse: {
             /** Agent Id */
@@ -1705,6 +1943,59 @@ export interface components {
             manifest_content?: string | null;
             /** Manifest Url */
             manifest_url?: string | null;
+        };
+        /**
+         * PortfolioRequest
+         * @example {
+         *       "capital_usd": 50000,
+         *       "investment_goal": "Build a diversified long-term portfolio for financial independence.",
+         *       "risk_profile": "balanced",
+         *       "time_horizon_years": 10
+         *     }
+         */
+        PortfolioRequest: {
+            /** Investment Goal */
+            investment_goal: string;
+            /**
+             * Risk Profile
+             * @default balanced
+             */
+            risk_profile: string;
+            /**
+             * Time Horizon Years
+             * @default 5
+             */
+            time_horizon_years: number;
+            /**
+             * Capital Usd
+             * @default 100000
+             */
+            capital_usd: number;
+        };
+        /**
+         * ProductStrategyRequest
+         * @example {
+         *       "horizon_quarters": 3,
+         *       "market_context": "Crowded tooling space, but weak proactive churn prevention.",
+         *       "product_idea": "AI-first customer success copilot for SaaS teams.",
+         *       "target_users": "CSMs at B2B SaaS companies with 20-200 customer accounts."
+         *     }
+         */
+        ProductStrategyRequest: {
+            /** Product Idea */
+            product_idea: string;
+            /** Target Users */
+            target_users: string;
+            /**
+             * Market Context
+             * @default
+             */
+            market_context: string;
+            /**
+             * Horizon Quarters
+             * @default 2
+             */
+            horizon_quarters: number;
         };
         /**
          * ReconciliationRunRequest
@@ -1819,6 +2110,34 @@ export interface components {
             runs: {
                 [key: string]: components["schemas"]["JsonValue"];
             }[];
+        };
+        /**
+         * ScenarioRequest
+         * @example {
+         *       "assumptions": "Current ARR is $5M with 30% YoY growth and limited brand awareness in EU.",
+         *       "decision": "Expand to EU market with a direct sales team.",
+         *       "horizon": "18 months",
+         *       "risk_tolerance": "balanced"
+         *     }
+         */
+        ScenarioRequest: {
+            /** Decision */
+            decision: string;
+            /**
+             * Assumptions
+             * @default
+             */
+            assumptions: string;
+            /**
+             * Horizon
+             * @default 12 months
+             */
+            horizon: string;
+            /**
+             * Risk Tolerance
+             * @default balanced
+             */
+            risk_tolerance: string;
         };
         /**
          * TextIntelRequest
@@ -2260,6 +2579,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description Upstream service unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     auth_login_auth_login_post: {
@@ -2313,6 +2641,15 @@ export interface operations {
             };
             /** @description Internal server error. */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Upstream service unavailable. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -3112,6 +3449,432 @@ export interface operations {
             };
         };
     };
+    agent_negotiation_endpoint_agents_negotiation_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NegotiationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DynamicObjectResponse"];
+                };
+            };
+            /** @description Bad request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid authorization header. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation error. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Rate limit exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Internal server error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Upstream service unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    agent_scenario_endpoint_agents_scenario_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScenarioRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DynamicObjectResponse"];
+                };
+            };
+            /** @description Bad request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid authorization header. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation error. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Rate limit exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Internal server error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Upstream service unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    agent_product_strategy_endpoint_agents_product_strategy_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProductStrategyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DynamicObjectResponse"];
+                };
+            };
+            /** @description Bad request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid authorization header. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation error. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Rate limit exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Internal server error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Upstream service unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    agent_portfolio_endpoint_agents_portfolio_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PortfolioRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DynamicObjectResponse"];
+                };
+            };
+            /** @description Bad request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid authorization header. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation error. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Rate limit exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Internal server error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Upstream service unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    agent_quality_judge_endpoint_agents_quality_judge_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["DynamicObjectResponse"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DynamicObjectResponse"];
+                };
+            };
+            /** @description Bad request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid authorization header. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation error. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Rate limit exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Internal server error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     registry_register_registry_register_post: {
         parameters: {
             query?: never;
@@ -3364,6 +4127,265 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentResponse"];
+                };
+            };
+            /** @description Missing or invalid authorization header. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Rate limit exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Internal server error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    registry_agent_key_create_registry_agents__agent_id__keys_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentKeyCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentKeyCreateResponse"];
+                };
+            };
+            /** @description Bad request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid authorization header. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Rate limit exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Internal server error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    admin_agent_suspend_admin_agents__agent_id__suspend_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentResponse"];
+                };
+            };
+            /** @description Bad request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid authorization header. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Rate limit exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Internal server error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    admin_agent_ban_admin_agents__agent_id__ban_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DynamicObjectResponse"];
+                };
+            };
+            /** @description Bad request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Missing or invalid authorization header. */
@@ -3694,6 +4716,15 @@ export interface operations {
             };
             /** @description Internal server error. */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Upstream service unavailable. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -4213,13 +5244,13 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Validation Error */
+            /** @description Validation error. */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Rate limit exceeded. */

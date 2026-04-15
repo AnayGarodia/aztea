@@ -1,8 +1,7 @@
 .auth-panel {
   background: var(--surface);
-  border: 1px solid var(--line);
+  border: 2px solid var(--line);
   border-radius: var(--r-xl);
-  box-shadow: var(--shadow-lg);
   width: 100%;
   max-width: 460px;
   overflow: hidden;
@@ -10,12 +9,12 @@
 .auth-panel__tabs {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 2px solid var(--line);
 }
 .auth-panel__tab {
   padding: 16px;
   font-size: 0.8125rem;
-  font-weight: 600;
+  font-weight: 800;
   color: var(--ink-mute);
   cursor: pointer;
   text-align: center;

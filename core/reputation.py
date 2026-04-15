@@ -66,6 +66,11 @@ def _to_non_negative_float(value, default: float = 0.0) -> float:
     return parsed
 
 
+def _normalize_decay_multiplier(value: float | int | None) -> float:
+    parsed = _to_non_negative_float(value, default=1.0)
+    return _clamp01(parsed if parsed > 0 else 1.0)
+
+
 def _normalize_agent_stats(total_calls, successful_calls, avg_latency_ms) -> tuple[int, int, float]:
     total = _to_non_negative_int(total_calls, default=0)
     successful = _to_non_negative_int(successful_calls, default=0)
@@ -118,6 +123,7 @@ def _build_trust_metrics(
     avg_latency_ms: float,
     rating_count: int,
     average_quality_rating: float | None,
+    decay_multiplier: float = 1.0,
 ) -> dict:
     quality_score = _compute_quality_score(average_quality_rating, rating_count)
     success_score = _compute_success_score(total_calls, successful_calls)
@@ -130,6 +136,9 @@ def _build_trust_metrics(
         + latency_score * _LATENCY_WEIGHT
     )
     trust_raw = (_NEUTRAL_TRUST * (1.0 - confidence_score)) + (base_score * confidence_score)
+    multiplier = _normalize_decay_multiplier(decay_multiplier)
+    baseline = _NEUTRAL_TRUST * (1.0 - confidence_score)
+    trust_raw = max(baseline, trust_raw * multiplier)
     success_rate = (successful_calls / total_calls) if total_calls > 0 else None
 
     return {
@@ -149,6 +158,7 @@ def _build_trust_metrics(
         "successful_calls": successful_calls,
         "success_rate": round(success_rate, 4) if success_rate is not None else None,
         "avg_latency_ms": round(avg_latency_ms, 3),
+        "decay_multiplier": round(multiplier, 6),
     }
 
 
@@ -443,9 +453,21 @@ def _load_agent_stats(agent_id: str) -> tuple[int, int, float]:
     return stats
 
 
+def _load_agent_decay_multiplier(agent_id: str) -> float:
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT trust_decay_multiplier FROM agents WHERE agent_id = ?",
+            (agent_id,),
+        ).fetchone()
+    if row is None:
+        raise ValueError(f"Agent '{agent_id}' not found.")
+    return _normalize_decay_multiplier(row["trust_decay_multiplier"])
+
+
 def compute_trust_metrics(agent_id: str) -> dict:
     """Compute trust metrics for one agent using registry stats + quality ratings."""
     total_calls, successful_calls, avg_latency_ms = _load_agent_stats(agent_id)
+    decay_multiplier = _load_agent_decay_multiplier(agent_id)
     quality_summary = get_agent_quality_summary(agent_id)
     return _build_trust_metrics(
         agent_id=agent_id,
@@ -454,6 +476,7 @@ def compute_trust_metrics(agent_id: str) -> dict:
         avg_latency_ms=avg_latency_ms,
         rating_count=quality_summary["rating_count"],
         average_quality_rating=quality_summary["average_quality_rating"],
+        decay_multiplier=decay_multiplier,
     )
 
 
@@ -485,6 +508,7 @@ def enrich_agent_record(agent: dict) -> dict:
         avg_latency_ms=avg_latency_ms,
         rating_count=summary["rating_count"],
         average_quality_rating=summary["average_quality_rating"],
+        decay_multiplier=_normalize_decay_multiplier(agent.get("trust_decay_multiplier")),
     )
 
     enriched = dict(agent)
@@ -529,6 +553,7 @@ def enrich_agent_records(agents: list[dict]) -> list[dict]:
             avg_latency_ms=avg_latency_ms,
             rating_count=summary["rating_count"],
             average_quality_rating=summary["average_quality_rating"],
+            decay_multiplier=_normalize_decay_multiplier(agent.get("trust_decay_multiplier")),
         )
 
         enriched = dict(agent)
@@ -574,3 +599,30 @@ def compute_caller_trust_metrics(caller_owner_id: str) -> dict:
         "average_rating": round(float(average_rating), 4) if average_rating is not None else None,
         "confidence_score": round(confidence, 4),
     }
+
+
+def count_caller_given_ratings(caller_owner_id: str, *, rating: int | None = None) -> int:
+    normalized_owner_id = str(caller_owner_id or "").strip()
+    if not normalized_owner_id:
+        return 0
+    with _conn() as conn:
+        if rating is None:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM job_quality_ratings
+                WHERE caller_owner_id = ?
+                """,
+                (normalized_owner_id,),
+            ).fetchone()
+        else:
+            validated = _validate_rating(int(rating))
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM job_quality_ratings
+                WHERE caller_owner_id = ? AND rating = ?
+                """,
+                (normalized_owner_id, validated),
+            ).fetchone()
+    return int(row["count"] if row else 0)

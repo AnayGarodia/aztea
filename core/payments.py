@@ -80,9 +80,16 @@ def init_payments_db() -> None:
                 wallet_id     TEXT PRIMARY KEY,
                 owner_id      TEXT NOT NULL UNIQUE,
                 balance_cents INTEGER NOT NULL DEFAULT 0 CHECK(balance_cents >= 0),
+                caller_trust  REAL NOT NULL DEFAULT 0.5,
                 created_at    TEXT NOT NULL
             )
         """)
+        wallet_cols = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(wallets)").fetchall()
+        }
+        if "caller_trust" not in wallet_cols:
+            conn.execute("ALTER TABLE wallets ADD COLUMN caller_trust REAL NOT NULL DEFAULT 0.5")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS transactions (
                 tx_id         TEXT PRIMARY KEY,
@@ -105,6 +112,18 @@ def init_payments_db() -> None:
                 summary_json    TEXT NOT NULL
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS caller_trust_events (
+                event_id      TEXT PRIMARY KEY,
+                owner_id      TEXT NOT NULL,
+                delta         REAL NOT NULL,
+                before_value  REAL NOT NULL,
+                after_value   REAL NOT NULL,
+                reason        TEXT NOT NULL,
+                related_id    TEXT,
+                created_at    TEXT NOT NULL
+            )
+        """)
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_tx_wallet ON transactions(wallet_id, created_at DESC)"
         )
@@ -120,6 +139,9 @@ def init_payments_db() -> None:
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_recon_created ON reconciliation_runs(created_at DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_caller_trust_events_owner_created ON caller_trust_events(owner_id, created_at DESC)"
         )
     get_or_create_wallet(PLATFORM_OWNER_ID)
 
@@ -199,8 +221,8 @@ def get_or_create_wallet(owner_id: str) -> dict:
         created_at = _now()
         try:
             conn.execute(
-                "INSERT INTO wallets (wallet_id, owner_id, balance_cents, created_at)"
-                " VALUES (?, ?, 0, ?)",
+                "INSERT INTO wallets (wallet_id, owner_id, balance_cents, caller_trust, created_at)"
+                " VALUES (?, ?, 0, 0.5, ?)",
                 (wallet_id, owner_id, created_at),
             )
         except sqlite3.IntegrityError:
@@ -212,6 +234,7 @@ def get_or_create_wallet(owner_id: str) -> dict:
             "wallet_id": wallet_id,
             "owner_id": owner_id,
             "balance_cents": 0,
+            "caller_trust": 0.5,
             "created_at": created_at,
         }
 
@@ -264,6 +287,8 @@ def pre_call_charge(caller_wallet_id: str, price_cents: int, agent_id: str) -> s
     Returns charge_tx_id. Raises InsufficientBalanceError if underfunded.
     DB lock held only for this short read-check-write sequence.
     """
+    if price_cents < 0:
+        raise ValueError("price_cents must be non-negative.")
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
@@ -305,10 +330,24 @@ def post_call_payout(
     Both inserts happen in one atomic transaction.
     Fee rounds down; agent gets the remainder to avoid creating or destroying cents.
     """
+    if price_cents < 0:
+        raise ValueError("price_cents must be non-negative.")
     fee_cents = price_cents * PLATFORM_FEE_PCT // 100
     agent_cents = price_cents - fee_cents
 
     with _conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        refund_exists = conn.execute(
+            """
+            SELECT 1
+            FROM transactions
+            WHERE related_tx_id = ? AND type = 'refund'
+            LIMIT 1
+            """,
+            (charge_tx_id,),
+        ).fetchone()
+        if refund_exists is not None:
+            return
         try:
             _insert_tx(
                 conn, agent_wallet_id, "payout", agent_cents, agent_id,
@@ -335,7 +374,21 @@ def post_call_refund(
     Transaction 2b (failure): refund full price to caller.
     Links to original charge via related_tx_id for audit trail.
     """
+    if price_cents < 0:
+        raise ValueError("price_cents must be non-negative.")
     with _conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        payout_exists = conn.execute(
+            """
+            SELECT 1
+            FROM transactions
+            WHERE related_tx_id = ? AND type IN ('payout', 'fee')
+            LIMIT 1
+            """,
+            (charge_tx_id,),
+        ).fetchone()
+        if payout_exists is not None:
+            return
         try:
             _insert_tx(
                 conn, caller_wallet_id, "refund", price_cents, agent_id,
@@ -343,6 +396,123 @@ def post_call_refund(
             )
         except sqlite3.IntegrityError:
             pass  # idempotency: refund already recorded
+
+
+def get_caller_trust(owner_id: str) -> float:
+    wallet = get_or_create_wallet(owner_id)
+    try:
+        value = float(wallet.get("caller_trust", 0.5))
+    except (TypeError, ValueError):
+        value = 0.5
+    return max(0.0, min(1.0, value))
+
+
+def adjust_caller_trust(owner_id: str, *, delta: float, reason: str, related_id: str | None = None) -> dict:
+    normalized_owner_id = str(owner_id or "").strip()
+    if not normalized_owner_id:
+        raise ValueError("owner_id must be a non-empty string.")
+    normalized_reason = str(reason or "").strip() or "manual"
+    with _conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        wallet = conn.execute(
+            "SELECT wallet_id, caller_trust FROM wallets WHERE owner_id = ?",
+            (normalized_owner_id,),
+        ).fetchone()
+        if wallet is None:
+            conn.execute(
+                "INSERT INTO wallets (wallet_id, owner_id, balance_cents, caller_trust, created_at) VALUES (?, ?, 0, 0.5, ?)",
+                (str(uuid.uuid4()), normalized_owner_id, _now()),
+            )
+            before = 0.5
+        else:
+            before = float(wallet["caller_trust"] if wallet["caller_trust"] is not None else 0.5)
+        after = max(0.0, min(1.0, before + float(delta)))
+        conn.execute(
+            "UPDATE wallets SET caller_trust = ? WHERE owner_id = ?",
+            (after, normalized_owner_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO caller_trust_events
+                (event_id, owner_id, delta, before_value, after_value, reason, related_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid.uuid4()),
+                normalized_owner_id,
+                float(delta),
+                before,
+                after,
+                normalized_reason,
+                str(related_id).strip() if related_id else None,
+                _now(),
+            ),
+        )
+    return {"owner_id": normalized_owner_id, "before": before, "after": after, "delta": float(delta)}
+
+
+def adjust_caller_trust_once(
+    owner_id: str,
+    *,
+    delta: float,
+    reason: str,
+    related_id: str,
+) -> dict:
+    with _conn() as conn:
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM caller_trust_events
+            WHERE owner_id = ? AND reason = ? AND related_id = ?
+            LIMIT 1
+            """,
+            (owner_id, reason, related_id),
+        ).fetchone()
+    if row is not None:
+        current = get_caller_trust(owner_id)
+        return {"owner_id": owner_id, "before": current, "after": current, "delta": 0.0}
+    return adjust_caller_trust(owner_id, delta=delta, reason=reason, related_id=related_id)
+
+
+def record_judge_fee(
+    platform_wallet_id: str,
+    judge_wallet_id: str,
+    *,
+    charge_tx_id: str,
+    agent_id: str,
+    fee_cents: int,
+) -> None:
+    if fee_cents <= 0:
+        return
+    with _conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        existing = conn.execute(
+            """
+            SELECT 1 FROM transactions
+            WHERE related_tx_id = ? AND wallet_id = ? AND type = 'fee'
+            LIMIT 1
+            """,
+            (f"judge_fee:{charge_tx_id}", judge_wallet_id),
+        ).fetchone()
+        if existing is not None:
+            return
+        _debit_wallet_conn(
+            conn,
+            platform_wallet_id,
+            fee_cents,
+            agent_id=agent_id,
+            related_tx_id=f"judge_fee:{charge_tx_id}",
+            memo=f"Quality judge fee for call {charge_tx_id[:8]}",
+        )
+        _credit_wallet_conn(
+            conn,
+            judge_wallet_id,
+            fee_cents,
+            tx_type="fee",
+            agent_id=agent_id,
+            related_tx_id=f"judge_fee:{charge_tx_id}",
+            memo=f"Quality judge fee receipt for call {charge_tx_id[:8]}",
+        )
 
 
 def _get_or_create_wallet_id_conn(conn: sqlite3.Connection, owner_id: str) -> str:

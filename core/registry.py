@@ -19,6 +19,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
+from typing import Any
 
 import numpy as np
 
@@ -43,6 +44,12 @@ _REQUIRED_COLUMNS = {
     "successful_calls",
     "tags",
     "input_schema",
+    "output_schema",
+    "output_verifier_url",
+    "internal_only",
+    "status",
+    "trust_decay_multiplier",
+    "last_decay_at",
     "created_at",
 }
 _EMBEDDING_CACHE_TTL_SECONDS = 60
@@ -105,6 +112,12 @@ def _create_agents_table(conn: sqlite3.Connection, table_name: str = "agents") -
                 successful_calls    INTEGER NOT NULL DEFAULT 0,
                 tags                TEXT NOT NULL DEFAULT '[]',
                 input_schema        TEXT NOT NULL DEFAULT '{{}}',
+                output_schema       TEXT NOT NULL DEFAULT '{{}}',
+                output_verifier_url TEXT,
+                internal_only       INTEGER NOT NULL DEFAULT 0,
+                status              TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','suspended','banned')),
+                trust_decay_multiplier REAL NOT NULL DEFAULT 1.0,
+                last_decay_at       TEXT NOT NULL DEFAULT '{_CANONICAL_CREATED_AT}',
                 created_at          TEXT NOT NULL
             )
         """)
@@ -191,6 +204,16 @@ def _needs_agents_migration(conn: sqlite3.Connection) -> bool:
         return True
     if cols["input_schema"]["dflt_value"] not in {"'{}'", '"{}"', "{}"}:
         return True
+    if cols["output_schema"]["dflt_value"] not in {"'{}'", '"{}"', "{}"}:
+        return True
+    if cols["internal_only"]["dflt_value"] != "0":
+        return True
+    if cols["status"]["dflt_value"] not in {"'active'", '"active"', "active"}:
+        return True
+    if cols["trust_decay_multiplier"]["dflt_value"] not in {"1", "1.0", "1.00"}:
+        return True
+    if cols["last_decay_at"]["notnull"] != 1:
+        return True
     if cols["created_at"]["notnull"] != 1:
         return True
     if not _has_unique_name_constraint(conn):
@@ -255,6 +278,10 @@ def _normalize_input_schema_json(raw_schema) -> str:
     return json.dumps(parsed)
 
 
+def _normalize_output_schema_json(raw_schema) -> str:
+    return _normalize_input_schema_json(raw_schema)
+
+
 def _parse_tags(raw_tags) -> list[str]:
     if isinstance(raw_tags, str):
         try:
@@ -279,6 +306,10 @@ def _parse_input_schema(raw_schema) -> dict:
     else:
         parsed = {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _parse_output_schema(raw_schema) -> dict:
+    return _parse_input_schema(raw_schema)
 
 
 def _build_embedding_source_text(name: str, description: str, tags: list[str], input_schema: dict) -> str:
@@ -430,6 +461,19 @@ def _normalize_legacy_agent_row(row: dict, used_agent_ids: set, used_names: set)
         successful_calls = total_calls
     tags = _normalize_tags_json(row.get("tags"))
     input_schema = _normalize_input_schema_json(row.get("input_schema"))
+    output_schema = _normalize_output_schema_json(row.get("output_schema"))
+    output_verifier_url = str(row.get("output_verifier_url") or "").strip() or None
+    try:
+        internal_only = 1 if int(row.get("internal_only") or 0) else 0
+    except (TypeError, ValueError):
+        internal_only = 0
+    status = str(row.get("status") or "active").strip().lower()
+    if status not in {"active", "suspended", "banned"}:
+        status = "active"
+    trust_decay_multiplier = _to_non_negative_float(row.get("trust_decay_multiplier"), default=1.0)
+    if trust_decay_multiplier <= 0:
+        trust_decay_multiplier = 1.0
+    last_decay_at = str(row.get("last_decay_at") or "").strip() or _CANONICAL_CREATED_AT
     created_at = str(row.get("created_at") or "").strip() or _CANONICAL_CREATED_AT
 
     return (
@@ -444,6 +488,12 @@ def _normalize_legacy_agent_row(row: dict, used_agent_ids: set, used_names: set)
         successful_calls,
         tags,
         input_schema,
+        output_schema,
+        output_verifier_url,
+        internal_only,
+        status,
+        trust_decay_multiplier,
+        last_decay_at,
         created_at,
     )
 
@@ -466,8 +516,9 @@ def _migrate_agents_table(conn: sqlite3.Connection) -> None:
             """
             INSERT INTO agents__canonical
                 (agent_id, owner_id, name, description, endpoint_url, price_per_call_usd,
-                 avg_latency_ms, total_calls, successful_calls, tags, input_schema, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 avg_latency_ms, total_calls, successful_calls, tags, input_schema,
+                 output_schema, output_verifier_url, internal_only, status, trust_decay_multiplier, last_decay_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             normalized,
         )
@@ -503,6 +554,17 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
         d["input_schema"] = parsed_schema if isinstance(parsed_schema, dict) else {}
     except (json.JSONDecodeError, TypeError):
         d["input_schema"] = {}
+    try:
+        parsed_output_schema = json.loads(d.get("output_schema") or "{}")
+        d["output_schema"] = parsed_output_schema if isinstance(parsed_output_schema, dict) else {}
+    except (json.JSONDecodeError, TypeError):
+        d["output_schema"] = {}
+    d["output_verifier_url"] = (d.get("output_verifier_url") or None)
+    d["internal_only"] = bool(int(d.get("internal_only") or 0))
+    status = str(d.get("status") or "active").strip().lower()
+    d["status"] = status if status in {"active", "suspended", "banned"} else "active"
+    d["trust_decay_multiplier"] = _to_non_negative_float(d.get("trust_decay_multiplier"), default=1.0) or 1.0
+    d["last_decay_at"] = str(d.get("last_decay_at") or _CANONICAL_CREATED_AT)
 
     total = d["total_calls"]
     successful = d.pop("successful_calls")
@@ -522,6 +584,11 @@ def register_agent(
     tags: list,
     agent_id: str | None = None,
     input_schema: dict | None = None,
+    output_schema: dict | None = None,
+    output_verifier_url: str | None = None,
+    internal_only: bool = False,
+    status: str = "active",
+    trust_decay_multiplier: float = 1.0,
     owner_id: str | None = None,
     embed_listing: bool = True,
 ) -> str:
@@ -547,8 +614,18 @@ def register_agent(
     created_at = datetime.now(timezone.utc).isoformat()
     normalized_tags = _parse_tags(tags)
     normalized_schema = _parse_input_schema(input_schema)
+    normalized_output_schema = _parse_output_schema(output_schema)
     schema_json = json.dumps(normalized_schema, sort_keys=True)
+    output_schema_json = json.dumps(normalized_output_schema, sort_keys=True)
     tags_json = json.dumps(normalized_tags)
+    normalized_verifier_url = str(output_verifier_url or "").strip() or None
+    normalized_status = str(status or "active").strip().lower()
+    if normalized_status not in {"active", "suspended", "banned"}:
+        raise ValueError("status must be one of: active, suspended, banned.")
+    normalized_decay_multiplier = _to_non_negative_float(trust_decay_multiplier, default=1.0)
+    if normalized_decay_multiplier <= 0:
+        normalized_decay_multiplier = 1.0
+    internal_only_int = 1 if internal_only else 0
     source_text = ""
     embedding_vector: list[float] | None = None
     if embed_listing:
@@ -559,11 +636,27 @@ def register_agent(
             """
             INSERT INTO agents
                 (agent_id, owner_id, name, description, endpoint_url,
-                 price_per_call_usd, tags, input_schema, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 price_per_call_usd, tags, input_schema, output_schema, output_verifier_url,
+                 internal_only, status, trust_decay_multiplier, last_decay_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (aid, normalized_owner_id, name, description, endpoint_url,
-              price, tags_json, schema_json, created_at),
+            (
+                aid,
+                normalized_owner_id,
+                name,
+                description,
+                endpoint_url,
+                price,
+                tags_json,
+                schema_json,
+                output_schema_json,
+                normalized_verifier_url,
+                internal_only_int,
+                normalized_status,
+                normalized_decay_multiplier,
+                created_at,
+                created_at,
+            ),
         )
         if embed_listing and embedding_vector is not None:
             _upsert_agent_embedding_row(
@@ -600,22 +693,57 @@ def update_call_stats(agent_id: str, latency_ms: float, success: bool) -> None:
 # Read operations
 # ---------------------------------------------------------------------------
 
-def get_agents(tag: str | None = None) -> list:
+def get_agents(tag: str | None = None, include_internal: bool = False, include_banned: bool = False) -> list:
     """
     Return all agent listings, optionally filtered by tag.
     Tag matching uses exact JSON-array membership to avoid substring false-positives.
     """
     with _conn() as conn:
+        where_clauses: list[str] = []
+        params: list[Any] = []
+        if not include_internal:
+            where_clauses.append("internal_only = 0")
+        if not include_banned:
+            where_clauses.append("status != 'banned'")
         if tag:
-            rows = conn.execute(
-                "SELECT * FROM agents WHERE tags LIKE ? ORDER BY created_at",
-                (f'%"{tag}"%',),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM agents ORDER BY created_at"
-            ).fetchall()
+            where_clauses.append("tags LIKE ?")
+            params.append(f'%"{tag}"%')
+        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+        rows = conn.execute(
+            f"SELECT * FROM agents {where_sql} ORDER BY created_at",
+            tuple(params),
+        ).fetchall()
     return [_row_to_dict(r) for r in rows]
+
+
+def set_agent_status(agent_id: str, status: str) -> dict | None:
+    normalized_status = str(status or "").strip().lower()
+    if normalized_status not in {"active", "suspended", "banned"}:
+        raise ValueError("status must be one of: active, suspended, banned.")
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE agents SET status = ? WHERE agent_id = ?",
+            (normalized_status, agent_id),
+        )
+    return get_agent(agent_id)
+
+
+def touch_agent_decay(agent_id: str, at_iso: str) -> None:
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE agents SET last_decay_at = ? WHERE agent_id = ?",
+            (str(at_iso or _CANONICAL_CREATED_AT), agent_id),
+        )
+
+
+def set_agent_decay_multiplier(agent_id: str, multiplier: float, at_iso: str) -> None:
+    parsed = _to_non_negative_float(multiplier, default=1.0)
+    parsed = max(0.0, min(1.0, parsed))
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE agents SET trust_decay_multiplier = ?, last_decay_at = ? WHERE agent_id = ?",
+            (parsed, str(at_iso or _CANONICAL_CREATED_AT), agent_id),
+        )
 
 
 def get_agent(agent_id: str) -> dict | None:

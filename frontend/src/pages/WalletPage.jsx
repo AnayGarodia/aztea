@@ -4,10 +4,12 @@ import Card from '../ui/Card'
 import Button from '../ui/Button'
 import Badge from '../ui/Badge'
 import EmptyState from '../ui/EmptyState'
+import Input from '../ui/Input'
 import SpendChart from '../features/analytics/SpendChart'
 import { depositToWallet } from '../api'
 import { useMarket } from '../context/MarketContext'
 import { ArrowDownLeft, ArrowUpRight, Plus } from 'lucide-react'
+import './WalletPage.css'
 
 function fmtUsd(cents) {
   if (typeof cents !== 'number') return '--'
@@ -28,45 +30,16 @@ function TxRow({ tx }) {
   const Icon = isCredit ? ArrowDownLeft : ArrowUpRight
 
   return (
-    <div style={{
-      display: 'grid',
-      gridTemplateColumns: 'auto 1fr auto auto',
-      gap: 'var(--sp-3)',
-      alignItems: 'center',
-      padding: '12px 0',
-      borderBottom: '1px solid var(--line)',
-    }}>
-      {/* Icon */}
-      <div style={{
-        width: 32, height: 32, borderRadius: '50%',
-        background: isCredit ? 'var(--positive-wash)' : 'var(--negative-wash)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-      }}>
+    <div className="wallet__tx-row">
+      <div className="wallet__tx-icon" style={{ background: isCredit ? 'var(--positive-wash)' : 'var(--negative-wash)' }}>
         <Icon size={14} color={color} />
       </div>
-
-      {/* Description */}
-      <div style={{ minWidth: 0 }}>
-        <p style={{ fontSize: '0.875rem', fontWeight: 500, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {tx.memo || tx.type}
-        </p>
-        <p style={{ fontSize: '0.75rem', color: 'var(--ink-mute)' }}>
-          {fmtDate(tx.created_at)}
-        </p>
+      <div>
+        <p className="wallet__tx-memo">{tx.memo || tx.type}</p>
+        <p className="wallet__tx-date">{fmtDate(tx.created_at)}</p>
       </div>
-
-      {/* Type badge */}
       <Badge label={tx.type} />
-
-      {/* Amount */}
-      <span style={{
-        fontFamily: 'var(--font-mono)',
-        fontSize: '0.9375rem',
-        fontWeight: 600,
-        color,
-        fontFeatureSettings: '"tnum"',
-        whiteSpace: 'nowrap',
-      }}>
+      <span className="wallet__tx-amount" style={{ color }}>
         {sign}{fmtUsd(Math.abs(tx.amount_cents))}
       </span>
     </div>
@@ -79,6 +52,7 @@ export default function WalletPage() {
   const [loading, setLoading] = useState(false)
 
   const transactions = wallet?.transactions ?? []
+  const lowBalance = (wallet?.balance_cents ?? 0) < 500
 
   const handleDeposit = async (e) => {
     e.preventDefault()
@@ -92,7 +66,7 @@ export default function WalletPage() {
     try {
       await depositToWallet(apiKey, wallet.wallet_id, cents, 'Dashboard deposit')
       await refreshWallet?.()
-      showToast?.('Funds added.', 'success')
+      showToast?.('Funds added to wallet.', 'success')
       setAmount('10')
     } catch (err) {
       showToast?.(err?.message ?? 'Deposit failed.', 'error')
@@ -102,145 +76,106 @@ export default function WalletPage() {
   }
 
   return (
-    <main style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
+    <main className="wallet">
       <Topbar crumbs={[{ label: 'Wallet' }]} />
 
-      <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--sp-6)' }}>
+      <div className="wallet__scroll">
+        <div className="wallet__content">
+          <header className="wallet__header">
+            <div>
+              <p className="wallet__eyebrow">Settlement + trust</p>
+              <h1>Wallet</h1>
+              <p>All charges, refunds, and payouts are visible here. Keep enough balance for uninterrupted calls.</p>
+            </div>
+            <div>
+              <p className="wallet__balance">{fmtUsd(wallet?.balance_cents)}</p>
+              {wallet?.wallet_id && <p className="wallet__wallet-id">{wallet.wallet_id}</p>}
+            </div>
+          </header>
 
-        {/* Balance hero */}
-        <div style={{ marginBottom: 'var(--sp-7)' }}>
-          <p style={{
-            fontSize: '0.6875rem', fontWeight: 600, letterSpacing: '0.07em',
-            textTransform: 'uppercase', color: 'var(--ink-mute)', marginBottom: 'var(--sp-2)',
-          }}>
-            Available balance
-          </p>
-          <p style={{
-            fontFamily: 'var(--font-mono)',
-            fontSize: 'clamp(2.5rem, 6vw, 3.75rem)',
-            fontWeight: 500,
-            color: 'var(--ink)',
-            letterSpacing: '-0.03em',
-            fontFeatureSettings: '"tnum"',
-            lineHeight: 1,
-          }}>
-            {fmtUsd(wallet?.balance_cents)}
-          </p>
-          {wallet?.wallet_id && (
-            <p style={{ marginTop: 8, fontSize: '0.75rem', color: 'var(--ink-mute)', fontFamily: 'var(--font-mono)' }}>
-              {wallet.wallet_id}
+          <section className={`wallet__trust ${lowBalance ? 'wallet__trust--warn' : ''}`}>
+            <p>
+              {lowBalance
+                ? 'Balance is low. Add funds to avoid failed pre-call charges.'
+                : 'Healthy balance. Calls can be charged and settled automatically.'}
             </p>
-          )}
-        </div>
+            <div className="wallet__trust-badges">
+              <Badge label="Charge before run" dot />
+              <Badge label="Auto payout to agent" dot />
+              <Badge label="Refund on failure" dot />
+            </div>
+          </section>
 
-        <div style={{ display: 'grid', gap: 'var(--sp-5)', gridTemplateColumns: '300px 1fr', alignItems: 'start' }}>
-
-          {/* Add funds */}
-          <Card>
-            <Card.Header>
-              <span style={{ fontWeight: 600, fontSize: '0.9375rem' }}>Add funds</span>
-            </Card.Header>
-            <Card.Body>
-              <form onSubmit={handleDeposit} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' }}>
-                <div>
-                  <p style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--ink-soft)', marginBottom: 'var(--sp-1)' }}>
-                    Amount (USD)
-                  </p>
-                  <div style={{ position: 'relative' }}>
-                    <span style={{
-                      position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)',
-                      color: 'var(--ink-mute)', fontSize: '0.875rem', pointerEvents: 'none',
-                    }}>
-                      $
-                    </span>
-                    <input
-                      type="number"
-                      min="0.01"
-                      step="0.01"
-                      value={amount}
-                      onChange={e => setAmount(e.target.value)}
-                      required
-                      style={{
-                        width: '100%', height: 42, paddingLeft: 26, paddingRight: 'var(--sp-3)',
-                        fontFamily: 'var(--font-mono)', fontSize: '1.125rem', fontWeight: 500,
-                        color: 'var(--ink)', background: 'var(--surface)',
-                        border: '1px solid var(--line)', borderRadius: 'var(--r-sm)',
-                        outline: 'none', fontFeatureSettings: '"tnum"',
-                        transition: 'border-color var(--duration-sm)',
-                      }}
-                      onFocus={e => { e.target.style.borderColor = 'var(--accent-line)'; e.target.style.boxShadow = 'var(--focus-ring)' }}
-                      onBlur={e => { e.target.style.borderColor = 'var(--line)'; e.target.style.boxShadow = 'none' }}
-                    />
-                  </div>
-                </div>
-
-                {/* Quick amounts */}
-                <div style={{ display: 'flex', gap: 'var(--sp-2)' }}>
-                  {['5', '10', '25', '100'].map(v => (
-                    <button
-                      key={v}
-                      type="button"
-                      onClick={() => setAmount(v)}
-                      style={{
-                        flex: 1, padding: '6px 0', fontSize: '0.8125rem', fontWeight: 500,
-                        color: amount === v ? 'var(--accent)' : 'var(--ink-soft)',
-                        background: amount === v ? 'var(--accent-wash)' : 'var(--canvas-sunk)',
-                        border: '1px solid',
-                        borderColor: amount === v ? 'var(--accent-line)' : 'var(--line)',
-                        borderRadius: 'var(--r-sm)',
-                        cursor: 'pointer',
-                        transition: 'all var(--duration-sm) var(--ease)',
-                        fontFamily: 'var(--font-mono)',
-                        fontFeatureSettings: '"tnum"',
-                      }}
-                    >
-                      ${v}
-                    </button>
-                  ))}
-                </div>
-
-                <Button type="submit" variant="primary" loading={loading} icon={<Plus size={14} />}>
-                  Add ${amount || '0'}
-                </Button>
-
-                <p style={{ fontSize: '0.75rem', color: 'var(--ink-mute)', lineHeight: 1.5 }}>
-                  In production, this connects to a payment processor. Funds are available immediately for agent calls.
-                </p>
-              </form>
-            </Card.Body>
-          </Card>
-
-          {/* Right column: chart + transactions stacked */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' }}>
-            {transactions.length > 0 && (
-              <Card>
-                <Card.Header>
-                  <span style={{ fontWeight: 600, fontSize: '0.9375rem' }}>14-day spend</span>
-                </Card.Header>
-                <Card.Body>
-                  <SpendChart transactions={transactions} />
-                </Card.Body>
-              </Card>
-            )}
-
+          <div className="wallet__grid">
             <Card>
               <Card.Header>
-                <span style={{ fontWeight: 600, fontSize: '0.9375rem' }}>
-                  Transactions {transactions.length > 0 && `(${transactions.length})`}
-                </span>
+                <span className="wallet__section-title">Add funds</span>
               </Card.Header>
               <Card.Body>
-                {transactions.length === 0 ? (
-                  <EmptyState title="No transactions" sub="Deposits and charges will appear here." />
-                ) : (
-                  <div>
-                    {transactions.map((tx, i) => (
-                      <TxRow key={tx.tx_id ?? i} tx={tx} />
+                <form onSubmit={handleDeposit} className="wallet__deposit-form">
+                  <Input
+                    label="Amount (USD)"
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    value={amount}
+                    onChange={e => setAmount(e.target.value)}
+                    required
+                    mono
+                    hint="Demo mode: funds are credited instantly."
+                  />
+
+                  <div className="wallet__quick-amounts">
+                    {['5', '10', '25', '100'].map(v => (
+                      <button
+                        key={v}
+                        type="button"
+                        onClick={() => setAmount(v)}
+                        className={amount === v ? 'wallet__quick-btn wallet__quick-btn--active' : 'wallet__quick-btn'}
+                      >
+                        ${v}
+                      </button>
                     ))}
                   </div>
-                )}
+
+                  <Button type="submit" variant="primary" loading={loading} icon={<Plus size={14} />}>
+                    Add {fmtUsd(Math.round((Number(amount) || 0) * 100))}
+                  </Button>
+                </form>
               </Card.Body>
             </Card>
+
+            <div className="wallet__right-col">
+              {transactions.length > 0 && (
+                <Card>
+                  <Card.Header>
+                    <span className="wallet__section-title">14-day spend</span>
+                  </Card.Header>
+                  <Card.Body>
+                    <SpendChart transactions={transactions} />
+                  </Card.Body>
+                </Card>
+              )}
+
+              <Card>
+                <Card.Header>
+                  <span className="wallet__section-title">
+                    Transactions {transactions.length > 0 && `(${transactions.length})`}
+                  </span>
+                </Card.Header>
+                <Card.Body>
+                  {transactions.length === 0 ? (
+                    <EmptyState title="No transactions yet" sub="Deposits, charges, payouts, and refunds appear here." />
+                  ) : (
+                    <div>
+                      {transactions.map((tx, i) => (
+                        <TxRow key={tx.tx_id ?? i} tx={tx} />
+                      ))}
+                    </div>
+                  )}
+                </Card.Body>
+              </Card>
+            </div>
           </div>
         </div>
       </div>

@@ -1,92 +1,131 @@
 .agent-card {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 20px;
   background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--r-lg);
+  border: 2px solid var(--line);
+  border-radius: var(--r-xl);
   cursor: pointer;
   text-decoration: none;
   color: inherit;
-  position: relative;
   overflow: hidden;
-  transition:
-    border-color var(--duration-md) var(--ease),
-    background var(--duration-md) var(--ease),
-    transform var(--duration-md) var(--ease);
-}
-/* Green glow on hover */
-.agent-card::before {
-  content: '';
-  position: absolute;
-  top: 0; left: 0; right: 0;
-  height: 2px;
-  background: var(--accent);
-  opacity: 0;
-  transition: opacity var(--duration-md) var(--ease);
+  transition: transform var(--duration-md) var(--ease);
+  user-select: none;
 }
 .agent-card:hover {
-  background: var(--surface-hover);
+  transform: translateY(-4px);
   border-color: var(--line-strong);
-  transform: translateY(-2px);
 }
-.agent-card:hover::before {
-  opacity: 1;
+.agent-card:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* Character display area (top half) */
+.agent-card__char-area {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-6) var(--sp-5) var(--sp-4);
+  background: var(--canvas);
+}
+
+/* Info section (bottom half) */
+.agent-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: var(--sp-4) var(--sp-5) var(--sp-5);
+  flex: 1;
 }
 
 .agent-card__header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
-}
-.agent-card__identity {
-  display: flex;
-  align-items: center;
   gap: 10px;
-  min-width: 0;
 }
+
 .agent-card__name {
-  font-weight: 700;
+  font-weight: 800;
   font-size: 0.9375rem;
   color: var(--ink);
   line-height: 1.3;
-  letter-spacing: -0.01em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 1;
 }
+
 .agent-card__price {
   font-family: var(--font-mono);
   font-size: 0.75rem;
   font-weight: 700;
-  color: var(--accent);
   white-space: nowrap;
   font-feature-settings: 'tnum';
   flex-shrink: 0;
-  background: var(--accent-wash);
-  border: 1px solid var(--accent-line);
+  border: 2px solid;
   border-radius: var(--r-sm);
-  padding: 2px 7px;
+  padding: 2px 8px;
 }
+
 .agent-card__desc {
   font-size: 0.8125rem;
   color: var(--ink-soft);
   line-height: 1.55;
-  flex: 1;
+  font-weight: 500;
+  /* Clamp to 2 lines */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
+
 .agent-card__tags {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
 }
+
+/* XP bar */
+.agent-card__xp {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.agent-card__xp-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.agent-card__xp-label {
+  font-size: 0.6875rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-mute);
+}
+.agent-card__xp-pct {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+.agent-card__xp-track {
+  width: 100%;
+  height: 10px;
+  background: var(--canvas-sunk);
+  border-radius: var(--r-pill);
+  overflow: hidden;
+}
+.agent-card__xp-fill {
+  height: 100%;
+  border-radius: var(--r-pill);
+}
+
 .agent-card__meta {
   display: flex;
-  align-items: center;
   gap: 20px;
-  padding-top: 12px;
-  border-top: 1px solid var(--line);
+  padding-top: 8px;
+  border-top: 2px solid var(--line);
   margin-top: auto;
 }
 .agent-card__meta-item {
@@ -94,9 +133,13 @@
   flex-direction: column;
   gap: 2px;
 }
+.agent-card__meta-item--cta {
+  margin-left: auto;
+  justify-content: flex-end;
+}
 .agent-card__meta-val {
   font-family: var(--font-mono);
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   font-weight: 700;
   color: var(--ink);
   font-feature-settings: 'tnum';
@@ -106,5 +149,5 @@
   color: var(--ink-mute);
   text-transform: uppercase;
   letter-spacing: 0.07em;
-  font-weight: 700;
+  font-weight: 800;
 }

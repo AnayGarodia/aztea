@@ -8,9 +8,9 @@ import './Sidebar.css'
 
 const NAV = [
   { to: '/overview', icon: <LayoutDashboard size={16} />, label: 'Overview' },
-  { to: '/agents',   icon: <Bot size={16} />,             label: 'Agents' },
-  { to: '/jobs',     icon: <Briefcase size={16} />,       label: 'Jobs' },
-  { to: '/wallet',   icon: <Wallet size={16} />,          label: 'Wallet' },
+  { to: '/agents',   icon: <Bot size={16} />,             label: 'Discover agents' },
+  { to: '/jobs',     icon: <Briefcase size={16} />,       label: 'Monitor jobs' },
+  { to: '/wallet',   icon: <Wallet size={16} />,          label: 'Wallet & trust' },
   { to: '/settings', icon: <Settings size={16} />,        label: 'Settings' },
 ]
 
@@ -32,6 +32,10 @@ export default function Sidebar() {
       </NavLink>
 
       <nav className="sidebar__nav">
+        <div className="sidebar__guide">
+          <p className="sidebar__guide-title">Launch path</p>
+          <p className="sidebar__guide-copy">Discover agents → run calls/jobs → track outcomes → keep wallet funded.</p>
+        </div>
         {NAV.map(({ to, icon, label }) => (
           <NavLink
             key={to}
@@ -47,7 +51,7 @@ export default function Sidebar() {
 
         {agents.length > 0 && (
           <div className="sidebar__agents-strip">
-            <p className="sidebar__agents-title">City pulse</p>
+            <p className="sidebar__agents-title">Live agents</p>
             <div className="sidebar__agents-list">
               {agents.slice(0, 4).map((agent) => (
                 <button

@@ -306,8 +306,8 @@ def test_min_caller_trust_gates_job_creation(client):
         json={"agent_id": agent_id, "input_payload": {"task": "x"}, "max_attempts": 2},
     )
     assert create.status_code == 403, create.text
-    detail = create.json()["detail"]
-    assert detail["error"] == "CALLER_TRUST_BELOW_MINIMUM"
+    error = create.json()
+    assert error["error"] == "UNAUTHORIZED"
 
 
 def test_clawback_moves_settled_payout_into_escrow(client):

@@ -5,7 +5,7 @@
 }
 .input-label {
   font-size: 0.75rem;
-  font-weight: 600;
+  font-weight: 800;
   color: var(--ink-soft);
   letter-spacing: 0.01em;
 }
@@ -41,8 +41,8 @@
   font-size: 0.875rem;
   color: var(--ink);
   background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
+  border: 2px solid var(--line);
+  border-radius: var(--r-md);
   outline: none;
   transition: border-color var(--duration-sm) var(--ease), background var(--duration-sm) var(--ease);
   box-sizing: border-box;

@@ -34,7 +34,8 @@ export default function Topbar({ crumbs = [] }) {
           aria-label={`Wallet balance: ${fmtBalance(balance)}`}
         >
           <span className="topbar__balance-dot" />
-          {fmtBalance(balance)}
+          <span className="topbar__balance-label">Balance</span>
+          <span>{fmtBalance(balance)}</span>
         </Link>
       </div>
     </header>

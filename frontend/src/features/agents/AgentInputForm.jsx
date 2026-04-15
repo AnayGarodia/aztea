@@ -37,6 +37,7 @@ function deriveFields(schema) {
 
 export default function AgentInputForm({ agent, onSubmit, loading, mode, onModeChange }) {
   const fields = useMemo(() => deriveFields(agent?.input_schema), [agent])
+  const requiredCount = useMemo(() => fields.filter(f => f.required).length, [fields])
   const [values, setValues] = useState(() =>
     Object.fromEntries(fields.map(f => [f.name, f.default ?? '']))
   )
@@ -63,6 +64,12 @@ export default function AgentInputForm({ agent, onSubmit, loading, mode, onModeC
 
   return (
     <form className="invoke-panel" onSubmit={handleSubmit}>
+      <p className="invoke-panel__intro">
+        {requiredCount > 0
+          ? `${requiredCount} required field${requiredCount > 1 ? 's' : ''} · review schema hints below before sending.`
+          : 'No required fields in schema. You can run with defaults or custom payload.'}
+      </p>
+
       {fields.length === 0 && (
         <p style={{ fontSize: '0.8125rem', color: 'var(--ink-mute)', padding: 'var(--sp-3)', background: 'var(--canvas-sunk)', borderRadius: 'var(--r-sm)', border: '1px solid var(--line)' }}>
           This agent has no defined input schema. Check its documentation.
@@ -115,6 +122,11 @@ export default function AgentInputForm({ agent, onSubmit, loading, mode, onModeC
       })}
 
       <Segmented options={MODE_OPTIONS} value={mode} onChange={onModeChange} />
+      <p className="invoke-panel__mode-help">
+        {mode === 'async'
+          ? 'Async queues a job you can monitor in Jobs.'
+          : 'Sync returns output immediately in this panel.'}
+      </p>
 
       <div className="invoke-panel__price-bar">
         <span className="invoke-panel__price-label">Cost per call</span>
@@ -129,7 +141,7 @@ export default function AgentInputForm({ agent, onSubmit, loading, mode, onModeC
         className="invoke-panel__submit"
         icon={mode === 'async' ? <Radio size={14} /> : <Zap size={14} />}
       >
-        {mode === 'async' ? `Queue job · ${price}` : `Invoke · ${price}`}
+        {mode === 'async' ? `Create async job · ${price}` : `Run now · ${price}`}
       </Button>
     </form>
   )

@@ -1,9 +1,7 @@
 .card {
   background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  box-shadow: var(--shadow-sm);
-  backdrop-filter: blur(14px);
+  border: 2px solid var(--line);
+  border-radius: var(--r-xl);
 }
 
 .card--flat { }
@@ -23,13 +21,13 @@
 }
 
 .card__header {
-  padding: 14px 20px;
-  border-bottom: 1px solid var(--line);
+  padding: 16px 20px;
+  border-bottom: 2px solid var(--line);
 }
 .card__body { padding: 20px; }
 .card__footer {
   padding: 12px 20px;
-  border-top: 1px solid var(--line);
+  border-top: 2px solid var(--line);
   background: var(--canvas-raised);
-  border-radius: 0 0 var(--r-md) var(--r-md);
+  border-radius: 0 0 var(--r-xl) var(--r-xl);
 }

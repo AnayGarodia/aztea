@@ -98,6 +98,11 @@ _CANONICAL_JOB_COLUMNS = (
     "last_retry_at",
     "timeout_count",
     "last_timeout_at",
+    "dispute_window_hours",
+    "dispute_outcome",
+    "judge_agent_id",
+    "judge_verdict",
+    "quality_score",
 )
 
 _REQUIRED_JOB_COLUMNS = set(_CANONICAL_JOB_COLUMNS)
@@ -321,7 +326,12 @@ def _create_jobs_table(conn: sqlite3.Connection, table_name: str = "jobs") -> No
             next_retry_at       TEXT,
             last_retry_at       TEXT,
             timeout_count       INTEGER NOT NULL DEFAULT 0 CHECK(timeout_count >= 0),
-            last_timeout_at     TEXT
+            last_timeout_at     TEXT,
+            dispute_window_hours INTEGER NOT NULL DEFAULT 72 CHECK(dispute_window_hours >= 1),
+            dispute_outcome      TEXT,
+            judge_agent_id       TEXT,
+            judge_verdict        TEXT,
+            quality_score        INTEGER
         )
     """)
 
@@ -475,6 +485,15 @@ def _normalize_legacy_job_row(row: dict, used_job_ids: set[str]) -> tuple:
 
     timeout_count = _to_non_negative_int(row.get("timeout_count"), default=0)
     last_timeout_at = _clean_optional_text(row.get("last_timeout_at"))
+    dispute_window_hours = max(1, _to_non_negative_int(row.get("dispute_window_hours"), default=72))
+    dispute_outcome = _clean_optional_text(row.get("dispute_outcome"))
+    judge_agent_id = _clean_optional_text(row.get("judge_agent_id"))
+    judge_verdict = _clean_optional_text(row.get("judge_verdict"))
+    quality_score = row.get("quality_score")
+    try:
+        parsed_quality_score = int(quality_score) if quality_score is not None else None
+    except (TypeError, ValueError):
+        parsed_quality_score = None
 
     if claim_owner_id is None:
         claim_token = None
@@ -520,6 +539,11 @@ def _normalize_legacy_job_row(row: dict, used_job_ids: set[str]) -> tuple:
         last_retry_at,
         timeout_count,
         last_timeout_at,
+        dispute_window_hours,
+        dispute_outcome,
+        judge_agent_id,
+        judge_verdict,
+        parsed_quality_score,
     )
 
 
@@ -530,22 +554,38 @@ def _migrate_jobs_table(conn: sqlite3.Connection) -> None:
         f"SELECT rowid AS _legacy_rowid, * FROM jobs ORDER BY {order_by}"
     ).fetchall()
 
-    conn.execute("DROP TABLE IF EXISTS jobs__canonical")
-    _create_jobs_table(conn, table_name="jobs__canonical")
+    fk_row = conn.execute("PRAGMA foreign_keys").fetchone()
+    fk_enabled = bool(fk_row and int(fk_row[0]) == 1)
+    if fk_enabled:
+        conn.execute("PRAGMA foreign_keys=OFF")
 
-    cols_sql = ", ".join(_CANONICAL_JOB_COLUMNS)
-    placeholders = ", ".join(["?"] * len(_CANONICAL_JOB_COLUMNS))
+    try:
+        conn.execute("DROP TABLE IF EXISTS jobs__canonical")
+        _create_jobs_table(conn, table_name="jobs__canonical")
 
-    used_job_ids: set[str] = set()
-    for row in legacy_rows:
-        normalized = _normalize_legacy_job_row(dict(row), used_job_ids)
-        conn.execute(
-            f"INSERT INTO jobs__canonical ({cols_sql}) VALUES ({placeholders})",
-            normalized,
-        )
+        cols_sql = ", ".join(_CANONICAL_JOB_COLUMNS)
+        placeholders = ", ".join(["?"] * len(_CANONICAL_JOB_COLUMNS))
 
-    conn.execute("DROP TABLE jobs")
-    conn.execute("ALTER TABLE jobs__canonical RENAME TO jobs")
+        used_job_ids: set[str] = set()
+        for row in legacy_rows:
+            normalized = _normalize_legacy_job_row(dict(row), used_job_ids)
+            conn.execute(
+                f"INSERT INTO jobs__canonical ({cols_sql}) VALUES ({placeholders})",
+                normalized,
+            )
+
+        conn.execute("DROP TABLE jobs")
+        conn.execute("ALTER TABLE jobs__canonical RENAME TO jobs")
+    except Exception:
+        conn.execute("DROP TABLE IF EXISTS jobs__canonical")
+        raise
+    finally:
+        if fk_enabled:
+            conn.execute("PRAGMA foreign_keys=ON")
+
+    violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+    if violations:
+        raise sqlite3.IntegrityError("jobs migration introduced foreign key violations.")
 
 
 def init_jobs_db() -> None:
@@ -579,6 +619,8 @@ def create_job(
     input_payload: dict,
     agent_owner_id: str | None = None,
     max_attempts: int = 3,
+    dispute_window_hours: int = 72,
+    judge_agent_id: str | None = None,
 ) -> dict:
     if price_cents < 0:
         raise ValueError("price_cents must be non-negative.")
@@ -586,6 +628,9 @@ def create_job(
     parsed_max_attempts = _to_non_negative_int(max_attempts, default=0)
     if parsed_max_attempts < 1:
         raise ValueError("max_attempts must be >= 1.")
+    parsed_dispute_window_hours = _to_non_negative_int(dispute_window_hours, default=0)
+    if parsed_dispute_window_hours < 1:
+        raise ValueError("dispute_window_hours must be >= 1.")
 
     owner_id = (agent_owner_id or f"agent:{agent_id}").strip()
     if not owner_id:
@@ -600,8 +645,8 @@ def create_job(
             INSERT INTO jobs
               (job_id, agent_id, agent_owner_id, caller_owner_id, caller_wallet_id,
                agent_wallet_id, platform_wallet_id, status, price_cents, charge_tx_id,
-               input_payload, created_at, updated_at, max_attempts)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               input_payload, created_at, updated_at, max_attempts, dispute_window_hours, judge_agent_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job_id,
@@ -618,6 +663,8 @@ def create_job(
                 now,
                 now,
                 parsed_max_attempts,
+                parsed_dispute_window_hours,
+                _clean_optional_text(judge_agent_id),
             ),
         )
     return get_job(job_id)
@@ -1074,6 +1121,7 @@ def mark_job_timeout(
     job_id: str,
     retry_delay_seconds: int = 0,
     error_message: str = "Job lease expired before completion.",
+    allow_retry: bool = True,
 ) -> dict | None:
     if retry_delay_seconds < 0:
         raise ValueError("retry_delay_seconds must be >= 0.")
@@ -1106,7 +1154,7 @@ def mark_job_timeout(
         retry_count = _to_non_negative_int(raw.get("retry_count"), default=0) + 1
         timeout_count = _to_non_negative_int(raw.get("timeout_count"), default=0) + 1
 
-        can_retry = attempt_count < max_attempts
+        can_retry = allow_retry and attempt_count < max_attempts
         next_status = "pending" if can_retry else "failed"
         next_retry_at = (now_dt + timedelta(seconds=retry_delay_seconds)).isoformat() if can_retry else None
         completed_at = None if can_retry else (_clean_optional_text(raw.get("completed_at")) or now)
@@ -1155,6 +1203,7 @@ def mark_job_timeout(
                 "status_after": next_status,
                 "retry_count": retry_count,
                 "timeout_count": timeout_count,
+                "allow_retry": bool(allow_retry),
             },
             created_at=now,
         )
@@ -1616,6 +1665,40 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     d["input_payload"] = _decode_json(d.get("input_payload"), default={})
     d["output_payload"] = _decode_json(d.get("output_payload"), default=None)
     return d
+
+
+def set_job_quality_result(job_id: str, *, judge_verdict: str, quality_score: int | None, judge_agent_id: str | None) -> dict | None:
+    now = _now()
+    with _conn() as conn:
+        conn.execute(
+            """
+            UPDATE jobs
+            SET judge_verdict = ?, quality_score = ?, judge_agent_id = ?, updated_at = ?
+            WHERE job_id = ?
+            """,
+            (
+                _clean_optional_text(judge_verdict),
+                int(quality_score) if quality_score is not None else None,
+                _clean_optional_text(judge_agent_id),
+                now,
+                job_id,
+            ),
+        )
+    return get_job(job_id)
+
+
+def set_job_dispute_outcome(job_id: str, outcome: str | None) -> dict | None:
+    now = _now()
+    with _conn() as conn:
+        conn.execute(
+            """
+            UPDATE jobs
+            SET dispute_outcome = ?, updated_at = ?
+            WHERE job_id = ?
+            """,
+            (_clean_optional_text(outcome), now, job_id),
+        )
+    return get_job(job_id)
 
 
 def _msg_to_dict(row: sqlite3.Row) -> dict:
