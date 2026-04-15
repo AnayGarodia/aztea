@@ -15,6 +15,9 @@ export default function AgentCard({ agent, index = 0 }) {
   const successPct = agent.success_rate != null ? Math.round(agent.success_rate * 100) : null
   const latency    = agent.avg_latency_ms != null ? `${(agent.avg_latency_ms / 1000).toFixed(1)}s` : '—'
   const calls      = agent.total_calls ?? 0
+  const matchReason = typeof agent.match_reason === 'string' && agent.match_reason.trim()
+    ? agent.match_reason.trim()
+    : ''
 
   const handleMouseEnter = () => {
     setIsHovered(true)
@@ -69,6 +72,11 @@ export default function AgentCard({ agent, index = 0 }) {
         </div>
 
         <p className="agent-card__desc">{agent.description || 'No description provided yet.'}</p>
+        {matchReason && (
+          <p className="agent-card__reason" title={matchReason}>
+            Match: {matchReason}
+          </p>
+        )}
 
         <div className="agent-card__tags">
           {(agent.tags ?? []).slice(0, 3).map(t => <Pill key={t} size="sm">{t}</Pill>)}

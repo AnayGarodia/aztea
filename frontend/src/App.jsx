@@ -9,6 +9,7 @@ import AgentsPage     from './pages/AgentsPage'
 import AgentDetailPage from './pages/AgentDetailPage'
 import JobsPage       from './pages/JobsPage'
 import JobDetailPage  from './pages/JobDetailPage'
+import WorkerPage     from './pages/WorkerPage'
 import WalletPage     from './pages/WalletPage'
 import SettingsPage   from './pages/SettingsPage'
 
@@ -47,6 +48,7 @@ function AuthedApp() {
           <Route path="/agents/:id" element={<AgentDetailPage />} />
           <Route path="/jobs"     element={<JobsPage />} />
           <Route path="/jobs/:id" element={<JobDetailPage />} />
+          <Route path="/worker"   element={<WorkerPage />} />
           <Route path="/wallet"   element={<WalletPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="*"         element={<Navigate to="/overview" replace />} />

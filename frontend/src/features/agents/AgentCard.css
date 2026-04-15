@@ -80,6 +80,19 @@
   overflow: hidden;
 }
 
+.agent-card__reason {
+  align-self: flex-start;
+  margin: 0;
+  padding: 3px 8px;
+  font-size: 0.6875rem;
+  line-height: 1.3;
+  font-weight: 700;
+  color: var(--ink-soft);
+  background: var(--canvas-sunk);
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+}
+
 .agent-card__tags {
   display: flex;
   flex-wrap: wrap;

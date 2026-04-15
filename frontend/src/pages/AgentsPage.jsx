@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import Topbar from '../layout/Topbar'
 import AgentCard from '../features/agents/AgentCard'
@@ -9,7 +9,7 @@ import Textarea from '../ui/Textarea'
 import Pill from '../ui/Pill'
 import Dialog from '../ui/Dialog'
 import Skeleton from '../ui/Skeleton'
-import { registerAgent } from '../api'
+import { registerAgent, searchAgents } from '../api'
 import { useMarket } from '../context/MarketContext'
 import { Plus, Search } from 'lucide-react'
 import './AgentsPage.css'
@@ -171,6 +171,52 @@ export default function AgentsPage() {
   const [search, setSearch] = useState('')
   const [activeTag, setActiveTag] = useState(ALL)
   const [showRegister, setShowRegister] = useState(false)
+  const [searchResults, setSearchResults] = useState([])
+  const [searchLoading, setSearchLoading] = useState(false)
+  const [searchError, setSearchError] = useState('')
+
+  useEffect(() => {
+    const query = search.trim()
+    setSearchError('')
+    if (!query) {
+      setSearchResults([])
+      setSearchLoading(false)
+      return
+    }
+
+    let cancelled = false
+    const timer = setTimeout(async () => {
+      setSearchLoading(true)
+      try {
+        const data = await searchAgents(apiKey, query)
+        if (cancelled) return
+        const normalized = (data?.results ?? []).map(item => {
+          const reasonFromList = Array.isArray(item?.match_reasons)
+            ? item.match_reasons.find(reason => typeof reason === 'string' && reason.trim())
+            : null
+          const matchReason = (typeof item?.match_reason === 'string' && item.match_reason.trim())
+            ? item.match_reason.trim()
+            : (reasonFromList || null)
+          return {
+            ...(item?.agent ?? {}),
+            match_reason: matchReason,
+          }
+        })
+        setSearchResults(normalized)
+      } catch (err) {
+        if (cancelled) return
+        setSearchResults([])
+        setSearchError(err?.message ?? 'Search failed.')
+      } finally {
+        if (!cancelled) setSearchLoading(false)
+      }
+    }, 250)
+
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [apiKey, search])
 
   const allTags = useMemo(() => {
     const s = new Set()
@@ -179,18 +225,12 @@ export default function AgentsPage() {
   }, [agents])
 
   const filtered = useMemo(() => {
-    const q = search.toLowerCase()
-    return agents.filter(a => {
-      const matchSearch = !q ||
-        a.name.toLowerCase().includes(q) ||
-        (a.description ?? '').toLowerCase().includes(q) ||
-        (a.tags ?? []).some(t => t.toLowerCase().includes(q))
-      const matchTag = activeTag === ALL || (a.tags ?? []).includes(activeTag)
-      return matchSearch && matchTag
-    })
-  }, [agents, search, activeTag])
+    const source = search.trim() ? searchResults : agents
+    return source.filter(a => activeTag === ALL || (a.tags ?? []).includes(activeTag))
+  }, [agents, search, searchResults, activeTag])
 
   const isFiltered = Boolean(search || activeTag !== ALL)
+  const listLoading = loading || searchLoading
 
   return (
     <main className="agents-page">
@@ -247,7 +287,7 @@ export default function AgentsPage() {
               value={search}
               onChange={e => setSearch(e.target.value)}
               iconLeft={<Search size={14} />}
-              hint="Tip: try tags like financial-research, code-review, or text-intel."
+              hint={searchError || 'Tip: try tags like financial-research, code-review, or text-intel.'}
             />
             <div className="agents-page__tag-row">
               <Pill interactive active={activeTag === ALL} onClick={() => setActiveTag(ALL)}>
@@ -261,7 +301,7 @@ export default function AgentsPage() {
             </div>
           </section>
 
-          {loading ? (
+          {listLoading ? (
             <div className="agents-page__grid">
               {[1, 2, 3, 4, 5, 6].map(i => <Skeleton key={i} variant="rect" height={212} />)}
             </div>

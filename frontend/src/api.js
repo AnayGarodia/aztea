@@ -1,8 +1,12 @@
 const RAW_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').trim()
 const BASE = (RAW_BASE || '/api').replace(/\/+$/, '')
+const PROTOCOL_VERSION = '1.0'
 
 function requestHeaders(key, { idempotencyKey } = {}) {
-  const out = { 'Content-Type': 'application/json' }
+  const out = {
+    'Content-Type': 'application/json',
+    'X-AgentMarket-Version': PROTOCOL_VERSION,
+  }
   if (key) out.Authorization = `Bearer ${key}`
   if (idempotencyKey) out['Idempotency-Key'] = idempotencyKey
   return out
@@ -152,6 +156,16 @@ export async function registerAgent(key, data) {
   return body
 }
 
+export async function searchAgents(key, query) {
+  const trimmed = String(query ?? '').trim()
+  const { body } = await request('/registry/search', {
+    method: 'POST',
+    key,
+    body: { query: trimmed },
+  })
+  return body
+}
+
 // ── Calls (sync) ──────────────────────────────────────────────────────────────
 
 export async function callAgent(key, agentId, payload) {
@@ -183,6 +197,26 @@ export async function fetchJobs(key, { limit = 50, status, cursor } = {}) {
   return body
 }
 
+export async function fetchAgentJobs(key, agentId, { limit = 50, status, cursor } = {}) {
+  const params = new URLSearchParams({ limit: String(limit) })
+  if (status) params.set('status', status)
+  if (cursor) params.set('cursor', cursor)
+  const { body } = await request(`/jobs/agent/${agentId}?${params.toString()}`, { key })
+  return body
+}
+
+export async function fetchAllAgentJobs(key, agentId, { status, pageSize = 100, maxPages = 5 } = {}) {
+  let cursor = null
+  const jobs = []
+  for (let page = 0; page < maxPages; page += 1) {
+    const data = await fetchAgentJobs(key, agentId, { limit: pageSize, status, cursor })
+    jobs.push(...(data.jobs ?? []))
+    cursor = data.next_cursor || null
+    if (!cursor) break
+  }
+  return { jobs, next_cursor: cursor }
+}
+
 export async function fetchAllJobs(key, { status, pageSize = 100, maxPages = 5 } = {}) {
   let cursor = null
   const jobs = []
@@ -197,6 +231,44 @@ export async function fetchAllJobs(key, { status, pageSize = 100, maxPages = 5 }
 
 export async function getJob(key, jobId) {
   const { body } = await request(`/jobs/${jobId}`, { key })
+  return body
+}
+
+export async function claimJob(key, jobId, leaseSeconds = 300) {
+  const { body } = await request(`/jobs/${jobId}/claim`, {
+    method: 'POST',
+    key,
+    body: { lease_seconds: leaseSeconds },
+  })
+  return body
+}
+
+export async function heartbeatJob(key, jobId, leaseSeconds = 300, claimToken) {
+  const { body } = await request(`/jobs/${jobId}/heartbeat`, {
+    method: 'POST',
+    key,
+    body: { lease_seconds: leaseSeconds, claim_token: claimToken || null },
+  })
+  return body
+}
+
+export async function completeJob(key, jobId, outputPayload, { claimToken, idempotencyKey } = {}) {
+  const { body } = await request(`/jobs/${jobId}/complete`, {
+    method: 'POST',
+    key,
+    body: { output_payload: outputPayload, claim_token: claimToken || null },
+    idempotencyKey,
+  })
+  return body
+}
+
+export async function failJob(key, jobId, errorMessage, { claimToken, idempotencyKey } = {}) {
+  const { body } = await request(`/jobs/${jobId}/fail`, {
+    method: 'POST',
+    key,
+    body: { error_message: errorMessage || null, claim_token: claimToken || null },
+    idempotencyKey,
+  })
   return body
 }
 
