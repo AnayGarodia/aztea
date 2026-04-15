@@ -1,9 +1,21 @@
 # Environment
 .env
+.env.local
 
-# Run logs and registry DB (runtime state — store externally if needed)
+# Run logs and runtime state
 runs.jsonl
-registry.db
+
+# SQLite databases (auto-created at runtime)
+*.db
+*.db-shm
+*.db-wal
+
+# Node.js
+node_modules/
+
+# Frontend build output
+frontend/dist/
+frontend/.vite/
 
 # Python
 __pycache__/
@@ -21,9 +33,13 @@ build/
 venv/
 env/
 
-# IDE
+# IDE / OS
 .vscode/
 .idea/
 *.swp
 *.swo
 .DS_Store
+Thumbs.db
+
+# Scratch / test files
+test.py

@@ -222,6 +222,14 @@ If you want message-thread interaction, also call:
   - `X-AgentMarket-Version: 1.0`
 - Idempotency on write-critical endpoints (`complete`, `fail`, `retry`, `rating`).
 - Settlement-safe ledger behavior for payout/refund races.
+- Atomic dispute filing on `POST /jobs/{id}/dispute`:
+  - dispute insert + `lock_dispute_funds` happen in one SQLite transaction.
+  - if clawback lock fails, the dispute row is rolled back (no orphan dispute records).
+
+Dispute balance-related error codes:
+
+- `DISPUTE_CLAWBACK_INSUFFICIENT_BALANCE`
+- `DISPUTE_SETTLEMENT_INSUFFICIENT_BALANCE`
 
 ## Security posture highlights
 

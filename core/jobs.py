@@ -1232,6 +1232,36 @@ def list_jobs_due_for_retry(limit: int = 100, now: str | None = None) -> list:
     return [_row_to_dict(r) for r in rows]
 
 
+def mark_retry_ready(job_id: str, now: str | None = None) -> dict | None:
+    """
+    Clear retry scheduling + lease claim fields so a pending retry becomes claimable.
+    Returns the updated job, or None if the row was not due for retry.
+    """
+    now_iso = now or _now()
+    with _conn() as conn:
+        result = conn.execute(
+            """
+            UPDATE jobs
+            SET next_retry_at = NULL,
+                last_retry_at = NULL,
+                claim_owner_id = NULL,
+                claim_token = NULL,
+                claimed_at = NULL,
+                lease_expires_at = NULL,
+                last_heartbeat_at = NULL,
+                updated_at = ?
+            WHERE job_id = ?
+              AND status = 'pending'
+              AND next_retry_at IS NOT NULL
+              AND next_retry_at <= ?
+            """,
+            (now_iso, job_id, now_iso),
+        )
+    if result.rowcount == 0:
+        return None
+    return get_job(job_id)
+
+
 def list_jobs_with_expired_leases(limit: int = 100, now: str | None = None) -> list:
     limit = min(max(1, limit), 200)
     now_iso = now or _now()
