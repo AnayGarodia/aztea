@@ -1,0 +1,309 @@
+#!/usr/bin/env python3
+"""stdio MCP server that exposes AgentMarket registry listings as tools."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import os
+import sys
+import threading
+from pathlib import Path
+from typing import Any
+
+import requests
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from core import mcp_manifest
+
+_LOG = logging.getLogger("agentmarket.mcp")
+_SERVER_NAME = "agentmarket-registry-mcp"
+_SERVER_VERSION = "0.1.0"
+_PROTOCOL_VERSION = "2024-11-05"
+_REQUEST_VERSION_HEADER = "X-AgentMarket-Version"
+_AGENTMARKET_PROTOCOL_VERSION = "1.0"
+
+
+class RegistryBridge:
+    def __init__(self, *, base_url: str, api_key: str, timeout_seconds: float = 10.0) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
+        self.timeout_seconds = max(1.0, float(timeout_seconds))
+        self._session = requests.Session()
+        self._lock = threading.Lock()
+        self._entries: list[dict[str, Any]] = []
+        self._manifest: dict[str, Any] = {
+            "tools": [],
+            "count": 0,
+            "generated_at": None,
+        }
+
+    def _headers(self) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self.api_key}",
+            _REQUEST_VERSION_HEADER: _AGENTMARKET_PROTOCOL_VERSION,
+            "Content-Type": "application/json",
+        }
+
+    def refresh(self) -> dict[str, Any]:
+        response = self._session.get(
+            f"{self.base_url}/registry/agents",
+            params={"include_reputation": "false"},
+            headers=self._headers(),
+            timeout=self.timeout_seconds,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        raw_agents = payload.get("agents")
+        agents = raw_agents if isinstance(raw_agents, list) else []
+        entries = mcp_manifest.build_mcp_tool_entries(agents)
+        manifest = mcp_manifest.build_mcp_manifest(agents)
+        with self._lock:
+            self._entries = entries
+            self._manifest = manifest
+        return manifest
+
+    def manifest(self) -> dict[str, Any]:
+        with self._lock:
+            return dict(self._manifest)
+
+    def tools(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [dict(entry["tool"]) for entry in self._entries]
+
+    def _agent_id_for_tool(self, tool_name: str) -> str | None:
+        with self._lock:
+            for entry in self._entries:
+                if entry["tool_name"] == tool_name:
+                    return entry["agent_id"]
+        return None
+
+    def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+        agent_id = self._agent_id_for_tool(tool_name)
+        if not agent_id:
+            return False, {"error": "TOOL_NOT_FOUND", "message": f"Unknown tool '{tool_name}'."}
+
+        try:
+            response = self._session.post(
+                f"{self.base_url}/registry/agents/{agent_id}/call",
+                headers=self._headers(),
+                json=arguments,
+                timeout=self.timeout_seconds,
+            )
+        except requests.RequestException as exc:
+            return False, {"error": "UPSTREAM_UNREACHABLE", "message": str(exc)}
+
+        content_type = str(response.headers.get("content-type") or "").lower()
+        parsed_body: Any
+        if "application/json" in content_type:
+            try:
+                parsed_body = response.json()
+            except ValueError:
+                parsed_body = {"raw_body": response.text}
+        else:
+            parsed_body = {"raw_body": response.text}
+
+        if response.ok:
+            if isinstance(parsed_body, dict):
+                return True, parsed_body
+            return True, {"result": parsed_body}
+        return False, {
+            "error": "TOOL_CALL_FAILED",
+            "status_code": response.status_code,
+            "response": parsed_body,
+        }
+
+
+class MCPStdioServer:
+    def __init__(self, bridge: RegistryBridge, refresh_seconds: int) -> None:
+        self.bridge = bridge
+        self.refresh_seconds = max(5, int(refresh_seconds))
+        self._write_lock = threading.Lock()
+
+    def _read_message(self) -> dict[str, Any] | None:
+        headers: dict[str, str] = {}
+        while True:
+            line = sys.stdin.buffer.readline()
+            if line == b"":
+                return None
+            if line in (b"\r\n", b"\n"):
+                break
+            decoded = line.decode("utf-8", errors="ignore").strip()
+            if ":" not in decoded:
+                continue
+            key, value = decoded.split(":", 1)
+            headers[key.strip().lower()] = value.strip()
+
+        content_length = headers.get("content-length")
+        if content_length is None:
+            raise ValueError("Missing Content-Length header.")
+        length = int(content_length)
+        body = sys.stdin.buffer.read(length)
+        if len(body) != length:
+            return None
+        return json.loads(body.decode("utf-8"))
+
+    def _write_message(self, payload: dict[str, Any]) -> None:
+        encoded = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        header = f"Content-Length: {len(encoded)}\r\n\r\n".encode("ascii")
+        with self._write_lock:
+            sys.stdout.buffer.write(header)
+            sys.stdout.buffer.write(encoded)
+            sys.stdout.buffer.flush()
+
+    def _jsonrpc_result(self, request_id: Any, result: dict[str, Any]) -> dict[str, Any]:
+        return {"jsonrpc": "2.0", "id": request_id, "result": result}
+
+    def _jsonrpc_error(
+        self, request_id: Any, code: int, message: str, data: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"code": code, "message": message}
+        if data:
+            payload["data"] = data
+        return {"jsonrpc": "2.0", "id": request_id, "error": payload}
+
+    def _initialize_result(self) -> dict[str, Any]:
+        return {
+            "protocolVersion": _PROTOCOL_VERSION,
+            "capabilities": {"tools": {"listChanged": False}},
+            "serverInfo": {"name": _SERVER_NAME, "version": _SERVER_VERSION},
+        }
+
+    def _format_tool_result(self, *, ok: bool, payload: dict[str, Any]) -> dict[str, Any]:
+        text = json.dumps(payload, ensure_ascii=False)
+        result: dict[str, Any] = {
+            "content": [{"type": "text", "text": text}],
+            "structuredContent": payload,
+        }
+        if not ok:
+            result["isError"] = True
+        return result
+
+    def _handle_request(self, request: dict[str, Any]) -> dict[str, Any] | None:
+        request_id = request.get("id")
+        method = request.get("method")
+        params = request.get("params")
+        if not isinstance(method, str):
+            return self._jsonrpc_error(request_id, -32600, "Invalid request method.")
+
+        if method == "initialize":
+            return self._jsonrpc_result(request_id, self._initialize_result())
+        if method == "ping":
+            return self._jsonrpc_result(request_id, {})
+        if method == "tools/list":
+            return self._jsonrpc_result(request_id, {"tools": self.bridge.tools()})
+        if method == "tools/call":
+            if not isinstance(params, dict):
+                return self._jsonrpc_error(request_id, -32602, "tools/call params must be an object.")
+            name = str(params.get("name") or "").strip()
+            if not name:
+                return self._jsonrpc_error(request_id, -32602, "tools/call requires a tool name.")
+            arguments = params.get("arguments")
+            if arguments is None:
+                arguments = {}
+            if not isinstance(arguments, dict):
+                return self._jsonrpc_error(
+                    request_id, -32602, "tools/call arguments must be a JSON object."
+                )
+            ok, payload = self.bridge.call_tool(name, arguments)
+            return self._jsonrpc_result(request_id, self._format_tool_result(ok=ok, payload=payload))
+
+        return self._jsonrpc_error(request_id, -32601, f"Method '{method}' not found.")
+
+    def _refresh_loop(self, stop_event: threading.Event) -> None:
+        while not stop_event.wait(self.refresh_seconds):
+            try:
+                self.bridge.refresh()
+            except Exception as exc:
+                _LOG.warning("Registry tool refresh failed: %s", exc)
+
+    def run(self) -> None:
+        stop_event = threading.Event()
+        refresh_thread = threading.Thread(
+            target=self._refresh_loop,
+            args=(stop_event,),
+            daemon=True,
+            name="agentmarket-mcp-refresh",
+        )
+        refresh_thread.start()
+        try:
+            while True:
+                try:
+                    message = self._read_message()
+                except Exception as exc:
+                    _LOG.warning("Failed to read MCP message: %s", exc)
+                    continue
+                if message is None:
+                    break
+                if not isinstance(message, dict):
+                    continue
+                if "id" not in message:
+                    continue  # notification
+                response = self._handle_request(message)
+                if response is not None:
+                    self._write_message(response)
+        finally:
+            stop_event.set()
+            refresh_thread.join(timeout=2)
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Expose AgentMarket registry as MCP tools over stdio.")
+    parser.add_argument(
+        "--base-url",
+        default=os.environ.get("AGENTMARKET_BASE_URL", "http://localhost:8000"),
+        help="AgentMarket HTTP base URL (default: AGENTMARKET_BASE_URL or http://localhost:8000).",
+    )
+    parser.add_argument(
+        "--api-key",
+        default=os.environ.get("AGENTMARKET_API_KEY", ""),
+        help="Caller API key (default: AGENTMARKET_API_KEY).",
+    )
+    parser.add_argument(
+        "--refresh-seconds",
+        type=int,
+        default=int(os.environ.get("AGENTMARKET_MCP_REFRESH_SECONDS", "60")),
+        help="Tool manifest refresh interval in seconds (default: 60).",
+    )
+    parser.add_argument(
+        "--timeout-seconds",
+        type=float,
+        default=float(os.environ.get("AGENTMARKET_MCP_TIMEOUT_SECONDS", "10")),
+        help="HTTP timeout for registry and tool calls (default: 10).",
+    )
+    parser.add_argument(
+        "--print-tools",
+        action="store_true",
+        help="Fetch and print current MCP tool manifest, then exit.",
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="[agentmarket-mcp] %(message)s")
+    args = _parse_args()
+    api_key = str(args.api_key or "").strip()
+    if not api_key:
+        raise SystemExit("Missing API key. Set AGENTMARKET_API_KEY or pass --api-key.")
+
+    bridge = RegistryBridge(
+        base_url=str(args.base_url or "").strip() or "http://localhost:8000",
+        api_key=api_key,
+        timeout_seconds=args.timeout_seconds,
+    )
+    bridge.refresh()
+
+    if args.print_tools:
+        print(json.dumps(bridge.manifest(), indent=2))
+        return
+
+    server = MCPStdioServer(bridge=bridge, refresh_seconds=args.refresh_seconds)
+    server.run()
+
+
+if __name__ == "__main__":
+    main()
