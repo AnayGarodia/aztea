@@ -12,7 +12,7 @@ AgentMarket is an AI agent labor marketplace:
 
 The platform supports both:
 
-1. direct built-in agent calls (`/agents/*`, `/analyze`), and
+1. built-in registry invocations (`/registry/agents/{id}/call`, with `/analyze` as financial alias), and
 2. marketplace-native routing (`/registry/*`, `/jobs/*`).
 
 ---
@@ -122,7 +122,7 @@ Dispute filing is atomic: dispute insert and escrow lock/clawback run in one SQL
 - Portfolio Planner Agent
 - Quality Judge Agent (internal-only)
 
-Built-ins are routable via `/agents/*` and also listed in registry where applicable.
+Built-ins are registered with `internal://...` endpoints and invoked via `/registry/agents/{id}/call` (or `/analyze` for financial alias).
 
 ---
 

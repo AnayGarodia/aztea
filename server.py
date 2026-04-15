@@ -34,6 +34,7 @@ from fastapi import Body, Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from pydantic import ValidationError
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 
@@ -118,7 +119,22 @@ _PRODUCT_AGENT_ID = "00000000-0000-0000-0000-000000000007"
 _PORTFOLIO_AGENT_ID = "00000000-0000-0000-0000-000000000008"
 _QUALITY_JUDGE_AGENT_ID = "00000000-0000-0000-0000-000000000009"
 
-_BUILTIN_PROXY_ENDPOINTS = {
+def _normalize_endpoint_ref(value: str | None) -> str:
+    return str(value or "").strip().rstrip("/")
+
+
+_BUILTIN_INTERNAL_ENDPOINTS = {
+    _FINANCIAL_AGENT_ID: "internal://financial",
+    _CODEREVIEW_AGENT_ID: "internal://code-review",
+    _TEXTINTEL_AGENT_ID: "internal://text-intel",
+    _WIKI_AGENT_ID: "internal://wiki",
+    _NEGOTIATION_AGENT_ID: "internal://negotiation",
+    _SCENARIO_AGENT_ID: "internal://scenario",
+    _PRODUCT_AGENT_ID: "internal://product-strategy",
+    _PORTFOLIO_AGENT_ID: "internal://portfolio",
+    _QUALITY_JUDGE_AGENT_ID: "internal://quality-judge",
+}
+_BUILTIN_LEGACY_ROUTE_ENDPOINTS = {
     _FINANCIAL_AGENT_ID: f"{_SERVER_BASE_URL}/agents/financial",
     _CODEREVIEW_AGENT_ID: f"{_SERVER_BASE_URL}/agents/code-review",
     _TEXTINTEL_AGENT_ID: f"{_SERVER_BASE_URL}/agents/text-intel",
@@ -129,22 +145,17 @@ _BUILTIN_PROXY_ENDPOINTS = {
     _PORTFOLIO_AGENT_ID: f"{_SERVER_BASE_URL}/agents/portfolio",
     _QUALITY_JUDGE_AGENT_ID: f"{_SERVER_BASE_URL}/agents/quality-judge",
 }
-_BUILTIN_PROXY_AUTH_URLS = {
-    _FINANCIAL_AGENT_ID: {
-        _BUILTIN_PROXY_ENDPOINTS[_FINANCIAL_AGENT_ID],
-        f"{_SERVER_BASE_URL}/analyze",  # legacy alias still present in existing registries
-    },
-    _CODEREVIEW_AGENT_ID: {_BUILTIN_PROXY_ENDPOINTS[_CODEREVIEW_AGENT_ID]},
-    _TEXTINTEL_AGENT_ID: {_BUILTIN_PROXY_ENDPOINTS[_TEXTINTEL_AGENT_ID]},
-    _WIKI_AGENT_ID: {_BUILTIN_PROXY_ENDPOINTS[_WIKI_AGENT_ID]},
-    _NEGOTIATION_AGENT_ID: {_BUILTIN_PROXY_ENDPOINTS[_NEGOTIATION_AGENT_ID]},
-    _SCENARIO_AGENT_ID: {_BUILTIN_PROXY_ENDPOINTS[_SCENARIO_AGENT_ID]},
-    _PRODUCT_AGENT_ID: {_BUILTIN_PROXY_ENDPOINTS[_PRODUCT_AGENT_ID]},
-    _PORTFOLIO_AGENT_ID: {_BUILTIN_PROXY_ENDPOINTS[_PORTFOLIO_AGENT_ID]},
-    _QUALITY_JUDGE_AGENT_ID: {_BUILTIN_PROXY_ENDPOINTS[_QUALITY_JUDGE_AGENT_ID]},
-}
-_BUILTIN_AGENT_IDS = frozenset(_BUILTIN_PROXY_ENDPOINTS.keys())
+_BUILTIN_ENDPOINT_TO_AGENT_ID: dict[str, str] = {}
+for _agent_id, _endpoint in _BUILTIN_INTERNAL_ENDPOINTS.items():
+    _BUILTIN_ENDPOINT_TO_AGENT_ID[_normalize_endpoint_ref(_endpoint)] = _agent_id
+    _legacy = _BUILTIN_LEGACY_ROUTE_ENDPOINTS.get(_agent_id)
+    if _legacy:
+        _BUILTIN_ENDPOINT_TO_AGENT_ID[_normalize_endpoint_ref(_legacy)] = _agent_id
+_BUILTIN_ENDPOINT_TO_AGENT_ID[_normalize_endpoint_ref(f"{_SERVER_BASE_URL}/analyze")] = _FINANCIAL_AGENT_ID
+_BUILTIN_AGENT_IDS = frozenset(_BUILTIN_INTERNAL_ENDPOINTS.keys())
 _BUILTIN_WORKER_OWNER_ID = "system:builtin-worker"
+_SYSTEM_USERNAME = "system"
+_SYSTEM_USER_EMAIL = "system@agentmarket.internal"
 
 _CALLER_CACHE_MISSING = object()
 _IDEMPOTENCY_KEY_HEADER = "Idempotency-Key"
@@ -505,357 +516,262 @@ def _init_ops_db() -> None:
 # Startup — register built-in agents
 # ---------------------------------------------------------------------------
 
-def _register_agents() -> None:
-    agents = [
+def _output_schema_object(properties: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
+    schema: dict[str, Any] = {"type": "object", "properties": dict(properties)}
+    if required:
+        schema["required"] = list(required)
+    return schema
+
+
+def _quality_judge_input_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "input_payload": {"type": "object"},
+            "output_payload": {"type": "object"},
+            "agent_description": {"type": "string"},
+        },
+        "required": ["input_payload", "output_payload"],
+    }
+
+
+def _builtin_agent_specs() -> list[dict[str, Any]]:
+    return [
         {
             "agent_id": _FINANCIAL_AGENT_ID,
             "name": "Financial Research Agent",
-            "description": (
-                "Fetches the most recent SEC 10-K or 10-Q for any public company "
-                "and returns a structured investment brief (signal, risks, highlights) "
-                "synthesized by an LLM."
-            ),
-            "endpoint_url": _BUILTIN_PROXY_ENDPOINTS[_FINANCIAL_AGENT_ID],
+            "description": "Fetches the latest SEC filing and returns a structured investment brief.",
+            "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_FINANCIAL_AGENT_ID],
             "price_per_call_usd": 0.01,
             "tags": ["financial-research", "sec-filings", "equity-analysis"],
-            "input_schema": {
-                "fields": [
-                    {
-                        "name": "ticker",
-                        "type": "text",
-                        "label": "Ticker symbol",
-                        "placeholder": "AAPL",
-                        "required": True,
-                        "max_length": 5,
-                        "transform": "uppercase",
-                        "hint": "Any NYSE or NASDAQ ticker (e.g. AAPL, MSFT, TSLA)",
-                    }
-                ]
-            },
+            "input_schema": FinancialRequest.model_json_schema(),
+            "output_schema": _output_schema_object(
+                {
+                    "ticker": {"type": "string"},
+                    "company_name": {"type": "string"},
+                    "filing_type": {"type": "string"},
+                    "filing_date": {"type": "string"},
+                    "business_summary": {"type": "string"},
+                    "recent_financial_highlights": {"type": "array", "items": {"type": "string"}},
+                    "key_risks": {"type": "array", "items": {"type": "string"}},
+                    "signal": {"type": "string"},
+                    "signal_reasoning": {"type": "string"},
+                    "generated_at": {"type": "string"},
+                },
+                required=["ticker", "signal"],
+            ),
         },
         {
             "agent_id": _CODEREVIEW_AGENT_ID,
             "name": "Code Review Agent",
-            "description": (
-                "Reviews any code snippet for bugs, security vulnerabilities, "
-                "performance issues, and style problems. Returns a scored report "
-                "with specific, actionable fixes."
-            ),
-            "endpoint_url": _BUILTIN_PROXY_ENDPOINTS[_CODEREVIEW_AGENT_ID],
-            "price_per_call_usd": 0.005,
+            "description": "Reviews code for bugs, security issues, and maintainability gaps.",
+            "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_CODEREVIEW_AGENT_ID],
+            "price_per_call_usd": 0.01,
             "tags": ["code-review", "security", "developer-tools"],
-            "input_schema": {
-                "fields": [
-                    {
-                        "name": "code",
-                        "type": "textarea",
-                        "label": "Code",
-                        "placeholder": "Paste your code here…",
-                        "required": True,
-                        "hint": "Up to ~12,000 characters",
-                    },
-                    {
-                        "name": "language",
-                        "type": "select",
-                        "label": "Language",
-                        "required": False,
-                        "default": "auto",
-                        "options": [
-                            "auto", "python", "javascript", "typescript",
-                            "go", "rust", "java", "cpp", "c", "ruby", "php",
-                            "swift", "kotlin", "sql",
-                        ],
-                    },
-                    {
-                        "name": "focus",
-                        "type": "select",
-                        "label": "Review focus",
-                        "required": False,
-                        "default": "all",
-                        "options": ["all", "security", "performance", "bugs", "style"],
-                    },
-                ]
-            },
+            "input_schema": CodeReviewRequest.model_json_schema(),
+            "output_schema": _output_schema_object(
+                {
+                    "language_detected": {"type": "string"},
+                    "score": {"type": "integer"},
+                    "issues": {"type": "array", "items": {"type": "object"}},
+                    "positive_aspects": {"type": "array", "items": {"type": "string"}},
+                    "summary": {"type": "string"},
+                },
+                required=["score", "summary"],
+            ),
         },
         {
             "agent_id": _TEXTINTEL_AGENT_ID,
             "name": "Text Intelligence Agent",
-            "description": (
-                "Analyzes any text for sentiment, key entities, topics, and readability. "
-                "Returns a structured NLP brief with summary, quotes, and scores. "
-                "Works on articles, reviews, reports, emails, or any prose."
-            ),
-            "endpoint_url": _BUILTIN_PROXY_ENDPOINTS[_TEXTINTEL_AGENT_ID],
-            "price_per_call_usd": 0.003,
+            "description": "Analyzes text for sentiment, entities, topics, and concise summary outputs.",
+            "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_TEXTINTEL_AGENT_ID],
+            "price_per_call_usd": 0.01,
             "tags": ["nlp", "sentiment-analysis", "text-analytics"],
-            "input_schema": {
-                "fields": [
-                    {
-                        "name": "text",
-                        "type": "textarea",
-                        "label": "Text to analyze",
-                        "placeholder": "Paste any text here — article, review, report…",
-                        "required": True,
-                        "hint": "Up to ~10,000 characters",
-                    },
-                    {
-                        "name": "mode",
-                        "type": "select",
-                        "label": "Analysis depth",
-                        "required": False,
-                        "default": "full",
-                        "options": ["full", "quick"],
-                        "hint": "quick = sentiment + summary only",
-                    },
-                ]
-            },
+            "input_schema": TextIntelRequest.model_json_schema(),
+            "output_schema": _output_schema_object(
+                {
+                    "word_count": {"type": "integer"},
+                    "reading_time_seconds": {"type": "integer"},
+                    "language": {"type": "string"},
+                    "sentiment": {"type": "string"},
+                    "sentiment_score": {"type": "number"},
+                    "summary": {"type": "string"},
+                    "key_entities": {"type": "array", "items": {"type": "string"}},
+                    "main_topics": {"type": "array", "items": {"type": "string"}},
+                    "key_quotes": {"type": "array", "items": {"type": "string"}},
+                },
+                required=["word_count", "summary"],
+            ),
         },
         {
             "agent_id": _WIKI_AGENT_ID,
             "name": "Wikipedia Research Agent",
-            "description": (
-                "Fetches the Wikipedia article for any topic and returns a "
-                "structured research brief: summary, key facts, related topics, "
-                "and content classification."
-            ),
-            "endpoint_url": _BUILTIN_PROXY_ENDPOINTS[_WIKI_AGENT_ID],
-            "price_per_call_usd": 0.003,
+            "description": "Builds structured research briefs from Wikipedia topics.",
+            "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_WIKI_AGENT_ID],
+            "price_per_call_usd": 0.01,
             "tags": ["research", "knowledge-base", "wikipedia"],
-            "input_schema": {
-                "fields": [
-                    {
-                        "name": "topic",
-                        "type": "text",
-                        "label": "Topic",
-                        "placeholder": "e.g. Quantum computing",
-                        "required": True,
-                        "hint": "Any Wikipedia-resolvable topic",
-                    }
-                ]
-            },
+            "input_schema": WikiRequest.model_json_schema(),
+            "output_schema": _output_schema_object(
+                {
+                    "title": {"type": "string"},
+                    "url": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "key_facts": {"type": "array", "items": {"type": "string"}},
+                    "related_topics": {"type": "array", "items": {"type": "string"}},
+                    "content_type": {"type": "string"},
+                },
+                required=["title", "summary"],
+            ),
         },
         {
             "agent_id": _NEGOTIATION_AGENT_ID,
             "name": "Negotiation Strategist Agent",
-            "description": (
-                "Builds practical negotiation playbooks with opening position, red lines, "
-                "tradeables, and fallback strategy tailored to your objective and counterpart."
-            ),
-            "endpoint_url": _BUILTIN_PROXY_ENDPOINTS[_NEGOTIATION_AGENT_ID],
-            "price_per_call_usd": 0.006,
+            "description": "Generates practical negotiation playbooks and fallback strategies.",
+            "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_NEGOTIATION_AGENT_ID],
+            "price_per_call_usd": 0.01,
             "tags": ["negotiation", "strategy", "operations"],
-            "input_schema": {
-                "fields": [
-                    {
-                        "name": "objective",
-                        "type": "textarea",
-                        "label": "Negotiation objective",
-                        "placeholder": "What outcome do you need to secure?",
-                        "required": True,
-                    },
-                    {
-                        "name": "counterparty_profile",
-                        "type": "textarea",
-                        "label": "Counterparty profile",
-                        "placeholder": "Who are they and what do they care about?",
-                        "required": False,
-                    },
-                    {
-                        "name": "constraints",
-                        "type": "textarea",
-                        "label": "Constraints (one per line)",
-                        "placeholder": "No discount above 10%\nNeed annual prepay",
-                        "required": False,
-                    },
-                    {
-                        "name": "context",
-                        "type": "textarea",
-                        "label": "Extra context",
-                        "placeholder": "Any relevant deal history or timing pressure",
-                        "required": False,
-                    },
-                ]
-            },
+            "input_schema": NegotiationRequest.model_json_schema(),
+            "output_schema": _output_schema_object(
+                {
+                    "opening_position": {"type": "string"},
+                    "must_haves": {"type": "array", "items": {"type": "string"}},
+                    "tradeables": {"type": "array", "items": {"type": "string"}},
+                    "red_lines": {"type": "array", "items": {"type": "string"}},
+                    "tactics": {"type": "array", "items": {"type": "object"}},
+                    "fallback_plan": {"type": "string"},
+                    "risk_flags": {"type": "array", "items": {"type": "string"}},
+                },
+                required=["opening_position", "fallback_plan"],
+            ),
         },
         {
             "agent_id": _SCENARIO_AGENT_ID,
             "name": "Scenario Simulator Agent",
-            "description": (
-                "Runs strategic upside/base/downside simulations with probabilities, "
-                "leading indicators, and a concrete action plan under uncertainty."
-            ),
-            "endpoint_url": _BUILTIN_PROXY_ENDPOINTS[_SCENARIO_AGENT_ID],
-            "price_per_call_usd": 0.007,
+            "description": "Simulates strategic scenarios and recommends execution plans.",
+            "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_SCENARIO_AGENT_ID],
+            "price_per_call_usd": 0.01,
             "tags": ["forecasting", "strategy", "decision-making"],
-            "input_schema": {
-                "fields": [
-                    {
-                        "name": "decision",
-                        "type": "textarea",
-                        "label": "Decision to evaluate",
-                        "placeholder": "What decision are you considering?",
-                        "required": True,
-                    },
-                    {
-                        "name": "assumptions",
-                        "type": "textarea",
-                        "label": "Assumptions",
-                        "placeholder": "Key assumptions and operating context",
-                        "required": False,
-                    },
-                    {
-                        "name": "horizon",
-                        "type": "text",
-                        "label": "Time horizon",
-                        "placeholder": "12 months",
-                        "required": False,
-                    },
-                    {
-                        "name": "risk_tolerance",
-                        "type": "select",
-                        "label": "Risk tolerance",
-                        "required": False,
-                        "default": "balanced",
-                        "options": ["conservative", "balanced", "aggressive"],
-                    },
-                ]
-            },
+            "input_schema": ScenarioRequest.model_json_schema(),
+            "output_schema": _output_schema_object(
+                {
+                    "decision": {"type": "string"},
+                    "horizon": {"type": "string"},
+                    "risk_tolerance": {"type": "string"},
+                    "scenarios": {"type": "array", "items": {"type": "object"}},
+                    "recommended_plan": {"type": "object"},
+                    "confidence": {"type": "number"},
+                },
+                required=["decision", "scenarios", "recommended_plan"],
+            ),
         },
         {
             "agent_id": _PRODUCT_AGENT_ID,
             "name": "Product Strategy Lab Agent",
-            "description": (
-                "Turns a product idea into positioning, user personas, quarter-by-quarter bets, "
-                "and measurable experiments."
-            ),
-            "endpoint_url": _BUILTIN_PROXY_ENDPOINTS[_PRODUCT_AGENT_ID],
-            "price_per_call_usd": 0.008,
+            "description": "Converts product ideas into strategic roadmaps and test plans.",
+            "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_PRODUCT_AGENT_ID],
+            "price_per_call_usd": 0.01,
             "tags": ["product", "go-to-market", "experimentation"],
-            "input_schema": {
-                "fields": [
-                    {
-                        "name": "product_idea",
-                        "type": "textarea",
-                        "label": "Product idea",
-                        "placeholder": "Describe what you're building",
-                        "required": True,
-                    },
-                    {
-                        "name": "target_users",
-                        "type": "textarea",
-                        "label": "Target users",
-                        "placeholder": "Who is this for?",
-                        "required": True,
-                    },
-                    {
-                        "name": "market_context",
-                        "type": "textarea",
-                        "label": "Market context",
-                        "placeholder": "Competitors, constraints, or timing",
-                        "required": False,
-                    },
-                    {
-                        "name": "horizon_quarters",
-                        "type": "text",
-                        "label": "Planning horizon (quarters)",
-                        "placeholder": "2",
-                        "required": False,
-                    },
-                ]
-            },
+            "input_schema": ProductStrategyRequest.model_json_schema(),
+            "output_schema": _output_schema_object(
+                {
+                    "positioning_statement": {"type": "string"},
+                    "user_personas": {"type": "array", "items": {"type": "string"}},
+                    "roadmap": {"type": "array", "items": {"type": "object"}},
+                    "experiments": {"type": "array", "items": {"type": "object"}},
+                    "risks": {"type": "array", "items": {"type": "string"}},
+                },
+                required=["positioning_statement", "roadmap"],
+            ),
         },
         {
             "agent_id": _PORTFOLIO_AGENT_ID,
             "name": "Portfolio Planner Agent",
-            "description": (
-                "Builds a structured educational portfolio allocation and monitoring plan "
-                "based on your goal, risk profile, and time horizon."
-            ),
-            "endpoint_url": _BUILTIN_PROXY_ENDPOINTS[_PORTFOLIO_AGENT_ID],
-            "price_per_call_usd": 0.006,
+            "description": "Builds educational portfolio allocation plans for target outcomes.",
+            "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_PORTFOLIO_AGENT_ID],
+            "price_per_call_usd": 0.01,
             "tags": ["portfolio", "allocation", "wealth-planning"],
-            "input_schema": {
-                "fields": [
-                    {
-                        "name": "investment_goal",
-                        "type": "textarea",
-                        "label": "Investment goal",
-                        "placeholder": "What are you optimizing for?",
-                        "required": True,
-                    },
-                    {
-                        "name": "risk_profile",
-                        "type": "select",
-                        "label": "Risk profile",
-                        "required": False,
-                        "default": "balanced",
-                        "options": ["conservative", "balanced", "aggressive"],
-                    },
-                    {
-                        "name": "time_horizon_years",
-                        "type": "text",
-                        "label": "Time horizon (years)",
-                        "placeholder": "5",
-                        "required": False,
-                    },
-                    {
-                        "name": "capital_usd",
-                        "type": "text",
-                        "label": "Capital (USD)",
-                        "placeholder": "100000",
-                        "required": False,
-                    },
-                ]
-            },
+            "input_schema": PortfolioRequest.model_json_schema(),
+            "output_schema": _output_schema_object(
+                {
+                    "goal_summary": {"type": "string"},
+                    "allocation": {"type": "array", "items": {"type": "object"}},
+                    "rebalancing_plan": {"type": "string"},
+                    "watch_metrics": {"type": "array", "items": {"type": "string"}},
+                    "disclaimer": {"type": "string"},
+                },
+                required=["goal_summary", "allocation"],
+            ),
         },
         {
             "agent_id": _QUALITY_JUDGE_AGENT_ID,
             "name": "Quality Judge Agent",
-            "description": (
-                "Internal verification worker that scores completed agent outputs for quality "
-                "before settlement."
-            ),
-            "endpoint_url": _BUILTIN_PROXY_ENDPOINTS[_QUALITY_JUDGE_AGENT_ID],
-            "price_per_call_usd": 0.001,
+            "description": "Internal verification worker that scores completed outputs before settlement.",
+            "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_QUALITY_JUDGE_AGENT_ID],
+            "price_per_call_usd": 0.01,
             "tags": ["quality", "internal"],
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "input_payload": {"type": "object"},
-                    "output_payload": {"type": "object"},
-                    "agent_description": {"type": "string"},
-                },
-                "required": ["input_payload", "output_payload"],
-            },
-            "output_schema": {
-                "type": "object",
-                "properties": {
+            "input_schema": _quality_judge_input_schema(),
+            "output_schema": _output_schema_object(
+                {
                     "verdict": {"type": "string"},
                     "score": {"type": "integer"},
                     "reason": {"type": "string"},
                 },
-                "required": ["verdict", "score", "reason"],
-            },
+                required=["verdict", "score", "reason"],
+            ),
             "internal_only": True,
         },
     ]
 
-    for a in agents:
-        if not registry.agent_exists_by_name(a["name"]):
-            registry.register_agent(
-                agent_id=a["agent_id"],
-                name=a["name"],
-                description=a["description"],
-                endpoint_url=a["endpoint_url"],
-                price_per_call_usd=a["price_per_call_usd"],
-                tags=a["tags"],
-                input_schema=a["input_schema"],
-                output_schema=a.get("output_schema"),
-                output_verifier_url=a.get("output_verifier_url"),
-                internal_only=bool(a.get("internal_only", False)),
-                owner_id="master",
-                embed_listing=False,
-            )
+
+def _ensure_system_user() -> str:
+    with _auth._conn() as conn:
+        existing = conn.execute(
+            "SELECT user_id FROM users WHERE username = ? ORDER BY created_at ASC LIMIT 1",
+            (_SYSTEM_USERNAME,),
+        ).fetchone()
+        if existing is not None:
+            user_id = str(existing["user_id"])
+            conn.execute("UPDATE users SET status = 'suspended' WHERE user_id = ?", (user_id,))
+            return user_id
+
+        user_id = str(uuid.uuid4())
+        now = _utc_now_iso()
+        email = _SYSTEM_USER_EMAIL
+        if conn.execute("SELECT 1 FROM users WHERE email = ? LIMIT 1", (email,)).fetchone() is not None:
+            email = f"system-{user_id[:8]}@agentmarket.internal"
+        salt = "system-account-disabled"
+        password_hash = hashlib.sha256(f"{user_id}:{salt}".encode("utf-8")).hexdigest()
+        conn.execute(
+            """
+            INSERT INTO users (user_id, username, email, password_hash, salt, created_at, status)
+            VALUES (?, ?, ?, ?, ?, ?, 'suspended')
+            """,
+            (user_id, _SYSTEM_USERNAME, email, password_hash, salt, now),
+        )
+        return user_id
+
+
+def ensure_builtin_agents_registered() -> None:
+    system_user_id = _ensure_system_user()
+    system_owner_id = f"user:{system_user_id}"
+    for spec in _builtin_agent_specs():
+        if registry.agent_exists_by_name(spec["name"]):
+            continue
+        registry.register_agent(
+            agent_id=spec["agent_id"],
+            name=spec["name"],
+            description=spec["description"],
+            endpoint_url=spec["endpoint_url"],
+            price_per_call_usd=0.01,
+            tags=spec["tags"],
+            input_schema=spec["input_schema"],
+            output_schema=spec["output_schema"],
+            output_verifier_url=None,
+            internal_only=bool(spec.get("internal_only", False)),
+            status="active",
+            owner_id=system_owner_id,
+            embed_listing=False,
+        )
 
 
 @asynccontextmanager
@@ -867,7 +783,7 @@ async def lifespan(app: FastAPI):
     disputes.init_disputes_db()
     reputation.init_reputation_db()
     _init_ops_db()
-    _register_agents()
+    ensure_builtin_agents_registered()
     stop_event: threading.Event | None = None
     sweeper_thread: threading.Thread | None = None
     hook_stop_event: threading.Event | None = None
@@ -1101,12 +1017,7 @@ def _require_scope(caller: core_models.CallerContext, required_scope: str, detai
 
 
 def _proxy_headers_for_agent(agent: dict) -> dict[str, str]:
-    headers = {"Content-Type": "application/json"}
-    allowed_internal_urls = _BUILTIN_PROXY_AUTH_URLS.get(agent["agent_id"], set())
-    endpoint_url = str(agent.get("endpoint_url", "")).rstrip("/")
-    if endpoint_url in {url.rstrip("/") for url in allowed_internal_urls}:
-        headers["Authorization"] = f"Bearer {_MASTER_KEY}"
-    return headers
+    return {"Content-Type": "application/json"}
 
 
 def _proxy_response(resp: http.Response) -> Response:
@@ -2122,6 +2033,17 @@ def _coerce_string_list(value: Any) -> list[str]:
     if not text:
         return []
     return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def _resolve_builtin_agent_id(agent: dict[str, Any]) -> str | None:
+    endpoint = _normalize_endpoint_ref(str(agent.get("endpoint_url") or ""))
+    matched = _BUILTIN_ENDPOINT_TO_AGENT_ID.get(endpoint)
+    if matched:
+        return matched
+    agent_id = str(agent.get("agent_id") or "").strip()
+    if agent_id in _BUILTIN_AGENT_IDS and endpoint.startswith("internal://"):
+        return agent_id
+    return None
 
 
 def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict:
@@ -3784,7 +3706,7 @@ def auth_revoke_key(
 
 
 # ---------------------------------------------------------------------------
-# Agent endpoints — direct calls (used by proxy and CLI client)
+# Built-in agent handlers (invoked via registry/internal routing)
 # ---------------------------------------------------------------------------
 
 
@@ -3844,228 +3766,22 @@ def _invoke_portfolio_agent(body: PortfolioRequest) -> dict:
 
 
 @app.post(
-    "/agents/financial",
-    response_model=core_models.DynamicObjectResponse,
-    responses=_error_responses(400, 401, 403, 422, 429, 500, 503),
-)
-@limiter.limit("10/minute")
-def agent_financial(
-    request: Request,
-    body: FinancialRequest,
-    _: core_models.CallerContext = Depends(_require_api_key),
-) -> core_models.DynamicObjectResponse:
-    try:
-        brief = _invoke_financial_agent(body)
-    except ValueError as e:
-        detail = str(e)
-        status = 422 if detail.startswith("Invalid ticker symbol:") else 400
-        raise HTTPException(status_code=status, detail=detail)
-    except _groq.RateLimitError as e:
-        raise HTTPException(status_code=503, detail=f"All LLM models rate-limited. ({e})")
-    except Exception as e:
-        _LOG.exception("Financial agent execution failed.")
-        raise HTTPException(status_code=500, detail="Agent execution failed.")
-    return JSONResponse(content=brief)
-
-
-# Keep /analyze as an alias for backwards compatibility
-@app.post(
     "/analyze",
     response_model=core_models.DynamicObjectResponse,
-    responses=_error_responses(400, 401, 403, 422, 429, 500, 503),
+    responses=_error_responses(400, 401, 402, 403, 404, 422, 429, 500, 502, 503),
 )
 @limiter.limit("10/minute")
 def analyze_alias(
     request: Request,
     body: FinancialRequest,
     caller: core_models.CallerContext = Depends(_require_api_key),
-) -> core_models.DynamicObjectResponse:
-    return agent_financial(request, body, caller)
-
-
-@app.post(
-    "/agents/code-review",
-    response_model=core_models.DynamicObjectResponse,
-    responses=_error_responses(400, 401, 403, 429, 500, 503),
-)
-@limiter.limit("10/minute")
-def agent_code_review(
-    request: Request,
-    body: CodeReviewRequest,
-    _: core_models.CallerContext = Depends(_require_api_key),
-) -> core_models.DynamicObjectResponse:
-    try:
-        result = _invoke_code_review_agent(body)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except _groq.RateLimitError as e:
-        raise HTTPException(status_code=503, detail=f"All LLM models rate-limited. ({e})")
-    except Exception as e:
-        _LOG.exception("Code review agent execution failed.")
-        raise HTTPException(status_code=500, detail="Agent execution failed.")
-    return JSONResponse(content=result)
-
-
-@app.post(
-    "/agents/text-intel",
-    response_model=core_models.DynamicObjectResponse,
-    responses=_error_responses(400, 401, 403, 429, 500, 503),
-)
-@limiter.limit("15/minute")
-def agent_text_intel(
-    request: Request,
-    body: TextIntelRequest,
-    _: core_models.CallerContext = Depends(_require_api_key),
-) -> core_models.DynamicObjectResponse:
-    try:
-        result = _invoke_text_intel_agent(body)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except _groq.RateLimitError as e:
-        raise HTTPException(status_code=503, detail=f"All LLM models rate-limited. ({e})")
-    except Exception as e:
-        _LOG.exception("Text-intel agent execution failed.")
-        raise HTTPException(status_code=500, detail="Agent execution failed.")
-    return JSONResponse(content=result)
-
-
-@app.post(
-    "/agents/wiki",
-    response_model=core_models.DynamicObjectResponse,
-    responses=_error_responses(400, 401, 403, 429, 500, 503),
-)
-@limiter.limit("15/minute")
-def agent_wiki_endpoint(
-    request: Request,
-    body: WikiRequest,
-    _: core_models.CallerContext = Depends(_require_api_key),
-) -> core_models.DynamicObjectResponse:
-    try:
-        result = _invoke_wiki_agent(body)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except _groq.RateLimitError as e:
-        raise HTTPException(status_code=503, detail=f"All LLM models rate-limited. ({e})")
-    except Exception as e:
-        _LOG.exception("Wiki agent execution failed.")
-        raise HTTPException(status_code=500, detail="Agent execution failed.")
-    return JSONResponse(content=result)
-
-
-@app.post(
-    "/agents/negotiation",
-    response_model=core_models.DynamicObjectResponse,
-    responses=_error_responses(400, 401, 403, 422, 429, 500, 503),
-)
-@limiter.limit("10/minute")
-def agent_negotiation_endpoint(
-    request: Request,
-    body: NegotiationRequest,
-    _: core_models.CallerContext = Depends(_require_api_key),
-) -> core_models.DynamicObjectResponse:
-    try:
-        result = _invoke_negotiation_agent(body)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except _groq.RateLimitError as e:
-        raise HTTPException(status_code=503, detail=f"All LLM models rate-limited. ({e})")
-    except Exception as e:
-        _LOG.exception("Negotiation agent execution failed.")
-        raise HTTPException(status_code=500, detail="Agent execution failed.")
-    return JSONResponse(content=result)
-
-
-@app.post(
-    "/agents/scenario",
-    response_model=core_models.DynamicObjectResponse,
-    responses=_error_responses(400, 401, 403, 422, 429, 500, 503),
-)
-@limiter.limit("10/minute")
-def agent_scenario_endpoint(
-    request: Request,
-    body: ScenarioRequest,
-    _: core_models.CallerContext = Depends(_require_api_key),
-) -> core_models.DynamicObjectResponse:
-    try:
-        result = _invoke_scenario_agent(body)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except _groq.RateLimitError as e:
-        raise HTTPException(status_code=503, detail=f"All LLM models rate-limited. ({e})")
-    except Exception as e:
-        _LOG.exception("Scenario agent execution failed.")
-        raise HTTPException(status_code=500, detail="Agent execution failed.")
-    return JSONResponse(content=result)
-
-
-@app.post(
-    "/agents/product-strategy",
-    response_model=core_models.DynamicObjectResponse,
-    responses=_error_responses(400, 401, 403, 422, 429, 500, 503),
-)
-@limiter.limit("10/minute")
-def agent_product_strategy_endpoint(
-    request: Request,
-    body: ProductStrategyRequest,
-    _: core_models.CallerContext = Depends(_require_api_key),
-) -> core_models.DynamicObjectResponse:
-    try:
-        result = _invoke_product_strategy_agent(body)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except _groq.RateLimitError as e:
-        raise HTTPException(status_code=503, detail=f"All LLM models rate-limited. ({e})")
-    except Exception as e:
-        _LOG.exception("Product strategy agent execution failed.")
-        raise HTTPException(status_code=500, detail="Agent execution failed.")
-    return JSONResponse(content=result)
-
-
-@app.post(
-    "/agents/portfolio",
-    response_model=core_models.DynamicObjectResponse,
-    responses=_error_responses(400, 401, 403, 422, 429, 500, 503),
-)
-@limiter.limit("10/minute")
-def agent_portfolio_endpoint(
-    request: Request,
-    body: PortfolioRequest,
-    _: core_models.CallerContext = Depends(_require_api_key),
-) -> core_models.DynamicObjectResponse:
-    try:
-        result = _invoke_portfolio_agent(body)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except _groq.RateLimitError as e:
-        raise HTTPException(status_code=503, detail=f"All LLM models rate-limited. ({e})")
-    except Exception as e:
-        _LOG.exception("Portfolio agent execution failed.")
-        raise HTTPException(status_code=500, detail="Agent execution failed.")
-    return JSONResponse(content=result)
-
-
-@app.post(
-    "/agents/quality-judge",
-    response_model=core_models.DynamicObjectResponse,
-    responses=_error_responses(400, 401, 403, 422, 429, 500),
-)
-@limiter.limit("60/minute")
-def agent_quality_judge_endpoint(
-    request: Request,
-    body: core_models.DynamicObjectResponse | None = Body(default=None),
-    _: core_models.CallerContext = Depends(_require_api_key),
-) -> core_models.DynamicObjectResponse:
-    payload = body.model_dump() if body is not None else {}
-    try:
-        result = judges.run_quality_judgment(
-            input_payload=payload.get("input_payload") if isinstance(payload, dict) else {},
-            output_payload=payload.get("output_payload") if isinstance(payload, dict) else {},
-            agent_description=str(payload.get("agent_description") or "") if isinstance(payload, dict) else "",
-        )
-    except Exception as exc:
-        _LOG.exception("Quality judge endpoint execution failed.")
-        raise HTTPException(status_code=500, detail="Agent execution failed.")
-    return JSONResponse(content=result)
+) -> Response:
+    return registry_call(
+        request=request,
+        agent_id=_FINANCIAL_AGENT_ID,
+        body=core_models.RegistryCallRequest(root=body.model_dump()),
+        caller=caller,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -4301,9 +4017,9 @@ def registry_call(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> Response:
     """
-    Proxy a call to the registered agent with full payment lifecycle:
+    Invoke a registered agent with full payment lifecycle:
       1. Deduct price (402 if broke).
-      2. HTTP POST to agent endpoint.
+      2. Dispatch call (internal handler for internal:// endpoints, HTTP otherwise).
       3a. Success → payout 90% agent / 10% platform.
       3b. Failure → full refund to caller.
     """
@@ -4322,14 +4038,18 @@ def registry_call(
                 {"agent_id": agent_id},
             ),
         )
-    try:
-        safe_endpoint_url = _validate_agent_endpoint_url(request, str(agent.get("endpoint_url") or ""))
-    except ValueError as exc:
-        _LOG.warning("Blocked misconfigured endpoint for agent %s: %s", agent_id, exc)
-        raise HTTPException(status_code=502, detail="Agent endpoint is misconfigured.")
+    builtin_agent_id = _resolve_builtin_agent_id(agent)
+    safe_endpoint_url = ""
+    if builtin_agent_id is None:
+        try:
+            safe_endpoint_url = _validate_agent_endpoint_url(request, str(agent.get("endpoint_url") or ""))
+        except ValueError as exc:
+            _LOG.warning("Blocked misconfigured endpoint for agent %s: %s", agent_id, exc)
+            raise HTTPException(status_code=502, detail="Agent endpoint is misconfigured.")
 
+    caller_owner_id = _caller_owner_id(request)
     price_cents     = _usd_to_cents(agent["price_per_call_usd"])
-    caller_wallet   = payments.get_or_create_wallet(_caller_owner_id(request))
+    caller_wallet   = payments.get_or_create_wallet(caller_owner_id)
     agent_wallet    = payments.get_or_create_wallet(f"agent:{agent_id}")
     platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
 
@@ -4351,13 +4071,121 @@ def registry_call(
             ),
         )
 
+    payload = body.root if body is not None else {}
     start = time.monotonic()
+    if builtin_agent_id is not None:
+        try:
+            job = jobs.create_job(
+                agent_id=agent["agent_id"],
+                caller_owner_id=caller_owner_id,
+                caller_wallet_id=caller_wallet["wallet_id"],
+                agent_wallet_id=agent_wallet["wallet_id"],
+                platform_wallet_id=platform_wallet["wallet_id"],
+                price_cents=price_cents,
+                charge_tx_id=charge_tx_id,
+                input_payload=payload,
+                agent_owner_id=agent.get("owner_id"),
+                max_attempts=1,
+                dispute_window_hours=_DEFAULT_JOB_DISPUTE_WINDOW_HOURS,
+                judge_agent_id=_extract_judge_agent_id(agent.get("input_schema")) or _QUALITY_JUDGE_AGENT_ID,
+            )
+        except Exception:
+            payments.post_call_refund(
+                caller_wallet["wallet_id"], charge_tx_id, price_cents, agent["agent_id"]
+            )
+            _LOG.exception("Failed to create sync job for built-in agent %s.", agent["agent_id"])
+            raise HTTPException(status_code=500, detail="Failed to create job.")
+        _record_job_event(
+            job,
+            "job.created",
+            actor_owner_id=caller["owner_id"],
+            payload={"source": "registry_call_sync", "max_attempts": 1},
+        )
+        try:
+            output = _execute_builtin_agent(builtin_agent_id, payload)
+            completed = jobs.update_job_status(
+                job["job_id"],
+                "complete",
+                output_payload=output,
+                completed=True,
+            )
+            if completed is None:
+                raise RuntimeError("Failed to mark built-in sync job complete.")
+            _settle_successful_job(completed, actor_owner_id=caller["owner_id"])
+            return JSONResponse(content=output)
+        except ValidationError as exc:
+            failed = jobs.update_job_status(
+                job["job_id"],
+                "failed",
+                error_message="Request validation failed.",
+                completed=True,
+            )
+            if failed is not None:
+                _settle_failed_job(
+                    failed,
+                    actor_owner_id=caller["owner_id"],
+                    event_type="job.failed_validation",
+                )
+            raise HTTPException(
+                status_code=422,
+                detail=error_codes.make_error(
+                    error_codes.INVALID_INPUT,
+                    "Request validation failed.",
+                    {"errors": exc.errors()},
+                ),
+            )
+        except ValueError as exc:
+            failed = jobs.update_job_status(
+                job["job_id"],
+                "failed",
+                error_message=str(exc),
+                completed=True,
+            )
+            if failed is not None:
+                _settle_failed_job(
+                    failed,
+                    actor_owner_id=caller["owner_id"],
+                    event_type="job.failed_input",
+                )
+            message = str(exc)
+            status = 422 if message.startswith("Invalid ticker symbol:") else 400
+            raise HTTPException(status_code=status, detail=message)
+        except _groq.RateLimitError as exc:
+            failed = jobs.update_job_status(
+                job["job_id"],
+                "failed",
+                error_message=f"All LLM models rate-limited. ({exc})",
+                completed=True,
+            )
+            if failed is not None:
+                _settle_failed_job(
+                    failed,
+                    actor_owner_id=caller["owner_id"],
+                    event_type="job.failed_rate_limit",
+                )
+            raise HTTPException(status_code=503, detail=f"All LLM models rate-limited. ({exc})")
+        except Exception:
+            _LOG.exception("Built-in agent execution failed for %s.", builtin_agent_id)
+            failed = jobs.update_job_status(
+                job["job_id"],
+                "failed",
+                error_message="Agent execution failed.",
+                completed=True,
+            )
+            if failed is not None:
+                _settle_failed_job(
+                    failed,
+                    actor_owner_id=caller["owner_id"],
+                    event_type="job.failed_builtin",
+                )
+            raise HTTPException(status_code=500, detail="Agent execution failed.")
+
     try:
         proxy_agent = dict(agent)
         proxy_agent["endpoint_url"] = safe_endpoint_url
         resp = http.post(
             safe_endpoint_url,
-            json=(body.root if body is not None else {}),
+            json=payload,
             headers=_proxy_headers_for_agent(proxy_agent),
             timeout=120,
         )

@@ -15,15 +15,17 @@ AgentMarket is a production-oriented marketplace where humans and AI agents can 
 
 ## Built-in agents currently registered
 
-- Financial Research Agent (`/agents/financial`)
-- Code Review Agent (`/agents/code-review`)
-- Text Intelligence Agent (`/agents/text-intel`)
-- Wiki Agent (`/agents/wiki`)
-- Negotiation Strategist Agent (`/agents/negotiation`)
-- Scenario Simulator Agent (`/agents/scenario`)
-- Product Strategy Lab Agent (`/agents/product-strategy`)
-- Portfolio Planner Agent (`/agents/portfolio`)
-- Quality Judge Agent (`/agents/quality-judge`, internal-only)
+- Financial Research Agent
+- Code Review Agent
+- Text Intelligence Agent
+- Wiki Agent
+- Negotiation Strategist Agent
+- Scenario Simulator Agent
+- Product Strategy Lab Agent
+- Portfolio Planner Agent
+- Quality Judge Agent (internal-only)
+
+Built-ins are auto-registered on startup under a reserved suspended `system` user with `internal://...` endpoints. They are invoked through `POST /registry/agents/{agent_id}/call` (or `/analyze` for financial alias), not through public `/agents/*` routes.
 
 ## Quickstart
 
