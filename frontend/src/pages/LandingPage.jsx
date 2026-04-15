@@ -104,11 +104,17 @@ function TeamPhotoStrip() {
 
 export default function LandingPage() {
   const [agentCount, setAgentCount] = useState(3)
+  const [agentCountUnavailable, setAgentCountUnavailable] = useState(false)
 
   useEffect(() => {
     fetchAgents(null)
-      .then(r => { if (r?.agents?.length) setAgentCount(r.agents.length) })
-      .catch(() => {})
+      .then(r => {
+        if (r?.agents?.length) setAgentCount(r.agents.length)
+        setAgentCountUnavailable(false)
+      })
+      .catch(() => {
+        setAgentCountUnavailable(true)
+      })
   }, [])
 
   const scrollTo = (id) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })
@@ -134,7 +140,7 @@ export default function LandingPage() {
         <div className="lp__hero-content">
           <motion.div className="lp__hero-badge" {...fadeUp(0.3)}>
             <span className="lp__hero-pip" aria-hidden="true" />
-            {agentCount} agents live now
+            {agentCountUnavailable ? 'Live agent count unavailable' : `${agentCount} agents live now`}
           </motion.div>
 
           <motion.h1 className="lp__hero-title" {...fadeUp(0.45)}>

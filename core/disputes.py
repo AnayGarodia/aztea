@@ -11,8 +11,10 @@ import threading
 import uuid
 from datetime import datetime, timezone
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "registry.db")
-_local = threading.local()
+from core import db as _db
+
+DB_PATH = _db.DB_PATH
+_local = _db._local
 
 DISPUTE_SIDES = {"caller", "agent"}
 DISPUTE_STATUSES = {
@@ -29,15 +31,7 @@ JUDGE_KINDS = {"llm_primary", "llm_secondary", "human_admin"}
 
 
 def _conn() -> sqlite3.Connection:
-    if not getattr(_local, "conn", None):
-        conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA busy_timeout=5000")
-        conn.execute("PRAGMA foreign_keys=ON")
-        _local.conn = conn
-    return _local.conn
+    return _db.get_raw_connection(DB_PATH)
 
 
 def _now() -> str:
@@ -78,19 +72,7 @@ def init_disputes_db() -> None:
             )
             """
         )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS caller_ratings (
-                rating_id         TEXT PRIMARY KEY,
-                job_id            TEXT NOT NULL UNIQUE,
-                caller_owner_id   TEXT NOT NULL,
-                agent_owner_id    TEXT NOT NULL,
-                rating            INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5),
-                comment           TEXT,
-                created_at        TEXT NOT NULL
-            )
-            """
-        )
+        # caller_ratings is defined in reputation.py; that table must be initialized first
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_disputes_job_unique ON disputes(job_id)")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_disputes_status_filed ON disputes(status, filed_at DESC)"
@@ -100,12 +82,6 @@ def init_disputes_db() -> None:
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_dispute_judgments_dispute_created ON dispute_judgments(dispute_id, created_at ASC)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_caller_ratings_caller_created ON caller_ratings(caller_owner_id, created_at DESC)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_caller_ratings_agent_created ON caller_ratings(agent_owner_id, created_at DESC)"
         )
 
 

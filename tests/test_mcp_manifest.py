@@ -30,7 +30,7 @@ def test_build_mcp_tool_entries_converts_fields_schema_and_dedupes_names():
     entries = mcp_manifest.build_mcp_tool_entries(agents)
     assert len(entries) == 2
     assert entries[0]["tool_name"] != entries[1]["tool_name"]
-    first_input = entries[0]["tool"]["inputSchema"]
+    first_input = entries[0]["tool"]["input_schema"]
     assert first_input["type"] == "object"
     assert first_input["properties"]["ticker"]["type"] == "string"
     assert first_input["properties"]["depth"]["type"] == "integer"
@@ -50,6 +50,6 @@ def test_build_mcp_manifest_has_tools_count_and_timestamp():
     manifest = mcp_manifest.build_mcp_manifest(agents)
     assert manifest["count"] == 1
     assert len(manifest["tools"]) == 1
-    assert manifest["tools"][0]["name"].startswith("agentmarket__")
+    assert not manifest["tools"][0]["name"].startswith("agentmarket__")
     assert manifest["generated_at"]
 

@@ -24,9 +24,11 @@ from typing import Any
 import numpy as np
 
 from core import embeddings
+from core import db as _db
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "registry.db")
-_local = threading.local()
+DB_PATH = _db.DB_PATH
+_local = _db._local
+
 _CANONICAL_CREATED_AT = "1970-01-01T00:00:00+00:00"
 _PRICE_CHECK_RE = re.compile(
     r"check\s*\(\s*price_per_call_usd\s*>=\s*0(?:\.0+)?\s*\)",
@@ -83,19 +85,8 @@ _embeddings_cache: dict[str, np.ndarray] = {}
 # ---------------------------------------------------------------------------
 
 def _conn() -> sqlite3.Connection:
-    """
-    Return a thread-local SQLite connection.
-    Opens a new one if this thread doesn't have one yet, and enables WAL mode.
-    """
-    if not getattr(_local, "conn", None):
-        conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA busy_timeout=5000")
-        conn.execute("PRAGMA foreign_keys=ON")
-        _local.conn = conn
-    return _local.conn
+    """Return a thread-local SQLite connection with WAL mode."""
+    return _db.get_raw_connection(DB_PATH)
 
 
 def _create_agents_table(conn: sqlite3.Connection, table_name: str = "agents") -> None:
@@ -388,27 +379,39 @@ def _invalidate_embeddings_cache() -> None:
         _embeddings_cache_expires_at = 0.0
 
 
-def _load_embeddings_cache() -> dict[str, np.ndarray]:
+def _load_embeddings_for_agents(agent_ids: set[str]) -> dict[str, np.ndarray]:
     global _embeddings_cache_expires_at, _embeddings_cache
+    requested = {str(agent_id).strip() for agent_id in agent_ids if str(agent_id).strip()}
+    if not requested:
+        return {}
+
     now = time.monotonic()
     with _embeddings_cache_lock:
-        if now < _embeddings_cache_expires_at:
-            return dict(_embeddings_cache)
-
-    # TODO: switch this full-table scan to sqlite-vec when the marketplace exceeds ~10k agents.
-    with _conn() as conn:
-        rows = conn.execute(
-            "SELECT agent_id, embedding FROM agent_embeddings"
-        ).fetchall()
+        if now >= _embeddings_cache_expires_at:
+            _embeddings_cache = {}
+            _embeddings_cache_expires_at = now + _EMBEDDING_CACHE_TTL_SECONDS
+        cached = {agent_id: _embeddings_cache[agent_id] for agent_id in requested if agent_id in _embeddings_cache}
+        missing = sorted(requested.difference(cached.keys()))
 
     loaded: dict[str, np.ndarray] = {}
-    for row in rows:
-        loaded[row["agent_id"]] = _unpack_embedding(row["embedding"])
+    if missing:
+        placeholders = ",".join("?" for _ in missing)
+        with _conn() as conn:
+            rows = conn.execute(
+                f"SELECT agent_id, embedding FROM agent_embeddings WHERE agent_id IN ({placeholders})",
+                tuple(missing),
+            ).fetchall()
+        for row in rows:
+            loaded[str(row["agent_id"])] = _unpack_embedding(row["embedding"])
 
     with _embeddings_cache_lock:
-        _embeddings_cache = loaded
-        _embeddings_cache_expires_at = now + _EMBEDDING_CACHE_TTL_SECONDS
-        return dict(_embeddings_cache)
+        if loaded:
+            _embeddings_cache.update(loaded)
+        _embeddings_cache_expires_at = max(
+            _embeddings_cache_expires_at,
+            time.monotonic() + _EMBEDDING_CACHE_TTL_SECONDS,
+        )
+        return {agent_id: _embeddings_cache[agent_id] for agent_id in requested if agent_id in _embeddings_cache}
 
 
 def _dedupe_name(base_name: str, used_names: set) -> str:
@@ -704,7 +707,7 @@ def get_agents(tag: str | None = None, include_internal: bool = False, include_b
         if not include_internal:
             where_clauses.append("internal_only = 0")
         if not include_banned:
-            where_clauses.append("status != 'banned'")
+            where_clauses.append("status NOT IN ('banned', 'suspended')")
         if tag:
             where_clauses.append("tags LIKE ?")
             params.append(f'%"{tag}"%')
@@ -1016,8 +1019,14 @@ def search_agents(
         normalized_caller_trust = _normalize_min_trust(caller_trust)
     required_fields = _required_input_fields_set(required_input_fields)
     query_vector = np.asarray(embeddings.embed_text(normalized_query), dtype=np.float32)
-    vectors_by_agent = _load_embeddings_cache()
     agents = get_agents_with_reputation()
+    vectors_by_agent = _load_embeddings_for_agents(
+        {
+            str(agent.get("agent_id") or "").strip()
+            for agent in agents
+            if str(agent.get("agent_id") or "").strip()
+        }
+    )
 
     missing_embeddings: list[tuple[str, str, list[float]]] = []
     candidates: list[dict] = []

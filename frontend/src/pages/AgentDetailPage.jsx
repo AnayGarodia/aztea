@@ -14,11 +14,11 @@ import ResultRenderer from '../features/agents/results/ResultRenderer'
 import TrustGauge from '../features/agents/TrustGauge'
 import { callAgent, createJob } from '../api'
 import { useMarket } from '../context/MarketContext'
-import { ArrowLeft, ArrowUpRight } from 'lucide-react'
+import { ArrowLeft, ArrowUpRight, AlertTriangle } from 'lucide-react'
 
 export default function AgentDetailPage() {
   const { id } = useParams()
-  const { agents, apiKey, showToast, refreshJobs } = useMarket()
+  const { agents, wallet, apiKey, showToast, refreshJobs } = useMarket()
   const [mode, setMode] = useState('sync')
   const [invokeLoading, setInvokeLoading] = useState(false)
   const [result, setResult] = useState(null)
@@ -26,6 +26,9 @@ export default function AgentDetailPage() {
 
   const agent = useMemo(() => agents.find(a => a.agent_id === id), [agents, id])
   const traits = agent ? generateAgentCharacter(agent.agent_id) : null
+  const priceCents = agent ? Math.round((agent.price_per_call_usd ?? 0) * 100) : 0
+  const balanceCents = wallet?.balance_cents ?? 0
+  const insufficientBalance = priceCents > 0 && balanceCents < priceCents
 
   const handleInvoke = async (payload) => {
     if (!agent) return
@@ -173,6 +176,31 @@ export default function AgentDetailPage() {
               <span style={{ fontWeight: 600, fontSize: '0.9375rem' }}>Invoke</span>
             </Card.Header>
             <Card.Body>
+              {/* Low-balance warning */}
+              {insufficientBalance && (
+                <div style={{
+                  display: 'flex', alignItems: 'flex-start', gap: 'var(--sp-3)',
+                  padding: 'var(--sp-3) var(--sp-4)',
+                  background: 'var(--warn-wash, #fffbe6)',
+                  border: '1px solid var(--warn-line, #f0d060)',
+                  borderRadius: 'var(--r-md)',
+                  marginBottom: 'var(--sp-4)',
+                }}>
+                  <AlertTriangle size={16} color="var(--warn, #d97706)" style={{ flexShrink: 0, marginTop: 2 }} />
+                  <div>
+                    <p style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--ink)', marginBottom: 2 }}>
+                      Insufficient balance
+                    </p>
+                    <p style={{ fontSize: '0.8125rem', color: 'var(--ink-soft)', marginBottom: 'var(--sp-2)' }}>
+                      Your balance (${(balanceCents / 100).toFixed(2)}) is less than this agent's price (${(priceCents / 100).toFixed(2)}).
+                      The call will be rejected until you add funds.
+                    </p>
+                    <Link to="/wallet">
+                      <Button variant="primary" size="sm">Add funds →</Button>
+                    </Link>
+                  </div>
+                </div>
+              )}
               <AgentInputForm
                 agent={agent}
                 mode={mode}

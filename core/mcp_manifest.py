@@ -8,7 +8,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-_MCP_TOOL_PREFIX = "agentmarket__"
+_MCP_TOOL_PREFIX = ""  # no prefix — tool names are plain snake_case agent name slugs
 _DEFAULT_SCHEMA = {"type": "object", "additionalProperties": True}
 _FIELD_TYPE_MAP = {
     "str": "string",
@@ -106,7 +106,8 @@ def _tool_name(agent: dict[str, Any], used_names: set[str]) -> str:
     if not base_name:
         base_name = f"tool_{suffix}"
 
-    candidate = f"{_MCP_TOOL_PREFIX}{base_name}"
+    # snake_case, no prefix — identical on both HTTP and stdio surfaces
+    candidate = base_name
     if candidate in used_names:
         candidate = f"{candidate}_{suffix}"
     while candidate in used_names:
@@ -131,8 +132,8 @@ def build_mcp_tool_entries(agents: list[dict[str, Any]]) -> list[dict[str, Any]]
         tool = {
             "name": tool_name,
             "description": tool_description,
-            "inputSchema": input_schema,
-            "outputSchema": output_schema,
+            "input_schema": input_schema,
+            "output_schema": output_schema,
         }
         entries.append({"agent_id": agent_id, "tool_name": tool_name, "tool": tool})
     return entries

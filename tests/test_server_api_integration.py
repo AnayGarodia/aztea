@@ -275,10 +275,13 @@ def test_worker_complete_after_expired_lease_returns_410_with_timeout_state(clie
     )
     assert completed.status_code == 410, completed.text
     body = completed.json()
-    assert body["status"] == "failed"
-    assert body["timeout_count"] == 1
-    assert body["error_message"] == "Job lease expired before completion."
-    assert body["claim_owner_id"] is None
+    assert body["error"] == "job.lease_expired"
+    assert body["message"] == "Job lease expired before completion."
+    job_data = body["details"]["job"]
+    assert job_data["status"] == "failed"
+    assert job_data["timeout_count"] == 1
+    assert job_data["error_message"] == "Job lease expired before completion."
+    assert job_data["claim_owner_id"] is None
 
 
 def test_complete_called_twice_returns_same_state_without_idempotency_key(client):
@@ -563,14 +566,13 @@ def test_job_message_protocol_validation_and_correlation_rules(client):
     assert tool_result.status_code == 201, tool_result.text
     assert tool_result.json()["payload"]["correlation_id"] == generated_correlation_id
 
-    mapped_legacy = client.post(
+    unsupported_legacy = client.post(
         f"/jobs/{job_id}/messages",
         headers=_auth_headers(worker["raw_api_key"]),
         json={"type": "legacy-custom-message", "payload": {"text": "still works"}},
     )
-    assert mapped_legacy.status_code == 201, mapped_legacy.text
-    assert mapped_legacy.json()["type"] == "note"
-    assert mapped_legacy.json()["payload"]["text"] == "still works"
+    assert unsupported_legacy.status_code == 400
+    assert "Unsupported job message type" in unsupported_legacy.json()["message"]
 
 
 def test_concurrent_complete_and_sweeper_timeout_race_has_no_lost_work(client):
@@ -1379,7 +1381,7 @@ def test_job_sweeper_handles_timeouts_sla_and_event_hooks(client, monkeypatch):
     )
     assert hook_resp.status_code == 201, hook_resp.text
 
-    timeout_job = _create_job_via_api(client, caller["raw_api_key"], agent_id=agent_id, max_attempts=1)
+    timeout_job = _create_job_via_api(client, caller["raw_api_key"], agent_id=agent_id, max_attempts=2)
     timeout_job_id = timeout_job["job_id"]
     claim = client.post(
         f"/jobs/{timeout_job_id}/claim",
@@ -1437,7 +1439,8 @@ def test_job_sweeper_handles_timeouts_sla_and_event_hooks(client, monkeypatch):
     )
     assert sweep.status_code == 200, sweep.text
     summary = sweep.json()
-    assert timeout_job_id in summary["timeout_failed_job_ids"]
+    assert timeout_job_id in summary["timeout_retry_job_ids"]
+    assert timeout_job_id not in summary["timeout_failed_job_ids"]
     assert sla_job_id in summary["sla_failed_job_ids"]
     assert retry_job_id in summary["retry_ready_job_ids"]
     assert summary["retry_ready_count"] >= 1
@@ -1455,7 +1458,8 @@ def test_job_sweeper_handles_timeouts_sla_and_event_hooks(client, monkeypatch):
     assert timeout_state.status_code == 200
     assert sla_state.status_code == 200
     assert retry_state.status_code == 200
-    assert timeout_state.json()["status"] == "failed"
+    assert timeout_state.json()["status"] == "pending"
+    assert timeout_state.json()["next_retry_at"] is None
     assert sla_state.json()["status"] == "failed"
     assert retry_state.json()["status"] == "pending"
     assert retry_state.json()["next_retry_at"] is None
@@ -1468,18 +1472,18 @@ def test_job_sweeper_handles_timeouts_sla_and_event_hooks(client, monkeypatch):
     caller_wallet = payments.get_or_create_wallet(f"user:{caller['user_id']}")
     assert (
         payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"]
-        == 300 - int(retry_job["price_cents"])
+        == 300 - int(timeout_job["price_cents"]) - int(retry_job["price_cents"])
     )
 
     events = client.get("/ops/jobs/events", headers=_auth_headers(caller["raw_api_key"]))
     assert events.status_code == 200
     event_types = {event["event_type"] for event in events.json()["events"]}
-    assert "job.timeout_terminal" in event_types
+    assert "job.timeout_retry_scheduled" in event_types
     assert "job.sla_expired" in event_types
     assert "retry_ready" in event_types
 
     hook_event_types = {entry["payload"].get("event_type") for entry in hook_events}
-    assert "job.timeout_terminal" in hook_event_types
+    assert "job.timeout_retry_scheduled" in hook_event_types
     assert "job.sla_expired" in hook_event_types
     assert "retry_ready" in hook_event_types
 
@@ -1893,6 +1897,8 @@ def test_mcp_manifest_returns_server_manifest_shape(client):
     owner = _register_user()
     tools_resp = client.get("/mcp/tools", headers=_auth_headers(owner["raw_api_key"]))
     assert tools_resp.status_code == 200, tools_resp.text
+    tool_names = {tool["name"] for tool in tools_resp.json()["tools"]}
+    assert "quality_judge_agent" not in tool_names
     manifest_resp = client.get("/mcp/manifest", headers=_auth_headers(owner["raw_api_key"]))
     assert manifest_resp.status_code == 200, manifest_resp.text
     manifest = manifest_resp.json()
@@ -1931,8 +1937,8 @@ def test_output_schema_mismatch_returns_schema_mismatch_error(client):
     )
     assert response.status_code == 422, response.text
     body = response.json()
-    assert body["error"] == "SCHEMA_MISMATCH"
-    assert body["data"]["mismatches"]
+    assert body["error"] == "schema.mismatch"
+    assert body["details"]["mismatches"]
 
 
 def test_agent_scoped_key_claims_and_completes_only_its_agent(client):
@@ -1948,7 +1954,22 @@ def test_agent_scoped_key_claims_and_completes_only_its_agent(client):
         json={"name": "scoped-a-key"},
     )
     assert key_resp.status_code == 201, key_resp.text
-    agent_key = key_resp.json()["raw_key"]
+    created_key = key_resp.json()
+    agent_key = created_key["raw_key"]
+
+    listed = client.get(
+        f"/registry/agents/{agent_a}/keys",
+        headers=_auth_headers(owner["raw_api_key"]),
+    )
+    assert listed.status_code == 200, listed.text
+    keys = listed.json()["keys"]
+    assert any(item["key_id"] == created_key["key_id"] and item["is_active"] is True for item in keys)
+
+    denied_list = client.get(
+        f"/registry/agents/{agent_a}/keys",
+        headers=_auth_headers(agent_key),
+    )
+    assert denied_list.status_code == 403
 
     job_a = _create_job_via_api(client, caller["raw_api_key"], agent_id=agent_a)
     claim_a = client.post(
@@ -1993,7 +2014,7 @@ def test_agent_suspend_and_ban_enforcement(client):
         json={"agent_id": agent_id, "input_payload": {"task": "blocked"}},
     )
     assert blocked.status_code == 503
-    assert blocked.json()["error"] == "AGENT_SUSPENDED"
+    assert blocked.json()["error"] == "agent.suspended"
 
     active = registry.set_agent_status(agent_id, "active")
     assert active is not None
@@ -2054,10 +2075,68 @@ def test_dispute_window_hours_is_enforced_from_job_record(client):
         json={"reason": "too old"},
     )
     assert dispute.status_code == 400
-    assert dispute.json()["error"] == "DISPUTE_WINDOW_CLOSED"
+    assert dispute.json()["error"] == "dispute.window_closed"
 
 
 def test_protocol_version_header_is_always_set(client):
     response = client.get("/health", headers=_auth_headers(TEST_MASTER_KEY))
     assert response.status_code == 200
     assert response.headers.get("X-AgentMarket-Version") == "1.0"
+
+
+def test_health_returns_503_when_memory_probe_fails(client, monkeypatch):
+    import psutil
+
+    class _BrokenProcess:
+        def memory_info(self):
+            raise RuntimeError("memory probe failed")
+
+    monkeypatch.setattr(psutil, "Process", lambda: _BrokenProcess())
+    response = client.get("/health", headers=_auth_headers(TEST_MASTER_KEY))
+    assert response.status_code == 503
+    body = response.json()
+    assert body["status"] == "degraded"
+    assert body["checks"]["memory"]["ok"] is False
+
+
+def test_dispute_window_respects_global_cap_seconds(client, monkeypatch):
+    monkeypatch.setattr(server, "_DISPUTE_FILE_WINDOW_SECONDS", 60)
+    worker = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 300)
+    agent_id = _register_agent_via_api(client, worker["raw_api_key"], name=f"Global Window {uuid.uuid4().hex[:6]}")
+
+    created = client.post(
+        "/jobs",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={"agent_id": agent_id, "input_payload": {"task": "x"}, "dispute_window_hours": 24},
+    )
+    assert created.status_code == 201, created.text
+    job_id = created.json()["job_id"]
+    claim = client.post(
+        f"/jobs/{job_id}/claim",
+        headers=_auth_headers(worker["raw_api_key"]),
+        json={"lease_seconds": 120},
+    )
+    assert claim.status_code == 200
+    complete = client.post(
+        f"/jobs/{job_id}/complete",
+        headers=_auth_headers(worker["raw_api_key"]),
+        json={"output_payload": {"ok": True}, "claim_token": claim.json()["claim_token"]},
+    )
+    assert complete.status_code == 200, complete.text
+
+    old_completed = (datetime.now(timezone.utc) - timedelta(seconds=90)).isoformat()
+    with jobs._conn() as conn:
+        conn.execute(
+            "UPDATE jobs SET completed_at = ?, updated_at = ? WHERE job_id = ?",
+            (old_completed, old_completed, job_id),
+        )
+
+    dispute = client.post(
+        f"/jobs/{job_id}/dispute",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={"reason": "window should be capped globally"},
+    )
+    assert dispute.status_code == 400
+    assert dispute.json()["error"] == "dispute.window_closed"

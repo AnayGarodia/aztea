@@ -17,18 +17,10 @@ function fmtDate(str) {
 }
 
 function ApiKeyRow({ item, onRevoke }) {
-  const [copied, setCopied] = useState(false)
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(item.key_prefix + '…').catch(() => {})
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1500)
-  }
-
   return (
     <div style={{
       display: 'grid',
-      gridTemplateColumns: '1fr auto auto auto',
+      gridTemplateColumns: '1fr auto auto',
       gap: 'var(--sp-4)',
       alignItems: 'center',
       padding: '12px 0',
@@ -49,22 +41,10 @@ function ApiKeyRow({ item, onRevoke }) {
             <Badge key={s} variant="default" label={s} />
           ))}
         </div>
+        <p style={{ fontSize: '0.75rem', color: 'var(--warn)', marginTop: 4 }}>
+          Only the prefix is stored. Copy your full key when it is first created.
+        </p>
       </div>
-      <button
-        onClick={handleCopy}
-        style={{
-          display: 'flex', alignItems: 'center', gap: 5,
-          padding: '5px 10px', borderRadius: 'var(--r-sm)',
-          fontSize: '0.8125rem', fontWeight: 500,
-          color: copied ? 'var(--positive)' : 'var(--ink-mute)',
-          background: 'none', border: '1px solid var(--line)', cursor: 'pointer',
-          transition: 'all var(--duration-sm) var(--ease)',
-        }}
-        title="Copy prefix"
-      >
-        <Copy size={12} />
-        {copied ? 'Copied' : 'Copy'}
-      </button>
       <span style={{ fontSize: '0.75rem', color: 'var(--ink-mute)', whiteSpace: 'nowrap' }}>
         {fmtDate(item.created_at)}
       </span>
@@ -259,11 +239,11 @@ export default function SettingsPage() {
                 <div>
                   {/* Header */}
                   <div style={{
-                    display: 'grid', gridTemplateColumns: '1fr auto auto auto',
+                    display: 'grid', gridTemplateColumns: '1fr auto auto',
                     gap: 'var(--sp-4)', padding: '8px 0',
                     borderBottom: '2px solid var(--line)',
                   }}>
-                    {['Name / Prefix', '', 'Created', ''].map((h, i) => (
+                    {['Name / Prefix', 'Created', ''].map((h, i) => (
                       <span key={i} style={{
                         fontSize: '0.6875rem', fontWeight: 600, letterSpacing: '0.05em',
                         textTransform: 'uppercase', color: 'var(--ink-mute)',

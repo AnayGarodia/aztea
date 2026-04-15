@@ -358,7 +358,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** Registry Agent Key List */
+        get: operations["registry_agent_key_list_registry_agents__agent_id__keys_get"];
         put?: never;
         /** Registry Agent Key Create */
         post: operations["registry_agent_key_create_registry_agents__agent_id__keys_post"];
@@ -965,6 +966,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/config/public": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Public server configuration for the frontend. */
+        get: operations["config_public_config_public_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/wallets/topup/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create a Stripe Checkout session for wallet top-up. */
+        post: operations["create_topup_session_wallets_topup_session_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1016,6 +1051,28 @@ export interface components {
             key_prefix: string;
             /** Created At */
             created_at: string;
+        };
+        /** AgentKeyListResponse */
+        AgentKeyListResponse: {
+            /** Keys */
+            keys: components["schemas"]["AgentKeyMetadataResponse"][];
+        };
+        /** AgentKeyMetadataResponse */
+        AgentKeyMetadataResponse: {
+            /** Key Id */
+            key_id: string;
+            /** Agent Id */
+            agent_id: string;
+            /** Key Prefix */
+            key_prefix: string;
+            /** Name */
+            name: string;
+            /** Created At */
+            created_at: string;
+            /** Revoked At */
+            revoked_at?: string | null;
+            /** Is Active */
+            is_active: boolean;
         };
         /**
          * AgentRegisterRequest
@@ -1319,10 +1376,7 @@ export interface components {
             error: string;
             /** Message */
             message: string;
-            /** Data */
-            data?: {
-                [key: string]: components["schemas"]["JsonValue"];
-            };
+            details?: components["schemas"]["JsonValue"] | null;
         };
         /**
          * FinancialRequest
@@ -1339,12 +1393,33 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** HealthCheckDetail */
+        HealthCheckDetail: {
+            /** Ok */
+            ok: boolean;
+            /** Latency Ms */
+            latency_ms?: number | null;
+            /** Writable */
+            writable?: boolean | null;
+            /** Rss Mb */
+            rss_mb?: number | null;
+            /** Error */
+            error?: string | null;
+        };
         /** HealthResponse */
         HealthResponse: {
             /** Status */
             status: string;
+            /** Checks */
+            checks?: {
+                [key: string]: components["schemas"]["HealthCheckDetail"];
+            } | null;
+            /** Agent Count */
+            agent_count?: number | null;
+            /** Version */
+            version?: string | null;
             /** Agents */
-            agents: number;
+            agents?: number | null;
         };
         /**
          * HookDeliveryProcessRequest
@@ -1812,6 +1887,16 @@ export interface components {
             /** Manifest Url */
             manifest_url?: string | null;
         };
+        /** RateLimitErrorResponse */
+        RateLimitErrorResponse: {
+            /**
+             * Error
+             * @constant
+             */
+            error: "rate_limit_exceeded";
+            /** Retry After Seconds */
+            retry_after_seconds: number;
+        };
         /**
          * ReconciliationRunRequest
          * @example {
@@ -1925,6 +2010,27 @@ export interface components {
             runs: {
                 [key: string]: components["schemas"]["JsonValue"];
             }[];
+            /**
+             * Skipped Lines
+             * @default 0
+             */
+            skipped_lines: number;
+            /** Skipped Line Numbers */
+            skipped_line_numbers?: number[];
+        };
+        /**
+         * TopupSessionRequest
+         * @description Request body for POST /wallets/topup/session (Stripe Checkout).
+         * @example {
+         *       "amount_cents": 1000,
+         *       "wallet_id": "wlt-abc123"
+         *     }
+         */
+        TopupSessionRequest: {
+            /** Wallet Id */
+            wallet_id: string;
+            /** Amount Cents */
+            amount_cents: number;
         };
         /**
          * UserLoginRequest
@@ -2010,7 +2116,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description All checks passed. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2025,11 +2131,20 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description One or more checks failed. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2073,7 +2188,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -2121,7 +2236,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -2190,7 +2305,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -2268,7 +2383,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -2328,7 +2443,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -2397,7 +2512,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -2462,7 +2577,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -2518,7 +2633,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -2596,7 +2711,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -2685,7 +2800,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -2761,7 +2876,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -2857,7 +2972,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -2962,7 +3077,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -3018,7 +3133,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -3074,7 +3189,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -3152,7 +3267,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -3221,7 +3336,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -3299,7 +3414,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -3375,7 +3490,83 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
+                };
+            };
+            /** @description Internal server error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    registry_agent_key_list_registry_agents__agent_id__keys_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentKeyListResponse"];
+                };
+            };
+            /** @description Missing or invalid authorization header. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Rate limit exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -3464,7 +3655,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -3549,7 +3740,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -3634,7 +3825,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -3732,7 +3923,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -3819,7 +4010,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -3915,7 +4106,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -4000,7 +4191,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -4080,7 +4271,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -4169,7 +4360,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -4267,7 +4458,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -4365,7 +4556,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -4463,7 +4654,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -4561,7 +4752,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -4650,7 +4841,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -4728,7 +4919,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -4817,7 +5008,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -4896,7 +5087,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -4994,7 +5185,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -5092,7 +5283,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -5190,7 +5381,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -5275,7 +5466,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -5373,7 +5564,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -5449,7 +5640,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -5517,7 +5708,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -5584,7 +5775,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -5662,7 +5853,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -5738,7 +5929,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -5807,7 +5998,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -5874,7 +6065,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -5943,7 +6134,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -6010,7 +6201,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -6077,7 +6268,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -6144,7 +6335,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -6213,7 +6404,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -6280,7 +6471,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -6367,7 +6558,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -6423,7 +6614,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -6499,7 +6690,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
@@ -6566,11 +6757,127 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
                 };
             };
             /** @description Internal server error. */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    config_public_config_public_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    create_topup_session_wallets_topup_session_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TopupSessionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Bad request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid authorization header. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Rate limit exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
+                };
+            };
+            /** @description Internal server error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Upstream service unavailable. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

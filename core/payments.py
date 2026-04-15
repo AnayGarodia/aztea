@@ -23,19 +23,23 @@ Design rules:
 """
 
 import json
+import logging
 import os
 import sqlite3
 import threading
 import uuid
 from datetime import datetime, timezone
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "registry.db")
+from core import logging_utils
+from core import db as _db
+
+DB_PATH = _db.DB_PATH
+_local = _db._local
 PLATFORM_OWNER_ID = "platform"
-PLATFORM_FEE_PCT = 10  # percent
 DISPUTE_ESCROW_OWNER_PREFIX = "dispute_escrow:"
 DISPUTE_RETURN_PLATFORM_FEE_ON_CALLER_WINS = True
 
-_local = threading.local()
+_LOG = logging.getLogger(__name__)
 
 
 class InsufficientBalanceError(Exception):
@@ -51,17 +55,28 @@ class InsufficientBalanceError(Exception):
 # Connection
 # ---------------------------------------------------------------------------
 
+
+def _env_int(name: str, default: int, minimum: int | None = None, maximum: int | None = None) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        value = default
+    else:
+        try:
+            value = int(raw)
+        except ValueError as exc:
+            raise RuntimeError(f"{name} must be an integer, got {raw!r}.") from exc
+    if minimum is not None and value < minimum:
+        raise RuntimeError(f"{name} must be >= {minimum}, got {value}.")
+    if maximum is not None and value > maximum:
+        raise RuntimeError(f"{name} must be <= {maximum}, got {value}.")
+    return value
+
+
+PLATFORM_FEE_PCT = _env_int("PLATFORM_FEE_PCT", 10, minimum=0, maximum=100)
+
 def _conn() -> sqlite3.Connection:
     """Return a thread-local SQLite connection with WAL mode."""
-    if not getattr(_local, "conn", None):
-        conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA busy_timeout=5000")
-        conn.execute("PRAGMA foreign_keys=ON")
-        _local.conn = conn
-    return _local.conn
+    return _db.get_raw_connection(DB_PATH)
 
 
 def _now() -> str:
@@ -335,6 +350,7 @@ def post_call_payout(
     fee_cents = price_cents * PLATFORM_FEE_PCT // 100
     agent_cents = price_cents - fee_cents
 
+    applied = False
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
         refund_exists = conn.execute(
@@ -347,12 +363,24 @@ def post_call_payout(
             (charge_tx_id,),
         ).fetchone()
         if refund_exists is not None:
+            logging_utils.log_event(
+                _LOG,
+                logging.INFO,
+                "payment.settlement_skipped",
+                {
+                    "kind": "payout",
+                    "reason": "refund_already_exists",
+                    "charge_tx_id": charge_tx_id,
+                    "agent_id": agent_id,
+                },
+            )
             return
         try:
             _insert_tx(
                 conn, agent_wallet_id, "payout", agent_cents, agent_id,
                 charge_tx_id, f"Payout 90% for call {charge_tx_id[:8]}",
             )
+            applied = True
         except sqlite3.IntegrityError:
             pass  # idempotency: payout already recorded
         try:
@@ -360,8 +388,23 @@ def post_call_payout(
                 conn, platform_wallet_id, "fee", fee_cents, agent_id,
                 charge_tx_id, f"Platform fee 10% for call {charge_tx_id[:8]}",
             )
+            applied = True
         except sqlite3.IntegrityError:
             pass  # idempotency: fee already recorded
+    logging_utils.log_event(
+        _LOG,
+        logging.INFO,
+        "payment.settlement",
+        {
+            "kind": "payout",
+            "charge_tx_id": charge_tx_id,
+            "agent_id": agent_id,
+            "price_cents": price_cents,
+            "agent_payout_cents": agent_cents,
+            "platform_fee_cents": fee_cents,
+            "applied": applied,
+        },
+    )
 
 
 def post_call_refund(
@@ -376,6 +419,7 @@ def post_call_refund(
     """
     if price_cents < 0:
         raise ValueError("price_cents must be non-negative.")
+    applied = False
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
         payout_exists = conn.execute(
@@ -388,14 +432,38 @@ def post_call_refund(
             (charge_tx_id,),
         ).fetchone()
         if payout_exists is not None:
+            logging_utils.log_event(
+                _LOG,
+                logging.INFO,
+                "payment.settlement_skipped",
+                {
+                    "kind": "refund",
+                    "reason": "payout_already_exists",
+                    "charge_tx_id": charge_tx_id,
+                    "agent_id": agent_id,
+                },
+            )
             return
         try:
             _insert_tx(
                 conn, caller_wallet_id, "refund", price_cents, agent_id,
                 charge_tx_id, f"Refund for failed call {charge_tx_id[:8]}",
             )
+            applied = True
         except sqlite3.IntegrityError:
             pass  # idempotency: refund already recorded
+    logging_utils.log_event(
+        _LOG,
+        logging.INFO,
+        "payment.settlement",
+        {
+            "kind": "refund",
+            "charge_tx_id": charge_tx_id,
+            "agent_id": agent_id,
+            "refund_cents": price_cents,
+            "applied": applied,
+        },
+    )
 
 
 def get_caller_trust(owner_id: str) -> float:
@@ -950,7 +1018,7 @@ def post_dispute_settlement(
             f"Dispute final settlement ({normalized_outcome})",
         )
 
-        return {
+        result = {
             "dispute_id": dispute_id,
             "outcome": normalized_outcome,
             "caller_delta_cents": caller_delta,
@@ -958,6 +1026,16 @@ def post_dispute_settlement(
             "platform_delta_cents": platform_delta,
             "charge_tx_id": charge_tx_id,
         }
+    logging_utils.log_event(
+        _LOG,
+        logging.INFO,
+        "payment.settlement",
+        {
+            "kind": "dispute_settlement",
+            **result,
+        },
+    )
+    return result
 
 
 def get_settlement_transactions(charge_tx_id: str) -> list:

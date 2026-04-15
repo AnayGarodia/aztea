@@ -28,6 +28,29 @@ _QUALITY_SYSTEM_PROMPT = (
     'Return strict JSON: {"verdict":"pass"|"fail","score":1-10,"reason":"..."} '
     "where score is an integer."
 )
+_CALLER_WIN_HINTS = {
+    "incomplete",
+    "wrong",
+    "error",
+    "missing",
+    "refund",
+    "broken",
+    "incorrect",
+    "hallucinated",
+    "timeout",
+    "failed",
+}
+_AGENT_WIN_HINTS = {
+    "scope",
+    "requirement",
+    "changed",
+    "abuse",
+    "harass",
+    "spam",
+    "outside scope",
+    "nonpayment",
+    "threat",
+}
 
 
 def _env_enabled(name: str) -> bool:
@@ -49,6 +72,45 @@ def _build_user_prompt(context: dict) -> str:
         "dispute": context["dispute"],
     }
     return json.dumps(payload, sort_keys=True, ensure_ascii=True)
+
+
+def _token_matches(text: str, vocabulary: set[str]) -> list[str]:
+    lowered = str(text or "").lower()
+    return sorted(token for token in vocabulary if token in lowered)
+
+
+def _local_dispute_fallback(context: dict) -> dict:
+    dispute = context.get("dispute") or {}
+    job = context.get("job") or {}
+    reason = str(dispute.get("reason") or "").strip()
+    evidence = str(dispute.get("evidence") or "").strip()
+    combined = " ".join(part for part in [reason, evidence, str(job.get("error_message") or "")] if part).strip()
+
+    caller_hits = _token_matches(combined, _CALLER_WIN_HINTS)
+    agent_hits = _token_matches(combined, _AGENT_WIN_HINTS)
+    output_payload = job.get("output_payload")
+    if not output_payload:
+        caller_hits.append("missing_output")
+
+    side = str(dispute.get("side") or "").strip().lower()
+    caller_score = len(caller_hits) + (1 if side == "caller" else 0)
+    agent_score = len(agent_hits) + (1 if side == "agent" else 0)
+    delta = caller_score - agent_score
+
+    if delta >= 2:
+        verdict = "caller_wins"
+    elif delta <= -2:
+        verdict = "agent_wins"
+    else:
+        verdict = "split"
+
+    confidence = min(0.9, max(0.55, 0.55 + (abs(delta) * 0.08)))
+    fallback_reason = (
+        "Deterministic fallback judge (live LLM disabled): "
+        f"caller_signals={caller_hits or ['none']}, agent_signals={agent_hits or ['none']}, "
+        f"side={side or 'unknown'}, verdict={verdict}."
+    )
+    return {"verdict": verdict, "reasoning": fallback_reason, "confidence": confidence}
 
 
 def _judge_once(client: Groq, model: str, context: dict) -> dict:
@@ -103,18 +165,9 @@ def run_judgment(dispute_id: str) -> dict:
     api_key = os.environ.get("GROQ_API_KEY", "").strip()
     live_enabled = _env_enabled("AGENTMARKET_ENABLE_LIVE_DISPUTE_JUDGES")
     if not api_key or not live_enabled:
-        reason = str(context["dispute"].get("reason") or "").lower()
-        evidence = str(context["dispute"].get("evidence") or "").lower()
-        joined = f"{reason} {evidence}"
-        if any(token in joined for token in ("incomplete", "wrong", "error", "missing", "refund", "broken")):
-            fallback_verdict = "caller_wins"
-            fallback_reason = "Fallback judge: dispute indicates delivery failure."
-        elif any(token in joined for token in ("scope", "requirement", "changed", "abuse", "harass", "spam")):
-            fallback_verdict = "agent_wins"
-            fallback_reason = "Fallback judge: dispute indicates caller-side scope or conduct issue."
-        else:
-            fallback_verdict = "split"
-            fallback_reason = "Fallback judge: evidence is mixed."
+        fallback = _local_dispute_fallback(context)
+        fallback_verdict = fallback["verdict"]
+        fallback_reason = fallback["reasoning"]
         disputes.record_judgment(
             dispute_id,
             judge_kind="llm_primary",
@@ -172,11 +225,42 @@ def run_judgment(dispute_id: str) -> dict:
     }
 
 
-def _local_quality_fallback(output_payload: dict | None) -> dict:
+def _local_quality_fallback(
+    *,
+    input_payload: dict | None,
+    output_payload: dict | None,
+    agent_description: str = "",
+) -> dict:
     payload = output_payload if isinstance(output_payload, dict) else {}
     if not payload:
         return {"verdict": "fail", "score": 1, "reason": "Output payload is empty."}
-    return {"verdict": "pass", "score": 7, "reason": "Output payload is non-empty."}
+    if any(payload.get(field) for field in ("error", "errors", "exception")):
+        return {"verdict": "fail", "score": 2, "reason": "Output payload contains explicit error fields."}
+
+    filled_fields = [
+        key
+        for key, value in payload.items()
+        if value not in (None, "", [], {}, ())
+    ]
+    text_chars = sum(len(value.strip()) for value in payload.values() if isinstance(value, str))
+    structured_sections = sum(
+        1
+        for value in payload.values()
+        if isinstance(value, (dict, list)) and len(value) > 0
+    )
+    score = 5
+    score += min(2, len(filled_fields) // 2)
+    score += 1 if text_chars >= 120 else 0
+    score += 1 if structured_sections > 0 else 0
+    score = max(1, min(10, score))
+    verdict = "pass" if score >= 6 else "fail"
+    reason = (
+        "Deterministic fallback quality judge (live LLM disabled): "
+        f"filled_fields={len(filled_fields)}, text_chars={text_chars}, "
+        f"structured_sections={structured_sections}, input_keys={len(input_payload or {})}, "
+        f"agent_desc_present={bool(str(agent_description).strip())}."
+    )
+    return {"verdict": verdict, "score": score, "reason": reason}
 
 
 def run_quality_judgment(
@@ -186,10 +270,18 @@ def run_quality_judgment(
     agent_description: str,
 ) -> dict:
     if not _env_enabled("AGENTMARKET_ENABLE_LIVE_QUALITY_JUDGE"):
-        return _local_quality_fallback(output_payload)
+        return _local_quality_fallback(
+            input_payload=input_payload,
+            output_payload=output_payload,
+            agent_description=agent_description,
+        )
     api_key = os.environ.get("GROQ_API_KEY", "").strip()
     if not api_key:
-        return _local_quality_fallback(output_payload)
+        return _local_quality_fallback(
+            input_payload=input_payload,
+            output_payload=output_payload,
+            agent_description=agent_description,
+        )
 
     user_prompt = json.dumps(
         {
@@ -212,14 +304,26 @@ def run_quality_judgment(
     )
     content = (completion.choices[0].message.content or "").strip()
     if not content:
-        return _local_quality_fallback(output_payload)
+        return _local_quality_fallback(
+            input_payload=input_payload,
+            output_payload=output_payload,
+            agent_description=agent_description,
+        )
     try:
         parsed = json.loads(content)
     except json.JSONDecodeError:
-        return _local_quality_fallback(output_payload)
+        return _local_quality_fallback(
+            input_payload=input_payload,
+            output_payload=output_payload,
+            agent_description=agent_description,
+        )
     verdict = str(parsed.get("verdict") or "").strip().lower()
     if verdict not in {"pass", "fail"}:
-        return _local_quality_fallback(output_payload)
+        return _local_quality_fallback(
+            input_payload=input_payload,
+            output_payload=output_payload,
+            agent_description=agent_description,
+        )
     try:
         score = int(parsed.get("score"))
     except (TypeError, ValueError):

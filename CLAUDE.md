@@ -33,25 +33,42 @@ agentmarket/
     product.py
     portfolio.py
   core/
+    db.py                   # Shared SQLite connection manager (WAL, PRAGMAs, thread-local pool)
+    migrate.py              # Idempotent migration runner (apply_migrations)
     auth.py                 # users, scoped API keys, agent keys
     registry.py             # agent listings + semantic search + embeddings cache
-    mcp_manifest.py         # registry -> MCP tool manifest helpers
+    mcp_manifest.py         # registry -> MCP tool manifest helpers (snake_case keys, no prefix)
     embeddings.py           # sentence-transformers embedding backend
     jobs.py                 # async jobs, claim/lease, retries, messages
     payments.py             # wallets + insert-only ledger + settlement helpers
-    disputes.py             # disputes, judgments, caller ratings persistence
+    disputes.py             # disputes, judgments (caller_ratings defined in reputation.py)
     judges.py               # dispute and quality judge helpers
-    reputation.py           # trust/reputation calculations
+    reputation.py           # trust/reputation calculations; canonical caller_ratings table
     onboarding.py           # agent.md parsing/validation/ingestion helpers
     models.py               # request/response contracts
     error_codes.py          # machine-readable error taxonomy
+  migrations/
+    0001_initial.sql        # All CREATE TABLE / INDEX statements (applied once on startup)
+  sdk/
+    agentmarket/
+      client.py             # AgentMarketClient: hire(), search_agents(), get_balance(), deposit()
+      agent.py              # AgentServer: @handler decorator, polling loop, heartbeats
+      models.py             # Pydantic v2 models (Agent, Job, JobResult, Wallet, ...)
+      exceptions.py         # Typed exceptions (InsufficientFundsError, JobFailedError, ...)
+      setup.py
+    tests/
+      test_client.py
+      test_agent_server.py
+  docs/
+    quickstart.md           # Hire + register in 5 minutes
+    verification-contracts.md
+    reputation.md
+    errors.md
+    api-reference.md
   frontend/                 # React/Vite web app
-  sdks/
-    python/
-    typescript/
   scripts/
     agentmarket_mcp_server.py  # stdio MCP server (auto-refresh registry tools)
-  tests/
+  tests/                    # pytest suite (142 tests)
 ```
 
 ---
@@ -150,6 +167,37 @@ Built-ins are registered with `internal://...` endpoints and invoked via `/regis
 
 ---
 
+## Database and migrations
+
+- All modules import from `core/db.py` — single shared connection manager with WAL mode, `busy_timeout=5000`, `foreign_keys=ON`.
+- Schema lives in `migrations/0001_initial.sql`. On startup `apply_migrations()` runs idempotently.
+- `caller_ratings` table is defined **only** in `core/reputation.py`; `disputes.py` does not redeclare it.
+- `GET /health` is production-grade: checks DB ping latency, disk writability, and memory RSS via psutil. Returns 503 on failure.
+
+## MCP surface
+
+- `GET /mcp/tools` and the stdio server (`scripts/agentmarket_mcp_server.py`) both use `core/mcp_manifest.py`.
+- Tool keys are snake_case (`input_schema`, `output_schema`). Tool names have no prefix.
+- `/mcp/invoke` authenticates via `auth.verify_agent_api_key` (not the non-existent `verify_agent_key`).
+
+## Python SDK (`sdk/`)
+
+Install: `pip install -e sdk/`
+
+```python
+from agentmarket import AgentMarketClient, AgentServer
+
+# Hire
+client = AgentMarketClient(api_key="am_...", base_url="http://localhost:8000")
+result = client.hire("agt-abc123", {"code": "..."})
+
+# Serve
+server = AgentServer(api_key="am_...", base_url="http://localhost:8000", name="My Agent", ...)
+@server.handler
+def handle(job): return {"result": "done"}
+server.run()
+```
+
 ## Frontend state (launch UX)
 
 Frontend now emphasizes first-time clarity:
@@ -159,6 +207,8 @@ Frontend now emphasizes first-time clarity:
 - clearer jobs/wallet/trust mental model,
 - cleaner empty states and actionable next steps,
 - preserved backend contract compatibility.
+- SettingsPage warns that only the key prefix is stored; full key must be copied at creation time.
+- Legacy components (`Dashboard.jsx`, `CallWorkspace.jsx`, `ActivityPanel.jsx`, `RegisterAgentModal.jsx`, `LandingPage.jsx` in `components/`) have been deleted.
 
 ---
 
@@ -169,11 +219,17 @@ Frontend now emphasizes first-time clarity:
 pip install -r requirements.txt
 uvicorn server:app --host 0.0.0.0 --port 8000
 
+# One-command Docker (persisted SQLite at /data/registry.db)
+cp .env.example .env && make docker
+
 # Frontend
 cd frontend && npm install && npm run dev
 
 # Tests
 pytest -q tests
+
+# Run DB migrations manually
+python -m core.migrate
 
 # Frontend prod build
 cd frontend && npm run build

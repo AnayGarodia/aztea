@@ -18,6 +18,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from contextvars import Token
 import socket
 from queue import Empty, Queue
 from datetime import datetime, timedelta, timezone
@@ -38,6 +39,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import ValidationError
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 import groq as _groq
 
@@ -58,6 +60,9 @@ from core import judges
 from core import models as core_models
 from core import reputation
 from core import error_codes
+from core.migrate import apply_migrations
+from core.db import DB_PATH as _DB_PATH
+from core import logging_utils
 from main import run as _run_financial
 from core.models import (
     AgentRegisterRequest,
@@ -94,8 +99,14 @@ from core.models import (
     UserLoginRequest,
     UserRegisterRequest,
     WikiRequest,
+    TopupSessionRequest,
 )
 
+_LOG_LEVEL_NAME = (os.environ.get("LOG_LEVEL", "INFO") or "INFO").strip().upper()
+_LOG_LEVEL = getattr(logging, _LOG_LEVEL_NAME, logging.INFO)
+if not isinstance(_LOG_LEVEL, int):
+    _LOG_LEVEL = logging.INFO
+logging_utils.configure_json_logging(_LOG_LEVEL)
 _LOG = logging.getLogger(__name__)
 
 
@@ -107,7 +118,19 @@ _MASTER_KEY = os.environ.get("API_KEY")
 if not _MASTER_KEY:
     raise RuntimeError("API_KEY is not set. Add it to your .env file.")
 
-_SERVER_BASE_URL = os.environ.get("SERVER_BASE_URL", "http://localhost:8000").rstrip("/")
+_SERVER_BASE_URL   = os.environ.get("SERVER_BASE_URL", "http://localhost:8000").rstrip("/")
+_FRONTEND_BASE_URL = os.environ.get("FRONTEND_BASE_URL", _SERVER_BASE_URL).rstrip("/")
+
+# Stripe
+_STRIPE_SECRET_KEY      = os.environ.get("STRIPE_SECRET_KEY", "").strip()
+_STRIPE_WEBHOOK_SECRET  = os.environ.get("STRIPE_WEBHOOK_SECRET", "").strip()
+_STRIPE_PUBLISHABLE_KEY = os.environ.get("STRIPE_PUBLISHABLE_KEY", "").strip()
+try:
+    import stripe as _stripe_lib
+    _STRIPE_AVAILABLE = True
+except ImportError:
+    _stripe_lib = None
+    _STRIPE_AVAILABLE = False
 
 # Deterministic UUIDs for built-in agents
 _FINANCIAL_AGENT_ID  = "00000000-0000-0000-0000-000000000001"
@@ -180,11 +203,15 @@ _DEFAULT_BUILTIN_JOB_WORKER_BATCH_SIZE = 20
 _PROTOCOL_VERSION = "1.0"
 _PROTOCOL_VERSION_HEADER = "X-AgentMarket-Version"
 # $0.001 cannot be represented in integer cents; keep ledger integer-safe until millicent support exists.
-_JUDGE_FEE_CENTS = 0
+_DEFAULT_JUDGE_FEE_CENTS = 0
 _REPUTATION_DECAY_GRACE_DAYS = 30
 _REPUTATION_DECAY_DAILY_RATE = 0.005
 AUTO_SUSPEND_FAILURE_RATE_THRESHOLD = 0.6
 AUTO_SUSPEND_MIN_CALLS = 10
+_DEFAULT_RATE_LIMIT = "60/minute"
+_AUTH_RATE_LIMIT = "10/minute"
+_SEARCH_RATE_LIMIT = "30/minute"
+_JOBS_CREATE_RATE_LIMIT = "100/minute"
 
 
 def _env_int(name: str, default: int, minimum: int | None = None, maximum: int | None = None) -> int:
@@ -217,6 +244,26 @@ def _env_float(name: str, default: float, minimum: float | None = None, maximum:
     if maximum is not None and value > maximum:
         raise RuntimeError(f"{name} must be <= {maximum}, got {value}.")
     return value
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return bool(default)
+    normalized = str(raw).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"{name} must be a boolean, got {raw!r}.")
+
+
+_JUDGE_FEE_CENTS = _env_int(
+    "JUDGE_FEE_CENTS",
+    _DEFAULT_JUDGE_FEE_CENTS,
+    minimum=0,
+    maximum=10_000,
+)
 
 
 _SWEEPER_INTERVAL_SECONDS = _env_int(
@@ -316,7 +363,10 @@ _BUILTIN_JOB_WORKER_BATCH_SIZE = _env_int(
     minimum=1,
     maximum=500,
 )
-_BUILTIN_JOB_WORKER_ENABLED = True
+_BUILTIN_JOB_WORKER_ENABLED = _env_bool(
+    "BUILTIN_JOB_WORKER_ENABLED",
+    default=_builtin_worker_interval > 0,
+)
 _SLO_CLAIM_P95_TARGET_MS = _env_int(
     "SLO_CLAIM_P95_TARGET_MS",
     60_000,
@@ -378,6 +428,16 @@ _BUILTIN_WORKER_STATE = {
     "enabled": _BUILTIN_JOB_WORKER_ENABLED,
     "interval_seconds": _BUILTIN_JOB_WORKER_INTERVAL_SECONDS,
     "batch_size": _BUILTIN_JOB_WORKER_BATCH_SIZE,
+    "running": False,
+    "started_at": None,
+    "last_run_at": None,
+    "last_summary": None,
+    "last_error": None,
+}
+_DISPUTE_JUDGE_STATE_LOCK = threading.Lock()
+_DISPUTE_JUDGE_STATE = {
+    "enabled": _DISPUTE_JUDGE_ENABLED,
+    "interval_seconds": _DISPUTE_JUDGE_INTERVAL_SECONDS,
     "running": False,
     "started_at": None,
     "last_run_at": None,
@@ -594,6 +654,22 @@ def _init_ops_db() -> None:
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_idempotency_updated ON idempotency_requests(updated_at DESC)"
+        )
+
+
+
+def _init_stripe_db() -> None:
+    """Create the stripe_sessions idempotency table (processed payment events)."""
+    with jobs._conn() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS stripe_sessions (
+                session_id    TEXT PRIMARY KEY,
+                wallet_id     TEXT NOT NULL,
+                amount_cents  INTEGER NOT NULL,
+                processed_at  TEXT NOT NULL
+            )
+            """
         )
 
 
@@ -861,6 +937,7 @@ def ensure_builtin_agents_registered() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    apply_migrations(_DB_PATH)
     registry.init_db()
     payments.init_payments_db()
     _auth.init_auth_db()
@@ -868,6 +945,7 @@ async def lifespan(app: FastAPI):
     disputes.init_disputes_db()
     reputation.init_reputation_db()
     _init_ops_db()
+    _init_stripe_db()
     ensure_builtin_agents_registered()
     stop_event: threading.Event | None = None
     sweeper_thread: threading.Thread | None = None
@@ -875,6 +953,8 @@ async def lifespan(app: FastAPI):
     hook_thread: threading.Thread | None = None
     builtin_stop_event: threading.Event | None = None
     builtin_thread: threading.Thread | None = None
+    dispute_judge_stop_event: threading.Event | None = None
+    dispute_judge_thread: threading.Thread | None = None
     if _SWEEPER_ENABLED:
         stop_event = threading.Event()
         sweeper_thread = threading.Thread(
@@ -910,6 +990,18 @@ async def lifespan(app: FastAPI):
         builtin_thread.start()
     else:
         _set_builtin_worker_state(running=False)
+
+    if _DISPUTE_JUDGE_ENABLED:
+        dispute_judge_stop_event = threading.Event()
+        dispute_judge_thread = threading.Thread(
+            target=_dispute_judge_loop,
+            args=(dispute_judge_stop_event,),
+            daemon=True,
+            name="agentmarket-dispute-judge",
+        )
+        dispute_judge_thread.start()
+    else:
+        _set_dispute_judge_state(running=False)
     try:
         yield
     finally:
@@ -925,6 +1017,10 @@ async def lifespan(app: FastAPI):
             builtin_stop_event.set()
         if builtin_thread is not None:
             builtin_thread.join(timeout=2)
+        if dispute_judge_stop_event is not None:
+            dispute_judge_stop_event.set()
+        if dispute_judge_thread is not None:
+            dispute_judge_thread.join(timeout=2)
 
 
 # ---------------------------------------------------------------------------
@@ -936,11 +1032,14 @@ def _key_from_request(request: Request) -> str:
     if caller:
         if caller["type"] == "master":
             return "master"
+        key_id = str(caller.get("key_id") or "").strip()
+        if key_id:
+            return f"key:{key_id}"
         return caller["owner_id"]
     return request.client.host if request.client else "unknown"
 
 
-limiter = Limiter(key_func=_key_from_request)
+limiter = Limiter(key_func=_key_from_request, default_limits=[_DEFAULT_RATE_LIMIT])
 app = FastAPI(title="agentmarket", lifespan=lifespan)
 app.state.limiter = limiter
 
@@ -967,11 +1066,15 @@ app.add_middleware(
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
     if not (request.headers.get(_PROTOCOL_VERSION_HEADER, "") or "").strip():
-        _LOG.warning(
-            "Request missing %s header: method=%s path=%s",
-            _PROTOCOL_VERSION_HEADER,
-            request.method,
-            request.url.path,
+        logging_utils.log_event(
+            _LOG,
+            logging.WARNING,
+            "request.missing_protocol_header",
+            {
+                "header": _PROTOCOL_VERSION_HEADER,
+                "method": request.method,
+                "path": request.url.path,
+            },
         )
     response = await call_next(request)
     response.headers[_PROTOCOL_VERSION_HEADER] = _PROTOCOL_VERSION
@@ -1008,6 +1111,34 @@ async def limit_body_size(request: Request, call_next):
     return await call_next(request)
 
 
+@app.middleware("http")
+async def request_tracing(request: Request, call_next):
+    request_id = str(uuid.uuid4())
+    request.state.request_id = request_id
+    token: Token = logging_utils.set_request_id(request_id)
+    start = time.monotonic()
+    response: Response | None = None
+    response = await call_next(request)
+    try:
+        response.headers["X-Request-ID"] = request_id
+        return response
+    finally:
+        duration_ms = round((time.monotonic() - start) * 1000, 3)
+        logging_utils.log_event(
+            _LOG,
+            logging.INFO,
+            "http.request.completed",
+            {
+                "method": request.method,
+                "path": request.url.path,
+                "duration_ms": duration_ms,
+                "status_code": response.status_code if response is not None else 500,
+                "client_ip": request.client.host if request.client else None,
+            },
+        )
+        logging_utils.reset_request_id(token)
+
+
 # ---------------------------------------------------------------------------
 # Auth helpers
 # ---------------------------------------------------------------------------
@@ -1040,6 +1171,7 @@ def _resolve_caller(request: Request) -> core_models.CallerContext | None:
             "owner_id": f"user:{user['user_id']}",
             "user": user,
             "scopes": scopes,
+            "key_id": str(user.get("key_id") or ""),
         }
         request.state._caller = caller
         return caller
@@ -1332,10 +1464,17 @@ def _timeout_stale_lease_at_touchpoint(job: dict, actor_owner_id: str, touchpoin
     updated = jobs.mark_job_timeout(
         job["job_id"],
         retry_delay_seconds=_SWEEPER_RETRY_DELAY_SECONDS,
-        allow_retry=False,
+        allow_retry=True,
     )
     if updated is None:
         return None
+
+    metadata: dict[str, Any] = {
+        "touchpoint": touchpoint,
+        "status_after": updated.get("status"),
+    }
+    if updated.get("status") == "pending":
+        metadata["next_retry_at"] = updated.get("next_retry_at")
 
     jobs.add_claim_event(
         job["job_id"],
@@ -1344,14 +1483,23 @@ def _timeout_stale_lease_at_touchpoint(job: dict, actor_owner_id: str, touchpoin
         claim_token=job.get("claim_token"),
         lease_expires_at=job.get("lease_expires_at"),
         actor_id=actor_owner_id,
-        metadata={"touchpoint": touchpoint, "status_after": updated.get("status")},
+        metadata=metadata,
     )
 
-    return _settle_failed_job(
-        updated,
-        actor_owner_id=actor_owner_id,
-        event_type="job.timeout_terminal",
-    )
+    if updated.get("status") == "pending":
+        _record_job_event(
+            updated,
+            "job.timeout_retry_scheduled",
+            actor_owner_id=actor_owner_id,
+            payload={
+                "touchpoint": touchpoint,
+                "retry_count": updated.get("retry_count"),
+                "next_retry_at": updated.get("next_retry_at"),
+            },
+        )
+        return updated
+
+    return _settle_failed_job(updated, actor_owner_id=actor_owner_id, event_type="job.timeout_terminal")
 
 
 def _job_latency_ms(job: dict) -> float:
@@ -1508,7 +1656,7 @@ def _normalize_job_message_protocol(
             "legacy_type": None,
         }
 
-    return _map_unknown_legacy_message_to_note(normalized_type, payload, normalized_correlation)
+    raise ValueError(f"Unsupported job message type: {normalized_type}")
 
 
 def _parse_job_message_protocol_from_models(
@@ -1573,36 +1721,7 @@ def _parse_job_message_protocol_fallback(
     if msg_type in _LEGACY_JOB_MESSAGE_TYPES:
         return {"type": msg_type, "payload": dict(payload), "correlation_id": normalized_correlation}
 
-    return _map_unknown_legacy_message_to_note(msg_type, dict(payload), normalized_correlation)
-
-
-def _map_unknown_legacy_message_to_note(
-    legacy_type: str,
-    payload: dict,
-    correlation_id: str | None = None,
-) -> dict:
-    _LOG.warning(
-        "Deprecated unknown legacy job message type '%s' mapped to note.",
-        legacy_type,
-    )
-    note_text = str(
-        payload.get("text")
-        or payload.get("note")
-        or payload.get("message")
-        or f"Legacy message type '{legacy_type}'"
-    ).strip()
-    if not note_text:
-        note_text = f"Legacy message type '{legacy_type}'"
-    return {
-        "type": "note",
-        "payload": {
-            "text": note_text,
-            "legacy_type": legacy_type,
-            "legacy_payload": payload,
-        },
-        "correlation_id": correlation_id,
-        "legacy_type": legacy_type,
-    }
+    raise ValueError(f"Unsupported job message type: {msg_type}")
 
 
 def _validate_typed_job_message_payload(msg_type: str, payload: dict) -> dict:
@@ -1781,6 +1900,19 @@ def _record_job_event(
         ).fetchone()
 
     event = _event_row_to_dict(row)
+    logging_utils.log_event(
+        _LOG,
+        logging.INFO,
+        "job.state_transition",
+        {
+            "event_id": event.get("event_id"),
+            "event_type": event.get("event_type"),
+            "job_id": event.get("job_id"),
+            "agent_id": event.get("agent_id"),
+            "actor_owner_id": event.get("actor_owner_id"),
+            "payload": event.get("payload") if isinstance(event.get("payload"), dict) else {},
+        },
+    )
     _deliver_job_event_hooks(event)
     return event
 
@@ -2124,6 +2256,11 @@ def _set_builtin_worker_state(**updates: Any) -> None:
         _BUILTIN_WORKER_STATE.update(updates)
 
 
+def _set_dispute_judge_state(**updates: Any) -> None:
+    with _DISPUTE_JUDGE_STATE_LOCK:
+        _DISPUTE_JUDGE_STATE.update(updates)
+
+
 def _coerce_string_list(value: Any) -> list[str]:
     if value is None:
         return []
@@ -2363,6 +2500,67 @@ def _builtin_worker_loop(stop_event: threading.Event) -> None:
                 last_error=str(exc),
             )
     _set_builtin_worker_state(running=False)
+
+
+def _run_pending_dispute_judgments(limit: int = 100, actor_owner_id: str = "system:dispute-judge") -> dict:
+    capped = min(max(1, int(limit)), 500)
+    pending = disputes.list_disputes(status="pending", limit=capped)
+    judged_count = 0
+    resolved_count = 0
+    tied_count = 0
+    errors: list[dict[str, str]] = []
+    processed_ids: list[str] = []
+    resolved_ids: list[str] = []
+    tied_ids: list[str] = []
+    for dispute_row in pending:
+        dispute_id = str(dispute_row.get("dispute_id") or "").strip()
+        if not dispute_id:
+            continue
+        try:
+            latest, _ = _resolve_dispute_with_judges(dispute_id, actor_owner_id=actor_owner_id)
+        except Exception as exc:
+            errors.append({"dispute_id": dispute_id, "error": str(exc)})
+            continue
+        judged_count += 1
+        processed_ids.append(dispute_id)
+        status = str(latest.get("status") or "").strip().lower()
+        if status == "resolved":
+            resolved_count += 1
+            resolved_ids.append(dispute_id)
+        elif status == "tied":
+            tied_count += 1
+            tied_ids.append(dispute_id)
+    return {
+        "pending_scanned": len(pending),
+        "judged_count": judged_count,
+        "resolved_count": resolved_count,
+        "tied_count": tied_count,
+        "failed_count": len(errors),
+        "processed_dispute_ids": processed_ids,
+        "resolved_dispute_ids": resolved_ids,
+        "tied_dispute_ids": tied_ids,
+        "errors": errors,
+    }
+
+
+def _dispute_judge_loop(stop_event: threading.Event) -> None:
+    _set_dispute_judge_state(running=True, started_at=_utc_now_iso())
+    while not stop_event.wait(_DISPUTE_JUDGE_INTERVAL_SECONDS):
+        started = _utc_now_iso()
+        try:
+            summary = _run_pending_dispute_judgments(actor_owner_id="system:dispute-judge")
+            _set_dispute_judge_state(
+                last_run_at=started,
+                last_summary=summary,
+                last_error=None,
+            )
+        except Exception as exc:
+            _LOG.exception("Dispute judge loop failed.")
+            _set_dispute_judge_state(
+                last_run_at=started,
+                last_error=str(exc),
+            )
+    _set_dispute_judge_state(running=False)
 
 
 def _enqueue_job_event_hook_deliveries(event: dict) -> None:
@@ -2831,13 +3029,11 @@ def _run_output_verifier(
 
 
 def _timeout_error_payload(job_payload: dict) -> dict:
-    payload = error_codes.make_error(
+    return error_codes.make_error(
         error_codes.AGENT_TIMEOUT,
         "Job lease expired before completion.",
         {"job": job_payload},
     )
-    payload.update(job_payload)
-    return payload
 
 
 def _run_quality_gate(job: dict, agent: dict, output_payload: dict) -> dict[str, Any]:
@@ -3245,16 +3441,29 @@ def _sweep_jobs(
 
     expired = jobs.list_jobs_with_expired_leases(limit=limit)
     timeout_failed_job_ids: list[str] = []
+    timeout_retry_job_ids: list[str] = []
     for item in expired:
         updated = jobs.mark_job_timeout(
             item["job_id"],
             retry_delay_seconds=retry_delay_seconds,
-            allow_retry=False,
+            allow_retry=True,
         )
         if updated is None:
             continue
-        settled = _settle_failed_job(updated, actor_owner_id=actor_owner_id, event_type="job.timeout_terminal")
-        timeout_failed_job_ids.append(settled["job_id"])
+        if updated.get("status") == "pending":
+            timeout_retry_job_ids.append(updated["job_id"])
+            _record_job_event(
+                updated,
+                "job.timeout_retry_scheduled",
+                actor_owner_id=actor_owner_id,
+                payload={
+                    "retry_count": updated.get("retry_count"),
+                    "next_retry_at": updated.get("next_retry_at"),
+                },
+            )
+        else:
+            settled = _settle_failed_job(updated, actor_owner_id=actor_owner_id, event_type="job.timeout_terminal")
+            timeout_failed_job_ids.append(settled["job_id"])
 
     sla_failed_job_ids: list[str] = []
     for item in jobs.list_jobs_past_sla(sla_seconds=sla_seconds, limit=limit):
@@ -3290,7 +3499,7 @@ def _sweep_jobs(
         "due_retry_count": len(due_retry),
         "retry_ready_count": len(retry_ready_job_ids),
         "retry_ready_job_ids": retry_ready_job_ids,
-        "timeout_retry_job_ids": [],
+        "timeout_retry_job_ids": timeout_retry_job_ids,
         "timeout_failed_job_ids": timeout_failed_job_ids,
         "sla_failed_job_ids": sla_failed_job_ids,
         "auto_suspended_count": int(suspension_summary["auto_suspended_count"]),
@@ -3475,6 +3684,8 @@ def _jobs_metrics(sla_seconds: int = _DEFAULT_SLA_SECONDS) -> dict:
         hook_worker_state = dict(_HOOK_WORKER_STATE)
     with _BUILTIN_WORKER_STATE_LOCK:
         builtin_worker_state = dict(_BUILTIN_WORKER_STATE)
+    with _DISPUTE_JUDGE_STATE_LOCK:
+        dispute_judge_state = dict(_DISPUTE_JUDGE_STATE)
 
     return {
         "status_counts": status_counts,
@@ -3490,6 +3701,7 @@ def _jobs_metrics(sla_seconds: int = _DEFAULT_SLA_SECONDS) -> dict:
         "sweeper": sweeper_state,
         "hook_worker": hook_worker_state,
         "builtin_worker": builtin_worker_state,
+        "dispute_judge": dispute_judge_state,
         "hook_delivery": {
             "status_counts": delivery_status_counts,
             "attempted_last_24h": int(delivery_attempted_24h),
@@ -3573,34 +3785,151 @@ def _default_error_code_for_request(status_code: int, path: str, message: str) -
     return error_codes.DEFAULT_BY_STATUS.get(status_code, error_codes.INVALID_INPUT)
 
 
+def _error_code_from_message(status_code: int, path: str, message: str) -> str:
+    lowered_path = str(path or "").lower()
+    lowered_message = str(message or "").strip().lower()
+
+    if lowered_message.startswith("authorization header missing"):
+        return "auth.missing_authorization"
+    if lowered_message == "invalid api key.":
+        return "auth.invalid_key"
+    if lowered_message == "invalid email or password.":
+        return "auth.invalid_credentials"
+    if lowered_message.startswith("agent-scoped keys cannot"):
+        return "auth.insufficient_scope"
+    if lowered_message.startswith("this endpoint requires"):
+        return "auth.insufficient_scope"
+    if lowered_message.startswith("not available for master key"):
+        return "auth.insufficient_scope"
+    if lowered_message == "not authorized." or lowered_message.startswith("not authorized"):
+        return "auth.forbidden"
+    if lowered_message.startswith("tool '"):
+        return "mcp.tool_not_found"
+    if lowered_message.startswith("agent '"):
+        return "agent.not_found"
+    if lowered_message.startswith("job '"):
+        return "job.not_found"
+    if lowered_message.startswith("dispute '"):
+        return "dispute.not_found"
+    if lowered_message.startswith("wallet '"):
+        return "wallet.not_found"
+    if lowered_message.startswith("invalid status:"):
+        return "request.invalid_status"
+    if "idempotency-key is too long" in lowered_message:
+        return "request.idempotency_key_too_long"
+    if lowered_message.startswith("a request with this idempotency-key is still in progress"):
+        return "request.idempotency_conflict"
+    if lowered_message.startswith("failed to fetch manifest_url"):
+        return "onboarding.manifest_fetch_failed"
+    if lowered_message.startswith("manifest too large"):
+        return "request.payload_too_large"
+    if lowered_message.startswith("fetched manifest is empty"):
+        return "onboarding.manifest_empty"
+    if lowered_message.startswith("failed to create job"):
+        return "job.create_failed"
+    if lowered_message.startswith("job is not claimable"):
+        return "job.not_claimable"
+    if lowered_message.startswith("job is not currently claimed by this worker"):
+        return "job.claim_missing"
+    if lowered_message.startswith("invalid or missing claim_token") or lowered_message.startswith("invalid or stale claim_token"):
+        return "job.invalid_claim_token"
+    if lowered_message.startswith("unable to heartbeat this job claim"):
+        return "job.heartbeat_failed"
+    if lowered_message.startswith("unable to release this job claim"):
+        return "job.release_failed"
+    if lowered_message.startswith("unable to update job status"):
+        return "job.transition_failed"
+    if lowered_message.startswith("unable to schedule retry for this job"):
+        return "job.retry_failed"
+    if lowered_message.startswith("upstream agent unreachable"):
+        return "agent.upstream_unreachable"
+    if lowered_message.startswith("agent endpoint is misconfigured"):
+        return "agent.endpoint_misconfigured"
+    if lowered_message.startswith("agent execution failed"):
+        return "agent.execution_failed"
+    if lowered_message.startswith("all llm models rate-limited"):
+        return "agent.upstream_rate_limited"
+    if lowered_message.startswith("hook not found"):
+        return "hook.not_found"
+    if lowered_message.startswith("key not found or already revoked"):
+        return "auth.key_not_found"
+    if lowered_message.startswith("disputes can only be filed for completed jobs"):
+        return "dispute.invalid_state"
+    if lowered_message.startswith("disputes must be filed before the caller submits a rating"):
+        return "dispute.rating_locked"
+    if lowered_message.startswith("a dispute already exists for this job"):
+        return "dispute.already_exists"
+    if lowered_message.startswith("dispute window has expired for this job"):
+        return "dispute.window_closed"
+    if lowered_message.startswith("job completion timestamp is invalid"):
+        return "job.invalid_completion_timestamp"
+    if lowered_message.startswith("failed to resolve dispute"):
+        return "dispute.resolve_failed"
+    if lowered_message.startswith("tool_result payload.correlation_id is required"):
+        return "job.invalid_tool_result"
+    if lowered_message.startswith("unknown tool_result correlation_id"):
+        return "job.invalid_tool_result"
+    if lowered_message.startswith("unsupported job message type"):
+        return "job.invalid_message_type"
+    if lowered_message.startswith("agent.md spec not found"):
+        return "onboarding.spec_not_found"
+    if lowered_message.startswith("cursor must not be empty") or lowered_message.startswith("invalid cursor"):
+        return "request.invalid_cursor"
+    if lowered_message.startswith("limit must be > 0"):
+        return "request.invalid_limit"
+    if lowered_message.startswith("sla_seconds must be > 0"):
+        return "request.invalid_sla_seconds"
+    if lowered_message.startswith("max_mismatches must be > 0"):
+        return "request.invalid_max_mismatches"
+    if lowered_message.startswith("rank_by must be one of"):
+        return "request.invalid_rank_by"
+    if lowered_message.startswith("authentication service is temporarily unavailable"):
+        return "auth.service_unavailable"
+    if lowered_message.startswith("master key cannot"):
+        return "auth.master_forbidden"
+    if lowered_message.startswith("only the original caller can rate this job"):
+        return "job.rating_forbidden"
+    if lowered_message.startswith("only the job's agent owner can rate the caller"):
+        return "job.rating_forbidden"
+    if lowered_message.startswith("ratings are locked once a dispute is filed"):
+        return "dispute.rating_locked"
+    if lowered_message.startswith("this endpoint requires caller or worker scope"):
+        return "auth.insufficient_scope"
+    return _default_error_code_for_request(status_code, path, lowered_message)
+
+
 def _normalize_error_payload(status_code: int, detail: Any, path: str) -> dict[str, Any]:
     if isinstance(detail, dict):
         raw_error = str(detail.get("error") or "").strip()
         if {"error", "message"}.issubset(detail.keys()):
-            data = detail.get("data")
-            if not isinstance(data, dict):
-                data = {}
+            details = detail.get("details")
+            if details is None and "data" in detail:
+                details = detail.get("data")
             return error_codes.make_error(
-                raw_error or _default_error_code_for_request(status_code, path, str(detail.get("message") or "")),
+                raw_error or _error_code_from_message(status_code, path, str(detail.get("message") or "")),
                 str(detail.get("message") or "Request failed."),
-                data,
+                details,
             )
         message = str(detail.get("message") or detail.get("detail") or "Request failed.").strip()
-        data = {
+        details = {
             str(k): v
             for k, v in detail.items()
-            if str(k) not in {"error", "message", "detail"}
+            if str(k) not in {"error", "message", "detail", "details", "data"}
         }
+        if "details" in detail and detail["details"] is not None:
+            details = detail["details"]
+        elif "data" in detail and detail["data"] is not None:
+            details = detail["data"]
         return error_codes.make_error(
-            raw_error or _default_error_code_for_request(status_code, path, message),
+            raw_error or _error_code_from_message(status_code, path, message),
             message,
-            data,
+            details,
         )
     message = str(detail or "Request failed.")
     return error_codes.make_error(
-        _default_error_code_for_request(status_code, path, message),
+        _error_code_from_message(status_code, path, message),
         message,
-        {},
+        None,
     )
 
 
@@ -3622,18 +3951,47 @@ async def _request_validation_exception_handler(request: Request, exc: RequestVa
 
 @app.exception_handler(RateLimitExceeded)
 async def _rate_limit_exception_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
-    payload = error_codes.make_error(
-        error_codes.RATE_LIMITED,
-        "Rate limit exceeded.",
-        {"detail": str(exc.detail) if getattr(exc, "detail", None) else ""},
+    retry_after = 60
+    limit = getattr(exc, "limit", None)
+    if limit is not None:
+        limit_item = getattr(limit, "limit", None)
+        get_expiry = getattr(limit_item, "get_expiry", None)
+        if callable(get_expiry):
+            try:
+                retry_after = int(get_expiry())
+            except Exception:
+                retry_after = 60
+    payload = {
+        "error": "rate_limit_exceeded",
+        "retry_after_seconds": max(1, retry_after),
+    }
+    logging_utils.log_event(
+        _LOG,
+        logging.WARNING,
+        "http.rate_limited",
+        {
+            "method": request.method,
+            "path": request.url.path,
+            "retry_after_seconds": payload["retry_after_seconds"],
+        },
     )
-    return JSONResponse(content=payload, status_code=429)
+    return JSONResponse(
+        content=payload,
+        status_code=429,
+        headers={"Retry-After": str(payload["retry_after_seconds"])},
+    )
 
 
 @app.exception_handler(Exception)
 async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    _LOG.exception("Unhandled server exception on %s %s", request.method, request.url.path)
-    payload = error_codes.make_error("INTERNAL_ERROR", "Internal server error.")
+    logging_utils.log_event(
+        _LOG,
+        logging.ERROR,
+        "server.unhandled_exception",
+        {"method": request.method, "path": request.url.path},
+    )
+    _LOG.exception("unhandled_exception")
+    payload = error_codes.make_error("server.internal_error", "Internal server error.")
     return JSONResponse(content=payload, status_code=500)
 
 
@@ -3651,7 +4009,7 @@ _OPENAPI_ERROR_RESPONSES: dict[int, dict[str, Any]] = {
     410: {"model": core_models.ErrorResponse, "description": "Lease expired."},
     413: {"model": core_models.ErrorResponse, "description": "Payload too large."},
     422: {"model": core_models.ErrorResponse, "description": "Validation error."},
-    429: {"model": core_models.ErrorResponse, "description": "Rate limit exceeded."},
+    429: {"model": core_models.RateLimitErrorResponse, "description": "Rate limit exceeded."},
     500: {"model": core_models.ErrorResponse, "description": "Internal server error."},
     502: {"model": core_models.ErrorResponse, "description": "Upstream request failed."},
     503: {"model": core_models.ErrorResponse, "description": "Upstream service unavailable."},
@@ -3666,13 +4024,73 @@ def _error_responses(*codes: int) -> dict[int, dict[str, Any]]:
 # Health
 # ---------------------------------------------------------------------------
 
+def _read_version() -> str:
+    try:
+        version_path = os.path.join(os.path.dirname(__file__), "VERSION")
+        return open(version_path).read().strip()
+    except Exception:
+        return "unknown"
+
+
 @app.get(
     "/health",
     response_model=core_models.HealthResponse,
-    responses=_error_responses(429, 500),
+    responses={
+        200: {"description": "All checks passed."},
+        503: {"model": core_models.ErrorResponse, "description": "One or more checks failed."},
+        **_error_responses(429, 500),
+    },
 )
 def health() -> core_models.HealthResponse:
-    return {"status": "ok", "agents": len(registry.get_agents())}
+    import psutil
+
+    checks: dict[str, core_models.HealthCheckDetail] = {}
+    all_ok = True
+
+    # DB check
+    try:
+        t0 = time.monotonic()
+        with jobs._conn() as conn:
+            conn.execute("SELECT 1").fetchone()
+        latency_ms = round((time.monotonic() - t0) * 1000, 2)
+        checks["db"] = core_models.HealthCheckDetail(ok=True, latency_ms=latency_ms)
+    except Exception as exc:
+        all_ok = False
+        checks["db"] = core_models.HealthCheckDetail(ok=False, error=str(exc))
+
+    # Disk check
+    try:
+        writable = os.access(_DB_PATH, os.W_OK)
+        checks["disk"] = core_models.HealthCheckDetail(ok=writable, writable=writable)
+        if not writable:
+            all_ok = False
+    except Exception as exc:
+        all_ok = False
+        checks["disk"] = core_models.HealthCheckDetail(ok=False, error=str(exc))
+
+    # Memory check
+    try:
+        proc = psutil.Process()
+        rss_mb = round(proc.memory_info().rss / (1024 * 1024), 2)
+        checks["memory"] = core_models.HealthCheckDetail(ok=True, rss_mb=rss_mb)
+    except Exception as exc:
+        all_ok = False
+        checks["memory"] = core_models.HealthCheckDetail(ok=False, error=str(exc))
+
+    agent_count = len(registry.get_agents())
+    status = "ok" if all_ok else "degraded"
+    response = core_models.HealthResponse(
+        status=status,
+        checks=checks,
+        agent_count=agent_count,
+        version=_read_version(),
+        agents=agent_count,
+    )
+
+    if not all_ok:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=503, content=response.model_dump())
+    return response
 
 
 @app.get(
@@ -3782,7 +4200,7 @@ def onboarding_ingest(
     response_model=core_models.AuthRegisterResponse,
     responses=_error_responses(400, 429, 500, 503),
 )
-@limiter.limit("10/minute")
+@limiter.limit(_AUTH_RATE_LIMIT, key_func=get_remote_address)
 def auth_register(request: Request, body: UserRegisterRequest) -> core_models.AuthRegisterResponse:
     """Create a new user account. Returns the initial API key (shown once)."""
     try:
@@ -3803,6 +4221,13 @@ def auth_register(request: Request, body: UserRegisterRequest) -> core_models.Au
                 status_code=503,
                 detail="Authentication service is temporarily unavailable. Please try again.",
             )
+    # Credit $1.00 starter balance so new users can invoke agents immediately
+    try:
+        _owner_id = f"user:{result['user_id']}"
+        _starter_wallet = payments.get_or_create_wallet(_owner_id)
+        payments.deposit(_starter_wallet["wallet_id"], 100, "Welcome credit — $1.00 to get started")
+    except Exception:
+        _LOG.warning("Failed to credit starter balance for new user %s", result.get("user_id"))
     return JSONResponse(content=result, status_code=201)
 
 
@@ -3811,7 +4236,7 @@ def auth_register(request: Request, body: UserRegisterRequest) -> core_models.Au
     response_model=core_models.AuthLoginResponse,
     responses=_error_responses(401, 429, 500, 503),
 )
-@limiter.limit("20/minute")
+@limiter.limit(_AUTH_RATE_LIMIT, key_func=get_remote_address)
 def auth_login(request: Request, body: UserLoginRequest) -> core_models.AuthLoginResponse:
     """Verify credentials. Returns a fresh API key valid for this session."""
     try:
@@ -4081,7 +4506,12 @@ def _mcp_tool_slug(name: str, fallback: str) -> str:
 
 def _mcp_active_agents() -> list[dict[str, Any]]:
     agents = registry.get_agents(include_internal=True, include_banned=True)
-    return [agent for agent in agents if str(agent.get("status") or "").strip().lower() == "active"]
+    return [
+        agent
+        for agent in agents
+        if str(agent.get("status") or "").strip().lower() == "active"
+        and not bool(agent.get("internal_only"))
+    ]
 
 
 def _mcp_tools_and_lookup() -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
@@ -4136,7 +4566,7 @@ def _caller_from_raw_api_key(raw_api_key: str) -> core_models.CallerContext | No
             "user": user,
             "scopes": list(user.get("scopes") or []),
         }
-    agent_key = _auth.verify_agent_key(raw)
+    agent_key = _auth.verify_agent_api_key(raw)
     if agent_key:
         return {
             "type": "agent_key",
@@ -4255,7 +4685,7 @@ def registry_list(
     response_model=core_models.RegistrySearchResponse,
     responses=_error_responses(400, 401, 403, 422, 429, 500),
 )
-@limiter.limit("60/minute")
+@limiter.limit(_SEARCH_RATE_LIMIT)
 def registry_search(
     request: Request,
     body: RegistrySearchRequest,
@@ -4309,6 +4739,29 @@ def registry_get(
     if agent is None or agent.get("status") == "banned":
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
     return JSONResponse(content=_agent_response(agent, caller))
+
+
+@app.get(
+    "/registry/agents/{agent_id}/keys",
+    response_model=core_models.AgentKeyListResponse,
+    responses=_error_responses(401, 403, 404, 429, 500),
+)
+@limiter.limit("60/minute")
+def registry_agent_key_list(
+    request: Request,
+    agent_id: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.AgentKeyListResponse:
+    _require_scope(caller, "worker")
+    if caller["type"] == "agent_key":
+        raise HTTPException(status_code=403, detail="Agent-scoped keys cannot list keys.")
+    agent = registry.get_agent(agent_id)
+    if agent is None or agent.get("status") == "banned":
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    if not _caller_can_manage_agent(caller, agent):
+        raise HTTPException(status_code=403, detail="Not authorized.")
+    keys = _auth.list_agent_api_keys(agent_id)
+    return JSONResponse(content={"keys": keys})
 
 
 @app.post(
@@ -4607,7 +5060,7 @@ def registry_call(
     response_model=core_models.JobResponse,
     responses=_error_responses(400, 401, 402, 403, 404, 429, 500, 503),
 )
-@limiter.limit("20/minute")
+@limiter.limit(_JOBS_CREATE_RATE_LIMIT)
 def jobs_create(
     request: Request,
     body: JobCreateRequest,
@@ -5503,7 +5956,9 @@ def jobs_dispute(
     dispute_window_hours = _to_non_negative_int(job.get("dispute_window_hours"), default=_DEFAULT_JOB_DISPUTE_WINDOW_HOURS)
     if dispute_window_hours < 1:
         dispute_window_hours = _DEFAULT_JOB_DISPUTE_WINDOW_HOURS
-    if datetime.now(timezone.utc) > (completed_at + timedelta(hours=dispute_window_hours)):
+    configured_window_seconds = dispute_window_hours * 3600
+    effective_window_seconds = min(configured_window_seconds, _DISPUTE_FILE_WINDOW_SECONDS)
+    if datetime.now(timezone.utc) > (completed_at + timedelta(seconds=effective_window_seconds)):
         raise HTTPException(status_code=400, detail="Dispute window has expired for this job.")
 
     side = _dispute_side_for_caller(caller, job)
@@ -5988,18 +6443,151 @@ def get_runs(
     limit = min(max(1, limit), 200)
     runs_file = os.path.join(os.path.dirname(__file__), "runs.jsonl")
     if not os.path.exists(runs_file):
-        return JSONResponse(content={"runs": []})
+        return JSONResponse(content={"runs": [], "skipped_lines": 0, "skipped_line_numbers": []})
     with open(runs_file, encoding="utf-8") as f:
         lines = f.readlines()
     runs = []
-    for line in reversed(lines):
+    skipped = 0
+    skipped_line_numbers: list[int] = []
+    for line_number, line in reversed(list(enumerate(lines, start=1))):
         line = line.strip()
         if not line:
             continue
         try:
             runs.append(json.loads(line))
         except json.JSONDecodeError:
+            skipped += 1
+            skipped_line_numbers.append(line_number)
             continue
         if len(runs) >= limit:
             break
-    return JSONResponse(content={"runs": runs})
+    skipped_line_numbers.sort()
+    return JSONResponse(
+        content={
+            "runs": runs,
+            "skipped_lines": skipped,
+            "skipped_line_numbers": skipped_line_numbers,
+        },
+        headers={"X-Skipped-Lines": str(skipped)},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Public config (Stripe publishable key for the frontend)
+# ---------------------------------------------------------------------------
+
+@app.get(
+    "/config/public",
+    tags=["config"],
+    summary="Public server configuration for the frontend.",
+)
+def config_public() -> JSONResponse:
+    return JSONResponse({
+        "stripe_enabled": bool(_STRIPE_SECRET_KEY and _STRIPE_AVAILABLE),
+        "stripe_publishable_key": _STRIPE_PUBLISHABLE_KEY or None,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Stripe: create checkout session + webhook
+# ---------------------------------------------------------------------------
+
+
+@app.post(
+    "/wallets/topup/session",
+    tags=["wallet"],
+    summary="Create a Stripe Checkout session for wallet top-up.",
+    responses=_error_responses(400, 401, 403, 404, 429, 500, 503),
+)
+@limiter.limit("20/minute")
+def create_topup_session(
+    request: Request,
+    body: core_models.TopupSessionRequest,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    if not _STRIPE_AVAILABLE or not _STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=503, detail="Payment processing is not configured on this server.")
+    _require_scope(caller, "caller")
+    wallet = payments.get_wallet(body.wallet_id)
+    if wallet is None:
+        raise HTTPException(status_code=404, detail=f"Wallet '{body.wallet_id}' not found.")
+    if caller["type"] != "master" and wallet["owner_id"] != caller["owner_id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to top up this wallet.")
+    if not (100 <= body.amount_cents <= 50000):
+        raise HTTPException(status_code=400, detail="Amount must be between $1.00 and $500.00.")
+
+    _stripe_lib.api_key = _STRIPE_SECRET_KEY
+    session = _stripe_lib.checkout.Session.create(
+        payment_method_types=["card"],
+        line_items=[{
+            "price_data": {
+                "currency": "usd",
+                "product_data": {
+                    "name": "AgentMarket wallet top-up",
+                    "description": f"Add ${body.amount_cents / 100:.2f} to your AgentMarket wallet.",
+                },
+                "unit_amount": body.amount_cents,
+            },
+            "quantity": 1,
+        }],
+        mode="payment",
+        client_reference_id=body.wallet_id,
+        metadata={
+            "wallet_id": body.wallet_id,
+            "owner_id": caller["owner_id"],
+        },
+        success_url=f"{_FRONTEND_BASE_URL}/wallet?payment=success&session_id={{CHECKOUT_SESSION_ID}}",
+        cancel_url=f"{_FRONTEND_BASE_URL}/wallet?payment=cancelled",
+    )
+    return JSONResponse({"checkout_url": session.url, "session_id": session.id})
+
+
+@app.post(
+    "/stripe/webhook",
+    tags=["wallet"],
+    summary="Stripe webhook receiver — credits wallet on successful checkout.",
+    include_in_schema=False,
+)
+async def stripe_webhook(request: Request) -> JSONResponse:
+    if not _STRIPE_AVAILABLE or not _STRIPE_SECRET_KEY or not _STRIPE_WEBHOOK_SECRET:
+        raise HTTPException(status_code=503, detail="Stripe not configured.")
+
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature", "")
+
+    try:
+        _stripe_lib.api_key = _STRIPE_SECRET_KEY
+        event = _stripe_lib.Webhook.construct_event(payload, sig_header, _STRIPE_WEBHOOK_SECRET)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid Stripe webhook signature.")
+
+    if event["type"] == "checkout.session.completed":
+        session_obj = event["data"]["object"]
+        wallet_id   = session_obj.get("client_reference_id") or (session_obj.get("metadata") or {}).get("wallet_id")
+        amount_cents = session_obj.get("amount_total")
+        session_id   = session_obj.get("id", "")
+
+        if not wallet_id or not amount_cents or not session_id:
+            _LOG.warning("Stripe webhook: missing wallet_id/amount/session_id in %s", session_id)
+            return JSONResponse({"received": True, "status": "skipped"})
+
+        # Idempotency: INSERT OR IGNORE so duplicate webhook fires are no-ops
+        with jobs._conn() as conn:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO stripe_sessions (session_id, wallet_id, amount_cents, processed_at)"
+                " VALUES (?, ?, ?, ?)",
+                (session_id, wallet_id, amount_cents, _utc_now_iso()),
+            )
+            conn.commit()
+            if cur.rowcount == 0:
+                return JSONResponse({"received": True, "status": "already_processed"})
+
+        try:
+            payments.deposit(wallet_id, amount_cents, f"Stripe payment [{session_id[:12]}]")
+        except Exception:
+            _LOG.exception("Failed to deposit Stripe payment for session %s wallet %s", session_id, wallet_id)
+            return JSONResponse({"received": True, "status": "deposit_failed"}, status_code=500)
+
+        _LOG.info("Stripe top-up: %d cents → wallet %s (session %s)", amount_cents, wallet_id, session_id)
+
+    return JSONResponse({"received": True, "status": "ok"})

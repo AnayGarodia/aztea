@@ -339,6 +339,16 @@ class DepositRequest(BaseModel):
     memo: str = "manual deposit"
 
 
+class TopupSessionRequest(BaseModel):
+    """Request body for POST /wallets/topup/session (Stripe Checkout)."""
+    model_config = ConfigDict(
+        json_schema_extra={"example": {"wallet_id": "wlt-abc123", "amount_cents": 1000}}
+    )
+
+    wallet_id: str
+    amount_cents: int  # Must be 100–50000 ($1.00–$500.00)
+
+
 class UserRegisterRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
@@ -1111,7 +1121,12 @@ class RegistrySearchRequest(BaseModel):
 class ErrorResponse(BaseModel):
     error: str
     message: str
-    data: JSONObject = Field(default_factory=dict)
+    details: JSONValue | None = None
+
+
+class RateLimitErrorResponse(BaseModel):
+    error: Literal["rate_limit_exceeded"]
+    retry_after_seconds: int
 
 
 class DynamicObjectResponse(BaseModel):
@@ -1122,9 +1137,21 @@ class DynamicListResponse(BaseModel):
     items: list[JSONObject]
 
 
+class HealthCheckDetail(BaseModel):
+    ok: bool
+    latency_ms: float | None = None
+    writable: bool | None = None
+    rss_mb: float | None = None
+    error: str | None = None
+
+
 class HealthResponse(BaseModel):
     status: str
-    agents: int
+    checks: dict[str, HealthCheckDetail] | None = None
+    agent_count: int | None = None
+    version: str | None = None
+    # legacy field kept for backwards compatibility
+    agents: int | None = None
 
 
 class ManifestSectionResponse(BaseModel):
@@ -1223,6 +1250,20 @@ class AgentKeyCreateResponse(BaseModel):
     raw_key: str
     key_prefix: str
     created_at: str
+
+
+class AgentKeyMetadataResponse(BaseModel):
+    key_id: str
+    agent_id: str
+    key_prefix: str
+    name: str
+    created_at: str
+    revoked_at: str | None = None
+    is_active: bool
+
+
+class AgentKeyListResponse(BaseModel):
+    keys: list[AgentKeyMetadataResponse]
 
 
 class AgentResponse(BaseModel):
@@ -1405,3 +1446,5 @@ class WalletResponse(BaseModel):
 
 class RunsResponse(BaseModel):
     runs: list[JSONObject]
+    skipped_lines: int = 0
+    skipped_line_numbers: list[int] = Field(default_factory=list)

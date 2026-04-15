@@ -71,18 +71,17 @@ function CallBar({ total, max }) {
 }
 
 export default function TrustGauge({ agent }) {
-  const rate  = agent?.success_rate   ?? null
-  const calls = agent?.total_calls    ?? 0
-  const ms    = agent?.avg_latency_ms ?? null
-
-  // Latency score: <1s = great (1.0), 3s = ok (0.5), >10s = poor (0.0)
-  const latencyScore = ms != null ? Math.max(0, 1 - ms / 10000) : null
+  // trust_score is 0–100 from the backend composite formula; normalize to 0–1 for the arc.
+  const trustPct      = agent?.trust_score      != null ? agent.trust_score / 100 : null
+  const confidencePct = agent?.confidence_score != null ? agent.confidence_score  : null
+  const calls         = agent?.total_calls       ?? 0
+  const ms            = agent?.avg_latency_ms    ?? null
 
   return (
     <div className="tg">
-      {/* Arc gauge — success rate */}
+      {/* Arc gauge — backend trust_score */}
       <div className="tg__gauge">
-        <TrustArc pct={rate} />
+        <TrustArc pct={trustPct} />
         <p className="tg__gauge-label">Trust score</p>
       </div>
 
@@ -98,10 +97,17 @@ export default function TrustGauge({ agent }) {
 
         <div className="tg__stat">
           <span className="tg__stat-val">
-            {ms != null ? (ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`) : '—'}
+            {ms != null ? (ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`) : '—'}
           </span>
           <span className="tg__stat-key">Avg latency</span>
-          {latencyScore != null && <CallBar total={latencyScore} max={1} />}
+        </div>
+
+        <div className="tg__stat">
+          <span className="tg__stat-val">
+            {confidencePct != null ? `${Math.round(confidencePct * 100)}%` : '—'}
+          </span>
+          <span className="tg__stat-key">Confidence</span>
+          {confidencePct != null && <CallBar total={confidencePct} max={1} />}
         </div>
 
         <div className="tg__stat">

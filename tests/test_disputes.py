@@ -307,7 +307,7 @@ def test_min_caller_trust_gates_job_creation(client):
     )
     assert create.status_code == 403, create.text
     error = create.json()
-    assert error["error"] == "UNAUTHORIZED"
+    assert error["error"] == "auth.forbidden"
 
 
 def test_clawback_moves_settled_payout_into_escrow(client):
@@ -358,5 +358,5 @@ def test_dispute_filing_rolls_back_when_clawback_lock_fails(client):
         json={"reason": "force clawback failure"},
     )
     assert filed.status_code == 409, filed.text
-    assert filed.json()["error"] == "DISPUTE_CLAWBACK_INSUFFICIENT_BALANCE"
+    assert filed.json()["error"] == "dispute.clawback_insufficient_balance"
     assert disputes.get_dispute_by_job(job["job_id"]) is None

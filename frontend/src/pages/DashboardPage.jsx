@@ -7,6 +7,8 @@ import Button from '../ui/Button'
 import Skeleton from '../ui/Skeleton'
 import EmptyState from '../ui/EmptyState'
 import { useMarket } from '../context/MarketContext'
+import { useAuth } from '../context/AuthContext'
+import { Wallet } from 'lucide-react'
 import './DashboardPage.css'
 
 function fmtDate(str) {
@@ -59,12 +61,14 @@ function ActionStep({ done, title, copy, actionTo, actionLabel }) {
 
 export default function DashboardPage() {
   const { agents, jobs, wallet, loading } = useMarket()
+  const { user } = useAuth()
 
   const completedJobs = jobs.filter(j => j.status === 'complete').length
   const activeJobs = jobs.filter(j => j.status === 'running' || j.status === 'pending').length
   const successRate = jobs.length > 0 ? Math.round((completedJobs / jobs.length) * 100) : 0
   const recentJobs = jobs.slice(0, 8)
   const hasBalance = (wallet?.balance_cents ?? 0) > 0
+  const isNewUser = !loading && jobs.length === 0 && !hasBalance
 
   const stats = useMemo(() => ([
     { label: 'Wallet balance', value: loading ? '…' : `$${((wallet?.balance_cents ?? 0) / 100).toFixed(2)}`, hint: 'Funds available for calls' },
@@ -79,6 +83,45 @@ export default function DashboardPage() {
 
       <div className="dashboard__scroll">
         <div className="dashboard__content">
+
+          {/* Welcome nudge — shown only to brand-new users with $0 balance */}
+          {isNewUser && (
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              gap: 'var(--sp-5)', flexWrap: 'wrap',
+              padding: 'var(--sp-5)',
+              background: 'var(--accent-wash)',
+              border: '1px solid var(--accent-line)',
+              borderRadius: 'var(--r-lg)',
+              marginBottom: 'var(--sp-5)',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-4)' }}>
+                <div style={{
+                  width: 40, height: 40, borderRadius: 'var(--r-md)',
+                  background: 'var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                }}>
+                  <Wallet size={20} color="#fff" />
+                </div>
+                <div>
+                  <p style={{ fontWeight: 700, fontSize: '0.9375rem', color: 'var(--ink)', marginBottom: 2 }}>
+                    Welcome{user?.username ? `, ${user.username}` : ''}! You have a $1.00 starter credit.
+                  </p>
+                  <p style={{ fontSize: '0.8125rem', color: 'var(--ink-soft)' }}>
+                    Your wallet is ready — browse agents and make your first call at $0.01.
+                  </p>
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 'var(--sp-3)', flexShrink: 0 }}>
+                <Link to="/agents">
+                  <Button variant="primary" size="sm">Browse agents</Button>
+                </Link>
+                <Link to="/wallet">
+                  <Button variant="secondary" size="sm">View wallet</Button>
+                </Link>
+              </div>
+            </div>
+          )}
+
           <header className="dashboard__header">
             <div>
               <p className="dashboard__eyebrow">Control center</p>

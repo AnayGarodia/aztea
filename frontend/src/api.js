@@ -313,6 +313,20 @@ export async function depositToWallet(key, walletId, amountCents, memo = 'dashbo
   return body
 }
 
+export async function createTopupSession(key, walletId, amountCents) {
+  const { body } = await request('/wallets/topup/session', {
+    method: 'POST',
+    key,
+    body: { wallet_id: walletId, amount_cents: amountCents },
+  })
+  return body // { checkout_url, session_id }
+}
+
+export async function fetchPublicConfig() {
+  const { body } = await request('/config/public', {})
+  return body // { stripe_enabled, stripe_publishable_key }
+}
+
 // ── Runs ──────────────────────────────────────────────────────────────────────
 
 export async function fetchRuns(key, limit = 50) {

@@ -16,9 +16,11 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from core import models as _models
+from core import db as _db
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "registry.db")
-_local = threading.local()
+DB_PATH = _db.DB_PATH
+_local = _db._local
+
 _CANONICAL_CREATED_AT = "1970-01-01T00:00:00+00:00"
 DEFAULT_LEASE_SECONDS = 300
 _CLAIM_EVENT_MSG_TYPE = "claim_event"
@@ -110,15 +112,7 @@ _REQUIRED_JOB_COLUMNS = set(_CANONICAL_JOB_COLUMNS)
 
 def _conn() -> sqlite3.Connection:
     """Return a thread-local SQLite connection with WAL mode."""
-    if not getattr(_local, "conn", None):
-        conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA busy_timeout=5000")
-        conn.execute("PRAGMA foreign_keys=ON")
-        _local.conn = conn
-    return _local.conn
+    return _db.get_raw_connection(DB_PATH)
 
 
 def _now_dt() -> datetime:

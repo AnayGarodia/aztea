@@ -19,7 +19,7 @@ import {
 import { useMarket } from '../context/MarketContext'
 import './WorkerPage.css'
 
-const OPEN_STATUSES = new Set(['pending', 'running', 'awaiting_clarification', 'retry_scheduled'])
+const OPEN_STATUSES = new Set(['pending', 'running', 'awaiting_clarification'])
 
 function fmtDate(str) {
   if (!str) return '--'

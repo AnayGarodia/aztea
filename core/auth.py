@@ -28,7 +28,10 @@ import threading
 import uuid
 from datetime import datetime, timezone
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "registry.db")
+from core import db as _db
+
+DB_PATH = _db.DB_PATH
+
 KEY_PREFIX = "am_"
 AGENT_KEY_PREFIX = "amk_"
 PBKDF2_ITERATIONS = 260_000
@@ -40,20 +43,14 @@ VALID_SUBJECT_STATUSES = {"active", "suspended", "banned"}
 
 # ── Connection ────────────────────────────────────────────────────────────────
 
-_local = threading.local()
+_local = _db._local
 
 
 def _conn() -> sqlite3.Connection:
     """Thread-local connection with WAL mode to match registry/payments."""
-    if not getattr(_local, "conn", None):
-        conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA busy_timeout=5000")
-        conn.execute("PRAGMA foreign_keys=ON")
-        _local.conn = conn
-    return _local.conn
+    conn = _db.get_raw_connection(DB_PATH)
+    _local.conn = conn
+    return conn
 
 
 def _now() -> str:
@@ -660,6 +657,28 @@ def list_api_keys(user_id: str) -> list:
     for row in rows:
         item = dict(row)
         item["scopes"] = _decode_scopes_json(item.get("scopes"))
+        keys.append(item)
+    return keys
+
+
+def list_agent_api_keys(agent_id: str) -> list[dict]:
+    normalized_agent_id = str(agent_id or "").strip()
+    if not normalized_agent_id:
+        raise ValueError("agent_id must be a non-empty string.")
+    with _conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT key_id, agent_id, key_prefix, name, created_at, revoked_at
+            FROM agent_keys
+            WHERE agent_id = ?
+            ORDER BY created_at DESC
+            """,
+            (normalized_agent_id,),
+        ).fetchall()
+    keys: list[dict] = []
+    for row in rows:
+        item = dict(row)
+        item["is_active"] = item.get("revoked_at") is None
         keys.append(item)
     return keys
 

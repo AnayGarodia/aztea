@@ -12,8 +12,10 @@ import threading
 import uuid
 from datetime import datetime, timezone
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "registry.db")
-_local = threading.local()
+from core import db as _db
+
+DB_PATH = _db.DB_PATH
+_local = _db._local
 
 _QUALITY_WEIGHT = 0.45
 _SUCCESS_WEIGHT = 0.35
@@ -27,15 +29,7 @@ _CONFIDENCE_DENOMINATOR = 10.0
 
 def _conn() -> sqlite3.Connection:
     """Return a thread-local SQLite connection with WAL mode."""
-    if not getattr(_local, "conn", None):
-        conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA busy_timeout=5000")
-        conn.execute("PRAGMA foreign_keys=ON")
-        _local.conn = conn
-    return _local.conn
+    return _db.get_raw_connection(DB_PATH)
 
 
 def _now() -> str:
