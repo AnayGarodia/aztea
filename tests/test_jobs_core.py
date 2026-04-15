@@ -291,6 +291,82 @@ def test_init_jobs_db_migrates_legacy_jobs_table(isolated_jobs_db):
     assert migrated["timeout_count"] == 0
 
 
+def test_init_jobs_db_migration_succeeds_with_foreign_key_dependents(isolated_jobs_db):
+    with sqlite3.connect(isolated_jobs_db) as conn:
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute(
+            """
+            CREATE TABLE jobs (
+                job_id             TEXT PRIMARY KEY,
+                agent_id           TEXT NOT NULL,
+                caller_owner_id    TEXT NOT NULL,
+                caller_wallet_id   TEXT NOT NULL,
+                agent_wallet_id    TEXT NOT NULL,
+                platform_wallet_id TEXT NOT NULL,
+                status             TEXT NOT NULL,
+                price_cents        INTEGER NOT NULL,
+                charge_tx_id       TEXT NOT NULL,
+                input_payload      TEXT NOT NULL,
+                created_at         TEXT NOT NULL,
+                updated_at         TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO jobs (
+                job_id, agent_id, caller_owner_id, caller_wallet_id, agent_wallet_id,
+                platform_wallet_id, status, price_cents, charge_tx_id, input_payload,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "legacy-job-fk",
+                "legacy-agent-fk",
+                "caller:legacy",
+                "caller-wallet",
+                "agent-wallet",
+                "platform-wallet",
+                "pending",
+                21,
+                "legacy-charge-fk",
+                '{"ticker": "AAPL"}',
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+            ),
+        )
+        conn.execute(
+            """
+            CREATE TABLE disputes (
+                dispute_id TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL REFERENCES jobs(job_id)
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO disputes (dispute_id, job_id) VALUES (?, ?)",
+            ("disp-1", "legacy-job-fk"),
+        )
+
+    _init_jobs_db()
+
+    with sqlite3.connect(isolated_jobs_db) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        check_rows = conn.execute("PRAGMA foreign_key_check").fetchall()
+        assert check_rows == []
+        dispute = conn.execute(
+            "SELECT dispute_id, job_id FROM disputes WHERE dispute_id = ?",
+            ("disp-1",),
+        ).fetchone()
+        assert dispute is not None
+        assert dispute["job_id"] == "legacy-job-fk"
+
+    migrated = jobs.get_job("legacy-job-fk")
+    assert migrated is not None
+    assert migrated["agent_owner_id"] == "agent:legacy-agent-fk"
+
+
 def test_claim_and_heartbeat_primitives_track_attempts(isolated_jobs_db):
     _init_jobs_db()
     job = _create_job(agent_owner_id="worker:owner-1")

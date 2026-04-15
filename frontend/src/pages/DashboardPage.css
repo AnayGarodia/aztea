@@ -1,0 +1,234 @@
+.dashboard {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.dashboard__scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--sp-6);
+}
+
+.dashboard__content {
+  max-width: 1100px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+
+.dashboard__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+}
+
+.dashboard__eyebrow {
+  margin: 0 0 4px;
+  font-size: 0.6875rem;
+  color: var(--ink-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 800;
+}
+
+.dashboard__header h1 {
+  margin: 0 0 4px;
+  font-family: var(--font-display);
+  font-size: 1.75rem;
+  color: var(--ink);
+}
+
+.dashboard__header p {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--ink-soft);
+  line-height: 1.55;
+  max-width: 640px;
+}
+
+.dashboard__header-actions {
+  display: flex;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+.dashboard__section-title {
+  font-size: 0.9375rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.dashboard__steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.dashboard__step {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: var(--sp-3);
+}
+
+.dashboard__step-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--line-strong);
+  background: var(--surface);
+}
+
+.dashboard__step-dot--done {
+  background: var(--positive);
+  border-color: var(--positive);
+}
+
+.dashboard__step-title {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.dashboard__step-copy {
+  margin: 2px 0 0;
+  font-size: 0.8125rem;
+  color: var(--ink-soft);
+}
+
+.dashboard__stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--sp-3);
+}
+
+.dashboard__stat-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dashboard__stat-label {
+  margin: 0;
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 800;
+  color: var(--ink-mute);
+}
+
+.dashboard__stat-value {
+  margin: 0;
+  font-size: 1.5rem;
+  color: var(--ink);
+  font-family: var(--font-display);
+}
+
+.dashboard__stat-hint {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+}
+
+.dashboard__main-grid {
+  display: grid;
+  grid-template-columns: 1fr minmax(260px, 320px);
+  gap: var(--sp-4);
+  align-items: start;
+}
+
+.dashboard__panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.dashboard__loading-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.dashboard__jobs {
+  display: flex;
+  flex-direction: column;
+}
+
+.dashboard__job-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: var(--sp-3);
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  padding: 12px 0;
+  text-decoration: none;
+}
+
+.dashboard__job-row:last-child {
+  border-bottom: none;
+}
+
+.dashboard__job-name {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.dashboard__job-id {
+  margin: 2px 0 0;
+  font-size: 0.75rem;
+  color: var(--ink-mute);
+  font-family: var(--font-mono);
+}
+
+.dashboard__job-date {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--ink-mute);
+  white-space: nowrap;
+}
+
+.dashboard__trust {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.dashboard__trust p {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--ink-soft);
+  line-height: 1.55;
+}
+
+.dashboard__trust-pills {
+  display: flex;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+@media (max-width: 980px) {
+  .dashboard__main-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard__step {
+    grid-template-columns: auto 1fr;
+  }
+
+  .dashboard__step .btn {
+    grid-column: 2 / -1;
+    justify-self: start;
+  }
+}

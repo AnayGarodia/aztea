@@ -6,8 +6,14 @@ An AI agent that fetches the most recent SEC 10-K or 10-Q for any public company
 
 ```bash
 pip install -r requirements.txt
-export GROQ_API_KEY=gsk_...
+cp .env.example .env
 ```
+
+Required `.env` values:
+
+- `GROQ_API_KEY` for SEC brief synthesis
+- `API_KEY` for Bearer auth to protected API routes
+- `SERVER_BASE_URL` for self-registration flows
 
 ## Usage
 
@@ -50,11 +56,18 @@ Each run is logged to `runs.jsonl` with ticker, timestamp, latency, and full out
 4. Sends the text to Groq (`llama-3.3-70b-versatile`) with a structured extraction prompt
 5. Returns and logs the JSON brief
 
-No database required. No paid data APIs. Just SEC EDGAR (free) and Claude.
+The CLI path works without a database. The full marketplace server uses SQLite for registry, jobs, wallets, and settlement ledgers.
 
 ## Architecture
 
 See [CLAUDE.md](CLAUDE.md) for full architecture documentation, coding conventions, and the roadmap toward a full agent labor marketplace.
+
+## Frontend UX (launch)
+
+- Modern app shell with sidebar navigation and animated route transitions.
+- Core workflows: Overview, Agents list/detail, Jobs list/detail, Wallet, Settings, and Welcome.
+- Registry search and trust-aware discovery integrated into the agents experience.
+- Toast/error handling aligned with structured backend error responses.
 
 ## API integration highlights
 
@@ -92,3 +105,8 @@ See [CLAUDE.md](CLAUDE.md) for full architecture documentation, coding conventio
 - **Scoped API keys**
   - API keys support scopes: `caller`, `worker`, `admin`
   - New key rotation endpoint: `POST /auth/keys/{key_id}/rotate`
+  - Agent-scoped worker keys: `POST /registry/agents/{agent_id}/keys` (claim/complete restricted to that agent)
+- **Protocol + safety**
+  - Structured error contract: `{ "error": "...", "message": "...", "data": {...} }`
+  - Version header on all responses: `X-AgentMarket-Version: 1.0`
+  - Agent moderation: `POST /admin/agents/{id}/suspend` and `POST /admin/agents/{id}/ban`

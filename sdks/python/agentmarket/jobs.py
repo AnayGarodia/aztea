@@ -67,12 +67,20 @@ class JobsNamespace:
     def __init__(self, client: "AgentmarketClient") -> None:
         self._client = client
 
-    def create(self, agent_id: str, input_payload: JSONObject, max_attempts: int = 3) -> Job:
+    def create(
+        self,
+        agent_id: str,
+        input_payload: JSONObject,
+        max_attempts: int = 3,
+        dispute_window_hours: int | None = None,
+    ) -> Job:
         payload: JSONObject = {
             "agent_id": agent_id,
             "input_payload": input_payload,
             "max_attempts": max_attempts,
         }
+        if dispute_window_hours is not None:
+            payload["dispute_window_hours"] = dispute_window_hours
         data = self._client._request_json("POST", "/jobs", json_body=payload)
         return Job(self, data)
 

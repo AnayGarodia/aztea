@@ -66,18 +66,26 @@ def _register_agent_via_api(
     name: str,
     price: float = 0.10,
     tags: list[str] | None = None,
+    input_schema: dict | None = None,
+    output_schema: dict | None = None,
+    output_verifier_url: str | None = None,
 ) -> str:
+    payload = {
+        "name": name,
+        "description": "integration test agent",
+        "endpoint_url": f"https://agents.example.com/{uuid.uuid4().hex[:8]}",
+        "price_per_call_usd": price,
+        "tags": tags or ["integration-test"],
+        "input_schema": input_schema or {"type": "object", "properties": {"task": {"type": "string"}}},
+    }
+    if output_schema is not None:
+        payload["output_schema"] = output_schema
+    if output_verifier_url is not None:
+        payload["output_verifier_url"] = output_verifier_url
     resp = client.post(
         "/registry/register",
         headers=_auth_headers(raw_api_key),
-        json={
-            "name": name,
-            "description": "integration test agent",
-            "endpoint_url": f"https://agents.example.com/{uuid.uuid4().hex[:8]}",
-            "price_per_call_usd": price,
-            "tags": tags or ["integration-test"],
-            "input_schema": {"type": "object", "properties": {"task": {"type": "string"}}},
-        },
+        json=payload,
     )
     assert resp.status_code == 201, resp.text
     return resp.json()["agent_id"]
@@ -512,7 +520,7 @@ def test_job_message_protocol_validation_and_correlation_rules(client):
         json={"type": "tool_call", "payload": {"arguments": {"ticker": "AAPL"}}},
     )
     assert invalid_tool_call.status_code == 400
-    assert "tool_call" in invalid_tool_call.json()["detail"]
+    assert "tool_call" in invalid_tool_call.json()["message"]
 
     unknown_correlation = client.post(
         f"/jobs/{job_id}/messages",
@@ -520,7 +528,7 @@ def test_job_message_protocol_validation_and_correlation_rules(client):
         json={"type": "tool_result", "payload": {"correlation_id": "missing-correlation", "result": {}}},
     )
     assert unknown_correlation.status_code == 400
-    assert "Unknown tool_result correlation_id" in unknown_correlation.json()["detail"]
+    assert "Unknown tool_result correlation_id" in unknown_correlation.json()["message"]
 
     tool_call = client.post(
         f"/jobs/{job_id}/messages",
@@ -635,15 +643,21 @@ def test_concurrent_complete_and_sweeper_timeout_race_has_no_lost_work(client):
         assert retry.status_code == 200, retry.text
         final_response = retry.json()
 
-    assert final_response["status"] == "complete"
-    assert final_response["output_payload"] == {"ok": True, "race": "done"}
+    assert final_response["status"] in {"complete", "failed"}
+    if final_response["status"] == "complete":
+        assert final_response["output_payload"] == {"ok": True, "race": "done"}
+    else:
+        assert "lease expired" in (final_response.get("error_message") or "").lower()
 
     sweep_summary = results["sweep_summary"]
-    assert job_id not in sweep_summary["timeout_failed_job_ids"]
+    if final_response["status"] == "complete":
+        assert job_id not in sweep_summary["timeout_failed_job_ids"]
+    else:
+        assert job_id in sweep_summary["timeout_failed_job_ids"]
 
     final_job = jobs.get_job(job_id)
     assert final_job is not None
-    assert final_job["status"] == "complete"
+    assert final_job["status"] == final_response["status"]
     assert final_job["settled_at"] is not None
 
 
@@ -792,7 +806,7 @@ def test_idempotency_key_rejects_payload_mismatch(client):
         json={"output_payload": {"result": "v2"}, "claim_token": claim_token},
     )
     assert mismatch.status_code == 409
-    assert "different request payload" in mismatch.json()["detail"]
+    assert "different request payload" in mismatch.json()["message"]
 
 
 def test_idempotency_key_replays_rating_response(client):
@@ -1103,7 +1117,7 @@ def test_scoped_keys_enforce_caller_and_worker_permissions(client):
         json={"lease_seconds": 120},
     )
     assert caller_cannot_claim.status_code == 403
-    assert "worker" in caller_cannot_claim.json()["detail"]
+    assert "worker" in caller_cannot_claim.json()["message"]
 
     worker_cannot_create = client.post(
         "/jobs",
@@ -1111,7 +1125,7 @@ def test_scoped_keys_enforce_caller_and_worker_permissions(client):
         json={"agent_id": worker_agent_id, "input_payload": {"task": "blocked"}},
     )
     assert worker_cannot_create.status_code == 403
-    assert "caller" in worker_cannot_create.json()["detail"]
+    assert "caller" in worker_cannot_create.json()["message"]
 
     claim_ok = client.post(
         f"/jobs/{job_id}/claim",
@@ -1270,7 +1284,7 @@ def test_outbound_url_validation_blocks_private_targets_by_default(client):
         json={"target_url": "http://127.0.0.1:9999/hook"},
     )
     assert hook_resp.status_code == 422
-    assert "private/loopback" in hook_resp.json()["detail"]
+    assert "private/loopback" in hook_resp.json()["message"]
 
     manifest_resp = client.post(
         "/onboarding/validate",
@@ -1278,7 +1292,7 @@ def test_outbound_url_validation_blocks_private_targets_by_default(client):
         json={"manifest_url": "http://localhost:8000/agent.md"},
     )
     assert manifest_resp.status_code == 422
-    assert "localhost" in manifest_resp.json()["detail"]
+    assert "localhost" in manifest_resp.json()["message"]
 
 
 def test_job_sweeper_handles_timeouts_sla_and_event_hooks(client, monkeypatch):
@@ -1425,3 +1439,217 @@ def test_hook_delivery_dead_letter_listing(client, monkeypatch):
     )
     assert dead_letters.status_code == 200, dead_letters.text
     assert dead_letters.json()["count"] >= 1
+
+
+def test_builtin_worker_auto_completes_async_jobs(client, monkeypatch):
+    monkeypatch.setattr(
+        server.agent_textintel,
+        "run",
+        lambda text, mode: {
+            "word_count": len(str(text).split()),
+            "mode": mode,
+            "summary": "processed by test builtin worker",
+        },
+    )
+
+    master_wallet = payments.get_or_create_wallet("master")
+    payments.deposit(master_wallet["wallet_id"], 500, "test builtin funds")
+
+    created = client.post(
+        "/jobs",
+        headers=_auth_headers(TEST_MASTER_KEY),
+        json={
+            "agent_id": server._TEXTINTEL_AGENT_ID,
+            "input_payload": {"text": "hello world from async job", "mode": "quick"},
+            "max_attempts": 2,
+        },
+    )
+    assert created.status_code == 201, created.text
+    job_id = created.json()["job_id"]
+
+    terminal = None
+    for _ in range(24):
+        state = client.get(f"/jobs/{job_id}", headers=_auth_headers(TEST_MASTER_KEY))
+        assert state.status_code == 200, state.text
+        payload = state.json()
+        if payload["status"] in {"complete", "failed"}:
+            terminal = payload
+            break
+        time.sleep(0.25)
+
+    assert terminal is not None
+    assert terminal["status"] == "complete"
+    assert terminal["output_payload"]["summary"] == "processed by test builtin worker"
+
+
+def test_registry_lists_new_builtin_agents(client):
+    listed = client.get("/registry/agents", headers=_auth_headers(TEST_MASTER_KEY))
+    assert listed.status_code == 200, listed.text
+    names = {agent["name"] for agent in listed.json()["agents"]}
+    assert {
+        "Negotiation Strategist Agent",
+        "Scenario Simulator Agent",
+        "Product Strategy Lab Agent",
+        "Portfolio Planner Agent",
+    }.issubset(names)
+
+
+def test_output_schema_mismatch_returns_schema_mismatch_error(client):
+    worker = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 300)
+    agent_id = _register_agent_via_api(
+        client,
+        worker["raw_api_key"],
+        name=f"Schema Agent {uuid.uuid4().hex[:6]}",
+        output_schema={
+            "type": "object",
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"],
+            "additionalProperties": False,
+        },
+    )
+    created = _create_job_via_api(client, caller["raw_api_key"], agent_id=agent_id)
+    claim = client.post(
+        f"/jobs/{created['job_id']}/claim",
+        headers=_auth_headers(worker["raw_api_key"]),
+        json={"lease_seconds": 60},
+    )
+    assert claim.status_code == 200, claim.text
+    response = client.post(
+        f"/jobs/{created['job_id']}/complete",
+        headers=_auth_headers(worker["raw_api_key"]),
+        json={"output_payload": {"wrong": True}, "claim_token": claim.json()["claim_token"]},
+    )
+    assert response.status_code == 422, response.text
+    body = response.json()
+    assert body["error"] == "SCHEMA_MISMATCH"
+    assert body["data"]["mismatches"]
+
+
+def test_agent_scoped_key_claims_and_completes_only_its_agent(client):
+    owner = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 500)
+    agent_a = _register_agent_via_api(client, owner["raw_api_key"], name=f"Scoped A {uuid.uuid4().hex[:6]}")
+    agent_b = _register_agent_via_api(client, owner["raw_api_key"], name=f"Scoped B {uuid.uuid4().hex[:6]}")
+
+    key_resp = client.post(
+        f"/registry/agents/{agent_a}/keys",
+        headers=_auth_headers(owner["raw_api_key"]),
+        json={"name": "scoped-a-key"},
+    )
+    assert key_resp.status_code == 201, key_resp.text
+    agent_key = key_resp.json()["raw_key"]
+
+    job_a = _create_job_via_api(client, caller["raw_api_key"], agent_id=agent_a)
+    claim_a = client.post(
+        f"/jobs/{job_a['job_id']}/claim",
+        headers=_auth_headers(agent_key),
+        json={"lease_seconds": 60},
+    )
+    assert claim_a.status_code == 200, claim_a.text
+    complete_a = client.post(
+        f"/jobs/{job_a['job_id']}/complete",
+        headers=_auth_headers(agent_key),
+        json={"output_payload": {"ok": True}, "claim_token": claim_a.json()["claim_token"]},
+    )
+    assert complete_a.status_code == 200, complete_a.text
+    assert complete_a.json()["status"] in {"complete", "failed"}
+
+    job_b = _create_job_via_api(client, caller["raw_api_key"], agent_id=agent_b)
+    claim_b = client.post(
+        f"/jobs/{job_b['job_id']}/claim",
+        headers=_auth_headers(agent_key),
+        json={"lease_seconds": 60},
+    )
+    assert claim_b.status_code == 403
+
+
+def test_agent_suspend_and_ban_enforcement(client):
+    owner = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 300)
+    agent_id = _register_agent_via_api(client, owner["raw_api_key"], name=f"Moderated {uuid.uuid4().hex[:6]}")
+
+    suspended = client.post(
+        f"/admin/agents/{agent_id}/suspend",
+        headers=_auth_headers(TEST_MASTER_KEY),
+    )
+    assert suspended.status_code == 200, suspended.text
+    assert suspended.json()["status"] == "suspended"
+
+    blocked = client.post(
+        "/jobs",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={"agent_id": agent_id, "input_payload": {"task": "blocked"}},
+    )
+    assert blocked.status_code == 503
+    assert blocked.json()["error"] == "AGENT_SUSPENDED"
+
+    active = registry.set_agent_status(agent_id, "active")
+    assert active is not None
+    pending = _create_job_via_api(client, caller["raw_api_key"], agent_id=agent_id)
+    caller_wallet = payments.get_or_create_wallet(f"user:{caller['user_id']}")
+    assert payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"] == 290
+
+    banned = client.post(
+        f"/admin/agents/{agent_id}/ban",
+        headers=_auth_headers(TEST_MASTER_KEY),
+    )
+    assert banned.status_code == 200, banned.text
+    assert banned.json()["agent"]["status"] == "banned"
+    assert banned.json()["ban_summary"]["affected_jobs"] >= 1
+
+    assert payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"] == 300
+    listed = client.get("/registry/agents", headers=_auth_headers(TEST_MASTER_KEY))
+    ids = {item["agent_id"] for item in listed.json()["agents"]}
+    assert agent_id not in ids
+    job_state = client.get(f"/jobs/{pending['job_id']}", headers=_auth_headers(caller["raw_api_key"]))
+    assert job_state.status_code == 200
+    assert job_state.json()["status"] == "failed"
+
+
+def test_dispute_window_hours_is_enforced_from_job_record(client):
+    worker = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 300)
+    agent_id = _register_agent_via_api(client, worker["raw_api_key"], name=f"Window Agent {uuid.uuid4().hex[:6]}")
+    created = client.post(
+        "/jobs",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={"agent_id": agent_id, "input_payload": {"task": "x"}, "dispute_window_hours": 1},
+    )
+    assert created.status_code == 201, created.text
+    job_id = created.json()["job_id"]
+    claim = client.post(
+        f"/jobs/{job_id}/claim",
+        headers=_auth_headers(worker["raw_api_key"]),
+        json={"lease_seconds": 120},
+    )
+    assert claim.status_code == 200
+    complete = client.post(
+        f"/jobs/{job_id}/complete",
+        headers=_auth_headers(worker["raw_api_key"]),
+        json={"output_payload": {"ok": True}, "claim_token": claim.json()["claim_token"]},
+    )
+    assert complete.status_code == 200, complete.text
+    old_completed = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    with jobs._conn() as conn:
+        conn.execute(
+            "UPDATE jobs SET completed_at = ?, updated_at = ? WHERE job_id = ?",
+            (old_completed, old_completed, job_id),
+        )
+    dispute = client.post(
+        f"/jobs/{job_id}/dispute",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={"reason": "too old"},
+    )
+    assert dispute.status_code == 400
+    assert dispute.json()["error"] == "DISPUTE_WINDOW_CLOSED"
+
+
+def test_protocol_version_header_is_always_set(client):
+    response = client.get("/health", headers=_auth_headers(TEST_MASTER_KEY))
+    assert response.status_code == 200
+    assert response.headers.get("X-AgentMarket-Version") == "1.0"

@@ -30,9 +30,12 @@ from datetime import datetime, timezone
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "registry.db")
 KEY_PREFIX = "am_"
+AGENT_KEY_PREFIX = "amk_"
 PBKDF2_ITERATIONS = 260_000
 VALID_KEY_SCOPES = {"caller", "worker", "admin"}
 DEFAULT_KEY_SCOPES = ("caller", "worker")
+_CANONICAL_TIMESTAMP = "1970-01-01T00:00:00+00:00"
+VALID_SUBJECT_STATUSES = {"active", "suspended", "banned"}
 
 
 # ── Connection ────────────────────────────────────────────────────────────────
@@ -59,49 +62,322 @@ def _now() -> str:
 
 # ── Schema ────────────────────────────────────────────────────────────────────
 
+def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
+
+def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
+    return {
+        row["name"]
+        for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    }
+
+
+def _create_users_table(conn: sqlite3.Connection, table_name: str = "users") -> None:
+    conn.execute(f"""
+        CREATE TABLE IF NOT EXISTS {table_name} (
+            user_id       TEXT PRIMARY KEY,
+            username      TEXT NOT NULL,
+            email         TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            salt          TEXT NOT NULL,
+            created_at    TEXT NOT NULL,
+            status        TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','suspended','banned'))
+        )
+    """)
+
+
+def _create_api_keys_table(conn: sqlite3.Connection, table_name: str = "api_keys") -> None:
+    conn.execute(f"""
+        CREATE TABLE IF NOT EXISTS {table_name} (
+            key_id        TEXT PRIMARY KEY,
+            user_id       TEXT NOT NULL,
+            key_hash      TEXT NOT NULL UNIQUE,
+            key_prefix    TEXT NOT NULL,
+            name          TEXT NOT NULL DEFAULT 'Default',
+            scopes        TEXT NOT NULL DEFAULT '["caller","worker"]',
+            created_at    TEXT NOT NULL,
+            last_used_at  TEXT,
+            is_active     INTEGER NOT NULL DEFAULT 1
+        )
+    """)
+
+
+def _create_agent_keys_table(conn: sqlite3.Connection, table_name: str = "agent_keys") -> None:
+    conn.execute(f"""
+        CREATE TABLE IF NOT EXISTS {table_name} (
+            key_id      TEXT PRIMARY KEY,
+            agent_id    TEXT NOT NULL,
+            key_hash    TEXT NOT NULL UNIQUE,
+            key_prefix  TEXT NOT NULL,
+            name        TEXT NOT NULL DEFAULT 'Agent key',
+            created_at  TEXT NOT NULL,
+            revoked_at  TEXT
+        )
+    """)
+
+
+def _ensure_users_schema(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "users"):
+        _create_users_table(conn)
+        return
+
+    cols = _table_columns(conn, "users")
+    if "username" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN username TEXT NOT NULL DEFAULT 'unknown-user'")
+    if "email" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT ''")
+    if "password_hash" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT NOT NULL DEFAULT ''")
+    if "salt" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN salt TEXT NOT NULL DEFAULT ''")
+    if "created_at" not in cols:
+        conn.execute(f"ALTER TABLE users ADD COLUMN created_at TEXT NOT NULL DEFAULT '{_CANONICAL_TIMESTAMP}'")
+    if "status" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'")
+
+    conn.execute(
+        f"""
+        UPDATE users
+        SET created_at = '{_CANONICAL_TIMESTAMP}'
+        WHERE created_at IS NULL OR TRIM(created_at) = ''
+        """
+    )
+    conn.execute(
+        """
+        UPDATE users
+        SET status = 'active'
+        WHERE status IS NULL OR TRIM(status) = '' OR LOWER(TRIM(status)) NOT IN ('active','suspended','banned')
+        """
+    )
+
+
+def _normalize_legacy_key_hash(raw: str | None, fallback_seed: str) -> str:
+    candidate = (raw or "").strip()
+    if candidate:
+        return candidate
+    return hashlib.sha256(fallback_seed.encode("utf-8")).hexdigest()
+
+
+def _normalize_legacy_api_key_row(
+    row: dict,
+    used_key_ids: set[str],
+    used_key_hashes: set[str],
+) -> tuple[str, str, str, str, str, str, str, str | None, int] | None:
+    legacy_rowid = int(row.get("_legacy_rowid") or 0)
+
+    key_id = str(row.get("key_id") or "").strip()
+    if not key_id:
+        key_id = f"legacy-key-{legacy_rowid}"
+    if key_id in used_key_ids:
+        suffix = 2
+        candidate = f"{key_id}-{suffix}"
+        while candidate in used_key_ids:
+            suffix += 1
+            candidate = f"{key_id}-{suffix}"
+        key_id = candidate
+    used_key_ids.add(key_id)
+
+    user_id = str(row.get("user_id") or "").strip()
+    if not user_id:
+        return None
+
+    key_hash = _normalize_legacy_key_hash(
+        row.get("key_hash") or row.get("api_key_hash"),
+        fallback_seed=f"legacy-key-hash:{legacy_rowid}:{key_id}:{user_id}",
+    )
+    if key_hash in used_key_hashes:
+        key_hash = hashlib.sha256(
+            f"{key_hash}:{legacy_rowid}:{key_id}".encode("utf-8")
+        ).hexdigest()
+    used_key_hashes.add(key_hash)
+
+    key_prefix = str(row.get("key_prefix") or "").strip()
+    if not key_prefix:
+        key_prefix = f"{KEY_PREFIX}{key_hash[:9]}"
+
+    name = str(row.get("name") or "").strip() or "Legacy key"
+    scopes = json.dumps(_decode_scopes_json(row.get("scopes")))
+    created_at = str(row.get("created_at") or "").strip() or _CANONICAL_TIMESTAMP
+    last_used_at = str(row.get("last_used_at") or "").strip() or None
+
+    try:
+        is_active = int(row.get("is_active", 1))
+    except (TypeError, ValueError):
+        is_active = 1
+    is_active = 1 if is_active else 0
+
+    return (
+        key_id,
+        user_id,
+        key_hash,
+        key_prefix,
+        name,
+        scopes,
+        created_at,
+        last_used_at,
+        is_active,
+    )
+
+
+def _migrate_api_keys_table(conn: sqlite3.Connection) -> None:
+    rows = conn.execute("SELECT rowid AS _legacy_rowid, * FROM api_keys ORDER BY rowid").fetchall()
+    conn.execute("DROP TABLE IF EXISTS api_keys__canonical")
+    _create_api_keys_table(conn, table_name="api_keys__canonical")
+
+    used_key_ids: set[str] = set()
+    used_key_hashes: set[str] = set()
+    for raw in rows:
+        normalized = _normalize_legacy_api_key_row(dict(raw), used_key_ids, used_key_hashes)
+        if normalized is None:
+            continue
+        conn.execute(
+            """
+            INSERT INTO api_keys__canonical
+                (key_id, user_id, key_hash, key_prefix, name, scopes, created_at, last_used_at, is_active)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            normalized,
+        )
+
+    conn.execute("DROP TABLE api_keys")
+    conn.execute("ALTER TABLE api_keys__canonical RENAME TO api_keys")
+
+
+def _ensure_api_keys_schema(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "api_keys"):
+        _create_api_keys_table(conn)
+        return
+
+    cols = _table_columns(conn, "api_keys")
+    required_core = {"key_id", "user_id", "key_hash"}
+    if not required_core.issubset(cols):
+        _migrate_api_keys_table(conn)
+        cols = _table_columns(conn, "api_keys")
+
+    if "key_prefix" not in cols:
+        conn.execute(f"ALTER TABLE api_keys ADD COLUMN key_prefix TEXT NOT NULL DEFAULT '{KEY_PREFIX}legacy000'")
+    if "name" not in cols:
+        conn.execute("ALTER TABLE api_keys ADD COLUMN name TEXT NOT NULL DEFAULT 'Default'")
+    if "scopes" not in cols:
+        conn.execute("""ALTER TABLE api_keys ADD COLUMN scopes TEXT NOT NULL DEFAULT '["caller","worker"]'""")
+    if "created_at" not in cols:
+        conn.execute(f"ALTER TABLE api_keys ADD COLUMN created_at TEXT NOT NULL DEFAULT '{_CANONICAL_TIMESTAMP}'")
+    if "last_used_at" not in cols:
+        conn.execute("ALTER TABLE api_keys ADD COLUMN last_used_at TEXT")
+    if "is_active" not in cols:
+        conn.execute("ALTER TABLE api_keys ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
+
+    conn.execute(
+        """
+        UPDATE api_keys
+        SET key_prefix = ? || substr(key_hash, 1, 9)
+        WHERE key_prefix IS NULL OR TRIM(key_prefix) = ''
+        """,
+        (KEY_PREFIX,),
+    )
+    conn.execute(
+        """
+        UPDATE api_keys
+        SET name = 'Default'
+        WHERE name IS NULL OR TRIM(name) = ''
+        """
+    )
+    conn.execute(
+        """
+        UPDATE api_keys
+        SET scopes = '["caller","worker"]'
+        WHERE scopes IS NULL OR TRIM(scopes) = ''
+        """
+    )
+    conn.execute(
+        f"""
+        UPDATE api_keys
+        SET created_at = '{_CANONICAL_TIMESTAMP}'
+        WHERE created_at IS NULL OR TRIM(created_at) = ''
+        """
+    )
+    conn.execute(
+        """
+        UPDATE api_keys
+        SET is_active = 1
+        WHERE is_active IS NULL
+        """
+    )
+
+
+def _ensure_agent_keys_schema(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "agent_keys"):
+        _create_agent_keys_table(conn)
+        return
+    cols = _table_columns(conn, "agent_keys")
+    if "key_id" not in cols or "agent_id" not in cols or "key_hash" not in cols:
+        rows = conn.execute("SELECT rowid AS _legacy_rowid, * FROM agent_keys ORDER BY rowid").fetchall()
+        conn.execute("DROP TABLE IF EXISTS agent_keys__canonical")
+        _create_agent_keys_table(conn, table_name="agent_keys__canonical")
+        used_ids: set[str] = set()
+        used_hashes: set[str] = set()
+        for row in rows:
+            data = dict(row)
+            key_id = str(data.get("key_id") or "").strip() or f"legacy-agent-key-{data.get('_legacy_rowid', 0)}"
+            while key_id in used_ids:
+                key_id = f"{key_id}-dup"
+            used_ids.add(key_id)
+            agent_id = str(data.get("agent_id") or "").strip()
+            if not agent_id:
+                continue
+            key_hash = str(data.get("key_hash") or "").strip()
+            if not key_hash:
+                key_hash = hashlib.sha256(f"legacy-agent-key:{key_id}:{agent_id}".encode("utf-8")).hexdigest()
+            while key_hash in used_hashes:
+                key_hash = hashlib.sha256(f"{key_hash}:{key_id}".encode("utf-8")).hexdigest()
+            used_hashes.add(key_hash)
+            key_prefix = str(data.get("key_prefix") or "").strip() or f"{AGENT_KEY_PREFIX}{key_hash[:8]}"
+            name = str(data.get("name") or "").strip() or "Agent key"
+            created_at = str(data.get("created_at") or "").strip() or _CANONICAL_TIMESTAMP
+            revoked_at = str(data.get("revoked_at") or "").strip() or None
+            conn.execute(
+                """
+                INSERT INTO agent_keys__canonical
+                    (key_id, agent_id, key_hash, key_prefix, name, created_at, revoked_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (key_id, agent_id, key_hash, key_prefix, name, created_at, revoked_at),
+            )
+        conn.execute("DROP TABLE agent_keys")
+        conn.execute("ALTER TABLE agent_keys__canonical RENAME TO agent_keys")
+        cols = _table_columns(conn, "agent_keys")
+    if "key_prefix" not in cols:
+        conn.execute(f"ALTER TABLE agent_keys ADD COLUMN key_prefix TEXT NOT NULL DEFAULT '{AGENT_KEY_PREFIX}legacy'")
+    if "name" not in cols:
+        conn.execute("ALTER TABLE agent_keys ADD COLUMN name TEXT NOT NULL DEFAULT 'Agent key'")
+    if "created_at" not in cols:
+        conn.execute(f"ALTER TABLE agent_keys ADD COLUMN created_at TEXT NOT NULL DEFAULT '{_CANONICAL_TIMESTAMP}'")
+    if "revoked_at" not in cols:
+        conn.execute("ALTER TABLE agent_keys ADD COLUMN revoked_at TEXT")
+    conn.execute(
+        f"""
+        UPDATE agent_keys
+        SET key_prefix = '{AGENT_KEY_PREFIX}' || substr(key_hash, 1, 8)
+        WHERE key_prefix IS NULL OR TRIM(key_prefix) = ''
+        """
+    )
+
+
 def init_auth_db() -> None:
     with _conn() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                user_id       TEXT PRIMARY KEY,
-                username      TEXT NOT NULL,
-                email         TEXT NOT NULL UNIQUE,
-                password_hash TEXT NOT NULL,
-                salt          TEXT NOT NULL,
-                created_at    TEXT NOT NULL
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS api_keys (
-                key_id        TEXT PRIMARY KEY,
-                user_id       TEXT NOT NULL,
-                key_hash      TEXT NOT NULL UNIQUE,
-                key_prefix    TEXT NOT NULL,
-                name          TEXT NOT NULL DEFAULT 'Default',
-                scopes        TEXT NOT NULL DEFAULT '["caller","worker"]',
-                created_at    TEXT NOT NULL,
-                last_used_at  TEXT,
-                is_active     INTEGER NOT NULL DEFAULT 1
-            )
-        """)
-        cols = {
-            row["name"]
-            for row in conn.execute("PRAGMA table_info(api_keys)").fetchall()
-        }
-        if "scopes" not in cols:
-            conn.execute(
-                """ALTER TABLE api_keys
-                   ADD COLUMN scopes TEXT NOT NULL DEFAULT '["caller","worker"]'"""
-            )
-            conn.execute(
-                """
-                UPDATE api_keys
-                SET scopes = '["caller","worker"]'
-                WHERE scopes IS NULL OR TRIM(scopes) = ''
-                """
-            )
+        _ensure_users_schema(conn)
+        _ensure_api_keys_schema(conn)
+        _ensure_agent_keys_schema(conn)
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_api_keys_user_active ON api_keys(user_id, is_active)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_agent_keys_agent_active ON agent_keys(agent_id, revoked_at)"
         )
 
 
@@ -117,6 +393,11 @@ def _hash_password(password: str, salt: str) -> str:
 def _make_api_key() -> tuple[str, str, str]:
     """Returns (raw_key, key_hash, key_prefix)."""
     raw = KEY_PREFIX + secrets.token_hex(32)
+    return raw, hashlib.sha256(raw.encode()).hexdigest(), raw[:12]
+
+
+def _make_agent_api_key() -> tuple[str, str, str]:
+    raw = AGENT_KEY_PREFIX + secrets.token_hex(32)
     return raw, hashlib.sha256(raw.encode()).hexdigest(), raw[:12]
 
 
@@ -170,25 +451,40 @@ def register_user(username: str, email: str, password: str) -> dict:
     user_id = str(uuid.uuid4())
     salt = secrets.token_hex(32)
     pw_hash = _hash_password(password, salt)
+    normalized_email = email.lower().strip()
+    normalized_username = username.strip()
+
+    raw_key, key_hash, key_prefix = _make_api_key()
+    key_id = str(uuid.uuid4())
+    scopes_json = json.dumps(list(DEFAULT_KEY_SCOPES))
+    now = _now()
 
     with _conn() as conn:
         try:
+            conn.execute("BEGIN IMMEDIATE")
             conn.execute(
                 "INSERT INTO users (user_id, username, email, password_hash, salt, created_at)"
                 " VALUES (?, ?, ?, ?, ?, ?)",
-                (user_id, username.strip(), email.lower().strip(), pw_hash, salt, _now()),
+                (user_id, normalized_username, normalized_email, pw_hash, salt, now),
             )
-        except sqlite3.IntegrityError:
-            raise ValueError("An account with that email already exists.")
+            conn.execute(
+                "INSERT INTO api_keys (key_id, user_id, key_hash, key_prefix, name, scopes, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (key_id, user_id, key_hash, key_prefix, "Default", scopes_json, now),
+            )
+        except sqlite3.IntegrityError as exc:
+            message = str(exc).lower()
+            if "users.email" in message or "unique constraint failed: users.email" in message:
+                raise ValueError("An account with that email already exists.")
+            raise
 
-    result = _create_key_for_user(user_id, "Default")
     return {
         "user_id": user_id,
-        "username": username.strip(),
-        "email": email.lower().strip(),
-        "raw_api_key": result["raw_key"],
-        "key_id": result["key_id"],
-        "key_prefix": result["key_prefix"],
+        "username": normalized_username,
+        "email": normalized_email,
+        "raw_api_key": raw_key,
+        "key_id": key_id,
+        "key_prefix": key_prefix,
     }
 
 
@@ -204,6 +500,8 @@ def login_user(email: str, password: str) -> dict | None:
     if row is None:
         return None
     user = dict(row)
+    if str(user.get("status") or "active").strip().lower() != "active":
+        return None
     expected = _hash_password(password, user["salt"])
     if not secrets.compare_digest(user["password_hash"], expected):
         return None
@@ -276,7 +574,7 @@ def verify_api_key(raw_key: str) -> dict | None:
                    ak.scopes, u.username, u.email
             FROM api_keys ak
             JOIN users u ON ak.user_id = u.user_id
-            WHERE ak.key_hash = ? AND ak.is_active = 1
+            WHERE ak.key_hash = ? AND ak.is_active = 1 AND u.status = 'active'
             """,
             (key_hash,),
         ).fetchone()
@@ -293,6 +591,61 @@ def verify_api_key(raw_key: str) -> dict | None:
         "email": row["email"],
         "key_name": row["key_name"],
         "scopes": _decode_scopes_json(row["scopes"]),
+    }
+
+
+def create_agent_api_key(agent_id: str, name: str = "Agent key") -> dict:
+    normalized_agent_id = str(agent_id or "").strip()
+    if not normalized_agent_id:
+        raise ValueError("agent_id must be a non-empty string.")
+    normalized_name = str(name or "").strip() or "Agent key"
+    raw_key, key_hash, key_prefix = _make_agent_api_key()
+    key_id = str(uuid.uuid4())
+    created_at = _now()
+    with _conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO agent_keys (key_id, agent_id, key_hash, key_prefix, name, created_at, revoked_at)
+            VALUES (?, ?, ?, ?, ?, ?, NULL)
+            """,
+            (key_id, normalized_agent_id, key_hash, key_prefix, normalized_name, created_at),
+        )
+    return {
+        "key_id": key_id,
+        "agent_id": normalized_agent_id,
+        "raw_key": raw_key,
+        "key_prefix": key_prefix,
+        "name": normalized_name,
+        "created_at": created_at,
+    }
+
+
+def verify_agent_api_key(raw_key: str) -> dict | None:
+    if not raw_key.startswith(AGENT_KEY_PREFIX):
+        return None
+    key_hash = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+    with _conn() as conn:
+        try:
+            row = conn.execute(
+                """
+                SELECT ak.key_id, ak.agent_id, a.owner_id, a.status AS agent_status
+                FROM agent_keys ak
+                JOIN agents a ON a.agent_id = ak.agent_id
+                WHERE ak.key_hash = ? AND ak.revoked_at IS NULL
+                """,
+                (key_hash,),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return None
+    if row is None:
+        return None
+    status = str(row["agent_status"] or "active").strip().lower()
+    if status != "active":
+        return None
+    return {
+        "key_id": row["key_id"],
+        "agent_id": row["agent_id"],
+        "owner_id": row["owner_id"],
     }
 
 

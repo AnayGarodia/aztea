@@ -4,11 +4,11 @@
   justify-content: center;
   gap: var(--sp-2);
   font-family: var(--font-sans);
-  font-weight: 600;
+  font-weight: 800;
   font-size: 0.8125rem;
   line-height: 1;
-  border-radius: var(--r-sm);
-  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  border: 2px solid transparent;
   cursor: pointer;
   white-space: nowrap;
   letter-spacing: -0.005em;

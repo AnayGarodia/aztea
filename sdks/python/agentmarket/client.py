@@ -94,6 +94,8 @@ class RegistryNamespace(_NamespaceBase):
         price_per_call_usd: float,
         tags: list[str] | None = None,
         input_schema: JSONObject | None = None,
+        output_schema: JSONObject | None = None,
+        output_verifier_url: str | None = None,
     ) -> JSONObject:
         payload: JSONObject = {
             "name": name,
@@ -102,7 +104,10 @@ class RegistryNamespace(_NamespaceBase):
             "price_per_call_usd": price_per_call_usd,
             "tags": cast(JSONValue, [str(tag) for tag in (tags or [])]),
             "input_schema": input_schema or {},
+            "output_schema": output_schema or {},
         }
+        if output_verifier_url is not None:
+            payload["output_verifier_url"] = output_verifier_url
         return self._client._request_json("POST", "/registry/register", json_body=payload)
 
     def list(
@@ -181,7 +186,7 @@ class AgentmarketClient:
         )
 
     def _headers(self, *, require_api_key: bool = True) -> dict[str, str]:
-        headers = {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json", "X-AgentMarket-Version": "1.0"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
         elif require_api_key:

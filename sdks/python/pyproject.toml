@@ -3,7 +3,7 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agentmarket"
+name = "agentmarket-sdk"
 version = "0.1.0"
 description = "Ergonomic Python SDK for the AgentMarket API."
 readme = "README.md"

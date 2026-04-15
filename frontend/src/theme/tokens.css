@@ -1,68 +1,78 @@
 /* ═══════════════════════════════════════════════════════
-   agentmarket — clean warm light design system
+   agentmarket — playful Duolingo-palette design system
    ═══════════════════════════════════════════════════════ */
 
 :root {
+  /* ── Duolingo palette ───────────────────────────────── */
+  --green:   #58CC02;
+  --purple:  #CE82FF;
+  --blue:    #1CB0F6;
+  --yellow:  #FFC800;
+  --red:     #FF4B4B;
+  --coral:   #FF9600;
+
   /* ── Canvas ─────────────────────────────────────────── */
-  --canvas:         #FAFAF8;
-  --canvas-raised:  #F3F1EC;
-  --canvas-sunk:    #ECEAE4;
+  --canvas:         #FFFDF7;
+  --canvas-raised:  #F5F3EE;
+  --canvas-sunk:    #EBE8E1;
   --surface:        #FFFFFF;
-  --surface-hover:  #F7F5F0;
+  --surface-hover:  #FFFAF0;
   --surface-raised: #FFFFFF;
 
   /* ── Ink ────────────────────────────────────────────── */
-  --ink:            #141414;
+  --ink:            #1A1A1A;
   --ink-soft:       #4A4850;
   --ink-mute:       #8A8890;
   --ink-faint:      #C5C2BA;
   --ink-inverse:    #FFFFFF;
 
   /* ── Lines ──────────────────────────────────────────── */
-  --line:           #E5E2D8;
-  --line-strong:    #D0CCBE;
+  --line:           #E8E5DC;
+  --line-strong:    #D4D0C4;
 
-  /* ── Accent — deep forest green ─────────────────────── */
-  --accent:         #1F4D3F;
-  --accent-hover:   #163A2F;
-  --accent-soft:    #2A6654;
+  /* ── Accent = Duolingo green ────────────────────────── */
+  --accent:         #58CC02;
+  --accent-hover:   #4CAB02;
+  --accent-press:   #3F8F02;
+  --accent-soft:    #70DD10;
   --accent-ink:     #FFFFFF;
-  --accent-wash:    #EAF0EC;
-  --accent-line:    #BDD4C5;
+  --accent-wash:    #E5F7CC;
+  --accent-line:    #BFEC7D;
 
   /* ── Semantic ───────────────────────────────────────── */
-  --positive:       #1F4D3F;
-  --positive-wash:  #EAF0EC;
-  --positive-line:  #BDD4C5;
+  --positive:       #58CC02;
+  --positive-wash:  #E5F7CC;
+  --positive-line:  #BFEC7D;
 
-  --negative:       #B3321C;
-  --negative-wash:  #FBEBE5;
-  --negative-line:  #E8C0B5;
+  --negative:       #FF4B4B;
+  --negative-wash:  #FFECEC;
+  --negative-line:  #FFB3B3;
 
-  --warn:           #A67217;
-  --warn-wash:      #FBF3DF;
-  --warn-line:      #E8D9A0;
+  --warn:           #FFC800;
+  --warn-wash:      #FFF9E0;
+  --warn-line:      #FFE680;
 
-  --info:           #2B5FAA;
-  --info-wash:      #E8EFF8;
-  --info-line:      #B5C8E8;
+  --info:           #1CB0F6;
+  --info-wash:      #E0F5FF;
+  --info-line:      #80D8FA;
 
-  /* ── Shadows ────────────────────────────────────────── */
-  --shadow-xs:  0 1px 0 rgba(20,20,20,0.05);
-  --shadow-sm:  0 1px 3px rgba(20,20,20,0.06), 0 1px 2px rgba(20,20,20,0.04);
-  --shadow-md:  0 8px 24px rgba(20,20,20,0.08), 0 2px 6px rgba(20,20,20,0.05);
-  --shadow-lg:  0 24px 64px rgba(20,20,20,0.10), 0 6px 16px rgba(20,20,20,0.06);
-  --shadow-xl:  0 48px 100px rgba(20,20,20,0.12);
+  /* ── Shadows (flat design — only CTA gets shadow) ───── */
+  --shadow-xs:   none;
+  --shadow-sm:   none;
+  --shadow-md:   none;
+  --shadow-lg:   none;
+  --shadow-xl:   none;
+  --shadow-cta:  0 4px 0 #4CAB02, 0 6px 24px rgba(88,204,2,0.25);
 
   /* ── Focus ──────────────────────────────────────────── */
-  --focus-ring: 0 0 0 2px rgba(31,77,63,0.25);
+  --focus-ring: 0 0 0 3px rgba(88,204,2,0.35);
 
-  /* ── Radii ──────────────────────────────────────────── */
-  --r-xs:   3px;
-  --r-sm:   6px;
-  --r-md:   10px;
-  --r-lg:   14px;
-  --r-xl:   20px;
+  /* ── Radii — minimum 16px for containers ───────────── */
+  --r-xs:   6px;
+  --r-sm:   10px;
+  --r-md:   16px;
+  --r-lg:   20px;
+  --r-xl:   24px;
   --r-pill: 9999px;
 
   /* ── Spacing ────────────────────────────────────────── */
@@ -78,13 +88,13 @@
   --sp-10: 128px;
 
   /* ── Typography ─────────────────────────────────────── */
-  --font-display: 'Bricolage Grotesque', system-ui, sans-serif;
-  --font-sans:    'Inter', system-ui, -apple-system, sans-serif;
+  --font-display: 'Nunito', system-ui, sans-serif;
+  --font-sans:    'Nunito', system-ui, sans-serif;
   --font-mono:    'JetBrains Mono', 'Courier New', monospace;
 
   /* ── Layout ─────────────────────────────────────────── */
   --sidebar-w:   220px;
-  --topbar-h:    52px;
+  --topbar-h:    56px;
   --content-max: 1200px;
 
   /* ── Transitions ────────────────────────────────────── */
@@ -115,29 +125,28 @@ body {
 .t-display-lg {
   font-family: var(--font-display);
   font-size: clamp(3.2rem, 9vw, 6rem);
-  font-weight: 800;
-  line-height: 0.95;
-  letter-spacing: -0.04em;
+  font-weight: 900;
+  line-height: 1.0;
+  letter-spacing: -0.02em;
 }
 .t-display {
   font-family: var(--font-display);
   font-size: clamp(2rem, 5vw, 3.5rem);
-  font-weight: 700;
-  line-height: 1.0;
-  letter-spacing: -0.03em;
+  font-weight: 800;
+  line-height: 1.05;
+  letter-spacing: -0.01em;
 }
 .t-h1 {
   font-family: var(--font-display);
   font-size: clamp(1.5rem, 3vw, 2.25rem);
-  font-weight: 700;
-  line-height: 1.1;
-  letter-spacing: -0.02em;
+  font-weight: 800;
+  line-height: 1.15;
 }
-.t-h2 { font-size: 1.125rem; font-weight: 600; line-height: 1.3; letter-spacing: -0.01em; }
-.t-h3 { font-size: 0.9375rem; font-weight: 600; line-height: 1.35; }
+.t-h2 { font-size: 1.125rem; font-weight: 700; line-height: 1.3; }
+.t-h3 { font-size: 0.9375rem; font-weight: 700; line-height: 1.35; }
 .t-body    { font-size: 0.9375rem; line-height: 1.6; }
 .t-body-sm { font-size: 0.8125rem; line-height: 1.55; }
-.t-micro   { font-size: 0.6875rem; line-height: 1.4; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 600; }
+.t-micro   { font-size: 0.6875rem; line-height: 1.4; letter-spacing: 0.06em; text-transform: uppercase; font-weight: 700; }
 .t-mono    { font-family: var(--font-mono); font-feature-settings: 'tnum'; }
 
 /* ── Helpers ─────────────────────────────────────────── */

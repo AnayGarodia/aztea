@@ -3,6 +3,13 @@
   flex-direction: column;
   gap: var(--sp-4);
 }
+.invoke-panel__intro,
+.invoke-panel__mode-help {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--ink-mute);
+  line-height: 1.45;
+}
 .invoke-panel__price-bar {
   display: flex;
   align-items: center;

@@ -36,10 +36,12 @@ class AuthUser(TypedDict):
 
 
 class CallerContext(TypedDict):
-    type: Literal["master", "user"]
+    type: Literal["master", "user", "agent_key"]
     owner_id: str
     scopes: list[str]
     user: NotRequired[AuthUser]
+    agent_id: NotRequired[str]
+    key_id: NotRequired[str]
 LEGACY_JOB_MESSAGE_TYPE_ALIASES = {
     "clarification_needed": "clarification_request",
     "clarification": "clarification_response",
@@ -150,6 +152,157 @@ class WikiRequest(BaseModel):
         return v.strip()
 
 
+class NegotiationRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "objective": "Renew enterprise contract with +15% ARR and annual prepay.",
+                "counterparty_profile": "Procurement-led buyer with strict legal review.",
+                "constraints": ["No discount above 10%", "Need 24-month commitment"],
+                "context": "Incumbent vendor status but increased competitive pressure.",
+            }
+        }
+    )
+
+    objective: str
+    counterparty_profile: str = ""
+    constraints: list[str] | str = Field(default_factory=list)
+    context: str = ""
+
+    @field_validator("objective")
+    @classmethod
+    def objective_not_empty(cls, v):
+        if not v.strip():
+            raise ValueError("objective must not be empty")
+        return v.strip()
+
+    @field_validator("constraints", mode="before")
+    @classmethod
+    def constraints_normalized(cls, value):
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        text = str(value).strip()
+        if not text:
+            return []
+        return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+class ScenarioRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "decision": "Expand to EU market with a direct sales team.",
+                "assumptions": "Current ARR is $5M with 30% YoY growth and limited brand awareness in EU.",
+                "horizon": "18 months",
+                "risk_tolerance": "balanced",
+            }
+        }
+    )
+
+    decision: str
+    assumptions: str = ""
+    horizon: str = "12 months"
+    risk_tolerance: str = "balanced"
+
+    @field_validator("decision")
+    @classmethod
+    def decision_not_empty(cls, v):
+        if not v.strip():
+            raise ValueError("decision must not be empty")
+        return v.strip()
+
+    @field_validator("risk_tolerance")
+    @classmethod
+    def risk_tolerance_valid(cls, v):
+        valid = {"conservative", "balanced", "aggressive"}
+        value = str(v).strip().lower()
+        if value not in valid:
+            raise ValueError(f"risk_tolerance must be one of: {', '.join(sorted(valid))}")
+        return value
+
+
+class ProductStrategyRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "product_idea": "AI-first customer success copilot for SaaS teams.",
+                "target_users": "CSMs at B2B SaaS companies with 20-200 customer accounts.",
+                "market_context": "Crowded tooling space, but weak proactive churn prevention.",
+                "horizon_quarters": 3,
+            }
+        }
+    )
+
+    product_idea: str
+    target_users: str
+    market_context: str = ""
+    horizon_quarters: int = 2
+
+    @field_validator("product_idea", "target_users")
+    @classmethod
+    def required_text_not_empty(cls, v):
+        if not v.strip():
+            raise ValueError("product_idea and target_users must not be empty")
+        return v.strip()
+
+    @field_validator("horizon_quarters")
+    @classmethod
+    def horizon_quarters_valid(cls, v):
+        if v < 1 or v > 8:
+            raise ValueError("horizon_quarters must be between 1 and 8")
+        return v
+
+
+class PortfolioRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "investment_goal": "Build a diversified long-term portfolio for financial independence.",
+                "risk_profile": "balanced",
+                "time_horizon_years": 10,
+                "capital_usd": 50000,
+            }
+        }
+    )
+
+    investment_goal: str
+    risk_profile: str = "balanced"
+    time_horizon_years: int = 5
+    capital_usd: float = 100000.0
+
+    @field_validator("investment_goal")
+    @classmethod
+    def investment_goal_not_empty(cls, v):
+        if not v.strip():
+            raise ValueError("investment_goal must not be empty")
+        return v.strip()
+
+    @field_validator("risk_profile")
+    @classmethod
+    def portfolio_risk_profile_valid(cls, v):
+        valid = {"conservative", "balanced", "aggressive"}
+        value = str(v).strip().lower()
+        if value not in valid:
+            raise ValueError(f"risk_profile must be one of: {', '.join(sorted(valid))}")
+        return value
+
+    @field_validator("time_horizon_years")
+    @classmethod
+    def horizon_years_valid(cls, v):
+        if v < 1 or v > 50:
+            raise ValueError("time_horizon_years must be between 1 and 50")
+        return v
+
+    @field_validator("capital_usd")
+    @classmethod
+    def capital_non_negative(cls, v):
+        if v < 0:
+            raise ValueError("capital_usd must be non-negative")
+        return v
+
+
 class AgentRegisterRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
@@ -160,6 +313,8 @@ class AgentRegisterRequest(BaseModel):
                 "price_per_call_usd": 0.05,
                 "tags": ["financial-research", "sec"],
                 "input_schema": {"type": "object", "properties": {"ticker": {"type": "string"}}},
+                "output_schema": {"type": "object", "properties": {"summary": {"type": "string"}}},
+                "output_verifier_url": "https://example.com/verify",
             }
         }
     )
@@ -170,6 +325,8 @@ class AgentRegisterRequest(BaseModel):
     price_per_call_usd: float
     tags: list[str] = Field(default_factory=list)
     input_schema: JSONObject = Field(default_factory=dict)
+    output_schema: JSONObject = Field(default_factory=dict)
+    output_verifier_url: str | None = None
 
 
 class DepositRequest(BaseModel):
@@ -276,6 +433,14 @@ class RotateKeyRequest(BaseModel):
         return normalized
 
 
+class AgentKeyCreateRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={"example": {"name": "Agent worker key"}}
+    )
+
+    name: str = "Agent worker key"
+
+
 class JobCreateRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
@@ -290,6 +455,7 @@ class JobCreateRequest(BaseModel):
     agent_id: str
     input_payload: JSONObject = Field(default_factory=dict)
     max_attempts: int = Field(default=3, ge=1, le=10)
+    dispute_window_hours: int = Field(default=72, ge=1, le=24 * 30)
 
 
 class JobCompleteRequest(BaseModel):
@@ -911,7 +1077,9 @@ class RegistrySearchRequest(BaseModel):
 
 
 class ErrorResponse(BaseModel):
-    detail: JSONValue
+    error: str
+    message: str
+    data: JSONObject = Field(default_factory=dict)
 
 
 class DynamicObjectResponse(BaseModel):
@@ -1017,6 +1185,14 @@ class ApiKeyRevokeResponse(BaseModel):
     revoked: bool
 
 
+class AgentKeyCreateResponse(BaseModel):
+    key_id: str
+    agent_id: str
+    raw_key: str
+    key_prefix: str
+    created_at: str
+
+
 class AgentResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -1027,6 +1203,9 @@ class AgentResponse(BaseModel):
     price_per_call_usd: float
     tags: list[str] = Field(default_factory=list)
     input_schema: JSONObject = Field(default_factory=dict)
+    output_schema: JSONObject = Field(default_factory=dict)
+    output_verifier_url: str | None = None
+    status: str = "active"
     caller_trust_min: float | None = None
 
 
@@ -1080,6 +1259,11 @@ class JobResponse(BaseModel):
     timeout_count: int
     last_timeout_at: str | None = None
     latest_message_id: int | None = None
+    dispute_window_hours: int | None = None
+    dispute_outcome: str | None = None
+    judge_verdict: str | None = None
+    quality_score: int | None = None
+    judge_agent_id: str | None = None
 
 
 class JobsListResponse(BaseModel):

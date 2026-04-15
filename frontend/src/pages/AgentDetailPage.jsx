@@ -7,13 +7,14 @@ import Button from '../ui/Button'
 import Badge from '../ui/Badge'
 import Pill from '../ui/Pill'
 import EmptyState from '../ui/EmptyState'
-import AgentAvatar from '../brand/AgentAvatar'
+import AgentCharacter from '../brand/AgentCharacter'
+import { generateAgentCharacter } from '../brand/characterUtils'
 import AgentInputForm from '../features/agents/AgentInputForm'
 import ResultRenderer from '../features/agents/results/ResultRenderer'
 import TrustGauge from '../features/agents/TrustGauge'
 import { callAgent, createJob } from '../api'
 import { useMarket } from '../context/MarketContext'
-import { ArrowLeft, ArrowUpRight, Code } from 'lucide-react'
+import { ArrowLeft, ArrowUpRight } from 'lucide-react'
 
 export default function AgentDetailPage() {
   const { id } = useParams()
@@ -24,6 +25,7 @@ export default function AgentDetailPage() {
   const [jobInfo, setJobInfo] = useState(null)
 
   const agent = useMemo(() => agents.find(a => a.agent_id === id), [agents, id])
+  const traits = agent ? generateAgentCharacter(agent.agent_id) : null
 
   const handleInvoke = async (payload) => {
     if (!agent) return
@@ -79,31 +81,31 @@ export default function AgentDetailPage() {
             display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
             gap: 'var(--sp-5)', flexWrap: 'wrap', marginBottom: 'var(--sp-4)',
           }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', marginBottom: 8 }}>
-                <AgentAvatar name={agent.name} size="md" />
-                <span style={{ fontSize: '0.75rem', color: 'var(--ink-mute)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600 }}>
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'flex-start', gap: 'var(--sp-4)' }}>
+              <AgentCharacter {...traits} state="idle" size={72} />
+              <div>
+                <span style={{ fontSize: '0.6875rem', color: 'var(--ink-mute)', letterSpacing: '0.08em', textTransform: 'uppercase', fontWeight: 800, display: 'block', marginBottom: 6 }}>
                   Agent profile
                 </span>
+                <h1 style={{
+                  fontFamily: 'var(--font-display)',
+                  fontSize: '1.75rem', fontWeight: 900,
+                  color: 'var(--ink)', lineHeight: 1.15,
+                  marginBottom: 8,
+                }}>
+                  {agent.name}
+                </h1>
+                {agent.description && (
+                  <p style={{ fontSize: '0.9375rem', color: 'var(--ink-soft)', lineHeight: 1.6, maxWidth: 560, marginBottom: 'var(--sp-3)' }}>
+                    {agent.description}
+                  </p>
+                )}
+                {(agent.tags ?? []).length > 0 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--sp-1)' }}>
+                    {agent.tags.map(t => <Pill key={t} size="sm">{t}</Pill>)}
+                  </div>
+                )}
               </div>
-              <h1 style={{
-                fontFamily: 'var(--font-display)',
-                fontSize: '1.75rem', fontWeight: 400,
-                color: 'var(--ink)', letterSpacing: '-0.02em', lineHeight: 1.15,
-                marginBottom: 8,
-              }}>
-                {agent.name}
-              </h1>
-              {agent.description && (
-                <p style={{ fontSize: '0.9375rem', color: 'var(--ink-soft)', lineHeight: 1.6, maxWidth: 600, marginBottom: 'var(--sp-3)' }}>
-                  {agent.description}
-                </p>
-              )}
-              {(agent.tags ?? []).length > 0 && (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--sp-1)' }}>
-                  {agent.tags.map(t => <Pill key={t} size="sm">{t}</Pill>)}
-                </div>
-              )}
             </div>
             <div style={{
               display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0,
@@ -139,6 +141,23 @@ export default function AgentDetailPage() {
             </p>
             <TrustGauge agent={agent} />
           </motion.div>
+
+          <div style={{
+            marginTop: 'var(--sp-3)',
+            padding: 'var(--sp-4)',
+            border: '1px solid var(--line)',
+            borderRadius: 'var(--r-md)',
+            background: 'var(--canvas-sunk)',
+          }}>
+            <p style={{ margin: 0, fontSize: '0.8125rem', fontWeight: 700, color: 'var(--ink)', marginBottom: 6 }}>
+              Invocation guide
+            </p>
+            <ul style={{ margin: 0, paddingLeft: 18, display: 'grid', gap: 4 }}>
+              <li style={{ fontSize: '0.8125rem', color: 'var(--ink-soft)' }}>Use <strong>Sync</strong> for immediate output in this page.</li>
+              <li style={{ fontSize: '0.8125rem', color: 'var(--ink-soft)' }}>Use <strong>Async</strong> to queue long jobs and monitor them in Jobs.</li>
+              <li style={{ fontSize: '0.8125rem', color: 'var(--ink-soft)' }}>Price is charged before run and refunded on failed execution.</li>
+            </ul>
+          </div>
         </div>
 
         {/* Two-column: invoke + output */}
@@ -203,7 +222,7 @@ export default function AgentDetailPage() {
               {/* Empty state */}
               {!result && !jobInfo && (
                 <p style={{ color: 'var(--ink-mute)', fontSize: '0.875rem' }}>
-                  Run the agent to see output here.
+                  Submit payload to run the agent. Sync results render here; async jobs open in Jobs.
                 </p>
               )}
             </Card.Body>

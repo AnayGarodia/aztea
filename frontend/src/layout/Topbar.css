@@ -1,7 +1,7 @@
 .topbar {
   height: var(--topbar-h);
-  border-bottom: 1px solid var(--line);
-  background: var(--canvas-raised);
+  border-bottom: 2px solid var(--line);
+  background: var(--surface);
   display: flex;
   align-items: center;
   gap: var(--sp-4);
@@ -16,7 +16,8 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
+  font-weight: 700;
   color: var(--ink-mute);
   flex: 1;
   min-width: 0;
@@ -31,9 +32,10 @@
   color: var(--ink-mute);
   text-decoration: none;
   transition: color var(--duration-sm);
+  font-weight: 700;
 }
 .topbar__breadcrumb a:hover { color: var(--ink); }
-.topbar__breadcrumb-current { color: var(--ink); font-weight: 600; }
+.topbar__breadcrumb-current { color: var(--ink); font-weight: 800; }
 
 .topbar__actions {
   display: flex;
@@ -45,23 +47,35 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  background: var(--surface);
-  border: 1px solid var(--line-strong);
+  background: var(--accent-wash);
+  border: 2px solid var(--accent-line);
   border-radius: var(--r-pill);
-  padding: 5px 12px;
+  padding: 5px 14px;
   font-family: var(--font-mono);
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   font-weight: 600;
-  color: var(--ink);
+  color: var(--accent);
   cursor: pointer;
   text-decoration: none;
-  transition: background var(--duration-sm), border-color var(--duration-sm), color var(--duration-sm);
+  transition: background var(--duration-sm);
   font-feature-settings: 'tnum';
 }
-.topbar__balance:hover { background: var(--surface-hover); border-color: var(--line-strong); color: var(--ink); }
+.topbar__balance:hover { background: #d4f0a0; }
+.topbar__balance-label {
+  font-family: var(--font-sans);
+  font-size: 0.6875rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.topbar__balance--low {
+  background: var(--warn-wash);
+  border-color: var(--warn-line);
+  color: var(--ink-soft);
+}
 
 .topbar__balance-dot {
-  width: 5px; height: 5px;
+  width: 6px; height: 6px;
   border-radius: 50%;
   background: var(--accent);
   flex-shrink: 0;

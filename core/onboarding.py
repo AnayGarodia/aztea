@@ -215,6 +215,10 @@ def parse_registration_metadata(metadata: dict | str) -> dict:
 
     tags = _normalize_tags(raw.get("tags", raw.get("capabilities")))
     input_schema = _normalize_input_schema(raw.get("input_schema"))
+    output_schema = _normalize_input_schema(raw.get("output_schema"))
+    output_verifier_url = raw.get("output_verifier_url")
+    if output_verifier_url is not None:
+        output_verifier_url = str(output_verifier_url).strip() or None
 
     return {
         "name": name,
@@ -223,6 +227,8 @@ def parse_registration_metadata(metadata: dict | str) -> dict:
         "price_per_call_usd": price_per_call_usd,
         "tags": tags,
         "input_schema": input_schema,
+        "output_schema": output_schema,
+        "output_verifier_url": output_verifier_url,
     }
 
 

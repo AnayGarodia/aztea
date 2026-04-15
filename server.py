@@ -17,6 +17,7 @@ import sqlite3
 import threading
 import time
 import uuid
+import socket
 from queue import Empty, Queue
 from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
@@ -30,14 +31,19 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 
 import groq as _groq
 
 from agents import codereview as agent_codereview
+from agents import negotiation as agent_negotiation
+from agents import portfolio as agent_portfolio
+from agents import product as agent_product
+from agents import scenario as agent_scenario
 from agents import textintel as agent_textintel
 from agents import wiki as agent_wiki
 from core import auth as _auth
@@ -49,6 +55,7 @@ from core import disputes
 from core import judges
 from core import models as core_models
 from core import reputation
+from core import error_codes
 from main import run as _run_financial
 from core.models import (
     AgentRegisterRequest,
@@ -70,11 +77,16 @@ from core.models import (
     JobReleaseRequest,
     JobRetryRequest,
     JobsSweepRequest,
+    NegotiationRequest,
+    PortfolioRequest,
+    ProductStrategyRequest,
+    ScenarioRequest,
     AdminDisputeRuleRequest,
     OnboardingValidateRequest,
     ReconciliationRunRequest,
     RegistrySearchRequest,
     RotateKeyRequest,
+    AgentKeyCreateRequest,
     TextIntelRequest,
     UserLoginRequest,
     UserRegisterRequest,
@@ -99,12 +111,22 @@ _FINANCIAL_AGENT_ID  = "00000000-0000-0000-0000-000000000001"
 _CODEREVIEW_AGENT_ID = "00000000-0000-0000-0000-000000000002"
 _TEXTINTEL_AGENT_ID  = "00000000-0000-0000-0000-000000000003"
 _WIKI_AGENT_ID       = "00000000-0000-0000-0000-000000000004"
+_NEGOTIATION_AGENT_ID = "00000000-0000-0000-0000-000000000005"
+_SCENARIO_AGENT_ID = "00000000-0000-0000-0000-000000000006"
+_PRODUCT_AGENT_ID = "00000000-0000-0000-0000-000000000007"
+_PORTFOLIO_AGENT_ID = "00000000-0000-0000-0000-000000000008"
+_QUALITY_JUDGE_AGENT_ID = "00000000-0000-0000-0000-000000000009"
 
 _BUILTIN_PROXY_ENDPOINTS = {
     _FINANCIAL_AGENT_ID: f"{_SERVER_BASE_URL}/agents/financial",
     _CODEREVIEW_AGENT_ID: f"{_SERVER_BASE_URL}/agents/code-review",
     _TEXTINTEL_AGENT_ID: f"{_SERVER_BASE_URL}/agents/text-intel",
     _WIKI_AGENT_ID: f"{_SERVER_BASE_URL}/agents/wiki",
+    _NEGOTIATION_AGENT_ID: f"{_SERVER_BASE_URL}/agents/negotiation",
+    _SCENARIO_AGENT_ID: f"{_SERVER_BASE_URL}/agents/scenario",
+    _PRODUCT_AGENT_ID: f"{_SERVER_BASE_URL}/agents/product-strategy",
+    _PORTFOLIO_AGENT_ID: f"{_SERVER_BASE_URL}/agents/portfolio",
+    _QUALITY_JUDGE_AGENT_ID: f"{_SERVER_BASE_URL}/agents/quality-judge",
 }
 _BUILTIN_PROXY_AUTH_URLS = {
     _FINANCIAL_AGENT_ID: {
@@ -114,7 +136,14 @@ _BUILTIN_PROXY_AUTH_URLS = {
     _CODEREVIEW_AGENT_ID: {_BUILTIN_PROXY_ENDPOINTS[_CODEREVIEW_AGENT_ID]},
     _TEXTINTEL_AGENT_ID: {_BUILTIN_PROXY_ENDPOINTS[_TEXTINTEL_AGENT_ID]},
     _WIKI_AGENT_ID: {_BUILTIN_PROXY_ENDPOINTS[_WIKI_AGENT_ID]},
+    _NEGOTIATION_AGENT_ID: {_BUILTIN_PROXY_ENDPOINTS[_NEGOTIATION_AGENT_ID]},
+    _SCENARIO_AGENT_ID: {_BUILTIN_PROXY_ENDPOINTS[_SCENARIO_AGENT_ID]},
+    _PRODUCT_AGENT_ID: {_BUILTIN_PROXY_ENDPOINTS[_PRODUCT_AGENT_ID]},
+    _PORTFOLIO_AGENT_ID: {_BUILTIN_PROXY_ENDPOINTS[_PORTFOLIO_AGENT_ID]},
+    _QUALITY_JUDGE_AGENT_ID: {_BUILTIN_PROXY_ENDPOINTS[_QUALITY_JUDGE_AGENT_ID]},
 }
+_BUILTIN_AGENT_IDS = frozenset(_BUILTIN_PROXY_ENDPOINTS.keys())
+_BUILTIN_WORKER_OWNER_ID = "system:builtin-worker"
 
 _CALLER_CACHE_MISSING = object()
 _IDEMPOTENCY_KEY_HEADER = "Idempotency-Key"
@@ -122,7 +151,7 @@ _MAX_BODY_BYTES = 512 * 1024  # 512 KB
 _DEFAULT_LEASE_SECONDS = 300
 _DEFAULT_RETRY_DELAY_SECONDS = 30
 _DEFAULT_SLA_SECONDS = 900
-_DEFAULT_SWEEP_INTERVAL_SECONDS = 30
+_DEFAULT_SWEEP_INTERVAL_SECONDS = 60
 _DEFAULT_SWEEP_LIMIT = 100
 _DEFAULT_HOOK_DELIVERY_INTERVAL_SECONDS = 2
 _DEFAULT_HOOK_DELIVERY_BATCH_SIZE = 50
@@ -130,7 +159,16 @@ _DEFAULT_HOOK_DELIVERY_MAX_ATTEMPTS = 5
 _DEFAULT_HOOK_DELIVERY_BASE_DELAY_SECONDS = 5
 _DEFAULT_HOOK_DELIVERY_MAX_DELAY_SECONDS = 300
 _DEFAULT_DISPUTE_FILE_WINDOW_SECONDS = 7 * 24 * 3600
+_DEFAULT_DISPUTE_WINDOW_HOURS = 72
 _DEFAULT_DISPUTE_JUDGE_INTERVAL_SECONDS = 0
+_DEFAULT_BUILTIN_JOB_WORKER_INTERVAL_SECONDS = 2
+_DEFAULT_BUILTIN_JOB_WORKER_BATCH_SIZE = 20
+_PROTOCOL_VERSION = "1.0"
+_PROTOCOL_VERSION_HEADER = "X-AgentMarket-Version"
+# $0.001 cannot be represented in integer cents; keep ledger integer-safe until millicent support exists.
+_JUDGE_FEE_CENTS = 0
+_REPUTATION_DECAY_GRACE_DAYS = 30
+_REPUTATION_DECAY_DAILY_RATE = 0.005
 
 
 def _env_int(name: str, default: int, minimum: int | None = None, maximum: int | None = None) -> int:
@@ -226,6 +264,12 @@ _DISPUTE_FILE_WINDOW_SECONDS = _env_int(
     minimum=3600,
     maximum=30 * 24 * 3600,
 )
+_DEFAULT_JOB_DISPUTE_WINDOW_HOURS = _env_int(
+    "DEFAULT_JOB_DISPUTE_WINDOW_HOURS",
+    _DEFAULT_DISPUTE_WINDOW_HOURS,
+    minimum=1,
+    maximum=24 * 30,
+)
 _DISPUTE_JUDGE_INTERVAL_SECONDS = _env_int(
     "DISPUTE_JUDGE_INTERVAL_SECONDS",
     _DEFAULT_DISPUTE_JUDGE_INTERVAL_SECONDS,
@@ -233,6 +277,24 @@ _DISPUTE_JUDGE_INTERVAL_SECONDS = _env_int(
     maximum=3600,
 )
 _DISPUTE_JUDGE_ENABLED = _DISPUTE_JUDGE_INTERVAL_SECONDS > 0
+_builtin_worker_interval = _env_int(
+    "BUILTIN_JOB_WORKER_INTERVAL_SECONDS",
+    _DEFAULT_BUILTIN_JOB_WORKER_INTERVAL_SECONDS,
+    minimum=0,
+    maximum=300,
+)
+_BUILTIN_JOB_WORKER_INTERVAL_SECONDS = (
+    _builtin_worker_interval
+    if _builtin_worker_interval > 0
+    else _DEFAULT_BUILTIN_JOB_WORKER_INTERVAL_SECONDS
+)
+_BUILTIN_JOB_WORKER_BATCH_SIZE = _env_int(
+    "BUILTIN_JOB_WORKER_BATCH_SIZE",
+    _DEFAULT_BUILTIN_JOB_WORKER_BATCH_SIZE,
+    minimum=1,
+    maximum=500,
+)
+_BUILTIN_JOB_WORKER_ENABLED = True
 _SLO_CLAIM_P95_TARGET_MS = _env_int(
     "SLO_CLAIM_P95_TARGET_MS",
     60_000,
@@ -283,6 +345,17 @@ _HOOK_WORKER_STATE = {
     "max_attempts": _HOOK_DELIVERY_MAX_ATTEMPTS,
     "base_delay_seconds": _HOOK_DELIVERY_BASE_DELAY_SECONDS,
     "max_delay_seconds": _HOOK_DELIVERY_MAX_DELAY_SECONDS,
+    "running": False,
+    "started_at": None,
+    "last_run_at": None,
+    "last_summary": None,
+    "last_error": None,
+}
+_BUILTIN_WORKER_STATE_LOCK = threading.Lock()
+_BUILTIN_WORKER_STATE = {
+    "enabled": _BUILTIN_JOB_WORKER_ENABLED,
+    "interval_seconds": _BUILTIN_JOB_WORKER_INTERVAL_SECONDS,
+    "batch_size": _BUILTIN_JOB_WORKER_BATCH_SIZE,
     "running": False,
     "started_at": None,
     "last_run_at": None,
@@ -560,6 +633,210 @@ def _register_agents() -> None:
                 ]
             },
         },
+        {
+            "agent_id": _NEGOTIATION_AGENT_ID,
+            "name": "Negotiation Strategist Agent",
+            "description": (
+                "Builds practical negotiation playbooks with opening position, red lines, "
+                "tradeables, and fallback strategy tailored to your objective and counterpart."
+            ),
+            "endpoint_url": _BUILTIN_PROXY_ENDPOINTS[_NEGOTIATION_AGENT_ID],
+            "price_per_call_usd": 0.006,
+            "tags": ["negotiation", "strategy", "operations"],
+            "input_schema": {
+                "fields": [
+                    {
+                        "name": "objective",
+                        "type": "textarea",
+                        "label": "Negotiation objective",
+                        "placeholder": "What outcome do you need to secure?",
+                        "required": True,
+                    },
+                    {
+                        "name": "counterparty_profile",
+                        "type": "textarea",
+                        "label": "Counterparty profile",
+                        "placeholder": "Who are they and what do they care about?",
+                        "required": False,
+                    },
+                    {
+                        "name": "constraints",
+                        "type": "textarea",
+                        "label": "Constraints (one per line)",
+                        "placeholder": "No discount above 10%\nNeed annual prepay",
+                        "required": False,
+                    },
+                    {
+                        "name": "context",
+                        "type": "textarea",
+                        "label": "Extra context",
+                        "placeholder": "Any relevant deal history or timing pressure",
+                        "required": False,
+                    },
+                ]
+            },
+        },
+        {
+            "agent_id": _SCENARIO_AGENT_ID,
+            "name": "Scenario Simulator Agent",
+            "description": (
+                "Runs strategic upside/base/downside simulations with probabilities, "
+                "leading indicators, and a concrete action plan under uncertainty."
+            ),
+            "endpoint_url": _BUILTIN_PROXY_ENDPOINTS[_SCENARIO_AGENT_ID],
+            "price_per_call_usd": 0.007,
+            "tags": ["forecasting", "strategy", "decision-making"],
+            "input_schema": {
+                "fields": [
+                    {
+                        "name": "decision",
+                        "type": "textarea",
+                        "label": "Decision to evaluate",
+                        "placeholder": "What decision are you considering?",
+                        "required": True,
+                    },
+                    {
+                        "name": "assumptions",
+                        "type": "textarea",
+                        "label": "Assumptions",
+                        "placeholder": "Key assumptions and operating context",
+                        "required": False,
+                    },
+                    {
+                        "name": "horizon",
+                        "type": "text",
+                        "label": "Time horizon",
+                        "placeholder": "12 months",
+                        "required": False,
+                    },
+                    {
+                        "name": "risk_tolerance",
+                        "type": "select",
+                        "label": "Risk tolerance",
+                        "required": False,
+                        "default": "balanced",
+                        "options": ["conservative", "balanced", "aggressive"],
+                    },
+                ]
+            },
+        },
+        {
+            "agent_id": _PRODUCT_AGENT_ID,
+            "name": "Product Strategy Lab Agent",
+            "description": (
+                "Turns a product idea into positioning, user personas, quarter-by-quarter bets, "
+                "and measurable experiments."
+            ),
+            "endpoint_url": _BUILTIN_PROXY_ENDPOINTS[_PRODUCT_AGENT_ID],
+            "price_per_call_usd": 0.008,
+            "tags": ["product", "go-to-market", "experimentation"],
+            "input_schema": {
+                "fields": [
+                    {
+                        "name": "product_idea",
+                        "type": "textarea",
+                        "label": "Product idea",
+                        "placeholder": "Describe what you're building",
+                        "required": True,
+                    },
+                    {
+                        "name": "target_users",
+                        "type": "textarea",
+                        "label": "Target users",
+                        "placeholder": "Who is this for?",
+                        "required": True,
+                    },
+                    {
+                        "name": "market_context",
+                        "type": "textarea",
+                        "label": "Market context",
+                        "placeholder": "Competitors, constraints, or timing",
+                        "required": False,
+                    },
+                    {
+                        "name": "horizon_quarters",
+                        "type": "text",
+                        "label": "Planning horizon (quarters)",
+                        "placeholder": "2",
+                        "required": False,
+                    },
+                ]
+            },
+        },
+        {
+            "agent_id": _PORTFOLIO_AGENT_ID,
+            "name": "Portfolio Planner Agent",
+            "description": (
+                "Builds a structured educational portfolio allocation and monitoring plan "
+                "based on your goal, risk profile, and time horizon."
+            ),
+            "endpoint_url": _BUILTIN_PROXY_ENDPOINTS[_PORTFOLIO_AGENT_ID],
+            "price_per_call_usd": 0.006,
+            "tags": ["portfolio", "allocation", "wealth-planning"],
+            "input_schema": {
+                "fields": [
+                    {
+                        "name": "investment_goal",
+                        "type": "textarea",
+                        "label": "Investment goal",
+                        "placeholder": "What are you optimizing for?",
+                        "required": True,
+                    },
+                    {
+                        "name": "risk_profile",
+                        "type": "select",
+                        "label": "Risk profile",
+                        "required": False,
+                        "default": "balanced",
+                        "options": ["conservative", "balanced", "aggressive"],
+                    },
+                    {
+                        "name": "time_horizon_years",
+                        "type": "text",
+                        "label": "Time horizon (years)",
+                        "placeholder": "5",
+                        "required": False,
+                    },
+                    {
+                        "name": "capital_usd",
+                        "type": "text",
+                        "label": "Capital (USD)",
+                        "placeholder": "100000",
+                        "required": False,
+                    },
+                ]
+            },
+        },
+        {
+            "agent_id": _QUALITY_JUDGE_AGENT_ID,
+            "name": "Quality Judge Agent",
+            "description": (
+                "Internal verification worker that scores completed agent outputs for quality "
+                "before settlement."
+            ),
+            "endpoint_url": _BUILTIN_PROXY_ENDPOINTS[_QUALITY_JUDGE_AGENT_ID],
+            "price_per_call_usd": 0.001,
+            "tags": ["quality", "internal"],
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "input_payload": {"type": "object"},
+                    "output_payload": {"type": "object"},
+                    "agent_description": {"type": "string"},
+                },
+                "required": ["input_payload", "output_payload"],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "verdict": {"type": "string"},
+                    "score": {"type": "integer"},
+                    "reason": {"type": "string"},
+                },
+                "required": ["verdict", "score", "reason"],
+            },
+            "internal_only": True,
+        },
     ]
 
     for a in agents:
@@ -572,6 +849,9 @@ def _register_agents() -> None:
                 price_per_call_usd=a["price_per_call_usd"],
                 tags=a["tags"],
                 input_schema=a["input_schema"],
+                output_schema=a.get("output_schema"),
+                output_verifier_url=a.get("output_verifier_url"),
+                internal_only=bool(a.get("internal_only", False)),
                 owner_id="master",
                 embed_listing=False,
             )
@@ -591,6 +871,8 @@ async def lifespan(app: FastAPI):
     sweeper_thread: threading.Thread | None = None
     hook_stop_event: threading.Event | None = None
     hook_thread: threading.Thread | None = None
+    builtin_stop_event: threading.Event | None = None
+    builtin_thread: threading.Thread | None = None
     if _SWEEPER_ENABLED:
         stop_event = threading.Event()
         sweeper_thread = threading.Thread(
@@ -614,6 +896,18 @@ async def lifespan(app: FastAPI):
         hook_thread.start()
     else:
         _set_hook_worker_state(running=False)
+
+    if _BUILTIN_JOB_WORKER_ENABLED:
+        builtin_stop_event = threading.Event()
+        builtin_thread = threading.Thread(
+            target=_builtin_worker_loop,
+            args=(builtin_stop_event,),
+            daemon=True,
+            name="agentmarket-builtin-worker",
+        )
+        builtin_thread.start()
+    else:
+        _set_builtin_worker_state(running=False)
     try:
         yield
     finally:
@@ -625,6 +919,10 @@ async def lifespan(app: FastAPI):
             hook_stop_event.set()
         if hook_thread is not None:
             hook_thread.join(timeout=2)
+        if builtin_stop_event is not None:
+            builtin_stop_event.set()
+        if builtin_thread is not None:
+            builtin_thread.join(timeout=2)
 
 
 # ---------------------------------------------------------------------------
@@ -643,7 +941,6 @@ def _key_from_request(request: Request) -> str:
 limiter = Limiter(key_func=_key_from_request)
 app = FastAPI(title="agentmarket", lifespan=lifespan)
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS — allow Vite dev server and common local ports
 app.add_middleware(
@@ -667,7 +964,15 @@ app.add_middleware(
 
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
+    if not (request.headers.get(_PROTOCOL_VERSION_HEADER, "") or "").strip():
+        _LOG.warning(
+            "Request missing %s header: method=%s path=%s",
+            _PROTOCOL_VERSION_HEADER,
+            request.method,
+            request.url.path,
+        )
     response = await call_next(request)
+    response.headers[_PROTOCOL_VERSION_HEADER] = _PROTOCOL_VERSION
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-XSS-Protection"] = "1; mode=block"
@@ -683,10 +988,19 @@ async def limit_body_size(request: Request, call_next):
         try:
             content_length = int(cl)
         except ValueError:
-            return JSONResponse({"detail": "Invalid Content-Length header."}, status_code=400)
+            return JSONResponse(
+                content=error_codes.make_error(
+                    error_codes.INVALID_INPUT,
+                    "Invalid Content-Length header.",
+                ),
+                status_code=400,
+            )
         if content_length > _MAX_BODY_BYTES:
             return JSONResponse(
-                {"detail": f"Request body too large (max {_MAX_BODY_BYTES // 1024} KB)."},
+                content=error_codes.make_error(
+                    error_codes.INVALID_INPUT,
+                    f"Request body too large (max {_MAX_BODY_BYTES // 1024} KB).",
+                ),
                 status_code=413,
             )
     return await call_next(request)
@@ -707,7 +1021,7 @@ def _resolve_caller(request: Request) -> core_models.CallerContext | None:
         return None
 
     raw = auth[7:]
-    if raw == _MASTER_KEY:
+    if hmac.compare_digest(raw, _MASTER_KEY):
         caller = {
             "type": "master",
             "owner_id": "master",
@@ -724,6 +1038,18 @@ def _resolve_caller(request: Request) -> core_models.CallerContext | None:
             "owner_id": f"user:{user['user_id']}",
             "user": user,
             "scopes": scopes,
+        }
+        request.state._caller = caller
+        return caller
+
+    agent_key = _auth.verify_agent_api_key(raw)
+    if agent_key:
+        caller = {
+            "type": "agent_key",
+            "owner_id": f"agent_key:{agent_key['agent_id']}",
+            "scopes": ["worker"],
+            "agent_id": str(agent_key["agent_id"]),
+            "key_id": str(agent_key["key_id"]),
         }
         request.state._caller = caller
         return caller
@@ -755,6 +1081,8 @@ def _caller_owner_id(request: Request) -> str:
 def _caller_has_scope(caller: core_models.CallerContext, required_scope: str) -> bool:
     if caller["type"] == "master":
         return True
+    if caller["type"] == "agent_key":
+        return required_scope == "worker"
     scopes = {str(scope).strip().lower() for scope in (caller.get("scopes") or []) if str(scope).strip()}
     if "admin" in scopes:
         return True
@@ -815,12 +1143,21 @@ def _extract_caller_trust_min(input_schema: dict | None) -> float | None:
     return value
 
 
+def _extract_judge_agent_id(input_schema: dict | None) -> str | None:
+    if not isinstance(input_schema, dict):
+        return None
+    candidate = input_schema.get("judge_agent_id")
+    if candidate is None and isinstance(input_schema.get("metadata"), dict):
+        candidate = input_schema["metadata"].get("judge_agent_id")
+    text = str(candidate or "").strip()
+    return text or None
+
+
 def _caller_trust_score(owner_id: str) -> float:
     try:
-        metrics = reputation.compute_caller_trust_metrics(owner_id)
+        return payments.get_caller_trust(owner_id)
     except Exception:
         return 0.5
-    return float(metrics.get("trust_score_normalized") or 0.5)
 
 
 def _agent_response(agent: dict, caller: core_models.CallerContext) -> dict:
@@ -862,6 +1199,8 @@ def _job_response(job: dict, caller: core_models.CallerContext) -> dict:
 def _caller_can_view_job(caller: core_models.CallerContext, job: dict) -> bool:
     if caller["type"] == "master":
         return True
+    if caller["type"] == "agent_key":
+        return str(caller.get("agent_id") or "").strip() == str(job.get("agent_id") or "").strip()
     owner_id = caller["owner_id"]
     return owner_id == job["caller_owner_id"] or jobs.is_worker_authorized(job, owner_id)
 
@@ -869,11 +1208,26 @@ def _caller_can_view_job(caller: core_models.CallerContext, job: dict) -> bool:
 def _caller_can_manage_agent(caller: core_models.CallerContext, agent: dict) -> bool:
     if caller["type"] == "master":
         return True
+    if caller["type"] == "agent_key":
+        return str(caller.get("agent_id") or "").strip() == str(agent.get("agent_id") or "").strip()
     return caller["owner_id"] == agent.get("owner_id")
 
 
-def _assert_worker_claim(job: dict, worker_owner_id: str, claim_token: str | None) -> None:
-    if not jobs.is_worker_authorized(job, worker_owner_id):
+def _caller_worker_authorized_for_job(caller: core_models.CallerContext, job: dict) -> bool:
+    if caller["type"] == "master":
+        return True
+    if caller["type"] == "agent_key":
+        return str(caller.get("agent_id") or "").strip() == str(job.get("agent_id") or "").strip()
+    return jobs.is_worker_authorized(job, caller["owner_id"])
+
+
+def _assert_worker_claim(
+    job: dict,
+    caller: core_models.CallerContext,
+    worker_owner_id: str,
+    claim_token: str | None,
+) -> None:
+    if not _caller_worker_authorized_for_job(caller, job):
         raise HTTPException(status_code=403, detail="Not authorized for this agent job.")
     if (job.get("claim_owner_id") or "").strip() != worker_owner_id:
         raise HTTPException(status_code=409, detail="Job is not currently claimed by this worker.")
@@ -944,11 +1298,11 @@ def _assert_settlement_claim_or_grace(
         _audit_master_claim_bypass(job, action=action, claim_token=claim_token)
         return
 
-    if not jobs.is_worker_authorized(job, actor_owner_id):
+    if not _caller_worker_authorized_for_job(caller, job):
         raise HTTPException(status_code=403, detail="Not authorized for this agent job.")
 
     if (job.get("claim_owner_id") or "").strip() == actor_owner_id:
-        _assert_worker_claim(job, actor_owner_id, claim_token)
+        _assert_worker_claim(job, caller, actor_owner_id, claim_token)
         return
 
     if not _job_supports_late_worker_grace(job):
@@ -981,6 +1335,7 @@ def _timeout_stale_lease_at_touchpoint(job: dict, actor_owner_id: str, touchpoin
     updated = jobs.mark_job_timeout(
         job["job_id"],
         retry_delay_seconds=_SWEEPER_RETRY_DELAY_SECONDS,
+        allow_retry=False,
     )
     if updated is None:
         return None
@@ -995,24 +1350,11 @@ def _timeout_stale_lease_at_touchpoint(job: dict, actor_owner_id: str, touchpoin
         metadata={"touchpoint": touchpoint, "status_after": updated.get("status")},
     )
 
-    if updated["status"] == "failed":
-        return _settle_failed_job(
-            updated,
-            actor_owner_id=actor_owner_id,
-            event_type="job.timeout_terminal",
-        )
-
-    _record_job_event(
+    return _settle_failed_job(
         updated,
-        "job.timeout_retry_scheduled",
         actor_owner_id=actor_owner_id,
-        payload={
-            "retry_count": updated["retry_count"],
-            "next_retry_at": updated["next_retry_at"],
-            "touchpoint": touchpoint,
-        },
+        event_type="job.timeout_terminal",
     )
-    return updated
 
 
 def _job_latency_ms(job: dict) -> float:
@@ -1022,6 +1364,65 @@ def _job_latency_ms(job: dict) -> float:
         return max(0.0, (completed - created).total_seconds() * 1000)
     except Exception:
         return 0.0
+
+
+def _validate_json_schema_subset(payload: Any, schema: dict, path: str = "$") -> list[str]:
+    if not isinstance(schema, dict) or not schema:
+        return []
+
+    errors: list[str] = []
+    schema_type = str(schema.get("type") or "").strip().lower()
+    if not schema_type and isinstance(schema.get("properties"), dict):
+        schema_type = "object"
+
+    def _is_type(value: Any, expected: str) -> bool:
+        if expected == "object":
+            return isinstance(value, dict)
+        if expected == "array":
+            return isinstance(value, list)
+        if expected == "string":
+            return isinstance(value, str)
+        if expected == "integer":
+            return isinstance(value, int) and not isinstance(value, bool)
+        if expected == "number":
+            return (isinstance(value, int) and not isinstance(value, bool)) or isinstance(value, float)
+        if expected == "boolean":
+            return isinstance(value, bool)
+        if expected == "null":
+            return value is None
+        return True
+
+    if schema_type:
+        if not _is_type(payload, schema_type):
+            errors.append(f"{path}: expected type '{schema_type}'")
+            return errors
+
+    if schema_type == "object":
+        properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+        required = schema.get("required") if isinstance(schema.get("required"), list) else []
+        for field in required:
+            key = str(field)
+            if key not in payload:
+                errors.append(f"{path}.{key}: required field missing")
+        if isinstance(properties, dict):
+            for key, field_schema in properties.items():
+                if key in payload and isinstance(field_schema, dict):
+                    errors.extend(
+                        _validate_json_schema_subset(payload[key], field_schema, path=f"{path}.{key}")
+                    )
+        additional_properties = schema.get("additionalProperties")
+        if additional_properties is False and isinstance(properties, dict):
+            allowed = set(properties.keys())
+            for key in payload.keys():
+                if key not in allowed:
+                    errors.append(f"{path}.{key}: additional property not allowed")
+    elif schema_type == "array" and isinstance(payload, list):
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            for idx, value in enumerate(payload):
+                errors.extend(_validate_json_schema_subset(value, item_schema, path=f"{path}[{idx}]"))
+
+    return errors
 
 
 def _parse_iso_datetime(value: str | None) -> datetime | None:
@@ -1432,7 +1833,10 @@ def _idempotency_begin(
                 try:
                     replay_body = json.loads(row["response_body"] or "{}")
                 except (TypeError, json.JSONDecodeError):
-                    replay_body = {"detail": "Stored idempotent response is invalid."}
+                    replay_body = error_codes.make_error(
+                        error_codes.INVALID_INPUT,
+                        "Stored idempotent response is invalid.",
+                    )
                 replay_status = int(row["response_status"] or 200)
                 return {
                     "replay": True,
@@ -1532,29 +1936,68 @@ def _hook_row_to_dict(row: sqlite3.Row) -> dict:
 
 
 def _validate_outbound_url(target_url: str, field_name: str) -> str:
-    parsed = urlparse(target_url.strip())
+    normalized = target_url.strip()
+    parsed = urlparse(normalized)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ValueError(f"{field_name} must be an absolute http(s) URL.")
+    if parsed.username or parsed.password:
+        raise ValueError(f"{field_name} must not include username or password.")
+    if parsed.fragment:
+        raise ValueError(f"{field_name} must not include URL fragments.")
 
     host = (parsed.hostname or "").strip().lower()
     if not host:
         raise ValueError(f"{field_name} hostname is missing.")
+    try:
+        parsed.port
+    except ValueError as exc:
+        raise ValueError(f"{field_name} has an invalid port.") from exc
     if _ALLOW_PRIVATE_OUTBOUND_URLS:
-        return target_url.strip()
+        return normalized
 
-    if host == "localhost":
+    if host == "localhost" or host.endswith(".localhost"):
         raise ValueError(f"{field_name} cannot target localhost unless ALLOW_PRIVATE_OUTBOUND_URLS=1.")
+
+    def _is_disallowed_ip(ip_value: ipaddress._BaseAddress) -> bool:
+        return (
+            ip_value.is_private
+            or ip_value.is_loopback
+            or ip_value.is_link_local
+            or ip_value.is_reserved
+            or ip_value.is_multicast
+            or ip_value.is_unspecified
+        )
+
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
-        # Hostname (non-literal IP) is allowed.
-        return target_url.strip()
+        try:
+            resolved_rows = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+        except socket.gaierror:
+            return normalized
+        except OSError as exc:
+            raise ValueError(f"{field_name} hostname resolution failed.") from exc
+        for row in resolved_rows:
+            sockaddr = row[4]
+            if not sockaddr:
+                continue
+            candidate = sockaddr[0]
+            try:
+                resolved_ip = ipaddress.ip_address(candidate)
+            except ValueError:
+                continue
+            if _is_disallowed_ip(resolved_ip):
+                raise ValueError(
+                    f"{field_name} cannot target hostnames resolving to private/loopback/reserved IPs unless "
+                    "ALLOW_PRIVATE_OUTBOUND_URLS=1."
+                )
+        return normalized
 
-    if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+    if _is_disallowed_ip(ip):
         raise ValueError(
             f"{field_name} cannot target private/loopback/reserved IPs unless ALLOW_PRIVATE_OUTBOUND_URLS=1."
         )
-    return target_url.strip()
+    return normalized
 
 
 def _validate_hook_url(target_url: str) -> str:
@@ -1588,12 +2031,15 @@ def _allow_loopback_same_origin(request: Request, target_url: str) -> bool:
 
 
 def _validate_agent_endpoint_url(request: Request, endpoint_url: str) -> str:
-    try:
-        return _validate_outbound_url(endpoint_url, "endpoint_url")
-    except ValueError:
-        if _allow_loopback_same_origin(request, endpoint_url):
-            return endpoint_url.strip()
-        raise
+    normalized = endpoint_url.strip()
+    if _allow_loopback_same_origin(request, normalized):
+        parsed = urlparse(normalized)
+        if parsed.username or parsed.password:
+            raise ValueError("endpoint_url must not include username or password.")
+        if parsed.fragment:
+            raise ValueError("endpoint_url must not include URL fragments.")
+        return normalized
+    return _validate_outbound_url(normalized, "endpoint_url")
 
 
 def _create_job_event_hook(owner_id: str, target_url: str, secret: str | None = None) -> dict:
@@ -1659,6 +2105,241 @@ def _deliver_job_event_hooks(event: dict) -> None:
 def _set_hook_worker_state(**updates: Any) -> None:
     with _HOOK_WORKER_STATE_LOCK:
         _HOOK_WORKER_STATE.update(updates)
+
+
+def _set_builtin_worker_state(**updates: Any) -> None:
+    with _BUILTIN_WORKER_STATE_LOCK:
+        _BUILTIN_WORKER_STATE.update(updates)
+
+
+def _coerce_string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    text = str(value).strip()
+    if not text:
+        return []
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict:
+    payload = input_payload or {}
+    if agent_id == _FINANCIAL_AGENT_ID:
+        body = FinancialRequest.model_validate(payload)
+        return _invoke_financial_agent(body)
+    if agent_id == _CODEREVIEW_AGENT_ID:
+        body = CodeReviewRequest.model_validate(payload)
+        return _invoke_code_review_agent(body)
+    if agent_id == _TEXTINTEL_AGENT_ID:
+        body = TextIntelRequest.model_validate(payload)
+        return _invoke_text_intel_agent(body)
+    if agent_id == _WIKI_AGENT_ID:
+        body = WikiRequest.model_validate(payload)
+        return _invoke_wiki_agent(body)
+    if agent_id == _NEGOTIATION_AGENT_ID:
+        body = NegotiationRequest.model_validate(payload)
+        return _invoke_negotiation_agent(body)
+    if agent_id == _SCENARIO_AGENT_ID:
+        body = ScenarioRequest.model_validate(payload)
+        return _invoke_scenario_agent(body)
+    if agent_id == _PRODUCT_AGENT_ID:
+        body = ProductStrategyRequest.model_validate(payload)
+        return _invoke_product_strategy_agent(body)
+    if agent_id == _PORTFOLIO_AGENT_ID:
+        body = PortfolioRequest.model_validate(payload)
+        return _invoke_portfolio_agent(body)
+    if agent_id == _QUALITY_JUDGE_AGENT_ID:
+        return judges.run_quality_judgment(
+            input_payload=payload.get("input_payload") if isinstance(payload, dict) else {},
+            output_payload=payload.get("output_payload") if isinstance(payload, dict) else {},
+            agent_description=str(payload.get("agent_description") or "") if isinstance(payload, dict) else "",
+        )
+    raise ValueError(f"Unsupported built-in agent '{agent_id}'.")
+
+
+def _process_pending_builtin_job(job: dict) -> bool:
+    claimed = jobs.claim_job(
+        job["job_id"],
+        claim_owner_id=_BUILTIN_WORKER_OWNER_ID,
+        lease_seconds=_DEFAULT_LEASE_SECONDS,
+        require_authorized_owner=False,
+    )
+    if claimed is None:
+        return False
+
+    _record_job_event(
+        claimed,
+        "job.claimed",
+        actor_owner_id=_BUILTIN_WORKER_OWNER_ID,
+        payload={
+            "lease_seconds": _DEFAULT_LEASE_SECONDS,
+            "attempt_count": claimed["attempt_count"],
+            "auto_worker": True,
+        },
+    )
+    jobs.add_message(
+        claimed["job_id"],
+        from_id=_BUILTIN_WORKER_OWNER_ID,
+        msg_type="progress",
+        payload={"message": "Built-in worker started processing.", "percent": 5},
+    )
+
+    try:
+        output = _execute_builtin_agent(
+            str(claimed["agent_id"]),
+            claimed.get("input_payload") or {},
+        )
+    except _groq.RateLimitError as exc:
+        retried = jobs.schedule_job_retry(
+            claimed["job_id"],
+            retry_delay_seconds=_SWEEPER_RETRY_DELAY_SECONDS,
+            error_message=f"Built-in worker rate-limited: {exc}",
+            claim_owner_id=_BUILTIN_WORKER_OWNER_ID,
+            claim_token=claimed.get("claim_token"),
+            require_authorized_owner=False,
+        )
+        if retried is not None and retried["status"] == "pending":
+            _record_job_event(
+                retried,
+                "job.retry_scheduled",
+                actor_owner_id=_BUILTIN_WORKER_OWNER_ID,
+                payload={"retry_count": retried["retry_count"], "next_retry_at": retried["next_retry_at"]},
+            )
+            return True
+        updated = retried or jobs.update_job_status(
+            claimed["job_id"],
+            "failed",
+            error_message=f"Built-in worker rate-limited: {exc}",
+            completed=True,
+        )
+        if updated is not None:
+            _settle_failed_job(
+                updated,
+                actor_owner_id=_BUILTIN_WORKER_OWNER_ID,
+                event_type="job.failed_builtin",
+            )
+        return True
+    except Exception as exc:
+        updated = jobs.update_job_status(
+            claimed["job_id"],
+            "failed",
+            error_message=f"Built-in execution failed: {exc}",
+            completed=True,
+        )
+        if updated is not None:
+            _settle_failed_job(
+                updated,
+                actor_owner_id=_BUILTIN_WORKER_OWNER_ID,
+                event_type="job.failed_builtin",
+            )
+        return True
+
+    jobs.add_message(
+        claimed["job_id"],
+        from_id=_BUILTIN_WORKER_OWNER_ID,
+        msg_type="final_result",
+        payload={"message": "Built-in worker completed successfully."},
+    )
+    agent = registry.get_agent(claimed["agent_id"])
+    if agent is not None:
+        output_schema = agent.get("output_schema")
+        if isinstance(output_schema, dict) and output_schema:
+            mismatches = _validate_json_schema_subset(output, output_schema)
+            if mismatches:
+                updated = jobs.update_job_status(
+                    claimed["job_id"],
+                    "failed",
+                    error_message=f"Output schema mismatch: {', '.join(mismatches[:3])}",
+                    completed=True,
+                )
+                if updated is not None:
+                    _settle_failed_job(
+                        updated,
+                        actor_owner_id=_BUILTIN_WORKER_OWNER_ID,
+                        event_type="job.failed_schema",
+                    )
+                return True
+        quality = _run_quality_gate(claimed, agent, output)
+        jobs.set_job_quality_result(
+            claimed["job_id"],
+            judge_verdict=quality["judge_verdict"],
+            quality_score=quality["quality_score"],
+            judge_agent_id=quality["judge_agent_id"],
+        )
+        if not quality["passed"]:
+            updated = jobs.update_job_status(
+                claimed["job_id"],
+                "failed",
+                error_message=f"Quality judge failed: {quality['reason']}",
+                completed=True,
+            )
+            if updated is not None:
+                _settle_failed_job(
+                    updated,
+                    actor_owner_id=_BUILTIN_WORKER_OWNER_ID,
+                    event_type="job.failed_quality",
+                )
+            return True
+    completed = jobs.update_job_status(
+        claimed["job_id"],
+        "complete",
+        output_payload=output,
+        completed=True,
+    )
+    if completed is not None:
+        settled = _settle_successful_job(completed, actor_owner_id=_BUILTIN_WORKER_OWNER_ID)
+        if agent is not None:
+            platform_fee_cents = max(0, completed["price_cents"] * payments.PLATFORM_FEE_PCT // 100)
+            judge_fee_cents = min(_JUDGE_FEE_CENTS, platform_fee_cents)
+            if judge_fee_cents > 0:
+                judge_agent_id = str(settled.get("judge_agent_id") or _QUALITY_JUDGE_AGENT_ID)
+                judge_wallet = payments.get_or_create_wallet(f"agent:{judge_agent_id}")
+                payments.record_judge_fee(
+                    completed["platform_wallet_id"],
+                    judge_wallet["wallet_id"],
+                    charge_tx_id=completed["charge_tx_id"],
+                    agent_id=completed["agent_id"],
+                    fee_cents=judge_fee_cents,
+                )
+    return True
+
+
+def _process_pending_builtin_jobs(limit_per_agent: int = _BUILTIN_JOB_WORKER_BATCH_SIZE) -> dict[str, int]:
+    batch_limit = min(max(1, int(limit_per_agent)), 500)
+    scanned = 0
+    processed = 0
+    for agent_id in _BUILTIN_AGENT_IDS:
+        pending = jobs.list_jobs_for_agent(
+            agent_id,
+            status="pending",
+            limit=batch_limit,
+        )
+        scanned += len(pending)
+        for job in pending:
+            if _process_pending_builtin_job(job):
+                processed += 1
+    return {"scanned": scanned, "processed": processed}
+
+
+def _builtin_worker_loop(stop_event: threading.Event) -> None:
+    _set_builtin_worker_state(running=True, started_at=_utc_now_iso())
+    while not stop_event.wait(_BUILTIN_JOB_WORKER_INTERVAL_SECONDS):
+        started = _utc_now_iso()
+        try:
+            summary = _process_pending_builtin_jobs(limit_per_agent=_BUILTIN_JOB_WORKER_BATCH_SIZE)
+            _set_builtin_worker_state(
+                last_run_at=started,
+                last_summary=summary,
+                last_error=None,
+            )
+        except Exception as exc:
+            _LOG.exception("Built-in worker loop failed.")
+            _set_builtin_worker_state(
+                last_run_at=started,
+                last_error=str(exc),
+            )
+    _set_builtin_worker_state(running=False)
 
 
 def _enqueue_job_event_hook_deliveries(event: dict) -> None:
@@ -1861,6 +2542,29 @@ def _process_due_hook_deliveries(limit: int = _HOOK_DELIVERY_BATCH_SIZE) -> dict
             continue
 
         try:
+            safe_target_url = _validate_hook_url(str(delivery["target_url"]))
+        except ValueError as exc:
+            error_text = f"Blocked unsafe hook target: {exc}"
+            _update_hook_attempt_metadata(
+                hook_id=hook_id,
+                attempted_at=now_iso,
+                success=False,
+                status_code=None,
+                error_text=error_text,
+            )
+            _mark_hook_delivery(
+                delivery_id,
+                status="dead_letter",
+                next_attempt_at=now_iso,
+                status_code=None,
+                error_text=error_text,
+                now_iso=now_iso,
+                mark_success=False,
+            )
+            dead_lettered += 1
+            continue
+
+        try:
             payload = json.loads(delivery["payload"] or "{}")
         except (TypeError, json.JSONDecodeError):
             payload = {}
@@ -1883,7 +2587,7 @@ def _process_due_hook_deliveries(limit: int = _HOOK_DELIVERY_BATCH_SIZE) -> dict
         success = False
         try:
             resp = http.post(
-                str(delivery["target_url"]),
+                safe_target_url,
                 data=payload_bytes,
                 headers=headers,
                 timeout=5,
@@ -1976,6 +2680,7 @@ def _hook_delivery_loop(stop_event: threading.Event) -> None:
                 last_error=None,
             )
         except Exception as exc:
+            _LOG.exception("Hook delivery loop failed.")
             _set_hook_worker_state(
                 last_run_at=started,
                 last_error=str(exc),
@@ -2036,6 +2741,173 @@ def _list_job_events(caller: core_models.CallerContext, since: int | None = None
             tuple(params),
         ).fetchall()
     return [_event_row_to_dict(r) for r in rows]
+
+
+def _run_output_verifier(
+    verifier_url: str | None,
+    *,
+    job: dict,
+    output_payload: dict,
+    timeout_seconds: int = 10,
+) -> tuple[bool, str]:
+    target = str(verifier_url or "").strip()
+    if not target:
+        return True, "no external verifier configured"
+    try:
+        safe_url = _validate_outbound_url(target, "output_verifier_url")
+    except ValueError as exc:
+        return False, f"invalid verifier url: {exc}"
+    payload = {
+        "job_id": job["job_id"],
+        "agent_id": job["agent_id"],
+        "input_payload": job.get("input_payload") or {},
+        "output_payload": output_payload,
+    }
+    try:
+        response = http.post(
+            safe_url,
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=timeout_seconds,
+        )
+        response.raise_for_status()
+        body = response.json()
+    except Exception as exc:
+        _LOG.warning("External verifier failed for job %s: %s", job.get("job_id"), exc)
+        return False, "external verifier request failed"
+    if not isinstance(body, dict):
+        return False, "external verifier returned non-object response"
+    if bool(body.get("verified")):
+        return True, "external verifier passed"
+    return False, str(body.get("reason") or "external verifier returned verified=false")
+
+
+def _timeout_error_payload(job_payload: dict) -> dict:
+    payload = error_codes.make_error(
+        error_codes.AGENT_TIMEOUT,
+        "Job lease expired before completion.",
+        {"job": job_payload},
+    )
+    payload.update(job_payload)
+    return payload
+
+
+def _run_quality_gate(job: dict, agent: dict, output_payload: dict) -> dict[str, Any]:
+    judge_agent_id = str(job.get("judge_agent_id") or _QUALITY_JUDGE_AGENT_ID).strip() or _QUALITY_JUDGE_AGENT_ID
+    judge_job_id: str | None = None
+    try:
+        judge_agent = registry.get_agent(judge_agent_id)
+        platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
+        judge_wallet = payments.get_or_create_wallet(f"agent:{judge_agent_id}")
+        child_charge_tx = payments.pre_call_charge(platform_wallet["wallet_id"], 0, judge_agent_id)
+        child = jobs.create_job(
+            agent_id=judge_agent_id,
+            caller_owner_id="system:quality-judge",
+            caller_wallet_id=platform_wallet["wallet_id"],
+            agent_wallet_id=judge_wallet["wallet_id"],
+            platform_wallet_id=platform_wallet["wallet_id"],
+            price_cents=0,
+            charge_tx_id=child_charge_tx,
+            input_payload={
+                "parent_job_id": job["job_id"],
+                "input_payload": job.get("input_payload") or {},
+                "output_payload": output_payload,
+                "agent_description": str(agent.get("description") or ""),
+            },
+            agent_owner_id=(judge_agent or {}).get("owner_id") or "master",
+            max_attempts=1,
+            dispute_window_hours=1,
+            judge_agent_id=None,
+        )
+        judge_job_id = child["job_id"]
+    except Exception:
+        judge_job_id = None
+
+    judge_result: dict[str, Any]
+    try:
+        judge_result = judges.run_quality_judgment(
+            input_payload=job.get("input_payload") or {},
+            output_payload=output_payload,
+            agent_description=str(agent.get("description") or ""),
+        )
+    except Exception as exc:
+        judge_result = {"verdict": "fail", "score": 1, "reason": f"quality judge error: {exc}"}
+    verdict = str(judge_result.get("verdict") or "").strip().lower()
+    if verdict not in {"pass", "fail"}:
+        verdict = "fail"
+    try:
+        score = int(judge_result.get("score"))
+    except (TypeError, ValueError):
+        score = 1 if verdict == "fail" else 7
+    score = max(1, min(10, score))
+    reason = str(judge_result.get("reason") or "").strip() or "Quality judge returned no reason."
+
+    verifier_passed, verifier_reason = _run_output_verifier(
+        agent.get("output_verifier_url"),
+        job=job,
+        output_payload=output_payload,
+    )
+    if verdict == "pass" and not verifier_passed:
+        verdict = "fail"
+        reason = f"{reason} External verifier: {verifier_reason}"
+
+    if judge_job_id is not None:
+        child_output = {"verdict": verdict, "score": score, "reason": reason}
+        child_complete = jobs.update_job_status(judge_job_id, "complete", output_payload=child_output, completed=True)
+        if child_complete is not None:
+            jobs.mark_settled(judge_job_id)
+
+    passed = verdict == "pass"
+    return {
+        "judge_agent_id": judge_agent_id,
+        "judge_job_id": judge_job_id,
+        "judge_verdict": verdict,
+        "quality_score": score,
+        "reason": reason,
+        "passed": passed,
+        "verifier_reason": verifier_reason,
+    }
+
+
+def _apply_dispute_effects(dispute: dict, outcome: str) -> None:
+    normalized_outcome = str(outcome or "").strip().lower()
+    current_job = jobs.get_job(dispute["job_id"])
+    previous_outcome = str((current_job or {}).get("dispute_outcome") or "").strip().lower()
+    job = jobs.set_job_dispute_outcome(dispute["job_id"], normalized_outcome)
+    if job is None:
+        return
+    if normalized_outcome == "caller_wins" and previous_outcome != "caller_wins":
+        registry.update_call_stats(job["agent_id"], latency_ms=0.0, success=False)
+
+    filed_by = str(dispute.get("filed_by_owner_id") or "").strip()
+    if filed_by.startswith("user:") and dispute.get("side") == "caller" and normalized_outcome == "agent_wins":
+        payments.adjust_caller_trust_once(
+            filed_by,
+            delta=-0.05,
+            reason="dispute_loss",
+            related_id=dispute["dispute_id"],
+        )
+
+
+def _fail_open_jobs_for_agent(agent_id: str, actor_owner_id: str, reason: str) -> dict[str, int]:
+    affected = 0
+    refunded = 0
+    for status in ("pending", "running", "awaiting_clarification"):
+        open_jobs = jobs.list_jobs_for_agent(agent_id, status=status, limit=500)
+        for item in open_jobs:
+            updated = jobs.update_job_status(
+                item["job_id"],
+                "failed",
+                error_message=reason,
+                completed=True,
+            )
+            if updated is None:
+                continue
+            affected += 1
+            settled = _settle_failed_job(updated, actor_owner_id=actor_owner_id, event_type="job.failed_agent_banned")
+            if settled.get("settled_at"):
+                refunded += 1
+    return {"affected_jobs": affected, "refunded_jobs": refunded}
 
 
 def _settle_successful_job(job: dict, actor_owner_id: str) -> dict:
@@ -2109,7 +2981,7 @@ def _dispute_side_for_caller(caller: core_models.CallerContext, job: dict) -> st
     owner_id = caller["owner_id"]
     if owner_id == job["caller_owner_id"]:
         return "caller"
-    if jobs.is_worker_authorized(job, owner_id):
+    if _caller_worker_authorized_for_job(caller, job):
         return "agent"
     raise HTTPException(status_code=403, detail="Only the caller or agent owner can file this dispute.")
 
@@ -2137,6 +3009,9 @@ def _resolve_dispute_with_judges(dispute_id: str, actor_owner_id: str) -> tuple[
             split_caller_cents=dispute_row.get("split_caller_cents"),
             split_agent_cents=dispute_row.get("split_agent_cents"),
         )
+        latest_dispute = disputes.get_dispute(dispute_id)
+        if latest_dispute is not None:
+            _apply_dispute_effects(latest_dispute, outcome)
     elif status == "tied":
         disputes.set_dispute_status(dispute_id, "tied")
 
@@ -2154,6 +3029,51 @@ def _resolve_dispute_with_judges(dispute_id: str, actor_owner_id: str) -> tuple[
     return _dispute_view(latest), settlement
 
 
+def _apply_reputation_decay(now_dt: datetime | None = None) -> dict[str, int]:
+    current = now_dt or datetime.now(timezone.utc)
+    scanned = 0
+    decayed = 0
+    with jobs._conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                a.agent_id,
+                a.trust_decay_multiplier,
+                a.last_decay_at,
+                MAX(j.completed_at) AS last_completed_at,
+                a.created_at
+            FROM agents a
+            LEFT JOIN jobs j
+              ON j.agent_id = a.agent_id
+             AND j.status = 'complete'
+             AND j.completed_at IS NOT NULL
+            WHERE a.status = 'active'
+            GROUP BY a.agent_id
+            """
+        ).fetchall()
+    for row in rows:
+        scanned += 1
+        reference = _parse_iso_datetime(row["last_completed_at"]) or _parse_iso_datetime(row["created_at"])
+        if reference is None:
+            continue
+        decay_threshold = reference + timedelta(days=_REPUTATION_DECAY_GRACE_DAYS)
+        if current <= decay_threshold:
+            continue
+        last_decay_at = _parse_iso_datetime(row["last_decay_at"]) or decay_threshold
+        start = decay_threshold if last_decay_at < decay_threshold else last_decay_at
+        elapsed_days = int((current - start).total_seconds() // 86400)
+        if elapsed_days <= 0:
+            continue
+        current_multiplier = max(0.0, min(1.0, float(row["trust_decay_multiplier"] or 1.0)))
+        new_multiplier = current_multiplier * ((1.0 - _REPUTATION_DECAY_DAILY_RATE) ** elapsed_days)
+        new_multiplier = max(0.0, min(1.0, new_multiplier))
+        if new_multiplier >= current_multiplier:
+            continue
+        registry.set_agent_decay_multiplier(row["agent_id"], new_multiplier, current.isoformat())
+        decayed += 1
+    return {"scanned_agents": scanned, "decayed_agents": decayed}
+
+
 def _sweep_jobs(
     retry_delay_seconds: int = _DEFAULT_RETRY_DELAY_SECONDS,
     sla_seconds: int = _DEFAULT_SLA_SECONDS,
@@ -2167,26 +3087,17 @@ def _sweep_jobs(
     limit = min(max(1, limit), 500)
 
     expired = jobs.list_jobs_with_expired_leases(limit=limit)
-    timeout_retry_job_ids: list[str] = []
     timeout_failed_job_ids: list[str] = []
     for item in expired:
         updated = jobs.mark_job_timeout(
             item["job_id"],
             retry_delay_seconds=retry_delay_seconds,
+            allow_retry=False,
         )
         if updated is None:
             continue
-        if updated["status"] == "failed":
-            settled = _settle_failed_job(updated, actor_owner_id=actor_owner_id, event_type="job.timeout_terminal")
-            timeout_failed_job_ids.append(settled["job_id"])
-        else:
-            timeout_retry_job_ids.append(updated["job_id"])
-            _record_job_event(
-                updated,
-                "job.timeout_retry_scheduled",
-                actor_owner_id=actor_owner_id,
-                payload={"retry_count": updated["retry_count"], "next_retry_at": updated["next_retry_at"]},
-            )
+        settled = _settle_failed_job(updated, actor_owner_id=actor_owner_id, event_type="job.timeout_terminal")
+        timeout_failed_job_ids.append(settled["job_id"])
 
     sla_failed_job_ids: list[str] = []
     for item in jobs.list_jobs_past_sla(sla_seconds=sla_seconds, limit=limit):
@@ -2202,12 +3113,14 @@ def _sweep_jobs(
         sla_failed_job_ids.append(settled["job_id"])
 
     due_retry = jobs.list_jobs_due_for_retry(limit=limit)
+    decay_summary = _apply_reputation_decay()
     return {
         "expired_leases_scanned": len(expired),
         "due_retry_count": len(due_retry),
-        "timeout_retry_job_ids": timeout_retry_job_ids,
+        "timeout_retry_job_ids": [],
         "timeout_failed_job_ids": timeout_failed_job_ids,
         "sla_failed_job_ids": sla_failed_job_ids,
+        "reputation_decay": decay_summary,
     }
 
 
@@ -2233,6 +3146,7 @@ def _jobs_sweeper_loop(stop_event: threading.Event) -> None:
                 last_error=None,
             )
         except Exception as exc:
+            _LOG.exception("Jobs sweeper loop failed.")
             _set_sweeper_state(
                 last_run_at=started,
                 last_error=str(exc),
@@ -2378,6 +3292,8 @@ def _jobs_metrics(sla_seconds: int = _DEFAULT_SLA_SECONDS) -> dict:
         sweeper_state = dict(_SWEEPER_STATE)
     with _HOOK_WORKER_STATE_LOCK:
         hook_worker_state = dict(_HOOK_WORKER_STATE)
+    with _BUILTIN_WORKER_STATE_LOCK:
+        builtin_worker_state = dict(_BUILTIN_WORKER_STATE)
 
     return {
         "status_counts": status_counts,
@@ -2390,6 +3306,7 @@ def _jobs_metrics(sla_seconds: int = _DEFAULT_SLA_SECONDS) -> dict:
         "alerts": alerts,
         "sweeper": sweeper_state,
         "hook_worker": hook_worker_state,
+        "builtin_worker": builtin_worker_state,
         "hook_delivery": {
             "status_counts": delivery_status_counts,
             "attempted_last_24h": int(delivery_attempted_24h),
@@ -2419,7 +3336,8 @@ def _load_manifest_content(manifest_content: str | None, manifest_url: str | Non
         resp = http.get(safe_url, timeout=15)
         resp.raise_for_status()
     except http.RequestException as exc:
-        raise HTTPException(status_code=502, detail=f"Failed to fetch manifest_url: {exc}")
+        _LOG.warning("Failed to fetch manifest_url %s: %s", safe_url, exc)
+        raise HTTPException(status_code=502, detail="Failed to fetch manifest_url.")
     if len(resp.content) > _MAX_BODY_BYTES:
         raise HTTPException(
             status_code=413,
@@ -2450,6 +3368,90 @@ def _sorted_agents(agents: list[dict], rank_by: str | None = None) -> list[dict]
     if mode == "price":
         return sorted(agents, key=lambda a: float(a.get("price_per_call_usd") or 0.0))
     raise HTTPException(status_code=422, detail="rank_by must be one of: trust, latency, price.")
+
+
+# ---------------------------------------------------------------------------
+# Error normalization + exception handlers
+# ---------------------------------------------------------------------------
+
+def _default_error_code_for_request(status_code: int, path: str, message: str) -> str:
+    lowered_path = str(path or "").lower()
+    lowered_message = str(message or "").lower()
+    if status_code == 404 and lowered_path.startswith("/jobs/"):
+        return error_codes.JOB_NOT_FOUND
+    if status_code == 404 and lowered_path.startswith("/registry/agents"):
+        return error_codes.AGENT_NOT_FOUND
+    if status_code == 410:
+        return error_codes.AGENT_TIMEOUT
+    if status_code == 400 and "dispute window" in lowered_message:
+        return error_codes.DISPUTE_WINDOW_CLOSED
+    if status_code == 503 and "suspend" in lowered_message:
+        return error_codes.AGENT_SUSPENDED
+    return error_codes.DEFAULT_BY_STATUS.get(status_code, error_codes.INVALID_INPUT)
+
+
+def _normalize_error_payload(status_code: int, detail: Any, path: str) -> dict[str, Any]:
+    if isinstance(detail, dict):
+        raw_error = str(detail.get("error") or "").strip()
+        if {"error", "message"}.issubset(detail.keys()):
+            data = detail.get("data")
+            if not isinstance(data, dict):
+                data = {}
+            return error_codes.make_error(
+                raw_error or _default_error_code_for_request(status_code, path, str(detail.get("message") or "")),
+                str(detail.get("message") or "Request failed."),
+                data,
+            )
+        message = str(detail.get("message") or detail.get("detail") or "Request failed.").strip()
+        data = {
+            str(k): v
+            for k, v in detail.items()
+            if str(k) not in {"error", "message", "detail"}
+        }
+        return error_codes.make_error(
+            raw_error or _default_error_code_for_request(status_code, path, message),
+            message,
+            data,
+        )
+    message = str(detail or "Request failed.")
+    return error_codes.make_error(
+        _default_error_code_for_request(status_code, path, message),
+        message,
+        {},
+    )
+
+
+@app.exception_handler(HTTPException)
+async def _http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    payload = _normalize_error_payload(exc.status_code, exc.detail, request.url.path)
+    return JSONResponse(content=payload, status_code=exc.status_code)
+
+
+@app.exception_handler(RequestValidationError)
+async def _request_validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    payload = error_codes.make_error(
+        error_codes.INVALID_INPUT,
+        "Request validation failed.",
+        {"errors": exc.errors()},
+    )
+    return JSONResponse(content=payload, status_code=422)
+
+
+@app.exception_handler(RateLimitExceeded)
+async def _rate_limit_exception_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+    payload = error_codes.make_error(
+        error_codes.RATE_LIMITED,
+        "Rate limit exceeded.",
+        {"detail": str(exc.detail) if getattr(exc, "detail", None) else ""},
+    )
+    return JSONResponse(content=payload, status_code=429)
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    _LOG.exception("Unhandled server exception on %s %s", request.method, request.url.path)
+    payload = error_codes.make_error("INTERNAL_ERROR", "Internal server error.")
+    return JSONResponse(content=payload, status_code=500)
 
 
 # ---------------------------------------------------------------------------
@@ -2555,6 +3557,9 @@ def onboarding_ingest(
     try:
         payload = onboarding.build_registration_payload_from_manifest(manifest_content, source=source)
         safe_endpoint_url = _validate_agent_endpoint_url(request, payload["endpoint_url"])
+        safe_verifier_url = None
+        if payload.get("output_verifier_url"):
+            safe_verifier_url = _validate_outbound_url(payload["output_verifier_url"], "output_verifier_url")
         agent_id = registry.register_agent(
             name=payload["name"],
             description=payload["description"],
@@ -2562,6 +3567,8 @@ def onboarding_ingest(
             price_per_call_usd=payload["price_per_call_usd"],
             tags=payload["tags"],
             input_schema=payload["input_schema"],
+            output_schema=payload.get("output_schema"),
+            output_verifier_url=safe_verifier_url,
             owner_id=caller["owner_id"],
         )
     except onboarding.ManifestValidationError as exc:
@@ -2590,27 +3597,54 @@ def onboarding_ingest(
     "/auth/register",
     status_code=201,
     response_model=core_models.AuthRegisterResponse,
-    responses=_error_responses(400, 429, 500),
+    responses=_error_responses(400, 429, 500, 503),
 )
 @limiter.limit("10/minute")
 def auth_register(request: Request, body: UserRegisterRequest) -> core_models.AuthRegisterResponse:
     """Create a new user account. Returns the initial API key (shown once)."""
     try:
+        _auth.init_auth_db()
         result = _auth.register_user(body.username, body.email, body.password)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except sqlite3.DatabaseError:
+        _LOG.exception("Auth register failed; retrying after auth schema init.")
+        try:
+            _auth.init_auth_db()
+            result = _auth.register_user(body.username, body.email, body.password)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except sqlite3.DatabaseError:
+            _LOG.exception("Auth register failed due to auth DB error.")
+            raise HTTPException(
+                status_code=503,
+                detail="Authentication service is temporarily unavailable. Please try again.",
+            )
     return JSONResponse(content=result, status_code=201)
 
 
 @app.post(
     "/auth/login",
     response_model=core_models.AuthLoginResponse,
-    responses=_error_responses(401, 429, 500),
+    responses=_error_responses(401, 429, 500, 503),
 )
 @limiter.limit("20/minute")
 def auth_login(request: Request, body: UserLoginRequest) -> core_models.AuthLoginResponse:
     """Verify credentials. Returns a fresh API key valid for this session."""
-    result = _auth.login_user(body.email, body.password)
+    try:
+        _auth.init_auth_db()
+        result = _auth.login_user(body.email, body.password)
+    except sqlite3.DatabaseError:
+        _LOG.exception("Auth login failed; retrying after auth schema init.")
+        try:
+            _auth.init_auth_db()
+            result = _auth.login_user(body.email, body.password)
+        except sqlite3.DatabaseError:
+            _LOG.exception("Auth login failed due to auth DB error.")
+            raise HTTPException(
+                status_code=503,
+                detail="Authentication service is temporarily unavailable. Please try again.",
+            )
     if result is None:
         raise HTTPException(status_code=401, detail="Invalid email or password.")
     return JSONResponse(content=result)
@@ -2631,6 +3665,8 @@ def auth_me(request: Request, caller: core_models.CallerContext = Depends(_requi
             "username": "admin",
             "scopes": ["caller", "worker", "admin"],
         })
+    if caller["type"] == "agent_key":
+        raise HTTPException(status_code=403, detail="Agent-scoped keys cannot access /auth/me.")
     user = caller["user"]
     return JSONResponse(content={
         "user_id": user["user_id"],
@@ -2648,7 +3684,7 @@ def auth_me(request: Request, caller: core_models.CallerContext = Depends(_requi
 @limiter.limit("30/minute")
 def auth_list_keys(request: Request, caller: core_models.CallerContext = Depends(_require_api_key)) -> core_models.ApiKeyListResponse:
     """List the caller's API keys (metadata only — raw keys never returned after creation)."""
-    if caller["type"] == "master":
+    if caller["type"] != "user":
         raise HTTPException(status_code=403, detail="Not available for master key.")
     keys = _auth.list_api_keys(caller["user"]["user_id"])
     return JSONResponse(content={"keys": keys})
@@ -2667,7 +3703,7 @@ def auth_create_key(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.ApiKeyCreateResponse:
     """Create a new named API key for the authenticated user."""
-    if caller["type"] == "master":
+    if caller["type"] != "user":
         raise HTTPException(status_code=403, detail="Not available for master key.")
     try:
         result = _auth.create_api_key(caller["user"]["user_id"], body.name, scopes=body.scopes)
@@ -2689,7 +3725,7 @@ def auth_rotate_key(
     body: RotateKeyRequest,
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.ApiKeyRotateResponse:
-    if caller["type"] == "master":
+    if caller["type"] != "user":
         raise HTTPException(status_code=403, detail="Not available for master key.")
     try:
         result = _auth.rotate_api_key(
@@ -2718,7 +3754,7 @@ def auth_revoke_key(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.ApiKeyRevokeResponse:
     """Revoke an API key by ID."""
-    if caller["type"] == "master":
+    if caller["type"] != "user":
         raise HTTPException(status_code=403, detail="Not available for master key.")
     ok = _auth.revoke_api_key(key_id, caller["user"]["user_id"])
     if not ok:
@@ -2729,6 +3765,62 @@ def auth_revoke_key(
 # ---------------------------------------------------------------------------
 # Agent endpoints — direct calls (used by proxy and CLI client)
 # ---------------------------------------------------------------------------
+
+
+def _invoke_financial_agent(body: FinancialRequest) -> dict:
+    ticker = body.ticker.strip().upper()
+    if not ticker.isalpha() or len(ticker) > 5:
+        raise ValueError(f"Invalid ticker symbol: '{ticker}'")
+    return _run_financial(ticker)
+
+
+def _invoke_code_review_agent(body: CodeReviewRequest) -> dict:
+    return agent_codereview.run(body.code, body.language, body.focus)
+
+
+def _invoke_text_intel_agent(body: TextIntelRequest) -> dict:
+    return agent_textintel.run(body.text, body.mode)
+
+
+def _invoke_wiki_agent(body: WikiRequest) -> dict:
+    return agent_wiki.run(body.topic)
+
+
+def _invoke_negotiation_agent(body: NegotiationRequest) -> dict:
+    return agent_negotiation.run(
+        objective=body.objective,
+        counterparty_profile=body.counterparty_profile,
+        constraints=_coerce_string_list(body.constraints),
+        context=body.context,
+    )
+
+
+def _invoke_scenario_agent(body: ScenarioRequest) -> dict:
+    return agent_scenario.run(
+        decision=body.decision,
+        assumptions=body.assumptions,
+        horizon=body.horizon,
+        risk_tolerance=body.risk_tolerance,
+    )
+
+
+def _invoke_product_strategy_agent(body: ProductStrategyRequest) -> dict:
+    return agent_product.run(
+        product_idea=body.product_idea,
+        target_users=body.target_users,
+        market_context=body.market_context,
+        horizon_quarters=body.horizon_quarters,
+    )
+
+
+def _invoke_portfolio_agent(body: PortfolioRequest) -> dict:
+    return agent_portfolio.run(
+        investment_goal=body.investment_goal,
+        risk_profile=body.risk_profile,
+        time_horizon_years=body.time_horizon_years,
+        capital_usd=body.capital_usd,
+    )
+
 
 @app.post(
     "/agents/financial",
@@ -2741,17 +3833,17 @@ def agent_financial(
     body: FinancialRequest,
     _: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.DynamicObjectResponse:
-    ticker = body.ticker.strip().upper()
-    if not ticker.isalpha() or len(ticker) > 5:
-        raise HTTPException(status_code=422, detail=f"Invalid ticker symbol: '{ticker}'")
     try:
-        brief = _run_financial(ticker)
+        brief = _invoke_financial_agent(body)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        detail = str(e)
+        status = 422 if detail.startswith("Invalid ticker symbol:") else 400
+        raise HTTPException(status_code=status, detail=detail)
     except _groq.RateLimitError as e:
         raise HTTPException(status_code=503, detail=f"All LLM models rate-limited. ({e})")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        _LOG.exception("Financial agent execution failed.")
+        raise HTTPException(status_code=500, detail="Agent execution failed.")
     return JSONResponse(content=brief)
 
 
@@ -2782,13 +3874,14 @@ def agent_code_review(
     _: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.DynamicObjectResponse:
     try:
-        result = agent_codereview.run(body.code, body.language, body.focus)
+        result = _invoke_code_review_agent(body)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except _groq.RateLimitError as e:
         raise HTTPException(status_code=503, detail=f"All LLM models rate-limited. ({e})")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        _LOG.exception("Code review agent execution failed.")
+        raise HTTPException(status_code=500, detail="Agent execution failed.")
     return JSONResponse(content=result)
 
 
@@ -2804,13 +3897,14 @@ def agent_text_intel(
     _: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.DynamicObjectResponse:
     try:
-        result = agent_textintel.run(body.text, body.mode)
+        result = _invoke_text_intel_agent(body)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except _groq.RateLimitError as e:
         raise HTTPException(status_code=503, detail=f"All LLM models rate-limited. ({e})")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        _LOG.exception("Text-intel agent execution failed.")
+        raise HTTPException(status_code=500, detail="Agent execution failed.")
     return JSONResponse(content=result)
 
 
@@ -2826,13 +3920,130 @@ def agent_wiki_endpoint(
     _: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.DynamicObjectResponse:
     try:
-        result = agent_wiki.run(body.topic)
+        result = _invoke_wiki_agent(body)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except _groq.RateLimitError as e:
         raise HTTPException(status_code=503, detail=f"All LLM models rate-limited. ({e})")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        _LOG.exception("Wiki agent execution failed.")
+        raise HTTPException(status_code=500, detail="Agent execution failed.")
+    return JSONResponse(content=result)
+
+
+@app.post(
+    "/agents/negotiation",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(400, 401, 403, 422, 429, 500, 503),
+)
+@limiter.limit("10/minute")
+def agent_negotiation_endpoint(
+    request: Request,
+    body: NegotiationRequest,
+    _: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
+    try:
+        result = _invoke_negotiation_agent(body)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except _groq.RateLimitError as e:
+        raise HTTPException(status_code=503, detail=f"All LLM models rate-limited. ({e})")
+    except Exception as e:
+        _LOG.exception("Negotiation agent execution failed.")
+        raise HTTPException(status_code=500, detail="Agent execution failed.")
+    return JSONResponse(content=result)
+
+
+@app.post(
+    "/agents/scenario",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(400, 401, 403, 422, 429, 500, 503),
+)
+@limiter.limit("10/minute")
+def agent_scenario_endpoint(
+    request: Request,
+    body: ScenarioRequest,
+    _: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
+    try:
+        result = _invoke_scenario_agent(body)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except _groq.RateLimitError as e:
+        raise HTTPException(status_code=503, detail=f"All LLM models rate-limited. ({e})")
+    except Exception as e:
+        _LOG.exception("Scenario agent execution failed.")
+        raise HTTPException(status_code=500, detail="Agent execution failed.")
+    return JSONResponse(content=result)
+
+
+@app.post(
+    "/agents/product-strategy",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(400, 401, 403, 422, 429, 500, 503),
+)
+@limiter.limit("10/minute")
+def agent_product_strategy_endpoint(
+    request: Request,
+    body: ProductStrategyRequest,
+    _: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
+    try:
+        result = _invoke_product_strategy_agent(body)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except _groq.RateLimitError as e:
+        raise HTTPException(status_code=503, detail=f"All LLM models rate-limited. ({e})")
+    except Exception as e:
+        _LOG.exception("Product strategy agent execution failed.")
+        raise HTTPException(status_code=500, detail="Agent execution failed.")
+    return JSONResponse(content=result)
+
+
+@app.post(
+    "/agents/portfolio",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(400, 401, 403, 422, 429, 500, 503),
+)
+@limiter.limit("10/minute")
+def agent_portfolio_endpoint(
+    request: Request,
+    body: PortfolioRequest,
+    _: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
+    try:
+        result = _invoke_portfolio_agent(body)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except _groq.RateLimitError as e:
+        raise HTTPException(status_code=503, detail=f"All LLM models rate-limited. ({e})")
+    except Exception as e:
+        _LOG.exception("Portfolio agent execution failed.")
+        raise HTTPException(status_code=500, detail="Agent execution failed.")
+    return JSONResponse(content=result)
+
+
+@app.post(
+    "/agents/quality-judge",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(400, 401, 403, 422, 429, 500),
+)
+@limiter.limit("60/minute")
+def agent_quality_judge_endpoint(
+    request: Request,
+    body: core_models.DynamicObjectResponse | None = Body(default=None),
+    _: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
+    payload = body.model_dump() if body is not None else {}
+    try:
+        result = judges.run_quality_judgment(
+            input_payload=payload.get("input_payload") if isinstance(payload, dict) else {},
+            output_payload=payload.get("output_payload") if isinstance(payload, dict) else {},
+            agent_description=str(payload.get("agent_description") or "") if isinstance(payload, dict) else "",
+        )
+    except Exception as exc:
+        _LOG.exception("Quality judge endpoint execution failed.")
+        raise HTTPException(status_code=500, detail="Agent execution failed.")
     return JSONResponse(content=result)
 
 
@@ -2853,8 +4064,13 @@ def registry_register(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.RegistryRegisterResponse:
     _require_scope(caller, "worker")
+    if caller["type"] == "agent_key":
+        raise HTTPException(status_code=403, detail="Agent-scoped keys cannot register new agents.")
     try:
         safe_endpoint_url = _validate_agent_endpoint_url(request, body.endpoint_url)
+        safe_verifier_url = None
+        if body.output_verifier_url:
+            safe_verifier_url = _validate_outbound_url(body.output_verifier_url, "output_verifier_url")
         agent_id = registry.register_agent(
             name=body.name,
             description=body.description,
@@ -2862,6 +4078,8 @@ def registry_register(
             price_per_call_usd=body.price_per_call_usd,
             tags=body.tags,
             input_schema=body.input_schema,
+            output_schema=body.output_schema,
+            output_verifier_url=safe_verifier_url,
             owner_id=caller["owner_id"],
         )
         agent = registry.get_agent_with_reputation(agent_id) or registry.get_agent(agent_id)
@@ -2953,9 +4171,84 @@ def registry_get(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.AgentResponse:
     agent = registry.get_agent_with_reputation(agent_id)
+    if agent is None or agent.get("status") == "banned":
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    return JSONResponse(content=_agent_response(agent, caller))
+
+
+@app.post(
+    "/registry/agents/{agent_id}/keys",
+    status_code=201,
+    response_model=core_models.AgentKeyCreateResponse,
+    responses=_error_responses(400, 401, 403, 404, 429, 500),
+)
+@limiter.limit("20/minute")
+def registry_agent_key_create(
+    request: Request,
+    agent_id: str,
+    body: AgentKeyCreateRequest,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.AgentKeyCreateResponse:
+    _require_scope(caller, "worker")
+    if caller["type"] == "agent_key":
+        raise HTTPException(status_code=403, detail="Agent-scoped keys cannot mint new keys.")
+    agent = registry.get_agent(agent_id)
+    if agent is None or agent.get("status") == "banned":
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    if not _caller_can_manage_agent(caller, agent):
+        raise HTTPException(status_code=403, detail="Not authorized.")
+    key = _auth.create_agent_api_key(agent_id, name=body.name)
+    return JSONResponse(
+        content={
+            "key_id": key["key_id"],
+            "agent_id": key["agent_id"],
+            "raw_key": key["raw_key"],
+            "key_prefix": key["key_prefix"],
+            "created_at": key["created_at"],
+        },
+        status_code=201,
+    )
+
+
+@app.post(
+    "/admin/agents/{agent_id}/suspend",
+    response_model=core_models.AgentResponse,
+    responses=_error_responses(400, 401, 403, 404, 429, 500),
+)
+@limiter.limit("20/minute")
+def admin_agent_suspend(
+    request: Request,
+    agent_id: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.AgentResponse:
+    _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
+    agent = registry.set_agent_status(agent_id, "suspended")
     if agent is None:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
     return JSONResponse(content=_agent_response(agent, caller))
+
+
+@app.post(
+    "/admin/agents/{agent_id}/ban",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(400, 401, 403, 404, 429, 500),
+)
+@limiter.limit("20/minute")
+def admin_agent_ban(
+    request: Request,
+    agent_id: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
+    _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
+    agent = registry.set_agent_status(agent_id, "banned")
+    if agent is None:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    summary = _fail_open_jobs_for_agent(
+        agent_id,
+        actor_owner_id=caller["owner_id"],
+        reason="Agent was banned by an administrator.",
+    )
+    return JSONResponse(content={"agent": _agent_response(agent, caller), "ban_summary": summary})
 
 
 @app.post(
@@ -2981,6 +4274,22 @@ def registry_call(
     agent = registry.get_agent(agent_id)
     if agent is None:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    if agent.get("status") == "banned":
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    if agent.get("status") == "suspended":
+        raise HTTPException(
+            status_code=503,
+            detail=error_codes.make_error(
+                error_codes.AGENT_SUSPENDED,
+                f"Agent '{agent_id}' is suspended.",
+                {"agent_id": agent_id},
+            ),
+        )
+    try:
+        safe_endpoint_url = _validate_agent_endpoint_url(request, str(agent.get("endpoint_url") or ""))
+    except ValueError as exc:
+        _LOG.warning("Blocked misconfigured endpoint for agent %s: %s", agent_id, exc)
+        raise HTTPException(status_code=502, detail="Agent endpoint is misconfigured.")
 
     price_cents     = _usd_to_cents(agent["price_per_call_usd"])
     caller_wallet   = payments.get_or_create_wallet(_caller_owner_id(request))
@@ -2994,20 +4303,25 @@ def registry_call(
     except payments.InsufficientBalanceError as e:
         raise HTTPException(
             status_code=402,
-            detail={
-                "error": "insufficient_balance",
-                "balance_cents": e.balance_cents,
-                "required_cents": e.required_cents,
-                "wallet_id": caller_wallet["wallet_id"],
-            },
+            detail=error_codes.make_error(
+                error_codes.INSUFFICIENT_FUNDS,
+                "Insufficient wallet balance.",
+                {
+                    "balance_cents": e.balance_cents,
+                    "required_cents": e.required_cents,
+                    "wallet_id": caller_wallet["wallet_id"],
+                },
+            ),
         )
 
     start = time.monotonic()
     try:
+        proxy_agent = dict(agent)
+        proxy_agent["endpoint_url"] = safe_endpoint_url
         resp = http.post(
-            agent["endpoint_url"],
+            safe_endpoint_url,
             json=(body.root if body is not None else {}),
-            headers=_proxy_headers_for_agent(agent),
+            headers=_proxy_headers_for_agent(proxy_agent),
             timeout=120,
         )
     except http.RequestException as e:
@@ -3016,7 +4330,8 @@ def registry_call(
         payments.post_call_refund(
             caller_wallet["wallet_id"], charge_tx_id, price_cents, agent_id
         )
-        raise HTTPException(status_code=502, detail=f"Upstream agent unreachable: {e}")
+        _LOG.warning("Upstream agent unreachable for %s: %s", agent_id, e)
+        raise HTTPException(status_code=502, detail="Upstream agent unreachable.")
 
     success = resp.ok
     latency_ms = (time.monotonic() - start) * 1000
@@ -3043,7 +4358,7 @@ def registry_call(
     "/jobs",
     status_code=201,
     response_model=core_models.JobResponse,
-    responses=_error_responses(400, 401, 402, 403, 404, 429, 500),
+    responses=_error_responses(400, 401, 402, 403, 404, 429, 500, 503),
 )
 @limiter.limit("20/minute")
 def jobs_create(
@@ -3055,6 +4370,17 @@ def jobs_create(
     agent = registry.get_agent(body.agent_id)
     if agent is None:
         raise HTTPException(status_code=404, detail=f"Agent '{body.agent_id}' not found.")
+    if agent.get("status") == "banned":
+        raise HTTPException(status_code=404, detail=f"Agent '{body.agent_id}' not found.")
+    if agent.get("status") == "suspended":
+        raise HTTPException(
+            status_code=503,
+            detail=error_codes.make_error(
+                error_codes.AGENT_SUSPENDED,
+                f"Agent '{body.agent_id}' is suspended.",
+                {"agent_id": body.agent_id},
+            ),
+        )
 
     caller_owner_id = _caller_owner_id(request)
     min_caller_trust = _extract_caller_trust_min(agent.get("input_schema"))
@@ -3063,12 +4389,15 @@ def jobs_create(
         if caller_trust < min_caller_trust:
             raise HTTPException(
                 status_code=403,
-                detail={
-                    "error": "CALLER_TRUST_BELOW_MINIMUM",
-                    "caller_trust": round(caller_trust, 6),
-                    "required_min_caller_trust": round(min_caller_trust, 6),
-                    "agent_id": agent["agent_id"],
-                },
+                detail=error_codes.make_error(
+                    error_codes.UNAUTHORIZED,
+                    "Caller trust is below this agent's required minimum.",
+                    {
+                        "caller_trust": round(caller_trust, 6),
+                        "required_min_caller_trust": round(min_caller_trust, 6),
+                        "agent_id": agent["agent_id"],
+                    },
+                ),
             )
 
     price_cents = _usd_to_cents(agent["price_per_call_usd"])
@@ -3083,12 +4412,15 @@ def jobs_create(
     except payments.InsufficientBalanceError as e:
         raise HTTPException(
             status_code=402,
-            detail={
-                "error": "insufficient_balance",
-                "balance_cents": e.balance_cents,
-                "required_cents": e.required_cents,
-                "wallet_id": caller_wallet["wallet_id"],
-            },
+            detail=error_codes.make_error(
+                error_codes.INSUFFICIENT_FUNDS,
+                "Insufficient wallet balance.",
+                {
+                    "balance_cents": e.balance_cents,
+                    "required_cents": e.required_cents,
+                    "wallet_id": caller_wallet["wallet_id"],
+                },
+            ),
         )
 
     try:
@@ -3103,12 +4435,15 @@ def jobs_create(
             input_payload=body.input_payload,
             agent_owner_id=agent.get("owner_id"),
             max_attempts=body.max_attempts,
+            dispute_window_hours=body.dispute_window_hours or _DEFAULT_JOB_DISPUTE_WINDOW_HOURS,
+            judge_agent_id=_extract_judge_agent_id(agent.get("input_schema")) or _QUALITY_JUDGE_AGENT_ID,
         )
     except Exception as e:
         payments.post_call_refund(
             caller_wallet["wallet_id"], charge_tx_id, price_cents, agent["agent_id"]
         )
-        raise HTTPException(status_code=500, detail=f"Failed to create job: {e}")
+        _LOG.exception("Failed to create job for agent %s.", agent["agent_id"])
+        raise HTTPException(status_code=500, detail="Failed to create job.")
 
     _record_job_event(
         job,
@@ -3243,8 +4578,12 @@ def jobs_claim(
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
 
+    if not _caller_worker_authorized_for_job(caller, job):
+        status = 403 if caller["type"] == "agent_key" else 409
+        detail = "Not authorized for this agent job." if status == 403 else "Job is not claimable."
+        raise HTTPException(status_code=status, detail=detail)
     worker_owner_id = caller["owner_id"]
-    require_auth = caller["type"] != "master"
+    require_auth = caller["type"] == "user"
     claimed = jobs.claim_job(
         job_id,
         claim_owner_id=worker_owner_id,
@@ -3290,17 +4629,21 @@ def jobs_heartbeat(
         touchpoint="heartbeat",
     )
     if timed_out is not None:
-        return JSONResponse(content=_job_response(timed_out, caller), status_code=410)
+        timed_out_response = _job_response(timed_out, caller)
+        return JSONResponse(
+            content=_timeout_error_payload(timed_out_response),
+            status_code=410,
+        )
 
     if caller["type"] != "master":
-        _assert_worker_claim(job, worker_owner_id, body.claim_token)
+        _assert_worker_claim(job, caller, worker_owner_id, body.claim_token)
 
     heartbeat = jobs.heartbeat_job_lease(
         job_id,
         claim_owner_id=worker_owner_id,
         lease_seconds=body.lease_seconds,
         claim_token=body.claim_token,
-        require_authorized_owner=(caller["type"] != "master"),
+        require_authorized_owner=(caller["type"] == "user"),
     )
     if heartbeat is None:
         raise HTTPException(status_code=409, detail="Unable to heartbeat this job claim.")
@@ -3338,16 +4681,20 @@ def jobs_release(
         touchpoint="release",
     )
     if timed_out is not None:
-        return JSONResponse(content=_job_response(timed_out, caller), status_code=410)
+        timed_out_response = _job_response(timed_out, caller)
+        return JSONResponse(
+            content=_timeout_error_payload(timed_out_response),
+            status_code=410,
+        )
 
     if caller["type"] != "master":
-        _assert_worker_claim(job, worker_owner_id, body.claim_token)
+        _assert_worker_claim(job, caller, worker_owner_id, body.claim_token)
 
     released = jobs.release_job_claim(
         job_id,
         claim_owner_id=worker_owner_id,
         claim_token=body.claim_token,
-        require_authorized_owner=(caller["type"] != "master"),
+        require_authorized_owner=(caller["type"] == "user"),
     )
     if released is None:
         raise HTTPException(status_code=409, detail="Unable to release this job claim.")
@@ -3364,7 +4711,7 @@ def jobs_release(
 @app.post(
     "/jobs/{job_id}/complete",
     response_model=core_models.JobResponse,
-    responses=_error_responses(401, 403, 404, 409, 410, 429, 500),
+    responses=_error_responses(401, 403, 404, 409, 410, 422, 429, 500),
 )
 @limiter.limit("30/minute")
 def jobs_complete(
@@ -3380,7 +4727,7 @@ def jobs_complete(
             raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
 
         actor_owner_id = caller["owner_id"]
-        if caller["type"] != "master" and not jobs.is_worker_authorized(job, actor_owner_id):
+        if not _caller_worker_authorized_for_job(caller, job):
             raise HTTPException(status_code=403, detail="Not authorized for this agent job.")
         timed_out = _timeout_stale_lease_at_touchpoint(
             job,
@@ -3388,7 +4735,11 @@ def jobs_complete(
             touchpoint="complete",
         )
         if timed_out is not None:
-            return _job_response(timed_out, caller), 410
+            timed_out_response = _job_response(timed_out, caller)
+            return (
+                _timeout_error_payload(timed_out_response),
+                410,
+            )
 
         if job["settled_at"]:
             return _job_response(job, caller), 200
@@ -3403,12 +4754,59 @@ def jobs_complete(
             action="complete",
         )
 
+        agent = registry.get_agent(job["agent_id"])
+        if agent is None:
+            raise HTTPException(status_code=404, detail=f"Agent '{job['agent_id']}' not found.")
+        output_schema = agent.get("output_schema")
+        if isinstance(output_schema, dict) and output_schema:
+            mismatches = _validate_json_schema_subset(body.output_payload, output_schema)
+            if mismatches:
+                raise HTTPException(
+                    status_code=422,
+                    detail=error_codes.make_error(
+                        error_codes.SCHEMA_MISMATCH,
+                        "output_payload does not match the declared output_schema.",
+                        {"mismatches": mismatches},
+                    ),
+                )
+
+        quality = _run_quality_gate(job, agent, body.output_payload)
+        jobs.set_job_quality_result(
+            job_id,
+            judge_verdict=quality["judge_verdict"],
+            quality_score=quality["quality_score"],
+            judge_agent_id=quality["judge_agent_id"],
+        )
+        if not quality["passed"]:
+            failed = jobs.update_job_status(
+                job_id,
+                "failed",
+                error_message=f"Quality judge failed: {quality['reason']}",
+                completed=True,
+            )
+            if failed is None:
+                raise HTTPException(status_code=409, detail="Unable to update job status.")
+            settled_failed = _settle_failed_job(failed, actor_owner_id=actor_owner_id, event_type="job.failed_quality")
+            return _job_response(settled_failed, caller), 200
+
         updated = jobs.update_job_status(
             job_id, "complete", output_payload=body.output_payload, completed=True
         )
         if updated is None:
             raise HTTPException(status_code=409, detail="Unable to update job status.")
         settled = _settle_successful_job(updated, actor_owner_id=actor_owner_id)
+        platform_fee_cents = max(0, updated["price_cents"] * payments.PLATFORM_FEE_PCT // 100)
+        judge_fee_cents = min(_JUDGE_FEE_CENTS, platform_fee_cents)
+        if judge_fee_cents > 0:
+            judge_wallet = payments.get_or_create_wallet(f"agent:{quality['judge_agent_id']}")
+            payments.record_judge_fee(
+                updated["platform_wallet_id"],
+                judge_wallet["wallet_id"],
+                charge_tx_id=updated["charge_tx_id"],
+                agent_id=updated["agent_id"],
+                fee_cents=judge_fee_cents,
+            )
+            settled = jobs.get_job(job_id) or settled
         return _job_response(settled, caller), 200
 
     return _run_idempotent_json_response(
@@ -3439,7 +4837,7 @@ def jobs_fail(
             raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
 
         actor_owner_id = caller["owner_id"]
-        if caller["type"] != "master" and not jobs.is_worker_authorized(job, actor_owner_id):
+        if not _caller_worker_authorized_for_job(caller, job):
             raise HTTPException(status_code=403, detail="Not authorized for this agent job.")
         timed_out = _timeout_stale_lease_at_touchpoint(
             job,
@@ -3447,7 +4845,11 @@ def jobs_fail(
             touchpoint="fail",
         )
         if timed_out is not None:
-            return _job_response(timed_out, caller), 410
+            timed_out_response = _job_response(timed_out, caller)
+            return (
+                _timeout_error_payload(timed_out_response),
+                410,
+            )
 
         if job["settled_at"]:
             return _job_response(job, caller), 200
@@ -3502,10 +4904,10 @@ def jobs_retry(
             raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
 
         actor_owner_id = caller["owner_id"]
-        require_auth = caller["type"] != "master"
+        require_auth = caller["type"] == "user"
         claim_owner_id = actor_owner_id if require_auth else (job.get("claim_owner_id") or actor_owner_id)
         if require_auth:
-            _assert_worker_claim(job, actor_owner_id, body.claim_token)
+            _assert_worker_claim(job, caller, actor_owner_id, body.claim_token)
 
         try:
             updated = jobs.schedule_job_retry(
@@ -3753,6 +5155,16 @@ def jobs_rate(
             raise HTTPException(status_code=400, detail=message)
 
         metrics = reputation.compute_trust_metrics(job["agent_id"])
+        if body.rating == 5:
+            five_star_count = reputation.count_caller_given_ratings(caller["owner_id"], rating=5)
+            if five_star_count >= 10:
+                milestone = five_star_count // 10
+                payments.adjust_caller_trust_once(
+                    caller["owner_id"],
+                    delta=0.02,
+                    reason="five_star_milestone",
+                    related_id=f"milestone:{milestone}",
+                )
         _record_job_event(
             job,
             "job.rated",
@@ -3790,13 +5202,14 @@ def jobs_rate_caller(
     job = jobs.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
-    if not jobs.is_worker_authorized(job, caller["owner_id"]):
+    if not _caller_worker_authorized_for_job(caller, job):
         raise HTTPException(status_code=403, detail="Only the job's agent owner can rate the caller.")
+    agent_owner_for_rating = job["agent_owner_id"] if caller["type"] == "agent_key" else caller["owner_id"]
 
     try:
         rating = reputation.record_caller_rating(
             job_id=job_id,
-            agent_owner_id=caller["owner_id"],
+            agent_owner_id=agent_owner_for_rating,
             rating=body.rating,
             comment=body.comment,
         )
@@ -3840,7 +5253,10 @@ def jobs_dispute(
     completed_at = _parse_iso_datetime(job.get("completed_at"))
     if completed_at is None:
         raise HTTPException(status_code=400, detail="Job completion timestamp is invalid.")
-    if (datetime.now(timezone.utc) - completed_at) > timedelta(seconds=_DISPUTE_FILE_WINDOW_SECONDS):
+    dispute_window_hours = _to_non_negative_int(job.get("dispute_window_hours"), default=_DEFAULT_JOB_DISPUTE_WINDOW_HOURS)
+    if dispute_window_hours < 1:
+        dispute_window_hours = _DEFAULT_JOB_DISPUTE_WINDOW_HOURS
+    if datetime.now(timezone.utc) > (completed_at + timedelta(hours=dispute_window_hours)):
         raise HTTPException(status_code=400, detail="Dispute window has expired for this job.")
 
     side = _dispute_side_for_caller(caller, job)
@@ -3901,7 +5317,8 @@ def disputes_judge(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        _LOG.exception("Dispute judge execution failed for %s.", dispute_id)
+        raise HTTPException(status_code=500, detail="Failed to resolve dispute.")
     return JSONResponse(content={"dispute": dispute_payload, "settlement": settlement})
 
 
@@ -3950,6 +5367,8 @@ def disputes_admin_rule(
             split_caller_cents=body.split_caller_cents,
             split_agent_cents=body.split_agent_cents,
         )
+        if finalized is not None:
+            _apply_dispute_effects(finalized, body.outcome)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except payments.InsufficientBalanceError as exc:
@@ -4272,7 +5691,7 @@ def wallet_me(
     owner_id = _caller_owner_id(request)
     wallet = payments.get_or_create_wallet(owner_id)
     txs = payments.get_wallet_transactions(wallet["wallet_id"], limit=50)
-    caller_trust = _caller_trust_score(owner_id)
+    caller_trust = payments.get_caller_trust(owner_id)
     return JSONResponse(content={**wallet, "caller_trust": caller_trust, "transactions": txs})
 
 
