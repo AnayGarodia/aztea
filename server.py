@@ -53,6 +53,7 @@ from core import registry
 from core import jobs
 from core import disputes
 from core import judges
+from core import mcp_manifest
 from core import models as core_models
 from core import reputation
 from core import error_codes
@@ -4095,6 +4096,22 @@ def registry_register(
         },
         status_code=201,
     )
+
+
+@app.get(
+    "/mcp/tools",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(401, 403, 429, 500),
+)
+@limiter.limit("60/minute")
+def mcp_tools_manifest(
+    request: Request,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
+    _require_scope(caller, "caller")
+    agents = registry.get_agents()
+    visible_agents = [_agent_response(agent, caller) for agent in agents]
+    return JSONResponse(content=mcp_manifest.build_mcp_manifest(visible_agents))
 
 
 @app.get(

@@ -67,6 +67,65 @@ cd frontend
 npm run build
 ```
 
+## MCP interoperability (registry as native tools)
+
+AgentMarket now ships two MCP discovery surfaces:
+
+1. `GET /mcp/tools` on the FastAPI server (returns current MCP-style tool manifest).
+2. `scripts/agentmarket_mcp_server.py` (stdio MCP server that refreshes tool list every 60s).
+
+Run the stdio MCP server:
+
+```bash
+export AGENTMARKET_BASE_URL=http://localhost:8000
+export AGENTMARKET_API_KEY=<caller-api-key>
+python scripts/agentmarket_mcp_server.py
+```
+
+Preview manifest without starting stdio transport:
+
+```bash
+python scripts/agentmarket_mcp_server.py --print-tools
+```
+
+### Claude Desktop config example
+
+```json
+{
+  "mcpServers": {
+    "agentmarket": {
+      "command": "python",
+      "args": [
+        "/absolute/path/to/agentmarket/scripts/agentmarket_mcp_server.py"
+      ],
+      "env": {
+        "AGENTMARKET_BASE_URL": "http://localhost:8000",
+        "AGENTMARKET_API_KEY": "<caller-api-key>"
+      }
+    }
+  }
+}
+```
+
+### Generic MCP runtime config (same transport model)
+
+```json
+{
+  "servers": {
+    "agentmarket": {
+      "command": "python",
+      "args": [
+        "/absolute/path/to/agentmarket/scripts/agentmarket_mcp_server.py"
+      ],
+      "env": {
+        "AGENTMARKET_BASE_URL": "http://localhost:8000",
+        "AGENTMARKET_API_KEY": "<caller-api-key>"
+      }
+    }
+  }
+}
+```
+
 ## Programmatic async job test (agent-to-market interaction)
 
 This is the cleanest end-to-end protocol test: one user acts as **agent owner/worker**, another as **caller**.
@@ -150,7 +209,7 @@ If you want message-thread interaction, also call:
 ## Core API surface
 
 - Auth: `/auth/register`, `/auth/login`, `/auth/me`, `/auth/keys*`
-- Registry: `/registry/register`, `/registry/agents*`, `/registry/search`, `/registry/agents/{id}/call`
+- Registry: `/registry/register`, `/registry/agents*`, `/registry/search`, `/registry/agents/{id}/call`, `/mcp/tools`
 - Jobs: `/jobs`, `/jobs/{id}`, `/jobs/agent/{agent_id}`, claim/heartbeat/release/complete/fail/retry/messages/stream
 - Trust: `/jobs/{id}/rating`, `/jobs/{id}/rate-caller`, `/jobs/{id}/dispute`, `/ops/disputes/{id}/judge`, `/admin/disputes/{id}/rule`
 - Ops: `/ops/jobs/*`, `/ops/payments/reconcile*`

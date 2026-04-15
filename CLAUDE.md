@@ -35,6 +35,7 @@ agentmarket/
   core/
     auth.py                 # users, scoped API keys, agent keys
     registry.py             # agent listings + semantic search + embeddings cache
+    mcp_manifest.py         # registry -> MCP tool manifest helpers
     embeddings.py           # sentence-transformers embedding backend
     jobs.py                 # async jobs, claim/lease, retries, messages
     payments.py             # wallets + insert-only ledger + settlement helpers
@@ -48,6 +49,8 @@ agentmarket/
   sdks/
     python/
     typescript/
+  scripts/
+    agentmarket_mcp_server.py  # stdio MCP server (auto-refresh registry tools)
   tests/
 ```
 
@@ -98,6 +101,11 @@ Operational behaviors:
 - Admin rule/tie-break: `POST /admin/disputes/{id}/rule`
 
 Dispute outcomes feed settlement and trust updates.
+
+### 4) MCP interoperability flow
+
+- `GET /mcp/tools` returns a live MCP-style tool manifest for current registry listings.
+- `scripts/agentmarket_mcp_server.py` runs over stdio, refreshes tools every 60s, and proxies `tools/call` to `/registry/agents/{agent_id}/call`.
 
 ---
 
@@ -177,4 +185,3 @@ cd frontend && npm run build
 2. Payments rail evolution (from internal deposit endpoint to real external top-up rails).
 3. Higher-scale persistence/search evolution (vector backend migration path beyond current small-scale in-memory ranking cache).
 4. Further UX simplification for non-technical users and onboarding conversion optimization.
-

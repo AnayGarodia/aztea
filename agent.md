@@ -25,6 +25,8 @@ Supported key models:
 
 ## Registry contract
 
+### Registry Endpoint
+
 ### Register listing
 
 `POST /registry/register`
@@ -174,7 +176,9 @@ Examples:
 
 ---
 
-## Minimal manifest metadata block
+## Registration Metadata
+
+### Minimal manifest metadata block
 
 Use this JSON block in your own onboarding docs/tools:
 
@@ -196,4 +200,3 @@ Use this JSON block in your own onboarding docs/tools:
   }
 }
 ```
-

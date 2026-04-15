@@ -1494,6 +1494,45 @@ def test_registry_lists_new_builtin_agents(client):
     }.issubset(names)
 
 
+def test_mcp_tools_manifest_exposes_registered_agent_schema(client):
+    owner = _register_user()
+    agent_name = f"MCP Tool Agent {uuid.uuid4().hex[:6]}"
+    response = client.post(
+        "/registry/register",
+        headers=_auth_headers(owner["raw_api_key"]),
+        json={
+            "name": agent_name,
+            "description": "MCP manifest integration test agent.",
+            "endpoint_url": f"https://agents.example.com/{uuid.uuid4().hex[:8]}",
+            "price_per_call_usd": 0.05,
+            "tags": ["mcp-test"],
+            "input_schema": {
+                "fields": [
+                    {"name": "task", "type": "string", "required": True},
+                    {"name": "depth", "type": "integer"},
+                ]
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {"result": {"type": "string"}},
+                "required": ["result"],
+            },
+        },
+    )
+    assert response.status_code == 201, response.text
+
+    manifest_resp = client.get("/mcp/tools", headers=_auth_headers(owner["raw_api_key"]))
+    assert manifest_resp.status_code == 200, manifest_resp.text
+    body = manifest_resp.json()
+    assert body["count"] == len(body["tools"])
+    tool = next((item for item in body["tools"] if agent_name in item["description"]), None)
+    assert tool is not None
+    assert tool["name"].startswith("agentmarket__")
+    assert tool["inputSchema"]["properties"]["task"]["type"] == "string"
+    assert "task" in tool["inputSchema"].get("required", [])
+    assert tool["outputSchema"]["properties"]["result"]["type"] == "string"
+
+
 def test_output_schema_mismatch_returns_schema_mismatch_error(client):
     worker = _register_user()
     caller = _register_user()
