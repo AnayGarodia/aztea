@@ -74,6 +74,8 @@ def test_build_registration_payload_from_manifest_maps_to_registry_shape():
             "properties": {"ticker": {"type": "string"}},
             "required": ["ticker"],
         },
+        "output_schema": {},
+        "output_verifier_url": None,
     }
 
 

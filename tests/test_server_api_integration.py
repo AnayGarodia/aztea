@@ -117,7 +117,27 @@ def _create_job_via_api(
     return resp.json()
 
 
-def _manifest(name: str, endpoint_url: str) -> str:
+def _manifest(
+    name: str,
+    endpoint_url: str,
+    *,
+    output_schema: dict | None = None,
+    output_verifier_url: str | None = None,
+) -> str:
+    metadata = {
+        "name": name,
+        "description": "Manifest onboarded agent",
+        "endpoint_url": endpoint_url,
+        "price_per_call_usd": 0.05,
+        "tags": ["manifest-test"],
+        "input_schema": {"type": "object", "properties": {"task": {"type": "string"}}},
+    }
+    if output_schema is not None:
+        metadata["output_schema"] = output_schema
+    if output_verifier_url is not None:
+        metadata["output_verifier_url"] = output_verifier_url
+    metadata_json = json.dumps(metadata, indent=2)
+
     return f"""# Example Agent Manifest
 
 ## Registry Endpoint
@@ -137,14 +157,7 @@ Bearer API key auth is required.
 
 ## Registration Metadata
 ```json
-{{
-  "name": "{name}",
-  "description": "Manifest onboarded agent",
-  "endpoint_url": "{endpoint_url}",
-  "price_per_call_usd": 0.05,
-  "tags": ["manifest-test"],
-  "input_schema": {{"type": "object", "properties": {{"task": {{"type": "string"}}}}}}
-}}
+{metadata_json}
 ```
 """
 
@@ -1073,6 +1086,44 @@ def test_onboarding_validation_ingestion_and_spec_endpoint(client):
     stored = registry.get_agent(agent_id)
     assert stored is not None
     assert stored["owner_id"] == f"user:{user['user_id']}"
+
+
+def test_onboarding_manifest_maps_output_schema_and_verifier_url(client):
+    user = _register_user()
+    output_schema = {
+        "type": "object",
+        "properties": {"result": {"type": "string"}},
+        "required": ["result"],
+        "additionalProperties": False,
+    }
+    verifier_url = f"https://verifier.example.com/{uuid.uuid4().hex[:8]}"
+    manifest = _manifest(
+        name=f"Manifest Output Agent {uuid.uuid4().hex[:6]}",
+        endpoint_url=f"https://manifest.example.com/{uuid.uuid4().hex[:8]}",
+        output_schema=output_schema,
+        output_verifier_url=verifier_url,
+    )
+
+    validated = client.post(
+        "/onboarding/validate",
+        headers=_auth_headers(user["raw_api_key"]),
+        json={"manifest_content": manifest},
+    )
+    assert validated.status_code == 200, validated.text
+    metadata = validated.json()["registration_metadata"]
+    assert metadata["output_schema"] == output_schema
+    assert metadata["output_verifier_url"] == verifier_url
+
+    ingested = client.post(
+        "/onboarding/ingest",
+        headers=_auth_headers(user["raw_api_key"]),
+        json={"manifest_content": manifest},
+    )
+    assert ingested.status_code == 201, ingested.text
+    stored = registry.get_agent(ingested.json()["agent_id"])
+    assert stored is not None
+    assert stored["output_schema"] == output_schema
+    assert stored["output_verifier_url"] == verifier_url
 
 
 def test_scoped_keys_enforce_caller_and_worker_permissions(client):

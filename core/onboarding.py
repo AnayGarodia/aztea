@@ -293,6 +293,8 @@ def manifest_metadata_to_registration_payload(metadata: dict | str) -> dict:
         "price_per_call_usd": normalized["price_per_call_usd"],
         "tags": normalized["tags"],
         "input_schema": normalized["input_schema"],
+        "output_schema": normalized["output_schema"],
+        "output_verifier_url": normalized["output_verifier_url"],
     }
 
 

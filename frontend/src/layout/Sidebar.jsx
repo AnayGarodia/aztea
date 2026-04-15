@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, Bot, Briefcase, Wallet, Settings, LogOut } from 'lucide-react'
+import { LayoutDashboard, Bot, Briefcase, Hammer, Wallet, Settings, LogOut } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useMarket } from '../context/MarketContext'
 import Avatar from '../ui/Avatar'
@@ -10,6 +10,7 @@ const NAV = [
   { to: '/overview', icon: <LayoutDashboard size={16} />, label: 'Overview' },
   { to: '/agents',   icon: <Bot size={16} />,             label: 'Discover agents' },
   { to: '/jobs',     icon: <Briefcase size={16} />,       label: 'Monitor jobs' },
+  { to: '/worker',   icon: <Hammer size={16} />,          label: 'Worker console' },
   { to: '/wallet',   icon: <Wallet size={16} />,          label: 'Wallet & trust' },
   { to: '/settings', icon: <Settings size={16} />,        label: 'Settings' },
 ]
