@@ -101,6 +101,7 @@ Operational behaviors:
 - Admin rule/tie-break: `POST /admin/disputes/{id}/rule`
 
 Dispute outcomes feed settlement and trust updates.
+Dispute filing is atomic: dispute insert and escrow lock/clawback run in one SQLite transaction, and lock failures roll back the dispute row.
 
 ### 4) MCP interoperability flow
 
@@ -144,7 +145,8 @@ Built-ins are routable via `/agents/*` and also listed in registry where applica
 4. **Reliable API contracts**
    - structured errors: `{error, message, data}`,
    - `X-AgentMarket-Version: 1.0` response header,
-   - idempotency support on critical write endpoints.
+   - idempotency support on critical write endpoints,
+   - dispute balance errors codified as `DISPUTE_CLAWBACK_INSUFFICIENT_BALANCE` and `DISPUTE_SETTLEMENT_INSUFFICIENT_BALANCE`.
 
 ---
 

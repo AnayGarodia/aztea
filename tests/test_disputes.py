@@ -333,3 +333,30 @@ def test_clawback_moves_settled_payout_into_escrow(client):
     assert _wallet_balance(escrow_wallet["owner_id"]) == 10
     assert _wallet_balance(f"agent:{agent_id}") == 0
     assert _wallet_balance(payments.PLATFORM_OWNER_ID) == 0
+
+
+def test_dispute_filing_rolls_back_when_clawback_lock_fails(client):
+    worker = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 200)
+    agent_id = _register_agent_via_api(client, worker["raw_api_key"], name=f"Rollback Agent {uuid.uuid4().hex[:6]}")
+
+    job = _create_job_via_api(client, caller["raw_api_key"], agent_id=agent_id)
+    _complete_job(client, worker["raw_api_key"], job["job_id"])
+    job_row = jobs.get_job(job["job_id"])
+    assert job_row is not None
+
+    with payments._conn() as conn:
+        conn.execute(
+            "UPDATE wallets SET balance_cents = 0 WHERE wallet_id IN (?, ?)",
+            (job_row["agent_wallet_id"], job_row["platform_wallet_id"]),
+        )
+
+    filed = client.post(
+        f"/jobs/{job['job_id']}/dispute",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={"reason": "force clawback failure"},
+    )
+    assert filed.status_code == 409, filed.text
+    assert filed.json()["error"] == "DISPUTE_CLAWBACK_INSUFFICIENT_BALANCE"
+    assert disputes.get_dispute_by_job(job["job_id"]) is None

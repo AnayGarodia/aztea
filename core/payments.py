@@ -639,81 +639,87 @@ def _related_sum_conn(conn: sqlite3.Connection, *, related_tx_id: str, wallet_id
     return int(row["total"] or 0)
 
 
-def lock_dispute_funds(dispute_id: str) -> dict:
+def _lock_dispute_funds_conn(conn: sqlite3.Connection, dispute_id: str) -> dict:
     """
     Lock dispute funds into escrow.
     If payout already happened, claw back from agent/platform into dispute escrow.
     If payout has not happened yet, charge remains held and no extra movement is needed.
     """
-    with _conn() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        ctx = _dispute_context_conn(conn, dispute_id)
-        escrow_wallet_id = _get_or_create_wallet_id_conn(conn, f"{DISPUTE_ESCROW_OWNER_PREFIX}{dispute_id}")
+    ctx = _dispute_context_conn(conn, dispute_id)
+    escrow_wallet_id = _get_or_create_wallet_id_conn(conn, f"{DISPUTE_ESCROW_OWNER_PREFIX}{dispute_id}")
 
-        already_locked = _related_sum_conn(
-            conn,
-            related_tx_id=dispute_id,
-            wallet_id=escrow_wallet_id,
-            tx_type="deposit",
-        )
-        if already_locked > 0:
-            return {
-                "dispute_id": dispute_id,
-                "escrow_wallet_id": escrow_wallet_id,
-                "locked_cents": already_locked,
-            }
-
-        charge_tx_id = str(ctx["charge_tx_id"])
-        agent_wallet_id = str(ctx["agent_wallet_id"])
-        platform_wallet_id = str(ctx["platform_wallet_id"])
-        agent_id = str(ctx["agent_id"])
-
-        agent_paid = _related_sum_conn(
-            conn,
-            related_tx_id=charge_tx_id,
-            wallet_id=agent_wallet_id,
-            tx_type="payout",
-        )
-        platform_paid = _related_sum_conn(
-            conn,
-            related_tx_id=charge_tx_id,
-            wallet_id=platform_wallet_id,
-            tx_type="fee",
-        )
-        total_locked = agent_paid + platform_paid
-
-        if total_locked > 0:
-            _debit_wallet_conn(
-                conn,
-                agent_wallet_id,
-                agent_paid,
-                agent_id=agent_id,
-                related_tx_id=dispute_id,
-                memo=f"Dispute clawback from agent for {dispute_id[:8]}",
-            )
-            _debit_wallet_conn(
-                conn,
-                platform_wallet_id,
-                platform_paid,
-                agent_id=agent_id,
-                related_tx_id=dispute_id,
-                memo=f"Dispute clawback from platform for {dispute_id[:8]}",
-            )
-            _credit_wallet_conn(
-                conn,
-                escrow_wallet_id,
-                total_locked,
-                tx_type="deposit",
-                agent_id=agent_id,
-                related_tx_id=dispute_id,
-                memo=f"Dispute escrow lock for {dispute_id[:8]}",
-            )
-
+    already_locked = _related_sum_conn(
+        conn,
+        related_tx_id=dispute_id,
+        wallet_id=escrow_wallet_id,
+        tx_type="deposit",
+    )
+    if already_locked > 0:
         return {
             "dispute_id": dispute_id,
             "escrow_wallet_id": escrow_wallet_id,
-            "locked_cents": total_locked,
+            "locked_cents": already_locked,
         }
+
+    charge_tx_id = str(ctx["charge_tx_id"])
+    agent_wallet_id = str(ctx["agent_wallet_id"])
+    platform_wallet_id = str(ctx["platform_wallet_id"])
+    agent_id = str(ctx["agent_id"])
+
+    agent_paid = _related_sum_conn(
+        conn,
+        related_tx_id=charge_tx_id,
+        wallet_id=agent_wallet_id,
+        tx_type="payout",
+    )
+    platform_paid = _related_sum_conn(
+        conn,
+        related_tx_id=charge_tx_id,
+        wallet_id=platform_wallet_id,
+        tx_type="fee",
+    )
+    total_locked = agent_paid + platform_paid
+
+    if total_locked > 0:
+        _debit_wallet_conn(
+            conn,
+            agent_wallet_id,
+            agent_paid,
+            agent_id=agent_id,
+            related_tx_id=dispute_id,
+            memo=f"Dispute clawback from agent for {dispute_id[:8]}",
+        )
+        _debit_wallet_conn(
+            conn,
+            platform_wallet_id,
+            platform_paid,
+            agent_id=agent_id,
+            related_tx_id=dispute_id,
+            memo=f"Dispute clawback from platform for {dispute_id[:8]}",
+        )
+        _credit_wallet_conn(
+            conn,
+            escrow_wallet_id,
+            total_locked,
+            tx_type="deposit",
+            agent_id=agent_id,
+            related_tx_id=dispute_id,
+            memo=f"Dispute escrow lock for {dispute_id[:8]}",
+        )
+
+    return {
+        "dispute_id": dispute_id,
+        "escrow_wallet_id": escrow_wallet_id,
+        "locked_cents": total_locked,
+    }
+
+
+def lock_dispute_funds(dispute_id: str, conn: sqlite3.Connection | None = None) -> dict:
+    if conn is not None:
+        return _lock_dispute_funds_conn(conn, dispute_id)
+    with _conn() as managed_conn:
+        managed_conn.execute("BEGIN IMMEDIATE")
+        return _lock_dispute_funds_conn(managed_conn, dispute_id)
 
 
 def post_dispute_settlement(

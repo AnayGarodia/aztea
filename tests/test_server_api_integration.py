@@ -1390,10 +1390,13 @@ def test_job_sweeper_handles_timeouts_sla_and_event_hooks(client, monkeypatch):
 
     sla_job = _create_job_via_api(client, caller["raw_api_key"], agent_id=agent_id, max_attempts=1)
     sla_job_id = sla_job["job_id"]
+    retry_job = _create_job_via_api(client, caller["raw_api_key"], agent_id=agent_id, max_attempts=3)
+    retry_job_id = retry_job["job_id"]
 
     with jobs._conn() as conn:
         expired = (datetime.now(timezone.utc) - timedelta(seconds=10)).isoformat()
         old = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        retry_due = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
         conn.execute(
             "UPDATE jobs SET status = 'running', lease_expires_at = ? WHERE job_id = ?",
             (expired, timeout_job_id),
@@ -1401,6 +1404,30 @@ def test_job_sweeper_handles_timeouts_sla_and_event_hooks(client, monkeypatch):
         conn.execute(
             "UPDATE jobs SET created_at = ?, updated_at = ? WHERE job_id = ?",
             (old, old, sla_job_id),
+        )
+        conn.execute(
+            """
+            UPDATE jobs
+            SET status = 'pending',
+                next_retry_at = ?,
+                last_retry_at = ?,
+                claim_owner_id = ?,
+                claim_token = ?,
+                claimed_at = ?,
+                lease_expires_at = ?,
+                last_heartbeat_at = ?
+            WHERE job_id = ?
+            """,
+            (
+                retry_due,
+                retry_due,
+                f"user:{worker['user_id']}",
+                "stale-claim-token",
+                retry_due,
+                retry_due,
+                retry_due,
+                retry_job_id,
+            ),
         )
 
     sweep = client.post(
@@ -1412,6 +1439,8 @@ def test_job_sweeper_handles_timeouts_sla_and_event_hooks(client, monkeypatch):
     summary = sweep.json()
     assert timeout_job_id in summary["timeout_failed_job_ids"]
     assert sla_job_id in summary["sla_failed_job_ids"]
+    assert retry_job_id in summary["retry_ready_job_ids"]
+    assert summary["retry_ready_count"] >= 1
 
     process = client.post(
         "/ops/jobs/hooks/process",
@@ -1422,23 +1451,37 @@ def test_job_sweeper_handles_timeouts_sla_and_event_hooks(client, monkeypatch):
 
     timeout_state = client.get(f"/jobs/{timeout_job_id}", headers=_auth_headers(caller["raw_api_key"]))
     sla_state = client.get(f"/jobs/{sla_job_id}", headers=_auth_headers(caller["raw_api_key"]))
+    retry_state = client.get(f"/jobs/{retry_job_id}", headers=_auth_headers(caller["raw_api_key"]))
     assert timeout_state.status_code == 200
     assert sla_state.status_code == 200
+    assert retry_state.status_code == 200
     assert timeout_state.json()["status"] == "failed"
     assert sla_state.json()["status"] == "failed"
+    assert retry_state.json()["status"] == "pending"
+    assert retry_state.json()["next_retry_at"] is None
+    assert retry_state.json()["last_retry_at"] is None
+    assert retry_state.json()["claim_owner_id"] is None
+    assert retry_state.json().get("claim_token") is None
+    assert retry_state.json()["lease_expires_at"] is None
+    assert retry_state.json()["last_heartbeat_at"] is None
 
     caller_wallet = payments.get_or_create_wallet(f"user:{caller['user_id']}")
-    assert payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"] == 300
+    assert (
+        payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"]
+        == 300 - int(retry_job["price_cents"])
+    )
 
     events = client.get("/ops/jobs/events", headers=_auth_headers(caller["raw_api_key"]))
     assert events.status_code == 200
     event_types = {event["event_type"] for event in events.json()["events"]}
     assert "job.timeout_terminal" in event_types
     assert "job.sla_expired" in event_types
+    assert "retry_ready" in event_types
 
     hook_event_types = {entry["payload"].get("event_type") for entry in hook_events}
     assert "job.timeout_terminal" in hook_event_types
     assert "job.sla_expired" in hook_event_types
+    assert "retry_ready" in hook_event_types
 
     metrics = client.get("/ops/jobs/metrics", headers=_auth_headers(TEST_MASTER_KEY))
     assert metrics.status_code == 200
@@ -1447,6 +1490,7 @@ def test_job_sweeper_handles_timeouts_sla_and_event_hooks(client, monkeypatch):
     assert "alerts" in body
     assert "hook_delivery" in body
     assert "slo" in body
+    assert body["retry_ready_last_sweep"] >= 1
 
 
 def test_hook_delivery_dead_letter_listing(client, monkeypatch):

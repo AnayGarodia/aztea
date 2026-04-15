@@ -3114,10 +3114,25 @@ def _sweep_jobs(
         sla_failed_job_ids.append(settled["job_id"])
 
     due_retry = jobs.list_jobs_due_for_retry(limit=limit)
+    retry_ready_job_ids: list[str] = []
+    for item in due_retry:
+        previous_next_retry_at = item.get("next_retry_at")
+        advanced = jobs.mark_retry_ready(item["job_id"])
+        if advanced is None:
+            continue
+        retry_ready_job_ids.append(advanced["job_id"])
+        _record_job_event(
+            advanced,
+            "retry_ready",
+            actor_owner_id=actor_owner_id,
+            payload={"previous_next_retry_at": previous_next_retry_at},
+        )
     decay_summary = _apply_reputation_decay()
     return {
         "expired_leases_scanned": len(expired),
         "due_retry_count": len(due_retry),
+        "retry_ready_count": len(retry_ready_job_ids),
+        "retry_ready_job_ids": retry_ready_job_ids,
         "timeout_retry_job_ids": [],
         "timeout_failed_job_ids": timeout_failed_job_ids,
         "sla_failed_job_ids": sla_failed_job_ids,
@@ -3291,6 +3306,10 @@ def _jobs_metrics(sla_seconds: int = _DEFAULT_SLA_SECONDS) -> dict:
 
     with _SWEEPER_STATE_LOCK:
         sweeper_state = dict(_SWEEPER_STATE)
+    sweeper_last_summary = sweeper_state.get("last_summary")
+    if not isinstance(sweeper_last_summary, dict):
+        sweeper_last_summary = {}
+    retry_ready_last_sweep = int(sweeper_last_summary.get("retry_ready_count") or 0)
     with _HOOK_WORKER_STATE_LOCK:
         hook_worker_state = dict(_HOOK_WORKER_STATE)
     with _BUILTIN_WORKER_STATE_LOCK:
@@ -3302,6 +3321,7 @@ def _jobs_metrics(sla_seconds: int = _DEFAULT_SLA_SECONDS) -> dict:
         "failed_unsettled_jobs": int(failed_unsettled),
         "expired_leases": expired_leases_count,
         "due_retries": due_retry_count,
+        "retry_ready_last_sweep": retry_ready_last_sweep,
         "sla_breaches": sla_breach_count,
         "events_last_24h": int(events_24h),
         "alerts": alerts,
@@ -5282,26 +5302,31 @@ def jobs_dispute(
     if disputes.has_dispute_for_job(job_id):
         raise HTTPException(status_code=409, detail="A dispute already exists for this job.")
 
+    conn = payments._conn()
     try:
+        conn.execute("BEGIN IMMEDIATE")
         created = disputes.create_dispute(
             job_id=job_id,
             filed_by_owner_id=caller["owner_id"],
             side=side,
             reason=body.reason,
             evidence=body.evidence,
+            conn=conn,
         )
+        lock_summary = payments.lock_dispute_funds(created["dispute_id"], conn=conn)
+        conn.execute("COMMIT")
     except sqlite3.IntegrityError:
+        conn.execute("ROLLBACK")
         raise HTTPException(status_code=409, detail="A dispute already exists for this job.")
     except ValueError as exc:
+        conn.execute("ROLLBACK")
         raise HTTPException(status_code=400, detail=str(exc))
-
-    try:
-        lock_summary = payments.lock_dispute_funds(created["dispute_id"])
     except payments.InsufficientBalanceError as exc:
+        conn.execute("ROLLBACK")
         raise HTTPException(
             status_code=409,
             detail={
-                "error": "DISPUTE_CLAWBACK_INSUFFICIENT_BALANCE",
+                "error": error_codes.DISPUTE_CLAWBACK_INSUFFICIENT_BALANCE,
                 "balance_cents": exc.balance_cents,
                 "required_cents": exc.required_cents,
             },
@@ -5392,7 +5417,7 @@ def disputes_admin_rule(
         raise HTTPException(
             status_code=409,
             detail={
-                "error": "DISPUTE_SETTLEMENT_INSUFFICIENT_BALANCE",
+                "error": error_codes.DISPUTE_SETTLEMENT_INSUFFICIENT_BALANCE,
                 "balance_cents": exc.balance_cents,
                 "required_cents": exc.required_cents,
             },
@@ -5559,6 +5584,7 @@ def jobs_sweep(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.DynamicObjectResponse:
     _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
+    started = _utc_now_iso()
     try:
         summary = _sweep_jobs(
             retry_delay_seconds=body.retry_delay_seconds,
@@ -5566,7 +5592,9 @@ def jobs_sweep(
             limit=body.limit,
             actor_owner_id=caller["owner_id"],
         )
+        _set_sweeper_state(last_run_at=started, last_summary=summary, last_error=None)
     except ValueError as exc:
+        _set_sweeper_state(last_run_at=started, last_error=str(exc))
         raise HTTPException(status_code=422, detail=str(exc))
     return JSONResponse(content=summary)
 

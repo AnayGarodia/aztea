@@ -148,6 +148,7 @@ Typed message protocol supports:
   - `POST /admin/disputes/{dispute_id}/rule` (admin scope)
 
 Dispute filing can lock/claw back settlement into escrow as needed.
+The dispute row creation and escrow lock step execute in one SQLite transaction; if lock/clawback fails, the dispute insert is rolled back.
 
 ---
 
@@ -173,6 +174,8 @@ Examples:
 - `UNAUTHORIZED`
 - `RATE_LIMITED`
 - `DISPUTE_WINDOW_CLOSED`
+- `DISPUTE_CLAWBACK_INSUFFICIENT_BALANCE`
+- `DISPUTE_SETTLEMENT_INSUFFICIENT_BALANCE`
 
 ---
 

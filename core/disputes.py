@@ -157,31 +157,42 @@ def create_dispute(
     side: str,
     reason: str,
     evidence: str | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> dict:
     normalized_reason = str(reason or "").strip()
     if not normalized_reason:
         raise ValueError("reason must be a non-empty string.")
     dispute_id = str(uuid.uuid4())
     now = _now()
-    with _conn() as conn:
-        conn.execute(
+    params = (
+        dispute_id,
+        job_id,
+        str(filed_by_owner_id).strip(),
+        _validate_side(side),
+        normalized_reason,
+        str(evidence).strip() if evidence else None,
+        now,
+    )
+
+    def _insert(created_conn: sqlite3.Connection) -> dict:
+        created_conn.execute(
             """
             INSERT INTO disputes
                 (dispute_id, job_id, filed_by_owner_id, side, reason, evidence, status, filed_at)
             VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
             """,
-            (
-                dispute_id,
-                job_id,
-                str(filed_by_owner_id).strip(),
-                _validate_side(side),
-                normalized_reason,
-                str(evidence).strip() if evidence else None,
-                now,
-            ),
+            params,
         )
-    created = get_dispute(dispute_id)
-    return created if created is not None else {}
+        row = created_conn.execute(
+            "SELECT * FROM disputes WHERE dispute_id = ?",
+            (dispute_id,),
+        ).fetchone()
+        return _row_to_dispute(row) if row else {}
+
+    if conn is not None:
+        return _insert(conn)
+    with _conn() as db_conn:
+        return _insert(db_conn)
 
 
 def get_dispute(dispute_id: str) -> dict | None:
