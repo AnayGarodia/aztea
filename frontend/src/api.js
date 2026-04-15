@@ -1,11 +1,11 @@
 const RAW_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').trim()
 const BASE = (RAW_BASE || '/api').replace(/\/+$/, '')
-const PROTOCOL_VERSION = '1.0'
+const VERSION = '1.0'
 
 function requestHeaders(key, { idempotencyKey } = {}) {
   const out = {
     'Content-Type': 'application/json',
-    'X-AgentMarket-Version': PROTOCOL_VERSION,
+    'X-AgentMarket-Version': VERSION,
   }
   if (key) out.Authorization = `Bearer ${key}`
   if (idempotencyKey) out['Idempotency-Key'] = idempotencyKey

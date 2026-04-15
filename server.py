@@ -12,6 +12,7 @@ import math
 import hmac
 import hashlib
 import logging
+import re
 import ipaddress
 import sqlite3
 import threading
@@ -54,7 +55,6 @@ from core import registry
 from core import jobs
 from core import disputes
 from core import judges
-from core import mcp_manifest
 from core import models as core_models
 from core import reputation
 from core import error_codes
@@ -79,6 +79,7 @@ from core.models import (
     JobReleaseRequest,
     JobRetryRequest,
     JobsSweepRequest,
+    MCPInvokeRequest,
     NegotiationRequest,
     PortfolioRequest,
     ProductStrategyRequest,
@@ -170,6 +171,7 @@ _DEFAULT_HOOK_DELIVERY_BATCH_SIZE = 50
 _DEFAULT_HOOK_DELIVERY_MAX_ATTEMPTS = 5
 _DEFAULT_HOOK_DELIVERY_BASE_DELAY_SECONDS = 5
 _DEFAULT_HOOK_DELIVERY_MAX_DELAY_SECONDS = 300
+_DEFAULT_HOOK_DELIVERY_CLAIM_LEASE_SECONDS = 30
 _DEFAULT_DISPUTE_FILE_WINDOW_SECONDS = 7 * 24 * 3600
 _DEFAULT_DISPUTE_WINDOW_HOURS = 72
 _DEFAULT_DISPUTE_JUDGE_INTERVAL_SECONDS = 0
@@ -181,6 +183,8 @@ _PROTOCOL_VERSION_HEADER = "X-AgentMarket-Version"
 _JUDGE_FEE_CENTS = 0
 _REPUTATION_DECAY_GRACE_DAYS = 30
 _REPUTATION_DECAY_DAILY_RATE = 0.005
+AUTO_SUSPEND_FAILURE_RATE_THRESHOLD = 0.6
+AUTO_SUSPEND_MIN_CALLS = 10
 
 
 def _env_int(name: str, default: int, minimum: int | None = None, maximum: int | None = None) -> int:
@@ -266,6 +270,12 @@ _HOOK_DELIVERY_MAX_DELAY_SECONDS = _env_int(
     _DEFAULT_HOOK_DELIVERY_MAX_DELAY_SECONDS,
     minimum=1,
     maximum=24 * 3600,
+)
+_HOOK_DELIVERY_CLAIM_LEASE_SECONDS = _env_int(
+    "HOOK_DELIVERY_CLAIM_LEASE_SECONDS",
+    _DEFAULT_HOOK_DELIVERY_CLAIM_LEASE_SECONDS,
+    minimum=5,
+    maximum=300,
 )
 if _HOOK_DELIVERY_MAX_DELAY_SECONDS < _HOOK_DELIVERY_BASE_DELAY_SECONDS:
     raise RuntimeError("HOOK_DELIVERY_MAX_DELAY_SECONDS must be >= HOOK_DELIVERY_BASE_DELAY_SECONDS.")
@@ -410,6 +420,80 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _migrate_job_event_deliveries_status_schema(conn: sqlite3.Connection) -> None:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'job_event_deliveries'"
+    ).fetchone()
+    if row is None:
+        return
+    table_sql = str(row["sql"] or "").lower()
+    if (
+        "dead_letter" not in table_sql
+        and "retrying" not in table_sql
+        and "'failed'" in table_sql
+        and "'cancelled'" in table_sql
+    ):
+        return
+
+    conn.execute(
+        """
+        CREATE TABLE job_event_deliveries_new (
+            delivery_id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id            INTEGER NOT NULL,
+            hook_id             TEXT NOT NULL,
+            owner_id            TEXT NOT NULL,
+            target_url          TEXT NOT NULL,
+            secret              TEXT,
+            payload             TEXT NOT NULL,
+            status              TEXT NOT NULL CHECK(status IN ('pending', 'delivered', 'failed', 'cancelled')),
+            attempt_count       INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
+            next_attempt_at     TEXT NOT NULL,
+            last_attempt_at     TEXT,
+            last_success_at     TEXT,
+            last_status_code    INTEGER,
+            last_error          TEXT,
+            created_at          TEXT NOT NULL,
+            updated_at          TEXT NOT NULL,
+            UNIQUE(event_id, hook_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO job_event_deliveries_new (
+            delivery_id, event_id, hook_id, owner_id, target_url, secret, payload, status,
+            attempt_count, next_attempt_at, last_attempt_at, last_success_at, last_status_code,
+            last_error, created_at, updated_at
+        )
+        SELECT
+            delivery_id,
+            event_id,
+            hook_id,
+            owner_id,
+            target_url,
+            secret,
+            payload,
+            CASE
+                WHEN status = 'retrying' THEN 'pending'
+                WHEN status = 'dead_letter' THEN 'failed'
+                WHEN status IN ('pending', 'delivered', 'failed', 'cancelled') THEN status
+                ELSE 'pending'
+            END AS status,
+            attempt_count,
+            next_attempt_at,
+            last_attempt_at,
+            last_success_at,
+            last_status_code,
+            last_error,
+            created_at,
+            updated_at
+        FROM job_event_deliveries
+        """
+    )
+    conn.execute("DROP TABLE job_event_deliveries")
+    conn.execute("ALTER TABLE job_event_deliveries_new RENAME TO job_event_deliveries")
+
+
 def _init_ops_db() -> None:
     with jobs._conn() as conn:
         conn.execute(
@@ -453,7 +537,7 @@ def _init_ops_db() -> None:
                 target_url          TEXT NOT NULL,
                 secret              TEXT,
                 payload             TEXT NOT NULL,
-                status              TEXT NOT NULL CHECK(status IN ('pending', 'retrying', 'delivered', 'dead_letter')),
+                status              TEXT NOT NULL CHECK(status IN ('pending', 'delivered', 'failed', 'cancelled')),
                 attempt_count       INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
                 next_attempt_at     TEXT NOT NULL,
                 last_attempt_at     TEXT,
@@ -466,6 +550,7 @@ def _init_ops_db() -> None:
             )
             """
         )
+        _migrate_job_event_deliveries_status_schema(conn)
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_job_events_owner_created ON job_events(caller_owner_id, created_at DESC)"
         )
@@ -1996,6 +2081,7 @@ def _list_job_event_hooks(owner_id: str | None = None, include_inactive: bool = 
 
 
 def _deactivate_job_event_hook(hook_id: str, owner_id: str | None = None) -> bool:
+    now = _utc_now_iso()
     with jobs._conn() as conn:
         if owner_id is None:
             result = conn.execute(
@@ -2007,7 +2093,21 @@ def _deactivate_job_event_hook(hook_id: str, owner_id: str | None = None) -> boo
                 "UPDATE job_event_hooks SET is_active = 0 WHERE hook_id = ? AND owner_id = ?",
                 (hook_id, owner_id),
             )
-    return result.rowcount > 0
+        if result.rowcount <= 0:
+            return False
+        conn.execute(
+            """
+            UPDATE job_event_deliveries
+            SET status = 'cancelled',
+                next_attempt_at = ?,
+                updated_at = ?,
+                last_error = COALESCE(last_error, 'hook deactivated')
+            WHERE hook_id = ?
+              AND status = 'pending'
+            """,
+            (now, now, hook_id),
+        )
+    return True
 
 
 def _deliver_job_event_hooks(event: dict) -> None:
@@ -2323,7 +2423,7 @@ def _claim_due_hook_delivery(now_iso: str) -> dict | None:
             """
             SELECT *
             FROM job_event_deliveries
-            WHERE status IN ('pending', 'retrying')
+            WHERE status = 'pending'
               AND next_attempt_at <= ?
             ORDER BY next_attempt_at ASC, delivery_id ASC
             LIMIT 1
@@ -2333,18 +2433,20 @@ def _claim_due_hook_delivery(now_iso: str) -> dict | None:
         if row is None:
             return None
 
+        claim_until_iso = (
+            datetime.fromisoformat(now_iso) + timedelta(seconds=_HOOK_DELIVERY_CLAIM_LEASE_SECONDS)
+        ).isoformat()
         result = conn.execute(
             """
             UPDATE job_event_deliveries
-            SET status = 'retrying',
-                attempt_count = attempt_count + 1,
+            SET next_attempt_at = ?,
                 last_attempt_at = ?,
                 updated_at = ?
             WHERE delivery_id = ?
-              AND status IN ('pending', 'retrying')
+              AND status = 'pending'
               AND next_attempt_at <= ?
             """,
-            (now_iso, now_iso, row["delivery_id"], now_iso),
+            (claim_until_iso, now_iso, now_iso, row["delivery_id"], now_iso),
         )
         if result.rowcount == 0:
             return None
@@ -2389,6 +2491,7 @@ def _mark_hook_delivery(
     *,
     status: str,
     next_attempt_at: str,
+    attempt_count: int | None = None,
     status_code: int | None,
     error_text: str | None,
     now_iso: str,
@@ -2400,6 +2503,7 @@ def _mark_hook_delivery(
             UPDATE job_event_deliveries
             SET status = ?,
                 next_attempt_at = ?,
+                attempt_count = COALESCE(?, attempt_count),
                 last_status_code = ?,
                 last_error = ?,
                 last_success_at = CASE WHEN ? = 1 THEN ? ELSE last_success_at END,
@@ -2409,6 +2513,7 @@ def _mark_hook_delivery(
             (
                 status,
                 next_attempt_at,
+                attempt_count,
                 status_code,
                 error_text,
                 1 if mark_success else 0,
@@ -2424,7 +2529,8 @@ def _process_due_hook_deliveries(limit: int = _HOOK_DELIVERY_BATCH_SIZE) -> dict
     processed = 0
     delivered = 0
     retried = 0
-    dead_lettered = 0
+    failed = 0
+    cancelled = 0
 
     for _ in range(batch_limit):
         now_iso = _utc_now_iso()
@@ -2454,14 +2560,15 @@ def _process_due_hook_deliveries(limit: int = _HOOK_DELIVERY_BATCH_SIZE) -> dict
             )
             _mark_hook_delivery(
                 delivery_id,
-                status="dead_letter",
+                status="cancelled",
                 next_attempt_at=now_iso,
+                attempt_count=attempt_count,
                 status_code=None,
                 error_text=error_text,
                 now_iso=now_iso,
                 mark_success=False,
             )
-            dead_lettered += 1
+            cancelled += 1
             continue
 
         try:
@@ -2477,14 +2584,25 @@ def _process_due_hook_deliveries(limit: int = _HOOK_DELIVERY_BATCH_SIZE) -> dict
             )
             _mark_hook_delivery(
                 delivery_id,
-                status="dead_letter",
-                next_attempt_at=now_iso,
+                status="failed" if (attempt_count + 1) >= _HOOK_DELIVERY_MAX_ATTEMPTS else "pending",
+                next_attempt_at=(
+                    now_iso
+                    if (attempt_count + 1) >= _HOOK_DELIVERY_MAX_ATTEMPTS
+                    else (
+                        datetime.now(timezone.utc)
+                        + timedelta(seconds=_hook_backoff_seconds(attempt_count + 1))
+                    ).isoformat()
+                ),
+                attempt_count=attempt_count + 1,
                 status_code=None,
                 error_text=error_text,
                 now_iso=now_iso,
                 mark_success=False,
             )
-            dead_lettered += 1
+            if (attempt_count + 1) >= _HOOK_DELIVERY_MAX_ATTEMPTS:
+                failed += 1
+            else:
+                retried += 1
             continue
 
         try:
@@ -2535,6 +2653,7 @@ def _process_due_hook_deliveries(limit: int = _HOOK_DELIVERY_BATCH_SIZE) -> dict
                 delivery_id,
                 status="delivered",
                 next_attempt_at=now_iso,
+                attempt_count=attempt_count,
                 status_code=status_code,
                 error_text=None,
                 now_iso=now_iso,
@@ -2543,25 +2662,28 @@ def _process_due_hook_deliveries(limit: int = _HOOK_DELIVERY_BATCH_SIZE) -> dict
             delivered += 1
             continue
 
-        if attempt_count >= _HOOK_DELIVERY_MAX_ATTEMPTS:
+        next_attempt_count = attempt_count + 1
+        if next_attempt_count >= _HOOK_DELIVERY_MAX_ATTEMPTS:
             _mark_hook_delivery(
                 delivery_id,
-                status="dead_letter",
+                status="failed",
                 next_attempt_at=now_iso,
+                attempt_count=next_attempt_count,
                 status_code=status_code,
                 error_text=error_text,
                 now_iso=now_iso,
                 mark_success=False,
             )
-            dead_lettered += 1
+            failed += 1
             continue
 
-        retry_delay = _hook_backoff_seconds(attempt_count)
+        retry_delay = _hook_backoff_seconds(next_attempt_count)
         next_attempt_at = (datetime.now(timezone.utc) + timedelta(seconds=retry_delay)).isoformat()
         _mark_hook_delivery(
             delivery_id,
-            status="retrying",
+            status="pending",
             next_attempt_at=next_attempt_at,
+            attempt_count=next_attempt_count,
             status_code=status_code,
             error_text=error_text,
             now_iso=now_iso,
@@ -2574,20 +2696,23 @@ def _process_due_hook_deliveries(limit: int = _HOOK_DELIVERY_BATCH_SIZE) -> dict
             """
             SELECT COUNT(*) AS count
             FROM job_event_deliveries
-            WHERE status IN ('pending', 'retrying')
+            WHERE status = 'pending'
             """
         ).fetchone()["count"]
-        dead = conn.execute(
-            "SELECT COUNT(*) AS count FROM job_event_deliveries WHERE status = 'dead_letter'"
+        failed_total = conn.execute(
+            "SELECT COUNT(*) AS count FROM job_event_deliveries WHERE status = 'failed'"
         ).fetchone()["count"]
 
     return {
         "processed": int(processed),
         "delivered": int(delivered),
         "retried": int(retried),
-        "dead_lettered": int(dead_lettered),
+        "failed": int(failed),
+        "cancelled": int(cancelled),
+        "dead_lettered": int(failed),
         "pending": int(pending),
-        "dead_letter_total": int(dead),
+        "failed_total": int(failed_total),
+        "dead_letter_total": int(failed_total),
     }
 
 
@@ -2746,24 +2871,62 @@ def _run_quality_gate(job: dict, agent: dict, output_payload: dict) -> dict[str,
     except Exception:
         judge_job_id = None
 
-    judge_result: dict[str, Any]
+    output_schema = agent.get("output_schema")
+    has_output_schema = output_schema is not None
+    live_quality_enabled = (
+        str(os.environ.get("AGENTMARKET_ENABLE_LIVE_QUALITY_JUDGE", "")).strip().lower()
+        in {"1", "true", "yes", "on"}
+        and bool(str(os.environ.get("GROQ_API_KEY", "")).strip())
+    )
+
+    verdict = "pass"
+    score = 5
+    reason = "No output contract defined — structural check passed."
+    parsed_output: Any
     try:
-        judge_result = judges.run_quality_judgment(
-            input_payload=job.get("input_payload") or {},
-            output_payload=output_payload,
-            agent_description=str(agent.get("description") or ""),
-        )
-    except Exception as exc:
-        judge_result = {"verdict": "fail", "score": 1, "reason": f"quality judge error: {exc}"}
-    verdict = str(judge_result.get("verdict") or "").strip().lower()
-    if verdict not in {"pass", "fail"}:
+        parsed_output = json.loads(_stable_json_text(output_payload))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        parsed_output = None
         verdict = "fail"
-    try:
-        score = int(judge_result.get("score"))
-    except (TypeError, ValueError):
-        score = 1 if verdict == "fail" else 7
-    score = max(1, min(10, score))
-    reason = str(judge_result.get("reason") or "").strip() or "Quality judge returned no reason."
+        score = 0
+        reason = "Output payload was not valid JSON."
+
+    if verdict == "pass" and (parsed_output is None or parsed_output == {}):
+        verdict = "fail"
+        score = 0
+        reason = "Output payload must not be null or an empty object."
+
+    if verdict == "pass" and has_output_schema and isinstance(output_schema, dict):
+        schema_errors = _validate_json_schema_subset(parsed_output, output_schema)
+        if schema_errors:
+            verdict = "fail"
+            score = 0
+            reason = f"Output did not match declared schema: {schema_errors[0]}"
+        else:
+            reason = "Output matched declared schema and structural checks."
+
+    if verdict == "pass" and live_quality_enabled:
+        try:
+            judge_result = judges.run_quality_judgment(
+                input_payload=job.get("input_payload") or {},
+                output_payload=output_payload,
+                agent_description=str(agent.get("description") or ""),
+            )
+            judge_verdict = str(judge_result.get("verdict") or "").strip().lower()
+            if judge_verdict in {"pass", "fail"}:
+                verdict = judge_verdict
+            else:
+                verdict = "fail"
+            try:
+                score = int(judge_result.get("score"))
+            except (TypeError, ValueError):
+                score = 1 if verdict == "fail" else 5
+            score = max(0, min(10, score))
+            reason = str(judge_result.get("reason") or "").strip() or "Quality judge returned no reason."
+        except Exception as exc:
+            verdict = "fail"
+            score = 0
+            reason = f"quality judge error: {exc}"
 
     verifier_passed, verifier_reason = _run_output_verifier(
         agent.get("output_verifier_url"),
@@ -2997,6 +3160,77 @@ def _apply_reputation_decay(now_dt: datetime | None = None) -> dict[str, int]:
     return {"scanned_agents": scanned, "decayed_agents": decayed}
 
 
+def _auto_suspend_low_performing_agents(actor_owner_id: str) -> dict[str, Any]:
+    suspended_agent_ids: list[str] = []
+    generated_events: list[dict[str, Any]] = []
+    now_iso = _utc_now_iso()
+    with jobs._conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT agent_id, owner_id, successful_calls, total_calls
+            FROM agents
+            WHERE status = 'active' AND total_calls >= ?
+            """,
+            (AUTO_SUSPEND_MIN_CALLS,),
+        ).fetchall()
+        for row in rows:
+            total_calls = int(row["total_calls"] or 0)
+            successful_calls = int(row["successful_calls"] or 0)
+            if total_calls <= 0:
+                continue
+            failure_rate = 1.0 - (float(successful_calls) / float(total_calls))
+            if failure_rate <= AUTO_SUSPEND_FAILURE_RATE_THRESHOLD:
+                continue
+            status_update = conn.execute(
+                "UPDATE agents SET status = 'suspended' WHERE agent_id = ? AND status = 'active'",
+                (row["agent_id"],),
+            )
+            if status_update.rowcount <= 0:
+                continue
+
+            payload = {
+                "reason": "failure_rate_threshold",
+                "failure_rate": round(failure_rate, 4),
+                "total_calls": total_calls,
+            }
+            cursor = conn.execute(
+                """
+                INSERT INTO job_events
+                    (job_id, agent_id, agent_owner_id, caller_owner_id, event_type, actor_owner_id, payload, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"agent:{row['agent_id']}",
+                    row["agent_id"],
+                    row["owner_id"] or "unknown",
+                    "system:sweeper",
+                    "agent_auto_suspended",
+                    actor_owner_id,
+                    _stable_json_text(payload),
+                    now_iso,
+                ),
+            )
+            event = {
+                "event_id": int(cursor.lastrowid),
+                "job_id": f"agent:{row['agent_id']}",
+                "agent_id": str(row["agent_id"]),
+                "agent_owner_id": str(row["owner_id"] or "unknown"),
+                "caller_owner_id": "system:sweeper",
+                "event_type": "agent_auto_suspended",
+                "actor_owner_id": actor_owner_id,
+                "payload": payload,
+                "created_at": now_iso,
+            }
+            generated_events.append(event)
+            suspended_agent_ids.append(str(row["agent_id"]))
+    for event in generated_events:
+        _deliver_job_event_hooks(event)
+    return {
+        "auto_suspended_count": len(suspended_agent_ids),
+        "auto_suspended_agent_ids": suspended_agent_ids,
+    }
+
+
 def _sweep_jobs(
     retry_delay_seconds: int = _DEFAULT_RETRY_DELAY_SECONDS,
     sla_seconds: int = _DEFAULT_SLA_SECONDS,
@@ -3049,6 +3283,7 @@ def _sweep_jobs(
             actor_owner_id=actor_owner_id,
             payload={"previous_next_retry_at": previous_next_retry_at},
         )
+    suspension_summary = _auto_suspend_low_performing_agents(actor_owner_id)
     decay_summary = _apply_reputation_decay()
     return {
         "expired_leases_scanned": len(expired),
@@ -3058,6 +3293,8 @@ def _sweep_jobs(
         "timeout_retry_job_ids": [],
         "timeout_failed_job_ids": timeout_failed_job_ids,
         "sla_failed_job_ids": sla_failed_job_ids,
+        "auto_suspended_count": int(suspension_summary["auto_suspended_count"]),
+        "auto_suspended_agent_ids": suspension_summary["auto_suspended_agent_ids"],
         "reputation_decay": decay_summary,
     }
 
@@ -3202,8 +3439,9 @@ def _jobs_metrics(sla_seconds: int = _DEFAULT_SLA_SECONDS) -> dict:
         alerts.append(f"{expired_leases_count} jobs have expired worker leases.")
     if sla_breach_count > 0:
         alerts.append(f"{sla_breach_count} jobs breached SLA.")
-    if delivery_status_counts.get("dead_letter", 0) > 0:
-        alerts.append(f"{delivery_status_counts.get('dead_letter', 0)} hook deliveries are in dead-letter.")
+    failed_deliveries = int(delivery_status_counts.get("failed", 0))
+    if failed_deliveries > 0:
+        alerts.append(f"{failed_deliveries} hook deliveries failed permanently.")
     if claim_p95_ms is not None and claim_p95_ms > _SLO_CLAIM_P95_TARGET_MS:
         alerts.append(
             f"Claim latency p95 {claim_p95_ms}ms exceeds SLO target {_SLO_CLAIM_P95_TARGET_MS}ms."
@@ -3232,6 +3470,7 @@ def _jobs_metrics(sla_seconds: int = _DEFAULT_SLA_SECONDS) -> dict:
     if not isinstance(sweeper_last_summary, dict):
         sweeper_last_summary = {}
     retry_ready_last_sweep = int(sweeper_last_summary.get("retry_ready_count") or 0)
+    auto_suspended_last_sweep = int(sweeper_last_summary.get("auto_suspended_count") or 0)
     with _HOOK_WORKER_STATE_LOCK:
         hook_worker_state = dict(_HOOK_WORKER_STATE)
     with _BUILTIN_WORKER_STATE_LOCK:
@@ -3244,6 +3483,7 @@ def _jobs_metrics(sla_seconds: int = _DEFAULT_SLA_SECONDS) -> dict:
         "expired_leases": expired_leases_count,
         "due_retries": due_retry_count,
         "retry_ready_last_sweep": retry_ready_last_sweep,
+        "auto_suspended_last_sweep": auto_suspended_last_sweep,
         "sla_breaches": sla_breach_count,
         "events_last_24h": int(events_24h),
         "alerts": alerts,
@@ -3834,6 +4074,91 @@ def registry_register(
     )
 
 
+def _mcp_tool_slug(name: str, fallback: str) -> str:
+    base = re.sub(r"[^a-z0-9]+", "_", str(name or "").strip().lower()).strip("_")
+    return base or f"agent_{fallback}"
+
+
+def _mcp_active_agents() -> list[dict[str, Any]]:
+    agents = registry.get_agents(include_internal=True, include_banned=True)
+    return [agent for agent in agents if str(agent.get("status") or "").strip().lower() == "active"]
+
+
+def _mcp_tools_and_lookup() -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+    tools: list[dict[str, Any]] = []
+    lookup: dict[str, dict[str, Any]] = {}
+    used_names: set[str] = set()
+    for agent in _mcp_active_agents():
+        agent_id = str(agent.get("agent_id") or "").strip()
+        if not agent_id:
+            continue
+        fallback = (agent_id.replace("-", "")[:8] or "agent").lower()
+        slug = _mcp_tool_slug(str(agent.get("name") or ""), fallback)
+        if slug in used_names:
+            slug = f"{slug}_{fallback}"
+        while slug in used_names:
+            slug = f"{slug}_x"
+        used_names.add(slug)
+
+        raw_input_schema = agent.get("input_schema")
+        if isinstance(raw_input_schema, dict) and raw_input_schema:
+            input_schema = raw_input_schema
+        else:
+            input_schema = {"type": "object", "properties": {}}
+        raw_output_schema = agent.get("output_schema")
+        output_schema = raw_output_schema if isinstance(raw_output_schema, dict) else {}
+        tool = {
+            "name": slug,
+            "description": str(agent.get("description") or ""),
+            "input_schema": input_schema,
+            "output_schema": output_schema,
+        }
+        tools.append(tool)
+        lookup[slug] = agent
+    return tools, lookup
+
+
+def _caller_from_raw_api_key(raw_api_key: str) -> core_models.CallerContext | None:
+    raw = str(raw_api_key or "").strip()
+    if not raw:
+        return None
+    if hmac.compare_digest(raw, _MASTER_KEY):
+        return {
+            "type": "master",
+            "owner_id": "master",
+            "scopes": ["caller", "worker", "admin"],
+        }
+    user = _auth.verify_api_key(raw)
+    if user:
+        return {
+            "type": "user",
+            "owner_id": f"user:{user['user_id']}",
+            "user": user,
+            "scopes": list(user.get("scopes") or []),
+        }
+    agent_key = _auth.verify_agent_key(raw)
+    if agent_key:
+        return {
+            "type": "agent_key",
+            "owner_id": str(agent_key["owner_id"]),
+            "agent_id": str(agent_key["agent_id"]),
+            "key_id": str(agent_key["key_id"]),
+            "scopes": ["worker"],
+        }
+    return None
+
+
+def _mcp_text_from_response(response: Response) -> str:
+    body_bytes = bytes(getattr(response, "body", b"") or b"")
+    if not body_bytes:
+        return "null"
+    body_text = body_bytes.decode("utf-8", errors="replace")
+    try:
+        return json.dumps(json.loads(body_text), ensure_ascii=False)
+    except json.JSONDecodeError:
+        return json.dumps(body_text, ensure_ascii=False)
+
+
 @app.get(
     "/mcp/tools",
     response_model=core_models.DynamicObjectResponse,
@@ -3845,9 +4170,66 @@ def mcp_tools_manifest(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.DynamicObjectResponse:
     _require_scope(caller, "caller")
-    agents = registry.get_agents()
-    visible_agents = [_agent_response(agent, caller) for agent in agents]
-    return JSONResponse(content=mcp_manifest.build_mcp_manifest(visible_agents))
+    tools, _ = _mcp_tools_and_lookup()
+    return JSONResponse(content={"tools": tools, "count": len(tools)})
+
+
+@app.get(
+    "/mcp/manifest",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(401, 403, 429, 500),
+)
+@limiter.limit("60/minute")
+def mcp_manifest_payload(
+    request: Request,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
+    _require_scope(caller, "caller")
+    tools, _ = _mcp_tools_and_lookup()
+    return JSONResponse(
+        content={
+            "schema_version": "v1",
+            "name": "agentmarket",
+            "description": "AI agent marketplace — specialized agents as callable tools",
+            "tools": tools,
+        }
+    )
+
+
+@app.post(
+    "/mcp/invoke",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(400, 403, 404, 429, 500),
+)
+@limiter.limit("60/minute")
+def mcp_invoke(
+    request: Request,
+    body: MCPInvokeRequest,
+) -> core_models.DynamicObjectResponse:
+    caller = _caller_from_raw_api_key(body.api_key)
+    if caller is None:
+        raise HTTPException(status_code=403, detail="Invalid API key.")
+    _, lookup = _mcp_tools_and_lookup()
+    agent = lookup.get(body.tool_name)
+    if agent is None:
+        raise HTTPException(status_code=404, detail=f"Tool '{body.tool_name}' not found.")
+    request.state._caller = caller
+    delegated = registry_call(
+        request=request,
+        agent_id=str(agent["agent_id"]),
+        body=core_models.RegistryCallRequest(root=body.input),
+        caller=caller,
+    )
+    return JSONResponse(
+        content={
+            "content": [
+                {
+                    "type": "text",
+                    "text": _mcp_text_from_response(delegated),
+                }
+            ]
+        }
+    )
 
 
 @app.get(
@@ -5396,7 +5778,7 @@ def job_event_hook_dead_letter(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.JobEventHookDeadLetterResponse:
     owner_id = None if _caller_has_scope(caller, "admin") else caller["owner_id"]
-    deliveries = _list_hook_deliveries(owner_id=owner_id, status="dead_letter", limit=limit)
+    deliveries = _list_hook_deliveries(owner_id=owner_id, status="failed", limit=limit)
     return JSONResponse(content={"deliveries": deliveries, "count": len(deliveries)})
 
 

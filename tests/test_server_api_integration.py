@@ -1536,6 +1536,133 @@ def test_hook_delivery_dead_letter_listing(client, monkeypatch):
     assert dead_letters.json()["count"] >= 1
 
 
+def test_hook_delete_cancels_pending_deliveries(client):
+    worker = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 200)
+
+    hook_resp = client.post(
+        "/ops/jobs/hooks",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={"target_url": "https://hooks.example.com/cancel-me"},
+    )
+    assert hook_resp.status_code == 201, hook_resp.text
+    hook_id = hook_resp.json()["hook_id"]
+
+    agent_id = _register_agent_via_api(
+        client,
+        worker["raw_api_key"],
+        name=f"Cancel Hook Agent {uuid.uuid4().hex[:6]}",
+        price=0.10,
+        tags=["hooks-cancel"],
+    )
+    _create_job_via_api(client, caller["raw_api_key"], agent_id=agent_id)
+
+    deleted = client.delete(
+        f"/ops/jobs/hooks/{hook_id}",
+        headers=_auth_headers(caller["raw_api_key"]),
+    )
+    assert deleted.status_code == 200, deleted.text
+
+    with jobs._conn() as conn:
+        counts = conn.execute(
+            """
+            SELECT status, COUNT(*) AS count
+            FROM job_event_deliveries
+            WHERE hook_id = ?
+            GROUP BY status
+            """,
+            (hook_id,),
+        ).fetchall()
+    by_status = {row["status"]: int(row["count"]) for row in counts}
+    assert by_status.get("pending", 0) == 0
+    assert by_status.get("cancelled", 0) >= 1
+
+
+def test_sweeper_auto_suspends_poor_agent_performance(client):
+    worker = _register_user()
+    agent_id = _register_agent_via_api(
+        client,
+        worker["raw_api_key"],
+        name=f"Auto Suspend Agent {uuid.uuid4().hex[:6]}",
+        price=0.10,
+        tags=["auto-suspend"],
+    )
+    for _ in range(7):
+        registry.update_call_stats(agent_id, latency_ms=50.0, success=False)
+    for _ in range(3):
+        registry.update_call_stats(agent_id, latency_ms=50.0, success=True)
+
+    summary = server._sweep_jobs(limit=10, actor_owner_id="system:test-sweeper")
+    assert summary["auto_suspended_count"] >= 1
+    assert agent_id in summary["auto_suspended_agent_ids"]
+    assert registry.get_agent(agent_id)["status"] == "suspended"
+
+    server._set_sweeper_state(last_summary=summary)
+    metrics = client.get("/ops/jobs/metrics", headers=_auth_headers(TEST_MASTER_KEY))
+    assert metrics.status_code == 200, metrics.text
+    assert metrics.json()["auto_suspended_last_sweep"] >= 1
+
+    events = client.get("/ops/jobs/events", headers=_auth_headers(TEST_MASTER_KEY))
+    assert events.status_code == 200, events.text
+    assert any(
+        event.get("event_type") == "agent_auto_suspended" and event.get("agent_id") == agent_id
+        for event in events.json()["events"]
+    )
+
+
+def test_quality_gate_fails_schema_mismatch_without_live_judge(monkeypatch):
+    monkeypatch.delenv("AGENTMARKET_ENABLE_LIVE_QUALITY_JUDGE", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+
+    def should_not_run_judge(**kwargs):
+        raise AssertionError("Live quality judge should not run for schema mismatch.")
+
+    monkeypatch.setattr(server.judges, "run_quality_judgment", should_not_run_judge)
+
+    result = server._run_quality_gate(
+        {"job_id": "job-schema-fail", "agent_id": "agent-x", "input_payload": {"task": "x"}},
+        {
+            "description": "schema-enforced agent",
+            "output_schema": {
+                "type": "object",
+                "properties": {"summary": {"type": "string"}},
+                "required": ["summary"],
+            },
+            "output_verifier_url": None,
+        },
+        {"wrong": "shape"},
+    )
+    assert result["judge_verdict"] == "fail"
+    assert result["quality_score"] == 0
+    assert result["passed"] is False
+    assert "Output did not match declared schema" in result["reason"]
+
+
+def test_quality_gate_honest_fallback_without_contract_or_judge(monkeypatch):
+    monkeypatch.delenv("AGENTMARKET_ENABLE_LIVE_QUALITY_JUDGE", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+
+    def should_not_run_judge(**kwargs):
+        raise AssertionError("Live quality judge should not run in fallback path.")
+
+    monkeypatch.setattr(server.judges, "run_quality_judgment", should_not_run_judge)
+
+    result = server._run_quality_gate(
+        {"job_id": "job-fallback", "agent_id": "agent-y", "input_payload": {"task": "x"}},
+        {
+            "description": "no contract agent",
+            "output_schema": None,
+            "output_verifier_url": None,
+        },
+        {"result": "ok"},
+    )
+    assert result["judge_verdict"] == "pass"
+    assert result["quality_score"] == 5
+    assert result["passed"] is True
+    assert result["reason"] == "No output contract defined — structural check passed."
+
+
 def test_builtin_worker_auto_completes_async_jobs(client, monkeypatch):
     monkeypatch.setattr(
         server.agent_textintel,
@@ -1656,12 +1783,13 @@ def test_registry_call_routes_internal_builtin_without_http_and_records_job(clie
 def test_mcp_tools_manifest_exposes_registered_agent_schema(client):
     owner = _register_user()
     agent_name = f"MCP Tool Agent {uuid.uuid4().hex[:6]}"
+    agent_description = "MCP manifest integration test agent."
     response = client.post(
         "/registry/register",
         headers=_auth_headers(owner["raw_api_key"]),
         json={
             "name": agent_name,
-            "description": "MCP manifest integration test agent.",
+            "description": agent_description,
             "endpoint_url": f"https://agents.example.com/{uuid.uuid4().hex[:8]}",
             "price_per_call_usd": 0.05,
             "tags": ["mcp-test"],
@@ -1684,12 +1812,94 @@ def test_mcp_tools_manifest_exposes_registered_agent_schema(client):
     assert manifest_resp.status_code == 200, manifest_resp.text
     body = manifest_resp.json()
     assert body["count"] == len(body["tools"])
-    tool = next((item for item in body["tools"] if agent_name in item["description"]), None)
+    tool = next((item for item in body["tools"] if item["description"] == agent_description), None)
     assert tool is not None
-    assert tool["name"].startswith("agentmarket__")
-    assert tool["inputSchema"]["properties"]["task"]["type"] == "string"
-    assert "task" in tool["inputSchema"].get("required", [])
-    assert tool["outputSchema"]["properties"]["result"]["type"] == "string"
+    assert tool["name"] == agent_name.lower().replace(" ", "_")
+    assert tool["input_schema"]["fields"][0]["name"] == "task"
+    assert tool["output_schema"]["properties"]["result"]["type"] == "string"
+
+
+def test_mcp_tools_only_returns_active_agents(client):
+    owner = _register_user()
+    active_name = f"MCP Active {uuid.uuid4().hex[:6]}"
+    suspended_name = f"MCP Suspended {uuid.uuid4().hex[:6]}"
+    active_agent_id = _register_agent_via_api(client, owner["raw_api_key"], name=active_name)
+    suspended_agent_id = _register_agent_via_api(client, owner["raw_api_key"], name=suspended_name)
+    registry.set_agent_status(suspended_agent_id, "suspended")
+    assert registry.get_agent(active_agent_id)["status"] == "active"
+    assert registry.get_agent(suspended_agent_id)["status"] == "suspended"
+
+    response = client.get("/mcp/tools", headers=_auth_headers(owner["raw_api_key"]))
+    assert response.status_code == 200, response.text
+    names = {tool["name"] for tool in response.json()["tools"]}
+    assert active_name.lower().replace(" ", "_") in names
+    assert suspended_name.lower().replace(" ", "_") not in names
+
+
+def test_mcp_tools_defaults_input_schema_when_null(client, monkeypatch):
+    owner = _register_user()
+    agent_name = f"MCP Null Input {uuid.uuid4().hex[:6]}"
+    slug = agent_name.lower().replace(" ", "_")
+    monkeypatch.setattr(
+        server.registry,
+        "get_agents",
+        lambda include_internal=True, include_banned=True: [
+            {
+                "agent_id": str(uuid.uuid4()),
+                "name": agent_name,
+                "description": "null schema test",
+                "status": "active",
+                "input_schema": None,
+                "output_schema": {"type": "object"},
+            }
+        ],
+    )
+    response = client.get("/mcp/tools", headers=_auth_headers(owner["raw_api_key"]))
+    assert response.status_code == 200, response.text
+    tool = next((item for item in response.json()["tools"] if item["name"] == slug), None)
+    assert tool is not None
+    assert tool["input_schema"] == {"type": "object", "properties": {}}
+
+
+def test_mcp_invoke_delegates_to_registry_call_path(client, monkeypatch):
+    caller = _register_user()
+    _fund_user_wallet(caller, 100)
+    monkeypatch.setattr(
+        server.agent_textintel,
+        "run",
+        lambda text, mode: {"summary": f"mcp::{mode}", "word_count": len(str(text).split())},
+    )
+
+    response = client.post(
+        "/mcp/invoke",
+        json={
+            "tool_name": "text_intelligence_agent",
+            "input": {"text": "mcp invoke payload", "mode": "quick"},
+            "api_key": caller["raw_api_key"],
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert isinstance(body.get("content"), list) and body["content"]
+    assert body["content"][0]["type"] == "text"
+    invoked_payload = json.loads(body["content"][0]["text"])
+    assert invoked_payload["summary"] == "mcp::quick"
+
+    caller_wallet = payments.get_or_create_wallet(f"user:{caller['user_id']}")
+    assert payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"] == 99
+
+
+def test_mcp_manifest_returns_server_manifest_shape(client):
+    owner = _register_user()
+    tools_resp = client.get("/mcp/tools", headers=_auth_headers(owner["raw_api_key"]))
+    assert tools_resp.status_code == 200, tools_resp.text
+    manifest_resp = client.get("/mcp/manifest", headers=_auth_headers(owner["raw_api_key"]))
+    assert manifest_resp.status_code == 200, manifest_resp.text
+    manifest = manifest_resp.json()
+    assert manifest["schema_version"] == "v1"
+    assert manifest["name"] == "agentmarket"
+    assert "specialized agents as callable tools" in manifest["description"]
+    assert manifest["tools"] == tools_resp.json()["tools"]
 
 
 def test_output_schema_mismatch_returns_schema_mismatch_error(client):
