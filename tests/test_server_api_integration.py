@@ -1589,6 +1589,70 @@ def test_registry_lists_new_builtin_agents(client):
     }.issubset(names)
 
 
+def test_builtin_agents_registered_to_system_owner_with_internal_endpoints(client):
+    with auth._conn() as conn:
+        system_row = conn.execute(
+            "SELECT user_id, status FROM users WHERE username = ? LIMIT 1",
+            ("system",),
+        ).fetchone()
+    assert system_row is not None
+    assert str(system_row["status"]).lower() == "suspended"
+    system_owner = f"user:{system_row['user_id']}"
+
+    for builtin_id in (
+        server._FINANCIAL_AGENT_ID,
+        server._CODEREVIEW_AGENT_ID,
+        server._TEXTINTEL_AGENT_ID,
+        server._WIKI_AGENT_ID,
+        server._NEGOTIATION_AGENT_ID,
+        server._SCENARIO_AGENT_ID,
+        server._PRODUCT_AGENT_ID,
+        server._PORTFOLIO_AGENT_ID,
+        server._QUALITY_JUDGE_AGENT_ID,
+    ):
+        agent = registry.get_agent(builtin_id)
+        assert agent is not None
+        assert agent["owner_id"] == system_owner
+        assert str(agent["endpoint_url"]).startswith("internal://")
+        assert float(agent["price_per_call_usd"]) == pytest.approx(0.01)
+
+
+def test_registry_call_routes_internal_builtin_without_http_and_records_job(client, monkeypatch):
+    caller = _register_user()
+    _fund_user_wallet(caller, 100)
+
+    monkeypatch.setattr(
+        server.agent_textintel,
+        "run",
+        lambda text, mode: {"summary": f"internal::{mode}", "word_count": len(str(text).split())},
+    )
+
+    def _fail_post(*args, **kwargs):
+        raise AssertionError("registry_call should not use outbound HTTP for internal:// endpoints")
+
+    monkeypatch.setattr(server.http, "post", _fail_post)
+
+    call = client.post(
+        f"/registry/agents/{server._TEXTINTEL_AGENT_ID}/call",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={"text": "hello from internal route", "mode": "quick"},
+    )
+    assert call.status_code == 200, call.text
+    assert call.json()["summary"] == "internal::quick"
+
+    caller_owner = f"user:{caller['user_id']}"
+    jobs_for_caller = jobs.list_jobs_for_owner(caller_owner, limit=20)
+    synced = [item for item in jobs_for_caller if item["agent_id"] == server._TEXTINTEL_AGENT_ID]
+    assert synced
+    assert synced[0]["status"] == "complete"
+    assert synced[0]["output_payload"]["summary"] == "internal::quick"
+
+    caller_wallet = payments.get_or_create_wallet(caller_owner)
+    agent_wallet = payments.get_or_create_wallet(f"agent:{server._TEXTINTEL_AGENT_ID}")
+    assert payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"] == 99
+    assert payments.get_wallet(agent_wallet["wallet_id"])["balance_cents"] >= 1
+
+
 def test_mcp_tools_manifest_exposes_registered_agent_schema(client):
     owner = _register_user()
     agent_name = f"MCP Tool Agent {uuid.uuid4().hex[:6]}"

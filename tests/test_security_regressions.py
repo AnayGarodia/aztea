@@ -504,13 +504,15 @@ def test_registry_call_blocks_misconfigured_endpoint_without_charging(client, is
 def test_agent_internal_error_response_does_not_leak_details(client, monkeypatch):
     user = _register_user()
     leaked_text = "super-secret-token-123"
+    wallet = payments.get_or_create_wallet(f"user:{user['user_id']}")
+    payments.deposit(wallet["wallet_id"], 500, "security test funds")
 
     def _boom(_body):
         raise RuntimeError(leaked_text)
 
     monkeypatch.setattr(server, "_invoke_code_review_agent", _boom)
     resp = client.post(
-        "/agents/code-review",
+        f"/registry/agents/{server._CODEREVIEW_AGENT_ID}/call",
         headers=_auth_headers(user["raw_api_key"]),
         json={"code": "print('hello')", "language": "python", "focus": "all"},
     )
