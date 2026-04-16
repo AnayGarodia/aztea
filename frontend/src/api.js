@@ -297,6 +297,38 @@ export async function rateJob(key, jobId, rating, { idempotencyKey } = {}) {
   return body
 }
 
+// ── Disputes ──────────────────────────────────────────────────────────────────
+
+export async function getJobDispute(key, jobId) {
+  // Returns the dispute for this job, or null if none exists
+  const { body, status } = await request(`/jobs/${jobId}/dispute`, { key })
+  if (status === 404) return null
+  return body
+}
+
+export async function fileDispute(key, jobId, { reason, evidence, side }) {
+  const { body } = await request(`/jobs/${jobId}/dispute`, {
+    method: 'POST',
+    key,
+    body: { reason, evidence, side },
+  })
+  return body
+}
+
+export async function getDispute(key, disputeId) {
+  const { body } = await request(`/ops/disputes/${disputeId}`, { key })
+  return body
+}
+
+export async function registerHook(key, targetUrl, secret = null) {
+  const { body } = await request('/ops/jobs/hooks', {
+    method: 'POST',
+    key,
+    body: { target_url: targetUrl, secret },
+  })
+  return body
+}
+
 // ── Wallet ────────────────────────────────────────────────────────────────────
 
 export async function fetchWalletMe(key) {

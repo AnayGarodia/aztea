@@ -9,8 +9,9 @@ than returning raw error dicts.
 from __future__ import annotations
 
 import json
+import threading
 import time
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import httpx
 
@@ -345,6 +346,147 @@ class AgentMarketClient:
                 error_msg = job_data.get("error_message") or "Job failed after clarification."
                 raise JobFailedError(error_msg, _parse_payload(job_data.get("output_payload")))
             time.sleep(_POLL_INTERVAL)
+
+    def hire_async(
+        self,
+        agent_id: str,
+        input_payload: Dict[str, Any],
+        *,
+        on_complete: Optional[Callable[["JobResult"], None]] = None,
+        on_error: Optional[Callable[[Exception], None]] = None,
+        timeout_seconds: int = 300,
+        max_attempts: int = 3,
+        verification_contract: Union["VerificationContract", Dict[str, Any], None] = None,
+    ) -> str:
+        """
+        Fire-and-forget hire.  Returns the ``job_id`` immediately.
+
+        If *on_complete* is provided it is called in a background daemon thread
+        once the job finishes (or *on_error* is called if it fails / times out).
+        This lets an agent hire a sub-agent and continue doing independent work
+        without blocking — the callback is the "poke" that resumes processing.
+
+        Example::
+
+            pending: dict = {}
+
+            def got_result(result: JobResult) -> None:
+                pending[result.job_id] = result.output
+
+            job_id = client.hire_async(
+                "agt-abc123",
+                {"code": "..."},
+                on_complete=got_result,
+            )
+            # ... do other work here ...
+            # got_result() fires in the background when the sub-job finishes
+
+        Parameters
+        ----------
+        on_complete
+            Called with a :class:`JobResult` when the job succeeds.
+        on_error
+            Called with the raised exception when the job fails or times out.
+            If not provided, exceptions are silently swallowed.
+        timeout_seconds
+            Max time to wait before giving up and calling *on_error*.
+        """
+        data = self._request(
+            "POST",
+            "/jobs",
+            json={
+                "agent_id": agent_id,
+                "input_payload": input_payload,
+                "max_attempts": max_attempts,
+            },
+        )
+        job_id: str = data["job_id"]
+
+        if on_complete is not None or on_error is not None:
+            def _watch() -> None:
+                try:
+                    result = self._poll_job_to_completion(
+                        job_id,
+                        timeout_seconds=timeout_seconds,
+                        verification_contract=verification_contract,
+                    )
+                    if on_complete is not None:
+                        on_complete(result)
+                except Exception as exc:
+                    if on_error is not None:
+                        on_error(exc)
+
+            t = threading.Thread(target=_watch, daemon=True, name=f"agentmarket-watch-{job_id[:8]}")
+            t.start()
+
+        return job_id
+
+    def _poll_job_to_completion(
+        self,
+        job_id: str,
+        *,
+        timeout_seconds: int,
+        verification_contract: Union["VerificationContract", Dict[str, Any], None] = None,
+    ) -> "JobResult":
+        """Internal: poll until job is terminal, then return JobResult."""
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"Job {job_id} did not complete within {timeout_seconds}s.")
+            job_data = self._request("GET", f"/jobs/{job_id}")
+            status = job_data.get("status", "")
+            if status == "complete":
+                output = _parse_payload(job_data.get("output_payload"))
+                if verification_contract is not None:
+                    from .models import VerificationContract as VC
+                    contract = (
+                        VC(**verification_contract)
+                        if isinstance(verification_contract, dict)
+                        else verification_contract
+                    )
+                    _verify_contract(output, contract)
+                return JobResult(
+                    job_id=job_id,
+                    output=output,
+                    quality_score=job_data.get("quality_score"),
+                    cost_cents=job_data.get("price_cents", 0),
+                )
+            if status == "failed":
+                error_msg = job_data.get("error_message") or "Job failed."
+                output = _parse_payload(job_data.get("output_payload"))
+                from .exceptions import JobFailedError
+                raise JobFailedError(error_msg, output)
+            if status == "awaiting_clarification":
+                question = self._get_clarification_question(job_id)
+                from .exceptions import ClarificationNeededError
+                raise ClarificationNeededError(question, job_id)
+            time.sleep(_POLL_INTERVAL)
+
+    def register_hook(self, target_url: str, secret: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Register a webhook URL to receive ``job.completed`` / ``job.failed``
+        events for all your jobs.
+
+        The server will POST a signed JSON payload to *target_url* whenever a
+        job you own changes state.  Use *secret* to verify the
+        ``X-AgentMarket-Signature`` HMAC-SHA256 header.
+
+        Returns the created hook dict (``hook_id``, ``target_url``, etc.).
+        """
+        return self._request(
+            "POST",
+            "/ops/jobs/hooks",
+            json={"target_url": target_url, "secret": secret},
+        )
+
+    def list_hooks(self) -> List[Dict[str, Any]]:
+        """Return all active webhooks registered for your account."""
+        data = self._request("GET", "/ops/jobs/hooks")
+        return data.get("hooks") or []
+
+    def delete_hook(self, hook_id: str) -> None:
+        """Deactivate a webhook by its ID."""
+        self._request("DELETE", f"/ops/jobs/hooks/{hook_id}")
 
     def _get_clarification_question(self, job_id: str) -> str:
         """Fetch the most recent clarification_request message text for a job."""

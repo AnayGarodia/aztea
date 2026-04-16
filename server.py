@@ -197,7 +197,7 @@ _DEFAULT_HOOK_DELIVERY_MAX_DELAY_SECONDS = 300
 _DEFAULT_HOOK_DELIVERY_CLAIM_LEASE_SECONDS = 30
 _DEFAULT_DISPUTE_FILE_WINDOW_SECONDS = 7 * 24 * 3600
 _DEFAULT_DISPUTE_WINDOW_HOURS = 72
-_DEFAULT_DISPUTE_JUDGE_INTERVAL_SECONDS = 0
+_DEFAULT_DISPUTE_JUDGE_INTERVAL_SECONDS = 60  # auto-resolve pending disputes every 60s
 _DEFAULT_BUILTIN_JOB_WORKER_INTERVAL_SECONDS = 2
 _DEFAULT_BUILTIN_JOB_WORKER_BATCH_SIZE = 20
 _PROTOCOL_VERSION = "1.0"
@@ -1044,18 +1044,32 @@ limiter = Limiter(key_func=_key_from_request, default_limits=[_DEFAULT_RATE_LIMI
 app = FastAPI(title="agentmarket", lifespan=lifespan)
 app.state.limiter = limiter
 
-# CORS — allow Vite dev server and common local ports
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
+# CORS — origins come from CORS_ALLOW_ORIGINS env var (comma-separated).
+# Defaults include common local dev ports.  In production, set the env var
+# to your deployed frontend origin(s), e.g.:
+#   CORS_ALLOW_ORIGINS=https://agentmarket.dev,https://www.agentmarket.dev
+_cors_env = os.environ.get("CORS_ALLOW_ORIGINS", "").strip()
+_cors_origins: list[str] = (
+    [o.strip() for o in _cors_env.split(",") if o.strip()]
+    if _cors_env
+    else [
         "http://localhost:5173",
         "http://localhost:5174",
         "http://localhost:3000",
         "http://127.0.0.1:5173",
-    ],
+        "http://127.0.0.1:5174",
+    ]
+)
+# Always include the configured frontend base URL so Stripe redirects work.
+if _FRONTEND_BASE_URL and _FRONTEND_BASE_URL not in _cors_origins:
+    _cors_origins.append(_FRONTEND_BASE_URL)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
     allow_credentials=False,
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
     max_age=600,
 )
 
@@ -5979,6 +5993,56 @@ def jobs_rate_caller(
         payload={"rating": body.rating},
     )
     return JSONResponse(content={"rating": rating, "caller_reputation": caller_reputation}, status_code=201)
+
+
+@app.get(
+    "/jobs/{job_id}/dispute",
+    response_model=core_models.DisputeResponse,
+    responses=_error_responses(401, 403, 404, 429, 500),
+)
+@limiter.limit("60/minute")
+def jobs_get_dispute(
+    request: Request,
+    job_id: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DisputeResponse:
+    """Fetch the dispute for a job, if one exists."""
+    job = jobs.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+    if caller["type"] != "master":
+        owner_id = caller["owner_id"]
+        if owner_id not in (job.get("caller_owner_id"), job.get("agent_owner_id")):
+            raise HTTPException(status_code=403, detail="Not authorized to view this dispute.")
+    dispute_row = disputes.get_dispute_by_job(job_id)
+    if dispute_row is None:
+        raise HTTPException(status_code=404, detail="No dispute found for this job.")
+    dispute_row["judgments"] = disputes.get_judgments(dispute_row["dispute_id"])
+    return JSONResponse(content=_dispute_view(dispute_row))
+
+
+@app.get(
+    "/ops/disputes/{dispute_id}",
+    response_model=core_models.DisputeResponse,
+    responses=_error_responses(401, 403, 404, 429, 500),
+)
+@limiter.limit("60/minute")
+def disputes_get(
+    request: Request,
+    dispute_id: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DisputeResponse:
+    """Fetch a dispute by its ID."""
+    dispute_row = disputes.get_dispute(dispute_id)
+    if dispute_row is None:
+        raise HTTPException(status_code=404, detail=f"Dispute '{dispute_id}' not found.")
+    if caller["type"] != "master":
+        job = jobs.get_job(dispute_row["job_id"])
+        owner_id = caller["owner_id"]
+        if job and owner_id not in (job.get("caller_owner_id"), job.get("agent_owner_id")):
+            raise HTTPException(status_code=403, detail="Not authorized.")
+    dispute_row["judgments"] = disputes.get_judgments(dispute_id)
+    return JSONResponse(content=_dispute_view(dispute_row))
 
 
 @app.post(

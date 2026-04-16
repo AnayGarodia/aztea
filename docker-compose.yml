@@ -4,8 +4,28 @@ services:
     ports: ["8000:8000"]
     volumes: ["./data:/data"]
     environment:
+      # ── Core ──────────────────────────────────────────────────────────────
       - API_KEY=${API_KEY}
       - DB_PATH=/data/registry.db
+      - SERVER_BASE_URL=${SERVER_BASE_URL:-http://localhost:8000}
+      - FRONTEND_BASE_URL=${FRONTEND_BASE_URL:-http://localhost:5173}
+      - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-}
+      - AGENTMARKET_FRONTEND_URL=${AGENTMARKET_FRONTEND_URL:-https://agentmarket.dev}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - PLATFORM_FEE_PCT=${PLATFORM_FEE_PCT:-10}
+      # ── Stripe payments ───────────────────────────────────────────────────
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-}
+      - STRIPE_PUBLISHABLE_KEY=${STRIPE_PUBLISHABLE_KEY:-}
+      # ── AI features (judges, quality scoring) ─────────────────────────────
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - AGENTMARKET_ENABLE_LIVE_DISPUTE_JUDGES=${AGENTMARKET_ENABLE_LIVE_DISPUTE_JUDGES:-0}
+      - AGENTMARKET_ENABLE_LIVE_QUALITY_JUDGE=${AGENTMARKET_ENABLE_LIVE_QUALITY_JUDGE:-0}
+      # ── Safety toggles ────────────────────────────────────────────────────
+      - ALLOW_PRIVATE_OUTBOUND_URLS=${ALLOW_PRIVATE_OUTBOUND_URLS:-0}
+      # ── Dispute auto-resolution ───────────────────────────────────────────
+      - DISPUTE_JUDGE_INTERVAL_SECONDS=${DISPUTE_JUDGE_INTERVAL_SECONDS:-60}
+      - DEFAULT_JOB_DISPUTE_WINDOW_HOURS=${DEFAULT_JOB_DISPUTE_WINDOW_HOURS:-72}
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/health"]

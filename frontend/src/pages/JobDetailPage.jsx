@@ -8,10 +8,10 @@ import EmptyState from '../ui/EmptyState'
 import Reveal from '../ui/motion/Reveal'
 import AgentSigil from '../brand/AgentSigil'
 import ResultRenderer from '../features/agents/results/ResultRenderer'
-import { getJobMessages } from '../api'
+import { getJobMessages, rateJob, getJobDispute, fileDispute } from '../api'
 import { useMarket } from '../context/MarketContext'
 import JobTimeline from '../features/jobs/JobTimeline'
-import { ArrowLeft, RefreshCw } from 'lucide-react'
+import { ArrowLeft, RefreshCw, Star, AlertTriangle, CheckCircle, Clock } from 'lucide-react'
 import './JobDetailPage.css'
 
 function fmtDate(str) {
@@ -61,12 +61,37 @@ function MessageBubble({ msg }) {
   )
 }
 
+const OUTCOME_LABELS = {
+  caller_wins: 'Caller wins',
+  agent_wins: 'Agent wins',
+  split: 'Split',
+  void: 'Void',
+}
+
+const DISPUTE_STATUS_COLORS = {
+  pending: 'var(--warn-line, #f0d060)',
+  judging: 'var(--accent)',
+  consensus: 'var(--positive)',
+  tied: 'var(--warn-line)',
+  resolved: 'var(--positive)',
+  appealed: 'var(--warn-line)',
+  final: 'var(--positive)',
+}
+
 export default function JobDetailPage() {
   const { id } = useParams()
-  const { jobs, agents, apiKey, refreshJobs } = useMarket()
+  const { jobs, agents, apiKey, refreshJobs, showToast } = useMarket()
   const [messages, setMessages] = useState([])
   const [loadingMsgs, setLoadingMsgs] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
+  const [dispute, setDispute] = useState(undefined) // undefined=not fetched, null=none
+  const [disputeReason, setDisputeReason] = useState('')
+  const [disputeEvidence, setDisputeEvidence] = useState('')
+  const [filingDispute, setFilingDispute] = useState(false)
+  const [showDisputeForm, setShowDisputeForm] = useState(false)
+  const [rating, setRating] = useState(null)
+  const [ratingSubmitting, setRatingSubmitting] = useState(false)
+  const [ratingDone, setRatingDone] = useState(false)
 
   const job = useMemo(() => jobs.find(j => j.job_id === id), [jobs, id])
   const agent = useMemo(() => agents.find(a => a.agent_id === job?.agent_id), [agents, job])
@@ -84,12 +109,58 @@ export default function JobDetailPage() {
     }
   }
 
+  const loadDispute = async () => {
+    if (!id || !apiKey) return
+    try {
+      const d = await getJobDispute(apiKey, id)
+      setDispute(d ?? null)
+    } catch {
+      setDispute(null)
+    }
+  }
+
   useEffect(() => { loadMessages() }, [apiKey, id]) // eslint-disable-line
+  useEffect(() => {
+    if (job?.status === 'complete') loadDispute()
+  }, [apiKey, id, job?.status]) // eslint-disable-line
 
   const handleRefresh = async () => {
     setRefreshing(true)
     await Promise.all([refreshJobs?.(), loadMessages()])
+    if (job?.status === 'complete') await loadDispute()
     setRefreshing(false)
+  }
+
+  const handleRating = async (stars) => {
+    if (ratingDone || !apiKey) return
+    setRating(stars)
+    setRatingSubmitting(true)
+    try {
+      await rateJob(apiKey, id, stars)
+      setRatingDone(true)
+      showToast?.('Rating submitted.', 'success')
+    } catch (e) {
+      showToast?.(e?.message || 'Could not submit rating.', 'error')
+      setRating(null)
+    } finally {
+      setRatingSubmitting(false)
+    }
+  }
+
+  const handleFileDispute = async (e) => {
+    e.preventDefault()
+    if (!disputeReason.trim()) return
+    setFilingDispute(true)
+    try {
+      const d = await fileDispute(apiKey, id, { reason: disputeReason, evidence: disputeEvidence, side: 'caller' })
+      setDispute(d)
+      setShowDisputeForm(false)
+      showToast?.('Dispute filed. Our judges will review it shortly.', 'success')
+    } catch (err) {
+      showToast?.(err?.message || 'Could not file dispute.', 'error')
+    } finally {
+      setFilingDispute(false)
+    }
   }
 
   if (!job) {
@@ -241,6 +312,153 @@ export default function JobDetailPage() {
               </Card.Body>
             </Card>
           </Reveal>
+
+          {/* Rating + Dispute — only for completed jobs */}
+          {job.status === 'complete' && (
+            <Reveal delay={0.3}>
+              <Card>
+                <Card.Header>
+                  <span className="job-detail__section-title">Rate &amp; Dispute</span>
+                </Card.Header>
+                <Card.Body>
+                  {/* Star rating */}
+                  {!ratingDone && !dispute && (
+                    <div style={{ marginBottom: 'var(--sp-4)' }}>
+                      <p style={{ fontSize: '0.8125rem', color: 'var(--ink-soft)', marginBottom: 'var(--sp-2)' }}>
+                        Rate this job (1–5). Submitting a rating closes the dispute window.
+                      </p>
+                      <div style={{ display: 'flex', gap: 'var(--sp-2)' }}>
+                        {[1, 2, 3, 4, 5].map(s => (
+                          <button
+                            key={s}
+                            disabled={ratingSubmitting}
+                            onClick={() => handleRating(s)}
+                            style={{
+                              background: 'none', border: 'none', cursor: 'pointer', padding: '4px',
+                              color: s <= (rating ?? 0) ? 'var(--warn-line, #f0c060)' : 'var(--line-mid)',
+                              transition: 'color 0.15s',
+                            }}
+                          >
+                            <Star size={22} fill={s <= (rating ?? 0) ? 'currentColor' : 'none'} />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {ratingDone && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', marginBottom: 'var(--sp-4)', color: 'var(--positive)' }}>
+                      <CheckCircle size={16} />
+                      <span style={{ fontSize: '0.875rem' }}>Rating submitted — thank you.</span>
+                    </div>
+                  )}
+
+                  {/* Dispute status */}
+                  {dispute ? (
+                    <div style={{
+                      padding: 'var(--sp-4)',
+                      border: `1px solid ${DISPUTE_STATUS_COLORS[dispute.status] || 'var(--line-mid)'}`,
+                      borderRadius: 'var(--r-md)',
+                      background: 'var(--surface-raised)',
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', marginBottom: 'var(--sp-2)' }}>
+                        <AlertTriangle size={15} color={DISPUTE_STATUS_COLORS[dispute.status]} />
+                        <span style={{ fontWeight: 600, fontSize: '0.875rem' }}>
+                          Dispute · {dispute.status}
+                        </span>
+                        {dispute.outcome && (
+                          <Badge label={OUTCOME_LABELS[dispute.outcome] || dispute.outcome} />
+                        )}
+                      </div>
+                      <p style={{ fontSize: '0.8125rem', color: 'var(--ink-soft)', marginBottom: 'var(--sp-1)' }}>
+                        <strong>Reason:</strong> {dispute.reason}
+                      </p>
+                      {dispute.evidence && (
+                        <p style={{ fontSize: '0.8125rem', color: 'var(--ink-soft)' }}>
+                          <strong>Evidence:</strong> {dispute.evidence}
+                        </p>
+                      )}
+                      {dispute.status === 'pending' && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', marginTop: 'var(--sp-3)', color: 'var(--ink-mute)', fontSize: '0.75rem' }}>
+                          <Clock size={13} />
+                          Under review — typically resolved within 24 hours.
+                        </div>
+                      )}
+                      {dispute.judgments?.length > 0 && (
+                        <div style={{ marginTop: 'var(--sp-3)', borderTop: '1px solid var(--line-soft)', paddingTop: 'var(--sp-3)' }}>
+                          <p style={{ fontSize: '0.75rem', fontWeight: 600, marginBottom: 'var(--sp-2)', color: 'var(--ink-mute)' }}>Judgments</p>
+                          {dispute.judgments.map((j, i) => (
+                            <div key={i} style={{ fontSize: '0.8125rem', color: 'var(--ink-soft)', marginBottom: 'var(--sp-1)' }}>
+                              <Badge label={j.judge_kind} /> {OUTCOME_LABELS[j.verdict] || j.verdict} — {j.reasoning}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : !ratingDone && (
+                    <>
+                      {showDisputeForm ? (
+                        <form onSubmit={handleFileDispute} style={{ marginTop: 'var(--sp-3)' }}>
+                          <div style={{ marginBottom: 'var(--sp-3)' }}>
+                            <label style={{ display: 'block', fontSize: '0.8125rem', fontWeight: 600, marginBottom: 'var(--sp-1)' }}>
+                              Reason <span style={{ color: 'var(--negative)' }}>*</span>
+                            </label>
+                            <textarea
+                              required
+                              rows={3}
+                              value={disputeReason}
+                              onChange={e => setDisputeReason(e.target.value)}
+                              placeholder="Describe what went wrong — wrong output, no response, etc."
+                              style={{
+                                width: '100%', padding: 'var(--sp-2) var(--sp-3)',
+                                border: '1px solid var(--line-mid)', borderRadius: 'var(--r-sm)',
+                                fontSize: '0.875rem', resize: 'vertical', background: 'var(--surface)',
+                                color: 'var(--ink)', boxSizing: 'border-box',
+                              }}
+                            />
+                          </div>
+                          <div style={{ marginBottom: 'var(--sp-3)' }}>
+                            <label style={{ display: 'block', fontSize: '0.8125rem', fontWeight: 600, marginBottom: 'var(--sp-1)' }}>
+                              Evidence (optional)
+                            </label>
+                            <textarea
+                              rows={2}
+                              value={disputeEvidence}
+                              onChange={e => setDisputeEvidence(e.target.value)}
+                              placeholder="Paste relevant output, logs, or context that supports your case."
+                              style={{
+                                width: '100%', padding: 'var(--sp-2) var(--sp-3)',
+                                border: '1px solid var(--line-mid)', borderRadius: 'var(--r-sm)',
+                                fontSize: '0.875rem', resize: 'vertical', background: 'var(--surface)',
+                                color: 'var(--ink)', boxSizing: 'border-box',
+                              }}
+                            />
+                          </div>
+                          <div style={{ display: 'flex', gap: 'var(--sp-2)' }}>
+                            <Button type="submit" variant="danger" size="sm" loading={filingDispute}>
+                              Submit dispute
+                            </Button>
+                            <Button type="button" variant="secondary" size="sm" onClick={() => setShowDisputeForm(false)}>
+                              Cancel
+                            </Button>
+                          </div>
+                        </form>
+                      ) : (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          icon={<AlertTriangle size={13} />}
+                          onClick={() => setShowDisputeForm(true)}
+                          style={{ marginTop: 'var(--sp-2)' }}
+                        >
+                          File a dispute
+                        </Button>
+                      )}
+                    </>
+                  )}
+                </Card.Body>
+              </Card>
+            </Reveal>
+          )}
 
         </div>
       </div>
