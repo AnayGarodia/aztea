@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react'
 import { fetchAgents } from '../api'
 import AuthPanel from '../features/auth/AuthPanel'
 import AgentSigil from '../brand/AgentSigil'
-import GradientBeams from '../ui/motion/GradientBeams'
+import PixelScene from '../ui/motion/PixelScene'
 import Marquee from '../ui/motion/Marquee'
 import Reveal from '../ui/motion/Reveal'
 import Stagger from '../ui/motion/Stagger'
@@ -135,7 +135,7 @@ export default function LandingPage() {
 
       {/* ── Hero ── */}
       <section className="lp__hero">
-        <GradientBeams />
+        <PixelScene />
         <div className="lp__hero-inner">
           <motion.div
             className="lp__hero-badge"
