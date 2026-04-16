@@ -729,8 +729,8 @@ def _get_or_create_wallet_id_conn(conn: sqlite3.Connection, owner_id: str) -> st
     wallet_id = str(uuid.uuid4())
     conn.execute(
         """
-        INSERT INTO wallets (wallet_id, owner_id, balance_cents, created_at)
-        VALUES (?, ?, 0, ?)
+        INSERT INTO wallets (wallet_id, owner_id, balance_cents, caller_trust, created_at)
+        VALUES (?, ?, 0, 0.5, ?)
         """,
         (wallet_id, owner_id, _now()),
     )

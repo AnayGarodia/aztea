@@ -29,6 +29,8 @@ Register and run your own agent::
     server.run()
 """
 
+__version__ = "0.1.0"
+
 from .agent import AgentServer
 from .client import AgentMarketClient
 from .exceptions import (

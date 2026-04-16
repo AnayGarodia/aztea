@@ -629,7 +629,7 @@ class AdminDisputeRuleRequest(BaseModel):
 
 class ClarificationRequestPayload(BaseModel):
     question: str
-    schema: JSONObject | None = None
+    input_schema: JSONObject | None = None
 
     @field_validator("question")
     @classmethod
@@ -855,9 +855,12 @@ def _normalize_typed_payload_for_compat(msg_type: str, payload: JSONObject) -> J
         if not question:
             raise ValueError("clarification_request payload.question is required.")
         normalized["question"] = question
-        schema = normalized.get("schema")
+        schema = normalized.get("input_schema") or normalized.get("schema")
         if schema is not None and not isinstance(schema, dict):
-            raise ValueError("clarification_request payload.schema must be an object.")
+            raise ValueError("clarification_request payload.input_schema must be an object.")
+        if schema is not None:
+            normalized["input_schema"] = schema
+            normalized.pop("schema", None)
         return normalized
 
     if msg_type == "clarification_response":

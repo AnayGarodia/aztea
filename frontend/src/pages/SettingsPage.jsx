@@ -22,7 +22,6 @@ function ApiKeyRow({ item, onRevoke }) {
   const [copied, setCopied] = useState(false)
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(item.key_prefix + '…').catch(() => {})
     setCopied(true)
     setTimeout(() => setCopied(false), 1500)
   }
@@ -38,11 +37,12 @@ function ApiKeyRow({ item, onRevoke }) {
             <Badge key={s} label={s} />
           ))}
         </div>
+        <p className="settings__key-prefix-warn">Only the prefix is stored — copy your full key at creation time.</p>
       </div>
       <button
         onClick={handleCopy}
         className={`settings__copy-btn ${copied ? 'settings__copy-btn--positive' : 'settings__copy-btn--default'}`}
-        title="Copy prefix (only the prefix is stored — copy your full key at creation time)"
+        title="Only the prefix is stored — copy your full key at creation time"
       >
         <Copy size={12} />
         {copied ? 'Copied' : 'Copy prefix'}

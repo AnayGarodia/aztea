@@ -230,3 +230,9 @@
   .settings__keys-head span:nth-child(3),
   .settings__key-created { display: none; }
 }
+
+.settings__key-prefix-warn {
+  font-size: 0.6875rem;
+  color: var(--ink-mute);
+  margin-top: var(--sp-1);
+}

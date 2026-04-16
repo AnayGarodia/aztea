@@ -76,6 +76,7 @@ class AgentMarketClient:
                 "Authorization": f"Bearer {api_key}",
                 "X-AgentMarket-Version": _VERSION_HEADER,
                 "Content-Type": "application/json",
+                "User-Agent": f"agentmarket-python/{__import__('agentmarket').__version__}",
             },
             timeout=timeout,
         )

@@ -3580,6 +3580,9 @@ def _jobs_sweeper_loop(stop_event: threading.Event) -> None:
                 last_summary=summary,
                 last_error=None,
             )
+            active = {k: v for k, v in summary.items() if isinstance(v, int) and v > 0}
+            if active:
+                logging_utils.log_event(_LOG, logging.INFO, "sweeper.pass_completed", active)
         except Exception as exc:
             _LOG.exception("Jobs sweeper loop failed.")
             _set_sweeper_state(
@@ -6756,15 +6759,20 @@ async def stripe_webhook(request: Request) -> JSONResponse:
         account_obj = event["data"]["object"]
         account_id = getattr(account_obj, "id", None) or account_obj.get("id", "")
         charges_enabled = getattr(account_obj, "charges_enabled", False) or account_obj.get("charges_enabled", False)
+        payouts_enabled = getattr(account_obj, "payouts_enabled", False) or account_obj.get("payouts_enabled", False)
+        fully_enabled = bool(charges_enabled and payouts_enabled)
         if account_id:
             import sqlite3 as _sqlite3
             with _sqlite3.connect(jobs.DB_PATH) as _ac_conn:
                 _ac_conn.execute(
                     "UPDATE wallets SET stripe_connect_enabled = ? WHERE stripe_connect_account_id = ?",
-                    (1 if charges_enabled else 0, account_id),
+                    (1 if fully_enabled else 0, account_id),
                 )
                 _ac_conn.commit()
-            _LOG.info("Stripe Connect account.updated: %s charges_enabled=%s", account_id, charges_enabled)
+            _LOG.info(
+                "Stripe Connect account.updated: %s charges_enabled=%s payouts_enabled=%s",
+                account_id, charges_enabled, payouts_enabled,
+            )
 
     return JSONResponse({"received": True, "status": "ok"})
 

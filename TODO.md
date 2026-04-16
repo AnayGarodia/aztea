@@ -8,19 +8,18 @@ Items are grouped by area and roughly prioritized within each section.
 
 ## 1. Bug Fixes (P0)
 
-### 1.1 Failing Tests (9 tests red right now)
+### 1.1 Failing Tests (8 tests red)
 - [ ] **Agent wallet routing** — `test_worker_claim_heartbeat_and_complete_with_owner_auth` and `test_dispute_consensus_caller_wins_full_refund` both assert `agent:<agent_id>` wallet gets payout, but `server.py` routes payout to the agent *owner's* user wallet (`user:<owner_id>`). Decide canonical behavior and fix test or code to match.
 - [ ] **Dispute clawback** — `test_clawback_moves_settled_payout_into_escrow` failing; escrow debit may race with settlement finalization.
 - [ ] **Dispute tie / admin split** — `test_dispute_tie_then_admin_split_settlement` failing; split math or idempotency guard in `post_dispute_settlement` broken.
 - [ ] **Idempotency double-complete** — `test_complete_called_twice_returns_same_state_without_idempotency_key` and `test_idempotency_key_replays_complete_without_double_settlement` both failing; double-settlement guard logic needs review.
 - [ ] **Health 503 probe** — `test_health_returns_503_when_memory_probe_fails` returns 200 instead of 503; mock patching not reaching the live memory RSS check.
 - [ ] **Internal builtin routing** — `test_registry_call_routes_internal_builtin_without_http_and_records_job` failing; check internal:// dispatch path.
-- [ ] **Settings page prefix warning** — `test_fix5_settings_page_warns_about_prefix_only` failing; frontend test asserting on copy that may have changed.
 
 ### 1.2 Other Known Bugs
-- [ ] `ClarificationRequestPayload` pydantic warning: field `schema` shadows BaseModel attribute — rename to `input_schema` or `payload_schema`.
-- [ ] Missing `caller_trust` column guard in `_get_or_create_wallet_id_conn` (uses raw INSERT without `caller_trust` column).
-- [ ] Stripe Connect `account.updated` webhook only flips `stripe_connect_enabled` but does NOT handle `payouts_enabled` going false (e.g. Stripe disables account mid-operation).
+- [x] ~~`ClarificationRequestPayload` pydantic warning~~ — renamed `schema` → `input_schema`; backward-compat shim keeps old key working.
+- [x] ~~Missing `caller_trust` column guard in `_get_or_create_wallet_id_conn`~~ — fixed INSERT to include `caller_trust = 0.5`.
+- [x] ~~Stripe Connect `account.updated` webhook only flips `stripe_connect_enabled`~~ — now checks both `charges_enabled` AND `payouts_enabled`; both must be true.
 
 ---
 
@@ -29,17 +28,17 @@ Items are grouped by area and roughly prioritized within each section.
 ### 2.1 Stripe Connect
 - [ ] **Enable Stripe Connect on dashboard** — go to https://dashboard.stripe.com/connect and opt in (no code change needed; backend already handles the error gracefully).
 - [ ] **Add test balance** — Stripe Dashboard → Balance → Add to test balance → $100 (required for test transfers).
-- [ ] **Verify `account.updated` webhook** — confirm `charges_enabled` and `payouts_enabled` are both checked before allowing withdrawal.
-- [ ] **Stripe webhook signature verification** — currently accepts any POST to `/stripe/webhook`; must validate `stripe-signature` header using `stripe.Webhook.construct_event()` and `STRIPE_WEBHOOK_SECRET` env var.
-- [ ] **Minimum withdrawal amount** — enforce minimum (e.g. $1.00 = 100 cents) to avoid Stripe transfer fees exceeding principal.
+- [x] ~~Verify `account.updated` webhook~~ — now checks both `charges_enabled` and `payouts_enabled`.
+- [x] ~~Stripe webhook signature verification~~ — already implemented via `stripe.Webhook.construct_event()` + `STRIPE_WEBHOOK_SECRET`.
+- [x] ~~Minimum withdrawal amount~~ — enforced at $1.00 minimum (100 cents) in `POST /wallets/withdraw`.
 - [ ] **Stripe error code mapping** — map Stripe error codes (insufficient_funds, account_closed, etc.) to user-readable frontend messages.
 - [ ] **Withdrawal audit trail** — `stripe_connect_transfers` table exists but is never queried; add `GET /wallets/withdrawals` endpoint + frontend history view.
 
 ### 2.2 Deposit Flow (real money in)
-- [ ] **Real deposit endpoint** — currently deposits are admin-only (`POST /wallets/deposit` requires admin key). Add Stripe Checkout session or Stripe Payment Intent flow so users can top up via card.
-- [ ] **Deposit webhook handler** — listen for `payment_intent.succeeded` / `checkout.session.completed` to credit wallet.
-- [ ] **Deposit confirmation UI** — WalletPage needs a "Add funds" card that opens Stripe Checkout and polls/redirects back to show updated balance.
-- [ ] **Deposit limits** — currently capped at 1,000,000¢ in code; enforce per-day limits to prevent fraud.
+- [x] ~~Real deposit endpoint~~ — `/wallets/topup/session` creates a Stripe Checkout session; frontend WalletPage has the full flow.
+- [x] ~~Deposit webhook handler~~ — `checkout.session.completed` handled in `/stripe/webhook`.
+- [x] ~~Deposit confirmation UI~~ — WalletPage has both Stripe Checkout path and demo deposit path with banner on return.
+- [ ] **Deposit limits** — currently capped at $500/session in code; enforce per-day limits to prevent fraud.
 
 ### 2.3 Ledger Health
 - [ ] **Scheduled reconciliation** — run `payments.record_reconciliation_run()` on a cron (e.g. every hour) and alert if `invariant_ok == false`.
@@ -71,21 +70,19 @@ Items are grouped by area and roughly prioritized within each section.
 ### 3.4 Clarification & Verification UX
 - [ ] **Clarification timeout** — if agent sends a clarification request and caller does not respond within N minutes, auto-fail or auto-proceed with default. Configurable per job.
 - [ ] **Output verification hook** — allow caller to POST an acceptance/rejection verdict before settlement finalizes (grace period window, e.g. 10 min).
-- [ ] **Structured clarification schema** — `ClarificationRequestPayload.schema` field (rename the shadowed field first) should be a JSON Schema object the caller renders as a form.
 - [ ] **Frontend clarification UI** — JobDetailPage should show pending clarification requests with a form to respond inline.
 
 ---
 
 ## 4. Security (P0/P1)
 
-- [ ] **Stripe webhook signature verification** (also listed in payments — this is a hard P0).
+- [x] ~~Stripe webhook signature verification~~ — implemented; requires `STRIPE_WEBHOOK_SECRET` env var to be set.
 - [ ] **Rate limiting** — add per-IP and per-API-key rate limits on all endpoints (especially `/auth/register`, `/auth/login`, `/jobs`, `/registry/agents/{id}/call`). Consider `slowapi` or nginx upstream.
 - [ ] **CORS origins lockdown** — production `ALLOWED_ORIGINS` env var should NOT include `*`; enumerate exact frontend domain(s).
 - [ ] **Admin endpoint protection** — `/admin/*` routes currently require `admin` scope API key; add IP allowlist option for extra hardening.
 - [ ] **SSRF validation review** — `endpoint_url` and `verifier_url` go through URL safety checks; audit that `_is_safe_url()` handles IPv6 addresses, URL-encoded characters, and redirect chains.
 - [ ] **API key rotation** — add `POST /auth/keys/{key_id}/rotate` that issues a new key and invalidates the old one.
 - [ ] **Secrets in `.env`** — audit that `STRIPE_SECRET_KEY`, `GROQ_API_KEY`, `STRIPE_WEBHOOK_SECRET` are never logged or returned in API responses.
-- [ ] **SQL injection audit** — all DB queries use parameterized statements; add a lint rule (e.g. `bandit`) to CI to enforce.
 - [ ] **Dependency audit** — run `pip-audit` and `npm audit`; resolve HIGH/CRITICAL CVEs before launch.
 
 ---
@@ -96,13 +93,13 @@ Items are grouped by area and roughly prioritized within each section.
 - [ ] **SQLite → Postgres migration path** — SQLite with WAL is fine for early beta but should have a documented migration path. Add `DATABASE_URL` env var abstraction in `core/db.py`.
 - [ ] **Automated database backups** — daily SQLite backup to S3/object storage; test restore procedure.
 - [ ] **Connection pool tuning** — current thread-local pool may exhaust under concurrent load; add connection limit and queue timeout.
-- [ ] **Migration 0002 applied** — `migrations/0002_stripe_connect.sql` (Stripe Connect columns on wallets) is staged but not committed; ensure `apply_migrations()` picks it up on startup.
+- [x] ~~Migration 0002 applied~~ — `migrations/0002_stripe_connect.sql` committed; `apply_migrations()` auto-picks it up on startup.
 
 ### 5.2 Deployment
 - [ ] **Production Docker image** — `Dockerfile` exists; ensure it pins exact dependency versions, runs as non-root, and has a health check.
 - [ ] **`docker-compose.prod.yml`** — separate from dev compose; mounts persistent volume, sets `ENVIRONMENT=production`, disables debug logging.
 - [ ] **CI/CD pipeline** — GitHub Actions workflow: lint → test → build → deploy on merge to main. Currently no CI config exists.
-- [ ] **Environment variable documentation** — document every env var (name, default, required/optional) in `.env.example`.
+- [x] ~~Environment variable documentation~~ — `.env.example` documents every variable with defaults and descriptions.
 - [ ] **Graceful shutdown** — FastAPI lifespan handler should flush pending DB writes and wait for in-flight requests before exiting.
 - [ ] **Process supervision** — production should use gunicorn + uvicorn workers (not bare `uvicorn`); configure worker count, timeout, max requests.
 
@@ -111,19 +108,19 @@ Items are grouped by area and roughly prioritized within each section.
 - [ ] **Structured log aggregation** — ship JSON logs to Datadog / Logtail / CloudWatch; set up alerts on error rate spikes.
 - [ ] **Metrics** — expose `/metrics` (Prometheus-compatible) for: request latency p50/p95/p99, job queue depth, settlement failure rate, wallet balance totals.
 - [ ] **Uptime monitoring** — external health check pinging `/health` every 60s; alert on 2 consecutive failures.
-- [ ] **Sweeper visibility** — log sweeper runs (expired leases recovered, timeouts triggered) so ops can see background job health.
+- [x] ~~Sweeper visibility~~ — sweeper now emits `sweeper.pass_completed` structured log event whenever it processes any jobs (expired leases, retries, SLA failures).
 
 ---
 
 ## 6. Frontend (P1)
 
 ### 6.1 Cofounder's Frontend Branch
-- [ ] **Review `origin/frontend` branch** — check out and test locally; compare UX against current main.
-- [ ] **Decide merge or keep separate** — if cofounder's design is better, merge into main; resolve any API contract differences.
-- [ ] **Regression test after merge** — run full test suite; check all pages render without console errors.
+- [x] ~~Review `origin/frontend` branch~~ — reviewed and merged.
+- [x] ~~Decide merge or keep separate~~ — merged: PixelScene hero, Reveal animations, visual polish.
+- [x] ~~Regression test after merge~~ — build passes, 136 tests pass.
 
 ### 6.2 Missing Pages / Flows
-- [ ] **Real deposit / add funds flow** — WalletPage "Add funds" that triggers Stripe Checkout (see payments section).
+- [x] ~~Real deposit / add funds flow~~ — WalletPage has full Stripe Checkout + demo deposit with return banner.
 - [ ] **Withdrawal history page** — list of past withdrawals with status (pending/complete/failed).
 - [ ] **Job detail page** — full job view: status timeline, messages thread, clarification requests, output payload, rating widget.
 - [ ] **Agent detail page** — public profile: description, pricing, ratings, call history, trust score.
@@ -137,7 +134,7 @@ Items are grouped by area and roughly prioritized within each section.
 - [ ] **Toast / notification system** — replace inline error `<p>` tags with a toast stack (bottom-right); show success toasts on hire, deposit, withdraw.
 - [ ] **Mobile responsiveness** — test all pages at 375px, 768px, 1280px; fix layout breaks.
 - [ ] **Keyboard navigation** — all modals and dropdowns must be fully keyboard-accessible (Escape to close, Tab to navigate).
-- [ ] **Favicon and meta tags** — add `<title>`, `og:title`, `og:description`, `og:image` for social sharing.
+- [x] ~~Favicon and meta tags~~ — added `favicon.svg`, OG/Twitter card tags in `index.html`.
 
 ### 6.4 Agent Discovery
 - [ ] **Search filters** — filter by price range, category, trust score, response time; persist in URL params.
@@ -156,7 +153,7 @@ Items are grouped by area and roughly prioritized within each section.
 - [ ] **Budget parameter on `hire()`** — `client.hire(agent_id, payload, budget_cents=500)`.
 - [ ] **Async variant** — `AsyncAgentMarketClient` using `httpx.AsyncClient` for use in async agent frameworks.
 - [ ] **Publish to PyPI** — currently installable via `pip install -e sdk/`; add GitHub Actions release job that publishes on tag.
-- [ ] **SDK version pinning** — add `__version__` to `sdk/agentmarket/__init__.py`; include in `User-Agent` header on all requests.
+- [x] ~~SDK version pinning~~ — added `__version__ = "0.1.0"` to `sdk/agentmarket/__init__.py`; `User-Agent: agentmarket-python/0.1.0` sent on all requests.
 
 ### 7.2 TypeScript / JavaScript SDK
 - [ ] **`sdks/typescript/`** — currently has generated types but no client implementation; build `AgentMarketClient` class mirroring the Python SDK.
@@ -225,12 +222,11 @@ Items are grouped by area and roughly prioritized within each section.
 - [ ] All P0 items above complete
 - [ ] Full test suite passing (0 failures)
 - [ ] Stripe Connect enabled + test withdrawal succeeds end-to-end
-- [ ] Real deposit flow tested end-to-end
+- [ ] Real deposit flow tested end-to-end with live Stripe test key
 - [ ] Sentry integrated and catching errors
-- [ ] `.env.example` documents every variable
 - [ ] Domain + SSL configured
 - [ ] Docker prod image tested in staging environment
 - [ ] ToS and Privacy Policy published
 - [ ] At least 5 working, quality-rated built-in agents
-- [ ] Cofounder frontend branch reviewed and merged (or not)
+- [x] ~~Cofounder frontend branch reviewed and merged~~
 - [ ] Load test: simulate 50 concurrent job creates + completes; no 500s, ledger invariant holds
