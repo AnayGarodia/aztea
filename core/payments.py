@@ -262,6 +262,36 @@ def get_wallet(wallet_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+def get_wallet_by_owner(owner_id: str) -> dict | None:
+    """Look up a wallet by owner_id (user_id or 'platform')."""
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM wallets WHERE owner_id = ?", (owner_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def charge(wallet_id: str, amount_cents: int, memo: str = "") -> str:
+    """Deduct amount_cents from wallet (e.g. for withdrawal). Returns tx_id.
+    Raises InsufficientBalanceError if balance is too low."""
+    if amount_cents <= 0:
+        raise ValueError("amount_cents must be positive.")
+    with _conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT balance_cents FROM wallets WHERE wallet_id = ?", (wallet_id,)
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"Wallet '{wallet_id}' not found.")
+        updated = conn.execute(
+            "UPDATE wallets SET balance_cents = balance_cents - ? WHERE wallet_id = ? AND balance_cents >= ?",
+            (amount_cents, wallet_id, amount_cents),
+        ).rowcount
+        if updated == 0:
+            raise InsufficientBalanceError(row["balance_cents"], amount_cents)
+        return _insert_tx_only(conn, wallet_id, "charge", -amount_cents, None, None, memo or "Withdrawal")
+
+
 def get_wallet_transactions(wallet_id: str, limit: int = 20) -> list:
     """Return the most recent `limit` transactions for a wallet, newest first."""
     with _conn() as conn:

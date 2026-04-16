@@ -94,6 +94,7 @@ export default function AuthPanel() {
             required
             autoComplete={tab === 'signin' ? 'current-password' : 'new-password'}
             iconLeft={<Lock size={14} />}
+            hint={tab === 'register' ? 'At least 8 characters' : undefined}
           />
           {error && <p className="auth-panel__error">{error}</p>}
           <Button type="submit" variant="primary" size="md" loading={loading} style={{ width: '100%' }}>

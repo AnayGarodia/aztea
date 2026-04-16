@@ -153,8 +153,9 @@ class AgentMarketClient:
             "/registry/search",
             json={"query": str(query).strip()},
         )
-        raw_agents = data.get("agents") or [] if isinstance(data, dict) else []
-        agents = [Agent(**a) for a in raw_agents]
+        # Server returns {results: [{agent: {...}, similarity, ...}, ...]}
+        raw_results = data.get("results") or [] if isinstance(data, dict) else []
+        agents = [Agent(**item["agent"]) for item in raw_results if isinstance(item.get("agent"), dict)]
 
         if max_price_cents is not None:
             agents = [a for a in agents if a.price_cents <= max_price_cents]
@@ -523,11 +524,19 @@ class AgentMarketClient:
         """
         wallet_data = self._request("GET", "/wallets/me")
         wallet_id = wallet_data["wallet_id"]
-        tx_data = self._request(
+        resp = self._request(
             "POST",
             "/wallets/deposit",
             json={"wallet_id": wallet_id, "amount_cents": amount_cents, "memo": memo},
         )
+        # Server returns {tx_id, wallet_id, balance_cents} — normalise for SDK model
+        tx_data = {
+            "tx_id": resp.get("tx_id", ""),
+            "wallet_id": resp.get("wallet_id", wallet_id),
+            "type": "deposit",
+            "amount_cents": amount_cents,
+            "memo": memo,
+        }
         return Transaction(**tx_data)
 
 

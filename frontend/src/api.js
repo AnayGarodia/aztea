@@ -41,12 +41,42 @@ async function parseResponseBody(response) {
   }
 }
 
+const HTTP_STATUS_MESSAGES = {
+  400: 'Bad request — check your input and try again.',
+  401: 'Not authenticated. Please sign in.',
+  403: "You don't have permission to do that.",
+  404: 'Not found.',
+  409: 'Conflict — this already exists.',
+  422: 'Invalid input — check the fields and try again.',
+  429: 'Too many requests. Wait a moment and try again.',
+  500: 'Server error. Try again in a moment.',
+  502: 'Payment processor error. Try again.',
+  503: 'Service temporarily unavailable.',
+}
+
 function makeApiError(response, parsedBody) {
-  const detail = parsedBody && typeof parsedBody === 'object' ? parsedBody.detail : null
-  const message =
-    detailToString(detail) ??
-    (typeof parsedBody === 'string' && parsedBody.trim() ? parsedBody : null) ??
-    `HTTP ${response.status}`
+  let message = null
+
+  if (parsedBody && typeof parsedBody === 'object') {
+    // Structured server error: { error, message, data }
+    if (typeof parsedBody.message === 'string' && parsedBody.message.trim()) {
+      message = parsedBody.message.trim()
+      // Surface the first validation sub-error (strip pydantic's "Value error, " prefix)
+      const errors = parsedBody.data?.errors
+      if (Array.isArray(errors) && errors.length > 0) {
+        const sub = errors[0]?.msg ?? errors[0]?.message ?? null
+        if (sub && typeof sub === 'string') {
+          message = sub.replace(/^Value error,\s*/i, '')
+        }
+      }
+    }
+    // FastAPI default detail field
+    if (!message) message = detailToString(parsedBody.detail)
+  }
+
+  if (!message && typeof parsedBody === 'string' && parsedBody.trim()) message = parsedBody.trim()
+  if (!message) message = HTTP_STATUS_MESSAGES[response.status] ?? `Unexpected error (HTTP ${response.status})`
+
   const err = new Error(message)
   err.status = response.status
   err.body = parsedBody
@@ -369,4 +399,30 @@ export async function fetchPublicConfig() {
 export async function fetchRuns(key, limit = 50) {
   const { body } = await request(`/runs?limit=${encodeURIComponent(String(limit))}`, { key })
   return body
+}
+
+// ── Stripe Connect ────────────────────────────────────────────────────────────
+
+export async function connectOnboard(key, returnUrl, refreshUrl) {
+  const { body } = await request('/wallets/connect/onboard', {
+    method: 'POST',
+    key,
+    body: { return_url: returnUrl || null, refresh_url: refreshUrl || null },
+  })
+  return body // { onboarding_url, account_id }
+}
+
+export async function getConnectStatus(key) {
+  const { body, status } = await request('/wallets/connect/status', { key, throwOnError: false })
+  if (status === 503) return { connected: false, charges_enabled: false, account_id: null, unavailable: true }
+  return body // { connected, charges_enabled, account_id }
+}
+
+export async function withdrawFunds(key, amountCents) {
+  const { body } = await request('/wallets/withdraw', {
+    method: 'POST',
+    key,
+    body: { amount_cents: amountCents },
+  })
+  return body // { status, transfer_id, amount_cents }
 }

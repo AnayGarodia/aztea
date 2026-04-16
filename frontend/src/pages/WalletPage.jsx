@@ -7,9 +7,9 @@ import Badge from '../ui/Badge'
 import EmptyState from '../ui/EmptyState'
 import Input from '../ui/Input'
 import SpendChart from '../features/analytics/SpendChart'
-import { createTopupSession, depositToWallet, fetchPublicConfig, fetchAgentEarnings } from '../api'
+import { createTopupSession, depositToWallet, fetchPublicConfig, fetchAgentEarnings, connectOnboard, getConnectStatus, withdrawFunds } from '../api'
 import { useMarket } from '../context/MarketContext'
-import { ArrowDownLeft, ArrowUpRight, Plus, CreditCard, CheckCircle, X, TrendingUp, Bot } from 'lucide-react'
+import { ArrowDownLeft, ArrowUpRight, Plus, CreditCard, CheckCircle, X, TrendingUp, Bot, Banknote, ExternalLink, AlertCircle } from 'lucide-react'
 import './WalletPage.css'
 
 function fmtUsd(cents) {
@@ -86,6 +86,10 @@ export default function WalletPage() {
   const [stripeEnabled, setStripeEnabled] = useState(false)
   const [paymentBanner, setPaymentBanner] = useState(null) // 'success' | 'cancelled' | null
   const [agentEarnings, setAgentEarnings] = useState(null) // null = loading, [] = empty
+  const [connectStatus, setConnectStatus] = useState(null) // null = loading
+  const [connectLoading, setConnectLoading] = useState(false)
+  const [withdrawAmount, setWithdrawAmount] = useState('10')
+  const [withdrawLoading, setWithdrawLoading] = useState(false)
 
   const transactions = wallet?.transactions ?? []
   const lowBalance = (wallet?.balance_cents ?? 0) < 500
@@ -105,6 +109,14 @@ export default function WalletPage() {
       .catch(() => setAgentEarnings([]))
   }, [apiKey])
 
+  // Fetch Stripe Connect status
+  useEffect(() => {
+    if (!apiKey) return
+    getConnectStatus(apiKey)
+      .then(data => setConnectStatus(data))
+      .catch(() => setConnectStatus({ connected: false, charges_enabled: false, account_id: null }))
+  }, [apiKey])
+
   // Handle Stripe redirect-back query params
   useEffect(() => {
     const payment = searchParams.get('payment')
@@ -120,6 +132,17 @@ export default function WalletPage() {
       setSearchParams({}, { replace: true })
     } else if (payment === 'cancelled') {
       setPaymentBanner('cancelled')
+      setSearchParams({}, { replace: true })
+    }
+
+    const connect = searchParams.get('connect')
+    if (connect === 'success' || connect === 'refresh') {
+      // Refetch connect status after returning from Stripe onboarding
+      if (apiKey) {
+        getConnectStatus(apiKey)
+          .then(data => setConnectStatus(data))
+          .catch(() => {})
+      }
       setSearchParams({}, { replace: true })
     }
   }, []) // eslint-disable-line
@@ -144,6 +167,38 @@ export default function WalletPage() {
       showToast?.(err?.message ?? 'Could not start payment session.', 'error')
     } finally {
       setStripeLoading(false)
+    }
+  }
+
+  const handleConnectOnboard = async () => {
+    setConnectLoading(true)
+    try {
+      const data = await connectOnboard(apiKey)
+      if (data?.onboarding_url) window.location.href = data.onboarding_url
+    } catch (err) {
+      showToast?.(err?.message ?? 'Could not start Stripe onboarding.', 'error')
+    } finally {
+      setConnectLoading(false)
+    }
+  }
+
+  const handleWithdraw = async (e) => {
+    e.preventDefault()
+    const cents = Math.round(Number(withdrawAmount) * 100)
+    if (!Number.isFinite(cents) || cents < 100) {
+      showToast?.('Minimum withdrawal is $1.00.', 'error')
+      return
+    }
+    setWithdrawLoading(true)
+    try {
+      await withdrawFunds(apiKey, cents)
+      await refreshWallet?.()
+      showToast?.(`Withdrawal of $${(cents / 100).toFixed(2)} initiated.`, 'success')
+      setWithdrawAmount('10')
+    } catch (err) {
+      showToast?.(err?.message ?? 'Withdrawal failed.', 'error')
+    } finally {
+      setWithdrawLoading(false)
     }
   }
 
@@ -360,6 +415,106 @@ export default function WalletPage() {
                   )}
                 </Card.Body>
               </Card>
+
+              {/* Stripe Connect / Withdraw card */}
+              {stripeEnabled && (
+                <Card>
+                  <Card.Header style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
+                    <Banknote size={14} color="var(--accent)" />
+                    <span className="wallet__section-title">Withdraw earnings</span>
+                  </Card.Header>
+                  <Card.Body>
+                    {connectStatus === null ? (
+                      <p style={{ fontSize: '0.8125rem', color: 'var(--ink-mute)', textAlign: 'center', padding: 'var(--sp-3) 0' }}>Loading…</p>
+                    ) : connectStatus.unavailable ? (
+                      <p style={{ fontSize: '0.8125rem', color: 'var(--ink-mute)' }}>Withdrawals not available on this server.</p>
+                    ) : !connectStatus.connected ? (
+                      <div>
+                        <p style={{ fontSize: '0.8125rem', color: 'var(--ink-soft)', marginBottom: 'var(--sp-4)' }}>
+                          Connect a bank account to withdraw your agent earnings to cash.
+                          Powered by Stripe Connect — secure and instant.
+                        </p>
+                        <Button
+                          variant="primary"
+                          loading={connectLoading}
+                          icon={<ExternalLink size={13} />}
+                          style={{ width: '100%' }}
+                          onClick={handleConnectOnboard}
+                        >
+                          Connect bank account
+                        </Button>
+                      </div>
+                    ) : !connectStatus.charges_enabled ? (
+                      <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', marginBottom: 'var(--sp-3)' }}>
+                          <AlertCircle size={14} color="var(--warn, #d97706)" />
+                          <p style={{ fontSize: '0.8125rem', color: 'var(--warn, #d97706)', fontWeight: 600 }}>Onboarding incomplete</p>
+                        </div>
+                        <p style={{ fontSize: '0.8125rem', color: 'var(--ink-soft)', marginBottom: 'var(--sp-4)' }}>
+                          Your Stripe account is connected but not yet approved for payouts. Finish the onboarding steps.
+                        </p>
+                        <Button
+                          variant="secondary"
+                          loading={connectLoading}
+                          icon={<ExternalLink size={13} />}
+                          style={{ width: '100%' }}
+                          onClick={handleConnectOnboard}
+                        >
+                          Resume onboarding
+                        </Button>
+                      </div>
+                    ) : (
+                      <form onSubmit={handleWithdraw}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', marginBottom: 'var(--sp-3)' }}>
+                          <CheckCircle size={14} color="var(--positive)" />
+                          <p style={{ fontSize: '0.8125rem', color: 'var(--positive)', fontWeight: 600 }}>Bank account connected</p>
+                        </div>
+                        {/* Fee breakdown */}
+                        {(() => {
+                          const gross = Math.round((Number(withdrawAmount) || 0) * 100)
+                          const stripeFee = Math.round(gross * 0.0025) + 25 // ~0.25% + $0.25
+                          const net = Math.max(0, gross - stripeFee)
+                          return gross >= 100 ? (
+                            <div style={{ background: 'var(--surface-alt, #f7f8fa)', borderRadius: 'var(--r-sm)', padding: 'var(--sp-3)', marginBottom: 'var(--sp-3)', fontSize: '0.8125rem' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--ink-soft)', marginBottom: 4 }}>
+                                <span>Withdrawal amount</span><span>{fmtUsd(gross)}</span>
+                              </div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--ink-mute)', marginBottom: 4 }}>
+                                <span>Stripe fee (~0.25% + $0.25)</span><span>−{fmtUsd(stripeFee)}</span>
+                              </div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, color: 'var(--ink)', borderTop: '1px solid var(--line-soft)', paddingTop: 4 }}>
+                                <span>You receive</span><span>{fmtUsd(net)}</span>
+                              </div>
+                            </div>
+                          ) : null
+                        })()}
+                        <Input
+                          label="Withdraw amount (USD)"
+                          type="number"
+                          min="1"
+                          max={((wallet?.balance_cents ?? 0) / 100).toFixed(2)}
+                          step="1"
+                          value={withdrawAmount}
+                          onChange={e => setWithdrawAmount(e.target.value)}
+                          required
+                          mono
+                          hint={`Available: ${fmtUsd(wallet?.balance_cents ?? 0)} · Platform fee already deducted from earnings`}
+                          style={{ marginBottom: 'var(--sp-3)' }}
+                        />
+                        <Button
+                          type="submit"
+                          variant="primary"
+                          loading={withdrawLoading}
+                          icon={<Banknote size={14} />}
+                          style={{ width: '100%' }}
+                        >
+                          Withdraw {fmtUsd(Math.round((Number(withdrawAmount) || 0) * 100))}
+                        </Button>
+                      </form>
+                    )}
+                  </Card.Body>
+                </Card>
+              )}
 
               <Card>
                 <Card.Header>

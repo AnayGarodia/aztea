@@ -349,6 +349,23 @@ class TopupSessionRequest(BaseModel):
     amount_cents: int  # Must be 100–50000 ($1.00–$500.00)
 
 
+class ConnectOnboardRequest(BaseModel):
+    """Request body for POST /wallets/connect/onboard."""
+    model_config = ConfigDict(
+        json_schema_extra={"example": {"return_url": "https://agentmarket.dev/wallet", "refresh_url": "https://agentmarket.dev/wallet"}}
+    )
+    return_url: str | None = None
+    refresh_url: str | None = None
+
+
+class WithdrawRequest(BaseModel):
+    """Request body for POST /wallets/withdraw."""
+    model_config = ConfigDict(
+        json_schema_extra={"example": {"amount_cents": 500}}
+    )
+    amount_cents: int  # Minimum 100 ($1.00)
+
+
 class UserRegisterRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={

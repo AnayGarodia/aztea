@@ -3992,10 +3992,20 @@ async def _http_exception_handler(request: Request, exc: HTTPException) -> JSONR
 
 @app.exception_handler(RequestValidationError)
 async def _request_validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    def _sanitize(errors):
+        clean = []
+        for e in errors:
+            entry = {k: v for k, v in e.items() if k != "ctx"}
+            ctx = e.get("ctx")
+            if ctx:
+                entry["ctx"] = {k: str(v) for k, v in ctx.items()}
+            clean.append(entry)
+        return clean
+
     payload = error_codes.make_error(
         error_codes.INVALID_INPUT,
         "Request validation failed.",
-        {"errors": exc.errors()},
+        {"errors": _sanitize(exc.errors())},
     )
     return JSONResponse(content=payload, status_code=422)
 
@@ -6741,4 +6751,241 @@ async def stripe_webhook(request: Request) -> JSONResponse:
 
         _LOG.info("Stripe top-up: %d cents → wallet %s (session %s)", amount_cents, wallet_id, session_id)
 
+    if event["type"] == "account.updated":
+        # Stripe Connect: account completed onboarding or details changed
+        account_obj = event["data"]["object"]
+        account_id = getattr(account_obj, "id", None) or account_obj.get("id", "")
+        charges_enabled = getattr(account_obj, "charges_enabled", False) or account_obj.get("charges_enabled", False)
+        if account_id:
+            import sqlite3 as _sqlite3
+            with _sqlite3.connect(jobs.DB_PATH) as _ac_conn:
+                _ac_conn.execute(
+                    "UPDATE wallets SET stripe_connect_enabled = ? WHERE stripe_connect_account_id = ?",
+                    (1 if charges_enabled else 0, account_id),
+                )
+                _ac_conn.commit()
+            _LOG.info("Stripe Connect account.updated: %s charges_enabled=%s", account_id, charges_enabled)
+
     return JSONResponse({"received": True, "status": "ok"})
+
+
+# ---------------------------------------------------------------------------
+# Stripe Connect Express — onboard, status, withdraw
+# ---------------------------------------------------------------------------
+
+
+@app.post(
+    "/wallets/connect/onboard",
+    tags=["wallet"],
+    summary="Create a Stripe Connect Express account and return an onboarding URL.",
+    responses=_error_responses(400, 401, 403, 503),
+)
+@limiter.limit("10/minute")
+def connect_onboard(
+    request: Request,
+    body: core_models.ConnectOnboardRequest,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    if not _STRIPE_AVAILABLE or not _STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=503, detail="Payment processing is not configured on this server.")
+    _require_scope(caller, "caller")
+
+    wallet = payments.get_wallet_by_owner(caller["owner_id"])
+    if wallet is None:
+        raise HTTPException(status_code=404, detail="Wallet not found.")
+
+    _stripe_lib.api_key = _STRIPE_SECRET_KEY
+
+    # Reuse existing Connect account if one already exists
+    existing_account_id = wallet.get("stripe_connect_account_id")
+    if not existing_account_id:
+        try:
+            account = _stripe_lib.Account.create(
+                type="express",
+                capabilities={"transfers": {"requested": True}},
+            )
+        except Exception as exc:
+            err_str = str(exc)
+            if "signed up for Connect" in err_str or "connect" in err_str.lower():
+                raise HTTPException(
+                    status_code=503,
+                    detail="Stripe Connect is not enabled on this account. Enable it at https://dashboard.stripe.com/connect",
+                )
+            raise HTTPException(status_code=502, detail=f"Stripe error: {exc}")
+        existing_account_id = account.id
+        import sqlite3 as _sqlite3
+        with _sqlite3.connect(jobs.DB_PATH) as _ac_conn:
+            _ac_conn.execute(
+                "UPDATE wallets SET stripe_connect_account_id = ? WHERE wallet_id = ?",
+                (existing_account_id, wallet["wallet_id"]),
+            )
+            _ac_conn.commit()
+
+    return_url = (body.return_url or "").strip() or f"{_FRONTEND_BASE_URL}/wallet?connect=success"
+    refresh_url = (body.refresh_url or "").strip() or f"{_FRONTEND_BASE_URL}/wallet?connect=refresh"
+
+    try:
+        link = _stripe_lib.AccountLink.create(
+            account=existing_account_id,
+            refresh_url=refresh_url,
+            return_url=return_url,
+            type="account_onboarding",
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Stripe error generating onboarding link: {exc}")
+    return JSONResponse({"onboarding_url": link.url, "account_id": existing_account_id})
+
+
+@app.get(
+    "/wallets/connect/status",
+    tags=["wallet"],
+    summary="Get Stripe Connect account status for the authenticated user.",
+    responses=_error_responses(401, 403, 503),
+)
+@limiter.limit("30/minute")
+def connect_status(
+    request: Request,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    if not _STRIPE_AVAILABLE or not _STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=503, detail="Payment processing is not configured on this server.")
+    _require_scope(caller, "caller")
+
+    wallet = payments.get_wallet_by_owner(caller["owner_id"])
+    if wallet is None:
+        raise HTTPException(status_code=404, detail="Wallet not found.")
+
+    account_id = wallet.get("stripe_connect_account_id")
+    if not account_id:
+        return JSONResponse({"connected": False, "charges_enabled": False, "account_id": None})
+
+    _stripe_lib.api_key = _STRIPE_SECRET_KEY
+    try:
+        account = _stripe_lib.Account.retrieve(account_id)
+        charges_enabled = bool(getattr(account, "charges_enabled", False))
+    except Exception:
+        charges_enabled = bool(wallet.get("stripe_connect_enabled", 0))
+
+    # Keep local cache in sync
+    if charges_enabled != bool(wallet.get("stripe_connect_enabled", 0)):
+        import sqlite3 as _sqlite3
+        with _sqlite3.connect(jobs.DB_PATH) as _ac_conn:
+            _ac_conn.execute(
+                "UPDATE wallets SET stripe_connect_enabled = ? WHERE wallet_id = ?",
+                (1 if charges_enabled else 0, wallet["wallet_id"]),
+            )
+            _ac_conn.commit()
+
+    return JSONResponse({
+        "connected": True,
+        "charges_enabled": charges_enabled,
+        "account_id": account_id,
+    })
+
+
+@app.post(
+    "/wallets/withdraw",
+    tags=["wallet"],
+    summary="Withdraw funds from wallet to connected Stripe account.",
+    responses=_error_responses(400, 401, 403, 503),
+)
+@limiter.limit("10/minute")
+def withdraw(
+    request: Request,
+    body: core_models.WithdrawRequest,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    if not _STRIPE_AVAILABLE or not _STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=503, detail="Payment processing is not configured on this server.")
+    _require_scope(caller, "caller")
+
+    if body.amount_cents < 100:
+        raise HTTPException(status_code=400, detail="Minimum withdrawal is $1.00.")
+    if body.amount_cents > 1_000_000:
+        raise HTTPException(status_code=400, detail="Maximum withdrawal is $10,000.00.")
+
+    wallet = payments.get_wallet_by_owner(caller["owner_id"])
+    if wallet is None:
+        raise HTTPException(status_code=404, detail="Wallet not found.")
+
+    account_id = wallet.get("stripe_connect_account_id")
+    if not account_id:
+        raise HTTPException(
+            status_code=400,
+            detail="No bank account connected. Use POST /wallets/connect/onboard first.",
+        )
+
+    if not wallet.get("stripe_connect_enabled"):
+        raise HTTPException(
+            status_code=400,
+            detail="Your Stripe Connect account is not yet active. Complete onboarding first.",
+        )
+
+    if wallet["balance_cents"] < body.amount_cents:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Insufficient balance: have {wallet['balance_cents']}¢, need {body.amount_cents}¢.",
+        )
+
+    _stripe_lib.api_key = _STRIPE_SECRET_KEY
+
+    # Debit wallet first (raises InsufficientBalanceError if something changed)
+    try:
+        payments.charge(
+            wallet["wallet_id"],
+            body.amount_cents,
+            memo=f"Withdrawal to Stripe Connect [{account_id[:12]}]",
+        )
+    except payments.InsufficientBalanceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    try:
+        transfer = _stripe_lib.Transfer.create(
+            amount=body.amount_cents,
+            currency="usd",
+            destination=account_id,
+        )
+    except Exception as exc:
+        err_str = str(exc)
+        # Refund the wallet charge on Stripe failure
+        try:
+            payments.deposit(
+                wallet["wallet_id"],
+                body.amount_cents,
+                memo=f"Withdrawal refund (Stripe error): {exc}",
+            )
+        except Exception:
+            _LOG.exception("Critical: failed to refund withdrawal for wallet %s", wallet["wallet_id"])
+        if "signed up for Connect" in err_str or "no such destination" in err_str.lower():
+            raise HTTPException(status_code=503, detail="Stripe Connect is not fully configured. Enable it at https://dashboard.stripe.com/connect")
+        if "insufficient" in err_str.lower():
+            raise HTTPException(status_code=400, detail="Insufficient Stripe platform balance. Add test balance at dashboard.stripe.com/balance.")
+        raise HTTPException(status_code=502, detail=f"Stripe transfer failed: {exc}")
+
+    # Record the transfer for audit
+    import sqlite3 as _sqlite3
+    import uuid as _uuid
+    with _sqlite3.connect(jobs.DB_PATH) as _tr_conn:
+        _tr_conn.execute(
+            "INSERT INTO stripe_connect_transfers (transfer_id, wallet_id, amount_cents, stripe_tx_id, memo, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                str(_uuid.uuid4()),
+                wallet["wallet_id"],
+                body.amount_cents,
+                transfer.id,
+                f"Withdrawal to {account_id[:12]}",
+                _utc_now_iso(),
+            ),
+        )
+        _tr_conn.commit()
+
+    _LOG.info(
+        "Stripe Connect withdrawal: %d¢ from wallet %s → account %s (transfer %s)",
+        body.amount_cents, wallet["wallet_id"], account_id, transfer.id,
+    )
+    return JSONResponse({
+        "status": "ok",
+        "transfer_id": transfer.id,
+        "amount_cents": body.amount_cents,
+    })
