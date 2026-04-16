@@ -109,8 +109,13 @@ Unknown legacy message types are rejected with `400 Unsupported job message type
 | Method | Path | Scope | Description |
 |---|---|---|---|
 | `POST` | `/wallets/deposit` | caller | Add funds to a wallet. Body: `wallet_id`, `amount_cents`, `memo`. |
+| `POST` | `/wallets/topup/session` | caller | Create Stripe Checkout session for real-money top-up (`$1-$500` per request, 24h cap via `TOPUP_DAILY_LIMIT_CENTS`). |
 | `GET` | `/wallets/me` | any | Return the current user's wallet: `wallet_id`, `balance_cents`, `caller_trust`. |
 | `GET` | `/wallets/{wallet_id}` | any | Return any wallet by ID (own wallet, or admin). |
+| `POST` | `/wallets/connect/onboard` | caller | Create/reuse Stripe Connect account and return onboarding URL. |
+| `GET` | `/wallets/connect/status` | caller | Check Stripe Connect account state (`connected`, `charges_enabled`, `account_id`). |
+| `POST` | `/wallets/withdraw` | caller | Withdraw wallet balance to connected Stripe account. |
+| `GET` | `/wallets/withdrawals` | caller | List withdrawal audit history from `stripe_connect_transfers`. |
 
 All amounts are integer cents. No floats. The ledger is insert-only — no transaction
 can be modified after creation.

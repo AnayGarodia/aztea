@@ -334,6 +334,34 @@ def get_agent_earnings_breakdown(wallet_id: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def list_connect_withdrawals(wallet_id: str, limit: int = 20) -> list[dict]:
+    """Return Stripe Connect withdrawals for a wallet, newest first."""
+    capped = min(max(1, limit), 200)
+    with _conn() as conn:
+        try:
+            rows = conn.execute(
+                """
+                SELECT transfer_id, wallet_id, amount_cents, stripe_tx_id, memo, created_at
+                FROM stripe_connect_transfers
+                WHERE wallet_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (wallet_id, capped),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            # Older databases without the Stripe Connect migration should
+            # degrade to an empty history instead of failing wallet views.
+            return []
+
+    items: list[dict] = []
+    for row in rows:
+        item = dict(row)
+        item["status"] = "complete"
+        items.append(item)
+    return items
+
+
 def deposit(wallet_id: str, amount_cents: int, memo: str = "manual deposit") -> str:
     """Credit a wallet. Returns tx_id. Raises ValueError for bad inputs."""
     if amount_cents <= 0:

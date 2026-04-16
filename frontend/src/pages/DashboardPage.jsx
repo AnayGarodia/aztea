@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import Topbar from '../layout/Topbar'
 import Card from '../ui/Card'
@@ -10,6 +10,7 @@ import Reveal from '../ui/motion/Reveal'
 import Stagger from '../ui/motion/Stagger'
 import { useMarket } from '../context/MarketContext'
 import { useAuth } from '../context/AuthContext'
+import { fetchReconciliationRuns } from '../api'
 import { Wallet } from 'lucide-react'
 import './DashboardPage.css'
 
@@ -51,8 +52,9 @@ function ActionStep({ done, title, copy, actionTo, actionLabel }) {
 }
 
 export default function DashboardPage() {
-  const { agents, jobs, wallet, loading } = useMarket()
+  const { agents, jobs, wallet, loading, apiKey } = useMarket()
   const { user } = useAuth()
+  const [reconRuns, setReconRuns] = useState(null)
 
   const completedJobs = jobs.filter(j => j.status === 'complete').length
   const activeJobs = jobs.filter(j => j.status === 'running' || j.status === 'pending').length
@@ -61,6 +63,25 @@ export default function DashboardPage() {
   const hasBalance = (wallet?.balance_cents ?? 0) > 0
   const isNewUser = !loading && jobs.length === 0 && !hasBalance
   const balance = loading ? '…' : `$${((wallet?.balance_cents ?? 0) / 100).toFixed(2)}`
+  const isAdmin = (user?.scopes ?? []).includes('admin')
+
+  useEffect(() => {
+    if (!isAdmin || !apiKey) {
+      setReconRuns(null)
+      return
+    }
+    let active = true
+    fetchReconciliationRuns(apiKey, 5)
+      .then(data => {
+        if (!active) return
+        setReconRuns(data?.runs ?? [])
+      })
+      .catch(() => {
+        if (!active) return
+        setReconRuns([])
+      })
+    return () => { active = false }
+  }, [isAdmin, apiKey])
 
   return (
     <main className="dashboard">
@@ -139,6 +160,32 @@ export default function DashboardPage() {
               </div>
             ))}
           </Stagger>
+
+          {isAdmin && (
+            <Reveal delay={0.08}>
+              <Card>
+                <Card.Header>
+                  <span className="dashboard__section-title">Ledger reconciliation</span>
+                </Card.Header>
+                <Card.Body>
+                  {reconRuns === null ? (
+                    <p className="dashboard__kpi-hint">Loading reconciliation runs…</p>
+                  ) : reconRuns.length === 0 ? (
+                    <p className="dashboard__kpi-hint">No reconciliation runs found yet.</p>
+                  ) : (
+                    <div>
+                      <p className="dashboard__kpi-hint">
+                        Latest: {fmtDate(reconRuns[0]?.created_at)} · drift {(reconRuns[0]?.drift_cents ?? 0)}¢ · mismatches {(reconRuns[0]?.mismatch_count ?? 0)}
+                      </p>
+                      <div className="dashboard__trust-pills" style={{ marginTop: 'var(--sp-2)' }}>
+                        <Badge label={reconRuns[0]?.invariant_ok ? 'invariant_ok' : 'invariant_failed'} dot />
+                      </div>
+                    </div>
+                  )}
+                </Card.Body>
+              </Card>
+            </Reveal>
+          )}
 
           {/* Checklist */}
           <Reveal delay={0.1}>

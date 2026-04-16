@@ -8,7 +8,7 @@ import EmptyState from '../ui/EmptyState'
 import Input from '../ui/Input'
 import Reveal from '../ui/motion/Reveal'
 import SpendChart from '../features/analytics/SpendChart'
-import { createTopupSession, depositToWallet, fetchPublicConfig, fetchAgentEarnings, connectOnboard, getConnectStatus, withdrawFunds } from '../api'
+import { createTopupSession, depositToWallet, fetchPublicConfig, fetchAgentEarnings, connectOnboard, getConnectStatus, withdrawFunds, fetchWithdrawals } from '../api'
 import { useMarket } from '../context/MarketContext'
 import { ArrowDownLeft, ArrowUpRight, Plus, CreditCard, CheckCircle, X, TrendingUp, Bot, Banknote, ExternalLink, AlertCircle } from 'lucide-react'
 import './WalletPage.css'
@@ -78,6 +78,31 @@ function AgentEarningsRow({ row }) {
   )
 }
 
+function WithdrawalRow({ item }) {
+  return (
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      gap: 'var(--sp-3)',
+      padding: 'var(--sp-3) 0',
+      borderBottom: '1px solid var(--line-soft)',
+    }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <p style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--ink)', marginBottom: 2 }}>
+          {item.memo || 'Withdrawal'}
+        </p>
+        <p style={{ fontSize: '0.75rem', color: 'var(--ink-mute)' }}>
+          {fmtDate(item.created_at)} · {item.stripe_tx_id ? `Stripe ${String(item.stripe_tx_id).slice(0, 14)}…` : 'No Stripe ID'}
+        </p>
+      </div>
+      <Badge label={item.status || 'complete'} />
+      <span style={{ fontWeight: 700, fontSize: '0.875rem', color: 'var(--ink)', fontVariantNumeric: 'tabular-nums' }}>
+        {fmtUsd(item.amount_cents)}
+      </span>
+    </div>
+  )
+}
+
 export default function WalletPage() {
   const { wallet, apiKey, refreshWallet, showToast } = useMarket()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -91,6 +116,7 @@ export default function WalletPage() {
   const [connectLoading, setConnectLoading] = useState(false)
   const [withdrawAmount, setWithdrawAmount] = useState('10')
   const [withdrawLoading, setWithdrawLoading] = useState(false)
+  const [withdrawalHistory, setWithdrawalHistory] = useState(null)
 
   const transactions = wallet?.transactions ?? []
   const lowBalance = (wallet?.balance_cents ?? 0) < 500
@@ -116,6 +142,13 @@ export default function WalletPage() {
     getConnectStatus(apiKey)
       .then(data => setConnectStatus(data))
       .catch(() => setConnectStatus({ connected: false, charges_enabled: false, account_id: null }))
+  }, [apiKey])
+
+  useEffect(() => {
+    if (!apiKey) return
+    fetchWithdrawals(apiKey, 10)
+      .then(data => setWithdrawalHistory(data?.withdrawals ?? []))
+      .catch(() => setWithdrawalHistory([]))
   }, [apiKey])
 
   // Handle Stripe redirect-back query params
@@ -194,6 +227,8 @@ export default function WalletPage() {
     try {
       await withdrawFunds(apiKey, cents)
       await refreshWallet?.()
+      const history = await fetchWithdrawals(apiKey, 10)
+      setWithdrawalHistory(history?.withdrawals ?? [])
       showToast?.(`Withdrawal of $${(cents / 100).toFixed(2)} initiated.`, 'success')
       setWithdrawAmount('10')
     } catch (err) {
@@ -519,6 +554,32 @@ export default function WalletPage() {
                           Withdraw {fmtUsd(Math.round((Number(withdrawAmount) || 0) * 100))}
                         </Button>
                       </form>
+                    )}
+                  </Card.Body>
+                </Card>
+                </Reveal>
+              )}
+
+              {stripeEnabled && (
+                <Reveal delay={0.23}>
+                <Card>
+                  <Card.Header>
+                    <span className="wallet__section-title">Withdrawal history</span>
+                  </Card.Header>
+                  <Card.Body>
+                    {withdrawalHistory === null ? (
+                      <p style={{ fontSize: '0.8125rem', color: 'var(--ink-mute)', textAlign: 'center', padding: 'var(--sp-3) 0' }}>Loading…</p>
+                    ) : withdrawalHistory.length === 0 ? (
+                      <EmptyState
+                        title="No withdrawals yet"
+                        sub="Completed payout transfers will appear here."
+                      />
+                    ) : (
+                      <div>
+                        {withdrawalHistory.map((item, idx) => (
+                          <WithdrawalRow key={item.transfer_id ?? idx} item={item} />
+                        ))}
+                      </div>
                     )}
                   </Card.Body>
                 </Card>

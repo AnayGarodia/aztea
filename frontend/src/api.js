@@ -54,12 +54,29 @@ const HTTP_STATUS_MESSAGES = {
   503: 'Service temporarily unavailable.',
 }
 
+const API_ERROR_MESSAGE_BY_CODE = {
+  'payment.stripe_insufficient_funds': 'Payouts are temporarily unavailable because platform Stripe balance is low. Please retry later.',
+  'payment.stripe_destination_invalid': 'Your payout account is unavailable. Reconnect your bank account and try again.',
+  'payment.stripe_connect_unavailable': 'Stripe Connect is not enabled on this server yet. Please contact support.',
+  'payment.stripe_rate_limited': 'Stripe is rate-limiting requests right now. Please retry in a moment.',
+  'payment.stripe_auth_error': 'Payments are temporarily unavailable due to Stripe configuration.',
+  'payment.stripe_upstream_error': 'Stripe is temporarily unavailable. Please try again.',
+  'payment.stripe_error': 'Payment processor error. Please try again.',
+  'payment.topup_daily_limit_exceeded': 'Daily top-up limit reached. Try a smaller amount or wait until the rolling 24h window resets.',
+}
+
 function makeApiError(response, parsedBody) {
   let message = null
+  let errorCode = null
 
   if (parsedBody && typeof parsedBody === 'object') {
+    if (typeof parsedBody.error === 'string' && parsedBody.error.trim()) {
+      errorCode = parsedBody.error.trim()
+      const mapped = API_ERROR_MESSAGE_BY_CODE[errorCode]
+      if (mapped) message = mapped
+    }
     // Structured server error: { error, message, data }
-    if (typeof parsedBody.message === 'string' && parsedBody.message.trim()) {
+    if (!message && typeof parsedBody.message === 'string' && parsedBody.message.trim()) {
       message = parsedBody.message.trim()
       // Surface the first validation sub-error (strip pydantic's "Value error, " prefix)
       const errors = parsedBody.data?.errors
@@ -80,6 +97,7 @@ function makeApiError(response, parsedBody) {
   const err = new Error(message)
   err.status = response.status
   err.body = parsedBody
+  err.code = errorCode || null
   return err
 }
 
@@ -384,6 +402,11 @@ export async function createTopupSession(key, walletId, amountCents) {
   return body // { checkout_url, session_id }
 }
 
+export async function fetchWithdrawals(key, limit = 20) {
+  const { body } = await request(`/wallets/withdrawals?limit=${encodeURIComponent(String(limit))}`, { key })
+  return body // { withdrawals: [{ transfer_id, amount_cents, stripe_tx_id, memo, created_at, status }], count }
+}
+
 export async function fetchAgentEarnings(key) {
   const { body } = await request('/wallets/me/agent-earnings', { key })
   return body // { earnings: [{ agent_id, agent_name, total_earned_cents, call_count, last_earned_at }] }
@@ -425,4 +448,9 @@ export async function withdrawFunds(key, amountCents) {
     body: { amount_cents: amountCents },
   })
   return body // { status, transfer_id, amount_cents }
+}
+
+export async function fetchReconciliationRuns(key, limit = 5) {
+  const { body } = await request(`/ops/payments/reconcile/runs?limit=${encodeURIComponent(String(limit))}`, { key })
+  return body // { runs, count }
 }

@@ -3,6 +3,7 @@ os.environ.setdefault("API_KEY", "test-master-key")
 os.environ.setdefault("SERVER_BASE_URL", "http://localhost:8000")
 
 import sqlite3
+import threading
 import uuid
 from pathlib import Path
 
@@ -550,3 +551,48 @@ def test_payments_refund_is_blocked_after_payout_settlement(isolated_db):
             (charge_tx_id,),
         ).fetchone()["count"]
     assert int(refunds) == 0
+
+
+def test_concurrent_pre_call_charge_cannot_overdraw_wallet(isolated_db):
+    payments.init_payments_db()
+    caller = payments.get_or_create_wallet("user:concurrency-caller")
+    payments.deposit(caller["wallet_id"], 100, "concurrency seed funds")
+
+    successful_charges: list[str] = []
+    insufficient_count = 0
+    unexpected_errors: list[str] = []
+    lock = threading.Lock()
+    barrier = threading.Barrier(2)
+
+    def _attempt_charge() -> None:
+        nonlocal insufficient_count
+        barrier.wait()
+        try:
+            tx_id = payments.pre_call_charge(caller["wallet_id"], 100, "agent:concurrency")
+            with lock:
+                successful_charges.append(tx_id)
+        except payments.InsufficientBalanceError:
+            with lock:
+                insufficient_count += 1
+        except Exception as exc:  # pragma: no cover - defensive guard for threaded path
+            with lock:
+                unexpected_errors.append(str(exc))
+
+    t1 = threading.Thread(target=_attempt_charge, name="charge-race-1")
+    t2 = threading.Thread(target=_attempt_charge, name="charge-race-2")
+    t1.start()
+    t2.start()
+    t1.join(timeout=5)
+    t2.join(timeout=5)
+
+    assert len(successful_charges) == 1
+    assert insufficient_count == 1
+    assert not unexpected_errors
+    assert payments.get_wallet(caller["wallet_id"])["balance_cents"] == 0
+
+    with payments._conn() as conn:
+        charge_count = conn.execute(
+            "SELECT COUNT(*) AS count FROM transactions WHERE wallet_id = ? AND type = 'charge'",
+            (caller["wallet_id"],),
+        ).fetchone()["count"]
+    assert int(charge_count) == 1

@@ -200,6 +200,9 @@ _DEFAULT_DISPUTE_WINDOW_HOURS = 72
 _DEFAULT_DISPUTE_JUDGE_INTERVAL_SECONDS = 60  # auto-resolve pending disputes every 60s
 _DEFAULT_BUILTIN_JOB_WORKER_INTERVAL_SECONDS = 2
 _DEFAULT_BUILTIN_JOB_WORKER_BATCH_SIZE = 20
+_DEFAULT_TOPUP_DAILY_LIMIT_CENTS = 100_000
+_DEFAULT_PAYMENTS_RECONCILIATION_INTERVAL_SECONDS = 3600
+_DEFAULT_PAYMENTS_RECONCILIATION_MAX_MISMATCHES = 100
 _PROTOCOL_VERSION = "1.0"
 _PROTOCOL_VERSION_HEADER = "X-AgentMarket-Version"
 # $0.001 cannot be represented in integer cents; keep ledger integer-safe until millicent support exists.
@@ -367,6 +370,25 @@ _BUILTIN_JOB_WORKER_ENABLED = _env_bool(
     "BUILTIN_JOB_WORKER_ENABLED",
     default=_builtin_worker_interval > 0,
 )
+_TOPUP_DAILY_LIMIT_CENTS = _env_int(
+    "TOPUP_DAILY_LIMIT_CENTS",
+    _DEFAULT_TOPUP_DAILY_LIMIT_CENTS,
+    minimum=0,
+    maximum=5_000_000,
+)
+_PAYMENTS_RECONCILIATION_INTERVAL_SECONDS = _env_int(
+    "PAYMENTS_RECONCILIATION_INTERVAL_SECONDS",
+    _DEFAULT_PAYMENTS_RECONCILIATION_INTERVAL_SECONDS,
+    minimum=0,
+    maximum=24 * 3600,
+)
+_PAYMENTS_RECONCILIATION_MAX_MISMATCHES = _env_int(
+    "PAYMENTS_RECONCILIATION_MAX_MISMATCHES",
+    _DEFAULT_PAYMENTS_RECONCILIATION_MAX_MISMATCHES,
+    minimum=1,
+    maximum=1000,
+)
+_PAYMENTS_RECONCILIATION_ENABLED = _PAYMENTS_RECONCILIATION_INTERVAL_SECONDS > 0
 _SLO_CLAIM_P95_TARGET_MS = _env_int(
     "SLO_CLAIM_P95_TARGET_MS",
     60_000,
@@ -438,6 +460,17 @@ _DISPUTE_JUDGE_STATE_LOCK = threading.Lock()
 _DISPUTE_JUDGE_STATE = {
     "enabled": _DISPUTE_JUDGE_ENABLED,
     "interval_seconds": _DISPUTE_JUDGE_INTERVAL_SECONDS,
+    "running": False,
+    "started_at": None,
+    "last_run_at": None,
+    "last_summary": None,
+    "last_error": None,
+}
+_PAYMENTS_RECONCILIATION_STATE_LOCK = threading.Lock()
+_PAYMENTS_RECONCILIATION_STATE = {
+    "enabled": _PAYMENTS_RECONCILIATION_ENABLED,
+    "interval_seconds": _PAYMENTS_RECONCILIATION_INTERVAL_SECONDS,
+    "max_mismatches": _PAYMENTS_RECONCILIATION_MAX_MISMATCHES,
     "running": False,
     "started_at": None,
     "last_run_at": None,
@@ -956,6 +989,8 @@ async def lifespan(app: FastAPI):
     builtin_thread: threading.Thread | None = None
     dispute_judge_stop_event: threading.Event | None = None
     dispute_judge_thread: threading.Thread | None = None
+    payments_reconciliation_stop_event: threading.Event | None = None
+    payments_reconciliation_thread: threading.Thread | None = None
     if _SWEEPER_ENABLED:
         stop_event = threading.Event()
         sweeper_thread = threading.Thread(
@@ -1003,6 +1038,18 @@ async def lifespan(app: FastAPI):
         dispute_judge_thread.start()
     else:
         _set_dispute_judge_state(running=False)
+
+    if _PAYMENTS_RECONCILIATION_ENABLED:
+        payments_reconciliation_stop_event = threading.Event()
+        payments_reconciliation_thread = threading.Thread(
+            target=_payments_reconciliation_loop,
+            args=(payments_reconciliation_stop_event,),
+            daemon=True,
+            name="agentmarket-payments-reconciliation",
+        )
+        payments_reconciliation_thread.start()
+    else:
+        _set_payments_reconciliation_state(running=False)
     try:
         yield
     finally:
@@ -1022,6 +1069,10 @@ async def lifespan(app: FastAPI):
             dispute_judge_stop_event.set()
         if dispute_judge_thread is not None:
             dispute_judge_thread.join(timeout=2)
+        if payments_reconciliation_stop_event is not None:
+            payments_reconciliation_stop_event.set()
+        if payments_reconciliation_thread is not None:
+            payments_reconciliation_thread.join(timeout=2)
 
 
 # ---------------------------------------------------------------------------
@@ -2293,6 +2344,11 @@ def _set_dispute_judge_state(**updates: Any) -> None:
         _DISPUTE_JUDGE_STATE.update(updates)
 
 
+def _set_payments_reconciliation_state(**updates: Any) -> None:
+    with _PAYMENTS_RECONCILIATION_STATE_LOCK:
+        _PAYMENTS_RECONCILIATION_STATE.update(updates)
+
+
 def _coerce_string_list(value: Any) -> list[str]:
     if value is None:
         return []
@@ -2593,6 +2649,41 @@ def _dispute_judge_loop(stop_event: threading.Event) -> None:
                 last_error=str(exc),
             )
     _set_dispute_judge_state(running=False)
+
+
+def _payments_reconciliation_loop(stop_event: threading.Event) -> None:
+    _set_payments_reconciliation_state(running=True, started_at=_utc_now_iso())
+    while not stop_event.is_set():
+        started = _utc_now_iso()
+        try:
+            summary = payments.record_reconciliation_run(
+                max_mismatches=_PAYMENTS_RECONCILIATION_MAX_MISMATCHES
+            )
+            _set_payments_reconciliation_state(
+                last_run_at=started,
+                last_summary=summary,
+                last_error=None,
+            )
+            if not bool(summary.get("invariant_ok")):
+                logging_utils.log_event(
+                    _LOG,
+                    logging.ERROR,
+                    "payments.reconciliation_invariant_failed",
+                    {
+                        "run_id": summary.get("run_id"),
+                        "drift_cents": summary.get("drift_cents"),
+                        "mismatch_count": summary.get("mismatch_count"),
+                    },
+                )
+        except Exception as exc:
+            _LOG.exception("Payments reconciliation loop failed.")
+            _set_payments_reconciliation_state(
+                last_run_at=started,
+                last_error=str(exc),
+            )
+        if stop_event.wait(_PAYMENTS_RECONCILIATION_INTERVAL_SECONDS):
+            break
+    _set_payments_reconciliation_state(running=False)
 
 
 def _enqueue_job_event_hook_deliveries(event: dict) -> None:
@@ -3740,6 +3831,8 @@ def _jobs_metrics(sla_seconds: int = _DEFAULT_SLA_SECONDS) -> dict:
         builtin_worker_state = dict(_BUILTIN_WORKER_STATE)
     with _DISPUTE_JUDGE_STATE_LOCK:
         dispute_judge_state = dict(_DISPUTE_JUDGE_STATE)
+    with _PAYMENTS_RECONCILIATION_STATE_LOCK:
+        payments_reconciliation_state = dict(_PAYMENTS_RECONCILIATION_STATE)
 
     return {
         "status_counts": status_counts,
@@ -3756,6 +3849,7 @@ def _jobs_metrics(sla_seconds: int = _DEFAULT_SLA_SECONDS) -> dict:
         "hook_worker": hook_worker_state,
         "builtin_worker": builtin_worker_state,
         "dispute_judge": dispute_judge_state,
+        "payments_reconciliation": payments_reconciliation_state,
         "hook_delivery": {
             "status_counts": delivery_status_counts,
             "attempted_last_24h": int(delivery_attempted_24h),
@@ -4142,6 +4236,7 @@ def health() -> core_models.HealthResponse:
             rss_mb = round(proc.memory_info().rss / (1024 * 1024), 2)
             checks["memory"] = core_models.HealthCheckDetail(ok=True, rss_mb=rss_mb)
         except Exception as exc:
+            all_ok = False
             checks["memory"] = core_models.HealthCheckDetail(ok=False, error=str(exc))
 
     agent_count = len(registry.get_agents())
@@ -4952,9 +5047,8 @@ def registry_call(
     caller_owner_id = _caller_owner_id(request)
     price_cents     = _usd_to_cents(agent["price_per_call_usd"])
     caller_wallet   = payments.get_or_create_wallet(caller_owner_id)
-    # Route payout to the agent owner's wallet (the person who listed it).
-    # Built-in agents are owned by the system user whose wallet accumulates platform earnings.
-    _agent_payout_owner = str(agent.get("owner_id") or payments.PLATFORM_OWNER_ID)
+    # Payouts settle to the canonical agent wallet keyed by agent_id.
+    _agent_payout_owner = f"agent:{agent['agent_id']}"
     agent_wallet    = payments.get_or_create_wallet(_agent_payout_owner)
     platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
 
@@ -5172,7 +5266,7 @@ def jobs_create(
 
     price_cents = _usd_to_cents(agent["price_per_call_usd"])
     caller_wallet = payments.get_or_create_wallet(caller_owner_id)
-    _agent_payout_owner2 = str(agent.get("owner_id") or payments.PLATFORM_OWNER_ID)
+    _agent_payout_owner2 = f"agent:{agent['agent_id']}"
     agent_wallet = payments.get_or_create_wallet(_agent_payout_owner2)
     platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
 
@@ -6561,27 +6655,6 @@ def wallet_me_agent_earnings(
         enriched.append({**row, "agent_name": name})
     return JSONResponse(content={"earnings": enriched})
 
-
-@app.get(
-    "/wallets/{wallet_id}",
-    response_model=core_models.WalletResponse,
-    responses=_error_responses(401, 403, 404, 429, 500),
-)
-@limiter.limit("60/minute")
-def wallet_get(
-    request: Request,
-    wallet_id: str,
-    caller: core_models.CallerContext = Depends(_require_api_key),
-) -> core_models.WalletResponse:
-    wallet = payments.get_wallet(wallet_id)
-    if wallet is None:
-        raise HTTPException(status_code=404, detail=f"Wallet '{wallet_id}' not found.")
-    if caller["type"] != "master" and wallet["owner_id"] != caller["owner_id"]:
-        raise HTTPException(status_code=403, detail="Not authorized to view this wallet.")
-    txs = payments.get_wallet_transactions(wallet_id, limit=50)
-    return JSONResponse(content={**wallet, "transactions": txs})
-
-
 # ---------------------------------------------------------------------------
 # Run history
 # ---------------------------------------------------------------------------
@@ -6650,6 +6723,81 @@ def config_public() -> JSONResponse:
 # ---------------------------------------------------------------------------
 
 
+def _extract_stripe_error_code(exc: Exception) -> str:
+    code = getattr(exc, "code", None)
+    if code:
+        return str(code).strip().lower()
+    nested = getattr(exc, "error", None)
+    nested_code = getattr(nested, "code", None) if nested is not None else None
+    if nested_code:
+        return str(nested_code).strip().lower()
+    return ""
+
+
+def _stripe_http_error(operation: str, exc: Exception) -> tuple[int, dict[str, Any]]:
+    code = _extract_stripe_error_code(exc)
+    message = str(exc or "").strip().lower()
+    if code in {"insufficient_funds", "balance_insufficient"} or "insufficient" in message:
+        return 400, {
+            "error": "payment.stripe_insufficient_funds",
+            "message": "Payouts are temporarily unavailable because Stripe platform balance is insufficient.",
+            "data": {"stripe_code": code or None, "operation": operation},
+        }
+    if code in {"account_closed", "account_invalid", "no_such_destination"} or "no such destination" in message:
+        return 400, {
+            "error": "payment.stripe_destination_invalid",
+            "message": "Your connected payout account is unavailable. Reconnect your bank account and try again.",
+            "data": {"stripe_code": code or None, "operation": operation},
+        }
+    if "signed up for connect" in message or "connect is not enabled" in message:
+        return 503, {
+            "error": "payment.stripe_connect_unavailable",
+            "message": "Stripe Connect is not enabled for this server account.",
+            "data": {"stripe_code": code or None, "operation": operation},
+        }
+    if code in {"rate_limit", "rate_limit_error"}:
+        return 429, {
+            "error": "payment.stripe_rate_limited",
+            "message": "Stripe is rate-limiting requests right now. Please retry shortly.",
+            "data": {"stripe_code": code or None, "operation": operation},
+        }
+    if code in {"authentication_error", "permission_error"}:
+        return 503, {
+            "error": "payment.stripe_auth_error",
+            "message": "Payment processing is temporarily unavailable due to Stripe configuration.",
+            "data": {"stripe_code": code or None, "operation": operation},
+        }
+    if code in {"api_connection_error", "api_error"}:
+        return 502, {
+            "error": "payment.stripe_upstream_error",
+            "message": "Stripe is temporarily unavailable. Please try again.",
+            "data": {"stripe_code": code or None, "operation": operation},
+        }
+    return 502, {
+        "error": "payment.stripe_error",
+        "message": "Stripe request failed. Please try again.",
+        "data": {"stripe_code": code or None, "operation": operation},
+    }
+
+
+def _wallet_stripe_topup_total_last_24h(wallet_id: str) -> int:
+    window_start = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    import sqlite3 as _sqlite3
+
+    with _sqlite3.connect(jobs.DB_PATH) as conn:
+        row = conn.execute(
+            """
+            SELECT COALESCE(SUM(amount_cents), 0) AS total
+            FROM stripe_sessions
+            WHERE wallet_id = ? AND processed_at >= ?
+            """,
+            (wallet_id, window_start),
+        ).fetchone()
+    if row is None:
+        return 0
+    return int(row[0] or 0)
+
+
 @app.post(
     "/wallets/topup/session",
     tags=["wallet"],
@@ -6672,30 +6820,51 @@ def create_topup_session(
         raise HTTPException(status_code=403, detail="Not authorized to top up this wallet.")
     if not (100 <= body.amount_cents <= 50000):
         raise HTTPException(status_code=400, detail="Amount must be between $1.00 and $500.00.")
+    if _TOPUP_DAILY_LIMIT_CENTS > 0:
+        used_last_24h = _wallet_stripe_topup_total_last_24h(body.wallet_id)
+        projected_total = used_last_24h + int(body.amount_cents)
+        if projected_total > _TOPUP_DAILY_LIMIT_CENTS:
+            limit_usd = _TOPUP_DAILY_LIMIT_CENTS / 100
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "payment.topup_daily_limit_exceeded",
+                    "message": f"Daily top-up limit exceeded (${limit_usd:,.2f}/24h).",
+                    "data": {
+                        "limit_cents": _TOPUP_DAILY_LIMIT_CENTS,
+                        "used_cents_last_24h": used_last_24h,
+                        "requested_cents": int(body.amount_cents),
+                    },
+                },
+            )
 
     _stripe_lib.api_key = _STRIPE_SECRET_KEY
-    session = _stripe_lib.checkout.Session.create(
-        payment_method_types=["card"],
-        line_items=[{
-            "price_data": {
-                "currency": "usd",
-                "product_data": {
-                    "name": "AgentMarket wallet top-up",
-                    "description": f"Add ${body.amount_cents / 100:.2f} to your AgentMarket wallet.",
+    try:
+        session = _stripe_lib.checkout.Session.create(
+            payment_method_types=["card"],
+            line_items=[{
+                "price_data": {
+                    "currency": "usd",
+                    "product_data": {
+                        "name": "AgentMarket wallet top-up",
+                        "description": f"Add ${body.amount_cents / 100:.2f} to your AgentMarket wallet.",
+                    },
+                    "unit_amount": body.amount_cents,
                 },
-                "unit_amount": body.amount_cents,
+                "quantity": 1,
+            }],
+            mode="payment",
+            client_reference_id=body.wallet_id,
+            metadata={
+                "wallet_id": body.wallet_id,
+                "owner_id": caller["owner_id"],
             },
-            "quantity": 1,
-        }],
-        mode="payment",
-        client_reference_id=body.wallet_id,
-        metadata={
-            "wallet_id": body.wallet_id,
-            "owner_id": caller["owner_id"],
-        },
-        success_url=f"{_FRONTEND_BASE_URL}/wallet?payment=success&session_id={{CHECKOUT_SESSION_ID}}",
-        cancel_url=f"{_FRONTEND_BASE_URL}/wallet?payment=cancelled",
-    )
+            success_url=f"{_FRONTEND_BASE_URL}/wallet?payment=success&session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=f"{_FRONTEND_BASE_URL}/wallet?payment=cancelled",
+        )
+    except Exception as exc:
+        status_code, payload = _stripe_http_error("topup_session", exc)
+        raise HTTPException(status_code=status_code, detail=payload)
     return JSONResponse({"checkout_url": session.url, "session_id": session.id})
 
 
@@ -6813,13 +6982,8 @@ def connect_onboard(
                 capabilities={"transfers": {"requested": True}},
             )
         except Exception as exc:
-            err_str = str(exc)
-            if "signed up for Connect" in err_str or "connect" in err_str.lower():
-                raise HTTPException(
-                    status_code=503,
-                    detail="Stripe Connect is not enabled on this account. Enable it at https://dashboard.stripe.com/connect",
-                )
-            raise HTTPException(status_code=502, detail=f"Stripe error: {exc}")
+            status_code, payload = _stripe_http_error("connect_onboard_account_create", exc)
+            raise HTTPException(status_code=status_code, detail=payload)
         existing_account_id = account.id
         import sqlite3 as _sqlite3
         with _sqlite3.connect(jobs.DB_PATH) as _ac_conn:
@@ -6840,7 +7004,8 @@ def connect_onboard(
             type="account_onboarding",
         )
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Stripe error generating onboarding link: {exc}")
+        status_code, payload = _stripe_http_error("connect_onboard_link_create", exc)
+        raise HTTPException(status_code=status_code, detail=payload)
     return JSONResponse({"onboarding_url": link.url, "account_id": existing_account_id})
 
 
@@ -6954,7 +7119,6 @@ def withdraw(
             destination=account_id,
         )
     except Exception as exc:
-        err_str = str(exc)
         # Refund the wallet charge on Stripe failure
         try:
             payments.deposit(
@@ -6964,11 +7128,8 @@ def withdraw(
             )
         except Exception:
             _LOG.exception("Critical: failed to refund withdrawal for wallet %s", wallet["wallet_id"])
-        if "signed up for Connect" in err_str or "no such destination" in err_str.lower():
-            raise HTTPException(status_code=503, detail="Stripe Connect is not fully configured. Enable it at https://dashboard.stripe.com/connect")
-        if "insufficient" in err_str.lower():
-            raise HTTPException(status_code=400, detail="Insufficient Stripe platform balance. Add test balance at dashboard.stripe.com/balance.")
-        raise HTTPException(status_code=502, detail=f"Stripe transfer failed: {exc}")
+        status_code, payload = _stripe_http_error("withdraw_transfer", exc)
+        raise HTTPException(status_code=status_code, detail=payload)
 
     # Record the transfer for audit
     import sqlite3 as _sqlite3
@@ -6997,3 +7158,46 @@ def withdraw(
         "transfer_id": transfer.id,
         "amount_cents": body.amount_cents,
     })
+
+
+@app.get(
+    "/wallets/withdrawals",
+    response_model=core_models.WalletWithdrawalsResponse,
+    tags=["wallet"],
+    summary="List withdrawal audit history for the authenticated caller wallet.",
+    responses=_error_responses(401, 403, 404, 422, 429, 500),
+)
+@limiter.limit("30/minute")
+def wallet_withdrawals(
+    request: Request,
+    limit: int = 20,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.WalletWithdrawalsResponse:
+    _require_scope(caller, "caller")
+    if limit <= 0:
+        raise HTTPException(status_code=422, detail="limit must be > 0.")
+    wallet = payments.get_wallet_by_owner(caller["owner_id"])
+    if wallet is None:
+        raise HTTPException(status_code=404, detail="Wallet not found.")
+    withdrawals = payments.list_connect_withdrawals(wallet["wallet_id"], limit=limit)
+    return JSONResponse(content={"withdrawals": withdrawals, "count": len(withdrawals)})
+
+
+@app.get(
+    "/wallets/{wallet_id}",
+    response_model=core_models.WalletResponse,
+    responses=_error_responses(401, 403, 404, 429, 500),
+)
+@limiter.limit("60/minute")
+def wallet_get(
+    request: Request,
+    wallet_id: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.WalletResponse:
+    wallet = payments.get_wallet(wallet_id)
+    if wallet is None:
+        raise HTTPException(status_code=404, detail=f"Wallet '{wallet_id}' not found.")
+    if caller["type"] != "master" and wallet["owner_id"] != caller["owner_id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to view this wallet.")
+    txs = payments.get_wallet_transactions(wallet_id, limit=50)
+    return JSONResponse(content={**wallet, "transactions": txs})

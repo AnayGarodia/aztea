@@ -1481,6 +1481,21 @@ class WalletResponse(BaseModel):
     transactions: list[JSONObject] = Field(default_factory=list)
 
 
+class WalletWithdrawalResponse(BaseModel):
+    transfer_id: str
+    wallet_id: str
+    amount_cents: int
+    stripe_tx_id: str
+    memo: str | None = None
+    created_at: str
+    status: str
+
+
+class WalletWithdrawalsResponse(BaseModel):
+    withdrawals: list[WalletWithdrawalResponse] = Field(default_factory=list)
+    count: int = 0
+
+
 class RunsResponse(BaseModel):
     runs: list[JSONObject]
     skipped_lines: int = 0

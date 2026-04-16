@@ -31,19 +31,19 @@ Items are grouped by area and roughly prioritized within each section.
 - [x] ~~Verify `account.updated` webhook~~ — now checks both `charges_enabled` and `payouts_enabled`.
 - [x] ~~Stripe webhook signature verification~~ — already implemented via `stripe.Webhook.construct_event()` + `STRIPE_WEBHOOK_SECRET`.
 - [x] ~~Minimum withdrawal amount~~ — enforced at $1.00 minimum (100 cents) in `POST /wallets/withdraw`.
-- [ ] **Stripe error code mapping** — map Stripe error codes (insufficient_funds, account_closed, etc.) to user-readable frontend messages.
-- [ ] **Withdrawal audit trail** — `stripe_connect_transfers` table exists but is never queried; add `GET /wallets/withdrawals` endpoint + frontend history view.
+- [x] ~~**Stripe error code mapping** — map Stripe error codes (insufficient_funds, account_closed, etc.) to user-readable frontend messages.~~
+- [x] ~~**Withdrawal audit trail** — `stripe_connect_transfers` table exists but is never queried; add `GET /wallets/withdrawals` endpoint + frontend history view.~~
 
 ### 2.2 Deposit Flow (real money in)
 - [x] ~~Real deposit endpoint~~ — `/wallets/topup/session` creates a Stripe Checkout session; frontend WalletPage has the full flow.
 - [x] ~~Deposit webhook handler~~ — `checkout.session.completed` handled in `/stripe/webhook`.
 - [x] ~~Deposit confirmation UI~~ — WalletPage has both Stripe Checkout path and demo deposit path with banner on return.
-- [ ] **Deposit limits** — currently capped at $500/session in code; enforce per-day limits to prevent fraud.
+- [x] ~~**Deposit limits** — currently capped at $500/session in code; enforce per-day limits to prevent fraud.~~
 
 ### 2.3 Ledger Health
-- [ ] **Scheduled reconciliation** — run `payments.record_reconciliation_run()` on a cron (e.g. every hour) and alert if `invariant_ok == false`.
-- [ ] **Expose reconciliation results** to admin dashboard.
-- [ ] **Negative balance guard** — SQLite CHECK constraint `balance_cents >= 0` exists on wallets; add explicit test that concurrent charges cannot race to negative.
+- [x] ~~**Scheduled reconciliation** — run `payments.record_reconciliation_run()` on a cron (e.g. every hour) and alert if `invariant_ok == false`.~~
+- [x] ~~**Expose reconciliation results** to admin dashboard.~~
+- [x] ~~**Negative balance guard** — SQLite CHECK constraint `balance_cents >= 0` exists on wallets; add explicit test that concurrent charges cannot race to negative.~~
 
 ---
 

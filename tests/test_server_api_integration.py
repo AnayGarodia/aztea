@@ -11,6 +11,7 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -1326,6 +1327,104 @@ def test_payments_reconciliation_and_settlement_trace_endpoints(client):
     )
     assert runs.status_code == 200, runs.text
     assert any(item["run_id"] == run_id for item in runs.json()["runs"])
+
+
+def test_topup_session_enforces_daily_limit(client, monkeypatch):
+    user = _register_user()
+    wallet = payments.get_or_create_wallet(f"user:{user['user_id']}")
+
+    import sqlite3
+
+    with sqlite3.connect(jobs.DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO stripe_sessions (session_id, wallet_id, amount_cents, processed_at) VALUES (?, ?, ?, ?)",
+            (
+                f"cs_{uuid.uuid4().hex[:10]}",
+                wallet["wallet_id"],
+                9_500,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        conn.commit()
+
+    fake_checkout = SimpleNamespace(
+        Session=SimpleNamespace(
+            create=lambda **kwargs: SimpleNamespace(url="https://checkout.example/session", id="cs_test_123")
+        )
+    )
+    monkeypatch.setattr(server, "_STRIPE_AVAILABLE", True)
+    monkeypatch.setattr(server, "_STRIPE_SECRET_KEY", "sk_test_123")
+    monkeypatch.setattr(server, "_TOPUP_DAILY_LIMIT_CENTS", 10_000)
+    monkeypatch.setattr(server, "_stripe_lib", SimpleNamespace(api_key=None, checkout=fake_checkout))
+
+    blocked = client.post(
+        "/wallets/topup/session",
+        headers=_auth_headers(user["raw_api_key"]),
+        json={"wallet_id": wallet["wallet_id"], "amount_cents": 600},
+    )
+    assert blocked.status_code == 400, blocked.text
+    blocked_body = blocked.json()
+    assert blocked_body["error"] == "payment.topup_daily_limit_exceeded"
+    assert blocked_body["details"]["limit_cents"] == 10_000
+
+    allowed = client.post(
+        "/wallets/topup/session",
+        headers=_auth_headers(user["raw_api_key"]),
+        json={"wallet_id": wallet["wallet_id"], "amount_cents": 500},
+    )
+    assert allowed.status_code == 200, allowed.text
+    assert allowed.json()["session_id"] == "cs_test_123"
+
+
+def test_wallet_withdrawals_returns_only_caller_wallet_history(client):
+    user = _register_user()
+    other = _register_user()
+    wallet = payments.get_or_create_wallet(f"user:{user['user_id']}")
+    other_wallet = payments.get_or_create_wallet(f"user:{other['user_id']}")
+
+    import sqlite3
+
+    now = datetime.now(timezone.utc).isoformat()
+    with sqlite3.connect(jobs.DB_PATH) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS stripe_connect_transfers (
+                transfer_id   TEXT PRIMARY KEY,
+                wallet_id     TEXT NOT NULL,
+                amount_cents  INTEGER NOT NULL,
+                stripe_tx_id  TEXT NOT NULL,
+                memo          TEXT,
+                created_at    TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO stripe_connect_transfers
+                (transfer_id, wallet_id, amount_cents, stripe_tx_id, memo, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (str(uuid.uuid4()), wallet["wallet_id"], 1234, "tr_user_123", "Withdrawal to bank", now),
+        )
+        conn.execute(
+            """
+            INSERT INTO stripe_connect_transfers
+                (transfer_id, wallet_id, amount_cents, stripe_tx_id, memo, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (str(uuid.uuid4()), other_wallet["wallet_id"], 4321, "tr_other_456", "Other withdrawal", now),
+        )
+        conn.commit()
+
+    response = client.get("/wallets/withdrawals?limit=10", headers=_auth_headers(user["raw_api_key"]))
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["count"] == 1
+    assert len(body["withdrawals"]) == 1
+    item = body["withdrawals"][0]
+    assert item["wallet_id"] == wallet["wallet_id"]
+    assert item["amount_cents"] == 1234
+    assert item["status"] == "complete"
 
 
 def test_outbound_url_validation_blocks_private_targets_by_default(client):
