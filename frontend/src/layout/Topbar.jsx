@@ -17,11 +17,11 @@ export default function Topbar({ crumbs = [] }) {
     <header className="topbar">
       <nav className="topbar__breadcrumb" aria-label="Breadcrumb">
         {crumbs.map((c, i) => (
-          <span key={i} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            {i > 0 && <ChevronRight size={13} />}
+          <span key={i} className="topbar__crumb-wrap">
+            {i > 0 && <ChevronRight size={12} className="topbar__crumb-sep" />}
             {c.to
-              ? <Link to={c.to}>{c.label}</Link>
-              : <span className="topbar__breadcrumb-current">{c.label}</span>
+              ? <Link to={c.to} className="topbar__crumb-link">{c.label}</Link>
+              : <span className="topbar__crumb-current">{c.label}</span>
             }
           </span>
         ))}
@@ -35,7 +35,7 @@ export default function Topbar({ crumbs = [] }) {
         >
           <span className="topbar__balance-dot" />
           <span className="topbar__balance-label">Balance</span>
-          <span>{fmtBalance(balance)}</span>
+          <span className="topbar__balance-value">{fmtBalance(balance)}</span>
         </Link>
       </div>
     </header>

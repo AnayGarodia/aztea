@@ -1,4 +1,4 @@
-import { AnimatePresence, motion } from 'framer-motion'
+import { AnimatePresence, motion } from 'motion/react'
 import { CheckCircle, XCircle, Info, AlertTriangle } from 'lucide-react'
 import './Toast.css'
 

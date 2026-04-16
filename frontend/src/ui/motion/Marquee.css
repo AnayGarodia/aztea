@@ -1,0 +1,35 @@
+.marquee {
+  overflow: hidden;
+  display: flex;
+  width: 100%;
+  user-select: none;
+}
+
+.marquee__track {
+  display: flex;
+  gap: var(--marquee-gap, 32px);
+  animation: marquee-scroll linear infinite;
+  flex-shrink: 0;
+  min-width: 100%;
+}
+
+.marquee__track:hover {
+  animation-play-state: paused;
+}
+
+.marquee__content {
+  display: flex;
+  gap: var(--marquee-gap, 32px);
+  flex-shrink: 0;
+  min-width: max-content;
+  align-items: center;
+}
+
+@keyframes marquee-scroll {
+  from { transform: translateX(0); }
+  to   { transform: translateX(calc(-50% - var(--marquee-gap, 32px) / 2)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .marquee__track { animation: none; }
+}

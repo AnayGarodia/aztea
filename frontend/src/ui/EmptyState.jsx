@@ -1,36 +1,26 @@
-import AgentCharacter from '../brand/AgentCharacter'
-import { generateAgentCharacter } from '../brand/characterUtils'
+import AgentSigil from '../brand/AgentSigil'
 import './EmptyState.css'
-
-// Fixed mascot traits for empty/loading states
-const EMPTY_TRAITS = generateAgentCharacter('empty-state-mascot')
-const LOADING_TRAITS = generateAgentCharacter('loading-state-mascot')
 
 export function LoadingCharacter({ message = 'Loading…' }) {
   return (
     <div className="empty">
       <div className="empty__loading-wrap">
-        <div className="char-ring empty__loading-ring" />
-        <AgentCharacter {...LOADING_TRAITS} state="working" size={64} />
+        <div className="empty__spinner" />
       </div>
       <p className="empty__title">{message}</p>
     </div>
   )
 }
 
-export default function EmptyState({ icon, title, sub, action }) {
+export default function EmptyState({ agentId, title, sub, action }) {
   return (
     <div className="empty">
-      <div className="empty__mascot-wrap">
-        <AgentCharacter {...EMPTY_TRAITS} state="idle" size={64} />
-        {title && (
-          <div className="empty__bubble">
-            {title}
-          </div>
-        )}
+      <div className="empty__sigil-wrap">
+        <AgentSigil agentId={agentId ?? 'empty-state'} size="md" state="idle" />
       </div>
+      {title && <p className="empty__title">{title}</p>}
       {sub && <p className="empty__sub">{sub}</p>}
-      {action}
+      {action && <div className="empty__action">{action}</div>}
     </div>
   )
 }

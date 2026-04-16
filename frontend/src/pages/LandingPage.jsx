@@ -1,165 +1,185 @@
 import { useEffect, useState } from 'react'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'motion/react'
 import { fetchAgents } from '../api'
 import AuthPanel from '../features/auth/AuthPanel'
-import AgentCharacter from '../brand/AgentCharacter'
-import { generateAgentCharacter } from '../brand/characterUtils'
+import AgentSigil from '../brand/AgentSigil'
+import GradientBeams from '../ui/motion/GradientBeams'
+import Marquee from '../ui/motion/Marquee'
+import Reveal from '../ui/motion/Reveal'
+import Stagger from '../ui/motion/Stagger'
+import Counter from '../ui/motion/Counter'
+import Tilt from '../ui/motion/Tilt'
+import Spotlight from '../ui/motion/Spotlight'
 import './LandingPage.css'
 
 const TICKER_ITEMS = [
-  '✓ Financial Research · AAPL 10-K · $0.01 · 2.1s',
-  '✓ Code Review · auth.py · $0.02 · 3.4s',
-  '✓ Text Intelligence · earnings Q3 · $0.01 · 1.8s',
-  '✓ Financial Research · MSFT · $0.01 · 2.6s',
-  '✓ Code Review · inference.go · $0.02 · 4.1s',
-  '✓ Text Intelligence · product brief · $0.01 · 1.3s',
+  { text: 'Financial Research · AAPL 10-K · $0.01 · 2.1s', ok: true },
+  { text: 'Code Review · auth.py · $0.02 · 3.4s', ok: true },
+  { text: 'Text Intelligence · earnings Q3 · $0.01 · 1.8s', ok: true },
+  { text: 'Scenario Simulator · stress test · $0.03 · 5.2s', ok: true },
+  { text: 'Portfolio Planner · rebalance · $0.02 · 2.9s', ok: true },
+  { text: 'Negotiation Agent · term sheet · $0.03 · 4.7s', ok: true },
 ]
 
-const STEPS = [
+const PILLARS = [
   {
-    char: 'step-agent-one',
-    bg: '#58CC02',
+    id: 'pillar-discover',
     n: '01',
-    h: 'Discover trusted agents',
-    b: 'Browse by tag, compare reliability, price, and latency, then choose the best fit.',
+    title: 'Discover specialists',
+    body: 'Browse by capability tag. Compare reliability scores, latency, and pricing before you commit a single token.',
   },
   {
-    char: 'step-agent-two',
-    bg: '#1CB0F6',
+    id: 'pillar-invoke',
     n: '02',
-    h: 'Run instantly or queue jobs',
-    b: 'Use sync calls for immediate outputs, or async jobs when work may take longer.',
+    title: 'Invoke with confidence',
+    body: 'Sync calls return immediately. Async jobs queue work and settle automatically — charge on start, payout on success, refund on failure.',
   },
   {
-    char: 'step-agent-three',
-    bg: '#CE82FF',
+    id: 'pillar-trust',
     n: '03',
-    h: 'Track progress and settle safely',
-    b: 'Monitor jobs, review outputs, and rely on automatic payout/refund handling.',
+    title: 'Reputation that compounds',
+    body: 'Every job feeds a trust layer. Dispute resolution, quality judging, and rating data build a moat no scraper can replicate.',
   },
 ]
 
-const PATHS = [
-  {
-    title: 'I want to hire agents',
-    bullets: [
-      'Browse the Agents page and inspect trust and pricing.',
-      'Open an agent profile and submit schema-based input.',
-      'Monitor async jobs in Jobs and keep your wallet funded.',
-    ],
-  },
-  {
-    title: 'I want to list my own agent',
-    bullets: [
-      'Register from Agents with endpoint, tags, and price.',
-      'Provide input/output JSON schemas so callers know what to send.',
-      'Keep endpoint responses stable to build trust and repeat demand.',
-    ],
-  },
+const DEMO_LINES = [
+  { delay: 0,    text: '$ curl -X POST /registry/agents/financial-research/call \\' },
+  { delay: 0.5,  text: '  -H "Authorization: Bearer sk-..." \\' },
+  { delay: 1.0,  text: '  -d \'{"ticker": "AAPL", "period": "Q3 2024"}\'' },
+  { delay: 1.6,  text: '' },
+  { delay: 1.8,  text: '{ "status": "complete", "cost_usd": 0.01,', accent: true },
+  { delay: 2.1,  text: '  "result": { "summary": "AAPL Q3 revenue…',  accent: true },
+  { delay: 2.4,  text: '    "sentiment": "bullish", "key_risks": […] }', accent: true },
+  { delay: 2.7,  text: '}', accent: true },
 ]
 
-const WORKING_TRAITS = generateAgentCharacter('landing-working-mascot')
-const SQUAD_IDS = ['squad-alpha', 'squad-beta', 'squad-gamma', 'squad-delta']
+const STATS = [
+  { label: 'agents live', val: null /* dynamic */ },
+  { label: 'avg success rate', val: 98, suffix: '%' },
+  { label: 'median latency', val: 2.8, suffix: 's', decimals: 1 },
+  { label: 'refund on failure', val: 100, suffix: '%' },
+]
 
-const fadeUp = (delay = 0) => ({
-  initial: { opacity: 0, y: 28 },
-  animate: { opacity: 1, y: 0 },
-  transition: { duration: 0.55, delay, ease: [0.25, 0.4, 0.25, 1] },
-})
-
-function Ticker() {
-  const doubled = [...TICKER_ITEMS, ...TICKER_ITEMS]
+function TerminalDemo() {
+  const [visible, setVisible] = useState(0)
+  useEffect(() => {
+    const timers = DEMO_LINES.map((l, i) =>
+      setTimeout(() => setVisible(i + 1), (l.delay + 1) * 1000)
+    )
+    return () => timers.forEach(clearTimeout)
+  }, [])
   return (
-    <div className="lp__ticker-track">
-      <div className="lp__ticker-scroll">
-        {doubled.map((t, i) => (
-          <span key={i} className="lp__ticker-item">{t}</span>
+    <div className="lp__terminal">
+      <div className="lp__terminal-bar">
+        <span className="lp__terminal-dot lp__terminal-dot--red" />
+        <span className="lp__terminal-dot lp__terminal-dot--yellow" />
+        <span className="lp__terminal-dot lp__terminal-dot--green" />
+        <span className="lp__terminal-title">agentmarket / invoke</span>
+      </div>
+      <div className="lp__terminal-body">
+        {DEMO_LINES.slice(0, visible).map((l, i) => (
+          <div key={i} className={`lp__terminal-line ${l.accent ? 'lp__terminal-line--accent' : ''}`}>
+            {l.text || <br />}
+          </div>
         ))}
+        {visible < DEMO_LINES.length && (
+          <span className="lp__terminal-cursor" aria-hidden />
+        )}
       </div>
     </div>
   )
 }
 
-function TeamPhotoStrip() {
-  return (
-    <div className="lp__squad">
-      {SQUAD_IDS.map((id, i) => {
-        const traits = generateAgentCharacter(id)
-        return (
-          <motion.div
-            key={id}
-            className="lp__squad-member"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.5 + i * 0.1, duration: 0.5, ease: [0.25, 0.4, 0.25, 1] }}
-          >
-            <AgentCharacter {...traits} state="idle" size={100} animDelay={i * 0.35} />
-            <div className="lp__squad-shadow" />
-          </motion.div>
-        )
-      })}
-    </div>
-  )
-}
-
 export default function LandingPage() {
-  const [agentCount, setAgentCount] = useState(3)
-  const [agentCountUnavailable, setAgentCountUnavailable] = useState(false)
+  const [agents, setAgents] = useState([])
+  const [agentCount, setAgentCount] = useState(9)
 
   useEffect(() => {
     fetchAgents(null)
       .then(r => {
-        if (r?.agents?.length) setAgentCount(r.agents.length)
-        setAgentCountUnavailable(false)
+        if (r?.agents?.length) {
+          setAgentCount(r.agents.length)
+          setAgents(r.agents.slice(0, 6))
+        }
       })
-      .catch(() => {
-        setAgentCountUnavailable(true)
-      })
+      .catch(() => {})
   }, [])
 
   const scrollTo = (id) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })
 
   return (
     <div className="lp">
-      <header className="lp__nav">
+      {/* ── Nav ── */}
+      <header className="lp__nav glass">
         <div className="lp__nav-brand">
-          <div className="lp__nav-logo">AM</div>
+          <div className="lp__nav-logo">
+            <svg width="16" height="16" viewBox="0 0 18 18" fill="none">
+              <path d="M9 2L16 14H2L9 2Z" fill="currentColor" opacity="0.9" />
+              <path d="M9 6L13 14H5L9 6Z" fill="currentColor" opacity="0.45" />
+            </svg>
+          </div>
           <span className="lp__nav-wordmark">agentmarket</span>
         </div>
-        <motion.button
-          className="lp__nav-cta"
-          onClick={() => scrollTo('lp-auth')}
-          whileHover={{ y: -1 }}
-          whileTap={{ scale: 0.96 }}
-        >
-          Get started
-        </motion.button>
+        <div className="lp__nav-actions">
+          <button className="lp__nav-link" onClick={() => scrollTo('lp-how')}>How it works</button>
+          <motion.button
+            className="lp__nav-cta"
+            onClick={() => scrollTo('lp-auth')}
+            whileHover={{ scale: 1.03, boxShadow: '0 0 20px var(--accent-glow)' }}
+            whileTap={{ scale: 0.97 }}
+          >
+            Get started
+          </motion.button>
+        </div>
       </header>
 
+      {/* ── Hero ── */}
       <section className="lp__hero">
-        <div className="lp__hero-content">
-          <motion.div className="lp__hero-badge" {...fadeUp(0.3)}>
-            <span className="lp__hero-pip" aria-hidden="true" />
-            {agentCountUnavailable ? 'Live agent count unavailable' : `${agentCount} agents live now`}
+        <GradientBeams />
+        <div className="lp__hero-inner">
+          <motion.div
+            className="lp__hero-badge"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.2, duration: 0.5 }}
+          >
+            <span className="status-dot" style={{ width: 6, height: 6 }} />
+            <span className="t-mono" style={{ fontSize: '0.75rem', color: 'var(--accent)' }}>
+              {agentCount} agents live
+            </span>
           </motion.div>
 
-          <motion.h1 className="lp__hero-title" {...fadeUp(0.45)}>
-            The economy for<br />
-            <span className="lp__hero-title-em">AI agents.</span>
+          <motion.h1
+            className="lp__hero-title t-display-xl"
+            initial={{ opacity: 0, y: 24 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.35, duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
+          >
+            The labor market<br />
+            <span className="lp__hero-em">for AI agents.</span>
           </motion.h1>
 
-          <motion.p className="lp__hero-sub" {...fadeUp(0.55)}>
-            Discover specialists, run calls or jobs, and settle payments with transparent wallet and trust signals.
+          <motion.p
+            className="lp__hero-sub"
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.5, duration: 0.55 }}
+          >
+            Specialists that do one thing well — discoverable, hireable, payable.
+            Every job builds a reputation layer that compounds into a moat.
           </motion.p>
 
-          <TeamPhotoStrip />
-
-          <motion.div className="lp__hero-actions" {...fadeUp(0.75)}>
+          <motion.div
+            className="lp__hero-actions"
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.65, duration: 0.5 }}
+          >
             <motion.button
               className="lp__btn-primary"
               onClick={() => scrollTo('lp-auth')}
-              whileHover={{ y: -2 }}
-              whileTap={{ scale: 0.96 }}
+              whileHover={{ y: -2, boxShadow: '0 0 32px var(--accent-glow)' }}
+              whileTap={{ scale: 0.97 }}
             >
               Enter the marketplace
             </motion.button>
@@ -167,142 +187,190 @@ export default function LandingPage() {
               className="lp__btn-ghost"
               onClick={() => scrollTo('lp-how')}
               whileHover={{ y: -1 }}
-              whileTap={{ scale: 0.97 }}
+              whileTap={{ scale: 0.98 }}
             >
-              How it works
+              How it works ↓
             </motion.button>
           </motion.div>
 
-          <motion.div className="lp__hero-mascot" {...fadeUp(1.0)}>
-            <div className="lp__speech-bubble">Ready to work.</div>
-            <div className="lp__speech-bubble-tail" aria-hidden="true" />
-            <AgentCharacter {...WORKING_TRAITS} state="working" size={140} />
-          </motion.div>
-        </div>
-      </section>
-
-      <section className="lp__quickstart">
-        <h2 className="lp__quickstart-title">First 5 minutes</h2>
-        <div className="lp__quickstart-grid">
-          <article className="lp__quickstart-card">
-            <span>1</span>
-            <p>Create an account</p>
-          </article>
-          <article className="lp__quickstart-card">
-            <span>2</span>
-            <p>Browse and compare agents</p>
-          </article>
-          <article className="lp__quickstart-card">
-            <span>3</span>
-            <p>Run sync calls or async jobs</p>
-          </article>
-          <article className="lp__quickstart-card">
-            <span>4</span>
-            <p>Track jobs + wallet in one place</p>
-          </article>
-        </div>
-      </section>
-
-      <div className="lp__ticker">
-        <div className="lp__ticker-label">LIVE</div>
-        <Ticker />
-      </div>
-
-      <section className="lp__how" id="lp-how">
-        <motion.p
-          className="lp__section-eyebrow"
-          initial={{ opacity: 0 }} whileInView={{ opacity: 1 }} viewport={{ once: true }}
-        >
-          How it works
-        </motion.p>
-        <p className="lp__how-intro">
-          Agentmarket gives you one control plane to discover, invoke, pay, and monitor.
-        </p>
-        <div className="lp__steps">
-          {STEPS.map((s, i) => {
-            const traits = generateAgentCharacter(s.char)
-            return (
-              <motion.div
-                key={i}
-                className="lp__step"
-                style={{ background: s.bg }}
-                initial={{ opacity: 0, y: 32 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true }}
-                transition={{ delay: i * 0.12, duration: 0.5 }}
-              >
-                <div className="lp__step-char">
-                  <AgentCharacter state="working" size={72} {...traits} />
-                </div>
-                <span className="lp__step-n">{s.n}</span>
-                <h3 className="lp__step-h">{s.h}</h3>
-                <p className="lp__step-b">{s.b}</p>
-              </motion.div>
-            )
-          })}
-        </div>
-      </section>
-
-      <section className="lp__paths">
-        {PATHS.map((path) => (
-          <article key={path.title} className="lp__path-card">
-            <h3>{path.title}</h3>
-            <ul>
-              {path.bullets.map((bullet) => (
-                <li key={bullet}>{bullet}</li>
-              ))}
-            </ul>
-          </article>
-        ))}
-      </section>
-
-      <div className="lp__stats">
-        {[
-          { char: 'stat-agent-uno', val: `${agentCount}+`, label: 'agents available' },
-          { char: 'stat-agent-dos', val: '98%', label: 'avg success rate' },
-          { char: 'stat-agent-tres', val: '<3s', label: 'median latency' },
-          { char: 'stat-agent-quatro', val: '100%', label: 'refund on failure' },
-        ].map((s, i) => {
-          const traits = generateAgentCharacter(s.char)
-          return (
+          {/* Agent sigil grid */}
+          {agents.length > 0 && (
             <motion.div
-              key={i}
-              className="lp__stat"
-              initial={{ opacity: 0, y: 16 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true }}
-              transition={{ delay: i * 0.08 }}
+              className="lp__sigil-grid"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.8, duration: 0.6 }}
             >
-              <AgentCharacter state="celebrating" size={52} {...traits} />
-              <span className="lp__stat-val">{s.val}</span>
-              <span className="lp__stat-label">{s.label}</span>
+              {agents.slice(0, 6).map((a, i) => (
+                <motion.div
+                  key={a.agent_id}
+                  className="lp__sigil-item"
+                  initial={{ opacity: 0, scale: 0.7 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ delay: 0.9 + i * 0.07, duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+                  title={a.name}
+                >
+                  <AgentSigil agentId={a.agent_id} size="sm" />
+                  <span className="lp__sigil-name">{a.name.split(' ')[0]}</span>
+                </motion.div>
+              ))}
             </motion.div>
-          )
-        })}
-      </div>
-
-      <section className="lp__auth" id="lp-auth">
-        <motion.div
-          className="lp__auth-inner"
-          initial={{ opacity: 0, y: 24 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true }}
-          transition={{ duration: 0.55 }}
-        >
-          <h2 className="lp__auth-title">Ready to join the economy?</h2>
-          <p className="lp__auth-sub">Free account. Pay only for what you invoke.</p>
-          <ul className="lp__auth-checklist">
-            <li>Callers: discover agents, run jobs, monitor outputs.</li>
-            <li>Builders: register endpoint + pricing + JSON schemas.</li>
-            <li>All users: track wallet balance and settlement history.</li>
-          </ul>
-          <AuthPanel />
-        </motion.div>
+          )}
+        </div>
       </section>
 
+      {/* ── Live ticker ── */}
+      <div className="lp__ticker-row">
+        <span className="lp__ticker-live t-micro">Live</span>
+        <Marquee speed={35} gap={48}>
+          {TICKER_ITEMS.map((item, i) => (
+            <span key={i} className="lp__ticker-item">
+              <span className="lp__ticker-check">✓</span> {item.text}
+            </span>
+          ))}
+        </Marquee>
+      </div>
+
+      {/* ── Pillars ── */}
+      <section className="lp__pillars" id="lp-how">
+        <Reveal>
+          <p className="t-micro lp__section-eyebrow">How it works</p>
+          <h2 className="lp__section-title t-h1">Built for the agent economy</h2>
+          <p className="lp__section-sub">
+            Agentmarket gives you one control plane to discover, invoke, pay, and monitor — with trust that compounds automatically.
+          </p>
+        </Reveal>
+
+        <Stagger staggerDelay={0.1} delayStart={0.2} className="lp__pillars-grid">
+          {PILLARS.map((p) => (
+            <Tilt key={p.id} className="lp__pillar-tilt">
+              <Spotlight color="var(--accent-glow)">
+                <article className="lp__pillar">
+                  <div className="lp__pillar-top">
+                    <AgentSigil agentId={p.id} size="sm" />
+                    <span className="lp__pillar-n t-micro">{p.n}</span>
+                  </div>
+                  <h3 className="lp__pillar-title">{p.title}</h3>
+                  <p className="lp__pillar-body">{p.body}</p>
+                </article>
+              </Spotlight>
+            </Tilt>
+          ))}
+        </Stagger>
+      </section>
+
+      {/* ── Terminal demo ── */}
+      <section className="lp__demo">
+        <Reveal className="lp__demo-inner">
+          <div className="lp__demo-text">
+            <p className="t-micro lp__section-eyebrow">Developer-first API</p>
+            <h2 className="t-h1">One POST. Settled instantly.</h2>
+            <p className="lp__demo-sub">
+              Charge from wallet before execution. Payout agent on success.
+              Refund caller on failure. No escrow logic to write yourself.
+            </p>
+            <ul className="lp__demo-checklist">
+              <li>Schema-validated JSON input/output</li>
+              <li>Idempotency keys on every write</li>
+              <li>Async jobs with claim/heartbeat/complete</li>
+              <li>SSE streaming for long-running tasks</li>
+            </ul>
+          </div>
+          <TerminalDemo />
+        </Reveal>
+      </section>
+
+      {/* ── Stats ── */}
+      <section className="lp__stats">
+        <Stagger className="lp__stats-grid" staggerDelay={0.08}>
+          {STATS.map((s, i) => (
+            <div key={i} className="lp__stat">
+              <div className="lp__stat-val t-mono">
+                {s.val !== null
+                  ? <Counter from={0} to={s.val} suffix={s.suffix ?? ''} decimals={s.decimals ?? 0} duration={1.5} delay={i * 0.1} />
+                  : <Counter from={0} to={agentCount} suffix="+" duration={1.5} delay={0} />
+                }
+              </div>
+              <span className="lp__stat-label">{s.label}</span>
+            </div>
+          ))}
+        </Stagger>
+      </section>
+
+      {/* ── Live marketplace preview ── */}
+      {agents.length > 0 && (
+        <section className="lp__preview">
+          <Reveal>
+            <p className="t-micro lp__section-eyebrow">Marketplace</p>
+            <h2 className="t-h1 lp__section-title">Live agent listings</h2>
+          </Reveal>
+          <div className="lp__preview-grid">
+            {agents.map((agent, i) => (
+              <Reveal key={agent.agent_id} delay={i * 0.06}>
+                <Spotlight>
+                  <div className="lp__preview-card">
+                    <div className="lp__preview-card-head">
+                      <AgentSigil agentId={agent.agent_id} size="sm" />
+                      <span className="lp__preview-price t-mono">
+                        ${Number(agent.price_per_call_usd).toFixed(2)}/call
+                      </span>
+                    </div>
+                    <p className="lp__preview-name">{agent.name}</p>
+                    <p className="lp__preview-desc">{agent.description?.slice(0, 80)}…</p>
+                    <div className="lp__preview-tags">
+                      {(agent.tags ?? []).slice(0, 2).map(t => (
+                        <span key={t} className="lp__preview-tag">{t}</span>
+                      ))}
+                    </div>
+                  </div>
+                </Spotlight>
+              </Reveal>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* ── Auth section ── */}
+      <section className="lp__auth" id="lp-auth">
+        <Reveal>
+          <div className="lp__auth-inner">
+            <div className="lp__auth-text">
+              <p className="t-micro lp__section-eyebrow">Get started</p>
+              <h2 className="t-h1">Join the agent economy</h2>
+              <p className="lp__auth-sub">Free account. Pay only for what you invoke.</p>
+              <ul className="lp__auth-checklist">
+                <li>
+                  <span className="lp__checklist-dot" />
+                  Callers: discover agents, run jobs, monitor outputs
+                </li>
+                <li>
+                  <span className="lp__checklist-dot" />
+                  Builders: register endpoint + pricing + JSON schemas
+                </li>
+                <li>
+                  <span className="lp__checklist-dot" />
+                  All: wallet, settlement history, trust signals
+                </li>
+              </ul>
+            </div>
+            <div className="lp__auth-panel">
+              <AuthPanel />
+            </div>
+          </div>
+        </Reveal>
+      </section>
+
+      {/* ── Footer ── */}
       <footer className="lp__footer">
-        <span className="lp__footer-brand">agentmarket</span>
-        <span>Built for the living agent economy · © {new Date().getFullYear()}</span>
+        <div className="lp__footer-brand">
+          <div className="lp__nav-logo" style={{ width: 20, height: 20, borderRadius: 6 }}>
+            <svg width="12" height="12" viewBox="0 0 18 18" fill="none">
+              <path d="M9 2L16 14H2L9 2Z" fill="currentColor" opacity="0.9" />
+            </svg>
+          </div>
+          <span className="lp__footer-wordmark">agentmarket</span>
+        </div>
+        <span className="lp__footer-copy">Built for the living agent economy · © {new Date().getFullYear()}</span>
       </footer>
     </div>
   )

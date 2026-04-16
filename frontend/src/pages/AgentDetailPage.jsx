@@ -1,20 +1,21 @@
 import { useMemo, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { motion } from 'framer-motion'
+import { motion } from 'motion/react'
 import Topbar from '../layout/Topbar'
 import Card from '../ui/Card'
 import Button from '../ui/Button'
 import Badge from '../ui/Badge'
 import Pill from '../ui/Pill'
 import EmptyState from '../ui/EmptyState'
-import AgentCharacter from '../brand/AgentCharacter'
-import { generateAgentCharacter } from '../brand/characterUtils'
+import Reveal from '../ui/motion/Reveal'
+import AgentSigil from '../brand/AgentSigil'
 import AgentInputForm from '../features/agents/AgentInputForm'
 import ResultRenderer from '../features/agents/results/ResultRenderer'
 import TrustGauge from '../features/agents/TrustGauge'
 import { callAgent, createJob } from '../api'
 import { useMarket } from '../context/MarketContext'
 import { ArrowLeft, ArrowUpRight, AlertTriangle } from 'lucide-react'
+import './AgentDetailPage.css'
 
 export default function AgentDetailPage() {
   const { id } = useParams()
@@ -25,7 +26,6 @@ export default function AgentDetailPage() {
   const [jobInfo, setJobInfo] = useState(null)
 
   const agent = useMemo(() => agents.find(a => a.agent_id === id), [agents, id])
-  const traits = agent ? generateAgentCharacter(agent.agent_id) : null
   const priceCents = agent ? Math.round((agent.price_per_call_usd ?? 0) * 100) : 0
   const balanceCents = wallet?.balance_cents ?? 0
   const insufficientBalance = priceCents > 0 && balanceCents < priceCents
@@ -55,9 +55,9 @@ export default function AgentDetailPage() {
 
   if (!agent) {
     return (
-      <main style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
+      <main className="agent-detail">
         <Topbar crumbs={[{ to: '/agents', label: 'Agents' }, { label: 'Agent' }]} />
-        <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--sp-6)' }}>
+        <div className="agent-detail__scroll">
           <EmptyState
             title="Agent not found"
             sub="This agent may have been removed from the registry."
@@ -73,188 +73,147 @@ export default function AgentDetailPage() {
   }
 
   return (
-    <main style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
+    <main className="agent-detail">
       <Topbar crumbs={[{ to: '/agents', label: 'Agents' }, { label: agent.name }]} />
 
-      <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--sp-6)' }}>
+      <div className="agent-detail__scroll">
+        <div className="agent-detail__content">
 
-        {/* Agent header */}
-        <div style={{ marginBottom: 'var(--sp-6)' }}>
-          <div style={{
-            display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
-            gap: 'var(--sp-5)', flexWrap: 'wrap', marginBottom: 'var(--sp-4)',
-          }}>
-            <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'flex-start', gap: 'var(--sp-4)' }}>
-              <AgentCharacter {...traits} state="idle" size={72} />
-              <div>
-                <span style={{ fontSize: '0.6875rem', color: 'var(--ink-mute)', letterSpacing: '0.08em', textTransform: 'uppercase', fontWeight: 800, display: 'block', marginBottom: 6 }}>
-                  Agent profile
-                </span>
-                <h1 style={{
-                  fontFamily: 'var(--font-display)',
-                  fontSize: '1.75rem', fontWeight: 900,
-                  color: 'var(--ink)', lineHeight: 1.15,
-                  marginBottom: 8,
-                }}>
-                  {agent.name}
-                </h1>
-                {agent.description && (
-                  <p style={{ fontSize: '0.9375rem', color: 'var(--ink-soft)', lineHeight: 1.6, maxWidth: 560, marginBottom: 'var(--sp-3)' }}>
-                    {agent.description}
-                  </p>
-                )}
-                {(agent.tags ?? []).length > 0 && (
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--sp-1)' }}>
-                    {agent.tags.map(t => <Pill key={t} size="sm">{t}</Pill>)}
+          {/* Hero */}
+          <Reveal>
+            <div className="agent-detail__hero">
+              <div className="agent-detail__hero-row">
+                <div className="agent-detail__hero-left">
+                  <AgentSigil agentId={agent.agent_id} size="lg" state="idle" />
+                  <div className="agent-detail__hero-meta">
+                    <span className="agent-detail__eyebrow">Agent profile</span>
+                    <h1 className="agent-detail__name">{agent.name}</h1>
+                    {agent.description && (
+                      <p className="agent-detail__description">{agent.description}</p>
+                    )}
+                    {(agent.tags ?? []).length > 0 && (
+                      <div className="agent-detail__tags">
+                        {agent.tags.map(t => <Pill key={t} size="sm">{t}</Pill>)}
+                      </div>
+                    )}
                   </div>
-                )}
+                </div>
+                <div className="agent-detail__price-col">
+                  <span className="agent-detail__price">
+                    ${Number(agent.price_per_call_usd).toFixed(2)}
+                  </span>
+                  <span className="agent-detail__price-label">per call</span>
+                </div>
               </div>
             </div>
-            <div style={{
-              display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0,
-            }}>
-              <span style={{
-                fontFamily: 'var(--font-mono)', fontSize: '1.5rem',
-                fontWeight: 500, color: 'var(--accent)', fontFeatureSettings: '"tnum"', lineHeight: 1,
-              }}>
-                ${Number(agent.price_per_call_usd).toFixed(2)}
-              </span>
-              <span style={{ fontSize: '0.75rem', color: 'var(--ink-mute)' }}>per call</span>
-            </div>
-          </div>
+          </Reveal>
 
           {/* Trust gauge */}
-          <motion.div
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.15, duration: 0.4 }}
-            style={{
-              padding: 'var(--sp-5)',
-              background: 'var(--surface)',
-              border: '1px solid var(--line)',
-              borderRadius: 'var(--r-lg)',
-              boxShadow: 'var(--shadow-xs)',
-            }}
-          >
-            <p style={{
-              fontSize: '0.6875rem', fontWeight: 700, letterSpacing: '0.07em',
-              textTransform: 'uppercase', color: 'var(--ink-mute)', marginBottom: 'var(--sp-4)',
-            }}>
-              Reputation
-            </p>
-            <TrustGauge agent={agent} />
-          </motion.div>
+          <Reveal delay={0.1}>
+            <motion.div
+              className="agent-detail__trust"
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.15, duration: 0.4 }}
+            >
+              <p className="agent-detail__trust-title">Reputation & trust</p>
+              <TrustGauge agent={agent} />
+            </motion.div>
+          </Reveal>
 
-          <div style={{
-            marginTop: 'var(--sp-3)',
-            padding: 'var(--sp-4)',
-            border: '1px solid var(--line)',
-            borderRadius: 'var(--r-md)',
-            background: 'var(--canvas-sunk)',
-          }}>
-            <p style={{ margin: 0, fontSize: '0.8125rem', fontWeight: 700, color: 'var(--ink)', marginBottom: 6 }}>
-              Invocation guide
-            </p>
-            <ul style={{ margin: 0, paddingLeft: 18, display: 'grid', gap: 4 }}>
-              <li style={{ fontSize: '0.8125rem', color: 'var(--ink-soft)' }}>Use <strong>Sync</strong> for immediate output in this page.</li>
-              <li style={{ fontSize: '0.8125rem', color: 'var(--ink-soft)' }}>Use <strong>Async</strong> to queue long jobs and monitor them in Jobs.</li>
-              <li style={{ fontSize: '0.8125rem', color: 'var(--ink-soft)' }}>Price is charged before run and refunded on failed execution.</li>
-            </ul>
+          {/* Invocation guide */}
+          <Reveal delay={0.15}>
+            <div className="agent-detail__guide">
+              <p className="agent-detail__guide-title">Invocation guide</p>
+              <ul>
+                <li>Use <strong>Sync</strong> for immediate output on this page.</li>
+                <li>Use <strong>Async</strong> to queue long jobs and monitor them in Jobs.</li>
+                <li>Price is charged before run and refunded on failed execution.</li>
+              </ul>
+            </div>
+          </Reveal>
+
+          {/* Two-column: invoke + output */}
+          <div className="agent-detail__invoke-grid">
+            <Reveal delay={0.2}>
+              <Card>
+                <Card.Header>
+                  <span className="agent-detail__section-title">Invoke</span>
+                </Card.Header>
+                <Card.Body>
+                  {/* Low-balance warning */}
+                  {insufficientBalance && (
+                    <div style={{
+                      display: 'flex', alignItems: 'flex-start', gap: 'var(--sp-3)',
+                      padding: 'var(--sp-3) var(--sp-4)',
+                      background: 'var(--warn-wash, #fffbe6)',
+                      border: '1px solid var(--warn-line, #f0d060)',
+                      borderRadius: 'var(--r-md)',
+                      marginBottom: 'var(--sp-4)',
+                    }}>
+                      <AlertTriangle size={16} color="var(--warn, #d97706)" style={{ flexShrink: 0, marginTop: 2 }} />
+                      <div>
+                        <p style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--ink)', marginBottom: 2 }}>
+                          Insufficient balance
+                        </p>
+                        <p style={{ fontSize: '0.8125rem', color: 'var(--ink-soft)', marginBottom: 'var(--sp-2)' }}>
+                          Your balance (${(balanceCents / 100).toFixed(2)}) is less than this agent's price (${(priceCents / 100).toFixed(2)}).
+                          The call will be rejected until you add funds.
+                        </p>
+                        <Link to="/wallet">
+                          <Button variant="primary" size="sm">Add funds →</Button>
+                        </Link>
+                      </div>
+                    </div>
+                  )}
+                  <AgentInputForm
+                    agent={agent}
+                    mode={mode}
+                    onModeChange={setMode}
+                    onSubmit={handleInvoke}
+                    loading={invokeLoading}
+                  />
+                </Card.Body>
+              </Card>
+            </Reveal>
+
+            <Reveal delay={0.25}>
+              <Card>
+                <Card.Header>
+                  <span className="agent-detail__section-title">Output</span>
+                </Card.Header>
+                <Card.Body>
+                  {jobInfo && (
+                    <div className="agent-detail__job-queued">
+                      <div className="agent-detail__job-queued-banner">
+                        <p className="agent-detail__job-queued-label">Job queued successfully</p>
+                        <p className="agent-detail__job-id">{jobInfo.jobId}</p>
+                      </div>
+                      <div className="agent-detail__job-actions">
+                        <Badge label={jobInfo.status} dot />
+                        <Link to={`/jobs/${jobInfo.jobId}`}>
+                          <Button variant="ghost" size="sm" iconRight={<ArrowUpRight size={13} />}>
+                            View job
+                          </Button>
+                        </Link>
+                      </div>
+                    </div>
+                  )}
+
+                  {result && !jobInfo && (
+                    <ResultRenderer result={result} agent={agent} />
+                  )}
+
+                  {!result && !jobInfo && (
+                    <p className="agent-detail__output-empty">
+                      Submit payload to run the agent. Sync results render here; async jobs open in Jobs.
+                    </p>
+                  )}
+                </Card.Body>
+              </Card>
+            </Reveal>
           </div>
-        </div>
 
-        {/* Two-column: invoke + output */}
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: 'minmax(280px, 360px) 1fr',
-          gap: 'var(--sp-5)',
-          alignItems: 'start',
-        }}>
-          {/* Invoke panel */}
-          <Card>
-            <Card.Header>
-              <span style={{ fontWeight: 600, fontSize: '0.9375rem' }}>Invoke</span>
-            </Card.Header>
-            <Card.Body>
-              {/* Low-balance warning */}
-              {insufficientBalance && (
-                <div style={{
-                  display: 'flex', alignItems: 'flex-start', gap: 'var(--sp-3)',
-                  padding: 'var(--sp-3) var(--sp-4)',
-                  background: 'var(--warn-wash, #fffbe6)',
-                  border: '1px solid var(--warn-line, #f0d060)',
-                  borderRadius: 'var(--r-md)',
-                  marginBottom: 'var(--sp-4)',
-                }}>
-                  <AlertTriangle size={16} color="var(--warn, #d97706)" style={{ flexShrink: 0, marginTop: 2 }} />
-                  <div>
-                    <p style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--ink)', marginBottom: 2 }}>
-                      Insufficient balance
-                    </p>
-                    <p style={{ fontSize: '0.8125rem', color: 'var(--ink-soft)', marginBottom: 'var(--sp-2)' }}>
-                      Your balance (${(balanceCents / 100).toFixed(2)}) is less than this agent's price (${(priceCents / 100).toFixed(2)}).
-                      The call will be rejected until you add funds.
-                    </p>
-                    <Link to="/wallet">
-                      <Button variant="primary" size="sm">Add funds →</Button>
-                    </Link>
-                  </div>
-                </div>
-              )}
-              <AgentInputForm
-                agent={agent}
-                mode={mode}
-                onModeChange={setMode}
-                onSubmit={handleInvoke}
-                loading={invokeLoading}
-              />
-            </Card.Body>
-          </Card>
-
-          {/* Output panel */}
-          <Card>
-            <Card.Header>
-              <span style={{ fontWeight: 600, fontSize: '0.9375rem' }}>Output</span>
-            </Card.Header>
-            <Card.Body>
-              {/* Async job created */}
-              {jobInfo && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
-                  <div style={{
-                    padding: 'var(--sp-4)', background: 'var(--accent-wash)',
-                    border: '1px solid var(--accent-line)', borderRadius: 'var(--r-md)',
-                  }}>
-                    <p style={{ fontSize: '0.875rem', fontWeight: 500, color: 'var(--accent-ink)', marginBottom: 4 }}>
-                      Job queued successfully
-                    </p>
-                    <p style={{ fontSize: '0.8125rem', color: 'var(--ink-soft)', fontFamily: 'var(--font-mono)' }}>
-                      {jobInfo.jobId}
-                    </p>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
-                    <Badge label={jobInfo.status} dot />
-                    <Link to={`/jobs/${jobInfo.jobId}`}>
-                      <Button variant="ghost" size="sm" iconRight={<ArrowUpRight size={13} />}>
-                        View job
-                      </Button>
-                    </Link>
-                  </div>
-                </div>
-              )}
-
-              {/* Sync result */}
-              {result && !jobInfo && (
-                <ResultRenderer result={result} agent={agent} />
-              )}
-
-              {/* Empty state */}
-              {!result && !jobInfo && (
-                <p style={{ color: 'var(--ink-mute)', fontSize: '0.875rem' }}>
-                  Submit payload to run the agent. Sync results render here; async jobs open in Jobs.
-                </p>
-              )}
-            </Card.Body>
-          </Card>
         </div>
       </div>
     </main>

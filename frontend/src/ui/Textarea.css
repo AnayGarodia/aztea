@@ -3,21 +3,20 @@
   padding: 10px 12px;
   font-family: var(--font-sans);
   font-size: 0.875rem;
-  color: var(--ink);
+  color: var(--text-primary);
   background: var(--surface);
-  border: 1px solid var(--line);
+  border: 1px solid var(--border);
   border-radius: var(--r-sm);
   outline: none;
   resize: vertical;
   min-height: 96px;
-  transition: border-color var(--duration-sm) var(--ease), background var(--duration-sm);
+  transition: border-color var(--duration-sm) var(--ease), box-shadow var(--duration-sm) var(--ease);
   line-height: 1.55;
   box-sizing: border-box;
 }
-.textarea::placeholder { color: var(--ink-faint); }
+.textarea::placeholder { color: var(--text-muted); }
 .textarea:focus {
-  border-color: var(--accent-line);
-  background: var(--surface);
-  box-shadow: var(--focus-ring);
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-bg);
 }
 .textarea--mono { font-family: var(--font-mono); font-size: 0.8125rem; }

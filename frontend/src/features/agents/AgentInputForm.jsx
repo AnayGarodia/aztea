@@ -71,7 +71,7 @@ export default function AgentInputForm({ agent, onSubmit, loading, mode, onModeC
       </p>
 
       {fields.length === 0 && (
-        <p style={{ fontSize: '0.8125rem', color: 'var(--ink-mute)', padding: 'var(--sp-3)', background: 'var(--canvas-sunk)', borderRadius: 'var(--r-sm)', border: '1px solid var(--line)' }}>
+        <p className="invoke-panel__no-schema">
           This agent has no defined input schema. Check its documentation.
         </p>
       )}

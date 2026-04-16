@@ -4,78 +4,47 @@
   align-items: center;
   justify-content: center;
   text-align: center;
-  gap: var(--sp-3);
-  padding: var(--sp-8) var(--sp-5);
-  color: var(--ink-mute);
+  gap: 12px;
+  padding: 64px 24px;
+  color: var(--text-muted);
 }
 
-/* Mascot + speech bubble */
-.empty__mascot-wrap {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-}
-
-.empty__bubble {
-  position: relative;
-  background: var(--surface);
-  border: 2px solid var(--line);
-  border-radius: var(--r-xl);
-  padding: 8px 16px;
-  font-size: 0.875rem;
-  font-weight: 700;
-  color: var(--ink-soft);
-  max-width: 240px;
-}
-
-/* Triangle pointer */
-.empty__bubble::before {
-  content: '';
-  position: absolute;
-  top: -10px;
-  left: 50%;
-  transform: translateX(-50%);
-  border: 5px solid transparent;
-  border-bottom-color: var(--line);
-}
-.empty__bubble::after {
-  content: '';
-  position: absolute;
-  top: -7px;
-  left: 50%;
-  transform: translateX(-50%);
-  border: 5px solid transparent;
-  border-bottom-color: var(--surface);
-}
-
-.empty__sub {
-  font-size: 0.875rem;
-  max-width: 300px;
-  line-height: 1.5;
-  font-weight: 500;
-}
-
-/* Loading variant */
-.empty__loading-wrap {
-  position: relative;
+.empty__sigil-wrap {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 80px;
-  height: 80px;
+  opacity: 0.6;
+  margin-bottom: 8px;
 }
 
-.empty__loading-ring {
-  position: absolute;
-  inset: 0;
+.empty__loading-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+}
+
+.empty__spinner {
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
-  border: 3px solid var(--accent-line);
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
 }
 
 .empty__title {
   font-size: 0.9375rem;
-  font-weight: 700;
-  color: var(--ink-soft);
+  font-weight: 500;
+  color: var(--text-secondary);
 }
+
+.empty__sub {
+  font-size: 0.8125rem;
+  max-width: 320px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+
+.empty__action { margin-top: 4px; }

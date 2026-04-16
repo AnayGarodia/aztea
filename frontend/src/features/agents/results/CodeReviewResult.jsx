@@ -39,8 +39,8 @@ export default function CodeReviewResult({ result: r }) {
               <div key={i} className="result-issue">
                 <div className="result-issue__header">
                   <Badge label={issue.severity} dot />
-                  {issue.category && <span style={{ fontSize: '0.8125rem', color: 'var(--ink-mute)' }}>{issue.category}</span>}
-                  {issue.line_hint && <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--ink-mute)' }}>line {issue.line_hint}</span>}
+                  {issue.category && <span style={{ fontSize: '0.8125rem', color: 'var(--text-muted)' }}>{issue.category}</span>}
+                  {issue.line_hint && <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--text-muted)' }}>line {issue.line_hint}</span>}
                 </div>
                 <p className="result-issue__desc">{issue.description}</p>
                 {issue.fix && <p className="result-issue__fix">Fix: {issue.fix}</p>}

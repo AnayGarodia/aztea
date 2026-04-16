@@ -2,20 +2,25 @@
 .tabs__list {
   display: flex;
   gap: 2px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--border);
   padding-bottom: 0;
 }
 .tabs__tab {
   font-size: 0.875rem;
   font-weight: 500;
-  color: var(--ink-mute);
+  color: var(--text-muted);
   padding: var(--sp-2) var(--sp-4);
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
   cursor: pointer;
+  background: none;
+  border-left: none;
+  border-right: none;
+  border-top: none;
+  font-family: var(--font-sans);
   transition: color var(--duration-sm) var(--ease), border-color var(--duration-sm) var(--ease);
   white-space: nowrap;
 }
-.tabs__tab:hover { color: var(--ink-soft); }
-.tabs__tab--active { color: var(--ink); border-bottom-color: var(--accent); }
+.tabs__tab:hover { color: var(--text-secondary); }
+.tabs__tab--active { color: var(--text-primary); border-bottom-color: var(--accent); }
 .tabs__panel { padding-top: var(--sp-5); }
