@@ -466,6 +466,85 @@ def post_call_refund(
     )
 
 
+def post_call_partial_settle(
+    caller_wallet_id: str,
+    agent_wallet_id: str,
+    platform_wallet_id: str,
+    charge_tx_id: str,
+    price_cents: int,
+    refund_fraction: float,
+    agent_id: str,
+) -> None:
+    """
+    Partial settlement: refund a fraction of the charge to the caller and
+    pay the remainder to the agent (90%) + platform (10%).
+
+    Used when an agent fails after spending some compute — e.g., bad input
+    validation that consumed tokens, or partial work before a downstream error.
+
+    refund_fraction=1.0  →  full refund (identical to post_call_refund)
+    refund_fraction=0.0  →  full payout to agent (identical to post_call_payout)
+    """
+    refund_fraction = max(0.0, min(1.0, float(refund_fraction)))
+    refund_cents = int(price_cents * refund_fraction)
+    kept_cents = price_cents - refund_cents
+
+    fee_cents = kept_cents * PLATFORM_FEE_PCT // 100
+    agent_cents = kept_cents - fee_cents
+
+    applied = False
+    with _conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        # Idempotency: skip if any settlement already recorded for this charge
+        already = conn.execute(
+            "SELECT 1 FROM transactions WHERE related_tx_id = ? LIMIT 1",
+            (charge_tx_id,),
+        ).fetchone()
+        if already is not None:
+            return
+        try:
+            if refund_cents > 0:
+                _insert_tx(
+                    conn, caller_wallet_id, "refund", refund_cents, agent_id,
+                    charge_tx_id,
+                    f"Partial refund ({int(refund_fraction*100)}%) for call {charge_tx_id[:8]}",
+                )
+                applied = True
+            if agent_cents > 0:
+                _insert_tx(
+                    conn, agent_wallet_id, "payout", agent_cents, agent_id,
+                    charge_tx_id,
+                    f"Partial payout ({int((1-refund_fraction)*100)}%) for call {charge_tx_id[:8]}",
+                )
+                applied = True
+            if fee_cents > 0:
+                _insert_tx(
+                    conn, platform_wallet_id, "fee", fee_cents, agent_id,
+                    charge_tx_id,
+                    f"Platform fee for partial call {charge_tx_id[:8]}",
+                )
+                applied = True
+        except sqlite3.IntegrityError:
+            pass  # idempotency: already recorded
+
+    logging_utils.log_event(
+        _LOG,
+        logging.INFO,
+        "payment.settlement",
+        {
+            "kind": "partial_settle",
+            "charge_tx_id": charge_tx_id,
+            "agent_id": agent_id,
+            "price_cents": price_cents,
+            "refund_fraction": refund_fraction,
+            "refund_cents": refund_cents,
+            "agent_payout_cents": agent_cents,
+            "platform_fee_cents": fee_cents,
+            "applied": applied,
+        },
+    )
+
+
 def get_caller_trust(owner_id: str) -> float:
     wallet = get_or_create_wallet(owner_id)
     try:

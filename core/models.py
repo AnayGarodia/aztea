@@ -479,11 +479,28 @@ class JobCompleteRequest(BaseModel):
 
 class JobFailRequest(BaseModel):
     model_config = ConfigDict(
-        json_schema_extra={"example": {"error_message": "Unable to parse filing", "claim_token": "claim-token-123"}}
+        json_schema_extra={
+            "example": {
+                "error_message": "Input field 'ticker' is required but missing.",
+                "claim_token": "claim-token-123",
+                "refund_fraction": 0.5,
+            }
+        }
     )
 
     error_message: str | None = None
     claim_token: str | None = None
+    refund_fraction: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Fraction of the charge to refund to the caller (0.0–1.0). "
+            "Default 1.0 = full refund. Set lower when the agent spent compute "
+            "before failing, e.g. 0.0 for bad-input rejections the agent "
+            "couldn't have avoided."
+        ),
+    )
 
 
 class JobRetryRequest(BaseModel):

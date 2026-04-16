@@ -18,6 +18,7 @@ from .exceptions import (
     AgentMarketError,
     AgentNotFoundError,
     AuthenticationError,
+    ClarificationNeededError,
     ContractVerificationError,
     InsufficientFundsError,
     JobFailedError,
@@ -63,7 +64,7 @@ class AgentMarketClient:
     def __init__(
         self,
         api_key: str,
-        base_url: str = "https://api.agentmarket.dev",
+        base_url: str = "https://api.agentmarket.dev",  # override for self-hosted
         timeout: float = 30.0,
     ) -> None:
         self._key = api_key
@@ -265,12 +266,100 @@ class AgentMarketClient:
                 output = _parse_payload(job_data.get("output_payload"))
                 raise JobFailedError(error_msg, output)
 
+            if status == "awaiting_clarification":
+                # Agent needs more info — surface the question to the caller.
+                question = self._get_clarification_question(job_id)
+                raise ClarificationNeededError(question, job_id)
+
             time.sleep(_POLL_INTERVAL)
 
     def get_job(self, job_id: str) -> Job:
         """Fetch the current state of a job."""
         data = self._request("GET", f"/jobs/{job_id}")
         return _job_from_raw(data)
+
+    def clarify(self, job_id: str, answer: str) -> None:
+        """
+        Respond to an agent's clarification request.
+
+        Call this after catching ``ClarificationNeededError`` from ``hire()``::
+
+            try:
+                result = client.hire(agent_id, payload)
+            except ClarificationNeededError as e:
+                print("Agent asks:", e.question)
+                result = client.hire_with_clarification(
+                    e.job_id, input("Your answer: ")
+                )
+        """
+        self._request(
+            "POST",
+            f"/jobs/{job_id}/messages",
+            json={
+                "type": "clarification_response",
+                "content": answer,
+            },
+        )
+
+    def hire_with_clarification(
+        self,
+        job_id: str,
+        answer: str,
+        *,
+        timeout_seconds: int = 120,
+        verification_contract: Union[VerificationContract, Dict[str, Any], None] = None,
+    ) -> "JobResult":
+        """
+        Respond to a clarification request and wait for the job to finish.
+
+        Typically called right after catching ``ClarificationNeededError``::
+
+            try:
+                result = client.hire(agent_id, payload)
+            except ClarificationNeededError as e:
+                result = client.hire_with_clarification(e.job_id, answer="AAPL")
+        """
+        self.clarify(job_id, answer)
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"Job {job_id} did not complete within {timeout_seconds}s after clarification.")
+            job_data = self._request("GET", f"/jobs/{job_id}")
+            status = job_data.get("status", "")
+            if status == "complete":
+                output = _parse_payload(job_data.get("output_payload"))
+                if verification_contract is not None:
+                    contract = (
+                        VerificationContract(**verification_contract)
+                        if isinstance(verification_contract, dict)
+                        else verification_contract
+                    )
+                    _verify_contract(output, contract)
+                return JobResult(
+                    job_id=job_id,
+                    output=output,
+                    quality_score=job_data.get("quality_score"),
+                    cost_cents=job_data.get("price_cents", 0),
+                )
+            if status == "failed":
+                error_msg = job_data.get("error_message") or "Job failed after clarification."
+                raise JobFailedError(error_msg, _parse_payload(job_data.get("output_payload")))
+            time.sleep(_POLL_INTERVAL)
+
+    def _get_clarification_question(self, job_id: str) -> str:
+        """Fetch the most recent clarification_request message text for a job."""
+        try:
+            data = self._request("GET", f"/jobs/{job_id}/messages")
+            messages = data.get("messages") or []
+            for msg in reversed(messages):
+                if msg.get("type") in ("clarification_request", "clarification_needed"):
+                    content = msg.get("content")
+                    if isinstance(content, dict):
+                        return content.get("text") or str(content)
+                    return str(content) if content is not None else "Agent needs clarification."
+        except AgentMarketError:
+            pass
+        return "Agent needs clarification."
 
     # ── Wallet ────────────────────────────────────────────────────────────────
 

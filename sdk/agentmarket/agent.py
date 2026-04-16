@@ -32,7 +32,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 from .client import AgentMarketClient, _parse_payload
-from .exceptions import AgentMarketError
+from .exceptions import AgentMarketError, ClarificationNeeded, InputError
 from .models import Agent
 
 _HEARTBEAT_INTERVAL = 20  # seconds
@@ -233,10 +233,10 @@ class AgentServer:
         )
         hb_thread.start()
 
-        # Run handler
+        # Run handler (with clarification retry support)
         t0 = time.monotonic()
+        input_payload = _parse_payload(job_raw.get("input_payload"))
         try:
-            input_payload = _parse_payload(job_raw.get("input_payload"))
             output = self._handler_func(input_payload)  # type: ignore[misc]
             elapsed = time.monotonic() - t0
             stop_hb.set()
@@ -253,6 +253,95 @@ class AgentServer:
             _print_status(
                 f"[agentmarket] Completed job {job_id} ({elapsed:.1f}s)"
             )
+
+        except ClarificationNeeded as exc:
+            # Pause the job and ask the caller a question.
+            # The heartbeat thread keeps running while we wait.
+            _print_status(
+                f"[agentmarket] Job {job_id} needs clarification: {exc.question}"
+            )
+            try:
+                self._client._request(
+                    "POST",
+                    f"/jobs/{job_id}/messages",
+                    json={
+                        "type": "clarification_request",
+                        "content": exc.question,
+                        "claim_token": claim_token,
+                    },
+                )
+            except AgentMarketError:
+                pass
+
+            # Poll for a clarification_response (up to 10 min)
+            answer = self._wait_for_clarification(job_id, timeout_seconds=600)
+            stop_hb.set()
+            hb_thread.join(timeout=1)
+
+            if answer is None:
+                # Timed out waiting — fail with full refund
+                try:
+                    self._client._request(
+                        "POST",
+                        f"/jobs/{job_id}/fail",
+                        json={
+                            "error_message": "Timed out waiting for caller clarification.",
+                            "claim_token": claim_token,
+                            "refund_fraction": 1.0,
+                        },
+                    )
+                except AgentMarketError:
+                    pass
+                _print_status(f"[agentmarket] Job {job_id} timed out awaiting clarification")
+            else:
+                # Re-run handler with clarification injected
+                input_payload["__clarification__"] = answer
+                try:
+                    output = self._handler_func(input_payload)  # type: ignore[misc]
+                    self._client._request(
+                        "POST",
+                        f"/jobs/{job_id}/complete",
+                        json={"output_payload": output, "claim_token": claim_token},
+                    )
+                    elapsed = time.monotonic() - t0
+                    _print_status(f"[agentmarket] Completed job {job_id} after clarification ({elapsed:.1f}s)")
+                except Exception as retry_exc:
+                    try:
+                        self._client._request(
+                            "POST",
+                            f"/jobs/{job_id}/fail",
+                            json={
+                                "error_message": str(retry_exc),
+                                "claim_token": claim_token,
+                                "refund_fraction": 1.0,
+                            },
+                        )
+                    except AgentMarketError:
+                        pass
+                    _print_status(f"[agentmarket] Failed job {job_id} after clarification: {retry_exc}")
+
+        except InputError as exc:
+            # Bad input from caller — fail fast with partial refund.
+            elapsed = time.monotonic() - t0
+            stop_hb.set()
+            hb_thread.join(timeout=1)
+            try:
+                self._client._request(
+                    "POST",
+                    f"/jobs/{job_id}/fail",
+                    json={
+                        "error_message": str(exc),
+                        "claim_token": claim_token,
+                        "refund_fraction": exc.refund_fraction,
+                    },
+                )
+            except AgentMarketError:
+                pass
+            _print_status(
+                f"[agentmarket] Job {job_id} rejected (bad input, "
+                f"{int(exc.refund_fraction*100)}% refund): {exc}"
+            )
+
         except Exception as exc:
             elapsed = time.monotonic() - t0
             stop_hb.set()
@@ -266,12 +355,40 @@ class AgentServer:
                     json={
                         "error_message": error_msg,
                         "claim_token": claim_token,
+                        "refund_fraction": 1.0,
                     },
                 )
             except AgentMarketError:
                 pass
 
             _print_status(f"[agentmarket] Failed job {job_id}: {error_msg}")
+
+    def _wait_for_clarification(
+        self,
+        job_id: str,
+        timeout_seconds: float = 600,
+    ) -> str | None:
+        """Poll job messages until a clarification_response arrives or timeout."""
+        deadline = time.monotonic() + timeout_seconds
+        seen_ids: set[int] = set()
+        while time.monotonic() < deadline:
+            try:
+                data = self._client._request("GET", f"/jobs/{job_id}/messages")
+                messages = data.get("messages") or []
+                for msg in messages:
+                    msg_id = msg.get("message_id")
+                    if msg_id in seen_ids:
+                        continue
+                    seen_ids.add(msg_id)
+                    if msg.get("type") in ("clarification_response", "clarification"):
+                        content = msg.get("content")
+                        if isinstance(content, dict):
+                            return content.get("text") or str(content)
+                        return str(content) if content is not None else ""
+            except AgentMarketError:
+                pass
+            time.sleep(5)
+        return None
 
     def _heartbeat_loop(
         self,

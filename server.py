@@ -3219,15 +3219,34 @@ def _settle_successful_job(job: dict, actor_owner_id: str) -> dict:
     return settled
 
 
-def _settle_failed_job(job: dict, actor_owner_id: str, event_type: str = "job.failed") -> dict:
+def _settle_failed_job(
+    job: dict,
+    actor_owner_id: str,
+    event_type: str = "job.failed",
+    refund_fraction: float = 1.0,
+) -> dict:
     newly_settled = False
     if not job["settled_at"]:
-        payments.post_call_refund(
-            job["caller_wallet_id"],
-            job["charge_tx_id"],
-            job["price_cents"],
-            job["agent_id"],
-        )
+        refund_fraction = max(0.0, min(1.0, float(refund_fraction)))
+        if refund_fraction >= 1.0:
+            # Full refund — original fast path
+            payments.post_call_refund(
+                job["caller_wallet_id"],
+                job["charge_tx_id"],
+                job["price_cents"],
+                job["agent_id"],
+            )
+        else:
+            # Partial settle: refund fraction to caller, keep rest for agent
+            payments.post_call_partial_settle(
+                caller_wallet_id=job["caller_wallet_id"],
+                agent_wallet_id=job["agent_wallet_id"],
+                platform_wallet_id=job["platform_wallet_id"],
+                charge_tx_id=job["charge_tx_id"],
+                price_cents=job["price_cents"],
+                refund_fraction=refund_fraction,
+                agent_id=job["agent_id"],
+            )
         newly_settled = jobs.mark_settled(job["job_id"])
         if newly_settled:
             registry.update_call_stats(job["agent_id"], latency_ms=_job_latency_ms(job), success=False)
@@ -5555,6 +5574,8 @@ def jobs_fail(
                 410,
             )
 
+        refund_fraction = float(getattr(body, "refund_fraction", 1.0) or 1.0)
+
         if job["settled_at"]:
             return _job_response(job, caller), 200
         if job["status"] == "failed" and job.get("error_message") == body.error_message:
@@ -5562,6 +5583,7 @@ def jobs_fail(
                 job,
                 actor_owner_id=actor_owner_id,
                 event_type="job.failed",
+                refund_fraction=refund_fraction,
             )
             return _job_response(settled, caller), 200
 
@@ -5577,7 +5599,12 @@ def jobs_fail(
         )
         if updated is None:
             raise HTTPException(status_code=409, detail="Unable to update job status.")
-        settled = _settle_failed_job(updated, actor_owner_id=actor_owner_id, event_type="job.failed")
+        settled = _settle_failed_job(
+            updated,
+            actor_owner_id=actor_owner_id,
+            event_type="job.failed",
+            refund_fraction=refund_fraction,
+        )
         return _job_response(settled, caller), 200
 
     return _run_idempotent_json_response(
