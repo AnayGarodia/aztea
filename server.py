@@ -660,7 +660,8 @@ def _init_ops_db() -> None:
 
 def _init_stripe_db() -> None:
     """Create the stripe_sessions idempotency table (processed payment events)."""
-    with jobs._conn() as conn:
+    import sqlite3 as _sqlite3
+    with _sqlite3.connect(jobs.DB_PATH) as conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS stripe_sessions (
@@ -4042,7 +4043,10 @@ def _read_version() -> str:
     },
 )
 def health() -> core_models.HealthResponse:
-    import psutil
+    try:
+        import psutil as _psutil
+    except ImportError:
+        _psutil = None
 
     checks: dict[str, core_models.HealthCheckDetail] = {}
     all_ok = True
@@ -4068,14 +4072,14 @@ def health() -> core_models.HealthResponse:
         all_ok = False
         checks["disk"] = core_models.HealthCheckDetail(ok=False, error=str(exc))
 
-    # Memory check
-    try:
-        proc = psutil.Process()
-        rss_mb = round(proc.memory_info().rss / (1024 * 1024), 2)
-        checks["memory"] = core_models.HealthCheckDetail(ok=True, rss_mb=rss_mb)
-    except Exception as exc:
-        all_ok = False
-        checks["memory"] = core_models.HealthCheckDetail(ok=False, error=str(exc))
+    # Memory check (optional — requires psutil)
+    if _psutil is not None:
+        try:
+            proc = _psutil.Process()
+            rss_mb = round(proc.memory_info().rss / (1024 * 1024), 2)
+            checks["memory"] = core_models.HealthCheckDetail(ok=True, rss_mb=rss_mb)
+        except Exception as exc:
+            checks["memory"] = core_models.HealthCheckDetail(ok=False, error=str(exc))
 
     agent_count = len(registry.get_agents())
     status = "ok" if all_ok else "degraded"
@@ -6562,23 +6566,30 @@ async def stripe_webhook(request: Request) -> JSONResponse:
         raise HTTPException(status_code=400, detail="Invalid Stripe webhook signature.")
 
     if event["type"] == "checkout.session.completed":
+        # Stripe SDK v15 returns StripeObjects, not plain dicts — use attribute
+        # access and fall back via getattr to avoid KeyError / AttributeError.
         session_obj = event["data"]["object"]
-        wallet_id   = session_obj.get("client_reference_id") or (session_obj.get("metadata") or {}).get("wallet_id")
-        amount_cents = session_obj.get("amount_total")
-        session_id   = session_obj.get("id", "")
+        _meta       = getattr(session_obj, "metadata", None) or {}
+        wallet_id   = (getattr(session_obj, "client_reference_id", None)
+                       or (_meta.get("wallet_id") if hasattr(_meta, "get") else getattr(_meta, "wallet_id", None)))
+        amount_cents = getattr(session_obj, "amount_total", None)
+        session_id   = getattr(session_obj, "id", "") or ""
 
         if not wallet_id or not amount_cents or not session_id:
             _LOG.warning("Stripe webhook: missing wallet_id/amount/session_id in %s", session_id)
             return JSONResponse({"received": True, "status": "skipped"})
 
-        # Idempotency: INSERT OR IGNORE so duplicate webhook fires are no-ops
-        with jobs._conn() as conn:
-            cur = conn.execute(
+        # Idempotency: INSERT OR IGNORE so duplicate webhook fires are no-ops.
+        # Use a fresh connection (not the thread-local one) — async handlers may
+        # run on a different thread than the one that initialised _conn().
+        import sqlite3 as _sqlite3
+        with _sqlite3.connect(jobs.DB_PATH) as _idem_conn:
+            cur = _idem_conn.execute(
                 "INSERT OR IGNORE INTO stripe_sessions (session_id, wallet_id, amount_cents, processed_at)"
                 " VALUES (?, ?, ?, ?)",
                 (session_id, wallet_id, amount_cents, _utc_now_iso()),
             )
-            conn.commit()
+            _idem_conn.commit()
             if cur.rowcount == 0:
                 return JSONResponse({"received": True, "status": "already_processed"})
 
