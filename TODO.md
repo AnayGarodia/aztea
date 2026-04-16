@@ -6,6 +6,28 @@ Items are grouped by area and roughly prioritized within each section.
 
 ---
 
+## Production Readiness Assessment
+
+### Core A2A workflow: Orchestrator → Specialist
+
+```
+DISCOVER → CONTRACT → WORK ASYNC → SETTLE → REPEAT
+```
+
+| Stage | Status | Key gap |
+|---|---|---|
+| **Discover** (search by need, see reputation + cost) | ~70% | `trust_score`, `total_calls`, `avg_latency_ms` exist in DB but NOT exposed in `AgentResponse`; no output_examples; no verified badge shown |
+| **Contract** (hire with budget cap, get job_id, fire-and-forget) | 60% | No `callback_url` — orchestrator must poll; no `budget_cents` on job create; no `max_spend_cents` on API keys |
+| **Work async** (orchestrator continues, specialist executes) | 85% | Job creates return immediately ✓; claim/heartbeat/complete lifecycle ✓; SSE stream ✓; clarification protocol ✓; missing: caller gets no push on completion |
+| **Settle** (verify output, dispute, payout) | 80% | Ledger ✓; dispute ✓; 2-judge resolution ✓; missing: output verification hook (caller accept/reject before finalization); clarification timeout |
+| **Protocols** (A2A, MCP) | 60% | MCP `/mcp/tools` + `/mcp/invoke` + stdio bridge ✓; **no Google A2A support** (`/.well-known/agent.json`, agent card, A2A task protocol); no OpenAI Agents SDK tool spec |
+| **SDK** | 55% | Sync hire ✓; polling loop ✓; clarification ✓; missing: callback receiver, `wait_for()`, `hire_many()`, `AsyncAgentMarketClient`, budget param |
+
+**Overall: ~70% toward a working agent-to-agent marketplace.**
+The single biggest gap is **callback_url** — without push notification on job completion, every orchestrator must implement its own polling loop, which is fragile and wastes resources. Second biggest is **A2A protocol** — without `/.well-known/agent.json`, orchestrators built on Google A2A SDK or other agent frameworks can't autodiscover and hire from AgentMarket natively.
+
+---
+
 ## 1. Bug Fixes (P0)
 
 ### 1.1 Failing Tests (resolved)
@@ -47,30 +69,43 @@ Items are grouped by area and roughly prioritized within each section.
 
 ---
 
-## 3. Agent-to-Agent Workflows (P1 — core to the product vision)
+## 3. Agent-to-Agent Workflows (P0 — core to the product vision)
 
-### 3.1 Webhook Callbacks (biggest gap)
-- [ ] **Add `callback_url` field to job creation** — `POST /jobs` body gets optional `callback_url: str`. When job reaches terminal state (complete/fail), platform POSTs `{job_id, status, output_payload, settled_at}` to that URL.
-- [ ] **Retry logic for callbacks** — retry up to 3× with exponential backoff on non-2xx; mark callback as failed after exhausting retries (do NOT block job settlement).
-- [ ] **Callback signature header** — sign the POST body with HMAC-SHA256 using a per-user secret so the receiving agent can verify authenticity.
-- [ ] **SDK callback receiver helper** — `AgentServer` and `AgentMarketClient` should have a `on_job_complete(callback_secret)` decorator that verifies signature and parses the payload.
-- [ ] **Test: agent A hires agent B with callback, verifies result** — add to test suite.
+### 3.1 Webhook Callbacks — orchestrator gets notified when job completes ⚠️ BIGGEST GAP
+- [ ] **Add `callback_url` field to `JobCreateRequest`** — optional `callback_url: str`. When job reaches terminal state (complete/fail/dispute_resolved), platform POSTs `{job_id, status, output_payload, settled_at, error_message}` to that URL. Uses existing hook delivery worker (already has retry/backoff/dead-letter).
+- [ ] **Callback signature header** — sign POST body with HMAC-SHA256 using a per-caller secret; include `X-AgentMarket-Signature: sha256=...` header so receiving agent can verify authenticity.
+- [ ] **SDK `on_job_complete(secret)` decorator** — `AgentServer` gets a `@server.on_job_complete(callback_secret)` decorator that verifies HMAC, parses payload, and fires handler. No polling needed.
+- [ ] **SDK `wait_for(job_id, timeout=60)`** — polls until terminal state or raises `JobTimeoutError`; usable when agent doesn't have a public callback URL.
+- [ ] **Test: end-to-end orchestrator hires specialist with callback** — agent A hires agent B, does own work, receives callback when B completes, verifies result.
 
-### 3.2 Spending Limits & Safety
-- [ ] **`max_spend_cents` on API keys** — add column to `api_keys` table; enforced at job creation and `/registry/agents/{id}/call`. Prevents runaway agent spend.
+### 3.2 Agent Discovery Signals — orchestrator picks the right specialist
+- [ ] **Expose `trust_score`, `total_calls`, `avg_latency_ms`, `success_rate` in `AgentResponse`** — these fields exist in the DB and are tracked; `AgentResponse` uses `extra="allow"` so they pass through, but they're not typed or guaranteed. Make them explicit fields.
+- [ ] **`output_examples` field on agent registration** — array of `{input, output}` pairs; stored as JSON blob; returned in search results so orchestrator can evaluate quality before hiring.
+- [ ] **`verified` badge** — boolean surfaced in `AgentResponse` when verifier URL has passed a quality check; shown prominently in discovery.
+- [ ] **Search result enrichment** — `RegistrySearchResult` already returns `trust` + `blended_score`; also include `total_calls`, `avg_latency_ms`, `success_rate` so orchestrators can filter programmatically.
+- [ ] **Semantic search via SDK** — `client.search_agents(query, max_price_cents=None, min_trust=None)` already partially exists; confirm it returns enriched fields above.
+
+### 3.3 Spending Limits & Budget Safety
+- [ ] **`budget_cents` on job creation** — orchestrator specifies max price willing to pay; `POST /jobs` rejects with 400 if `agent.price_cents > budget_cents`. Critical for orchestrators that must stay within cost envelopes.
+- [ ] **`max_spend_cents` on API keys** — total spend cap on a key; enforced atomically in `pre_call_charge`. Prevents runaway agent spend if orchestrator loops unexpectedly.
 - [ ] **`daily_spend_limit_cents` on wallets** — rolling 24h spend cap; checked in `pre_call_charge`.
-- [ ] **Agent budget field on job creation** — caller specifies max price they'll pay; reject if agent's `price_cents > budget`.
-- [ ] **Spending summary endpoint** — `GET /wallets/spend-summary?period=7d` returns total spent, by-agent breakdown.
+- [ ] **Spending summary endpoint** — `GET /wallets/spend-summary?period=7d` returns total spent, by-agent breakdown; useful for orchestrators tracking ROI per specialist.
 
-### 3.3 Job Batching
-- [ ] **`POST /jobs/batch`** — accept array of job specs, create all atomically, return array of `job_id`s. Single wallet debit for total.
-- [ ] **Batch status endpoint** — `GET /jobs/batch/{batch_id}` returns aggregate status (n_pending, n_complete, n_failed).
-- [ ] **SDK `hire_many()`** — wraps batch endpoint; returns list of job futures.
+### 3.4 Job Batching — orchestrator hires many specialists at once
+- [ ] **`POST /jobs/batch`** — accept array of job specs (up to 50), create all atomically with a single wallet debit for total cost, return array of `{job_id, agent_id}`. Lets orchestrator fire off 100 specialists in one API call.
+- [ ] **Batch status endpoint** — `GET /jobs/batch/{batch_id}` returns aggregate `{n_pending, n_complete, n_failed, total_cost_cents}`.
+- [ ] **SDK `hire_many(specs)`** — wraps batch endpoint; returns `list[Job]`; each Job has `.wait()` or fires callback.
 
-### 3.4 Clarification & Verification UX
-- [ ] **Clarification timeout** — if agent sends a clarification request and caller does not respond within N minutes, auto-fail or auto-proceed with default. Configurable per job.
-- [ ] **Output verification hook** — allow caller to POST an acceptance/rejection verdict before settlement finalizes (grace period window, e.g. 10 min).
-- [ ] **Frontend clarification UI** — JobDetailPage should show pending clarification requests with a form to respond inline.
+### 3.5 Clarification & Verification Protocol
+- [ ] **Clarification timeout** — if agent sends a clarification request and caller does not respond within N minutes, auto-fail or auto-proceed with configurable default. `clarification_timeout_seconds` on job create.
+- [ ] **Output verification hook** — caller can POST acceptance/rejection verdict within a grace window before settlement finalizes. If caller rejects, auto-opens dispute. If window expires without response, auto-accepts.
+- [ ] **Frontend clarification UI** — JobDetailPage shows pending clarification requests with inline response form; push notification on new clarification.
+
+### 3.6 A2A & Protocol Interoperability ⚠️ HIGH LEVERAGE
+- [ ] **Google A2A: `/.well-known/agent.json`** — serve an Agent Card at this path for each registered agent (or a platform-level card). This makes AgentMarket natively discoverable by any Google A2A-compatible orchestrator. Schema: `{name, description, url, version, capabilities, skills[], authentication}`.
+- [ ] **Google A2A: task endpoints** — `POST /a2a/tasks/send`, `GET /a2a/tasks/{id}`, `POST /a2a/tasks/{id}/cancel`. Maps directly to existing job lifecycle. Lets any A2A orchestrator hire from AgentMarket without knowing the AgentMarket API.
+- [ ] **OpenAI Agents SDK tool spec** — `GET /openai/tools` returns tool definitions in OpenAI function-calling format. Lets ChatGPT/OpenAI agents hire from AgentMarket as a tool call.
+- [ ] **MCP hardening** — MCP `/mcp/tools` + stdio bridge already work; audit that tool schemas correctly reflect `input_schema`/`output_schema` from registry and that auth flows cleanly for non-human callers.
 
 ---
 
@@ -117,13 +152,13 @@ Items are grouped by area and roughly prioritized within each section.
 ### 6.1 Cofounder's Frontend Branch
 - [x] ~~Review `origin/frontend` branch~~ — reviewed and merged.
 - [x] ~~Decide merge or keep separate~~ — merged: PixelScene hero, Reveal animations, visual polish.
-- [x] ~~Regression test after merge~~ — build passes, 136 tests pass.
+- [x] ~~Regression test after merge~~ — build passes, 148 tests pass.
 
 ### 6.2 Missing Pages / Flows
 - [x] ~~Real deposit / add funds flow~~ — WalletPage has full Stripe Checkout + demo deposit with return banner.
 - [x] ~~**Withdrawal history page** — list of past withdrawals with status (pending/complete/failed).~~
 - [ ] **Job detail page** — full job view: status timeline, messages thread, clarification requests, output payload, rating widget.
-- [ ] **Agent detail page** — public profile: description, pricing, ratings, call history, trust score.
+- [ ] **Agent detail page** — public profile: description, pricing, ratings, trust score, call count, avg latency, output examples.
 - [ ] **Onboarding flow** — new users see a 3-step wizard: (1) fund wallet, (2) browse agents, (3) make first call. Skip if already used platform.
 - [ ] **API key management page** — list keys, create new (with scopes), revoke, show prefix only after creation with copy-once warning.
 
@@ -137,9 +172,10 @@ Items are grouped by area and roughly prioritized within each section.
 - [x] ~~Favicon and meta tags~~ — added `favicon.svg`, OG/Twitter card tags in `index.html`.
 
 ### 6.4 Agent Discovery
-- [ ] **Search filters** — filter by price range, category, trust score, response time; persist in URL params.
-- [ ] **Sort options** — sort by price, popularity, trust score, recency.
-- [ ] **Agent cards** — show trust score badge, avg response time, call count, pricing prominently.
+- [ ] **Search filters** — filter by price range, trust score, response time, verified-only; persist in URL params.
+- [ ] **Sort options** — sort by price, popularity, trust score, recency, success rate.
+- [ ] **Agent cards** — show trust score badge, avg response time, call count, success rate, pricing prominently.
+- [ ] **Output examples on agent detail** — show 2-3 real input→output pairs so buyers can judge quality before hiring.
 - [ ] **Featured / curated agents** — pin 3-5 high-quality built-in agents at top of discovery.
 
 ---
@@ -147,18 +183,18 @@ Items are grouped by area and roughly prioritized within each section.
 ## 7. SDK (P1)
 
 ### 7.1 Python SDK
-- [ ] **Webhook callback receiver** — `AgentServer.on_job_complete(secret)` decorator validates HMAC signature and fires handler.
-- [ ] **`hire_many()`** — wraps batch job creation; returns `list[Job]`.
-- [ ] **`wait_for(job_id, timeout=60)`** — polls until terminal state or timeout; raises `JobTimeoutError`.
-- [ ] **Budget parameter on `hire()`** — `client.hire(agent_id, payload, budget_cents=500)`.
-- [ ] **Async variant** — `AsyncAgentMarketClient` using `httpx.AsyncClient` for use in async agent frameworks.
+- [ ] **`wait_for(job_id, timeout=60)`** — polls until terminal state or raises `JobTimeoutError`; most useful fallback when no callback URL available.
+- [ ] **Callback receiver helper** — `AgentServer.on_job_complete(secret)` decorator validates HMAC signature and fires handler.
+- [ ] **`hire_many(specs)`** — wraps batch job creation; returns `list[Job]`.
+- [ ] **`budget_cents` parameter on `hire()`** — `client.hire(agent_id, payload, budget_cents=500)`.
+- [ ] **`AsyncAgentMarketClient`** — `httpx.AsyncClient` variant; critical for orchestrators built on async frameworks (LangGraph, AutoGen, CrewAI).
 - [ ] **Publish to PyPI** — currently installable via `pip install -e sdk/`; add GitHub Actions release job that publishes on tag.
 - [x] ~~SDK version pinning~~ — added `__version__ = "0.1.0"` to `sdk/agentmarket/__init__.py`; `User-Agent: agentmarket-python/0.1.0` sent on all requests.
 
 ### 7.2 TypeScript / JavaScript SDK
 - [ ] **`sdks/typescript/`** — currently has generated types but no client implementation; build `AgentMarketClient` class mirroring the Python SDK.
-- [ ] **`hire(agentId, payload)`** — returns `Promise<Job>`.
-- [ ] **`search(query)`** — returns `Promise<Agent[]>`.
+- [ ] **`hire(agentId, payload, options?)`** — returns `Promise<Job>`.
+- [ ] **`search(query, filters?)`** — returns `Promise<Agent[]>`.
 - [ ] **`getBalance()`** — returns `Promise<number>` (cents).
 - [ ] **Publish to npm** as `agentmarket`.
 - [ ] **Node.js + browser compatibility** — use `fetch` API; no Node-specific imports.
@@ -168,7 +204,7 @@ Items are grouped by area and roughly prioritized within each section.
 ## 8. Agents & Quality (P1/P2)
 
 ### 8.1 Built-in Agents
-- [ ] **Benchmark scores** — for each built-in agent, run a fixed eval suite and record accuracy/quality metrics; surface in registry listing.
+- [ ] **Benchmark scores** — for each built-in agent, run a fixed eval suite and record accuracy/quality metrics; surface as `output_examples` in registry listing.
 - [ ] **Response time SLAs** — document expected P95 latency per agent; alert if exceeded.
 - [ ] **Financial Research Agent** — upgrade to use real-time data where possible; add confidence score to output.
 - [ ] **Code Review Agent** — support multi-file input; output structured diff comments.
@@ -186,7 +222,7 @@ Items are grouped by area and roughly prioritized within each section.
 
 ## 9. Trust & Reputation (P1)
 
-- [ ] **Surfacing trust scores in UI** — caller trust and agent trust scores are computed but not shown on agent cards or caller profiles.
+- [ ] **Surface trust scores + call stats in discovery** — `trust_score`, `total_calls`, `avg_latency_ms`, `success_rate` already in DB; add to `AgentResponse` as typed fields (currently untyped passthrough).
 - [ ] **Trust score explanation** — tooltip or page explaining how trust is calculated (dispute history, rating history, call volume).
 - [ ] **Minimum trust gate** — option for agent owners to reject callers below a trust threshold.
 - [ ] **Dispute stats** — show dispute rate % on agent listings; agents with >10% dispute rate get a warning badge.
@@ -211,6 +247,8 @@ Items are grouped by area and roughly prioritized within each section.
 - [ ] **SDK quickstart** — 5-minute guide: install SDK → fund wallet → hire first agent → get result.
 - [ ] **Agent builder guide** — how to register an agent, write `agent.md`, handle job lifecycle, set pricing.
 - [ ] **MCP integration guide** — how to configure `agentmarket_mcp_server.py` in Claude Code / Claude Desktop.
+- [ ] **A2A integration guide** — how to configure AgentMarket as a participant in Google A2A networks.
+- [ ] **Orchestrator pattern guide** — code example of an orchestrator that discovers, hires, waits for callback, and handles disputes.
 - [ ] **Dispute guide** — for callers: how to file, what to expect, timeline. For agents: how to respond.
 - [ ] **Pricing page** — public-facing breakdown of platform fee (10%), Stripe payout fee, no subscription cost.
 - [ ] **Changelog** — running changelog of notable changes; start from current state.
@@ -221,12 +259,15 @@ Items are grouped by area and roughly prioritized within each section.
 
 - [ ] All P0 items above complete
 - [ ] Full test suite passing (0 failures)
+- [ ] `callback_url` end-to-end tested: orchestrator hires specialist, receives callback, no polling required
+- [ ] `/.well-known/agent.json` served and validated against A2A spec
+- [ ] `budget_cents` enforced: orchestrator cannot overspend on a specialist
 - [ ] Stripe Connect enabled + test withdrawal succeeds end-to-end
 - [ ] Real deposit flow tested end-to-end with live Stripe test key
 - [ ] Sentry integrated and catching errors
 - [ ] Domain + SSL configured
 - [ ] Docker prod image tested in staging environment
 - [ ] ToS and Privacy Policy published
-- [ ] At least 5 working, quality-rated built-in agents
+- [ ] At least 5 working, quality-rated built-in agents with output examples
 - [x] ~~Cofounder frontend branch reviewed and merged~~
 - [ ] Load test: simulate 50 concurrent job creates + completes; no 500s, ledger invariant holds
