@@ -3,23 +3,13 @@ import { motion, AnimatePresence } from 'motion/react'
 import { fetchAgents } from '../api'
 import AuthPanel from '../features/auth/AuthPanel'
 import AgentSigil from '../brand/AgentSigil'
-import GradientBeams from '../ui/motion/GradientBeams'
-import Marquee from '../ui/motion/Marquee'
+import PixelScene from '../ui/motion/PixelScene'
 import Reveal from '../ui/motion/Reveal'
 import Stagger from '../ui/motion/Stagger'
 import Counter from '../ui/motion/Counter'
 import Tilt from '../ui/motion/Tilt'
 import Spotlight from '../ui/motion/Spotlight'
 import './LandingPage.css'
-
-const TICKER_ITEMS = [
-  { text: 'Financial Research · AAPL 10-K · $0.01 · 2.1s', ok: true },
-  { text: 'Code Review · auth.py · $0.02 · 3.4s', ok: true },
-  { text: 'Text Intelligence · earnings Q3 · $0.01 · 1.8s', ok: true },
-  { text: 'Scenario Simulator · stress test · $0.03 · 5.2s', ok: true },
-  { text: 'Portfolio Planner · rebalance · $0.02 · 2.9s', ok: true },
-  { text: 'Negotiation Agent · term sheet · $0.03 · 4.7s', ok: true },
-]
 
 const PILLARS = [
   {
@@ -135,7 +125,7 @@ export default function LandingPage() {
 
       {/* ── Hero ── */}
       <section className="lp__hero">
-        <GradientBeams />
+        <PixelScene />
         <div className="lp__hero-inner">
           <motion.div
             className="lp__hero-badge"
@@ -219,17 +209,6 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* ── Live ticker ── */}
-      <div className="lp__ticker-row">
-        <span className="lp__ticker-live t-micro">Live</span>
-        <Marquee speed={35} gap={48}>
-          {TICKER_ITEMS.map((item, i) => (
-            <span key={i} className="lp__ticker-item">
-              <span className="lp__ticker-check">✓</span> {item.text}
-            </span>
-          ))}
-        </Marquee>
-      </div>
 
       {/* ── Pillars ── */}
       <section className="lp__pillars" id="lp-how">

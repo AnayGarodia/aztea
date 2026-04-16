@@ -6,6 +6,7 @@ import Button from '../ui/Button'
 import Badge from '../ui/Badge'
 import EmptyState from '../ui/EmptyState'
 import Input from '../ui/Input'
+import Reveal from '../ui/motion/Reveal'
 import SpendChart from '../features/analytics/SpendChart'
 import { createTopupSession, depositToWallet, fetchPublicConfig, fetchAgentEarnings, connectOnboard, getConnectStatus, withdrawFunds } from '../api'
 import { useMarket } from '../context/MarketContext'
@@ -32,15 +33,15 @@ function TxRow({ tx }) {
 
   return (
     <div className="wallet__tx-row">
-      <div className="wallet__tx-icon" style={{ background: isCredit ? 'var(--positive-wash)' : 'var(--negative-wash)' }}>
-        <Icon size={14} color={color} />
+      <div className="wallet__tx-icon" style={{ background: isCredit ? 'var(--positive-bg)' : 'var(--negative-bg)', border: `1px solid ${isCredit ? 'var(--positive-border)' : 'var(--negative-border)'}` }}>
+        <Icon size={13} color={color} />
       </div>
       <div>
         <p className="wallet__tx-memo">{tx.memo || tx.type}</p>
         <p className="wallet__tx-date">{fmtDate(tx.created_at)}</p>
       </div>
       <Badge label={tx.type} />
-      <span className="wallet__tx-amount" style={{ color }}>
+      <span className="wallet__tx-amount t-mono" style={{ color }}>
         {sign}{fmtUsd(Math.abs(tx.amount_cents))}
       </span>
     </div>
@@ -303,6 +304,7 @@ export default function WalletPage() {
           </section>
 
           <div className="wallet__grid">
+            <Reveal>
             <Card>
               <Card.Header>
                 <span className="wallet__section-title">Add funds</span>
@@ -372,9 +374,11 @@ export default function WalletPage() {
                 )}
               </Card.Body>
             </Card>
+            </Reveal>
 
             <div className="wallet__right-col">
               {transactions.length > 0 && (
+                <Reveal delay={0.1}>
                 <Card>
                   <Card.Header>
                     <span className="wallet__section-title">14-day spend</span>
@@ -383,9 +387,11 @@ export default function WalletPage() {
                     <SpendChart transactions={transactions} />
                   </Card.Body>
                 </Card>
+                </Reveal>
               )}
 
               {/* Agent earnings breakdown */}
+              <Reveal delay={0.15}>
               <Card>
                 <Card.Header style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
                   <TrendingUp size={14} color="var(--accent)" />
@@ -415,9 +421,11 @@ export default function WalletPage() {
                   )}
                 </Card.Body>
               </Card>
+              </Reveal>
 
               {/* Stripe Connect / Withdraw card */}
               {stripeEnabled && (
+                <Reveal delay={0.2}>
                 <Card>
                   <Card.Header style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
                     <Banknote size={14} color="var(--accent)" />
@@ -514,8 +522,10 @@ export default function WalletPage() {
                     )}
                   </Card.Body>
                 </Card>
+                </Reveal>
               )}
 
+              <Reveal delay={0.25}>
               <Card>
                 <Card.Header>
                   <span className="wallet__section-title">
@@ -534,6 +544,7 @@ export default function WalletPage() {
                   )}
                 </Card.Body>
               </Card>
+              </Reveal>
             </div>
           </div>
         </div>
