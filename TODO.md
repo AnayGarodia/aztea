@@ -16,15 +16,15 @@ DISCOVER → CONTRACT → WORK ASYNC → SETTLE → REPEAT
 
 | Stage | Status | Key gap |
 |---|---|---|
-| **Discover** (search by need, see reputation + cost) | ~70% | `trust_score`, `total_calls`, `avg_latency_ms` exist in DB but NOT exposed in `AgentResponse`; no output_examples; no verified badge shown |
-| **Contract** (hire with budget cap, get job_id, fire-and-forget) | 60% | No `callback_url` — orchestrator must poll; no `budget_cents` on job create; no `max_spend_cents` on API keys |
-| **Work async** (orchestrator continues, specialist executes) | 85% | Job creates return immediately ✓; claim/heartbeat/complete lifecycle ✓; SSE stream ✓; clarification protocol ✓; missing: caller gets no push on completion |
-| **Settle** (verify output, dispute, payout) | 80% | Ledger ✓; dispute ✓; 2-judge resolution ✓; missing: output verification hook (caller accept/reject before finalization); clarification timeout |
-| **Protocols** (A2A, MCP) | 60% | MCP `/mcp/tools` + `/mcp/invoke` + stdio bridge ✓; **no Google A2A support** (`/.well-known/agent.json`, agent card, A2A task protocol); no OpenAI Agents SDK tool spec |
+| **Discover** (search by need, see reputation + cost) | ~80% | `trust_score`, `total_calls`, `avg_latency_ms`, `success_rate` now typed in `AgentResponse` ✓; missing: `output_examples`, verified badge |
+| **Contract** (hire with budget cap, get job_id, fire-and-forget) | 75% | `callback_url` on jobs ✓ — orchestrator gets push notification on completion; missing: `budget_cents` cap, `max_spend_cents` on API keys |
+| **Work async** (orchestrator continues, specialist executes) | 90% | Job creates return immediately ✓; claim/heartbeat/complete ✓; SSE stream ✓; clarification protocol ✓; callback push on terminal state ✓ |
+| **Settle** (verify output, dispute, payout) | 80% | Ledger ✓; dispute ✓; 2-judge resolution ✓; missing: output verification hook, clarification timeout |
+| **Protocols** (A2A, MCP) | 75% | MCP ✓; `/.well-known/agent.json` platform + per-agent cards ✓; missing: A2A task endpoints (`POST /a2a/tasks/send`), OpenAI tool spec |
 | **SDK** | 55% | Sync hire ✓; polling loop ✓; clarification ✓; missing: callback receiver, `wait_for()`, `hire_many()`, `AsyncAgentMarketClient`, budget param |
 
-**Overall: ~70% toward a working agent-to-agent marketplace.**
-The single biggest gap is **callback_url** — without push notification on job completion, every orchestrator must implement its own polling loop, which is fragile and wastes resources. Second biggest is **A2A protocol** — without `/.well-known/agent.json`, orchestrators built on Google A2A SDK or other agent frameworks can't autodiscover and hire from AgentMarket natively.
+**Overall: ~80% toward a working agent-to-agent marketplace.**
+The biggest remaining gaps: (1) **A2A task endpoints** — agent cards exist but orchestrators using Google A2A SDK need `POST /a2a/tasks/send` to actually submit work; (2) **budget enforcement** — no cost ceiling when hiring; (3) **SDK async client** — orchestrators on LangGraph/AutoGen need `AsyncAgentMarketClient`.
 
 ---
 
@@ -71,15 +71,15 @@ The single biggest gap is **callback_url** — without push notification on job 
 
 ## 3. Agent-to-Agent Workflows (P0 — core to the product vision)
 
-### 3.1 Webhook Callbacks — orchestrator gets notified when job completes ⚠️ BIGGEST GAP
-- [ ] **Add `callback_url` field to `JobCreateRequest`** — optional `callback_url: str`. When job reaches terminal state (complete/fail/dispute_resolved), platform POSTs `{job_id, status, output_payload, settled_at, error_message}` to that URL. Uses existing hook delivery worker (already has retry/backoff/dead-letter).
-- [ ] **Callback signature header** — sign POST body with HMAC-SHA256 using a per-caller secret; include `X-AgentMarket-Signature: sha256=...` header so receiving agent can verify authenticity.
-- [ ] **SDK `on_job_complete(secret)` decorator** — `AgentServer` gets a `@server.on_job_complete(callback_secret)` decorator that verifies HMAC, parses payload, and fires handler. No polling needed.
+### 3.1 Webhook Callbacks — orchestrator gets notified when job completes
+- [x] ~~**Add `callback_url` field to `JobCreateRequest`**~~ — `POST /jobs` now accepts optional `callback_url`; on `job.completed`/`job.failed` the platform POSTs `{job_id, status, output_payload, error_message, completed_at, settled_at, price_cents}` via the existing hook delivery worker (retry/backoff/dead-letter). Migration `0003_callback_url.sql` adds the column.
+- [ ] **Callback HMAC secret** — add per-caller `callback_secret` field; sign POST body and send `X-AgentMarket-Signature: sha256=...` so receiving agent can verify authenticity. Currently unsigned.
+- [ ] **SDK `on_job_complete(secret)` decorator** — `AgentServer` gets a `@server.on_job_complete(callback_secret)` decorator that verifies HMAC, parses payload, and fires handler.
 - [ ] **SDK `wait_for(job_id, timeout=60)`** — polls until terminal state or raises `JobTimeoutError`; usable when agent doesn't have a public callback URL.
 - [ ] **Test: end-to-end orchestrator hires specialist with callback** — agent A hires agent B, does own work, receives callback when B completes, verifies result.
 
 ### 3.2 Agent Discovery Signals — orchestrator picks the right specialist
-- [ ] **Expose `trust_score`, `total_calls`, `avg_latency_ms`, `success_rate` in `AgentResponse`** — these fields exist in the DB and are tracked; `AgentResponse` uses `extra="allow"` so they pass through, but they're not typed or guaranteed. Make them explicit fields.
+- [x] ~~**Expose `trust_score`, `total_calls`, `avg_latency_ms`, `success_rate` in `AgentResponse`**~~ — now typed fields on `AgentResponse`; always returned from `/registry/agents` and `/registry/search`.
 - [ ] **`output_examples` field on agent registration** — array of `{input, output}` pairs; stored as JSON blob; returned in search results so orchestrator can evaluate quality before hiring.
 - [ ] **`verified` badge** — boolean surfaced in `AgentResponse` when verifier URL has passed a quality check; shown prominently in discovery.
 - [ ] **Search result enrichment** — `RegistrySearchResult` already returns `trust` + `blended_score`; also include `total_calls`, `avg_latency_ms`, `success_rate` so orchestrators can filter programmatically.
@@ -101,9 +101,9 @@ The single biggest gap is **callback_url** — without push notification on job 
 - [ ] **Output verification hook** — caller can POST acceptance/rejection verdict within a grace window before settlement finalizes. If caller rejects, auto-opens dispute. If window expires without response, auto-accepts.
 - [ ] **Frontend clarification UI** — JobDetailPage shows pending clarification requests with inline response form; push notification on new clarification.
 
-### 3.6 A2A & Protocol Interoperability ⚠️ HIGH LEVERAGE
-- [ ] **Google A2A: `/.well-known/agent.json`** — serve an Agent Card at this path for each registered agent (or a platform-level card). This makes AgentMarket natively discoverable by any Google A2A-compatible orchestrator. Schema: `{name, description, url, version, capabilities, skills[], authentication}`.
-- [ ] **Google A2A: task endpoints** — `POST /a2a/tasks/send`, `GET /a2a/tasks/{id}`, `POST /a2a/tasks/{id}/cancel`. Maps directly to existing job lifecycle. Lets any A2A orchestrator hire from AgentMarket without knowing the AgentMarket API.
+### 3.6 A2A & Protocol Interoperability
+- [x] ~~**Google A2A: `/.well-known/agent.json`**~~ — platform card at `GET /.well-known/agent.json` lists all registered agents as skills. Per-agent cards at `GET /registry/agents/{id}/agent.json`. Both include `trust_score`, `success_rate`, `avg_latency_ms`, `hire_endpoint`, `status_endpoint`.
+- [ ] **Google A2A: task endpoints** — `POST /a2a/tasks/send`, `GET /a2a/tasks/{id}`, `POST /a2a/tasks/{id}/cancel`. Maps directly to existing job lifecycle. Lets any A2A orchestrator hire without knowing the AgentMarket API.
 - [ ] **OpenAI Agents SDK tool spec** — `GET /openai/tools` returns tool definitions in OpenAI function-calling format. Lets ChatGPT/OpenAI agents hire from AgentMarket as a tool call.
 - [ ] **MCP hardening** — MCP `/mcp/tools` + stdio bridge already work; audit that tool schemas correctly reflect `input_schema`/`output_schema` from registry and that auth flows cleanly for non-human callers.
 

@@ -2053,6 +2053,8 @@ def _record_job_event(
         },
     )
     _deliver_job_event_hooks(event)
+    if event.get("event_type") in {"job.completed", "job.failed", "job.failed_quality"} and (job or {}).get("callback_url"):
+        _enqueue_job_callback(job, event["event_id"])
     return event
 
 
@@ -2787,6 +2789,52 @@ def _enqueue_job_event_hook_deliveries(event: dict) -> None:
             )
 
 
+_JOB_CALLBACK_HOOK_PREFIX = "callback:"
+
+
+def _enqueue_job_callback(job: dict, event_id: int) -> None:
+    """Enqueue a one-time push delivery to job.callback_url on terminal state."""
+    callback_url = (job.get("callback_url") or "").strip()
+    if not callback_url:
+        return
+    try:
+        safe_url = _validate_hook_url(callback_url)
+    except ValueError:
+        return
+
+    hook_id = f"{_JOB_CALLBACK_HOOK_PREFIX}{job['job_id']}"
+    payload = {
+        "job_id": job["job_id"],
+        "agent_id": job.get("agent_id"),
+        "status": job.get("status"),
+        "output_payload": job.get("output_payload"),
+        "error_message": job.get("error_message"),
+        "completed_at": job.get("completed_at"),
+        "settled_at": job.get("settled_at"),
+        "price_cents": job.get("price_cents"),
+    }
+    now = _utc_now_iso()
+    with jobs._conn() as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO job_event_deliveries
+                (event_id, hook_id, owner_id, target_url, secret, payload,
+                 status, attempt_count, next_attempt_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, NULL, ?, 'pending', 0, ?, ?, ?)
+            """,
+            (
+                event_id,
+                hook_id,
+                job.get("caller_owner_id", ""),
+                safe_url,
+                json.dumps(payload, separators=(",", ":"), sort_keys=True, default=str),
+                now,
+                now,
+                now,
+            ),
+        )
+
+
 def _hook_backoff_seconds(attempt_count: int) -> int:
     exponent = max(0, attempt_count - 1)
     delay = _HOOK_DELIVERY_BASE_DELAY_SECONDS * (2 ** exponent)
@@ -2920,45 +2968,48 @@ def _process_due_hook_deliveries(limit: int = _HOOK_DELIVERY_BATCH_SIZE) -> dict
         hook_id = str(delivery["hook_id"])
         attempt_count = int(delivery["attempt_count"])
 
-        with jobs._conn() as conn:
-            hook_row = conn.execute(
-                "SELECT is_active FROM job_event_hooks WHERE hook_id = ?",
-                (hook_id,),
-            ).fetchone()
+        is_job_callback = hook_id.startswith(_JOB_CALLBACK_HOOK_PREFIX)
+        if not is_job_callback:
+            with jobs._conn() as conn:
+                hook_row = conn.execute(
+                    "SELECT is_active FROM job_event_hooks WHERE hook_id = ?",
+                    (hook_id,),
+                ).fetchone()
 
-        if hook_row is None or int(hook_row["is_active"]) != 1:
-            error_text = "Hook is inactive or deleted."
-            _update_hook_attempt_metadata(
-                hook_id=hook_id,
-                attempted_at=now_iso,
-                success=False,
-                status_code=None,
-                error_text=error_text,
-            )
-            _mark_hook_delivery(
-                delivery_id,
-                status="cancelled",
-                next_attempt_at=now_iso,
-                attempt_count=attempt_count,
-                status_code=None,
-                error_text=error_text,
-                now_iso=now_iso,
-                mark_success=False,
-            )
-            cancelled += 1
-            continue
+            if hook_row is None or int(hook_row["is_active"]) != 1:
+                error_text = "Hook is inactive or deleted."
+                _update_hook_attempt_metadata(
+                    hook_id=hook_id,
+                    attempted_at=now_iso,
+                    success=False,
+                    status_code=None,
+                    error_text=error_text,
+                )
+                _mark_hook_delivery(
+                    delivery_id,
+                    status="cancelled",
+                    next_attempt_at=now_iso,
+                    attempt_count=attempt_count,
+                    status_code=None,
+                    error_text=error_text,
+                    now_iso=now_iso,
+                    mark_success=False,
+                )
+                cancelled += 1
+                continue
 
         try:
             safe_target_url = _validate_hook_url(str(delivery["target_url"]))
         except ValueError as exc:
             error_text = f"Blocked unsafe hook target: {exc}"
-            _update_hook_attempt_metadata(
-                hook_id=hook_id,
-                attempted_at=now_iso,
-                success=False,
-                status_code=None,
-                error_text=error_text,
-            )
+            if not is_job_callback:
+                _update_hook_attempt_metadata(
+                    hook_id=hook_id,
+                    attempted_at=now_iso,
+                    success=False,
+                    status_code=None,
+                    error_text=error_text,
+                )
             _mark_hook_delivery(
                 delivery_id,
                 status="failed" if (attempt_count + 1) >= _HOOK_DELIVERY_MAX_ATTEMPTS else "pending",
@@ -3017,13 +3068,14 @@ def _process_due_hook_deliveries(limit: int = _HOOK_DELIVERY_BATCH_SIZE) -> dict
         except http.RequestException as exc:
             error_text = str(exc)
 
-        _update_hook_attempt_metadata(
-            hook_id=hook_id,
-            attempted_at=now_iso,
-            success=success,
-            status_code=status_code,
-            error_text=error_text,
-        )
+        if not is_job_callback:
+            _update_hook_attempt_metadata(
+                hook_id=hook_id,
+                attempted_at=now_iso,
+                success=success,
+                status_code=status_code,
+                error_text=error_text,
+            )
 
         if success:
             _mark_hook_delivery(
@@ -4807,6 +4859,121 @@ def _mcp_text_from_response(response: Response) -> str:
         return json.dumps(body_text, ensure_ascii=False)
 
 
+def _a2a_agent_card(agent: dict) -> dict:
+    """Build a Google A2A Agent Card for a single registered agent."""
+    price_usd = float(agent.get("price_per_call_usd") or 0.0)
+    return {
+        "name": str(agent.get("name") or ""),
+        "description": str(agent.get("description") or ""),
+        "url": f"{_SERVER_BASE_URL}/registry/agents/{agent['agent_id']}/call",
+        "version": "1.0.0",
+        "provider": {"organization": "AgentMarket", "url": _SERVER_BASE_URL},
+        "defaultInputModes": ["application/json"],
+        "defaultOutputModes": ["application/json"],
+        "capabilities": {
+            "streaming": True,
+            "pushNotifications": True,
+            "stateTransitionHistory": True,
+        },
+        "skills": [
+            {
+                "id": agent["agent_id"],
+                "name": str(agent.get("name") or ""),
+                "description": str(agent.get("description") or ""),
+                "tags": list(agent.get("tags") or []),
+                "inputModes": ["application/json"],
+                "outputModes": ["application/json"],
+                "inputSchema": agent.get("input_schema") or {},
+                "outputSchema": agent.get("output_schema") or {},
+            }
+        ],
+        "authentication": {"schemes": ["ApiKey"]},
+        "agentmarket": {
+            "agent_id": agent["agent_id"],
+            "price_per_call_usd": price_usd,
+            "trust_score": agent.get("trust_score"),
+            "total_calls": agent.get("total_calls"),
+            "avg_latency_ms": agent.get("avg_latency_ms"),
+            "success_rate": agent.get("success_rate"),
+            "hire_endpoint": f"{_SERVER_BASE_URL}/jobs",
+            "status_endpoint": f"{_SERVER_BASE_URL}/jobs/{{job_id}}",
+        },
+    }
+
+
+@app.get(
+    "/.well-known/agent.json",
+    include_in_schema=True,
+    tags=["A2A"],
+    summary="Google A2A: platform-level agent card listing all registered agents as skills.",
+)
+def a2a_platform_agent_card(request: Request) -> JSONResponse:
+    agents = registry.get_agents_with_reputation()
+    visible = [a for a in agents if not a.get("internal_only")]
+    skills = []
+    for agent in visible:
+        skills.append(
+            {
+                "id": agent["agent_id"],
+                "name": str(agent.get("name") or ""),
+                "description": str(agent.get("description") or ""),
+                "tags": list(agent.get("tags") or []),
+                "inputModes": ["application/json"],
+                "outputModes": ["application/json"],
+                "agentmarket": {
+                    "agent_id": agent["agent_id"],
+                    "price_per_call_usd": float(agent.get("price_per_call_usd") or 0.0),
+                    "trust_score": agent.get("trust_score"),
+                    "total_calls": agent.get("total_calls"),
+                    "success_rate": agent.get("success_rate"),
+                    "avg_latency_ms": agent.get("avg_latency_ms"),
+                },
+            }
+        )
+    card = {
+        "name": "AgentMarket",
+        "description": "AI agent labor marketplace. Discover, hire, and orchestrate specialist agents. Pay per invocation.",
+        "url": _SERVER_BASE_URL,
+        "version": "1.0.0",
+        "provider": {"organization": "AgentMarket", "url": _SERVER_BASE_URL},
+        "defaultInputModes": ["application/json"],
+        "defaultOutputModes": ["application/json"],
+        "capabilities": {
+            "streaming": True,
+            "pushNotifications": True,
+            "stateTransitionHistory": True,
+        },
+        "skills": skills,
+        "authentication": {"schemes": ["ApiKey"]},
+        "agentmarket": {
+            "hire_endpoint": f"{_SERVER_BASE_URL}/jobs",
+            "search_endpoint": f"{_SERVER_BASE_URL}/registry/search",
+            "list_endpoint": f"{_SERVER_BASE_URL}/registry/agents",
+            "mcp_tools_endpoint": f"{_SERVER_BASE_URL}/mcp/tools",
+        },
+    }
+    return JSONResponse(content=card, headers={"Content-Type": "application/json"})
+
+
+@app.get(
+    "/registry/agents/{agent_id}/agent.json",
+    include_in_schema=True,
+    tags=["A2A"],
+    summary="Google A2A: per-agent card. Also served at /.well-known/agent.json?agent_id=...",
+    responses=_error_responses(404),
+)
+def a2a_agent_card(agent_id: str, request: Request) -> JSONResponse:
+    agent = registry.get_agent_with_reputation(agent_id)
+    if agent is None or agent.get("status") == "banned":
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    if agent.get("internal_only"):
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    return JSONResponse(
+        content=_a2a_agent_card(agent),
+        headers={"Content-Type": "application/json"},
+    )
+
+
 @app.get(
     "/mcp/tools",
     response_model=core_models.DynamicObjectResponse,
@@ -5360,6 +5527,7 @@ def jobs_create(
             max_attempts=body.max_attempts,
             dispute_window_hours=body.dispute_window_hours or _DEFAULT_JOB_DISPUTE_WINDOW_HOURS,
             judge_agent_id=_extract_judge_agent_id(agent.get("input_schema")) or _QUALITY_JUDGE_AGENT_ID,
+            callback_url=body.callback_url or None,
         )
     except Exception as e:
         payments.post_call_refund(

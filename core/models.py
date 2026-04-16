@@ -483,6 +483,15 @@ class JobCreateRequest(BaseModel):
     input_payload: JSONObject = Field(default_factory=dict)
     max_attempts: int = Field(default=3, ge=1, le=10)
     dispute_window_hours: int = Field(default=72, ge=1, le=24 * 30)
+    callback_url: str | None = Field(
+        default=None,
+        description=(
+            "Optional HTTPS URL the platform will POST to when the job reaches a terminal state "
+            "(completed, failed). Body: {job_id, status, output_payload, error_message, settled_at}. "
+            "Delivered with retry/backoff via the hook delivery worker. "
+            "Verify authenticity with the X-AgentMarket-Signature header (HMAC-SHA256)."
+        ),
+    )
 
 
 class JobCompleteRequest(BaseModel):
@@ -1317,6 +1326,11 @@ class AgentResponse(BaseModel):
     output_verifier_url: str | None = None
     status: str = "active"
     caller_trust_min: float | None = None
+    # Discovery signals for orchestrators
+    trust_score: float | None = None
+    total_calls: int | None = None
+    avg_latency_ms: float | None = None
+    success_rate: float | None = None
 
 
 class RegistryRegisterResponse(BaseModel):
@@ -1374,6 +1388,7 @@ class JobResponse(BaseModel):
     judge_verdict: str | None = None
     quality_score: int | None = None
     judge_agent_id: str | None = None
+    callback_url: str | None = None
 
 
 class JobsListResponse(BaseModel):

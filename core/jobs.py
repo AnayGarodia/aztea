@@ -325,7 +325,8 @@ def _create_jobs_table(conn: sqlite3.Connection, table_name: str = "jobs") -> No
             dispute_outcome      TEXT,
             judge_agent_id       TEXT,
             judge_verdict        TEXT,
-            quality_score        INTEGER
+            quality_score        INTEGER,
+            callback_url         TEXT
         )
     """)
 
@@ -615,6 +616,7 @@ def create_job(
     max_attempts: int = 3,
     dispute_window_hours: int = 72,
     judge_agent_id: str | None = None,
+    callback_url: str | None = None,
 ) -> dict:
     if price_cents < 0:
         raise ValueError("price_cents must be non-negative.")
@@ -639,8 +641,9 @@ def create_job(
             INSERT INTO jobs
               (job_id, agent_id, agent_owner_id, caller_owner_id, caller_wallet_id,
                agent_wallet_id, platform_wallet_id, status, price_cents, charge_tx_id,
-               input_payload, created_at, updated_at, max_attempts, dispute_window_hours, judge_agent_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               input_payload, created_at, updated_at, max_attempts, dispute_window_hours, judge_agent_id,
+               callback_url)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job_id,
@@ -659,6 +662,7 @@ def create_job(
                 parsed_max_attempts,
                 parsed_dispute_window_hours,
                 _clean_optional_text(judge_agent_id),
+                _clean_optional_text(callback_url),
             ),
         )
     return get_job(job_id)
