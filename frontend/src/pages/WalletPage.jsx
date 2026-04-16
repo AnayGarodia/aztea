@@ -5,6 +5,7 @@ import Button from '../ui/Button'
 import Badge from '../ui/Badge'
 import EmptyState from '../ui/EmptyState'
 import Input from '../ui/Input'
+import Reveal from '../ui/motion/Reveal'
 import SpendChart from '../features/analytics/SpendChart'
 import { depositToWallet } from '../api'
 import { useMarket } from '../context/MarketContext'
@@ -31,15 +32,15 @@ function TxRow({ tx }) {
 
   return (
     <div className="wallet__tx-row">
-      <div className="wallet__tx-icon" style={{ background: isCredit ? 'var(--positive-wash)' : 'var(--negative-wash)' }}>
-        <Icon size={14} color={color} />
+      <div className="wallet__tx-icon" style={{ background: isCredit ? 'var(--positive-bg)' : 'var(--negative-bg)', border: `1px solid ${isCredit ? 'var(--positive-border)' : 'var(--negative-border)'}` }}>
+        <Icon size={13} color={color} />
       </div>
       <div>
         <p className="wallet__tx-memo">{tx.memo || tx.type}</p>
         <p className="wallet__tx-date">{fmtDate(tx.created_at)}</p>
       </div>
       <Badge label={tx.type} />
-      <span className="wallet__tx-amount" style={{ color }}>
+      <span className="wallet__tx-amount t-mono" style={{ color }}>
         {sign}{fmtUsd(Math.abs(tx.amount_cents))}
       </span>
     </div>
@@ -81,102 +82,110 @@ export default function WalletPage() {
 
       <div className="wallet__scroll">
         <div className="wallet__content">
-          <header className="wallet__header">
-            <div>
-              <p className="wallet__eyebrow">Settlement + trust</p>
-              <h1>Wallet</h1>
-              <p>All charges, refunds, and payouts are visible here. Keep enough balance for uninterrupted calls.</p>
-            </div>
-            <div>
-              <p className="wallet__balance">{fmtUsd(wallet?.balance_cents)}</p>
-              {wallet?.wallet_id && <p className="wallet__wallet-id">{wallet.wallet_id}</p>}
-            </div>
-          </header>
 
-          <section className={`wallet__trust ${lowBalance ? 'wallet__trust--warn' : ''}`}>
-            <p>
-              {lowBalance
-                ? 'Balance is low. Add funds to avoid failed pre-call charges.'
-                : 'Healthy balance. Calls can be charged and settled automatically.'}
-            </p>
-            <div className="wallet__trust-badges">
-              <Badge label="Charge before run" dot />
-              <Badge label="Auto payout to agent" dot />
-              <Badge label="Refund on failure" dot />
+          {/* Hero balance */}
+          <Reveal>
+            <div className={`wallet__hero ${lowBalance ? 'wallet__hero--warn' : ''}`}>
+              <div>
+                <p className="wallet__eyebrow t-micro">Settlement & trust</p>
+                <h1>Wallet</h1>
+                <p className="wallet__hero-sub">All charges, refunds, and payouts in one auditable ledger.</p>
+              </div>
+              <div className="wallet__balance-wrap">
+                <div className="wallet__balance-label t-micro">Available balance</div>
+                <div className="wallet__balance t-mono">{fmtUsd(wallet?.balance_cents)}</div>
+                {wallet?.wallet_id && <div className="wallet__wallet-id t-mono">{wallet.wallet_id}</div>}
+                {lowBalance && <div className="wallet__low-warn">⚠ Low balance — add funds to continue</div>}
+              </div>
             </div>
-          </section>
+          </Reveal>
+
+          {/* Status bar */}
+          <div className="wallet__status-bar">
+            <Badge label="deposit" dot />
+            <Badge label="charge" dot />
+            <Badge label="payout" dot />
+            <Badge label="refund" dot />
+            <span className="wallet__status-note">All transactions are insert-only and immutable.</span>
+          </div>
 
           <div className="wallet__grid">
-            <Card>
-              <Card.Header>
-                <span className="wallet__section-title">Add funds</span>
-              </Card.Header>
-              <Card.Body>
-                <form onSubmit={handleDeposit} className="wallet__deposit-form">
-                  <Input
-                    label="Amount (USD)"
-                    type="number"
-                    min="0.01"
-                    step="0.01"
-                    value={amount}
-                    onChange={e => setAmount(e.target.value)}
-                    required
-                    mono
-                    hint="Demo mode: funds are credited instantly."
-                  />
+            {/* Deposit form */}
+            <Reveal delay={0.1}>
+              <Card>
+                <Card.Header>
+                  <span className="wallet__section-title">Add funds</span>
+                </Card.Header>
+                <Card.Body>
+                  <form onSubmit={handleDeposit} className="wallet__deposit-form">
+                    <Input
+                      label="Amount (USD)"
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      value={amount}
+                      onChange={e => setAmount(e.target.value)}
+                      required
+                      mono
+                      hint="Demo mode: funds are credited instantly."
+                    />
 
-                  <div className="wallet__quick-amounts">
-                    {['5', '10', '25', '100'].map(v => (
-                      <button
-                        key={v}
-                        type="button"
-                        onClick={() => setAmount(v)}
-                        className={amount === v ? 'wallet__quick-btn wallet__quick-btn--active' : 'wallet__quick-btn'}
-                      >
-                        ${v}
-                      </button>
-                    ))}
-                  </div>
+                    <div className="wallet__quick-amounts">
+                      {['5', '10', '25', '100'].map(v => (
+                        <button
+                          key={v}
+                          type="button"
+                          onClick={() => setAmount(v)}
+                          className={`wallet__quick-btn ${amount === v ? 'wallet__quick-btn--active' : ''}`}
+                        >
+                          ${v}
+                        </button>
+                      ))}
+                    </div>
 
-                  <Button type="submit" variant="primary" loading={loading} icon={<Plus size={14} />}>
-                    Add {fmtUsd(Math.round((Number(amount) || 0) * 100))}
-                  </Button>
-                </form>
-              </Card.Body>
-            </Card>
+                    <Button type="submit" variant="primary" loading={loading} icon={<Plus size={14} />}>
+                      Add {fmtUsd(Math.round((Number(amount) || 0) * 100))}
+                    </Button>
+                  </form>
+                </Card.Body>
+              </Card>
+            </Reveal>
 
             <div className="wallet__right-col">
               {transactions.length > 0 && (
-                <Card>
-                  <Card.Header>
-                    <span className="wallet__section-title">14-day spend</span>
-                  </Card.Header>
-                  <Card.Body>
-                    <SpendChart transactions={transactions} />
-                  </Card.Body>
-                </Card>
+                <Reveal delay={0.15}>
+                  <Card>
+                    <Card.Header>
+                      <span className="wallet__section-title">14-day spend</span>
+                    </Card.Header>
+                    <Card.Body>
+                      <SpendChart transactions={transactions} />
+                    </Card.Body>
+                  </Card>
+                </Reveal>
               )}
 
-              <Card>
-                <Card.Header>
-                  <span className="wallet__section-title">
-                    Transactions {transactions.length > 0 && `(${transactions.length})`}
-                  </span>
-                </Card.Header>
-                <Card.Body>
-                  {transactions.length === 0 ? (
-                    <EmptyState title="No transactions yet" sub="Deposits, charges, payouts, and refunds appear here." />
-                  ) : (
-                    <div>
-                      {transactions.map((tx, i) => (
-                        <TxRow key={tx.tx_id ?? i} tx={tx} />
-                      ))}
-                    </div>
-                  )}
-                </Card.Body>
-              </Card>
+              <Reveal delay={0.2}>
+                <Card>
+                  <Card.Header>
+                    <span className="wallet__section-title">
+                      Transactions {transactions.length > 0 && `(${transactions.length})`}
+                    </span>
+                  </Card.Header>
+                  <Card.Body>
+                    {transactions.length === 0 ? (
+                      <EmptyState agentId="empty-wallet" title="No transactions yet" sub="Deposits, charges, payouts, and refunds appear here." />
+                    ) : (
+                      <div>
+                        {transactions.map((tx, i) => <TxRow key={tx.tx_id ?? i} tx={tx} />)}
+                      </div>
+                    )}
+                  </Card.Body>
+                </Card>
+              </Reveal>
             </div>
           </div>
+
         </div>
       </div>
     </main>

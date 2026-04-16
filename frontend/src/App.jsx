@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { MarketProvider } from './context/MarketContext'
+import { ThemeProvider } from './context/ThemeContext'
 import AppShell from './layout/AppShell'
 
 import LandingPage    from './pages/LandingPage'
@@ -28,11 +29,12 @@ function AppBoot() {
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      color: 'var(--ink-mute)',
-      fontFamily: 'var(--font-sans)',
-      fontSize: '0.875rem',
+      color: 'var(--text-muted)',
+      fontFamily: 'var(--font-mono)',
+      fontSize: '0.8125rem',
+      letterSpacing: '0.05em',
     }}>
-      Connecting…
+      connecting…
     </div>
   )
 }
@@ -66,21 +68,23 @@ function RootRedirect() {
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <AuthProvider>
-        <Routes>
-          <Route path="/welcome" element={<LandingPage />} />
-          <Route path="/" element={<RootRedirect />} />
-          <Route
-            path="/*"
-            element={
-              <RequireAuth>
-                <AuthedApp />
-              </RequireAuth>
-            }
-          />
-        </Routes>
-      </AuthProvider>
-    </BrowserRouter>
+    <ThemeProvider>
+      <BrowserRouter>
+        <AuthProvider>
+          <Routes>
+            <Route path="/welcome" element={<LandingPage />} />
+            <Route path="/" element={<RootRedirect />} />
+            <Route
+              path="/*"
+              element={
+                <RequireAuth>
+                  <AuthedApp />
+                </RequireAuth>
+              }
+            />
+          </Routes>
+        </AuthProvider>
+      </BrowserRouter>
+    </ThemeProvider>
   )
 }

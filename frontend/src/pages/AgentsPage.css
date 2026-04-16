@@ -9,176 +9,153 @@
 .agents-page__scroll {
   flex: 1;
   overflow-y: auto;
-  padding: var(--sp-6);
+  padding: 32px;
 }
 
 .agents-page__content {
-  max-width: 1100px;
+  max-width: 1200px;
   margin: 0 auto;
   display: flex;
   flex-direction: column;
-  gap: var(--sp-5);
+  gap: 24px;
 }
 
+/* Header */
 .agents-page__header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: var(--sp-4);
+  gap: 16px;
   flex-wrap: wrap;
+}
+
+.agents-page__eyebrow {
+  font-size: 0.625rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+  font-weight: 600;
+  margin-bottom: 6px;
 }
 
 .agents-page__header h1 {
   margin: 0 0 4px;
-  font-family: var(--font-display);
-  font-size: 1.75rem;
-  font-weight: 800;
-  color: var(--ink);
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
 }
 
 .agents-page__header p {
   margin: 0;
-  color: var(--ink-soft);
   font-size: 0.875rem;
+  color: var(--text-secondary);
   line-height: 1.55;
-}
-
-.agents-page__eyebrow {
-  margin: 0 0 4px;
-  font-size: 0.6875rem;
-  color: var(--ink-mute);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-weight: 800;
 }
 
 .agents-page__header-actions {
   display: flex;
-  gap: var(--sp-2);
+  gap: 8px;
   flex-wrap: wrap;
 }
 
-.agents-page__narrative {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: var(--sp-3);
-}
-
-.agents-page__narrative article {
-  border: 2px solid var(--line);
-  border-radius: var(--r-lg);
-  background: var(--surface);
-  padding: var(--sp-4);
-}
-
-.agents-page__narrative h2 {
-  margin: 0 0 var(--sp-2);
-  font-size: 0.9375rem;
-  color: var(--ink);
-}
-
-.agents-page__narrative ul {
-  margin: 0;
-  padding-left: 18px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.agents-page__narrative li {
-  font-size: 0.8125rem;
-  color: var(--ink-soft);
-  line-height: 1.5;
-}
-
+/* Filters */
 .agents-page__filters {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-3);
+  gap: 12px;
 }
 
 .agents-page__tag-row {
   display: flex;
-  gap: var(--sp-2);
+  gap: 6px;
   flex-wrap: wrap;
 }
 
+/* Grid */
 .agents-page__grid {
   display: grid;
-  gap: var(--sp-4);
+  gap: 16px;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
 }
 
 .agents-page__empty-actions {
   display: flex;
-  gap: var(--sp-2);
+  gap: 8px;
   flex-wrap: wrap;
   justify-content: center;
 }
 
+/* Register dialog */
 .agents-register__guide {
-  margin-bottom: var(--sp-4);
-  padding: var(--sp-3);
-  border: 1px solid var(--line);
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
   border-radius: var(--r-md);
-  background: var(--canvas-sunk);
+  background: var(--surface-2);
 }
 
 .agents-register__guide p {
-  margin: 0 0 var(--sp-2);
   font-size: 0.8125rem;
-  font-weight: 700;
-  color: var(--ink);
+  font-weight: 500;
+  color: var(--text-primary);
+  margin: 0 0 8px;
 }
 
 .agents-register__guide ul {
-  margin: 0;
-  padding-left: 18px;
+  padding-left: 16px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
 }
 
 .agents-register__guide li {
   font-size: 0.75rem;
-  color: var(--ink-soft);
+  color: var(--text-secondary);
   line-height: 1.45;
 }
 
 .agents-register__form {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-4);
+  gap: 16px;
 }
 
 .agents-register__schema-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--sp-2);
-  margin-bottom: calc(var(--sp-2) * -1);
+  gap: 8px;
+  margin-bottom: -8px;
 }
 
 .agents-register__schema-header span {
   font-size: 0.75rem;
-  font-weight: 800;
-  color: var(--ink-soft);
+  font-weight: 500;
+  color: var(--text-secondary);
 }
 
 .agents-register__schema-header button {
-  border: 1px solid var(--line);
+  border: 1px solid var(--border);
   border-radius: var(--r-sm);
-  padding: 4px 8px;
+  padding: 3px 8px;
   font-size: 0.6875rem;
-  color: var(--ink-soft);
-  background: var(--surface);
-  font-weight: 700;
+  color: var(--accent);
+  background: var(--accent-bg);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease;
 }
+.agents-register__schema-header button:hover { background: var(--accent-border); }
 
 .agents-register__actions {
   display: flex;
-  gap: var(--sp-3);
+  gap: 10px;
   justify-content: flex-end;
-  padding-top: var(--sp-2);
   flex-wrap: wrap;
+}
+
+@media (max-width: 768px) {
+  .agents-page__scroll { padding: 20px 16px; }
+  .agents-page__grid { grid-template-columns: 1fr; }
 }

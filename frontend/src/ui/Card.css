@@ -1,33 +1,46 @@
 .card {
   background: var(--surface);
-  border: 2px solid var(--line);
-  border-radius: var(--r-xl);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
 }
 
-.card--flat { }
-.card--raised { box-shadow: var(--shadow-md); }
-.card--xl { border-radius: var(--r-xl); }
+.card--elevated {
+  background: var(--surface-2);
+  box-shadow: var(--shadow-md);
+}
+
+.card--glass {
+  background: var(--overlay);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+.card--accent {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+
 .card--interactive {
   cursor: pointer;
   transition:
-    border-color var(--duration-sm) var(--ease),
-    background var(--duration-sm) var(--ease),
-    transform var(--duration-sm) var(--ease);
+    border-color 0.2s ease,
+    background 0.2s ease,
+    box-shadow 0.2s ease;
 }
 .card--interactive:hover {
-  background: var(--surface-hover);
-  border-color: var(--line-strong);
-  transform: translateY(-2px);
+  border-color: var(--border-bright);
+  background: var(--surface-2);
+  box-shadow: var(--shadow-md);
 }
 
 .card__header {
   padding: 16px 20px;
-  border-bottom: 2px solid var(--line);
+  border-bottom: 1px solid var(--border);
 }
 .card__body { padding: 20px; }
 .card__footer {
   padding: 12px 20px;
-  border-top: 2px solid var(--line);
-  background: var(--canvas-raised);
-  border-radius: 0 0 var(--r-xl) var(--r-xl);
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+  border-radius: 0 0 var(--r-lg) var(--r-lg);
 }

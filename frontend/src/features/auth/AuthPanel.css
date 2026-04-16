@@ -1,21 +1,22 @@
 .auth-panel {
   background: var(--surface);
-  border: 2px solid var(--line);
+  border: 1px solid var(--border);
   border-radius: var(--r-xl);
   width: 100%;
   max-width: 460px;
   overflow: hidden;
+  box-shadow: var(--shadow-md);
 }
 .auth-panel__tabs {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  border-bottom: 2px solid var(--line);
+  border-bottom: 1px solid var(--border);
 }
 .auth-panel__tab {
   padding: 16px;
   font-size: 0.8125rem;
-  font-weight: 800;
-  color: var(--ink-mute);
+  font-weight: 600;
+  color: var(--text-muted);
   cursor: pointer;
   text-align: center;
   border-bottom: 2px solid transparent;
@@ -27,23 +28,27 @@
   font-family: var(--font-sans);
   transition: color var(--duration-sm), border-color var(--duration-sm), background var(--duration-sm);
 }
-.auth-panel__tab:hover { color: var(--ink); background: var(--canvas-raised); }
-.auth-panel__tab--active { color: var(--accent); border-bottom-color: var(--accent); background: var(--accent-wash); }
-.auth-panel__body { padding: 26px; }
+.auth-panel__tab:hover { color: var(--text-secondary); background: var(--surface-2); }
+.auth-panel__tab--active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  background: var(--accent-bg);
+}
+.auth-panel__body { padding: 28px; }
 .auth-panel__form { display: flex; flex-direction: column; gap: 16px; }
-.auth-panel__title { font-size: 1rem; font-weight: 700; color: var(--ink); margin-bottom: 2px; letter-spacing: -0.01em; }
-.auth-panel__sub { font-size: 0.8125rem; color: var(--ink-mute); }
+.auth-panel__title { font-size: 1rem; font-weight: 700; color: var(--text-primary); margin-bottom: 2px; letter-spacing: -0.01em; }
+.auth-panel__sub { font-size: 0.8125rem; color: var(--text-muted); }
 .auth-panel__error {
-  background: var(--negative-wash);
+  background: var(--negative-bg);
   color: var(--negative);
-  border: 1px solid var(--negative-line);
+  border: 1px solid var(--negative-border);
   border-radius: var(--r-sm);
   padding: 10px 14px;
   font-size: 0.8125rem;
 }
 .auth-panel__hint {
   font-size: 0.6875rem;
-  color: var(--ink-mute);
+  color: var(--text-muted);
   text-align: center;
   line-height: 1.5;
 }
