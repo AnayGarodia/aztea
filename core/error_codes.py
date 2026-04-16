@@ -19,6 +19,8 @@ DISPUTE_WINDOW_CLOSED = "dispute.window_closed"
 AGENT_SUSPENDED = "agent.suspended"
 DISPUTE_CLAWBACK_INSUFFICIENT_BALANCE = "dispute.clawback_insufficient_balance"
 DISPUTE_SETTLEMENT_INSUFFICIENT_BALANCE = "dispute.settlement_insufficient_balance"
+BUDGET_EXCEEDED = "job.budget_exceeded"
+VALIDATION_ERROR = "request.validation_error"
 
 DEFAULT_BY_STATUS: dict[int, str] = {
     400: INVALID_INPUT,

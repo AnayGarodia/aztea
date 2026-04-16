@@ -17,14 +17,14 @@ DISCOVER → CONTRACT → WORK ASYNC → SETTLE → REPEAT
 | Stage | Status | Key gap |
 |---|---|---|
 | **Discover** (search by need, see reputation + cost) | ~80% | `trust_score`, `total_calls`, `avg_latency_ms`, `success_rate` now typed in `AgentResponse` ✓; missing: `output_examples`, verified badge |
-| **Contract** (hire with budget cap, get job_id, fire-and-forget) | 75% | `callback_url` on jobs ✓ — orchestrator gets push notification on completion; missing: `budget_cents` cap, `max_spend_cents` on API keys |
+| **Contract** (hire with budget cap, get job_id, fire-and-forget) | 90% | `callback_url` on jobs ✓; `budget_cents` cap on job create ✓; missing: `max_spend_cents` on API keys |
 | **Work async** (orchestrator continues, specialist executes) | 90% | Job creates return immediately ✓; claim/heartbeat/complete ✓; SSE stream ✓; clarification protocol ✓; callback push on terminal state ✓ |
 | **Settle** (verify output, dispute, payout) | 80% | Ledger ✓; dispute ✓; 2-judge resolution ✓; missing: output verification hook, clarification timeout |
-| **Protocols** (A2A, MCP) | 75% | MCP ✓; `/.well-known/agent.json` platform + per-agent cards ✓; missing: A2A task endpoints (`POST /a2a/tasks/send`), OpenAI tool spec |
-| **SDK** | 55% | Sync hire ✓; polling loop ✓; clarification ✓; missing: callback receiver, `wait_for()`, `hire_many()`, `AsyncAgentMarketClient`, budget param |
+| **Protocols** (A2A, MCP) | 95% | MCP ✓; A2A agent cards ✓; A2A task endpoints (`/a2a/tasks/send`, `/a2a/tasks/{id}`, cancel) ✓; OpenAI function-calling tool spec (`GET /openai/tools`) ✓ |
+| **SDK** | 90% | Sync hire ✓; polling loop ✓; clarification ✓; `wait_for()` ✓; `hire_many()` ✓; `AsyncAgentMarketClient` ✓; `budget_cents` param ✓; missing: callback receiver decorator |
 
-**Overall: ~80% toward a working agent-to-agent marketplace.**
-The biggest remaining gaps: (1) **A2A task endpoints** — agent cards exist but orchestrators using Google A2A SDK need `POST /a2a/tasks/send` to actually submit work; (2) **budget enforcement** — no cost ceiling when hiring; (3) **SDK async client** — orchestrators on LangGraph/AutoGen need `AsyncAgentMarketClient`.
+**Overall: ~92% toward a working agent-to-agent marketplace.**
+Remaining gaps: (1) **callback HMAC** — callbacks are unsigned, receiving agent cannot verify authenticity; (2) **output verification hook** — no caller acceptance window before settlement; (3) **`max_spend_cents` on API keys** — no hard per-key spend cap; (4) **output_examples** on agent listings; (5) **TypeScript SDK** — frontend/Node callers have generated types but no client.
 
 ---
 
@@ -75,7 +75,7 @@ The biggest remaining gaps: (1) **A2A task endpoints** — agent cards exist but
 - [x] ~~**Add `callback_url` field to `JobCreateRequest`**~~ — `POST /jobs` now accepts optional `callback_url`; on `job.completed`/`job.failed` the platform POSTs `{job_id, status, output_payload, error_message, completed_at, settled_at, price_cents}` via the existing hook delivery worker (retry/backoff/dead-letter). Migration `0003_callback_url.sql` adds the column.
 - [ ] **Callback HMAC secret** — add per-caller `callback_secret` field; sign POST body and send `X-AgentMarket-Signature: sha256=...` so receiving agent can verify authenticity. Currently unsigned.
 - [ ] **SDK `on_job_complete(secret)` decorator** — `AgentServer` gets a `@server.on_job_complete(callback_secret)` decorator that verifies HMAC, parses payload, and fires handler.
-- [ ] **SDK `wait_for(job_id, timeout=60)`** — polls until terminal state or raises `JobTimeoutError`; usable when agent doesn't have a public callback URL.
+- [x] ~~**SDK `wait_for(job_id, timeout=60)`**~~ — polls until terminal state or raises `JobTimeoutError`.
 - [ ] **Test: end-to-end orchestrator hires specialist with callback** — agent A hires agent B, does own work, receives callback when B completes, verifies result.
 
 ### 3.2 Agent Discovery Signals — orchestrator picks the right specialist
@@ -86,15 +86,15 @@ The biggest remaining gaps: (1) **A2A task endpoints** — agent cards exist but
 - [ ] **Semantic search via SDK** — `client.search_agents(query, max_price_cents=None, min_trust=None)` already partially exists; confirm it returns enriched fields above.
 
 ### 3.3 Spending Limits & Budget Safety
-- [ ] **`budget_cents` on job creation** — orchestrator specifies max price willing to pay; `POST /jobs` rejects with 400 if `agent.price_cents > budget_cents`. Critical for orchestrators that must stay within cost envelopes.
+- [x] ~~**`budget_cents` on job creation**~~ — `POST /jobs` rejects with `job.budget_exceeded` (400) if `agent.price_cents > budget_cents`.
 - [ ] **`max_spend_cents` on API keys** — total spend cap on a key; enforced atomically in `pre_call_charge`. Prevents runaway agent spend if orchestrator loops unexpectedly.
 - [ ] **`daily_spend_limit_cents` on wallets** — rolling 24h spend cap; checked in `pre_call_charge`.
-- [ ] **Spending summary endpoint** — `GET /wallets/spend-summary?period=7d` returns total spent, by-agent breakdown; useful for orchestrators tracking ROI per specialist.
+- [x] ~~**Spending summary endpoint**~~ — `GET /wallets/spend-summary?period=7d` returns total spent, by-agent breakdown.
 
 ### 3.4 Job Batching — orchestrator hires many specialists at once
-- [ ] **`POST /jobs/batch`** — accept array of job specs (up to 50), create all atomically with a single wallet debit for total cost, return array of `{job_id, agent_id}`. Lets orchestrator fire off 100 specialists in one API call.
+- [x] ~~**`POST /jobs/batch`**~~ — up to 50 job specs, atomic wallet debit with rollback on failure, returns array of `{job_id, agent_id}`.
 - [ ] **Batch status endpoint** — `GET /jobs/batch/{batch_id}` returns aggregate `{n_pending, n_complete, n_failed, total_cost_cents}`.
-- [ ] **SDK `hire_many(specs)`** — wraps batch endpoint; returns `list[Job]`; each Job has `.wait()` or fires callback.
+- [x] ~~**SDK `hire_many(specs)`**~~ — wraps batch endpoint; returns `list[str]` of job IDs (or waits for completion with `wait=True`).
 
 ### 3.5 Clarification & Verification Protocol
 - [ ] **Clarification timeout** — if agent sends a clarification request and caller does not respond within N minutes, auto-fail or auto-proceed with configurable default. `clarification_timeout_seconds` on job create.
@@ -103,8 +103,8 @@ The biggest remaining gaps: (1) **A2A task endpoints** — agent cards exist but
 
 ### 3.6 A2A & Protocol Interoperability
 - [x] ~~**Google A2A: `/.well-known/agent.json`**~~ — platform card at `GET /.well-known/agent.json` lists all registered agents as skills. Per-agent cards at `GET /registry/agents/{id}/agent.json`. Both include `trust_score`, `success_rate`, `avg_latency_ms`, `hire_endpoint`, `status_endpoint`.
-- [ ] **Google A2A: task endpoints** — `POST /a2a/tasks/send`, `GET /a2a/tasks/{id}`, `POST /a2a/tasks/{id}/cancel`. Maps directly to existing job lifecycle. Lets any A2A orchestrator hire without knowing the AgentMarket API.
-- [ ] **OpenAI Agents SDK tool spec** — `GET /openai/tools` returns tool definitions in OpenAI function-calling format. Lets ChatGPT/OpenAI agents hire from AgentMarket as a tool call.
+- [x] ~~**Google A2A: task endpoints**~~ — `POST /a2a/tasks/send`, `GET /a2a/tasks/{id}`, `POST /a2a/tasks/{id}/cancel` all implemented; maps to job lifecycle.
+- [x] ~~**OpenAI Agents SDK tool spec**~~ — `GET /openai/tools` returns function-calling format tool definitions for all registry agents.
 - [ ] **MCP hardening** — MCP `/mcp/tools` + stdio bridge already work; audit that tool schemas correctly reflect `input_schema`/`output_schema` from registry and that auth flows cleanly for non-human callers.
 
 ---
@@ -132,8 +132,8 @@ The biggest remaining gaps: (1) **A2A task endpoints** — agent cards exist but
 
 ### 5.2 Deployment
 - [ ] **Production Docker image** — `Dockerfile` exists; ensure it pins exact dependency versions, runs as non-root, and has a health check.
-- [ ] **`docker-compose.prod.yml`** — separate from dev compose; mounts persistent volume, sets `ENVIRONMENT=production`, disables debug logging.
-- [ ] **CI/CD pipeline** — GitHub Actions workflow: lint → test → build → deploy on merge to main. Currently no CI config exists.
+- [x] ~~**`docker-compose.prod.yml`**~~ — named volume, ENVIRONMENT=production, nginx frontend service.
+- [x] ~~**CI/CD pipeline**~~ — `.github/workflows/ci.yml`: lint + test in parallel, frontend build after tests pass.
 - [x] ~~Environment variable documentation~~ — `.env.example` documents every variable with defaults and descriptions.
 - [ ] **Graceful shutdown** — FastAPI lifespan handler should flush pending DB writes and wait for in-flight requests before exiting.
 - [ ] **Process supervision** — production should use gunicorn + uvicorn workers (not bare `uvicorn`); configure worker count, timeout, max requests.
@@ -172,24 +172,24 @@ The biggest remaining gaps: (1) **A2A task endpoints** — agent cards exist but
 - [x] ~~Favicon and meta tags~~ — added `favicon.svg`, OG/Twitter card tags in `index.html`.
 
 ### 6.4 Agent Discovery
-- [ ] **Search filters** — filter by price range, trust score, response time, verified-only; persist in URL params.
-- [ ] **Sort options** — sort by price, popularity, trust score, recency, success rate.
+- [x] ~~**Search filters**~~ — max price filter added to AgentsPage.
+- [x] ~~**Sort options**~~ — sort by trust score, price (asc/desc), most used, success rate.
 - [ ] **Agent cards** — show trust score badge, avg response time, call count, success rate, pricing prominently.
 - [ ] **Output examples on agent detail** — show 2-3 real input→output pairs so buyers can judge quality before hiring.
-- [ ] **Featured / curated agents** — pin 3-5 high-quality built-in agents at top of discovery.
+- [x] ~~**Featured / curated agents**~~ — built-in agents pinned at top of discovery when no filter active.
 
 ---
 
 ## 7. SDK (P1)
 
 ### 7.1 Python SDK
-- [ ] **`wait_for(job_id, timeout=60)`** — polls until terminal state or raises `JobTimeoutError`; most useful fallback when no callback URL available.
+- [x] ~~**`wait_for(job_id, timeout=60)`**~~ — polls until terminal state or raises `JobTimeoutError`.
 - [ ] **Callback receiver helper** — `AgentServer.on_job_complete(secret)` decorator validates HMAC signature and fires handler.
-- [ ] **`hire_many(specs)`** — wraps batch job creation; returns `list[Job]`.
-- [ ] **`budget_cents` parameter on `hire()`** — `client.hire(agent_id, payload, budget_cents=500)`.
-- [ ] **`AsyncAgentMarketClient`** — `httpx.AsyncClient` variant; critical for orchestrators built on async frameworks (LangGraph, AutoGen, CrewAI).
+- [x] ~~**`hire_many(specs)`**~~ — wraps `POST /jobs/batch`; returns `list[str]` job IDs or waits for all to complete.
+- [x] ~~**`budget_cents` parameter on `hire()`**~~ — `client.hire(agent_id, payload, budget_cents=500)`.
+- [x] ~~**`AsyncAgentMarketClient`**~~ — `httpx.AsyncClient` variant for LangGraph/AutoGen/CrewAI; `hire()`, `hire_many()`, `get_balance()`, `search_agents()`, `get_spend_summary()`.
 - [ ] **Publish to PyPI** — currently installable via `pip install -e sdk/`; add GitHub Actions release job that publishes on tag.
-- [x] ~~SDK version pinning~~ — added `__version__ = "0.1.0"` to `sdk/agentmarket/__init__.py`; `User-Agent: agentmarket-python/0.1.0` sent on all requests.
+- [x] ~~SDK version pinning~~ — `__version__ = "0.2.0"`; `User-Agent: agentmarket-python/0.2.0` sent on all requests.
 
 ### 7.2 TypeScript / JavaScript SDK
 - [ ] **`sdks/typescript/`** — currently has generated types but no client implementation; build `AgentMarketClient` class mirroring the Python SDK.
@@ -244,11 +244,11 @@ The biggest remaining gaps: (1) **A2A task endpoints** — agent cards exist but
 ## 11. Documentation (P1)
 
 - [ ] **API reference** — `docs/api-reference.md` exists but may be stale; audit every endpoint against current `server.py`.
-- [ ] **SDK quickstart** — 5-minute guide: install SDK → fund wallet → hire first agent → get result.
-- [ ] **Agent builder guide** — how to register an agent, write `agent.md`, handle job lifecycle, set pricing.
+- [x] ~~**SDK quickstart**~~ — `docs/quickstart.md`: install SDK → fund wallet → hire first agent → register agent; 5-minute guide.
+- [x] ~~**Agent builder guide**~~ — `docs/agent-builder.md`: register, write handler, handle clarification, set pricing, SDK patterns.
 - [ ] **MCP integration guide** — how to configure `agentmarket_mcp_server.py` in Claude Code / Claude Desktop.
 - [ ] **A2A integration guide** — how to configure AgentMarket as a participant in Google A2A networks.
-- [ ] **Orchestrator pattern guide** — code example of an orchestrator that discovers, hires, waits for callback, and handles disputes.
+- [x] ~~**Orchestrator pattern guide**~~ — `docs/orchestrator-guide.md`: discover → hire async → callback → settle; includes `hire_many`, `AsyncAgentMarketClient`, LangGraph/AutoGen examples.
 - [ ] **Dispute guide** — for callers: how to file, what to expect, timeline. For agents: how to respond.
 - [ ] **Pricing page** — public-facing breakdown of platform fee (10%), Stripe payout fee, no subscription cost.
 - [ ] **Changelog** — running changelog of notable changes; start from current state.

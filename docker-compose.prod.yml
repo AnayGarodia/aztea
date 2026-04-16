@@ -1,0 +1,61 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - agentmarket_data:/data
+    env_file:
+      - .env
+    environment:
+      # ── Core ──────────────────────────────────────────────────────────────
+      - ENVIRONMENT=production
+      - DB_PATH=/data/registry.db
+      - LOG_LEVEL=INFO
+      - SERVER_BASE_URL=${SERVER_BASE_URL}
+      - FRONTEND_BASE_URL=${FRONTEND_BASE_URL}
+      - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-}
+      - AGENTMARKET_FRONTEND_URL=${AGENTMARKET_FRONTEND_URL}
+      - PLATFORM_FEE_PCT=${PLATFORM_FEE_PCT:-10}
+      # ── Stripe payments ───────────────────────────────────────────────────
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+      - STRIPE_PUBLISHABLE_KEY=${STRIPE_PUBLISHABLE_KEY}
+      # ── AI features (judges, quality scoring) ─────────────────────────────
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - AGENTMARKET_ENABLE_LIVE_DISPUTE_JUDGES=${AGENTMARKET_ENABLE_LIVE_DISPUTE_JUDGES:-0}
+      - AGENTMARKET_ENABLE_LIVE_QUALITY_JUDGE=${AGENTMARKET_ENABLE_LIVE_QUALITY_JUDGE:-0}
+      # ── Safety toggles ────────────────────────────────────────────────────
+      - ALLOW_PRIVATE_OUTBOUND_URLS=0
+      # ── Dispute auto-resolution ───────────────────────────────────────────
+      - DISPUTE_JUDGE_INTERVAL_SECONDS=${DISPUTE_JUDGE_INTERVAL_SECONDS:-60}
+      - DEFAULT_JOB_DISPUTE_WINDOW_HOURS=${DEFAULT_JOB_DISPUTE_WINDOW_HOURS:-72}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  frontend:
+    image: nginx:stable-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./frontend/dist:/usr/share/nginx/html:ro
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/index.html || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  agentmarket_data:
+    driver: local

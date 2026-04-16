@@ -167,10 +167,31 @@ function RegisterDialog({ apiKey, onClose, onSuccess, showToast }) {
   )
 }
 
+const SORT_OPTIONS = [
+  { value: 'trust', label: 'Trust score' },
+  { value: 'price_asc', label: 'Price: low to high' },
+  { value: 'price_desc', label: 'Price: high to low' },
+  { value: 'calls', label: 'Most used' },
+  { value: 'success', label: 'Success rate' },
+]
+
+function sortAgents(list, sortBy) {
+  const arr = [...list]
+  switch (sortBy) {
+    case 'price_asc':  return arr.sort((a, b) => (a.price_per_call_usd ?? 0) - (b.price_per_call_usd ?? 0))
+    case 'price_desc': return arr.sort((a, b) => (b.price_per_call_usd ?? 0) - (a.price_per_call_usd ?? 0))
+    case 'calls':      return arr.sort((a, b) => (b.total_calls ?? 0) - (a.total_calls ?? 0))
+    case 'success':    return arr.sort((a, b) => (b.success_rate ?? 0) - (a.success_rate ?? 0))
+    default:           return arr.sort((a, b) => (b.trust_score ?? 0) - (a.trust_score ?? 0))
+  }
+}
+
 export default function AgentsPage() {
   const { agents, loading, apiKey, refresh, showToast } = useMarket()
   const [search, setSearch] = useState('')
   const [activeTag, setActiveTag] = useState(ALL)
+  const [sortBy, setSortBy] = useState('trust')
+  const [maxPriceCents, setMaxPriceCents] = useState('')
   const [showRegister, setShowRegister] = useState(false)
   const [searchResults, setSearchResults] = useState([])
   const [searchLoading, setSearchLoading] = useState(false)
@@ -193,15 +214,9 @@ export default function AgentsPage() {
         if (cancelled) return
         const normalized = (data?.results ?? []).map(item => {
           const matchReasons = Array.isArray(item?.match_reasons)
-            ? item.match_reasons
-              .map(reason => (typeof reason === 'string' ? reason.trim() : ''))
-              .filter(Boolean)
+            ? item.match_reasons.map(r => (typeof r === 'string' ? r.trim() : '')).filter(Boolean)
             : []
-          return {
-            ...(item?.agent ?? {}),
-            match_reasons: matchReasons,
-            _from_search: true,
-          }
+          return { ...(item?.agent ?? {}), match_reasons: matchReasons, _from_search: true }
         })
         setSearchResults(normalized)
       } catch (err) {
@@ -213,10 +228,7 @@ export default function AgentsPage() {
       }
     }, 300)
 
-    return () => {
-      cancelled = true
-      clearTimeout(timer)
-    }
+    return () => { cancelled = true; clearTimeout(timer) }
   }, [apiKey, search])
 
   const allTags = useMemo(() => {
@@ -227,11 +239,29 @@ export default function AgentsPage() {
 
   const filtered = useMemo(() => {
     const source = search.trim() ? searchResults : agents
-    return source.filter(a => activeTag === ALL || (a.tags ?? []).includes(activeTag))
-  }, [agents, search, searchResults, activeTag])
+    const maxCents = maxPriceCents ? parseFloat(maxPriceCents) * 100 : null
+    let list = source.filter(a => {
+      if (activeTag !== ALL && !(a.tags ?? []).includes(activeTag)) return false
+      if (maxCents != null && (a.price_per_call_usd ?? 0) * 100 > maxCents) return false
+      return true
+    })
+    if (!search.trim()) list = sortAgents(list, sortBy)
+    return list
+  }, [agents, search, searchResults, activeTag, sortBy, maxPriceCents])
 
-  const isFiltered = Boolean(search || activeTag !== ALL)
+  // Featured = built-in agents sorted by trust, shown before others when no filter active
+  const featured = useMemo(() => {
+    if (search.trim() || activeTag !== ALL || maxPriceCents) return []
+    return agents
+      .filter(a => (a.tags ?? []).some(t => ['financial-research','code-review','text-intel','wiki','negotiation','scenario','product-strategy','portfolio'].includes(t)))
+      .sort((a, b) => (b.trust_score ?? 0) - (a.trust_score ?? 0))
+      .slice(0, 3)
+  }, [agents, search, activeTag, maxPriceCents])
+
+  const isFiltered = Boolean(search || activeTag !== ALL || maxPriceCents)
   const listLoading = loading || searchLoading
+
+  const clearFilters = () => { setSearch(''); setActiveTag(ALL); setMaxPriceCents('') }
 
   return (
     <main className="agents-page">
@@ -253,12 +283,7 @@ export default function AgentsPage() {
                 <Link to="/jobs">
                   <Button variant="secondary" size="sm">Monitor jobs</Button>
                 </Link>
-                <Button
-                  variant="primary"
-                  size="sm"
-                  icon={<Plus size={14} />}
-                  onClick={() => setShowRegister(true)}
-                >
+                <Button variant="primary" size="sm" icon={<Plus size={14} />} onClick={() => setShowRegister(true)}>
                   Register agent
                 </Button>
               </div>
@@ -267,25 +292,51 @@ export default function AgentsPage() {
 
           <Reveal delay={0.05}>
             <section className="agents-page__filters">
-            <Input
-              placeholder="Search by name, description, or tag…"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              iconLeft={<Search size={14} />}
-              hint={searchError || 'Tip: try tags like financial-research, code-review, or text-intel.'}
-            />
-            <div className="agents-page__tag-row">
-              <Pill interactive active={activeTag === ALL} onClick={() => setActiveTag(ALL)}>
-                All tags
-              </Pill>
-              {allTags.map(tag => (
-                <Pill key={tag} interactive active={activeTag === tag} onClick={() => setActiveTag(tag)}>
-                  {tag}
-                </Pill>
-              ))}
-            </div>
-          </section>
+              <div className="agents-page__filter-row">
+                <Input
+                  placeholder="Search by name, description, or tag…"
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  iconLeft={<Search size={14} />}
+                  hint={searchError || undefined}
+                />
+                <Input
+                  placeholder="Max price (USD)"
+                  type="number"
+                  min="0"
+                  step="0.001"
+                  value={maxPriceCents}
+                  onChange={e => setMaxPriceCents(e.target.value)}
+                  style={{ width: 140, flexShrink: 0 }}
+                />
+                <select
+                  className="agents-page__sort-select"
+                  value={sortBy}
+                  onChange={e => setSortBy(e.target.value)}
+                  aria-label="Sort agents"
+                >
+                  {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </div>
+              <div className="agents-page__tag-row">
+                <Pill interactive active={activeTag === ALL} onClick={() => setActiveTag(ALL)}>All tags</Pill>
+                {allTags.map(tag => (
+                  <Pill key={tag} interactive active={activeTag === tag} onClick={() => setActiveTag(tag)}>{tag}</Pill>
+                ))}
+              </div>
+            </section>
           </Reveal>
+
+          {!isFiltered && featured.length > 0 && !listLoading && (
+            <Reveal delay={0.07}>
+              <section className="agents-page__featured">
+                <p className="agents-page__section-label t-micro">Featured agents</p>
+                <div className="agents-page__grid agents-page__grid--featured">
+                  {featured.map((agent, i) => <AgentCard key={agent.agent_id} agent={agent} index={i} featured />)}
+                </div>
+              </section>
+            </Reveal>
+          )}
 
           {listLoading ? (
             <div className="agents-page__grid">
@@ -294,29 +345,21 @@ export default function AgentsPage() {
           ) : filtered.length === 0 ? (
             <EmptyState
               title={isFiltered ? 'No matching agents' : 'No agents listed yet'}
-              sub={isFiltered ? 'Try a different tag or search query.' : 'Register the first listing to seed the marketplace.'}
+              sub={isFiltered ? 'Try adjusting your filters or search query.' : 'Register the first listing to seed the marketplace.'}
               action={
                 <div className="agents-page__empty-actions">
-                  {isFiltered && (
-                    <Button
-                      variant="secondary"
-                      onClick={() => { setSearch(''); setActiveTag(ALL) }}
-                    >
-                      Clear filters
-                    </Button>
-                  )}
-                  <Button variant="primary" icon={<Plus size={14} />} onClick={() => setShowRegister(true)}>
-                    Register agent
-                  </Button>
+                  {isFiltered && <Button variant="secondary" onClick={clearFilters}>Clear filters</Button>}
+                  <Button variant="primary" icon={<Plus size={14} />} onClick={() => setShowRegister(true)}>Register agent</Button>
                 </div>
               }
             />
           ) : (
-            <div className="agents-page__grid">
-              {filtered.map((agent, index) => (
-                <AgentCard key={agent.agent_id} agent={agent} index={index} />
-              ))}
-            </div>
+            <>
+              {isFiltered && <p className="agents-page__results-count t-micro">{filtered.length} result{filtered.length !== 1 ? 's' : ''}</p>}
+              <div className="agents-page__grid">
+                {filtered.map((agent, index) => <AgentCard key={agent.agent_id} agent={agent} index={index} />)}
+              </div>
+            </>
           )}
         </div>
       </div>

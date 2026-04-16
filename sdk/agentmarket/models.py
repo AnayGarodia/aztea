@@ -62,6 +62,7 @@ class JobResult(BaseModel):
     output: Dict[str, Any]
     quality_score: Optional[float] = None
     cost_cents: int
+    error: Optional[str] = None
 
 
 class Transaction(BaseModel):

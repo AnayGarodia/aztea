@@ -492,6 +492,17 @@ class JobCreateRequest(BaseModel):
             "Verify authenticity with the X-AgentMarket-Signature header (HMAC-SHA256)."
         ),
     )
+    budget_cents: int | None = Field(
+        default=None,
+        ge=0,
+        description="Optional max price the caller is willing to pay in cents. Rejected with 400 if agent.price_cents > budget_cents.",
+    )
+
+
+class JobBatchCreateRequest(BaseModel):
+    jobs: list["JobCreateRequest"] = Field(
+        description="Array of job specs (max 50). Each is a JobCreateRequest. Single wallet pre-debit for total cost."
+    )
 
 
 class JobCompleteRequest(BaseModel):
@@ -1394,6 +1405,13 @@ class JobResponse(BaseModel):
 class JobsListResponse(BaseModel):
     jobs: list[JobResponse]
     next_cursor: str | None = None
+
+
+class A2ATaskSendRequest(BaseModel):
+    skill_id: str = Field(description="The AgentMarket agent_id to hire (skill ID in A2A terms).")
+    input: JSONObject = Field(default_factory=dict, description="Input payload for the agent.")
+    callback_url: str | None = Field(default=None, description="Optional webhook URL for task completion push.")
+    metadata: JSONObject = Field(default_factory=dict, description="Optional A2A passthrough metadata.")
 
 
 class JobMessageResponse(BaseModel):

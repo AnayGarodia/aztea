@@ -195,6 +195,8 @@ class AgentMarketClient:
         wait: bool = True,
         timeout_seconds: int = 60,
         max_attempts: int = 3,
+        budget_cents: Optional[int] = None,
+        callback_url: Optional[str] = None,
     ) -> JobResult:
         """
         Create a job and (by default) block until it completes.
@@ -205,28 +207,30 @@ class AgentMarketClient:
             The agent to hire.
         input_payload
             Input data for the agent.
+        budget_cents
+            Optional max price. Raises immediately if agent.price_cents > budget_cents.
+        callback_url
+            Optional HTTPS URL. Platform POSTs job result when complete — no polling needed.
         verification_contract
-            Optional contract checked against the output.  Raises
-            :exc:`ContractVerificationError` on mismatch.
+            Optional contract checked against the output.
         wait
-            If ``True`` (default) poll until the job is done and return a
-            :class:`~agentmarket.models.JobResult`.  If ``False`` return
-            immediately with an empty-output JobResult containing only the
-            ``job_id`` and ``cost_cents``.
+            If ``True`` (default) poll until done. If ``False`` return immediately with job_id.
         timeout_seconds
             How long to wait for completion before raising ``TimeoutError``.
         max_attempts
             Max worker retry attempts for the job.
         """
-        data = self._request(
-            "POST",
-            "/jobs",
-            json={
-                "agent_id": agent_id,
-                "input_payload": input_payload,
-                "max_attempts": max_attempts,
-            },
-        )
+        body: Dict[str, Any] = {
+            "agent_id": agent_id,
+            "input_payload": input_payload,
+            "max_attempts": max_attempts,
+        }
+        if budget_cents is not None:
+            body["budget_cents"] = budget_cents
+        if callback_url is not None:
+            body["callback_url"] = callback_url
+
+        data = self._request("POST", "/jobs", json=body)
         job_id: str = data["job_id"]
 
         if not wait:
@@ -236,45 +240,70 @@ class AgentMarketClient:
                 cost_cents=data.get("price_cents", 0),
             )
 
-        deadline = time.monotonic() + timeout_seconds
-        while True:
-            if time.monotonic() > deadline:
-                raise TimeoutError(
-                    f"Job {job_id} did not complete within {timeout_seconds}s."
-                )
+        return self._poll_job_to_completion(
+            job_id,
+            timeout_seconds=timeout_seconds,
+            verification_contract=verification_contract,
+        )
 
-            job_data = self._request("GET", f"/jobs/{job_id}")
-            status = job_data.get("status", "")
+    def wait_for(self, job_id: str, timeout_seconds: int = 60) -> JobResult:
+        """
+        Block until a job reaches a terminal state and return the result.
 
-            if status == "complete":
-                output = _parse_payload(job_data.get("output_payload"))
+        Use this when you hired with ``wait=False`` (fire-and-forget) and later
+        want to collect the result::
 
-                if verification_contract is not None:
-                    contract = (
-                        VerificationContract(**verification_contract)
-                        if isinstance(verification_contract, dict)
-                        else verification_contract
-                    )
-                    _verify_contract(output, contract)
+            job_id = client.hire("agt-abc123", payload, wait=False).job_id
+            # ... do other work ...
+            result = client.wait_for(job_id, timeout_seconds=300)
 
-                return JobResult(
-                    job_id=job_id,
-                    output=output,
-                    quality_score=job_data.get("quality_score"),
-                    cost_cents=job_data.get("price_cents", 0),
-                )
+        Raises ``TimeoutError`` if the job doesn't complete in time.
+        """
+        return self._poll_job_to_completion(job_id, timeout_seconds=timeout_seconds)
 
-            if status == "failed":
-                error_msg = job_data.get("error_message") or "Job failed."
-                output = _parse_payload(job_data.get("output_payload"))
-                raise JobFailedError(error_msg, output)
+    def hire_many(
+        self,
+        specs: List[Dict[str, Any]],
+        *,
+        wait: bool = False,
+        timeout_seconds: int = 300,
+    ) -> List[JobResult]:
+        """
+        Create up to 50 jobs in a single request with one wallet debit.
 
-            if status == "awaiting_clarification":
-                # Agent needs more info — surface the question to the caller.
-                question = self._get_clarification_question(job_id)
-                raise ClarificationNeededError(question, job_id)
+        Each spec is a dict with keys matching ``JobCreateRequest`` fields:
+        ``agent_id`` (required), ``input_payload``, ``max_attempts``,
+        ``budget_cents``, ``callback_url``.
 
-            time.sleep(_POLL_INTERVAL)
+        Returns a list of :class:`JobResult` (with empty output if ``wait=False``).
+
+        Example::
+
+            results = client.hire_many([
+                {"agent_id": "agt-abc", "input_payload": {"task": "summarise"}},
+                {"agent_id": "agt-xyz", "input_payload": {"code": "..."}},
+            ], wait=False)
+            job_ids = [r.job_id for r in results]
+        """
+        data = self._request("POST", "/jobs/batch", json={"jobs": specs})
+        raw_jobs = data.get("jobs") or []
+        results = [
+            JobResult(
+                job_id=j["job_id"],
+                output=_parse_payload(j.get("output_payload")),
+                cost_cents=j.get("price_cents", 0),
+            )
+            for j in raw_jobs
+        ]
+        if wait:
+            completed = []
+            for result in results:
+                try:
+                    completed.append(self._poll_job_to_completion(result.job_id, timeout_seconds=timeout_seconds))
+                except Exception as exc:
+                    completed.append(JobResult(job_id=result.job_id, output={}, cost_cents=result.cost_cents, error=str(exc)))
+            return completed
+        return results
 
     def get_job(self, job_id: str) -> Job:
         """Fetch the current state of a job."""
@@ -358,6 +387,8 @@ class AgentMarketClient:
         on_error: Optional[Callable[[Exception], None]] = None,
         timeout_seconds: int = 300,
         max_attempts: int = 3,
+        budget_cents: Optional[int] = None,
+        callback_url: Optional[str] = None,
         verification_contract: Union["VerificationContract", Dict[str, Any], None] = None,
     ) -> str:
         """
@@ -393,15 +424,16 @@ class AgentMarketClient:
         timeout_seconds
             Max time to wait before giving up and calling *on_error*.
         """
-        data = self._request(
-            "POST",
-            "/jobs",
-            json={
-                "agent_id": agent_id,
-                "input_payload": input_payload,
-                "max_attempts": max_attempts,
-            },
-        )
+        body: Dict[str, Any] = {
+            "agent_id": agent_id,
+            "input_payload": input_payload,
+            "max_attempts": max_attempts,
+        }
+        if budget_cents is not None:
+            body["budget_cents"] = budget_cents
+        if callback_url is not None:
+            body["callback_url"] = callback_url
+        data = self._request("POST", "/jobs", json=body)
         job_id: str = data["job_id"]
 
         if on_complete is not None or on_error is not None:
@@ -530,7 +562,6 @@ class AgentMarketClient:
             "/wallets/deposit",
             json={"wallet_id": wallet_id, "amount_cents": amount_cents, "memo": memo},
         )
-        # Server returns {tx_id, wallet_id, balance_cents} — normalise for SDK model
         tx_data = {
             "tx_id": resp.get("tx_id", ""),
             "wallet_id": resp.get("wallet_id", wallet_id),
@@ -539,6 +570,208 @@ class AgentMarketClient:
             "memo": memo,
         }
         return Transaction(**tx_data)
+
+    def get_spend_summary(self, period: str = "7d") -> Dict[str, Any]:
+        """
+        Return a rolling spend summary.
+
+        Parameters
+        ----------
+        period
+            One of ``"1d"``, ``"7d"``, ``"30d"``, ``"90d"``.
+
+        Returns a dict with ``total_cents``, ``total_jobs``, and ``by_agent``
+        (list of ``{agent_id, total_cents, job_count}`` sorted by spend).
+        """
+        return self._request("GET", "/wallets/spend-summary", params={"period": period})
+
+
+class AsyncAgentMarketClient:
+    """
+    Async variant of AgentMarketClient using ``httpx.AsyncClient``.
+
+    Designed for orchestrators built on LangGraph, AutoGen, CrewAI, or any
+    other async Python framework::
+
+        async with AsyncAgentMarketClient(api_key="am_...") as client:
+            # Fire off 3 specialists concurrently
+            results = await asyncio.gather(
+                client.hire("agt-abc", {"code": "..."}),
+                client.hire("agt-xyz", {"text": "..."}),
+                client.hire("agt-def", {"query": "..."}),
+            )
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str = "https://api.agentmarket.dev",
+        timeout: float = 30.0,
+    ) -> None:
+        import httpx as _httpx
+        self._key = api_key
+        self._base = base_url.rstrip("/")
+        self._http = _httpx.AsyncClient(
+            base_url=self._base,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "X-AgentMarket-Version": _VERSION_HEADER,
+                "Content-Type": "application/json",
+                "User-Agent": f"agentmarket-python/{__import__('agentmarket').__version__}",
+            },
+            timeout=timeout,
+        )
+
+    async def close(self) -> None:
+        await self._http.aclose()
+
+    async def __aenter__(self) -> "AsyncAgentMarketClient":
+        return self
+
+    async def __aexit__(self, *_: Any) -> None:
+        await self.close()
+
+    async def _request(self, method: str, path: str, *, json: Any = None, params: Any = None) -> Any:
+        import httpx as _httpx
+        try:
+            resp = await self._http.request(method, path, json=json, params=params)
+        except _httpx.TransportError as exc:
+            raise AgentMarketError(f"Network error: {exc}") from exc
+
+        body: Any = None
+        if resp.content:
+            try:
+                body = resp.json()
+            except Exception:
+                body = resp.text
+
+        if resp.status_code == 401:
+            raise AuthenticationError(_extract_detail(body) or "Invalid or missing API key.")
+        if resp.status_code == 402:
+            raise InsufficientFundsError(_extract_detail(body) or "Insufficient funds.")
+        if resp.status_code == 403:
+            raise PermissionError(_extract_detail(body) or "Insufficient permissions.")
+        if resp.status_code == 404:
+            raise AgentNotFoundError(_extract_detail(body) or "Not found.")
+        if resp.status_code == 429:
+            raise RateLimitError(int(resp.headers.get("Retry-After", 60)))
+        if not resp.is_success:
+            raise AgentMarketError(_extract_detail(body) or f"HTTP {resp.status_code}", status_code=resp.status_code)
+        return body
+
+    async def hire(
+        self,
+        agent_id: str,
+        input_payload: Dict[str, Any],
+        *,
+        wait: bool = True,
+        timeout_seconds: int = 60,
+        max_attempts: int = 3,
+        budget_cents: Optional[int] = None,
+        callback_url: Optional[str] = None,
+    ) -> JobResult:
+        """
+        Async hire. Returns immediately if ``wait=False``, otherwise polls until done.
+
+        Example::
+
+            async with AsyncAgentMarketClient(api_key="am_...") as client:
+                result = await client.hire("agt-abc123", {"task": "summarise this"})
+                print(result.output)
+        """
+        import asyncio
+        body: Dict[str, Any] = {
+            "agent_id": agent_id,
+            "input_payload": input_payload,
+            "max_attempts": max_attempts,
+        }
+        if budget_cents is not None:
+            body["budget_cents"] = budget_cents
+        if callback_url is not None:
+            body["callback_url"] = callback_url
+        data = await self._request("POST", "/jobs", json=body)
+        job_id: str = data["job_id"]
+
+        if not wait:
+            return JobResult(job_id=job_id, output={}, cost_cents=data.get("price_cents", 0))
+
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"Job {job_id} did not complete within {timeout_seconds}s.")
+            job_data = await self._request("GET", f"/jobs/{job_id}")
+            status = job_data.get("status", "")
+            if status == "complete":
+                return JobResult(
+                    job_id=job_id,
+                    output=_parse_payload(job_data.get("output_payload")),
+                    quality_score=job_data.get("quality_score"),
+                    cost_cents=job_data.get("price_cents", 0),
+                )
+            if status == "failed":
+                raise JobFailedError(job_data.get("error_message") or "Job failed.", _parse_payload(job_data.get("output_payload")))
+            await asyncio.sleep(_POLL_INTERVAL)
+
+    async def hire_many(
+        self,
+        specs: List[Dict[str, Any]],
+        *,
+        wait: bool = False,
+        timeout_seconds: int = 300,
+    ) -> List[JobResult]:
+        """
+        Async batch hire. Creates up to 50 jobs in one request.
+
+        Example::
+
+            async with AsyncAgentMarketClient(api_key="am_...") as client:
+                results = await client.hire_many([
+                    {"agent_id": "agt-abc", "input_payload": {"task": "..."}},
+                    {"agent_id": "agt-xyz", "input_payload": {"code": "..."}},
+                ], wait=True)
+        """
+        import asyncio
+        data = await self._request("POST", "/jobs/batch", json={"jobs": specs})
+        raw_jobs = data.get("jobs") or []
+        results = [
+            JobResult(job_id=j["job_id"], output=_parse_payload(j.get("output_payload")), cost_cents=j.get("price_cents", 0))
+            for j in raw_jobs
+        ]
+        if wait:
+            async def _wait(r: JobResult) -> JobResult:
+                deadline = time.monotonic() + timeout_seconds
+                while True:
+                    if time.monotonic() > deadline:
+                        return JobResult(job_id=r.job_id, output={}, cost_cents=r.cost_cents, error=f"Timed out after {timeout_seconds}s")
+                    job_data = await self._request("GET", f"/jobs/{r.job_id}")
+                    s = job_data.get("status", "")
+                    if s == "complete":
+                        return JobResult(job_id=r.job_id, output=_parse_payload(job_data.get("output_payload")), cost_cents=job_data.get("price_cents", 0))
+                    if s == "failed":
+                        return JobResult(job_id=r.job_id, output={}, cost_cents=r.cost_cents, error=job_data.get("error_message") or "failed")
+                    await asyncio.sleep(_POLL_INTERVAL)
+            return list(await asyncio.gather(*[_wait(r) for r in results]))
+        return results
+
+    async def get_balance(self) -> int:
+        """Return current wallet balance in cents."""
+        data = await self._request("GET", "/wallets/me")
+        return int(data.get("balance_cents", 0))
+
+    async def search_agents(self, query: str, *, max_price_cents: Optional[int] = None, min_trust: Optional[float] = None) -> List["Agent"]:
+        """Search the registry asynchronously."""
+        data = await self._request("POST", "/registry/search", json={"query": str(query).strip()})
+        raw_results = data.get("results") or []
+        agents = [Agent(**item["agent"]) for item in raw_results if isinstance(item.get("agent"), dict)]
+        if max_price_cents is not None:
+            agents = [a for a in agents if a.price_cents <= max_price_cents]
+        if min_trust is not None:
+            agents = [a for a in agents if a.trust_score >= min_trust]
+        return agents
+
+    async def get_spend_summary(self, period: str = "7d") -> Dict[str, Any]:
+        """Return rolling spend summary (1d/7d/30d/90d)."""
+        return await self._request("GET", "/wallets/spend-summary", params={"period": period})
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

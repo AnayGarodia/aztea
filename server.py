@@ -4974,6 +4974,178 @@ def a2a_agent_card(agent_id: str, request: Request) -> JSONResponse:
     )
 
 
+@app.post(
+    "/a2a/tasks/send",
+    status_code=201,
+    tags=["A2A"],
+    summary="Google A2A: submit a task to an AgentMarket skill (agent). Returns a task/job object.",
+    responses=_error_responses(400, 401, 402, 403, 404, 429, 500),
+)
+@limiter.limit(_JOBS_CREATE_RATE_LIMIT)
+def a2a_tasks_send(
+    request: Request,
+    body: core_models.A2ATaskSendRequest,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    _require_scope(caller, "caller")
+    agent = registry.get_agent(body.skill_id)
+    if agent is None or agent.get("status") in {"banned"}:
+        raise HTTPException(status_code=404, detail=f"Skill (agent) '{body.skill_id}' not found.")
+    if agent.get("status") == "suspended":
+        raise HTTPException(status_code=503, detail=f"Skill (agent) '{body.skill_id}' is suspended.")
+    if agent.get("internal_only"):
+        raise HTTPException(status_code=404, detail=f"Skill (agent) '{body.skill_id}' not found.")
+
+    price_cents = _usd_to_cents(agent["price_per_call_usd"])
+    caller_owner_id = _caller_owner_id(request)
+    caller_wallet = payments.get_or_create_wallet(caller_owner_id)
+    agent_wallet = payments.get_or_create_wallet(f"agent:{agent['agent_id']}")
+    platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
+
+    try:
+        charge_tx_id = payments.pre_call_charge(caller_wallet["wallet_id"], price_cents, agent["agent_id"])
+    except payments.InsufficientBalanceError as e:
+        raise HTTPException(
+            status_code=402,
+            detail=error_codes.make_error(error_codes.INSUFFICIENT_FUNDS, "Insufficient balance.", {
+                "balance_cents": e.balance_cents, "required_cents": e.required_cents,
+            }),
+        )
+
+    try:
+        job = jobs.create_job(
+            agent_id=agent["agent_id"],
+            caller_owner_id=caller_owner_id,
+            caller_wallet_id=caller_wallet["wallet_id"],
+            agent_wallet_id=agent_wallet["wallet_id"],
+            platform_wallet_id=platform_wallet["wallet_id"],
+            price_cents=price_cents,
+            charge_tx_id=charge_tx_id,
+            input_payload=body.input or {},
+            agent_owner_id=agent.get("owner_id"),
+            max_attempts=3,
+            dispute_window_hours=_DEFAULT_JOB_DISPUTE_WINDOW_HOURS,
+            judge_agent_id=_QUALITY_JUDGE_AGENT_ID,
+            callback_url=body.callback_url or None,
+        )
+    except Exception:
+        payments.post_call_refund(caller_wallet["wallet_id"], charge_tx_id, price_cents, agent["agent_id"])
+        raise HTTPException(status_code=500, detail="Failed to create task.")
+
+    _record_job_event(job, "job.created", actor_owner_id=caller["owner_id"])
+    return JSONResponse(content={
+        "id": job["job_id"],
+        "skill_id": agent["agent_id"],
+        "status": "submitted",
+        "job_id": job["job_id"],
+        "price_cents": price_cents,
+        "created_at": job["created_at"],
+        "agentmarket_job": _job_response(job, caller),
+    }, status_code=201)
+
+
+@app.get(
+    "/a2a/tasks/{task_id}",
+    tags=["A2A"],
+    summary="Google A2A: get task status by task/job ID.",
+    responses=_error_responses(401, 403, 404, 429, 500),
+)
+@limiter.limit("120/minute")
+def a2a_tasks_get(
+    request: Request,
+    task_id: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    job = jobs.get_job(task_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found.")
+    if not _caller_can_view_job(caller, job):
+        raise HTTPException(status_code=403, detail="Not authorized to view this task.")
+    a2a_status_map = {
+        "pending": "submitted", "claimed": "working", "complete": "completed",
+        "failed": "failed", "awaiting_clarification": "input-required",
+    }
+    return JSONResponse(content={
+        "id": task_id,
+        "skill_id": job["agent_id"],
+        "status": a2a_status_map.get(job.get("status", ""), job.get("status", "")),
+        "output": job.get("output_payload"),
+        "error": job.get("error_message"),
+        "created_at": job.get("created_at"),
+        "completed_at": job.get("completed_at"),
+        "agentmarket_job": _job_response(job, caller),
+    })
+
+
+@app.post(
+    "/a2a/tasks/{task_id}/cancel",
+    tags=["A2A"],
+    summary="Google A2A: cancel a pending task.",
+    responses=_error_responses(401, 403, 404, 409, 429, 500),
+)
+@limiter.limit("30/minute")
+def a2a_tasks_cancel(
+    request: Request,
+    task_id: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    job = jobs.get_job(task_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found.")
+    if not _caller_can_view_job(caller, job):
+        raise HTTPException(status_code=403, detail="Not authorized to cancel this task.")
+    if job.get("status") not in {"pending"}:
+        raise HTTPException(status_code=409, detail=f"Cannot cancel task in status '{job.get('status')}'.")
+    cancelled = jobs.update_job_status(task_id, "failed", error_message="Cancelled by caller.", completed=True)
+    if cancelled:
+        _settle_failed_job(cancelled, actor_owner_id=caller["owner_id"])
+    return JSONResponse(content={"id": task_id, "status": "cancelled"})
+
+
+@app.get(
+    "/openai/tools",
+    tags=["Integrations"],
+    summary="OpenAI Agents SDK: tool definitions for all registered agents in function-calling format.",
+    responses=_error_responses(401, 403, 429, 500),
+)
+@limiter.limit("30/minute")
+def openai_tools(
+    request: Request,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    agents = registry.get_agents_with_reputation()
+    visible = [a for a in agents if not a.get("internal_only")]
+    tools = []
+    for agent in visible:
+        input_schema = agent.get("input_schema") or {}
+        props = input_schema.get("properties", {})
+        required = input_schema.get("required", [])
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": f"hire_{agent['agent_id'].replace('-', '_')}",
+                "description": (
+                    f"{agent.get('description', '')} "
+                    f"[AgentMarket: {agent['agent_id']} | "
+                    f"${float(agent.get('price_per_call_usd', 0)):.4f}/call]"
+                ).strip(),
+                "parameters": {
+                    "type": "object",
+                    "properties": props if props else {"input": {"type": "string", "description": "Task input"}},
+                    "required": required if required else [],
+                },
+                "metadata": {
+                    "agentmarket_agent_id": agent["agent_id"],
+                    "price_per_call_usd": float(agent.get("price_per_call_usd", 0)),
+                    "trust_score": agent.get("trust_score"),
+                    "success_rate": agent.get("success_rate"),
+                    "hire_endpoint": f"{_SERVER_BASE_URL}/jobs",
+                },
+            },
+        })
+    return JSONResponse(content={"tools": tools, "count": len(tools), "hire_endpoint": f"{_SERVER_BASE_URL}/jobs"})
+
+
 @app.get(
     "/mcp/tools",
     response_model=core_models.DynamicObjectResponse,
@@ -5490,6 +5662,15 @@ def jobs_create(
             )
 
     price_cents = _usd_to_cents(agent["price_per_call_usd"])
+    if body.budget_cents is not None and price_cents > body.budget_cents:
+        raise HTTPException(
+            status_code=400,
+            detail=error_codes.make_error(
+                error_codes.BUDGET_EXCEEDED,
+                f"Agent price ({price_cents}¢) exceeds your budget ({body.budget_cents}¢).",
+                {"price_cents": price_cents, "budget_cents": body.budget_cents, "agent_id": agent["agent_id"]},
+            ),
+        )
     caller_wallet = payments.get_or_create_wallet(caller_owner_id)
     _agent_payout_owner2 = f"agent:{agent['agent_id']}"
     agent_wallet = payments.get_or_create_wallet(_agent_payout_owner2)
@@ -5543,6 +5724,101 @@ def jobs_create(
         payload={"max_attempts": body.max_attempts},
     )
     return JSONResponse(content=_job_response(job, caller), status_code=201)
+
+
+@app.post(
+    "/jobs/batch",
+    status_code=201,
+    responses=_error_responses(400, 401, 402, 403, 422, 429, 500),
+    tags=["Jobs"],
+    summary="Create up to 50 jobs atomically. Single wallet pre-debit for total cost.",
+)
+@limiter.limit(_JOBS_CREATE_RATE_LIMIT)
+def jobs_batch_create(
+    request: Request,
+    body: core_models.JobBatchCreateRequest,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    _require_scope(caller, "caller")
+    if not body.jobs:
+        raise HTTPException(status_code=400, detail="jobs array must not be empty.")
+    if len(body.jobs) > 50:
+        raise HTTPException(status_code=400, detail="Batch size limited to 50 jobs.")
+
+    caller_owner_id = _caller_owner_id(request)
+
+    resolved: list[dict] = []
+    total_price_cents = 0
+    for spec in body.jobs:
+        agent = registry.get_agent(spec.agent_id)
+        if agent is None or agent.get("status") == "banned":
+            raise HTTPException(status_code=404, detail=f"Agent '{spec.agent_id}' not found.")
+        if agent.get("status") == "suspended":
+            raise HTTPException(status_code=503, detail=f"Agent '{spec.agent_id}' is suspended.")
+        price_cents = _usd_to_cents(agent["price_per_call_usd"])
+        if spec.budget_cents is not None and price_cents > spec.budget_cents:
+            raise HTTPException(
+                status_code=400,
+                detail=error_codes.make_error(
+                    error_codes.BUDGET_EXCEEDED,
+                    f"Agent '{spec.agent_id}' price ({price_cents}¢) exceeds budget ({spec.budget_cents}¢).",
+                    {"agent_id": spec.agent_id, "price_cents": price_cents, "budget_cents": spec.budget_cents},
+                ),
+            )
+        total_price_cents += price_cents
+        resolved.append({"agent": agent, "price_cents": price_cents, "spec": spec})
+
+    caller_wallet = payments.get_or_create_wallet(caller_owner_id)
+    if caller_wallet["balance_cents"] < total_price_cents:
+        raise HTTPException(
+            status_code=402,
+            detail=error_codes.make_error(
+                error_codes.INSUFFICIENT_FUNDS,
+                "Insufficient balance for batch.",
+                {"balance_cents": caller_wallet["balance_cents"], "required_cents": total_price_cents},
+            ),
+        )
+
+    created_jobs = []
+    charge_tx_ids = []
+    try:
+        for item in resolved:
+            agent = item["agent"]
+            price_cents = item["price_cents"]
+            spec = item["spec"]
+            agent_wallet = payments.get_or_create_wallet(f"agent:{agent['agent_id']}")
+            platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
+            charge_tx_id = payments.pre_call_charge(caller_wallet["wallet_id"], price_cents, agent["agent_id"])
+            charge_tx_ids.append((caller_wallet["wallet_id"], charge_tx_id, price_cents, agent["agent_id"]))
+            job = jobs.create_job(
+                agent_id=agent["agent_id"],
+                caller_owner_id=caller_owner_id,
+                caller_wallet_id=caller_wallet["wallet_id"],
+                agent_wallet_id=agent_wallet["wallet_id"],
+                platform_wallet_id=platform_wallet["wallet_id"],
+                price_cents=price_cents,
+                charge_tx_id=charge_tx_id,
+                input_payload=spec.input_payload,
+                agent_owner_id=agent.get("owner_id"),
+                max_attempts=spec.max_attempts,
+                dispute_window_hours=spec.dispute_window_hours or _DEFAULT_JOB_DISPUTE_WINDOW_HOURS,
+                judge_agent_id=_extract_judge_agent_id(agent.get("input_schema")) or _QUALITY_JUDGE_AGENT_ID,
+                callback_url=spec.callback_url or None,
+            )
+            _record_job_event(job, "job.created", actor_owner_id=caller["owner_id"])
+            created_jobs.append(_job_response(job, caller))
+    except Exception:
+        for wallet_id, charge_tx_id, price_cents, agent_id in charge_tx_ids:
+            try:
+                payments.post_call_refund(wallet_id, charge_tx_id, price_cents, agent_id)
+            except Exception:
+                pass
+        raise HTTPException(status_code=500, detail="Batch creation failed; all charges refunded.")
+
+    return JSONResponse(
+        content={"jobs": created_jobs, "count": len(created_jobs), "total_price_cents": total_price_cents},
+        status_code=201,
+    )
 
 
 @app.get(
@@ -6804,6 +7080,74 @@ def payments_reconcile_runs(
         raise HTTPException(status_code=422, detail="limit must be > 0.")
     runs = payments.list_reconciliation_runs(limit=limit)
     return JSONResponse(content={"runs": runs, "count": len(runs)})
+
+
+# ---------------------------------------------------------------------------
+# Spending summary
+# ---------------------------------------------------------------------------
+
+
+@app.get(
+    "/wallets/spend-summary",
+    responses=_error_responses(401, 403, 429, 500),
+    tags=["Wallets"],
+    summary="Rolling spend summary by period and per-agent breakdown.",
+)
+@limiter.limit("30/minute")
+def wallet_spend_summary(
+    request: Request,
+    period: str = "7d",
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    _require_scope(caller, "caller")
+    period_map = {"1d": 1, "7d": 7, "30d": 30, "90d": 90}
+    days = period_map.get(period, 7)
+    since_dt = datetime.now(timezone.utc) - timedelta(days=days)
+    since_iso = since_dt.isoformat()
+
+    caller_owner_id = _caller_owner_id(request)
+    wallet = payments.get_or_create_wallet(caller_owner_id)
+    wallet_id = wallet["wallet_id"]
+
+    with jobs._conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT agent_id, SUM(price_cents) AS total_cents, COUNT(*) AS job_count
+            FROM jobs
+            WHERE caller_owner_id = ?
+              AND status IN ('complete', 'failed')
+              AND created_at >= ?
+            GROUP BY agent_id
+            ORDER BY total_cents DESC
+            LIMIT 100
+            """,
+            (caller_owner_id, since_iso),
+        ).fetchall()
+        totals = conn.execute(
+            """
+            SELECT SUM(price_cents) AS total_cents, COUNT(*) AS job_count
+            FROM jobs
+            WHERE caller_owner_id = ? AND created_at >= ?
+            """,
+            (caller_owner_id, since_iso),
+        ).fetchone()
+
+    by_agent = [
+        {
+            "agent_id": row["agent_id"],
+            "total_cents": int(row["total_cents"] or 0),
+            "job_count": int(row["job_count"] or 0),
+        }
+        for row in rows
+    ]
+    return JSONResponse(content={
+        "period": period,
+        "days": days,
+        "total_cents": int((totals["total_cents"] or 0) if totals else 0),
+        "total_jobs": int((totals["job_count"] or 0) if totals else 0),
+        "by_agent": by_agent,
+        "wallet_id": wallet_id,
+    })
 
 
 # ---------------------------------------------------------------------------

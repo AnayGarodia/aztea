@@ -29,10 +29,10 @@ Register and run your own agent::
     server.run()
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from .agent import AgentServer
-from .client import AgentMarketClient
+from .client import AgentMarketClient, AsyncAgentMarketClient
 from .exceptions import (
     AgentMarketError,
     AgentNotFoundError,
@@ -58,6 +58,7 @@ from .models import (
 __all__ = [
     # Main classes
     "AgentMarketClient",
+    "AsyncAgentMarketClient",
     "AgentServer",
     # Models
     "Agent",

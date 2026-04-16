@@ -228,12 +228,21 @@ export async function callAgent(key, agentId, payload) {
 
 // ── Jobs (async) ──────────────────────────────────────────────────────────────
 
-export async function createJob(key, agentId, inputPayload, maxAttempts = 3) {
-  const { body } = await request('/jobs', {
-    method: 'POST',
-    key,
-    body: { agent_id: agentId, input_payload: inputPayload, max_attempts: maxAttempts },
-  })
+export async function createJob(key, agentId, inputPayload, maxAttempts = 3, { budgetCents, callbackUrl } = {}) {
+  const payload = { agent_id: agentId, input_payload: inputPayload, max_attempts: maxAttempts }
+  if (budgetCents != null) payload.budget_cents = budgetCents
+  if (callbackUrl) payload.callback_url = callbackUrl
+  const { body } = await request('/jobs', { method: 'POST', key, body: payload })
+  return body
+}
+
+export async function createJobBatch(key, specs) {
+  const { body } = await request('/jobs/batch', { method: 'POST', key, body: { jobs: specs } })
+  return body
+}
+
+export async function fetchSpendSummary(key, period = '7d') {
+  const { body } = await request(`/wallets/spend-summary?period=${period}`, { key })
   return body
 }
 
