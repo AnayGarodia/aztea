@@ -261,6 +261,28 @@ def _env_bool(name: str, default: bool) -> bool:
     raise RuntimeError(f"{name} must be a boolean, got {raw!r}.")
 
 
+def _parse_ip_allowlist(name: str, raw: str | None) -> list[Any]:
+    value = str(raw or "").strip()
+    if not value:
+        return []
+    networks: list[Any] = []
+    for token in value.split(","):
+        candidate = token.strip()
+        if not candidate:
+            continue
+        try:
+            if "/" in candidate:
+                network = ipaddress.ip_network(candidate, strict=False)
+            else:
+                ip_obj = ipaddress.ip_address(candidate)
+                prefix = 32 if ip_obj.version == 4 else 128
+                network = ipaddress.ip_network(f"{candidate}/{prefix}", strict=False)
+        except ValueError as exc:
+            raise RuntimeError(f"{name} contains invalid IP/CIDR value {candidate!r}.") from exc
+        networks.append(network)
+    return networks
+
+
 _JUDGE_FEE_CENTS = _env_int(
     "JUDGE_FEE_CENTS",
     _DEFAULT_JUDGE_FEE_CENTS,
@@ -413,11 +435,16 @@ _SLO_HOOK_SUCCESS_RATE_MIN = _env_float(
     minimum=0.0,
     maximum=1.0,
 )
+_ENVIRONMENT = str(os.environ.get("ENVIRONMENT", "development") or "development").strip().lower()
 _ALLOW_PRIVATE_OUTBOUND_URLS = os.environ.get("ALLOW_PRIVATE_OUTBOUND_URLS", "0").strip().lower() in {
     "1",
     "true",
     "yes",
 }
+_ADMIN_IP_ALLOWLIST_NETWORKS = _parse_ip_allowlist(
+    "ADMIN_IP_ALLOWLIST",
+    os.environ.get("ADMIN_IP_ALLOWLIST"),
+)
 _SWEEPER_STATE_LOCK = threading.Lock()
 _SWEEPER_STATE = {
     "enabled": _SWEEPER_ENABLED,
@@ -1111,6 +1138,9 @@ _cors_origins: list[str] = (
         "http://127.0.0.1:5174",
     ]
 )
+# Production safety: refuse wildcard CORS in production deployments.
+if _ENVIRONMENT == "production" and "*" in _cors_origins:
+    raise RuntimeError("CORS_ALLOW_ORIGINS must not contain '*' when ENVIRONMENT=production.")
 # Always include the configured frontend base URL so Stripe redirects work.
 if _FRONTEND_BASE_URL and _FRONTEND_BASE_URL not in _cors_origins:
     _cors_origins.append(_FRONTEND_BASE_URL)
@@ -1293,6 +1323,32 @@ def _caller_owner_id(request: Request) -> str:
     if caller is None:
         raise HTTPException(status_code=403, detail="Invalid API key.")
     return caller["owner_id"]
+
+
+def _request_client_ip(request: Request) -> Any | None:
+    forwarded_for = (request.headers.get("x-forwarded-for", "") or "").strip()
+    if forwarded_for:
+        candidate = forwarded_for.split(",")[0].strip()
+        try:
+            return ipaddress.ip_address(candidate)
+        except ValueError:
+            pass
+    host = (request.client.host if request.client else "") or ""
+    try:
+        return ipaddress.ip_address(host)
+    except ValueError:
+        return None
+
+
+def _require_admin_ip_allowlist(request: Request) -> None:
+    if not _ADMIN_IP_ALLOWLIST_NETWORKS:
+        return
+    client_ip = _request_client_ip(request)
+    if client_ip is None:
+        raise HTTPException(status_code=403, detail="Admin endpoint access denied from this network.")
+    if any(client_ip in network for network in _ADMIN_IP_ALLOWLIST_NETWORKS):
+        return
+    raise HTTPException(status_code=403, detail="Admin endpoint access denied from this network.")
 
 
 def _caller_has_scope(caller: core_models.CallerContext, required_scope: str) -> bool:
@@ -4972,6 +5028,7 @@ def admin_agent_suspend(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.AgentResponse:
     _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
+    _require_admin_ip_allowlist(request)
     agent = registry.set_agent_status(agent_id, "suspended")
     if agent is None:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
@@ -4990,6 +5047,7 @@ def admin_agent_ban(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.DynamicObjectResponse:
     _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
+    _require_admin_ip_allowlist(request)
     agent = registry.set_agent_status(agent_id, "banned")
     if agent is None:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
@@ -6265,6 +6323,7 @@ def disputes_admin_rule(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.DisputeJudgeResponse:
     _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
+    _require_admin_ip_allowlist(request)
     dispute_row = disputes.get_dispute(dispute_id)
     if dispute_row is None:
         raise HTTPException(status_code=404, detail=f"Dispute '{dispute_id}' not found.")

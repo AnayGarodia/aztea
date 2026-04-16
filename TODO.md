@@ -8,13 +8,13 @@ Items are grouped by area and roughly prioritized within each section.
 
 ## 1. Bug Fixes (P0)
 
-### 1.1 Failing Tests (8 tests red)
-- [ ] **Agent wallet routing** — `test_worker_claim_heartbeat_and_complete_with_owner_auth` and `test_dispute_consensus_caller_wins_full_refund` both assert `agent:<agent_id>` wallet gets payout, but `server.py` routes payout to the agent *owner's* user wallet (`user:<owner_id>`). Decide canonical behavior and fix test or code to match.
-- [ ] **Dispute clawback** — `test_clawback_moves_settled_payout_into_escrow` failing; escrow debit may race with settlement finalization.
-- [ ] **Dispute tie / admin split** — `test_dispute_tie_then_admin_split_settlement` failing; split math or idempotency guard in `post_dispute_settlement` broken.
-- [ ] **Idempotency double-complete** — `test_complete_called_twice_returns_same_state_without_idempotency_key` and `test_idempotency_key_replays_complete_without_double_settlement` both failing; double-settlement guard logic needs review.
-- [ ] **Health 503 probe** — `test_health_returns_503_when_memory_probe_fails` returns 200 instead of 503; mock patching not reaching the live memory RSS check.
-- [ ] **Internal builtin routing** — `test_registry_call_routes_internal_builtin_without_http_and_records_job` failing; check internal:// dispatch path.
+### 1.1 Failing Tests (resolved)
+- [x] ~~**Agent wallet routing** — `test_worker_claim_heartbeat_and_complete_with_owner_auth` and `test_dispute_consensus_caller_wins_full_refund` both assert `agent:<agent_id>` wallet gets payout, but `server.py` routes payout to the agent *owner's* user wallet (`user:<owner_id>`). Decide canonical behavior and fix test or code to match.~~
+- [x] ~~**Dispute clawback** — `test_clawback_moves_settled_payout_into_escrow` failing; escrow debit may race with settlement finalization.~~
+- [x] ~~**Dispute tie / admin split** — `test_dispute_tie_then_admin_split_settlement` failing; split math or idempotency guard in `post_dispute_settlement` broken.~~
+- [x] ~~**Idempotency double-complete** — `test_complete_called_twice_returns_same_state_without_idempotency_key` and `test_idempotency_key_replays_complete_without_double_settlement` both failing; double-settlement guard logic needs review.~~
+- [x] ~~**Health 503 probe** — `test_health_returns_503_when_memory_probe_fails` returns 200 instead of 503; mock patching not reaching the live memory RSS check.~~
+- [x] ~~**Internal builtin routing** — `test_registry_call_routes_internal_builtin_without_http_and_records_job` failing; check internal:// dispatch path.~~
 
 ### 1.2 Other Known Bugs
 - [x] ~~`ClarificationRequestPayload` pydantic warning~~ — renamed `schema` → `input_schema`; backward-compat shim keeps old key working.
@@ -77,11 +77,11 @@ Items are grouped by area and roughly prioritized within each section.
 ## 4. Security (P0/P1)
 
 - [x] ~~Stripe webhook signature verification~~ — implemented; requires `STRIPE_WEBHOOK_SECRET` env var to be set.
-- [ ] **Rate limiting** — add per-IP and per-API-key rate limits on all endpoints (especially `/auth/register`, `/auth/login`, `/jobs`, `/registry/agents/{id}/call`). Consider `slowapi` or nginx upstream.
-- [ ] **CORS origins lockdown** — production `ALLOWED_ORIGINS` env var should NOT include `*`; enumerate exact frontend domain(s).
-- [ ] **Admin endpoint protection** — `/admin/*` routes currently require `admin` scope API key; add IP allowlist option for extra hardening.
+- [x] ~~**Rate limiting** — add per-IP and per-API-key rate limits on all endpoints (especially `/auth/register`, `/auth/login`, `/jobs`, `/registry/agents/{id}/call`). Consider `slowapi` or nginx upstream.~~
+- [x] ~~**CORS origins lockdown** — production `ALLOWED_ORIGINS` env var should NOT include `*`; enumerate exact frontend domain(s).~~
+- [x] ~~**Admin endpoint protection** — `/admin/*` routes currently require `admin` scope API key; add IP allowlist option for extra hardening.~~
 - [ ] **SSRF validation review** — `endpoint_url` and `verifier_url` go through URL safety checks; audit that `_is_safe_url()` handles IPv6 addresses, URL-encoded characters, and redirect chains.
-- [ ] **API key rotation** — add `POST /auth/keys/{key_id}/rotate` that issues a new key and invalidates the old one.
+- [x] ~~**API key rotation** — add `POST /auth/keys/{key_id}/rotate` that issues a new key and invalidates the old one.~~
 - [ ] **Secrets in `.env`** — audit that `STRIPE_SECRET_KEY`, `GROQ_API_KEY`, `STRIPE_WEBHOOK_SECRET` are never logged or returned in API responses.
 - [ ] **Dependency audit** — run `pip-audit` and `npm audit`; resolve HIGH/CRITICAL CVEs before launch.
 
@@ -121,7 +121,7 @@ Items are grouped by area and roughly prioritized within each section.
 
 ### 6.2 Missing Pages / Flows
 - [x] ~~Real deposit / add funds flow~~ — WalletPage has full Stripe Checkout + demo deposit with return banner.
-- [ ] **Withdrawal history page** — list of past withdrawals with status (pending/complete/failed).
+- [x] ~~**Withdrawal history page** — list of past withdrawals with status (pending/complete/failed).~~
 - [ ] **Job detail page** — full job view: status timeline, messages thread, clarification requests, output payload, rating widget.
 - [ ] **Agent detail page** — public profile: description, pricing, ratings, call history, trust score.
 - [ ] **Onboarding flow** — new users see a 3-step wizard: (1) fund wallet, (2) browse agents, (3) make first call. Skip if already used platform.
@@ -130,7 +130,7 @@ Items are grouped by area and roughly prioritized within each section.
 ### 6.3 UX Polish
 - [ ] **Empty states** — every list (agents, jobs, transactions) needs a helpful empty state with a CTA rather than a blank table.
 - [ ] **Loading skeletons** — replace spinners with skeleton screens on WalletPage, AgentListPage, JobsPage.
-- [ ] **Error boundary** — wrap top-level routes in a React error boundary so a single component crash doesn't blank the whole app.
+- [x] ~~**Error boundary** — wrap top-level routes in a React error boundary so a single component crash doesn't blank the whole app.~~
 - [ ] **Toast / notification system** — replace inline error `<p>` tags with a toast stack (bottom-right); show success toasts on hire, deposit, withdraw.
 - [ ] **Mobile responsiveness** — test all pages at 375px, 768px, 1280px; fix layout breaks.
 - [ ] **Keyboard navigation** — all modals and dropdowns must be fully keyboard-accessible (Escape to close, Tab to navigate).

@@ -3,6 +3,7 @@ import { AuthProvider, useAuth } from './context/AuthContext'
 import { MarketProvider } from './context/MarketContext'
 import { ThemeProvider } from './context/ThemeContext'
 import AppShell from './layout/AppShell'
+import ErrorBoundary from './ui/ErrorBoundary'
 
 import LandingPage    from './pages/LandingPage'
 import DashboardPage  from './pages/DashboardPage'
@@ -43,19 +44,21 @@ function AuthedApp() {
   const { apiKey } = useAuth()
   return (
     <MarketProvider apiKey={apiKey}>
-      <Routes>
-        <Route element={<AppShell />}>
-          <Route path="/overview" element={<DashboardPage />} />
-          <Route path="/agents"   element={<AgentsPage />} />
-          <Route path="/agents/:id" element={<AgentDetailPage />} />
-          <Route path="/jobs"     element={<JobsPage />} />
-          <Route path="/jobs/:id" element={<JobDetailPage />} />
-          <Route path="/worker"   element={<WorkerPage />} />
-          <Route path="/wallet"   element={<WalletPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
-          <Route path="*"         element={<Navigate to="/overview" replace />} />
-        </Route>
-      </Routes>
+      <ErrorBoundary>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route path="/overview" element={<DashboardPage />} />
+            <Route path="/agents"   element={<AgentsPage />} />
+            <Route path="/agents/:id" element={<AgentDetailPage />} />
+            <Route path="/jobs"     element={<JobsPage />} />
+            <Route path="/jobs/:id" element={<JobDetailPage />} />
+            <Route path="/worker"   element={<WorkerPage />} />
+            <Route path="/wallet"   element={<WalletPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="*"         element={<Navigate to="/overview" replace />} />
+          </Route>
+        </Routes>
+      </ErrorBoundary>
     </MarketProvider>
   )
 }
@@ -71,18 +74,20 @@ export default function App() {
     <ThemeProvider>
       <BrowserRouter>
         <AuthProvider>
-          <Routes>
-            <Route path="/welcome" element={<LandingPage />} />
-            <Route path="/" element={<RootRedirect />} />
-            <Route
-              path="/*"
-              element={
-                <RequireAuth>
-                  <AuthedApp />
-                </RequireAuth>
-              }
-            />
-          </Routes>
+          <ErrorBoundary>
+            <Routes>
+              <Route path="/welcome" element={<LandingPage />} />
+              <Route path="/" element={<RootRedirect />} />
+              <Route
+                path="/*"
+                element={
+                  <RequireAuth>
+                    <AuthedApp />
+                  </RequireAuth>
+                }
+              />
+            </Routes>
+          </ErrorBoundary>
         </AuthProvider>
       </BrowserRouter>
     </ThemeProvider>

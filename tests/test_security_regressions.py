@@ -2,6 +2,7 @@ import os
 os.environ.setdefault("API_KEY", "test-master-key")
 os.environ.setdefault("SERVER_BASE_URL", "http://localhost:8000")
 
+import ipaddress
 import sqlite3
 import threading
 import uuid
@@ -161,6 +162,47 @@ def test_wallet_endpoint_authorization_allows_owner_and_master_only(client):
     )
     assert master_ok.status_code == 200
     assert master_ok.json()["wallet_id"] == wallet_b["wallet_id"]
+
+
+def test_admin_ip_allowlist_blocks_and_allows_by_forwarded_for(client, monkeypatch):
+    owner = _register_user()
+    register = client.post(
+        "/registry/register",
+        headers=_auth_headers(owner["raw_api_key"]),
+        json={
+            "name": f"Allowlist Agent {uuid.uuid4().hex[:6]}",
+            "description": "admin allowlist test",
+            "endpoint_url": f"https://agents.example.com/{uuid.uuid4().hex[:8]}",
+            "price_per_call_usd": 0.05,
+            "tags": ["allowlist-test"],
+            "input_schema": {"type": "object", "properties": {"task": {"type": "string"}}},
+        },
+    )
+    assert register.status_code == 201, register.text
+    agent_id = register.json()["agent_id"]
+
+    monkeypatch.setattr(
+        server,
+        "_ADMIN_IP_ALLOWLIST_NETWORKS",
+        [ipaddress.ip_network("198.51.100.0/24")],
+    )
+
+    blocked = client.post(
+        f"/admin/agents/{agent_id}/suspend",
+        headers=_auth_headers(TEST_MASTER_KEY),
+    )
+    assert blocked.status_code == 403
+
+    allowed_headers = {
+        **_auth_headers(TEST_MASTER_KEY),
+        "X-Forwarded-For": "198.51.100.42",
+    }
+    allowed = client.post(
+        f"/admin/agents/{agent_id}/suspend",
+        headers=allowed_headers,
+    )
+    assert allowed.status_code == 200, allowed.text
+    assert allowed.json()["status"] == "suspended"
 
 
 def test_wallet_deposit_blocks_cross_owner_topup(client):
