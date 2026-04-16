@@ -277,6 +277,33 @@ def get_wallet_transactions(wallet_id: str, limit: int = 20) -> list:
     return [dict(r) for r in rows]
 
 
+def get_agent_earnings_breakdown(wallet_id: str) -> list[dict]:
+    """
+    Return per-agent earnings for a wallet.
+
+    Each row: { agent_id, total_earned_cents, call_count, last_earned_at }
+    Only includes payout transactions (i.e. earnings from agent calls).
+    """
+    with _conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                agent_id,
+                SUM(amount_cents)  AS total_earned_cents,
+                COUNT(*)           AS call_count,
+                MAX(created_at)    AS last_earned_at
+            FROM transactions
+            WHERE wallet_id = ?
+              AND type = 'payout'
+              AND agent_id IS NOT NULL
+            GROUP BY agent_id
+            ORDER BY total_earned_cents DESC
+            """,
+            (wallet_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def deposit(wallet_id: str, amount_cents: int, memo: str = "manual deposit") -> str:
     """Credit a wallet. Returns tx_id. Raises ValueError for bad inputs."""
     if amount_cents <= 0:

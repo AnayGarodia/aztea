@@ -1193,6 +1193,10 @@ def _resolve_caller(request: Request) -> core_models.CallerContext | None:
     return None
 
 
+_SIGNUP_URL = os.environ.get("AGENTMARKET_FRONTEND_URL", "https://agentmarket.dev") + "/signup"
+_DOCS_URL = "https://github.com/AnayGarodia/agentmarket/blob/main/docs/quickstart.md"
+
+
 def _require_api_key(request: Request) -> core_models.CallerContext:
     caller = _resolve_caller(request)
     if caller is None:
@@ -1200,9 +1204,22 @@ def _require_api_key(request: Request) -> core_models.CallerContext:
         if not auth.startswith("Bearer "):
             raise HTTPException(
                 status_code=401,
-                detail="Authorization header missing. Expected: Bearer <key>",
+                detail={
+                    "error": "AUTHENTICATION_REQUIRED",
+                    "message": "No API key provided. Sign up to get one — it comes with $1 free credit.",
+                    "signup_url": _SIGNUP_URL,
+                    "docs_url": _DOCS_URL,
+                },
             )
-        raise HTTPException(status_code=403, detail="Invalid API key.")
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "INVALID_API_KEY",
+                "message": "API key is invalid or expired.",
+                "signup_url": _SIGNUP_URL,
+                "docs_url": _DOCS_URL,
+            },
+        )
     return caller
 
 
@@ -4908,7 +4925,10 @@ def registry_call(
     caller_owner_id = _caller_owner_id(request)
     price_cents     = _usd_to_cents(agent["price_per_call_usd"])
     caller_wallet   = payments.get_or_create_wallet(caller_owner_id)
-    agent_wallet    = payments.get_or_create_wallet(f"agent:{agent_id}")
+    # Route payout to the agent owner's wallet (the person who listed it).
+    # Built-in agents are owned by the system user whose wallet accumulates platform earnings.
+    _agent_payout_owner = str(agent.get("owner_id") or payments.PLATFORM_OWNER_ID)
+    agent_wallet    = payments.get_or_create_wallet(_agent_payout_owner)
     platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
 
     try:
@@ -5125,7 +5145,8 @@ def jobs_create(
 
     price_cents = _usd_to_cents(agent["price_per_call_usd"])
     caller_wallet = payments.get_or_create_wallet(caller_owner_id)
-    agent_wallet = payments.get_or_create_wallet(f"agent:{agent['agent_id']}")
+    _agent_payout_owner2 = str(agent.get("owner_id") or payments.PLATFORM_OWNER_ID)
+    agent_wallet = payments.get_or_create_wallet(_agent_payout_owner2)
     platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
 
     try:
@@ -6434,6 +6455,34 @@ def wallet_me(
     txs = payments.get_wallet_transactions(wallet["wallet_id"], limit=50)
     caller_trust = payments.get_caller_trust(owner_id)
     return JSONResponse(content={**wallet, "caller_trust": caller_trust, "transactions": txs})
+
+
+@app.get(
+    "/wallets/me/agent-earnings",
+    responses=_error_responses(401, 403, 429, 500),
+)
+@limiter.limit("60/minute")
+def wallet_me_agent_earnings(
+    request: Request,
+    _: core_models.CallerContext = Depends(_require_api_key),
+):
+    """Per-agent earnings breakdown for the authenticated user's wallet."""
+    owner_id = _caller_owner_id(request)
+    wallet = payments.get_or_create_wallet(owner_id)
+    breakdown = payments.get_agent_earnings_breakdown(wallet["wallet_id"])
+    # Enrich with agent names where available
+    enriched = []
+    for row in breakdown:
+        agent_id = row["agent_id"]
+        name = agent_id
+        try:
+            agent = registry.get_agent(agent_id)
+            if agent:
+                name = agent.get("name") or agent_id
+        except Exception:
+            pass
+        enriched.append({**row, "agent_name": name})
+    return JSONResponse(content={"earnings": enriched})
 
 
 @app.get(

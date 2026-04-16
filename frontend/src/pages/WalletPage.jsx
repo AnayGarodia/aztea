@@ -7,9 +7,9 @@ import Badge from '../ui/Badge'
 import EmptyState from '../ui/EmptyState'
 import Input from '../ui/Input'
 import SpendChart from '../features/analytics/SpendChart'
-import { createTopupSession, depositToWallet, fetchPublicConfig } from '../api'
+import { createTopupSession, depositToWallet, fetchPublicConfig, fetchAgentEarnings } from '../api'
 import { useMarket } from '../context/MarketContext'
-import { ArrowDownLeft, ArrowUpRight, Plus, CreditCard, CheckCircle, X } from 'lucide-react'
+import { ArrowDownLeft, ArrowUpRight, Plus, CreditCard, CheckCircle, X, TrendingUp, Bot } from 'lucide-react'
 import './WalletPage.css'
 
 function fmtUsd(cents) {
@@ -47,6 +47,36 @@ function TxRow({ tx }) {
   )
 }
 
+function AgentEarningsRow({ row }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
+      padding: 'var(--sp-3) 0',
+      borderBottom: '1px solid var(--line-soft)',
+    }}>
+      <div style={{
+        width: 32, height: 32, borderRadius: '50%',
+        background: 'var(--accent-wash, #eef2ff)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        flexShrink: 0,
+      }}>
+        <Bot size={14} color="var(--accent)" />
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <p style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--ink)', marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {row.agent_name}
+        </p>
+        <p style={{ fontSize: '0.75rem', color: 'var(--ink-mute)' }}>
+          {row.call_count} call{row.call_count !== 1 ? 's' : ''} · last {row.last_earned_at ? new Date(row.last_earned_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '—'}
+        </p>
+      </div>
+      <span style={{ fontWeight: 700, fontSize: '0.9375rem', color: 'var(--positive)', fontVariantNumeric: 'tabular-nums' }}>
+        +{fmtUsd(row.total_earned_cents)}
+      </span>
+    </div>
+  )
+}
+
 export default function WalletPage() {
   const { wallet, apiKey, refreshWallet, showToast } = useMarket()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -55,6 +85,7 @@ export default function WalletPage() {
   const [demoLoading, setDemoLoading] = useState(false)
   const [stripeEnabled, setStripeEnabled] = useState(false)
   const [paymentBanner, setPaymentBanner] = useState(null) // 'success' | 'cancelled' | null
+  const [agentEarnings, setAgentEarnings] = useState(null) // null = loading, [] = empty
 
   const transactions = wallet?.transactions ?? []
   const lowBalance = (wallet?.balance_cents ?? 0) < 500
@@ -65,6 +96,14 @@ export default function WalletPage() {
       .then(cfg => setStripeEnabled(!!cfg?.stripe_enabled))
       .catch(() => {})
   }, [])
+
+  // Fetch per-agent earnings
+  useEffect(() => {
+    if (!apiKey) return
+    fetchAgentEarnings(apiKey)
+      .then(data => setAgentEarnings(data?.earnings ?? []))
+      .catch(() => setAgentEarnings([]))
+  }, [apiKey])
 
   // Handle Stripe redirect-back query params
   useEffect(() => {
@@ -290,6 +329,37 @@ export default function WalletPage() {
                   </Card.Body>
                 </Card>
               )}
+
+              {/* Agent earnings breakdown */}
+              <Card>
+                <Card.Header style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
+                  <TrendingUp size={14} color="var(--accent)" />
+                  <span className="wallet__section-title">
+                    Agent earnings
+                    {agentEarnings && agentEarnings.length > 0 && (
+                      <span style={{ marginLeft: 'var(--sp-2)', color: 'var(--ink-mute)', fontWeight: 400 }}>
+                        · {fmtUsd(agentEarnings.reduce((s, r) => s + r.total_earned_cents, 0))} total
+                      </span>
+                    )}
+                  </span>
+                </Card.Header>
+                <Card.Body>
+                  {agentEarnings === null ? (
+                    <p style={{ fontSize: '0.8125rem', color: 'var(--ink-mute)', textAlign: 'center', padding: 'var(--sp-4) 0' }}>Loading…</p>
+                  ) : agentEarnings.length === 0 ? (
+                    <EmptyState
+                      title="No agent earnings yet"
+                      sub="When agents you've listed get called, your earnings appear here per agent."
+                    />
+                  ) : (
+                    <div>
+                      {agentEarnings.map((row, i) => (
+                        <AgentEarningsRow key={row.agent_id ?? i} row={row} />
+                      ))}
+                    </div>
+                  )}
+                </Card.Body>
+              </Card>
 
               <Card>
                 <Card.Header>

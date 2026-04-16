@@ -28,6 +28,22 @@ _REQUEST_VERSION_HEADER = "X-AgentMarket-Version"
 _AGENTMARKET_PROTOCOL_VERSION = "1.0"
 
 
+_AUTH_TOOL_NAME = "agentmarket_setup"
+_AUTH_TOOL: dict[str, Any] = {
+    "name": _AUTH_TOOL_NAME,
+    "description": (
+        "AgentMarket requires an API key to call agents. "
+        "Sign up at the signup_url below — you get $1 free credit, no card required. "
+        "Then set AGENTMARKET_API_KEY=am_... and restart this MCP server."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+    },
+}
+
+
 class RegistryBridge:
     def __init__(self, *, base_url: str, api_key: str, timeout_seconds: float = 10.0) -> None:
         self.base_url = base_url.rstrip("/")
@@ -41,6 +57,8 @@ class RegistryBridge:
             "count": 0,
             "generated_at": None,
         }
+        self._auth_required: bool = not bool(api_key)
+        self._signup_url: str = f"{self.base_url.rstrip('/')}/signup"
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -50,12 +68,33 @@ class RegistryBridge:
         }
 
     def refresh(self) -> dict[str, Any]:
-        response = self._session.get(
-            f"{self.base_url}/registry/agents",
-            params={"include_reputation": "false"},
-            headers=self._headers(),
-            timeout=self.timeout_seconds,
-        )
+        if self._auth_required:
+            return self._manifest
+        try:
+            response = self._session.get(
+                f"{self.base_url}/registry/agents",
+                params={"include_reputation": "false"},
+                headers=self._headers(),
+                timeout=self.timeout_seconds,
+            )
+        except requests.RequestException as exc:
+            _LOG.warning("Registry refresh network error: %s", exc)
+            return self._manifest
+
+        if response.status_code in (401, 403):
+            _LOG.warning("AgentMarket API key invalid or missing (HTTP %s). Switch to auth mode.", response.status_code)
+            try:
+                body = response.json()
+                if isinstance(body, dict) and "detail" in body:
+                    detail = body["detail"]
+                    if isinstance(detail, dict) and "signup_url" in detail:
+                        self._signup_url = detail["signup_url"]
+            except Exception:
+                pass
+            with self._lock:
+                self._auth_required = True
+            return self._manifest
+
         response.raise_for_status()
         payload = response.json()
         raw_agents = payload.get("agents")
@@ -65,6 +104,7 @@ class RegistryBridge:
         with self._lock:
             self._entries = entries
             self._manifest = manifest
+            self._auth_required = False
         return manifest
 
     def manifest(self) -> dict[str, Any]:
@@ -73,6 +113,8 @@ class RegistryBridge:
 
     def tools(self) -> list[dict[str, Any]]:
         with self._lock:
+            if self._auth_required:
+                return [_AUTH_TOOL]
             return [dict(entry["tool"]) for entry in self._entries]
 
     def _agent_id_for_tool(self, tool_name: str) -> str | None:
@@ -82,7 +124,25 @@ class RegistryBridge:
                     return entry["agent_id"]
         return None
 
+    def _auth_required_response(self) -> tuple[bool, dict[str, Any]]:
+        return False, {
+            "error": "AUTHENTICATION_REQUIRED",
+            "message": (
+                "You need an AgentMarket API key to call agents. "
+                "Sign up — it's free and you get $1 credit instantly, no card required."
+            ),
+            "signup_url": self._signup_url,
+            "docs_url": "https://github.com/AnayGarodia/agentmarket/blob/main/docs/quickstart.md",
+            "next_step": "Set AGENTMARKET_API_KEY=am_... in your environment and restart the MCP server.",
+        }
+
     def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+        with self._lock:
+            auth_required = self._auth_required
+
+        if auth_required or tool_name == _AUTH_TOOL_NAME:
+            return self._auth_required_response()
+
         agent_id = self._agent_id_for_tool(tool_name)
         if not agent_id:
             return False, {"error": "TOOL_NOT_FOUND", "message": f"Unknown tool '{tool_name}'."}
@@ -96,6 +156,11 @@ class RegistryBridge:
             )
         except requests.RequestException as exc:
             return False, {"error": "UPSTREAM_UNREACHABLE", "message": str(exc)}
+
+        if response.status_code in (401, 403):
+            with self._lock:
+                self._auth_required = True
+            return self._auth_required_response()
 
         content_type = str(response.headers.get("content-type") or "").lower()
         parsed_body: Any
@@ -288,7 +353,10 @@ def main() -> None:
     args = _parse_args()
     api_key = str(args.api_key or "").strip()
     if not api_key:
-        raise SystemExit("Missing API key. Set AGENTMARKET_API_KEY or pass --api-key.")
+        _LOG.warning(
+            "No API key set. The MCP server will start in unauthenticated mode — "
+            "tool calls will return a sign-up link. Set AGENTMARKET_API_KEY=am_... to enable full access."
+        )
 
     bridge = RegistryBridge(
         base_url=str(args.base_url or "").strip() or "http://localhost:8000",

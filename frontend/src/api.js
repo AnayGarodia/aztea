@@ -322,6 +322,11 @@ export async function createTopupSession(key, walletId, amountCents) {
   return body // { checkout_url, session_id }
 }
 
+export async function fetchAgentEarnings(key) {
+  const { body } = await request('/wallets/me/agent-earnings', { key })
+  return body // { earnings: [{ agent_id, agent_name, total_earned_cents, call_count, last_earned_at }] }
+}
+
 export async function fetchPublicConfig() {
   const { body } = await request('/config/public', {})
   return body // { stripe_enabled, stripe_publishable_key }
