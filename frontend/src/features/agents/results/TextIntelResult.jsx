@@ -61,7 +61,7 @@ export default function TextIntelResult({ result: r }) {
           <p className="result-section__label">Key Entities</p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
             {r.key_entities.map((e, i) => (
-              <span key={i} style={{ fontSize: '0.8125rem', padding: '3px 10px', background: 'var(--canvas-sunk)', border: '1px solid var(--line)', borderRadius: 'var(--r-pill)', color: 'var(--ink-soft)' }}>{e}</span>
+              <span key={i} style={{ fontSize: '0.8125rem', padding: '3px 10px', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 'var(--r-pill)', color: 'var(--text-secondary)' }}>{e}</span>
             ))}
           </div>
         </div>
@@ -72,7 +72,7 @@ export default function TextIntelResult({ result: r }) {
           <p className="result-section__label">Key Quotes</p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {r.key_quotes.map((q, i) => (
-              <blockquote key={i} style={{ margin: 0, paddingLeft: '12px', borderLeft: '3px solid var(--accent-line)', fontSize: '0.875rem', color: 'var(--ink-soft)', lineHeight: 1.6, fontStyle: 'italic' }}>
+              <blockquote key={i} style={{ margin: 0, paddingLeft: '12px', borderLeft: '3px solid var(--accent-border)', fontSize: '0.875rem', color: 'var(--text-secondary)', lineHeight: 1.6, fontStyle: 'italic' }}>
                 {q}
               </blockquote>
             ))}

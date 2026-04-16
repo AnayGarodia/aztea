@@ -9,6 +9,7 @@ import Textarea from '../ui/Textarea'
 import Pill from '../ui/Pill'
 import Dialog from '../ui/Dialog'
 import Skeleton from '../ui/Skeleton'
+import Reveal from '../ui/motion/Reveal'
 import { registerAgent, searchAgents } from '../api'
 import { useMarket } from '../context/MarketContext'
 import { Plus, Search } from 'lucide-react'
@@ -238,50 +239,34 @@ export default function AgentsPage() {
 
       <div className="agents-page__scroll">
         <div className="agents-page__content">
-          <header className="agents-page__header">
-            <div>
-              <p className="agents-page__eyebrow">Discover + hire</p>
-              <h1>Agent marketplace</h1>
-              <p>
-                Find specialists by capability, inspect trust signals, and invoke with confidence.
-                {loading ? '' : ` ${agents.length} listing${agents.length !== 1 ? 's' : ''} live.`}
-              </p>
-            </div>
-            <div className="agents-page__header-actions">
-              <Link to="/jobs">
-                <Button variant="secondary" size="sm">Monitor jobs</Button>
-              </Link>
-              <Button
-                variant="primary"
-                size="sm"
-                icon={<Plus size={14} />}
-                onClick={() => setShowRegister(true)}
-              >
-                Register agent
-              </Button>
-            </div>
-          </header>
+          <Reveal>
+            <header className="agents-page__header">
+              <div>
+                <p className="agents-page__eyebrow t-micro">Discover + hire</p>
+                <h1>Agent marketplace</h1>
+                <p>
+                  Find specialists by capability, inspect trust signals, and invoke with confidence.
+                  {loading ? '' : ` ${agents.length} listing${agents.length !== 1 ? 's' : ''} live.`}
+                </p>
+              </div>
+              <div className="agents-page__header-actions">
+                <Link to="/jobs">
+                  <Button variant="secondary" size="sm">Monitor jobs</Button>
+                </Link>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  icon={<Plus size={14} />}
+                  onClick={() => setShowRegister(true)}
+                >
+                  Register agent
+                </Button>
+              </div>
+            </header>
+          </Reveal>
 
-          <section className="agents-page__narrative">
-            <article>
-              <h2>How to hire safely</h2>
-              <ul>
-                <li>Compare trust score, price, and latency before invoking.</li>
-                <li>Use sync for immediate output, async if work can take time.</li>
-                <li>Track in Jobs and review wallet settlement history.</li>
-              </ul>
-            </article>
-            <article>
-              <h2>How to list your own agent</h2>
-              <ul>
-                <li>Register endpoint + tags + price.</li>
-                <li>Provide input/output JSON schemas for caller clarity.</li>
-                <li>Keep response contracts stable to build reputation.</li>
-              </ul>
-            </article>
-          </section>
-
-          <section className="agents-page__filters">
+          <Reveal delay={0.05}>
+            <section className="agents-page__filters">
             <Input
               placeholder="Search by name, description, or tag…"
               value={search}
@@ -300,6 +285,7 @@ export default function AgentsPage() {
               ))}
             </div>
           </section>
+          </Reveal>
 
           {listLoading ? (
             <div className="agents-page__grid">

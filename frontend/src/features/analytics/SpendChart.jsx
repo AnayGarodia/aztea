@@ -40,14 +40,14 @@ function CustomTooltip({ active, payload, label }) {
   return (
     <div style={{
       background: 'var(--surface)',
-      border: '1px solid var(--line)',
+      border: '1px solid var(--border)',
       borderRadius: 'var(--r-md)',
       padding: '10px 14px',
       boxShadow: 'var(--shadow-md)',
       fontSize: '0.8125rem',
     }}>
-      <p style={{ fontWeight: 600, color: 'var(--ink)', marginBottom: 4 }}>{label}</p>
-      <p style={{ color: 'var(--ink-soft)' }}>
+      <p style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: 4 }}>{label}</p>
+      <p style={{ color: 'var(--text-secondary)' }}>
         Spend: <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--negative)', fontWeight: 600 }}>
           {fmtUsd(payload[0]?.value)}
         </span>
@@ -67,9 +67,9 @@ export default function SpendChart({ transactions = [] }) {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        color: 'var(--ink-faint)',
+        color: 'var(--text-muted)',
         fontSize: '0.875rem',
-        border: '1px dashed var(--line)',
+        border: '1px dashed var(--border)',
         borderRadius: 'var(--r-md)',
       }}>
         Spend history will appear here
@@ -86,22 +86,22 @@ export default function SpendChart({ transactions = [] }) {
             <stop offset="95%" stopColor="var(--negative)" stopOpacity={0} />
           </linearGradient>
         </defs>
-        <CartesianGrid stroke="var(--line)" strokeDasharray="4 4" vertical={false} />
+        <CartesianGrid stroke="var(--border)" strokeDasharray="4 4" vertical={false} />
         <XAxis
           dataKey="date"
-          tick={{ fontSize: 10, fill: 'var(--ink-faint)', fontFamily: 'Inter, sans-serif' }}
+          tick={{ fontSize: 10, fill: 'var(--text-muted)', fontFamily: 'Geist, sans-serif' }}
           axisLine={false}
           tickLine={false}
           interval={3}
         />
         <YAxis
-          tick={{ fontSize: 10, fill: 'var(--ink-faint)', fontFamily: 'IBM Plex Mono, monospace' }}
+          tick={{ fontSize: 10, fill: 'var(--text-muted)', fontFamily: 'Geist Mono, monospace' }}
           axisLine={false}
           tickLine={false}
           tickFormatter={v => v > 0 ? `$${(v / 100).toFixed(0)}` : ''}
           width={36}
         />
-        <Tooltip content={<CustomTooltip />} cursor={{ stroke: 'var(--line-strong)', strokeWidth: 1 }} />
+        <Tooltip content={<CustomTooltip />} cursor={{ stroke: 'var(--border-bright)', strokeWidth: 1 }} />
         <Area
           type="monotone"
           dataKey="spend"

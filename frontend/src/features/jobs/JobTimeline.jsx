@@ -1,4 +1,4 @@
-import { motion } from 'framer-motion'
+import { motion } from 'motion/react'
 import './JobTimeline.css'
 
 const STATUS_FLOW = ['pending', 'running', 'awaiting_clarification', 'complete']

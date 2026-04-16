@@ -2,15 +2,15 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-family: var(--font-sans);
-  font-size: 0.6875rem;
-  font-weight: 800;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  font-weight: 500;
   line-height: 1;
-  padding: 4px 9px;
+  padding: 3px 8px;
   border-radius: var(--r-pill);
   white-space: nowrap;
-  border: 2px solid transparent;
-  letter-spacing: 0.04em;
+  border: 1px solid transparent;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
@@ -21,12 +21,13 @@
 }
 
 /* variants */
-.badge--default  { background: var(--surface); color: var(--ink-soft); border-color: var(--line); }
-.badge--positive { background: var(--positive-wash);    color: var(--positive);  border-color: var(--positive-line); }
-.badge--negative { background: var(--negative-wash);    color: var(--negative);  border-color: var(--negative-line); }
-.badge--warn     { background: var(--warn-wash);        color: var(--warn);      border-color: var(--warn-line); }
-.badge--info     { background: var(--info-wash);        color: var(--info);      border-color: var(--info-line); }
-.badge--accent   { background: var(--accent-wash);      color: var(--accent);    border-color: var(--accent-line); }
+.badge--default  { background: var(--surface-2); color: var(--text-secondary); border-color: var(--border); }
+.badge--positive { background: var(--positive-bg); color: var(--positive); border-color: var(--positive-border); }
+.badge--negative { background: var(--negative-bg); color: var(--negative); border-color: var(--negative-border); }
+.badge--warn     { background: var(--warn-bg);     color: var(--warn);     border-color: var(--warn-border); }
+.badge--info     { background: var(--info-bg);     color: var(--info);     border-color: var(--info-border); }
+.badge--accent   { background: var(--accent-bg);   color: var(--accent);   border-color: var(--accent-border); }
+.badge--violet   { background: var(--violet-bg);   color: var(--violet);   border-color: var(--violet-border); }
 
 .badge--pulse .badge__dot {
   animation: badge-pulse 1.4s ease-in-out infinite;

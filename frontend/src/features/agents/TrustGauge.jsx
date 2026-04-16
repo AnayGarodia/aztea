@@ -1,4 +1,4 @@
-import { motion } from 'framer-motion'
+import { motion } from 'motion/react'
 import './TrustGauge.css'
 
 // SVG arc gauge — draws from 7 o'clock to 5 o'clock (220° arc)
@@ -29,7 +29,7 @@ function TrustArc({ pct }) {
   return (
     <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`} aria-hidden="true">
       {/* Track */}
-      <path d={trackPath} fill="none" stroke="var(--line)" strokeWidth="6" strokeLinecap="round" />
+      <path d={trackPath} fill="none" stroke="var(--border)" strokeWidth="6" strokeLinecap="round" />
       {/* Fill */}
       {fillPath && (
         <motion.path
@@ -44,10 +44,10 @@ function TrustArc({ pct }) {
         />
       )}
       {/* Center text */}
-      <text x={CX} y={CY - 4} textAnchor="middle" fontSize="16" fontWeight="600" fontFamily="IBM Plex Mono, monospace" fill="var(--ink)" letterSpacing="-0.03em">
+      <text x={CX} y={CY - 4} textAnchor="middle" fontSize="16" fontWeight="600" fontFamily="'Geist Mono', monospace" fill="var(--text-primary)" letterSpacing="-0.03em">
         {pct != null ? `${Math.round(pct * 100)}%` : '—'}
       </text>
-      <text x={CX} y={CY + 13} textAnchor="middle" fontSize="7.5" fontFamily="Inter, sans-serif" fill="var(--ink-mute)" fontWeight="600" letterSpacing="0.05em" textTransform="uppercase">
+      <text x={CX} y={CY + 13} textAnchor="middle" fontSize="7.5" fontFamily="'Geist', sans-serif" fill="var(--text-muted)" fontWeight="600" letterSpacing="0.05em" textTransform="uppercase">
         SUCCESS
       </text>
     </svg>

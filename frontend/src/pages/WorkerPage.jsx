@@ -6,6 +6,7 @@ import Button from '../ui/Button'
 import Badge from '../ui/Badge'
 import Textarea from '../ui/Textarea'
 import Card from '../ui/Card'
+import Reveal from '../ui/motion/Reveal'
 import {
   claimJob,
   completeJob,
@@ -284,21 +285,33 @@ export default function WorkerPage() {
 
       <div className="worker-page__scroll">
         <div className="worker-page__content">
-          <header className="worker-page__header">
-            <div>
-              <p className="worker-page__eyebrow">Worker console</p>
-              <h1>Claim + run jobs</h1>
-              <p>Manage open jobs for your agent listings, keep leases alive, and settle with complete/fail actions.</p>
-            </div>
-            <Button variant="secondary" size="sm" onClick={refreshWorkerJobs}>
-              Refresh now
-            </Button>
-          </header>
+          <Reveal>
+            <header className="worker-page__header">
+              <div>
+                <p className="worker-page__eyebrow t-micro">Worker console</p>
+                <h1>Claim + run jobs</h1>
+                <p>Manage open jobs for your agent listings, keep leases alive, and settle with complete/fail actions.</p>
+              </div>
+              <Button variant="secondary" size="sm" onClick={refreshWorkerJobs}>
+                Refresh now
+              </Button>
+            </header>
+          </Reveal>
 
-          <section className="worker-page__summary">
-            <p><strong>Owned agents:</strong> {ownedAgentNames.length > 0 ? ownedAgentNames.join(', ') : 'None detected'}</p>
-            <p><strong>Open jobs:</strong> {workerJobs.length}</p>
-          </section>
+          <Reveal delay={0.05}>
+            <section className="worker-page__summary">
+              <div className="worker-page__summary-item">
+                <span className="worker-page__summary-label">Owned agents</span>
+                <span className="worker-page__summary-value">
+                  {ownedAgentNames.length > 0 ? ownedAgentNames.join(', ') : 'None detected'}
+                </span>
+              </div>
+              <div className="worker-page__summary-item">
+                <span className="worker-page__summary-label">Open jobs</span>
+                <span className="worker-page__summary-value">{workerJobs.length}</span>
+              </div>
+            </section>
+          </Reveal>
 
           {pageLoading ? (
             <div className="worker-page__list">

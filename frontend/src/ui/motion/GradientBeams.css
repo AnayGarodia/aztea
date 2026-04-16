@@ -1,0 +1,86 @@
+.grad-beams {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.grad-beams__beam {
+  position: absolute;
+  width: 2px;
+  border-radius: 9999px;
+  transform-origin: top center;
+  opacity: 0;
+  animation: beam-fade 8s ease-in-out infinite;
+}
+
+.grad-beams__beam--1 {
+  left: 20%;
+  top: -10%;
+  height: 70%;
+  background: linear-gradient(to bottom, transparent, var(--accent), transparent);
+  animation-delay: 0s;
+  opacity: 0.35;
+  transform: rotate(-15deg);
+}
+
+.grad-beams__beam--2 {
+  left: 50%;
+  top: -5%;
+  height: 80%;
+  background: linear-gradient(to bottom, transparent, var(--violet), transparent);
+  animation-delay: 2.5s;
+  opacity: 0.2;
+  transform: rotate(5deg);
+}
+
+.grad-beams__beam--3 {
+  left: 75%;
+  top: -8%;
+  height: 65%;
+  background: linear-gradient(to bottom, transparent, var(--accent-2), transparent);
+  animation-delay: 5s;
+  opacity: 0.25;
+  transform: rotate(20deg);
+}
+
+.grad-beams__orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  pointer-events: none;
+}
+
+.grad-beams__orb--1 {
+  width: 600px;
+  height: 600px;
+  left: -100px;
+  top: -200px;
+  background: radial-gradient(circle, var(--accent-glow-lg) 0%, transparent 70%);
+  animation: orb-float 12s ease-in-out infinite alternate;
+}
+
+.grad-beams__orb--2 {
+  width: 500px;
+  height: 500px;
+  right: -100px;
+  top: -100px;
+  background: radial-gradient(circle, var(--violet-bg) 0%, transparent 70%);
+  animation: orb-float 15s ease-in-out infinite alternate-reverse;
+}
+
+@keyframes beam-fade {
+  0%, 100% { opacity: 0; }
+  20%, 80%  { opacity: 1; }
+}
+
+@keyframes orb-float {
+  from { transform: translate(0, 0) scale(1); }
+  to   { transform: translate(40px, 20px) scale(1.1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .grad-beams__beam,
+  .grad-beams__orb { animation: none; }
+}

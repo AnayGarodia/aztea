@@ -19,7 +19,7 @@
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--ink-mute);
+  color: var(--text-muted);
 }
 
 /* Stats column */
@@ -43,7 +43,7 @@
   font-family: var(--font-mono);
   font-size: 1.0625rem;
   font-weight: 600;
-  color: var(--ink);
+  color: var(--text-primary);
   font-feature-settings: 'tnum';
   line-height: 1;
 }
@@ -53,7 +53,7 @@
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: var(--ink-mute);
+  color: var(--text-muted);
 }
 
 /* Progress bar for supplementary metrics */
@@ -63,13 +63,13 @@
 
 .tg__bar-track {
   height: 3px;
-  background: var(--line);
+  background: var(--border);
   border-radius: var(--r-pill);
   overflow: hidden;
 }
 
 .tg__bar-fill {
   height: 100%;
-  background: var(--accent);
+  background: linear-gradient(90deg, var(--accent-2), var(--accent));
   border-radius: var(--r-pill);
 }
