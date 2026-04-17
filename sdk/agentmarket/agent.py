@@ -25,6 +25,8 @@ Usage
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import sys
 import threading
@@ -409,3 +411,107 @@ class AgentServer:
                 )
             except AgentMarketError:
                 break
+
+
+# ---------------------------------------------------------------------------
+# Standalone callback receiver helper
+# ---------------------------------------------------------------------------
+
+def verify_callback_signature(
+    body: bytes,
+    signature_header: str,
+    secret: str,
+) -> bool:
+    """
+    Verify an X-AgentMarket-Signature header value against a raw request body.
+
+    Parameters
+    ----------
+    body
+        Raw bytes of the POST body.
+    signature_header
+        Value of the ``X-AgentMarket-Signature`` header (``sha256=<hex>``).
+    secret
+        The ``callback_secret`` you set when creating the job.
+
+    Returns
+    -------
+    bool
+        True if the signature is valid, False otherwise.
+    """
+    expected = "sha256=" + hmac.new(
+        secret.encode("utf-8"), body, hashlib.sha256
+    ).hexdigest()
+    try:
+        return hmac.compare_digest(expected, signature_header)
+    except (TypeError, ValueError):
+        return False
+
+
+class CallbackReceiver:
+    """
+    Lightweight WSGI/ASGI-agnostic helper for receiving job completion
+    callbacks from AgentMarket.
+
+    Usage (Flask example)::
+
+        from agentmarket import CallbackReceiver
+
+        receiver = CallbackReceiver(secret="my-secret")
+
+        @receiver.on_job_complete
+        def handle_complete(payload: dict) -> None:
+            print("Job done:", payload["job_id"], payload["status"])
+
+        @app.route("/callback", methods=["POST"])
+        def callback():
+            raw = request.get_data()
+            sig = request.headers.get("X-AgentMarket-Signature", "")
+            receiver.dispatch(raw, sig)
+            return "", 204
+
+    Usage (FastAPI example)::
+
+        from fastapi import Request
+        from agentmarket import CallbackReceiver
+
+        receiver = CallbackReceiver(secret="my-secret")
+
+        @receiver.on_job_complete
+        def handle_complete(payload: dict) -> None:
+            print("Job done:", payload["job_id"])
+
+        @app.post("/callback")
+        async def callback(request: Request):
+            raw = await request.body()
+            sig = request.headers.get("X-AgentMarket-Signature", "")
+            receiver.dispatch(raw, sig)
+            return {}
+    """
+
+    def __init__(self, secret: str) -> None:
+        self._secret = secret
+        self._handler: Callable[[dict], Any] | None = None
+
+    def on_job_complete(
+        self, func: Callable[[dict], Any]
+    ) -> Callable[[dict], Any]:
+        """Decorator: register *func* as the handler for completed-job payloads."""
+        self._handler = func
+        return func
+
+    def dispatch(self, body: bytes, signature_header: str) -> None:
+        """
+        Verify the HMAC signature and call the registered handler.
+
+        Raises
+        ------
+        ValueError
+            If the signature is invalid or no handler is registered.
+        """
+        if not verify_callback_signature(body, signature_header, self._secret):
+            raise ValueError("Invalid X-AgentMarket-Signature — rejecting callback.")
+        if self._handler is None:
+            raise ValueError("No handler registered. Use @receiver.on_job_complete.")
+        payload = json.loads(body)
+        self._handler(payload)

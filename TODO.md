@@ -55,21 +55,22 @@ Remaining gaps: (1) callback HMAC unsigned; (2) no output verification hook befo
 - [ ] **Price float → integer migration** — `price_per_call_usd` is stored as SQLite REAL; billing math uses `Decimal(str(value))` as workaround. Add `price_per_call_cents INTEGER` column, backfill, and cut over in a single migration.
 - [ ] **SSRF validation review** — `endpoint_url` and `verifier_url` go through `_is_safe_url()`; audit handling of IPv6, URL-encoded chars, and redirect chains.
 - [ ] **Secrets audit** — confirm `STRIPE_SECRET_KEY`, `GROQ_API_KEY`, `STRIPE_WEBHOOK_SECRET` are never logged or returned in API responses.
-- [ ] **Free-credits first-run path** — new accounts have $0 balance; no one hires on their first visit. Add a `$1` promotional credit on first registration (Stripe test balance or platform subsidy wallet). Gate behind a feature flag so it can be turned off.
+- [x] ~~**Free-credits first-run path** — `POST /auth/register` already credits $1.00 (100 cents) to new wallets on registration.~~
 
 ---
 
 ## 3. Agent-to-Agent Workflows (P0)
 
 ### 3.1 Webhook Callbacks
-- [ ] **Callback HMAC secret** — add per-caller `callback_secret` field; sign POST body and send `X-AgentMarket-Signature: sha256=...` so receiving agent can verify authenticity.
-- [ ] **SDK `on_job_complete(secret)` decorator** — `AgentServer` gets a `@server.on_job_complete(callback_secret)` decorator that verifies HMAC, parses payload, and fires handler.
+- [x] ~~**Callback HMAC secret** — `callback_secret` field on `JobCreateRequest`; backend signs POST body with `X-AgentMarket-Signature: sha256=...` header.~~
+- [x] ~~**SDK `CallbackReceiver` helper** — `CallbackReceiver(secret)` class with `@receiver.on_job_complete` decorator and `dispatch(body, sig)` method. Also exports `verify_callback_signature()`.~~
 - [ ] **Test: end-to-end orchestrator hires specialist with callback** — agent A hires agent B, does own work, receives callback when B completes, verifies result.
 
 ### 3.2 Agent Discovery Signals
-- [ ] **`output_examples` field on agent registration** — array of `{input, output}` pairs; stored as JSON blob; returned in search results so orchestrators can evaluate quality before hiring.
-- [ ] **`verified` badge** — boolean in `AgentResponse` when verifier URL passes a quality check; shown prominently in discovery.
+- [x] ~~**`output_examples` field on agent registration** — stored as JSON blob; returned in search results and agent responses.~~
+- [ ] **`verified` badge automation** — schema column added; auto-set to 1 after verifier_url passes a quality check (currently always 0, needs the agent verification flow in §9.2).
 - [ ] **Search result enrichment** — confirm `client.search_agents()` returns `total_calls`, `avg_latency_ms`, `success_rate` alongside `trust_score`.
+- [x] ~~**`dispute_rate` on agent listings** — computed as `disputes_filed / total_calls`; returned in all agent responses via reputation enrichment.~~
 
 ### 3.3 Clarification & Verification
 - [ ] **Clarification timeout** — if agent sends a clarification request and caller does not respond within N minutes, auto-fail or auto-proceed. `clarification_timeout_seconds` on job create.
@@ -86,7 +87,7 @@ Remaining gaps: (1) callback HMAC unsigned; (2) no output verification hook befo
 - [ ] **SSRF validation review** — audit `_is_safe_url()` for IPv6 addresses, URL-encoded characters, and redirect chains on `endpoint_url` and `verifier_url`.
 - [ ] **Secrets in env** — audit that `STRIPE_SECRET_KEY`, `GROQ_API_KEY`, `STRIPE_WEBHOOK_SECRET` are never logged or returned in API responses.
 - [ ] **Dependency audit** — run `pip-audit` and `npm audit`; resolve HIGH/CRITICAL CVEs before launch.
-- [ ] **Rate-limit auth endpoints** — `POST /auth/login` and `POST /auth/register` should be rate-limited at ≤10/minute per IP to prevent brute-force and enumeration.
+- [x] ~~**Rate-limit auth endpoints** — already at 10/minute per IP via `_AUTH_RATE_LIMIT`.~~
 
 ---
 
@@ -98,9 +99,9 @@ Remaining gaps: (1) callback HMAC unsigned; (2) no output verification hook befo
 - [ ] **Connection pool tuning** — current thread-local pool may exhaust under concurrent load; add connection limit and queue timeout.
 
 ### 5.2 Deployment
-- [ ] **Production Docker image** — pin exact dependency versions, run as non-root, add a `HEALTHCHECK` directive.
+- [x] ~~**Production Docker image** — non-root user, HEALTHCHECK, gunicorn + uvicorn workers with configurable `WEB_CONCURRENCY`/`GUNICORN_TIMEOUT`.~~
 - [ ] **Graceful shutdown** — FastAPI lifespan handler should flush pending DB writes and drain in-flight requests before exiting.
-- [ ] **Process supervision** — use gunicorn + uvicorn workers in production (not bare `uvicorn`); configure worker count, timeout, max requests.
+- [x] ~~**Process supervision** — Dockerfile uses gunicorn + UvicornWorker; `WEB_CONCURRENCY`, `GUNICORN_TIMEOUT`, `GUNICORN_MAX_REQUESTS` env vars configurable.~~
 
 ### 5.3 Observability
 - [ ] **Error tracking** — integrate Sentry (`sentry-sdk[fastapi]` backend + `@sentry/react` frontend); capture unhandled exceptions with request context.
@@ -150,10 +151,7 @@ Remaining gaps: (1) callback HMAC unsigned; (2) no output verification hook befo
 - [ ] **Publish to PyPI** — add GitHub Actions release job that publishes on tag push.
 
 ### 8.2 TypeScript / JavaScript SDK
-- [ ] **`sdks/typescript/`** — currently generated types only; build `AgentMarketClient` class mirroring the Python SDK.
-- [ ] **`hire(agentId, payload, options?)`** — returns `Promise<Job>`.
-- [ ] **`search(query, filters?)`** — returns `Promise<Agent[]>`.
-- [ ] **`getBalance()`** — returns `Promise<number>` (cents).
+- [ ] **`sdks/typescript/`** — generated types exist; still need to build `AgentMarketClient` class with `hire()`, `search()`, `getBalance()`.
 - [ ] **Publish to npm** as `agentmarket`.
 - [ ] **Node.js + browser compatibility** — use `fetch` API; no Node-specific imports.
 
@@ -213,10 +211,10 @@ Remaining gaps: (1) callback HMAC unsigned; (2) no output verification hook befo
 ## 13. Documentation (P1)
 
 - [ ] **API reference** — audit every endpoint in `server.py` against `docs/api-reference.md`; update stale entries.
-- [ ] **MCP integration guide (high priority)** — how to configure `agentmarket_mcp_server.py` in Claude Code / Claude Desktop. This is the fastest path for technical early adopters to try the product — publish this before launch.
+- [x] ~~**MCP integration guide** — `docs/mcp-integration.md` covers Claude Code, Claude Desktop, env vars, A2A vs MCP choice.~~
 - [ ] **A2A integration guide** — how to configure AgentMarket as a participant in Google A2A networks.
 - [ ] **Dispute guide** — for callers: how to file, timeline. For agents: how to respond.
-- [ ] **`output_examples` on landing page** — show 2–3 real input→output pairs for built-in agents on the homepage/agent list. Biggest single UX improvement for cold visitors deciding whether to fund a wallet.
+- [ ] **`output_examples` on landing page** — show 2–3 real input→output pairs for built-in agents on the homepage/agent list. Biggest single UX improvement for cold visitors deciding whether to fund a wallet. (Backend column + API field now exists; needs frontend component + data populated for built-in agents.)
 
 ---
 

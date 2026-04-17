@@ -474,6 +474,28 @@ def compute_trust_metrics(agent_id: str) -> dict:
     )
 
 
+def _load_dispute_rates_map(agent_ids: list[str]) -> dict[str, int]:
+    """Return {agent_id: dispute_count} for each agent_id. Returns empty dict if tables missing."""
+    if not agent_ids:
+        return {}
+    placeholders = ",".join("?" * len(agent_ids))
+    try:
+        with _conn() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT j.agent_id, COUNT(d.dispute_id) AS dispute_count
+                FROM disputes d
+                JOIN jobs j ON d.job_id = j.job_id
+                WHERE j.agent_id IN ({placeholders})
+                GROUP BY j.agent_id
+                """,
+                agent_ids,
+            ).fetchall()
+        return {row["agent_id"]: int(row["dispute_count"]) for row in rows}
+    except sqlite3.OperationalError:
+        return {}
+
+
 def enrich_agent_record(agent: dict) -> dict:
     """Attach trust/reputation fields to a single registry agent record."""
     if "agent_id" not in agent:
@@ -505,12 +527,17 @@ def enrich_agent_record(agent: dict) -> dict:
         decay_multiplier=_normalize_decay_multiplier(agent.get("trust_decay_multiplier")),
     )
 
+    dispute_counts = _load_dispute_rates_map([agent_id])
+    dispute_count = dispute_counts.get(agent_id, 0)
     enriched = dict(agent)
     enriched["trust_score"] = metrics["trust_score"]
     enriched["quality_rating_count"] = metrics["rating_count"]
     enriched["quality_rating_avg"] = metrics["average_quality_rating"]
     enriched["confidence_score"] = metrics["confidence_score"]
     enriched["reputation"] = metrics
+    enriched["dispute_rate"] = (
+        round(dispute_count / total_calls, 4) if total_calls > 0 else None
+    )
     return enriched
 
 
@@ -523,6 +550,7 @@ def enrich_agent_records(agents: list[dict]) -> list[dict]:
     summary_map = _get_agent_quality_summary_map(agent_ids)
     stats_map = _load_agent_stats_map(agent_ids)
 
+    dispute_counts = _load_dispute_rates_map(agent_ids)
     enriched_records = []
     for agent in agents:
         if "agent_id" not in agent:
@@ -550,12 +578,16 @@ def enrich_agent_records(agents: list[dict]) -> list[dict]:
             decay_multiplier=_normalize_decay_multiplier(agent.get("trust_decay_multiplier")),
         )
 
+        dc = dispute_counts.get(agent["agent_id"], 0)
         enriched = dict(agent)
         enriched["trust_score"] = metrics["trust_score"]
         enriched["quality_rating_count"] = metrics["rating_count"]
         enriched["quality_rating_avg"] = metrics["average_quality_rating"]
         enriched["confidence_score"] = metrics["confidence_score"]
         enriched["reputation"] = metrics
+        enriched["dispute_rate"] = (
+            round(dc / total_calls, 4) if total_calls > 0 else None
+        )
         enriched_records.append(enriched)
     return enriched_records
 

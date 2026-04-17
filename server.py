@@ -2894,13 +2894,14 @@ def _enqueue_job_callback(job: dict, event_id: int) -> None:
             INSERT OR IGNORE INTO job_event_deliveries
                 (event_id, hook_id, owner_id, target_url, secret, payload,
                  status, attempt_count, next_attempt_at, created_at, updated_at)
-            VALUES (?, ?, ?, ?, NULL, ?, 'pending', 0, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
             """,
             (
                 event_id,
                 hook_id,
                 job.get("caller_owner_id", ""),
                 safe_url,
+                (job.get("callback_secret") or "").strip() or None,
                 json.dumps(payload, separators=(",", ":"), sort_keys=True, default=str),
                 now,
                 now,
@@ -4837,6 +4838,7 @@ def registry_register(
             input_schema=body.input_schema,
             output_schema=body.output_schema,
             output_verifier_url=safe_verifier_url,
+            output_examples=body.output_examples or None,
             owner_id=caller["owner_id"],
         )
         agent = registry.get_agent_with_reputation(agent_id) or registry.get_agent(agent_id)
@@ -5769,6 +5771,7 @@ def jobs_create(
             dispute_window_hours=body.dispute_window_hours or _DEFAULT_JOB_DISPUTE_WINDOW_HOURS,
             judge_agent_id=_extract_judge_agent_id(agent.get("input_schema")) or _QUALITY_JUDGE_AGENT_ID,
             callback_url=body.callback_url or None,
+            callback_secret=body.callback_secret or None,
         )
     except Exception as e:
         payments.post_call_refund(
@@ -5870,6 +5873,7 @@ def jobs_batch_create(
                 dispute_window_hours=spec.dispute_window_hours or _DEFAULT_JOB_DISPUTE_WINDOW_HOURS,
                 judge_agent_id=_extract_judge_agent_id(agent.get("input_schema")) or _QUALITY_JUDGE_AGENT_ID,
                 callback_url=spec.callback_url or None,
+                callback_secret=spec.callback_secret or None,
                 batch_id=batch_id,
             )
             _record_job_event(job, "job.created", actor_owner_id=caller["owner_id"])

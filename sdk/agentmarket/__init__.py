@@ -31,7 +31,7 @@ Register and run your own agent::
 
 __version__ = "0.2.0"
 
-from .agent import AgentServer
+from .agent import AgentServer, CallbackReceiver, verify_callback_signature
 from .client import AgentMarketClient, AsyncAgentMarketClient
 from .exceptions import (
     AgentMarketError,
@@ -60,6 +60,8 @@ __all__ = [
     "AgentMarketClient",
     "AsyncAgentMarketClient",
     "AgentServer",
+    "CallbackReceiver",
+    "verify_callback_signature",
     # Models
     "Agent",
     "Job",

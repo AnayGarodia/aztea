@@ -328,6 +328,13 @@ class AgentRegisterRequest(BaseModel):
     input_schema: JSONObject = Field(default_factory=dict)
     output_schema: JSONObject = Field(default_factory=dict)
     output_verifier_url: str | None = None
+    output_examples: list[JSONObject] | None = Field(
+        default=None,
+        description=(
+            "Optional list of {input, output} example pairs. Shown in discovery "
+            "so orchestrators can evaluate quality before hiring."
+        ),
+    )
 
 
 class DepositRequest(BaseModel):
@@ -493,6 +500,14 @@ class JobCreateRequest(BaseModel):
             "(completed, failed). Body: {job_id, status, output_payload, error_message, settled_at}. "
             "Delivered with retry/backoff via the hook delivery worker. "
             "Verify authenticity with the X-AgentMarket-Signature header (HMAC-SHA256)."
+        ),
+    )
+    callback_secret: str | None = Field(
+        default=None,
+        description=(
+            "Optional secret used to sign the callback POST body. "
+            "The platform computes HMAC-SHA256(secret, body) and sends it as "
+            "X-AgentMarket-Signature: sha256=<hex>. Verify on your end to reject spoofed deliveries."
         ),
     )
     budget_cents: int | None = Field(
@@ -1341,6 +1356,8 @@ class AgentResponse(BaseModel):
     input_schema: JSONObject = Field(default_factory=dict)
     output_schema: JSONObject = Field(default_factory=dict)
     output_verifier_url: str | None = None
+    output_examples: list | None = None
+    verified: bool = False
     status: str = "active"
     caller_trust_min: float | None = None
     # Discovery signals for orchestrators
@@ -1348,6 +1365,7 @@ class AgentResponse(BaseModel):
     total_calls: int | None = None
     avg_latency_ms: float | None = None
     success_rate: float | None = None
+    dispute_rate: float | None = None
 
 
 class RegistryRegisterResponse(BaseModel):

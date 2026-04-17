@@ -37,6 +37,8 @@ _PRICE_CHECK_RE = re.compile(
 _REQUIRED_COLUMNS = {
     "agent_id",
     "owner_id",
+    "output_examples",
+    "verified",
     "name",
     "description",
     "endpoint_url",
@@ -105,6 +107,8 @@ def _create_agents_table(conn: sqlite3.Connection, table_name: str = "agents") -
                 input_schema        TEXT NOT NULL DEFAULT '{{}}',
                 output_schema       TEXT NOT NULL DEFAULT '{{}}',
                 output_verifier_url TEXT,
+                output_examples     TEXT,
+                verified            INTEGER NOT NULL DEFAULT 0,
                 internal_only       INTEGER NOT NULL DEFAULT 0,
                 status              TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','suspended','banned')),
                 trust_decay_multiplier REAL NOT NULL DEFAULT 1.0,
@@ -467,6 +471,16 @@ def _normalize_legacy_agent_row(row: dict, used_agent_ids: set, used_names: set)
     output_schema = _normalize_output_schema_json(row.get("output_schema"))
     output_verifier_url = str(row.get("output_verifier_url") or "").strip() or None
     try:
+        raw_examples = row.get("output_examples")
+        parsed_ex = json.loads(raw_examples) if raw_examples else None
+        output_examples = json.dumps(parsed_ex) if isinstance(parsed_ex, list) else None
+    except (json.JSONDecodeError, TypeError):
+        output_examples = None
+    try:
+        verified = 1 if int(row.get("verified") or 0) else 0
+    except (TypeError, ValueError):
+        verified = 0
+    try:
         internal_only = 1 if int(row.get("internal_only") or 0) else 0
     except (TypeError, ValueError):
         internal_only = 0
@@ -493,6 +507,8 @@ def _normalize_legacy_agent_row(row: dict, used_agent_ids: set, used_names: set)
         input_schema,
         output_schema,
         output_verifier_url,
+        output_examples,
+        verified,
         internal_only,
         status,
         trust_decay_multiplier,
@@ -520,8 +536,9 @@ def _migrate_agents_table(conn: sqlite3.Connection) -> None:
             INSERT INTO agents__canonical
                 (agent_id, owner_id, name, description, endpoint_url, price_per_call_usd,
                  avg_latency_ms, total_calls, successful_calls, tags, input_schema,
-                 output_schema, output_verifier_url, internal_only, status, trust_decay_multiplier, last_decay_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 output_schema, output_verifier_url, output_examples, verified,
+                 internal_only, status, trust_decay_multiplier, last_decay_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             normalized,
         )
@@ -563,6 +580,13 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     except (json.JSONDecodeError, TypeError):
         d["output_schema"] = {}
     d["output_verifier_url"] = (d.get("output_verifier_url") or None)
+    try:
+        raw_examples = d.get("output_examples")
+        parsed_examples = json.loads(raw_examples) if raw_examples else None
+        d["output_examples"] = parsed_examples if isinstance(parsed_examples, list) else None
+    except (json.JSONDecodeError, TypeError):
+        d["output_examples"] = None
+    d["verified"] = bool(int(d.get("verified") or 0))
     d["internal_only"] = bool(int(d.get("internal_only") or 0))
     status = str(d.get("status") or "active").strip().lower()
     d["status"] = status if status in {"active", "suspended", "banned"} else "active"
@@ -589,6 +613,8 @@ def register_agent(
     input_schema: dict | None = None,
     output_schema: dict | None = None,
     output_verifier_url: str | None = None,
+    output_examples: list | None = None,
+    verified: bool = False,
     internal_only: bool = False,
     status: str = "active",
     trust_decay_multiplier: float = 1.0,
@@ -622,6 +648,13 @@ def register_agent(
     output_schema_json = json.dumps(normalized_output_schema, sort_keys=True)
     tags_json = json.dumps(normalized_tags)
     normalized_verifier_url = str(output_verifier_url or "").strip() or None
+    if isinstance(output_examples, list):
+        normalized_examples: str | None = json.dumps(
+            [ex for ex in output_examples if isinstance(ex, dict)]
+        ) or None
+    else:
+        normalized_examples = None
+    normalized_verified = 1 if verified else 0
     normalized_status = str(status or "active").strip().lower()
     if normalized_status not in {"active", "suspended", "banned"}:
         raise ValueError("status must be one of: active, suspended, banned.")
@@ -640,8 +673,8 @@ def register_agent(
             INSERT INTO agents
                 (agent_id, owner_id, name, description, endpoint_url,
                  price_per_call_usd, tags, input_schema, output_schema, output_verifier_url,
-                 internal_only, status, trust_decay_multiplier, last_decay_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 output_examples, verified, internal_only, status, trust_decay_multiplier, last_decay_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 aid,
@@ -654,6 +687,8 @@ def register_agent(
                 schema_json,
                 output_schema_json,
                 normalized_verifier_url,
+                normalized_examples,
+                normalized_verified,
                 internal_only_int,
                 normalized_status,
                 normalized_decay_multiplier,

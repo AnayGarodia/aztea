@@ -106,6 +106,7 @@ _CANONICAL_JOB_COLUMNS = (
     "judge_verdict",
     "quality_score",
     "callback_url",
+    "callback_secret",
     "batch_id",
 )
 
@@ -329,6 +330,7 @@ def _create_jobs_table(conn: sqlite3.Connection, table_name: str = "jobs") -> No
             judge_verdict        TEXT,
             quality_score        INTEGER,
             callback_url         TEXT,
+            callback_secret      TEXT,
             batch_id             TEXT
         )
     """)
@@ -496,6 +498,7 @@ def _normalize_legacy_job_row(row: dict, used_job_ids: set[str]) -> tuple:
     except (TypeError, ValueError):
         parsed_quality_score = None
     callback_url = _clean_optional_text(row.get("callback_url"))
+    callback_secret = _clean_optional_text(row.get("callback_secret"))
     batch_id = _clean_optional_text(row.get("batch_id"))
 
     if claim_owner_id is None:
@@ -548,6 +551,7 @@ def _normalize_legacy_job_row(row: dict, used_job_ids: set[str]) -> tuple:
         judge_verdict,
         parsed_quality_score,
         callback_url,
+        callback_secret,
         batch_id,
     )
 
@@ -627,6 +631,7 @@ def create_job(
     dispute_window_hours: int = 72,
     judge_agent_id: str | None = None,
     callback_url: str | None = None,
+    callback_secret: str | None = None,
     batch_id: str | None = None,
 ) -> dict:
     if price_cents < 0:
@@ -653,8 +658,8 @@ def create_job(
               (job_id, agent_id, agent_owner_id, caller_owner_id, caller_wallet_id,
                agent_wallet_id, platform_wallet_id, status, price_cents, charge_tx_id,
                input_payload, created_at, updated_at, max_attempts, dispute_window_hours, judge_agent_id,
-               callback_url, batch_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               callback_url, callback_secret, batch_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job_id,
@@ -674,6 +679,7 @@ def create_job(
                 parsed_dispute_window_hours,
                 _clean_optional_text(judge_agent_id),
                 _clean_optional_text(callback_url),
+                _clean_optional_text(callback_secret),
                 _clean_optional_text(batch_id),
             ),
         )
