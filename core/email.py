@@ -114,3 +114,14 @@ def send_dispute_resolved(to: str, job_id: str, dispute_id: str, outcome: str) -
         f"<p>Outcome: <strong>{outcome}</strong></p>",
         f"Dispute {dispute_id} for job {job_id} resolved. Outcome: {outcome}",
     )
+
+
+def send_withdrawal_processed(to: str, amount_cents: int) -> None:
+    amount_fmt = f"${amount_cents / 100:.2f}"
+    send(
+        to,
+        "Withdrawal processed",
+        f"<p>Your withdrawal of <strong>{amount_fmt}</strong> has been submitted to your connected Stripe account.</p>"
+        "<p>Funds typically arrive within 1–2 business days.</p>",
+        f"Your withdrawal of {amount_fmt} has been submitted. Funds typically arrive within 1–2 business days.",
+    )

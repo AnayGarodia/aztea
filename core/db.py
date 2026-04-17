@@ -15,6 +15,16 @@ from contextlib import contextmanager
 from typing import Generator
 
 _DEFAULT_DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "registry.db"))
+
+# DATABASE_URL provides forward-compat with Postgres. SQLite-only for now.
+# Accepted forms: "sqlite:///absolute/path.db" or a bare file path.
+# Postgres URLs (postgresql://...) are noted but not yet supported — swap this module when ready.
+_DATABASE_URL = os.environ.get("DATABASE_URL", "")
+if _DATABASE_URL.startswith("sqlite:///"):
+    _DEFAULT_DB_PATH = os.path.abspath(_DATABASE_URL[len("sqlite:///"):])
+elif _DATABASE_URL and not _DATABASE_URL.startswith(("postgres", "postgresql")):
+    _DEFAULT_DB_PATH = os.path.abspath(_DATABASE_URL)
+
 DB_PATH = os.environ.get("DB_PATH", _DEFAULT_DB_PATH)
 
 _local = threading.local()

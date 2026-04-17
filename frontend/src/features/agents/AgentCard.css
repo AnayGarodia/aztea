@@ -164,3 +164,23 @@
   transition: opacity 0.15s ease;
 }
 .agent-card:hover .agent-card__meta-cta { opacity: 1; }
+
+.agent-card__header-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+.agent-card__trust {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: 0.02em;
+}
+.agent-card__dispute-warn {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: #b45309;
+  margin: 4px 0 0;
+  padding: 2px 0;
+}

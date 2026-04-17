@@ -4282,6 +4282,13 @@ def _settle_failed_job(
             actor_owner_id=actor_owner_id,
             payload={"status": settled["status"], "error_message": settled.get("error_message")},
         )
+        try:
+            caller_email = _get_owner_email(settled.get("caller_owner_id", ""))
+            if caller_email:
+                _agent_name = (registry.get_agent(settled["agent_id"]) or {}).get("name", settled["agent_id"])
+                _email.send_job_failed(caller_email, settled["job_id"], _agent_name, settled.get("error_message") or "")
+        except Exception:
+            pass
     if (
         str(settled.get("status") or "").strip().lower() == "failed"
     ):
@@ -8997,6 +9004,12 @@ def withdraw(
         "Stripe Connect withdrawal: %d¢ from wallet %s → account %s (transfer %s)",
         body.amount_cents, wallet["wallet_id"], account_id, transfer.id,
     )
+    try:
+        _withdraw_email = _get_owner_email(caller.get("owner_id", ""))
+        if _withdraw_email:
+            _email.send_withdrawal_processed(_withdraw_email, body.amount_cents)
+    except Exception:
+        pass
     return JSONResponse({
         "status": "ok",
         "transfer_id": transfer.id,

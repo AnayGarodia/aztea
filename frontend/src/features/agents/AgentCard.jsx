@@ -9,9 +9,14 @@ import './AgentCard.css'
 export default function AgentCard({ agent, index = 0 }) {
   const navigate = useNavigate()
 
-  const successPct = agent.success_rate != null ? Math.round(agent.success_rate * 100) : null
-  const latency    = agent.avg_latency_ms != null ? `${(agent.avg_latency_ms / 1000).toFixed(1)}s` : '—'
-  const calls      = agent.total_calls ?? 0
+  const successPct  = agent.success_rate != null ? Math.round(agent.success_rate * 100) : null
+  const latency     = agent.avg_latency_ms != null ? `${(agent.avg_latency_ms / 1000).toFixed(1)}s` : '—'
+  const calls       = agent.total_calls ?? 0
+  const trustScore  = typeof agent.trust_score === 'number' ? agent.trust_score.toFixed(0) : null
+  const disputeRate = typeof agent.dispute_rate === 'number' ? agent.dispute_rate : null
+  const highDispute = disputeRate !== null && disputeRate > 0.10
+  const avgRating   = typeof agent.quality_rating_avg === 'number' ? agent.quality_rating_avg : null
+  const ratingCount = agent.quality_rating_count ?? 0
   const matchReasons = Array.isArray(agent.match_reasons)
     ? agent.match_reasons.map(r => (typeof r === 'string' ? r.trim() : '')).filter(Boolean)
     : []
@@ -38,9 +43,16 @@ export default function AgentCard({ agent, index = 0 }) {
           {/* Sigil header */}
           <div className="agent-card__sigil-area">
             <AgentSigil agentId={agent.agent_id} size="md" />
-            <span className="agent-card__price t-mono">
-              ${Number(agent.price_per_call_usd).toFixed(2)}
-            </span>
+            <div className="agent-card__header-right">
+              {trustScore !== null && (
+                <span className="agent-card__trust" title="Trust score (0–100)">
+                  ★ {trustScore}
+                </span>
+              )}
+              <span className="agent-card__price t-mono">
+                ${Number(agent.price_per_call_usd).toFixed(2)}
+              </span>
+            </div>
           </div>
 
           {/* Info section */}
@@ -89,10 +101,21 @@ export default function AgentCard({ agent, index = 0 }) {
                 <span className="agent-card__meta-val t-mono">{calls.toLocaleString()}</span>
                 <span className="agent-card__meta-label">Calls</span>
               </div>
+              {avgRating !== null && ratingCount > 0 && (
+                <div className="agent-card__meta-item" title={`${ratingCount} rating${ratingCount !== 1 ? 's' : ''}`}>
+                  <span className="agent-card__meta-val t-mono">{'★'.repeat(Math.round(avgRating))}{'☆'.repeat(5 - Math.round(avgRating))}</span>
+                  <span className="agent-card__meta-label">Rating</span>
+                </div>
+              )}
               <div className="agent-card__meta-cta">
                 Open →
               </div>
             </div>
+            {highDispute && (
+              <p className="agent-card__dispute-warn" title={`${(disputeRate * 100).toFixed(1)}% dispute rate`}>
+                ⚠ High dispute rate
+              </p>
+            )}
           </div>
         </div>
       </Spotlight>

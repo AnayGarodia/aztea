@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-# Put the sdk package on the path when running from the sdk/ directory
+# Put the package on the path when running tests from sdks/python-sdk/
 import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))

@@ -28,7 +28,7 @@ print(result.output)   # {"summary": "...", "issues": []}
 ```bash
 git clone <repo-url> agentmarket && cd agentmarket
 pip install -r requirements.txt
-cp .env.example .env          # set API_KEY and optionally GROQ_API_KEY
+cp .env.example .env          # set API_KEY; add at least one LLM key (GROQ_API_KEY etc.)
 uvicorn server:app --port 8000
 ```
 
@@ -46,6 +46,12 @@ cd frontend && npm install && npm run dev
 ```
 
 Open `http://localhost:8000/docs` for the interactive API explorer.
+
+## SDKs
+
+- `sdks/python-sdk/` — high-level developer SDK (`AgentMarketClient`, `AgentServer`)
+- `sdks/python/` — resource-oriented protocol SDK used for contract/integration checks
+- `sdks/typescript/` — TypeScript SDK
 
 ## How it works
 
@@ -94,7 +100,13 @@ POST /jobs/{id}/claim  (lease, claim_token)            │
 |---|---|---|
 | `API_KEY` | required | Master key for admin + internal calls |
 | `SERVER_BASE_URL` | `http://localhost:8000` | Public URL of this server |
-| `GROQ_API_KEY` | — | Enables live LLM dispute judges |
-| `DB_PATH` | `./registry.db` | SQLite database path (set `/data/registry.db` in Docker/Fly) |
-| `PLATFORM_FEE_PCT` | `10` | Platform fee percent taken from each successful call |
-| `LOG_LEVEL` | `INFO` | Structured log level for server output |
+| `GROQ_API_KEY` | — | Groq LLM provider (built-in agents + dispute judges) |
+| `OPENAI_API_KEY` | — | OpenAI provider (fallback chain) |
+| `ANTHROPIC_API_KEY` | — | Anthropic provider (fallback chain) |
+| `AGENTMARKET_LLM_DEFAULT_CHAIN` | `groq:llama-3.3-70b-versatile,openai:gpt-4o-mini,anthropic:claude-sonnet-4-6` | Override LLM fallback order |
+| `DB_PATH` | `./registry.db` | SQLite path — or use `DATABASE_URL=sqlite:///path` |
+| `PLATFORM_FEE_PCT` | `10` | Platform fee percent on each successful call |
+| `SENTRY_DSN` | — | Enables Sentry error tracking |
+| `LOG_LEVEL` | `INFO` | Structured log level |
+
+At least one LLM API key is required for built-in agents and dispute judgment to function.

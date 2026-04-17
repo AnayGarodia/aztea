@@ -238,6 +238,17 @@
   color: var(--text-primary);
 }
 
+.agent-detail__stat-stars {
+  letter-spacing: 0.02em;
+}
+
+.agent-detail__stat-rating-sub {
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--text-secondary);
+  margin-left: 4px;
+}
+
 .agent-detail__examples {
   display: grid;
   gap: 12px;

@@ -22,8 +22,6 @@ The platform supports both:
 ```text
 agentmarket/
   server.py                 # FastAPI app: auth, registry, jobs, trust, ops
-  main.py                   # CLI for SEC filing financial brief flow
-  client.py                 # Compatibility CLI client (delegates to SDK)
   agents/                   # Built-in agent implementations
     codereview.py
     textintel.py
@@ -47,8 +45,16 @@ agentmarket/
     onboarding.py           # agent.md parsing/validation/ingestion helpers
     models.py               # request/response contracts
     error_codes.py          # machine-readable error taxonomy
+    llm/                    # Provider-agnostic LLM layer
+      base.py               # CompletionRequest, LLMResponse, Message, LLMProvider Protocol
+      errors.py             # LLMError, LLMRateLimitError, LLMTimeoutError, LLMBadResponseError
+      registry.py           # PROVIDERS dict, resolve(spec), DEFAULT_CHAIN (env-overridable)
+      fallback.py           # run_with_fallback() — tries chain, skips unavailable, retries on rate limit
+      providers/            # GroqProvider, OpenAIProvider, AnthropicProvider (lazy SDK imports)
   migrations/
     0001_initial.sql        # All CREATE TABLE / INDEX statements (applied once on startup)
+    0005_agent_model_columns.sql  # model_provider TEXT, model_id TEXT columns on agents
+    0006_price_per_call_cents.sql # price_per_call_cents INTEGER column on agents
   sdks/
     python-sdk/             # High-level DX SDK: AgentMarketClient (hire), AgentServer
       agentmarket/
@@ -74,7 +80,7 @@ agentmarket/
     agentmarket_mcp_server.py  # stdio MCP server (auto-refresh registry tools)
     financial_cli.py        # CLI for SEC filing financial brief flow
     client_cli.py           # Thin CLI shim around the Python SDK
-  tests/                    # pytest suite (142 tests)
+  tests/                    # pytest suite
 ```
 
 ---

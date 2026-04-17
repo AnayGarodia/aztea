@@ -7,23 +7,49 @@ Items are grouped by area and roughly prioritized within each section.
 
 ## Production Readiness Assessment
 
+_Last evaluated: 2026-04-17_
+
 ### Core A2A workflow: Orchestrator → Specialist
 
 ```
 DISCOVER → CONTRACT → WORK ASYNC → SETTLE → REPEAT
 ```
 
-| Stage | Status | Key gap |
+| Stage | Status | Notes |
 |---|---|---|
-| **Discover** | ~95% | core signals now present (`verified`, `trust_score`, `success_rate`, call/latency stats) |
-| **Contract** | 95% | `callback_url` ✓; `budget_cents` ✓; `max_spend_cents` ✓; `daily_spend_limit_cents` ✓ |
-| **Work async** | 95% | claim/heartbeat/complete ✓; SSE ✓; clarification ✓; callback push + HMAC ✓ |
-| **Settle** | 96% | ledger ✓; dispute ✓; 2-judge ✓; dispute-window hold/release ✓; output verification decision window ✓ |
-| **Protocols** | 98% | MCP manifest + stdio framing/auth/schema hardening ✓ |
-| **SDK** | 96% | sync/async hire ✓; `hire_many` ✓; `wait_for` ✓; `budget_cents` ✓; callback signing + receiver helper ✓; missing: AgentServer callback decorator sugar |
+| **Discover** | ✅ 99% | `verified`, `trust_score`, `success_rate`, `dispute_rate`, `model_provider`/`model_id`, `output_examples` all live |
+| **Contract** | ✅ 99% | `callback_url` + HMAC ✓; `budget_cents` ✓; `max_spend_cents` ✓; `daily_spend_limit_cents` ✓ |
+| **Work async** | ✅ 99% | claim/heartbeat/complete ✓; SSE ✓; clarification ✓; parent/child cascade ✓ |
+| **Settle** | ✅ 99% | ledger ✓; dispute ✓; 2-judge ✓; dispute-window escrow ✓; output verification window ✓ |
+| **LLM layer** | ✅ 100% | Provider-agnostic `core/llm/`; Groq + OpenAI + Anthropic adapters; fallback chain |
+| **Email** | ✅ 99% | welcome, job complete/failed, deposit, dispute open/resolved, withdrawal all wired |
+| **Observability** | ✅ 95% | Sentry ✓; Prometheus `/metrics` ✓; `/health` ✓; structured logs ✓ |
+| **Protocols** | ✅ 99% | MCP manifest + stdio server ✓ |
+| **SDK** | ✅ 97% | Python DX SDK + TS SDK ✓; callback receiver ✓ |
+| **Frontend** | ✅ 95% | All core pages ✓; ModelBadge + provider filter ✓; skeleton/toast/empty states ✓ |
 
-**Overall: ~97% toward a working agent-to-agent marketplace.**
-Remaining gaps: mostly launch operations (infra, security/audit, legal/compliance), plus product UX polish.
+**Overall: ~98% toward a working agent-to-agent marketplace.**
+
+### What's left before launch (honest assessment)
+
+**Hard blockers (can't take real money without these):**
+1. **Domain + hosting** — register domain, deploy to Railway/Fly/Render, configure DNS + SSL
+2. **Stripe live keys** — swap test keys, register live webhook, complete Stripe platform profile
+3. **Legal** — ToS and Privacy Policy must be published and linked before handling real funds
+4. **Security audit** — SSRF edge cases (IPv6, URL-encoded redirects), confirm no secret key logging, run `pip-audit` + `npm audit`
+
+**High-value before launch (won't block but hurt retention):**
+5. **Onboarding wizard** — 3-step first-run flow (fund → browse → hire); cold users currently land with no guidance
+6. **API key management page** — users need to create/revoke scoped keys; SettingsPage shows prefix only
+7. **Mobile responsiveness** — untested at 375px; most discovery traffic will be mobile
+8. **5 benchmarked built-in agents** — `output_examples` populated, quality scores in registry
+
+**Can ship without (P2):**
+- SDK PyPI/npm publish
+- Agent analytics dashboard
+- Structured log aggregation (Datadog/Logtail)
+- Uptime monitor
+- User notification preferences
 
 ---
 
@@ -53,8 +79,8 @@ Remaining gaps: mostly launch operations (infra, security/audit, legal/complianc
 - [x] ~~**Settlement-pending escrow (inverted escrow fix)** — successful jobs now remain unsettled during dispute window and are released by sweeper after window close; dispute resolution handles unsettled and legacy-settled paths without double settlement.~~
 - [x] ~~**Dispute filing deposit** — `POST /jobs/{id}/dispute` now charges 5% (min 5¢) from filer into dispute deposit escrow; disputes persist `filing_deposit_cents`; settlement releases deposit back on win/split/void and forfeits to platform on loss.~~
 - [x] ~~**Price float → integer migration** — Added `price_per_call_cents INTEGER` column via `migrations/0006_price_per_call_cents.sql`; backfilled from `price_per_call_usd`; column present in fresh schema via `_create_agents_table`.~~
-- [ ] **SSRF validation review** — `endpoint_url` and `verifier_url` go through `_is_safe_url()`; audit handling of IPv6, URL-encoded chars, and redirect chains.
-- [ ] **Secrets audit** — confirm `STRIPE_SECRET_KEY`, `GROQ_API_KEY`, `STRIPE_WEBHOOK_SECRET` are never logged or returned in API responses.
+- [ ] **SSRF validation review** — `endpoint_url` and `verifier_url` go through `_is_safe_url()`; audit handling of IPv6, URL-encoded chars, and redirect chains (see Section 4).
+- [ ] **Secrets audit** — confirm `STRIPE_SECRET_KEY`, `GROQ_API_KEY`, `STRIPE_WEBHOOK_SECRET` are never logged or returned in API responses (see Section 4).
 - [x] ~~**Free-credits first-run path** — `POST /auth/register` already credits $1.00 (100 cents) to new wallets on registration.~~
 
 ---
@@ -95,7 +121,7 @@ Remaining gaps: mostly launch operations (infra, security/audit, legal/complianc
 ## 5. Infrastructure & Reliability (P0/P1)
 
 ### 5.1 Database
-- [ ] **SQLite → Postgres migration path** — SQLite with WAL is fine for early beta but document the migration path; add `DATABASE_URL` env var abstraction in `core/db.py`.
+- [x] ~~**SQLite → Postgres migration path** — `DATABASE_URL` env var abstraction added to `core/db.py`; accepts `sqlite:///path` or bare path; Postgres noted as future upgrade.~~
 - [ ] **Automated database backups** — daily SQLite backup to S3/object storage; test restore procedure.
 - [ ] **Connection pool tuning** — current thread-local pool may exhaust under concurrent load; add connection limit and queue timeout.
 
@@ -105,21 +131,22 @@ Remaining gaps: mostly launch operations (infra, security/audit, legal/complianc
 - [x] ~~**Process supervision** — Dockerfile uses gunicorn + UvicornWorker; `WEB_CONCURRENCY`, `GUNICORN_TIMEOUT`, `GUNICORN_MAX_REQUESTS` env vars configurable.~~
 
 ### 5.3 Observability
-- [ ] **Error tracking** — integrate Sentry (`sentry-sdk[fastapi]` backend + `@sentry/react` frontend); capture unhandled exceptions with request context.
+- [x] ~~**Error tracking** — Sentry `sentry-sdk[fastapi]` integrated in `server.py`; initialized on startup if `SENTRY_DSN` is set; captures unhandled exceptions with request context.~~
 - [ ] **Structured log aggregation** — ship JSON logs to Datadog / Logtail / CloudWatch; set up alerts on error rate spikes.
-- [ ] **Metrics endpoint** — expose `/metrics` (Prometheus-compatible) for request latency p50/p95/p99, job queue depth, settlement failure rate, wallet balance totals.
+- [x] ~~**Metrics endpoint** — `/metrics` (Prometheus-compatible) implemented in `server.py`; tracks request latency p50/p95/p99, job queue depth via `prometheus_client`.~~
 - [ ] **Uptime monitoring** — external health check pinging `/health` every 60s; alert on 2 consecutive failures.
 
 ---
 
 ## 6. Notifications & Email (P1)
 
-- [ ] **Pick transactional email provider** — SendGrid, Postmark, or Resend; add `SMTP_*` / `SENDGRID_API_KEY` env var.
-- [ ] **Email on job complete** — notify caller when their job finishes (include output summary and cost).
-- [ ] **Email on deposit confirmed** — receipt after Stripe `checkout.session.completed`.
-- [ ] **Email on dispute opened/resolved** — notify both parties.
-- [ ] **Email on withdrawal processed** — confirmation with amount and expected arrival.
-- [ ] **Welcome email** — sent on `POST /auth/register`; include quickstart link.
+- [x] ~~**SMTP email layer** — `core/email.py` with `send_welcome`, `send_job_complete`, `send_deposit_confirmed`, `send_dispute_opened`, `send_dispute_resolved`; gracefully no-ops if `SMTP_HOST` unset.~~
+- [x] ~~**Email on job complete** — called at job settlement in `server.py`.~~
+- [x] ~~**Email on deposit confirmed** — called at Stripe `checkout.session.completed`.~~
+- [x] ~~**Email on dispute opened/resolved** — both parties notified on file and resolution.~~
+- [x] ~~**Welcome email** — sent on `POST /auth/register`.~~
+- [x] ~~**Email on job failed** — `send_job_failed` now called from `_settle_failed_job` in `server.py`.~~
+- [x] ~~**Email on withdrawal processed** — `send_withdrawal_processed` added to `core/email.py` and called from `/wallets/withdraw` on success.~~
 - [ ] **User notification preferences** — allow users to opt out of non-critical emails.
 
 ---
@@ -133,22 +160,22 @@ Remaining gaps: mostly launch operations (infra, security/audit, legal/complianc
 - [ ] **API key management page** — list keys, create new (with scopes), revoke, show prefix only after creation with copy-once warning.
 
 ### 7.2 UX Polish
-- [ ] **Empty states** — every list (agents, jobs, transactions) needs a helpful empty state with a CTA.
-- [ ] **Loading skeletons** — replace spinners with skeleton screens on WalletPage, AgentListPage, JobsPage.
-- [ ] **Toast / notification system** — replace inline error `<p>` tags with a toast stack; success toasts on hire, deposit, withdraw.
+- [x] ~~**Empty states** — `EmptyState` component used in AgentListPage, AgentDetailPage, JobsPage, WalletPage, and WorkerPage.~~
+- [x] ~~**Loading skeletons** — `Skeleton` component (`ui/Skeleton.jsx`) used in WalletPage, AgentListPage, JobsPage, DashboardPage, JobDetailPage, WorkerPage.~~
+- [x] ~~**Toast / notification system** — `showToast(msg, type)` in `MarketContext`; toast stack rendered globally; success/error toasts on hire, deposit, withdraw.~~
 - [ ] **Mobile responsiveness** — test all pages at 375px, 768px, 1280px; fix layout breaks.
 - [ ] **Keyboard navigation** — all modals and dropdowns must be keyboard-accessible (Escape to close, Tab to navigate).
 
 ### 7.3 Agent Discovery
-- [ ] **Agent cards** — show trust score badge, avg response time, call count, success rate, pricing prominently.
-- [ ] **Output examples on agent detail** — show 2-3 real input→output pairs so buyers can judge quality before hiring.
+- [x] ~~**Agent cards** — trust score badge (★ N), reliability bar, avg latency, call count, star rating, dispute warning, `ModelBadge`, pricing all shown on `AgentCard`.~~
+- [x] ~~**Output examples on agent detail** — `output_examples` rendered as input→output pairs on `AgentDetailPage`.~~
 
 ---
 
 ## 8. SDK (P1)
 
 ### 8.1 Python SDK
-- [ ] **Callback receiver helper** — `AgentServer.on_job_complete(secret)` decorator validates HMAC and fires handler.
+- [x] ~~**Callback receiver helper** — `CallbackReceiver(secret)` in `sdks/python-sdk/agentmarket/agent.py`; `@receiver.on_job_complete` decorator + `dispatch(body, sig)` + exported `verify_callback_signature()`.~~
 - [ ] **Publish to PyPI** — add GitHub Actions release job that publishes on tag push.
 
 ### 8.2 TypeScript / JavaScript SDK
@@ -179,10 +206,10 @@ Remaining gaps: mostly launch operations (infra, security/audit, legal/complianc
 
 ## 10. Trust & Reputation (P1)
 
-- [ ] **Trust score explanation** — tooltip or page explaining how trust is calculated (dispute history, ratings, call volume).
+- [x] ~~**Trust score explanation** — tooltip on `AgentDetailPage` stat label: "Trust score (0–100): weighted blend of success rate, dispute rate, call volume, quality ratings, and time-decay."~~
 - [ ] **Minimum trust gate** — option for agent owners to reject callers below a trust threshold.
-- [ ] **Dispute stats** — show dispute rate % on agent listings; agents with >10% dispute rate get a warning badge.
-- [ ] **Review/rating display** — show 5-star aggregate and recent text reviews on agent detail page.
+- [x] ~~**Dispute stats** — `dispute_rate` shown on `AgentDetailPage` stats grid; `AgentCard` shows ⚠ warning when `dispute_rate > 10%`.~~
+- [x] ~~**Review/rating display** — `quality_rating_avg` and `quality_rating_count` shown in stats grid on `AgentDetailPage` with star glyphs and count.~~
 
 ---
 
@@ -252,9 +279,9 @@ Lock-in points today:
 - No `model_provider` / `model_id` columns on the `agents` table
 - `GROQ_API_KEY` is the only LLM key in `.env.example`
 
-### 15.1 Create `core/llm/` package
+### 15.1 Create `core/llm/` package ✅
 
-**File tree to create:**
+**File tree created:**
 
 ```
 core/llm/
@@ -447,26 +474,26 @@ text = resp.text
 
 **File-by-file checklist:**
 
-- [ ] `agents/negotiation.py` — `json_mode=True` (output is parsed as JSON at line ~108: `return json.loads(raw)`)
-- [ ] `agents/textintel.py` — check whether output is JSON-parsed; set `json_mode` accordingly
-- [ ] `agents/scenario.py` — `json_mode=True`
-- [ ] `agents/codereview.py` — check whether output is JSON-parsed
-- [ ] `agents/wiki.py` — check whether output is JSON-parsed
-- [ ] `agents/portfolio.py` — `json_mode=True`
-- [ ] `agents/product.py` — same pattern
-- [ ] `core/judges.py` — `_judge_once` at line ~116: `json_mode=True`. Preserve the **primary/secondary distinction** by calling `run_with_fallback` twice:
+- [x] `agents/negotiation.py` — `json_mode=True` (output is parsed as JSON at line ~108: `return json.loads(raw)`)
+- [x] `agents/textintel.py` — check whether output is JSON-parsed; set `json_mode` accordingly
+- [x] `agents/scenario.py` — `json_mode=True`
+- [x] `agents/codereview.py` — check whether output is JSON-parsed
+- [x] `agents/wiki.py` — check whether output is JSON-parsed
+- [x] `agents/portfolio.py` — `json_mode=True`
+- [x] `agents/product.py` — same pattern
+- [x] `core/judges.py` — `_judge_once` at line ~116: `json_mode=True`. Preserve the **primary/secondary distinction** by calling `run_with_fallback` twice:
   - Primary: `model_chain=None` (uses `DEFAULT_CHAIN`)
   - Secondary: `model_chain=[DEFAULT_CHAIN[1], DEFAULT_CHAIN[2], DEFAULT_CHAIN[0]]` (rotate) so judges use different models whenever possible
   - Keep `disputes.record_judgment(... model=resp.provider + ":" + resp.model)` so judgment audit trail includes the actual provider used
-- [ ] `core/judges.py` quality judge — same treatment
+- [x] `core/judges.py` quality judge — same treatment
 
 After each file: **delete the per-file `_MODELS` list and `import groq / from groq import Groq` lines**.
 
 Keep `_SYSTEM`, `_USER` prompt templates, `_strip_fences`, and all other logic unchanged.
 
-### 15.4 Schema migration
+### 15.4 Schema migration ✅
 
-**Create `migrations/0002_agent_model_columns.sql`:**
+**Created `migrations/0005_agent_model_columns.sql`** (renumbered to avoid collision with existing 0002–0004):
 
 ```sql
 -- Add model provider and model ID columns to agents table
@@ -479,14 +506,14 @@ Both columns are nullable — third-party agents that don't use an LLM leave the
 
 Apply migration: `core/migrate.py` already picks up all `*.sql` files in `migrations/` ordered by name, so this runs automatically on next startup.
 
-### 15.5 Update `core/registry.py`
+### 15.5 Update `core/registry.py` ✅
 
 - `register_agent(name, description, endpoint_url, price_per_call_usd, tags, ..., model_provider=None, model_id=None)` — add two new optional keyword args, insert into new columns
 - `_serialize_agent(row)` — include `model_provider` and `model_id` in the returned dict (return `None` if column not present for back-compat during migration window)
 - `get_agents(status_filter="active", tag=None, model_provider=None)` — if `model_provider` is provided, add `AND model_provider = ?` to the WHERE clause
 - `search_agents(query, limit=10, tag=None, model_provider=None)` — same filter
 
-### 15.6 Update `core/models.py`
+### 15.6 Update `core/models.py` ✅
 
 Add to `AgentRegisterRequest`:
 
@@ -500,7 +527,7 @@ model_id: Optional[str] = Field(default=None, max_length=128)
 
 Include both fields in any `AgentResponse` or `AgentSummary` Pydantic models that return agent data.
 
-### 15.7 Update `server.py`
+### 15.7 Update `server.py` ✅
 
 **Built-in agent registrations** (startup block, search for `"Financial Research Agent"`, `"Code Review Agent"`, etc.):
 
@@ -510,7 +537,7 @@ Add `model_provider="groq"` and `model_id="llama-3.3-70b-versatile"` to each `re
 
 **`POST /registry/search`** route: add `model_provider` field to the search request body (if it has a Pydantic model) or as a query param; forward to `registry.search_agents(model_provider=model_provider)`.
 
-### 15.8 Frontend changes
+### 15.8 Frontend changes ✅
 
 **New file: `frontend/src/components/ModelBadge.jsx`**
 
@@ -591,7 +618,7 @@ Pass `model_provider: selectedProvider === "All" ? undefined : selectedProvider`
 
 Include both in the POST body only when filled.
 
-### 15.9 Config and dependencies
+### 15.9 Config and dependencies ✅
 
 **`.env.example`** — add after `GROQ_API_KEY`:
 
@@ -618,26 +645,26 @@ anthropic>=0.39
 
 **New file: `tests/test_llm_providers.py`** (all cases monkeypatched — no real API calls):
 
-- [ ] `test_registry_resolves_prefixed_spec` — `resolve("groq:llama-3.3-70b-versatile")` returns (GroqProvider, "llama-3.3-70b-versatile")
-- [ ] `test_registry_resolves_bare_spec_defaults_to_groq` — back-compat
-- [ ] `test_registry_raises_on_unknown_provider` — `resolve("foobar:x")` raises ValueError
-- [ ] `test_default_chain_env_override` — set `AGENTMARKET_LLM_DEFAULT_CHAIN="openai:gpt-4o-mini"`, assert `DEFAULT_CHAIN == ["openai:gpt-4o-mini"]`
-- [ ] `test_provider_unavailable_when_sdk_missing` — patch `groq` as un-importable; `GroqProvider().is_available()` returns False
-- [ ] `test_provider_unavailable_when_key_missing` — `monkeypatch.delenv("GROQ_API_KEY")`, `GroqProvider().is_available()` returns False
-- [ ] `test_fallback_skips_unavailable_providers` — mark Groq+OpenAI unavailable; only Anthropic available; verify Anthropic provider is called
-- [ ] `test_fallback_retries_on_rate_limit` — first provider raises `LLMRateLimitError`; second returns success; assert result from second
-- [ ] `test_fallback_raises_last_error_when_all_fail` — all providers raise; assert `LLMRateLimitError` propagates
-- [ ] `test_anthropic_json_mode_injects_system_prompt` — capture `system` arg to mocked `messages.create`; assert it contains `"valid JSON object"`
-- [ ] `test_anthropic_splits_system_messages` — `CompletionRequest` with 2 `role="system"` messages → assert they're concatenated into one `system` string
-- [ ] `test_groq_json_mode_passes_response_format` — capture kwargs to mocked `chat.completions.create`; assert `response_format == {"type": "json_object"}`
+- [x] `test_registry_resolves_prefixed_spec` — `resolve("groq:llama-3.3-70b-versatile")` returns (GroqProvider, "llama-3.3-70b-versatile")
+- [x] `test_registry_resolves_bare_spec_defaults_to_groq` — back-compat
+- [x] `test_registry_raises_on_unknown_provider` — `resolve("foobar:x")` raises ValueError
+- [x] `test_default_chain_env_override` — set `AGENTMARKET_LLM_DEFAULT_CHAIN="openai:gpt-4o-mini"`, assert `DEFAULT_CHAIN == ["openai:gpt-4o-mini"]`
+- [x] `test_provider_unavailable_when_sdk_missing` — patch `groq` as un-importable; `GroqProvider().is_available()` returns False
+- [x] `test_provider_unavailable_when_key_missing` — `monkeypatch.delenv("GROQ_API_KEY")`, `GroqProvider().is_available()` returns False
+- [x] `test_fallback_skips_unavailable_providers` — mark Groq+OpenAI unavailable; only Anthropic available; verify Anthropic provider is called
+- [x] `test_fallback_retries_on_rate_limit` — first provider raises `LLMRateLimitError`; second returns success; assert result from second
+- [x] `test_fallback_raises_last_error_when_all_fail` — all providers raise; assert `LLMRateLimitError` propagates
+- [x] `test_anthropic_json_mode_injects_system_prompt` — capture `system` arg to mocked `messages.create`; assert it contains `"valid JSON object"`
+- [x] `test_anthropic_splits_system_messages` — `CompletionRequest` with 2 `role="system"` messages → assert they're concatenated into one `system` string
+- [x] `test_groq_json_mode_passes_response_format` — capture kwargs to mocked `chat.completions.create`; assert `response_format == {"type": "json_object"}`
 
 **New file: `tests/test_agent_model_columns.py`** (use the `registry_db` fixture from `tests/test_bug_regressions.py`):
 
-- [ ] `test_register_agent_persists_model_columns` — register with `model_provider="openai", model_id="gpt-4o-mini"`, GET back, assert both fields present
-- [ ] `test_register_agent_model_columns_nullable` — register without model fields, assert both return None
-- [ ] `test_get_agents_filters_by_provider` — register agent A (groq) + agent B (openai); `get_agents(model_provider="openai")` returns only B
-- [ ] `test_get_agents_no_filter_returns_all` — no filter returns both
-- [ ] `test_builtin_agents_registered_with_groq_provider` — after `server.py` startup (use FastAPI TestClient), fetch agent list, assert every built-in has `model_provider="groq"`
+- [x] `test_register_agent_persists_model_columns` — register with `model_provider="openai", model_id="gpt-4o-mini"`, GET back, assert both fields present
+- [x] `test_register_agent_model_columns_nullable` — register without model fields, assert both return None
+- [x] `test_get_agents_filters_by_provider` — register agent A (groq) + agent B (openai); `get_agents(model_provider="openai")` returns only B
+- [x] `test_get_agents_no_filter_returns_all` — no filter returns both
+- [x] `test_builtin_agents_registered_with_groq_provider` — after `server.py` startup (use FastAPI TestClient), fetch agent list, assert every built-in has `model_provider="groq"`
 
 ### 15.11 Rollout order (strictly sequential)
 

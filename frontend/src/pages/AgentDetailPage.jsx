@@ -144,7 +144,12 @@ export default function AgentDetailPage() {
               <Card.Body>
                 <div className="agent-detail__stats-grid">
                   <div className="agent-detail__stat">
-                    <span className="agent-detail__stat-label">Trust score</span>
+                    <span
+                      className="agent-detail__stat-label agent-detail__trust-help"
+                      title="Trust score (0–100): weighted blend of success rate, dispute rate, call volume, quality ratings, and time-decay. Higher is better."
+                    >
+                      Trust score ⓘ
+                    </span>
                     <span className="agent-detail__stat-value">
                       {typeof agent.trust_score === 'number' ? agent.trust_score.toFixed(2) : '—'}
                     </span>
@@ -169,6 +174,15 @@ export default function AgentDetailPage() {
                     <span className="agent-detail__stat-label">Verified</span>
                     <span className="agent-detail__stat-value">{agent.verified ? 'Yes' : 'No'}</span>
                   </div>
+                  {typeof agent.quality_rating_avg === 'number' && agent.quality_rating_count > 0 && (
+                    <div className="agent-detail__stat">
+                      <span className="agent-detail__stat-label">Quality rating</span>
+                      <span className="agent-detail__stat-value agent-detail__stat-stars">
+                        {'★'.repeat(Math.round(agent.quality_rating_avg))}{'☆'.repeat(5 - Math.round(agent.quality_rating_avg))}
+                        <span className="agent-detail__stat-rating-sub"> {agent.quality_rating_avg.toFixed(1)} ({agent.quality_rating_count})</span>
+                      </span>
+                    </div>
+                  )}
                 </div>
               </Card.Body>
             </Card>
