@@ -33,6 +33,22 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+_SENTRY_DSN = os.environ.get("SENTRY_DSN", "").strip()
+if _SENTRY_DSN:
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.fastapi import FastApiIntegration
+        from sentry_sdk.integrations.starlette import StarletteIntegration
+        sentry_sdk.init(
+            dsn=_SENTRY_DSN,
+            integrations=[StarletteIntegration(), FastApiIntegration()],
+            traces_sample_rate=float(os.environ.get("SENTRY_TRACES_SAMPLE_RATE", "0.1")),
+            environment=os.environ.get("ENVIRONMENT", "production"),
+            send_default_pii=False,
+        )
+    except Exception as _sentry_exc:
+        logging.warning("Sentry init failed: %s", _sentry_exc)
+
 from fastapi import Body, Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -64,6 +80,7 @@ from core import error_codes
 from core.migrate import apply_migrations
 from core.db import DB_PATH as _DB_PATH
 from core import logging_utils
+from core import email as _email
 from main import run as _run_financial
 from core.models import (
     AgentRegisterRequest,
@@ -1635,6 +1652,61 @@ async def limit_body_size(request: Request, call_next):
     return await call_next(request)
 
 
+# ---------------------------------------------------------------------------
+# Prometheus metrics
+# ---------------------------------------------------------------------------
+
+try:
+    from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST, REGISTRY
+    _PROM_AVAILABLE = True
+except ImportError:
+    _PROM_AVAILABLE = False
+
+if _PROM_AVAILABLE:
+    _prom_requests_total = Counter(
+        "agentmarket_http_requests_total",
+        "Total HTTP requests",
+        ["method", "path", "status"],
+    )
+    _prom_request_latency = Histogram(
+        "agentmarket_http_request_duration_seconds",
+        "HTTP request latency",
+        ["method", "path"],
+        buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0],
+    )
+
+    @app.middleware("http")
+    async def prometheus_middleware(request: Request, call_next):
+        path = request.url.path
+        # Don't instrument /metrics itself to avoid recursion noise
+        if path == "/metrics":
+            return await call_next(request)
+        start = time.perf_counter()
+        response = await call_next(request)
+        latency = time.perf_counter() - start
+        _prom_requests_total.labels(
+            method=request.method, path=path, status=response.status_code
+        ).inc()
+        _prom_request_latency.labels(method=request.method, path=path).observe(latency)
+        return response
+
+
+@app.get("/metrics", include_in_schema=False)
+def metrics_endpoint(request: Request):
+    """Prometheus-compatible metrics. Restricted to internal/admin callers."""
+    allow_cidr = os.environ.get("METRICS_ALLOW_CIDR", "127.0.0.1/32")
+    client_ip = request.client.host if request.client else ""
+    try:
+        network = ipaddress.ip_network(allow_cidr, strict=False)
+        if ipaddress.ip_address(client_ip) not in network:
+            raise HTTPException(status_code=403, detail="Forbidden")
+    except ValueError:
+        pass
+    if not _PROM_AVAILABLE:
+        return JSONResponse({"error": "prometheus_client not installed"}, status_code=503)
+    return Response(generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
+
+
 @app.middleware("http")
 async def request_tracing(request: Request, call_next):
     request_id = str(uuid.uuid4())
@@ -1851,6 +1923,18 @@ def _require_admin_ip_allowlist(request: Request) -> None:
     if any(client_ip in network for network in _ADMIN_IP_ALLOWLIST_NETWORKS):
         return
     raise HTTPException(status_code=403, detail="Admin endpoint access denied from this network.")
+
+
+def _get_owner_email(owner_id: str) -> str | None:
+    """Return email address for a user owner_id (user:<uuid>), or None."""
+    if not isinstance(owner_id, str) or not owner_id.startswith("user:"):
+        return None
+    user_id = owner_id[len("user:"):]
+    try:
+        user = _auth.get_user_by_id(user_id)
+        return user.get("email") if user else None
+    except Exception:
+        return None
 
 
 def _caller_has_scope(caller: core_models.CallerContext, required_scope: str) -> bool:
@@ -5363,6 +5447,7 @@ def auth_register(request: Request, body: UserRegisterRequest) -> core_models.Au
         payments.deposit(_starter_wallet["wallet_id"], 100, "Welcome credit — $1.00 to get started")
     except Exception:
         _LOG.warning("Failed to credit starter balance for new user %s", result.get("user_id"))
+    _email.send_welcome(result.get("email", ""), result.get("username", "there"))
     return JSONResponse(content=result, status_code=201)
 
 
@@ -7172,6 +7257,11 @@ def jobs_complete(
                 fee_cents=judge_fee_cents,
             )
             settled = jobs.get_job(job_id) or settled
+        caller_email = _get_owner_email(settled.get("caller_owner_id", ""))
+        if caller_email:
+            _agent_row = registry.get_agent(settled.get("agent_id", ""))
+            _agent_name = (_agent_row or {}).get("name", "agent")
+            _email.send_job_complete(caller_email, job_id, _agent_name, int(settled.get("price_cents") or 0))
         return _job_response(settled, caller), 200
 
     return _run_idempotent_json_response(
@@ -7868,6 +7958,11 @@ def jobs_dispute(
             "lock": lock_summary,
         },
     )
+    # Notify both parties about the dispute
+    for _party_owner_id in {job.get("caller_owner_id"), job.get("agent_owner_id")}:
+        _party_email = _get_owner_email(_party_owner_id or "")
+        if _party_email:
+            _email.send_dispute_opened(_party_email, job_id, created["dispute_id"])
     return JSONResponse(content=_dispute_view(created), status_code=201)
 
 
@@ -7966,6 +8061,10 @@ def disputes_admin_rule(
             actor_owner_id=caller["owner_id"],
             payload={"dispute_id": dispute_id, "outcome": body.outcome},
         )
+        for _party_owner_id in {job.get("caller_owner_id"), job.get("agent_owner_id")}:
+            _party_email = _get_owner_email(_party_owner_id or "")
+            if _party_email:
+                _email.send_dispute_resolved(_party_email, finalized["job_id"], dispute_id, body.outcome)
     return JSONResponse(content={"dispute": _dispute_view(finalized), "settlement": settlement})
 
 
@@ -8662,6 +8761,15 @@ async def stripe_webhook(request: Request) -> JSONResponse:
             return JSONResponse({"received": True, "status": "deposit_failed"}, status_code=500)
 
         _LOG.info("Stripe top-up: %d cents → wallet %s (session %s)", amount_cents, wallet_id, session_id)
+        # Notify wallet owner
+        try:
+            _wallet_row = payments.get_wallet(wallet_id)
+            if _wallet_row:
+                _deposit_email = _get_owner_email(_wallet_row.get("owner_id", ""))
+                if _deposit_email:
+                    _email.send_deposit_confirmed(_deposit_email, int(amount_cents))
+        except Exception:
+            _LOG.warning("Failed to send deposit email for wallet %s", wallet_id)
 
     if event["type"] == "account.updated":
         # Stripe Connect: account completed onboarding or details changed

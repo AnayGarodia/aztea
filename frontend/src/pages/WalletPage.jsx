@@ -5,6 +5,7 @@ import Card from '../ui/Card'
 import Button from '../ui/Button'
 import Badge from '../ui/Badge'
 import EmptyState from '../ui/EmptyState'
+import Skeleton from '../ui/Skeleton'
 import Input from '../ui/Input'
 import Reveal from '../ui/motion/Reveal'
 import SpendChart from '../features/analytics/SpendChart'
@@ -441,7 +442,9 @@ export default function WalletPage() {
                 </Card.Header>
                 <Card.Body>
                   {agentEarnings === null ? (
-                    <p style={{ fontSize: '0.8125rem', color: 'var(--ink-mute)', textAlign: 'center', padding: 'var(--sp-4) 0' }}>Loading…</p>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)', padding: 'var(--sp-2) 0' }}>
+                      {[1,2,3].map(i => <Skeleton key={i} variant="rect" height={44} />)}
+                    </div>
                   ) : agentEarnings.length === 0 ? (
                     <EmptyState
                       title="No agent earnings yet"
@@ -468,7 +471,10 @@ export default function WalletPage() {
                   </Card.Header>
                   <Card.Body>
                     {connectStatus === null ? (
-                      <p style={{ fontSize: '0.8125rem', color: 'var(--ink-mute)', textAlign: 'center', padding: 'var(--sp-3) 0' }}>Loading…</p>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)', padding: 'var(--sp-2) 0' }}>
+                        <Skeleton variant="rect" height={40} />
+                        <Skeleton variant="text" width="60%" />
+                      </div>
                     ) : connectStatus.unavailable ? (
                       <p style={{ fontSize: '0.8125rem', color: 'var(--ink-mute)' }}>Withdrawals not available on this server.</p>
                     ) : !connectStatus.connected ? (
@@ -568,7 +574,9 @@ export default function WalletPage() {
                   </Card.Header>
                   <Card.Body>
                     {withdrawalHistory === null ? (
-                      <p style={{ fontSize: '0.8125rem', color: 'var(--ink-mute)', textAlign: 'center', padding: 'var(--sp-3) 0' }}>Loading…</p>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)', padding: 'var(--sp-2) 0' }}>
+                        {[1,2].map(i => <Skeleton key={i} variant="rect" height={44} />)}
+                      </div>
                     ) : withdrawalHistory.length === 0 ? (
                       <EmptyState
                         title="No withdrawals yet"

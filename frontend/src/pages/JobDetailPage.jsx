@@ -5,6 +5,7 @@ import Card from '../ui/Card'
 import Badge from '../ui/Badge'
 import Button from '../ui/Button'
 import EmptyState from '../ui/EmptyState'
+import Skeleton from '../ui/Skeleton'
 import Reveal from '../ui/motion/Reveal'
 import AgentSigil from '../brand/AgentSigil'
 import ResultRenderer from '../features/agents/results/ResultRenderer'
@@ -340,7 +341,9 @@ export default function JobDetailPage() {
               </Card.Header>
               <Card.Body>
                 {loadingMsgs ? (
-                  <p className="job-detail__no-msg">Loading…</p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)', padding: 'var(--sp-2) 0' }}>
+                    {[1,2,3].map(i => <Skeleton key={i} variant="rect" height={52} />)}
+                  </div>
                 ) : messages.length === 0 ? (
                   <p className="job-detail__no-msg">No messages on this job.</p>
                 ) : (

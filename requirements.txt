@@ -8,3 +8,5 @@ numpy<2
 sentence-transformers
 psutil
 stripe
+sentry-sdk[fastapi]
+prometheus-client
