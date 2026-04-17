@@ -1,0 +1,87 @@
+/* ============================================================
+   Mobile-first responsive overrides — imported in main.jsx
+   Breakpoints: 375px (phone), 768px (tablet), 1024px (small laptop)
+   ============================================================ */
+
+/* --- AgentsPage / agent grid --- */
+@media (max-width: 768px) {
+  .agents-page__scroll { padding: 16px 12px; }
+  .agents-page__grid { grid-template-columns: 1fr !important; }
+  .agents-page__controls { flex-direction: column; gap: 8px; }
+  .agents-page__provider-filters { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 4px; }
+  .agents-register__model-row { flex-direction: column; }
+}
+
+/* --- AgentDetailPage --- */
+@media (max-width: 768px) {
+  .agent-detail__scroll { padding: 16px 12px; }
+  .agent-detail__hero-row { flex-direction: column; gap: 16px; }
+  .agent-detail__price-col { align-self: flex-start; }
+  .agent-detail__invoke-grid { grid-template-columns: 1fr !important; }
+  .agent-detail__stats-grid { grid-template-columns: repeat(2, 1fr) !important; }
+}
+
+/* --- JobsPage --- */
+@media (max-width: 768px) {
+  .jobs-page__scroll { padding: 16px 12px; }
+  .jobs-page__filters { flex-wrap: wrap; gap: 6px; }
+}
+
+/* --- JobDetailPage --- */
+@media (max-width: 768px) {
+  .job-detail__scroll { padding: 16px 12px; }
+  .job-detail__grid { grid-template-columns: 1fr !important; }
+  .job-detail__meta-row { flex-wrap: wrap; gap: 8px; }
+}
+
+/* --- WalletPage --- */
+@media (max-width: 768px) {
+  .wallet__scroll { padding: 16px 12px; }
+  .wallet__cards { grid-template-columns: 1fr !important; }
+  .wallet__actions { flex-direction: column; }
+  .wallet__stripe-row { flex-direction: column; gap: 8px; }
+}
+
+/* --- DashboardPage --- */
+@media (max-width: 768px) {
+  .dashboard__scroll { padding: 16px 12px; }
+  .dashboard__stats { grid-template-columns: repeat(2, 1fr) !important; }
+  .dashboard__hero { flex-direction: column; gap: 12px; }
+}
+
+/* --- SettingsPage --- */
+@media (max-width: 768px) {
+  .settings__scroll { padding: 16px 12px; }
+  .settings__key-row { flex-wrap: wrap; gap: 8px; }
+}
+
+/* --- WorkerPage --- */
+@media (max-width: 768px) {
+  .worker__scroll { padding: 16px 12px; }
+  .worker__controls { flex-direction: column; gap: 8px; }
+}
+
+/* --- AgentCard --- */
+@media (max-width: 480px) {
+  .agent-card { padding: 14px; }
+  .agent-card__meta { gap: 8px; }
+}
+
+/* --- Card --- */
+@media (max-width: 480px) {
+  .card { border-radius: var(--r-lg); }
+}
+
+/* --- Topbar breadcrumbs --- */
+@media (max-width: 480px) {
+  .topbar__crumbs { font-size: 0.75rem; }
+}
+
+/* --- Modal/overlay sizing --- */
+@media (max-width: 480px) {
+  .modal, .dialog {
+    margin: 8px;
+    max-width: calc(100vw - 16px);
+    border-radius: var(--r-xl);
+  }
+}

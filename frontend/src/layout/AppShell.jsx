@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'motion/react'
 import Sidebar from './Sidebar'
 import MobileNav from './MobileNav'
 import Toast from '../ui/Toast'
+import OnboardingWizard from '../features/onboarding/OnboardingWizard'
 import { useMarket } from '../context/MarketContext'
 import './AppShell.css'
 
@@ -29,6 +30,7 @@ export default function AppShell() {
       </div>
       <MobileNav />
       <Toast toast={toast} />
+      <OnboardingWizard />
     </div>
   )
 }

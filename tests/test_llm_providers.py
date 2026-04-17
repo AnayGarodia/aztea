@@ -1,15 +1,10 @@
 """Tests for core/llm/ provider abstraction layer."""
-import importlib
-import os
-import sys
-import types
 import unittest.mock as mock
 
 import pytest
 
 from core.llm.base import CompletionRequest, LLMResponse, Message, Usage
 from core.llm.errors import (
-    LLMAuthError,
     LLMBadResponseError,
     LLMError,
     LLMRateLimitError,
@@ -122,8 +117,9 @@ def test_anthropic_provider_unavailable_when_key_missing(monkeypatch):
 # run_with_fallback()
 # ---------------------------------------------------------------------------
 
-def _make_mock_provider(name: str, available: bool = True, response: LLMResponse | None = None,
-                         raises=None) -> mock.MagicMock:
+def _make_mock_provider(name: str, available: bool = True,
+                        response: LLMResponse | None = None,
+                        raises=None) -> mock.MagicMock:
     p = mock.MagicMock()
     p.name = name
     p.is_available.return_value = available

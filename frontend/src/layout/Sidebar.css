@@ -148,6 +148,27 @@
   gap: 4px;
 }
 
+.sidebar__legal-links {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+}
+
+.sidebar__legal-link {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  text-decoration: none;
+  transition: color 0.15s;
+}
+
+.sidebar__legal-link:hover { color: var(--text-secondary); }
+
+.sidebar__legal-sep {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+}
+
 .sidebar__theme-btn {
   display: flex;
   align-items: center;

@@ -5,6 +5,7 @@ import App from './App'
 import './theme/reset.css'
 import './theme/fonts.css'
 import './theme/tokens.css'
+import './styles/responsive.css'
 
 const SENTRY_DSN = import.meta.env.VITE_SENTRY_DSN
 if (SENTRY_DSN) {

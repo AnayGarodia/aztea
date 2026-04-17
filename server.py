@@ -923,7 +923,7 @@ def _builtin_agent_specs() -> list[dict[str, Any]]:
         {
             "agent_id": _CODEREVIEW_AGENT_ID,
             "name": "Code Review Agent",
-            "description": "Reviews code for bugs, security issues, and maintainability gaps.",
+            "description": "Staff-engineer-quality code review: OWASP Top 10 vulnerabilities with CWE IDs, performance anti-patterns, complexity scoring, test recommendations, and copy-paste-ready fixes.",
             "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_CODEREVIEW_AGENT_ID],
             "price_per_call_usd": 0.01,
             "tags": ["code-review", "security", "developer-tools"],
@@ -984,7 +984,7 @@ def _builtin_agent_specs() -> list[dict[str, Any]]:
         {
             "agent_id": _TEXTINTEL_AGENT_ID,
             "name": "Text Intelligence Agent",
-            "description": "Analyzes text for sentiment, entities, topics, and concise summary outputs.",
+            "description": "Deep NLP analysis: sentiment + objectivity scoring, named entity extraction with roles, logical fallacy detection, rhetorical device identification, bias indicators, and claim extraction. Modes: full | quick | claims | rhetoric.",
             "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_TEXTINTEL_AGENT_ID],
             "price_per_call_usd": 0.01,
             "tags": ["nlp", "sentiment-analysis", "text-analytics"],
@@ -1043,7 +1043,7 @@ def _builtin_agent_specs() -> list[dict[str, Any]]:
         {
             "agent_id": _WIKI_AGENT_ID,
             "name": "Wikipedia Research Agent",
-            "description": "Builds structured research briefs from Wikipedia topics.",
+            "description": "Deep research synthesis from Wikipedia: dense fact extraction, chronological timelines, notable figures, statistics with source notes, controversies and debates, knowledge gaps, and primary sources worth following up. Modes: standard | deep.",
             "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_WIKI_AGENT_ID],
             "price_per_call_usd": 0.01,
             "tags": ["research", "knowledge-base", "wikipedia"],
@@ -1090,7 +1090,7 @@ def _builtin_agent_specs() -> list[dict[str, Any]]:
         {
             "agent_id": _NEGOTIATION_AGENT_ID,
             "name": "Negotiation Strategist Agent",
-            "description": "Generates practical negotiation playbooks and fallback strategies.",
+            "description": "Harvard-method negotiation strategy: ZOPA/BATNA analysis, power dynamics scoring, verbatim scripts, concession sequencing plan, tactic counterplay, and timeline leverage. Grounded in Fisher & Ury and behavioral economics.",
             "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_NEGOTIATION_AGENT_ID],
             "price_per_call_usd": 0.01,
             "tags": ["negotiation", "strategy", "operations"],
@@ -1147,7 +1147,7 @@ def _builtin_agent_specs() -> list[dict[str, Any]]:
         {
             "agent_id": _SCENARIO_AGENT_ID,
             "name": "Scenario Simulator Agent",
-            "description": "Simulates strategic scenarios and recommends execution plans.",
+            "description": "5-scenario strategic foresight (crash/downside/base/upside/moonshot) with calibrated probabilities, sensitivity analysis, pre-mortem, monitoring dashboard, and early signal detection. GBN/Shell methodology.",
             "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_SCENARIO_AGENT_ID],
             "price_per_call_usd": 0.01,
             "tags": ["forecasting", "strategy", "decision-making"],
@@ -1206,7 +1206,7 @@ def _builtin_agent_specs() -> list[dict[str, Any]]:
         {
             "agent_id": _PRODUCT_AGENT_ID,
             "name": "Product Strategy Lab Agent",
-            "description": "Converts product ideas into strategic roadmaps and test plans.",
+            "description": "VP-level product strategy: Jobs To Be Done analysis, RICE-scored roadmap, competitive moat assessment, unit economics (CAC/LTV), hypothesis-driven experiments, and phased go-to-market. Honest about weak spots.",
             "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_PRODUCT_AGENT_ID],
             "price_per_call_usd": 0.01,
             "tags": ["product", "go-to-market", "experimentation"],
@@ -1260,7 +1260,7 @@ def _builtin_agent_specs() -> list[dict[str, Any]]:
         {
             "agent_id": _PORTFOLIO_AGENT_ID,
             "name": "Portfolio Planner Agent",
-            "description": "Builds educational portfolio allocation plans for target outcomes.",
+            "description": "CFA-level portfolio planning: mean-variance optimization concepts, factor exposure, Sharpe/Sortino estimates, inflation-adjusted return ranges, tax efficiency notes, specific ETF examples (VTI/BND/VXUS), phased deployment plan, and realistic red flags.",
             "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_PORTFOLIO_AGENT_ID],
             "price_per_call_usd": 0.01,
             "tags": ["portfolio", "allocation", "wealth-planning"],
@@ -2845,18 +2845,28 @@ def _validate_outbound_url(target_url: str, field_name: str) -> str:
     if _ALLOW_PRIVATE_OUTBOUND_URLS:
         return normalized
 
+    # Reject URL-encoded characters in the hostname (e.g. 127%2E0%2E0%2E1 or %00 null-byte tricks)
+    from urllib.parse import unquote as _url_unquote
+    if host != _url_unquote(host):
+        raise ValueError(f"{field_name} hostname must not contain percent-encoded characters.")
+
     if host == "localhost" or host.endswith(".localhost"):
         raise ValueError(f"{field_name} cannot target localhost unless ALLOW_PRIVATE_OUTBOUND_URLS=1.")
 
     def _is_disallowed_ip(ip_value: ipaddress._BaseAddress) -> bool:
-        return (
+        if (
             ip_value.is_private
             or ip_value.is_loopback
             or ip_value.is_link_local
             or ip_value.is_reserved
             or ip_value.is_multicast
             or ip_value.is_unspecified
-        )
+        ):
+            return True
+        # Block IPv4-mapped IPv6 addresses (e.g. ::ffff:127.0.0.1)
+        if isinstance(ip_value, ipaddress.IPv6Address) and ip_value.ipv4_mapped is not None:
+            return _is_disallowed_ip(ip_value.ipv4_mapped)
+        return False
 
     try:
         ip = ipaddress.ip_address(host)
@@ -5607,7 +5617,7 @@ def _invoke_financial_agent(body: FinancialRequest) -> dict:
 
 
 def _invoke_code_review_agent(body: CodeReviewRequest) -> dict:
-    return agent_codereview.run(body.code, body.language, body.focus)
+    return agent_codereview.run(body.code, body.language, body.focus, getattr(body, "context", ""))
 
 
 def _invoke_text_intel_agent(body: TextIntelRequest) -> dict:
@@ -5615,7 +5625,7 @@ def _invoke_text_intel_agent(body: TextIntelRequest) -> dict:
 
 
 def _invoke_wiki_agent(body: WikiRequest) -> dict:
-    return agent_wiki.run(body.topic)
+    return agent_wiki.run(body.topic, depth=body.depth)
 
 
 def _invoke_negotiation_agent(body: NegotiationRequest) -> dict:
@@ -5624,6 +5634,7 @@ def _invoke_negotiation_agent(body: NegotiationRequest) -> dict:
         counterparty_profile=body.counterparty_profile,
         constraints=_coerce_string_list(body.constraints),
         context=body.context,
+        style=getattr(body, "style", "principled"),
     )
 
 
@@ -5633,6 +5644,7 @@ def _invoke_scenario_agent(body: ScenarioRequest) -> dict:
         assumptions=body.assumptions,
         horizon=body.horizon,
         risk_tolerance=body.risk_tolerance,
+        key_variables=getattr(body, "key_variables", None),
     )
 
 
@@ -5642,6 +5654,7 @@ def _invoke_product_strategy_agent(body: ProductStrategyRequest) -> dict:
         target_users=body.target_users,
         market_context=body.market_context,
         horizon_quarters=body.horizon_quarters,
+        stage=getattr(body, "stage", "seed"),
     )
 
 
@@ -5651,6 +5664,8 @@ def _invoke_portfolio_agent(body: PortfolioRequest) -> dict:
         risk_profile=body.risk_profile,
         time_horizon_years=body.time_horizon_years,
         capital_usd=body.capital_usd,
+        existing_holdings=getattr(body, "existing_holdings", ""),
+        constraints=getattr(body, "constraints", ""),
     )
 
 

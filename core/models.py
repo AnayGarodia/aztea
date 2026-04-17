@@ -95,6 +95,7 @@ class CodeReviewRequest(BaseModel):
     code: str
     language: str = "auto"
     focus: str = "all"
+    context: str = ""
 
     @field_validator("code")
     @classmethod
@@ -135,15 +136,16 @@ class TextIntelRequest(BaseModel):
     @field_validator("mode")
     @classmethod
     def mode_valid(cls, v):
-        if v not in ("full", "quick"):
-            raise ValueError("mode must be 'full' or 'quick'")
+        if v not in ("full", "quick", "claims", "rhetoric"):
+            raise ValueError("mode must be one of: full, quick, claims, rhetoric")
         return v
 
 
 class WikiRequest(BaseModel):
-    model_config = ConfigDict(json_schema_extra={"example": {"topic": "Capital asset pricing model"}})
+    model_config = ConfigDict(json_schema_extra={"example": {"topic": "Capital asset pricing model", "depth": "standard"}})
 
     topic: str
+    depth: str = "standard"
 
     @field_validator("topic")
     @classmethod
@@ -151,6 +153,13 @@ class WikiRequest(BaseModel):
         if not v.strip():
             raise ValueError("topic must not be empty")
         return v.strip()
+
+    @field_validator("depth")
+    @classmethod
+    def depth_valid(cls, v):
+        if v not in ("standard", "deep"):
+            raise ValueError("depth must be 'standard' or 'deep'")
+        return v
 
 
 class NegotiationRequest(BaseModel):
@@ -169,6 +178,7 @@ class NegotiationRequest(BaseModel):
     counterparty_profile: str = ""
     constraints: list[str] | str = Field(default_factory=list)
     context: str = ""
+    style: str = "principled"
 
     @field_validator("objective")
     @classmethod
@@ -206,6 +216,7 @@ class ScenarioRequest(BaseModel):
     assumptions: str = ""
     horizon: str = "12 months"
     risk_tolerance: str = "balanced"
+    key_variables: list[str] = Field(default_factory=list)
 
     @field_validator("decision")
     @classmethod
@@ -240,6 +251,7 @@ class ProductStrategyRequest(BaseModel):
     target_users: str
     market_context: str = ""
     horizon_quarters: int = 2
+    stage: str = "seed"
 
     @field_validator("product_idea", "target_users")
     @classmethod
@@ -272,6 +284,8 @@ class PortfolioRequest(BaseModel):
     risk_profile: str = "balanced"
     time_horizon_years: int = 5
     capital_usd: float = 100000.0
+    existing_holdings: str = ""
+    constraints: str = ""
 
     @field_validator("investment_goal")
     @classmethod

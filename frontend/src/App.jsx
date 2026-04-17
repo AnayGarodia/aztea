@@ -6,6 +6,8 @@ import AppShell from './layout/AppShell'
 import ErrorBoundary from './ui/ErrorBoundary'
 
 import LandingPage    from './pages/LandingPage'
+import TermsPage      from './pages/TermsPage'
+import PrivacyPage    from './pages/PrivacyPage'
 import DashboardPage  from './pages/DashboardPage'
 import AgentsPage     from './pages/AgentsPage'
 import AgentDetailPage from './pages/AgentDetailPage'
@@ -55,6 +57,8 @@ function AuthedApp() {
             <Route path="/worker"   element={<WorkerPage />} />
             <Route path="/wallet"   element={<WalletPage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/terms"    element={<TermsPage />} />
+            <Route path="/privacy"  element={<PrivacyPage />} />
             <Route path="*"         element={<Navigate to="/overview" replace />} />
           </Route>
         </Routes>
