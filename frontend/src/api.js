@@ -204,12 +204,14 @@ export async function registerAgent(key, data) {
   return body
 }
 
-export async function searchAgents(key, query) {
+export async function searchAgents(key, query, { model_provider } = {}) {
   const trimmed = String(query ?? '').trim()
+  const bodyData = { query: trimmed }
+  if (model_provider) bodyData.model_provider = model_provider
   const { body } = await request('/registry/search', {
     method: 'POST',
     key,
-    body: { query: trimmed },
+    body: bodyData,
   })
   return body
 }

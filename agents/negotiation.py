@@ -21,16 +21,7 @@ Output: {
 import json
 import re
 
-import groq as _groq
-from groq import Groq
-
-_MODELS = [
-    "llama-3.3-70b-versatile",
-    "llama-3.1-70b-versatile",
-    "llama3-70b-8192",
-    "mixtral-8x7b-32768",
-    "llama-3.1-8b-instant",
-]
+from core.llm import CompletionRequest, Message, run_with_fallback
 
 _SYSTEM = (
     "You are an elite negotiations strategist. "
@@ -80,37 +71,24 @@ def run(
     constraints: list[str] | None = None,
     context: str = "",
 ) -> dict:
-    client = Groq()
     safe_constraints = constraints or []
-    messages = [
-        {"role": "system", "content": _SYSTEM},
-        {
-            "role": "user",
-            "content": _USER.format(
-                objective=objective[:_MAX_TEXT_CHARS],
-                counterparty_profile=counterparty_profile[:_MAX_TEXT_CHARS],
-                constraints=json.dumps(safe_constraints)[:_MAX_TEXT_CHARS],
-                context=context[:_MAX_TEXT_CHARS],
-            ),
-        },
-    ]
-    last_err = None
-    for model in _MODELS:
-        try:
-            resp = client.chat.completions.create(
-                model=model,
-                max_tokens=1200,
-                messages=messages,
-            )
-        except _groq.RateLimitError as exc:
-            last_err = exc
-            continue
-        raw = _strip_fences(resp.choices[0].message.content.strip())
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"Model {model} returned non-JSON: {exc}\n\n{raw[:300]}") from exc
-    raise last_err
+    user_content = _USER.format(
+        objective=objective[:_MAX_TEXT_CHARS],
+        counterparty_profile=counterparty_profile[:_MAX_TEXT_CHARS],
+        constraints=json.dumps(safe_constraints)[:_MAX_TEXT_CHARS],
+        context=context[:_MAX_TEXT_CHARS],
+    )
+    resp = run_with_fallback(CompletionRequest(
+        model="",
+        messages=[Message("system", _SYSTEM), Message("user", user_content)],
+        max_tokens=1200,
+        json_mode=True,
+    ))
+    raw = _strip_fences(resp.text)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"LLM returned non-JSON: {exc}\n\n{raw[:300]}") from exc
 
 
 def _strip_fences(text: str) -> str:

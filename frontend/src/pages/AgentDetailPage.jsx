@@ -15,6 +15,7 @@ import TrustGauge from '../features/agents/TrustGauge'
 import { callAgent, createJob } from '../api'
 import { useMarket } from '../context/MarketContext'
 import { ArrowLeft, ArrowUpRight, AlertTriangle } from 'lucide-react'
+import ModelBadge from '../components/ModelBadge'
 import './AgentDetailPage.css'
 
 function fmtPct(value) {
@@ -105,6 +106,9 @@ export default function AgentDetailPage() {
                     {(agent.tags ?? []).length > 0 && (
                       <div className="agent-detail__tags">
                         {agent.tags.map(t => <Pill key={t} size="sm">{t}</Pill>)}
+                        {agent.model_provider && (
+                          <ModelBadge provider={agent.model_provider} modelId={agent.model_id} />
+                        )}
                       </div>
                     )}
                   </div>

@@ -41,6 +41,8 @@ function RegisterDialog({ apiKey, onClose, onSuccess, showToast }) {
     tags: '',
     input_schema_text: '',
     output_schema_text: '',
+    model_provider: '',
+    model_id: '',
   })
   const [loading, setLoading] = useState(false)
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
@@ -63,7 +65,7 @@ function RegisterDialog({ apiKey, onClose, onSuccess, showToast }) {
       const input_schema = parseSchema(form.input_schema_text, 'Input schema')
       const output_schema = parseSchema(form.output_schema_text, 'Output schema')
 
-      await registerAgent(apiKey, {
+      const payload = {
         name: form.name.trim(),
         description: form.description.trim(),
         endpoint_url: form.endpoint_url.trim(),
@@ -71,7 +73,10 @@ function RegisterDialog({ apiKey, onClose, onSuccess, showToast }) {
         tags,
         input_schema,
         output_schema,
-      })
+      }
+      if (form.model_provider) payload.model_provider = form.model_provider
+      if (form.model_id.trim()) payload.model_id = form.model_id.trim()
+      await registerAgent(apiKey, payload)
       showToast?.('Agent registered and listed.', 'success')
       onSuccess()
     } catch (err) {
@@ -157,6 +162,31 @@ function RegisterDialog({ apiKey, onClose, onSuccess, showToast }) {
             style={{ minHeight: 120 }}
           />
 
+          <div className="agents-register__model-row">
+            <div style={{ flex: 1 }}>
+              <label className="input__label">LLM provider (optional)</label>
+              <select
+                className="agents-register__select"
+                value={form.model_provider}
+                onChange={e => set('model_provider', e.target.value)}
+              >
+                <option value="">None / not applicable</option>
+                <option value="groq">Groq</option>
+                <option value="openai">OpenAI</option>
+                <option value="anthropic">Anthropic</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+            <Input
+              label="Model ID (optional)"
+              value={form.model_id}
+              onChange={e => set('model_id', e.target.value)}
+              placeholder="llama-3.3-70b-versatile"
+              maxLength={128}
+              style={{ flex: 2 }}
+            />
+          </div>
+
           <div className="agents-register__actions">
             <Button variant="ghost" type="button" onClick={onClose}>Cancel</Button>
             <Button variant="primary" type="submit" loading={loading}>Register listing</Button>
@@ -186,10 +216,19 @@ function sortAgents(list, sortBy) {
   }
 }
 
+const PROVIDER_FILTERS = [
+  { value: ALL, label: 'All providers' },
+  { value: 'groq', label: 'Groq' },
+  { value: 'openai', label: 'OpenAI' },
+  { value: 'anthropic', label: 'Anthropic' },
+  { value: 'other', label: 'Other' },
+]
+
 export default function AgentsPage() {
   const { agents, loading, apiKey, refresh, showToast } = useMarket()
   const [search, setSearch] = useState('')
   const [activeTag, setActiveTag] = useState(ALL)
+  const [activeProvider, setActiveProvider] = useState(ALL)
   const [sortBy, setSortBy] = useState('trust')
   const [maxPriceCents, setMaxPriceCents] = useState('')
   const [showRegister, setShowRegister] = useState(false)
@@ -210,7 +249,8 @@ export default function AgentsPage() {
     const timer = setTimeout(async () => {
       setSearchLoading(true)
       try {
-        const data = await searchAgents(apiKey, query)
+        const providerParam = activeProvider !== ALL ? activeProvider : undefined
+        const data = await searchAgents(apiKey, query, { model_provider: providerParam })
         if (cancelled) return
         const normalized = (data?.results ?? []).map(item => {
           const matchReasons = Array.isArray(item?.match_reasons)
@@ -229,7 +269,7 @@ export default function AgentsPage() {
     }, 300)
 
     return () => { cancelled = true; clearTimeout(timer) }
-  }, [apiKey, search])
+  }, [apiKey, search, activeProvider])
 
   const allTags = useMemo(() => {
     const s = new Set()
@@ -242,12 +282,13 @@ export default function AgentsPage() {
     const maxCents = maxPriceCents ? parseFloat(maxPriceCents) * 100 : null
     let list = source.filter(a => {
       if (activeTag !== ALL && !(a.tags ?? []).includes(activeTag)) return false
+      if (activeProvider !== ALL && a.model_provider !== activeProvider) return false
       if (maxCents != null && (a.price_per_call_usd ?? 0) * 100 > maxCents) return false
       return true
     })
     if (!search.trim()) list = sortAgents(list, sortBy)
     return list
-  }, [agents, search, searchResults, activeTag, sortBy, maxPriceCents])
+  }, [agents, search, searchResults, activeTag, activeProvider, sortBy, maxPriceCents])
 
   // Featured = built-in agents sorted by trust, shown before others when no filter active
   const featured = useMemo(() => {
@@ -258,10 +299,10 @@ export default function AgentsPage() {
       .slice(0, 3)
   }, [agents, search, activeTag, maxPriceCents])
 
-  const isFiltered = Boolean(search || activeTag !== ALL || maxPriceCents)
+  const isFiltered = Boolean(search || activeTag !== ALL || activeProvider !== ALL || maxPriceCents)
   const listLoading = loading || searchLoading
 
-  const clearFilters = () => { setSearch(''); setActiveTag(ALL); setMaxPriceCents('') }
+  const clearFilters = () => { setSearch(''); setActiveTag(ALL); setActiveProvider(ALL); setMaxPriceCents('') }
 
   return (
     <main className="agents-page">
@@ -322,6 +363,13 @@ export default function AgentsPage() {
                 <Pill interactive active={activeTag === ALL} onClick={() => setActiveTag(ALL)}>All tags</Pill>
                 {allTags.map(tag => (
                   <Pill key={tag} interactive active={activeTag === tag} onClick={() => setActiveTag(tag)}>{tag}</Pill>
+                ))}
+              </div>
+              <div className="agents-page__tag-row">
+                {PROVIDER_FILTERS.map(p => (
+                  <Pill key={p.value} interactive active={activeProvider === p.value} onClick={() => setActiveProvider(p.value)}>
+                    {p.label}
+                  </Pill>
                 ))}
               </div>
             </section>

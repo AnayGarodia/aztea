@@ -8,15 +8,9 @@ import json
 import os
 from typing import Any
 
-from groq import Groq
-
 from core import disputes
-
-_MODELS = [
-    "llama-3.3-70b-versatile",
-    "meta-llama/llama-4-scout-17b-16e-instruct",
-]
-_QUALITY_MODEL = "llama-3.3-70b-versatile"
+from core.llm import CompletionRequest, Message, run_with_fallback
+from core.llm.registry import DEFAULT_CHAIN
 
 _SYSTEM_PROMPT = (
     "You are an impartial arbiter. Analyze the dispute evidence and return strict JSON "
@@ -113,27 +107,30 @@ def _local_dispute_fallback(context: dict) -> dict:
     return {"verdict": verdict, "reasoning": fallback_reason, "confidence": confidence}
 
 
-def _judge_once(client: Groq, model: str, context: dict) -> dict:
-    completion = client.chat.completions.create(
-        model=model,
-        temperature=0.0,
-        response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": _build_user_prompt(context)},
-        ],
+def _judge_once(model_chain: list[str], context: dict) -> dict:
+    llm_resp = run_with_fallback(
+        CompletionRequest(
+            model="",
+            messages=[
+                Message("system", _SYSTEM_PROMPT),
+                Message("user", _build_user_prompt(context)),
+            ],
+            temperature=0.0,
+            json_mode=True,
+        ),
+        model_chain=model_chain,
     )
-    content = (completion.choices[0].message.content or "").strip()
+    content = llm_resp.text
     if not content:
-        raise RuntimeError(f"Judge model '{model}' returned empty content.")
+        raise RuntimeError("Judge returned empty content.")
     try:
         parsed = json.loads(content)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Judge model '{model}' returned non-JSON content.") from exc
+        raise RuntimeError("Judge returned non-JSON content.") from exc
     verdict = _normalize_verdict(parsed.get("verdict"))
     reasoning = str(parsed.get("reasoning") or "").strip()
     if not reasoning:
-        raise RuntimeError(f"Judge model '{model}' returned empty reasoning.")
+        raise RuntimeError("Judge returned empty reasoning.")
     confidence_raw = parsed.get("confidence", 0.0)
     try:
         confidence = float(confidence_raw)
@@ -144,7 +141,7 @@ def _judge_once(client: Groq, model: str, context: dict) -> dict:
         "verdict": verdict,
         "reasoning": reasoning,
         "confidence": confidence,
-        "model": model,
+        "model": f"{llm_resp.provider}:{llm_resp.model}",
     }
 
 
@@ -162,9 +159,8 @@ def run_judgment(dispute_id: str) -> dict:
         }
 
     disputes.set_dispute_status(dispute_id, "judging")
-    api_key = os.environ.get("GROQ_API_KEY", "").strip()
     live_enabled = _env_enabled("AGENTMARKET_ENABLE_LIVE_DISPUTE_JUDGES")
-    if not api_key or not live_enabled:
+    if not live_enabled:
         fallback = _local_dispute_fallback(context)
         fallback_verdict = fallback["verdict"]
         fallback_reason = fallback["reasoning"]
@@ -189,9 +185,10 @@ def run_judgment(dispute_id: str) -> dict:
             "judgments": disputes.get_judgments(dispute_id),
         }
 
-    client = Groq(api_key=api_key)
+    primary_chain = list(DEFAULT_CHAIN)
+    secondary_chain = DEFAULT_CHAIN[1:] + DEFAULT_CHAIN[:1]
 
-    primary = _judge_once(client, _MODELS[0], context)
+    primary = _judge_once(primary_chain, context)
     disputes.record_judgment(
         dispute_id,
         judge_kind="llm_primary",
@@ -200,7 +197,7 @@ def run_judgment(dispute_id: str) -> dict:
         model=primary["model"],
     )
 
-    secondary = _judge_once(client, _MODELS[1], context)
+    secondary = _judge_once(secondary_chain, context)
     disputes.record_judgment(
         dispute_id,
         judge_kind="llm_secondary",
@@ -275,13 +272,6 @@ def run_quality_judgment(
             output_payload=output_payload,
             agent_description=agent_description,
         )
-    api_key = os.environ.get("GROQ_API_KEY", "").strip()
-    if not api_key:
-        return _local_quality_fallback(
-            input_payload=input_payload,
-            output_payload=output_payload,
-            agent_description=agent_description,
-        )
 
     user_prompt = json.dumps(
         {
@@ -292,17 +282,23 @@ def run_quality_judgment(
         sort_keys=True,
         ensure_ascii=True,
     )
-    client = Groq(api_key=api_key)
-    completion = client.chat.completions.create(
-        model=_QUALITY_MODEL,
-        temperature=0.0,
-        response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": _QUALITY_SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ],
-    )
-    content = (completion.choices[0].message.content or "").strip()
+    try:
+        llm_resp = run_with_fallback(CompletionRequest(
+            model="",
+            messages=[
+                Message("system", _QUALITY_SYSTEM_PROMPT),
+                Message("user", user_prompt),
+            ],
+            temperature=0.0,
+            json_mode=True,
+        ))
+        content = llm_resp.text
+    except Exception:
+        return _local_quality_fallback(
+            input_payload=input_payload,
+            output_payload=output_payload,
+            agent_description=agent_description,
+        )
     if not content:
         return _local_quality_fallback(
             input_payload=input_payload,

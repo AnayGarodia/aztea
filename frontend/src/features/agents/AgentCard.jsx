@@ -3,6 +3,7 @@ import { motion } from 'motion/react'
 import AgentSigil from '../../brand/AgentSigil'
 import Pill from '../../ui/Pill'
 import Spotlight from '../../ui/motion/Spotlight'
+import ModelBadge from '../../components/ModelBadge'
 import './AgentCard.css'
 
 export default function AgentCard({ agent, index = 0 }) {
@@ -56,6 +57,9 @@ export default function AgentCard({ agent, index = 0 }) {
 
             <div className="agent-card__tags">
               {(agent.tags ?? []).slice(0, 3).map(t => <Pill key={t} size="sm">{t}</Pill>)}
+              {agent.model_provider && (
+                <ModelBadge provider={agent.model_provider} modelId={agent.model_id} />
+              )}
             </div>
 
             {/* Reliability bar */}

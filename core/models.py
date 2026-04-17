@@ -335,6 +335,15 @@ class AgentRegisterRequest(BaseModel):
             "so orchestrators can evaluate quality before hiring."
         ),
     )
+    model_provider: Literal["groq", "openai", "anthropic", "other"] | None = Field(
+        default=None,
+        description="LLM provider used by this agent, if any.",
+    )
+    model_id: str | None = Field(
+        default=None,
+        max_length=128,
+        description="Specific model identifier (e.g. 'llama-3.3-70b-versatile').",
+    )
 
 
 class DepositRequest(BaseModel):
@@ -1232,6 +1241,7 @@ class RegistrySearchRequest(BaseModel):
     max_price_cents: int | None = Field(default=None, ge=0)
     required_input_fields: list[str] | None = None
     respect_caller_trust_min: bool = False
+    model_provider: Literal["groq", "openai", "anthropic", "other"] | None = None
 
     @field_validator("query")
     @classmethod

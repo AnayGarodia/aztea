@@ -1,4 +1,6 @@
 groq
+openai>=1.50
+anthropic>=0.39
 requests
 python-dotenv
 fastapi

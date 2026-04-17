@@ -1415,6 +1415,8 @@ def ensure_builtin_agents_registered() -> None:
                 status="active",
                 owner_id=system_owner_id,
                 embed_listing=False,
+                model_provider="groq",
+                model_id="llama-3.3-70b-versatile",
             )
             continue
         if spec.get("output_examples"):
@@ -5716,6 +5718,8 @@ def registry_register(
             output_examples=body.output_examples or None,
             verified=verified,
             owner_id=caller["owner_id"],
+            model_provider=body.model_provider,
+            model_id=body.model_id,
         )
         agent = registry.get_agent_with_reputation(agent_id) or registry.get_agent(agent_id)
     except ValueError as e:
@@ -6196,9 +6200,17 @@ def registry_list(
     tag: str | None = None,
     rank_by: str | None = None,
     include_reputation: bool = True,
+    model_provider: str | None = None,
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.RegistryAgentsResponse:
-    agents = registry.get_agents_with_reputation(tag=tag) if include_reputation else registry.get_agents(tag=tag)
+    try:
+        agents = (
+            registry.get_agents_with_reputation(tag=tag, model_provider=model_provider)
+            if include_reputation
+            else registry.get_agents(tag=tag, model_provider=model_provider)
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     agents = _sorted_agents(agents, rank_by=rank_by)
     return JSONResponse(content={"agents": [_agent_response(a, caller) for a in agents], "count": len(agents)})
 
@@ -6230,6 +6242,7 @@ def registry_search(
             max_price_cents=body.max_price_cents,
             required_input_fields=body.required_input_fields,
             caller_trust=caller_trust,
+            model_provider=body.model_provider,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

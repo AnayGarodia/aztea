@@ -120,7 +120,10 @@ def _create_agents_table(conn: sqlite3.Connection, table_name: str = "agents") -
                 status              TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','suspended','banned')),
                 trust_decay_multiplier REAL NOT NULL DEFAULT 1.0,
                 last_decay_at       TEXT NOT NULL DEFAULT '{_CANONICAL_CREATED_AT}',
-                created_at          TEXT NOT NULL
+                created_at          TEXT NOT NULL,
+                model_provider      TEXT,
+                model_id            TEXT,
+                price_per_call_cents INTEGER
             )
         """)
 
@@ -145,6 +148,12 @@ def _ensure_agents_indexes(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_agent_embeddings_embedded_at ON agent_embeddings(embedded_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_agents_model_provider ON agents(model_provider)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_agents_price_cents ON agents(price_per_call_cents)"
     )
 
 
@@ -623,6 +632,8 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     d["status"] = status if status in {"active", "suspended", "banned"} else "active"
     d["trust_decay_multiplier"] = _to_non_negative_float(d.get("trust_decay_multiplier"), default=1.0) or 1.0
     d["last_decay_at"] = str(d.get("last_decay_at") or _CANONICAL_CREATED_AT)
+    d["model_provider"] = str(d.get("model_provider") or "").strip() or None
+    d["model_id"] = str(d.get("model_id") or "").strip() or None
 
     total = d["total_calls"]
     successful = d.pop("successful_calls")
@@ -652,6 +663,8 @@ def register_agent(
     trust_decay_multiplier: float = 1.0,
     owner_id: str | None = None,
     embed_listing: bool = True,
+    model_provider: str | None = None,
+    model_id: str | None = None,
 ) -> str:
     """
     Insert a new agent listing. Returns the agent_id.
@@ -710,8 +723,9 @@ def register_agent(
                  price_per_call_usd, tags, input_schema, output_schema, output_verifier_url,
                  output_examples, verified, endpoint_health_status, endpoint_consecutive_failures,
                  endpoint_last_checked_at, endpoint_last_error,
-                 internal_only, status, trust_decay_multiplier, last_decay_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, ?, ?, ?, ?, ?)
+                 internal_only, status, trust_decay_multiplier, last_decay_at, created_at,
+                 model_provider, model_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 aid,
@@ -732,6 +746,8 @@ def register_agent(
                 normalized_decay_multiplier,
                 created_at,
                 created_at,
+                str(model_provider).strip() if model_provider else None,
+                str(model_id).strip()[:128] if model_id else None,
             ),
         )
         if embed_listing and embedding_vector is not None:
@@ -769,11 +785,19 @@ def update_call_stats(agent_id: str, latency_ms: float, success: bool) -> None:
 # Read operations
 # ---------------------------------------------------------------------------
 
-def get_agents(tag: str | None = None, include_internal: bool = False, include_banned: bool = False) -> list:
+def get_agents(
+    tag: str | None = None,
+    include_internal: bool = False,
+    include_banned: bool = False,
+    model_provider: str | None = None,
+) -> list:
     """
-    Return all agent listings, optionally filtered by tag.
+    Return all agent listings, optionally filtered by tag or model_provider.
     Tag matching uses exact JSON-array membership to avoid substring false-positives.
     """
+    _VALID_MODEL_PROVIDERS = {"groq", "openai", "anthropic", "other"}
+    if model_provider is not None and model_provider not in _VALID_MODEL_PROVIDERS:
+        raise ValueError(f"model_provider must be one of: {', '.join(sorted(_VALID_MODEL_PROVIDERS))}.")
     with _conn() as conn:
         where_clauses: list[str] = []
         params: list[Any] = []
@@ -784,6 +808,9 @@ def get_agents(tag: str | None = None, include_internal: bool = False, include_b
         if tag:
             where_clauses.append("tags LIKE ?")
             params.append(f'%"{tag}"%')
+        if model_provider:
+            where_clauses.append("model_provider = ?")
+            params.append(model_provider)
         where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
         rows = conn.execute(
             f"SELECT * FROM agents {where_sql} ORDER BY created_at",
@@ -1141,6 +1168,7 @@ def search_agents(
     max_price_cents: int | None = None,
     required_input_fields: list[str] | None = None,
     caller_trust: float | None = None,
+    model_provider: str | None = None,
 ) -> list[dict]:
     normalized_query = str(query or "").strip()
     if not normalized_query:
@@ -1149,6 +1177,9 @@ def search_agents(
         raise ValueError("limit must be >= 1.")
     if max_price_cents is not None and max_price_cents < 0:
         raise ValueError("max_price_cents must be >= 0 when provided.")
+    _VALID_MODEL_PROVIDERS = {"groq", "openai", "anthropic", "other"}
+    if model_provider is not None and model_provider not in _VALID_MODEL_PROVIDERS:
+        raise ValueError(f"model_provider must be one of: {', '.join(sorted(_VALID_MODEL_PROVIDERS))}.")
 
     trust_floor = _normalize_min_trust(min_trust)
     normalized_caller_trust = None
@@ -1171,6 +1202,9 @@ def search_agents(
     for agent in agents:
         agent_id = str(agent.get("agent_id") or "").strip()
         if not agent_id:
+            continue
+
+        if model_provider and agent.get("model_provider") != model_provider:
             continue
 
         price_cents = _price_usd_to_cents(agent.get("price_per_call_usd"))
@@ -1281,11 +1315,11 @@ def search_agents(
     ]
 
 
-def get_agents_with_reputation(tag: str | None = None) -> list:
+def get_agents_with_reputation(tag: str | None = None, model_provider: str | None = None) -> list:
     """Return listings enriched with trust/reputation fields for ranking."""
     from core import reputation
 
-    return reputation.enrich_agent_records(get_agents(tag=tag))
+    return reputation.enrich_agent_records(get_agents(tag=tag, model_provider=model_provider))
 
 
 def get_agent_with_reputation(agent_id: str) -> dict | None:

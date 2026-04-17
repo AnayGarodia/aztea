@@ -26,16 +26,7 @@ Output: {
 import json
 import re
 
-import groq as _groq
-from groq import Groq
-
-_MODELS = [
-    "llama-3.3-70b-versatile",
-    "llama-3.1-70b-versatile",
-    "llama3-70b-8192",
-    "mixtral-8x7b-32768",
-    "llama-3.1-8b-instant",
-]
+from core.llm import CompletionRequest, Message, run_with_fallback
 
 _SYSTEM = (
     "You are a strategic scenario planner. "
@@ -83,36 +74,23 @@ def run(
     horizon: str = "12 months",
     risk_tolerance: str = "balanced",
 ) -> dict:
-    client = Groq()
-    messages = [
-        {"role": "system", "content": _SYSTEM},
-        {
-            "role": "user",
-            "content": _USER.format(
-                decision=decision[:_MAX_TEXT_CHARS],
-                assumptions=assumptions[:_MAX_TEXT_CHARS],
-                horizon=horizon[:200],
-                risk_tolerance=risk_tolerance[:100],
-            ),
-        },
-    ]
-    last_err = None
-    for model in _MODELS:
-        try:
-            resp = client.chat.completions.create(
-                model=model,
-                max_tokens=1400,
-                messages=messages,
-            )
-        except _groq.RateLimitError as exc:
-            last_err = exc
-            continue
-        raw = _strip_fences(resp.choices[0].message.content.strip())
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"Model {model} returned non-JSON: {exc}\n\n{raw[:300]}") from exc
-    raise last_err
+    user_content = _USER.format(
+        decision=decision[:_MAX_TEXT_CHARS],
+        assumptions=assumptions[:_MAX_TEXT_CHARS],
+        horizon=horizon[:200],
+        risk_tolerance=risk_tolerance[:100],
+    )
+    resp = run_with_fallback(CompletionRequest(
+        model="",
+        messages=[Message("system", _SYSTEM), Message("user", user_content)],
+        max_tokens=1400,
+        json_mode=True,
+    ))
+    raw = _strip_fences(resp.text)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+            raise ValueError(f"LLM returned non-JSON: {exc}\n\n{raw[:300]}") from exc
 
 
 def _strip_fences(text: str) -> str:

@@ -1458,6 +1458,16 @@ export interface components {
             output_examples?: {
                 [key: string]: components["schemas"]["JsonValue"];
             }[] | null;
+            /**
+             * Model Provider
+             * @description LLM provider used by this agent, if any.
+             */
+            model_provider?: ("groq" | "openai" | "anthropic" | "other") | null;
+            /**
+             * Model Id
+             * @description Specific model identifier (e.g. 'llama-3.3-70b-versatile').
+             */
+            model_id?: string | null;
         };
         /** AgentResponse */
         AgentResponse: {
@@ -2459,6 +2469,8 @@ export interface components {
              * @default false
              */
             respect_caller_trust_min: boolean;
+            /** Model Provider */
+            model_provider?: ("groq" | "openai" | "anthropic" | "other") | null;
         };
         /** RegistrySearchResponse */
         RegistrySearchResponse: {
@@ -4208,6 +4220,7 @@ export interface operations {
                 tag?: string | null;
                 rank_by?: string | null;
                 include_reputation?: boolean;
+                model_provider?: string | null;
             };
             header?: never;
             path?: never;

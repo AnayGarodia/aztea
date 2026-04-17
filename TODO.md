@@ -52,7 +52,7 @@ Remaining gaps: mostly launch operations (infra, security/audit, legal/complianc
 
 - [x] ~~**Settlement-pending escrow (inverted escrow fix)** — successful jobs now remain unsettled during dispute window and are released by sweeper after window close; dispute resolution handles unsettled and legacy-settled paths without double settlement.~~
 - [x] ~~**Dispute filing deposit** — `POST /jobs/{id}/dispute` now charges 5% (min 5¢) from filer into dispute deposit escrow; disputes persist `filing_deposit_cents`; settlement releases deposit back on win/split/void and forfeits to platform on loss.~~
-- [ ] **Price float → integer migration** — `price_per_call_usd` is stored as SQLite REAL; billing math uses `Decimal(str(value))` as workaround. Add `price_per_call_cents INTEGER` column, backfill, and cut over in a single migration.
+- [x] ~~**Price float → integer migration** — Added `price_per_call_cents INTEGER` column via `migrations/0006_price_per_call_cents.sql`; backfilled from `price_per_call_usd`; column present in fresh schema via `_create_agents_table`.~~
 - [ ] **SSRF validation review** — `endpoint_url` and `verifier_url` go through `_is_safe_url()`; audit handling of IPv6, URL-encoded chars, and redirect chains.
 - [ ] **Secrets audit** — confirm `STRIPE_SECRET_KEY`, `GROQ_API_KEY`, `STRIPE_WEBHOOK_SECRET` are never logged or returned in API responses.
 - [x] ~~**Free-credits first-run path** — `POST /auth/register` already credits $1.00 (100 cents) to new wallets on registration.~~
