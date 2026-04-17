@@ -236,3 +236,437 @@ Remaining gaps: mostly launch operations (infra, security/audit, legal/complianc
 - [ ] At least 5 working, benchmarked built-in agents with output examples
 - [x] ~~`callback_url` end-to-end tested with HMAC verification~~
 - [ ] Load test: 50 concurrent job creates + completes; no 500s, ledger invariant holds
+
+---
+
+## 15. Model-Agnostic LLM Layer (P1 — for Codex)
+
+### 15.0 Goal
+
+Replace Groq hardcoding across all 9 LLM call sites with a provider-agnostic layer. Ship with 3 working providers (Groq, OpenAI, Anthropic). Let third-party agents declare their model; surface it in the marketplace. Preserve all current behavior (latency, refund semantics, fallback on rate limit) — this is a refactor, not a feature redesign.
+
+Lock-in points today:
+- 7 built-in agents (`agents/*.py`) each do `from groq import Groq` + hold a `_MODELS` list + `except _groq.RateLimitError`
+- 2 call sites in `core/judges.py` (dispute judge + quality judge)
+- `response_format={"type":"json_object"}` at `core/judges.py:120` is OpenAI/Groq-only; Anthropic rejects it
+- No `model_provider` / `model_id` columns on the `agents` table
+- `GROQ_API_KEY` is the only LLM key in `.env.example`
+
+### 15.1 Create `core/llm/` package
+
+**File tree to create:**
+
+```
+core/llm/
+  __init__.py
+  base.py
+  errors.py
+  registry.py
+  fallback.py
+  providers/
+    __init__.py
+    groq_provider.py
+    openai_provider.py
+    anthropic_provider.py
+```
+
+**`core/llm/base.py`** — pure dataclasses, no SDK imports:
+
+```python
+from __future__ import annotations
+from dataclasses import dataclass, field
+from typing import Protocol, Literal
+
+Role = Literal["system", "user", "assistant"]
+
+@dataclass
+class Message:
+    role: Role
+    content: str
+
+@dataclass
+class CompletionRequest:
+    model: str              # bare model id; chain overrides this
+    messages: list[Message]
+    temperature: float = 0.0
+    max_tokens: int | None = None
+    json_mode: bool = False  # True → adapters return valid JSON; each adapter translates differently
+    stop: list[str] | None = None
+    timeout_seconds: float = 60.0
+
+@dataclass
+class Usage:
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+
+@dataclass
+class LLMResponse:
+    text: str
+    model: str
+    provider: str
+    usage: Usage = field(default_factory=Usage)
+    finish_reason: str = "stop"
+
+class LLMProvider(Protocol):
+    name: str
+    def is_available(self) -> bool: ...
+    def complete(self, req: CompletionRequest) -> LLMResponse: ...
+```
+
+**`core/llm/errors.py`**:
+
+```python
+class LLMError(Exception):
+    def __init__(self, provider: str, model: str, message: str, cause: Exception | None = None):
+        super().__init__(f"[{provider}:{model}] {message}")
+        self.provider = provider
+        self.model = model
+        self.cause = cause
+
+class LLMRateLimitError(LLMError):
+    retry_after_seconds: int | None = None
+
+class LLMTimeoutError(LLMError): ...
+class LLMAuthError(LLMError): ...
+class LLMBadResponseError(LLMError): ...  # non-JSON when json_mode=True
+```
+
+**`core/llm/registry.py`**:
+
+```python
+PROVIDERS: dict[str, LLMProvider] = {}  # "groq" -> GroqProvider(), etc. — populated at module load
+
+def get_provider(name: str) -> LLMProvider:
+    """Raises KeyError if provider name not registered."""
+
+def resolve(spec: str) -> tuple[LLMProvider, str]:
+    """'groq:llama-3.3-70b-versatile' -> (GroqProvider, 'llama-3.3-70b-versatile')
+    Bare 'llama-3.3-70b-versatile' -> (GroqProvider, 'llama-3.3-70b-versatile') for back-compat.
+    Raises ValueError on unknown provider prefix."""
+
+DEFAULT_CHAIN: list[str]
+# Read from AGENTMARKET_LLM_DEFAULT_CHAIN env var (comma-separated "<provider>:<model>" specs).
+# Falls back to: ["groq:llama-3.3-70b-versatile", "openai:gpt-4o-mini", "anthropic:claude-sonnet-4-6"]
+```
+
+**`core/llm/fallback.py`**:
+
+```python
+def run_with_fallback(
+    req_template: CompletionRequest,
+    model_chain: list[str] | None = None,
+) -> LLMResponse:
+    """Iterate model_chain (default: registry.DEFAULT_CHAIN).
+    For each spec: resolve to (provider, model); skip if provider.is_available() is False;
+    catch LLMRateLimitError + LLMTimeoutError + HTTP 5xx → try next.
+    Return first success. Raise last LLMError if all fail.
+    req_template.model is IGNORED — the chain drives model selection.
+    """
+```
+
+**`core/llm/__init__.py`** re-exports:
+
+```python
+from .base import CompletionRequest, LLMResponse, Message, Usage, LLMProvider
+from .errors import LLMError, LLMRateLimitError, LLMTimeoutError, LLMAuthError, LLMBadResponseError
+from .fallback import run_with_fallback
+from .registry import resolve, get_provider, DEFAULT_CHAIN
+```
+
+### 15.2 Implement provider adapters
+
+Each adapter **lazy-imports its SDK inside `__init__`** and sets `self._available = False` on `ImportError` or missing API key. Never raise at module import time.
+
+**`core/llm/providers/groq_provider.py`** (GroqProvider):
+
+- `is_available()`: returns False if `groq` SDK not installed OR `GROQ_API_KEY` env var empty
+- `complete(req)`:
+  - Maps `CompletionRequest` → `client.chat.completions.create(model=req.model, messages=[...], temperature=..., max_tokens=..., timeout=req.timeout_seconds)`
+  - If `req.json_mode=True`: add `response_format={"type": "json_object"}` kwarg
+  - Catches `groq.RateLimitError` → raise `LLMRateLimitError`
+  - Catches `groq.APITimeoutError` → raise `LLMTimeoutError`
+  - Returns `LLMResponse(text=completion.choices[0].message.content.strip(), model=req.model, provider="groq", usage=Usage(...))`
+
+**`core/llm/providers/openai_provider.py`** (OpenAIProvider):
+
+- Same structure as Groq. OpenAI SDK: `openai.OpenAI(api_key=...).chat.completions.create(...)`
+- `response_format={"type":"json_object"}` supported natively when `json_mode=True`
+- Catches `openai.RateLimitError`, `openai.APITimeoutError`, `openai.AuthenticationError`
+
+**`core/llm/providers/anthropic_provider.py`** (AnthropicProvider):
+
+Anthropic's API differs in 3 critical ways:
+
+1. **No `response_format`**. When `req.json_mode=True`, prepend to the system message: `"You must respond with a single valid JSON object and nothing else. No prose, no markdown fences."` If the response text is not parseable as JSON, raise `LLMBadResponseError` (don't silently pass).
+
+2. **System messages are a separate field**. Split `req.messages`:
+   - All `role="system"` messages → concatenate into a single `system` string (newline-separated)
+   - Remaining messages → map as-is to `messages` list
+   - If no system messages, omit the `system` kwarg entirely
+
+3. **`max_tokens` is required**. If `req.max_tokens is None`, default to 4096.
+
+API call: `anthropic.Anthropic(api_key=...).messages.create(model=..., system=..., messages=..., max_tokens=..., temperature=..., timeout=...)`
+
+Response: `response.content[0].text`, `response.usage.input_tokens`, `response.usage.output_tokens`, `response.stop_reason`
+
+Catches `anthropic.RateLimitError` → `LLMRateLimitError`, `anthropic.APITimeoutError` → `LLMTimeoutError`
+
+### 15.3 Migrate all 9 LLM call sites
+
+Each of the following files currently has this pattern (with minor variations):
+
+```python
+import groq as _groq
+from groq import Groq
+_MODELS = ["llama-3.3-70b-versatile", "llama-3.1-70b-versatile", "llama3-70b-8192", ..., "llama-3.1-8b-instant"]
+
+# in run():
+client = Groq()
+for model in _MODELS:
+    try:
+        resp = client.chat.completions.create(model=model, messages=msgs, ...)
+    except _groq.RateLimitError: continue
+```
+
+Replace with:
+
+```python
+from core.llm import CompletionRequest, Message, run_with_fallback
+
+# in run():
+resp = run_with_fallback(CompletionRequest(
+    model="",          # ignored — chain picks the model
+    messages=[Message("system", _SYSTEM), Message("user", user_prompt)],
+    temperature=0.0,
+    max_tokens=1200,   # keep existing value per file
+    json_mode=True,    # or False — see below
+))
+text = resp.text
+```
+
+**File-by-file checklist:**
+
+- [ ] `agents/negotiation.py` — `json_mode=True` (output is parsed as JSON at line ~108: `return json.loads(raw)`)
+- [ ] `agents/textintel.py` — check whether output is JSON-parsed; set `json_mode` accordingly
+- [ ] `agents/scenario.py` — `json_mode=True`
+- [ ] `agents/codereview.py` — check whether output is JSON-parsed
+- [ ] `agents/wiki.py` — check whether output is JSON-parsed
+- [ ] `agents/portfolio.py` — `json_mode=True`
+- [ ] `agents/product.py` — same pattern
+- [ ] `core/judges.py` — `_judge_once` at line ~116: `json_mode=True`. Preserve the **primary/secondary distinction** by calling `run_with_fallback` twice:
+  - Primary: `model_chain=None` (uses `DEFAULT_CHAIN`)
+  - Secondary: `model_chain=[DEFAULT_CHAIN[1], DEFAULT_CHAIN[2], DEFAULT_CHAIN[0]]` (rotate) so judges use different models whenever possible
+  - Keep `disputes.record_judgment(... model=resp.provider + ":" + resp.model)` so judgment audit trail includes the actual provider used
+- [ ] `core/judges.py` quality judge — same treatment
+
+After each file: **delete the per-file `_MODELS` list and `import groq / from groq import Groq` lines**.
+
+Keep `_SYSTEM`, `_USER` prompt templates, `_strip_fences`, and all other logic unchanged.
+
+### 15.4 Schema migration
+
+**Create `migrations/0002_agent_model_columns.sql`:**
+
+```sql
+-- Add model provider and model ID columns to agents table
+ALTER TABLE agents ADD COLUMN model_provider TEXT;
+ALTER TABLE agents ADD COLUMN model_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_agents_model_provider ON agents(model_provider);
+```
+
+Both columns are nullable — third-party agents that don't use an LLM leave them NULL.
+
+Apply migration: `core/migrate.py` already picks up all `*.sql` files in `migrations/` ordered by name, so this runs automatically on next startup.
+
+### 15.5 Update `core/registry.py`
+
+- `register_agent(name, description, endpoint_url, price_per_call_usd, tags, ..., model_provider=None, model_id=None)` — add two new optional keyword args, insert into new columns
+- `_serialize_agent(row)` — include `model_provider` and `model_id` in the returned dict (return `None` if column not present for back-compat during migration window)
+- `get_agents(status_filter="active", tag=None, model_provider=None)` — if `model_provider` is provided, add `AND model_provider = ?` to the WHERE clause
+- `search_agents(query, limit=10, tag=None, model_provider=None)` — same filter
+
+### 15.6 Update `core/models.py`
+
+Add to `AgentRegisterRequest`:
+
+```python
+from typing import Literal, Optional
+from pydantic import Field
+
+model_provider: Optional[Literal["groq", "openai", "anthropic", "other"]] = None
+model_id: Optional[str] = Field(default=None, max_length=128)
+```
+
+Include both fields in any `AgentResponse` or `AgentSummary` Pydantic models that return agent data.
+
+### 15.7 Update `server.py`
+
+**Built-in agent registrations** (startup block, search for `"Financial Research Agent"`, `"Code Review Agent"`, etc.):
+
+Add `model_provider="groq"` and `model_id="llama-3.3-70b-versatile"` to each `register_agent(...)` call.
+
+**`GET /registry/agents`** route: add `model_provider: Optional[str] = Query(default=None)` parameter, forward to `registry.get_agents(model_provider=model_provider)`.
+
+**`POST /registry/search`** route: add `model_provider` field to the search request body (if it has a Pydantic model) or as a query param; forward to `registry.search_agents(model_provider=model_provider)`.
+
+### 15.8 Frontend changes
+
+**New file: `frontend/src/components/ModelBadge.jsx`**
+
+```jsx
+const PROVIDER_COLORS = {
+  groq:      { background: "#fff4e6", color: "#ad3f00" },
+  openai:    { background: "#e6fbf4", color: "#0a6b4b" },
+  anthropic: { background: "#f3ecff", color: "#4a2a9c" },
+  other:     { background: "#f1f5f9", color: "#334155" },
+};
+
+export default function ModelBadge({ provider, modelId }) {
+  if (!provider) return null;
+  const style = PROVIDER_COLORS[provider] || PROVIDER_COLORS.other;
+  return (
+    <span className="model-badge" style={style}>
+      {provider} · {modelId || "—"}
+    </span>
+  );
+}
+```
+
+Add `frontend/src/components/ModelBadge.css`:
+
+```css
+.model-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+```
+
+**`frontend/src/pages/AgentListPage.jsx`**: Add a provider filter chip row above the agent grid:
+
+```jsx
+const PROVIDERS = ["All", "groq", "openai", "anthropic", "other"];
+const [selectedProvider, setSelectedProvider] = useState("All");
+
+// Filter chip row
+<div className="provider-filters">
+  {PROVIDERS.map(p => (
+    <button
+      key={p}
+      className={`chip ${selectedProvider === p ? "active" : ""}`}
+      onClick={() => setSelectedProvider(p)}
+    >
+      {p}
+    </button>
+  ))}
+</div>
+```
+
+Pass `model_provider: selectedProvider === "All" ? undefined : selectedProvider` to the API call. Render `<ModelBadge provider={agent.model_provider} modelId={agent.model_id} />` on each agent card.
+
+**`frontend/src/pages/AgentDetailPage.jsx`**: Render `<ModelBadge>` near the trust score or pricing section.
+
+**Registration form** (whichever JSX file handles agent registration): Add two optional fields:
+
+```jsx
+<select name="model_provider">
+  <option value="">— No model declared —</option>
+  <option value="groq">Groq</option>
+  <option value="openai">OpenAI</option>
+  <option value="anthropic">Anthropic</option>
+  <option value="other">Other</option>
+</select>
+
+<input
+  type="text"
+  name="model_id"
+  maxLength={128}
+  placeholder="e.g. llama-3.3-70b-versatile"
+/>
+```
+
+Include both in the POST body only when filled.
+
+### 15.9 Config and dependencies
+
+**`.env.example`** — add after `GROQ_API_KEY`:
+
+```bash
+# LLM providers (at least one API key required for built-in agents)
+GROQ_API_KEY=
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
+
+# Optional: override fallback chain (comma-separated "<provider>:<model_id>")
+# AGENTMARKET_LLM_DEFAULT_CHAIN=groq:llama-3.3-70b-versatile,openai:gpt-4o-mini,anthropic:claude-sonnet-4-6
+```
+
+**`requirements.txt`** — add:
+
+```
+openai>=1.50
+anthropic>=0.39
+```
+
+(`groq` is already present.)
+
+### 15.10 Tests to write
+
+**New file: `tests/test_llm_providers.py`** (all cases monkeypatched — no real API calls):
+
+- [ ] `test_registry_resolves_prefixed_spec` — `resolve("groq:llama-3.3-70b-versatile")` returns (GroqProvider, "llama-3.3-70b-versatile")
+- [ ] `test_registry_resolves_bare_spec_defaults_to_groq` — back-compat
+- [ ] `test_registry_raises_on_unknown_provider` — `resolve("foobar:x")` raises ValueError
+- [ ] `test_default_chain_env_override` — set `AGENTMARKET_LLM_DEFAULT_CHAIN="openai:gpt-4o-mini"`, assert `DEFAULT_CHAIN == ["openai:gpt-4o-mini"]`
+- [ ] `test_provider_unavailable_when_sdk_missing` — patch `groq` as un-importable; `GroqProvider().is_available()` returns False
+- [ ] `test_provider_unavailable_when_key_missing` — `monkeypatch.delenv("GROQ_API_KEY")`, `GroqProvider().is_available()` returns False
+- [ ] `test_fallback_skips_unavailable_providers` — mark Groq+OpenAI unavailable; only Anthropic available; verify Anthropic provider is called
+- [ ] `test_fallback_retries_on_rate_limit` — first provider raises `LLMRateLimitError`; second returns success; assert result from second
+- [ ] `test_fallback_raises_last_error_when_all_fail` — all providers raise; assert `LLMRateLimitError` propagates
+- [ ] `test_anthropic_json_mode_injects_system_prompt` — capture `system` arg to mocked `messages.create`; assert it contains `"valid JSON object"`
+- [ ] `test_anthropic_splits_system_messages` — `CompletionRequest` with 2 `role="system"` messages → assert they're concatenated into one `system` string
+- [ ] `test_groq_json_mode_passes_response_format` — capture kwargs to mocked `chat.completions.create`; assert `response_format == {"type": "json_object"}`
+
+**New file: `tests/test_agent_model_columns.py`** (use the `registry_db` fixture from `tests/test_bug_regressions.py`):
+
+- [ ] `test_register_agent_persists_model_columns` — register with `model_provider="openai", model_id="gpt-4o-mini"`, GET back, assert both fields present
+- [ ] `test_register_agent_model_columns_nullable` — register without model fields, assert both return None
+- [ ] `test_get_agents_filters_by_provider` — register agent A (groq) + agent B (openai); `get_agents(model_provider="openai")` returns only B
+- [ ] `test_get_agents_no_filter_returns_all` — no filter returns both
+- [ ] `test_builtin_agents_registered_with_groq_provider` — after `server.py` startup (use FastAPI TestClient), fetch agent list, assert every built-in has `model_provider="groq"`
+
+### 15.11 Rollout order (strictly sequential)
+
+1. Land `core/llm/` package with all 3 providers + `tests/test_llm_providers.py`. No call sites migrated yet. CI must be green.
+2. Migrate `core/judges.py` (2 call sites). Run full test suite. Manual smoke: file a dispute and trigger judgment.
+3. Migrate all 7 `agents/*.py` files. Run full test suite. Manual smoke: make 1 call to each built-in agent.
+4. Land `migrations/0002_agent_model_columns.sql` + `core/registry.py` + `core/models.py` + built-in registration updates + `tests/test_agent_model_columns.py`.
+5. Land frontend: `ModelBadge`, filter chips, detail page badge, registration form fields.
+6. Update `CLAUDE.md` system map to mention `core/llm/` and the model fields.
+
+### 15.12 Non-goals (do not scope-creep)
+
+- Streaming responses — all current call sites are single-turn; don't add streaming to `LLMProvider`
+- Function/tool calling — not used anywhere
+- Vision / multi-modal — text-only
+- Per-caller provider override — the chain is server-wide
+- Cost tracking per provider — `LLMResponse.usage` captures tokens but don't change the billing ledger
+- Intra-provider retries — `run_with_fallback` only moves to the next provider; per-provider retry is a future concern
+
+---
+
+## 16. Structural Cleanup (completed)
+
+- [x] Consolidated SDKs: `sdk/` → `sdks/python-sdk/`; old `sdks/python/` (raw HTTP client) retained for contract tests; `sdks/typescript/` unchanged
+- [x] Moved `main.py` → `scripts/financial_cli.py`; `client.py` → `scripts/client_cli.py`
+- [x] Deleted `test.py` (leftover smoke script)
+- [x] Moved `openapi.json` → `docs/openapi.json`
+- [x] Inlined `core/logger.py` into `scripts/financial_cli.py`; deleted `core/logger.py`
+- [x] Untracked `registry.db-shm`, `registry.db-wal` (already covered by `*.db-shm` / `*.db-wal` gitignore patterns; explicitly staged removal)
+- [x] Expanded `.gitignore`: `.qwen/`, `.agents/`, `skills/`, `skills-lock.json`, `.mypy_cache/`, `.pytest_cache/`
+- [x] Updated `CLAUDE.md` repo map to reflect new layout
+- [x] Updated `server.py` import from `from main import run` → `from scripts.financial_cli import run`

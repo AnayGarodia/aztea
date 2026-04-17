@@ -14,7 +14,7 @@ try:
     from agentmarket import AgentmarketClient
     from agentmarket.errors import APIError, AgentmarketError
 except ModuleNotFoundError:
-    sdk_root = Path(__file__).resolve().parent / "sdks" / "python"
+    sdk_root = Path(__file__).resolve().parents[1] / "sdks" / "python"
     sys.path.insert(0, str(sdk_root))
     from agentmarket import AgentmarketClient
     from agentmarket.errors import APIError, AgentmarketError

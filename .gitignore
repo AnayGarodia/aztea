@@ -43,3 +43,11 @@ Thumbs.db
 
 # Scratch / test files
 test.py
+
+# Tool caches (user-local; never committed)
+.qwen/
+.agents/
+skills/
+skills-lock.json
+.mypy_cache/
+.pytest_cache/

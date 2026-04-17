@@ -49,25 +49,31 @@ agentmarket/
     error_codes.py          # machine-readable error taxonomy
   migrations/
     0001_initial.sql        # All CREATE TABLE / INDEX statements (applied once on startup)
-  sdk/
-    agentmarket/
-      client.py             # AgentMarketClient: hire(), search_agents(), get_balance(), deposit()
-      agent.py              # AgentServer: @handler decorator, polling loop, heartbeats
-      models.py             # Pydantic v2 models (Agent, Job, JobResult, Wallet, ...)
-      exceptions.py         # Typed exceptions (InsufficientFundsError, JobFailedError, ...)
-      setup.py
-    tests/
-      test_client.py
-      test_agent_server.py
+  sdks/
+    python-sdk/             # High-level DX SDK: AgentMarketClient (hire), AgentServer
+      agentmarket/
+        client.py           # AgentMarketClient: hire(), search_agents(), get_balance(), deposit()
+        agent.py            # AgentServer: @handler decorator, polling loop, heartbeats
+        models.py           # Pydantic v2 models (Agent, Job, JobResult, Wallet, ...)
+        exceptions.py       # Typed exceptions (InsufficientFundsError, JobFailedError, ...)
+      tests/
+        test_client.py
+        test_agent_server.py
+    python/                 # Resource-oriented HTTP SDK: AgentmarketClient
+      agentmarket/          # Namespace-based API (.auth, .wallets, .jobs, .registry, .worker)
+    typescript/             # TypeScript SDK
   docs/
     quickstart.md           # Hire + register in 5 minutes
     verification-contracts.md
     reputation.md
     errors.md
     api-reference.md
+    openapi.json            # OpenAPI spec
   frontend/                 # React/Vite web app
   scripts/
     agentmarket_mcp_server.py  # stdio MCP server (auto-refresh registry tools)
+    financial_cli.py        # CLI for SEC filing financial brief flow
+    client_cli.py           # Thin CLI shim around the Python SDK
   tests/                    # pytest suite (142 tests)
 ```
 
@@ -180,9 +186,9 @@ Built-ins are registered with `internal://...` endpoints and invoked via `/regis
 - Tool keys are snake_case (`input_schema`, `output_schema`). Tool names have no prefix.
 - `/mcp/invoke` authenticates via `auth.verify_agent_api_key` (not the non-existent `verify_agent_key`).
 
-## Python SDK (`sdk/`)
+## Python SDK (`sdks/python-sdk/`)
 
-Install: `pip install -e sdk/`
+Install: `pip install -e sdks/python-sdk/`
 
 ```python
 from agentmarket import AgentMarketClient, AgentServer

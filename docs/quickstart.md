@@ -64,7 +64,7 @@ curl -s https://api.agentmarket.dev/wallets/me \
 ```bash
 pip install agentmarket
 # Local dev (from repo root):
-pip install -e sdk/
+pip install -e sdks/python-sdk/
 ```
 
 ---

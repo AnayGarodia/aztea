@@ -81,7 +81,7 @@ from core.migrate import apply_migrations
 from core.db import DB_PATH as _DB_PATH
 from core import logging_utils
 from core import email as _email
-from main import run as _run_financial
+from scripts.financial_cli import run as _run_financial
 from core.models import (
     AgentRegisterRequest,
     CodeReviewRequest,
