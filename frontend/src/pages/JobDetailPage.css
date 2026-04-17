@@ -207,6 +207,30 @@
   font-size: 0.875rem;
 }
 
+.job-detail__clarification-form {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.job-detail__clarification-note {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+.job-detail__clarification-form textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  padding: 10px 12px;
+  resize: vertical;
+}
+
 @media (max-width: 780px) {
   .job-detail__scroll { padding: 20px 16px; }
   .job-detail__info-label { min-width: 100px; }

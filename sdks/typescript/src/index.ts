@@ -1,6 +1,11 @@
 export {
   AgentmarketApiError,
+  AgentMarketClient,
   AgentmarketClient,
+  type HireManyOptions,
+  type HireManySpec,
+  type HireOptions,
+  type SearchOptions,
   type AgentResponse,
   type HealthResponse,
   type JobHandle,

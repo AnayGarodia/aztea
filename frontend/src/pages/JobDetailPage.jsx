@@ -8,7 +8,7 @@ import EmptyState from '../ui/EmptyState'
 import Reveal from '../ui/motion/Reveal'
 import AgentSigil from '../brand/AgentSigil'
 import ResultRenderer from '../features/agents/results/ResultRenderer'
-import { getJobMessages, rateJob, getJobDispute, fileDispute } from '../api'
+import { getJobMessages, postJobMessage, rateJob, getJobDispute, fileDispute } from '../api'
 import { useMarket } from '../context/MarketContext'
 import JobTimeline from '../features/jobs/JobTimeline'
 import { ArrowLeft, RefreshCw, Star, AlertTriangle, CheckCircle, Clock } from 'lucide-react'
@@ -92,6 +92,8 @@ export default function JobDetailPage() {
   const [rating, setRating] = useState(null)
   const [ratingSubmitting, setRatingSubmitting] = useState(false)
   const [ratingDone, setRatingDone] = useState(false)
+  const [clarificationAnswer, setClarificationAnswer] = useState('')
+  const [clarificationSubmitting, setClarificationSubmitting] = useState(false)
 
   const job = useMemo(() => jobs.find(j => j.job_id === id), [jobs, id])
   const agent = useMemo(() => agents.find(a => a.agent_id === job?.agent_id), [agents, job])
@@ -160,6 +162,45 @@ export default function JobDetailPage() {
       showToast?.(err?.message || 'Could not file dispute.', 'error')
     } finally {
       setFilingDispute(false)
+    }
+  }
+
+  const clarificationThread = useMemo(
+    () => messages.filter(msg => ['clarification_request', 'clarification_response'].includes(msg.type)),
+    [messages],
+  )
+  const latestClarificationRequest = useMemo(
+    () => [...clarificationThread].reverse().find(msg => msg.type === 'clarification_request'),
+    [clarificationThread],
+  )
+  const hasClarificationResponse = useMemo(() => {
+    if (!latestClarificationRequest) return false
+    return clarificationThread.some(
+      msg =>
+        msg.type === 'clarification_response'
+        && String(msg?.payload?.request_message_id ?? '') === String(latestClarificationRequest.message_id),
+    )
+  }, [clarificationThread, latestClarificationRequest])
+
+  const handleClarificationResponse = async (e) => {
+    e.preventDefault()
+    if (!latestClarificationRequest || !clarificationAnswer.trim()) return
+    setClarificationSubmitting(true)
+    try {
+      await postJobMessage(apiKey, id, {
+        type: 'clarification_response',
+        payload: {
+          answer: clarificationAnswer.trim(),
+          request_message_id: latestClarificationRequest.message_id,
+        },
+      })
+      setClarificationAnswer('')
+      await loadMessages()
+      showToast?.('Clarification sent.', 'success')
+    } catch (err) {
+      showToast?.(err?.message || 'Could not send clarification response.', 'error')
+    } finally {
+      setClarificationSubmitting(false)
     }
   }
 
@@ -308,6 +349,43 @@ export default function JobDetailPage() {
                       <MessageBubble key={msg.message_id} msg={msg} />
                     ))}
                   </div>
+                )}
+              </Card.Body>
+            </Card>
+          </Reveal>
+
+          <Reveal delay={0.27}>
+            <Card>
+              <Card.Header>
+                <span className="job-detail__section-title">
+                  Clarification thread {clarificationThread.length > 0 && `(${clarificationThread.length})`}
+                </span>
+              </Card.Header>
+              <Card.Body>
+                {clarificationThread.length === 0 ? (
+                  <p className="job-detail__no-msg">No clarification messages yet.</p>
+                ) : (
+                  <div className="job-detail__messages">
+                    {clarificationThread.map(msg => (
+                      <MessageBubble key={`clar-${msg.message_id}`} msg={msg} />
+                    ))}
+                  </div>
+                )}
+                {latestClarificationRequest && !hasClarificationResponse && (
+                  <form onSubmit={handleClarificationResponse} className="job-detail__clarification-form">
+                    <p className="job-detail__clarification-note">
+                      Respond to the latest clarification request to unblock this job.
+                    </p>
+                    <textarea
+                      rows={3}
+                      value={clarificationAnswer}
+                      onChange={event => setClarificationAnswer(event.target.value)}
+                      placeholder="Add clarification context for the worker."
+                    />
+                    <Button type="submit" variant="primary" size="sm" loading={clarificationSubmitting}>
+                      Send clarification
+                    </Button>
+                  </form>
                 )}
               </Card.Body>
             </Card>

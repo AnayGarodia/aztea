@@ -27,6 +27,8 @@ class Agent(BaseModel):
     output_schema: Dict[str, Any] = {}
     status: str = "active"
     trust_score: float = 50.0
+    success_rate: float = 1.0
+    dispute_rate: float = 0.0
     total_calls: int = 0
     successful_calls: int = 0
     avg_latency_ms: float = 0.0
@@ -50,6 +52,18 @@ class Job(BaseModel):
     error_message: Optional[str] = None
     quality_score: Optional[int] = None
     claim_token: Optional[str] = None
+    parent_job_id: Optional[str] = None
+    parent_cascade_policy: Optional[str] = None
+    clarification_timeout_seconds: Optional[int] = None
+    clarification_timeout_policy: Optional[str] = None
+    clarification_requested_at: Optional[str] = None
+    clarification_deadline_at: Optional[str] = None
+    output_verification_window_seconds: Optional[int] = None
+    output_verification_status: Optional[str] = None
+    output_verification_deadline_at: Optional[str] = None
+    output_verification_decided_at: Optional[str] = None
+    output_verification_decision_owner_id: Optional[str] = None
+    output_verification_reason: Optional[str] = None
     created_at: str = ""
     updated_at: str = ""
     completed_at: Optional[str] = None

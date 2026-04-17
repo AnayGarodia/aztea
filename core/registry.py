@@ -39,6 +39,10 @@ _REQUIRED_COLUMNS = {
     "owner_id",
     "output_examples",
     "verified",
+    "endpoint_health_status",
+    "endpoint_consecutive_failures",
+    "endpoint_last_checked_at",
+    "endpoint_last_error",
     "name",
     "description",
     "endpoint_url",
@@ -109,6 +113,10 @@ def _create_agents_table(conn: sqlite3.Connection, table_name: str = "agents") -
                 output_verifier_url TEXT,
                 output_examples     TEXT,
                 verified            INTEGER NOT NULL DEFAULT 0,
+                endpoint_health_status TEXT NOT NULL DEFAULT 'unknown' CHECK(endpoint_health_status IN ('unknown','healthy','degraded')),
+                endpoint_consecutive_failures INTEGER NOT NULL DEFAULT 0,
+                endpoint_last_checked_at TEXT,
+                endpoint_last_error TEXT,
                 internal_only       INTEGER NOT NULL DEFAULT 0,
                 status              TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','suspended','banned')),
                 trust_decay_multiplier REAL NOT NULL DEFAULT 1.0,
@@ -480,6 +488,15 @@ def _normalize_legacy_agent_row(row: dict, used_agent_ids: set, used_names: set)
         verified = 1 if int(row.get("verified") or 0) else 0
     except (TypeError, ValueError):
         verified = 0
+    endpoint_health_status = str(row.get("endpoint_health_status") or "unknown").strip().lower()
+    if endpoint_health_status not in {"unknown", "healthy", "degraded"}:
+        endpoint_health_status = "unknown"
+    endpoint_consecutive_failures = _to_non_negative_int(
+        row.get("endpoint_consecutive_failures"),
+        default=0,
+    )
+    endpoint_last_checked_at = str(row.get("endpoint_last_checked_at") or "").strip() or None
+    endpoint_last_error = str(row.get("endpoint_last_error") or "").strip() or None
     try:
         internal_only = 1 if int(row.get("internal_only") or 0) else 0
     except (TypeError, ValueError):
@@ -509,6 +526,10 @@ def _normalize_legacy_agent_row(row: dict, used_agent_ids: set, used_names: set)
         output_verifier_url,
         output_examples,
         verified,
+        endpoint_health_status,
+        endpoint_consecutive_failures,
+        endpoint_last_checked_at,
+        endpoint_last_error,
         internal_only,
         status,
         trust_decay_multiplier,
@@ -537,8 +558,9 @@ def _migrate_agents_table(conn: sqlite3.Connection) -> None:
                 (agent_id, owner_id, name, description, endpoint_url, price_per_call_usd,
                  avg_latency_ms, total_calls, successful_calls, tags, input_schema,
                  output_schema, output_verifier_url, output_examples, verified,
+                 endpoint_health_status, endpoint_consecutive_failures, endpoint_last_checked_at, endpoint_last_error,
                  internal_only, status, trust_decay_multiplier, last_decay_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             normalized,
         )
@@ -587,6 +609,16 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     except (json.JSONDecodeError, TypeError):
         d["output_examples"] = None
     d["verified"] = bool(int(d.get("verified") or 0))
+    endpoint_health_status = str(d.get("endpoint_health_status") or "unknown").strip().lower()
+    if endpoint_health_status not in {"unknown", "healthy", "degraded"}:
+        endpoint_health_status = "unknown"
+    d["endpoint_health_status"] = endpoint_health_status
+    d["endpoint_consecutive_failures"] = _to_non_negative_int(
+        d.get("endpoint_consecutive_failures"),
+        default=0,
+    )
+    d["endpoint_last_checked_at"] = str(d.get("endpoint_last_checked_at") or "").strip() or None
+    d["endpoint_last_error"] = str(d.get("endpoint_last_error") or "").strip() or None
     d["internal_only"] = bool(int(d.get("internal_only") or 0))
     status = str(d.get("status") or "active").strip().lower()
     d["status"] = status if status in {"active", "suspended", "banned"} else "active"
@@ -615,6 +647,7 @@ def register_agent(
     output_verifier_url: str | None = None,
     output_examples: list | None = None,
     verified: bool = False,
+    endpoint_health_status: str = "unknown",
     internal_only: bool = False,
     status: str = "active",
     trust_decay_multiplier: float = 1.0,
@@ -655,6 +688,9 @@ def register_agent(
     else:
         normalized_examples = None
     normalized_verified = 1 if verified else 0
+    normalized_health_status = str(endpoint_health_status or "unknown").strip().lower()
+    if normalized_health_status not in {"unknown", "healthy", "degraded"}:
+        raise ValueError("endpoint_health_status must be one of: unknown, healthy, degraded.")
     normalized_status = str(status or "active").strip().lower()
     if normalized_status not in {"active", "suspended", "banned"}:
         raise ValueError("status must be one of: active, suspended, banned.")
@@ -673,8 +709,10 @@ def register_agent(
             INSERT INTO agents
                 (agent_id, owner_id, name, description, endpoint_url,
                  price_per_call_usd, tags, input_schema, output_schema, output_verifier_url,
-                 output_examples, verified, internal_only, status, trust_decay_multiplier, last_decay_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 output_examples, verified, endpoint_health_status, endpoint_consecutive_failures,
+                 endpoint_last_checked_at, endpoint_last_error,
+                 internal_only, status, trust_decay_multiplier, last_decay_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, ?, ?, ?, ?, ?)
             """,
             (
                 aid,
@@ -689,6 +727,7 @@ def register_agent(
                 normalized_verifier_url,
                 normalized_examples,
                 normalized_verified,
+                normalized_health_status,
                 internal_only_int,
                 normalized_status,
                 normalized_decay_multiplier,
@@ -762,6 +801,70 @@ def set_agent_status(agent_id: str, status: str) -> dict | None:
         conn.execute(
             "UPDATE agents SET status = ? WHERE agent_id = ?",
             (normalized_status, agent_id),
+        )
+    return get_agent(agent_id)
+
+
+def set_agent_verified(agent_id: str, verified: bool) -> dict | None:
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE agents SET verified = ? WHERE agent_id = ?",
+            (1 if verified else 0, agent_id),
+        )
+    return get_agent(agent_id)
+
+
+def set_agent_endpoint_health(
+    agent_id: str,
+    *,
+    endpoint_health_status: str,
+    endpoint_consecutive_failures: int,
+    endpoint_last_checked_at: str,
+    endpoint_last_error: str | None,
+) -> dict | None:
+    normalized_status = str(endpoint_health_status or "").strip().lower()
+    if normalized_status not in {"unknown", "healthy", "degraded"}:
+        raise ValueError("endpoint_health_status must be one of: unknown, healthy, degraded.")
+    normalized_failures = _to_non_negative_int(endpoint_consecutive_failures, default=0)
+    checked_at = str(endpoint_last_checked_at or "").strip()
+    if not checked_at:
+        raise ValueError("endpoint_last_checked_at must be a non-empty ISO timestamp.")
+    normalized_error = str(endpoint_last_error or "").strip() or None
+    with _conn() as conn:
+        conn.execute(
+            """
+            UPDATE agents
+            SET endpoint_health_status = ?,
+                endpoint_consecutive_failures = ?,
+                endpoint_last_checked_at = ?,
+                endpoint_last_error = ?
+            WHERE agent_id = ?
+            """,
+            (
+                normalized_status,
+                normalized_failures,
+                checked_at,
+                normalized_error,
+                agent_id,
+            ),
+        )
+    return get_agent(agent_id)
+
+
+def set_agent_output_examples(agent_id: str, output_examples: list[dict] | None) -> dict | None:
+    normalized_examples: str | None
+    if output_examples is None:
+        normalized_examples = None
+    elif isinstance(output_examples, list):
+        normalized_examples = json.dumps(
+            [item for item in output_examples if isinstance(item, dict)]
+        )
+    else:
+        raise ValueError("output_examples must be a list of objects or null.")
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE agents SET output_examples = ? WHERE agent_id = ?",
+            (normalized_examples, agent_id),
         )
     return get_agent(agent_id)
 

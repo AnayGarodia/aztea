@@ -219,10 +219,17 @@ class AgentServer:
                 f"/jobs/{job_id}/claim",
                 json={"lease_seconds": _LEASE_SECONDS},
             )
-            claim_token: str | None = claim_data.get("claim_token")
         except AgentMarketError as exc:
             # Another worker may have claimed it first — skip silently
             return
+        if not isinstance(claim_data, dict):
+            _print_status(f"[agentmarket] Claim response for job {job_id} was malformed.")
+            return
+        raw_claim_token = claim_data.get("claim_token")
+        if not isinstance(raw_claim_token, str) or not raw_claim_token.strip():
+            _print_status(f"[agentmarket] Claim for job {job_id} did not return a valid claim token.")
+            return
+        claim_token: str = raw_claim_token
 
         _print_status(f"[agentmarket] Claimed job {job_id}")
 

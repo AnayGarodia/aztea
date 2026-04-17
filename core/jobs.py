@@ -59,6 +59,24 @@ VALID_STATUSES = {
     "failed",
 }
 
+PARENT_CASCADE_POLICIES = {
+    "detach",
+    "fail_children_on_parent_fail",
+}
+
+CLARIFICATION_TIMEOUT_POLICIES = {
+    "fail",
+    "proceed",
+}
+
+OUTPUT_VERIFICATION_STATUSES = {
+    "not_required",
+    "pending",
+    "accepted",
+    "rejected",
+    "expired",
+}
+
 _CLAIMABLE_STATUSES = {
     "pending",
     "running",
@@ -95,11 +113,17 @@ _CANONICAL_JOB_COLUMNS = (
     "last_heartbeat_at",
     "attempt_count",
     "max_attempts",
+    "parent_job_id",
+    "parent_cascade_policy",
     "retry_count",
     "next_retry_at",
     "last_retry_at",
     "timeout_count",
     "last_timeout_at",
+    "clarification_timeout_seconds",
+    "clarification_timeout_policy",
+    "clarification_requested_at",
+    "clarification_deadline_at",
     "dispute_window_hours",
     "dispute_outcome",
     "judge_agent_id",
@@ -107,6 +131,12 @@ _CANONICAL_JOB_COLUMNS = (
     "quality_score",
     "callback_url",
     "callback_secret",
+    "output_verification_window_seconds",
+    "output_verification_status",
+    "output_verification_deadline_at",
+    "output_verification_decided_at",
+    "output_verification_decision_owner_id",
+    "output_verification_reason",
     "batch_id",
 )
 
@@ -157,6 +187,35 @@ def _clean_optional_text(value) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _normalize_parent_cascade_policy(value: str | None) -> str:
+    normalized = str(value or "").strip().lower() or "detach"
+    if normalized not in PARENT_CASCADE_POLICIES:
+        raise ValueError(
+            "parent_cascade_policy must be one of: "
+            + ", ".join(sorted(PARENT_CASCADE_POLICIES))
+            + "."
+        )
+    return normalized
+
+
+def _normalize_clarification_timeout_policy(value: str | None) -> str:
+    normalized = str(value or "").strip().lower() or "fail"
+    if normalized not in CLARIFICATION_TIMEOUT_POLICIES:
+        raise ValueError(
+            "clarification_timeout_policy must be one of: "
+            + ", ".join(sorted(CLARIFICATION_TIMEOUT_POLICIES))
+            + "."
+        )
+    return normalized
+
+
+def _normalize_output_verification_status(value: str | None) -> str:
+    normalized = str(value or "").strip().lower() or "not_required"
+    if normalized not in OUTPUT_VERIFICATION_STATUSES:
+        return "not_required"
+    return normalized
 
 
 def _normalize_required_json(value, default) -> str:
@@ -319,11 +378,17 @@ def _create_jobs_table(conn: sqlite3.Connection, table_name: str = "jobs") -> No
             last_heartbeat_at   TEXT,
             attempt_count       INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
             max_attempts        INTEGER NOT NULL DEFAULT 3 CHECK(max_attempts >= 1),
+            parent_job_id       TEXT,
+            parent_cascade_policy TEXT NOT NULL DEFAULT 'detach',
             retry_count         INTEGER NOT NULL DEFAULT 0 CHECK(retry_count >= 0),
             next_retry_at       TEXT,
             last_retry_at       TEXT,
             timeout_count       INTEGER NOT NULL DEFAULT 0 CHECK(timeout_count >= 0),
             last_timeout_at     TEXT,
+            clarification_timeout_seconds INTEGER NOT NULL DEFAULT 0 CHECK(clarification_timeout_seconds >= 0),
+            clarification_timeout_policy  TEXT NOT NULL DEFAULT 'fail',
+            clarification_requested_at    TEXT,
+            clarification_deadline_at     TEXT,
             dispute_window_hours INTEGER NOT NULL DEFAULT 72 CHECK(dispute_window_hours >= 1),
             dispute_outcome      TEXT,
             judge_agent_id       TEXT,
@@ -331,6 +396,12 @@ def _create_jobs_table(conn: sqlite3.Connection, table_name: str = "jobs") -> No
             quality_score        INTEGER,
             callback_url         TEXT,
             callback_secret      TEXT,
+            output_verification_window_seconds INTEGER NOT NULL DEFAULT 0 CHECK(output_verification_window_seconds >= 0),
+            output_verification_status         TEXT NOT NULL DEFAULT 'not_required',
+            output_verification_deadline_at    TEXT,
+            output_verification_decided_at     TEXT,
+            output_verification_decision_owner_id TEXT,
+            output_verification_reason         TEXT,
             batch_id             TEXT
         )
     """)
@@ -400,6 +471,15 @@ def _ensure_jobs_indexes(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_jobs_batch_created ON jobs(batch_id, created_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_jobs_parent_created ON jobs(parent_job_id, created_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_jobs_clarification_deadline ON jobs(status, clarification_deadline_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_jobs_output_verification_deadline ON jobs(output_verification_status, output_verification_deadline_at)"
     )
 
 
@@ -479,6 +559,8 @@ def _normalize_legacy_job_row(row: dict, used_job_ids: set[str]) -> tuple:
 
     attempt_count = _to_non_negative_int(row.get("attempt_count"), default=0)
     max_attempts = max(1, _to_non_negative_int(row.get("max_attempts"), default=3))
+    parent_job_id = _clean_optional_text(row.get("parent_job_id"))
+    parent_cascade_policy = _normalize_parent_cascade_policy(row.get("parent_cascade_policy"))
     retry_count = _to_non_negative_int(row.get("retry_count"), default=0)
     if retry_count > max_attempts:
         retry_count = max_attempts
@@ -488,6 +570,12 @@ def _normalize_legacy_job_row(row: dict, used_job_ids: set[str]) -> tuple:
 
     timeout_count = _to_non_negative_int(row.get("timeout_count"), default=0)
     last_timeout_at = _clean_optional_text(row.get("last_timeout_at"))
+    clarification_timeout_seconds = _to_non_negative_int(row.get("clarification_timeout_seconds"), default=0)
+    clarification_timeout_policy = _normalize_clarification_timeout_policy(
+        row.get("clarification_timeout_policy")
+    )
+    clarification_requested_at = _clean_optional_text(row.get("clarification_requested_at"))
+    clarification_deadline_at = _clean_optional_text(row.get("clarification_deadline_at"))
     dispute_window_hours = max(1, _to_non_negative_int(row.get("dispute_window_hours"), default=72))
     dispute_outcome = _clean_optional_text(row.get("dispute_outcome"))
     judge_agent_id = _clean_optional_text(row.get("judge_agent_id"))
@@ -499,6 +587,19 @@ def _normalize_legacy_job_row(row: dict, used_job_ids: set[str]) -> tuple:
         parsed_quality_score = None
     callback_url = _clean_optional_text(row.get("callback_url"))
     callback_secret = _clean_optional_text(row.get("callback_secret"))
+    output_verification_window_seconds = _to_non_negative_int(
+        row.get("output_verification_window_seconds"),
+        default=0,
+    )
+    output_verification_status = _normalize_output_verification_status(
+        row.get("output_verification_status")
+    )
+    output_verification_deadline_at = _clean_optional_text(row.get("output_verification_deadline_at"))
+    output_verification_decided_at = _clean_optional_text(row.get("output_verification_decided_at"))
+    output_verification_decision_owner_id = _clean_optional_text(
+        row.get("output_verification_decision_owner_id")
+    )
+    output_verification_reason = _clean_optional_text(row.get("output_verification_reason"))
     batch_id = _clean_optional_text(row.get("batch_id"))
 
     if claim_owner_id is None:
@@ -514,6 +615,12 @@ def _normalize_legacy_job_row(row: dict, used_job_ids: set[str]) -> tuple:
         lease_expires_at = None
         last_heartbeat_at = None
         next_retry_at = None
+
+    if status != "awaiting_clarification":
+        clarification_requested_at = None
+        clarification_deadline_at = None
+    elif clarification_timeout_seconds <= 0:
+        clarification_deadline_at = None
 
     return (
         job_id,
@@ -540,11 +647,17 @@ def _normalize_legacy_job_row(row: dict, used_job_ids: set[str]) -> tuple:
         last_heartbeat_at,
         attempt_count,
         max_attempts,
+        parent_job_id,
+        parent_cascade_policy,
         retry_count,
         next_retry_at,
         last_retry_at,
         timeout_count,
         last_timeout_at,
+        clarification_timeout_seconds,
+        clarification_timeout_policy,
+        clarification_requested_at,
+        clarification_deadline_at,
         dispute_window_hours,
         dispute_outcome,
         judge_agent_id,
@@ -552,6 +665,12 @@ def _normalize_legacy_job_row(row: dict, used_job_ids: set[str]) -> tuple:
         parsed_quality_score,
         callback_url,
         callback_secret,
+        output_verification_window_seconds,
+        output_verification_status,
+        output_verification_deadline_at,
+        output_verification_decided_at,
+        output_verification_decision_owner_id,
+        output_verification_reason,
         batch_id,
     )
 
@@ -628,10 +747,15 @@ def create_job(
     input_payload: dict,
     agent_owner_id: str | None = None,
     max_attempts: int = 3,
+    parent_job_id: str | None = None,
+    parent_cascade_policy: str = "detach",
+    clarification_timeout_seconds: int | None = None,
+    clarification_timeout_policy: str = "fail",
     dispute_window_hours: int = 72,
     judge_agent_id: str | None = None,
     callback_url: str | None = None,
     callback_secret: str | None = None,
+    output_verification_window_seconds: int | None = None,
     batch_id: str | None = None,
 ) -> dict:
     if price_cents < 0:
@@ -640,9 +764,21 @@ def create_job(
     parsed_max_attempts = _to_non_negative_int(max_attempts, default=0)
     if parsed_max_attempts < 1:
         raise ValueError("max_attempts must be >= 1.")
+    normalized_parent_cascade_policy = _normalize_parent_cascade_policy(parent_cascade_policy)
+    parsed_clarification_timeout_seconds = _to_non_negative_int(
+        clarification_timeout_seconds,
+        default=0,
+    )
+    normalized_clarification_timeout_policy = _normalize_clarification_timeout_policy(
+        clarification_timeout_policy
+    )
     parsed_dispute_window_hours = _to_non_negative_int(dispute_window_hours, default=0)
     if parsed_dispute_window_hours < 1:
         raise ValueError("dispute_window_hours must be >= 1.")
+    parsed_output_verification_window_seconds = _to_non_negative_int(
+        output_verification_window_seconds,
+        default=0,
+    )
 
     owner_id = (agent_owner_id or f"agent:{agent_id}").strip()
     if not owner_id:
@@ -657,9 +793,10 @@ def create_job(
             INSERT INTO jobs
               (job_id, agent_id, agent_owner_id, caller_owner_id, caller_wallet_id,
                agent_wallet_id, platform_wallet_id, status, price_cents, charge_tx_id,
-               input_payload, created_at, updated_at, max_attempts, dispute_window_hours, judge_agent_id,
-               callback_url, callback_secret, batch_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               input_payload, created_at, updated_at, max_attempts, parent_job_id, parent_cascade_policy,
+               clarification_timeout_seconds, clarification_timeout_policy, dispute_window_hours, judge_agent_id,
+               callback_url, callback_secret, output_verification_window_seconds, output_verification_status, batch_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job_id,
@@ -676,10 +813,16 @@ def create_job(
                 now,
                 now,
                 parsed_max_attempts,
+                _clean_optional_text(parent_job_id),
+                normalized_parent_cascade_policy,
+                parsed_clarification_timeout_seconds,
+                normalized_clarification_timeout_policy,
                 parsed_dispute_window_hours,
                 _clean_optional_text(judge_agent_id),
                 _clean_optional_text(callback_url),
                 _clean_optional_text(callback_secret),
+                parsed_output_verification_window_seconds,
+                "not_required",
                 _clean_optional_text(batch_id),
             ),
         )
@@ -700,6 +843,42 @@ def list_jobs_for_batch(batch_id: str, caller_owner_id: str) -> list[dict]:
             ORDER BY created_at ASC, job_id ASC
             """,
             (normalized_batch_id, normalized_owner_id),
+        ).fetchall()
+    return [_row_to_dict(row) for row in rows]
+
+
+def list_child_jobs(
+    parent_job_id: str,
+    *,
+    statuses: tuple[str, ...] | None = None,
+    limit: int = 200,
+) -> list[dict]:
+    normalized_parent = _clean_optional_text(parent_job_id)
+    if normalized_parent is None:
+        return []
+    capped_limit = min(max(1, int(limit)), 500)
+    params: list = [normalized_parent]
+    where_status = ""
+    if statuses:
+        normalized_statuses = tuple(
+            status for status in statuses if isinstance(status, str) and status in VALID_STATUSES
+        )
+        if normalized_statuses:
+            placeholders = ", ".join(["?"] * len(normalized_statuses))
+            where_status = f" AND status IN ({placeholders})"
+            params.extend(normalized_statuses)
+    params.append(capped_limit)
+    with _conn() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT *
+            FROM jobs
+            WHERE parent_job_id = ?
+            {where_status}
+            ORDER BY created_at ASC, job_id ASC
+            LIMIT ?
+            """,
+            tuple(params),
         ).fetchall()
     return [_row_to_dict(row) for row in rows]
 
@@ -1316,6 +1495,26 @@ def list_jobs_with_expired_leases(limit: int = 100, now: str | None = None) -> l
     return [_row_to_dict(r) for r in rows]
 
 
+def list_jobs_with_expired_clarification_deadline(limit: int = 100, now: str | None = None) -> list:
+    limit = min(max(1, limit), 200)
+    now_iso = now or _now()
+    with _conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM jobs
+            WHERE status = 'awaiting_clarification'
+              AND completed_at IS NULL
+              AND settled_at IS NULL
+              AND clarification_deadline_at IS NOT NULL
+              AND clarification_deadline_at <= ?
+            ORDER BY clarification_deadline_at ASC, created_at ASC
+            LIMIT ?
+            """,
+            (now_iso, limit),
+        ).fetchall()
+    return [_row_to_dict(r) for r in rows]
+
+
 def list_jobs_past_sla(sla_seconds: int, limit: int = 100, now: str | None = None) -> list:
     if sla_seconds <= 0:
         raise ValueError("sla_seconds must be > 0.")
@@ -1334,6 +1533,44 @@ def list_jobs_past_sla(sla_seconds: int, limit: int = 100, now: str | None = Non
             LIMIT ?
             """,
             (threshold, limit),
+        ).fetchall()
+    return [_row_to_dict(r) for r in rows]
+
+
+def list_jobs_with_expired_output_verification(limit: int = 100, now: str | None = None) -> list:
+    limit = min(max(1, limit), 200)
+    now_iso = now or _now()
+    with _conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM jobs
+            WHERE status = 'complete'
+              AND completed_at IS NOT NULL
+              AND settled_at IS NULL
+              AND output_verification_status = 'pending'
+              AND output_verification_deadline_at IS NOT NULL
+              AND output_verification_deadline_at <= ?
+            ORDER BY output_verification_deadline_at ASC, created_at ASC
+            LIMIT ?
+            """,
+            (now_iso, limit),
+        ).fetchall()
+    return [_row_to_dict(r) for r in rows]
+
+
+def list_completed_jobs_pending_settlement(limit: int = 100) -> list:
+    limit = min(max(1, limit), 500)
+    with _conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM jobs
+            WHERE status = 'complete'
+              AND completed_at IS NOT NULL
+              AND settled_at IS NULL
+            ORDER BY completed_at ASC, created_at ASC
+            LIMIT ?
+            """,
+            (limit,),
         ).fetchall()
     return [_row_to_dict(r) for r in rows]
 
@@ -1363,7 +1600,15 @@ def update_job_status(
                 claim_owner_id = CASE WHEN ? = 1 THEN NULL ELSE claim_owner_id END,
                 claim_token = CASE WHEN ? = 1 THEN NULL ELSE claim_token END,
                 lease_expires_at = CASE WHEN ? = 1 THEN NULL ELSE lease_expires_at END,
-                last_heartbeat_at = CASE WHEN ? = 1 THEN NULL ELSE last_heartbeat_at END
+                last_heartbeat_at = CASE WHEN ? = 1 THEN NULL ELSE last_heartbeat_at END,
+                clarification_requested_at = CASE
+                    WHEN ? = 1 OR ? != 'awaiting_clarification' THEN NULL
+                    ELSE clarification_requested_at
+                END,
+                clarification_deadline_at = CASE
+                    WHEN ? = 1 OR ? != 'awaiting_clarification' THEN NULL
+                    ELSE clarification_deadline_at
+                END
             WHERE job_id = ? AND (? = 0 OR completed_at IS NULL)
             """,
             (
@@ -1377,6 +1622,10 @@ def update_job_status(
                 clear_claim,
                 clear_claim,
                 clear_claim,
+                clear_claim,
+                status,
+                clear_claim,
+                status,
                 job_id,
                 completed_flag,
             ),
@@ -1396,6 +1645,148 @@ def mark_settled(job_id: str) -> bool:
             (now, job_id),
         )
     return result.rowcount > 0
+
+
+def initialize_output_verification_state(job_id: str) -> dict | None:
+    now = _now()
+    with _conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
+        if row is None:
+            return None
+        raw = dict(row)
+        if raw.get("status") != "complete" or _clean_optional_text(raw.get("completed_at")) is None:
+            return _row_to_dict(row)
+
+        window_seconds = _to_non_negative_int(
+            raw.get("output_verification_window_seconds"),
+            default=0,
+        )
+        status = _normalize_output_verification_status(raw.get("output_verification_status"))
+        completed_at_dt = _parse_ts(_clean_optional_text(raw.get("completed_at")))
+        deadline = (
+            (completed_at_dt + timedelta(seconds=window_seconds)).isoformat()
+            if completed_at_dt is not None and window_seconds > 0
+            else None
+        )
+
+        if window_seconds <= 0:
+            if (
+                status == "not_required"
+                and _clean_optional_text(raw.get("output_verification_deadline_at")) is None
+                and _clean_optional_text(raw.get("output_verification_decided_at")) is None
+                and _clean_optional_text(raw.get("output_verification_decision_owner_id")) is None
+                and _clean_optional_text(raw.get("output_verification_reason")) is None
+            ):
+                return _row_to_dict(row)
+            conn.execute(
+                """
+                UPDATE jobs
+                SET output_verification_status = 'not_required',
+                    output_verification_deadline_at = NULL,
+                    output_verification_decided_at = NULL,
+                    output_verification_decision_owner_id = NULL,
+                    output_verification_reason = NULL,
+                    updated_at = ?
+                WHERE job_id = ?
+                """,
+                (now, job_id),
+            )
+            return get_job(job_id)
+
+        if status == "pending" and _clean_optional_text(raw.get("output_verification_deadline_at")):
+            return _row_to_dict(row)
+        if status in {"accepted", "rejected", "expired"}:
+            return _row_to_dict(row)
+
+        conn.execute(
+            """
+            UPDATE jobs
+            SET output_verification_status = 'pending',
+                output_verification_deadline_at = ?,
+                output_verification_decided_at = NULL,
+                output_verification_decision_owner_id = NULL,
+                output_verification_reason = NULL,
+                updated_at = ?
+            WHERE job_id = ?
+            """,
+            (deadline, now, job_id),
+        )
+    return get_job(job_id)
+
+
+def set_output_verification_decision(
+    job_id: str,
+    *,
+    decision: str,
+    decision_owner_id: str,
+    reason: str | None = None,
+) -> dict | None:
+    normalized_decision = str(decision or "").strip().lower()
+    if normalized_decision not in {"accept", "reject"}:
+        raise ValueError("decision must be 'accept' or 'reject'.")
+    next_status = "accepted" if normalized_decision == "accept" else "rejected"
+    now = _now()
+    with _conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
+        if row is None:
+            return None
+        raw = dict(row)
+        current = _normalize_output_verification_status(raw.get("output_verification_status"))
+        if current == next_status:
+            return _row_to_dict(row)
+        if current != "pending":
+            return None
+        conn.execute(
+            """
+            UPDATE jobs
+            SET output_verification_status = ?,
+                output_verification_decided_at = ?,
+                output_verification_decision_owner_id = ?,
+                output_verification_reason = ?,
+                updated_at = ?
+            WHERE job_id = ?
+            """,
+            (
+                next_status,
+                now,
+                _clean_optional_text(decision_owner_id),
+                _clean_optional_text(reason),
+                now,
+                job_id,
+            ),
+        )
+    return get_job(job_id)
+
+
+def mark_output_verification_expired(job_id: str, *, decision_owner_id: str = "system:verification-expiry") -> dict | None:
+    now = _now()
+    with _conn() as conn:
+        result = conn.execute(
+            """
+            UPDATE jobs
+            SET output_verification_status = 'expired',
+                output_verification_decided_at = COALESCE(output_verification_decided_at, ?),
+                output_verification_decision_owner_id = COALESCE(output_verification_decision_owner_id, ?),
+                output_verification_reason = COALESCE(output_verification_reason, 'Verification window expired without caller decision.'),
+                updated_at = ?
+            WHERE job_id = ?
+              AND output_verification_status = 'pending'
+              AND output_verification_deadline_at IS NOT NULL
+              AND output_verification_deadline_at <= ?
+            """,
+            (
+                now,
+                _clean_optional_text(decision_owner_id),
+                now,
+                job_id,
+                now,
+            ),
+        )
+    if result.rowcount == 0:
+        return None
+    return get_job(job_id)
 
 
 def _message_correlation_exists_conn(
@@ -1525,6 +1916,8 @@ def add_message(
             completed = _clean_optional_text(raw.get("completed_at")) is not None
             settled = _clean_optional_text(raw.get("settled_at")) is not None
             should_update_status = status_target is not None and not completed and not settled
+            mark_clarification_requested = canonical_type == "clarification_request"
+            clear_clarification_tracking = canonical_type == "clarification_response"
 
             claim_owner_id = _clean_optional_text(raw.get("claim_owner_id"))
             claim_token = _clean_optional_text(raw.get("claim_token"))
@@ -1537,13 +1930,32 @@ def add_message(
                 base_dt = existing_expiry if existing_expiry and existing_expiry > now_dt else now_dt
                 next_lease_expires_at = (base_dt + timedelta(seconds=lease_seconds)).isoformat()
 
-            if should_update_status or lease_extended:
+            clarification_deadline_at = None
+            if mark_clarification_requested:
+                timeout_seconds = _to_non_negative_int(
+                    raw.get("clarification_timeout_seconds"),
+                    default=0,
+                )
+                if timeout_seconds > 0:
+                    clarification_deadline_at = (now_dt + timedelta(seconds=timeout_seconds)).isoformat()
+
+            if should_update_status or lease_extended or mark_clarification_requested or clear_clarification_tracking:
                 conn.execute(
                     """
                     UPDATE jobs
                     SET status = CASE WHEN ? = 1 THEN ? ELSE status END,
                         lease_expires_at = CASE WHEN ? = 1 THEN ? ELSE lease_expires_at END,
                         last_heartbeat_at = CASE WHEN ? = 1 THEN ? ELSE last_heartbeat_at END,
+                        clarification_requested_at = CASE
+                            WHEN ? = 1 THEN ?
+                            WHEN ? = 1 THEN NULL
+                            ELSE clarification_requested_at
+                        END,
+                        clarification_deadline_at = CASE
+                            WHEN ? = 1 THEN ?
+                            WHEN ? = 1 THEN NULL
+                            ELSE clarification_deadline_at
+                        END,
                         updated_at = ?
                     WHERE job_id = ?
                     """,
@@ -1554,6 +1966,12 @@ def add_message(
                         next_lease_expires_at,
                         1 if lease_extended else 0,
                         now,
+                        1 if mark_clarification_requested else 0,
+                        now,
+                        1 if clear_clarification_tracking else 0,
+                        1 if mark_clarification_requested else 0,
+                        clarification_deadline_at,
+                        1 if clear_clarification_tracking else 0,
                         now,
                         job_id,
                     ),

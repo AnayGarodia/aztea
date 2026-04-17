@@ -101,6 +101,18 @@ def _complete_job(client: TestClient, worker_key: str, job_id: str) -> dict:
     return complete.json()
 
 
+def _simulate_legacy_payout(job_id: str) -> None:
+    job = jobs.get_job(job_id)
+    assert job is not None
+    payments.post_call_payout(
+        job["agent_wallet_id"],
+        job["platform_wallet_id"],
+        job["charge_tx_id"],
+        job["price_cents"],
+        job["agent_id"],
+    )
+
+
 def _wallet_balance(owner_id: str) -> int:
     wallet = payments.get_or_create_wallet(owner_id)
     latest = payments.get_wallet(wallet["wallet_id"])
@@ -140,8 +152,8 @@ def test_dispute_consensus_caller_wins_full_refund(client, monkeypatch):
 
     caller_owner = f"user:{caller['user_id']}"
     assert _wallet_balance(caller_owner) == 190
-    assert _wallet_balance(f"agent:{agent_id}") == 9
-    assert _wallet_balance(payments.PLATFORM_OWNER_ID) == 1
+    assert _wallet_balance(f"agent:{agent_id}") == 0
+    assert _wallet_balance(payments.PLATFORM_OWNER_ID) == 0
 
     filed = client.post(
         f"/jobs/{job['job_id']}/dispute",
@@ -149,10 +161,12 @@ def test_dispute_consensus_caller_wins_full_refund(client, monkeypatch):
         json={"reason": "Output is incomplete", "evidence": "section 7 omitted"},
     )
     assert filed.status_code == 201, filed.text
+    assert filed.json()["filing_deposit_cents"] == 5
     dispute_id = filed.json()["dispute_id"]
 
     assert _wallet_balance(f"agent:{agent_id}") == 0
     assert _wallet_balance(payments.PLATFORM_OWNER_ID) == 0
+    assert _wallet_balance(caller_owner) == 185
 
     def _consensus(dispute_id_arg: str) -> dict:
         disputes.record_judgment(
@@ -186,6 +200,7 @@ def test_dispute_consensus_caller_wins_full_refund(client, monkeypatch):
 def test_dispute_tie_then_admin_split_settlement(client, monkeypatch):
     worker = _register_user()
     caller = _register_user()
+    _fund_user_wallet(worker, 50)
     _fund_user_wallet(caller, 200)
     agent_id = _register_agent_via_api(client, worker["raw_api_key"], name=f"Tie Agent {uuid.uuid4().hex[:6]}")
 
@@ -198,6 +213,7 @@ def test_dispute_tie_then_admin_split_settlement(client, monkeypatch):
         json={"reason": "Caller changed requirements mid-stream"},
     )
     assert filed.status_code == 201, filed.text
+    assert filed.json()["filing_deposit_cents"] == 5
     dispute_id = filed.json()["dispute_id"]
 
     def _tie(dispute_id_arg: str) -> dict:
@@ -245,6 +261,7 @@ def test_dispute_tie_then_admin_split_settlement(client, monkeypatch):
     assert _wallet_balance(caller_owner) == 196
     assert _wallet_balance(f"agent:{agent_id}") == 4
     assert _wallet_balance(payments.PLATFORM_OWNER_ID) == 0
+    assert _wallet_balance(f"user:{worker['user_id']}") == 50
 
 
 def test_double_file_and_rate_after_dispute_blocked(client):
@@ -318,6 +335,7 @@ def test_clawback_moves_settled_payout_into_escrow(client):
 
     job = _create_job_via_api(client, caller["raw_api_key"], agent_id=agent_id)
     _complete_job(client, worker["raw_api_key"], job["job_id"])
+    _simulate_legacy_payout(job["job_id"])
 
     assert _wallet_balance(f"agent:{agent_id}") == 9
     assert _wallet_balance(payments.PLATFORM_OWNER_ID) == 1
@@ -343,6 +361,7 @@ def test_dispute_filing_rolls_back_when_clawback_lock_fails(client):
 
     job = _create_job_via_api(client, caller["raw_api_key"], agent_id=agent_id)
     _complete_job(client, worker["raw_api_key"], job["job_id"])
+    _simulate_legacy_payout(job["job_id"])
     job_row = jobs.get_job(job["job_id"])
     assert job_row is not None
 

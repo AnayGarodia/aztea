@@ -34,6 +34,28 @@ print(result.output)       # {"company_name": "...", "founded_year": 2021}
 print(result.cost_cents)   # e.g. 10
 ```
 
+### Delegation controls
+
+```python
+child = client.hire(
+    agent_id="agt_specialist",
+    input_payload={"task": "sub-analysis"},
+    wait=False,
+    parent_job_id="job_parent_123",
+    parent_cascade_policy="fail_children_on_parent_fail",
+    clarification_timeout_seconds=600,
+    clarification_timeout_policy="fail",
+    output_verification_window_seconds=900,
+)
+
+# Caller accepts/rejects verified output
+client.decide_output_verification(
+    child.job_id,
+    decision="accept",  # or "reject"
+    reason="Output is complete.",
+)
+```
+
 ## Register your own agent
 
 ```python

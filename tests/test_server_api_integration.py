@@ -4,6 +4,7 @@ os.environ.setdefault("API_KEY", "test-master-key")
 os.environ.setdefault("SERVER_BASE_URL", "http://localhost:8000")
 
 import hashlib
+import hmac
 import json
 import socket
 import threading
@@ -104,18 +105,44 @@ def _create_job_via_api(
     *,
     agent_id: str,
     max_attempts: int = 3,
+    extra: dict | None = None,
 ) -> dict:
+    payload = {
+        "agent_id": agent_id,
+        "input_payload": {"task": "analyze"},
+        "max_attempts": max_attempts,
+    }
+    if extra:
+        payload.update(extra)
     resp = client.post(
         "/jobs",
         headers=_auth_headers(raw_api_key),
-        json={
-            "agent_id": agent_id,
-            "input_payload": {"task": "analyze"},
-            "max_attempts": max_attempts,
-        },
+        json=payload,
     )
     assert resp.status_code == 201, resp.text
     return resp.json()
+
+
+def _force_settle_completed_job(job_id: str) -> dict:
+    job = jobs.get_job(job_id)
+    assert job is not None
+    assert job["status"] == "complete"
+    window_seconds = max(1, int(server._effective_dispute_window_seconds(job)))
+    completed_at = (datetime.now(timezone.utc) - timedelta(seconds=window_seconds + 5)).isoformat()
+    with jobs._conn() as conn:
+        conn.execute(
+            "UPDATE jobs SET completed_at = ?, updated_at = ? WHERE job_id = ?",
+            (completed_at, completed_at, job_id),
+        )
+    server._sweep_jobs(
+        retry_delay_seconds=0,
+        sla_seconds=7200,
+        limit=100,
+        actor_owner_id="test:settlement",
+    )
+    settled = jobs.get_job(job_id)
+    assert settled is not None
+    return settled
 
 
 def _manifest(
@@ -231,6 +258,8 @@ def test_worker_claim_heartbeat_and_complete_with_owner_auth(client):
     )
     assert completed.status_code == 200, completed.text
     assert completed.json()["status"] == "complete"
+    settled = _force_settle_completed_job(job_id)
+    assert settled["settled_at"] is not None
 
     caller_wallet = payments.get_or_create_wallet(f"user:{caller['user_id']}")
     agent_wallet = payments.get_or_create_wallet(f"agent:{agent_id}")
@@ -325,6 +354,8 @@ def test_complete_called_twice_returns_same_state_without_idempotency_key(client
     assert first.json() == second.json()
     assert second.json()["status"] == "complete"
     assert second.json()["output_payload"] == output_payload
+    settled = _force_settle_completed_job(job_id)
+    assert settled["settled_at"] is not None
 
     caller_wallet = payments.get_or_create_wallet(f"user:{caller['user_id']}")
     agent_wallet = payments.get_or_create_wallet(f"agent:{agent_id}")
@@ -662,6 +693,8 @@ def test_concurrent_complete_and_sweeper_timeout_race_has_no_lost_work(client):
     assert final_response["status"] in {"complete", "failed"}
     if final_response["status"] == "complete":
         assert final_response["output_payload"] == {"ok": True, "race": "done"}
+        settled = _force_settle_completed_job(job_id)
+        assert settled["settled_at"] is not None
     else:
         assert "lease expired" in (final_response.get("error_message") or "").lower()
 
@@ -674,7 +707,8 @@ def test_concurrent_complete_and_sweeper_timeout_race_has_no_lost_work(client):
     final_job = jobs.get_job(job_id)
     assert final_job is not None
     assert final_job["status"] == final_response["status"]
-    assert final_job["settled_at"] is not None
+    if final_job["status"] == "failed":
+        assert final_job["settled_at"] is not None
 
 
 def test_master_complete_records_auditable_claim_event(client):
@@ -768,6 +802,8 @@ def test_idempotency_key_replays_complete_without_double_settlement(client):
     )
     assert second.status_code == 200, second.text
     assert first.json() == second.json()
+    settled = _force_settle_completed_job(job_id)
+    assert settled["settled_at"] is not None
 
     caller_wallet = payments.get_or_create_wallet(f"user:{caller['user_id']}")
     agent_wallet = payments.get_or_create_wallet(f"agent:{agent_id}")
@@ -1129,6 +1165,102 @@ def test_onboarding_manifest_maps_output_schema_and_verifier_url(client):
     assert stored["output_verifier_url"] == verifier_url
 
 
+def test_registry_register_auto_verifies_with_verifier_url(client, monkeypatch):
+    worker = _register_user()
+    verifier_url = f"https://verifier.agentmarket.dev/{uuid.uuid4().hex[:8]}"
+    captured: dict[str, object] = {}
+
+    class _VerifierResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"verified": True, "reason": "Verifier accepted registration payload."}
+
+    def _fake_post(url, json=None, headers=None, timeout=None):
+        captured["url"] = url
+        captured["body"] = json
+        return _VerifierResponse()
+
+    monkeypatch.setattr(server.http, "post", _fake_post)
+    response = client.post(
+        "/registry/register",
+        headers=_auth_headers(worker["raw_api_key"]),
+        json={
+            "name": f"Verified Agent {uuid.uuid4().hex[:6]}",
+            "description": "Verifier-backed listing",
+            "endpoint_url": f"https://agents.agentmarket.dev/{uuid.uuid4().hex[:8]}",
+            "price_per_call_usd": 0.1,
+            "tags": ["verified-test"],
+            "input_schema": {"type": "object", "properties": {"task": {"type": "string"}}},
+            "output_schema": {"type": "object", "properties": {"ok": {"type": "boolean"}}},
+            "output_verifier_url": verifier_url,
+        },
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["agent"]["verified"] is True
+    assert captured["url"] == verifier_url
+    verifier_payload = captured["body"]
+    assert verifier_payload["event_type"] == "agent_registration_verification"
+    assert verifier_payload["agent"]["name"].startswith("Verified Agent")
+
+
+def test_endpoint_health_monitor_marks_degraded_and_recovers(client, monkeypatch):
+    worker = _register_user()
+    response = client.post(
+        "/registry/register",
+        headers=_auth_headers(worker["raw_api_key"]),
+        json={
+            "name": f"Health Mon Agent {uuid.uuid4().hex[:6]}",
+            "description": "Agent for endpoint health monitoring tests",
+            "endpoint_url": f"https://health.agentmarket.dev/{uuid.uuid4().hex[:8]}",
+            "price_per_call_usd": 0.1,
+            "tags": ["health-monitor"],
+            "input_schema": {"type": "object", "properties": {"task": {"type": "string"}}},
+        },
+    )
+    assert response.status_code == 201, response.text
+    agent_id = response.json()["agent_id"]
+
+    def _failed_head(*args, **kwargs):
+        raise server.http.RequestException("network down")
+
+    monkeypatch.setattr(server.http, "head", _failed_head)
+    monkeypatch.setattr(server.http, "get", _failed_head)
+    for _ in range(3):
+        summary = server._monitor_agent_endpoints(limit=100, timeout_seconds=1, failure_threshold=3)
+    assert summary["endpoint_degraded_count"] >= 1
+    degraded = registry.get_agent(agent_id)
+    assert degraded is not None
+    assert degraded["endpoint_health_status"] == "degraded"
+    assert degraded["endpoint_consecutive_failures"] >= 3
+
+    class _HealthyHead:
+        status_code = 200
+
+    monkeypatch.setattr(server.http, "head", lambda *args, **kwargs: _HealthyHead())
+    summary = server._monitor_agent_endpoints(limit=100, timeout_seconds=1, failure_threshold=3)
+    assert summary["endpoint_healthy_count"] >= 1
+    recovered = registry.get_agent(agent_id)
+    assert recovered is not None
+    assert recovered["endpoint_health_status"] == "healthy"
+    assert recovered["endpoint_consecutive_failures"] == 0
+
+
+def test_shutdown_draining_flag_is_toggleable(client):
+    server._set_server_shutting_down(True)
+    try:
+        assert server._server_is_shutting_down() is True
+        response = client.get("/health", headers=_auth_headers(TEST_MASTER_KEY))
+        assert response.status_code in {200, 503}
+    finally:
+        server._set_server_shutting_down(False)
+    assert server._server_is_shutting_down() is False
+
+
 def test_scoped_keys_enforce_caller_and_worker_permissions(client):
     worker_owner = _register_user()
     caller = _register_user()
@@ -1441,6 +1573,8 @@ def test_payments_reconciliation_and_settlement_trace_endpoints(client):
         json={"output_payload": {"ok": True}, "claim_token": claim_token},
     )
     assert completed.status_code == 200, completed.text
+    settled = _force_settle_completed_job(job_id)
+    assert settled["settled_at"] is not None
 
     trace = client.get(
         f"/ops/jobs/{job_id}/settlement-trace",
@@ -1592,6 +1726,94 @@ def test_outbound_url_validation_blocks_private_targets_by_default(client):
     )
     assert manifest_resp.status_code == 422
     assert "localhost" in manifest_resp.json()["message"]
+
+
+def test_job_callback_url_delivery_is_signed_and_contains_terminal_output(client, monkeypatch):
+    worker = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 300)
+
+    agent_id = _register_agent_via_api(
+        client,
+        worker["raw_api_key"],
+        name=f"Callback Agent {uuid.uuid4().hex[:6]}",
+        tags=["callback"],
+    )
+
+    callback_url = "https://hooks.example.com/job-callback"
+    callback_secret = "super-secret-callback-key"
+    callback_requests: list[dict] = []
+
+    def fake_post(url, data=None, headers=None, timeout=None):
+        callback_requests.append(
+            {
+                "url": url,
+                "data": data,
+                "headers": headers or {},
+            }
+        )
+        resp = requests.Response()
+        resp.status_code = 204
+        resp._content = b""
+        return resp
+
+    monkeypatch.setattr(server.http, "post", fake_post)
+
+    created = client.post(
+        "/jobs",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={
+            "agent_id": agent_id,
+            "input_payload": {"task": "deliver callback"},
+            "callback_url": callback_url,
+            "callback_secret": callback_secret,
+        },
+    )
+    assert created.status_code == 201, created.text
+    job_id = created.json()["job_id"]
+
+    claim = client.post(
+        f"/jobs/{job_id}/claim",
+        headers=_auth_headers(worker["raw_api_key"]),
+        json={"lease_seconds": 60},
+    )
+    assert claim.status_code == 200, claim.text
+
+    completed = client.post(
+        f"/jobs/{job_id}/complete",
+        headers=_auth_headers(worker["raw_api_key"]),
+        json={
+            "output_payload": {"ok": True, "source": "specialist"},
+            "claim_token": claim.json()["claim_token"],
+        },
+    )
+    assert completed.status_code == 200, completed.text
+    assert completed.json()["status"] == "complete"
+
+    processed = client.post(
+        "/ops/jobs/hooks/process",
+        headers=_auth_headers(TEST_MASTER_KEY),
+        json={"limit": 100},
+    )
+    assert processed.status_code == 200, processed.text
+    assert processed.json()["delivered"] >= 1
+
+    callback_match = next((entry for entry in callback_requests if entry["url"] == callback_url), None)
+    assert callback_match is not None
+    payload_bytes = callback_match["data"]
+    assert isinstance(payload_bytes, (bytes, bytearray))
+    payload = json.loads(payload_bytes.decode("utf-8"))
+    assert payload["job_id"] == job_id
+    assert payload["status"] == "complete"
+    assert payload["output_payload"] == {"ok": True, "source": "specialist"}
+
+    signature = callback_match["headers"].get("X-AgentMarket-Signature")
+    expected_signature = "sha256=" + hmac.new(
+        callback_secret.encode("utf-8"),
+        payload_bytes,
+        hashlib.sha256,
+    ).hexdigest()
+    assert signature == expected_signature
 
 
 def test_job_sweeper_handles_timeouts_sla_and_event_hooks(client, monkeypatch):
@@ -1992,6 +2214,8 @@ def test_builtin_agents_registered_to_system_owner_with_internal_endpoints(clien
         assert agent["owner_id"] == system_owner
         assert str(agent["endpoint_url"]).startswith("internal://")
         assert float(agent["price_per_call_usd"]) == pytest.approx(0.01)
+        assert isinstance(agent.get("output_examples"), list)
+        assert len(agent["output_examples"]) >= 2
 
 
 def test_registry_call_routes_internal_builtin_without_http_and_records_job(client, monkeypatch):
@@ -2023,6 +2247,8 @@ def test_registry_call_routes_internal_builtin_without_http_and_records_job(clie
     assert synced
     assert synced[0]["status"] == "complete"
     assert synced[0]["output_payload"]["summary"] == "internal::quick"
+    settled = _force_settle_completed_job(synced[0]["job_id"])
+    assert settled["settled_at"] is not None
 
     caller_wallet = payments.get_or_create_wallet(caller_owner)
     agent_wallet = payments.get_or_create_wallet(f"agent:{server._TEXTINTEL_AGENT_ID}")
@@ -2239,6 +2465,541 @@ def test_agent_scoped_key_claims_and_completes_only_its_agent(client):
         json={"lease_seconds": 60},
     )
     assert claim_b.status_code == 403
+
+
+def test_orchestrator_agent_can_hire_specialist_agent_programmatically(client):
+    orchestrator_owner = _register_user()
+    specialist_owner = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 1_000)
+    _fund_user_wallet(orchestrator_owner, 200)
+
+    orchestrator_agent_id = _register_agent_via_api(
+        client,
+        orchestrator_owner["raw_api_key"],
+        name=f"Orchestrator {uuid.uuid4().hex[:6]}",
+        price=0.10,
+        tags=["orchestrator"],
+    )
+    specialist_agent_id = _register_agent_via_api(
+        client,
+        specialist_owner["raw_api_key"],
+        name=f"Specialist {uuid.uuid4().hex[:6]}",
+        price=0.05,
+        tags=["specialist"],
+    )
+
+    parent_job = _create_job_via_api(
+        client,
+        caller["raw_api_key"],
+        agent_id=orchestrator_agent_id,
+        max_attempts=2,
+    )
+    parent_job_id = parent_job["job_id"]
+    parent_claim = client.post(
+        f"/jobs/{parent_job_id}/claim",
+        headers=_auth_headers(orchestrator_owner["raw_api_key"]),
+        json={"lease_seconds": 120},
+    )
+    assert parent_claim.status_code == 200, parent_claim.text
+    parent_claim_token = parent_claim.json()["claim_token"]
+
+    delegated = client.post(
+        "/jobs",
+        headers=_auth_headers(orchestrator_owner["raw_api_key"]),
+        json={
+            "agent_id": specialist_agent_id,
+            "input_payload": {"task": "solve delegated sub-task"},
+            "max_attempts": 2,
+        },
+    )
+    assert delegated.status_code == 201, delegated.text
+    child_job_id = delegated.json()["job_id"]
+
+    child_claim = client.post(
+        f"/jobs/{child_job_id}/claim",
+        headers=_auth_headers(specialist_owner["raw_api_key"]),
+        json={"lease_seconds": 120},
+    )
+    assert child_claim.status_code == 200, child_claim.text
+    child_complete = client.post(
+        f"/jobs/{child_job_id}/complete",
+        headers=_auth_headers(specialist_owner["raw_api_key"]),
+        json={
+            "output_payload": {"delegate_result": "specialist complete"},
+            "claim_token": child_claim.json()["claim_token"],
+        },
+    )
+    assert child_complete.status_code == 200, child_complete.text
+    assert child_complete.json()["status"] == "complete"
+
+    child_state = client.get(
+        f"/jobs/{child_job_id}",
+        headers=_auth_headers(orchestrator_owner["raw_api_key"]),
+    )
+    assert child_state.status_code == 200, child_state.text
+    assert child_state.json()["status"] == "complete"
+
+    parent_complete = client.post(
+        f"/jobs/{parent_job_id}/complete",
+        headers=_auth_headers(orchestrator_owner["raw_api_key"]),
+        json={
+            "output_payload": {
+                "delegate_job_id": child_job_id,
+                "delegate_result": child_state.json()["output_payload"],
+            },
+            "claim_token": parent_claim_token,
+        },
+    )
+    assert parent_complete.status_code == 200, parent_complete.text
+    assert parent_complete.json()["status"] == "complete"
+
+    caller_view = client.get(
+        f"/jobs/{parent_job_id}",
+        headers=_auth_headers(caller["raw_api_key"]),
+    )
+    assert caller_view.status_code == 200, caller_view.text
+    assert caller_view.json()["status"] == "complete"
+    assert caller_view.json()["output_payload"]["delegate_job_id"] == child_job_id
+
+
+def test_orchestrator_receives_child_completion_callback_and_finishes_parent(client, monkeypatch):
+    orchestrator_owner = _register_user()
+    specialist_owner = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 1_000)
+    _fund_user_wallet(orchestrator_owner, 200)
+
+    orchestrator_agent_id = _register_agent_via_api(
+        client,
+        orchestrator_owner["raw_api_key"],
+        name=f"Callback Orchestrator {uuid.uuid4().hex[:6]}",
+        tags=["orchestrator", "callback"],
+    )
+    specialist_agent_id = _register_agent_via_api(
+        client,
+        specialist_owner["raw_api_key"],
+        name=f"Callback Specialist {uuid.uuid4().hex[:6]}",
+        tags=["specialist", "callback"],
+    )
+
+    callback_url = "https://hooks.example.com/orchestrator-poke"
+    callback_secret = "orchestrator-callback-secret"
+    callback_requests: list[dict] = []
+
+    def fake_post(url, data=None, headers=None, timeout=None):
+        callback_requests.append({"url": url, "data": data, "headers": headers or {}})
+        resp = requests.Response()
+        resp.status_code = 204
+        resp._content = b""
+        return resp
+
+    monkeypatch.setattr(server.http, "post", fake_post)
+
+    parent_job = _create_job_via_api(
+        client,
+        caller["raw_api_key"],
+        agent_id=orchestrator_agent_id,
+        max_attempts=2,
+    )
+    parent_job_id = parent_job["job_id"]
+    parent_claim = client.post(
+        f"/jobs/{parent_job_id}/claim",
+        headers=_auth_headers(orchestrator_owner["raw_api_key"]),
+        json={"lease_seconds": 120},
+    )
+    assert parent_claim.status_code == 200, parent_claim.text
+    parent_claim_token = parent_claim.json()["claim_token"]
+
+    delegated = client.post(
+        "/jobs",
+        headers=_auth_headers(orchestrator_owner["raw_api_key"]),
+        json={
+            "agent_id": specialist_agent_id,
+            "input_payload": {"task": "solve delegated callback sub-task"},
+            "callback_url": callback_url,
+            "callback_secret": callback_secret,
+            "max_attempts": 2,
+        },
+    )
+    assert delegated.status_code == 201, delegated.text
+    child_job_id = delegated.json()["job_id"]
+
+    child_claim = client.post(
+        f"/jobs/{child_job_id}/claim",
+        headers=_auth_headers(specialist_owner["raw_api_key"]),
+        json={"lease_seconds": 120},
+    )
+    assert child_claim.status_code == 200, child_claim.text
+    child_complete = client.post(
+        f"/jobs/{child_job_id}/complete",
+        headers=_auth_headers(specialist_owner["raw_api_key"]),
+        json={
+            "output_payload": {"delegate_result": "callback specialist complete"},
+            "claim_token": child_claim.json()["claim_token"],
+        },
+    )
+    assert child_complete.status_code == 200, child_complete.text
+    assert child_complete.json()["status"] == "complete"
+
+    processed = client.post(
+        "/ops/jobs/hooks/process",
+        headers=_auth_headers(TEST_MASTER_KEY),
+        json={"limit": 100},
+    )
+    assert processed.status_code == 200, processed.text
+    assert processed.json()["delivered"] >= 1
+
+    callback_match = next((entry for entry in callback_requests if entry["url"] == callback_url), None)
+    assert callback_match is not None
+    payload_bytes = callback_match["data"]
+    assert isinstance(payload_bytes, (bytes, bytearray))
+    payload = json.loads(payload_bytes.decode("utf-8"))
+    assert payload["job_id"] == child_job_id
+    assert payload["status"] == "complete"
+    assert payload["output_payload"] == {"delegate_result": "callback specialist complete"}
+
+    expected_signature = "sha256=" + hmac.new(
+        callback_secret.encode("utf-8"),
+        payload_bytes,
+        hashlib.sha256,
+    ).hexdigest()
+    assert callback_match["headers"].get("X-AgentMarket-Signature") == expected_signature
+
+    parent_complete = client.post(
+        f"/jobs/{parent_job_id}/complete",
+        headers=_auth_headers(orchestrator_owner["raw_api_key"]),
+        json={
+            "output_payload": {
+                "delegate_job_id": child_job_id,
+                "delegate_result": payload["output_payload"],
+            },
+            "claim_token": parent_claim_token,
+        },
+    )
+    assert parent_complete.status_code == 200, parent_complete.text
+    assert parent_complete.json()["status"] == "complete"
+
+    caller_view = client.get(
+        f"/jobs/{parent_job_id}",
+        headers=_auth_headers(caller["raw_api_key"]),
+    )
+    assert caller_view.status_code == 200, caller_view.text
+    assert caller_view.json()["status"] == "complete"
+    assert caller_view.json()["output_payload"]["delegate_job_id"] == child_job_id
+
+
+def test_output_verification_accept_blocks_then_allows_settlement(client):
+    worker = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 400)
+
+    agent_id = _register_agent_via_api(
+        client,
+        worker["raw_api_key"],
+        name=f"Verification Agent {uuid.uuid4().hex[:6]}",
+        price=0.10,
+        tags=["verification"],
+    )
+    created = _create_job_via_api(
+        client,
+        caller["raw_api_key"],
+        agent_id=agent_id,
+        extra={"output_verification_window_seconds": 3600},
+    )
+    job_id = created["job_id"]
+
+    claim = client.post(
+        f"/jobs/{job_id}/claim",
+        headers=_auth_headers(worker["raw_api_key"]),
+        json={"lease_seconds": 120},
+    )
+    assert claim.status_code == 200, claim.text
+    completed = client.post(
+        f"/jobs/{job_id}/complete",
+        headers=_auth_headers(worker["raw_api_key"]),
+        json={"output_payload": {"ok": True}, "claim_token": claim.json()["claim_token"]},
+    )
+    assert completed.status_code == 200, completed.text
+    assert completed.json()["output_verification_status"] == "pending"
+    assert jobs.get_job(job_id)["settled_at"] is None
+
+    accepted = client.post(
+        f"/jobs/{job_id}/verification",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={"decision": "accept"},
+    )
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["output_verification_status"] == "accepted"
+
+    settled = _force_settle_completed_job(job_id)
+    assert settled["output_verification_status"] == "accepted"
+    assert settled["settled_at"] is not None
+
+
+def test_output_verification_reject_auto_opens_dispute(client):
+    worker = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 400)
+
+    agent_id = _register_agent_via_api(
+        client,
+        worker["raw_api_key"],
+        name=f"Reject Verification Agent {uuid.uuid4().hex[:6]}",
+        tags=["verification-reject"],
+    )
+    created = _create_job_via_api(
+        client,
+        caller["raw_api_key"],
+        agent_id=agent_id,
+        extra={"output_verification_window_seconds": 3600},
+    )
+    job_id = created["job_id"]
+
+    claim = client.post(
+        f"/jobs/{job_id}/claim",
+        headers=_auth_headers(worker["raw_api_key"]),
+        json={"lease_seconds": 120},
+    )
+    assert claim.status_code == 200, claim.text
+    completed = client.post(
+        f"/jobs/{job_id}/complete",
+        headers=_auth_headers(worker["raw_api_key"]),
+        json={"output_payload": {"result": "bad"}, "claim_token": claim.json()["claim_token"]},
+    )
+    assert completed.status_code == 200, completed.text
+    assert completed.json()["output_verification_status"] == "pending"
+
+    rejected = client.post(
+        f"/jobs/{job_id}/verification",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={"decision": "reject", "reason": "Output missed required section."},
+    )
+    assert rejected.status_code == 200, rejected.text
+    assert rejected.json()["output_verification_status"] == "rejected"
+    assert jobs.get_job(job_id)["settled_at"] is None
+
+    dispute = client.get(
+        f"/jobs/{job_id}/dispute",
+        headers=_auth_headers(caller["raw_api_key"]),
+    )
+    assert dispute.status_code == 200, dispute.text
+    assert dispute.json()["job_id"] == job_id
+    assert dispute.json()["side"] == "caller"
+    assert disputes.has_dispute_for_job(job_id)
+
+
+def test_clarification_timeout_policy_fail_and_proceed(client):
+    worker = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 600)
+
+    agent_id = _register_agent_via_api(
+        client,
+        worker["raw_api_key"],
+        name=f"Clarification Timeout Agent {uuid.uuid4().hex[:6]}",
+        tags=["clarification-timeout"],
+    )
+
+    fail_job = _create_job_via_api(
+        client,
+        caller["raw_api_key"],
+        agent_id=agent_id,
+        extra={
+            "clarification_timeout_seconds": 30,
+            "clarification_timeout_policy": "fail",
+        },
+    )
+    proceed_job = _create_job_via_api(
+        client,
+        caller["raw_api_key"],
+        agent_id=agent_id,
+        extra={
+            "clarification_timeout_seconds": 30,
+            "clarification_timeout_policy": "proceed",
+        },
+    )
+
+    for item in (fail_job, proceed_job):
+        claim = client.post(
+            f"/jobs/{item['job_id']}/claim",
+            headers=_auth_headers(worker["raw_api_key"]),
+            json={"lease_seconds": 120},
+        )
+        assert claim.status_code == 200, claim.text
+        asked = client.post(
+            f"/jobs/{item['job_id']}/messages",
+            headers=_auth_headers(worker["raw_api_key"]),
+            json={"type": "clarification_request", "payload": {"question": "Need format details."}},
+        )
+        assert asked.status_code == 201, asked.text
+
+    past_deadline = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
+    with jobs._conn() as conn:
+        conn.execute(
+            "UPDATE jobs SET clarification_deadline_at = ?, updated_at = ? WHERE job_id IN (?, ?)",
+            (past_deadline, past_deadline, fail_job["job_id"], proceed_job["job_id"]),
+        )
+
+    sweep = client.post(
+        "/ops/jobs/sweep",
+        headers=_auth_headers(TEST_MASTER_KEY),
+        json={"retry_delay_seconds": 0, "sla_seconds": 7200, "limit": 200},
+    )
+    assert sweep.status_code == 200, sweep.text
+    summary = sweep.json()
+    assert fail_job["job_id"] in summary["clarification_timeout_failed_job_ids"]
+    assert proceed_job["job_id"] in summary["clarification_timeout_proceeded_job_ids"]
+
+    failed_state = jobs.get_job(fail_job["job_id"])
+    proceeded_state = jobs.get_job(proceed_job["job_id"])
+    assert failed_state is not None
+    assert proceeded_state is not None
+    assert failed_state["status"] == "failed"
+    assert failed_state["settled_at"] is not None
+    assert proceeded_state["status"] == "running"
+
+
+def test_parent_child_linkage_and_fail_cascade_policy(client):
+    orchestrator_owner = _register_user()
+    specialist_owner = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 1_000)
+    _fund_user_wallet(orchestrator_owner, 300)
+
+    orchestrator_agent_id = _register_agent_via_api(
+        client,
+        orchestrator_owner["raw_api_key"],
+        name=f"Cascade Parent {uuid.uuid4().hex[:6]}",
+        tags=["orchestrator", "cascade"],
+    )
+    specialist_agent_id = _register_agent_via_api(
+        client,
+        specialist_owner["raw_api_key"],
+        name=f"Cascade Child {uuid.uuid4().hex[:6]}",
+        tags=["specialist", "cascade"],
+    )
+
+    parent_job = _create_job_via_api(
+        client,
+        caller["raw_api_key"],
+        agent_id=orchestrator_agent_id,
+        max_attempts=2,
+    )
+    parent_job_id = parent_job["job_id"]
+
+    child_cascade = client.post(
+        "/jobs",
+        headers=_auth_headers(orchestrator_owner["raw_api_key"]),
+        json={
+            "agent_id": specialist_agent_id,
+            "input_payload": {"task": "cascade me"},
+            "parent_job_id": parent_job_id,
+            "parent_cascade_policy": "fail_children_on_parent_fail",
+        },
+    )
+    assert child_cascade.status_code == 201, child_cascade.text
+    assert child_cascade.json()["parent_job_id"] == parent_job_id
+    assert child_cascade.json()["parent_cascade_policy"] == "fail_children_on_parent_fail"
+    cascade_child_job_id = child_cascade.json()["job_id"]
+
+    child_detached = client.post(
+        "/jobs",
+        headers=_auth_headers(orchestrator_owner["raw_api_key"]),
+        json={
+            "agent_id": specialist_agent_id,
+            "input_payload": {"task": "leave me pending"},
+            "parent_job_id": parent_job_id,
+        },
+    )
+    assert child_detached.status_code == 201, child_detached.text
+    detached_child_job_id = child_detached.json()["job_id"]
+
+    parent_claim = client.post(
+        f"/jobs/{parent_job_id}/claim",
+        headers=_auth_headers(orchestrator_owner["raw_api_key"]),
+        json={"lease_seconds": 120},
+    )
+    assert parent_claim.status_code == 200, parent_claim.text
+
+    parent_fail = client.post(
+        f"/jobs/{parent_job_id}/fail",
+        headers=_auth_headers(orchestrator_owner["raw_api_key"]),
+        json={
+            "error_message": "orchestrator failed",
+            "claim_token": parent_claim.json()["claim_token"],
+        },
+    )
+    assert parent_fail.status_code == 200, parent_fail.text
+    assert parent_fail.json()["status"] == "failed"
+
+    cascaded_child_state = jobs.get_job(cascade_child_job_id)
+    detached_child_state = jobs.get_job(detached_child_job_id)
+    assert cascaded_child_state is not None
+    assert detached_child_state is not None
+    assert cascaded_child_state["status"] == "failed"
+    assert cascaded_child_state["settled_at"] is not None
+    assert detached_child_state["status"] == "pending"
+
+
+def test_parent_cascade_policy_requires_parent_job_id(client):
+    owner = _register_user()
+    _fund_user_wallet(owner, 300)
+    agent_id = _register_agent_via_api(
+        client,
+        owner["raw_api_key"],
+        name=f"Policy Guard Agent {uuid.uuid4().hex[:6]}",
+    )
+    created = client.post(
+        "/jobs",
+        headers=_auth_headers(owner["raw_api_key"]),
+        json={
+            "agent_id": agent_id,
+            "input_payload": {"task": "x"},
+            "parent_cascade_policy": "fail_children_on_parent_fail",
+        },
+    )
+    assert created.status_code == 422
+    assert "parent_cascade_policy requires parent_job_id" in created.text
+
+
+def test_agent_scoped_key_cannot_create_delegated_jobs(client):
+    owner = _register_user()
+    other_owner = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 500)
+    orchestrator_agent_id = _register_agent_via_api(
+        client,
+        owner["raw_api_key"],
+        name=f"Scoped Orchestrator {uuid.uuid4().hex[:6]}",
+    )
+    specialist_agent_id = _register_agent_via_api(
+        client,
+        other_owner["raw_api_key"],
+        name=f"Scoped Specialist {uuid.uuid4().hex[:6]}",
+    )
+
+    key_resp = client.post(
+        f"/registry/agents/{orchestrator_agent_id}/keys",
+        headers=_auth_headers(owner["raw_api_key"]),
+        json={"name": "scoped-orchestrator-key"},
+    )
+    assert key_resp.status_code == 201, key_resp.text
+    scoped_key = key_resp.json()["raw_key"]
+
+    delegated = client.post(
+        "/jobs",
+        headers=_auth_headers(scoped_key),
+        json={
+            "agent_id": specialist_agent_id,
+            "input_payload": {"task": "delegate"},
+        },
+    )
+    assert delegated.status_code == 403, delegated.text
+    delegated_body = delegated.json()
+    detail_text = str(delegated_body.get("detail", ""))
+    message_text = str(delegated_body.get("message", ""))
+    assert "scope" in (detail_text + " " + message_text).lower()
 
 
 def test_agent_suspend_and_ban_enforcement(client):

@@ -492,7 +492,43 @@ class JobCreateRequest(BaseModel):
     agent_id: str
     input_payload: JSONObject = Field(default_factory=dict)
     max_attempts: int = Field(default=3, ge=1, le=10)
+    parent_job_id: str | None = Field(
+        default=None,
+        description="Optional parent job ID when creating a delegated child job.",
+    )
+    parent_cascade_policy: Literal["detach", "fail_children_on_parent_fail"] = Field(
+        default="detach",
+        description=(
+            "Behavior when parent reaches terminal failure. "
+            "'detach' keeps child running; 'fail_children_on_parent_fail' fails active descendants."
+        ),
+    )
+    clarification_timeout_seconds: int | None = Field(
+        default=None,
+        ge=0,
+        le=7 * 24 * 3600,
+        description=(
+            "Optional timeout for awaiting caller clarification. "
+            "0/null disables timeout-based action."
+        ),
+    )
+    clarification_timeout_policy: Literal["fail", "proceed"] = Field(
+        default="fail",
+        description=(
+            "Action when clarification timeout is reached. "
+            "'fail' marks job failed and refunds per failure flow; 'proceed' resumes running."
+        ),
+    )
     dispute_window_hours: int = Field(default=72, ge=1, le=24 * 30)
+    output_verification_window_seconds: int | None = Field(
+        default=None,
+        ge=0,
+        le=7 * 24 * 3600,
+        description=(
+            "Optional caller acceptance window after worker completion. "
+            "During this window, settlement is held until caller accepts/rejects or window expires."
+        ),
+    )
     callback_url: str | None = Field(
         default=None,
         description=(
@@ -613,6 +649,36 @@ class JobDisputeRequest(BaseModel):
         if not text:
             raise ValueError("reason must not be empty")
         return text
+
+
+class JobVerificationDecisionRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "decision": "reject",
+                "reason": "Output omitted required risk analysis section.",
+                "evidence": "https://example.com/evidence/risk-section",
+            }
+        }
+    )
+
+    decision: Literal["accept", "reject"]
+    reason: str | None = None
+    evidence: str | None = None
+
+    @field_validator("reason")
+    @classmethod
+    def verification_reason_normalize(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        text = value.strip()
+        return text or None
+
+    @model_validator(mode="after")
+    def validate_reject_reason(self) -> "JobVerificationDecisionRequest":
+        if self.decision == "reject" and not self.reason:
+            raise ValueError("reason is required when decision is 'reject'.")
+        return self
 
 
 class JobRateCallerRequest(BaseModel):
@@ -1358,6 +1424,10 @@ class AgentResponse(BaseModel):
     output_verifier_url: str | None = None
     output_examples: list | None = None
     verified: bool = False
+    endpoint_health_status: str | None = None
+    endpoint_consecutive_failures: int | None = None
+    endpoint_last_checked_at: str | None = None
+    endpoint_last_error: str | None = None
     status: str = "active"
     caller_trust_min: float | None = None
     # Discovery signals for orchestrators
@@ -1412,11 +1482,17 @@ class JobResponse(BaseModel):
     last_heartbeat_at: str | None = None
     attempt_count: int
     max_attempts: int
+    parent_job_id: str | None = None
+    parent_cascade_policy: str | None = None
     retry_count: int
     next_retry_at: str | None = None
     last_retry_at: str | None = None
     timeout_count: int
     last_timeout_at: str | None = None
+    clarification_timeout_seconds: int | None = None
+    clarification_timeout_policy: str | None = None
+    clarification_requested_at: str | None = None
+    clarification_deadline_at: str | None = None
     latest_message_id: int | None = None
     dispute_window_hours: int | None = None
     dispute_outcome: str | None = None
@@ -1424,6 +1500,12 @@ class JobResponse(BaseModel):
     quality_score: int | None = None
     judge_agent_id: str | None = None
     callback_url: str | None = None
+    output_verification_window_seconds: int | None = None
+    output_verification_status: str | None = None
+    output_verification_deadline_at: str | None = None
+    output_verification_decided_at: str | None = None
+    output_verification_decision_owner_id: str | None = None
+    output_verification_reason: str | None = None
 
 
 class JobsListResponse(BaseModel):
@@ -1480,6 +1562,7 @@ class DisputeResponse(BaseModel):
     side: str
     reason: str
     evidence: str | None = None
+    filing_deposit_cents: int = 0
     status: str
     outcome: str | None = None
     split_caller_cents: int | None = None

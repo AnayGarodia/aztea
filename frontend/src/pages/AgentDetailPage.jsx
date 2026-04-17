@@ -17,6 +17,16 @@ import { useMarket } from '../context/MarketContext'
 import { ArrowLeft, ArrowUpRight, AlertTriangle } from 'lucide-react'
 import './AgentDetailPage.css'
 
+function fmtPct(value) {
+  if (typeof value !== 'number' || Number.isNaN(value)) return '—'
+  return `${(value * 100).toFixed(1)}%`
+}
+
+function fmtMs(value) {
+  if (typeof value !== 'number' || Number.isNaN(value)) return '—'
+  return `${Math.round(value)} ms`
+}
+
 export default function AgentDetailPage() {
   const { id } = useParams()
   const { agents, wallet, apiKey, showToast, refreshJobs } = useMarket()
@@ -29,6 +39,7 @@ export default function AgentDetailPage() {
   const priceCents = agent ? Math.round((agent.price_per_call_usd ?? 0) * 100) : 0
   const balanceCents = wallet?.balance_cents ?? 0
   const insufficientBalance = priceCents > 0 && balanceCents < priceCents
+  const outputExamples = Array.isArray(agent?.output_examples) ? agent.output_examples : []
 
   const handleInvoke = async (payload) => {
     if (!agent) return
@@ -119,6 +130,75 @@ export default function AgentDetailPage() {
               <p className="agent-detail__trust-title">Reputation & trust</p>
               <TrustGauge agent={agent} />
             </motion.div>
+          </Reveal>
+
+          <Reveal delay={0.12}>
+            <Card>
+              <Card.Header>
+                <span className="agent-detail__section-title">Public profile</span>
+              </Card.Header>
+              <Card.Body>
+                <div className="agent-detail__stats-grid">
+                  <div className="agent-detail__stat">
+                    <span className="agent-detail__stat-label">Trust score</span>
+                    <span className="agent-detail__stat-value">
+                      {typeof agent.trust_score === 'number' ? agent.trust_score.toFixed(2) : '—'}
+                    </span>
+                  </div>
+                  <div className="agent-detail__stat">
+                    <span className="agent-detail__stat-label">Success rate</span>
+                    <span className="agent-detail__stat-value">{fmtPct(agent.success_rate)}</span>
+                  </div>
+                  <div className="agent-detail__stat">
+                    <span className="agent-detail__stat-label">Dispute rate</span>
+                    <span className="agent-detail__stat-value">{fmtPct(agent.dispute_rate)}</span>
+                  </div>
+                  <div className="agent-detail__stat">
+                    <span className="agent-detail__stat-label">Total calls</span>
+                    <span className="agent-detail__stat-value">{agent.total_calls ?? '—'}</span>
+                  </div>
+                  <div className="agent-detail__stat">
+                    <span className="agent-detail__stat-label">Avg latency</span>
+                    <span className="agent-detail__stat-value">{fmtMs(agent.avg_latency_ms)}</span>
+                  </div>
+                  <div className="agent-detail__stat">
+                    <span className="agent-detail__stat-label">Verified</span>
+                    <span className="agent-detail__stat-value">{agent.verified ? 'Yes' : 'No'}</span>
+                  </div>
+                </div>
+              </Card.Body>
+            </Card>
+          </Reveal>
+
+          <Reveal delay={0.14}>
+            <Card>
+              <Card.Header>
+                <span className="agent-detail__section-title">Output examples</span>
+              </Card.Header>
+              <Card.Body>
+                {outputExamples.length === 0 ? (
+                  <p className="agent-detail__output-empty">
+                    No examples provided yet.
+                  </p>
+                ) : (
+                  <div className="agent-detail__examples">
+                    {outputExamples.map((example, index) => (
+                      <div key={`${agent.agent_id}-example-${index}`} className="agent-detail__example">
+                        <p className="agent-detail__example-title">Example {index + 1}</p>
+                        <div className="agent-detail__example-block">
+                          <span>Input</span>
+                          <pre>{JSON.stringify(example?.input ?? {}, null, 2)}</pre>
+                        </div>
+                        <div className="agent-detail__example-block">
+                          <span>Output</span>
+                          <pre>{JSON.stringify(example?.output ?? {}, null, 2)}</pre>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Card.Body>
+            </Card>
           </Reveal>
 
           {/* Invocation guide */}

@@ -683,6 +683,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/jobs/{job_id}/verification": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Jobs Output Verification Decide */
+        post: operations["jobs_output_verification_decide_jobs__job_id__verification_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/jobs/{job_id}/fail": {
         parameters: {
             query?: never;
@@ -1434,6 +1451,13 @@ export interface components {
             };
             /** Output Verifier Url */
             output_verifier_url?: string | null;
+            /**
+             * Output Examples
+             * @description Optional list of {input, output} example pairs. Shown in discovery so orchestrators can evaluate quality before hiring.
+             */
+            output_examples?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            }[] | null;
         };
         /** AgentResponse */
         AgentResponse: {
@@ -1459,6 +1483,21 @@ export interface components {
             };
             /** Output Verifier Url */
             output_verifier_url?: string | null;
+            /** Output Examples */
+            output_examples?: unknown[] | null;
+            /**
+             * Verified
+             * @default false
+             */
+            verified: boolean;
+            /** Endpoint Health Status */
+            endpoint_health_status?: string | null;
+            /** Endpoint Consecutive Failures */
+            endpoint_consecutive_failures?: number | null;
+            /** Endpoint Last Checked At */
+            endpoint_last_checked_at?: string | null;
+            /** Endpoint Last Error */
+            endpoint_last_error?: string | null;
             /**
              * Status
              * @default active
@@ -1474,6 +1513,8 @@ export interface components {
             avg_latency_ms?: number | null;
             /** Success Rate */
             success_rate?: number | null;
+            /** Dispute Rate */
+            dispute_rate?: number | null;
         } & {
             [key: string]: unknown;
         };
@@ -1691,6 +1732,11 @@ export interface components {
             reason: string;
             /** Evidence */
             evidence?: string | null;
+            /**
+             * Filing Deposit Cents
+             * @default 0
+             */
+            filing_deposit_cents: number;
             /** Status */
             status: string;
             /** Outcome */
@@ -1846,15 +1892,49 @@ export interface components {
              */
             max_attempts: number;
             /**
+             * Parent Job Id
+             * @description Optional parent job ID when creating a delegated child job.
+             */
+            parent_job_id?: string | null;
+            /**
+             * Parent Cascade Policy
+             * @description Behavior when parent reaches terminal failure. 'detach' keeps child running; 'fail_children_on_parent_fail' fails active descendants.
+             * @default detach
+             * @enum {string}
+             */
+            parent_cascade_policy: "detach" | "fail_children_on_parent_fail";
+            /**
+             * Clarification Timeout Seconds
+             * @description Optional timeout for awaiting caller clarification. 0/null disables timeout-based action.
+             */
+            clarification_timeout_seconds?: number | null;
+            /**
+             * Clarification Timeout Policy
+             * @description Action when clarification timeout is reached. 'fail' marks job failed and refunds per failure flow; 'proceed' resumes running.
+             * @default fail
+             * @enum {string}
+             */
+            clarification_timeout_policy: "fail" | "proceed";
+            /**
              * Dispute Window Hours
              * @default 72
              */
             dispute_window_hours: number;
             /**
+             * Output Verification Window Seconds
+             * @description Optional caller acceptance window after worker completion. During this window, settlement is held until caller accepts/rejects or window expires.
+             */
+            output_verification_window_seconds?: number | null;
+            /**
              * Callback Url
              * @description Optional HTTPS URL the platform will POST to when the job reaches a terminal state (completed, failed). Body: {job_id, status, output_payload, error_message, settled_at}. Delivered with retry/backoff via the hook delivery worker. Verify authenticity with the X-AgentMarket-Signature header (HMAC-SHA256).
              */
             callback_url?: string | null;
+            /**
+             * Callback Secret
+             * @description Optional secret used to sign the callback POST body. The platform computes HMAC-SHA256(secret, body) and sends it as X-AgentMarket-Signature: sha256=<hex>. Verify on your end to reject spoofed deliveries.
+             */
+            callback_secret?: string | null;
             /**
              * Budget Cents
              * @description Optional max price the caller is willing to pay in cents. Rejected with 400 if agent.price_cents > budget_cents.
@@ -2084,6 +2164,10 @@ export interface components {
             attempt_count: number;
             /** Max Attempts */
             max_attempts: number;
+            /** Parent Job Id */
+            parent_job_id?: string | null;
+            /** Parent Cascade Policy */
+            parent_cascade_policy?: string | null;
             /** Retry Count */
             retry_count: number;
             /** Next Retry At */
@@ -2094,6 +2178,14 @@ export interface components {
             timeout_count: number;
             /** Last Timeout At */
             last_timeout_at?: string | null;
+            /** Clarification Timeout Seconds */
+            clarification_timeout_seconds?: number | null;
+            /** Clarification Timeout Policy */
+            clarification_timeout_policy?: string | null;
+            /** Clarification Requested At */
+            clarification_requested_at?: string | null;
+            /** Clarification Deadline At */
+            clarification_deadline_at?: string | null;
             /** Latest Message Id */
             latest_message_id?: number | null;
             /** Dispute Window Hours */
@@ -2108,6 +2200,18 @@ export interface components {
             judge_agent_id?: string | null;
             /** Callback Url */
             callback_url?: string | null;
+            /** Output Verification Window Seconds */
+            output_verification_window_seconds?: number | null;
+            /** Output Verification Status */
+            output_verification_status?: string | null;
+            /** Output Verification Deadline At */
+            output_verification_deadline_at?: string | null;
+            /** Output Verification Decided At */
+            output_verification_decided_at?: string | null;
+            /** Output Verification Decision Owner Id */
+            output_verification_decision_owner_id?: string | null;
+            /** Output Verification Reason */
+            output_verification_reason?: string | null;
         } & {
             [key: string]: unknown;
         };
@@ -2151,6 +2255,25 @@ export interface components {
             transactions: {
                 [key: string]: components["schemas"]["JsonValue"];
             }[];
+        };
+        /**
+         * JobVerificationDecisionRequest
+         * @example {
+         *       "decision": "reject",
+         *       "evidence": "https://example.com/evidence/risk-section",
+         *       "reason": "Output omitted required risk analysis section."
+         *     }
+         */
+        JobVerificationDecisionRequest: {
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "accept" | "reject";
+            /** Reason */
+            reason?: string | null;
+            /** Evidence */
+            evidence?: string | null;
         };
         /** JobsListResponse */
         JobsListResponse: {
@@ -5607,6 +5730,104 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Rate limit exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
+                };
+            };
+            /** @description Internal server error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    jobs_output_verification_decide_jobs__job_id__verification_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JobVerificationDecisionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobResponse"];
+                };
+            };
+            /** @description Bad request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid authorization header. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
             /** @description Rate limit exceeded. */

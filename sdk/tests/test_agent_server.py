@@ -196,6 +196,27 @@ def test_process_job_calls_fail_on_handler_exception():
     assert "Something went wrong" in fail_calls[0].get("error_message", "")
 
 
+def test_process_job_skips_when_claim_token_missing():
+    server = _make_server(lambda inp: {"ok": True})
+    server._agent_id = "agt-test"
+
+    claim_resp = _mock_response(200, {"job_id": "job-err"})
+    complete_calls = 0
+
+    def fake_request(method: str, path: str, **kwargs):
+        nonlocal complete_calls
+        if method == "POST" and path.endswith("/claim"):
+            return claim_resp
+        if method == "POST" and path.endswith("/complete"):
+            complete_calls += 1
+        return _mock_response(200, {})
+
+    with patch.object(server._client._http, "request", side_effect=fake_request):
+        server._process_job({"job_id": "job-err", "status": "pending", "input_payload": {}})
+
+    assert complete_calls == 0
+
+
 # ── Heartbeat thread ──────────────────────────────────────────────────────────
 
 

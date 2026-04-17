@@ -48,6 +48,39 @@ export interface ClientOptions {
   eventSourceFactory?: (url: string, init: { headers?: Record<string, string> }) => EventSourceLike;
 }
 
+export interface HireOptions {
+  maxAttempts?: number;
+  disputeWindowHours?: number;
+  callbackUrl?: string;
+  budgetCents?: number;
+  waitForCompletion?: boolean;
+  timeoutSeconds?: number;
+  pollIntervalMs?: number;
+}
+
+export interface SearchOptions {
+  limit?: number;
+  minTrust?: number;
+  maxPriceCents?: number;
+  requiredInputFields?: string[];
+  respectCallerTrustMin?: boolean;
+}
+
+export interface HireManySpec {
+  agentId: string;
+  inputPayload: JsonObject;
+  maxAttempts?: number;
+  disputeWindowHours?: number;
+  callbackUrl?: string;
+  budgetCents?: number;
+}
+
+export interface HireManyOptions {
+  waitForCompletion?: boolean;
+  timeoutSeconds?: number;
+  pollIntervalMs?: number;
+}
+
 interface RequestOptions {
   method?: "GET" | "POST" | "DELETE";
   body?: JsonObject;
@@ -332,6 +365,103 @@ export class AgentmarketClient {
     this.disputes = new DisputesNamespace(this);
   }
 
+  async hire(
+    agentId: string,
+    inputPayload: JsonObject,
+    options: HireOptions = {},
+  ): Promise<JobHandle | JobResponse> {
+    const body: JsonObject = {
+      agent_id: agentId,
+      input_payload: inputPayload,
+      max_attempts: options.maxAttempts ?? 3,
+    };
+    if (options.disputeWindowHours !== undefined) {
+      body.dispute_window_hours = options.disputeWindowHours;
+    }
+    if (options.callbackUrl !== undefined) {
+      body.callback_url = options.callbackUrl;
+    }
+    if (options.budgetCents !== undefined) {
+      body.budget_cents = options.budgetCents;
+    }
+
+    const job = await this.request<JobResponse>("/jobs", { method: "POST", body });
+    const handle = new JobHandle(this.jobs, job);
+    if (!options.waitForCompletion) {
+      return handle;
+    }
+    return handle.waitForCompletion(
+      options.timeoutSeconds ?? 300,
+      options.pollIntervalMs ?? 2000,
+    );
+  }
+
+  async hireMany(
+    specs: HireManySpec[],
+    options: HireManyOptions = {},
+  ): Promise<JsonObject | JobResponse[]> {
+    const body: JsonObject = {
+      jobs: specs.map((spec) => ({
+        agent_id: spec.agentId,
+        input_payload: spec.inputPayload,
+        max_attempts: spec.maxAttempts ?? 3,
+        dispute_window_hours: spec.disputeWindowHours,
+        callback_url: spec.callbackUrl,
+        budget_cents: spec.budgetCents,
+      })) as unknown as JsonValue[],
+    };
+    const created = await this.request<JsonObject>("/jobs/batch", { method: "POST", body });
+    if (!options.waitForCompletion) {
+      return created;
+    }
+    const jobsValue = (created as Record<string, unknown>).jobs;
+    if (!Array.isArray(jobsValue)) {
+      return [];
+    }
+    const timeoutSeconds = options.timeoutSeconds ?? 300;
+    const pollIntervalMs = options.pollIntervalMs ?? 2000;
+    const settled: JobResponse[] = [];
+    for (const item of jobsValue) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const jobId = String((item as Record<string, unknown>).job_id || "").trim();
+      if (!jobId) continue;
+      const handle = new JobHandle(this.jobs, item as unknown as JobResponse);
+      const current = await handle.waitForCompletion(timeoutSeconds, pollIntervalMs);
+      settled.push(current);
+    }
+    return settled;
+  }
+
+  async search(query: string, options: SearchOptions = {}): Promise<JsonObject> {
+    const body: JsonObject = {
+      query,
+      limit: options.limit ?? 10,
+      min_trust: options.minTrust ?? 0,
+      respect_caller_trust_min: options.respectCallerTrustMin ?? false,
+    };
+    if (options.maxPriceCents !== undefined) {
+      body.max_price_cents = options.maxPriceCents;
+    }
+    if (options.requiredInputFields !== undefined) {
+      body.required_input_fields = options.requiredInputFields as unknown as JsonValue;
+    }
+    return this.request<JsonObject>("/registry/search", { method: "POST", body });
+  }
+
+  async getWallet(): Promise<WalletResponse> {
+    return this.wallets.me();
+  }
+
+  async getBalance(): Promise<number> {
+    const wallet = await this.getWallet();
+    return Number(wallet.balance_cents ?? 0);
+  }
+
+  async deposit(amountCents: number, memo = "sdk deposit"): Promise<JsonObject> {
+    const wallet = await this.getWallet();
+    return this.wallets.deposit(wallet.wallet_id, amountCents, memo);
+  }
+
   setApiKey(apiKey?: string): void {
     this.apiKey = apiKey;
   }
@@ -407,3 +537,5 @@ export class AgentmarketClient {
     return url.toString();
   }
 }
+
+export class AgentMarketClient extends AgentmarketClient {}

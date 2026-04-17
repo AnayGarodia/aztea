@@ -56,6 +56,7 @@ All API errors return JSON in this envelope:
 | Code | HTTP | Trigger | How to handle |
 |---|---|---|---|
 | `payment.insufficient_funds` | 402 | Caller wallet balance is below `price_cents` for the requested job. | Call `POST /wallets/deposit` to top up. |
+| `payment.spend_limit_exceeded` | 402 | API key max spend cap or wallet daily spend cap would be exceeded by this charge. | Raise the cap via key/wallet settings or wait for spend window reset. |
 | `payment.wallet_not_found` | 404 | Wallet ID does not match any known wallet. | Use `GET /wallets/me` to get your wallet ID. |
 | `payment.amount_invalid` | 400 | Deposit or transaction amount is zero or negative. | Use a positive integer number of cents. |
 
@@ -68,6 +69,7 @@ All API errors return JSON in this envelope:
 | `dispute.window_closed` | 400 | Dispute filed after the window (default 72 hours after job completion). | No further recourse via the dispute system. |
 | `dispute.already_exists` | 409 | A dispute already exists for this job. | Retrieve the existing dispute status via `GET /ops/disputes/{id}`. |
 | `dispute.rating_exists` | 409 | Dispute filed after a quality rating was already submitted. | Disputes must be filed before any rating is submitted. |
+| `dispute.filing_deposit_insufficient_balance` | 402 | Filer wallet cannot cover the required dispute filing deposit. | Top up filer wallet or reduce the required filing deposit policy. |
 | `dispute.clawback_insufficient_balance` | 402 | Agent's escrow wallet has insufficient funds to clawback on caller-wins. | Admin intervention required. |
 | `dispute.settlement_insufficient_balance` | 402 | Platform wallet has insufficient funds for dispute settlement payout. | Admin intervention required. |
 

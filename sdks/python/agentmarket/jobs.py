@@ -199,7 +199,10 @@ class JobsNamespace:
                 content = line[5:].strip()
                 if not content:
                     continue
-                parsed = json.loads(content)
+                try:
+                    parsed = json.loads(content)
+                except json.JSONDecodeError:
+                    continue
                 if isinstance(parsed, dict):
                     yield parsed
 

@@ -36,7 +36,7 @@ _AUTH_TOOL: dict[str, Any] = {
         "Sign up at the signup_url below — you get $1 free credit, no card required. "
         "Then set AGENTMARKET_API_KEY=am_... and restart this MCP server."
     ),
-    "inputSchema": {
+    "input_schema": {
         "type": "object",
         "properties": {},
         "required": [],
@@ -201,12 +201,20 @@ class MCPStdioServer:
             if ":" not in decoded:
                 continue
             key, value = decoded.split(":", 1)
-            headers[key.strip().lower()] = value.strip()
+            header_name = key.strip().lower()
+            if not header_name:
+                continue
+            headers[header_name] = value.strip()
 
         content_length = headers.get("content-length")
         if content_length is None:
             raise ValueError("Missing Content-Length header.")
-        length = int(content_length)
+        try:
+            length = int(content_length, 10)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Invalid Content-Length header.") from exc
+        if length <= 0 or length > 1_000_000:
+            raise ValueError("Content-Length out of allowed bounds.")
         body = sys.stdin.buffer.read(length)
         if len(body) != length:
             return None

@@ -37,6 +37,7 @@ DB_PATH = _db.DB_PATH
 _local = _db._local
 PLATFORM_OWNER_ID = "platform"
 DISPUTE_ESCROW_OWNER_PREFIX = "dispute_escrow:"
+DISPUTE_DEPOSIT_OWNER_PREFIX = "dispute_deposit:"
 DISPUTE_RETURN_PLATFORM_FEE_ON_CALLER_WINS = True
 
 _LOG = logging.getLogger(__name__)
@@ -1010,6 +1011,9 @@ def _dispute_context_conn(conn: sqlite3.Connection, dispute_id: str) -> sqlite3.
         SELECT
             d.dispute_id,
             d.job_id,
+            d.filed_by_owner_id,
+            d.side,
+            d.filing_deposit_cents,
             d.status AS dispute_status,
             d.outcome AS dispute_outcome,
             j.agent_id,
@@ -1123,6 +1127,149 @@ def lock_dispute_funds(dispute_id: str, conn: sqlite3.Connection | None = None) 
     with _conn() as managed_conn:
         managed_conn.execute("BEGIN IMMEDIATE")
         return _lock_dispute_funds_conn(managed_conn, dispute_id)
+
+
+def _collect_dispute_filing_deposit_conn(
+    conn: sqlite3.Connection,
+    *,
+    dispute_id: str,
+    filed_by_owner_id: str,
+    amount_cents: int,
+) -> dict:
+    if amount_cents < 0:
+        raise ValueError("amount_cents must be non-negative.")
+    deposit_wallet_id = _get_or_create_wallet_id_conn(conn, f"{DISPUTE_DEPOSIT_OWNER_PREFIX}{dispute_id}")
+    if amount_cents == 0:
+        return {
+            "dispute_id": dispute_id,
+            "deposit_wallet_id": deposit_wallet_id,
+            "collected_cents": 0,
+        }
+    already_collected = _related_sum_conn(
+        conn,
+        related_tx_id=dispute_id,
+        wallet_id=deposit_wallet_id,
+        tx_type="deposit",
+    )
+    if already_collected > 0:
+        return {
+            "dispute_id": dispute_id,
+            "deposit_wallet_id": deposit_wallet_id,
+            "collected_cents": already_collected,
+        }
+    ctx = _dispute_context_conn(conn, dispute_id)
+    agent_id = str(ctx["agent_id"])
+    filer_wallet_id = _get_or_create_wallet_id_conn(conn, str(filed_by_owner_id))
+    _debit_wallet_conn(
+        conn,
+        filer_wallet_id,
+        amount_cents,
+        agent_id=agent_id,
+        related_tx_id=dispute_id,
+        memo=f"Dispute filing deposit for {dispute_id[:8]}",
+    )
+    _credit_wallet_conn(
+        conn,
+        deposit_wallet_id,
+        amount_cents,
+        tx_type="deposit",
+        agent_id=agent_id,
+        related_tx_id=dispute_id,
+        memo=f"Dispute filing deposit escrow for {dispute_id[:8]}",
+    )
+    return {
+        "dispute_id": dispute_id,
+        "deposit_wallet_id": deposit_wallet_id,
+        "collected_cents": amount_cents,
+    }
+
+
+def collect_dispute_filing_deposit(
+    dispute_id: str,
+    *,
+    filed_by_owner_id: str,
+    amount_cents: int,
+    conn: sqlite3.Connection | None = None,
+) -> dict:
+    if conn is not None:
+        return _collect_dispute_filing_deposit_conn(
+            conn,
+            dispute_id=dispute_id,
+            filed_by_owner_id=filed_by_owner_id,
+            amount_cents=amount_cents,
+        )
+    with _conn() as managed_conn:
+        managed_conn.execute("BEGIN IMMEDIATE")
+        return _collect_dispute_filing_deposit_conn(
+            managed_conn,
+            dispute_id=dispute_id,
+            filed_by_owner_id=filed_by_owner_id,
+            amount_cents=amount_cents,
+        )
+
+
+def _release_dispute_filing_deposit_conn(
+    conn: sqlite3.Connection,
+    *,
+    dispute_id: str,
+    outcome: str,
+    agent_id: str,
+    platform_wallet_id: str,
+) -> dict:
+    ctx = _dispute_context_conn(conn, dispute_id)
+    configured_deposit_cents = int(ctx["filing_deposit_cents"] or 0)
+    deposit_wallet_id = _get_or_create_wallet_id_conn(conn, f"{DISPUTE_DEPOSIT_OWNER_PREFIX}{dispute_id}")
+    if configured_deposit_cents <= 0:
+        return {
+            "deposit_wallet_id": deposit_wallet_id,
+            "filing_deposit_cents": 0,
+            "filing_deposit_refunded_cents": 0,
+            "filing_deposit_forfeited_cents": 0,
+        }
+    deposit_balance = _wallet_balance_conn(conn, deposit_wallet_id)
+    if deposit_balance <= 0:
+        return {
+            "deposit_wallet_id": deposit_wallet_id,
+            "filing_deposit_cents": configured_deposit_cents,
+            "filing_deposit_refunded_cents": 0,
+            "filing_deposit_forfeited_cents": 0,
+        }
+    filed_side = str(ctx["side"] or "").strip().lower()
+    filer_owner_id = str(ctx["filed_by_owner_id"] or "").strip()
+    filer_won = (
+        (filed_side == "caller" and outcome == "caller_wins")
+        or (filed_side == "agent" and outcome == "agent_wins")
+    )
+    refund_to_filer = filer_won or outcome in {"split", "void"}
+    if refund_to_filer and filer_owner_id:
+        target_wallet_id = _get_or_create_wallet_id_conn(conn, filer_owner_id)
+        destination = "filer"
+    else:
+        target_wallet_id = platform_wallet_id
+        destination = "platform"
+    _debit_wallet_conn(
+        conn,
+        deposit_wallet_id,
+        deposit_balance,
+        agent_id=agent_id,
+        related_tx_id=dispute_id,
+        memo=f"Dispute filing deposit release for {dispute_id[:8]}",
+    )
+    _credit_wallet_conn(
+        conn,
+        target_wallet_id,
+        deposit_balance,
+        tx_type="deposit",
+        agent_id=agent_id,
+        related_tx_id=dispute_id,
+        memo=f"Dispute filing deposit to {destination} for {dispute_id[:8]}",
+    )
+    return {
+        "deposit_wallet_id": deposit_wallet_id,
+        "filing_deposit_cents": configured_deposit_cents,
+        "filing_deposit_refunded_cents": deposit_balance if refund_to_filer else 0,
+        "filing_deposit_forfeited_cents": 0 if refund_to_filer else deposit_balance,
+    }
 
 
 def post_dispute_settlement(
@@ -1352,6 +1499,13 @@ def post_dispute_settlement(
             dispute_id,
             f"Dispute final settlement ({normalized_outcome})",
         )
+        filing_deposit_summary = _release_dispute_filing_deposit_conn(
+            conn,
+            dispute_id=dispute_id,
+            outcome=normalized_outcome,
+            agent_id=agent_id,
+            platform_wallet_id=platform_wallet_id,
+        )
 
         result = {
             "dispute_id": dispute_id,
@@ -1360,6 +1514,9 @@ def post_dispute_settlement(
             "agent_delta_cents": agent_delta,
             "platform_delta_cents": platform_delta,
             "charge_tx_id": charge_tx_id,
+            "filing_deposit_cents": int(filing_deposit_summary["filing_deposit_cents"]),
+            "filing_deposit_refunded_cents": int(filing_deposit_summary["filing_deposit_refunded_cents"]),
+            "filing_deposit_forfeited_cents": int(filing_deposit_summary["filing_deposit_forfeited_cents"]),
         }
     logging_utils.log_event(
         _LOG,

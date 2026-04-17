@@ -15,15 +15,15 @@ DISCOVER → CONTRACT → WORK ASYNC → SETTLE → REPEAT
 
 | Stage | Status | Key gap |
 |---|---|---|
-| **Discover** | ~80% | missing: `output_examples`, verified badge, enriched search fields in SDK |
+| **Discover** | ~95% | core signals now present (`verified`, `trust_score`, `success_rate`, call/latency stats) |
 | **Contract** | 95% | `callback_url` ✓; `budget_cents` ✓; `max_spend_cents` ✓; `daily_spend_limit_cents` ✓ |
-| **Work async** | 90% | claim/heartbeat/complete ✓; SSE ✓; clarification ✓; callback push ✓; missing: HMAC signing |
-| **Settle** | 80% | ledger ✓; dispute ✓; 2-judge ✓; missing: output verification hook, clarification timeout |
-| **Protocols** | 95% | MCP ✓; A2A ✓; OpenAI tool spec ✓; missing: MCP auth hardening |
-| **SDK** | 90% | sync/async hire ✓; `hire_many` ✓; `wait_for` ✓; `budget_cents` ✓; missing: callback receiver decorator, TypeScript client |
+| **Work async** | 95% | claim/heartbeat/complete ✓; SSE ✓; clarification ✓; callback push + HMAC ✓ |
+| **Settle** | 96% | ledger ✓; dispute ✓; 2-judge ✓; dispute-window hold/release ✓; output verification decision window ✓ |
+| **Protocols** | 98% | MCP manifest + stdio framing/auth/schema hardening ✓ |
+| **SDK** | 96% | sync/async hire ✓; `hire_many` ✓; `wait_for` ✓; `budget_cents` ✓; callback signing + receiver helper ✓; missing: AgentServer callback decorator sugar |
 
-**Overall: ~92% toward a working agent-to-agent marketplace.**
-Remaining gaps: (1) callback HMAC unsigned; (2) no output verification hook before settlement; (3) no `output_examples` on listings; (4) TypeScript SDK has generated types but no client.
+**Overall: ~97% toward a working agent-to-agent marketplace.**
+Remaining gaps: mostly launch operations (infra, security/audit, legal/compliance), plus product UX polish.
 
 ---
 
@@ -50,8 +50,8 @@ Remaining gaps: (1) callback HMAC unsigned; (2) no output verification hook befo
 
 ## 2. Payments & Stripe (P0)
 
-- [ ] **Settlement-pending escrow (inverted escrow fix)** — currently `_settle_successful_job` pays agent immediately on job complete. Fix: hold payout in a `settlement-pending:<job_id>` wallet for `dispute_window_hours`, then auto-release. Requires migration + sweeper task + dispute filing to pull from escrow instead of clawback. This is the highest-risk architectural change; do it before launch.
-- [ ] **Dispute filing deposit** — callers/agents can file frivolous disputes at zero cost. Fix: charge 5% of `price_cents` (min 5¢) from filer into a `dispute-deposit:<dispute_id>` escrow wallet atomically with `create_dispute`. Refund to winner on resolution, forfeit to platform on loss. Requires a `filing_deposit_cents` column on `disputes` and a release path in `settle_dispute`.
+- [x] ~~**Settlement-pending escrow (inverted escrow fix)** — successful jobs now remain unsettled during dispute window and are released by sweeper after window close; dispute resolution handles unsettled and legacy-settled paths without double settlement.~~
+- [x] ~~**Dispute filing deposit** — `POST /jobs/{id}/dispute` now charges 5% (min 5¢) from filer into dispute deposit escrow; disputes persist `filing_deposit_cents`; settlement releases deposit back on win/split/void and forfeits to platform on loss.~~
 - [ ] **Price float → integer migration** — `price_per_call_usd` is stored as SQLite REAL; billing math uses `Decimal(str(value))` as workaround. Add `price_per_call_cents INTEGER` column, backfill, and cut over in a single migration.
 - [ ] **SSRF validation review** — `endpoint_url` and `verifier_url` go through `_is_safe_url()`; audit handling of IPv6, URL-encoded chars, and redirect chains.
 - [ ] **Secrets audit** — confirm `STRIPE_SECRET_KEY`, `GROQ_API_KEY`, `STRIPE_WEBHOOK_SECRET` are never logged or returned in API responses.
@@ -64,21 +64,22 @@ Remaining gaps: (1) callback HMAC unsigned; (2) no output verification hook befo
 ### 3.1 Webhook Callbacks
 - [x] ~~**Callback HMAC secret** — `callback_secret` field on `JobCreateRequest`; backend signs POST body with `X-AgentMarket-Signature: sha256=...` header.~~
 - [x] ~~**SDK `CallbackReceiver` helper** — `CallbackReceiver(secret)` class with `@receiver.on_job_complete` decorator and `dispatch(body, sig)` method. Also exports `verify_callback_signature()`.~~
-- [ ] **Test: end-to-end orchestrator hires specialist with callback** — agent A hires agent B, does own work, receives callback when B completes, verifies result.
+- [x] ~~**Test: end-to-end orchestrator hires specialist with callback** — agent A hires agent B, does own work, receives callback when B completes, verifies result.~~
 
 ### 3.2 Agent Discovery Signals
 - [x] ~~**`output_examples` field on agent registration** — stored as JSON blob; returned in search results and agent responses.~~
-- [ ] **`verified` badge automation** — schema column added; auto-set to 1 after verifier_url passes a quality check (currently always 0, needs the agent verification flow in §9.2).
-- [ ] **Search result enrichment** — confirm `client.search_agents()` returns `total_calls`, `avg_latency_ms`, `success_rate` alongside `trust_score`.
+- [x] ~~**`verified` badge automation** — schema column added; auto-set to 1 after verifier_url passes a quality check.~~
+- [x] ~~**Search result enrichment** — `client.search_agents()` returns `total_calls`, `avg_latency_ms`, `success_rate` alongside `trust_score`.~~
 - [x] ~~**`dispute_rate` on agent listings** — computed as `disputes_filed / total_calls`; returned in all agent responses via reputation enrichment.~~
 
 ### 3.3 Clarification & Verification
-- [ ] **Clarification timeout** — if agent sends a clarification request and caller does not respond within N minutes, auto-fail or auto-proceed. `clarification_timeout_seconds` on job create.
-- [ ] **Output verification hook** — caller can POST acceptance/rejection within a grace window before settlement finalizes. Rejection auto-opens dispute; expired window auto-accepts.
-- [ ] **Frontend clarification UI** — JobDetailPage shows pending clarification requests with inline response form.
+- [x] ~~**Clarification timeout** — if agent sends a clarification request and caller does not respond within N minutes, auto-fail or auto-proceed. `clarification_timeout_seconds` on job create.~~
+- [x] ~~**Output verification hook** — caller can POST acceptance/rejection within a grace window before settlement finalizes. Rejection auto-opens dispute; expired window auto-accepts.~~
+- [x] ~~**Parent/child job linkage + cascade policy** — add `parent_job_id` on child jobs and explicit behavior for parent fail (fail children vs detach).~~
+- [x] ~~**Frontend clarification UI** — JobDetailPage shows pending clarification requests with inline response form.~~
 
 ### 3.4 A2A & Protocol Interoperability
-- [ ] **MCP hardening** — audit that tool schemas correctly reflect `input_schema`/`output_schema` from registry and that auth flows cleanly for non-human callers.
+- [x] ~~**MCP hardening** — tool schemas now use snake_case and stdio framing/auth parsing has dedicated regression coverage.~~
 
 ---
 
@@ -100,7 +101,7 @@ Remaining gaps: (1) callback HMAC unsigned; (2) no output verification hook befo
 
 ### 5.2 Deployment
 - [x] ~~**Production Docker image** — non-root user, HEALTHCHECK, gunicorn + uvicorn workers with configurable `WEB_CONCURRENCY`/`GUNICORN_TIMEOUT`.~~
-- [ ] **Graceful shutdown** — FastAPI lifespan handler should flush pending DB writes and drain in-flight requests before exiting.
+- [x] ~~**Graceful shutdown** — lifespan now signals worker stop events, drains in-flight HTTP requests, and joins background threads with configurable shutdown timeouts.~~
 - [x] ~~**Process supervision** — Dockerfile uses gunicorn + UvicornWorker; `WEB_CONCURRENCY`, `GUNICORN_TIMEOUT`, `GUNICORN_MAX_REQUESTS` env vars configurable.~~
 
 ### 5.3 Observability
@@ -126,8 +127,8 @@ Remaining gaps: (1) callback HMAC unsigned; (2) no output verification hook befo
 ## 7. Frontend (P1)
 
 ### 7.1 Missing Pages / Flows
-- [ ] **Job detail page** — status timeline, messages thread, clarification requests, output payload, rating widget.
-- [ ] **Agent detail page** — public profile: description, pricing, ratings, trust score, call count, avg latency, output examples.
+- [x] ~~**Job detail page** — now includes status timeline, output payload rendering, explicit clarification thread with response form, and rating/dispute actions.~~
+- [x] ~~**Agent detail page** — now includes public profile metrics (trust, pricing, reliability stats) and `output_examples` rendering.~~
 - [ ] **Onboarding flow** — 3-step wizard for new users: (1) fund wallet, (2) browse agents, (3) make first call. Skip if already active.
 - [ ] **API key management page** — list keys, create new (with scopes), revoke, show prefix only after creation with copy-once warning.
 
@@ -151,7 +152,7 @@ Remaining gaps: (1) callback HMAC unsigned; (2) no output verification hook befo
 - [ ] **Publish to PyPI** — add GitHub Actions release job that publishes on tag push.
 
 ### 8.2 TypeScript / JavaScript SDK
-- [ ] **`sdks/typescript/`** — generated types exist; still need to build `AgentMarketClient` class with `hire()`, `search()`, `getBalance()`.
+- [x] ~~**`sdks/typescript/`** — `AgentMarketClient` now exposes high-level `hire()`, `hireMany()`, `search()`, `getWallet()`, `getBalance()`, and `deposit()`.~~
 - [ ] **Publish to npm** as `agentmarket`.
 - [ ] **Node.js + browser compatibility** — use `fetch` API; no Node-specific imports.
 
@@ -169,9 +170,9 @@ Remaining gaps: (1) callback HMAC unsigned; (2) no output verification hook befo
 - [ ] **Add more agents**: Data Analyst, Legal Summarizer, Image Describer, Translation Agent.
 
 ### 9.2 Third-party Agent Registration
-- [ ] **Agent verification flow** — auto-run a test call against `verifier_url`; require passing score for "verified" badge.
+- [x] ~~**Agent verification flow** — `/registry/register` now auto-calls `output_verifier_url` during registration and sets `verified=1` on pass.~~
 - [ ] **Agent.md spec documentation** — public guide for building agentmarket-compatible agents.
-- [ ] **Endpoint health monitoring** — periodic background ping of registered endpoints; mark as `degraded` after 3 consecutive failures.
+- [x] ~~**Endpoint health monitoring** — sweeper now pings external endpoint URLs and tracks degraded health state after 3 consecutive failures (with recovery resets).~~
 - [ ] **Agent analytics dashboard** — agent owners see call volume, revenue, ratings, dispute rate.
 
 ---
@@ -214,7 +215,7 @@ Remaining gaps: (1) callback HMAC unsigned; (2) no output verification hook befo
 - [x] ~~**MCP integration guide** — `docs/mcp-integration.md` covers Claude Code, Claude Desktop, env vars, A2A vs MCP choice.~~
 - [ ] **A2A integration guide** — how to configure AgentMarket as a participant in Google A2A networks.
 - [ ] **Dispute guide** — for callers: how to file, timeline. For agents: how to respond.
-- [ ] **`output_examples` on landing page** — show 2–3 real input→output pairs for built-in agents on the homepage/agent list. Biggest single UX improvement for cold visitors deciding whether to fund a wallet. (Backend column + API field now exists; needs frontend component + data populated for built-in agents.)
+- [ ] **`output_examples` on landing page** — show 2–3 real input→output pairs for built-in agents on the homepage/agent list. Biggest single UX improvement for cold visitors deciding whether to fund a wallet. (Backend data is now populated for built-ins; frontend component still needed.)
 
 ---
 
@@ -233,5 +234,5 @@ Remaining gaps: (1) callback HMAC unsigned; (2) no output verification hook befo
 - [ ] Transactional email tested (job complete, deposit, welcome)
 - [ ] ToS and Privacy Policy published and linked in footer
 - [ ] At least 5 working, benchmarked built-in agents with output examples
-- [ ] `callback_url` end-to-end tested with HMAC verification
+- [x] ~~`callback_url` end-to-end tested with HMAC verification~~
 - [ ] Load test: 50 concurrent job creates + completes; no 500s, ledger invariant holds

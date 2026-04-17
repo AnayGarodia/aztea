@@ -25,9 +25,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from agentmarket.client import AgentMarketClient
 from agentmarket.exceptions import (
+    AgentMarketError,
     AgentNotFoundError,
     ContractVerificationError,
     JobFailedError,
+    RateLimitError,
 )
 from agentmarket.models import JobResult
 
@@ -233,3 +235,139 @@ def test_hire_no_wait_returns_immediately():
 
     assert result.job_id == "job-nw"
     assert result.output == {}
+
+
+def test_request_429_with_invalid_retry_after_uses_default():
+    client = _make_client()
+    too_many = _mock_response(429, {"detail": "Too many requests"})
+    too_many.headers = {"Retry-After": "abc"}
+
+    with patch.object(client._http, "request", side_effect=[too_many]):
+        with pytest.raises(RateLimitError) as exc_info:
+            client.get_balance()
+
+    assert exc_info.value.retry_after == 60
+
+
+def test_hire_raises_clear_error_when_job_id_missing():
+    client = _make_client()
+    create_resp = _mock_response(200, {"price_cents": 10})
+
+    with patch.object(client._http, "request", side_effect=[create_resp]):
+        with pytest.raises(AgentMarketError) as exc_info:
+            client.hire("agent-id", {}, wait=False)
+
+    assert "missing a valid job_id" in str(exc_info.value)
+
+
+def test_hire_includes_callback_secret_in_job_create_payload():
+    client = _make_client()
+    create_resp = _mock_response(200, {"job_id": "job-cb", "price_cents": 10})
+
+    with patch.object(client._http, "request", side_effect=[create_resp]) as req_mock:
+        result = client.hire(
+            "agent-id",
+            {"task": "x"},
+            wait=False,
+            callback_url="https://hooks.example.com/job",
+            callback_secret="cb-secret",
+        )
+
+    assert result.job_id == "job-cb"
+    first_call_kwargs = req_mock.call_args_list[0].kwargs
+    assert first_call_kwargs["json"]["callback_url"] == "https://hooks.example.com/job"
+    assert first_call_kwargs["json"]["callback_secret"] == "cb-secret"
+
+
+def test_hire_includes_lineage_and_timeout_controls():
+    client = _make_client()
+    create_resp = _mock_response(200, {"job_id": "job-lineage", "price_cents": 10})
+
+    with patch.object(client._http, "request", side_effect=[create_resp]) as req_mock:
+        result = client.hire(
+            "agent-id",
+            {"task": "delegate"},
+            wait=False,
+            parent_job_id="job-parent",
+            parent_cascade_policy="fail_children_on_parent_fail",
+            clarification_timeout_seconds=120,
+            clarification_timeout_policy="proceed",
+            output_verification_window_seconds=300,
+        )
+
+    assert result.job_id == "job-lineage"
+    first_call_kwargs = req_mock.call_args_list[0].kwargs
+    payload = first_call_kwargs["json"]
+    assert payload["parent_job_id"] == "job-parent"
+    assert payload["parent_cascade_policy"] == "fail_children_on_parent_fail"
+    assert payload["clarification_timeout_seconds"] == 120
+    assert payload["clarification_timeout_policy"] == "proceed"
+    assert payload["output_verification_window_seconds"] == 300
+
+
+def test_decide_output_verification_posts_expected_payload():
+    client = _make_client()
+    decision_resp = _mock_response(
+        200,
+        {
+            "job_id": "job-verify",
+            "agent_id": "agent-id",
+            "status": "complete",
+            "price_cents": 10,
+            "input_payload": {},
+            "output_payload": {"ok": True},
+            "output_verification_status": "accepted",
+        },
+    )
+
+    with patch.object(client._http, "request", side_effect=[decision_resp]) as req_mock:
+        job = client.decide_output_verification(
+            "job-verify",
+            decision="accept",
+            reason="Looks good",
+        )
+
+    assert job.job_id == "job-verify"
+    kwargs = req_mock.call_args_list[0].kwargs
+    assert kwargs["json"]["decision"] == "accept"
+    assert kwargs["json"]["reason"] == "Looks good"
+
+
+def test_search_agents_returns_reputation_signals():
+    client = _make_client()
+    search_resp = _mock_response(
+        200,
+        {
+            "results": [
+                {
+                    "agent": {
+                        "agent_id": "agt-demo",
+                        "name": "Demo Agent",
+                        "description": "Does demo work",
+                        "endpoint_url": "https://agents.example.com/demo",
+                        "price_per_call_usd": 0.12,
+                        "trust_score": 0.92,
+                        "success_rate": 0.97,
+                        "total_calls": 110,
+                        "successful_calls": 107,
+                        "avg_latency_ms": 420.5,
+                        "dispute_rate": 0.01,
+                        "input_schema": {},
+                        "output_schema": {},
+                        "tags": ["demo"],
+                        "owner_id": "owner-demo",
+                    }
+                }
+            ]
+        },
+    )
+
+    with patch.object(client._http, "request", side_effect=[search_resp]):
+        agents = client.search_agents("demo")
+
+    assert len(agents) == 1
+    assert agents[0].trust_score == pytest.approx(0.92)
+    assert agents[0].success_rate == pytest.approx(0.97)
+    assert agents[0].total_calls == 110
+    assert agents[0].avg_latency_ms == pytest.approx(420.5)
+    assert agents[0].dispute_rate == pytest.approx(0.01)

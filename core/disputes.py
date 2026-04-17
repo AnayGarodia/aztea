@@ -49,6 +49,7 @@ def init_disputes_db() -> None:
                 side                 TEXT NOT NULL CHECK(side IN ('caller','agent')),
                 reason               TEXT NOT NULL,
                 evidence             TEXT,
+                filing_deposit_cents INTEGER NOT NULL DEFAULT 0 CHECK(filing_deposit_cents >= 0),
                 status               TEXT NOT NULL CHECK(status IN ('pending','judging','consensus','tied','resolved','appealed','final')),
                 outcome              TEXT CHECK(outcome IN ('caller_wins','agent_wins','split','void')),
                 split_caller_cents   INTEGER,
@@ -80,6 +81,14 @@ def init_disputes_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_disputes_filer_filed ON disputes(filed_by_owner_id, filed_at DESC)"
         )
+        dispute_cols = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(disputes)").fetchall()
+        }
+        if "filing_deposit_cents" not in dispute_cols:
+            conn.execute(
+                "ALTER TABLE disputes ADD COLUMN filing_deposit_cents INTEGER NOT NULL DEFAULT 0"
+            )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_dispute_judgments_dispute_created ON dispute_judgments(dispute_id, created_at ASC)"
         )
@@ -87,7 +96,7 @@ def init_disputes_db() -> None:
 
 def _row_to_dispute(row: sqlite3.Row) -> dict:
     data = dict(row)
-    for field in ("split_caller_cents", "split_agent_cents"):
+    for field in ("filing_deposit_cents", "split_caller_cents", "split_agent_cents"):
         value = data.get(field)
         data[field] = int(value) if value is not None else None
     return data
@@ -133,6 +142,7 @@ def create_dispute(
     side: str,
     reason: str,
     evidence: str | None = None,
+    filing_deposit_cents: int = 0,
     conn: sqlite3.Connection | None = None,
 ) -> dict:
     normalized_reason = str(reason or "").strip()
@@ -140,6 +150,9 @@ def create_dispute(
         raise ValueError("reason must be a non-empty string.")
     dispute_id = str(uuid.uuid4())
     now = _now()
+    normalized_filing_deposit = int(filing_deposit_cents)
+    if normalized_filing_deposit < 0:
+        raise ValueError("filing_deposit_cents must be non-negative.")
     params = (
         dispute_id,
         job_id,
@@ -147,6 +160,7 @@ def create_dispute(
         _validate_side(side),
         normalized_reason,
         str(evidence).strip() if evidence else None,
+        normalized_filing_deposit,
         now,
     )
 
@@ -154,8 +168,8 @@ def create_dispute(
         created_conn.execute(
             """
             INSERT INTO disputes
-                (dispute_id, job_id, filed_by_owner_id, side, reason, evidence, status, filed_at)
-            VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
+                (dispute_id, job_id, filed_by_owner_id, side, reason, evidence, filing_deposit_cents, status, filed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
             """,
             params,
         )
@@ -385,6 +399,7 @@ def get_dispute_context(dispute_id: str) -> dict | None:
         "side",
         "reason",
         "evidence",
+        "filing_deposit_cents",
         "status",
         "outcome",
         "split_caller_cents",

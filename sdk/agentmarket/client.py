@@ -47,6 +47,26 @@ def _parse_payload(value: Any) -> Dict[str, Any]:
     return {}
 
 
+def _retry_after_seconds(headers: Any, default: int = 60) -> int:
+    raw_value = headers.get("Retry-After") if headers is not None else None
+    if raw_value is None:
+        return default
+    try:
+        parsed = int(str(raw_value).strip())
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed >= 0 else default
+
+
+def _require_job_id(payload: Any, *, context: str) -> str:
+    if not isinstance(payload, dict):
+        raise AgentMarketError(f"{context} expected a JSON object response.")
+    job_id = payload.get("job_id")
+    if not isinstance(job_id, str) or not job_id.strip():
+        raise AgentMarketError(f"{context} response is missing a valid job_id.")
+    return job_id
+
+
 class AgentMarketClient:
     """
     High-level client for the AgentMarket platform.
@@ -126,8 +146,7 @@ class AgentMarketClient:
             detail = _extract_detail(body) or "Not found."
             raise AgentNotFoundError(detail)
         if resp.status_code == 429:
-            retry_after = int(resp.headers.get("Retry-After", 60))
-            raise RateLimitError(retry_after)
+            raise RateLimitError(_retry_after_seconds(resp.headers))
         if not resp.is_success:
             detail = _extract_detail(body) or f"HTTP {resp.status_code}"
             raise AgentMarketError(detail, status_code=resp.status_code)
@@ -197,6 +216,12 @@ class AgentMarketClient:
         max_attempts: int = 3,
         budget_cents: Optional[int] = None,
         callback_url: Optional[str] = None,
+        callback_secret: Optional[str] = None,
+        parent_job_id: Optional[str] = None,
+        parent_cascade_policy: str = "detach",
+        clarification_timeout_seconds: Optional[int] = None,
+        clarification_timeout_policy: str = "fail",
+        output_verification_window_seconds: Optional[int] = None,
     ) -> JobResult:
         """
         Create a job and (by default) block until it completes.
@@ -211,6 +236,9 @@ class AgentMarketClient:
             Optional max price. Raises immediately if agent.price_cents > budget_cents.
         callback_url
             Optional HTTPS URL. Platform POSTs job result when complete — no polling needed.
+        callback_secret
+            Optional secret used to sign callback deliveries via
+            ``X-AgentMarket-Signature`` (HMAC-SHA256 over raw body).
         verification_contract
             Optional contract checked against the output.
         wait
@@ -229,9 +257,19 @@ class AgentMarketClient:
             body["budget_cents"] = budget_cents
         if callback_url is not None:
             body["callback_url"] = callback_url
+        if callback_secret is not None:
+            body["callback_secret"] = callback_secret
+        if parent_job_id is not None:
+            body["parent_job_id"] = parent_job_id
+        body["parent_cascade_policy"] = parent_cascade_policy
+        if clarification_timeout_seconds is not None:
+            body["clarification_timeout_seconds"] = clarification_timeout_seconds
+        body["clarification_timeout_policy"] = clarification_timeout_policy
+        if output_verification_window_seconds is not None:
+            body["output_verification_window_seconds"] = output_verification_window_seconds
 
         data = self._request("POST", "/jobs", json=body)
-        job_id: str = data["job_id"]
+        job_id = _require_job_id(data, context="POST /jobs")
 
         if not wait:
             return JobResult(
@@ -287,14 +325,19 @@ class AgentMarketClient:
         """
         data = self._request("POST", "/jobs/batch", json={"jobs": specs})
         raw_jobs = data.get("jobs") or []
-        results = [
-            JobResult(
-                job_id=j["job_id"],
-                output=_parse_payload(j.get("output_payload")),
-                cost_cents=j.get("price_cents", 0),
+        results: List[JobResult] = []
+        for index, entry in enumerate(raw_jobs):
+            context = f"POST /jobs/batch jobs[{index}]"
+            job_id = _require_job_id(entry, context=context)
+            output_payload = entry.get("output_payload") if isinstance(entry, dict) else None
+            price_cents = entry.get("price_cents", 0) if isinstance(entry, dict) else 0
+            results.append(
+                JobResult(
+                    job_id=job_id,
+                    output=_parse_payload(output_payload),
+                    cost_cents=price_cents,
+                )
             )
-            for j in raw_jobs
-        ]
         if wait:
             completed = []
             for result in results:
@@ -308,6 +351,22 @@ class AgentMarketClient:
     def get_job(self, job_id: str) -> Job:
         """Fetch the current state of a job."""
         data = self._request("GET", f"/jobs/{job_id}")
+        return _job_from_raw(data)
+
+    def decide_output_verification(
+        self,
+        job_id: str,
+        *,
+        decision: str,
+        reason: Optional[str] = None,
+        evidence: Optional[str] = None,
+    ) -> Job:
+        payload: Dict[str, Any] = {"decision": decision}
+        if reason is not None:
+            payload["reason"] = reason
+        if evidence is not None:
+            payload["evidence"] = evidence
+        data = self._request("POST", f"/jobs/{job_id}/verification", json=payload)
         return _job_from_raw(data)
 
     def clarify(self, job_id: str, answer: str) -> None:
@@ -389,6 +448,12 @@ class AgentMarketClient:
         max_attempts: int = 3,
         budget_cents: Optional[int] = None,
         callback_url: Optional[str] = None,
+        callback_secret: Optional[str] = None,
+        parent_job_id: Optional[str] = None,
+        parent_cascade_policy: str = "detach",
+        clarification_timeout_seconds: Optional[int] = None,
+        clarification_timeout_policy: str = "fail",
+        output_verification_window_seconds: Optional[int] = None,
         verification_contract: Union["VerificationContract", Dict[str, Any], None] = None,
     ) -> str:
         """
@@ -433,8 +498,18 @@ class AgentMarketClient:
             body["budget_cents"] = budget_cents
         if callback_url is not None:
             body["callback_url"] = callback_url
+        if callback_secret is not None:
+            body["callback_secret"] = callback_secret
+        if parent_job_id is not None:
+            body["parent_job_id"] = parent_job_id
+        body["parent_cascade_policy"] = parent_cascade_policy
+        if clarification_timeout_seconds is not None:
+            body["clarification_timeout_seconds"] = clarification_timeout_seconds
+        body["clarification_timeout_policy"] = clarification_timeout_policy
+        if output_verification_window_seconds is not None:
+            body["output_verification_window_seconds"] = output_verification_window_seconds
         data = self._request("POST", "/jobs", json=body)
-        job_id: str = data["job_id"]
+        job_id = _require_job_id(data, context="POST /jobs")
 
         if on_complete is not None or on_error is not None:
             def _watch() -> None:
@@ -654,7 +729,7 @@ class AsyncAgentMarketClient:
         if resp.status_code == 404:
             raise AgentNotFoundError(_extract_detail(body) or "Not found.")
         if resp.status_code == 429:
-            raise RateLimitError(int(resp.headers.get("Retry-After", 60)))
+            raise RateLimitError(_retry_after_seconds(resp.headers))
         if not resp.is_success:
             raise AgentMarketError(_extract_detail(body) or f"HTTP {resp.status_code}", status_code=resp.status_code)
         return body
@@ -669,6 +744,12 @@ class AsyncAgentMarketClient:
         max_attempts: int = 3,
         budget_cents: Optional[int] = None,
         callback_url: Optional[str] = None,
+        callback_secret: Optional[str] = None,
+        parent_job_id: Optional[str] = None,
+        parent_cascade_policy: str = "detach",
+        clarification_timeout_seconds: Optional[int] = None,
+        clarification_timeout_policy: str = "fail",
+        output_verification_window_seconds: Optional[int] = None,
     ) -> JobResult:
         """
         Async hire. Returns immediately if ``wait=False``, otherwise polls until done.
@@ -689,8 +770,18 @@ class AsyncAgentMarketClient:
             body["budget_cents"] = budget_cents
         if callback_url is not None:
             body["callback_url"] = callback_url
+        if callback_secret is not None:
+            body["callback_secret"] = callback_secret
+        if parent_job_id is not None:
+            body["parent_job_id"] = parent_job_id
+        body["parent_cascade_policy"] = parent_cascade_policy
+        if clarification_timeout_seconds is not None:
+            body["clarification_timeout_seconds"] = clarification_timeout_seconds
+        body["clarification_timeout_policy"] = clarification_timeout_policy
+        if output_verification_window_seconds is not None:
+            body["output_verification_window_seconds"] = output_verification_window_seconds
         data = await self._request("POST", "/jobs", json=body)
-        job_id: str = data["job_id"]
+        job_id = _require_job_id(data, context="POST /jobs")
 
         if not wait:
             return JobResult(job_id=job_id, output={}, cost_cents=data.get("price_cents", 0))
@@ -733,10 +824,19 @@ class AsyncAgentMarketClient:
         import asyncio
         data = await self._request("POST", "/jobs/batch", json={"jobs": specs})
         raw_jobs = data.get("jobs") or []
-        results = [
-            JobResult(job_id=j["job_id"], output=_parse_payload(j.get("output_payload")), cost_cents=j.get("price_cents", 0))
-            for j in raw_jobs
-        ]
+        results: List[JobResult] = []
+        for index, entry in enumerate(raw_jobs):
+            context = f"POST /jobs/batch jobs[{index}]"
+            job_id = _require_job_id(entry, context=context)
+            output_payload = entry.get("output_payload") if isinstance(entry, dict) else None
+            price_cents = entry.get("price_cents", 0) if isinstance(entry, dict) else 0
+            results.append(
+                JobResult(
+                    job_id=job_id,
+                    output=_parse_payload(output_payload),
+                    cost_cents=price_cents,
+                )
+            )
         if wait:
             async def _wait(r: JobResult) -> JobResult:
                 deadline = time.monotonic() + timeout_seconds
@@ -772,6 +872,22 @@ class AsyncAgentMarketClient:
     async def get_spend_summary(self, period: str = "7d") -> Dict[str, Any]:
         """Return rolling spend summary (1d/7d/30d/90d)."""
         return await self._request("GET", "/wallets/spend-summary", params={"period": period})
+
+    async def decide_output_verification(
+        self,
+        job_id: str,
+        *,
+        decision: str,
+        reason: Optional[str] = None,
+        evidence: Optional[str] = None,
+    ) -> Job:
+        payload: Dict[str, Any] = {"decision": decision}
+        if reason is not None:
+            payload["reason"] = reason
+        if evidence is not None:
+            payload["evidence"] = evidence
+        data = await self._request("POST", f"/jobs/{job_id}/verification", json=payload)
+        return _job_from_raw(data)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

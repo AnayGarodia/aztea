@@ -7,6 +7,7 @@ Run:
 
 import json
 import os
+import asyncio
 import base64
 import math
 import hmac
@@ -78,6 +79,7 @@ from core.models import (
     JobFailRequest,
     JobHeartbeatRequest,
     JobDisputeRequest,
+    JobVerificationDecisionRequest,
     JobMessageRequest,
     JobRateCallerRequest,
     JobRatingRequest,
@@ -197,12 +199,17 @@ _DEFAULT_HOOK_DELIVERY_MAX_DELAY_SECONDS = 300
 _DEFAULT_HOOK_DELIVERY_CLAIM_LEASE_SECONDS = 30
 _DEFAULT_DISPUTE_FILE_WINDOW_SECONDS = 7 * 24 * 3600
 _DEFAULT_DISPUTE_WINDOW_HOURS = 72
+_DEFAULT_DISPUTE_FILING_DEPOSIT_BPS = 500
+_DEFAULT_DISPUTE_FILING_DEPOSIT_MIN_CENTS = 5
 _DEFAULT_DISPUTE_JUDGE_INTERVAL_SECONDS = 60  # auto-resolve pending disputes every 60s
 _DEFAULT_BUILTIN_JOB_WORKER_INTERVAL_SECONDS = 2
 _DEFAULT_BUILTIN_JOB_WORKER_BATCH_SIZE = 20
 _DEFAULT_TOPUP_DAILY_LIMIT_CENTS = 100_000
 _DEFAULT_PAYMENTS_RECONCILIATION_INTERVAL_SECONDS = 3600
 _DEFAULT_PAYMENTS_RECONCILIATION_MAX_MISMATCHES = 100
+_DEFAULT_ENDPOINT_MONITOR_BATCH_SIZE = 100
+_DEFAULT_ENDPOINT_MONITOR_TIMEOUT_SECONDS = 3
+_DEFAULT_ENDPOINT_MONITOR_FAILURE_THRESHOLD = 3
 _PROTOCOL_VERSION = "1.0"
 _PROTOCOL_VERSION_HEADER = "X-AgentMarket-Version"
 # $0.001 cannot be represented in integer cents; keep ledger integer-safe until millicent support exists.
@@ -371,6 +378,18 @@ _DISPUTE_JUDGE_INTERVAL_SECONDS = _env_int(
     maximum=3600,
 )
 _DISPUTE_JUDGE_ENABLED = _DISPUTE_JUDGE_INTERVAL_SECONDS > 0
+_DISPUTE_FILING_DEPOSIT_BPS = _env_int(
+    "DISPUTE_FILING_DEPOSIT_BPS",
+    _DEFAULT_DISPUTE_FILING_DEPOSIT_BPS,
+    minimum=0,
+    maximum=10_000,
+)
+_DISPUTE_FILING_DEPOSIT_MIN_CENTS = _env_int(
+    "DISPUTE_FILING_DEPOSIT_MIN_CENTS",
+    _DEFAULT_DISPUTE_FILING_DEPOSIT_MIN_CENTS,
+    minimum=0,
+    maximum=10_000,
+)
 _builtin_worker_interval = _env_int(
     "BUILTIN_JOB_WORKER_INTERVAL_SECONDS",
     _DEFAULT_BUILTIN_JOB_WORKER_INTERVAL_SECONDS,
@@ -411,6 +430,24 @@ _PAYMENTS_RECONCILIATION_MAX_MISMATCHES = _env_int(
     maximum=1000,
 )
 _PAYMENTS_RECONCILIATION_ENABLED = _PAYMENTS_RECONCILIATION_INTERVAL_SECONDS > 0
+_ENDPOINT_MONITOR_BATCH_SIZE = _env_int(
+    "ENDPOINT_MONITOR_BATCH_SIZE",
+    _DEFAULT_ENDPOINT_MONITOR_BATCH_SIZE,
+    minimum=1,
+    maximum=500,
+)
+_ENDPOINT_MONITOR_TIMEOUT_SECONDS = _env_int(
+    "ENDPOINT_MONITOR_TIMEOUT_SECONDS",
+    _DEFAULT_ENDPOINT_MONITOR_TIMEOUT_SECONDS,
+    minimum=1,
+    maximum=30,
+)
+_ENDPOINT_MONITOR_FAILURE_THRESHOLD = _env_int(
+    "ENDPOINT_MONITOR_FAILURE_THRESHOLD",
+    _DEFAULT_ENDPOINT_MONITOR_FAILURE_THRESHOLD,
+    minimum=1,
+    maximum=20,
+)
 _SLO_CLAIM_P95_TARGET_MS = _env_int(
     "SLO_CLAIM_P95_TARGET_MS",
     60_000,
@@ -504,6 +541,21 @@ _PAYMENTS_RECONCILIATION_STATE = {
     "last_summary": None,
     "last_error": None,
 }
+_INFLIGHT_REQUESTS_LOCK = threading.Lock()
+_INFLIGHT_REQUESTS = 0
+_SERVER_SHUTTING_DOWN = False
+_SHUTDOWN_DRAIN_TIMEOUT_SECONDS = _env_int(
+    "SHUTDOWN_DRAIN_TIMEOUT_SECONDS",
+    15,
+    minimum=0,
+    maximum=120,
+)
+_SHUTDOWN_THREAD_JOIN_TIMEOUT_SECONDS = _env_int(
+    "SHUTDOWN_THREAD_JOIN_TIMEOUT_SECONDS",
+    10,
+    minimum=1,
+    maximum=120,
+)
 _JOB_STREAM_HEARTBEAT_SECONDS = 15
 _JOB_TERMINAL_STATUSES = {"complete", "failed"}
 _LEGACY_JOB_MESSAGE_TYPES = {
@@ -538,6 +590,44 @@ def _usd_to_cents(usd: float) -> int:
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _set_server_shutting_down(value: bool) -> None:
+    global _SERVER_SHUTTING_DOWN
+    with _INFLIGHT_REQUESTS_LOCK:
+        _SERVER_SHUTTING_DOWN = bool(value)
+
+
+def _server_is_shutting_down() -> bool:
+    with _INFLIGHT_REQUESTS_LOCK:
+        return bool(_SERVER_SHUTTING_DOWN)
+
+
+def _inc_inflight_requests() -> int:
+    global _INFLIGHT_REQUESTS
+    with _INFLIGHT_REQUESTS_LOCK:
+        _INFLIGHT_REQUESTS += 1
+        return _INFLIGHT_REQUESTS
+
+
+def _dec_inflight_requests() -> int:
+    global _INFLIGHT_REQUESTS
+    with _INFLIGHT_REQUESTS_LOCK:
+        _INFLIGHT_REQUESTS = max(0, _INFLIGHT_REQUESTS - 1)
+        return _INFLIGHT_REQUESTS
+
+
+def _inflight_requests_count() -> int:
+    with _INFLIGHT_REQUESTS_LOCK:
+        return int(_INFLIGHT_REQUESTS)
+
+
+def _compute_dispute_filing_deposit_cents(price_cents: int) -> int:
+    normalized_price = max(0, int(price_cents))
+    if normalized_price <= 0 or _DISPUTE_FILING_DEPOSIT_BPS <= 0:
+        return 0
+    computed = (normalized_price * _DISPUTE_FILING_DEPOSIT_BPS) // 10_000
+    return max(_DISPUTE_FILING_DEPOSIT_MIN_CENTS, computed)
 
 
 def _migrate_job_event_deliveries_status_schema(conn: sqlite3.Connection) -> None:
@@ -720,8 +810,7 @@ def _init_ops_db() -> None:
 
 def _init_stripe_db() -> None:
     """Create the stripe_sessions idempotency table (processed payment events)."""
-    import sqlite3 as _sqlite3
-    with _sqlite3.connect(jobs.DB_PATH) as conn:
+    with sqlite3.connect(jobs.DB_PATH) as conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS stripe_sessions (
@@ -782,6 +871,38 @@ def _builtin_agent_specs() -> list[dict[str, Any]]:
                 },
                 required=["ticker", "signal"],
             ),
+            "output_examples": [
+                {
+                    "input": {"ticker": "AAPL"},
+                    "output": {
+                        "ticker": "AAPL",
+                        "company_name": "Apple Inc.",
+                        "filing_type": "10-Q",
+                        "filing_date": "2026-01-31",
+                        "business_summary": "Consumer hardware and services ecosystem.",
+                        "recent_financial_highlights": ["Revenue growth in Services", "Stable gross margin"],
+                        "key_risks": ["Regulatory pressure", "Supply chain concentration"],
+                        "signal": "positive",
+                        "signal_reasoning": "Recurring revenue expansion offsets hardware cyclicality.",
+                        "generated_at": "2026-02-01T00:00:00+00:00",
+                    },
+                },
+                {
+                    "input": {"ticker": "TSLA"},
+                    "output": {
+                        "ticker": "TSLA",
+                        "company_name": "Tesla, Inc.",
+                        "filing_type": "10-Q",
+                        "filing_date": "2026-02-05",
+                        "business_summary": "EV manufacturing and energy storage business.",
+                        "recent_financial_highlights": ["Automotive margin compression", "Energy growth"],
+                        "key_risks": ["Price competition", "Execution risk on new models"],
+                        "signal": "neutral",
+                        "signal_reasoning": "Growth opportunities remain, but profitability volatility is elevated.",
+                        "generated_at": "2026-02-06T00:00:00+00:00",
+                    },
+                },
+            ],
         },
         {
             "agent_id": _CODEREVIEW_AGENT_ID,
@@ -801,6 +922,48 @@ def _builtin_agent_specs() -> list[dict[str, Any]]:
                 },
                 required=["score", "summary"],
             ),
+            "output_examples": [
+                {
+                    "input": {
+                        "code": "def divide(a, b):\n    return a / b\n",
+                        "language": "python",
+                        "focus": "bugs",
+                    },
+                    "output": {
+                        "language_detected": "python",
+                        "score": 78,
+                        "issues": [
+                            {
+                                "severity": "medium",
+                                "title": "Missing zero-division guard",
+                                "suggestion": "Handle b == 0 before division.",
+                            }
+                        ],
+                        "positive_aspects": ["Function is concise and readable."],
+                        "summary": "Core logic is correct but missing input safety checks.",
+                    },
+                },
+                {
+                    "input": {
+                        "code": "const token = req.headers.authorization;\nconsole.log(token);",
+                        "language": "javascript",
+                        "focus": "security",
+                    },
+                    "output": {
+                        "language_detected": "javascript",
+                        "score": 62,
+                        "issues": [
+                            {
+                                "severity": "high",
+                                "title": "Sensitive token logging",
+                                "suggestion": "Remove token logging or redact before logging.",
+                            }
+                        ],
+                        "positive_aspects": ["Simple extraction flow."],
+                        "summary": "Avoid exposing secrets in logs.",
+                    },
+                },
+            ],
         },
         {
             "agent_id": _TEXTINTEL_AGENT_ID,
@@ -824,6 +987,42 @@ def _builtin_agent_specs() -> list[dict[str, Any]]:
                 },
                 required=["word_count", "summary"],
             ),
+            "output_examples": [
+                {
+                    "input": {
+                        "text": "Revenue rose 18% year over year while operating margin fell 2 points.",
+                        "mode": "quick",
+                    },
+                    "output": {
+                        "word_count": 13,
+                        "reading_time_seconds": 4,
+                        "language": "en",
+                        "sentiment": "mixed",
+                        "sentiment_score": 0.12,
+                        "summary": "Strong growth paired with margin pressure.",
+                        "key_entities": ["Revenue", "Operating margin"],
+                        "main_topics": ["earnings", "profitability"],
+                        "key_quotes": ["Revenue rose 18% year over year"],
+                    },
+                },
+                {
+                    "input": {
+                        "text": "Customer satisfaction improved after response times dropped below two hours.",
+                        "mode": "full",
+                    },
+                    "output": {
+                        "word_count": 11,
+                        "reading_time_seconds": 3,
+                        "language": "en",
+                        "sentiment": "positive",
+                        "sentiment_score": 0.71,
+                        "summary": "Faster support correlated with better satisfaction.",
+                        "key_entities": ["Customer satisfaction", "response times"],
+                        "main_topics": ["support operations", "customer experience"],
+                        "key_quotes": ["response times dropped below two hours"],
+                    },
+                },
+            ],
         },
         {
             "agent_id": _WIKI_AGENT_ID,
@@ -844,6 +1043,33 @@ def _builtin_agent_specs() -> list[dict[str, Any]]:
                 },
                 required=["title", "summary"],
             ),
+            "output_examples": [
+                {
+                    "input": {"topic": "Discounted cash flow"},
+                    "output": {
+                        "title": "Discounted cash flow",
+                        "url": "https://en.wikipedia.org/wiki/Discounted_cash_flow",
+                        "summary": "Valuation method based on present value of expected future cash flows.",
+                        "key_facts": [
+                            "Uses a discount rate to reflect risk and time value.",
+                            "Common in equity and project valuation.",
+                        ],
+                        "related_topics": ["Net present value", "Weighted average cost of capital"],
+                        "content_type": "encyclopedia_article",
+                    },
+                },
+                {
+                    "input": {"topic": "Porter's five forces"},
+                    "output": {
+                        "title": "Porter's five forces analysis",
+                        "url": "https://en.wikipedia.org/wiki/Porter%27s_five_forces_analysis",
+                        "summary": "Framework for analyzing competition and profitability drivers in an industry.",
+                        "key_facts": ["Covers supplier power, buyer power, rivalry, substitutes, and entrants."],
+                        "related_topics": ["Competitive strategy", "Industry analysis"],
+                        "content_type": "encyclopedia_article",
+                    },
+                },
+            ],
         },
         {
             "agent_id": _NEGOTIATION_AGENT_ID,
@@ -865,6 +1091,42 @@ def _builtin_agent_specs() -> list[dict[str, Any]]:
                 },
                 required=["opening_position", "fallback_plan"],
             ),
+            "output_examples": [
+                {
+                    "input": {
+                        "objective": "Renew enterprise contract at +12% ARR with annual prepay.",
+                        "counterparty_profile": "Procurement-led team",
+                        "constraints": ["No discount above 8%"],
+                        "context": "Incumbent vendor with strong adoption.",
+                    },
+                    "output": {
+                        "opening_position": "Propose multi-year renewal with premium support add-on.",
+                        "must_haves": ["Price uplift near target", "Annual prepay"],
+                        "tradeables": ["Seat ramp schedule", "Training credits"],
+                        "red_lines": ["Discount above 8%"],
+                        "tactics": [{"name": "anchoring", "description": "Lead with value-backed anchor"}],
+                        "fallback_plan": "Offer term extension in exchange for lower uplift.",
+                        "risk_flags": ["Budget freeze risk", "Competitive quotes late in cycle"],
+                    },
+                },
+                {
+                    "input": {
+                        "objective": "Secure vendor SLA concessions without price increase.",
+                        "counterparty_profile": "Relationship-focused account team",
+                        "constraints": ["No budget increase"],
+                        "context": "Recent outage impacted trust.",
+                    },
+                    "output": {
+                        "opening_position": "Tie SLA upgrades to renewal certainty and reference commitment.",
+                        "must_haves": ["Response-time SLA improvements"],
+                        "tradeables": ["Public case study participation"],
+                        "red_lines": ["Any net new cost"],
+                        "tactics": [{"name": "package swap", "description": "Exchange non-cash concessions"}],
+                        "fallback_plan": "Escalate to pilot extension with explicit SLA checkpoints.",
+                        "risk_flags": ["Vendor legal delays", "Scope ambiguity in SLA wording"],
+                    },
+                },
+            ],
         },
         {
             "agent_id": _SCENARIO_AGENT_ID,
@@ -885,6 +1147,45 @@ def _builtin_agent_specs() -> list[dict[str, Any]]:
                 },
                 required=["decision", "scenarios", "recommended_plan"],
             ),
+            "output_examples": [
+                {
+                    "input": {
+                        "decision": "Expand to EU via direct sales team",
+                        "assumptions": "ARR 5M with 30% growth",
+                        "horizon": "18 months",
+                        "risk_tolerance": "balanced",
+                    },
+                    "output": {
+                        "decision": "Expand to EU via direct sales team",
+                        "horizon": "18 months",
+                        "risk_tolerance": "balanced",
+                        "scenarios": [
+                            {"name": "base", "probability": 0.5, "result": "moderate growth"},
+                            {"name": "upside", "probability": 0.25, "result": "accelerated pipeline"},
+                        ],
+                        "recommended_plan": {
+                            "phases": ["pilot in 2 countries", "scale after KPI validation"]
+                        },
+                        "confidence": 0.67,
+                    },
+                },
+                {
+                    "input": {
+                        "decision": "Delay expansion and deepen US upsell",
+                        "assumptions": "Strong NRR but slowing top-of-funnel",
+                        "horizon": "12 months",
+                        "risk_tolerance": "conservative",
+                    },
+                    "output": {
+                        "decision": "Delay expansion and deepen US upsell",
+                        "horizon": "12 months",
+                        "risk_tolerance": "conservative",
+                        "scenarios": [{"name": "base", "probability": 0.6, "result": "higher cash efficiency"}],
+                        "recommended_plan": {"focus": ["enterprise expansion", "churn prevention"]},
+                        "confidence": 0.72,
+                    },
+                },
+            ],
         },
         {
             "agent_id": _PRODUCT_AGENT_ID,
@@ -904,6 +1205,41 @@ def _builtin_agent_specs() -> list[dict[str, Any]]:
                 },
                 required=["positioning_statement", "roadmap"],
             ),
+            "output_examples": [
+                {
+                    "input": {
+                        "product_idea": "AI copilot for customer success teams",
+                        "target_users": "Mid-market B2B SaaS CSMs",
+                        "market_context": "Crowded tooling category",
+                        "horizon_quarters": 3,
+                    },
+                    "output": {
+                        "positioning_statement": "Proactive churn prevention assistant for high-volume CSM workflows.",
+                        "user_personas": ["Scaled CSM", "CS leader"],
+                        "roadmap": [
+                            {"quarter": "Q1", "milestone": "risk scoring MVP"},
+                            {"quarter": "Q2", "milestone": "playbook automation"},
+                        ],
+                        "experiments": [{"name": "churn model A/B", "metric": "retention lift"}],
+                        "risks": ["Data quality variance", "Integration complexity"],
+                    },
+                },
+                {
+                    "input": {
+                        "product_idea": "Automated onboarding coach for PLG products",
+                        "target_users": "SMB product teams",
+                        "market_context": "High trial-to-paid drop-off",
+                        "horizon_quarters": 2,
+                    },
+                    "output": {
+                        "positioning_statement": "Guided activation coach that shortens time-to-value for new users.",
+                        "user_personas": ["Growth PM", "Lifecycle marketer"],
+                        "roadmap": [{"quarter": "Q1", "milestone": "in-app assistant + milestone tracking"}],
+                        "experiments": [{"name": "activation checklist personalization", "metric": "activation rate"}],
+                        "risks": ["Over-personalization fatigue"],
+                    },
+                },
+            ],
         },
         {
             "agent_id": _PORTFOLIO_AGENT_ID,
@@ -923,6 +1259,47 @@ def _builtin_agent_specs() -> list[dict[str, Any]]:
                 },
                 required=["goal_summary", "allocation"],
             ),
+            "output_examples": [
+                {
+                    "input": {
+                        "investment_goal": "Long-term wealth growth",
+                        "risk_profile": "balanced",
+                        "time_horizon_years": 10,
+                        "capital_usd": 50000,
+                    },
+                    "output": {
+                        "goal_summary": "Balanced growth allocation for long-term horizon.",
+                        "allocation": [
+                            {"asset_class": "US equities", "weight_pct": 45},
+                            {"asset_class": "International equities", "weight_pct": 20},
+                            {"asset_class": "Bonds", "weight_pct": 30},
+                            {"asset_class": "Cash", "weight_pct": 5},
+                        ],
+                        "rebalancing_plan": "Rebalance semi-annually or at 5% drift.",
+                        "watch_metrics": ["volatility", "drawdown", "allocation drift"],
+                        "disclaimer": "Educational output, not investment advice.",
+                    },
+                },
+                {
+                    "input": {
+                        "investment_goal": "Capital preservation",
+                        "risk_profile": "conservative",
+                        "time_horizon_years": 5,
+                        "capital_usd": 120000,
+                    },
+                    "output": {
+                        "goal_summary": "Conservative allocation prioritizing downside protection.",
+                        "allocation": [
+                            {"asset_class": "Investment-grade bonds", "weight_pct": 55},
+                            {"asset_class": "Dividend equities", "weight_pct": 25},
+                            {"asset_class": "Cash equivalents", "weight_pct": 20},
+                        ],
+                        "rebalancing_plan": "Quarterly review with annual tax-aware rebalance.",
+                        "watch_metrics": ["income yield", "duration risk", "inflation sensitivity"],
+                        "disclaimer": "Educational output, not investment advice.",
+                    },
+                },
+            ],
         },
         {
             "agent_id": _QUALITY_JUDGE_AGENT_ID,
@@ -940,6 +1317,32 @@ def _builtin_agent_specs() -> list[dict[str, Any]]:
                 },
                 required=["verdict", "score", "reason"],
             ),
+            "output_examples": [
+                {
+                    "input": {
+                        "input_payload": {"task": "Summarize filing risks"},
+                        "output_payload": {"summary": "Identified debt covenant and supply-chain risks."},
+                        "agent_description": "SEC filing analyst",
+                    },
+                    "output": {
+                        "verdict": "pass",
+                        "score": 86,
+                        "reason": "Output is relevant, structured, and addresses requested risk focus.",
+                    },
+                },
+                {
+                    "input": {
+                        "input_payload": {"task": "Provide concise bug report"},
+                        "output_payload": {"text": "Looks good."},
+                        "agent_description": "Code review specialist",
+                    },
+                    "output": {
+                        "verdict": "fail",
+                        "score": 22,
+                        "reason": "Response is too generic and lacks actionable findings.",
+                    },
+                },
+            ],
             "internal_only": True,
         },
     ]
@@ -977,23 +1380,32 @@ def ensure_builtin_agents_registered() -> None:
     system_user_id = _ensure_system_user()
     system_owner_id = f"user:{system_user_id}"
     for spec in _builtin_agent_specs():
-        if registry.agent_exists_by_name(spec["name"]):
+        existing = registry.get_agent(spec["agent_id"])
+        if existing is None:
+            if registry.agent_exists_by_name(spec["name"]):
+                continue
+            registry.register_agent(
+                agent_id=spec["agent_id"],
+                name=spec["name"],
+                description=spec["description"],
+                endpoint_url=spec["endpoint_url"],
+                price_per_call_usd=0.01,
+                tags=spec["tags"],
+                input_schema=spec["input_schema"],
+                output_schema=spec["output_schema"],
+                output_verifier_url=None,
+                output_examples=spec.get("output_examples"),
+                internal_only=bool(spec.get("internal_only", False)),
+                status="active",
+                owner_id=system_owner_id,
+                embed_listing=False,
+            )
             continue
-        registry.register_agent(
-            agent_id=spec["agent_id"],
-            name=spec["name"],
-            description=spec["description"],
-            endpoint_url=spec["endpoint_url"],
-            price_per_call_usd=0.01,
-            tags=spec["tags"],
-            input_schema=spec["input_schema"],
-            output_schema=spec["output_schema"],
-            output_verifier_url=None,
-            internal_only=bool(spec.get("internal_only", False)),
-            status="active",
-            owner_id=system_owner_id,
-            embed_listing=False,
-        )
+        if spec.get("output_examples"):
+            registry.set_agent_output_examples(
+                spec["agent_id"],
+                spec["output_examples"],
+            )
 
 
 @asynccontextmanager
@@ -1008,6 +1420,7 @@ async def lifespan(app: FastAPI):
     _init_ops_db()
     _init_stripe_db()
     ensure_builtin_agents_registered()
+    _set_server_shutting_down(False)
     stop_event: threading.Event | None = None
     sweeper_thread: threading.Thread | None = None
     hook_stop_event: threading.Event | None = None
@@ -1080,26 +1493,32 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        _set_server_shutting_down(True)
+        drain_deadline = time.monotonic() + _SHUTDOWN_DRAIN_TIMEOUT_SECONDS
+        while time.monotonic() < drain_deadline:
+            if _inflight_requests_count() <= 0:
+                break
+            await asyncio.sleep(0.05)
         if stop_event is not None:
             stop_event.set()
         if sweeper_thread is not None:
-            sweeper_thread.join(timeout=2)
+            sweeper_thread.join(timeout=_SHUTDOWN_THREAD_JOIN_TIMEOUT_SECONDS)
         if hook_stop_event is not None:
             hook_stop_event.set()
         if hook_thread is not None:
-            hook_thread.join(timeout=2)
+            hook_thread.join(timeout=_SHUTDOWN_THREAD_JOIN_TIMEOUT_SECONDS)
         if builtin_stop_event is not None:
             builtin_stop_event.set()
         if builtin_thread is not None:
-            builtin_thread.join(timeout=2)
+            builtin_thread.join(timeout=_SHUTDOWN_THREAD_JOIN_TIMEOUT_SECONDS)
         if dispute_judge_stop_event is not None:
             dispute_judge_stop_event.set()
         if dispute_judge_thread is not None:
-            dispute_judge_thread.join(timeout=2)
+            dispute_judge_thread.join(timeout=_SHUTDOWN_THREAD_JOIN_TIMEOUT_SECONDS)
         if payments_reconciliation_stop_event is not None:
             payments_reconciliation_stop_event.set()
         if payments_reconciliation_thread is not None:
-            payments_reconciliation_thread.join(timeout=2)
+            payments_reconciliation_thread.join(timeout=_SHUTDOWN_THREAD_JOIN_TIMEOUT_SECONDS)
 
 
 # ---------------------------------------------------------------------------
@@ -1158,6 +1577,15 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 # Middleware — security headers + request size cap
 # ---------------------------------------------------------------------------
+
+@app.middleware("http")
+async def shutdown_draining(request: Request, call_next):
+    _inc_inflight_requests()
+    try:
+        return await call_next(request)
+    finally:
+        _dec_inflight_requests()
+
 
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
@@ -1533,6 +1961,7 @@ def _job_response(job: dict, caller: core_models.CallerContext) -> dict:
 
     if owner_id != job.get("caller_owner_id"):
         result.pop("caller_owner_id", None)
+        result.pop("output_verification_decision_owner_id", None)
     if owner_id != job.get("claim_owner_id"):
         result.pop("claim_token", None)
     return result
@@ -1545,6 +1974,38 @@ def _caller_can_view_job(caller: core_models.CallerContext, job: dict) -> bool:
         return str(caller.get("agent_id") or "").strip() == str(job.get("agent_id") or "").strip()
     owner_id = caller["owner_id"]
     return owner_id == job["caller_owner_id"] or jobs.is_worker_authorized(job, owner_id)
+
+
+def _resolve_parent_job_for_creation(
+    caller: core_models.CallerContext,
+    parent_job_id: str | None,
+    *,
+    parent_cascade_policy: str,
+) -> dict | None:
+    normalized_parent_job_id = str(parent_job_id or "").strip()
+    normalized_policy = str(parent_cascade_policy or "").strip().lower() or "detach"
+    if not normalized_parent_job_id:
+        if normalized_policy != "detach":
+            raise HTTPException(
+                status_code=422,
+                detail="parent_cascade_policy requires parent_job_id.",
+            )
+        return None
+
+    parent = jobs.get_job(normalized_parent_job_id)
+    if parent is None:
+        raise HTTPException(status_code=404, detail=f"Parent job '{normalized_parent_job_id}' not found.")
+
+    if caller["type"] == "master":
+        return parent
+
+    owner_id = caller["owner_id"]
+    if owner_id not in {parent.get("caller_owner_id"), parent.get("agent_owner_id")}:
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to link jobs to this parent_job_id.",
+        )
+    return parent
 
 
 def _caller_can_manage_agent(caller: core_models.CallerContext, agent: dict) -> bool:
@@ -3334,6 +3795,42 @@ def _run_output_verifier(
     return False, str(body.get("reason") or "external verifier returned verified=false")
 
 
+def _run_registration_verifier(
+    verifier_url: str | None,
+    *,
+    registration_payload: dict[str, Any],
+    timeout_seconds: int = 10,
+) -> tuple[bool, str]:
+    target = str(verifier_url or "").strip()
+    if not target:
+        return False, "no verifier configured"
+    try:
+        safe_url = _validate_outbound_url(target, "output_verifier_url")
+    except ValueError as exc:
+        return False, f"invalid verifier url: {exc}"
+    payload = {
+        "event_type": "agent_registration_verification",
+        "agent": registration_payload,
+    }
+    try:
+        response = http.post(
+            safe_url,
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=timeout_seconds,
+        )
+        response.raise_for_status()
+        body = response.json()
+    except Exception as exc:
+        _LOG.warning("Agent registration verifier request failed for %s: %s", registration_payload.get("name"), exc)
+        return False, "registration verifier request failed"
+    if not isinstance(body, dict):
+        return False, "registration verifier returned non-object response"
+    if bool(body.get("verified")):
+        return True, str(body.get("reason") or "registration verifier passed")
+    return False, str(body.get("reason") or "registration verifier returned verified=false")
+
+
 def _timeout_error_payload(job_payload: dict) -> dict:
     return error_codes.make_error(
         error_codes.AGENT_TIMEOUT,
@@ -3366,6 +3863,8 @@ def _run_quality_gate(job: dict, agent: dict, output_payload: dict) -> dict[str,
             },
             agent_owner_id=(judge_agent or {}).get("owner_id") or "master",
             max_attempts=1,
+            parent_job_id=job["job_id"],
+            parent_cascade_policy="detach",
             dispute_window_hours=1,
             judge_agent_id=None,
         )
@@ -3460,12 +3959,18 @@ def _run_quality_gate(job: dict, agent: dict, output_payload: dict) -> dict[str,
 def _apply_dispute_effects(dispute: dict, outcome: str) -> None:
     normalized_outcome = str(outcome or "").strip().lower()
     current_job = jobs.get_job(dispute["job_id"])
+    was_settled = bool((current_job or {}).get("settled_at"))
     previous_outcome = str((current_job or {}).get("dispute_outcome") or "").strip().lower()
     job = jobs.set_job_dispute_outcome(dispute["job_id"], normalized_outcome)
     if job is None:
         return
+    if not was_settled:
+        jobs.mark_settled(dispute["job_id"])
+        job = jobs.get_job(dispute["job_id"]) or job
     if normalized_outcome == "caller_wins" and previous_outcome != "caller_wins":
         registry.update_call_stats(job["agent_id"], latency_ms=0.0, success=False)
+    elif normalized_outcome in {"agent_wins", "split", "void"} and not was_settled:
+        registry.update_call_stats(job["agent_id"], latency_ms=_job_latency_ms(job), success=True)
 
     filed_by = str(dispute.get("filed_by_owner_id") or "").strip()
     if filed_by.startswith("user:") and dispute.get("side") == "caller" and normalized_outcome == "agent_wins":
@@ -3498,9 +4003,138 @@ def _fail_open_jobs_for_agent(agent_id: str, actor_owner_id: str, reason: str) -
     return {"affected_jobs": affected, "refunded_jobs": refunded}
 
 
+def _normalize_output_verification_status(job: dict) -> str:
+    status = str(job.get("output_verification_status") or "").strip().lower()
+    if status in {"pending", "accepted", "rejected", "expired"}:
+        return status
+    return "not_required"
+
+
+def _ensure_output_rejection_dispute(
+    job: dict,
+    *,
+    filed_by_owner_id: str,
+    reason: str,
+    evidence: str | None = None,
+) -> dict:
+    existing = disputes.get_dispute_by_job(job["job_id"])
+    if existing is not None:
+        return existing
+
+    conn = payments._conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        created = disputes.create_dispute(
+            job_id=job["job_id"],
+            filed_by_owner_id=filed_by_owner_id,
+            side="caller",
+            reason=reason,
+            evidence=evidence,
+            filing_deposit_cents=0,
+            conn=conn,
+        )
+        payments.collect_dispute_filing_deposit(
+            created["dispute_id"],
+            filed_by_owner_id=filed_by_owner_id,
+            amount_cents=0,
+            conn=conn,
+        )
+        payments.lock_dispute_funds(created["dispute_id"], conn=conn)
+        conn.execute("COMMIT")
+        return created
+    except sqlite3.IntegrityError:
+        conn.execute("ROLLBACK")
+        existing = disputes.get_dispute_by_job(job["job_id"])
+        if existing is not None:
+            return existing
+        raise HTTPException(status_code=409, detail="A dispute already exists for this job.")
+    except ValueError as exc:
+        conn.execute("ROLLBACK")
+        raise HTTPException(status_code=400, detail=str(exc))
+    except payments.InsufficientBalanceError as exc:
+        conn.execute("ROLLBACK")
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": error_codes.DISPUTE_CLAWBACK_INSUFFICIENT_BALANCE,
+                "balance_cents": exc.balance_cents,
+                "required_cents": exc.required_cents,
+            },
+        )
+
+
+def _cascade_fail_active_child_jobs(parent_job: dict, actor_owner_id: str) -> dict[str, Any]:
+    active_children = jobs.list_child_jobs(
+        parent_job["job_id"],
+        statuses=("pending", "running", "awaiting_clarification"),
+        limit=500,
+    )
+    failed_child_job_ids: list[str] = []
+    for child in active_children:
+        policy = str(child.get("parent_cascade_policy") or "").strip().lower() or "detach"
+        if policy != "fail_children_on_parent_fail":
+            continue
+        updated = jobs.update_job_status(
+            child["job_id"],
+            "failed",
+            error_message=f"Parent job {parent_job['job_id']} failed; child was cascaded.",
+            completed=True,
+        )
+        if updated is None:
+            continue
+        settled_child = _settle_failed_job(
+            updated,
+            actor_owner_id=actor_owner_id,
+            event_type="job.failed_parent_cascade",
+            refund_fraction=1.0,
+        )
+        failed_child_job_ids.append(settled_child["job_id"])
+    return {
+        "scanned_children": len(active_children),
+        "failed_children": len(failed_child_job_ids),
+        "failed_child_job_ids": failed_child_job_ids,
+    }
+
+
+def _effective_dispute_window_seconds(job: dict) -> int:
+    dispute_window_hours = _to_non_negative_int(
+        job.get("dispute_window_hours"),
+        default=_DEFAULT_JOB_DISPUTE_WINDOW_HOURS,
+    )
+    if dispute_window_hours < 1:
+        dispute_window_hours = _DEFAULT_JOB_DISPUTE_WINDOW_HOURS
+    configured_window_seconds = dispute_window_hours * 3600
+    return min(configured_window_seconds, _DISPUTE_FILE_WINDOW_SECONDS)
+
+
+def _dispute_window_deadline(job: dict) -> datetime | None:
+    completed_at = _parse_iso_datetime(job.get("completed_at"))
+    if completed_at is None:
+        return None
+    return completed_at + timedelta(seconds=_effective_dispute_window_seconds(job))
+
+
+def _is_dispute_window_open(job: dict, *, now_dt: datetime | None = None) -> bool:
+    deadline = _dispute_window_deadline(job)
+    if deadline is None:
+        return False
+    current = now_dt or datetime.now(timezone.utc)
+    return current <= deadline
+
+
 def _settle_successful_job(job: dict, actor_owner_id: str) -> dict:
     newly_settled = False
+    refreshed = jobs.initialize_output_verification_state(job["job_id"])
+    if refreshed is not None:
+        job = refreshed
     if disputes.has_dispute_for_job(job["job_id"]):
+        return jobs.get_job(job["job_id"]) or job
+    verification_status = _normalize_output_verification_status(job)
+    if verification_status == "pending":
+        return jobs.get_job(job["job_id"]) or job
+    if verification_status == "rejected":
+        return jobs.get_job(job["job_id"]) or job
+    if _is_dispute_window_open(job):
         return jobs.get_job(job["job_id"]) or job
     if not job["settled_at"]:
         payments.post_call_payout(
@@ -3517,9 +4151,9 @@ def _settle_successful_job(job: dict, actor_owner_id: str) -> dict:
     if newly_settled:
         _record_job_event(
             settled,
-            "job.completed",
+            "job.settled",
             actor_owner_id=actor_owner_id,
-            payload={"status": settled["status"]},
+            payload={"status": settled["status"], "settled_at": settled.get("settled_at")},
         )
     return settled
 
@@ -3563,6 +4197,10 @@ def _settle_failed_job(
             actor_owner_id=actor_owner_id,
             payload={"status": settled["status"], "error_message": settled.get("error_message")},
         )
+    if (
+        str(settled.get("status") or "").strip().lower() == "failed"
+    ):
+        _cascade_fail_active_child_jobs(settled, actor_owner_id=actor_owner_id)
     return settled
 
 
@@ -3685,6 +4323,93 @@ def _apply_reputation_decay(now_dt: datetime | None = None) -> dict[str, int]:
     return {"scanned_agents": scanned, "decayed_agents": decayed}
 
 
+def _should_monitor_agent_endpoint(agent: dict) -> bool:
+    status = str(agent.get("status") or "").strip().lower()
+    if status in {"banned", "suspended"}:
+        return False
+    endpoint = str(agent.get("endpoint_url") or "").strip()
+    if not endpoint:
+        return False
+    if endpoint.startswith("internal://"):
+        return False
+    parsed = urlparse(endpoint)
+    host = (parsed.hostname or "").strip().lower()
+    if host in {"example.com"} or host.endswith(".example.com"):
+        return False
+    if host.endswith(".test") or host.endswith(".invalid"):
+        return False
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _monitor_agent_endpoints(
+    *,
+    limit: int = _ENDPOINT_MONITOR_BATCH_SIZE,
+    timeout_seconds: int = _ENDPOINT_MONITOR_TIMEOUT_SECONDS,
+    failure_threshold: int = _ENDPOINT_MONITOR_FAILURE_THRESHOLD,
+) -> dict[str, Any]:
+    agents = registry.get_agents(include_internal=True, include_banned=True)
+    checked = 0
+    healthy = 0
+    degraded = 0
+    recovered = 0
+    degraded_agent_ids: list[str] = []
+    recovered_agent_ids: list[str] = []
+    for agent in agents:
+        if checked >= limit:
+            break
+        if not _should_monitor_agent_endpoint(agent):
+            continue
+        checked += 1
+        agent_id = str(agent.get("agent_id") or "")
+        previous_status = str(agent.get("endpoint_health_status") or "unknown").strip().lower()
+        previous_failures = _to_non_negative_int(agent.get("endpoint_consecutive_failures"), default=0)
+        endpoint_url = str(agent.get("endpoint_url") or "").strip()
+        ok = False
+        error_text: str | None = None
+        try:
+            safe_url = _validate_outbound_url(endpoint_url, "endpoint_url")
+            response = http.head(safe_url, timeout=timeout_seconds, allow_redirects=True)
+            status_code = int(response.status_code)
+            if status_code in {405, 501}:
+                response = http.get(safe_url, timeout=timeout_seconds, allow_redirects=True)
+                status_code = int(response.status_code)
+            ok = 200 <= status_code < 500
+            if not ok:
+                error_text = f"status_code={status_code}"
+        except Exception as exc:
+            ok = False
+            error_text = str(exc) or "endpoint health check failed"
+        if ok:
+            new_failures = 0
+            new_status = "healthy"
+            healthy += 1
+            if previous_status == "degraded":
+                recovered += 1
+                recovered_agent_ids.append(agent_id)
+        else:
+            new_failures = previous_failures + 1
+            new_status = "degraded" if new_failures >= failure_threshold else "healthy"
+            if new_status == "degraded":
+                degraded += 1
+                if previous_status != "degraded":
+                    degraded_agent_ids.append(agent_id)
+        registry.set_agent_endpoint_health(
+            agent_id,
+            endpoint_health_status=new_status,
+            endpoint_consecutive_failures=new_failures,
+            endpoint_last_checked_at=_utc_now_iso(),
+            endpoint_last_error=None if ok else error_text,
+        )
+    return {
+        "endpoint_checks_scanned": checked,
+        "endpoint_healthy_count": healthy,
+        "endpoint_degraded_count": degraded,
+        "endpoint_recovered_count": recovered,
+        "endpoint_degraded_agent_ids": degraded_agent_ids,
+        "endpoint_recovered_agent_ids": recovered_agent_ids,
+    }
+
+
 def _auto_suspend_low_performing_agents(actor_owner_id: str) -> dict[str, Any]:
     suspended_agent_ids: list[str] = []
     generated_events: list[dict[str, Any]] = []
@@ -3794,6 +4519,40 @@ def _sweep_jobs(
             settled = _settle_failed_job(updated, actor_owner_id=actor_owner_id, event_type="job.timeout_terminal")
             timeout_failed_job_ids.append(settled["job_id"])
 
+    clarification_timeout_failed_job_ids: list[str] = []
+    clarification_timeout_proceeded_job_ids: list[str] = []
+    expired_clarification = jobs.list_jobs_with_expired_clarification_deadline(limit=limit)
+    for item in expired_clarification:
+        timeout_policy = str(item.get("clarification_timeout_policy") or "").strip().lower() or "fail"
+        if timeout_policy == "proceed":
+            resumed = jobs.update_job_status(item["job_id"], "running", completed=False)
+            if resumed is None:
+                continue
+            clarification_timeout_proceeded_job_ids.append(resumed["job_id"])
+            _record_job_event(
+                resumed,
+                "job.clarification_timeout_proceeded",
+                actor_owner_id=actor_owner_id,
+                payload={"clarification_deadline_at": item.get("clarification_deadline_at")},
+            )
+            continue
+
+        failed = jobs.update_job_status(
+            item["job_id"],
+            "failed",
+            error_message="Clarification response timeout reached.",
+            completed=True,
+        )
+        if failed is None:
+            continue
+        settled = _settle_failed_job(
+            failed,
+            actor_owner_id=actor_owner_id,
+            event_type="job.clarification_timeout_failed",
+            refund_fraction=1.0,
+        )
+        clarification_timeout_failed_job_ids.append(settled["job_id"])
+
     sla_failed_job_ids: list[str] = []
     for item in jobs.list_jobs_past_sla(sla_seconds=sla_seconds, limit=limit):
         updated = jobs.update_job_status(
@@ -3821,6 +4580,25 @@ def _sweep_jobs(
             actor_owner_id=actor_owner_id,
             payload={"previous_next_retry_at": previous_next_retry_at},
         )
+    output_verification_expired_job_ids: list[str] = []
+    for item in jobs.list_jobs_with_expired_output_verification(limit=limit):
+        expired = jobs.mark_output_verification_expired(item["job_id"])
+        if expired is None:
+            continue
+        output_verification_expired_job_ids.append(expired["job_id"])
+        _record_job_event(
+            expired,
+            "job.output_verification_expired",
+            actor_owner_id=actor_owner_id,
+            payload={"output_verification_deadline_at": item.get("output_verification_deadline_at")},
+        )
+    completed_pending_settlement = jobs.list_completed_jobs_pending_settlement(limit=limit)
+    settled_successful_job_ids: list[str] = []
+    for item in completed_pending_settlement:
+        settled = _settle_successful_job(item, actor_owner_id=actor_owner_id)
+        if settled.get("settled_at"):
+            settled_successful_job_ids.append(settled["job_id"])
+    endpoint_health_summary = _monitor_agent_endpoints(limit=limit)
     suspension_summary = _auto_suspend_low_performing_agents(actor_owner_id)
     decay_summary = _apply_reputation_decay()
     return {
@@ -3830,7 +4608,15 @@ def _sweep_jobs(
         "retry_ready_job_ids": retry_ready_job_ids,
         "timeout_retry_job_ids": timeout_retry_job_ids,
         "timeout_failed_job_ids": timeout_failed_job_ids,
+        "clarification_timeout_scanned": len(expired_clarification),
+        "clarification_timeout_failed_job_ids": clarification_timeout_failed_job_ids,
+        "clarification_timeout_proceeded_job_ids": clarification_timeout_proceeded_job_ids,
         "sla_failed_job_ids": sla_failed_job_ids,
+        "output_verification_expired_job_ids": output_verification_expired_job_ids,
+        "completed_pending_settlement_scanned": len(completed_pending_settlement),
+        "settled_successful_count": len(settled_successful_job_ids),
+        "settled_successful_job_ids": settled_successful_job_ids,
+        **endpoint_health_summary,
         "auto_suspended_count": int(suspension_summary["auto_suspended_count"]),
         "auto_suspended_agent_ids": suspension_summary["auto_suspended_agent_ids"],
         "reputation_decay": decay_summary,
@@ -4829,6 +5615,22 @@ def registry_register(
         safe_verifier_url = None
         if body.output_verifier_url:
             safe_verifier_url = _validate_outbound_url(body.output_verifier_url, "output_verifier_url")
+        registration_payload = {
+            "name": body.name,
+            "description": body.description,
+            "endpoint_url": safe_endpoint_url,
+            "price_per_call_usd": body.price_per_call_usd,
+            "tags": body.tags,
+            "input_schema": body.input_schema,
+            "output_schema": body.output_schema,
+        }
+        verified = False
+        verifier_reason = "no verifier configured"
+        if safe_verifier_url:
+            verified, verifier_reason = _run_registration_verifier(
+                safe_verifier_url,
+                registration_payload=registration_payload,
+            )
         agent_id = registry.register_agent(
             name=body.name,
             description=body.description,
@@ -4839,6 +5641,7 @@ def registry_register(
             output_schema=body.output_schema,
             output_verifier_url=safe_verifier_url,
             output_examples=body.output_examples or None,
+            verified=verified,
             owner_id=caller["owner_id"],
         )
         agent = registry.get_agent_with_reputation(agent_id) or registry.get_agent(agent_id)
@@ -4846,10 +5649,16 @@ def registry_register(
         raise HTTPException(status_code=400, detail=str(e))
     except sqlite3.IntegrityError as e:
         raise HTTPException(status_code=409, detail=str(e))
+    message = "Agent registered successfully."
+    if safe_verifier_url:
+        if agent and agent.get("verified"):
+            message = "Agent registered and verifier approved."
+        else:
+            message = f"Agent registered; verifier did not approve ({verifier_reason})."
     return JSONResponse(
         content={
             "agent_id": agent_id,
-            "message": "Agent registered successfully.",
+            "message": message,
             "agent": _agent_response(agent, caller) if agent else None,
         },
         status_code=201,
@@ -5580,6 +6389,12 @@ def registry_call(
             )
             if completed is None:
                 raise RuntimeError("Failed to mark built-in sync job complete.")
+            _record_job_event(
+                completed,
+                "job.completed",
+                actor_owner_id=caller["owner_id"],
+                payload={"status": completed["status"], "source": "registry_call_sync"},
+            )
             _settle_successful_job(completed, actor_owner_id=caller["owner_id"])
             return JSONResponse(content=output)
         except ValidationError as exc:
@@ -5701,6 +6516,11 @@ def jobs_create(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.JobResponse:
     _require_scope(caller, "caller")
+    parent_job = _resolve_parent_job_for_creation(
+        caller,
+        body.parent_job_id,
+        parent_cascade_policy=body.parent_cascade_policy,
+    )
     agent = registry.get_agent(body.agent_id)
     if agent is None:
         raise HTTPException(status_code=404, detail=f"Agent '{body.agent_id}' not found.")
@@ -5768,10 +6588,15 @@ def jobs_create(
             input_payload=body.input_payload,
             agent_owner_id=agent.get("owner_id"),
             max_attempts=body.max_attempts,
+            parent_job_id=(parent_job or {}).get("job_id"),
+            parent_cascade_policy=body.parent_cascade_policy,
+            clarification_timeout_seconds=body.clarification_timeout_seconds,
+            clarification_timeout_policy=body.clarification_timeout_policy,
             dispute_window_hours=body.dispute_window_hours or _DEFAULT_JOB_DISPUTE_WINDOW_HOURS,
             judge_agent_id=_extract_judge_agent_id(agent.get("input_schema")) or _QUALITY_JUDGE_AGENT_ID,
             callback_url=body.callback_url or None,
             callback_secret=body.callback_secret or None,
+            output_verification_window_seconds=body.output_verification_window_seconds,
         )
     except Exception as e:
         payments.post_call_refund(
@@ -5784,7 +6609,11 @@ def jobs_create(
         job,
         "job.created",
         actor_owner_id=caller["owner_id"],
-        payload={"max_attempts": body.max_attempts},
+        payload={
+            "max_attempts": body.max_attempts,
+            "parent_job_id": (parent_job or {}).get("job_id"),
+            "parent_cascade_policy": body.parent_cascade_policy,
+        },
     )
     return JSONResponse(content=_job_response(job, caller), status_code=201)
 
@@ -5814,6 +6643,11 @@ def jobs_batch_create(
     resolved: list[dict] = []
     total_price_cents = 0
     for spec in body.jobs:
+        parent_job = _resolve_parent_job_for_creation(
+            caller,
+            spec.parent_job_id,
+            parent_cascade_policy=spec.parent_cascade_policy,
+        )
         agent = registry.get_agent(spec.agent_id)
         if agent is None or agent.get("status") == "banned":
             raise HTTPException(status_code=404, detail=f"Agent '{spec.agent_id}' not found.")
@@ -5830,7 +6664,14 @@ def jobs_batch_create(
                 ),
             )
         total_price_cents += price_cents
-        resolved.append({"agent": agent, "price_cents": price_cents, "spec": spec})
+        resolved.append(
+            {
+                "agent": agent,
+                "price_cents": price_cents,
+                "spec": spec,
+                "parent_job_id": (parent_job or {}).get("job_id"),
+            }
+        )
 
     caller_wallet = payments.get_or_create_wallet(caller_owner_id)
     if caller_wallet["balance_cents"] < total_price_cents:
@@ -5850,6 +6691,7 @@ def jobs_batch_create(
             agent = item["agent"]
             price_cents = item["price_cents"]
             spec = item["spec"]
+            parent_job_id = item["parent_job_id"]
             agent_wallet = payments.get_or_create_wallet(f"agent:{agent['agent_id']}")
             platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
             charge_tx_id = _pre_call_charge_or_402(
@@ -5870,10 +6712,15 @@ def jobs_batch_create(
                 input_payload=spec.input_payload,
                 agent_owner_id=agent.get("owner_id"),
                 max_attempts=spec.max_attempts,
+                parent_job_id=parent_job_id,
+                parent_cascade_policy=spec.parent_cascade_policy,
+                clarification_timeout_seconds=spec.clarification_timeout_seconds,
+                clarification_timeout_policy=spec.clarification_timeout_policy,
                 dispute_window_hours=spec.dispute_window_hours or _DEFAULT_JOB_DISPUTE_WINDOW_HOURS,
                 judge_agent_id=_extract_judge_agent_id(agent.get("input_schema")) or _QUALITY_JUDGE_AGENT_ID,
                 callback_url=spec.callback_url or None,
                 callback_secret=spec.callback_secret or None,
+                output_verification_window_seconds=spec.output_verification_window_seconds,
                 batch_id=batch_id,
             )
             _record_job_event(job, "job.created", actor_owner_id=caller["owner_id"])
@@ -6299,6 +7146,19 @@ def jobs_complete(
         )
         if updated is None:
             raise HTTPException(status_code=409, detail="Unable to update job status.")
+        initialized = jobs.initialize_output_verification_state(job_id)
+        if initialized is not None:
+            updated = initialized
+        _record_job_event(
+            updated,
+            "job.completed",
+            actor_owner_id=actor_owner_id,
+            payload={
+                "status": updated["status"],
+                "output_verification_status": updated.get("output_verification_status"),
+                "output_verification_deadline_at": updated.get("output_verification_deadline_at"),
+            },
+        )
         settled = _settle_successful_job(updated, actor_owner_id=actor_owner_id)
         platform_fee_cents = max(0, updated["price_cents"] * payments.PLATFORM_FEE_PCT // 100)
         judge_fee_cents = min(_JUDGE_FEE_CENTS, platform_fee_cents)
@@ -6319,6 +7179,128 @@ def jobs_complete(
         caller=caller,
         scope=f"jobs.complete:{job_id}",
         payload={"output_payload": body.output_payload, "claim_token": body.claim_token},
+        operation=_operation,
+    )
+
+
+@app.post(
+    "/jobs/{job_id}/verification",
+    response_model=core_models.JobResponse,
+    responses=_error_responses(400, 401, 403, 404, 409, 429, 500),
+)
+@limiter.limit("30/minute")
+def jobs_output_verification_decide(
+    request: Request,
+    job_id: str,
+    body: JobVerificationDecisionRequest,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.JobResponse:
+    _require_scope(caller, "caller")
+
+    def _operation() -> tuple[dict, int]:
+        job = jobs.get_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+        if caller["type"] != "master" and caller["owner_id"] != job.get("caller_owner_id"):
+            raise HTTPException(status_code=403, detail="Only the job caller can decide output verification.")
+        if job.get("status") != "complete" or not job.get("completed_at"):
+            raise HTTPException(status_code=400, detail="Output verification is only available for completed jobs.")
+        if job.get("settled_at"):
+            raise HTTPException(status_code=409, detail="Job is already settled.")
+
+        initialized = jobs.initialize_output_verification_state(job_id) or job
+        verification_status = _normalize_output_verification_status(initialized)
+        if verification_status == "not_required":
+            raise HTTPException(
+                status_code=400,
+                detail="This job does not have an output verification window configured.",
+            )
+
+        if verification_status == "pending":
+            deadline = _parse_iso_datetime(initialized.get("output_verification_deadline_at"))
+            if deadline is not None and datetime.now(timezone.utc) > deadline:
+                expired = jobs.mark_output_verification_expired(
+                    job_id,
+                    decision_owner_id="system:verification-expiry-api",
+                )
+                if expired is not None:
+                    initialized = expired
+                    verification_status = "expired"
+                    _record_job_event(
+                        expired,
+                        "job.output_verification_expired",
+                        actor_owner_id=caller["owner_id"],
+                        payload={"output_verification_deadline_at": expired.get("output_verification_deadline_at")},
+                    )
+
+        if body.decision == "accept":
+            if disputes.has_dispute_for_job(job_id):
+                raise HTTPException(status_code=409, detail="Cannot accept output after a dispute is already filed.")
+            if verification_status == "accepted":
+                settled = _settle_successful_job(initialized, actor_owner_id=caller["owner_id"])
+                return _job_response(settled, caller), 200
+            if verification_status in {"rejected", "expired"}:
+                raise HTTPException(status_code=409, detail="Output verification decision is already closed for this job.")
+            decided = jobs.set_output_verification_decision(
+                job_id,
+                decision="accept",
+                decision_owner_id=caller["owner_id"],
+                reason=body.reason,
+            )
+            if decided is None:
+                raise HTTPException(status_code=409, detail="Unable to record output verification decision.")
+            _record_job_event(
+                decided,
+                "job.output_verification_accepted",
+                actor_owner_id=caller["owner_id"],
+                payload={},
+            )
+            settled = _settle_successful_job(decided, actor_owner_id=caller["owner_id"])
+            return _job_response(settled, caller), 200
+
+        if verification_status == "rejected":
+            return _job_response(initialized, caller), 200
+        if verification_status in {"accepted", "expired"}:
+            raise HTTPException(status_code=409, detail="Output verification decision is already closed for this job.")
+
+        rejection_reason = body.reason or "Caller rejected output during verification window."
+        dispute_row = _ensure_output_rejection_dispute(
+            initialized,
+            filed_by_owner_id=caller["owner_id"],
+            reason=rejection_reason,
+            evidence=body.evidence,
+        )
+        decided = jobs.set_output_verification_decision(
+            job_id,
+            decision="reject",
+            decision_owner_id=caller["owner_id"],
+            reason=rejection_reason,
+        )
+        decided_job = decided or jobs.get_job(job_id) or initialized
+        _record_job_event(
+            decided_job,
+            "job.output_verification_rejected",
+            actor_owner_id=caller["owner_id"],
+            payload={"dispute_id": dispute_row["dispute_id"]},
+        )
+        _record_job_event(
+            decided_job,
+            "job.dispute_filed",
+            actor_owner_id=caller["owner_id"],
+            payload={
+                "dispute_id": dispute_row["dispute_id"],
+                "side": "caller",
+                "reason": rejection_reason,
+                "auto_opened": True,
+            },
+        )
+        return _job_response(decided_job, caller), 200
+
+    return _run_idempotent_json_response(
+        request=request,
+        caller=caller,
+        scope=f"jobs.verification:{job_id}",
+        payload=body.model_dump(),
         operation=_operation,
     )
 
@@ -6816,12 +7798,10 @@ def jobs_dispute(
     completed_at = _parse_iso_datetime(job.get("completed_at"))
     if completed_at is None:
         raise HTTPException(status_code=400, detail="Job completion timestamp is invalid.")
-    dispute_window_hours = _to_non_negative_int(job.get("dispute_window_hours"), default=_DEFAULT_JOB_DISPUTE_WINDOW_HOURS)
-    if dispute_window_hours < 1:
-        dispute_window_hours = _DEFAULT_JOB_DISPUTE_WINDOW_HOURS
-    configured_window_seconds = dispute_window_hours * 3600
-    effective_window_seconds = min(configured_window_seconds, _DISPUTE_FILE_WINDOW_SECONDS)
-    if datetime.now(timezone.utc) > (completed_at + timedelta(seconds=effective_window_seconds)):
+    deadline = _dispute_window_deadline(job)
+    if deadline is None:
+        raise HTTPException(status_code=400, detail="Job completion timestamp is invalid.")
+    if datetime.now(timezone.utc) > deadline:
         raise HTTPException(status_code=400, detail="Dispute window has expired for this job.")
 
     side = _dispute_side_for_caller(caller, job)
@@ -6830,7 +7810,11 @@ def jobs_dispute(
     if disputes.has_dispute_for_job(job_id):
         raise HTTPException(status_code=409, detail="A dispute already exists for this job.")
 
+    filing_deposit_cents = _compute_dispute_filing_deposit_cents(int(job.get("price_cents") or 0))
     conn = payments._conn()
+    lock_summary: dict[str, Any] = {}
+    deposit_summary: dict[str, Any] = {}
+    insufficient_phase = "dispute_create"
     try:
         conn.execute("BEGIN IMMEDIATE")
         created = disputes.create_dispute(
@@ -6839,8 +7823,17 @@ def jobs_dispute(
             side=side,
             reason=body.reason,
             evidence=body.evidence,
+            filing_deposit_cents=filing_deposit_cents,
             conn=conn,
         )
+        insufficient_phase = "filing_deposit"
+        deposit_summary = payments.collect_dispute_filing_deposit(
+            created["dispute_id"],
+            filed_by_owner_id=caller["owner_id"],
+            amount_cents=filing_deposit_cents,
+            conn=conn,
+        )
+        insufficient_phase = "clawback_lock"
         lock_summary = payments.lock_dispute_funds(created["dispute_id"], conn=conn)
         conn.execute("COMMIT")
     except sqlite3.IntegrityError:
@@ -6851,10 +7844,15 @@ def jobs_dispute(
         raise HTTPException(status_code=400, detail=str(exc))
     except payments.InsufficientBalanceError as exc:
         conn.execute("ROLLBACK")
+        error_code = (
+            error_codes.DISPUTE_FILING_DEPOSIT_INSUFFICIENT_BALANCE
+            if insufficient_phase == "filing_deposit"
+            else error_codes.DISPUTE_CLAWBACK_INSUFFICIENT_BALANCE
+        )
         raise HTTPException(
             status_code=409,
             detail={
-                "error": error_codes.DISPUTE_CLAWBACK_INSUFFICIENT_BALANCE,
+                "error": error_code,
                 "balance_cents": exc.balance_cents,
                 "required_cents": exc.required_cents,
             },
@@ -6863,7 +7861,12 @@ def jobs_dispute(
         job,
         "job.dispute_filed",
         actor_owner_id=caller["owner_id"],
-        payload={"dispute_id": created["dispute_id"], "side": side, "lock": lock_summary},
+        payload={
+            "dispute_id": created["dispute_id"],
+            "side": side,
+            "filing_deposit": deposit_summary,
+            "lock": lock_summary,
+        },
     )
     return JSONResponse(content=_dispute_view(created), status_code=201)
 
@@ -7522,9 +8525,7 @@ def _stripe_http_error(operation: str, exc: Exception) -> tuple[int, dict[str, A
 
 def _wallet_stripe_topup_total_last_24h(wallet_id: str) -> int:
     window_start = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
-    import sqlite3 as _sqlite3
-
-    with _sqlite3.connect(jobs.DB_PATH) as conn:
+    with sqlite3.connect(jobs.DB_PATH) as conn:
         row = conn.execute(
             """
             SELECT COALESCE(SUM(amount_cents), 0) AS total
@@ -7644,8 +8645,7 @@ async def stripe_webhook(request: Request) -> JSONResponse:
         # Idempotency: INSERT OR IGNORE so duplicate webhook fires are no-ops.
         # Use a fresh connection (not the thread-local one) — async handlers may
         # run on a different thread than the one that initialised _conn().
-        import sqlite3 as _sqlite3
-        with _sqlite3.connect(jobs.DB_PATH) as _idem_conn:
+        with sqlite3.connect(jobs.DB_PATH) as _idem_conn:
             cur = _idem_conn.execute(
                 "INSERT OR IGNORE INTO stripe_sessions (session_id, wallet_id, amount_cents, processed_at)"
                 " VALUES (?, ?, ?, ?)",
@@ -7671,8 +8671,7 @@ async def stripe_webhook(request: Request) -> JSONResponse:
         payouts_enabled = getattr(account_obj, "payouts_enabled", False) or account_obj.get("payouts_enabled", False)
         fully_enabled = bool(charges_enabled and payouts_enabled)
         if account_id:
-            import sqlite3 as _sqlite3
-            with _sqlite3.connect(jobs.DB_PATH) as _ac_conn:
+            with sqlite3.connect(jobs.DB_PATH) as _ac_conn:
                 _ac_conn.execute(
                     "UPDATE wallets SET stripe_connect_enabled = ? WHERE stripe_connect_account_id = ?",
                     (1 if fully_enabled else 0, account_id),
@@ -7725,8 +8724,7 @@ def connect_onboard(
             status_code, payload = _stripe_http_error("connect_onboard_account_create", exc)
             raise HTTPException(status_code=status_code, detail=payload)
         existing_account_id = account.id
-        import sqlite3 as _sqlite3
-        with _sqlite3.connect(jobs.DB_PATH) as _ac_conn:
+        with sqlite3.connect(jobs.DB_PATH) as _ac_conn:
             _ac_conn.execute(
                 "UPDATE wallets SET stripe_connect_account_id = ? WHERE wallet_id = ?",
                 (existing_account_id, wallet["wallet_id"]),
@@ -7781,8 +8779,7 @@ def connect_status(
 
     # Keep local cache in sync
     if charges_enabled != bool(wallet.get("stripe_connect_enabled", 0)):
-        import sqlite3 as _sqlite3
-        with _sqlite3.connect(jobs.DB_PATH) as _ac_conn:
+        with sqlite3.connect(jobs.DB_PATH) as _ac_conn:
             _ac_conn.execute(
                 "UPDATE wallets SET stripe_connect_enabled = ? WHERE wallet_id = ?",
                 (1 if charges_enabled else 0, wallet["wallet_id"]),
@@ -7872,14 +8869,12 @@ def withdraw(
         raise HTTPException(status_code=status_code, detail=payload)
 
     # Record the transfer for audit
-    import sqlite3 as _sqlite3
-    import uuid as _uuid
-    with _sqlite3.connect(jobs.DB_PATH) as _tr_conn:
+    with sqlite3.connect(jobs.DB_PATH) as _tr_conn:
         _tr_conn.execute(
             "INSERT INTO stripe_connect_transfers (transfer_id, wallet_id, amount_cents, stripe_tx_id, memo, created_at)"
             " VALUES (?, ?, ?, ?, ?, ?)",
             (
-                str(_uuid.uuid4()),
+                str(uuid.uuid4()),
                 wallet["wallet_id"],
                 body.amount_cents,
                 transfer.id,
