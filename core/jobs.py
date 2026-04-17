@@ -105,6 +105,8 @@ _CANONICAL_JOB_COLUMNS = (
     "judge_agent_id",
     "judge_verdict",
     "quality_score",
+    "callback_url",
+    "batch_id",
 )
 
 _REQUIRED_JOB_COLUMNS = set(_CANONICAL_JOB_COLUMNS)
@@ -326,7 +328,8 @@ def _create_jobs_table(conn: sqlite3.Connection, table_name: str = "jobs") -> No
             judge_agent_id       TEXT,
             judge_verdict        TEXT,
             quality_score        INTEGER,
-            callback_url         TEXT
+            callback_url         TEXT,
+            batch_id             TEXT
         )
     """)
 
@@ -392,6 +395,9 @@ def _ensure_jobs_indexes(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_jobs_batch_created ON jobs(batch_id, created_at DESC)"
     )
 
 
@@ -489,6 +495,8 @@ def _normalize_legacy_job_row(row: dict, used_job_ids: set[str]) -> tuple:
         parsed_quality_score = int(quality_score) if quality_score is not None else None
     except (TypeError, ValueError):
         parsed_quality_score = None
+    callback_url = _clean_optional_text(row.get("callback_url"))
+    batch_id = _clean_optional_text(row.get("batch_id"))
 
     if claim_owner_id is None:
         claim_token = None
@@ -539,6 +547,8 @@ def _normalize_legacy_job_row(row: dict, used_job_ids: set[str]) -> tuple:
         judge_agent_id,
         judge_verdict,
         parsed_quality_score,
+        callback_url,
+        batch_id,
     )
 
 
@@ -617,6 +627,7 @@ def create_job(
     dispute_window_hours: int = 72,
     judge_agent_id: str | None = None,
     callback_url: str | None = None,
+    batch_id: str | None = None,
 ) -> dict:
     if price_cents < 0:
         raise ValueError("price_cents must be non-negative.")
@@ -642,8 +653,8 @@ def create_job(
               (job_id, agent_id, agent_owner_id, caller_owner_id, caller_wallet_id,
                agent_wallet_id, platform_wallet_id, status, price_cents, charge_tx_id,
                input_payload, created_at, updated_at, max_attempts, dispute_window_hours, judge_agent_id,
-               callback_url)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               callback_url, batch_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job_id,
@@ -663,9 +674,28 @@ def create_job(
                 parsed_dispute_window_hours,
                 _clean_optional_text(judge_agent_id),
                 _clean_optional_text(callback_url),
+                _clean_optional_text(batch_id),
             ),
         )
     return get_job(job_id)
+
+
+def list_jobs_for_batch(batch_id: str, caller_owner_id: str) -> list[dict]:
+    normalized_batch_id = _clean_optional_text(batch_id)
+    normalized_owner_id = _clean_optional_text(caller_owner_id)
+    if normalized_batch_id is None or normalized_owner_id is None:
+        return []
+    with _conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM jobs
+            WHERE batch_id = ? AND caller_owner_id = ?
+            ORDER BY created_at ASC, job_id ASC
+            """,
+            (normalized_batch_id, normalized_owner_id),
+        ).fetchall()
+    return [_row_to_dict(row) for row in rows]
 
 
 def get_job(job_id: str) -> dict | None:

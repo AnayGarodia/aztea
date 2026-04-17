@@ -28,7 +28,7 @@ import os
 import sqlite3
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from core import logging_utils
 from core import db as _db
@@ -48,6 +48,27 @@ class InsufficientBalanceError(Exception):
         self.required_cents = required_cents
         super().__init__(
             f"Insufficient balance: have {balance_cents}¢, need {required_cents}¢"
+        )
+
+
+class KeySpendLimitExceededError(Exception):
+    def __init__(self, limit_cents: int, spent_cents: int, attempted_cents: int):
+        self.limit_cents = int(limit_cents)
+        self.spent_cents = int(spent_cents)
+        self.attempted_cents = int(attempted_cents)
+        super().__init__(
+            f"API key spend cap exceeded: spent {spent_cents}¢, attempted {attempted_cents}¢, cap {limit_cents}¢"
+        )
+
+
+class WalletDailySpendLimitExceededError(Exception):
+    def __init__(self, limit_cents: int, spent_last_24h_cents: int, attempted_cents: int):
+        self.limit_cents = int(limit_cents)
+        self.spent_last_24h_cents = int(spent_last_24h_cents)
+        self.attempted_cents = int(attempted_cents)
+        super().__init__(
+            "Wallet daily spend cap exceeded: "
+            f"spent_last_24h {spent_last_24h_cents}¢, attempted {attempted_cents}¢, cap {limit_cents}¢"
         )
 
 
@@ -96,6 +117,7 @@ def init_payments_db() -> None:
                 owner_id      TEXT NOT NULL UNIQUE,
                 balance_cents INTEGER NOT NULL DEFAULT 0 CHECK(balance_cents >= 0),
                 caller_trust  REAL NOT NULL DEFAULT 0.5,
+                daily_spend_limit_cents INTEGER CHECK(daily_spend_limit_cents >= 0),
                 created_at    TEXT NOT NULL
             )
         """)
@@ -105,6 +127,15 @@ def init_payments_db() -> None:
         }
         if "caller_trust" not in wallet_cols:
             conn.execute("ALTER TABLE wallets ADD COLUMN caller_trust REAL NOT NULL DEFAULT 0.5")
+        if "daily_spend_limit_cents" not in wallet_cols:
+            conn.execute("ALTER TABLE wallets ADD COLUMN daily_spend_limit_cents INTEGER")
+        conn.execute(
+            """
+            UPDATE wallets
+            SET daily_spend_limit_cents = NULL
+            WHERE daily_spend_limit_cents < 0
+            """
+        )
         conn.execute("""
             CREATE TABLE IF NOT EXISTS transactions (
                 tx_id         TEXT PRIMARY KEY,
@@ -113,10 +144,17 @@ def init_payments_db() -> None:
                 amount_cents  INTEGER NOT NULL,
                 related_tx_id TEXT,
                 agent_id      TEXT,
+                charged_by_key_id TEXT,
                 memo          TEXT NOT NULL DEFAULT '',
                 created_at    TEXT NOT NULL
             )
         """)
+        tx_cols = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(transactions)").fetchall()
+        }
+        if "charged_by_key_id" not in tx_cols:
+            conn.execute("ALTER TABLE transactions ADD COLUMN charged_by_key_id TEXT")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS reconciliation_runs (
                 run_id          TEXT PRIMARY KEY,
@@ -153,6 +191,9 @@ def init_payments_db() -> None:
             """
         )
         conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tx_wallet_key_type ON transactions(wallet_id, charged_by_key_id, type)"
+        )
+        conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_recon_created ON reconciliation_runs(created_at DESC)"
         )
         conn.execute(
@@ -173,6 +214,7 @@ def _insert_tx(
     agent_id: str | None,
     related_tx_id: str | None,
     memo: str,
+    charged_by_key_id: str | None = None,
 ) -> str:
     """
     Insert one transaction row and update the wallet balance cache atomically.
@@ -180,13 +222,24 @@ def _insert_tx(
     Returns the new tx_id.
     """
     tx_id = str(uuid.uuid4())
+    normalized_key_id = _resolve_charged_by_key_id(conn, charged_by_key_id, related_tx_id)
     conn.execute(
         """
         INSERT INTO transactions
-            (tx_id, wallet_id, type, amount_cents, related_tx_id, agent_id, memo, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (tx_id, wallet_id, type, amount_cents, related_tx_id, agent_id, charged_by_key_id, memo, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (tx_id, wallet_id, tx_type, amount_cents, related_tx_id, agent_id, memo, _now()),
+        (
+            tx_id,
+            wallet_id,
+            tx_type,
+            amount_cents,
+            related_tx_id,
+            agent_id,
+            normalized_key_id,
+            memo,
+            _now(),
+        ),
     )
     conn.execute(
         "UPDATE wallets SET balance_cents = balance_cents + ? WHERE wallet_id = ?",
@@ -203,18 +256,56 @@ def _insert_tx_only(
     agent_id: str | None,
     related_tx_id: str | None,
     memo: str,
+    charged_by_key_id: str | None = None,
 ) -> str:
     """Insert a transaction row without mutating wallet balance (used when balance already updated)."""
     tx_id = str(uuid.uuid4())
+    normalized_key_id = _resolve_charged_by_key_id(conn, charged_by_key_id, related_tx_id)
     conn.execute(
         """
         INSERT INTO transactions
-            (tx_id, wallet_id, type, amount_cents, related_tx_id, agent_id, memo, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (tx_id, wallet_id, type, amount_cents, related_tx_id, agent_id, charged_by_key_id, memo, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (tx_id, wallet_id, tx_type, amount_cents, related_tx_id, agent_id, memo, _now()),
+        (
+            tx_id,
+            wallet_id,
+            tx_type,
+            amount_cents,
+            related_tx_id,
+            agent_id,
+            normalized_key_id,
+            memo,
+            _now(),
+        ),
     )
     return tx_id
+
+
+def _resolve_charged_by_key_id(
+    conn: sqlite3.Connection,
+    charged_by_key_id: str | None,
+    related_tx_id: str | None,
+) -> str | None:
+    normalized = str(charged_by_key_id or "").strip()
+    if normalized:
+        return normalized
+    related = str(related_tx_id or "").strip()
+    if not related:
+        return None
+    row = conn.execute(
+        """
+        SELECT charged_by_key_id
+        FROM transactions
+        WHERE tx_id = ?
+        LIMIT 1
+        """,
+        (related,),
+    ).fetchone()
+    if row is None:
+        return None
+    inherited = str(row["charged_by_key_id"] or "").strip()
+    return inherited or None
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +341,7 @@ def get_or_create_wallet(owner_id: str) -> dict:
             "owner_id": owner_id,
             "balance_cents": 0,
             "caller_trust": 0.5,
+            "daily_spend_limit_cents": None,
             "created_at": created_at,
         }
 
@@ -269,6 +361,27 @@ def get_wallet_by_owner(owner_id: str) -> dict | None:
             "SELECT * FROM wallets WHERE owner_id = ?", (owner_id,)
         ).fetchone()
     return dict(row) if row else None
+
+
+def set_wallet_daily_spend_limit(wallet_id: str, daily_spend_limit_cents: int | None) -> dict:
+    normalized_limit = None
+    if daily_spend_limit_cents is not None:
+        normalized_limit = int(daily_spend_limit_cents)
+        if normalized_limit < 0:
+            raise ValueError("daily_spend_limit_cents must be >= 0.")
+    with _conn() as conn:
+        updated = conn.execute(
+            """
+            UPDATE wallets
+            SET daily_spend_limit_cents = ?
+            WHERE wallet_id = ?
+            """,
+            (normalized_limit, wallet_id),
+        ).rowcount
+        if updated == 0:
+            raise ValueError(f"Wallet '{wallet_id}' not found.")
+        row = conn.execute("SELECT * FROM wallets WHERE wallet_id = ?", (wallet_id,)).fetchone()
+    return dict(row)
 
 
 def charge(wallet_id: str, amount_cents: int, memo: str = "") -> str:
@@ -381,7 +494,14 @@ def deposit(wallet_id: str, amount_cents: int, memo: str = "manual deposit") -> 
 # Call lifecycle
 # ---------------------------------------------------------------------------
 
-def pre_call_charge(caller_wallet_id: str, price_cents: int, agent_id: str) -> str:
+def pre_call_charge(
+    caller_wallet_id: str,
+    price_cents: int,
+    agent_id: str,
+    *,
+    charged_by_key_id: str | None = None,
+    max_spend_cents: int | None = None,
+) -> str:
     """
     Transaction 1 (pre-call): check balance, deduct charge, update cache.
     Returns charge_tx_id. Raises InsufficientBalanceError if underfunded.
@@ -389,14 +509,64 @@ def pre_call_charge(caller_wallet_id: str, price_cents: int, agent_id: str) -> s
     """
     if price_cents < 0:
         raise ValueError("price_cents must be non-negative.")
+    normalized_key_id = str(charged_by_key_id or "").strip() or None
+    normalized_max_spend = None
+    if max_spend_cents is not None:
+        normalized_max_spend = int(max_spend_cents)
+        if normalized_max_spend < 0:
+            raise ValueError("max_spend_cents must be >= 0.")
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT balance_cents FROM wallets WHERE wallet_id = ?",
+            "SELECT balance_cents, daily_spend_limit_cents FROM wallets WHERE wallet_id = ?",
             (caller_wallet_id,),
         ).fetchone()
         if row is None:
             raise ValueError(f"Wallet '{caller_wallet_id}' not found.")
+        if normalized_key_id is not None and normalized_max_spend is not None:
+            spent_row = conn.execute(
+                """
+                SELECT COALESCE(SUM(-amount_cents), 0) AS net_spent_cents
+                FROM transactions
+                WHERE wallet_id = ?
+                  AND charged_by_key_id = ?
+                  AND type IN ('charge', 'refund')
+                """,
+                (caller_wallet_id, normalized_key_id),
+            ).fetchone()
+            net_spent = int(spent_row["net_spent_cents"] or 0) if spent_row else 0
+            if net_spent < 0:
+                net_spent = 0
+            if net_spent + price_cents > normalized_max_spend:
+                raise KeySpendLimitExceededError(
+                    limit_cents=normalized_max_spend,
+                    spent_cents=net_spent,
+                    attempted_cents=price_cents,
+                )
+        wallet_daily_limit_raw = row["daily_spend_limit_cents"]
+        if wallet_daily_limit_raw is not None:
+            daily_limit_cents = int(wallet_daily_limit_raw)
+            now_dt = datetime.now(timezone.utc)
+            since_iso = (now_dt - timedelta(hours=24)).isoformat()
+            spent_daily_row = conn.execute(
+                """
+                SELECT COALESCE(SUM(-amount_cents), 0) AS net_spent_cents
+                FROM transactions
+                WHERE wallet_id = ?
+                  AND type IN ('charge', 'refund')
+                  AND created_at >= ?
+                """,
+                (caller_wallet_id, since_iso),
+            ).fetchone()
+            net_spent_daily = int(spent_daily_row["net_spent_cents"] or 0) if spent_daily_row else 0
+            if net_spent_daily < 0:
+                net_spent_daily = 0
+            if net_spent_daily + price_cents > daily_limit_cents:
+                raise WalletDailySpendLimitExceededError(
+                    limit_cents=daily_limit_cents,
+                    spent_last_24h_cents=net_spent_daily,
+                    attempted_cents=price_cents,
+                )
         updated = conn.execute(
             """
             UPDATE wallets
@@ -415,6 +585,7 @@ def pre_call_charge(caller_wallet_id: str, price_cents: int, agent_id: str) -> s
             agent_id,
             None,
             f"Call to agent {agent_id}",
+            normalized_key_id,
         )
 
 

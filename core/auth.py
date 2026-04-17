@@ -97,6 +97,7 @@ def _create_api_keys_table(conn: sqlite3.Connection, table_name: str = "api_keys
             key_prefix    TEXT NOT NULL,
             name          TEXT NOT NULL DEFAULT 'Default',
             scopes        TEXT NOT NULL DEFAULT '["caller","worker"]',
+            max_spend_cents INTEGER CHECK(max_spend_cents >= 0),
             created_at    TEXT NOT NULL,
             last_used_at  TEXT,
             is_active     INTEGER NOT NULL DEFAULT 1
@@ -164,7 +165,7 @@ def _normalize_legacy_api_key_row(
     row: dict,
     used_key_ids: set[str],
     used_key_hashes: set[str],
-) -> tuple[str, str, str, str, str, str, str, str | None, int] | None:
+) -> tuple[str, str, str, str, str, str, int | None, str, str | None, int] | None:
     legacy_rowid = int(row.get("_legacy_rowid") or 0)
 
     key_id = str(row.get("key_id") or "").strip()
@@ -199,6 +200,13 @@ def _normalize_legacy_api_key_row(
 
     name = str(row.get("name") or "").strip() or "Legacy key"
     scopes = json.dumps(_decode_scopes_json(row.get("scopes")))
+    max_spend_cents = row.get("max_spend_cents")
+    try:
+        parsed_max_spend = int(max_spend_cents) if max_spend_cents is not None else None
+    except (TypeError, ValueError):
+        parsed_max_spend = None
+    if parsed_max_spend is not None and parsed_max_spend < 0:
+        parsed_max_spend = None
     created_at = str(row.get("created_at") or "").strip() or _CANONICAL_TIMESTAMP
     last_used_at = str(row.get("last_used_at") or "").strip() or None
 
@@ -215,6 +223,7 @@ def _normalize_legacy_api_key_row(
         key_prefix,
         name,
         scopes,
+        parsed_max_spend,
         created_at,
         last_used_at,
         is_active,
@@ -235,8 +244,8 @@ def _migrate_api_keys_table(conn: sqlite3.Connection) -> None:
         conn.execute(
             """
             INSERT INTO api_keys__canonical
-                (key_id, user_id, key_hash, key_prefix, name, scopes, created_at, last_used_at, is_active)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (key_id, user_id, key_hash, key_prefix, name, scopes, max_spend_cents, created_at, last_used_at, is_active)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             normalized,
         )
@@ -262,6 +271,8 @@ def _ensure_api_keys_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE api_keys ADD COLUMN name TEXT NOT NULL DEFAULT 'Default'")
     if "scopes" not in cols:
         conn.execute("""ALTER TABLE api_keys ADD COLUMN scopes TEXT NOT NULL DEFAULT '["caller","worker"]'""")
+    if "max_spend_cents" not in cols:
+        conn.execute("ALTER TABLE api_keys ADD COLUMN max_spend_cents INTEGER")
     if "created_at" not in cols:
         conn.execute(f"ALTER TABLE api_keys ADD COLUMN created_at TEXT NOT NULL DEFAULT '{_CANONICAL_TIMESTAMP}'")
     if "last_used_at" not in cols:
@@ -303,6 +314,13 @@ def _ensure_api_keys_schema(conn: sqlite3.Connection) -> None:
         UPDATE api_keys
         SET is_active = 1
         WHERE is_active IS NULL
+        """
+    )
+    conn.execute(
+        """
+        UPDATE api_keys
+        SET max_spend_cents = NULL
+        WHERE max_spend_cents < 0
         """
     )
 
@@ -438,6 +456,18 @@ def _normalize_scopes(scopes: list[str] | tuple[str, ...] | set[str] | None) -> 
     return normalized
 
 
+def _normalize_optional_non_negative_int(value: int | str | None, *, field_name: str) -> int | None:
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be an integer >= 0.") from exc
+    if parsed < 0:
+        raise ValueError(f"{field_name} must be >= 0.")
+    return parsed
+
+
 # ── User management ───────────────────────────────────────────────────────────
 
 def register_user(username: str, email: str, password: str) -> dict:
@@ -503,6 +533,12 @@ def login_user(email: str, password: str) -> dict | None:
     if not secrets.compare_digest(user["password_hash"], expected):
         return None
 
+    # Revoke any existing session key so logins don't accumulate unbounded rows.
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE api_keys SET is_active = 0 WHERE user_id = ? AND name = 'Session key' AND is_active = 1",
+            (user["user_id"],),
+        )
     result = _create_key_for_user(user["user_id"], "Session key")
     return {
         "user_id": user["user_id"],
@@ -528,15 +564,34 @@ def get_user_by_id(user_id: str) -> dict | None:
 
 # ── API key management ────────────────────────────────────────────────────────
 
-def _create_key_for_user(user_id: str, name: str, scopes: list[str] | None = None) -> dict:
+def _create_key_for_user(
+    user_id: str,
+    name: str,
+    scopes: list[str] | None = None,
+    *,
+    max_spend_cents: int | None = None,
+) -> dict:
     raw, key_hash, prefix = _make_api_key()
     key_id = str(uuid.uuid4())
     normalized_scopes = _normalize_scopes(scopes)
+    normalized_max_spend = _normalize_optional_non_negative_int(
+        max_spend_cents,
+        field_name="max_spend_cents",
+    )
     with _conn() as conn:
         conn.execute(
-            "INSERT INTO api_keys (key_id, user_id, key_hash, key_prefix, name, scopes, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (key_id, user_id, key_hash, prefix, name, json.dumps(normalized_scopes), _now()),
+            "INSERT INTO api_keys (key_id, user_id, key_hash, key_prefix, name, scopes, max_spend_cents, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                key_id,
+                user_id,
+                key_hash,
+                prefix,
+                name,
+                json.dumps(normalized_scopes),
+                normalized_max_spend,
+                _now(),
+            ),
         )
     return {
         "raw_key": raw,
@@ -544,6 +599,7 @@ def _create_key_for_user(user_id: str, name: str, scopes: list[str] | None = Non
         "key_prefix": prefix,
         "name": name,
         "scopes": normalized_scopes,
+        "max_spend_cents": normalized_max_spend,
     }
 
 
@@ -551,9 +607,15 @@ def create_api_key(
     user_id: str,
     name: str = "New key",
     scopes: list[str] | tuple[str, ...] | set[str] | None = None,
+    max_spend_cents: int | None = None,
 ) -> dict:
     """Create a named API key for a user. Returns {"raw_key", "key_id", "key_prefix", "name"}."""
-    return _create_key_for_user(user_id, name, scopes=list(scopes) if scopes is not None else None)
+    return _create_key_for_user(
+        user_id,
+        name,
+        scopes=list(scopes) if scopes is not None else None,
+        max_spend_cents=max_spend_cents,
+    )
 
 
 def verify_api_key(raw_key: str) -> dict | None:
@@ -568,7 +630,7 @@ def verify_api_key(raw_key: str) -> dict | None:
         row = conn.execute(
             """
             SELECT ak.key_id, ak.user_id, ak.name AS key_name,
-                   ak.scopes, u.username, u.email
+                   ak.scopes, ak.max_spend_cents, u.username, u.email
             FROM api_keys ak
             JOIN users u ON ak.user_id = u.user_id
             WHERE ak.key_hash = ? AND ak.is_active = 1 AND u.status = 'active'
@@ -588,6 +650,11 @@ def verify_api_key(raw_key: str) -> dict | None:
         "email": row["email"],
         "key_name": row["key_name"],
         "scopes": _decode_scopes_json(row["scopes"]),
+        "max_spend_cents": (
+            int(row["max_spend_cents"])
+            if row["max_spend_cents"] is not None
+            else None
+        ),
     }
 
 
@@ -649,7 +716,7 @@ def verify_agent_api_key(raw_key: str) -> dict | None:
 def list_api_keys(user_id: str) -> list:
     with _conn() as conn:
         rows = conn.execute(
-            "SELECT key_id, key_prefix, name, scopes, created_at, last_used_at, is_active"
+            "SELECT key_id, key_prefix, name, scopes, max_spend_cents, created_at, last_used_at, is_active"
             " FROM api_keys WHERE user_id = ? ORDER BY created_at DESC",
             (user_id,),
         ).fetchall()
@@ -657,6 +724,11 @@ def list_api_keys(user_id: str) -> list:
     for row in rows:
         item = dict(row)
         item["scopes"] = _decode_scopes_json(item.get("scopes"))
+        item["max_spend_cents"] = (
+            int(item["max_spend_cents"])
+            if item.get("max_spend_cents") is not None
+            else None
+        )
         keys.append(item)
     return keys
 
@@ -697,10 +769,18 @@ def rotate_api_key(
     user_id: str,
     name: str | None = None,
     scopes: list[str] | tuple[str, ...] | set[str] | None = None,
+    max_spend_cents: int | None = None,
+    *,
+    max_spend_cents_provided: bool = False,
 ) -> dict | None:
     normalized_scopes = (
         _normalize_scopes(scopes)
         if scopes is not None
+        else None
+    )
+    normalized_max_spend = (
+        _normalize_optional_non_negative_int(max_spend_cents, field_name="max_spend_cents")
+        if max_spend_cents_provided
         else None
     )
     replacement_name = (name or "").strip() or None
@@ -709,7 +789,7 @@ def rotate_api_key(
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
             """
-            SELECT key_id, name, scopes
+            SELECT key_id, name, scopes, max_spend_cents
             FROM api_keys
             WHERE key_id = ? AND user_id = ? AND is_active = 1
             """,
@@ -720,6 +800,15 @@ def rotate_api_key(
 
         final_name = replacement_name or row["name"]
         final_scopes = normalized_scopes or _decode_scopes_json(row["scopes"])
+        final_max_spend = (
+            normalized_max_spend
+            if max_spend_cents_provided
+            else (
+                int(row["max_spend_cents"])
+                if row["max_spend_cents"] is not None
+                else None
+            )
+        )
 
         raw, key_hash, prefix = _make_api_key()
         new_key_id = str(uuid.uuid4())
@@ -727,8 +816,8 @@ def rotate_api_key(
 
         conn.execute(
             """
-            INSERT INTO api_keys (key_id, user_id, key_hash, key_prefix, name, scopes, created_at, is_active)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+            INSERT INTO api_keys (key_id, user_id, key_hash, key_prefix, name, scopes, max_spend_cents, created_at, is_active)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
             """,
             (
                 new_key_id,
@@ -737,6 +826,7 @@ def rotate_api_key(
                 prefix,
                 final_name,
                 json.dumps(final_scopes),
+                final_max_spend,
                 now,
             ),
         )
@@ -756,4 +846,5 @@ def rotate_api_key(
         "key_prefix": prefix,
         "name": final_name,
         "scopes": final_scopes,
+        "max_spend_cents": final_max_spend,
     }

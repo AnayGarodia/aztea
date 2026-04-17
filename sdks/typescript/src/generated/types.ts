@@ -564,6 +564,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/jobs/batch/{batch_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get aggregate status for a batch created via POST /jobs/batch. */
+        get: operations["jobs_batch_status_jobs_batch__batch_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/jobs/{job_id}": {
         parameters: {
             query?: never;
@@ -1092,6 +1109,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/wallets/me/daily-spend-limit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Set or clear the authenticated wallet's rolling 24h spend cap. */
+        post: operations["wallet_set_daily_spend_limit_wallets_me_daily_spend_limit_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/wallets/me/agent-earnings": {
         parameters: {
             query?: never;
@@ -1455,6 +1489,8 @@ export interface components {
             name: string;
             /** Scopes */
             scopes: string[];
+            /** Max Spend Cents */
+            max_spend_cents?: number | null;
         };
         /** ApiKeyListResponse */
         ApiKeyListResponse: {
@@ -1471,6 +1507,8 @@ export interface components {
             name: string;
             /** Scopes */
             scopes: string[];
+            /** Max Spend Cents */
+            max_spend_cents?: number | null;
             /** Created At */
             created_at: string;
             /** Last Used At */
@@ -1497,6 +1535,8 @@ export interface components {
             name: string;
             /** Scopes */
             scopes: string[];
+            /** Max Spend Cents */
+            max_spend_cents?: number | null;
         };
         /** AuthLoginResponse */
         AuthLoginResponse: {
@@ -1572,6 +1612,7 @@ export interface components {
         /**
          * CreateKeyRequest
          * @example {
+         *       "max_spend_cents": 5000,
          *       "name": "Worker key",
          *       "scopes": [
          *         "worker",
@@ -1587,6 +1628,8 @@ export interface components {
             name: string;
             /** Scopes */
             scopes?: string[];
+            /** Max Spend Cents */
+            max_spend_cents?: number | null;
         };
         /**
          * DepositRequest
@@ -2316,6 +2359,7 @@ export interface components {
         /**
          * RotateKeyRequest
          * @example {
+         *       "max_spend_cents": 10000,
          *       "name": "Rotated worker key",
          *       "scopes": [
          *         "worker"
@@ -2327,6 +2371,8 @@ export interface components {
             name?: string | null;
             /** Scopes */
             scopes?: string[] | null;
+            /** Max Spend Cents */
+            max_spend_cents?: number | null;
         };
         /** RunsResponse */
         RunsResponse: {
@@ -2398,6 +2444,21 @@ export interface components {
             /** Context */
             ctx?: Record<string, never>;
         };
+        /** WalletDailySpendLimitRequest */
+        WalletDailySpendLimitRequest: {
+            /**
+             * Daily Spend Limit Cents
+             * @description Optional rolling 24h spend cap in cents. null clears the cap.
+             */
+            daily_spend_limit_cents?: number | null;
+        };
+        /** WalletDailySpendLimitResponse */
+        WalletDailySpendLimitResponse: {
+            /** Wallet Id */
+            wallet_id: string;
+            /** Daily Spend Limit Cents */
+            daily_spend_limit_cents?: number | null;
+        };
         /** WalletDepositResponse */
         WalletDepositResponse: {
             /** Tx Id */
@@ -2417,6 +2478,8 @@ export interface components {
             balance_cents: number;
             /** Caller Trust */
             caller_trust?: number | null;
+            /** Daily Spend Limit Cents */
+            daily_spend_limit_cents?: number | null;
             /** Transactions */
             transactions?: {
                 [key: string]: components["schemas"]["JsonValue"];
@@ -4929,6 +4992,82 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Rate limit exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
+                };
+            };
+            /** @description Internal server error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    jobs_batch_status_jobs_batch__batch_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                batch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Missing or invalid authorization header. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
             /** @description Rate limit exceeded. */
@@ -7647,6 +7786,84 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Rate limit exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
+                };
+            };
+            /** @description Internal server error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    wallet_set_daily_spend_limit_wallets_me_daily_spend_limit_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WalletDailySpendLimitRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WalletDailySpendLimitResponse"];
+                };
+            };
+            /** @description Bad request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid authorization header. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
             /** @description Rate limit exceeded. */

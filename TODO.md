@@ -50,8 +50,12 @@ Remaining gaps: (1) callback HMAC unsigned; (2) no output verification hook befo
 
 ## 2. Payments & Stripe (P0)
 
+- [ ] **Settlement-pending escrow (inverted escrow fix)** — currently `_settle_successful_job` pays agent immediately on job complete. Fix: hold payout in a `settlement-pending:<job_id>` wallet for `dispute_window_hours`, then auto-release. Requires migration + sweeper task + dispute filing to pull from escrow instead of clawback. This is the highest-risk architectural change; do it before launch.
+- [ ] **Dispute filing deposit** — callers/agents can file frivolous disputes at zero cost. Fix: charge 5% of `price_cents` (min 5¢) from filer into a `dispute-deposit:<dispute_id>` escrow wallet atomically with `create_dispute`. Refund to winner on resolution, forfeit to platform on loss. Requires a `filing_deposit_cents` column on `disputes` and a release path in `settle_dispute`.
+- [ ] **Price float → integer migration** — `price_per_call_usd` is stored as SQLite REAL; billing math uses `Decimal(str(value))` as workaround. Add `price_per_call_cents INTEGER` column, backfill, and cut over in a single migration.
 - [ ] **SSRF validation review** — `endpoint_url` and `verifier_url` go through `_is_safe_url()`; audit handling of IPv6, URL-encoded chars, and redirect chains.
 - [ ] **Secrets audit** — confirm `STRIPE_SECRET_KEY`, `GROQ_API_KEY`, `STRIPE_WEBHOOK_SECRET` are never logged or returned in API responses.
+- [ ] **Free-credits first-run path** — new accounts have $0 balance; no one hires on their first visit. Add a `$1` promotional credit on first registration (Stripe test balance or platform subsidy wallet). Gate behind a feature flag so it can be turned off.
 
 ---
 
@@ -82,6 +86,7 @@ Remaining gaps: (1) callback HMAC unsigned; (2) no output verification hook befo
 - [ ] **SSRF validation review** — audit `_is_safe_url()` for IPv6 addresses, URL-encoded characters, and redirect chains on `endpoint_url` and `verifier_url`.
 - [ ] **Secrets in env** — audit that `STRIPE_SECRET_KEY`, `GROQ_API_KEY`, `STRIPE_WEBHOOK_SECRET` are never logged or returned in API responses.
 - [ ] **Dependency audit** — run `pip-audit` and `npm audit`; resolve HIGH/CRITICAL CVEs before launch.
+- [ ] **Rate-limit auth endpoints** — `POST /auth/login` and `POST /auth/register` should be rate-limited at ≤10/minute per IP to prevent brute-force and enumeration.
 
 ---
 
@@ -208,9 +213,10 @@ Remaining gaps: (1) callback HMAC unsigned; (2) no output verification hook befo
 ## 13. Documentation (P1)
 
 - [ ] **API reference** — audit every endpoint in `server.py` against `docs/api-reference.md`; update stale entries.
-- [ ] **MCP integration guide** — how to configure `agentmarket_mcp_server.py` in Claude Code / Claude Desktop.
+- [ ] **MCP integration guide (high priority)** — how to configure `agentmarket_mcp_server.py` in Claude Code / Claude Desktop. This is the fastest path for technical early adopters to try the product — publish this before launch.
 - [ ] **A2A integration guide** — how to configure AgentMarket as a participant in Google A2A networks.
 - [ ] **Dispute guide** — for callers: how to file, timeline. For agents: how to respond.
+- [ ] **`output_examples` on landing page** — show 2–3 real input→output pairs for built-in agents on the homepage/agent list. Biggest single UX improvement for cold visitors deciding whether to fund a wallet.
 
 ---
 

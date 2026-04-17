@@ -33,6 +33,7 @@ class AuthUser(TypedDict):
     email: str
     key_name: str
     scopes: list[str]
+    max_spend_cents: NotRequired[int | None]
 
 
 class CallerContext(TypedDict):
@@ -412,11 +413,12 @@ class UserLoginRequest(BaseModel):
 
 class CreateKeyRequest(BaseModel):
     model_config = ConfigDict(
-        json_schema_extra={"example": {"name": "Worker key", "scopes": ["worker", "caller"]}}
+        json_schema_extra={"example": {"name": "Worker key", "scopes": ["worker", "caller"], "max_spend_cents": 5000}}
     )
 
     name: str = "New key"
     scopes: list[str] = Field(default_factory=lambda: list(_auth.DEFAULT_KEY_SCOPES))
+    max_spend_cents: int | None = Field(default=None, ge=0)
 
     @field_validator("scopes")
     @classmethod
@@ -436,11 +438,12 @@ class CreateKeyRequest(BaseModel):
 
 class RotateKeyRequest(BaseModel):
     model_config = ConfigDict(
-        json_schema_extra={"example": {"name": "Rotated worker key", "scopes": ["worker"]}}
+        json_schema_extra={"example": {"name": "Rotated worker key", "scopes": ["worker"], "max_spend_cents": 10000}}
     )
 
     name: str | None = None
     scopes: list[str] | None = None
+    max_spend_cents: int | None = Field(default=None, ge=0)
 
     @field_validator("scopes")
     @classmethod
@@ -1271,6 +1274,7 @@ class ApiKeyMetadataResponse(BaseModel):
     key_prefix: str
     name: str
     scopes: list[str]
+    max_spend_cents: int | None = None
     created_at: str
     last_used_at: str | None = None
     is_active: int
@@ -1286,6 +1290,7 @@ class ApiKeyCreateResponse(BaseModel):
     key_prefix: str
     name: str
     scopes: list[str]
+    max_spend_cents: int | None = None
 
 
 class ApiKeyRotateResponse(BaseModel):
@@ -1295,6 +1300,7 @@ class ApiKeyRotateResponse(BaseModel):
     key_prefix: str
     name: str
     scopes: list[str]
+    max_spend_cents: int | None = None
 
 
 class ApiKeyRevokeResponse(BaseModel):
@@ -1511,7 +1517,21 @@ class WalletResponse(BaseModel):
     owner_id: str
     balance_cents: int
     caller_trust: float | None = None
+    daily_spend_limit_cents: int | None = None
     transactions: list[JSONObject] = Field(default_factory=list)
+
+
+class WalletDailySpendLimitRequest(BaseModel):
+    daily_spend_limit_cents: int | None = Field(
+        default=None,
+        ge=0,
+        description="Optional rolling 24h spend cap in cents. null clears the cap.",
+    )
+
+
+class WalletDailySpendLimitResponse(BaseModel):
+    wallet_id: str
+    daily_spend_limit_cents: int | None = None
 
 
 class WalletWithdrawalResponse(BaseModel):

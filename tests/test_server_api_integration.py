@@ -1218,6 +1218,153 @@ def test_api_key_rotation_revokes_old_key_and_keeps_scopes(client):
     assert new_me.json()["scopes"] == ["worker"]
 
 
+def test_api_key_max_spend_cap_enforced_on_job_charges(client):
+    worker_owner = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 200)
+
+    agent_id = _register_agent_via_api(
+        client,
+        worker_owner["raw_api_key"],
+        name=f"Spend Capped Agent {uuid.uuid4().hex[:6]}",
+        price=0.06,
+        tags=["spend-cap"],
+    )
+
+    capped_key_resp = client.post(
+        "/auth/keys",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={"name": "capped-caller", "scopes": ["caller"], "max_spend_cents": 10},
+    )
+    assert capped_key_resp.status_code == 201, capped_key_resp.text
+    assert capped_key_resp.json()["max_spend_cents"] == 10
+    capped_key = capped_key_resp.json()["raw_key"]
+
+    first = client.post(
+        "/jobs",
+        headers=_auth_headers(capped_key),
+        json={"agent_id": agent_id, "input_payload": {"task": "first"}},
+    )
+    assert first.status_code == 201, first.text
+
+    second = client.post(
+        "/jobs",
+        headers=_auth_headers(capped_key),
+        json={"agent_id": agent_id, "input_payload": {"task": "second"}},
+    )
+    assert second.status_code == 402, second.text
+    blocked = second.json()
+    assert blocked["error"] == "payment.spend_limit_exceeded"
+    assert blocked["details"]["scope"] == "api_key"
+    assert blocked["details"]["limit_cents"] == 10
+
+
+def test_wallet_daily_spend_limit_blocks_new_job_charges(client):
+    worker_owner = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 300)
+
+    agent_id = _register_agent_via_api(
+        client,
+        worker_owner["raw_api_key"],
+        name=f"Daily Limit Agent {uuid.uuid4().hex[:6]}",
+        price=0.06,
+        tags=["daily-limit"],
+    )
+
+    set_limit = client.post(
+        "/wallets/me/daily-spend-limit",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={"daily_spend_limit_cents": 10},
+    )
+    assert set_limit.status_code == 200, set_limit.text
+    assert set_limit.json()["daily_spend_limit_cents"] == 10
+
+    first = client.post(
+        "/jobs",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={"agent_id": agent_id, "input_payload": {"task": "first"}},
+    )
+    assert first.status_code == 201, first.text
+
+    second = client.post(
+        "/jobs",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={"agent_id": agent_id, "input_payload": {"task": "second"}},
+    )
+    assert second.status_code == 402, second.text
+    blocked = second.json()
+    assert blocked["error"] == "payment.spend_limit_exceeded"
+    assert blocked["details"]["scope"] == "wallet_daily"
+    assert blocked["details"]["limit_cents"] == 10
+
+    clear_limit = client.post(
+        "/wallets/me/daily-spend-limit",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={"daily_spend_limit_cents": None},
+    )
+    assert clear_limit.status_code == 200, clear_limit.text
+    assert clear_limit.json()["daily_spend_limit_cents"] is None
+
+    third = client.post(
+        "/jobs",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={"agent_id": agent_id, "input_payload": {"task": "third"}},
+    )
+    assert third.status_code == 201, third.text
+
+
+def test_jobs_batch_status_endpoint_returns_aggregate_counts(client):
+    worker_owner = _register_user()
+    caller = _register_user()
+    outsider = _register_user()
+    _fund_user_wallet(caller, 200)
+
+    agent_id = _register_agent_via_api(
+        client,
+        worker_owner["raw_api_key"],
+        name=f"Batch Status Agent {uuid.uuid4().hex[:6]}",
+        price=0.05,
+        tags=["batch-status"],
+    )
+
+    created = client.post(
+        "/jobs/batch",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={
+            "jobs": [
+                {"agent_id": agent_id, "input_payload": {"task": "a"}},
+                {"agent_id": agent_id, "input_payload": {"task": "b"}},
+            ]
+        },
+    )
+    assert created.status_code == 201, created.text
+    created_body = created.json()
+    assert created_body["count"] == 2
+    assert created_body["total_price_cents"] == 10
+    batch_id = created_body["batch_id"]
+
+    status = client.get(
+        f"/jobs/batch/{batch_id}",
+        headers=_auth_headers(caller["raw_api_key"]),
+    )
+    assert status.status_code == 200, status.text
+    status_body = status.json()
+    assert status_body["batch_id"] == batch_id
+    assert status_body["count"] == 2
+    assert status_body["n_pending"] == 2
+    assert status_body["n_complete"] == 0
+    assert status_body["n_failed"] == 0
+    assert status_body["total_cost_cents"] == 10
+    assert all(job["batch_id"] == batch_id for job in status_body["jobs"])
+
+    blocked = client.get(
+        f"/jobs/batch/{batch_id}",
+        headers=_auth_headers(outsider["raw_api_key"]),
+    )
+    assert blocked.status_code == 404
+
+
 def test_admin_scope_controls_ops_endpoints(client):
     user = _register_user()
 

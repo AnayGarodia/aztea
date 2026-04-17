@@ -1325,6 +1325,80 @@ def _caller_owner_id(request: Request) -> str:
     return caller["owner_id"]
 
 
+def _caller_key_spend_cap(caller: core_models.CallerContext) -> int | None:
+    if caller.get("type") != "user":
+        return None
+    user = caller.get("user") or {}
+    raw = user.get("max_spend_cents")
+    if raw is None:
+        return None
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def _pre_call_charge_or_402(
+    *,
+    caller: core_models.CallerContext,
+    caller_wallet_id: str,
+    price_cents: int,
+    agent_id: str,
+) -> str:
+    try:
+        return payments.pre_call_charge(
+            caller_wallet_id,
+            price_cents,
+            agent_id,
+            charged_by_key_id=str(caller.get("key_id") or "").strip() or None,
+            max_spend_cents=_caller_key_spend_cap(caller),
+        )
+    except payments.InsufficientBalanceError as exc:
+        raise HTTPException(
+            status_code=402,
+            detail=error_codes.make_error(
+                error_codes.INSUFFICIENT_FUNDS,
+                "Insufficient wallet balance.",
+                {
+                    "balance_cents": exc.balance_cents,
+                    "required_cents": exc.required_cents,
+                    "wallet_id": caller_wallet_id,
+                },
+            ),
+        )
+    except payments.KeySpendLimitExceededError as exc:
+        raise HTTPException(
+            status_code=402,
+            detail=error_codes.make_error(
+                error_codes.SPEND_LIMIT_EXCEEDED,
+                "API key spend cap exceeded.",
+                {
+                    "scope": "api_key",
+                    "key_id": str(caller.get("key_id") or "").strip() or None,
+                    "limit_cents": exc.limit_cents,
+                    "spent_cents": exc.spent_cents,
+                    "attempted_cents": exc.attempted_cents,
+                },
+            ),
+        )
+    except payments.WalletDailySpendLimitExceededError as exc:
+        raise HTTPException(
+            status_code=402,
+            detail=error_codes.make_error(
+                error_codes.SPEND_LIMIT_EXCEEDED,
+                "Wallet daily spend cap exceeded.",
+                {
+                    "scope": "wallet_daily",
+                    "wallet_id": caller_wallet_id,
+                    "limit_cents": exc.limit_cents,
+                    "spent_last_24h_cents": exc.spent_last_24h_cents,
+                    "attempted_cents": exc.attempted_cents,
+                },
+            ),
+        )
+
+
 def _request_client_ip(request: Request) -> Any | None:
     forwarded_for = (request.headers.get("x-forwarded-for", "") or "").strip()
     if forwarded_for:
@@ -3572,6 +3646,7 @@ def _apply_reputation_decay(now_dt: datetime | None = None) -> dict[str, int]:
                 a.agent_id,
                 a.trust_decay_multiplier,
                 a.last_decay_at,
+                a.total_calls,
                 MAX(j.completed_at) AS last_completed_at,
                 a.created_at
             FROM agents a
@@ -3585,6 +3660,9 @@ def _apply_reputation_decay(now_dt: datetime | None = None) -> dict[str, int]:
         ).fetchall()
     for row in rows:
         scanned += 1
+        # Skip decay when there isn't enough signal — penalizing new agents is unfair.
+        if (row["total_calls"] or 0) < 20:
+            continue
         reference = _parse_iso_datetime(row["last_completed_at"]) or _parse_iso_datetime(row["created_at"])
         if reference is None:
             continue
@@ -4584,7 +4662,12 @@ def auth_create_key(
     if caller["type"] != "user":
         raise HTTPException(status_code=403, detail="Not available for master key.")
     try:
-        result = _auth.create_api_key(caller["user"]["user_id"], body.name, scopes=body.scopes)
+        result = _auth.create_api_key(
+            caller["user"]["user_id"],
+            body.name,
+            scopes=body.scopes,
+            max_spend_cents=body.max_spend_cents,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return JSONResponse(content=result, status_code=201)
@@ -4611,6 +4694,8 @@ def auth_rotate_key(
             user_id=caller["user"]["user_id"],
             name=body.name,
             scopes=body.scopes,
+            max_spend_cents=body.max_spend_cents,
+            max_spend_cents_provided="max_spend_cents" in body.model_fields_set,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -5002,15 +5087,12 @@ def a2a_tasks_send(
     agent_wallet = payments.get_or_create_wallet(f"agent:{agent['agent_id']}")
     platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
 
-    try:
-        charge_tx_id = payments.pre_call_charge(caller_wallet["wallet_id"], price_cents, agent["agent_id"])
-    except payments.InsufficientBalanceError as e:
-        raise HTTPException(
-            status_code=402,
-            detail=error_codes.make_error(error_codes.INSUFFICIENT_FUNDS, "Insufficient balance.", {
-                "balance_cents": e.balance_cents, "required_cents": e.required_cents,
-            }),
-        )
+    charge_tx_id = _pre_call_charge_or_402(
+        caller=caller,
+        caller_wallet_id=caller_wallet["wallet_id"],
+        price_cents=price_cents,
+        agent_id=agent["agent_id"],
+    )
 
     try:
         job = jobs.create_job(
@@ -5449,23 +5531,12 @@ def registry_call(
     agent_wallet    = payments.get_or_create_wallet(_agent_payout_owner)
     platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
 
-    try:
-        charge_tx_id = payments.pre_call_charge(
-            caller_wallet["wallet_id"], price_cents, agent_id
-        )
-    except payments.InsufficientBalanceError as e:
-        raise HTTPException(
-            status_code=402,
-            detail=error_codes.make_error(
-                error_codes.INSUFFICIENT_FUNDS,
-                "Insufficient wallet balance.",
-                {
-                    "balance_cents": e.balance_cents,
-                    "required_cents": e.required_cents,
-                    "wallet_id": caller_wallet["wallet_id"],
-                },
-            ),
-        )
+    charge_tx_id = _pre_call_charge_or_402(
+        caller=caller,
+        caller_wallet_id=caller_wallet["wallet_id"],
+        price_cents=price_cents,
+        agent_id=agent_id,
+    )
 
     payload = body.root if body is not None else {}
     start = time.monotonic()
@@ -5676,23 +5747,12 @@ def jobs_create(
     agent_wallet = payments.get_or_create_wallet(_agent_payout_owner2)
     platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
 
-    try:
-        charge_tx_id = payments.pre_call_charge(
-            caller_wallet["wallet_id"], price_cents, agent["agent_id"]
-        )
-    except payments.InsufficientBalanceError as e:
-        raise HTTPException(
-            status_code=402,
-            detail=error_codes.make_error(
-                error_codes.INSUFFICIENT_FUNDS,
-                "Insufficient wallet balance.",
-                {
-                    "balance_cents": e.balance_cents,
-                    "required_cents": e.required_cents,
-                    "wallet_id": caller_wallet["wallet_id"],
-                },
-            ),
-        )
+    charge_tx_id = _pre_call_charge_or_402(
+        caller=caller,
+        caller_wallet_id=caller_wallet["wallet_id"],
+        price_cents=price_cents,
+        agent_id=agent["agent_id"],
+    )
 
     try:
         job = jobs.create_job(
@@ -5746,6 +5806,7 @@ def jobs_batch_create(
         raise HTTPException(status_code=400, detail="Batch size limited to 50 jobs.")
 
     caller_owner_id = _caller_owner_id(request)
+    batch_id = str(uuid.uuid4())
 
     resolved: list[dict] = []
     total_price_cents = 0
@@ -5788,7 +5849,12 @@ def jobs_batch_create(
             spec = item["spec"]
             agent_wallet = payments.get_or_create_wallet(f"agent:{agent['agent_id']}")
             platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
-            charge_tx_id = payments.pre_call_charge(caller_wallet["wallet_id"], price_cents, agent["agent_id"])
+            charge_tx_id = _pre_call_charge_or_402(
+                caller=caller,
+                caller_wallet_id=caller_wallet["wallet_id"],
+                price_cents=price_cents,
+                agent_id=agent["agent_id"],
+            )
             charge_tx_ids.append((caller_wallet["wallet_id"], charge_tx_id, price_cents, agent["agent_id"]))
             job = jobs.create_job(
                 agent_id=agent["agent_id"],
@@ -5804,9 +5870,17 @@ def jobs_batch_create(
                 dispute_window_hours=spec.dispute_window_hours or _DEFAULT_JOB_DISPUTE_WINDOW_HOURS,
                 judge_agent_id=_extract_judge_agent_id(agent.get("input_schema")) or _QUALITY_JUDGE_AGENT_ID,
                 callback_url=spec.callback_url or None,
+                batch_id=batch_id,
             )
             _record_job_event(job, "job.created", actor_owner_id=caller["owner_id"])
             created_jobs.append(_job_response(job, caller))
+    except HTTPException:
+        for wallet_id, charge_tx_id, price_cents, agent_id in charge_tx_ids:
+            try:
+                payments.post_call_refund(wallet_id, charge_tx_id, price_cents, agent_id)
+            except Exception:
+                pass
+        raise
     except Exception:
         for wallet_id, charge_tx_id, price_cents, agent_id in charge_tx_ids:
             try:
@@ -5816,8 +5890,68 @@ def jobs_batch_create(
         raise HTTPException(status_code=500, detail="Batch creation failed; all charges refunded.")
 
     return JSONResponse(
-        content={"jobs": created_jobs, "count": len(created_jobs), "total_price_cents": total_price_cents},
+        content={
+            "batch_id": batch_id,
+            "jobs": created_jobs,
+            "count": len(created_jobs),
+            "total_price_cents": total_price_cents,
+        },
         status_code=201,
+    )
+
+
+@app.get(
+    "/jobs/batch/{batch_id}",
+    responses=_error_responses(401, 403, 404, 429, 500),
+    tags=["Jobs"],
+    summary="Get aggregate status for a batch created via POST /jobs/batch.",
+)
+@limiter.limit("60/minute")
+def jobs_batch_status(
+    request: Request,
+    batch_id: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    _require_scope(caller, "caller")
+    owner_id = _caller_owner_id(request)
+    batch_jobs = jobs.list_jobs_for_batch(batch_id, owner_id)
+    if not batch_jobs:
+        raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found.")
+
+    n_pending = 0
+    n_running = 0
+    n_awaiting_clarification = 0
+    n_complete = 0
+    n_failed = 0
+    total_cost_cents = 0
+    for job in batch_jobs:
+        total_cost_cents += int(job.get("price_cents") or 0)
+        status = str(job.get("status") or "")
+        if status == "pending":
+            n_pending += 1
+        elif status == "running":
+            n_running += 1
+            n_pending += 1
+        elif status == "awaiting_clarification":
+            n_awaiting_clarification += 1
+            n_pending += 1
+        elif status == "complete":
+            n_complete += 1
+        elif status == "failed":
+            n_failed += 1
+
+    return JSONResponse(
+        content={
+            "batch_id": batch_id,
+            "count": len(batch_jobs),
+            "n_pending": n_pending,
+            "n_running": n_running,
+            "n_awaiting_clarification": n_awaiting_clarification,
+            "n_complete": n_complete,
+            "n_failed": n_failed,
+            "total_cost_cents": total_cost_cents,
+            "jobs": [_job_response(job, caller) for job in batch_jobs],
+        }
     )
 
 
@@ -7197,6 +7331,37 @@ def wallet_me(
     txs = payments.get_wallet_transactions(wallet["wallet_id"], limit=50)
     caller_trust = payments.get_caller_trust(owner_id)
     return JSONResponse(content={**wallet, "caller_trust": caller_trust, "transactions": txs})
+
+
+@app.post(
+    "/wallets/me/daily-spend-limit",
+    response_model=core_models.WalletDailySpendLimitResponse,
+    responses=_error_responses(400, 401, 403, 429, 500),
+    tags=["Wallets"],
+    summary="Set or clear the authenticated wallet's rolling 24h spend cap.",
+)
+@limiter.limit("20/minute")
+def wallet_set_daily_spend_limit(
+    request: Request,
+    body: core_models.WalletDailySpendLimitRequest,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.WalletDailySpendLimitResponse:
+    _require_scope(caller, "caller")
+    owner_id = _caller_owner_id(request)
+    wallet = payments.get_or_create_wallet(owner_id)
+    try:
+        updated = payments.set_wallet_daily_spend_limit(
+            wallet["wallet_id"],
+            body.daily_spend_limit_cents,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return JSONResponse(
+        content={
+            "wallet_id": updated["wallet_id"],
+            "daily_spend_limit_cents": updated.get("daily_spend_limit_cents"),
+        }
+    )
 
 
 @app.get(
