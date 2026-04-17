@@ -2,7 +2,7 @@
 api_models.py — Request body schemas shared by server routes.
 """
 
-from typing import Annotated, Any, Literal, NotRequired, TypeAlias, TypedDict
+from typing import Annotated, Literal, NotRequired, TypeAlias, TypedDict
 
 from pydantic import (
     BaseModel,

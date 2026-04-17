@@ -17,15 +17,13 @@ import os
 import threading
 import time
 from typing import Any
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import httpx
-import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from agentmarket.agent import AgentServer
-from agentmarket.exceptions import AgentMarketError
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

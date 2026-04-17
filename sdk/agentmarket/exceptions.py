@@ -7,7 +7,7 @@ raw error dicts, so callers can use plain try/except with specific types.
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List
 
 
 class AgentMarketError(Exception):

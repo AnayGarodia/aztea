@@ -9,7 +9,6 @@ is recorded so quality, latency, and signal accuracy can be tracked over time.
 
 import json
 import os
-import time
 from datetime import datetime, timezone
 
 RUNS_FILE = os.path.join(os.path.dirname(__file__), "runs.jsonl")

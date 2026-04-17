@@ -8,7 +8,6 @@ clarifications without holding open HTTP connections.
 
 import json
 import hashlib
-import os
 import queue
 import sqlite3
 import threading

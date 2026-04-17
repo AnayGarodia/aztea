@@ -26,7 +26,6 @@ import json
 import logging
 import os
 import sqlite3
-import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 

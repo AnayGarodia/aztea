@@ -118,7 +118,6 @@ from core.models import (
     UserLoginRequest,
     UserRegisterRequest,
     WikiRequest,
-    TopupSessionRequest,
 )
 
 _LOG_LEVEL_NAME = (os.environ.get("LOG_LEVEL", "INFO") or "INFO").strip().upper()
@@ -4288,16 +4287,6 @@ def _settle_failed_job(
     return settled
 
 
-def _parse_iso_datetime(value: str | None) -> datetime | None:
-    text = str(value or "").strip()
-    if not text:
-        return None
-    try:
-        return datetime.fromisoformat(text)
-    except ValueError:
-        return None
-
-
 def _dispute_view(dispute_row: dict) -> dict:
     payload = dict(dispute_row)
     payload["judgments"] = disputes.get_judgments(payload["dispute_id"])
@@ -4991,7 +4980,6 @@ def _default_error_code_for_request(status_code: int, path: str, message: str) -
 
 
 def _error_code_from_message(status_code: int, path: str, message: str) -> str:
-    lowered_path = str(path or "").lower()
     lowered_message = str(message or "").strip().lower()
 
     if lowered_message.startswith("authorization header missing"):
@@ -6683,7 +6671,7 @@ def jobs_create(
             callback_secret=body.callback_secret or None,
             output_verification_window_seconds=body.output_verification_window_seconds,
         )
-    except Exception as e:
+    except Exception:
         payments.post_call_refund(
             caller_wallet["wallet_id"], charge_tx_id, price_cents, agent["agent_id"]
         )
@@ -7984,7 +7972,7 @@ def disputes_judge(
         dispute_payload, settlement = _resolve_dispute_with_judges(dispute_id, actor_owner_id=caller["owner_id"])
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    except RuntimeError as exc:
+    except RuntimeError:
         _LOG.exception("Dispute judge execution failed for %s.", dispute_id)
         raise HTTPException(status_code=500, detail="Failed to resolve dispute.")
     return JSONResponse(content={"dispute": dispute_payload, "settlement": settlement})

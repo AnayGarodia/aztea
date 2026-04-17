@@ -5,9 +5,7 @@ disputes.py — dispute lifecycle and bilateral caller ratings persistence.
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
-import threading
 import uuid
 from datetime import datetime, timezone
 

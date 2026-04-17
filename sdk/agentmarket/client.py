@@ -19,7 +19,6 @@ from .exceptions import (
     AgentMarketError,
     AgentNotFoundError,
     AuthenticationError,
-    ClarificationNeededError,
     ContractVerificationError,
     InsufficientFundsError,
     JobFailedError,

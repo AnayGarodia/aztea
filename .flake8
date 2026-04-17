@@ -1,0 +1,23 @@
+[flake8]
+max-line-length = 120
+extend-ignore =
+    # line length (handled by max-line-length)
+    E501,
+    # whitespace/alignment style
+    E221, E231, E241,
+    # blank line style
+    E301, E302, E303, E304, E305, E306,
+    # trailing whitespace / blank line at EOF
+    W291, W292, W293, W391,
+    # module level import not at top (needed after load_dotenv)
+    E402,
+    # do not require two blank lines in nested contexts
+    E701, E711, E712,
+exclude =
+    .git,
+    __pycache__,
+    node_modules,
+    frontend,
+    sdk/agentmarket/setup.py,
+    .venv,
+    venv,

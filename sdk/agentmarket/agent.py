@@ -28,14 +28,12 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import sys
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List
 
 from .client import AgentMarketClient, _parse_payload
 from .exceptions import AgentMarketError, ClarificationNeeded, InputError
-from .models import Agent
 
 _HEARTBEAT_INTERVAL = 20  # seconds
 _POLL_INTERVAL = 2        # seconds between job-list polls
@@ -219,7 +217,7 @@ class AgentServer:
                 f"/jobs/{job_id}/claim",
                 json={"lease_seconds": _LEASE_SECONDS},
             )
-        except AgentMarketError as exc:
+        except AgentMarketError:
             # Another worker may have claimed it first — skip silently
             return
         if not isinstance(claim_data, dict):

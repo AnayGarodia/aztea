@@ -27,10 +27,10 @@ jobs:
             ${{ runner.os }}-pip-
 
       - name: Install dependencies
-        run: pip install -r requirements.txt flake8
+        run: pip install -r requirements-dev.txt flake8
 
       - name: Run flake8
-        run: flake8 . --max-line-length=120 --extend-ignore=E501 --exclude=.git,__pycache__,node_modules,frontend,sdk/agentmarket/setup.py
+        run: flake8 .
 
   test:
     name: Python tests
@@ -52,10 +52,12 @@ jobs:
             ${{ runner.os }}-pip-
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-dev.txt
 
       - name: Run pytest
         run: pytest -q tests/
+        env:
+          API_KEY: test-master-key
 
   frontend-build:
     name: Frontend build

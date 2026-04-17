@@ -10,7 +10,6 @@ Usage:
     python test_payments.py          # in another
 """
 
-import json
 import os
 import sqlite3
 import sys
@@ -196,7 +195,7 @@ try:
 except requests.ConnectionError:
     print("  ✗  cannot connect to server — is `uvicorn server:app --port 8000` running?")
     print(f"\n{'─'*42}")
-    print(f"  Part A: all direct tests above  |  Part B: skipped (no server)")
+    print("  Part A: all direct tests above  |  Part B: skipped (no server)")
     sys.exit(1 if failures else 0)
 
 
@@ -268,7 +267,7 @@ elif status in (429, 503):
     check("charge recorded before upstream fail", "charge" in types, str(types))
     check("refund fired on LLM rate limit", "refund" in types, str(types))
     check("balance restored to 500¢", w["balance_cents"] == 500, str(w["balance_cents"]))
-    print(f"     (Groq rate-limited → refund path verified. Try again when limit resets.)")
+    print("     (Groq rate-limited → refund path verified. Try again when limit resets.)")
 else:
     check("charge recorded", "charge" in types, str(types))
     check("refund fired on failure", "refund" in types, str(types))

@@ -11,10 +11,6 @@ Fix 7: disputes.py duplicated the caller_ratings table definition
 Fix 8: GET /runs lacked X-Skipped-Lines header for decode failures
 """
 
-import json
-import os
-import sqlite3
-import uuid
 from pathlib import Path
 
 import pytest
@@ -113,7 +109,6 @@ def registry_db(tmp_path, monkeypatch):
         monkeypatch.setattr(m, "DB_PATH", db_path)
 
     # Stub out embeddings so registration doesn't need the model
-    import numpy as np
     dim = registry.embeddings.EMBEDDING_DIM
     monkeypatch.setattr(registry.embeddings, "embed_text", lambda _: [0.0] * dim)
 
