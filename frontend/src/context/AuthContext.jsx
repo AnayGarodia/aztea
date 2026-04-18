@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react'
-import { authMe } from '../api'
+import { authMe, setSessionExpiredHandler } from '../api'
 
 const Ctx = createContext(null)
 
@@ -55,6 +55,11 @@ export function AuthProvider({ children }) {
     setApiKey('')
     setUser(null)
   }, [])
+
+  useEffect(() => {
+    setSessionExpiredHandler(disconnect)
+    return () => setSessionExpiredHandler(null)
+  }, [disconnect])
 
   return (
     <Ctx.Provider value={{ apiKey, user, booting, connect, disconnect }}>

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { motion, AnimatePresence } from 'motion/react'
 import { fetchAgents } from '../api'
 import AuthPanel from '../features/auth/AuthPanel'
@@ -112,6 +113,7 @@ export default function LandingPage() {
         </div>
         <div className="lp__nav-actions">
           <button className="lp__nav-link" onClick={() => scrollTo('lp-how')}>How it works</button>
+          <button className="lp__nav-link" onClick={() => scrollTo('lp-pricing')}>Pricing</button>
           <motion.button
             className="lp__nav-cta"
             onClick={() => scrollTo('lp-auth')}
@@ -309,6 +311,56 @@ export default function LandingPage() {
         </section>
       )}
 
+      {/* ── Pricing ── */}
+      <section className="lp__pricing" id="lp-pricing">
+        <Reveal>
+          <p className="t-micro lp__section-eyebrow">Pricing</p>
+          <h2 className="lp__section-title t-h1">Simple, usage-based pricing</h2>
+          <p className="lp__section-sub">No subscriptions. No seats. Pay only for the work that gets done.</p>
+        </Reveal>
+        <Stagger className="lp__pricing-grid" staggerDelay={0.08}>
+          <div className="lp__pricing-card">
+            <p className="lp__pricing-label">For callers</p>
+            <div className="lp__pricing-rate">
+              <span className="lp__pricing-num">Agent price</span>
+              <span className="lp__pricing-denom">per successful call</span>
+            </div>
+            <ul className="lp__pricing-list">
+              <li>Charged before execution</li>
+              <li>Auto-refunded on agent failure</li>
+              <li>Dispute window on every job</li>
+              <li>$1.00 free credit on signup</li>
+            </ul>
+          </div>
+          <div className="lp__pricing-card lp__pricing-card--accent">
+            <p className="lp__pricing-label">Platform fee</p>
+            <div className="lp__pricing-rate">
+              <span className="lp__pricing-num">10%</span>
+              <span className="lp__pricing-denom">of agent revenue</span>
+            </div>
+            <ul className="lp__pricing-list">
+              <li>Taken from agent payout only</li>
+              <li>Callers pay listed price exactly</li>
+              <li>No fee on refunds or disputes won</li>
+              <li>Stripe payout fees apply to withdrawals</li>
+            </ul>
+          </div>
+          <div className="lp__pricing-card">
+            <p className="lp__pricing-label">For builders</p>
+            <div className="lp__pricing-rate">
+              <span className="lp__pricing-num">You set</span>
+              <span className="lp__pricing-denom">the price</span>
+            </div>
+            <ul className="lp__pricing-list">
+              <li>Register any HTTP endpoint</li>
+              <li>Set price per call in USD</li>
+              <li>Withdraw earnings anytime</li>
+              <li>Trust score builds automatically</li>
+            </ul>
+          </div>
+        </Stagger>
+      </section>
+
       {/* ── Auth section ── */}
       <section className="lp__auth" id="lp-auth">
         <Reveal>
@@ -349,7 +401,13 @@ export default function LandingPage() {
           </div>
           <span className="lp__footer-wordmark">agentmarket</span>
         </div>
-        <span className="lp__footer-copy">Built for the living agent economy · © {new Date().getFullYear()}</span>
+        <div className="lp__footer-links">
+          <Link to="/terms" className="lp__footer-link">Terms</Link>
+          <span className="lp__footer-sep">·</span>
+          <Link to="/privacy" className="lp__footer-link">Privacy</Link>
+          <span className="lp__footer-sep">·</span>
+          <span className="lp__footer-copy">© {new Date().getFullYear()}</span>
+        </div>
       </footer>
     </div>
   )

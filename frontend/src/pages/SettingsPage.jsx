@@ -18,39 +18,30 @@ function fmtDate(str) {
   return new Date(str).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
+const SCOPE_OPTIONS = [
+  { value: 'caller', label: 'Caller', desc: 'hire agents, create jobs' },
+  { value: 'worker', label: 'Worker', desc: 'claim and complete jobs' },
+]
+
 function ApiKeyRow({ item, onRevoke }) {
-  const [copied, setCopied] = useState(false)
-
-  const handleCopy = () => {
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1500)
-  }
-
   return (
     <div className="settings__key-row">
       <div>
         <p className="settings__key-name">{item.name}</p>
         <div className="settings__key-meta">
-          <span className="settings__key-prefix">{item.key_prefix}…</span>
+          <span className="settings__key-prefix t-mono">{item.key_prefix}…</span>
           <span className="settings__key-last-used">Last used: {fmtDate(item.last_used_at)}</span>
           {(item.scopes ?? []).map(s => (
             <Badge key={s} label={s} />
           ))}
         </div>
-        <p className="settings__key-prefix-warn">Only the prefix is stored — copy your full key at creation time.</p>
+        <p className="settings__key-prefix-note">Only the prefix is stored — the full key was shown once at creation.</p>
       </div>
-      <button
-        onClick={handleCopy}
-        className={`settings__copy-btn ${copied ? 'settings__copy-btn--positive' : 'settings__copy-btn--default'}`}
-        title="Only the prefix is stored — copy your full key at creation time"
-      >
-        <Copy size={12} />
-        {copied ? 'Copied' : 'Copy prefix'}
-      </button>
       <span className="settings__key-created">{fmtDate(item.created_at)}</span>
       <button
         onClick={() => onRevoke(item.key_id)}
         className="settings__revoke-btn"
+        aria-label={`Revoke key ${item.name}`}
       >
         <Trash2 size={12} />
         Revoke
@@ -64,6 +55,7 @@ export default function SettingsPage() {
   const { user, disconnect } = useAuth()
   const [keys, setKeys] = useState([])
   const [keyName, setKeyName] = useState('')
+  const [keyScopes, setKeyScopes] = useState(['caller', 'worker'])
   const [creating, setCreating] = useState(false)
   const [newKey, setNewKey] = useState(null)
 
@@ -81,10 +73,11 @@ export default function SettingsPage() {
   const handleCreateKey = async (e) => {
     e.preventDefault()
     if (!keyName.trim()) return
+    if (keyScopes.length === 0) { showToast?.('Select at least one scope.', 'error'); return }
     setCreating(true)
     setNewKey(null)
     try {
-      const created = await createAuthKey(apiKey, keyName.trim(), ['caller', 'worker'])
+      const created = await createAuthKey(apiKey, keyName.trim(), keyScopes)
       setNewKey(created.raw_key ?? null)
       showToast?.(`Key "${keyName}" created.`, 'success')
       setKeyName('')
@@ -184,6 +177,25 @@ export default function SettingsPage() {
                       placeholder="Production key"
                       required
                     />
+                  </div>
+                  <div className="settings__scope-wrap">
+                    <p className="settings__scope-label">Scopes</p>
+                    <div className="settings__scope-options">
+                      {SCOPE_OPTIONS.map(opt => (
+                        <label key={opt.value} className={`settings__scope-chip ${keyScopes.includes(opt.value) ? 'settings__scope-chip--active' : ''}`}>
+                          <input
+                            type="checkbox"
+                            checked={keyScopes.includes(opt.value)}
+                            onChange={e => setKeyScopes(prev =>
+                              e.target.checked ? [...prev, opt.value] : prev.filter(s => s !== opt.value)
+                            )}
+                            style={{ display: 'none' }}
+                          />
+                          <span className="settings__scope-chip-name">{opt.label}</span>
+                          <span className="settings__scope-chip-desc">{opt.desc}</span>
+                        </label>
+                      ))}
+                    </div>
                   </div>
                   <Button type="submit" variant="primary" size="md" loading={creating} icon={<Plus size={14} />}>
                     Create key

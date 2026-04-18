@@ -57,8 +57,6 @@ function AuthedApp() {
             <Route path="/worker"   element={<WorkerPage />} />
             <Route path="/wallet"   element={<WalletPage />} />
             <Route path="/settings" element={<SettingsPage />} />
-            <Route path="/terms"    element={<TermsPage />} />
-            <Route path="/privacy"  element={<PrivacyPage />} />
             <Route path="*"         element={<Navigate to="/overview" replace />} />
           </Route>
         </Routes>
@@ -81,6 +79,8 @@ export default function App() {
           <ErrorBoundary>
             <Routes>
               <Route path="/welcome" element={<LandingPage />} />
+              <Route path="/terms"   element={<TermsPage />} />
+              <Route path="/privacy" element={<PrivacyPage />} />
               <Route path="/" element={<RootRedirect />} />
               <Route
                 path="/*"

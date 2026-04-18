@@ -2,6 +2,9 @@ const RAW_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').trim()
 const BASE = (RAW_BASE || '/api').replace(/\/+$/, '')
 const VERSION = '1.0'
 
+let _onSessionExpired = null
+export function setSessionExpiredHandler(fn) { _onSessionExpired = fn }
+
 function requestHeaders(key, { idempotencyKey } = {}) {
   const out = {
     'Content-Type': 'application/json',
@@ -114,7 +117,10 @@ async function request(path, {
     body: body === undefined ? undefined : JSON.stringify(body),
   })
   const parsedBody = await parseResponseBody(response)
-  if (!response.ok && throwOnError) throw makeApiError(response, parsedBody)
+  if (!response.ok && throwOnError) {
+    if (response.status === 401 && _onSessionExpired && !path.startsWith('/auth/')) _onSessionExpired()
+    throw makeApiError(response, parsedBody)
+  }
   return {
     ok: response.ok,
     status: response.status,
