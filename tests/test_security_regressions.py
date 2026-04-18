@@ -111,11 +111,12 @@ def test_proxy_call_does_not_forward_master_auth_to_external_endpoints(client, m
 
     captured: dict = {}
 
-    def fake_post(url, json=None, headers=None, timeout=None):
+    def fake_post(url, json=None, headers=None, timeout=None, allow_redirects=None):
         captured["url"] = url
         captured["json"] = json
         captured["headers"] = dict(headers or {})
         captured["timeout"] = timeout
+        captured["allow_redirects"] = allow_redirects
         resp = requests.Response()
         resp.status_code = 200
         resp._content = b'{"ok": true}'
@@ -134,6 +135,7 @@ def test_proxy_call_does_not_forward_master_auth_to_external_endpoints(client, m
     assert captured["url"] == endpoint_url
     assert captured["headers"].get("Content-Type") == "application/json"
     assert "Authorization" not in captured["headers"]
+    assert captured["allow_redirects"] is False
 
 
 def test_wallet_endpoint_authorization_allows_owner_and_master_only(client):

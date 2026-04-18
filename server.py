@@ -3691,6 +3691,7 @@ def _process_due_hook_deliveries(limit: int = _HOOK_DELIVERY_BATCH_SIZE) -> dict
                 data=payload_bytes,
                 headers=headers,
                 timeout=5,
+                allow_redirects=False,
             )
             status_code = int(resp.status_code)
             success = 200 <= status_code < 300
@@ -3877,7 +3878,10 @@ def _run_output_verifier(
             json=payload,
             headers={"Content-Type": "application/json"},
             timeout=timeout_seconds,
+            allow_redirects=False,
         )
+        if 300 <= int(response.status_code) < 400:
+            return False, "external verifier redirects are not allowed"
         response.raise_for_status()
         body = response.json()
     except Exception as exc:
@@ -3913,7 +3917,10 @@ def _run_registration_verifier(
             json=payload,
             headers={"Content-Type": "application/json"},
             timeout=timeout_seconds,
+            allow_redirects=False,
         )
+        if 300 <= int(response.status_code) < 400:
+            return False, "registration verifier redirects are not allowed"
         response.raise_for_status()
         body = response.json()
     except Exception as exc:
@@ -4460,10 +4467,10 @@ def _monitor_agent_endpoints(
         error_text: str | None = None
         try:
             safe_url = _validate_outbound_url(endpoint_url, "endpoint_url")
-            response = http.head(safe_url, timeout=timeout_seconds, allow_redirects=True)
+            response = http.head(safe_url, timeout=timeout_seconds, allow_redirects=False)
             status_code = int(response.status_code)
             if status_code in {405, 501}:
-                response = http.get(safe_url, timeout=timeout_seconds, allow_redirects=True)
+                response = http.get(safe_url, timeout=timeout_seconds, allow_redirects=False)
                 status_code = int(response.status_code)
             ok = 200 <= status_code < 500
             if not ok:
@@ -4941,7 +4948,9 @@ def _load_manifest_content(manifest_content: str | None, manifest_url: str | Non
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     try:
-        resp = http.get(safe_url, timeout=15)
+        resp = http.get(safe_url, timeout=15, allow_redirects=False)
+        if 300 <= int(resp.status_code) < 400:
+            raise HTTPException(status_code=502, detail="manifest_url redirects are not allowed.")
         resp.raise_for_status()
     except http.RequestException as exc:
         _LOG.warning("Failed to fetch manifest_url %s: %s", safe_url, exc)
@@ -6580,6 +6589,7 @@ def registry_call(
             json=payload,
             headers=_proxy_headers_for_agent(proxy_agent),
             timeout=120,
+            allow_redirects=False,
         )
     except http.RequestException as e:
         latency_ms = (time.monotonic() - start) * 1000
@@ -6590,7 +6600,7 @@ def registry_call(
         _LOG.warning("Upstream agent unreachable for %s: %s", agent_id, e)
         raise HTTPException(status_code=502, detail="Upstream agent unreachable.")
 
-    success = resp.ok
+    success = 200 <= int(resp.status_code) < 300
     latency_ms = (time.monotonic() - start) * 1000
     registry.update_call_stats(agent_id, latency_ms, success)
 

@@ -1179,9 +1179,10 @@ def test_registry_register_auto_verifies_with_verifier_url(client, monkeypatch):
         def json(self):
             return {"verified": True, "reason": "Verifier accepted registration payload."}
 
-    def _fake_post(url, json=None, headers=None, timeout=None):
+    def _fake_post(url, json=None, headers=None, timeout=None, allow_redirects=None):
         captured["url"] = url
         captured["body"] = json
+        captured["allow_redirects"] = allow_redirects
         return _VerifierResponse()
 
     monkeypatch.setattr(server.http, "post", _fake_post)
@@ -1203,6 +1204,7 @@ def test_registry_register_auto_verifies_with_verifier_url(client, monkeypatch):
     body = response.json()
     assert body["agent"]["verified"] is True
     assert captured["url"] == verifier_url
+    assert captured["allow_redirects"] is False
     verifier_payload = captured["body"]
     assert verifier_payload["event_type"] == "agent_registration_verification"
     assert verifier_payload["agent"]["name"].startswith("Verified Agent")
@@ -1728,6 +1730,36 @@ def test_outbound_url_validation_blocks_private_targets_by_default(client):
     assert "localhost" in manifest_resp.json()["message"]
 
 
+def test_manifest_url_redirects_are_blocked(client, monkeypatch):
+    user = _register_user()
+    captured: dict[str, object] = {}
+
+    class _RedirectResponse:
+        status_code = 302
+        headers = {"Location": "http://127.0.0.1/internal"}
+        content = b""
+        text = ""
+
+        @staticmethod
+        def raise_for_status():
+            return None
+
+    def _fake_get(url, timeout=None, allow_redirects=None):
+        captured["url"] = url
+        captured["allow_redirects"] = allow_redirects
+        return _RedirectResponse()
+
+    monkeypatch.setattr(server.http, "get", _fake_get)
+    manifest_resp = client.post(
+        "/onboarding/validate",
+        headers=_auth_headers(user["raw_api_key"]),
+        json={"manifest_url": "https://docs.example.com/agent.md"},
+    )
+    assert manifest_resp.status_code == 502
+    assert "redirect" in manifest_resp.json()["message"].lower()
+    assert captured["allow_redirects"] is False
+
+
 def test_job_callback_url_delivery_is_signed_and_contains_terminal_output(client, monkeypatch):
     worker = _register_user()
     caller = _register_user()
@@ -1744,7 +1776,7 @@ def test_job_callback_url_delivery_is_signed_and_contains_terminal_output(client
     callback_secret = "super-secret-callback-key"
     callback_requests: list[dict] = []
 
-    def fake_post(url, data=None, headers=None, timeout=None):
+    def fake_post(url, data=None, headers=None, timeout=None, allow_redirects=None):
         callback_requests.append(
             {
                 "url": url,
@@ -1830,7 +1862,7 @@ def test_job_sweeper_handles_timeouts_sla_and_event_hooks(client, monkeypatch):
 
     hook_events: list[dict] = []
 
-    def fake_post(url, data=None, headers=None, timeout=None):
+    def fake_post(url, data=None, headers=None, timeout=None, allow_redirects=None):
         payload = {}
         if data:
             payload = json.loads(data.decode("utf-8"))
@@ -1971,7 +2003,7 @@ def test_hook_delivery_dead_letter_listing(client, monkeypatch):
     _fund_user_wallet(caller, 200)
     monkeypatch.setattr(server, "_HOOK_DELIVERY_MAX_ATTEMPTS", 1)
 
-    def always_fail_post(url, data=None, headers=None, timeout=None):
+    def always_fail_post(url, data=None, headers=None, timeout=None, allow_redirects=None):
         raise requests.RequestException("hook unavailable")
 
     monkeypatch.setattr(server.http, "post", always_fail_post)
@@ -2587,7 +2619,7 @@ def test_orchestrator_receives_child_completion_callback_and_finishes_parent(cli
     callback_secret = "orchestrator-callback-secret"
     callback_requests: list[dict] = []
 
-    def fake_post(url, data=None, headers=None, timeout=None):
+    def fake_post(url, data=None, headers=None, timeout=None, allow_redirects=None):
         callback_requests.append({"url": url, "data": data, "headers": headers or {}})
         resp = requests.Response()
         resp.status_code = 204
