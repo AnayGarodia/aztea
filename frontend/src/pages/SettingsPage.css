@@ -152,44 +152,6 @@
   flex-wrap: wrap;
 }
 
-.settings__scope-chip {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 8px 12px;
-  border-radius: var(--r-md);
-  border: 1px solid var(--border);
-  cursor: pointer;
-  transition: all var(--duration-sm) var(--ease);
-  background: var(--surface);
-  min-width: 100px;
-}
-
-.settings__scope-chip:hover {
-  border-color: var(--accent);
-  background: var(--accent-wash, #eef2ff);
-}
-
-.settings__scope-chip--active {
-  border-color: var(--accent);
-  background: var(--accent-wash, #eef2ff);
-}
-
-.settings__scope-chip-name {
-  font-size: 0.8125rem;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.settings__scope-chip--active .settings__scope-chip-name {
-  color: var(--accent);
-}
-
-.settings__scope-chip-desc {
-  font-size: 0.6875rem;
-  color: var(--text-muted);
-}
-
 /* Keys table */
 .settings__key-create {
   display: flex;

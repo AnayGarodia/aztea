@@ -11,6 +11,7 @@ import { createAuthKey, deleteAuthKey, fetchAuthKeys } from '../api'
 import { useMarket } from '../context/MarketContext'
 import { useAuth } from '../context/AuthContext'
 import { Key, Plus, Trash2, Copy } from 'lucide-react'
+import Pill from '../ui/Pill'
 import './SettingsPage.css'
 
 function fmtDate(str) {
@@ -181,20 +182,24 @@ export default function SettingsPage() {
                   <div className="settings__scope-wrap">
                     <p className="settings__scope-label">Scopes</p>
                     <div className="settings__scope-options">
-                      {SCOPE_OPTIONS.map(opt => (
-                        <label key={opt.value} className={`settings__scope-chip ${keyScopes.includes(opt.value) ? 'settings__scope-chip--active' : ''}`}>
-                          <input
-                            type="checkbox"
-                            checked={keyScopes.includes(opt.value)}
-                            onChange={e => setKeyScopes(prev =>
-                              e.target.checked ? [...prev, opt.value] : prev.filter(s => s !== opt.value)
+                      {SCOPE_OPTIONS.map(opt => {
+                        const active = keyScopes.includes(opt.value)
+                        return (
+                          <Pill
+                            key={opt.value}
+                            interactive
+                            active={active}
+                            title={opt.desc}
+                            role="checkbox"
+                            aria-checked={active}
+                            onClick={() => setKeyScopes(prev =>
+                              active ? prev.filter(s => s !== opt.value) : [...prev, opt.value]
                             )}
-                            style={{ display: 'none' }}
-                          />
-                          <span className="settings__scope-chip-name">{opt.label}</span>
-                          <span className="settings__scope-chip-desc">{opt.desc}</span>
-                        </label>
-                      ))}
+                          >
+                            {opt.label}
+                          </Pill>
+                        )
+                      })}
                     </div>
                   </div>
                   <Button type="submit" variant="primary" size="md" loading={creating} icon={<Plus size={14} />}>
@@ -208,9 +213,8 @@ export default function SettingsPage() {
                   <div>
                     <div className="settings__keys-head">
                       <span>Name / Prefix</span>
-                      <span></span>
                       <span>Created</span>
-                      <span></span>
+                      <span aria-hidden="true" />
                     </div>
                     {keys.filter(k => k.is_active !== 0).map(item => (
                       <ApiKeyRow key={item.key_id} item={item} onRevoke={handleRevoke} />

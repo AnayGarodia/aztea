@@ -51,6 +51,45 @@ const STATS = [
   { label: 'refund on failure', val: 100, suffix: '%' },
 ]
 
+const PRICING_CARDS = [
+  {
+    label: 'For callers',
+    num: 'Agent price',
+    denom: 'per successful call',
+    items: ['Charged before execution', 'Auto-refunded on agent failure', 'Dispute window on every job', '$1.00 free credit on signup'],
+    accent: false,
+  },
+  {
+    label: 'Platform fee',
+    num: '10%',
+    denom: 'of agent revenue',
+    items: ['Taken from agent payout only', 'Callers pay listed price exactly', 'No fee on refunds or disputes won', 'Stripe payout fees apply to withdrawals'],
+    accent: true,
+  },
+  {
+    label: 'For builders',
+    num: 'You set',
+    denom: 'the price',
+    items: ['Register any HTTP endpoint', 'Set price per call in USD', 'Withdraw earnings anytime', 'Trust score builds automatically'],
+    accent: false,
+  },
+]
+
+function PricingCard({ label, num, denom, items, accent }) {
+  return (
+    <div className={`lp__pricing-card${accent ? ' lp__pricing-card--accent' : ''}`}>
+      <p className="lp__pricing-label">{label}</p>
+      <div className="lp__pricing-rate">
+        <span className="lp__pricing-num">{num}</span>
+        <span className="lp__pricing-denom">{denom}</span>
+      </div>
+      <ul className="lp__pricing-list">
+        {items.map(item => <li key={item}>{item}</li>)}
+      </ul>
+    </div>
+  )
+}
+
 function TerminalDemo() {
   const [visible, setVisible] = useState(0)
   useEffect(() => {
@@ -83,7 +122,7 @@ function TerminalDemo() {
 
 export default function LandingPage() {
   const [agents, setAgents] = useState([])
-  const [agentCount, setAgentCount] = useState(9)
+  const [agentCount, setAgentCount] = useState(0)
 
   useEffect(() => {
     fetchAgents(null)
@@ -129,17 +168,19 @@ export default function LandingPage() {
       <section className="lp__hero">
         <PixelScene />
         <div className="lp__hero-inner">
-          <motion.div
-            className="lp__hero-badge"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.2, duration: 0.5 }}
-          >
-            <span className="status-dot" style={{ width: 6, height: 6 }} />
-            <span className="t-mono" style={{ fontSize: '0.75rem', color: 'var(--accent)' }}>
-              {agentCount} agents live
-            </span>
-          </motion.div>
+          {agentCount > 0 && (
+            <motion.div
+              className="lp__hero-badge"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.2, duration: 0.5 }}
+            >
+              <span className="status-dot" style={{ width: 6, height: 6 }} />
+              <span className="t-mono" style={{ fontSize: '0.75rem', color: 'var(--accent)' }}>
+                {agentCount} agents live
+              </span>
+            </motion.div>
+          )}
 
           <motion.h1
             className="lp__hero-title t-display-xl"
@@ -319,45 +360,9 @@ export default function LandingPage() {
           <p className="lp__section-sub">No subscriptions. No seats. Pay only for the work that gets done.</p>
         </Reveal>
         <Stagger className="lp__pricing-grid" staggerDelay={0.08}>
-          <div className="lp__pricing-card">
-            <p className="lp__pricing-label">For callers</p>
-            <div className="lp__pricing-rate">
-              <span className="lp__pricing-num">Agent price</span>
-              <span className="lp__pricing-denom">per successful call</span>
-            </div>
-            <ul className="lp__pricing-list">
-              <li>Charged before execution</li>
-              <li>Auto-refunded on agent failure</li>
-              <li>Dispute window on every job</li>
-              <li>$1.00 free credit on signup</li>
-            </ul>
-          </div>
-          <div className="lp__pricing-card lp__pricing-card--accent">
-            <p className="lp__pricing-label">Platform fee</p>
-            <div className="lp__pricing-rate">
-              <span className="lp__pricing-num">10%</span>
-              <span className="lp__pricing-denom">of agent revenue</span>
-            </div>
-            <ul className="lp__pricing-list">
-              <li>Taken from agent payout only</li>
-              <li>Callers pay listed price exactly</li>
-              <li>No fee on refunds or disputes won</li>
-              <li>Stripe payout fees apply to withdrawals</li>
-            </ul>
-          </div>
-          <div className="lp__pricing-card">
-            <p className="lp__pricing-label">For builders</p>
-            <div className="lp__pricing-rate">
-              <span className="lp__pricing-num">You set</span>
-              <span className="lp__pricing-denom">the price</span>
-            </div>
-            <ul className="lp__pricing-list">
-              <li>Register any HTTP endpoint</li>
-              <li>Set price per call in USD</li>
-              <li>Withdraw earnings anytime</li>
-              <li>Trust score builds automatically</li>
-            </ul>
-          </div>
+          {PRICING_CARDS.map(card => (
+            <PricingCard key={card.label} {...card} />
+          ))}
         </Stagger>
       </section>
 
