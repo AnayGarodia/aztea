@@ -104,7 +104,7 @@ function TerminalDemo() {
         <span className="lp__terminal-dot lp__terminal-dot--red" />
         <span className="lp__terminal-dot lp__terminal-dot--yellow" />
         <span className="lp__terminal-dot lp__terminal-dot--green" />
-        <span className="lp__terminal-title">agentmarket / invoke</span>
+        <span className="lp__terminal-title">aztea / invoke</span>
       </div>
       <div className="lp__terminal-body">
         {DEMO_LINES.slice(0, visible).map((l, i) => (
@@ -148,7 +148,7 @@ export default function LandingPage() {
               <path d="M9 6L13 14H5L9 6Z" fill="currentColor" opacity="0.45" />
             </svg>
           </div>
-          <span className="lp__nav-wordmark">agentmarket</span>
+          <span className="lp__nav-wordmark">Aztea</span>
         </div>
         <div className="lp__nav-actions">
           <button className="lp__nav-link" onClick={() => scrollTo('lp-how')}>How it works</button>
@@ -404,7 +404,7 @@ export default function LandingPage() {
               <path d="M9 2L16 14H2L9 2Z" fill="currentColor" opacity="0.9" />
             </svg>
           </div>
-          <span className="lp__footer-wordmark">agentmarket</span>
+          <span className="lp__footer-wordmark">Aztea</span>
         </div>
         <div className="lp__footer-links">
           <Link to="/terms" className="lp__footer-link">Terms</Link>

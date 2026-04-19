@@ -5,8 +5,8 @@ import './PixelScene.css'
 const W = 192
 const H = 108
 
-// ── Color constants (match design tokens, hardcoded for Canvas) ──
-const C = {
+// ── Color constants per theme ────────────────────────────────────
+const C_DARK = {
   bg:           '#08090C',
   grid:         'rgba(28,32,48,0.28)',
   ground:       'rgba(28,32,48,0.55)',
@@ -16,7 +16,28 @@ const C = {
   violetDk:     '#7C3AED',
   white:        '#E8ECF4',
   edge:         'rgba(8,9,12,0.5)',
+  edgeRgb:      '8,9,12',
 }
+
+const C_LIGHT = {
+  bg:           '#F5F2EB',
+  grid:         'rgba(140,120,90,0.12)',
+  ground:       'rgba(140,120,90,0.28)',
+  emerald:      '#16A34A',
+  emeraldDk:    '#14532D',
+  violet:       '#7C3AED',
+  violetDk:     '#5B21B6',
+  white:        '#1C1917',
+  edge:         'rgba(245,242,235,0.5)',
+  edgeRgb:      '245,242,235',
+}
+
+function getThemeColors() {
+  return document.documentElement.getAttribute('data-theme') === 'light' ? C_LIGHT : C_DARK
+}
+
+// Mutable C reference — updated on theme change
+let C = getThemeColors()
 
 // ── Agent sprite: 7w × 11h ────────────────────────────────────
 // 0 = transparent  1 = primary  2 = dark shade  3 = white (eyes)
@@ -123,14 +144,14 @@ function drawBackground(ctx) {
   // Edge vignette — top/bottom
   for (let i = 0; i < 14; i++) {
     const a = ((14 - i) / 14) * 0.55
-    ctx.fillStyle = `rgba(8,9,12,${a})`
+    ctx.fillStyle = `rgba(${C.edgeRgb},${a})`
     ctx.fillRect(0, i, W, 1)
     ctx.fillRect(0, H - 1 - i, W, 1)
   }
   // Edge vignette — left/right
   for (let i = 0; i < 18; i++) {
     const a = ((18 - i) / 18) * 0.45
-    ctx.fillStyle = `rgba(8,9,12,${a})`
+    ctx.fillStyle = `rgba(${C.edgeRgb},${a})`
     ctx.fillRect(i, 0, 1, H)
     ctx.fillRect(W - 1 - i, 0, 1, H)
   }
@@ -227,11 +248,16 @@ export default function PixelScene({ className = '' }) {
     const ctx = canvas.getContext('2d', { alpha: false })
     ctx.imageSmoothingEnabled = false
 
+    // Keep C in sync with theme toggle
+    C = getThemeColors()
+    const themeObserver = new MutationObserver(() => { C = getThemeColors() })
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+
     const ambient = makeAmbientParticles()
 
     if (prefersReducedMotion()) {
       drawStatic(ctx, ambient)
-      return
+      return () => themeObserver.disconnect()
     }
 
     let rafId  = null
@@ -365,8 +391,8 @@ export default function PixelScene({ className = '' }) {
         const p = (t - PH.CELEBRATE) / (PH.TOTAL - PH.CELEBRATE)
         drawSprite(ctx, SPRITE,     PAL_A, AX, AY + breathA)
         drawSprite(ctx, SPRITE_MIR, PAL_B, BX, BY + breathB)
-        // Subtle darkening overlay fades out (0→1)
-        ctx.fillStyle = `rgba(8,9,12,${(1 - p) * 0.15})`
+        // Subtle overlay fades out (0→1)
+        ctx.fillStyle = `rgba(${C.edgeRgb},${(1 - p) * 0.15})`
         ctx.fillRect(0, 0, W, H)
       }
 
@@ -374,7 +400,10 @@ export default function PixelScene({ className = '' }) {
     }
 
     rafId = requestAnimationFrame(tick)
-    return () => { if (rafId !== null) cancelAnimationFrame(rafId) }
+    return () => {
+      if (rafId !== null) cancelAnimationFrame(rafId)
+      themeObserver.disconnect()
+    }
   }, [])
 
   return (

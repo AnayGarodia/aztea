@@ -105,6 +105,15 @@
   );
 }
 
+[data-theme="light"] .lp__hero::after {
+  background: linear-gradient(
+    180deg,
+    rgba(245, 242, 235, 0.35) 0%,
+    rgba(245, 242, 235, 0.60) 50%,
+    rgba(245, 242, 235, 0.82) 100%
+  );
+}
+
 .lp__hero-inner {
   position: relative;
   z-index: 2;

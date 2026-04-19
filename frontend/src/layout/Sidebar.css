@@ -23,25 +23,13 @@
 }
 .sidebar__brand:hover { opacity: 0.8; }
 
-.sidebar__logo {
-  width: 28px;
-  height: 28px;
-  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  color: var(--accent-ink);
-  box-shadow: 0 2px 8px var(--accent-glow);
-}
 
 .sidebar__wordmark {
-  font-size: 0.875rem;
+  font-size: 1.0625rem;
   font-family: var(--font-display);
-  font-weight: 600;
-  color: var(--text-primary);
-  letter-spacing: -0.01em;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: -0.02em;
 }
 
 /* Nav */

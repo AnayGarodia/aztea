@@ -35,13 +35,7 @@ export default function Sidebar() {
     <aside className="sidebar">
       {/* Brand */}
       <NavLink to="/overview" className="sidebar__brand">
-        <div className="sidebar__logo">
-          <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-            <path d="M9 2L16 14H2L9 2Z" fill="currentColor" opacity="0.9" />
-            <path d="M9 6L13 14H5L9 6Z" fill="currentColor" opacity="0.4" />
-          </svg>
-        </div>
-        <span className="sidebar__wordmark">agentmarket</span>
+        <span className="sidebar__wordmark">Aztea</span>
       </NavLink>
 
       {/* Nav */}

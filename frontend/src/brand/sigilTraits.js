@@ -1,4 +1,3 @@
-// Deterministic hash (djb2 variant)
 function djb2(str) {
   let h = 5381
   for (let i = 0; i < str.length; i++) {
@@ -8,7 +7,6 @@ function djb2(str) {
   return Math.abs(h)
 }
 
-// Seeded PRNG
 function mulberry32(seed) {
   return function () {
     seed |= 0; seed = seed + 0x6D2B79F5 | 0
@@ -18,35 +16,32 @@ function mulberry32(seed) {
   }
 }
 
-const GRADIENT_PAIRS = [
-  ['#5EF3A3', '#22C88B'],
-  ['#A78BFA', '#7C3AED'],
-  ['#60A5FA', '#3B82F6'],
-  ['#F472B6', '#EC4899'],
-  ['#34D399', '#6EE7B7'],
-  ['#FBBF24', '#F59E0B'],
-  ['#5EF3A3', '#60A5FA'],
-  ['#A78BFA', '#F472B6'],
-  ['#22C88B', '#3B82F6'],
-  ['#F87171', '#FBBF24'],
-]
-
-const SHAPES = ['orbit', 'hex', 'prism', 'mesh', 'spiral', 'ring', 'diamond', 'cross']
-
 export function getSigilTraits(agentId) {
   const seed = djb2(String(agentId))
   const rand = mulberry32(seed)
 
-  const shapeIdx = Math.floor(rand() * SHAPES.length)
-  const gradIdx  = Math.floor(rand() * GRADIENT_PAIRS.length)
-  const rotation = Math.floor(rand() * 360)
-  const strokeW  = 1 + rand() * 1.5
+  const baseHue = Math.floor(rand() * 360)
+
+  const colors = [
+    `hsl(${baseHue}, 68%, 44%)`,
+    `hsl(${(baseHue + 55)  % 360}, 64%, 56%)`,
+    `hsl(${(baseHue + 170) % 360}, 58%, 52%)`,
+    `hsl(${(baseHue + 220) % 360}, 52%, 62%)`,
+    `hsl(${baseHue}, 78%, 32%)`,
+  ]
 
   return {
-    shape:    SHAPES[shapeIdx],
-    colors:   GRADIENT_PAIRS[gradIdx],
-    rotation,
-    strokeW,
+    seed,
+    colors,
+    primaryColor: colors[0],
+    // Legacy compat
+    shape:    'bauhaus',
+    rotation: 0,
+    strokeW:  2,
     gradId:   `sigil-grad-${seed}`,
   }
+}
+
+export function getAgentColor(agentId) {
+  return getSigilTraits(agentId).primaryColor
 }

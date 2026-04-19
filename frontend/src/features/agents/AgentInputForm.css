@@ -1,21 +1,194 @@
+/* ── Typeform shell ─────────────────────────────────────────── */
 .invoke-panel {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2xl);
+  overflow: hidden;
+  position: relative;
 }
-.invoke-panel__intro,
+
+/* Progress bar */
+.invoke-panel__progress-track {
+  height: 3px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+.invoke-panel__progress-fill {
+  height: 3px;
+  background: var(--accent);
+  transition: width 0.4s var(--ease);
+}
+
+/* Questions container */
+.invoke-panel__questions {
+  min-height: 320px;
+  overflow: hidden;
+}
+
+/* Individual question pane — motion handled by AnimatePresence */
+.invoke-panel__q {
+  padding: 36px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  will-change: transform, opacity;
+}
+
+/* Question meta */
+.invoke-panel__q-num {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent);
+  letter-spacing: 0.04em;
+}
+.invoke-panel__q-label {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+  line-height: 1.25;
+}
+.invoke-panel__q-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: -8px;
+}
+
+/* Typeform-style inputs — underline only */
+.invoke-panel__tf-input {
+  width: 100%;
+  border: none;
+  border-bottom: 2px solid var(--border);
+  padding: 10px 0;
+  font-family: var(--font-sans);
+  font-size: 16px;
+  color: var(--text-primary);
+  background: transparent;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.invoke-panel__tf-input::placeholder { color: var(--border-bright); }
+.invoke-panel__tf-input:focus { border-color: var(--accent); }
+
+.invoke-panel__tf-textarea {
+  width: 100%;
+  border: none;
+  border-bottom: 2px solid var(--border);
+  padding: 10px 0;
+  font-family: var(--font-sans);
+  font-size: 15px;
+  color: var(--text-primary);
+  background: transparent;
+  outline: none;
+  resize: none;
+  min-height: 80px;
+  line-height: 1.6;
+  transition: border-color 0.15s;
+}
+.invoke-panel__tf-textarea::placeholder { color: var(--border-bright); }
+.invoke-panel__tf-textarea:focus { border-color: var(--accent); }
+
+.invoke-panel__tf-select {
+  width: 100%;
+  border: none;
+  border-bottom: 2px solid var(--border);
+  padding: 10px 0;
+  font-family: var(--font-sans);
+  font-size: 16px;
+  color: var(--text-primary);
+  background: transparent;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.15s;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239C9590' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0 center;
+  padding-right: 20px;
+}
+.invoke-panel__tf-select:focus { border-color: var(--accent); }
+
+/* Action row */
+.invoke-panel__q-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.invoke-panel__ok {
+  padding: 9px 20px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-radius: var(--r-md);
+  font-size: 13px;
+  font-weight: 600;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  border: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 0.15s var(--ease), transform 0.1s;
+}
+.invoke-panel__ok:hover { background: var(--accent-hover); }
+.invoke-panel__ok:active { transform: scale(0.97); }
+.invoke-panel__ok:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.invoke-panel__back {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  padding: 4px 0;
+  transition: color 0.15s;
+}
+.invoke-panel__back:hover { color: var(--text-primary); }
+
+.invoke-panel__hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.invoke-panel__hint kbd {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 5px;
+}
+
+/* Mode & price footer */
+.invoke-panel__footer {
+  padding: 20px 40px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: var(--surface-2);
+}
+
 .invoke-panel__mode-help {
   margin: 0;
   font-size: 0.75rem;
   color: var(--text-muted);
   line-height: 1.45;
 }
+
 .invoke-panel__price-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: var(--sp-3) var(--sp-4);
-  background: var(--surface-2);
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
 }
@@ -27,12 +200,28 @@
   color: var(--accent);
   font-feature-settings: 'tnum';
 }
+
 .invoke-panel__submit { width: 100%; }
+
 .invoke-panel__no-schema {
   font-size: 0.8125rem;
   color: var(--text-muted);
-  padding: 12px 14px;
-  background: var(--surface-2);
-  border-radius: var(--r-sm);
-  border: 1px solid var(--border);
+  padding: 36px 40px;
+  text-align: center;
 }
+
+/* Progress dots */
+.invoke-panel__dots {
+  display: flex;
+  gap: 6px;
+  padding: 14px 40px;
+}
+.invoke-panel__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border);
+  transition: background 0.2s, transform 0.2s;
+}
+.invoke-panel__dot.done { background: var(--accent); }
+.invoke-panel__dot.cur  { background: var(--accent); transform: scale(1.3); }

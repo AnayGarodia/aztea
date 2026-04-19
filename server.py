@@ -61,10 +61,14 @@ from slowapi.util import get_remote_address
 import groq as _groq
 
 from agents import codereview as agent_codereview
+from agents import datainsights as agent_datainsights
+from agents import emailwriter as agent_emailwriter
 from agents import negotiation as agent_negotiation
 from agents import portfolio as agent_portfolio
 from agents import product as agent_product
+from agents import resume as agent_resume
 from agents import scenario as agent_scenario
+from agents import sqlbuilder as agent_sqlbuilder
 from agents import textintel as agent_textintel
 from agents import wiki as agent_wiki
 from core import auth as _auth
@@ -114,6 +118,7 @@ from core.models import (
     RegistrySearchRequest,
     RotateKeyRequest,
     AgentKeyCreateRequest,
+    AgentReviewDecisionRequest,
     TextIntelRequest,
     UserLoginRequest,
     UserRegisterRequest,
@@ -151,14 +156,18 @@ except ImportError:
     _STRIPE_AVAILABLE = False
 
 # Deterministic UUIDs for built-in agents
-_FINANCIAL_AGENT_ID  = "00000000-0000-0000-0000-000000000001"
-_CODEREVIEW_AGENT_ID = "00000000-0000-0000-0000-000000000002"
-_TEXTINTEL_AGENT_ID  = "00000000-0000-0000-0000-000000000003"
-_WIKI_AGENT_ID       = "00000000-0000-0000-0000-000000000004"
+_FINANCIAL_AGENT_ID   = "00000000-0000-0000-0000-000000000001"
+_CODEREVIEW_AGENT_ID  = "00000000-0000-0000-0000-000000000002"
+_TEXTINTEL_AGENT_ID   = "00000000-0000-0000-0000-000000000003"
+_WIKI_AGENT_ID        = "00000000-0000-0000-0000-000000000004"
 _NEGOTIATION_AGENT_ID = "00000000-0000-0000-0000-000000000005"
-_SCENARIO_AGENT_ID = "00000000-0000-0000-0000-000000000006"
-_PRODUCT_AGENT_ID = "00000000-0000-0000-0000-000000000007"
-_PORTFOLIO_AGENT_ID = "00000000-0000-0000-0000-000000000008"
+_SCENARIO_AGENT_ID    = "00000000-0000-0000-0000-000000000006"
+_PRODUCT_AGENT_ID     = "00000000-0000-0000-0000-000000000007"
+_PORTFOLIO_AGENT_ID   = "00000000-0000-0000-0000-000000000008"
+_RESUME_AGENT_ID      = "00000000-0000-0000-0000-000000000009"
+_SQLBUILDER_AGENT_ID  = "00000000-0000-0000-0000-000000000010"
+_DATAINSIGHTS_AGENT_ID = "00000000-0000-0000-0000-000000000011"
+_EMAILWRITER_AGENT_ID  = "00000000-0000-0000-0000-000000000012"
 _QUALITY_JUDGE_AGENT_ID = "00000000-0000-0000-0000-000000000009"
 
 def _normalize_endpoint_ref(value: str | None) -> str:
@@ -175,6 +184,10 @@ _BUILTIN_INTERNAL_ENDPOINTS = {
     _PRODUCT_AGENT_ID: "internal://product-strategy",
     _PORTFOLIO_AGENT_ID: "internal://portfolio",
     _QUALITY_JUDGE_AGENT_ID: "internal://quality-judge",
+    _RESUME_AGENT_ID: "internal://resume",
+    _SQLBUILDER_AGENT_ID: "internal://sql-builder",
+    _DATAINSIGHTS_AGENT_ID: "internal://data-insights",
+    _EMAILWRITER_AGENT_ID: "internal://email-writer",
 }
 _BUILTIN_LEGACY_ROUTE_ENDPOINTS = {
     _FINANCIAL_AGENT_ID: f"{_SERVER_BASE_URL}/agents/financial",
@@ -186,6 +199,10 @@ _BUILTIN_LEGACY_ROUTE_ENDPOINTS = {
     _PRODUCT_AGENT_ID: f"{_SERVER_BASE_URL}/agents/product-strategy",
     _PORTFOLIO_AGENT_ID: f"{_SERVER_BASE_URL}/agents/portfolio",
     _QUALITY_JUDGE_AGENT_ID: f"{_SERVER_BASE_URL}/agents/quality-judge",
+    _RESUME_AGENT_ID: f"{_SERVER_BASE_URL}/agents/resume",
+    _SQLBUILDER_AGENT_ID: f"{_SERVER_BASE_URL}/agents/sql-builder",
+    _DATAINSIGHTS_AGENT_ID: f"{_SERVER_BASE_URL}/agents/data-insights",
+    _EMAILWRITER_AGENT_ID: f"{_SERVER_BASE_URL}/agents/email-writer",
 }
 _BUILTIN_ENDPOINT_TO_AGENT_ID: dict[str, str] = {}
 for _agent_id, _endpoint in _BUILTIN_INTERNAL_ENDPOINTS.items():
@@ -226,6 +243,7 @@ _DEFAULT_PAYMENTS_RECONCILIATION_MAX_MISMATCHES = 100
 _DEFAULT_ENDPOINT_MONITOR_BATCH_SIZE = 100
 _DEFAULT_ENDPOINT_MONITOR_TIMEOUT_SECONDS = 3
 _DEFAULT_ENDPOINT_MONITOR_FAILURE_THRESHOLD = 3
+MINIMUM_DEPOSIT_CENTS = int(os.getenv("MINIMUM_DEPOSIT_CENTS", "500"))
 _PROTOCOL_VERSION = "1.0"
 _PROTOCOL_VERSION_HEADER = "X-AgentMarket-Version"
 # $0.001 cannot be represented in integer cents; keep ledger integer-safe until millicent support exists.
@@ -1361,6 +1379,264 @@ def _builtin_agent_specs() -> list[dict[str, Any]]:
             ],
             "internal_only": True,
         },
+        {
+            "agent_id": _RESUME_AGENT_ID,
+            "name": "Resume Analyzer Agent",
+            "description": "Staff-recruiter-quality resume analysis: ATS score, keyword gap detection, line-by-line rewrites, section audit, and a verdict. Optionally matches against a specific job description.",
+            "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_RESUME_AGENT_ID],
+            "price_per_call_usd": 0.02,
+            "tags": ["career", "recruiting", "writing"],
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "resume_text": {
+                        "type": "string",
+                        "description": "Full resume text (plain text or lightly formatted)",
+                        "example": "Jane Doe\njane@email.com\n\nExperience:\nSoftware Engineer at Acme Corp...",
+                    },
+                    "job_description": {
+                        "type": "string",
+                        "description": "Job description to match against (optional)",
+                        "default": "",
+                    },
+                    "role_level": {
+                        "type": "string",
+                        "enum": ["junior", "mid", "senior", "executive"],
+                        "default": "mid",
+                        "description": "Target seniority level",
+                    },
+                },
+                "required": ["resume_text"],
+            },
+            "output_schema": _output_schema_object(
+                {
+                    "overall_score": {"type": "integer"},
+                    "ats_score": {"type": "integer"},
+                    "verdict": {"type": "string"},
+                    "strengths": {"type": "array", "items": {"type": "string"}},
+                    "critical_gaps": {"type": "array", "items": {"type": "string"}},
+                    "line_edits": {"type": "array", "items": {"type": "object"}},
+                    "one_line_summary": {"type": "string"},
+                },
+                required=["overall_score", "verdict", "one_line_summary"],
+            ),
+            "output_examples": [
+                {
+                    "input": {"resume_text": "John Smith\njohn@email.com\n\nExperience:\nJr Dev at StartupXYZ 2022-2024...", "role_level": "mid"},
+                    "output": {
+                        "overall_score": 62,
+                        "ats_score": 71,
+                        "verdict": "needs_work",
+                        "strengths": ["Consistent employment history", "Relevant tech stack listed"],
+                        "critical_gaps": ["No quantified impact in any bullet", "Missing summary section", "Skills section is disorganized"],
+                        "line_edits": [{"original": "Worked on features", "improved": "Shipped 8 product features serving 12K users, reducing support tickets 22%", "reason": "Quantified impact outperforms vague ownership"}],
+                        "one_line_summary": "Solid background but resume undersells their work — needs rewriting before senior roles.",
+                    },
+                },
+            ],
+        },
+        {
+            "agent_id": _SQLBUILDER_AGENT_ID,
+            "name": "SQL Query Builder Agent",
+            "description": "Natural language to production SQL across PostgreSQL, MySQL, SQLite, BigQuery, and Snowflake. Includes explanation, edge case handling, performance notes, and dialect-specific guidance.",
+            "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_SQLBUILDER_AGENT_ID],
+            "price_per_call_usd": 0.01,
+            "tags": ["sql", "data-engineering", "developer-tools"],
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "Natural language question to answer with SQL",
+                        "example": "What are the top 10 customers by total spend in the last 90 days?",
+                    },
+                    "schema": {
+                        "type": "string",
+                        "description": "Database schema as DDL or table descriptions (optional)",
+                        "default": "",
+                        "example": "CREATE TABLE orders (id INT, customer_id INT, amount DECIMAL, created_at TIMESTAMP);",
+                    },
+                    "dialect": {
+                        "type": "string",
+                        "enum": ["postgresql", "mysql", "sqlite", "bigquery", "snowflake"],
+                        "default": "postgresql",
+                    },
+                    "context": {
+                        "type": "string",
+                        "description": "Additional context: data volumes, performance requirements",
+                        "default": "",
+                    },
+                },
+                "required": ["question"],
+            },
+            "output_schema": _output_schema_object(
+                {
+                    "sql": {"type": "string"},
+                    "explanation": {"type": "string"},
+                    "assumptions": {"type": "array", "items": {"type": "string"}},
+                    "performance_notes": {"type": "array", "items": {"type": "string"}},
+                    "estimated_complexity": {"type": "string"},
+                },
+                required=["sql", "explanation"],
+            ),
+            "output_examples": [
+                {
+                    "input": {
+                        "question": "Top 5 products by revenue last quarter",
+                        "schema": "CREATE TABLE orders (id INT, product_id INT, amount DECIMAL, created_at TIMESTAMP);\nCREATE TABLE products (id INT, name TEXT);",
+                        "dialect": "postgresql",
+                    },
+                    "output": {
+                        "sql": "WITH last_q AS (\n  SELECT product_id, SUM(amount) AS revenue\n  FROM orders\n  WHERE created_at >= date_trunc('quarter', CURRENT_DATE) - INTERVAL '3 months'\n    AND created_at < date_trunc('quarter', CURRENT_DATE)\n  GROUP BY product_id\n)\nSELECT p.name, lq.revenue\nFROM last_q lq JOIN products p ON p.id = lq.product_id\nORDER BY lq.revenue DESC\nLIMIT 5;",
+                        "explanation": "Uses date_trunc to isolate the previous calendar quarter, aggregates order revenue per product, joins to get names, and returns top 5.",
+                        "assumptions": ["'Last quarter' means previous full calendar quarter", "amount column is already in the same currency"],
+                        "performance_notes": ["Add index on orders(created_at, product_id) for large tables"],
+                        "estimated_complexity": "moderate",
+                    },
+                },
+            ],
+        },
+        {
+            "agent_id": _DATAINSIGHTS_AGENT_ID,
+            "name": "Data Insights Agent",
+            "description": "Analyzes JSON, CSV, or structured text data: descriptive statistics, anomaly detection, trend identification, direct answers to specific questions, and visualization recommendations.",
+            "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_DATAINSIGHTS_AGENT_ID],
+            "price_per_call_usd": 0.02,
+            "tags": ["data-analysis", "analytics", "statistics"],
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "data": {
+                        "type": "string",
+                        "description": "Raw data to analyze: JSON array, CSV text, or key:value pairs",
+                        "example": '[{"month":"Jan","revenue":42000,"users":1200},{"month":"Feb","revenue":51000,"users":1450}]',
+                    },
+                    "question": {
+                        "type": "string",
+                        "description": "Specific question to answer, or 'general' for open-ended analysis",
+                        "default": "general",
+                        "example": "Which month had the highest revenue per user?",
+                    },
+                    "format": {
+                        "type": "string",
+                        "enum": ["json", "csv", "text"],
+                        "default": "json",
+                    },
+                },
+                "required": ["data"],
+            },
+            "output_schema": _output_schema_object(
+                {
+                    "row_count": {"type": "integer"},
+                    "key_findings": {"type": "array", "items": {"type": "string"}},
+                    "anomalies": {"type": "array", "items": {"type": "object"}},
+                    "answer_to_question": {"type": "string"},
+                    "recommendations": {"type": "array", "items": {"type": "string"}},
+                },
+                required=["key_findings", "answer_to_question"],
+            ),
+            "output_examples": [
+                {
+                    "input": {
+                        "data": '[{"month":"Jan","revenue":42000},{"month":"Feb","revenue":51000},{"month":"Mar","revenue":38000}]',
+                        "question": "Is revenue trending up or down?",
+                        "format": "json",
+                    },
+                    "output": {
+                        "row_count": 3,
+                        "key_findings": ["Feb was peak revenue at $51K", "March dropped 25.5% from Feb — significant decline", "Jan-Feb shows growth but Feb-Mar reversal"],
+                        "anomalies": [{"description": "March revenue drop of 25.5% from Feb — unusually large swing", "severity": "medium", "affected_rows": "row 3"}],
+                        "answer_to_question": "Mixed — revenue grew 21% Jan to Feb, then dropped 25.5% in March. No clear trend in 3 data points; more history needed.",
+                        "recommendations": ["Investigate March drop cause before drawing conclusions", "Collect at least 6 months of data for trend analysis"],
+                    },
+                },
+            ],
+        },
+        {
+            "agent_id": _EMAILWRITER_AGENT_ID,
+            "name": "Email Sequence Writer Agent",
+            "description": "Writes professional emails and multi-email sequences for outreach, follow-ups, proposals, announcements, and support. Generates 3 subject line A/B variants, preview text, and personalization hooks per email.",
+            "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_EMAILWRITER_AGENT_ID],
+            "price_per_call_usd": 0.02,
+            "tags": ["writing", "marketing", "sales"],
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "goal": {
+                        "type": "string",
+                        "description": "What this email (or sequence) needs to achieve",
+                        "example": "Book a 20-minute demo with a VP of Engineering at a Series B startup",
+                    },
+                    "tone": {
+                        "type": "string",
+                        "enum": ["formal", "professional", "friendly", "direct", "persuasive"],
+                        "default": "professional",
+                    },
+                    "email_type": {
+                        "type": "string",
+                        "enum": ["outreach", "follow_up", "proposal", "rejection", "announcement", "support", "sequence"],
+                        "default": "outreach",
+                    },
+                    "recipient_context": {
+                        "type": "string",
+                        "description": "Who you're writing to",
+                        "default": "",
+                        "example": "VP Engineering at a 50-person Series B SaaS startup in fintech",
+                    },
+                    "sender_context": {
+                        "type": "string",
+                        "description": "Who you are / your company",
+                        "default": "",
+                    },
+                    "key_points": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Key points to include",
+                        "default": [],
+                    },
+                    "sequence_length": {
+                        "type": "integer",
+                        "description": "Number of emails in the sequence (1-5)",
+                        "default": 1,
+                        "minimum": 1,
+                        "maximum": 5,
+                    },
+                },
+                "required": ["goal"],
+            },
+            "output_schema": _output_schema_object(
+                {
+                    "emails": {"type": "array", "items": {"type": "object"}},
+                    "strategy_notes": {"type": "string"},
+                    "personalization_hooks": {"type": "array", "items": {"type": "string"}},
+                },
+                required=["emails", "strategy_notes"],
+            ),
+            "output_examples": [
+                {
+                    "input": {
+                        "goal": "Get a product manager to respond to a demo request",
+                        "tone": "friendly",
+                        "email_type": "outreach",
+                        "recipient_context": "Senior PM at a mid-size B2B SaaS company",
+                        "sequence_length": 1,
+                    },
+                    "output": {
+                        "emails": [{
+                            "sequence_position": 1,
+                            "subject_lines": ["Quick question about [Company]'s onboarding flow", "The problem most PMs have with {metric}", "15 minutes — is this relevant to you?"],
+                            "body": "Hi [Name],\n\nI noticed [Company] recently launched [feature] — that usually means onboarding optimization becomes a real priority.\n\nWe help teams like yours cut time-to-value by 40% without touching the engineering backlog.\n\nWorth 15 minutes next week?\n\n[Your name]",
+                            "preview_text": "Quick question about your onboarding flow at [Company]...",
+                            "send_timing": "Day 0",
+                            "word_count": 58,
+                            "cta": "Book a 15-minute call",
+                        }],
+                        "strategy_notes": "Single email focused on a specific trigger event to establish relevance before the ask.",
+                        "personalization_hooks": ["Reference a recent product launch or announcement", "Mention a job posting that reveals a pain point", "Cite a public metric or company news"],
+                    },
+                },
+            ],
+        },
     ]
 
 
@@ -1844,13 +2120,13 @@ def _pre_call_charge_or_402(
     *,
     caller: core_models.CallerContext,
     caller_wallet_id: str,
-    price_cents: int,
+    charge_cents: int,
     agent_id: str,
 ) -> str:
     try:
         return payments.pre_call_charge(
             caller_wallet_id,
-            price_cents,
+            charge_cents,
             agent_id,
             charged_by_key_id=str(caller.get("key_id") or "").strip() or None,
             max_spend_cents=_caller_key_spend_cap(caller),
@@ -1898,6 +2174,20 @@ def _pre_call_charge_or_402(
                 },
             ),
         )
+
+
+def _deposit_below_minimum_error(attempted_cents: int) -> HTTPException:
+    return HTTPException(
+        status_code=422,
+        detail=error_codes.make_error(
+            error_codes.DEPOSIT_BELOW_MINIMUM,
+            f"Minimum deposit is {MINIMUM_DEPOSIT_CENTS} cents.",
+            {
+                "minimum_cents": MINIMUM_DEPOSIT_CENTS,
+                "attempted_cents": int(attempted_cents),
+            },
+        ),
+    )
 
 
 def _request_client_ip(request: Request) -> Any | None:
@@ -2017,22 +2307,35 @@ def _caller_trust_score(owner_id: str) -> float:
 
 def _agent_response(agent: dict, caller: core_models.CallerContext) -> dict:
     min_caller_trust = _extract_caller_trust_min(agent.get("input_schema"))
+    price_cents = _usd_to_cents(agent.get("price_per_call_usd") or 0.0)
+    caller_charge_cents = payments.compute_success_distribution(
+        price_cents,
+        platform_fee_pct=payments.PLATFORM_FEE_PCT,
+        fee_bearer_policy="caller",
+    )["caller_charge_cents"]
     if caller.get("type") == "master":
         out = dict(agent)
         out["caller_trust_min"] = min_caller_trust
+        out["caller_charge_cents"] = caller_charge_cents
         return out
     redacted = dict(agent)
     redacted.pop("owner_id", None)
     redacted["caller_trust_min"] = min_caller_trust
+    redacted["caller_charge_cents"] = caller_charge_cents
     return redacted
 
 
 def _job_response(job: dict, caller: core_models.CallerContext) -> dict:
     if caller.get("type") == "master":
-        return job
+        out = dict(job)
+        if out.get("caller_charge_cents") is None:
+            out["caller_charge_cents"] = int(out.get("price_cents") or 0)
+        return out
 
     owner_id = caller.get("owner_id")
     result = dict(job)
+    if result.get("caller_charge_cents") is None:
+        result["caller_charge_cents"] = int(result.get("price_cents") or 0)
     hidden = {
         "caller_wallet_id",
         "agent_wallet_id",
@@ -2044,7 +2347,7 @@ def _job_response(job: dict, caller: core_models.CallerContext) -> dict:
     for key in hidden:
         result.pop(key, None)
 
-    if owner_id != job.get("caller_owner_id"):
+    if owner_id != job.get("caller_owner_id") and owner_id != job.get("claim_owner_id"):
         result.pop("caller_owner_id", None)
         result.pop("output_verification_decision_owner_id", None)
     if owner_id != job.get("claim_owner_id"):
@@ -2099,6 +2402,26 @@ def _caller_can_manage_agent(caller: core_models.CallerContext, agent: dict) -> 
     if caller["type"] == "agent_key":
         return str(caller.get("agent_id") or "").strip() == str(agent.get("agent_id") or "").strip()
     return caller["owner_id"] == agent.get("owner_id")
+
+
+def _caller_is_admin(caller: core_models.CallerContext) -> bool:
+    if caller.get("type") == "master":
+        return True
+    scopes = caller.get("scopes") or []
+    return "admin" in scopes
+
+
+def _caller_can_access_agent(caller: core_models.CallerContext, agent: dict) -> bool:
+    if _caller_is_admin(caller):
+        return True
+    if bool(agent.get("internal_only")):
+        return _caller_can_manage_agent(caller, agent)
+    review_status = str(agent.get("review_status") or "approved").strip().lower()
+    if review_status != "approved":
+        return False
+    if str(agent.get("status") or "").strip().lower() == "banned":
+        return False
+    return True
 
 
 def _caller_worker_authorized_for_job(caller: core_models.CallerContext, job: dict) -> bool:
@@ -3091,6 +3414,14 @@ def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict
             output_payload=payload.get("output_payload") if isinstance(payload, dict) else {},
             agent_description=str(payload.get("agent_description") or "") if isinstance(payload, dict) else "",
         )
+    if agent_id == _RESUME_AGENT_ID:
+        return agent_resume.run(payload)
+    if agent_id == _SQLBUILDER_AGENT_ID:
+        return agent_sqlbuilder.run(payload)
+    if agent_id == _DATAINSIGHTS_AGENT_ID:
+        return agent_datainsights.run(payload)
+    if agent_id == _EMAILWRITER_AGENT_ID:
+        return agent_emailwriter.run(payload)
     raise ValueError(f"Unsupported built-in agent '{agent_id}'.")
 
 
@@ -3177,7 +3508,7 @@ def _process_pending_builtin_job(job: dict) -> bool:
         msg_type="final_result",
         payload={"message": "Built-in worker completed successfully."},
     )
-    agent = registry.get_agent(claimed["agent_id"])
+    agent = registry.get_agent(claimed["agent_id"], include_unapproved=True)
     if agent is not None:
         output_schema = agent.get("output_schema")
         if isinstance(output_schema, dict) and output_schema:
@@ -3226,7 +3557,12 @@ def _process_pending_builtin_job(job: dict) -> bool:
     if completed is not None:
         settled = _settle_successful_job(completed, actor_owner_id=_BUILTIN_WORKER_OWNER_ID)
         if agent is not None:
-            platform_fee_cents = max(0, completed["price_cents"] * payments.PLATFORM_FEE_PCT // 100)
+            distribution = payments.compute_success_distribution(
+                int(completed.get("price_cents") or 0),
+                platform_fee_pct=completed.get("platform_fee_pct_at_create"),
+                fee_bearer_policy=completed.get("fee_bearer_policy"),
+            )
+            platform_fee_cents = int(distribution["platform_fee_cents"])
             judge_fee_cents = min(_JUDGE_FEE_CENTS, platform_fee_cents)
             if judge_fee_cents > 0:
                 judge_agent_id = str(settled.get("judge_agent_id") or _QUALITY_JUDGE_AGENT_ID)
@@ -4245,6 +4581,8 @@ def _settle_successful_job(job: dict, actor_owner_id: str) -> dict:
             job["charge_tx_id"],
             job["price_cents"],
             job["agent_id"],
+            platform_fee_pct=job.get("platform_fee_pct_at_create"),
+            fee_bearer_policy=job.get("fee_bearer_policy"),
         )
         newly_settled = jobs.mark_settled(job["job_id"])
         if newly_settled:
@@ -4274,7 +4612,7 @@ def _settle_failed_job(
             payments.post_call_refund(
                 job["caller_wallet_id"],
                 job["charge_tx_id"],
-                job["price_cents"],
+                int(job.get("caller_charge_cents") or job["price_cents"]),
                 job["agent_id"],
             )
         else:
@@ -4287,6 +4625,9 @@ def _settle_failed_job(
                 price_cents=job["price_cents"],
                 refund_fraction=refund_fraction,
                 agent_id=job["agent_id"],
+                platform_fee_pct=job.get("platform_fee_pct_at_create"),
+                fee_bearer_policy=job.get("fee_bearer_policy"),
+                caller_charge_cents=job.get("caller_charge_cents"),
             )
         newly_settled = jobs.mark_settled(job["job_id"])
         if newly_settled:
@@ -4440,6 +4781,18 @@ def _should_monitor_agent_endpoint(agent: dict) -> bool:
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
+def _probe_agent_endpoint_health(endpoint_url: str, timeout_seconds: int) -> tuple[bool, str | None]:
+    safe_url = _validate_outbound_url(str(endpoint_url or "").strip(), "endpoint_url")
+    response = http.head(safe_url, timeout=timeout_seconds, allow_redirects=False)
+    status_code = int(response.status_code)
+    if status_code in {405, 501}:
+        response = http.get(safe_url, timeout=timeout_seconds, allow_redirects=False)
+        status_code = int(response.status_code)
+    if 200 <= status_code < 500:
+        return True, None
+    return False, f"status_code={status_code}"
+
+
 def _monitor_agent_endpoints(
     *,
     limit: int = _ENDPOINT_MONITOR_BATCH_SIZE,
@@ -4466,15 +4819,7 @@ def _monitor_agent_endpoints(
         ok = False
         error_text: str | None = None
         try:
-            safe_url = _validate_outbound_url(endpoint_url, "endpoint_url")
-            response = http.head(safe_url, timeout=timeout_seconds, allow_redirects=False)
-            status_code = int(response.status_code)
-            if status_code in {405, 501}:
-                response = http.get(safe_url, timeout=timeout_seconds, allow_redirects=False)
-                status_code = int(response.status_code)
-            ok = 200 <= status_code < 500
-            if not ok:
-                error_text = f"status_code={status_code}"
+            ok, error_text = _probe_agent_endpoint_health(endpoint_url, timeout_seconds=timeout_seconds)
         except Exception as exc:
             ok = False
             error_text = str(exc) or "endpoint health check failed"
@@ -4968,8 +5313,9 @@ def _load_manifest_content(manifest_content: str | None, manifest_url: str | Non
 
 def _sorted_agents(agents: list[dict], rank_by: str | None = None) -> list[dict]:
     if rank_by is None:
-        return agents
-    mode = rank_by.strip().lower()
+        mode = "trust"
+    else:
+        mode = rank_by.strip().lower()
     if mode == "trust":
         return sorted(
             agents,
@@ -5393,6 +5739,9 @@ def onboarding_ingest(
     try:
         payload = onboarding.build_registration_payload_from_manifest(manifest_content, source=source)
         safe_endpoint_url = _validate_agent_endpoint_url(request, payload["endpoint_url"])
+        safe_healthcheck_url = None
+        if payload.get("healthcheck_url"):
+            safe_healthcheck_url = _validate_outbound_url(payload["healthcheck_url"], "healthcheck_url")
         safe_verifier_url = None
         if payload.get("output_verifier_url"):
             safe_verifier_url = _validate_outbound_url(payload["output_verifier_url"], "output_verifier_url")
@@ -5400,6 +5749,7 @@ def onboarding_ingest(
             name=payload["name"],
             description=payload["description"],
             endpoint_url=safe_endpoint_url,
+            healthcheck_url=safe_healthcheck_url,
             price_per_call_usd=payload["price_per_call_usd"],
             tags=payload["tags"],
             input_schema=payload["input_schema"],
@@ -5412,7 +5762,10 @@ def onboarding_ingest(
     except (ValueError, sqlite3.IntegrityError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    agent = registry.get_agent_with_reputation(agent_id) or registry.get_agent(agent_id)
+    agent = registry.get_agent_with_reputation(agent_id, include_unapproved=True) or registry.get_agent(
+        agent_id,
+        include_unapproved=True,
+    )
     return JSONResponse(
         content={
             "agent_id": agent_id,
@@ -5718,6 +6071,9 @@ def registry_register(
         raise HTTPException(status_code=403, detail="Agent-scoped keys cannot register new agents.")
     try:
         safe_endpoint_url = _validate_agent_endpoint_url(request, body.endpoint_url)
+        safe_healthcheck_url = None
+        if body.healthcheck_url:
+            safe_healthcheck_url = _validate_outbound_url(body.healthcheck_url, "healthcheck_url")
         safe_verifier_url = None
         if body.output_verifier_url:
             safe_verifier_url = _validate_outbound_url(body.output_verifier_url, "output_verifier_url")
@@ -5725,6 +6081,7 @@ def registry_register(
             "name": body.name,
             "description": body.description,
             "endpoint_url": safe_endpoint_url,
+            "healthcheck_url": safe_healthcheck_url,
             "price_per_call_usd": body.price_per_call_usd,
             "tags": body.tags,
             "input_schema": body.input_schema,
@@ -5741,6 +6098,7 @@ def registry_register(
             name=body.name,
             description=body.description,
             endpoint_url=safe_endpoint_url,
+            healthcheck_url=safe_healthcheck_url,
             price_per_call_usd=body.price_per_call_usd,
             tags=body.tags,
             input_schema=body.input_schema,
@@ -5752,7 +6110,10 @@ def registry_register(
             model_provider=body.model_provider,
             model_id=body.model_id,
         )
-        agent = registry.get_agent_with_reputation(agent_id) or registry.get_agent(agent_id)
+        agent = registry.get_agent_with_reputation(agent_id, include_unapproved=True) or registry.get_agent(
+            agent_id,
+            include_unapproved=True,
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except sqlite3.IntegrityError as e:
@@ -5763,10 +6124,13 @@ def registry_register(
             message = "Agent registered and verifier approved."
         else:
             message = f"Agent registered; verifier did not approve ({verifier_reason})."
+    if (agent or {}).get("review_status") == "pending_review":
+        message = "Your agent listing is pending review. You will be notified when it goes live."
     return JSONResponse(
         content={
             "agent_id": agent_id,
             "message": message,
+            "review_status": (agent or {}).get("review_status"),
             "agent": _agent_response(agent, caller) if agent else None,
         },
         status_code=201,
@@ -5992,8 +6356,8 @@ def a2a_tasks_send(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> JSONResponse:
     _require_scope(caller, "caller")
-    agent = registry.get_agent(body.skill_id)
-    if agent is None or agent.get("status") in {"banned"}:
+    agent = registry.get_agent(body.skill_id, include_unapproved=True)
+    if agent is None or not _caller_can_access_agent(caller, agent) or agent.get("status") in {"banned"}:
         raise HTTPException(status_code=404, detail=f"Skill (agent) '{body.skill_id}' not found.")
     if agent.get("status") == "suspended":
         raise HTTPException(status_code=503, detail=f"Skill (agent) '{body.skill_id}' is suspended.")
@@ -6001,6 +6365,14 @@ def a2a_tasks_send(
         raise HTTPException(status_code=404, detail=f"Skill (agent) '{body.skill_id}' not found.")
 
     price_cents = _usd_to_cents(agent["price_per_call_usd"])
+    fee_bearer_policy = "caller"
+    platform_fee_pct_at_create = int(payments.PLATFORM_FEE_PCT)
+    success_distribution = payments.compute_success_distribution(
+        price_cents,
+        platform_fee_pct=platform_fee_pct_at_create,
+        fee_bearer_policy=fee_bearer_policy,
+    )
+    caller_charge_cents = int(success_distribution["caller_charge_cents"])
     caller_owner_id = _caller_owner_id(request)
     caller_wallet = payments.get_or_create_wallet(caller_owner_id)
     agent_wallet = payments.get_or_create_wallet(f"agent:{agent['agent_id']}")
@@ -6009,7 +6381,7 @@ def a2a_tasks_send(
     charge_tx_id = _pre_call_charge_or_402(
         caller=caller,
         caller_wallet_id=caller_wallet["wallet_id"],
-        price_cents=price_cents,
+        charge_cents=caller_charge_cents,
         agent_id=agent["agent_id"],
     )
 
@@ -6021,6 +6393,9 @@ def a2a_tasks_send(
             agent_wallet_id=agent_wallet["wallet_id"],
             platform_wallet_id=platform_wallet["wallet_id"],
             price_cents=price_cents,
+            caller_charge_cents=caller_charge_cents,
+            platform_fee_pct_at_create=platform_fee_pct_at_create,
+            fee_bearer_policy=fee_bearer_policy,
             charge_tx_id=charge_tx_id,
             input_payload=body.input or {},
             agent_owner_id=agent.get("owner_id"),
@@ -6030,7 +6405,7 @@ def a2a_tasks_send(
             callback_url=body.callback_url or None,
         )
     except Exception:
-        payments.post_call_refund(caller_wallet["wallet_id"], charge_tx_id, price_cents, agent["agent_id"])
+        payments.post_call_refund(caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent["agent_id"])
         raise HTTPException(status_code=500, detail="Failed to create task.")
 
     _record_job_event(job, "job.created", actor_owner_id=caller["owner_id"])
@@ -6040,6 +6415,7 @@ def a2a_tasks_send(
         "status": "submitted",
         "job_id": job["job_id"],
         "price_cents": price_cents,
+        "caller_charge_cents": caller_charge_cents,
         "created_at": job["created_at"],
         "agentmarket_job": _job_response(job, caller),
     }, status_code=201)
@@ -6234,11 +6610,20 @@ def registry_list(
     model_provider: str | None = None,
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.RegistryAgentsResponse:
+    include_unapproved = _caller_is_admin(caller)
     try:
         agents = (
-            registry.get_agents_with_reputation(tag=tag, model_provider=model_provider)
+            registry.get_agents_with_reputation(
+                tag=tag,
+                include_unapproved=include_unapproved,
+                model_provider=model_provider,
+            )
             if include_reputation
-            else registry.get_agents(tag=tag, model_provider=model_provider)
+            else registry.get_agents(
+                tag=tag,
+                include_unapproved=include_unapproved,
+                model_provider=model_provider,
+            )
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -6263,6 +6648,7 @@ def registry_search(
     The legacy GET /registry/agents?tag=... route remains supported for backward compatibility.
     """
     try:
+        include_unapproved = _caller_is_admin(caller)
         caller_trust = None
         if body.respect_caller_trust_min and caller["type"] != "master":
             caller_trust = _caller_trust_score(caller["owner_id"])
@@ -6273,6 +6659,7 @@ def registry_search(
             max_price_cents=body.max_price_cents,
             required_input_fields=body.required_input_fields,
             caller_trust=caller_trust,
+            include_unapproved=include_unapproved,
             model_provider=body.model_provider,
         )
     except ValueError as exc:
@@ -6302,8 +6689,9 @@ def registry_get(
     agent_id: str,
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.AgentResponse:
-    agent = registry.get_agent_with_reputation(agent_id)
-    if agent is None or agent.get("status") == "banned":
+    include_unapproved = _caller_is_admin(caller)
+    agent = registry.get_agent_with_reputation(agent_id, include_unapproved=include_unapproved)
+    if agent is None or agent.get("status") == "banned" or not _caller_can_access_agent(caller, agent):
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
     return JSONResponse(content=_agent_response(agent, caller))
 
@@ -6322,7 +6710,7 @@ def registry_agent_key_list(
     _require_scope(caller, "worker")
     if caller["type"] == "agent_key":
         raise HTTPException(status_code=403, detail="Agent-scoped keys cannot list keys.")
-    agent = registry.get_agent(agent_id)
+    agent = registry.get_agent(agent_id, include_unapproved=True)
     if agent is None or agent.get("status") == "banned":
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
     if not _caller_can_manage_agent(caller, agent):
@@ -6347,7 +6735,7 @@ def registry_agent_key_create(
     _require_scope(caller, "worker")
     if caller["type"] == "agent_key":
         raise HTTPException(status_code=403, detail="Agent-scoped keys cannot mint new keys.")
-    agent = registry.get_agent(agent_id)
+    agent = registry.get_agent(agent_id, include_unapproved=True)
     if agent is None or agent.get("status") == "banned":
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
     if not _caller_can_manage_agent(caller, agent):
@@ -6408,6 +6796,73 @@ def admin_agent_ban(
     return JSONResponse(content={"agent": _agent_response(agent, caller), "ban_summary": summary})
 
 
+@app.get(
+    "/admin/agents/review-queue",
+    response_model=core_models.RegistryAgentsResponse,
+    responses=_error_responses(401, 403, 429, 500),
+)
+@limiter.limit("60/minute")
+def admin_agents_review_queue(
+    request: Request,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.RegistryAgentsResponse:
+    _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
+    _require_admin_ip_allowlist(request)
+    agents = registry.list_pending_review_agents()
+    return JSONResponse(content={"agents": [_agent_response(agent, caller) for agent in agents], "count": len(agents)})
+
+
+@app.post(
+    "/admin/agents/{agent_id}/review",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(400, 401, 403, 404, 429, 500),
+)
+@limiter.limit("30/minute")
+def admin_review_agent(
+    request: Request,
+    agent_id: str,
+    body: AgentReviewDecisionRequest,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
+    _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
+    _require_admin_ip_allowlist(request)
+    reviewed = registry.set_agent_review_decision(
+        agent_id,
+        decision=body.decision,
+        note=body.note,
+        reviewed_by=caller["owner_id"],
+        reviewed_at=_utc_now_iso(),
+    )
+    if reviewed is None:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+
+    health_probe: dict[str, Any] | None = None
+    probe_url = str(reviewed.get("healthcheck_url") or "").strip()
+    if not probe_url:
+        probe_url = str(reviewed.get("endpoint_url") or "").strip()
+    if body.decision == "approve" and probe_url:
+        try:
+            ok, error_text = _probe_agent_endpoint_health(
+                probe_url,
+                timeout_seconds=_ENDPOINT_MONITOR_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:
+            ok = False
+            error_text = str(exc)
+        endpoint_status = "healthy" if ok else "degraded"
+        endpoint_failures = 0 if ok else max(1, int(reviewed.get("endpoint_consecutive_failures") or 0) + 1)
+        reviewed = registry.set_agent_endpoint_health(
+            agent_id,
+            endpoint_health_status=endpoint_status,
+            endpoint_consecutive_failures=endpoint_failures,
+            endpoint_last_checked_at=_utc_now_iso(),
+            endpoint_last_error=None if ok else error_text,
+        ) or reviewed
+        health_probe = {"ok": bool(ok), "error": error_text}
+
+    return JSONResponse(content={"agent": _agent_response(reviewed, caller), "health_probe": health_probe})
+
+
 @app.post(
     "/registry/agents/{agent_id}/call",
     response_model=core_models.DynamicObjectResponse,
@@ -6428,8 +6883,10 @@ def registry_call(
       3b. Failure → full refund to caller.
     """
     _require_scope(caller, "caller")
-    agent = registry.get_agent(agent_id)
+    agent = registry.get_agent(agent_id, include_unapproved=True)
     if agent is None:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    if not _caller_can_access_agent(caller, agent):
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
     if agent.get("status") == "banned":
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
@@ -6453,6 +6910,14 @@ def registry_call(
 
     caller_owner_id = _caller_owner_id(request)
     price_cents     = _usd_to_cents(agent["price_per_call_usd"])
+    fee_bearer_policy = "caller"
+    platform_fee_pct_at_create = int(payments.PLATFORM_FEE_PCT)
+    success_distribution = payments.compute_success_distribution(
+        price_cents,
+        platform_fee_pct=platform_fee_pct_at_create,
+        fee_bearer_policy=fee_bearer_policy,
+    )
+    caller_charge_cents = int(success_distribution["caller_charge_cents"])
     caller_wallet   = payments.get_or_create_wallet(caller_owner_id)
     # Payouts settle to the canonical agent wallet keyed by agent_id.
     _agent_payout_owner = f"agent:{agent['agent_id']}"
@@ -6462,7 +6927,7 @@ def registry_call(
     charge_tx_id = _pre_call_charge_or_402(
         caller=caller,
         caller_wallet_id=caller_wallet["wallet_id"],
-        price_cents=price_cents,
+        charge_cents=caller_charge_cents,
         agent_id=agent_id,
     )
 
@@ -6477,6 +6942,9 @@ def registry_call(
                 agent_wallet_id=agent_wallet["wallet_id"],
                 platform_wallet_id=platform_wallet["wallet_id"],
                 price_cents=price_cents,
+                caller_charge_cents=caller_charge_cents,
+                platform_fee_pct_at_create=platform_fee_pct_at_create,
+                fee_bearer_policy=fee_bearer_policy,
                 charge_tx_id=charge_tx_id,
                 input_payload=payload,
                 agent_owner_id=agent.get("owner_id"),
@@ -6486,7 +6954,7 @@ def registry_call(
             )
         except Exception:
             payments.post_call_refund(
-                caller_wallet["wallet_id"], charge_tx_id, price_cents, agent["agent_id"]
+                caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent["agent_id"]
             )
             _LOG.exception("Failed to create sync job for built-in agent %s.", agent["agent_id"])
             raise HTTPException(status_code=500, detail="Failed to create job.")
@@ -6595,7 +7063,7 @@ def registry_call(
         latency_ms = (time.monotonic() - start) * 1000
         registry.update_call_stats(agent_id, latency_ms, False)
         payments.post_call_refund(
-            caller_wallet["wallet_id"], charge_tx_id, price_cents, agent_id
+            caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent_id
         )
         _LOG.warning("Upstream agent unreachable for %s: %s", agent_id, e)
         raise HTTPException(status_code=502, detail="Upstream agent unreachable.")
@@ -6608,10 +7076,12 @@ def registry_call(
         payments.post_call_payout(
             agent_wallet["wallet_id"], platform_wallet["wallet_id"],
             charge_tx_id, price_cents, agent_id,
+            platform_fee_pct=platform_fee_pct_at_create,
+            fee_bearer_policy=fee_bearer_policy,
         )
     else:
         payments.post_call_refund(
-            caller_wallet["wallet_id"], charge_tx_id, price_cents, agent_id
+            caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent_id
         )
 
     return _proxy_response(resp)
@@ -6639,8 +7109,8 @@ def jobs_create(
         body.parent_job_id,
         parent_cascade_policy=body.parent_cascade_policy,
     )
-    agent = registry.get_agent(body.agent_id)
-    if agent is None:
+    agent = registry.get_agent(body.agent_id, include_unapproved=True)
+    if agent is None or not _caller_can_access_agent(caller, agent):
         raise HTTPException(status_code=404, detail=f"Agent '{body.agent_id}' not found.")
     if agent.get("status") == "banned":
         raise HTTPException(status_code=404, detail=f"Agent '{body.agent_id}' not found.")
@@ -6673,6 +7143,14 @@ def jobs_create(
             )
 
     price_cents = _usd_to_cents(agent["price_per_call_usd"])
+    fee_bearer_policy = payments.normalize_fee_bearer_policy(body.fee_bearer_policy)
+    platform_fee_pct_at_create = int(payments.PLATFORM_FEE_PCT)
+    success_distribution = payments.compute_success_distribution(
+        price_cents,
+        platform_fee_pct=platform_fee_pct_at_create,
+        fee_bearer_policy=fee_bearer_policy,
+    )
+    caller_charge_cents = int(success_distribution["caller_charge_cents"])
     if body.budget_cents is not None and price_cents > body.budget_cents:
         raise HTTPException(
             status_code=400,
@@ -6690,7 +7168,7 @@ def jobs_create(
     charge_tx_id = _pre_call_charge_or_402(
         caller=caller,
         caller_wallet_id=caller_wallet["wallet_id"],
-        price_cents=price_cents,
+        charge_cents=caller_charge_cents,
         agent_id=agent["agent_id"],
     )
 
@@ -6702,6 +7180,9 @@ def jobs_create(
             agent_wallet_id=agent_wallet["wallet_id"],
             platform_wallet_id=platform_wallet["wallet_id"],
             price_cents=price_cents,
+            caller_charge_cents=caller_charge_cents,
+            platform_fee_pct_at_create=platform_fee_pct_at_create,
+            fee_bearer_policy=fee_bearer_policy,
             charge_tx_id=charge_tx_id,
             input_payload=body.input_payload,
             agent_owner_id=agent.get("owner_id"),
@@ -6718,7 +7199,7 @@ def jobs_create(
         )
     except Exception:
         payments.post_call_refund(
-            caller_wallet["wallet_id"], charge_tx_id, price_cents, agent["agent_id"]
+            caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent["agent_id"]
         )
         _LOG.exception("Failed to create job for agent %s.", agent["agent_id"])
         raise HTTPException(status_code=500, detail="Failed to create job.")
@@ -6766,12 +7247,20 @@ def jobs_batch_create(
             spec.parent_job_id,
             parent_cascade_policy=spec.parent_cascade_policy,
         )
-        agent = registry.get_agent(spec.agent_id)
-        if agent is None or agent.get("status") == "banned":
+        agent = registry.get_agent(spec.agent_id, include_unapproved=True)
+        if agent is None or not _caller_can_access_agent(caller, agent) or agent.get("status") == "banned":
             raise HTTPException(status_code=404, detail=f"Agent '{spec.agent_id}' not found.")
         if agent.get("status") == "suspended":
             raise HTTPException(status_code=503, detail=f"Agent '{spec.agent_id}' is suspended.")
         price_cents = _usd_to_cents(agent["price_per_call_usd"])
+        fee_bearer_policy = payments.normalize_fee_bearer_policy(spec.fee_bearer_policy)
+        platform_fee_pct_at_create = int(payments.PLATFORM_FEE_PCT)
+        success_distribution = payments.compute_success_distribution(
+            price_cents,
+            platform_fee_pct=platform_fee_pct_at_create,
+            fee_bearer_policy=fee_bearer_policy,
+        )
+        caller_charge_cents = int(success_distribution["caller_charge_cents"])
         if spec.budget_cents is not None and price_cents > spec.budget_cents:
             raise HTTPException(
                 status_code=400,
@@ -6781,11 +7270,14 @@ def jobs_batch_create(
                     {"agent_id": spec.agent_id, "price_cents": price_cents, "budget_cents": spec.budget_cents},
                 ),
             )
-        total_price_cents += price_cents
+        total_price_cents += caller_charge_cents
         resolved.append(
             {
                 "agent": agent,
                 "price_cents": price_cents,
+                "caller_charge_cents": caller_charge_cents,
+                "platform_fee_pct_at_create": platform_fee_pct_at_create,
+                "fee_bearer_policy": fee_bearer_policy,
                 "spec": spec,
                 "parent_job_id": (parent_job or {}).get("job_id"),
             }
@@ -6808,6 +7300,9 @@ def jobs_batch_create(
         for item in resolved:
             agent = item["agent"]
             price_cents = item["price_cents"]
+            caller_charge_cents = item["caller_charge_cents"]
+            platform_fee_pct_at_create = item["platform_fee_pct_at_create"]
+            fee_bearer_policy = item["fee_bearer_policy"]
             spec = item["spec"]
             parent_job_id = item["parent_job_id"]
             agent_wallet = payments.get_or_create_wallet(f"agent:{agent['agent_id']}")
@@ -6815,10 +7310,10 @@ def jobs_batch_create(
             charge_tx_id = _pre_call_charge_or_402(
                 caller=caller,
                 caller_wallet_id=caller_wallet["wallet_id"],
-                price_cents=price_cents,
+                charge_cents=caller_charge_cents,
                 agent_id=agent["agent_id"],
             )
-            charge_tx_ids.append((caller_wallet["wallet_id"], charge_tx_id, price_cents, agent["agent_id"]))
+            charge_tx_ids.append((caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent["agent_id"]))
             job = jobs.create_job(
                 agent_id=agent["agent_id"],
                 caller_owner_id=caller_owner_id,
@@ -6826,6 +7321,9 @@ def jobs_batch_create(
                 agent_wallet_id=agent_wallet["wallet_id"],
                 platform_wallet_id=platform_wallet["wallet_id"],
                 price_cents=price_cents,
+                caller_charge_cents=caller_charge_cents,
+                platform_fee_pct_at_create=platform_fee_pct_at_create,
+                fee_bearer_policy=fee_bearer_policy,
                 charge_tx_id=charge_tx_id,
                 input_payload=spec.input_payload,
                 agent_owner_id=agent.get("owner_id"),
@@ -7000,7 +7498,7 @@ def jobs_list_for_agent(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.JobsListResponse:
     _require_scope(caller, "worker")
-    agent = registry.get_agent(agent_id)
+    agent = registry.get_agent(agent_id, include_unapproved=True)
     if agent is None:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
     if not _caller_can_manage_agent(caller, agent):
@@ -7047,6 +7545,14 @@ def jobs_claim(
     job = jobs.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+    agent = registry.get_agent(str(job.get("agent_id") or ""), include_unapproved=True)
+    if agent is None:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+    if (
+        not _caller_is_admin(caller)
+        and str(agent.get("review_status") or "approved").strip().lower() != "approved"
+    ):
+        raise HTTPException(status_code=403, detail="Agent listing is pending review and cannot accept jobs.")
 
     if not _caller_worker_authorized_for_job(caller, job):
         status = 403 if caller["type"] == "agent_key" else 409
@@ -7072,6 +7578,8 @@ def jobs_claim(
             "attempt_count": claimed["attempt_count"],
         },
     )
+    claimed["caller_owner_id"] = job.get("caller_owner_id")
+    claimed["caller_trust_score"] = _caller_trust_score(str(job.get("caller_owner_id") or ""))
     return JSONResponse(content=_job_response(claimed, caller))
 
 
@@ -7224,7 +7732,7 @@ def jobs_complete(
             action="complete",
         )
 
-        agent = registry.get_agent(job["agent_id"])
+        agent = registry.get_agent(job["agent_id"], include_unapproved=True)
         if agent is None:
             raise HTTPException(status_code=404, detail=f"Agent '{job['agent_id']}' not found.")
         output_schema = agent.get("output_schema")
@@ -7278,7 +7786,12 @@ def jobs_complete(
             },
         )
         settled = _settle_successful_job(updated, actor_owner_id=actor_owner_id)
-        platform_fee_cents = max(0, updated["price_cents"] * payments.PLATFORM_FEE_PCT // 100)
+        distribution = payments.compute_success_distribution(
+            int(updated.get("price_cents") or 0),
+            platform_fee_pct=updated.get("platform_fee_pct_at_create"),
+            fee_bearer_policy=updated.get("fee_bearer_policy"),
+        )
+        platform_fee_cents = int(distribution["platform_fee_cents"])
         judge_fee_cents = min(_JUDGE_FEE_CENTS, platform_fee_cents)
         if judge_fee_cents > 0:
             judge_wallet = payments.get_or_create_wallet(f"agent:{quality['judge_agent_id']}")
@@ -8118,7 +8631,12 @@ def jobs_settlement_trace(
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
 
     txs = payments.get_settlement_transactions(job["charge_tx_id"])
-    fee_cents = job["price_cents"] * payments.PLATFORM_FEE_PCT // 100
+    distribution = payments.compute_success_distribution(
+        int(job.get("price_cents") or 0),
+        platform_fee_pct=job.get("platform_fee_pct_at_create"),
+        fee_bearer_policy=job.get("fee_bearer_policy"),
+    )
+    fee_cents = int(distribution["platform_fee_cents"])
     return JSONResponse(
         content={
             "job_id": job["job_id"],
@@ -8126,7 +8644,7 @@ def jobs_settlement_trace(
             "status": job["status"],
             "charge_tx_id": job["charge_tx_id"],
             "price_cents": job["price_cents"],
-            "expected_agent_payout_cents": job["price_cents"] - fee_cents,
+            "expected_agent_payout_cents": distribution["agent_payout_cents"],
             "expected_platform_fee_cents": fee_cents,
             "settled_at": job["settled_at"],
             "transactions": txs,
@@ -8430,7 +8948,7 @@ def wallet_spend_summary(
 @app.post(
     "/wallets/deposit",
     response_model=core_models.WalletDepositResponse,
-    responses=_error_responses(400, 401, 403, 404, 429, 500),
+    responses=_error_responses(400, 401, 403, 404, 422, 429, 500),
 )
 @limiter.limit("20/minute")
 def wallet_deposit(
@@ -8444,6 +8962,8 @@ def wallet_deposit(
         raise HTTPException(status_code=404, detail=f"Wallet '{body.wallet_id}' not found.")
     if caller["type"] != "master" and wallet["owner_id"] != caller["owner_id"]:
         raise HTTPException(status_code=403, detail="Not authorized to deposit into this wallet.")
+    if int(body.amount_cents) < MINIMUM_DEPOSIT_CENTS:
+        raise _deposit_below_minimum_error(int(body.amount_cents))
     try:
         tx_id = payments.deposit(body.wallet_id, body.amount_cents, body.memo)
     except ValueError as e:
@@ -8522,7 +9042,7 @@ def wallet_me_agent_earnings(
         agent_id = row["agent_id"]
         name = agent_id
         try:
-            agent = registry.get_agent(agent_id)
+            agent = registry.get_agent(agent_id, include_unapproved=True)
             if agent:
                 name = agent.get("name") or agent_id
         except Exception:
@@ -8675,7 +9195,7 @@ def _wallet_stripe_topup_total_last_24h(wallet_id: str) -> int:
     "/wallets/topup/session",
     tags=["wallet"],
     summary="Create a Stripe Checkout session for wallet top-up.",
-    responses=_error_responses(400, 401, 403, 404, 429, 500, 503),
+    responses=_error_responses(400, 401, 403, 404, 422, 429, 500, 503),
 )
 @limiter.limit("20/minute")
 def create_topup_session(
@@ -8691,6 +9211,8 @@ def create_topup_session(
         raise HTTPException(status_code=404, detail=f"Wallet '{body.wallet_id}' not found.")
     if caller["type"] != "master" and wallet["owner_id"] != caller["owner_id"]:
         raise HTTPException(status_code=403, detail="Not authorized to top up this wallet.")
+    if int(body.amount_cents) < MINIMUM_DEPOSIT_CENTS:
+        raise _deposit_below_minimum_error(int(body.amount_cents))
     if not (100 <= body.amount_cents <= 50000):
         raise HTTPException(status_code=400, detail="Amount must be between $1.00 and $500.00.")
     if _TOPUP_DAILY_LIMIT_CENTS > 0:

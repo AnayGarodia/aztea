@@ -1,81 +1,173 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'motion/react'
-import Button from '../../ui/Button'
-import { Wallet, Bot, Zap, ArrowRight, X } from 'lucide-react'
+import { ArrowRight, X, Wallet, Bot, Zap, ChevronLeft } from 'lucide-react'
 import './OnboardingWizard.css'
 
-const STORAGE_KEY = 'agentmarket_onboarding_done'
+const STORAGE_KEY = 'aztea_onboarding_done'
+
+// Inline visual widgets per step
+function WalletVisual() {
+  const [count, setCount] = useState(0)
+  useEffect(() => {
+    const start = Date.now()
+    const duration = 1200
+    const raf = requestAnimationFrame(function tick() {
+      const p = Math.min((Date.now() - start) / duration, 1)
+      const eased = 1 - Math.pow(1 - p, 3)
+      setCount(eased)
+      if (p < 1) requestAnimationFrame(tick)
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [])
+
+  return (
+    <div className="ob-visual ob-visual--wallet">
+      <div className="ob-visual__card">
+        <div className="ob-visual__card-label">Available balance</div>
+        <div className="ob-visual__card-amount">
+          ${(count * 1.0).toFixed(2)}
+        </div>
+        <div className="ob-visual__card-badge">Free credit applied</div>
+        <div className="ob-visual__card-row">
+          <div className="ob-visual__tx">
+            <div className="ob-visual__tx-dot ob-visual__tx-dot--green" />
+            <span>Welcome bonus</span>
+            <span className="ob-visual__tx-amt">+$1.00</span>
+          </div>
+        </div>
+      </div>
+      <div className="ob-visual__glow ob-visual__glow--green" />
+    </div>
+  )
+}
+
+function AgentsVisual() {
+  const agents = [
+    { name: 'SQL Builder', color: '#6366f1', score: '9.4' },
+    { name: 'Email Writer', color: '#f59e0b', score: '9.1' },
+    { name: 'Data Insights', color: '#10b981', score: '8.8' },
+    { name: 'Resume Review', color: '#ec4899', score: '9.6' },
+  ]
+  return (
+    <div className="ob-visual ob-visual--agents">
+      {agents.map((a, i) => (
+        <motion.div
+          key={a.name}
+          className="ob-visual__agent-card"
+          initial={{ opacity: 0, x: -12 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ delay: i * 0.1, duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+        >
+          <div className="ob-visual__agent-icon" style={{ background: a.color + '22', color: a.color }}>
+            <Bot size={14} />
+          </div>
+          <span className="ob-visual__agent-name">{a.name}</span>
+          <span className="ob-visual__agent-score" style={{ color: a.color }}>★ {a.score}</span>
+        </motion.div>
+      ))}
+      <div className="ob-visual__glow ob-visual__glow--violet" />
+    </div>
+  )
+}
+
+function CallVisual() {
+  const lines = [
+    { text: '$ aztea call sql-builder \\', delay: 0 },
+    { text: '  --question "top 5 users by revenue"', delay: 0.15 },
+    { text: '', delay: 0.3 },
+    { text: '✓ Charged $0.01', color: '#10b981', delay: 0.45 },
+    { text: '✓ Running...', color: '#10b981', delay: 0.65 },
+    { text: '', delay: 0.8 },
+    { text: 'SELECT u.id, SUM(o.total)', color: '#a78bfa', delay: 0.9 },
+    { text: 'FROM orders o JOIN users u...', color: '#a78bfa', delay: 1.0 },
+  ]
+  return (
+    <div className="ob-visual ob-visual--call">
+      <div className="ob-visual__terminal">
+        <div className="ob-visual__terminal-bar">
+          <span className="ob-visual__dot-r" />
+          <span className="ob-visual__dot-y" />
+          <span className="ob-visual__dot-g" />
+          <span className="ob-visual__terminal-title">aztea</span>
+        </div>
+        <div className="ob-visual__terminal-body">
+          {lines.map((l, i) => (
+            <motion.div
+              key={i}
+              className="ob-visual__terminal-line"
+              style={l.color ? { color: l.color } : {}}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: l.delay, duration: 0.3 }}
+            >
+              {l.text}
+            </motion.div>
+          ))}
+        </div>
+      </div>
+      <div className="ob-visual__glow ob-visual__glow--amber" />
+    </div>
+  )
+}
 
 const STEPS = [
   {
+    id: 'wallet',
     icon: Wallet,
-    iconColor: '#22c55e',
-    title: 'Fund your wallet',
-    subtitle: 'You need balance to call agents.',
-    description: (
-      <>
-        <p>Every agent call is charged before it runs and refunded automatically if the agent fails.</p>
-        <p>We've already given you <strong>$1.00 free credit</strong> to get started — enough to make
-           100 calls at $0.01 each.</p>
-        <p>Add more funds any time via Stripe on the Wallet page.</p>
-      </>
-    ),
-    cta: 'Go to Wallet',
+    accentColor: '#22c55e',
+    eyebrow: '01 / 03',
+    title: 'You start with\n$1 free credit',
+    subtitle: 'No card needed to explore',
+    body: 'Every agent call is charged before it runs and refunded automatically if it fails. Your free credit covers 100 calls at $0.01 — enough to really try things out.',
+    cta: 'View my wallet',
     ctaPath: '/wallet',
-    skip: true,
+    Visual: WalletVisual,
   },
   {
+    id: 'agents',
     icon: Bot,
-    iconColor: '#6366f1',
-    title: 'Browse the registry',
-    subtitle: 'Find agents worth hiring.',
-    description: (
-      <>
-        <p>The Discover page lists every registered agent with their trust score, success rate,
-           pricing, and real output examples.</p>
-        <p>Look for the <strong>★ trust score</strong> and the green reliability bar — these are
-           computed from real job history, not self-reported.</p>
-        <p>Use the provider filter to find agents running on your preferred LLM stack.</p>
-      </>
-    ),
-    cta: 'Explore agents',
+    accentColor: '#6366f1',
+    eyebrow: '02 / 03',
+    title: 'Find agents\nworth hiring',
+    subtitle: 'Every trust score is earned, not self-reported',
+    body: 'The registry lists agents with their real success rates, pricing, and example outputs. Filter by capability, sort by trust score, and open any agent to run it directly in the browser.',
+    cta: 'Browse agents',
     ctaPath: '/agents',
-    skip: true,
+    Visual: AgentsVisual,
   },
   {
+    id: 'call',
     icon: Zap,
-    iconColor: '#f59e0b',
-    title: 'Make your first call',
-    subtitle: 'Sync or async — your choice.',
-    description: (
-      <>
-        <p>Open any agent and submit a payload. <strong>Sync mode</strong> returns results instantly
-           on the page. <strong>Async mode</strong> queues a job you can monitor in Jobs.</p>
-        <p>Every job result is stored. You can dispute, rate, and re-run from the Jobs page.</p>
-        <p>To integrate programmatically, grab your API key from Settings and use the Python or
-           TypeScript SDK.</p>
-      </>
-    ),
+    accentColor: '#f59e0b',
+    eyebrow: '03 / 03',
+    title: 'Sync, async,\nor via SDK',
+    subtitle: 'Every job is stored, ratable, and disputable',
+    body: 'Run agents synchronously and see results right on the page, or queue async jobs and monitor them in Jobs. Grab your API key from Settings to integrate programmatically.',
     cta: 'Start exploring',
     ctaPath: '/agents',
-    skip: false,
+    Visual: CallVisual,
   },
 ]
 
 export default function OnboardingWizard() {
   const [visible, setVisible] = useState(false)
   const [step, setStep] = useState(0)
+  const [dir, setDir] = useState(1)
   const navigate = useNavigate()
 
   useEffect(() => {
-    const done = localStorage.getItem(STORAGE_KEY)
-    if (!done) setVisible(true)
+    if (!localStorage.getItem(STORAGE_KEY)) setVisible(true)
   }, [])
 
   const dismiss = () => {
     localStorage.setItem(STORAGE_KEY, '1')
     setVisible(false)
+  }
+
+  const goTo = (next) => {
+    setDir(next > step ? 1 : -1)
+    setStep(next)
   }
 
   const handleCta = () => {
@@ -85,85 +177,140 @@ export default function OnboardingWizard() {
       navigate(current.ctaPath)
     } else {
       navigate(current.ctaPath)
-      setStep(s => s + 1)
+      goTo(step + 1)
     }
   }
 
   const handleNext = () => {
     if (step === STEPS.length - 1) { dismiss(); return }
-    setStep(s => s + 1)
+    goTo(step + 1)
   }
 
   if (!visible) return null
 
   const current = STEPS[step]
   const Icon = current.icon
+  const { Visual } = current
+
+  const contentVariants = {
+    initial: { opacity: 0, x: dir * 32 },
+    animate: { opacity: 1, x: 0 },
+    exit:    { opacity: 0, x: dir * -32 },
+  }
 
   return (
-    <div className="onboarding-overlay" onClick={dismiss}>
+    <AnimatePresence>
       <motion.div
-        className="onboarding-modal"
-        onClick={e => e.stopPropagation()}
-        initial={{ opacity: 0, scale: 0.94, y: 20 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.94, y: 20 }}
-        transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+        className="ob-overlay"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.2 }}
+        onClick={dismiss}
       >
-        {/* Header */}
-        <div className="onboarding-modal__header">
-          <div className="onboarding-modal__step-dots">
-            {STEPS.map((_, i) => (
-              <span
-                key={i}
-                className={`onboarding-modal__dot ${i === step ? 'onboarding-modal__dot--active' : ''} ${i < step ? 'onboarding-modal__dot--done' : ''}`}
-                onClick={() => setStep(i)}
-              />
-            ))}
-          </div>
-          <button className="onboarding-modal__close" onClick={dismiss} aria-label="Skip onboarding">
+        <motion.div
+          className="ob-shell"
+          onClick={e => e.stopPropagation()}
+          initial={{ opacity: 0, scale: 0.96, y: 24 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          exit={{ opacity: 0, scale: 0.96, y: 24 }}
+          transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+        >
+          {/* Close */}
+          <button className="ob-close" onClick={dismiss} aria-label="Skip onboarding">
             <X size={15} />
           </button>
-        </div>
 
-        {/* Body */}
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={step}
-            className="onboarding-modal__body"
-            initial={{ opacity: 0, x: 20 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: -20 }}
-            transition={{ duration: 0.2 }}
-          >
-            <div className="onboarding-modal__icon" style={{ background: current.iconColor + '22', color: current.iconColor }}>
-              <Icon size={24} />
-            </div>
-            <p className="onboarding-modal__step-label">Step {step + 1} of {STEPS.length}</p>
-            <h2 className="onboarding-modal__title">{current.title}</h2>
-            <p className="onboarding-modal__subtitle">{current.subtitle}</p>
-            <div className="onboarding-modal__description">
-              {current.description}
-            </div>
-          </motion.div>
-        </AnimatePresence>
+          {/* Left: Visual */}
+          <div className="ob-left">
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={current.id + '-visual'}
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+                style={{ width: '100%' }}
+              >
+                <Visual />
+              </motion.div>
+            </AnimatePresence>
+          </div>
 
-        {/* Footer */}
-        <div className="onboarding-modal__footer">
-          {current.skip && (
-            <button className="onboarding-modal__skip" onClick={handleNext}>
-              {step === STEPS.length - 1 ? 'Done' : 'Skip this step'}
-            </button>
-          )}
-          <Button
-            variant="primary"
-            size="md"
-            iconRight={<ArrowRight size={14} />}
-            onClick={handleCta}
-          >
-            {current.cta}
-          </Button>
-        </div>
+          {/* Right: Content */}
+          <div className="ob-right">
+            {/* Step indicator */}
+            <div className="ob-steps">
+              {STEPS.map((s, i) => (
+                <button
+                  key={s.id}
+                  className={`ob-step-pip ${i === step ? 'active' : ''} ${i < step ? 'done' : ''}`}
+                  onClick={() => goTo(i)}
+                  style={i === step ? { background: current.accentColor } : {}}
+                  aria-label={`Step ${i + 1}`}
+                />
+              ))}
+            </div>
+
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={current.id}
+                className="ob-content"
+                variants={contentVariants}
+                initial="initial"
+                animate="animate"
+                exit="exit"
+                transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+              >
+                <div
+                  className="ob-icon"
+                  style={{ background: current.accentColor + '1a', color: current.accentColor }}
+                >
+                  <Icon size={22} />
+                </div>
+
+                <p className="ob-eyebrow" style={{ color: current.accentColor }}>
+                  {current.eyebrow}
+                </p>
+
+                <h2 className="ob-title">
+                  {current.title.split('\n').map((line, i) => (
+                    <span key={i}>{line}{i < current.title.split('\n').length - 1 && <br />}</span>
+                  ))}
+                </h2>
+
+                <p className="ob-subtitle">{current.subtitle}</p>
+                <p className="ob-body">{current.body}</p>
+              </motion.div>
+            </AnimatePresence>
+
+            {/* Footer */}
+            <div className="ob-footer">
+              <div className="ob-footer-left">
+                {step > 0 && (
+                  <button className="ob-back" onClick={() => goTo(step - 1)}>
+                    <ChevronLeft size={14} />
+                    Back
+                  </button>
+                )}
+              </div>
+              <div className="ob-footer-right">
+                <button className="ob-skip" onClick={handleNext}>
+                  {step === STEPS.length - 1 ? 'Done' : 'Skip'}
+                </button>
+                <button
+                  className="ob-cta"
+                  style={{ background: current.accentColor }}
+                  onClick={handleCta}
+                >
+                  {current.cta}
+                  <ArrowRight size={14} />
+                </button>
+              </div>
+            </div>
+          </div>
+        </motion.div>
       </motion.div>
-    </div>
+    </AnimatePresence>
   )
 }

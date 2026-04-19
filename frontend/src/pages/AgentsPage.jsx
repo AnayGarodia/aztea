@@ -236,6 +236,18 @@ export default function AgentsPage() {
   const [searchLoading, setSearchLoading] = useState(false)
   const [searchError, setSearchError] = useState('')
 
+  // Instant local text filter — runs synchronously so search feels immediate
+  const localMatched = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    if (!q) return agents
+    return agents.filter(a =>
+      (a.name ?? '').toLowerCase().includes(q) ||
+      (a.description ?? '').toLowerCase().includes(q) ||
+      (a.tags ?? []).some(t => t.toLowerCase().includes(q))
+    )
+  }, [agents, search])
+
+  // Debounced semantic search via API (supplements local with ranked results)
   useEffect(() => {
     const query = search.trim()
     setSearchError('')
@@ -245,9 +257,9 @@ export default function AgentsPage() {
       return
     }
 
+    setSearchLoading(true)
     let cancelled = false
     const timer = setTimeout(async () => {
-      setSearchLoading(true)
       try {
         const providerParam = activeProvider !== ALL ? activeProvider : undefined
         const data = await searchAgents(apiKey, query, { model_provider: providerParam })
@@ -266,7 +278,7 @@ export default function AgentsPage() {
       } finally {
         if (!cancelled) setSearchLoading(false)
       }
-    }, 300)
+    }, 380)
 
     return () => { cancelled = true; clearTimeout(timer) }
   }, [apiKey, search, activeProvider])
@@ -278,7 +290,10 @@ export default function AgentsPage() {
   }, [agents])
 
   const filtered = useMemo(() => {
-    const source = search.trim() ? searchResults : agents
+    // Use API results when available, local results as instant fallback while API loads
+    const source = search.trim()
+      ? (searchResults.length > 0 ? searchResults : localMatched)
+      : agents
     const maxCents = maxPriceCents ? parseFloat(maxPriceCents) * 100 : null
     let list = source.filter(a => {
       if (activeTag !== ALL && !(a.tags ?? []).includes(activeTag)) return false
@@ -288,7 +303,7 @@ export default function AgentsPage() {
     })
     if (!search.trim()) list = sortAgents(list, sortBy)
     return list
-  }, [agents, search, searchResults, activeTag, activeProvider, sortBy, maxPriceCents])
+  }, [agents, search, searchResults, localMatched, activeTag, activeProvider, sortBy, maxPriceCents])
 
   // Featured = built-in agents sorted by trust, shown before others when no filter active
   const featured = useMemo(() => {
@@ -300,7 +315,9 @@ export default function AgentsPage() {
   }, [agents, search, activeTag, maxPriceCents])
 
   const isFiltered = Boolean(search || activeTag !== ALL || activeProvider !== ALL || maxPriceCents)
-  const listLoading = loading || searchLoading
+  // Only full-skeleton-load when agents haven't loaded yet; search-loading is shown inline
+  const listLoading = loading
+  const isSemanticSearching = search.trim() && searchLoading
 
   const clearFilters = () => { setSearch(''); setActiveTag(ALL); setActiveProvider(ALL); setMaxPriceCents('') }
 
@@ -339,7 +356,7 @@ export default function AgentsPage() {
                   value={search}
                   onChange={e => setSearch(e.target.value)}
                   iconLeft={<Search size={14} />}
-                  hint={searchError || undefined}
+                  hint={searchError || (isSemanticSearching ? 'Refining with semantic search…' : undefined)}
                 />
                 <Input
                   placeholder="Max price (USD)"

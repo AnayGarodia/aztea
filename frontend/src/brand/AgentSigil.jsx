@@ -1,135 +1,155 @@
 import { getSigilTraits } from './sigilTraits'
 
-const SIZES = { xs: 20, sm: 32, md: 64, lg: 128, xl: 280 }
-
-function OrbitShape({ colors, gradId, strokeW, r = 38 }) {
-  return (
-    <>
-      <circle cx="50" cy="50" r={r} fill="none" stroke={`url(#${gradId})`} strokeWidth={strokeW} />
-      <ellipse cx="50" cy="50" rx={r} ry={r * 0.35} fill="none" stroke={`url(#${gradId})`} strokeWidth={strokeW * 0.6} opacity="0.6" />
-      <circle cx={50 + r} cy="50" r={strokeW * 1.8} fill={colors[0]} />
-    </>
-  )
+function djb2(str) {
+  let h = 5381
+  for (let i = 0; i < str.length; i++) {
+    h = ((h << 5) + h) ^ str.charCodeAt(i)
+    h = h | 0
+  }
+  return Math.abs(h)
 }
 
-function HexShape({ colors, gradId, strokeW }) {
-  const pts = Array.from({ length: 6 }, (_, i) => {
-    const a = (Math.PI / 3) * i - Math.PI / 6
-    return `${50 + 36 * Math.cos(a)},${50 + 36 * Math.sin(a)}`
-  }).join(' ')
-  const pts2 = Array.from({ length: 6 }, (_, i) => {
-    const a = (Math.PI / 3) * i - Math.PI / 6
-    return `${50 + 20 * Math.cos(a)},${50 + 20 * Math.sin(a)}`
-  }).join(' ')
-  return (
-    <>
-      <polygon points={pts} fill="none" stroke={`url(#${gradId})`} strokeWidth={strokeW} />
-      <polygon points={pts2} fill={`url(#${gradId})`} opacity="0.15" />
-    </>
-  )
+function mulberry32(seed) {
+  return function () {
+    seed |= 0; seed = seed + 0x6D2B79F5 | 0
+    let t = Math.imul(seed ^ seed >>> 15, 1 | seed)
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t
+    return ((t ^ t >>> 14) >>> 0) / 4294967296
+  }
 }
 
-function PrismShape({ colors, gradId, strokeW }) {
-  return (
-    <>
-      <polygon points="50,12 85,72 15,72" fill="none" stroke={`url(#${gradId})`} strokeWidth={strokeW} />
-      <polygon points="50,28 70,62 30,62" fill={`url(#${gradId})`} opacity="0.15" />
-      <line x1="50" y1="12" x2="50" y2="72" stroke={`url(#${gradId})`} strokeWidth={strokeW * 0.5} opacity="0.5" />
-    </>
-  )
+// Recursive Mondrian-style rect subdivision
+function splitRect(x, y, w, h, depth, rand) {
+  const minDim = 6
+  if (depth === 0 || (w < minDim && h < minDim)) return [{ x, y, w, h }]
+  if (rand() < 0.22) return [{ x, y, w, h }]  // sometimes don't split
+
+  const horiz = w >= h ? rand() < 0.42 : rand() < 0.62
+  const t = 0.3 + rand() * 0.4
+
+  if (horiz) {
+    const split = h * t
+    return [
+      ...splitRect(x, y,          w, split,       depth - 1, rand),
+      ...splitRect(x, y + split,  w, h - split,   depth - 1, rand),
+    ]
+  } else {
+    const split = w * t
+    return [
+      ...splitRect(x,          y, split,       h, depth - 1, rand),
+      ...splitRect(x + split,  y, w - split,   h, depth - 1, rand),
+    ]
+  }
 }
 
-function MeshShape({ colors, gradId, strokeW }) {
-  const pts = Array.from({ length: 5 }, (_, i) => {
-    const a = (Math.PI * 2 / 5) * i - Math.PI / 2
-    return [50 + 34 * Math.cos(a), 50 + 34 * Math.sin(a)]
-  })
-  const lines = []
-  for (let i = 0; i < pts.length; i++)
-    for (let j = i + 1; j < pts.length; j++)
-      lines.push(<line key={`${i}${j}`} x1={pts[i][0]} y1={pts[i][1]} x2={pts[j][0]} y2={pts[j][1]} stroke={`url(#${gradId})`} strokeWidth={strokeW * 0.6} opacity="0.6" />)
-  return (
-    <>
-      {lines}
-      {pts.map(([x, y], i) => <circle key={i} cx={x} cy={y} r={strokeW * 1.5} fill={colors[0]} />)}
-    </>
-  )
+// Build a 5-color Mondrian palette from a base hue
+function buildPalette(baseHue) {
+  const h2 = (baseHue + 160) % 360
+  const h3 = (baseHue +  45) % 360
+  return [
+    `hsl(${baseHue}, 68%, 44%)`,   // deep primary
+    `hsl(${baseHue}, 55%, 62%)`,   // lighter primary
+    `hsl(${h2},       62%, 50%)`,  // complementary
+    `hsl(${h3},       72%, 58%)`,  // warm accent
+    `hsl(${baseHue},  18%, 24%)`,  // near-black tint
+  ]
 }
 
-function SpiralShape({ colors, gradId, strokeW }) {
-  const path = Array.from({ length: 120 }, (_, i) => {
-    const t = (i / 119) * Math.PI * 4
-    const r = 5 + t * 3.5
-    const x = 50 + r * Math.cos(t)
-    const y = 50 + r * Math.sin(t)
-    return `${i === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${y.toFixed(2)}`
-  }).join(' ')
-  return <path d={path} fill="none" stroke={`url(#${gradId})`} strokeWidth={strokeW} strokeLinecap="round" />
-}
+const SIZES = { xs: 20, sm: 32, md: 52, lg: 96, xl: 128 }
+const RADII = { xs: 4,  sm: 7,  md: 10, lg: 14, xl: 18  }
+const DEPTH = { xs: 0,  sm: 1,  md: 3,  lg: 4,  xl: 4   }
 
-function RingShape({ colors, gradId, strokeW }) {
-  return (
-    <>
-      <circle cx="50" cy="50" r="36" fill="none" stroke={`url(#${gradId})`} strokeWidth={strokeW * 2} strokeDasharray="6 4" />
-      <circle cx="50" cy="50" r="22" fill="none" stroke={`url(#${gradId})`} strokeWidth={strokeW} opacity="0.5" />
-      <circle cx="50" cy="50" r="6" fill={colors[0]} />
-    </>
-  )
-}
+export default function AgentSigil({ agentId, size = 'md', className, style }) {
+  const px    = SIZES[size] ?? SIZES.md
+  const rx    = RADII[size] ?? RADII.md
+  const depth = DEPTH[size] ?? DEPTH.md
 
-function DiamondShape({ colors, gradId, strokeW }) {
-  return (
-    <>
-      <polygon points="50,14 82,50 50,86 18,50" fill="none" stroke={`url(#${gradId})`} strokeWidth={strokeW} />
-      <polygon points="50,28 68,50 50,72 32,50" fill={`url(#${gradId})`} opacity="0.18" />
-      <line x1="18" y1="50" x2="82" y2="50" stroke={`url(#${gradId})`} strokeWidth={strokeW * 0.4} opacity="0.4" />
-      <line x1="50" y1="14" x2="50" y2="86" stroke={`url(#${gradId})`} strokeWidth={strokeW * 0.4} opacity="0.4" />
-    </>
-  )
-}
+  const seed   = djb2(String(agentId ?? 'default'))
+  const rand   = mulberry32(seed)
+  const traits = getSigilTraits(agentId ?? 'default')
 
-function CrossShape({ colors, gradId, strokeW }) {
-  return (
-    <>
-      <line x1="50" y1="16" x2="50" y2="84" stroke={`url(#${gradId})`} strokeWidth={strokeW * 2} strokeLinecap="round" />
-      <line x1="16" y1="50" x2="84" y2="50" stroke={`url(#${gradId})`} strokeWidth={strokeW * 2} strokeLinecap="round" />
-      <circle cx="50" cy="50" r="36" fill="none" stroke={`url(#${gradId})`} strokeWidth={strokeW * 0.5} opacity="0.4" />
-    </>
-  )
-}
+  const baseHue = Math.floor(rand() * 360)
+  const palette = buildPalette(baseHue)
 
-const SHAPE_MAP = { orbit: OrbitShape, hex: HexShape, prism: PrismShape, mesh: MeshShape, spiral: SpiralShape, ring: RingShape, diamond: DiamondShape, cross: CrossShape }
+  const clipId = `mc-${seed}-${size}`
 
-export default function AgentSigil({ agentId, size = 'md', state = 'idle', className, style }) {
-  const { shape, colors, rotation, strokeW, gradId } = getSigilTraits(agentId ?? 'default')
-  const px = SIZES[size] ?? SIZES.md
-  const ShapeComp = SHAPE_MAP[shape] ?? OrbitShape
+  // xs and sm: just base color + 1 accent circle (no subdivision)
+  if (size === 'xs' || size === 'sm') {
+    const bg  = palette[0]
+    const acc = palette[2]
+    const cx  = px * (0.4 + rand() * 0.3)
+    const cy  = px * (0.3 + rand() * 0.35)
+    const r   = px * (0.22 + rand() * 0.12)
+    return (
+      <svg width={px} height={px} viewBox={`0 0 ${px} ${px}`} aria-hidden="true"
+        className={className} style={{ display: 'block', flexShrink: 0, ...style }}>
+        <rect width={px} height={px} rx={rx} fill={bg} />
+        <circle cx={cx} cy={cy} r={r} fill={acc} opacity="0.85" />
+      </svg>
+    )
+  }
 
-  const animStyle = {
-    idle:   {},
-    active: { animation: 'spin 8s linear infinite' },
-    alert:  { animation: 'pulse 1.5s ease-in-out infinite' },
-  }[state] ?? {}
+  // md, lg, xl: Mondrian subdivision
+  const rects = splitRect(0, 0, px, px, depth, rand)
+
+  // Assign colors — avoid placing same color adjacent (simple modulo rule)
+  const coloredRects = rects.map((r, i) => ({
+    ...r,
+    fill: palette[i % palette.length],
+  }))
+
+  // Add 1–2 small dot accents on top for visual interest at larger sizes
+  const dots = size !== 'md' ? [] : [
+    { cx: rand() * px, cy: rand() * px, r: px * 0.05 + rand() * px * 0.04, fill: 'rgba(255,255,255,0.55)' },
+  ]
 
   return (
     <svg
       width={px}
       height={px}
-      viewBox="0 0 100 100"
+      viewBox={`0 0 ${px} ${px}`}
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
       className={className}
-      style={{ flexShrink: 0, ...animStyle, ...style }}
+      style={{ display: 'block', flexShrink: 0, borderRadius: rx, ...style }}
+      aria-hidden="true"
     >
       <defs>
-        <linearGradient id={gradId} x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor={colors[0]} />
-          <stop offset="100%" stopColor={colors[1]} />
-        </linearGradient>
+        <clipPath id={clipId}>
+          <rect x="0" y="0" width={px} height={px} rx={rx} />
+        </clipPath>
       </defs>
-      <g transform={`rotate(${rotation} 50 50)`}>
-        <ShapeComp colors={colors} gradId={gradId} strokeW={strokeW} />
+
+      <g clipPath={`url(#${clipId})`}>
+        {/* Mondrian rects */}
+        {coloredRects.map((r, i) => (
+          <rect
+            key={i}
+            x={r.x} y={r.y} width={r.w} height={r.h}
+            fill={r.fill}
+          />
+        ))}
+
+        {/* Thin separating lines between rects for the Mondrian grid effect */}
+        {coloredRects.map((r, i) => (
+          <rect
+            key={`border-${i}`}
+            x={r.x} y={r.y} width={r.w} height={r.h}
+            fill="none"
+            stroke="rgba(0,0,0,0.12)"
+            strokeWidth="0.8"
+          />
+        ))}
+
+        {/* Dot accents */}
+        {dots.map((d, i) => (
+          <circle key={`dot-${i}`} cx={d.cx} cy={d.cy} r={d.r} fill={d.fill} />
+        ))}
       </g>
+
+      {/* Outer border ring */}
+      <rect x="0" y="0" width={px} height={px} rx={rx}
+        fill="none" stroke="rgba(0,0,0,0.08)" strokeWidth="1" />
     </svg>
   )
 }

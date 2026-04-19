@@ -1,7 +1,5 @@
-import { useState, useMemo, useEffect } from 'react'
-import Input from '../../ui/Input'
-import Textarea from '../../ui/Textarea'
-import Select from '../../ui/Select'
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
+import { motion, AnimatePresence } from 'motion/react'
 import Button from '../../ui/Button'
 import Segmented from '../../ui/Segmented'
 import { Zap, Radio } from 'lucide-react'
@@ -35,19 +33,56 @@ function deriveFields(schema) {
   })
 }
 
+const STEP_VARIANTS = {
+  initial: { opacity: 0, y: 18 },
+  animate: { opacity: 1, y: 0 },
+  exit:    { opacity: 0, y: -18 },
+}
+
+const STEP_TRANSITION = { duration: 0.28, ease: [0.16, 1, 0.3, 1] }
+
 export default function AgentInputForm({ agent, onSubmit, loading, mode, onModeChange }) {
   const fields = useMemo(() => deriveFields(agent?.input_schema), [agent])
-  const requiredCount = useMemo(() => fields.filter(f => f.required).length, [fields])
+  const total  = fields.length
+
+  const [step, setStep] = useState(0)
   const [values, setValues] = useState(() =>
     Object.fromEntries(fields.map(f => [f.name, f.default ?? '']))
   )
 
-  // Reset form when agent changes
+  const inputRef = useRef(null)
+
+  // Reset when agent changes
   useEffect(() => {
     setValues(Object.fromEntries(fields.map(f => [f.name, f.default ?? ''])))
+    setStep(0)
   }, [fields])
 
+  // Auto-focus current field
+  useEffect(() => {
+    const timer = setTimeout(() => inputRef.current?.focus(), 60)
+    return () => clearTimeout(timer)
+  }, [step])
+
   const set = (name, val) => setValues(v => ({ ...v, [name]: val }))
+
+  const goNext = useCallback(() => {
+    if (step < total - 1) setStep(s => s + 1)
+  }, [step, total])
+
+  const goBack = useCallback(() => {
+    if (step > 0) setStep(s => s - 1)
+  }, [step])
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      const f = fields[step]
+      if (f?.type !== 'textarea') {
+        e.preventDefault()
+        goNext()
+      }
+    }
+  }
 
   const handleSubmit = (e) => {
     e.preventDefault()
@@ -61,88 +96,183 @@ export default function AgentInputForm({ agent, onSubmit, loading, mode, onModeC
   }
 
   const price = `$${Number(agent?.price_per_call_usd ?? 0).toFixed(2)}`
+  const progressPct = total > 0 ? (step / total) * 100 : 0
 
-  return (
-    <form className="invoke-panel" onSubmit={handleSubmit}>
-      <p className="invoke-panel__intro">
-        {requiredCount > 0
-          ? `${requiredCount} required field${requiredCount > 1 ? 's' : ''} · review schema hints below before sending.`
-          : 'No required fields in schema. You can run with defaults or custom payload.'}
-      </p>
-
-      {fields.length === 0 && (
+  // No schema fallback
+  if (fields.length === 0) {
+    return (
+      <form className="invoke-panel" onSubmit={handleSubmit}>
         <p className="invoke-panel__no-schema">
           This agent has no defined input schema. Check its documentation.
         </p>
-      )}
+        <div className="invoke-panel__footer">
+          <Segmented options={MODE_OPTIONS} value={mode} onChange={onModeChange} />
+          <p className="invoke-panel__mode-help">
+            {mode === 'async'
+              ? 'Async queues a job you can monitor in Jobs.'
+              : 'Sync returns output immediately in this panel.'}
+          </p>
+          <div className="invoke-panel__price-bar">
+            <span className="invoke-panel__price-label">Cost per call</span>
+            <span className="invoke-panel__price-val">{price}</span>
+          </div>
+          <Button
+            type="submit"
+            variant="primary"
+            size="md"
+            loading={loading}
+            className="invoke-panel__submit"
+            icon={mode === 'async' ? <Radio size={14} /> : <Zap size={14} />}
+          >
+            {mode === 'async' ? `Create async job · ${price}` : `Run now · ${price}`}
+          </Button>
+        </div>
+      </form>
+    )
+  }
 
-      {fields.map(f => {
-        if (f.type === 'textarea') {
-          return (
-            <Textarea
-              key={f.name}
-              label={f.label ?? f.name}
-              hint={f.hint}
-              placeholder={f.placeholder}
-              value={values[f.name]}
-              onChange={e => set(f.name, e.target.value)}
-              required={f.required}
-              maxLength={f.max_length}
-              style={{ minHeight: 120 }}
-            />
-          )
-        }
-        if (f.type === 'select') {
-          return (
-            <Select
-              key={f.name}
-              label={f.label ?? f.name}
-              hint={f.hint}
-              value={values[f.name]}
-              onChange={e => set(f.name, e.target.value)}
-              required={f.required}
-            >
-              <option value="">Select…</option>
-              {(f.options ?? []).map(o => <option key={o} value={o}>{o}</option>)}
-            </Select>
-          )
-        }
-        return (
-          <Input
-            key={f.name}
-            label={f.label ?? f.name}
-            hint={f.hint}
-            placeholder={f.placeholder}
-            value={values[f.name]}
-            onChange={e => set(f.name, e.target.value)}
-            required={f.required}
-            maxLength={f.max_length}
-          />
-        )
-      })}
+  const isLastField = step === total - 1
+  const f = fields[step]
 
-      <Segmented options={MODE_OPTIONS} value={mode} onChange={onModeChange} />
-      <p className="invoke-panel__mode-help">
-        {mode === 'async'
-          ? 'Async queues a job you can monitor in Jobs.'
-          : 'Sync returns output immediately in this panel.'}
-      </p>
-
-      <div className="invoke-panel__price-bar">
-        <span className="invoke-panel__price-label">Cost per call</span>
-        <span className="invoke-panel__price-val">{price}</span>
+  return (
+    <form className="invoke-panel" onSubmit={handleSubmit}>
+      {/* Progress bar */}
+      <div className="invoke-panel__progress-track">
+        <div
+          className="invoke-panel__progress-fill"
+          style={{ width: `${progressPct}%` }}
+        />
       </div>
 
-      <Button
-        type="submit"
-        variant="primary"
-        size="md"
-        loading={loading}
-        className="invoke-panel__submit"
-        icon={mode === 'async' ? <Radio size={14} /> : <Zap size={14} />}
-      >
-        {mode === 'async' ? `Create async job · ${price}` : `Run now · ${price}`}
-      </Button>
+      {/* Question pane — AnimatePresence for clean step transitions */}
+      <div className="invoke-panel__questions">
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={step}
+            className="invoke-panel__q active"
+            variants={STEP_VARIANTS}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            transition={STEP_TRANSITION}
+          >
+            <span className="invoke-panel__q-num">
+              {String(step + 1).padStart(2, '0')} of {String(total).padStart(2, '0')}
+            </span>
+            <label className="invoke-panel__q-label" htmlFor={`tf-${f.name}`}>
+              {f.label ?? f.name}
+              {f.required && <span style={{ color: 'var(--accent)', marginLeft: 4 }}>*</span>}
+            </label>
+            {f.hint && <p className="invoke-panel__q-hint">{f.hint}</p>}
+
+            {/* Input */}
+            {f.type === 'textarea' ? (
+              <textarea
+                id={`tf-${f.name}`}
+                ref={inputRef}
+                className="invoke-panel__tf-textarea"
+                placeholder={f.placeholder || 'Type your answer here…'}
+                value={values[f.name]}
+                onChange={e => set(f.name, e.target.value)}
+                required={f.required}
+                maxLength={f.max_length}
+                onKeyDown={handleKeyDown}
+              />
+            ) : f.type === 'select' ? (
+              <select
+                id={`tf-${f.name}`}
+                ref={inputRef}
+                className="invoke-panel__tf-select"
+                value={values[f.name]}
+                onChange={e => { set(f.name, e.target.value); setTimeout(goNext, 200) }}
+                required={f.required}
+              >
+                <option value="">Select an option…</option>
+                {(f.options ?? []).map(o => <option key={o} value={o}>{o}</option>)}
+              </select>
+            ) : (
+              <input
+                id={`tf-${f.name}`}
+                ref={inputRef}
+                className="invoke-panel__tf-input"
+                type="text"
+                placeholder={f.placeholder || 'Type your answer…'}
+                value={values[f.name]}
+                onChange={e => set(f.name, e.target.value)}
+                required={f.required}
+                maxLength={f.max_length}
+                onKeyDown={handleKeyDown}
+                autoComplete="off"
+              />
+            )}
+
+            {/* Action row */}
+            <div className="invoke-panel__q-row">
+              {f.type !== 'select' && !isLastField && (
+                <button
+                  type="button"
+                  className="invoke-panel__ok"
+                  onClick={goNext}
+                >
+                  OK <span style={{ opacity: 0.7 }}>&#8629;</span>
+                </button>
+              )}
+              {f.type !== 'select' && (
+                <span className="invoke-panel__hint">
+                  or press <kbd>Enter</kbd>
+                </span>
+              )}
+              {step > 0 && (
+                <button
+                  type="button"
+                  className="invoke-panel__back"
+                  onClick={goBack}
+                >
+                  Back
+                </button>
+              )}
+            </div>
+          </motion.div>
+        </AnimatePresence>
+      </div>
+
+      {/* Progress dots */}
+      <div className="invoke-panel__dots" aria-hidden="true">
+        {fields.map((_, i) => (
+          <div
+            key={i}
+            className={[
+              'invoke-panel__dot',
+              i < step ? 'done' : '',
+              i === step ? 'cur' : '',
+            ].filter(Boolean).join(' ')}
+          />
+        ))}
+      </div>
+
+      {/* Footer: mode selector + price + submit */}
+      <div className="invoke-panel__footer">
+        <Segmented options={MODE_OPTIONS} value={mode} onChange={onModeChange} />
+        <p className="invoke-panel__mode-help">
+          {mode === 'async'
+            ? 'Async queues a job you can monitor in Jobs.'
+            : 'Sync returns output immediately in this panel.'}
+        </p>
+        <div className="invoke-panel__price-bar">
+          <span className="invoke-panel__price-label">Cost per call</span>
+          <span className="invoke-panel__price-val">{price}</span>
+        </div>
+        <Button
+          type="submit"
+          variant="primary"
+          size="md"
+          loading={loading}
+          className="invoke-panel__submit"
+          icon={mode === 'async' ? <Radio size={14} /> : <Zap size={14} />}
+        >
+          {mode === 'async' ? `Create async job · ${price}` : `Run now · ${price}`}
+        </Button>
+      </div>
     </form>
   )
 }

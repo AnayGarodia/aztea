@@ -40,10 +40,12 @@
 
 .agents-page__header h1 {
   margin: 0 0 4px;
-  font-size: 1.5rem;
+  font-size: clamp(1.5rem, 2.5vw, 2rem);
   font-weight: 700;
+  font-family: var(--font-display);
   color: var(--text-primary);
   letter-spacing: -0.02em;
+  line-height: 1.15;
 }
 
 .agents-page__header p {
@@ -111,15 +113,22 @@
   margin: -8px 0 -4px;
 }
 
-/* Grid */
+/* Grid — explicit columns so rows are always even */
 .agents-page__grid {
   display: grid;
   gap: 16px;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(3, 1fr);
 }
 
 .agents-page__grid--featured {
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(3, 1fr);
+}
+
+@media (max-width: 1024px) {
+  .agents-page__grid,
+  .agents-page__grid--featured {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
 
 .agents-page__empty-actions {
@@ -225,7 +234,10 @@
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
-@media (max-width: 768px) {
+@media (max-width: 640px) {
   .agents-page__scroll { padding: 20px 16px; }
-  .agents-page__grid { grid-template-columns: 1fr; }
+  .agents-page__grid,
+  .agents-page__grid--featured {
+    grid-template-columns: 1fr;
+  }
 }
