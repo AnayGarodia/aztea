@@ -2,25 +2,68 @@
   position: fixed;
   bottom: var(--sp-5);
   right: var(--sp-5);
-  z-index: 9000;
+  z-index: var(--z-toast, 9000);
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-lg);
+  max-width: 360px;
+  font-size: 0.8125rem;
+}
+
+/* Vivid left-border signal stripe */
+.toast--success { border-left: 3px solid var(--positive); }
+.toast--error   { border-left: 3px solid var(--negative); }
+.toast--warn    { border-left: 3px solid var(--warn); }
+.toast--info    { border-left: 3px solid var(--info); }
+
+/* Icon bubble */
+.toast__icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 12px 16px;
-  border-radius: var(--r-md);
-  border: 1px solid transparent;
-  box-shadow: var(--shadow-lg);
-  font-size: 0.875rem;
-  font-weight: 500;
-  max-width: 420px;
-  white-space: nowrap;
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  justify-content: center;
+  font-size: 11px;
+  flex-shrink: 0;
+  margin-top: 1px;
+  font-weight: 700;
 }
-.toast--success { background: var(--positive-bg); color: var(--positive); border-color: var(--positive-border); }
-.toast--error   { background: var(--negative-bg); color: var(--negative); border-color: var(--negative-border); }
-.toast--info    { background: var(--surface-2);   color: var(--text-primary); border-color: var(--border); }
-.toast--warn    { background: var(--warn-bg);     color: var(--warn);     border-color: var(--warn-border); }
+.toast--success .toast__icon { background: var(--positive-bg); color: var(--positive); }
+.toast--error   .toast__icon { background: var(--negative-bg); color: var(--negative); }
+.toast--warn    .toast__icon { background: var(--warn-bg);     color: var(--warn);     }
+.toast--info    .toast__icon { background: var(--info-bg);     color: var(--info);     }
+
+/* Text content */
+.toast__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+}
+.toast__msg {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+/* Inline icon variant (the existing lucide icon approach) */
+.toast svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.toast--success svg { color: var(--positive); }
+.toast--error   svg { color: var(--negative); }
+.toast--warn    svg { color: var(--warn);     }
+.toast--info    svg { color: var(--info);     }
+.toast--success, .toast--error, .toast--warn, .toast--info {
+  color: var(--text-primary);
+}
 
 @media (max-width: 768px) {
   .toast { bottom: 76px; right: 12px; left: 12px; max-width: 100%; }

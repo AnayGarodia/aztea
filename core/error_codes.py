@@ -22,6 +22,7 @@ DISPUTE_SETTLEMENT_INSUFFICIENT_BALANCE = "dispute.settlement_insufficient_balan
 DISPUTE_FILING_DEPOSIT_INSUFFICIENT_BALANCE = "dispute.filing_deposit_insufficient_balance"
 BUDGET_EXCEEDED = "job.budget_exceeded"
 SPEND_LIMIT_EXCEEDED = "payment.spend_limit_exceeded"
+DEPOSIT_BELOW_MINIMUM = "payment.deposit_below_minimum"
 VALIDATION_ERROR = "request.validation_error"
 
 DEFAULT_BY_STATUS: dict[int, str] = {

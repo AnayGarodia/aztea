@@ -1,6 +1,6 @@
 .tg {
   display: flex;
-  gap: var(--sp-5);
+  gap: 28px;
   align-items: flex-start;
   flex-wrap: wrap;
 }
@@ -10,66 +10,66 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--sp-2);
+  gap: 8px;
   flex-shrink: 0;
 }
 .tg__gauge svg { display: block; }
 .tg__gauge-label {
-  font-size: 0.6875rem;
+  font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.07em;
   text-transform: uppercase;
   color: var(--text-muted);
 }
 
-/* Stats column */
+/* Stats grid */
 .tg__stats {
   flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-4);
-  min-width: 140px;
-  justify-content: center;
-  padding-top: var(--sp-2);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  min-width: 200px;
+  align-content: start;
 }
 
 .tg__stat {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
+  padding: 14px 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
 }
 
 .tg__stat-val {
-  font-family: var(--font-mono);
-  font-size: 1.0625rem;
-  font-weight: 600;
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  font-weight: 500;
   color: var(--text-primary);
-  font-feature-settings: 'tnum';
+  letter-spacing: -0.02em;
   line-height: 1;
+  display: block;
 }
 
 .tg__stat-key {
-  font-size: 0.6875rem;
+  font-size: 10px;
   font-weight: 600;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.07em;
   text-transform: uppercase;
   color: var(--text-muted);
+  margin-top: 4px;
+  display: block;
 }
 
-/* Progress bar for supplementary metrics */
+/* Progress bar */
 .tg__bar-wrap {
-  margin-top: 5px;
+  margin-top: 8px;
 }
-
 .tg__bar-track {
   height: 3px;
-  background: var(--border);
+  background: var(--border-bright);
   border-radius: var(--r-pill);
   overflow: hidden;
 }
-
 .tg__bar-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--accent-2), var(--accent));
   border-radius: var(--r-pill);
 }

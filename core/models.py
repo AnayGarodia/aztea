@@ -325,6 +325,7 @@ class AgentRegisterRequest(BaseModel):
                 "name": "Financial Filing Analyst",
                 "description": "Summarizes SEC 10-Q filings into investment briefs.",
                 "endpoint_url": "https://example.com/analyze",
+                "healthcheck_url": "https://example.com/health",
                 "price_per_call_usd": 0.05,
                 "tags": ["financial-research", "sec"],
                 "input_schema": {"type": "object", "properties": {"ticker": {"type": "string"}}},
@@ -337,6 +338,7 @@ class AgentRegisterRequest(BaseModel):
     name: str
     description: str
     endpoint_url: str
+    healthcheck_url: str | None = None
     price_per_call_usd: float
     tags: list[str] = Field(default_factory=list)
     input_schema: JSONObject = Field(default_factory=dict)
@@ -574,6 +576,15 @@ class JobCreateRequest(BaseModel):
         ge=0,
         description="Optional max price the caller is willing to pay in cents. Rejected with 400 if agent.price_cents > budget_cents.",
     )
+    fee_bearer_policy: Literal["worker", "caller", "split"] = Field(
+        default="caller",
+        description=(
+            "Who bears platform fees. "
+            "'caller' charges caller price+fee, worker gets full listed price. "
+            "'worker' keeps caller price unchanged and deducts fee from worker payout. "
+            "'split' splits fee between caller and worker."
+        ),
+    )
 
 
 class JobBatchCreateRequest(BaseModel):
@@ -752,6 +763,28 @@ class AdminDisputeRuleRequest(BaseModel):
             if self.split_caller_cents is None or self.split_agent_cents is None:
                 raise ValueError("split outcomes require split_caller_cents and split_agent_cents")
         return self
+
+
+class AgentReviewDecisionRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "decision": "approve",
+                "note": "Endpoint passed review checklist.",
+            }
+        }
+    )
+
+    decision: Literal["approve", "reject"]
+    note: str | None = None
+
+    @field_validator("note")
+    @classmethod
+    def normalize_note(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        text = value.strip()
+        return text or None
 
 
 class ClarificationRequestPayload(BaseModel):
@@ -1441,7 +1474,9 @@ class AgentResponse(BaseModel):
     name: str
     description: str
     endpoint_url: str
+    healthcheck_url: str | None = None
     price_per_call_usd: float
+    caller_charge_cents: int | None = None
     tags: list[str] = Field(default_factory=list)
     input_schema: JSONObject = Field(default_factory=dict)
     output_schema: JSONObject = Field(default_factory=dict)
@@ -1453,6 +1488,10 @@ class AgentResponse(BaseModel):
     endpoint_last_checked_at: str | None = None
     endpoint_last_error: str | None = None
     status: str = "active"
+    review_status: str = "approved"
+    review_note: str | None = None
+    reviewed_at: str | None = None
+    reviewed_by: str | None = None
     caller_trust_min: float | None = None
     # Discovery signals for orchestrators
     trust_score: float | None = None
@@ -1465,6 +1504,7 @@ class AgentResponse(BaseModel):
 class RegistryRegisterResponse(BaseModel):
     agent_id: str
     message: str
+    review_status: str | None = None
     agent: AgentResponse | None = None
 
 
@@ -1493,6 +1533,9 @@ class JobResponse(BaseModel):
     agent_id: str
     status: str
     price_cents: int
+    caller_charge_cents: int | None = None
+    platform_fee_pct_at_create: int | None = None
+    fee_bearer_policy: str | None = None
     input_payload: JSONObject
     output_payload: JSONObject | None = None
     error_message: str | None = None

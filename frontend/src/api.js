@@ -8,7 +8,7 @@ export function setSessionExpiredHandler(fn) { _onSessionExpired = fn }
 function requestHeaders(key, { idempotencyKey } = {}) {
   const out = {
     'Content-Type': 'application/json',
-    'X-AgentMarket-Version': VERSION,
+    'X-Aztea-Version': VERSION,
   }
   if (key) out.Authorization = `Bearer ${key}`
   if (idempotencyKey) out['Idempotency-Key'] = idempotencyKey

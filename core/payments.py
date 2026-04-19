@@ -28,6 +28,7 @@ import os
 import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, ROUND_HALF_UP
 
 from core import logging_utils
 from core import db as _db
@@ -94,6 +95,55 @@ def _env_int(name: str, default: int, minimum: int | None = None, maximum: int |
 
 
 PLATFORM_FEE_PCT = _env_int("PLATFORM_FEE_PCT", 10, minimum=0, maximum=100)
+VALID_FEE_BEARER_POLICIES = {"worker", "caller", "split"}
+DEFAULT_FEE_BEARER_POLICY = "caller"
+
+
+def normalize_fee_bearer_policy(value: str | None) -> str:
+    normalized = str(value or "").strip().lower() or DEFAULT_FEE_BEARER_POLICY
+    if normalized not in VALID_FEE_BEARER_POLICIES:
+        return DEFAULT_FEE_BEARER_POLICY
+    return normalized
+
+
+def compute_platform_fee_cents(price_cents: int, platform_fee_pct: int | None = None) -> int:
+    pct = PLATFORM_FEE_PCT if platform_fee_pct is None else int(platform_fee_pct)
+    if price_cents < 0:
+        raise ValueError("price_cents must be non-negative.")
+    if pct < 0:
+        raise ValueError("platform_fee_pct must be non-negative.")
+    fee = (
+        Decimal(price_cents) * Decimal(pct) / Decimal(100)
+    ).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    return int(fee)
+
+
+def compute_success_distribution(
+    price_cents: int,
+    *,
+    platform_fee_pct: int | None = None,
+    fee_bearer_policy: str | None = None,
+) -> dict[str, int]:
+    if price_cents < 0:
+        raise ValueError("price_cents must be non-negative.")
+    fee_cents = compute_platform_fee_cents(price_cents, platform_fee_pct)
+    policy = normalize_fee_bearer_policy(fee_bearer_policy)
+    if policy == "worker":
+        caller_charge_cents = price_cents
+        agent_payout_cents = max(0, price_cents - fee_cents)
+    elif policy == "split":
+        caller_fee_cents = (fee_cents + 1) // 2
+        worker_fee_cents = fee_cents - caller_fee_cents
+        caller_charge_cents = price_cents + caller_fee_cents
+        agent_payout_cents = max(0, price_cents - worker_fee_cents)
+    else:  # caller
+        caller_charge_cents = price_cents + fee_cents
+        agent_payout_cents = price_cents
+    return {
+        "caller_charge_cents": int(caller_charge_cents),
+        "agent_payout_cents": int(agent_payout_cents),
+        "platform_fee_cents": int(fee_cents),
+    }
 
 def _conn() -> sqlite3.Connection:
     """Return a thread-local SQLite connection with WAL mode."""
@@ -595,16 +645,22 @@ def post_call_payout(
     charge_tx_id: str,
     price_cents: int,
     agent_id: str,
+    *,
+    platform_fee_pct: int | None = None,
+    fee_bearer_policy: str | None = None,
 ) -> None:
     """
     Transaction 2a (success): credit 90% to agent, 10% to platform.
     Both inserts happen in one atomic transaction.
     Fee rounds down; agent gets the remainder to avoid creating or destroying cents.
     """
-    if price_cents < 0:
-        raise ValueError("price_cents must be non-negative.")
-    fee_cents = price_cents * PLATFORM_FEE_PCT // 100
-    agent_cents = price_cents - fee_cents
+    distribution = compute_success_distribution(
+        price_cents,
+        platform_fee_pct=platform_fee_pct,
+        fee_bearer_policy=fee_bearer_policy,
+    )
+    fee_cents = int(distribution["platform_fee_cents"])
+    agent_cents = int(distribution["agent_payout_cents"])
 
     applied = False
     with _conn() as conn:
@@ -632,19 +688,21 @@ def post_call_payout(
             )
             return
         try:
-            _insert_tx(
-                conn, agent_wallet_id, "payout", agent_cents, agent_id,
-                charge_tx_id, f"Payout 90% for call {charge_tx_id[:8]}",
-            )
-            applied = True
+            if agent_cents > 0:
+                _insert_tx(
+                    conn, agent_wallet_id, "payout", agent_cents, agent_id,
+                    charge_tx_id, f"Agent payout for call {charge_tx_id[:8]}",
+                )
+                applied = True
         except sqlite3.IntegrityError:
             pass  # idempotency: payout already recorded
         try:
-            _insert_tx(
-                conn, platform_wallet_id, "fee", fee_cents, agent_id,
-                charge_tx_id, f"Platform fee 10% for call {charge_tx_id[:8]}",
-            )
-            applied = True
+            if fee_cents > 0:
+                _insert_tx(
+                    conn, platform_wallet_id, "fee", fee_cents, agent_id,
+                    charge_tx_id, f"Platform fee for call {charge_tx_id[:8]}",
+                )
+                applied = True
         except sqlite3.IntegrityError:
             pass  # idempotency: fee already recorded
     logging_utils.log_event(
@@ -658,6 +716,7 @@ def post_call_payout(
             "price_cents": price_cents,
             "agent_payout_cents": agent_cents,
             "platform_fee_cents": fee_cents,
+            "fee_bearer_policy": normalize_fee_bearer_policy(fee_bearer_policy),
             "applied": applied,
         },
     )
@@ -730,6 +789,10 @@ def post_call_partial_settle(
     price_cents: int,
     refund_fraction: float,
     agent_id: str,
+    *,
+    platform_fee_pct: int | None = None,
+    fee_bearer_policy: str | None = None,
+    caller_charge_cents: int | None = None,
 ) -> None:
     """
     Partial settlement: refund a fraction of the charge to the caller and
@@ -741,12 +804,32 @@ def post_call_partial_settle(
     refund_fraction=1.0  →  full refund (identical to post_call_refund)
     refund_fraction=0.0  →  full payout to agent (identical to post_call_payout)
     """
+    distribution = compute_success_distribution(
+        price_cents,
+        platform_fee_pct=platform_fee_pct,
+        fee_bearer_policy=fee_bearer_policy,
+    )
+    total_charge_cents = int(
+        distribution["caller_charge_cents"]
+        if caller_charge_cents is None
+        else max(0, int(caller_charge_cents))
+    )
+    total_success_cents = int(distribution["agent_payout_cents"] + distribution["platform_fee_cents"])
     refund_fraction = max(0.0, min(1.0, float(refund_fraction)))
-    refund_cents = int(price_cents * refund_fraction)
-    kept_cents = price_cents - refund_cents
-
-    fee_cents = kept_cents * PLATFORM_FEE_PCT // 100
-    agent_cents = kept_cents - fee_cents
+    refund_cents = int(
+        (Decimal(total_charge_cents) * Decimal(str(refund_fraction))).quantize(
+            Decimal("1"), rounding=ROUND_HALF_UP
+        )
+    )
+    kept_cents = max(0, total_charge_cents - refund_cents)
+    if total_success_cents <= 0 or kept_cents <= 0:
+        agent_cents = 0
+        fee_cents = 0
+    else:
+        ratio = Decimal(distribution["platform_fee_cents"]) / Decimal(total_success_cents)
+        fee_cents = int((Decimal(kept_cents) * ratio).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        fee_cents = max(0, min(fee_cents, kept_cents))
+        agent_cents = kept_cents - fee_cents
 
     applied = False
     with _conn() as conn:
@@ -792,10 +875,12 @@ def post_call_partial_settle(
             "charge_tx_id": charge_tx_id,
             "agent_id": agent_id,
             "price_cents": price_cents,
+            "caller_charge_cents": total_charge_cents,
             "refund_fraction": refund_fraction,
             "refund_cents": refund_cents,
             "agent_payout_cents": agent_cents,
             "platform_fee_cents": fee_cents,
+            "fee_bearer_policy": normalize_fee_bearer_policy(fee_bearer_policy),
             "applied": applied,
         },
     )
@@ -1017,6 +1102,9 @@ def _dispute_context_conn(conn: sqlite3.Connection, dispute_id: str) -> sqlite3.
             d.outcome AS dispute_outcome,
             j.agent_id,
             j.price_cents,
+            j.caller_charge_cents,
+            j.fee_bearer_policy,
+            j.platform_fee_pct_at_create,
             j.charge_tx_id,
             j.caller_wallet_id,
             j.agent_wallet_id,
@@ -1289,6 +1377,18 @@ def post_dispute_settlement(
         ctx = _dispute_context_conn(conn, dispute_id)
         agent_id = str(ctx["agent_id"])
         price_cents = int(ctx["price_cents"])
+        platform_fee_pct = int(ctx["platform_fee_pct_at_create"] if ctx["platform_fee_pct_at_create"] is not None else PLATFORM_FEE_PCT)
+        fee_bearer_policy = normalize_fee_bearer_policy(ctx["fee_bearer_policy"])
+        distribution = compute_success_distribution(
+            price_cents,
+            platform_fee_pct=platform_fee_pct,
+            fee_bearer_policy=fee_bearer_policy,
+        )
+        caller_charge_cents = int(
+            ctx["caller_charge_cents"]
+            if ctx["caller_charge_cents"] is not None
+            else distribution["caller_charge_cents"]
+        )
         charge_tx_id = str(ctx["charge_tx_id"])
         caller_wallet_id = str(ctx["caller_wallet_id"])
         agent_wallet_id = str(ctx["agent_wallet_id"])
@@ -1314,8 +1414,9 @@ def post_dispute_settlement(
             }
 
         escrow_balance = _wallet_balance_conn(conn, escrow_wallet_id)
-        fee_cents = price_cents * PLATFORM_FEE_PCT // 100
-        default_agent_cents = price_cents - fee_cents
+        fee_cents = int(distribution["platform_fee_cents"])
+        default_agent_cents = int(distribution["agent_payout_cents"])
+        caller_refund_target_cents = caller_charge_cents
 
         caller_delta = 0
         agent_delta = 0
@@ -1323,7 +1424,7 @@ def post_dispute_settlement(
 
         if normalized_outcome == "caller_wins":
             if escrow_balance > 0:
-                payout_cents = min(price_cents, escrow_balance)
+                payout_cents = min(caller_refund_target_cents, escrow_balance)
                 _debit_wallet_conn(
                     conn,
                     escrow_wallet_id,
@@ -1346,13 +1447,13 @@ def post_dispute_settlement(
                 _credit_wallet_conn(
                     conn,
                     caller_wallet_id,
-                    price_cents,
+                    caller_refund_target_cents,
                     tx_type="refund",
                     agent_id=agent_id,
                     related_tx_id=dispute_id,
                     memo=f"Dispute caller win refund for {dispute_id[:8]}",
                 )
-                caller_delta += price_cents
+                caller_delta += caller_refund_target_cents
 
         elif normalized_outcome == "agent_wins":
             if escrow_balance > 0:
@@ -1419,9 +1520,9 @@ def post_dispute_settlement(
             agent_share = int(split_agent_cents)
             if caller_share < 0 or agent_share < 0:
                 raise ValueError("split shares must be non-negative.")
-            if caller_share + agent_share > price_cents:
+            if caller_share + agent_share > caller_charge_cents:
                 raise ValueError("split shares cannot exceed job price.")
-            platform_share = price_cents - caller_share - agent_share
+            platform_share = caller_charge_cents - caller_share - agent_share
 
             total_release = caller_share + agent_share + platform_share
             if escrow_balance >= total_release and total_release > 0:

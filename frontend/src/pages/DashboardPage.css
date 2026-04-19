@@ -22,10 +22,10 @@
 
 /* Welcome header */
 .dashboard__welcome {
-  background: linear-gradient(135deg, var(--surface) 0%, var(--surface-2) 100%);
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r-xl);
-  padding: 28px 32px;
+  padding: 32px 36px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -33,6 +33,16 @@
   flex-wrap: wrap;
   position: relative;
   overflow: hidden;
+}
+
+.dashboard__welcome::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 60% 80% at 95% 50%, var(--accent-glow-lg) 0%, transparent 70%),
+    radial-gradient(ellipse 40% 60% at 5% 10%, rgba(200,90,42,0.04) 0%, transparent 60%);
+  pointer-events: none;
 }
 
 .dashboard__welcome::before {
@@ -55,21 +65,24 @@
 }
 
 .dashboard__welcome h1 {
-  font-size: 1.5rem;
+  font-size: clamp(1.5rem, 2.5vw, 2rem);
   font-weight: 700;
+  font-family: var(--font-display);
   color: var(--text-primary);
   letter-spacing: -0.02em;
   margin: 0 0 6px;
-  line-height: 1.2;
+  line-height: 1.15;
 }
 
 .dashboard__welcome p {
-  font-size: 0.875rem;
+  font-size: 0.9375rem;
   color: var(--text-secondary);
-  line-height: 1.55;
-  max-width: 560px;
+  line-height: 1.65;
+  max-width: 480px;
   margin: 0;
 }
+
+.dashboard__welcome > * { position: relative; z-index: 1; }
 
 .dashboard__welcome-actions {
   display: flex;
@@ -109,8 +122,8 @@
   font-size: 1.75rem;
   font-weight: 700;
   color: var(--text-primary);
-  font-family: var(--font-mono);
-  letter-spacing: -0.02em;
+  font-family: var(--font-display);
+  letter-spacing: -0.03em;
   line-height: 1;
   font-feature-settings: 'tnum';
 }

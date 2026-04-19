@@ -5,7 +5,7 @@ const ThemeContext = createContext(null)
 export function ThemeProvider({ children }) {
   const [theme, setTheme] = useState(() => {
     try {
-      const saved = localStorage.getItem('agentmarket_theme')
+      const saved = localStorage.getItem('aztea_theme')
       if (saved === 'light' || saved === 'dark') return saved
     } catch (_) {}
     return window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
@@ -13,7 +13,7 @@ export function ThemeProvider({ children }) {
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
-    try { localStorage.setItem('agentmarket_theme', theme) } catch (_) {}
+    try { localStorage.setItem('aztea_theme', theme) } catch (_) {}
   }, [theme])
 
   const toggle = () => setTheme(t => t === 'dark' ? 'light' : 'dark')

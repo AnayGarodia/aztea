@@ -106,6 +106,13 @@ def test_python_sdk_contract_major_flow(sdk_server):
         input_schema={"type": "object", "properties": {"ticker": {"type": "string"}}},
     )
     agent_id = str(register["agent_id"])
+    approve = requests.post(
+        f"{sdk_server}/admin/agents/{agent_id}/review",
+        headers={"Authorization": f"Bearer {TEST_MASTER_KEY}"},
+        json={"decision": "approve", "note": "sdk contract auto-approval"},
+        timeout=15,
+    )
+    assert approve.status_code == 200, approve.text
     wallet = caller.wallets.me()
     caller.wallets.deposit(wallet_id=str(wallet["wallet_id"]), amount_cents=2_000, memo="sdk test")
     listed = caller.registry.list(tag="sdk-contract")

@@ -45,6 +45,7 @@ _REQUIRED_COLUMNS = {
     "name",
     "description",
     "endpoint_url",
+    "healthcheck_url",
     "price_per_call_usd",
     "avg_latency_ms",
     "total_calls",
@@ -55,6 +56,10 @@ _REQUIRED_COLUMNS = {
     "output_verifier_url",
     "internal_only",
     "status",
+    "review_status",
+    "review_note",
+    "reviewed_at",
+    "reviewed_by",
     "trust_decay_multiplier",
     "last_decay_at",
     "created_at",
@@ -79,6 +84,11 @@ _QUERY_STOP_WORDS = {
     "i",
     "need",
 }
+REVIEW_STATUSES = {
+    "approved",
+    "pending_review",
+    "rejected",
+}
 
 _embeddings_cache_lock = threading.Lock()
 _embeddings_cache_expires_at = 0.0
@@ -102,6 +112,7 @@ def _create_agents_table(conn: sqlite3.Connection, table_name: str = "agents") -
                 name                TEXT NOT NULL UNIQUE,
                 description         TEXT NOT NULL,
                 endpoint_url        TEXT NOT NULL,
+                healthcheck_url     TEXT,
                 price_per_call_usd  REAL NOT NULL CHECK(price_per_call_usd >= 0),
                 avg_latency_ms      REAL NOT NULL DEFAULT 0.0,
                 total_calls         INTEGER NOT NULL DEFAULT 0,
@@ -118,6 +129,10 @@ def _create_agents_table(conn: sqlite3.Connection, table_name: str = "agents") -
                 endpoint_last_error TEXT,
                 internal_only       INTEGER NOT NULL DEFAULT 0,
                 status              TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','suspended','banned')),
+                review_status       TEXT NOT NULL DEFAULT 'approved',
+                review_note         TEXT,
+                reviewed_at         TEXT,
+                reviewed_by         TEXT,
                 trust_decay_multiplier REAL NOT NULL DEFAULT 1.0,
                 last_decay_at       TEXT NOT NULL DEFAULT '{_CANONICAL_CREATED_AT}',
                 created_at          TEXT NOT NULL,
@@ -220,6 +235,8 @@ def _needs_agents_migration(conn: sqlite3.Connection) -> bool:
     if cols["internal_only"]["dflt_value"] != "0":
         return True
     if cols["status"]["dflt_value"] not in {"'active'", '"active"', "active"}:
+        return True
+    if cols["review_status"]["dflt_value"] not in {"'approved'", '"approved"', "approved"}:
         return True
     if cols["trust_decay_multiplier"]["dflt_value"] not in {"1", "1.0", "1.00"}:
         return True
@@ -476,6 +493,7 @@ def _normalize_legacy_agent_row(row: dict, used_agent_ids: set, used_names: set)
     description = str(row.get("description") or "").strip() or "No description provided."
     owner_id = str(row.get("owner_id") or "").strip() or f"agent:{agent_id}"
     endpoint_url = str(row.get("endpoint_url") or "").strip() or f"legacy://missing-endpoint/{agent_id}"
+    healthcheck_url = str(row.get("healthcheck_url") or "").strip() or None
     price_per_call_usd = _to_non_negative_float(row.get("price_per_call_usd"), default=0.0)
     avg_latency_ms = _to_non_negative_float(row.get("avg_latency_ms"), default=0.0)
     total_calls = _to_non_negative_int(row.get("total_calls"), default=0)
@@ -512,6 +530,12 @@ def _normalize_legacy_agent_row(row: dict, used_agent_ids: set, used_names: set)
     status = str(row.get("status") or "active").strip().lower()
     if status not in {"active", "suspended", "banned"}:
         status = "active"
+    review_status = str(row.get("review_status") or "approved").strip().lower()
+    if review_status not in REVIEW_STATUSES:
+        review_status = "approved"
+    review_note = str(row.get("review_note") or "").strip() or None
+    reviewed_at = str(row.get("reviewed_at") or "").strip() or None
+    reviewed_by = str(row.get("reviewed_by") or "").strip() or None
     trust_decay_multiplier = _to_non_negative_float(row.get("trust_decay_multiplier"), default=1.0)
     if trust_decay_multiplier <= 0:
         trust_decay_multiplier = 1.0
@@ -524,6 +548,7 @@ def _normalize_legacy_agent_row(row: dict, used_agent_ids: set, used_names: set)
         name,
         description,
         endpoint_url,
+        healthcheck_url,
         price_per_call_usd,
         avg_latency_ms,
         total_calls,
@@ -540,6 +565,10 @@ def _normalize_legacy_agent_row(row: dict, used_agent_ids: set, used_names: set)
         endpoint_last_error,
         internal_only,
         status,
+        review_status,
+        review_note,
+        reviewed_at,
+        reviewed_by,
         trust_decay_multiplier,
         last_decay_at,
         created_at,
@@ -563,12 +592,13 @@ def _migrate_agents_table(conn: sqlite3.Connection) -> None:
         conn.execute(
             """
             INSERT INTO agents__canonical
-                (agent_id, owner_id, name, description, endpoint_url, price_per_call_usd,
+                (agent_id, owner_id, name, description, endpoint_url, healthcheck_url, price_per_call_usd,
                  avg_latency_ms, total_calls, successful_calls, tags, input_schema,
                  output_schema, output_verifier_url, output_examples, verified,
                  endpoint_health_status, endpoint_consecutive_failures, endpoint_last_checked_at, endpoint_last_error,
-                 internal_only, status, trust_decay_multiplier, last_decay_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 internal_only, status, review_status, review_note, reviewed_at, reviewed_by,
+                 trust_decay_multiplier, last_decay_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             normalized,
         )
@@ -609,6 +639,7 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
         d["output_schema"] = parsed_output_schema if isinstance(parsed_output_schema, dict) else {}
     except (json.JSONDecodeError, TypeError):
         d["output_schema"] = {}
+    d["healthcheck_url"] = str(d.get("healthcheck_url") or "").strip() or None
     d["output_verifier_url"] = (d.get("output_verifier_url") or None)
     try:
         raw_examples = d.get("output_examples")
@@ -630,6 +661,11 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     d["internal_only"] = bool(int(d.get("internal_only") or 0))
     status = str(d.get("status") or "active").strip().lower()
     d["status"] = status if status in {"active", "suspended", "banned"} else "active"
+    review_status = str(d.get("review_status") or "approved").strip().lower()
+    d["review_status"] = review_status if review_status in REVIEW_STATUSES else "approved"
+    d["review_note"] = str(d.get("review_note") or "").strip() or None
+    d["reviewed_at"] = str(d.get("reviewed_at") or "").strip() or None
+    d["reviewed_by"] = str(d.get("reviewed_by") or "").strip() or None
     d["trust_decay_multiplier"] = _to_non_negative_float(d.get("trust_decay_multiplier"), default=1.0) or 1.0
     d["last_decay_at"] = str(d.get("last_decay_at") or _CANONICAL_CREATED_AT)
     d["model_provider"] = str(d.get("model_provider") or "").strip() or None
@@ -651,6 +687,7 @@ def register_agent(
     endpoint_url: str,
     price_per_call_usd: float,
     tags: list,
+    healthcheck_url: str | None = None,
     agent_id: str | None = None,
     input_schema: dict | None = None,
     output_schema: dict | None = None,
@@ -660,6 +697,10 @@ def register_agent(
     endpoint_health_status: str = "unknown",
     internal_only: bool = False,
     status: str = "active",
+    review_status: str | None = None,
+    review_note: str | None = None,
+    reviewed_at: str | None = None,
+    reviewed_by: str | None = None,
     trust_decay_multiplier: float = 1.0,
     owner_id: str | None = None,
     embed_listing: bool = True,
@@ -692,6 +733,7 @@ def register_agent(
     schema_json = json.dumps(normalized_schema, sort_keys=True)
     output_schema_json = json.dumps(normalized_output_schema, sort_keys=True)
     tags_json = json.dumps(normalized_tags)
+    normalized_healthcheck_url = str(healthcheck_url or "").strip() or None
     normalized_verifier_url = str(output_verifier_url or "").strip() or None
     if isinstance(output_examples, list):
         normalized_examples: str | None = json.dumps(
@@ -706,6 +748,17 @@ def register_agent(
     normalized_status = str(status or "active").strip().lower()
     if normalized_status not in {"active", "suspended", "banned"}:
         raise ValueError("status must be one of: active, suspended, banned.")
+    is_internal = internal_only or str(endpoint_url or "").strip().startswith("internal://")
+    normalized_review_status = str(review_status or "").strip().lower()
+    if not normalized_review_status:
+        normalized_review_status = "approved" if is_internal else "pending_review"
+    if normalized_review_status not in REVIEW_STATUSES:
+        raise ValueError(
+            "review_status must be one of: " + ", ".join(sorted(REVIEW_STATUSES)) + "."
+        )
+    normalized_review_note = str(review_note or "").strip() or None
+    normalized_reviewed_at = str(reviewed_at or "").strip() or None
+    normalized_reviewed_by = str(reviewed_by or "").strip() or None
     normalized_decay_multiplier = _to_non_negative_float(trust_decay_multiplier, default=1.0)
     if normalized_decay_multiplier <= 0:
         normalized_decay_multiplier = 1.0
@@ -719,13 +772,14 @@ def register_agent(
         conn.execute(
             """
             INSERT INTO agents
-                (agent_id, owner_id, name, description, endpoint_url,
+                (agent_id, owner_id, name, description, endpoint_url, healthcheck_url,
                  price_per_call_usd, tags, input_schema, output_schema, output_verifier_url,
                  output_examples, verified, endpoint_health_status, endpoint_consecutive_failures,
                  endpoint_last_checked_at, endpoint_last_error,
-                 internal_only, status, trust_decay_multiplier, last_decay_at, created_at,
+                 internal_only, status, review_status, review_note, reviewed_at, reviewed_by,
+                 trust_decay_multiplier, last_decay_at, created_at,
                  model_provider, model_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 aid,
@@ -733,6 +787,7 @@ def register_agent(
                 name,
                 description,
                 endpoint_url,
+                normalized_healthcheck_url,
                 price,
                 tags_json,
                 schema_json,
@@ -743,6 +798,10 @@ def register_agent(
                 normalized_health_status,
                 internal_only_int,
                 normalized_status,
+                normalized_review_status,
+                normalized_review_note,
+                normalized_reviewed_at,
+                normalized_reviewed_by,
                 normalized_decay_multiplier,
                 created_at,
                 created_at,
@@ -789,6 +848,7 @@ def get_agents(
     tag: str | None = None,
     include_internal: bool = False,
     include_banned: bool = False,
+    include_unapproved: bool = True,
     model_provider: str | None = None,
 ) -> list:
     """
@@ -805,6 +865,8 @@ def get_agents(
             where_clauses.append("internal_only = 0")
         if not include_banned:
             where_clauses.append("status NOT IN ('banned', 'suspended')")
+        if not include_unapproved:
+            where_clauses.append("review_status = 'approved'")
         if tag:
             where_clauses.append("tags LIKE ?")
             params.append(f'%"{tag}"%')
@@ -828,7 +890,63 @@ def set_agent_status(agent_id: str, status: str) -> dict | None:
             "UPDATE agents SET status = ? WHERE agent_id = ?",
             (normalized_status, agent_id),
         )
-    return get_agent(agent_id)
+    return get_agent(agent_id, include_unapproved=True)
+
+
+def list_pending_review_agents(limit: int = 200) -> list[dict]:
+    capped = min(max(1, int(limit)), 1000)
+    with _conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM agents
+            WHERE review_status = 'pending_review'
+            ORDER BY created_at DESC, agent_id DESC
+            LIMIT ?
+            """,
+            (capped,),
+        ).fetchall()
+    return [_row_to_dict(row) for row in rows]
+
+
+def set_agent_review_decision(
+    agent_id: str,
+    *,
+    decision: str,
+    reviewed_by: str,
+    note: str | None = None,
+    reviewed_at: str | None = None,
+) -> dict | None:
+    normalized_decision = str(decision or "").strip().lower()
+    if normalized_decision not in {"approve", "reject"}:
+        raise ValueError("decision must be one of: approve, reject.")
+    target_status = "approved" if normalized_decision == "approve" else "rejected"
+    normalized_reviewed_by = str(reviewed_by or "").strip()
+    if not normalized_reviewed_by:
+        raise ValueError("reviewed_by must be a non-empty string.")
+    normalized_note = str(note or "").strip() or None
+    normalized_reviewed_at = str(reviewed_at or datetime.now(timezone.utc).isoformat()).strip()
+    with _conn() as conn:
+        updated = conn.execute(
+            """
+            UPDATE agents
+            SET review_status = ?,
+                review_note = ?,
+                reviewed_at = ?,
+                reviewed_by = ?
+            WHERE agent_id = ?
+            """,
+            (
+                target_status,
+                normalized_note,
+                normalized_reviewed_at,
+                normalized_reviewed_by,
+                agent_id,
+            ),
+        ).rowcount
+    if updated == 0:
+        return None
+    return get_agent(agent_id, include_unapproved=True)
 
 
 def set_agent_verified(agent_id: str, verified: bool) -> dict | None:
@@ -837,7 +955,7 @@ def set_agent_verified(agent_id: str, verified: bool) -> dict | None:
             "UPDATE agents SET verified = ? WHERE agent_id = ?",
             (1 if verified else 0, agent_id),
         )
-    return get_agent(agent_id)
+    return get_agent(agent_id, include_unapproved=True)
 
 
 def set_agent_endpoint_health(
@@ -874,7 +992,7 @@ def set_agent_endpoint_health(
                 agent_id,
             ),
         )
-    return get_agent(agent_id)
+    return get_agent(agent_id, include_unapproved=True)
 
 
 def set_agent_output_examples(agent_id: str, output_examples: list[dict] | None) -> dict | None:
@@ -892,7 +1010,7 @@ def set_agent_output_examples(agent_id: str, output_examples: list[dict] | None)
             "UPDATE agents SET output_examples = ? WHERE agent_id = ?",
             (normalized_examples, agent_id),
         )
-    return get_agent(agent_id)
+    return get_agent(agent_id, include_unapproved=True)
 
 
 def touch_agent_decay(agent_id: str, at_iso: str) -> None:
@@ -913,11 +1031,15 @@ def set_agent_decay_multiplier(agent_id: str, multiplier: float, at_iso: str) ->
         )
 
 
-def get_agent(agent_id: str) -> dict | None:
+def get_agent(agent_id: str, *, include_unapproved: bool = True) -> dict | None:
     """Return a single agent listing by ID, or None if not found."""
+    where_sql = "agent_id = ?"
+    if not include_unapproved:
+        where_sql += " AND review_status = 'approved'"
     with _conn() as conn:
         row = conn.execute(
-            "SELECT * FROM agents WHERE agent_id = ?", (agent_id,)
+            f"SELECT * FROM agents WHERE {where_sql}",
+            (agent_id,),
         ).fetchone()
     return _row_to_dict(row) if row else None
 
@@ -1168,6 +1290,7 @@ def search_agents(
     max_price_cents: int | None = None,
     required_input_fields: list[str] | None = None,
     caller_trust: float | None = None,
+    include_unapproved: bool = True,
     model_provider: str | None = None,
 ) -> list[dict]:
     normalized_query = str(query or "").strip()
@@ -1187,7 +1310,7 @@ def search_agents(
         normalized_caller_trust = _normalize_min_trust(caller_trust)
     required_fields = _required_input_fields_set(required_input_fields)
     query_vector = np.asarray(embeddings.embed_text(normalized_query), dtype=np.float32)
-    agents = get_agents_with_reputation()
+    agents = get_agents_with_reputation(include_unapproved=include_unapproved)
     vectors_by_agent = _load_embeddings_for_agents(
         {
             str(agent.get("agent_id") or "").strip()
@@ -1315,16 +1438,27 @@ def search_agents(
     ]
 
 
-def get_agents_with_reputation(tag: str | None = None, model_provider: str | None = None) -> list:
+def get_agents_with_reputation(
+    tag: str | None = None,
+    *,
+    include_unapproved: bool = True,
+    model_provider: str | None = None,
+) -> list:
     """Return listings enriched with trust/reputation fields for ranking."""
     from core import reputation
 
-    return reputation.enrich_agent_records(get_agents(tag=tag, model_provider=model_provider))
+    return reputation.enrich_agent_records(
+        get_agents(
+            tag=tag,
+            include_unapproved=include_unapproved,
+            model_provider=model_provider,
+        )
+    )
 
 
-def get_agent_with_reputation(agent_id: str) -> dict | None:
+def get_agent_with_reputation(agent_id: str, *, include_unapproved: bool = True) -> dict | None:
     """Return one enriched listing by agent_id, or None if missing."""
     from core import reputation
 
-    agent = get_agent(agent_id)
+    agent = get_agent(agent_id, include_unapproved=include_unapproved)
     return reputation.enrich_agent_record(agent) if agent else None

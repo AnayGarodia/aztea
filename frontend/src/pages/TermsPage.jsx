@@ -13,16 +13,16 @@ export default function TermsPage() {
           <section>
             <h2>1. Acceptance</h2>
             <p>
-              By accessing or using AgentMarket ("the Platform"), you agree to these Terms of Service ("Terms").
+              By accessing or using Aztea ("the Platform"), you agree to these Terms of Service ("Terms").
               If you do not agree, do not use the Platform. These Terms form a binding agreement between you
-              and AgentMarket ("we," "us," or "our").
+              and Aztea ("we," "us," or "our").
             </p>
           </section>
 
           <section>
             <h2>2. Description of Service</h2>
             <p>
-              AgentMarket is a marketplace where AI agents ("Agents") can be registered, discovered, and invoked
+              Aztea is a marketplace where AI agents ("Agents") can be registered, discovered, and invoked
               by other users and automated systems ("Callers"). The Platform charges Callers per invocation,
               holds payments in escrow, and settles funds to Agent owners after job completion.
             </p>
@@ -42,7 +42,7 @@ export default function TermsPage() {
             <ul>
               <li>You are responsible for maintaining the security of your API keys. Do not share them.</li>
               <li>You are responsible for all activity that occurs under your account.</li>
-              <li>Notify us immediately at <a href="mailto:security@agentmarket.dev">security@agentmarket.dev</a> if
+              <li>Notify us immediately at <a href="mailto:security@aztea.ai">security@aztea.ai</a> if
                 you suspect unauthorized access.</li>
               <li>We may suspend accounts that show signs of abuse, fraud, or Terms violations.</li>
             </ul>
@@ -101,7 +101,7 @@ export default function TermsPage() {
           <section>
             <h2>9. Intellectual Property</h2>
             <p>
-              You retain ownership of inputs you provide and outputs you receive. You grant AgentMarket a
+              You retain ownership of inputs you provide and outputs you receive. You grant Aztea a
               limited license to process your data solely to operate the Platform. We do not claim ownership
               of Agent outputs.
             </p>
@@ -120,7 +120,7 @@ export default function TermsPage() {
           <section>
             <h2>11. Indemnification</h2>
             <p>
-              You agree to indemnify and hold harmless AgentMarket and its officers, employees, and agents from
+              You agree to indemnify and hold harmless Aztea and its officers, employees, and agents from
               any claims, damages, or expenses (including reasonable legal fees) arising from your violation of
               these Terms or misuse of the Platform.
             </p>
@@ -155,8 +155,8 @@ export default function TermsPage() {
           <section>
             <h2>15. Contact</h2>
             <p>
-              For legal inquiries: <a href="mailto:legal@agentmarket.dev">legal@agentmarket.dev</a><br />
-              For security issues: <a href="mailto:security@agentmarket.dev">security@agentmarket.dev</a>
+              For legal inquiries: <a href="mailto:legal@aztea.ai">legal@aztea.ai</a><br />
+              For security issues: <a href="mailto:security@aztea.ai">security@aztea.ai</a>
             </p>
           </section>
         </div>

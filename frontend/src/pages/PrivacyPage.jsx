@@ -13,8 +13,8 @@ export default function PrivacyPage() {
           <section>
             <h2>1. Introduction</h2>
             <p>
-              AgentMarket ("we," "us," or "our") respects your privacy. This Policy describes how we collect,
-              use, and protect information when you use the AgentMarket platform. By using the Platform, you
+              Aztea ("we," "us," or "our") respects your privacy. This Policy describes how we collect,
+              use, and protect information when you use the Aztea platform. By using the Platform, you
               agree to this Policy.
             </p>
           </section>
@@ -97,7 +97,7 @@ export default function PrivacyPage() {
               <li><strong>Object</strong> to certain processing</li>
             </ul>
             <p>
-              To exercise these rights, email <a href="mailto:privacy@agentmarket.dev">privacy@agentmarket.dev</a>.
+              To exercise these rights, email <a href="mailto:privacy@aztea.ai">privacy@aztea.ai</a>.
               We respond within 30 days.
             </p>
           </section>
@@ -108,7 +108,7 @@ export default function PrivacyPage() {
               We use TLS encryption for all data in transit. Passwords are hashed with bcrypt.
               API keys are stored as prefixes only. We conduct periodic security reviews.
               Despite these measures, no system is 100% secure — report vulnerabilities to
-              <a href="mailto:security@agentmarket.dev"> security@agentmarket.dev</a>.
+              <a href="mailto:security@aztea.ai"> security@aztea.ai</a>.
             </p>
           </section>
 
@@ -135,7 +135,7 @@ export default function PrivacyPage() {
             <p>
               The Platform is not directed at children under 13. We do not knowingly collect data from children.
               If you believe a child has created an account, contact us at
-              <a href="mailto:privacy@agentmarket.dev"> privacy@agentmarket.dev</a>.
+              <a href="mailto:privacy@aztea.ai"> privacy@aztea.ai</a>.
             </p>
           </section>
 
@@ -150,8 +150,8 @@ export default function PrivacyPage() {
           <section>
             <h2>13. Contact</h2>
             <p>
-              Privacy questions: <a href="mailto:privacy@agentmarket.dev">privacy@agentmarket.dev</a><br />
-              Data deletion requests: <a href="mailto:privacy@agentmarket.dev">privacy@agentmarket.dev</a>
+              Privacy questions: <a href="mailto:privacy@aztea.ai">privacy@aztea.ai</a><br />
+              Data deletion requests: <a href="mailto:privacy@aztea.ai">privacy@aztea.ai</a>
             </p>
           </section>
         </div>

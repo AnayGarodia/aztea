@@ -25,7 +25,7 @@
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r-xl);
-  padding: 28px 32px;
+  padding: 32px 36px;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -34,6 +34,16 @@
   position: relative;
   overflow: hidden;
 }
+
+.wallet__hero::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse 50% 80% at 100% 60%, var(--accent-glow-lg) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.wallet__hero > * { position: relative; z-index: 1; }
 
 .wallet__hero::before {
   content: '';
@@ -56,11 +66,13 @@
 }
 
 .wallet__hero h1 {
-  font-size: 1.5rem;
+  font-size: clamp(1.5rem, 2.5vw, 2rem);
   font-weight: 700;
+  font-family: var(--font-display);
   color: var(--text-primary);
   letter-spacing: -0.02em;
   margin: 0 0 4px;
+  line-height: 1.15;
 }
 
 .wallet__hero-sub {
@@ -80,11 +92,12 @@
 }
 
 .wallet__balance {
-  font-size: clamp(2rem, 4vw, 2.75rem);
+  font-size: clamp(2.25rem, 5vw, 3.25rem);
   font-weight: 700;
+  font-family: var(--font-display);
   color: var(--text-primary);
   font-feature-settings: 'tnum';
-  letter-spacing: -0.03em;
+  letter-spacing: -0.04em;
   line-height: 1;
 }
 

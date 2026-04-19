@@ -505,6 +505,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/agents/review-queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Admin Agents Review Queue */
+        get: operations["admin_agents_review_queue_admin_agents_review_queue_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/agents/{agent_id}/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Admin Review Agent */
+        post: operations["admin_review_agent_admin_agents__agent_id__review_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/registry/agents/{agent_id}/call": {
         parameters: {
             query?: never;
@@ -1405,6 +1439,7 @@ export interface components {
          * @example {
          *       "description": "Summarizes SEC 10-Q filings into investment briefs.",
          *       "endpoint_url": "https://example.com/analyze",
+         *       "healthcheck_url": "https://example.com/health",
          *       "input_schema": {
          *         "properties": {
          *           "ticker": {
@@ -1437,6 +1472,8 @@ export interface components {
             description: string;
             /** Endpoint Url */
             endpoint_url: string;
+            /** Healthcheck Url */
+            healthcheck_url?: string | null;
             /** Price Per Call Usd */
             price_per_call_usd: number;
             /** Tags */
@@ -1479,8 +1516,12 @@ export interface components {
             description: string;
             /** Endpoint Url */
             endpoint_url: string;
+            /** Healthcheck Url */
+            healthcheck_url?: string | null;
             /** Price Per Call Usd */
             price_per_call_usd: number;
+            /** Caller Charge Cents */
+            caller_charge_cents?: number | null;
             /** Tags */
             tags?: string[];
             /** Input Schema */
@@ -1513,6 +1554,17 @@ export interface components {
              * @default active
              */
             status: string;
+            /**
+             * Review Status
+             * @default approved
+             */
+            review_status: string;
+            /** Review Note */
+            review_note?: string | null;
+            /** Reviewed At */
+            reviewed_at?: string | null;
+            /** Reviewed By */
+            reviewed_by?: string | null;
             /** Caller Trust Min */
             caller_trust_min?: number | null;
             /** Trust Score */
@@ -1527,6 +1579,22 @@ export interface components {
             dispute_rate?: number | null;
         } & {
             [key: string]: unknown;
+        };
+        /**
+         * AgentReviewDecisionRequest
+         * @example {
+         *       "decision": "approve",
+         *       "note": "Endpoint passed review checklist."
+         *     }
+         */
+        AgentReviewDecisionRequest: {
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "approve" | "reject";
+            /** Note */
+            note?: string | null;
         };
         /** ApiKeyCreateResponse */
         ApiKeyCreateResponse: {
@@ -1950,6 +2018,13 @@ export interface components {
              * @description Optional max price the caller is willing to pay in cents. Rejected with 400 if agent.price_cents > budget_cents.
              */
             budget_cents?: number | null;
+            /**
+             * Fee Bearer Policy
+             * @description Who bears platform fees. 'caller' charges caller price+fee, worker gets full listed price. 'worker' keeps caller price unchanged and deducts fee from worker payout. 'split' splits fee between caller and worker.
+             * @default caller
+             * @enum {string}
+             */
+            fee_bearer_policy: "worker" | "caller" | "split";
         };
         /**
          * JobDisputeRequest
@@ -2144,6 +2219,12 @@ export interface components {
             status: string;
             /** Price Cents */
             price_cents: number;
+            /** Caller Charge Cents */
+            caller_charge_cents?: number | null;
+            /** Platform Fee Pct At Create */
+            platform_fee_pct_at_create?: number | null;
+            /** Fee Bearer Policy */
+            fee_bearer_policy?: string | null;
             /** Input Payload */
             input_payload: {
                 [key: string]: components["schemas"]["JsonValue"];
@@ -2432,6 +2513,8 @@ export interface components {
             agent_id: string;
             /** Message */
             message: string;
+            /** Review Status */
+            review_status?: string | null;
             agent?: components["schemas"]["AgentResponse"] | null;
         };
         /**
@@ -4698,6 +4781,151 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DynamicObjectResponse"];
+                };
+            };
+            /** @description Bad request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid authorization header. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Rate limit exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
+                };
+            };
+            /** @description Internal server error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    admin_agents_review_queue_admin_agents_review_queue_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegistryAgentsResponse"];
+                };
+            };
+            /** @description Missing or invalid authorization header. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Rate limit exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
+                };
+            };
+            /** @description Internal server error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    admin_review_agent_admin_agents__agent_id__review_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentReviewDecisionRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -7957,13 +8185,13 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Validation Error */
+            /** @description Validation error. */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Rate limit exceeded. */
@@ -8321,13 +8549,13 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Validation Error */
+            /** @description Validation error. */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Rate limit exceeded. */

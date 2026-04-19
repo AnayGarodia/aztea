@@ -35,10 +35,12 @@
 
 .worker-page__header h1 {
   margin: 0 0 4px;
-  font-size: 1.5rem;
+  font-size: clamp(1.5rem, 2.5vw, 2rem);
   font-weight: 700;
+  font-family: var(--font-display);
   color: var(--text-primary);
   letter-spacing: -0.02em;
+  line-height: 1.15;
 }
 
 .worker-page__header p {

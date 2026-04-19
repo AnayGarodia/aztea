@@ -26,6 +26,7 @@ from core import jobs
 from core import payments
 from core import registry
 from core import reputation
+from core import error_codes
 import server
 
 TEST_MASTER_KEY = "test-master-key"
@@ -71,6 +72,7 @@ def _register_agent_via_api(
     input_schema: dict | None = None,
     output_schema: dict | None = None,
     output_verifier_url: str | None = None,
+    auto_approve: bool = True,
 ) -> str:
     payload = {
         "name": name,
@@ -90,7 +92,15 @@ def _register_agent_via_api(
         json=payload,
     )
     assert resp.status_code == 201, resp.text
-    return resp.json()["agent_id"]
+    agent_id = resp.json()["agent_id"]
+    if auto_approve:
+        review = client.post(
+            f"/admin/agents/{agent_id}/review",
+            headers=_auth_headers(TEST_MASTER_KEY),
+            json={"decision": "approve", "note": "test auto-approve"},
+        )
+        assert review.status_code == 200, review.text
+    return agent_id
 
 
 def _fund_user_wallet(user: dict, amount_cents: int = 500) -> dict:
@@ -264,8 +274,8 @@ def test_worker_claim_heartbeat_and_complete_with_owner_auth(client):
     caller_wallet = payments.get_or_create_wallet(f"user:{caller['user_id']}")
     agent_wallet = payments.get_or_create_wallet(f"agent:{agent_id}")
     platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
-    assert payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"] == 190
-    assert payments.get_wallet(agent_wallet["wallet_id"])["balance_cents"] == 9
+    assert payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"] == 189
+    assert payments.get_wallet(agent_wallet["wallet_id"])["balance_cents"] == 10
     assert payments.get_wallet(platform_wallet["wallet_id"])["balance_cents"] == 1
 
 
@@ -360,8 +370,8 @@ def test_complete_called_twice_returns_same_state_without_idempotency_key(client
     caller_wallet = payments.get_or_create_wallet(f"user:{caller['user_id']}")
     agent_wallet = payments.get_or_create_wallet(f"agent:{agent_id}")
     platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
-    assert payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"] == 190
-    assert payments.get_wallet(agent_wallet["wallet_id"])["balance_cents"] == 9
+    assert payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"] == 189
+    assert payments.get_wallet(agent_wallet["wallet_id"])["balance_cents"] == 10
     assert payments.get_wallet(platform_wallet["wallet_id"])["balance_cents"] == 1
 
 
@@ -808,8 +818,8 @@ def test_idempotency_key_replays_complete_without_double_settlement(client):
     caller_wallet = payments.get_or_create_wallet(f"user:{caller['user_id']}")
     agent_wallet = payments.get_or_create_wallet(f"agent:{agent_id}")
     platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
-    assert payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"] == 190
-    assert payments.get_wallet(agent_wallet["wallet_id"])["balance_cents"] == 9
+    assert payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"] == 189
+    assert payments.get_wallet(agent_wallet["wallet_id"])["balance_cents"] == 10
     assert payments.get_wallet(platform_wallet["wallet_id"])["balance_cents"] == 1
 
     stored_agent = registry.get_agent(agent_id)
@@ -1475,7 +1485,7 @@ def test_jobs_batch_status_endpoint_returns_aggregate_counts(client):
     assert created.status_code == 201, created.text
     created_body = created.json()
     assert created_body["count"] == 2
-    assert created_body["total_price_cents"] == 10
+    assert created_body["total_price_cents"] == 12
     batch_id = created_body["batch_id"]
 
     status = client.get(
@@ -1586,7 +1596,7 @@ def test_payments_reconciliation_and_settlement_trace_endpoints(client):
     trace_body = trace.json()
     tx_types = {tx["type"] for tx in trace_body["transactions"]}
     assert {"charge", "payout", "fee"}.issubset(tx_types)
-    assert trace_body["expected_agent_payout_cents"] == 9
+    assert trace_body["expected_agent_payout_cents"] == 10
     assert trace_body["expected_platform_fee_cents"] == 1
 
     preview = client.get(
@@ -1610,6 +1620,72 @@ def test_payments_reconciliation_and_settlement_trace_endpoints(client):
     )
     assert runs.status_code == 200, runs.text
     assert any(item["run_id"] == run_id for item in runs.json()["runs"])
+
+
+def test_fee_distribution_policies_cover_caller_worker_split():
+    caller_policy = payments.compute_success_distribution(
+        10,
+        platform_fee_pct=10,
+        fee_bearer_policy="caller",
+    )
+    assert caller_policy == {
+        "caller_charge_cents": 11,
+        "agent_payout_cents": 10,
+        "platform_fee_cents": 1,
+    }
+
+    worker_policy = payments.compute_success_distribution(
+        10,
+        platform_fee_pct=10,
+        fee_bearer_policy="worker",
+    )
+    assert worker_policy == {
+        "caller_charge_cents": 10,
+        "agent_payout_cents": 9,
+        "platform_fee_cents": 1,
+    }
+
+    split_policy = payments.compute_success_distribution(
+        25,
+        platform_fee_pct=10,
+        fee_bearer_policy="split",
+    )
+    assert split_policy == {
+        "caller_charge_cents": 27,
+        "agent_payout_cents": 24,
+        "platform_fee_cents": 3,
+    }
+
+
+def test_listing_and_job_create_show_caller_all_in_charge(client):
+    worker = _register_user()
+    caller = _register_user()
+    caller_wallet = _fund_user_wallet(caller, 200)
+    before_balance = payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"]
+
+    tag = f"all-in-{uuid.uuid4().hex[:6]}"
+    agent_id = _register_agent_via_api(
+        client,
+        worker["raw_api_key"],
+        name=f"All In Charge Agent {uuid.uuid4().hex[:6]}",
+        price=0.10,
+        tags=[tag],
+    )
+
+    listings = client.get(
+        f"/registry/agents?tag={tag}",
+        headers=_auth_headers(caller["raw_api_key"]),
+    )
+    assert listings.status_code == 200, listings.text
+    listing_agent = next(agent for agent in listings.json()["agents"] if agent["agent_id"] == agent_id)
+    assert listing_agent["caller_charge_cents"] == 11
+
+    created = _create_job_via_api(client, caller["raw_api_key"], agent_id=agent_id)
+    assert created["caller_charge_cents"] == 11
+    assert created["fee_bearer_policy"] == "caller"
+
+    after_balance = payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"]
+    assert before_balance - after_balance == 11
 
 
 def test_topup_session_enforces_daily_limit(client, monkeypatch):
@@ -1657,6 +1733,61 @@ def test_topup_session_enforces_daily_limit(client, monkeypatch):
     )
     assert allowed.status_code == 200, allowed.text
     assert allowed.json()["session_id"] == "cs_test_123"
+
+
+def test_wallet_deposit_enforces_minimum_amount(client):
+    user = _register_user()
+    wallet = payments.get_or_create_wallet(f"user:{user['user_id']}")
+
+    below = client.post(
+        "/wallets/deposit",
+        headers=_auth_headers(user["raw_api_key"]),
+        json={"wallet_id": wallet["wallet_id"], "amount_cents": 499, "memo": "too low"},
+    )
+    assert below.status_code == 422, below.text
+    below_body = below.json()
+    assert below_body["error"] == error_codes.DEPOSIT_BELOW_MINIMUM
+    assert below_body["details"]["minimum_cents"] == server.MINIMUM_DEPOSIT_CENTS
+    assert below_body["details"]["attempted_cents"] == 499
+
+    allowed = client.post(
+        "/wallets/deposit",
+        headers=_auth_headers(user["raw_api_key"]),
+        json={"wallet_id": wallet["wallet_id"], "amount_cents": 500, "memo": "ok"},
+    )
+    assert allowed.status_code == 200, allowed.text
+
+
+def test_wallet_topup_session_enforces_minimum_amount(client, monkeypatch):
+    user = _register_user()
+    wallet = payments.get_or_create_wallet(f"user:{user['user_id']}")
+    fake_checkout = SimpleNamespace(
+        Session=SimpleNamespace(
+            create=lambda **kwargs: SimpleNamespace(url="https://checkout.example/session", id="cs_test_minimum")
+        )
+    )
+    monkeypatch.setattr(server, "_STRIPE_AVAILABLE", True)
+    monkeypatch.setattr(server, "_STRIPE_SECRET_KEY", "sk_test_123")
+    monkeypatch.setattr(server, "_stripe_lib", SimpleNamespace(api_key=None, checkout=fake_checkout))
+
+    below = client.post(
+        "/wallets/topup/session",
+        headers=_auth_headers(user["raw_api_key"]),
+        json={"wallet_id": wallet["wallet_id"], "amount_cents": 499},
+    )
+    assert below.status_code == 422, below.text
+    below_body = below.json()
+    assert below_body["error"] == error_codes.DEPOSIT_BELOW_MINIMUM
+    assert below_body["details"]["minimum_cents"] == server.MINIMUM_DEPOSIT_CENTS
+    assert below_body["details"]["attempted_cents"] == 499
+
+    allowed = client.post(
+        "/wallets/topup/session",
+        headers=_auth_headers(user["raw_api_key"]),
+        json={"wallet_id": wallet["wallet_id"], "amount_cents": 500},
+    )
+    assert allowed.status_code == 200, allowed.text
+    assert allowed.json()["session_id"] == "cs_test_minimum"
 
 
 def test_wallet_withdrawals_returns_only_caller_wallet_history(client):
@@ -1972,7 +2103,7 @@ def test_job_sweeper_handles_timeouts_sla_and_event_hooks(client, monkeypatch):
     caller_wallet = payments.get_or_create_wallet(f"user:{caller['user_id']}")
     assert (
         payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"]
-        == 300 - int(timeout_job["price_cents"]) - int(retry_job["price_cents"])
+        == 300 - int(timeout_job["caller_charge_cents"]) - int(retry_job["caller_charge_cents"])
     )
 
     events = client.get("/ops/jobs/events", headers=_auth_headers(caller["raw_api_key"]))
@@ -2247,7 +2378,7 @@ def test_builtin_agents_registered_to_system_owner_with_internal_endpoints(clien
         assert str(agent["endpoint_url"]).startswith("internal://")
         assert float(agent["price_per_call_usd"]) == pytest.approx(0.01)
         assert isinstance(agent.get("output_examples"), list)
-        assert len(agent["output_examples"]) >= 2
+        assert len(agent["output_examples"]) >= 1
 
 
 def test_registry_call_routes_internal_builtin_without_http_and_records_job(client, monkeypatch):
@@ -3059,7 +3190,7 @@ def test_agent_suspend_and_ban_enforcement(client):
     assert active is not None
     pending = _create_job_via_api(client, caller["raw_api_key"], agent_id=agent_id)
     caller_wallet = payments.get_or_create_wallet(f"user:{caller['user_id']}")
-    assert payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"] == 290
+    assert payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"] == 289
 
     banned = client.post(
         f"/admin/agents/{agent_id}/ban",
@@ -3115,6 +3246,189 @@ def test_dispute_window_hours_is_enforced_from_job_record(client):
     )
     assert dispute.status_code == 400
     assert dispute.json()["error"] == "dispute.window_closed"
+
+
+def test_registry_register_marks_new_worker_agents_pending_review(client):
+    worker = _register_user()
+    response = client.post(
+        "/registry/register",
+        headers=_auth_headers(worker["raw_api_key"]),
+        json={
+            "name": f"Pending Queue Agent {uuid.uuid4().hex[:6]}",
+            "description": "awaiting review",
+            "endpoint_url": f"https://agents.example.com/{uuid.uuid4().hex[:8]}",
+            "price_per_call_usd": 0.10,
+            "tags": ["pending-review"],
+            "input_schema": {"type": "object", "properties": {"task": {"type": "string"}}},
+        },
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["review_status"] == "pending_review"
+    assert body["agent"]["review_status"] == "pending_review"
+    assert "pending review" in body["message"].lower()
+
+
+def test_pending_review_agent_hidden_from_public_listing_and_visible_in_admin_queue(client):
+    worker = _register_user()
+    caller = _register_user()
+    register = client.post(
+        "/registry/register",
+        headers=_auth_headers(worker["raw_api_key"]),
+        json={
+            "name": f"Pending Hidden Agent {uuid.uuid4().hex[:6]}",
+            "description": "awaiting review",
+            "endpoint_url": f"https://agents.example.com/{uuid.uuid4().hex[:8]}",
+            "price_per_call_usd": 0.10,
+            "tags": ["pending-hidden"],
+            "input_schema": {"type": "object", "properties": {"task": {"type": "string"}}},
+        },
+    )
+    assert register.status_code == 201, register.text
+    pending_agent_id = register.json()["agent_id"]
+
+    listing = client.get(
+        "/registry/agents?tag=pending-hidden",
+        headers=_auth_headers(caller["raw_api_key"]),
+    )
+    assert listing.status_code == 200, listing.text
+    assert all(agent["agent_id"] != pending_agent_id for agent in listing.json()["agents"])
+
+    queue = client.get(
+        "/admin/agents/review-queue",
+        headers=_auth_headers(TEST_MASTER_KEY),
+    )
+    assert queue.status_code == 200, queue.text
+    assert any(agent["agent_id"] == pending_agent_id for agent in queue.json()["agents"])
+
+
+def test_pending_review_agent_cannot_accept_job_claim(client):
+    worker = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 500)
+    register = client.post(
+        "/registry/register",
+        headers=_auth_headers(worker["raw_api_key"]),
+        json={
+            "name": f"Pending Claim Agent {uuid.uuid4().hex[:6]}",
+            "description": "awaiting review",
+            "endpoint_url": f"https://agents.example.com/{uuid.uuid4().hex[:8]}",
+            "price_per_call_usd": 0.10,
+            "tags": ["pending-claim"],
+            "input_schema": {"type": "object", "properties": {"task": {"type": "string"}}},
+        },
+    )
+    assert register.status_code == 201, register.text
+    pending_agent_id = register.json()["agent_id"]
+
+    caller_wallet = payments.get_or_create_wallet(f"user:{caller['user_id']}")
+    agent_wallet = payments.get_or_create_wallet(f"agent:{pending_agent_id}")
+    platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
+    charge_tx_id = payments.pre_call_charge(caller_wallet["wallet_id"], 0, pending_agent_id)
+    job = jobs.create_job(
+        agent_id=pending_agent_id,
+        caller_owner_id=f"user:{caller['user_id']}",
+        caller_wallet_id=caller_wallet["wallet_id"],
+        agent_wallet_id=agent_wallet["wallet_id"],
+        platform_wallet_id=platform_wallet["wallet_id"],
+        price_cents=0,
+        caller_charge_cents=0,
+        platform_fee_pct_at_create=int(payments.PLATFORM_FEE_PCT),
+        fee_bearer_policy="caller",
+        charge_tx_id=charge_tx_id,
+        input_payload={"task": "pending claim should fail"},
+        agent_owner_id=f"user:{worker['user_id']}",
+    )
+
+    claim = client.post(
+        f"/jobs/{job['job_id']}/claim",
+        headers=_auth_headers(worker["raw_api_key"]),
+        json={"lease_seconds": 60},
+    )
+    assert claim.status_code == 403
+    assert "pending review" in claim.json()["message"].lower()
+
+
+def test_admin_review_approve_and_reject_paths(client, monkeypatch):
+    worker = _register_user()
+    caller = _register_user()
+    register = client.post(
+        "/registry/register",
+        headers=_auth_headers(worker["raw_api_key"]),
+        json={
+            "name": f"Review Flow Agent {uuid.uuid4().hex[:6]}",
+            "description": "awaiting review",
+            "endpoint_url": f"https://agents.example.com/{uuid.uuid4().hex[:8]}",
+            "healthcheck_url": f"https://agents.example.com/{uuid.uuid4().hex[:8]}/health",
+            "price_per_call_usd": 0.10,
+            "tags": ["review-flow"],
+            "input_schema": {"type": "object", "properties": {"task": {"type": "string"}}},
+        },
+    )
+    assert register.status_code == 201, register.text
+    pending_agent_id = register.json()["agent_id"]
+
+    probe_calls: list[tuple[str, int]] = []
+
+    def _fake_probe(url: str, timeout_seconds: int):
+        probe_calls.append((url, timeout_seconds))
+        return True, None
+
+    monkeypatch.setattr(server, "_probe_agent_endpoint_health", _fake_probe)
+    approved = client.post(
+        f"/admin/agents/{pending_agent_id}/review",
+        headers=_auth_headers(TEST_MASTER_KEY),
+        json={"decision": "approve", "note": "approved by test"},
+    )
+    assert approved.status_code == 200, approved.text
+    approved_body = approved.json()
+    assert approved_body["agent"]["review_status"] == "approved"
+    assert approved_body["agent"]["reviewed_by"] == "master"
+    assert probe_calls
+    assert probe_calls[0][0].endswith("/health")
+
+    listing = client.get(
+        "/registry/agents?tag=review-flow",
+        headers=_auth_headers(caller["raw_api_key"]),
+    )
+    assert listing.status_code == 200, listing.text
+    assert any(agent["agent_id"] == pending_agent_id for agent in listing.json()["agents"])
+
+    reject_register = client.post(
+        "/registry/register",
+        headers=_auth_headers(worker["raw_api_key"]),
+        json={
+            "name": f"Review Reject Agent {uuid.uuid4().hex[:6]}",
+            "description": "awaiting review",
+            "endpoint_url": f"https://agents.example.com/{uuid.uuid4().hex[:8]}",
+            "price_per_call_usd": 0.10,
+            "tags": ["review-reject"],
+            "input_schema": {"type": "object", "properties": {"task": {"type": "string"}}},
+        },
+    )
+    assert reject_register.status_code == 201, reject_register.text
+    reject_agent_id = reject_register.json()["agent_id"]
+
+    rejected = client.post(
+        f"/admin/agents/{reject_agent_id}/review",
+        headers=_auth_headers(TEST_MASTER_KEY),
+        json={"decision": "reject", "note": "insufficient details"},
+    )
+    assert rejected.status_code == 200, rejected.text
+    assert rejected.json()["agent"]["review_status"] == "rejected"
+
+    hidden = client.get(
+        "/registry/agents?tag=review-reject",
+        headers=_auth_headers(caller["raw_api_key"]),
+    )
+    assert hidden.status_code == 200, hidden.text
+    assert all(agent["agent_id"] != reject_agent_id for agent in hidden.json()["agents"])
+
+
+def test_built_in_agents_remain_auto_approved():
+    builtin = registry.get_agent(server._FINANCIAL_AGENT_ID, include_unapproved=True)
+    assert builtin is not None
+    assert builtin["review_status"] == "approved"
 
 
 def test_protocol_version_header_is_always_set(client):

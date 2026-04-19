@@ -67,6 +67,11 @@ CLARIFICATION_TIMEOUT_POLICIES = {
     "fail",
     "proceed",
 }
+FEE_BEARER_POLICIES = {
+    "worker",
+    "caller",
+    "split",
+}
 
 OUTPUT_VERIFICATION_STATUSES = {
     "not_required",
@@ -97,6 +102,9 @@ _CANONICAL_JOB_COLUMNS = (
     "platform_wallet_id",
     "status",
     "price_cents",
+    "caller_charge_cents",
+    "platform_fee_pct_at_create",
+    "fee_bearer_policy",
     "charge_tx_id",
     "input_payload",
     "output_payload",
@@ -214,6 +222,13 @@ def _normalize_output_verification_status(value: str | None) -> str:
     normalized = str(value or "").strip().lower() or "not_required"
     if normalized not in OUTPUT_VERIFICATION_STATUSES:
         return "not_required"
+    return normalized
+
+
+def _normalize_fee_bearer_policy(value: str | None) -> str:
+    normalized = str(value or "").strip().lower() or "caller"
+    if normalized not in FEE_BEARER_POLICIES:
+        return "caller"
     return normalized
 
 
@@ -362,6 +377,9 @@ def _create_jobs_table(conn: sqlite3.Connection, table_name: str = "jobs") -> No
             platform_wallet_id  TEXT NOT NULL,
             status              TEXT NOT NULL,
             price_cents         INTEGER NOT NULL CHECK(price_cents >= 0),
+            caller_charge_cents INTEGER NOT NULL CHECK(caller_charge_cents >= 0),
+            platform_fee_pct_at_create INTEGER NOT NULL DEFAULT 10 CHECK(platform_fee_pct_at_create >= 0 AND platform_fee_pct_at_create <= 100),
+            fee_bearer_policy   TEXT NOT NULL DEFAULT 'caller',
             charge_tx_id        TEXT NOT NULL,
             input_payload       TEXT NOT NULL,
             output_payload      TEXT,
@@ -537,6 +555,16 @@ def _normalize_legacy_job_row(row: dict, used_job_ids: set[str]) -> tuple:
         status = "pending"
 
     price_cents = _to_non_negative_int(row.get("price_cents"), default=0)
+    caller_charge_cents = _to_non_negative_int(row.get("caller_charge_cents"), default=price_cents)
+    if caller_charge_cents < price_cents:
+        caller_charge_cents = price_cents
+    platform_fee_pct_at_create = _to_non_negative_int(
+        row.get("platform_fee_pct_at_create"),
+        default=10,
+    )
+    if platform_fee_pct_at_create > 100:
+        platform_fee_pct_at_create = 100
+    fee_bearer_policy = _normalize_fee_bearer_policy(row.get("fee_bearer_policy"))
     charge_tx_id = _clean_optional_text(row.get("charge_tx_id")) or str(
         uuid.uuid5(uuid.NAMESPACE_URL, f"legacy-charge:{job_id}")
     )
@@ -631,6 +659,9 @@ def _normalize_legacy_job_row(row: dict, used_job_ids: set[str]) -> tuple:
         platform_wallet_id,
         status,
         price_cents,
+        caller_charge_cents,
+        platform_fee_pct_at_create,
+        fee_bearer_policy,
         charge_tx_id,
         input_payload,
         output_payload,
@@ -744,6 +775,9 @@ def create_job(
     price_cents: int,
     charge_tx_id: str,
     input_payload: dict,
+    caller_charge_cents: int | None = None,
+    platform_fee_pct_at_create: int = 10,
+    fee_bearer_policy: str = "caller",
     agent_owner_id: str | None = None,
     max_attempts: int = 3,
     parent_job_id: str | None = None,
@@ -759,6 +793,13 @@ def create_job(
 ) -> dict:
     if price_cents < 0:
         raise ValueError("price_cents must be non-negative.")
+    parsed_caller_charge_cents = _to_non_negative_int(caller_charge_cents, default=price_cents)
+    if parsed_caller_charge_cents < price_cents:
+        raise ValueError("caller_charge_cents must be >= price_cents.")
+    parsed_platform_fee_pct = _to_non_negative_int(platform_fee_pct_at_create, default=10)
+    if parsed_platform_fee_pct > 100:
+        raise ValueError("platform_fee_pct_at_create must be <= 100.")
+    normalized_fee_bearer_policy = _normalize_fee_bearer_policy(fee_bearer_policy)
 
     parsed_max_attempts = _to_non_negative_int(max_attempts, default=0)
     if parsed_max_attempts < 1:
@@ -791,11 +832,12 @@ def create_job(
             """
             INSERT INTO jobs
               (job_id, agent_id, agent_owner_id, caller_owner_id, caller_wallet_id,
-               agent_wallet_id, platform_wallet_id, status, price_cents, charge_tx_id,
+               agent_wallet_id, platform_wallet_id, status, price_cents, caller_charge_cents,
+               platform_fee_pct_at_create, fee_bearer_policy, charge_tx_id,
                input_payload, created_at, updated_at, max_attempts, parent_job_id, parent_cascade_policy,
                clarification_timeout_seconds, clarification_timeout_policy, dispute_window_hours, judge_agent_id,
                callback_url, callback_secret, output_verification_window_seconds, output_verification_status, batch_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job_id,
@@ -807,6 +849,9 @@ def create_job(
                 platform_wallet_id,
                 "pending",
                 price_cents,
+                parsed_caller_charge_cents,
+                parsed_platform_fee_pct,
+                normalized_fee_bearer_policy,
                 charge_tx_id,
                 json.dumps(input_payload),
                 now,

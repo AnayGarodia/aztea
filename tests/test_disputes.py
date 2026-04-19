@@ -51,6 +51,7 @@ def _register_agent_via_api(
     name: str,
     price: float = 0.10,
     input_schema: dict | None = None,
+    auto_approve: bool = True,
 ) -> str:
     resp = client.post(
         "/registry/register",
@@ -65,7 +66,15 @@ def _register_agent_via_api(
         },
     )
     assert resp.status_code == 201, resp.text
-    return str(resp.json()["agent_id"])
+    agent_id = str(resp.json()["agent_id"])
+    if auto_approve:
+        review = client.post(
+            f"/admin/agents/{agent_id}/review",
+            headers=_auth_headers(TEST_MASTER_KEY),
+            json={"decision": "approve", "note": "test auto-approve"},
+        )
+        assert review.status_code == 200, review.text
+    return agent_id
 
 
 def _fund_user_wallet(user: dict, amount_cents: int = 200) -> dict:
@@ -151,7 +160,7 @@ def test_dispute_consensus_caller_wins_full_refund(client, monkeypatch):
     _complete_job(client, worker["raw_api_key"], job["job_id"])
 
     caller_owner = f"user:{caller['user_id']}"
-    assert _wallet_balance(caller_owner) == 190
+    assert _wallet_balance(caller_owner) == 189
     assert _wallet_balance(f"agent:{agent_id}") == 0
     assert _wallet_balance(payments.PLATFORM_OWNER_ID) == 0
 
@@ -166,7 +175,7 @@ def test_dispute_consensus_caller_wins_full_refund(client, monkeypatch):
 
     assert _wallet_balance(f"agent:{agent_id}") == 0
     assert _wallet_balance(payments.PLATFORM_OWNER_ID) == 0
-    assert _wallet_balance(caller_owner) == 185
+    assert _wallet_balance(caller_owner) == 184
 
     def _consensus(dispute_id_arg: str) -> dict:
         disputes.record_judgment(
@@ -258,9 +267,9 @@ def test_dispute_tie_then_admin_split_settlement(client, monkeypatch):
     assert body["dispute"]["outcome"] == "split"
 
     caller_owner = f"user:{caller['user_id']}"
-    assert _wallet_balance(caller_owner) == 196
+    assert _wallet_balance(caller_owner) == 195
     assert _wallet_balance(f"agent:{agent_id}") == 4
-    assert _wallet_balance(payments.PLATFORM_OWNER_ID) == 0
+    assert _wallet_balance(payments.PLATFORM_OWNER_ID) == 1
     assert _wallet_balance(f"user:{worker['user_id']}") == 50
 
 
@@ -337,7 +346,7 @@ def test_clawback_moves_settled_payout_into_escrow(client):
     _complete_job(client, worker["raw_api_key"], job["job_id"])
     _simulate_legacy_payout(job["job_id"])
 
-    assert _wallet_balance(f"agent:{agent_id}") == 9
+    assert _wallet_balance(f"agent:{agent_id}") == 10
     assert _wallet_balance(payments.PLATFORM_OWNER_ID) == 1
 
     filed = client.post(
@@ -348,7 +357,7 @@ def test_clawback_moves_settled_payout_into_escrow(client):
     assert filed.status_code == 201, filed.text
     dispute_id = filed.json()["dispute_id"]
     escrow_wallet = payments.get_or_create_wallet(f"{payments.DISPUTE_ESCROW_OWNER_PREFIX}{dispute_id}")
-    assert _wallet_balance(escrow_wallet["owner_id"]) == 10
+    assert _wallet_balance(escrow_wallet["owner_id"]) == 11
     assert _wallet_balance(f"agent:{agent_id}") == 0
     assert _wallet_balance(payments.PLATFORM_OWNER_ID) == 0
 

@@ -107,6 +107,7 @@ def test_proxy_call_does_not_forward_master_auth_to_external_endpoints(client, m
         endpoint_url=endpoint_url,
         price_per_call_usd=0.05,
         tags=["security-test"],
+        review_status="approved",
     )
 
     captured: dict = {}
@@ -223,10 +224,10 @@ def test_wallet_deposit_blocks_cross_owner_topup(client):
     master_ok = client.post(
         "/wallets/deposit",
         headers=_auth_headers(TEST_MASTER_KEY),
-        json={"wallet_id": wallet_b["wallet_id"], "amount_cents": 50, "memo": "admin topup"},
+        json={"wallet_id": wallet_b["wallet_id"], "amount_cents": 500, "memo": "admin topup"},
     )
     assert master_ok.status_code == 200, master_ok.text
-    assert master_ok.json()["balance_cents"] == 50
+    assert master_ok.json()["balance_cents"] == 500
 
 
 def test_registry_register_blocks_private_endpoint_urls(client):
@@ -517,6 +518,7 @@ def test_registry_call_blocks_misconfigured_endpoint_without_charging(client, is
         endpoint_url="https://agents.example.com/agent",
         price_per_call_usd=0.05,
         tags=["security-test"],
+        review_status="approved",
     )
     with sqlite3.connect(isolated_db) as conn:
         conn.execute(
