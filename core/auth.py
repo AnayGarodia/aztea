@@ -67,7 +67,12 @@ def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
     return row is not None
 
 
+_ALLOWED_PRAGMA_TABLES = frozenset({"users", "api_keys", "agent_keys"})
+
+
 def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
+    if table_name not in _ALLOWED_PRAGMA_TABLES:
+        raise ValueError(f"Disallowed table name for schema introspection: {table_name!r}")
     return {
         row["name"]
         for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()

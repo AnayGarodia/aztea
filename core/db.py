@@ -17,7 +17,7 @@ from typing import Generator
 _DEFAULT_DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "registry.db"))
 
 # DATABASE_URL provides forward-compat with Postgres. SQLite-only for now.
-# Accepted forms: "sqlite:///absolute/path.db" or a bare file path.
+# Accepted forms: "sqlite:///absolute/path.db" or a bare path.
 # Postgres URLs (postgresql://...) are noted but not yet supported — swap this module when ready.
 _DATABASE_URL = os.environ.get("DATABASE_URL", "")
 if _DATABASE_URL.startswith("sqlite:///"):
@@ -27,7 +27,16 @@ elif _DATABASE_URL and not _DATABASE_URL.startswith(("postgres", "postgresql")):
 
 DB_PATH = os.environ.get("DB_PATH", _DEFAULT_DB_PATH)
 
+# Cap concurrent database connections. SQLite WAL allows one writer and many
+# readers, but unbounded threads will exhaust OS file descriptors. Override via
+# DB_MAX_CONNECTIONS env var (default: 32).
+_MAX_CONNECTIONS = max(1, int(os.environ.get("DB_MAX_CONNECTIONS", "32")))
+_conn_semaphore = threading.Semaphore(_MAX_CONNECTIONS)
+
 _local = threading.local()
+# Track all open connections so close_all_connections() can checkpoint WAL on shutdown.
+_open_connections: list[sqlite3.Connection] = []
+_open_connections_lock = threading.Lock()
 
 
 def _open_connection(db_path: str) -> sqlite3.Connection:
@@ -38,14 +47,35 @@ def _open_connection(db_path: str) -> sqlite3.Connection:
     conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA cache_size=-64000")
+    with _open_connections_lock:
+        _open_connections.append(conn)
     return conn
 
 
 def get_raw_connection(db_path: str = DB_PATH) -> sqlite3.Connection:
-    """Return the thread-local connection, opening it if not yet created."""
-    if not getattr(_local, "conn", None):
-        _local.conn = _open_connection(db_path)
+    """Return the thread-local connection, opening it (or reopening if closed) as needed."""
+    conn = getattr(_local, "conn", None)
+    if conn is not None:
+        try:
+            conn.execute("SELECT 1")
+            return conn
+        except Exception:
+            _local.conn = None
+    _local.conn = _open_connection(db_path)
     return _local.conn
+
+
+def close_all_connections() -> None:
+    """Checkpoint WAL and close all tracked connections. Call on process shutdown."""
+    with _open_connections_lock:
+        conns = list(_open_connections)
+        _open_connections.clear()
+    for conn in conns:
+        try:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            conn.close()
+        except Exception:
+            pass
 
 
 @contextmanager

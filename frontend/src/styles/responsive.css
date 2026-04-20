@@ -85,3 +85,47 @@
     border-radius: var(--r-xl);
   }
 }
+
+/* ============================================================
+   375px — narrow phones (iPhone SE, Galaxy A series)
+   ============================================================ */
+
+/* --- DashboardPage --- */
+@media (max-width: 375px) {
+  .dashboard__stats { grid-template-columns: 1fr !important; }
+  .dashboard__scroll { padding: 12px 10px; }
+  .dashboard__hero { gap: 10px; }
+}
+
+/* --- SettingsPage --- */
+@media (max-width: 375px) {
+  .settings__scroll { padding: 12px 10px; }
+  .settings__key-value { max-width: 120px; font-size: 0.7rem; }
+}
+
+/* --- WalletPage --- */
+@media (max-width: 375px) {
+  .wallet__scroll { padding: 12px 10px; }
+  .wallet__balance-amount { font-size: 1.75rem; }
+}
+
+/* --- LandingPage --- */
+@media (max-width: 375px) {
+  .lp__nav { padding: 0 14px; }
+  .lp__nav-wordmark { font-size: 0.875rem; }
+  .lp__hero-actions { flex-direction: column; gap: 10px; }
+  .lp__auth-inner { gap: 20px; }
+  .lp__pricing-grid { grid-template-columns: 1fr !important; }
+  .lp__pricing-card { padding: 20px; }
+}
+
+/* --- AgentDetailPage --- */
+@media (max-width: 375px) {
+  .agent-detail__stats-grid { grid-template-columns: 1fr !important; }
+  .agent-detail__scroll { padding: 12px 10px; }
+}
+
+/* --- Topbar --- */
+@media (max-width: 375px) {
+  .topbar__crumbs { font-size: 0.6875rem; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}

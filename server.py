@@ -82,6 +82,7 @@ from agents import wiki as agent_wiki
 from core import auth as _auth
 from core import onboarding
 from core import payments
+from core.db import close_all_connections as _close_all_db_connections
 from core import registry
 from core import jobs
 from core import disputes
@@ -139,6 +140,26 @@ if not isinstance(_LOG_LEVEL, int):
     _LOG_LEVEL = logging.INFO
 logging_utils.configure_json_logging(_LOG_LEVEL)
 _LOG = logging.getLogger(__name__)
+
+
+class _SecretRedactFilter(logging.Filter):
+    """Strip API key values and sensitive env-var patterns from log records."""
+    import re as _re
+    _PATTERNS = _re.compile(
+        r'((?:am_|amk_|sk_live_|sk_test_|Bearer\s+)[A-Za-z0-9_\-]{8,})',
+        _re.IGNORECASE,
+    )
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg = self._PATTERNS.sub('[REDACTED]', str(record.msg))
+        record.args = tuple(
+            self._PATTERNS.sub('[REDACTED]', str(a)) if isinstance(a, str) else a
+            for a in (record.args or ())
+        )
+        return True
+
+
+logging.getLogger().addFilter(_SecretRedactFilter())
 _BACKGROUND_WORKER_LOCK_PATH = os.environ.get("BACKGROUND_WORKER_LOCK_PATH", "").strip()
 _background_worker_lock_handle: Any | None = None
 
@@ -331,7 +352,7 @@ AUTO_SUSPEND_MIN_CALLS = 10
 _DEFAULT_RATE_LIMIT = "60/minute"
 _AUTH_RATE_LIMIT = "10/minute"
 _SEARCH_RATE_LIMIT = "30/minute"
-_JOBS_CREATE_RATE_LIMIT = "100/minute"
+_JOBS_CREATE_RATE_LIMIT = "20/minute"
 
 
 def _env_int(name: str, default: int, minimum: int | None = None, maximum: int | None = None) -> int:
@@ -2061,6 +2082,11 @@ def ensure_builtin_agents_registered() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if _ENVIRONMENT == "production" and not _ADMIN_IP_ALLOWLIST_NETWORKS:
+        _LOG.warning(
+            "ADMIN_IP_ALLOWLIST is not set. Admin routes are accessible from any IP. "
+            "Set ADMIN_IP_ALLOWLIST=<cidr>,... to restrict access in production."
+        )
     apply_migrations(jobs.DB_PATH)
     registry.init_db()
     payments.init_payments_db()
@@ -2176,6 +2202,7 @@ async def lifespan(app: FastAPI):
             payments_reconciliation_thread.join(timeout=_SHUTDOWN_THREAD_JOIN_TIMEOUT_SECONDS)
         if is_background_worker_leader:
             _release_background_worker_lock()
+        _close_all_db_connections()
 
 
 # ---------------------------------------------------------------------------
@@ -2229,6 +2256,15 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
     max_age=600,
 )
+
+# Trust X-Forwarded-For from the immediate upstream proxy only.
+# TRUSTED_PROXY_IPS defaults to 127.0.0.1 (local nginx / Docker internal).
+# Set to a comma-separated list of proxy CIDRs in production.
+_trusted_proxies = [
+    h.strip()
+    for h in os.environ.get("TRUSTED_PROXY_IPS", "127.0.0.1").split(",")
+    if h.strip()
+]
 
 
 # ---------------------------------------------------------------------------
@@ -6659,8 +6695,8 @@ def registry_register(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    except sqlite3.IntegrityError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=409, detail="Agent ID or name already exists.")
     message = "Agent registered successfully."
     if safe_verifier_url:
         if agent and agent.get("verified"):

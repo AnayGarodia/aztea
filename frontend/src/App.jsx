@@ -5,7 +5,8 @@ import { ThemeProvider } from './context/ThemeContext'
 import AppShell from './layout/AppShell'
 import ErrorBoundary from './ui/ErrorBoundary'
 
-import LandingPage    from './pages/LandingPage'
+import LandingPage        from './pages/LandingPage'
+import OnboardingWizard  from './features/onboarding/OnboardingWizard'
 import DocsPage       from './pages/DocsPage'
 import TermsPage      from './pages/TermsPage'
 import PrivacyPage    from './pages/PrivacyPage'
@@ -59,6 +60,7 @@ function AuthedApp() {
   const { apiKey } = useAuth()
   return (
     <MarketProvider apiKey={apiKey}>
+      <OnboardingWizard />
       <ErrorBoundary>
         <Routes>
           <Route element={<AppShell />}>

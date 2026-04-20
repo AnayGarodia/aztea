@@ -17,6 +17,7 @@ uniform vec3 tint;
 uniform vec3 paletteBase;
 uniform float brightness;
 uniform float xShift;
+uniform float lightMode;
 
 #define FC gl_FragCoord.xy
 #define T time
@@ -80,7 +81,15 @@ void main() {
     col = mix(col, paletteBase * bg, d);
   }
 
-  col = mix(col, col * tint, 0.35);
+  if (lightMode > 0.5) {
+    float luma = dot(col, vec3(0.2126, 0.7152, 0.0722));
+    vec3 warmLow = vec3(0.30, 0.19, 0.08);
+    vec3 warmHigh = vec3(0.96, 0.78, 0.50);
+    float warmMix = smoothstep(0.03, 1.18, luma + bg * 0.42);
+    col = mix(warmLow, warmHigh, warmMix);
+  }
+
+  col = mix(col, col * tint, lightMode > 0.5 ? 0.18 : 0.35);
   col *= brightness;
   O = vec4(col, 1.0);
 }`
@@ -145,6 +154,7 @@ export default function AnimatedShaderHero({ isDark = false, className = '' }) {
     const paletteBaseLoc = gl.getUniformLocation(program, 'paletteBase')
     const brightnessLoc = gl.getUniformLocation(program, 'brightness')
     const xShiftLoc = gl.getUniformLocation(program, 'xShift')
+    const lightModeLoc = gl.getUniformLocation(program, 'lightMode')
 
     gl.enableVertexAttribArray(positionLoc)
     gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, 0, 0)
@@ -174,11 +184,13 @@ export default function AnimatedShaderHero({ isDark = false, className = '' }) {
         gl.uniform3f(paletteBaseLoc, 0.08, 0.14, 0.34)
         gl.uniform1f(brightnessLoc, 0.8)
         gl.uniform1f(xShiftLoc, -0.52)
+        gl.uniform1f(lightModeLoc, 0.0)
       } else {
         gl.uniform3f(tintLoc, 0.94, 0.82, 0.62)
         gl.uniform3f(paletteBaseLoc, 0.34, 0.24, 0.14)
         gl.uniform1f(brightnessLoc, 1.08)
         gl.uniform1f(xShiftLoc, -0.14)
+        gl.uniform1f(lightModeLoc, 1.0)
       }
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
       frameId = requestAnimationFrame(render)
