@@ -23,7 +23,7 @@ Output: {
 import re
 import html
 from datetime import datetime, timezone
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urlparse
 
 import requests
 

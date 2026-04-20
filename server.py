@@ -338,9 +338,9 @@ _CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
         _WIKI_AGENT_ID,            # Wikipedia API
         _CVELOOKUP_AGENT_ID,       # NIST NVD API
         _ARXIV_RESEARCH_AGENT_ID,  # arXiv API
-        _PYTHON_EXECUTOR_AGENT_ID, # subprocess sandbox
-        _WEB_RESEARCHER_AGENT_ID,  # HTTP fetch + parse
-        _IMAGE_GENERATOR_AGENT_ID, # OpenAI / Replicate API
+        _PYTHON_EXECUTOR_AGENT_ID,  # subprocess sandbox
+        _WEB_RESEARCHER_AGENT_ID,   # HTTP fetch + parse
+        _IMAGE_GENERATOR_AGENT_ID,  # OpenAI / Replicate API
         _CODEREVIEW_AGENT_ID,      # structured expert output, high quality prompt
     }
 )

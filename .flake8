@@ -5,6 +5,10 @@ extend-ignore =
     E501,
     # whitespace/alignment style
     E221, E231, E241,
+    # continuation line indentation in deeply nested dict/list literals
+    E122, E123, E124, E125, E126, E127, E128, E131,
+    # inline comment spacing (single space before # in inline comments is fine)
+    E261, E262,
     # blank line style
     E301, E302, E303, E304, E305, E306,
     # trailing whitespace / blank line at EOF

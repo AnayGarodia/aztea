@@ -2803,7 +2803,7 @@ def test_registry_call_routes_internal_builtin_without_http_and_records_job(clie
     monkeypatch.setattr(
         server.agent_cve_lookup,
         "run",
-        lambda payload: {"results": [], "total_vulnerable": 0, "total_packages_checked": 1, "summary": f"internal::ok", "source": "nvd"},
+        lambda payload: {"results": [], "total_vulnerable": 0, "total_packages_checked": 1, "summary": "internal::ok", "source": "nvd"},
     )
 
     def _fail_post(*args, **kwargs):
