@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { MarketProvider } from './context/MarketContext'
 import { ThemeProvider } from './context/ThemeContext'
@@ -6,8 +6,10 @@ import AppShell from './layout/AppShell'
 import ErrorBoundary from './ui/ErrorBoundary'
 
 import LandingPage    from './pages/LandingPage'
+import DocsPage       from './pages/DocsPage'
 import TermsPage      from './pages/TermsPage'
 import PrivacyPage    from './pages/PrivacyPage'
+import LegalAcceptancePage from './pages/LegalAcceptancePage'
 import DashboardPage  from './pages/DashboardPage'
 import AgentsPage     from './pages/AgentsPage'
 import AgentDetailPage from './pages/AgentDetailPage'
@@ -21,6 +23,17 @@ function RequireAuth({ children }) {
   const { apiKey, booting } = useAuth()
   if (booting) return <AppBoot />
   if (!apiKey) return <Navigate to="/welcome" replace />
+  return children
+}
+
+function RequireLegalAcceptance({ children }) {
+  const { apiKey, booting, user } = useAuth()
+  const location = useLocation()
+  if (booting) return <AppBoot />
+  if (!apiKey) return <Navigate to="/welcome" replace />
+  if (user?.legal_acceptance_required) {
+    return <Navigate to="/legal/accept" replace state={{ from: location.pathname }} />
+  }
   return children
 }
 
@@ -66,8 +79,9 @@ function AuthedApp() {
 }
 
 function RootRedirect() {
-  const { apiKey, booting } = useAuth()
+  const { apiKey, booting, user } = useAuth()
   if (booting) return <AppBoot />
+  if (apiKey && user?.legal_acceptance_required) return <Navigate to="/legal/accept" replace />
   return <Navigate to={apiKey ? '/overview' : '/welcome'} replace />
 }
 
@@ -79,15 +93,25 @@ export default function App() {
           <ErrorBoundary>
             <Routes>
               <Route path="/welcome" element={<LandingPage />} />
+              <Route path="/docs"    element={<DocsPage />} />
+              <Route path="/docs/:docSlug" element={<DocsPage />} />
               <Route path="/terms"   element={<TermsPage />} />
               <Route path="/privacy" element={<PrivacyPage />} />
+              <Route
+                path="/legal/accept"
+                element={
+                  <RequireAuth>
+                    <LegalAcceptancePage />
+                  </RequireAuth>
+                }
+              />
               <Route path="/" element={<RootRedirect />} />
               <Route
                 path="/*"
                 element={
-                  <RequireAuth>
+                  <RequireLegalAcceptance>
                     <AuthedApp />
-                  </RequireAuth>
+                  </RequireLegalAcceptance>
                 }
               />
             </Routes>

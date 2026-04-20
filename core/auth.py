@@ -37,6 +37,8 @@ VALID_KEY_SCOPES = {"caller", "worker", "admin"}
 DEFAULT_KEY_SCOPES = ("caller", "worker")
 _CANONICAL_TIMESTAMP = "1970-01-01T00:00:00+00:00"
 VALID_SUBJECT_STATUSES = {"active", "suspended", "banned"}
+LEGAL_TERMS_VERSION = "2026-04-19"
+LEGAL_PRIVACY_VERSION = "2026-04-19"
 
 
 # ── Connection ────────────────────────────────────────────────────────────────
@@ -81,7 +83,12 @@ def _create_users_table(conn: sqlite3.Connection, table_name: str = "users") -> 
             password_hash TEXT NOT NULL,
             salt          TEXT NOT NULL,
             created_at    TEXT NOT NULL,
-            status        TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','suspended','banned'))
+            status        TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','suspended','banned')),
+            terms_version_accepted TEXT,
+            privacy_version_accepted TEXT,
+            legal_accepted_at TEXT,
+            legal_accept_ip TEXT,
+            legal_accept_user_agent TEXT
         )
     """)
 
@@ -96,6 +103,7 @@ def _create_api_keys_table(conn: sqlite3.Connection, table_name: str = "api_keys
             name          TEXT NOT NULL DEFAULT 'Default',
             scopes        TEXT NOT NULL DEFAULT '["caller","worker"]',
             max_spend_cents INTEGER CHECK(max_spend_cents >= 0),
+            per_job_cap_cents INTEGER CHECK(per_job_cap_cents >= 0),
             created_at    TEXT NOT NULL,
             last_used_at  TEXT,
             is_active     INTEGER NOT NULL DEFAULT 1
@@ -135,6 +143,16 @@ def _ensure_users_schema(conn: sqlite3.Connection) -> None:
         conn.execute(f"ALTER TABLE users ADD COLUMN created_at TEXT NOT NULL DEFAULT '{_CANONICAL_TIMESTAMP}'")
     if "status" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'")
+    if "terms_version_accepted" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN terms_version_accepted TEXT")
+    if "privacy_version_accepted" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN privacy_version_accepted TEXT")
+    if "legal_accepted_at" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN legal_accepted_at TEXT")
+    if "legal_accept_ip" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN legal_accept_ip TEXT")
+    if "legal_accept_user_agent" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN legal_accept_user_agent TEXT")
 
     conn.execute(
         f"""
@@ -163,7 +181,7 @@ def _normalize_legacy_api_key_row(
     row: dict,
     used_key_ids: set[str],
     used_key_hashes: set[str],
-) -> tuple[str, str, str, str, str, str, int | None, str, str | None, int] | None:
+) -> tuple[str, str, str, str, str, str, int | None, int | None, str, str | None, int] | None:
     legacy_rowid = int(row.get("_legacy_rowid") or 0)
 
     key_id = str(row.get("key_id") or "").strip()
@@ -205,6 +223,13 @@ def _normalize_legacy_api_key_row(
         parsed_max_spend = None
     if parsed_max_spend is not None and parsed_max_spend < 0:
         parsed_max_spend = None
+    per_job_cap_cents = row.get("per_job_cap_cents")
+    try:
+        parsed_per_job_cap = int(per_job_cap_cents) if per_job_cap_cents is not None else None
+    except (TypeError, ValueError):
+        parsed_per_job_cap = None
+    if parsed_per_job_cap is not None and parsed_per_job_cap < 0:
+        parsed_per_job_cap = None
     created_at = str(row.get("created_at") or "").strip() or _CANONICAL_TIMESTAMP
     last_used_at = str(row.get("last_used_at") or "").strip() or None
 
@@ -222,6 +247,7 @@ def _normalize_legacy_api_key_row(
         name,
         scopes,
         parsed_max_spend,
+        parsed_per_job_cap,
         created_at,
         last_used_at,
         is_active,
@@ -242,8 +268,8 @@ def _migrate_api_keys_table(conn: sqlite3.Connection) -> None:
         conn.execute(
             """
             INSERT INTO api_keys__canonical
-                (key_id, user_id, key_hash, key_prefix, name, scopes, max_spend_cents, created_at, last_used_at, is_active)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (key_id, user_id, key_hash, key_prefix, name, scopes, max_spend_cents, per_job_cap_cents, created_at, last_used_at, is_active)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             normalized,
         )
@@ -271,6 +297,8 @@ def _ensure_api_keys_schema(conn: sqlite3.Connection) -> None:
         conn.execute("""ALTER TABLE api_keys ADD COLUMN scopes TEXT NOT NULL DEFAULT '["caller","worker"]'""")
     if "max_spend_cents" not in cols:
         conn.execute("ALTER TABLE api_keys ADD COLUMN max_spend_cents INTEGER")
+    if "per_job_cap_cents" not in cols:
+        conn.execute("ALTER TABLE api_keys ADD COLUMN per_job_cap_cents INTEGER")
     if "created_at" not in cols:
         conn.execute(f"ALTER TABLE api_keys ADD COLUMN created_at TEXT NOT NULL DEFAULT '{_CANONICAL_TIMESTAMP}'")
     if "last_used_at" not in cols:
@@ -319,6 +347,13 @@ def _ensure_api_keys_schema(conn: sqlite3.Connection) -> None:
         UPDATE api_keys
         SET max_spend_cents = NULL
         WHERE max_spend_cents < 0
+        """
+    )
+    conn.execute(
+        """
+        UPDATE api_keys
+        SET per_job_cap_cents = NULL
+        WHERE per_job_cap_cents < 0
         """
     )
 
@@ -466,6 +501,30 @@ def _normalize_optional_non_negative_int(value: int | str | None, *, field_name:
     return parsed
 
 
+def _normalize_optional_text(value: object) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _legal_state_from_row(row: dict) -> dict:
+    terms_version_accepted = _normalize_optional_text(row.get("terms_version_accepted"))
+    privacy_version_accepted = _normalize_optional_text(row.get("privacy_version_accepted"))
+    legal_accepted_at = _normalize_optional_text(row.get("legal_accepted_at"))
+    has_required_acceptance = (
+        terms_version_accepted == LEGAL_TERMS_VERSION
+        and privacy_version_accepted == LEGAL_PRIVACY_VERSION
+        and legal_accepted_at is not None
+    )
+    return {
+        "legal_acceptance_required": not has_required_acceptance,
+        "legal_accepted_at": legal_accepted_at,
+        "terms_version_current": LEGAL_TERMS_VERSION,
+        "privacy_version_current": LEGAL_PRIVACY_VERSION,
+        "terms_version_accepted": terms_version_accepted,
+        "privacy_version_accepted": privacy_version_accepted,
+    }
+
+
 # ── User management ───────────────────────────────────────────────────────────
 
 def register_user(username: str, email: str, password: str) -> dict:
@@ -510,6 +569,7 @@ def register_user(username: str, email: str, password: str) -> dict:
         "raw_api_key": raw_key,
         "key_id": key_id,
         "key_prefix": key_prefix,
+        **_legal_state_from_row({}),
     }
 
 
@@ -546,6 +606,7 @@ def login_user(email: str, password: str) -> dict | None:
         "raw_api_key": result["raw_key"],
         "key_id": result["key_id"],
         "key_prefix": result["key_prefix"],
+        **_legal_state_from_row(user),
     }
 
 
@@ -568,6 +629,7 @@ def _create_key_for_user(
     scopes: list[str] | None = None,
     *,
     max_spend_cents: int | None = None,
+    per_job_cap_cents: int | None = None,
 ) -> dict:
     raw, key_hash, prefix = _make_api_key()
     key_id = str(uuid.uuid4())
@@ -576,10 +638,14 @@ def _create_key_for_user(
         max_spend_cents,
         field_name="max_spend_cents",
     )
+    normalized_per_job_cap = _normalize_optional_non_negative_int(
+        per_job_cap_cents,
+        field_name="per_job_cap_cents",
+    )
     with _conn() as conn:
         conn.execute(
-            "INSERT INTO api_keys (key_id, user_id, key_hash, key_prefix, name, scopes, max_spend_cents, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO api_keys (key_id, user_id, key_hash, key_prefix, name, scopes, max_spend_cents, per_job_cap_cents, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 key_id,
                 user_id,
@@ -588,6 +654,7 @@ def _create_key_for_user(
                 name,
                 json.dumps(normalized_scopes),
                 normalized_max_spend,
+                normalized_per_job_cap,
                 _now(),
             ),
         )
@@ -598,6 +665,7 @@ def _create_key_for_user(
         "name": name,
         "scopes": normalized_scopes,
         "max_spend_cents": normalized_max_spend,
+        "per_job_cap_cents": normalized_per_job_cap,
     }
 
 
@@ -606,6 +674,7 @@ def create_api_key(
     name: str = "New key",
     scopes: list[str] | tuple[str, ...] | set[str] | None = None,
     max_spend_cents: int | None = None,
+    per_job_cap_cents: int | None = None,
 ) -> dict:
     """Create a named API key for a user. Returns {"raw_key", "key_id", "key_prefix", "name"}."""
     return _create_key_for_user(
@@ -613,6 +682,7 @@ def create_api_key(
         name,
         scopes=list(scopes) if scopes is not None else None,
         max_spend_cents=max_spend_cents,
+        per_job_cap_cents=per_job_cap_cents,
     )
 
 
@@ -628,7 +698,8 @@ def verify_api_key(raw_key: str) -> dict | None:
         row = conn.execute(
             """
             SELECT ak.key_id, ak.user_id, ak.name AS key_name,
-                   ak.scopes, ak.max_spend_cents, u.username, u.email
+                   ak.scopes, ak.max_spend_cents, ak.per_job_cap_cents, u.username, u.email,
+                   u.terms_version_accepted, u.privacy_version_accepted, u.legal_accepted_at
             FROM api_keys ak
             JOIN users u ON ak.user_id = u.user_id
             WHERE ak.key_hash = ? AND ak.is_active = 1 AND u.status = 'active'
@@ -653,6 +724,67 @@ def verify_api_key(raw_key: str) -> dict | None:
             if row["max_spend_cents"] is not None
             else None
         ),
+        "per_job_cap_cents": (
+            int(row["per_job_cap_cents"])
+            if row["per_job_cap_cents"] is not None
+            else None
+        ),
+        **_legal_state_from_row(dict(row)),
+    }
+
+
+def accept_legal_terms(
+    user_id: str,
+    *,
+    terms_version: str,
+    privacy_version: str,
+    accepted_ip: str | None = None,
+    accepted_user_agent: str | None = None,
+) -> dict:
+    normalized_user_id = str(user_id or "").strip()
+    if not normalized_user_id:
+        raise ValueError("user_id is required.")
+
+    normalized_terms = str(terms_version or "").strip()
+    normalized_privacy = str(privacy_version or "").strip()
+    if normalized_terms != LEGAL_TERMS_VERSION or normalized_privacy != LEGAL_PRIVACY_VERSION:
+        raise ValueError("Legal version mismatch. Refresh terms and privacy and try again.")
+
+    now = _now()
+    normalized_ip = _normalize_optional_text(accepted_ip)
+    normalized_ua = _normalize_optional_text(accepted_user_agent)
+    if normalized_ua and len(normalized_ua) > 512:
+        normalized_ua = normalized_ua[:512]
+
+    with _conn() as conn:
+        result = conn.execute(
+            """
+            UPDATE users
+            SET terms_version_accepted = ?,
+                privacy_version_accepted = ?,
+                legal_accepted_at = ?,
+                legal_accept_ip = ?,
+                legal_accept_user_agent = ?
+            WHERE user_id = ?
+            """,
+            (normalized_terms, normalized_privacy, now, normalized_ip, normalized_ua, normalized_user_id),
+        )
+        if result.rowcount < 1:
+            raise ValueError("User not found.")
+        row = conn.execute(
+            """
+            SELECT user_id, terms_version_accepted, privacy_version_accepted, legal_accepted_at
+            FROM users
+            WHERE user_id = ?
+            """,
+            (normalized_user_id,),
+        ).fetchone()
+
+    if row is None:
+        raise ValueError("User not found.")
+    return {
+        "user_id": str(row["user_id"]),
+        **_legal_state_from_row(dict(row)),
     }
 
 
@@ -714,7 +846,7 @@ def verify_agent_api_key(raw_key: str) -> dict | None:
 def list_api_keys(user_id: str) -> list:
     with _conn() as conn:
         rows = conn.execute(
-            "SELECT key_id, key_prefix, name, scopes, max_spend_cents, created_at, last_used_at, is_active"
+            "SELECT key_id, key_prefix, name, scopes, max_spend_cents, per_job_cap_cents, created_at, last_used_at, is_active"
             " FROM api_keys WHERE user_id = ? ORDER BY created_at DESC",
             (user_id,),
         ).fetchall()
@@ -725,6 +857,11 @@ def list_api_keys(user_id: str) -> list:
         item["max_spend_cents"] = (
             int(item["max_spend_cents"])
             if item.get("max_spend_cents") is not None
+            else None
+        )
+        item["per_job_cap_cents"] = (
+            int(item["per_job_cap_cents"])
+            if item.get("per_job_cap_cents") is not None
             else None
         )
         keys.append(item)
@@ -768,8 +905,10 @@ def rotate_api_key(
     name: str | None = None,
     scopes: list[str] | tuple[str, ...] | set[str] | None = None,
     max_spend_cents: int | None = None,
+    per_job_cap_cents: int | None = None,
     *,
     max_spend_cents_provided: bool = False,
+    per_job_cap_cents_provided: bool = False,
 ) -> dict | None:
     normalized_scopes = (
         _normalize_scopes(scopes)
@@ -781,13 +920,18 @@ def rotate_api_key(
         if max_spend_cents_provided
         else None
     )
+    normalized_per_job_cap = (
+        _normalize_optional_non_negative_int(per_job_cap_cents, field_name="per_job_cap_cents")
+        if per_job_cap_cents_provided
+        else None
+    )
     replacement_name = (name or "").strip() or None
 
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
             """
-            SELECT key_id, name, scopes, max_spend_cents
+            SELECT key_id, name, scopes, max_spend_cents, per_job_cap_cents
             FROM api_keys
             WHERE key_id = ? AND user_id = ? AND is_active = 1
             """,
@@ -807,6 +951,15 @@ def rotate_api_key(
                 else None
             )
         )
+        final_per_job_cap = (
+            normalized_per_job_cap
+            if per_job_cap_cents_provided
+            else (
+                int(row["per_job_cap_cents"])
+                if row["per_job_cap_cents"] is not None
+                else None
+            )
+        )
 
         raw, key_hash, prefix = _make_api_key()
         new_key_id = str(uuid.uuid4())
@@ -814,8 +967,19 @@ def rotate_api_key(
 
         conn.execute(
             """
-            INSERT INTO api_keys (key_id, user_id, key_hash, key_prefix, name, scopes, max_spend_cents, created_at, is_active)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+            INSERT INTO api_keys (
+                key_id,
+                user_id,
+                key_hash,
+                key_prefix,
+                name,
+                scopes,
+                max_spend_cents,
+                per_job_cap_cents,
+                created_at,
+                is_active
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
             """,
             (
                 new_key_id,
@@ -825,6 +989,7 @@ def rotate_api_key(
                 final_name,
                 json.dumps(final_scopes),
                 final_max_spend,
+                final_per_job_cap,
                 now,
             ),
         )
@@ -845,4 +1010,5 @@ def rotate_api_key(
         "name": final_name,
         "scopes": final_scopes,
         "max_spend_cents": final_max_spend,
+        "per_job_cap_cents": final_per_job_cap,
     }

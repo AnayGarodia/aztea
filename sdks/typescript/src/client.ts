@@ -538,4 +538,4 @@ export class AgentmarketClient {
   }
 }
 
-export class AgentMarketClient extends AgentmarketClient {}
+export class AzteaClient extends AgentmarketClient {}

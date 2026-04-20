@@ -54,6 +54,28 @@ def _applied_versions(conn: sqlite3.Connection) -> set[int]:
     return {row[0] for row in rows}
 
 
+def _is_idempotent_add_column_duplicate(statement: str, exc: sqlite3.OperationalError) -> bool:
+    message = str(exc).strip().lower()
+    if "duplicate column name" not in message:
+        return False
+
+    # Migration files can include comment lines before ALTER TABLE.
+    # Strip comments so idempotency checks still detect ADD COLUMN statements.
+    source = str(statement or "")
+    source = re.sub(r"/\*.*?\*/", " ", source, flags=re.DOTALL)
+    cleaned_lines: list[str] = []
+    for raw_line in source.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("--"):
+            continue
+        if "--" in line:
+            line = line.split("--", 1)[0].strip()
+        if line:
+            cleaned_lines.append(line)
+    normalized = " ".join(" ".join(cleaned_lines).strip().lower().split())
+    return normalized.startswith("alter table ") and " add column " in normalized
+
+
 def apply_migrations(db_path: str | None = None) -> list[int]:
     """
     Apply all pending migrations to the database at db_path.
@@ -87,7 +109,12 @@ def apply_migrations(db_path: str | None = None) -> list[int]:
 
             with conn:
                 for statement in statements:
-                    conn.execute(statement)
+                    try:
+                        conn.execute(statement)
+                    except sqlite3.OperationalError as exc:
+                        if _is_idempotent_add_column_duplicate(statement, exc):
+                            continue
+                        raise
                 conn.execute(
                     "INSERT INTO schema_migrations (version, filename) VALUES (?, ?)",
                     (version, os.path.basename(filepath)),

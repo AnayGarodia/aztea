@@ -15,6 +15,7 @@ from starlette.requests import Request
 
 from core import auth
 from core import disputes
+from core import email as email_utils
 from core import jobs
 from core import payments
 from core import registry
@@ -167,7 +168,7 @@ def test_wallet_endpoint_authorization_allows_owner_and_master_only(client):
     assert master_ok.json()["wallet_id"] == wallet_b["wallet_id"]
 
 
-def test_admin_ip_allowlist_blocks_and_allows_by_forwarded_for(client, monkeypatch):
+def test_admin_ip_allowlist_blocks_forwarded_for_spoofing(client, monkeypatch):
     owner = _register_user()
     register = client.post(
         "/registry/register",
@@ -196,16 +197,60 @@ def test_admin_ip_allowlist_blocks_and_allows_by_forwarded_for(client, monkeypat
     )
     assert blocked.status_code == 403
 
-    allowed_headers = {
+    spoofed_headers = {
         **_auth_headers(TEST_MASTER_KEY),
         "X-Forwarded-For": "198.51.100.42",
     }
+    spoofed = client.post(
+        f"/admin/agents/{agent_id}/suspend",
+        headers=spoofed_headers,
+    )
+    assert spoofed.status_code == 403
+
+    monkeypatch.setattr(
+        server,
+        "_request_client_ip",
+        lambda _request: ipaddress.ip_address("198.51.100.42"),
+    )
     allowed = client.post(
         f"/admin/agents/{agent_id}/suspend",
-        headers=allowed_headers,
+        headers=_auth_headers(TEST_MASTER_KEY),
     )
     assert allowed.status_code == 200, allowed.text
     assert allowed.json()["status"] == "suspended"
+
+
+def test_ops_disputes_judge_enforces_admin_ip_allowlist(client, monkeypatch):
+    dispute_id = "dsp-test-allowlist"
+    monkeypatch.setattr(
+        server,
+        "_ADMIN_IP_ALLOWLIST_NETWORKS",
+        [ipaddress.ip_network("198.51.100.0/24")],
+    )
+    monkeypatch.setattr(disputes, "get_dispute", lambda _dispute_id: {"dispute_id": _dispute_id})
+    monkeypatch.setattr(
+        server,
+        "_resolve_dispute_with_judges",
+        lambda _dispute_id, actor_owner_id: ({"dispute_id": _dispute_id, "status": "resolved"}, {"ok": True}),
+    )
+
+    blocked = client.post(
+        f"/ops/disputes/{dispute_id}/judge",
+        headers=_auth_headers(TEST_MASTER_KEY),
+    )
+    assert blocked.status_code == 403
+
+    monkeypatch.setattr(
+        server,
+        "_request_client_ip",
+        lambda _request: ipaddress.ip_address("198.51.100.42"),
+    )
+    allowed = client.post(
+        f"/ops/disputes/{dispute_id}/judge",
+        headers=_auth_headers(TEST_MASTER_KEY),
+    )
+    assert allowed.status_code == 200, allowed.text
+    assert allowed.json()["dispute"]["dispute_id"] == dispute_id
 
 
 def test_wallet_deposit_blocks_cross_owner_topup(client):
@@ -228,6 +273,52 @@ def test_wallet_deposit_blocks_cross_owner_topup(client):
     )
     assert master_ok.status_code == 200, master_ok.text
     assert master_ok.json()["balance_cents"] == 500
+
+
+def test_auth_password_max_length_enforced(client):
+    suffix = uuid.uuid4().hex[:8]
+    too_long_password = "a1" * 513  # 1026 chars
+    register_resp = client.post(
+        "/auth/register",
+        json={
+            "username": f"longpw-{suffix}",
+            "email": f"longpw-{suffix}@example.com",
+            "password": too_long_password,
+        },
+    )
+    assert register_resp.status_code == 422
+
+    user = _register_user()
+    login_resp = client.post(
+        "/auth/login",
+        json={
+            "email": user["email"],
+            "password": too_long_password,
+        },
+    )
+    assert login_resp.status_code == 422
+
+
+def test_transactional_email_html_escapes_user_values(monkeypatch):
+    captured: dict[str, str] = {}
+
+    def _fake_send(to: str, subject: str, html: str, text: str) -> None:
+        captured["to"] = to
+        captured["subject"] = subject
+        captured["html"] = html
+        captured["text"] = text
+
+    monkeypatch.setattr(email_utils, "send", _fake_send)
+    email_utils.send_job_failed(
+        "victim@example.com",
+        '<job-id>"',
+        "<img src=x onerror=alert(1)>",
+        "<script>alert(1)</script>",
+    )
+
+    assert "<script>" not in captured["html"]
+    assert "&lt;img src=x onerror=alert(1)&gt;" in captured["html"]
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in captured["html"]
 
 
 def test_registry_register_blocks_private_endpoint_urls(client):

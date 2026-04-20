@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from core import jobs
 from core import models
+from core import error_codes
 
 
 def _close_jobs_conn() -> None:
@@ -274,6 +275,7 @@ def test_init_jobs_db_migrates_legacy_jobs_table(isolated_jobs_db):
             "last_heartbeat_at",
             "attempt_count",
             "max_attempts",
+            "tree_depth",
             "retry_count",
             "next_retry_at",
             "last_retry_at",
@@ -1109,3 +1111,43 @@ def test_init_jobs_db_migrates_job_messages_for_correlation_id(isolated_jobs_db)
             for row in conn.execute("PRAGMA index_list(job_messages)").fetchall()
         }
         assert "idx_job_messages_job_correlation" in indexes
+
+
+def test_job_create_request_defaults_verification_window_to_24_hours():
+    request = models.JobCreateRequest(agent_id="agent-default", input_payload={"task": "default"})
+    assert request.output_verification_window_seconds == 86400
+
+
+def test_job_create_request_allows_explicit_zero_verification_window():
+    request = models.JobCreateRequest(
+        agent_id="agent-default",
+        input_payload={"task": "explicit-zero"},
+        output_verification_window_seconds=0,
+    )
+    assert request.output_verification_window_seconds == 0
+
+
+def test_create_job_persists_tree_depth(isolated_jobs_db):
+    _init_jobs_db()
+    created = jobs.create_job(
+        agent_id="agent-tree-depth",
+        agent_owner_id="worker:tree-depth",
+        caller_owner_id="caller:tree-depth",
+        caller_wallet_id="caller-wallet-tree-depth",
+        agent_wallet_id="agent-wallet-tree-depth",
+        platform_wallet_id="platform-wallet-tree-depth",
+        price_cents=20,
+        charge_tx_id=f"charge-{uuid.uuid4().hex}",
+        input_payload={"task": "depth"},
+        max_attempts=2,
+        tree_depth=3,
+    )
+    assert created["tree_depth"] == 3
+
+
+def test_verified_contract_required_error_code_is_defined():
+    assert error_codes.VERIFIED_CONTRACT_REQUIRED == "job.verified_contract_required"
+
+
+def test_orchestration_depth_exceeded_error_code_is_defined():
+    assert error_codes.ORCHESTRATION_DEPTH_EXCEEDED == "job.orchestration_depth_exceeded"

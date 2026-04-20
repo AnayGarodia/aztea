@@ -27,6 +27,10 @@ from contextlib import asynccontextmanager
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Callable
 from urllib.parse import urlparse
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - fcntl unavailable on some platforms
+    fcntl = None
 
 import requests as http
 from dotenv import load_dotenv
@@ -61,14 +65,18 @@ from slowapi.util import get_remote_address
 import groq as _groq
 
 from agents import codereview as agent_codereview
+from agents import cve_lookup as agent_cve_lookup
 from agents import datainsights as agent_datainsights
-from agents import emailwriter as agent_emailwriter
+from agents import dependency_scanner as agent_dependency_scanner
+from agents import incident_response as agent_incident_response
 from agents import negotiation as agent_negotiation
 from agents import portfolio as agent_portfolio
 from agents import product as agent_product
-from agents import resume as agent_resume
 from agents import scenario as agent_scenario
+from agents import secrets_detection as agent_secrets_detection
 from agents import sqlbuilder as agent_sqlbuilder
+from agents import static_analysis as agent_static_analysis
+from agents import system_design as agent_system_design
 from agents import textintel as agent_textintel
 from agents import wiki as agent_wiki
 from core import auth as _auth
@@ -82,7 +90,6 @@ from core import models as core_models
 from core import reputation
 from core import error_codes
 from core.migrate import apply_migrations
-from core.db import DB_PATH as _DB_PATH
 from core import logging_utils
 from core import email as _email
 from scripts.financial_cli import run as _run_financial
@@ -119,6 +126,7 @@ from core.models import (
     RotateKeyRequest,
     AgentKeyCreateRequest,
     AgentReviewDecisionRequest,
+    AuthLegalAcceptRequest,
     TextIntelRequest,
     UserLoginRequest,
     UserRegisterRequest,
@@ -131,6 +139,59 @@ if not isinstance(_LOG_LEVEL, int):
     _LOG_LEVEL = logging.INFO
 logging_utils.configure_json_logging(_LOG_LEVEL)
 _LOG = logging.getLogger(__name__)
+_BACKGROUND_WORKER_LOCK_PATH = os.environ.get("BACKGROUND_WORKER_LOCK_PATH", "").strip()
+_background_worker_lock_handle: Any | None = None
+
+
+def _background_worker_lock_path() -> str:
+    configured = str(_BACKGROUND_WORKER_LOCK_PATH or "").strip()
+    if configured:
+        return configured
+    db_ref = str(getattr(jobs, "DB_PATH", "") or "")
+    digest = hashlib.sha256(db_ref.encode("utf-8")).hexdigest()[:16]
+    return f"/tmp/aztea-background-worker-{digest}.lock"
+
+
+def _acquire_background_worker_lock() -> bool:
+    global _background_worker_lock_handle
+    if _background_worker_lock_handle is not None:
+        return True
+    if fcntl is None:
+        return True
+    lock_path = _background_worker_lock_path()
+    try:
+        handle = open(lock_path, "a+", encoding="utf-8")
+    except OSError as exc:
+        _LOG.warning("Failed to open background worker lock file %s: %s", lock_path, exc)
+        return True
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.close()
+        return False
+    except OSError as exc:
+        _LOG.warning("Failed to acquire background worker lock %s: %s", lock_path, exc)
+        handle.close()
+        return True
+    _background_worker_lock_handle = handle
+    return True
+
+
+def _release_background_worker_lock() -> None:
+    global _background_worker_lock_handle
+    handle = _background_worker_lock_handle
+    if handle is None:
+        return
+    if fcntl is not None:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+    try:
+        handle.close()
+    except OSError:
+        pass
+    _background_worker_lock_handle = None
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +229,13 @@ _RESUME_AGENT_ID      = "00000000-0000-0000-0000-000000000009"
 _SQLBUILDER_AGENT_ID  = "00000000-0000-0000-0000-000000000010"
 _DATAINSIGHTS_AGENT_ID = "00000000-0000-0000-0000-000000000011"
 _EMAILWRITER_AGENT_ID  = "00000000-0000-0000-0000-000000000012"
-_QUALITY_JUDGE_AGENT_ID = "00000000-0000-0000-0000-000000000009"
+_SECRETS_AGENT_ID      = "00000000-0000-0000-0000-000000000013"
+_STATICANALYSIS_AGENT_ID = "00000000-0000-0000-0000-000000000014"
+_DEPSCANNER_AGENT_ID   = "00000000-0000-0000-0000-000000000015"
+_CVELOOKUP_AGENT_ID    = "00000000-0000-0000-0000-000000000016"
+_QUALITY_JUDGE_AGENT_ID = "00000000-0000-0000-0000-000000000017"
+_SYSTEM_DESIGN_AGENT_ID = "00000000-0000-0000-0000-000000000018"
+_INCIDENT_RESPONSE_AGENT_ID = "00000000-0000-0000-0000-000000000019"
 
 def _normalize_endpoint_ref(value: str | None) -> str:
     return str(value or "").strip().rstrip("/")
@@ -184,10 +251,14 @@ _BUILTIN_INTERNAL_ENDPOINTS = {
     _PRODUCT_AGENT_ID: "internal://product-strategy",
     _PORTFOLIO_AGENT_ID: "internal://portfolio",
     _QUALITY_JUDGE_AGENT_ID: "internal://quality-judge",
-    _RESUME_AGENT_ID: "internal://resume",
     _SQLBUILDER_AGENT_ID: "internal://sql-builder",
     _DATAINSIGHTS_AGENT_ID: "internal://data-insights",
-    _EMAILWRITER_AGENT_ID: "internal://email-writer",
+    _SECRETS_AGENT_ID: "internal://secrets-detection",
+    _STATICANALYSIS_AGENT_ID: "internal://static-analysis",
+    _DEPSCANNER_AGENT_ID: "internal://dependency-scanner",
+    _CVELOOKUP_AGENT_ID: "internal://cve-lookup",
+    _SYSTEM_DESIGN_AGENT_ID: "internal://system-design-reviewer",
+    _INCIDENT_RESPONSE_AGENT_ID: "internal://incident-response-commander",
 }
 _BUILTIN_LEGACY_ROUTE_ENDPOINTS = {
     _FINANCIAL_AGENT_ID: f"{_SERVER_BASE_URL}/agents/financial",
@@ -199,10 +270,14 @@ _BUILTIN_LEGACY_ROUTE_ENDPOINTS = {
     _PRODUCT_AGENT_ID: f"{_SERVER_BASE_URL}/agents/product-strategy",
     _PORTFOLIO_AGENT_ID: f"{_SERVER_BASE_URL}/agents/portfolio",
     _QUALITY_JUDGE_AGENT_ID: f"{_SERVER_BASE_URL}/agents/quality-judge",
-    _RESUME_AGENT_ID: f"{_SERVER_BASE_URL}/agents/resume",
     _SQLBUILDER_AGENT_ID: f"{_SERVER_BASE_URL}/agents/sql-builder",
     _DATAINSIGHTS_AGENT_ID: f"{_SERVER_BASE_URL}/agents/data-insights",
-    _EMAILWRITER_AGENT_ID: f"{_SERVER_BASE_URL}/agents/email-writer",
+    _SECRETS_AGENT_ID: f"{_SERVER_BASE_URL}/agents/secrets-detection",
+    _STATICANALYSIS_AGENT_ID: f"{_SERVER_BASE_URL}/agents/static-analysis",
+    _DEPSCANNER_AGENT_ID: f"{_SERVER_BASE_URL}/agents/dependency-scanner",
+    _CVELOOKUP_AGENT_ID: f"{_SERVER_BASE_URL}/agents/cve-lookup",
+    _SYSTEM_DESIGN_AGENT_ID: f"{_SERVER_BASE_URL}/agents/system-design-reviewer",
+    _INCIDENT_RESPONSE_AGENT_ID: f"{_SERVER_BASE_URL}/agents/incident-response-commander",
 }
 _BUILTIN_ENDPOINT_TO_AGENT_ID: dict[str, str] = {}
 for _agent_id, _endpoint in _BUILTIN_INTERNAL_ENDPOINTS.items():
@@ -214,7 +289,7 @@ _BUILTIN_ENDPOINT_TO_AGENT_ID[_normalize_endpoint_ref(f"{_SERVER_BASE_URL}/analy
 _BUILTIN_AGENT_IDS = frozenset(_BUILTIN_INTERNAL_ENDPOINTS.keys())
 _BUILTIN_WORKER_OWNER_ID = "system:builtin-worker"
 _SYSTEM_USERNAME = "system"
-_SYSTEM_USER_EMAIL = "system@agentmarket.internal"
+_SYSTEM_USER_EMAIL = "system@aztea.internal"
 
 _CALLER_CACHE_MISSING = object()
 _IDEMPOTENCY_KEY_HEADER = "Idempotency-Key"
@@ -226,7 +301,7 @@ _DEFAULT_SWEEP_INTERVAL_SECONDS = 60
 _DEFAULT_SWEEP_LIMIT = 100
 _DEFAULT_HOOK_DELIVERY_INTERVAL_SECONDS = 2
 _DEFAULT_HOOK_DELIVERY_BATCH_SIZE = 50
-_DEFAULT_HOOK_DELIVERY_MAX_ATTEMPTS = 5
+_DEFAULT_HOOK_DELIVERY_MAX_ATTEMPTS = 3
 _DEFAULT_HOOK_DELIVERY_BASE_DELAY_SECONDS = 5
 _DEFAULT_HOOK_DELIVERY_MAX_DELAY_SECONDS = 300
 _DEFAULT_HOOK_DELIVERY_CLAIM_LEASE_SECONDS = 30
@@ -245,7 +320,8 @@ _DEFAULT_ENDPOINT_MONITOR_TIMEOUT_SECONDS = 3
 _DEFAULT_ENDPOINT_MONITOR_FAILURE_THRESHOLD = 3
 MINIMUM_DEPOSIT_CENTS = int(os.getenv("MINIMUM_DEPOSIT_CENTS", "500"))
 _PROTOCOL_VERSION = "1.0"
-_PROTOCOL_VERSION_HEADER = "X-AgentMarket-Version"
+_PROTOCOL_VERSION_HEADER = "X-Aztea-Version"
+_LEGACY_PROTOCOL_VERSION_HEADER = "X-AgentMarket-Version"
 # $0.001 cannot be represented in integer cents; keep ledger integer-safe until millicent support exists.
 _DEFAULT_JUDGE_FEE_CENTS = 0
 _REPUTATION_DECAY_GRACE_DAYS = 30
@@ -881,7 +957,7 @@ def _quality_judge_input_schema() -> dict[str, Any]:
 
 
 def _builtin_agent_specs() -> list[dict[str, Any]]:
-    return [
+    specs = [
         {
             "agent_id": _FINANCIAL_AGENT_ID,
             "name": "Financial Research Agent",
@@ -1383,7 +1459,7 @@ def _builtin_agent_specs() -> list[dict[str, Any]]:
             "agent_id": _RESUME_AGENT_ID,
             "name": "Resume Analyzer Agent",
             "description": "Staff-recruiter-quality resume analysis: ATS score, keyword gap detection, line-by-line rewrites, section audit, and a verdict. Optionally matches against a specific job description.",
-            "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_RESUME_AGENT_ID],
+            "endpoint_url": "internal://resume",
             "price_per_call_usd": 0.02,
             "tags": ["career", "recruiting", "writing"],
             "input_schema": {
@@ -1556,7 +1632,7 @@ def _builtin_agent_specs() -> list[dict[str, Any]]:
             "agent_id": _EMAILWRITER_AGENT_ID,
             "name": "Email Sequence Writer Agent",
             "description": "Writes professional emails and multi-email sequences for outreach, follow-ups, proposals, announcements, and support. Generates 3 subject line A/B variants, preview text, and personalization hooks per email.",
-            "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_EMAILWRITER_AGENT_ID],
+            "endpoint_url": "internal://email-writer",
             "price_per_call_usd": 0.02,
             "tags": ["writing", "marketing", "sales"],
             "input_schema": {
@@ -1637,7 +1713,288 @@ def _builtin_agent_specs() -> list[dict[str, Any]]:
                 },
             ],
         },
+        {
+            "agent_id": _SECRETS_AGENT_ID,
+            "name": "Secrets Detection Agent",
+            "description": "Scans GitHub repositories for exposed API keys, credentials, tokens, and secrets in source code and git history. Detects Stripe keys, AWS credentials, JWT secrets, and database passwords.",
+            "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_SECRETS_AGENT_ID],
+            "price_per_call_usd": 0.04,
+            "tags": ["security", "secrets", "git-history", "credentials"],
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "description": "GitHub repo (owner/repo or full URL)"},
+                    "scan": {"type": "string", "enum": ["full", "shallow"], "default": "full", "description": "full scans git history; shallow scans current HEAD only"},
+                    "branch": {"type": "string", "default": "main"},
+                },
+                "required": ["repo"],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "secrets": {"type": "array", "items": {"type": "object"}},
+                    "git_history_secrets": {"type": "array", "items": {"type": "object"}},
+                    "total_critical": {"type": "integer"},
+                    "summary": {"type": "string"},
+                },
+            },
+            "output_examples": [
+                {
+                    "input": {"repo": "acme/payments-api", "scan": "full"},
+                    "output": {
+                        "repo": "acme/payments-api",
+                        "secrets": [{"file": "src/config/keys.js", "line": 12, "type": "stripe_key", "description": "Hardcoded Stripe live secret key", "confidence": "high"}],
+                        "git_history_secrets": [{"commit": "a3f9b12", "file": ".env.backup", "type": "aws_credentials", "description": "AWS credentials committed to git history"}],
+                        "total_critical": 2,
+                        "summary": "Found 2 critical credential exposures.",
+                        "scan_duration_ms": 1100,
+                    },
+                },
+            ],
+        },
+        {
+            "agent_id": _STATICANALYSIS_AGENT_ID,
+            "name": "Static Analysis Agent",
+            "description": "Performs static security analysis on GitHub repositories. Detects SQL injection (CWE-89), authentication bypass (CWE-306), XSS (CWE-79), path traversal (CWE-22), and SSRF (CWE-918) with copy-paste-ready fixes.",
+            "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_STATICANALYSIS_AGENT_ID],
+            "price_per_call_usd": 0.09,
+            "tags": ["security", "sast", "code-analysis", "cwe", "owasp"],
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "description": "GitHub repo (owner/repo or full URL)"},
+                    "focus": {"type": "string", "default": "all", "description": "Comma-separated: injection,auth,xss,path_traversal,all"},
+                    "language": {"type": "string", "default": "auto"},
+                },
+                "required": ["repo"],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "findings": {"type": "array", "items": {"type": "object"}},
+                    "total_critical": {"type": "integer"},
+                    "total_high": {"type": "integer"},
+                    "summary": {"type": "string"},
+                },
+            },
+            "output_examples": [
+                {
+                    "input": {"repo": "acme/payments-api", "focus": "injection,auth"},
+                    "output": {
+                        "repo": "acme/payments-api",
+                        "findings": [{"file": "src/db/query.js", "line": 47, "severity": "critical", "type": "sql_injection", "cwe": "CWE-89", "description": "Unsanitized input in SQL query"}],
+                        "total_critical": 1,
+                        "total_high": 1,
+                        "summary": "Found 1 critical SQL injection (CWE-89).",
+                        "scan_duration_ms": 2300,
+                    },
+                },
+            ],
+        },
+        {
+            "agent_id": _DEPSCANNER_AGENT_ID,
+            "name": "Dependency Scanner Agent",
+            "description": "Scans npm, pip, Maven, Cargo, and Go module dependencies against the NIST NVD and GitHub Advisory Database. Returns CVEs with CVSS scores, affected version ranges, and upgrade paths.",
+            "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_DEPSCANNER_AGENT_ID],
+            "price_per_call_usd": 0.11,
+            "tags": ["security", "dependencies", "cve", "supply-chain", "npm"],
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "description": "GitHub repo to scan"},
+                    "ecosystem": {"type": "string", "enum": ["npm", "pip", "maven", "cargo", "go"], "default": "npm"},
+                },
+                "required": ["repo"],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "vulnerabilities": {"type": "array", "items": {"type": "object"}},
+                    "total": {"type": "integer"},
+                    "summary": {"type": "string"},
+                },
+            },
+            "output_examples": [
+                {
+                    "input": {"repo": "acme/payments-api", "ecosystem": "npm"},
+                    "output": {
+                        "repo": "acme/payments-api",
+                        "ecosystem": "npm",
+                        "vulnerabilities": [{"package": "lodash", "version": "4.17.20", "cve": "CVE-2021-23337", "cvss": 7.2, "severity": "high"}],
+                        "total": 2,
+                        "summary": "Found 2 CVEs across 1 vulnerable package.",
+                        "scan_duration_ms": 3100,
+                    },
+                },
+            ],
+        },
+        {
+            "agent_id": _CVELOOKUP_AGENT_ID,
+            "name": "CVE Lookup Agent",
+            "description": "Real-time CVE intelligence for specific package versions. Cross-references NIST NVD, MITRE CVE, and GitHub Advisory Database. Returns CVSS scores, exploit availability, affected version ranges, and recommended upgrade paths.",
+            "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_CVELOOKUP_AGENT_ID],
+            "price_per_call_usd": 0.06,
+            "tags": ["security", "cve", "vulnerability-intel", "nvd", "packages"],
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "packages": {"type": "array", "items": {"type": "string"}, "description": "Array of package@version strings", "example": ["express@4.17.1", "lodash@4.17.20"]},
+                    "include_patched": {"type": "boolean", "default": False},
+                },
+                "required": ["packages"],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "results": {"type": "array", "items": {"type": "object"}},
+                    "total_vulnerable": {"type": "integer"},
+                    "summary": {"type": "string"},
+                },
+            },
+            "output_examples": [
+                {
+                    "input": {"packages": ["lodash@4.17.20", "express@4.17.1"]},
+                    "output": {
+                        "results": [{"package": "lodash", "version": "4.17.20", "cve": "CVE-2019-10744", "cvss": 9.1, "severity": "critical"}],
+                        "total_vulnerable": 2,
+                        "total_packages_checked": 2,
+                        "summary": "lodash@4.17.20 has 2 known CVEs including CVE-2019-10744 (prototype pollution, CVSS 9.1).",
+                    },
+                },
+            ],
+        },
     ]
+    specs = [
+        spec
+        for spec in specs
+        if spec.get("agent_id") not in {_RESUME_AGENT_ID, _EMAILWRITER_AGENT_ID}
+    ]
+    specs.extend(
+        [
+            {
+                "agent_id": _SYSTEM_DESIGN_AGENT_ID,
+                "name": "System Design Reviewer Agent",
+                "description": "Principal-level architecture planning with request flows, data models, tradeoff matrices, phased rollout plans, and explicit risk ownership.",
+                "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_SYSTEM_DESIGN_AGENT_ID],
+                "price_per_call_usd": 0.08,
+                "tags": ["architecture", "system-design", "scalability", "reliability"],
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "context": {"type": "string", "description": "Product/service context and objective."},
+                        "requirements": {"type": "array", "items": {"type": "string"}},
+                        "constraints": {"type": "array", "items": {"type": "string"}},
+                        "scale_assumptions": {"type": "array", "items": {"type": "string"}},
+                        "stack": {"type": "array", "items": {"type": "string"}},
+                        "non_functional_requirements": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["context", "requirements"],
+                },
+                "output_schema": _output_schema_object(
+                    {
+                        "architecture_summary": {"type": "string"},
+                        "components": {"type": "array", "items": {"type": "object"}},
+                        "request_flow": {"type": "array", "items": {"type": "string"}},
+                        "tradeoff_matrix": {"type": "array", "items": {"type": "object"}},
+                        "scaling_plan": {"type": "object"},
+                        "phase_plan": {"type": "array", "items": {"type": "object"}},
+                        "top_risks": {"type": "array", "items": {"type": "object"}},
+                    },
+                    required=["architecture_summary", "components", "phase_plan"],
+                ),
+                "output_examples": [
+                    {
+                        "input": {
+                            "context": "Realtime fraud scoring API for card transactions.",
+                            "requirements": ["p95 under 120ms", "99.95% availability", "full auditability"],
+                            "constraints": ["single region initially", "lean infra team"],
+                        },
+                        "output": {
+                            "architecture_summary": "Event-driven scoring service with low-latency cache and async model updates.",
+                            "components": [
+                                {"name": "gateway", "responsibility": "auth + rate limit"},
+                                {"name": "scoring-service", "responsibility": "rules + model inference"},
+                            ],
+                            "request_flow": ["gateway validates request", "scoring-service reads feature cache", "decision emitted to ledger"],
+                            "tradeoff_matrix": [
+                                {
+                                    "decision": "cache strategy",
+                                    "option_a": "global cache",
+                                    "option_b": "service-local cache",
+                                    "chosen": "service-local cache",
+                                    "rationale": "lower latency and reduced blast radius",
+                                }
+                            ],
+                            "scaling_plan": {"hotspots": ["feature lookup"], "mitigations": ["read-through cache"]},
+                            "phase_plan": [{"phase": "phase-1", "goal": "stabilize core path"}],
+                            "top_risks": [{"risk": "feature staleness", "impact": "medium", "owner": "platform"}],
+                        },
+                    }
+                ],
+            },
+            {
+                "agent_id": _INCIDENT_RESPONSE_AGENT_ID,
+                "name": "Incident Response Commander Agent",
+                "description": "SRE-grade incident command: likely root causes with confidence, first-15-minute actions, stabilization plan, communication templates, and 30/60/90-minute timeline.",
+                "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_INCIDENT_RESPONSE_AGENT_ID],
+                "price_per_call_usd": 0.08,
+                "tags": ["incident-response", "sre", "operations", "reliability"],
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "incident_title": {"type": "string"},
+                        "severity": {"type": "string", "default": "unknown"},
+                        "symptoms": {"type": "array", "items": {"type": "string"}},
+                        "service_map": {"type": "array", "items": {"type": "string"}},
+                        "recent_changes": {"type": "array", "items": {"type": "string"}},
+                        "telemetry": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["incident_title", "symptoms"],
+                },
+                "output_schema": _output_schema_object(
+                    {
+                        "severity_assessment": {"type": "object"},
+                        "probable_root_causes": {"type": "array", "items": {"type": "object"}},
+                        "first_15_min_actions": {"type": "array", "items": {"type": "string"}},
+                        "stabilization_plan": {"type": "array", "items": {"type": "string"}},
+                        "communications": {"type": "object"},
+                        "timeline_30_60_90": {"type": "object"},
+                        "postmortem_followups": {"type": "array", "items": {"type": "string"}},
+                    },
+                    required=["severity_assessment", "first_15_min_actions", "communications"],
+                ),
+                "output_examples": [
+                    {
+                        "input": {
+                            "incident_title": "Checkout latency spike",
+                            "symptoms": ["p95 jumped from 180ms to 1.9s", "timeouts from payment provider"],
+                            "recent_changes": ["new retry policy deployed"],
+                        },
+                        "output": {
+                            "severity_assessment": {"level": "sev-1", "justification": "Revenue path degraded globally"},
+                            "probable_root_causes": [
+                                {
+                                    "cause": "retry amplification to payment upstream",
+                                    "confidence": "high",
+                                    "evidence": ["timeout volume aligns with deploy"],
+                                }
+                            ],
+                            "first_15_min_actions": ["freeze deploys", "disable aggressive retries", "enable load shedding"],
+                            "stabilization_plan": ["rollback retry policy", "drain failing worker pool"],
+                            "communications": {
+                                "internal_update": "Mitigating checkout latency via retry rollback.",
+                                "status_page_update": "Investigating elevated checkout errors.",
+                                "next_update_eta": "15 minutes",
+                            },
+                            "timeline_30_60_90": {"30": "service stabilized", "60": "error budget impact estimated", "90": "postmortem owner assigned"},
+                            "postmortem_followups": ["retry policy guardrail tests", "per-provider circuit breaker thresholds"],
+                        },
+                    }
+                ],
+            },
+        ]
+    )
+    return specs
 
 
 def _ensure_system_user() -> str:
@@ -1655,7 +2012,7 @@ def _ensure_system_user() -> str:
         now = _utc_now_iso()
         email = _SYSTEM_USER_EMAIL
         if conn.execute("SELECT 1 FROM users WHERE email = ? LIMIT 1", (email,)).fetchone() is not None:
-            email = f"system-{user_id[:8]}@agentmarket.internal"
+            email = f"system-{user_id[:8]}@aztea.internal"
         salt = "system-account-disabled"
         password_hash = hashlib.sha256(f"{user_id}:{salt}".encode("utf-8")).hexdigest()
         conn.execute(
@@ -1704,7 +2061,7 @@ def ensure_builtin_agents_registered() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    apply_migrations(_DB_PATH)
+    apply_migrations(jobs.DB_PATH)
     registry.init_db()
     payments.init_payments_db()
     _auth.init_auth_db()
@@ -1725,7 +2082,11 @@ async def lifespan(app: FastAPI):
     dispute_judge_thread: threading.Thread | None = None
     payments_reconciliation_stop_event: threading.Event | None = None
     payments_reconciliation_thread: threading.Thread | None = None
-    if _SWEEPER_ENABLED:
+    is_background_worker_leader = _acquire_background_worker_lock()
+    if not is_background_worker_leader:
+        _LOG.info("Background workers disabled in this process; another worker owns the lock.")
+
+    if is_background_worker_leader and _SWEEPER_ENABLED:
         stop_event = threading.Event()
         sweeper_thread = threading.Thread(
             target=_jobs_sweeper_loop,
@@ -1737,7 +2098,7 @@ async def lifespan(app: FastAPI):
     else:
         _set_sweeper_state(running=False)
 
-    if _HOOK_DELIVERY_ENABLED:
+    if is_background_worker_leader and _HOOK_DELIVERY_ENABLED:
         hook_stop_event = threading.Event()
         hook_thread = threading.Thread(
             target=_hook_delivery_loop,
@@ -1749,7 +2110,7 @@ async def lifespan(app: FastAPI):
     else:
         _set_hook_worker_state(running=False)
 
-    if _BUILTIN_JOB_WORKER_ENABLED:
+    if is_background_worker_leader and _BUILTIN_JOB_WORKER_ENABLED:
         builtin_stop_event = threading.Event()
         builtin_thread = threading.Thread(
             target=_builtin_worker_loop,
@@ -1761,7 +2122,7 @@ async def lifespan(app: FastAPI):
     else:
         _set_builtin_worker_state(running=False)
 
-    if _DISPUTE_JUDGE_ENABLED:
+    if is_background_worker_leader and _DISPUTE_JUDGE_ENABLED:
         dispute_judge_stop_event = threading.Event()
         dispute_judge_thread = threading.Thread(
             target=_dispute_judge_loop,
@@ -1773,7 +2134,7 @@ async def lifespan(app: FastAPI):
     else:
         _set_dispute_judge_state(running=False)
 
-    if _PAYMENTS_RECONCILIATION_ENABLED:
+    if is_background_worker_leader and _PAYMENTS_RECONCILIATION_ENABLED:
         payments_reconciliation_stop_event = threading.Event()
         payments_reconciliation_thread = threading.Thread(
             target=_payments_reconciliation_loop,
@@ -1813,6 +2174,8 @@ async def lifespan(app: FastAPI):
             payments_reconciliation_stop_event.set()
         if payments_reconciliation_thread is not None:
             payments_reconciliation_thread.join(timeout=_SHUTDOWN_THREAD_JOIN_TIMEOUT_SECONDS)
+        if is_background_worker_leader:
+            _release_background_worker_lock()
 
 
 # ---------------------------------------------------------------------------
@@ -1838,7 +2201,7 @@ app.state.limiter = limiter
 # CORS — origins come from CORS_ALLOW_ORIGINS env var (comma-separated).
 # Defaults include common local dev ports.  In production, set the env var
 # to your deployed frontend origin(s), e.g.:
-#   CORS_ALLOW_ORIGINS=https://agentmarket.dev,https://www.agentmarket.dev
+#   CORS_ALLOW_ORIGINS=https://aztea.dev,https://www.aztea.dev
 _cors_env = os.environ.get("CORS_ALLOW_ORIGINS", "").strip()
 _cors_origins: list[str] = (
     [o.strip() for o in _cors_env.split(",") if o.strip()]
@@ -1883,7 +2246,9 @@ async def shutdown_draining(request: Request, call_next):
 
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
-    if not (request.headers.get(_PROTOCOL_VERSION_HEADER, "") or "").strip():
+    has_primary = (request.headers.get(_PROTOCOL_VERSION_HEADER, "") or "").strip()
+    has_legacy = (request.headers.get(_LEGACY_PROTOCOL_VERSION_HEADER, "") or "").strip()
+    if not (has_primary or has_legacy):
         logging_utils.log_event(
             _LOG,
             logging.WARNING,
@@ -1896,6 +2261,7 @@ async def security_headers(request: Request, call_next):
         )
     response = await call_next(request)
     response.headers[_PROTOCOL_VERSION_HEADER] = _PROTOCOL_VERSION
+    response.headers[_LEGACY_PROTOCOL_VERSION_HEADER] = _PROTOCOL_VERSION
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-XSS-Protection"] = "1; mode=block"
@@ -2065,8 +2431,70 @@ def _resolve_caller(request: Request) -> core_models.CallerContext | None:
     return None
 
 
-_SIGNUP_URL = os.environ.get("AGENTMARKET_FRONTEND_URL", "https://agentmarket.dev") + "/signup"
-_DOCS_URL = "https://github.com/AnayGarodia/agentmarket/blob/main/docs/quickstart.md"
+_PUBLIC_FRONTEND_URL = (
+    os.environ.get("AZTEA_FRONTEND_URL")
+    or os.environ.get("AGENTMARKET_FRONTEND_URL")
+    or "https://aztea.dev"
+).rstrip("/")
+_SIGNUP_URL = f"{_PUBLIC_FRONTEND_URL}/signup"
+_DOCS_URL = f"{_PUBLIC_FRONTEND_URL}/docs"
+
+_PUBLIC_DOCS_DIR = os.path.join(os.path.dirname(__file__), "docs")
+_PUBLIC_DOCS_PRIORITY = {
+    "quickstart.md": 0,
+    "auth-onboarding.md": 1,
+    "api-reference.md": 2,
+}
+
+
+def _public_docs_entries() -> list[dict[str, str]]:
+    if not os.path.isdir(_PUBLIC_DOCS_DIR):
+        return []
+
+    filenames = [
+        name for name in os.listdir(_PUBLIC_DOCS_DIR)
+        if name.endswith(".md") and os.path.isfile(os.path.join(_PUBLIC_DOCS_DIR, name))
+    ]
+    filenames.sort(key=lambda name: (_PUBLIC_DOCS_PRIORITY.get(name, 100), name))
+
+    entries: list[dict[str, str]] = []
+    for filename in filenames:
+        slug = filename[:-3].strip().lower()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", slug):
+            continue
+        title = slug.replace("-", " ").title()
+        full_path = os.path.join(_PUBLIC_DOCS_DIR, filename)
+        try:
+            with open(full_path, encoding="utf-8") as handle:
+                for line in handle:
+                    stripped = line.strip()
+                    if stripped.startswith("# "):
+                        heading = stripped[2:].strip()
+                        if heading:
+                            title = heading
+                        break
+                    if stripped:
+                        break
+        except OSError:
+            continue
+        entries.append({
+            "slug": slug,
+            "title": title,
+            "filename": filename,
+            "full_path": full_path,
+        })
+
+    return entries
+
+
+def _find_public_doc(doc_slug: str) -> dict[str, str] | None:
+    normalized_slug = str(doc_slug or "").strip().lower()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", normalized_slug):
+        return None
+    for entry in _public_docs_entries():
+        if entry["slug"] == normalized_slug:
+            return entry
+    return None
 
 
 def _require_api_key(request: Request) -> core_models.CallerContext:
@@ -2107,6 +2535,20 @@ def _caller_key_spend_cap(caller: core_models.CallerContext) -> int | None:
         return None
     user = caller.get("user") or {}
     raw = user.get("max_spend_cents")
+    if raw is None:
+        return None
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def _caller_key_per_job_cap(caller: core_models.CallerContext) -> int | None:
+    if caller.get("type") != "user":
+        return None
+    user = caller.get("user") or {}
+    raw = user.get("per_job_cap_cents")
     if raw is None:
         return None
     try:
@@ -2176,6 +2618,18 @@ def _pre_call_charge_or_402(
         )
 
 
+def _agent_has_verified_contract(agent: dict) -> bool:
+    if "verified_contract" in agent:
+        try:
+            return bool(int(agent.get("verified_contract") or 0))
+        except (TypeError, ValueError):
+            return bool(agent.get("verified_contract"))
+    try:
+        return bool(int(agent.get("verified") or 0))
+    except (TypeError, ValueError):
+        return bool(agent.get("verified"))
+
+
 def _deposit_below_minimum_error(attempted_cents: int) -> HTTPException:
     return HTTPException(
         status_code=422,
@@ -2191,13 +2645,6 @@ def _deposit_below_minimum_error(attempted_cents: int) -> HTTPException:
 
 
 def _request_client_ip(request: Request) -> Any | None:
-    forwarded_for = (request.headers.get("x-forwarded-for", "") or "").strip()
-    if forwarded_for:
-        candidate = forwarded_for.split(",")[0].strip()
-        try:
-            return ipaddress.ip_address(candidate)
-        except ValueError:
-            pass
     host = (request.client.host if request.client else "") or ""
     try:
         return ipaddress.ip_address(host)
@@ -2341,7 +2788,6 @@ def _job_response(job: dict, caller: core_models.CallerContext) -> dict:
         "agent_wallet_id",
         "platform_wallet_id",
         "charge_tx_id",
-        "settled_at",
         "agent_owner_id",
     }
     for key in hidden:
@@ -2890,8 +3336,13 @@ def _job_has_tool_call_correlation(job_id: str, correlation_id: str) -> bool:
     if callable(helper):
         try:
             return bool(helper(job_id, correlation_id))
-        except Exception:
-            pass
+        except Exception as exc:
+            _LOG.warning(
+                "Failed to query tool-call correlation index for job %s correlation %s: %s",
+                job_id,
+                correlation_id,
+                exc,
+            )
 
     since_id: int | None = None
     while True:
@@ -3414,14 +3865,22 @@ def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict
             output_payload=payload.get("output_payload") if isinstance(payload, dict) else {},
             agent_description=str(payload.get("agent_description") or "") if isinstance(payload, dict) else "",
         )
-    if agent_id == _RESUME_AGENT_ID:
-        return agent_resume.run(payload)
     if agent_id == _SQLBUILDER_AGENT_ID:
         return agent_sqlbuilder.run(payload)
     if agent_id == _DATAINSIGHTS_AGENT_ID:
         return agent_datainsights.run(payload)
-    if agent_id == _EMAILWRITER_AGENT_ID:
-        return agent_emailwriter.run(payload)
+    if agent_id == _SECRETS_AGENT_ID:
+        return agent_secrets_detection.run(payload)
+    if agent_id == _STATICANALYSIS_AGENT_ID:
+        return agent_static_analysis.run(payload)
+    if agent_id == _DEPSCANNER_AGENT_ID:
+        return agent_dependency_scanner.run(payload)
+    if agent_id == _CVELOOKUP_AGENT_ID:
+        return agent_cve_lookup.run(payload)
+    if agent_id == _SYSTEM_DESIGN_AGENT_ID:
+        return agent_system_design.run(payload)
+    if agent_id == _INCIDENT_RESPONSE_AGENT_ID:
+        return agent_incident_response.run(payload)
     raise ValueError(f"Unsupported built-in agent '{agent_id}'.")
 
 
@@ -4010,13 +4469,13 @@ def _process_due_hook_deliveries(limit: int = _HOOK_DELIVERY_BATCH_SIZE) -> dict
 
         headers = {
             "Content-Type": "application/json",
-            "X-AgentMarket-Event-Id": str(delivery["event_id"]),
-            "X-AgentMarket-Event-Type": str(payload.get("event_type") or "unknown"),
+            "X-Aztea-Event-Id": str(delivery["event_id"]),
+            "X-Aztea-Event-Type": str(payload.get("event_type") or "unknown"),
         }
         secret = (delivery.get("secret") or "").strip()
         if secret:
             digest = hmac.new(secret.encode("utf-8"), payload_bytes, hashlib.sha256).hexdigest()
-            headers["X-AgentMarket-Signature"] = f"sha256={digest}"
+            headers["X-Aztea-Signature"] = f"sha256={digest}"
 
         status_code = None
         error_text = None
@@ -4312,9 +4771,13 @@ def _run_quality_gate(job: dict, agent: dict, output_payload: dict) -> dict[str,
 
     output_schema = agent.get("output_schema")
     has_output_schema = output_schema is not None
+    live_quality_toggle = (
+        os.environ.get("AZTEA_ENABLE_LIVE_QUALITY_JUDGE")
+        or os.environ.get("AGENTMARKET_ENABLE_LIVE_QUALITY_JUDGE")
+        or ""
+    )
     live_quality_enabled = (
-        str(os.environ.get("AGENTMARKET_ENABLE_LIVE_QUALITY_JUDGE", "")).strip().lower()
-        in {"1", "true", "yes", "on"}
+        str(live_quality_toggle).strip().lower() in {"1", "true", "yes", "on"}
         and bool(str(os.environ.get("GROQ_API_KEY", "")).strip())
     )
 
@@ -4460,6 +4923,8 @@ def _ensure_output_rejection_dispute(
         return existing
 
     conn = payments._conn()
+    filing_deposit_cents = _compute_dispute_filing_deposit_cents(int(job.get("price_cents") or 0))
+    insufficient_phase = "dispute_create"
     try:
         conn.execute("BEGIN IMMEDIATE")
         created = disputes.create_dispute(
@@ -4468,15 +4933,17 @@ def _ensure_output_rejection_dispute(
             side="caller",
             reason=reason,
             evidence=evidence,
-            filing_deposit_cents=0,
+            filing_deposit_cents=filing_deposit_cents,
             conn=conn,
         )
+        insufficient_phase = "filing_deposit"
         payments.collect_dispute_filing_deposit(
             created["dispute_id"],
             filed_by_owner_id=filed_by_owner_id,
-            amount_cents=0,
+            amount_cents=filing_deposit_cents,
             conn=conn,
         )
+        insufficient_phase = "clawback_lock"
         payments.lock_dispute_funds(created["dispute_id"], conn=conn)
         conn.execute("COMMIT")
         return created
@@ -4491,10 +4958,15 @@ def _ensure_output_rejection_dispute(
         raise HTTPException(status_code=400, detail=str(exc))
     except payments.InsufficientBalanceError as exc:
         conn.execute("ROLLBACK")
+        error_code = (
+            error_codes.DISPUTE_FILING_DEPOSIT_INSUFFICIENT_BALANCE
+            if insufficient_phase == "filing_deposit"
+            else error_codes.DISPUTE_CLAWBACK_INSUFFICIENT_BALANCE
+        )
         raise HTTPException(
             status_code=409,
             detail={
-                "error": error_codes.DISPUTE_CLAWBACK_INSUFFICIENT_BALANCE,
+                "error": error_code,
                 "balance_cents": exc.balance_cents,
                 "required_cents": exc.required_cents,
             },
@@ -4560,7 +5032,12 @@ def _is_dispute_window_open(job: dict, *, now_dt: datetime | None = None) -> boo
     return current <= deadline
 
 
-def _settle_successful_job(job: dict, actor_owner_id: str) -> dict:
+def _settle_successful_job(
+    job: dict,
+    actor_owner_id: str,
+    *,
+    require_dispute_window_expiry: bool = True,
+) -> dict:
     newly_settled = False
     refreshed = jobs.initialize_output_verification_state(job["job_id"])
     if refreshed is not None:
@@ -4572,7 +5049,9 @@ def _settle_successful_job(job: dict, actor_owner_id: str) -> dict:
         return jobs.get_job(job["job_id"]) or job
     if verification_status == "rejected":
         return jobs.get_job(job["job_id"]) or job
-    if _is_dispute_window_open(job):
+    # Explicit caller acceptance should release funds immediately; only implicit acceptance
+    # paths remain gated by the dispute window timeout.
+    if require_dispute_window_expiry and _is_dispute_window_open(job):
         return jobs.get_job(job["job_id"]) or job
     if not job["settled_at"]:
         payments.post_call_payout(
@@ -4645,8 +5124,8 @@ def _settle_failed_job(
             if caller_email:
                 _agent_name = (registry.get_agent(settled["agent_id"]) or {}).get("name", settled["agent_id"])
                 _email.send_job_failed(caller_email, settled["job_id"], _agent_name, settled.get("error_message") or "")
-        except Exception:
-            pass
+        except Exception as exc:
+            _LOG.warning("Failed to send job failure email for job %s: %s", settled.get("job_id"), exc)
     if (
         str(settled.get("status") or "").strip().lower() == "failed"
     ):
@@ -5640,7 +6119,7 @@ def health() -> core_models.HealthResponse:
 
     # Disk check
     try:
-        writable = os.access(_DB_PATH, os.W_OK)
+        writable = os.access(jobs.DB_PATH, os.W_OK)
         checks["disk"] = core_models.HealthCheckDetail(ok=writable, writable=writable)
         if not writable:
             all_ok = False
@@ -5782,6 +6261,18 @@ def onboarding_ingest(
 # Auth routes  (public — no key required)
 # ---------------------------------------------------------------------------
 
+
+def _auth_legal_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "legal_acceptance_required": bool(payload.get("legal_acceptance_required", True)),
+        "legal_accepted_at": payload.get("legal_accepted_at"),
+        "terms_version_current": str(payload.get("terms_version_current") or _auth.LEGAL_TERMS_VERSION),
+        "privacy_version_current": str(payload.get("privacy_version_current") or _auth.LEGAL_PRIVACY_VERSION),
+        "terms_version_accepted": payload.get("terms_version_accepted"),
+        "privacy_version_accepted": payload.get("privacy_version_accepted"),
+    }
+
+
 @app.post(
     "/auth/register",
     status_code=201,
@@ -5817,7 +6308,7 @@ def auth_register(request: Request, body: UserRegisterRequest) -> core_models.Au
     except Exception:
         _LOG.warning("Failed to credit starter balance for new user %s", result.get("user_id"))
     _email.send_welcome(result.get("email", ""), result.get("username", "there"))
-    return JSONResponse(content=result, status_code=201)
+    return JSONResponse(content={**result, **_auth_legal_payload(result)}, status_code=201)
 
 
 @app.post(
@@ -5844,7 +6335,7 @@ def auth_login(request: Request, body: UserLoginRequest) -> core_models.AuthLogi
             )
     if result is None:
         raise HTTPException(status_code=401, detail="Invalid email or password.")
-    return JSONResponse(content=result)
+    return JSONResponse(content={**result, **_auth_legal_payload(result)})
 
 
 @app.get(
@@ -5870,7 +6361,46 @@ def auth_me(request: Request, caller: core_models.CallerContext = Depends(_requi
         "username": user["username"],
         "email": user["email"],
         "scopes": caller.get("scopes") or [],
+        **_auth_legal_payload(user),
     })
+
+
+@app.post(
+    "/auth/legal/accept",
+    response_model=core_models.AuthLegalAcceptResponse,
+    responses=_error_responses(400, 401, 403, 429, 500),
+)
+@limiter.limit(_AUTH_RATE_LIMIT, key_func=get_remote_address)
+def auth_accept_legal(
+    request: Request,
+    body: AuthLegalAcceptRequest,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.AuthLegalAcceptResponse:
+    if caller["type"] != "user":
+        raise HTTPException(status_code=403, detail="Not available for master or agent-scoped keys.")
+    client_ip = _request_client_ip(request)
+    accepted_ip = str(client_ip) if client_ip is not None else None
+    try:
+        result = _auth.accept_legal_terms(
+            caller["user"]["user_id"],
+            terms_version=body.terms_version,
+            privacy_version=body.privacy_version,
+            accepted_ip=accepted_ip,
+            accepted_user_agent=request.headers.get("user-agent"),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=error_codes.make_error(
+                error_codes.LEGAL_VERSION_MISMATCH,
+                str(exc),
+                {
+                    "terms_version_current": _auth.LEGAL_TERMS_VERSION,
+                    "privacy_version_current": _auth.LEGAL_PRIVACY_VERSION,
+                },
+            ),
+        )
+    return JSONResponse(content={**result, **_auth_legal_payload(result)})
 
 
 @app.get(
@@ -5891,7 +6421,7 @@ def auth_list_keys(request: Request, caller: core_models.CallerContext = Depends
     "/auth/keys",
     status_code=201,
     response_model=core_models.ApiKeyCreateResponse,
-    responses=_error_responses(400, 401, 403, 429, 500),
+    responses=_error_responses(400, 401, 403, 422, 429, 500),
 )
 @limiter.limit("10/minute")
 def auth_create_key(
@@ -5902,12 +6432,23 @@ def auth_create_key(
     """Create a new named API key for the authenticated user."""
     if caller["type"] != "user":
         raise HTTPException(status_code=403, detail="Not available for master key.")
+    requested_scopes = {str(scope).strip().lower() for scope in body.scopes}
+    if "caller" in requested_scopes and body.per_job_cap_cents is None:
+        raise HTTPException(
+            status_code=422,
+            detail=error_codes.make_error(
+                error_codes.VALIDATION_ERROR,
+                "caller-scoped keys require per_job_cap_cents.",
+                {"field": "per_job_cap_cents", "required_for_scope": "caller"},
+            ),
+        )
     try:
         result = _auth.create_api_key(
             caller["user"]["user_id"],
             body.name,
             scopes=body.scopes,
             max_spend_cents=body.max_spend_cents,
+            per_job_cap_cents=body.per_job_cap_cents,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -5936,7 +6477,9 @@ def auth_rotate_key(
             name=body.name,
             scopes=body.scopes,
             max_spend_cents=body.max_spend_cents,
+            per_job_cap_cents=body.per_job_cap_cents,
             max_spend_cents_provided="max_spend_cents" in body.model_fields_set,
+            per_job_cap_cents_provided="per_job_cap_cents" in body.model_fields_set,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -6235,7 +6778,7 @@ def _a2a_agent_card(agent: dict) -> dict:
         "description": str(agent.get("description") or ""),
         "url": f"{_SERVER_BASE_URL}/registry/agents/{agent['agent_id']}/call",
         "version": "1.0.0",
-        "provider": {"organization": "AgentMarket", "url": _SERVER_BASE_URL},
+        "provider": {"organization": "Aztea", "url": _SERVER_BASE_URL},
         "defaultInputModes": ["application/json"],
         "defaultOutputModes": ["application/json"],
         "capabilities": {
@@ -6299,11 +6842,11 @@ def a2a_platform_agent_card(request: Request) -> JSONResponse:
             }
         )
     card = {
-        "name": "AgentMarket",
+        "name": "Aztea",
         "description": "AI agent labor marketplace. Discover, hire, and orchestrate specialist agents. Pay per invocation.",
         "url": _SERVER_BASE_URL,
         "version": "1.0.0",
-        "provider": {"organization": "AgentMarket", "url": _SERVER_BASE_URL},
+        "provider": {"organization": "Aztea", "url": _SERVER_BASE_URL},
         "defaultInputModes": ["application/json"],
         "defaultOutputModes": ["application/json"],
         "capabilities": {
@@ -6346,7 +6889,7 @@ def a2a_agent_card(agent_id: str, request: Request) -> JSONResponse:
     "/a2a/tasks/send",
     status_code=201,
     tags=["A2A"],
-    summary="Google A2A: submit a task to an AgentMarket skill (agent). Returns a task/job object.",
+    summary="Google A2A: submit a task to an Aztea skill (agent). Returns a task/job object.",
     responses=_error_responses(400, 401, 402, 403, 404, 429, 500),
 )
 @limiter.limit(_JOBS_CREATE_RATE_LIMIT)
@@ -6503,7 +7046,7 @@ def openai_tools(
                 "name": f"hire_{agent['agent_id'].replace('-', '_')}",
                 "description": (
                     f"{agent.get('description', '')} "
-                    f"[AgentMarket: {agent['agent_id']} | "
+                    f"[Aztea: {agent['agent_id']} | "
                     f"${float(agent.get('price_per_call_usd', 0)):.4f}/call]"
                 ).strip(),
                 "parameters": {
@@ -6838,8 +7381,6 @@ def admin_review_agent(
 
     health_probe: dict[str, Any] | None = None
     probe_url = str(reviewed.get("healthcheck_url") or "").strip()
-    if not probe_url:
-        probe_url = str(reviewed.get("endpoint_url") or "").strip()
     if body.decision == "approve" and probe_url:
         try:
             ok, error_text = _probe_agent_endpoint_health(
@@ -6995,12 +7536,22 @@ def registry_call(
                     actor_owner_id=caller["owner_id"],
                     event_type="job.failed_validation",
                 )
+            def _sanitize_errors(errors):
+                clean = []
+                for e in errors:
+                    entry = {k: v for k, v in e.items() if k != "ctx"}
+                    ctx = e.get("ctx")
+                    if ctx:
+                        entry["ctx"] = {k: str(v) for k, v in ctx.items()}
+                    clean.append(entry)
+                return clean
+
             raise HTTPException(
                 status_code=422,
                 detail=error_codes.make_error(
                     error_codes.INVALID_INPUT,
                     "Request validation failed.",
-                    {"errors": exc.errors()},
+                    {"errors": _sanitize_errors(exc.errors())},
                 ),
             )
         except ValueError as exc:
@@ -7095,7 +7646,7 @@ def registry_call(
     "/jobs",
     status_code=201,
     response_model=core_models.JobResponse,
-    responses=_error_responses(400, 401, 402, 403, 404, 429, 500, 503),
+    responses=_error_responses(400, 401, 402, 403, 404, 422, 429, 500, 503),
 )
 @limiter.limit(_JOBS_CREATE_RATE_LIMIT)
 def jobs_create(
@@ -7109,6 +7660,17 @@ def jobs_create(
         body.parent_job_id,
         parent_cascade_policy=body.parent_cascade_policy,
     )
+    parent_tree_depth = _to_non_negative_int((parent_job or {}).get("tree_depth"), default=0)
+    tree_depth = parent_tree_depth + 1 if parent_job is not None else 0
+    if tree_depth >= 10:
+        raise HTTPException(
+            status_code=422,
+            detail=error_codes.make_error(
+                error_codes.ORCHESTRATION_DEPTH_EXCEEDED,
+                "Maximum orchestration depth is 10 levels.",
+                {"max_depth": 10, "attempted_depth": tree_depth},
+            ),
+        )
     agent = registry.get_agent(body.agent_id, include_unapproved=True)
     if agent is None or not _caller_can_access_agent(caller, agent):
         raise HTTPException(status_code=404, detail=f"Agent '{body.agent_id}' not found.")
@@ -7160,6 +7722,35 @@ def jobs_create(
                 {"price_cents": price_cents, "budget_cents": body.budget_cents, "agent_id": agent["agent_id"]},
             ),
         )
+    if price_cents > 5000 and not _agent_has_verified_contract(agent):
+        raise HTTPException(
+            status_code=422,
+            detail=error_codes.make_error(
+                error_codes.VERIFIED_CONTRACT_REQUIRED,
+                "Jobs above $50 require a worker with a verified input/output contract.",
+                {"agent_id": agent["agent_id"], "price_cents": price_cents},
+            ),
+        )
+    key_per_job_cap_cents = _caller_key_per_job_cap(caller)
+    if key_per_job_cap_cents is not None and price_cents > key_per_job_cap_cents:
+        raise HTTPException(
+            status_code=402,
+            detail=error_codes.make_error(
+                error_codes.SPEND_LIMIT_EXCEEDED,
+                "API key per-job cap exceeded.",
+                {
+                    "scope": "api_key_per_job",
+                    "key_id": str(caller.get("key_id") or "").strip() or None,
+                    "limit_cents": key_per_job_cap_cents,
+                    "attempted_cents": price_cents,
+                },
+            ),
+        )
+    output_verification_window_seconds = (
+        86400
+        if body.output_verification_window_seconds is None
+        else body.output_verification_window_seconds
+    )
     caller_wallet = payments.get_or_create_wallet(caller_owner_id)
     _agent_payout_owner2 = f"agent:{agent['agent_id']}"
     agent_wallet = payments.get_or_create_wallet(_agent_payout_owner2)
@@ -7188,6 +7779,7 @@ def jobs_create(
             agent_owner_id=agent.get("owner_id"),
             max_attempts=body.max_attempts,
             parent_job_id=(parent_job or {}).get("job_id"),
+            tree_depth=tree_depth,
             parent_cascade_policy=body.parent_cascade_policy,
             clarification_timeout_seconds=body.clarification_timeout_seconds,
             clarification_timeout_policy=body.clarification_timeout_policy,
@@ -7195,7 +7787,7 @@ def jobs_create(
             judge_agent_id=_extract_judge_agent_id(agent.get("input_schema")) or _QUALITY_JUDGE_AGENT_ID,
             callback_url=body.callback_url or None,
             callback_secret=body.callback_secret or None,
-            output_verification_window_seconds=body.output_verification_window_seconds,
+            output_verification_window_seconds=output_verification_window_seconds,
         )
     except Exception:
         payments.post_call_refund(
@@ -7212,6 +7804,7 @@ def jobs_create(
             "max_attempts": body.max_attempts,
             "parent_job_id": (parent_job or {}).get("job_id"),
             "parent_cascade_policy": body.parent_cascade_policy,
+            "tree_depth": tree_depth,
         },
     )
     return JSONResponse(content=_job_response(job, caller), status_code=201)
@@ -7241,18 +7834,54 @@ def jobs_batch_create(
 
     resolved: list[dict] = []
     total_price_cents = 0
+    key_per_job_cap_cents = _caller_key_per_job_cap(caller)
     for spec in body.jobs:
         parent_job = _resolve_parent_job_for_creation(
             caller,
             spec.parent_job_id,
             parent_cascade_policy=spec.parent_cascade_policy,
         )
+        parent_tree_depth = _to_non_negative_int((parent_job or {}).get("tree_depth"), default=0)
+        tree_depth = parent_tree_depth + 1 if parent_job is not None else 0
+        if tree_depth >= 10:
+            raise HTTPException(
+                status_code=422,
+                detail=error_codes.make_error(
+                    error_codes.ORCHESTRATION_DEPTH_EXCEEDED,
+                    "Maximum orchestration depth is 10 levels.",
+                    {"max_depth": 10, "attempted_depth": tree_depth},
+                ),
+            )
         agent = registry.get_agent(spec.agent_id, include_unapproved=True)
         if agent is None or not _caller_can_access_agent(caller, agent) or agent.get("status") == "banned":
             raise HTTPException(status_code=404, detail=f"Agent '{spec.agent_id}' not found.")
         if agent.get("status") == "suspended":
             raise HTTPException(status_code=503, detail=f"Agent '{spec.agent_id}' is suspended.")
         price_cents = _usd_to_cents(agent["price_per_call_usd"])
+        if price_cents > 5000 and not _agent_has_verified_contract(agent):
+            raise HTTPException(
+                status_code=422,
+                detail=error_codes.make_error(
+                    error_codes.VERIFIED_CONTRACT_REQUIRED,
+                    "Jobs above $50 require a worker with a verified input/output contract.",
+                    {"agent_id": agent["agent_id"], "price_cents": price_cents},
+                ),
+            )
+        if key_per_job_cap_cents is not None and price_cents > key_per_job_cap_cents:
+            raise HTTPException(
+                status_code=402,
+                detail=error_codes.make_error(
+                    error_codes.SPEND_LIMIT_EXCEEDED,
+                    "API key per-job cap exceeded.",
+                    {
+                        "scope": "api_key_per_job",
+                        "key_id": str(caller.get("key_id") or "").strip() or None,
+                        "limit_cents": key_per_job_cap_cents,
+                        "attempted_cents": price_cents,
+                        "agent_id": agent["agent_id"],
+                    },
+                ),
+            )
         fee_bearer_policy = payments.normalize_fee_bearer_policy(spec.fee_bearer_policy)
         platform_fee_pct_at_create = int(payments.PLATFORM_FEE_PCT)
         success_distribution = payments.compute_success_distribution(
@@ -7280,6 +7909,7 @@ def jobs_batch_create(
                 "fee_bearer_policy": fee_bearer_policy,
                 "spec": spec,
                 "parent_job_id": (parent_job or {}).get("job_id"),
+                "tree_depth": tree_depth,
             }
         )
 
@@ -7305,6 +7935,7 @@ def jobs_batch_create(
             fee_bearer_policy = item["fee_bearer_policy"]
             spec = item["spec"]
             parent_job_id = item["parent_job_id"]
+            tree_depth = item["tree_depth"]
             agent_wallet = payments.get_or_create_wallet(f"agent:{agent['agent_id']}")
             platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
             charge_tx_id = _pre_call_charge_or_402(
@@ -7329,6 +7960,7 @@ def jobs_batch_create(
                 agent_owner_id=agent.get("owner_id"),
                 max_attempts=spec.max_attempts,
                 parent_job_id=parent_job_id,
+                tree_depth=tree_depth,
                 parent_cascade_policy=spec.parent_cascade_policy,
                 clarification_timeout_seconds=spec.clarification_timeout_seconds,
                 clarification_timeout_policy=spec.clarification_timeout_policy,
@@ -7336,7 +7968,11 @@ def jobs_batch_create(
                 judge_agent_id=_extract_judge_agent_id(agent.get("input_schema")) or _QUALITY_JUDGE_AGENT_ID,
                 callback_url=spec.callback_url or None,
                 callback_secret=spec.callback_secret or None,
-                output_verification_window_seconds=spec.output_verification_window_seconds,
+                output_verification_window_seconds=(
+                    86400
+                    if spec.output_verification_window_seconds is None
+                    else spec.output_verification_window_seconds
+                ),
                 batch_id=batch_id,
             )
             _record_job_event(job, "job.created", actor_owner_id=caller["owner_id"])
@@ -7345,15 +7981,27 @@ def jobs_batch_create(
         for wallet_id, charge_tx_id, price_cents, agent_id in charge_tx_ids:
             try:
                 payments.post_call_refund(wallet_id, charge_tx_id, price_cents, agent_id)
-            except Exception:
-                pass
+            except Exception as exc:
+                _LOG.exception(
+                    "Batch refund failed after handled error (wallet=%s charge_tx_id=%s agent=%s): %s",
+                    wallet_id,
+                    charge_tx_id,
+                    agent_id,
+                    exc,
+                )
         raise
     except Exception:
         for wallet_id, charge_tx_id, price_cents, agent_id in charge_tx_ids:
             try:
                 payments.post_call_refund(wallet_id, charge_tx_id, price_cents, agent_id)
-            except Exception:
-                pass
+            except Exception as exc:
+                _LOG.exception(
+                    "Batch refund failed after unhandled error (wallet=%s charge_tx_id=%s agent=%s): %s",
+                    wallet_id,
+                    charge_tx_id,
+                    agent_id,
+                    exc,
+                )
         raise HTTPException(status_code=500, detail="Batch creation failed; all charges refunded.")
 
     return JSONResponse(
@@ -7873,7 +8521,11 @@ def jobs_output_verification_decide(
             if disputes.has_dispute_for_job(job_id):
                 raise HTTPException(status_code=409, detail="Cannot accept output after a dispute is already filed.")
             if verification_status == "accepted":
-                settled = _settle_successful_job(initialized, actor_owner_id=caller["owner_id"])
+                settled = _settle_successful_job(
+                    initialized,
+                    actor_owner_id=caller["owner_id"],
+                    require_dispute_window_expiry=False,
+                )
                 return _job_response(settled, caller), 200
             if verification_status in {"rejected", "expired"}:
                 raise HTTPException(status_code=409, detail="Output verification decision is already closed for this job.")
@@ -7891,7 +8543,11 @@ def jobs_output_verification_decide(
                 actor_owner_id=caller["owner_id"],
                 payload={},
             )
-            settled = _settle_successful_job(decided, actor_owner_id=caller["owner_id"])
+            settled = _settle_successful_job(
+                decided,
+                actor_owner_id=caller["owner_id"],
+                require_dispute_window_expiry=False,
+            )
             return _job_response(settled, caller), 200
 
         if verification_status == "rejected":
@@ -8524,6 +9180,7 @@ def disputes_judge(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.DisputeJudgeResponse:
     _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
+    _require_admin_ip_allowlist(request)
     if disputes.get_dispute(dispute_id) is None:
         raise HTTPException(status_code=404, detail=f"Dispute '{dispute_id}' not found.")
     try:
@@ -9045,8 +9702,8 @@ def wallet_me_agent_earnings(
             agent = registry.get_agent(agent_id, include_unapproved=True)
             if agent:
                 name = agent.get("name") or agent_id
-        except Exception:
-            pass
+        except (sqlite3.DatabaseError, ValueError, TypeError) as exc:
+            _LOG.warning("Failed to load agent name for earnings row %s: %s", agent_id, exc)
         enriched.append({**row, "agent_name": name})
     return JSONResponse(content={"earnings": enriched})
 
@@ -9110,6 +9767,45 @@ def config_public() -> JSONResponse:
     return JSONResponse({
         "stripe_enabled": bool(_STRIPE_SECRET_KEY and _STRIPE_AVAILABLE),
         "stripe_publishable_key": _STRIPE_PUBLISHABLE_KEY or None,
+    })
+
+
+@app.get(
+    "/public/docs",
+    tags=["docs"],
+    summary="List platform documentation available from this deployment.",
+)
+def public_docs_index() -> JSONResponse:
+    entries = _public_docs_entries()
+    docs = [
+        {
+            "slug": item["slug"],
+            "title": item["title"],
+            "path": f"/public/docs/{item['slug']}",
+        }
+        for item in entries
+    ]
+    return JSONResponse({"docs": docs, "count": len(docs)})
+
+
+@app.get(
+    "/public/docs/{doc_slug}",
+    tags=["docs"],
+    summary="Fetch a public documentation file by slug.",
+)
+def public_doc_content(doc_slug: str) -> JSONResponse:
+    doc = _find_public_doc(doc_slug)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Documentation page not found.")
+    try:
+        with open(doc["full_path"], encoding="utf-8") as handle:
+            content = handle.read()
+    except OSError:
+        raise HTTPException(status_code=500, detail="Unable to read documentation file.") from None
+    return JSONResponse({
+        "slug": doc["slug"],
+        "title": doc["title"],
+        "content": content,
     })
 
 
@@ -9241,8 +9937,8 @@ def create_topup_session(
                 "price_data": {
                     "currency": "usd",
                     "product_data": {
-                        "name": "AgentMarket wallet top-up",
-                        "description": f"Add ${body.amount_cents / 100:.2f} to your AgentMarket wallet.",
+                        "name": "Aztea wallet top-up",
+                        "description": f"Add ${body.amount_cents / 100:.2f} to your Aztea wallet.",
                     },
                     "unit_amount": body.amount_cents,
                 },

@@ -139,10 +139,20 @@ def _force_settle_completed_job(job_id: str) -> dict:
     assert job["status"] == "complete"
     window_seconds = max(1, int(server._effective_dispute_window_seconds(job)))
     completed_at = (datetime.now(timezone.utc) - timedelta(seconds=window_seconds + 5)).isoformat()
+    expired_verification_deadline = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
     with jobs._conn() as conn:
         conn.execute(
-            "UPDATE jobs SET completed_at = ?, updated_at = ? WHERE job_id = ?",
-            (completed_at, completed_at, job_id),
+            """
+            UPDATE jobs
+            SET completed_at = ?,
+                updated_at = ?,
+                output_verification_deadline_at = CASE
+                    WHEN output_verification_status = 'pending' THEN ?
+                    ELSE output_verification_deadline_at
+                END
+            WHERE job_id = ?
+            """,
+            (completed_at, completed_at, expired_verification_deadline, job_id),
         )
     server._sweep_jobs(
         retry_delay_seconds=0,
@@ -1177,7 +1187,7 @@ def test_onboarding_manifest_maps_output_schema_and_verifier_url(client):
 
 def test_registry_register_auto_verifies_with_verifier_url(client, monkeypatch):
     worker = _register_user()
-    verifier_url = f"https://verifier.agentmarket.dev/{uuid.uuid4().hex[:8]}"
+    verifier_url = f"https://verifier.aztea.dev/{uuid.uuid4().hex[:8]}"
     captured: dict[str, object] = {}
 
     class _VerifierResponse:
@@ -1202,7 +1212,7 @@ def test_registry_register_auto_verifies_with_verifier_url(client, monkeypatch):
         json={
             "name": f"Verified Agent {uuid.uuid4().hex[:6]}",
             "description": "Verifier-backed listing",
-            "endpoint_url": f"https://agents.agentmarket.dev/{uuid.uuid4().hex[:8]}",
+            "endpoint_url": f"https://agents.aztea.dev/{uuid.uuid4().hex[:8]}",
             "price_per_call_usd": 0.1,
             "tags": ["verified-test"],
             "input_schema": {"type": "object", "properties": {"task": {"type": "string"}}},
@@ -1228,7 +1238,7 @@ def test_endpoint_health_monitor_marks_degraded_and_recovers(client, monkeypatch
         json={
             "name": f"Health Mon Agent {uuid.uuid4().hex[:6]}",
             "description": "Agent for endpoint health monitoring tests",
-            "endpoint_url": f"https://health.agentmarket.dev/{uuid.uuid4().hex[:8]}",
+            "endpoint_url": f"https://health.aztea.dev/{uuid.uuid4().hex[:8]}",
             "price_per_call_usd": 0.1,
             "tags": ["health-monitor"],
             "input_schema": {"type": "object", "properties": {"task": {"type": "string"}}},
@@ -1288,7 +1298,7 @@ def test_scoped_keys_enforce_caller_and_worker_permissions(client):
     caller_key_resp = client.post(
         "/auth/keys",
         headers=_auth_headers(caller["raw_api_key"]),
-        json={"name": "caller-only", "scopes": ["caller"]},
+        json={"name": "caller-only", "scopes": ["caller"], "per_job_cap_cents": 500},
     )
     assert caller_key_resp.status_code == 201, caller_key_resp.text
     caller_only_key = caller_key_resp.json()["raw_key"]
@@ -1333,6 +1343,33 @@ def test_scoped_keys_enforce_caller_and_worker_permissions(client):
     assert claim_ok.status_code == 200, claim_ok.text
 
 
+def test_caller_scoped_key_requires_per_job_cap_on_creation(client):
+    user = _register_user()
+
+    missing_cap = client.post(
+        "/auth/keys",
+        headers=_auth_headers(user["raw_api_key"]),
+        json={"name": "caller-without-cap", "scopes": ["caller"]},
+    )
+    assert missing_cap.status_code == 422, missing_cap.text
+    assert missing_cap.json()["error"] == "request.validation_error"
+
+    worker_only = client.post(
+        "/auth/keys",
+        headers=_auth_headers(user["raw_api_key"]),
+        json={"name": "worker-only", "scopes": ["worker"]},
+    )
+    assert worker_only.status_code == 201, worker_only.text
+
+    caller_with_cap = client.post(
+        "/auth/keys",
+        headers=_auth_headers(user["raw_api_key"]),
+        json={"name": "caller-with-cap", "scopes": ["caller"], "per_job_cap_cents": 250},
+    )
+    assert caller_with_cap.status_code == 201, caller_with_cap.text
+    assert caller_with_cap.json()["per_job_cap_cents"] == 250
+
+
 def test_api_key_rotation_revokes_old_key_and_keeps_scopes(client):
     user = _register_user()
 
@@ -1362,6 +1399,53 @@ def test_api_key_rotation_revokes_old_key_and_keeps_scopes(client):
     assert new_me.json()["scopes"] == ["worker"]
 
 
+def test_auth_me_reports_legal_acceptance_required_for_new_user(client):
+    user = _register_user()
+    response = client.get("/auth/me", headers=_auth_headers(user["raw_api_key"]))
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["legal_acceptance_required"] is True
+    assert body["terms_version_current"] == auth.LEGAL_TERMS_VERSION
+    assert body["privacy_version_current"] == auth.LEGAL_PRIVACY_VERSION
+    assert body["legal_accepted_at"] is None
+
+
+def test_auth_legal_accept_records_acceptance(client):
+    user = _register_user()
+
+    me_before = client.get("/auth/me", headers=_auth_headers(user["raw_api_key"]))
+    assert me_before.status_code == 200, me_before.text
+    current_terms = me_before.json()["terms_version_current"]
+    current_privacy = me_before.json()["privacy_version_current"]
+
+    accepted = client.post(
+        "/auth/legal/accept",
+        headers=_auth_headers(user["raw_api_key"]),
+        json={"terms_version": current_terms, "privacy_version": current_privacy},
+    )
+    assert accepted.status_code == 200, accepted.text
+    accepted_body = accepted.json()
+    assert accepted_body["legal_acceptance_required"] is False
+    assert accepted_body["terms_version_accepted"] == current_terms
+    assert accepted_body["privacy_version_accepted"] == current_privacy
+    assert accepted_body["legal_accepted_at"] is not None
+
+    me_after = client.get("/auth/me", headers=_auth_headers(user["raw_api_key"]))
+    assert me_after.status_code == 200, me_after.text
+    assert me_after.json()["legal_acceptance_required"] is False
+
+
+def test_auth_legal_accept_rejects_mismatched_versions(client):
+    user = _register_user()
+    response = client.post(
+        "/auth/legal/accept",
+        headers=_auth_headers(user["raw_api_key"]),
+        json={"terms_version": "1900-01-01", "privacy_version": "1900-01-01"},
+    )
+    assert response.status_code == 400, response.text
+    assert response.json()["error"] == "auth.legal_version_mismatch"
+
+
 def test_api_key_max_spend_cap_enforced_on_job_charges(client):
     worker_owner = _register_user()
     caller = _register_user()
@@ -1378,7 +1462,12 @@ def test_api_key_max_spend_cap_enforced_on_job_charges(client):
     capped_key_resp = client.post(
         "/auth/keys",
         headers=_auth_headers(caller["raw_api_key"]),
-        json={"name": "capped-caller", "scopes": ["caller"], "max_spend_cents": 10},
+        json={
+            "name": "capped-caller",
+            "scopes": ["caller"],
+            "max_spend_cents": 10,
+            "per_job_cap_cents": 500,
+        },
     )
     assert capped_key_resp.status_code == 201, capped_key_resp.text
     assert capped_key_resp.json()["max_spend_cents"] == 10
@@ -1401,6 +1490,104 @@ def test_api_key_max_spend_cap_enforced_on_job_charges(client):
     assert blocked["error"] == "payment.spend_limit_exceeded"
     assert blocked["details"]["scope"] == "api_key"
     assert blocked["details"]["limit_cents"] == 10
+
+
+def test_api_key_per_job_cap_blocks_job_creation(client):
+    worker_owner = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 200)
+
+    agent_id = _register_agent_via_api(
+        client,
+        worker_owner["raw_api_key"],
+        name=f"Per Job Capped Agent {uuid.uuid4().hex[:6]}",
+        price=0.11,
+        tags=["per-job-cap"],
+    )
+
+    capped_key_resp = client.post(
+        "/auth/keys",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={"name": "per-job-capped", "scopes": ["caller"], "per_job_cap_cents": 10},
+    )
+    assert capped_key_resp.status_code == 201, capped_key_resp.text
+    capped_key = capped_key_resp.json()["raw_key"]
+
+    blocked = client.post(
+        "/jobs",
+        headers=_auth_headers(capped_key),
+        json={"agent_id": agent_id, "input_payload": {"task": "too-expensive"}},
+    )
+    assert blocked.status_code == 402, blocked.text
+    body = blocked.json()
+    assert body["error"] == "payment.spend_limit_exceeded"
+    assert body["details"]["scope"] == "api_key_per_job"
+    assert body["details"]["limit_cents"] == 10
+    assert body["details"]["attempted_cents"] == 11
+
+
+def test_jobs_above_50_require_verified_contract(client):
+    worker_owner = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 10_000)
+
+    agent_id = _register_agent_via_api(
+        client,
+        worker_owner["raw_api_key"],
+        name=f"High Value Unverified Agent {uuid.uuid4().hex[:6]}",
+        price=51.00,
+        tags=["high-value"],
+    )
+
+    blocked = client.post(
+        "/jobs",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={"agent_id": agent_id, "input_payload": {"task": "high-value"}},
+    )
+    assert blocked.status_code == 422, blocked.text
+    body = blocked.json()
+    assert body["error"] == "job.verified_contract_required"
+
+    registry.set_agent_verified(agent_id, True)
+    allowed = client.post(
+        "/jobs",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={"agent_id": agent_id, "input_payload": {"task": "high-value"}},
+    )
+    assert allowed.status_code == 201, allowed.text
+
+
+def test_job_creation_rejects_depth_10_or_more(client):
+    worker_owner = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 600)
+
+    agent_id = _register_agent_via_api(
+        client,
+        worker_owner["raw_api_key"],
+        name=f"Depth Agent {uuid.uuid4().hex[:6]}",
+        price=0.10,
+        tags=["depth"],
+    )
+
+    root = client.post(
+        "/jobs",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={"agent_id": agent_id, "input_payload": {"task": "root"}},
+    )
+    assert root.status_code == 201, root.text
+    root_id = root.json()["job_id"]
+
+    with jobs._conn() as conn:
+        conn.execute("UPDATE jobs SET tree_depth = 9 WHERE job_id = ?", (root_id,))
+
+    blocked = client.post(
+        "/jobs",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={"agent_id": agent_id, "input_payload": {"task": "child"}, "parent_job_id": root_id},
+    )
+    assert blocked.status_code == 422, blocked.text
+    assert blocked.json()["error"] == "job.orchestration_depth_exceeded"
 
 
 def test_wallet_daily_spend_limit_blocks_new_job_charges(client):
@@ -1515,7 +1702,7 @@ def test_admin_scope_controls_ops_endpoints(client):
     caller_key_resp = client.post(
         "/auth/keys",
         headers=_auth_headers(user["raw_api_key"]),
-        json={"name": "caller-only", "scopes": ["caller"]},
+        json={"name": "caller-only", "scopes": ["caller"], "per_job_cap_cents": 500},
     )
     assert caller_key_resp.status_code == 201
     caller_key = caller_key_resp.json()["raw_key"]
@@ -1970,7 +2157,7 @@ def test_job_callback_url_delivery_is_signed_and_contains_terminal_output(client
     assert payload["status"] == "complete"
     assert payload["output_payload"] == {"ok": True, "source": "specialist"}
 
-    signature = callback_match["headers"].get("X-AgentMarket-Signature")
+    signature = callback_match["headers"].get("X-Aztea-Signature")
     expected_signature = "sha256=" + hmac.new(
         callback_secret.encode("utf-8"),
         payload_bytes,
@@ -2247,7 +2434,7 @@ def test_sweeper_auto_suspends_poor_agent_performance(client):
 
 
 def test_quality_gate_fails_schema_mismatch_without_live_judge(monkeypatch):
-    monkeypatch.delenv("AGENTMARKET_ENABLE_LIVE_QUALITY_JUDGE", raising=False)
+    monkeypatch.delenv("AZTEA_ENABLE_LIVE_QUALITY_JUDGE", raising=False)
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
 
     def should_not_run_judge(**kwargs):
@@ -2275,7 +2462,7 @@ def test_quality_gate_fails_schema_mismatch_without_live_judge(monkeypatch):
 
 
 def test_quality_gate_honest_fallback_without_contract_or_judge(monkeypatch):
-    monkeypatch.delenv("AGENTMARKET_ENABLE_LIVE_QUALITY_JUDGE", raising=False)
+    monkeypatch.delenv("AZTEA_ENABLE_LIVE_QUALITY_JUDGE", raising=False)
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
 
     def should_not_run_judge(**kwargs):
@@ -2348,7 +2535,17 @@ def test_registry_lists_new_builtin_agents(client):
         "Scenario Simulator Agent",
         "Product Strategy Lab Agent",
         "Portfolio Planner Agent",
+        "System Design Reviewer Agent",
+        "Incident Response Commander Agent",
     }.issubset(names)
+
+
+def test_registry_hides_deprecated_builtin_agents(client):
+    listed = client.get("/registry/agents", headers=_auth_headers(TEST_MASTER_KEY))
+    assert listed.status_code == 200, listed.text
+    names = {agent["name"] for agent in listed.json()["agents"]}
+    assert "Resume Analyzer Agent" not in names
+    assert "Email Sequence Writer Agent" not in names
 
 
 def test_builtin_agents_registered_to_system_owner_with_internal_endpoints(client):
@@ -2827,7 +3024,7 @@ def test_orchestrator_receives_child_completion_callback_and_finishes_parent(cli
         payload_bytes,
         hashlib.sha256,
     ).hexdigest()
-    assert callback_match["headers"].get("X-AgentMarket-Signature") == expected_signature
+    assert callback_match["headers"].get("X-Aztea-Signature") == expected_signature
 
     parent_complete = client.post(
         f"/jobs/{parent_job_id}/complete",
@@ -2894,8 +3091,9 @@ def test_output_verification_accept_blocks_then_allows_settlement(client):
     )
     assert accepted.status_code == 200, accepted.text
     assert accepted.json()["output_verification_status"] == "accepted"
-
-    settled = _force_settle_completed_job(job_id)
+    assert accepted.json()["settled_at"] is not None
+    settled = jobs.get_job(job_id)
+    assert settled is not None
     assert settled["output_verification_status"] == "accepted"
     assert settled["settled_at"] is not None
 
@@ -2949,6 +3147,7 @@ def test_output_verification_reject_auto_opens_dispute(client):
     assert dispute.status_code == 200, dispute.text
     assert dispute.json()["job_id"] == job_id
     assert dispute.json()["side"] == "caller"
+    assert dispute.json()["filing_deposit_cents"] == 5
     assert disputes.has_dispute_for_job(job_id)
 
 
@@ -3425,7 +3624,8 @@ def test_admin_review_approve_and_reject_paths(client, monkeypatch):
     assert all(agent["agent_id"] != reject_agent_id for agent in hidden.json()["agents"])
 
 
-def test_built_in_agents_remain_auto_approved():
+def test_built_in_agents_remain_auto_approved(client):
+    _ = client
     builtin = registry.get_agent(server._FINANCIAL_AGENT_ID, include_unapproved=True)
     assert builtin is not None
     assert builtin["review_status"] == "approved"
@@ -3434,7 +3634,7 @@ def test_built_in_agents_remain_auto_approved():
 def test_protocol_version_header_is_always_set(client):
     response = client.get("/health", headers=_auth_headers(TEST_MASTER_KEY))
     assert response.status_code == 200
-    assert response.headers.get("X-AgentMarket-Version") == "1.0"
+    assert response.headers.get("X-Aztea-Version") == "1.0"
 
 
 def test_health_returns_503_when_memory_probe_fails(client, monkeypatch):
@@ -3493,3 +3693,26 @@ def test_dispute_window_respects_global_cap_seconds(client, monkeypatch):
     )
     assert dispute.status_code == 400
     assert dispute.json()["error"] == "dispute.window_closed"
+
+
+def test_public_docs_index_and_content_are_available_without_auth(client):
+    index_response = client.get("/public/docs")
+    assert index_response.status_code == 200, index_response.text
+    body = index_response.json()
+    assert body["count"] >= 1
+    assert body["docs"]
+
+    first = body["docs"][0]
+    assert first["path"] == f"/public/docs/{first['slug']}"
+
+    doc_response = client.get(first["path"])
+    assert doc_response.status_code == 200, doc_response.text
+    doc_body = doc_response.json()
+    assert doc_body["slug"] == first["slug"]
+    assert isinstance(doc_body["content"], str)
+    assert doc_body["content"].strip()
+
+
+def test_public_docs_unknown_slug_returns_404(client):
+    response = client.get("/public/docs/not-a-real-doc")
+    assert response.status_code == 404

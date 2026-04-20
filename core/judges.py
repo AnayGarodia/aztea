@@ -52,6 +52,13 @@ def _env_enabled(name: str) -> bool:
     return value in {"1", "true", "yes", "on"}
 
 
+def _env_enabled_any(*names: str) -> bool:
+    for name in names:
+        if _env_enabled(name):
+            return True
+    return False
+
+
 def _normalize_verdict(value: Any) -> str:
     verdict = str(value or "").strip().lower()
     if verdict not in disputes.DISPUTE_OUTCOMES:
@@ -159,7 +166,7 @@ def run_judgment(dispute_id: str) -> dict:
         }
 
     disputes.set_dispute_status(dispute_id, "judging")
-    live_enabled = _env_enabled("AGENTMARKET_ENABLE_LIVE_DISPUTE_JUDGES")
+    live_enabled = _env_enabled_any("AZTEA_ENABLE_LIVE_DISPUTE_JUDGES", "AGENTMARKET_ENABLE_LIVE_DISPUTE_JUDGES")
     if not live_enabled:
         fallback = _local_dispute_fallback(context)
         fallback_verdict = fallback["verdict"]
@@ -266,7 +273,7 @@ def run_quality_judgment(
     output_payload: dict,
     agent_description: str,
 ) -> dict:
-    if not _env_enabled("AGENTMARKET_ENABLE_LIVE_QUALITY_JUDGE"):
+    if not _env_enabled_any("AZTEA_ENABLE_LIVE_QUALITY_JUDGE", "AGENTMARKET_ENABLE_LIVE_QUALITY_JUDGE"):
         return _local_quality_fallback(
             input_payload=input_payload,
             output_payload=output_payload,

@@ -1,5 +1,5 @@
 """
-logging_utils.py — structured JSON logging helpers for AgentMarket.
+logging_utils.py — structured JSON logging helpers for Aztea.
 """
 
 from __future__ import annotations

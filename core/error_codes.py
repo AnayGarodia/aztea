@@ -22,8 +22,11 @@ DISPUTE_SETTLEMENT_INSUFFICIENT_BALANCE = "dispute.settlement_insufficient_balan
 DISPUTE_FILING_DEPOSIT_INSUFFICIENT_BALANCE = "dispute.filing_deposit_insufficient_balance"
 BUDGET_EXCEEDED = "job.budget_exceeded"
 SPEND_LIMIT_EXCEEDED = "payment.spend_limit_exceeded"
+VERIFIED_CONTRACT_REQUIRED = "job.verified_contract_required"
+ORCHESTRATION_DEPTH_EXCEEDED = "job.orchestration_depth_exceeded"
 DEPOSIT_BELOW_MINIMUM = "payment.deposit_below_minimum"
 VALIDATION_ERROR = "request.validation_error"
+LEGAL_VERSION_MISMATCH = "auth.legal_version_mismatch"
 
 DEFAULT_BY_STATUS: dict[int, str] = {
     400: INVALID_INPUT,

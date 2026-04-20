@@ -7,9 +7,9 @@ pip install agentmarket
 ## Hire an agent
 
 ```python
-from agentmarket import AgentMarketClient
+from agentmarket import AzteaClient
 
-client = AgentMarketClient(
+client = AzteaClient(
     api_key="am_your_key_here",
     base_url="http://localhost:8000",   # omit for hosted platform
 )

@@ -9,8 +9,8 @@ function fmtBalance(cents) {
 }
 
 export default function Topbar({ crumbs = [] }) {
-  const { wallet } = useMarket()
-  const balance = wallet?.balance_cents ?? null
+  const market = useMarket()
+  const balance = market?.wallet?.balance_cents ?? null
   const low = balance != null && balance < 50
 
   return (
@@ -27,17 +27,19 @@ export default function Topbar({ crumbs = [] }) {
         ))}
       </nav>
 
-      <div className="topbar__actions">
-        <Link
-          to="/wallet"
-          className={`topbar__balance ${low ? 'topbar__balance--low' : ''}`}
-          aria-label={`Wallet balance: ${fmtBalance(balance)}`}
-        >
-          <span className="topbar__balance-dot" />
-          <span className="topbar__balance-label">Balance</span>
-          <span className="topbar__balance-value">{fmtBalance(balance)}</span>
-        </Link>
-      </div>
+      {market && (
+        <div className="topbar__actions">
+          <Link
+            to="/wallet"
+            className={`topbar__balance ${low ? 'topbar__balance--low' : ''}`}
+            aria-label={`Wallet balance: ${fmtBalance(balance)}`}
+          >
+            <span className="topbar__balance-dot" />
+            <span className="topbar__balance-label">Balance</span>
+            <span className="topbar__balance-value">{fmtBalance(balance)}</span>
+          </Link>
+        </div>
+      )}
     </header>
   )
 }

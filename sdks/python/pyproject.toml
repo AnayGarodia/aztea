@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "agentmarket-sdk"
 version = "0.1.0"
-description = "Ergonomic Python SDK for the AgentMarket API."
+description = "Ergonomic Python SDK for the Aztea API."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

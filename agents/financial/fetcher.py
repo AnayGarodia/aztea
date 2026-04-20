@@ -16,7 +16,7 @@ from typing import Optional
 import requests
 
 EDGAR_HEADERS = {
-    "User-Agent": "agentmarket research-agent@agentmarket.dev",
+    "User-Agent": "agentmarket research-agent@aztea.dev",
     "Accept-Encoding": "gzip, deflate",
     "Accept": "application/json,text/html,*/*",
 }

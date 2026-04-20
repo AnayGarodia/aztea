@@ -6,11 +6,12 @@ Configure via environment variables:
   SMTP_PORT       e.g. 587
   SMTP_USER       e.g. apikey
   SMTP_PASSWORD   e.g. your SMTP password or API key
-  FROM_EMAIL      e.g. noreply@agentmarket.dev
-  FROM_NAME       e.g. AgentMarket
+  FROM_EMAIL      e.g. noreply@aztea.dev
+  FROM_NAME       e.g. Aztea
 """
 from __future__ import annotations
 
+import html
 import logging
 import os
 import smtplib
@@ -24,10 +25,14 @@ _SMTP_HOST     = os.environ.get("SMTP_HOST", "").strip()
 _SMTP_PORT     = int(os.environ.get("SMTP_PORT", "587") or "587")
 _SMTP_USER     = os.environ.get("SMTP_USER", "").strip()
 _SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "").strip()
-_FROM_EMAIL    = os.environ.get("FROM_EMAIL", "noreply@agentmarket.dev").strip()
-_FROM_NAME     = os.environ.get("FROM_NAME", "AgentMarket").strip()
+_FROM_EMAIL    = os.environ.get("FROM_EMAIL", "noreply@aztea.dev").strip()
+_FROM_NAME     = os.environ.get("FROM_NAME", "Aztea").strip()
 
 ENABLED = bool(_SMTP_HOST and _SMTP_USER and _SMTP_PASSWORD)
+
+
+def _esc(value: object) -> str:
+    return html.escape(str(value), quote=True)
 
 
 def _send_sync(to: str, subject: str, html: str, text: str) -> None:
@@ -55,33 +60,39 @@ def send(to: str, subject: str, html: str, text: str) -> None:
 
 
 def send_welcome(to: str, username: str) -> None:
+    safe_username = _esc(username)
     send(
         to,
-        "Welcome to AgentMarket",
-        f"<p>Hi {username},</p>"
-        "<p>Welcome to AgentMarket! We've added <strong>$1.00</strong> of credit to your wallet to get started.</p>"
-        "<p>— The AgentMarket team</p>",
-        f"Hi {username},\n\nWelcome to AgentMarket! We've added $1.00 of credit to get you started.\n\n— The AgentMarket team",
+        "Welcome to Aztea",
+        f"<p>Hi {safe_username},</p>"
+        "<p>Welcome to Aztea! We've added <strong>$1.00</strong> of credit to your wallet to get started.</p>"
+        "<p>— The Aztea team</p>",
+        f"Hi {username},\n\nWelcome to Aztea! We've added $1.00 of credit to get you started.\n\n— The Aztea team",
     )
 
 
 def send_job_complete(to: str, job_id: str, agent_name: str, price_cents: int) -> None:
     price_fmt = f"${price_cents / 100:.2f}"
+    safe_agent_name = _esc(agent_name)
+    safe_job_id = _esc(job_id)
     send(
         to,
         f"Job complete — {agent_name}",
-        f"<p>Your job on <strong>{agent_name}</strong> has completed.</p>"
-        f"<p>Job ID: <code>{job_id}</code> &nbsp;·&nbsp; Charged: <strong>{price_fmt}</strong></p>",
+        f"<p>Your job on <strong>{safe_agent_name}</strong> has completed.</p>"
+        f"<p>Job ID: <code>{safe_job_id}</code> &nbsp;·&nbsp; Charged: <strong>{price_fmt}</strong></p>",
         f"Your job on {agent_name} has completed.\nJob ID: {job_id}\nCharged: {price_fmt}",
     )
 
 
 def send_job_failed(to: str, job_id: str, agent_name: str, error: str) -> None:
+    safe_agent_name = _esc(agent_name)
+    safe_job_id = _esc(job_id)
+    safe_error = _esc(error)
     send(
         to,
         f"Job failed — {agent_name}",
-        f"<p>Your job on <strong>{agent_name}</strong> failed. You have been fully refunded.</p>"
-        f"<p>Job ID: <code>{job_id}</code> &nbsp;·&nbsp; Reason: {error}</p>",
+        f"<p>Your job on <strong>{safe_agent_name}</strong> failed. You have been fully refunded.</p>"
+        f"<p>Job ID: <code>{safe_job_id}</code> &nbsp;·&nbsp; Reason: {safe_error}</p>",
         f"Your job on {agent_name} failed and you've been refunded.\nJob ID: {job_id}\nReason: {error}",
     )
 
@@ -97,21 +108,26 @@ def send_deposit_confirmed(to: str, amount_cents: int) -> None:
 
 
 def send_dispute_opened(to: str, job_id: str, dispute_id: str) -> None:
+    safe_job_id = _esc(job_id)
+    safe_dispute_id = _esc(dispute_id)
     send(
         to,
         "Dispute filed",
-        f"<p>A dispute has been filed for job <code>{job_id}</code> (ID: <code>{dispute_id}</code>).</p>"
+        f"<p>A dispute has been filed for job <code>{safe_job_id}</code> (ID: <code>{safe_dispute_id}</code>).</p>"
         "<p>Our judges will review the case and notify you of the outcome.</p>",
         f"A dispute has been filed for job {job_id} (dispute {dispute_id}). Our judges will review shortly.",
     )
 
 
 def send_dispute_resolved(to: str, job_id: str, dispute_id: str, outcome: str) -> None:
+    safe_job_id = _esc(job_id)
+    safe_dispute_id = _esc(dispute_id)
+    safe_outcome = _esc(outcome)
     send(
         to,
         "Dispute resolved",
-        f"<p>The dispute for job <code>{job_id}</code> (ID: <code>{dispute_id}</code>) has been resolved.</p>"
-        f"<p>Outcome: <strong>{outcome}</strong></p>",
+        f"<p>The dispute for job <code>{safe_job_id}</code> (ID: <code>{safe_dispute_id}</code>) has been resolved.</p>"
+        f"<p>Outcome: <strong>{safe_outcome}</strong></p>",
         f"Dispute {dispute_id} for job {job_id} resolved. Outcome: {outcome}",
     )
 

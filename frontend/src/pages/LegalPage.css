@@ -13,7 +13,7 @@
 }
 
 .legal-page__content {
-  max-width: 760px;
+  max-width: 900px;
   margin: 0 auto;
   color: var(--text-primary);
 }
@@ -22,61 +22,55 @@
   font-size: 1.75rem;
   font-weight: 700;
   color: var(--text-primary);
-  margin-bottom: 4px;
+  margin-bottom: 12px;
 }
 
-.legal-page__effective {
+.legal-page__status {
   font-size: 0.8125rem;
   color: var(--text-muted);
-  margin-bottom: 40px;
+  margin: 0;
 }
 
-.legal-page__content section {
-  margin-bottom: 32px;
+.legal-page__status--error {
+  color: var(--negative);
 }
 
-.legal-page__content h2 {
-  font-size: 1rem;
-  font-weight: 700;
-  color: var(--text-primary);
-  margin-bottom: 10px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--border);
+.legal-page__markdown {
+  margin-top: 14px;
 }
 
-.legal-page__content h3 {
-  font-size: 0.875rem;
-  font-weight: 600;
+.legal-page__accept-cta {
+  margin: 0 0 16px;
+  border: 1px solid var(--accent-border);
+  background: var(--accent-bg);
+  border-radius: var(--r-md);
+  padding: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.legal-page__accept-cta p {
+  margin: 0;
   color: var(--text-secondary);
-  margin: 14px 0 6px;
+  font-size: 0.8125rem;
 }
 
-.legal-page__content p {
-  font-size: 0.875rem;
-  line-height: 1.7;
-  color: var(--text-secondary);
-  margin-bottom: 10px;
-}
-
-.legal-page__content ul {
-  padding-left: 20px;
-  margin-bottom: 10px;
-}
-
-.legal-page__content li {
-  font-size: 0.875rem;
-  line-height: 1.7;
-  color: var(--text-secondary);
-  margin-bottom: 4px;
-}
-
-.legal-page__content a {
-  color: var(--accent);
+.legal-page__accept-btn {
   text-decoration: none;
+  border: 1px solid var(--accent-border);
+  background: var(--surface);
+  color: var(--accent);
+  border-radius: var(--r-sm);
+  padding: 7px 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
 }
 
-.legal-page__content a:hover {
-  text-decoration: underline;
+.legal-page__accept-btn:hover {
+  background: var(--surface-2);
 }
 
 @media (max-width: 768px) {

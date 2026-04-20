@@ -1,0 +1,138 @@
+.markdown-doc {
+  color: var(--text-secondary);
+  font-size: 0.9375rem;
+  line-height: 1.78;
+}
+
+.markdown-doc > *:first-child { margin-top: 0; }
+.markdown-doc > *:last-child  { margin-bottom: 0; }
+
+.markdown-doc h1,
+.markdown-doc h2,
+.markdown-doc h3,
+.markdown-doc h4 {
+  color: var(--text-primary);
+  line-height: 1.3;
+  font-weight: 600;
+}
+
+.markdown-doc h1 {
+  font-size: 1.875rem;
+  letter-spacing: -0.02em;
+  margin: 0 0 0.6em;
+}
+
+.markdown-doc h2 {
+  font-size: 1.125rem;
+  letter-spacing: -0.01em;
+  margin: 2em 0 0.5em;
+  padding-bottom: 0.4em;
+  border-bottom: 1px solid var(--border);
+}
+
+.markdown-doc h3 {
+  font-size: 0.9375rem;
+  margin: 1.5em 0 0.4em;
+}
+
+.markdown-doc h4 {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  margin: 1.2em 0 0.3em;
+}
+
+.markdown-doc p,
+.markdown-doc ul,
+.markdown-doc ol,
+.markdown-doc blockquote,
+.markdown-doc table,
+.markdown-doc pre {
+  margin: 0.75em 0;
+}
+
+.markdown-doc ul,
+.markdown-doc ol {
+  padding-left: 1.4rem;
+}
+
+.markdown-doc li {
+  margin: 0.3rem 0;
+}
+
+.markdown-doc a {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.markdown-doc a:hover {
+  text-decoration: underline;
+}
+
+.markdown-doc strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.markdown-doc code {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 0.12em 0.38em;
+  font-family: var(--font-mono);
+  font-size: 0.8em;
+  color: var(--text-primary);
+}
+
+.markdown-doc pre {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 1rem 1.2rem;
+  overflow-x: auto;
+  line-height: 1.6;
+}
+
+.markdown-doc pre code {
+  border: none;
+  padding: 0;
+  background: transparent;
+  font-size: 0.8125rem;
+}
+
+.markdown-doc blockquote {
+  border-left: 3px solid var(--accent-border);
+  padding-left: 1rem;
+  color: var(--text-muted);
+  font-style: italic;
+  margin-left: 0;
+}
+
+.markdown-doc table {
+  width: 100%;
+  border-collapse: collapse;
+  border: 1px solid var(--border);
+  font-size: 0.875rem;
+}
+
+.markdown-doc th,
+.markdown-doc td {
+  border: 1px solid var(--border);
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown-doc th {
+  color: var(--text-primary);
+  background: var(--surface-2);
+  font-weight: 600;
+  font-size: 0.8125rem;
+  letter-spacing: 0.02em;
+}
+
+.markdown-doc hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1.5rem 0;
+}

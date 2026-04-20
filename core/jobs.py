@@ -121,6 +121,7 @@ _CANONICAL_JOB_COLUMNS = (
     "attempt_count",
     "max_attempts",
     "parent_job_id",
+    "tree_depth",
     "parent_cascade_policy",
     "retry_count",
     "next_retry_at",
@@ -396,6 +397,7 @@ def _create_jobs_table(conn: sqlite3.Connection, table_name: str = "jobs") -> No
             attempt_count       INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
             max_attempts        INTEGER NOT NULL DEFAULT 3 CHECK(max_attempts >= 1),
             parent_job_id       TEXT,
+            tree_depth          INTEGER NOT NULL DEFAULT 0 CHECK(tree_depth >= 0),
             parent_cascade_policy TEXT NOT NULL DEFAULT 'detach',
             retry_count         INTEGER NOT NULL DEFAULT 0 CHECK(retry_count >= 0),
             next_retry_at       TEXT,
@@ -587,6 +589,7 @@ def _normalize_legacy_job_row(row: dict, used_job_ids: set[str]) -> tuple:
     attempt_count = _to_non_negative_int(row.get("attempt_count"), default=0)
     max_attempts = max(1, _to_non_negative_int(row.get("max_attempts"), default=3))
     parent_job_id = _clean_optional_text(row.get("parent_job_id"))
+    tree_depth = _to_non_negative_int(row.get("tree_depth"), default=0)
     parent_cascade_policy = _normalize_parent_cascade_policy(row.get("parent_cascade_policy"))
     retry_count = _to_non_negative_int(row.get("retry_count"), default=0)
     if retry_count > max_attempts:
@@ -678,6 +681,7 @@ def _normalize_legacy_job_row(row: dict, used_job_ids: set[str]) -> tuple:
         attempt_count,
         max_attempts,
         parent_job_id,
+        tree_depth,
         parent_cascade_policy,
         retry_count,
         next_retry_at,
@@ -781,6 +785,7 @@ def create_job(
     agent_owner_id: str | None = None,
     max_attempts: int = 3,
     parent_job_id: str | None = None,
+    tree_depth: int = 0,
     parent_cascade_policy: str = "detach",
     clarification_timeout_seconds: int | None = None,
     clarification_timeout_policy: str = "fail",
@@ -804,6 +809,7 @@ def create_job(
     parsed_max_attempts = _to_non_negative_int(max_attempts, default=0)
     if parsed_max_attempts < 1:
         raise ValueError("max_attempts must be >= 1.")
+    parsed_tree_depth = _to_non_negative_int(tree_depth, default=0)
     normalized_parent_cascade_policy = _normalize_parent_cascade_policy(parent_cascade_policy)
     parsed_clarification_timeout_seconds = _to_non_negative_int(
         clarification_timeout_seconds,
@@ -834,10 +840,10 @@ def create_job(
               (job_id, agent_id, agent_owner_id, caller_owner_id, caller_wallet_id,
                agent_wallet_id, platform_wallet_id, status, price_cents, caller_charge_cents,
                platform_fee_pct_at_create, fee_bearer_policy, charge_tx_id,
-               input_payload, created_at, updated_at, max_attempts, parent_job_id, parent_cascade_policy,
+               input_payload, created_at, updated_at, max_attempts, parent_job_id, tree_depth, parent_cascade_policy,
                clarification_timeout_seconds, clarification_timeout_policy, dispute_window_hours, judge_agent_id,
                callback_url, callback_secret, output_verification_window_seconds, output_verification_status, batch_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job_id,
@@ -858,6 +864,7 @@ def create_job(
                 now,
                 parsed_max_attempts,
                 _clean_optional_text(parent_job_id),
+                parsed_tree_depth,
                 normalized_parent_cascade_policy,
                 parsed_clarification_timeout_seconds,
                 normalized_clarification_timeout_policy,

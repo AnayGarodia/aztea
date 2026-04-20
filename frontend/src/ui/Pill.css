@@ -1,7 +1,9 @@
 .pill {
+  appearance: none;
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  font-family: inherit;
   font-size: 0.6875rem;
   font-weight: 500;
   line-height: 1;
@@ -21,6 +23,10 @@
   background: var(--surface-3);
   border-color: var(--border-bright);
   color: var(--text-secondary);
+}
+.pill--interactive:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 2px;
 }
 .pill--active {
   background: var(--accent-bg);

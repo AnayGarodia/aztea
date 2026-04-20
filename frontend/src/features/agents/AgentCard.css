@@ -9,9 +9,8 @@
   overflow: hidden;
   cursor: pointer;
   height: 100%;
-  padding: 16px 16px 14px 20px;
+  padding: 16px;
   will-change: transform;
-  position: relative;
   transition:
     border-color 0.18s ease,
     box-shadow   0.2s  ease,
@@ -19,34 +18,14 @@
 }
 
 .ac:hover {
-  border-color: var(--ac-accent, var(--border-bright));
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--ac-accent, var(--accent)) 20%, transparent),
-    0 8px 28px rgba(0, 0, 0, 0.08),
-    0 2px 8px rgba(0, 0, 0, 0.04);
+  border-color: var(--border-bright);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.08), 0 2px 8px rgba(0, 0, 0, 0.04);
   transform: translateY(-2px);
 }
 
 .ac:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
-}
-
-/* ── Left accent stripe ───────────────────────────────────────── */
-.ac__stripe {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 3px;
-  background: var(--ac-accent, var(--accent));
-  border-radius: 14px 0 0 14px;
-  opacity: 0.75;
-  transition: opacity 0.18s ease;
-}
-
-.ac:hover .ac__stripe {
-  opacity: 1;
 }
 
 /* ── Header ──────────────────────────────────────────────────── */
@@ -82,37 +61,12 @@
   white-space: nowrap;
 }
 
-.ac__subrow {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
 .ac__price {
   font-family: var(--font-mono);
   font-size: 0.6875rem;
-  font-weight: 700;
-  color: var(--text-primary);
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-pill);
-  padding: 2px 7px;
+  color: var(--text-muted);
   font-feature-settings: 'tnum';
   white-space: nowrap;
-}
-
-.ac__trust {
-  font-size: 0.6875rem;
-  font-weight: 700;
-  font-feature-settings: 'tnum';
-  white-space: nowrap;
-}
-
-.ac__verified {
-  display: flex;
-  align-items: center;
-  color: var(--accent);
-  opacity: 0.8;
 }
 
 /* ── Body ────────────────────────────────────────────────────── */
@@ -161,38 +115,6 @@
   margin-top: auto;
   padding-top: 8px;
   border-top: 1px solid var(--border);
-}
-
-.ac__rel {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  flex: 1;
-  min-width: 0;
-}
-
-.ac__rel-track {
-  flex: 1;
-  height: 3px;
-  background: var(--surface-3);
-  border-radius: var(--r-pill);
-  overflow: hidden;
-}
-
-.ac__rel-fill {
-  height: 100%;
-  border-radius: var(--r-pill);
-  background: var(--positive, #22c55e);
-}
-
-.ac__rel-pct {
-  font-family: var(--font-mono);
-  font-size: 0.6875rem;
-  font-weight: 700;
-  color: var(--positive, #22c55e);
-  white-space: nowrap;
-  flex-shrink: 0;
-  font-feature-settings: 'tnum';
 }
 
 .ac__calls {

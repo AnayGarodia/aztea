@@ -52,11 +52,11 @@ export default function AgentInputForm({ agent, onSubmit, loading, mode, onModeC
 
   const inputRef = useRef(null)
 
-  // Reset when agent changes
+  // Reset only when the actual agent changes, not on every parent re-render
   useEffect(() => {
     setValues(Object.fromEntries(fields.map(f => [f.name, f.default ?? ''])))
     setStep(0)
-  }, [fields])
+  }, [agent?.agent_id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-focus current field
   useEffect(() => {
@@ -209,45 +209,18 @@ export default function AgentInputForm({ agent, onSubmit, loading, mode, onModeC
             {/* Action row */}
             <div className="invoke-panel__q-row">
               {f.type !== 'select' && !isLastField && (
-                <button
-                  type="button"
-                  className="invoke-panel__ok"
-                  onClick={goNext}
-                >
-                  OK <span style={{ opacity: 0.7 }}>&#8629;</span>
+                <button type="button" className="invoke-panel__ok" onClick={goNext}>
+                  Next →
                 </button>
               )}
-              {f.type !== 'select' && (
-                <span className="invoke-panel__hint">
-                  or press <kbd>Enter</kbd>
-                </span>
-              )}
               {step > 0 && (
-                <button
-                  type="button"
-                  className="invoke-panel__back"
-                  onClick={goBack}
-                >
-                  Back
+                <button type="button" className="invoke-panel__back" onClick={goBack}>
+                  ← Back
                 </button>
               )}
             </div>
           </motion.div>
         </AnimatePresence>
-      </div>
-
-      {/* Progress dots */}
-      <div className="invoke-panel__dots" aria-hidden="true">
-        {fields.map((_, i) => (
-          <div
-            key={i}
-            className={[
-              'invoke-panel__dot',
-              i < step ? 'done' : '',
-              i === step ? 'cur' : '',
-            ].filter(Boolean).join(' ')}
-          />
-        ))}
       </div>
 
       {/* Footer: mode selector + price + submit */}

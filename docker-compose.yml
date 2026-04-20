@@ -10,7 +10,7 @@ services:
       - SERVER_BASE_URL=${SERVER_BASE_URL:-http://localhost:8000}
       - FRONTEND_BASE_URL=${FRONTEND_BASE_URL:-http://localhost:5173}
       - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-}
-      - AGENTMARKET_FRONTEND_URL=${AGENTMARKET_FRONTEND_URL:-https://agentmarket.dev}
+      - AZTEA_FRONTEND_URL=${AZTEA_FRONTEND_URL:-https://aztea.dev}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - PLATFORM_FEE_PCT=${PLATFORM_FEE_PCT:-10}
       # ── Stripe payments ───────────────────────────────────────────────────
@@ -19,8 +19,8 @@ services:
       - STRIPE_PUBLISHABLE_KEY=${STRIPE_PUBLISHABLE_KEY:-}
       # ── AI features (judges, quality scoring) ─────────────────────────────
       - GROQ_API_KEY=${GROQ_API_KEY:-}
-      - AGENTMARKET_ENABLE_LIVE_DISPUTE_JUDGES=${AGENTMARKET_ENABLE_LIVE_DISPUTE_JUDGES:-0}
-      - AGENTMARKET_ENABLE_LIVE_QUALITY_JUDGE=${AGENTMARKET_ENABLE_LIVE_QUALITY_JUDGE:-0}
+      - AZTEA_ENABLE_LIVE_DISPUTE_JUDGES=${AZTEA_ENABLE_LIVE_DISPUTE_JUDGES:-0}
+      - AZTEA_ENABLE_LIVE_QUALITY_JUDGE=${AZTEA_ENABLE_LIVE_QUALITY_JUDGE:-0}
       # ── Safety toggles ────────────────────────────────────────────────────
       - ALLOW_PRIVATE_OUTBOUND_URLS=${ALLOW_PRIVATE_OUTBOUND_URLS:-0}
       # ── Dispute auto-resolution ───────────────────────────────────────────

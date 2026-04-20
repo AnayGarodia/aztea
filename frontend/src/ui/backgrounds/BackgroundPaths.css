@@ -1,0 +1,69 @@
+.background-paths {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.background-paths__svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0.9;
+}
+
+.background-paths--light {
+  color: color-mix(in oklab, var(--accent) 48%, var(--text-primary));
+}
+
+.background-paths--dark {
+  color: color-mix(in oklab, var(--accent) 62%, white);
+}
+
+.background-paths--strong.background-paths--light {
+  color: color-mix(in oklab, var(--text-primary) 88%, var(--accent));
+}
+
+.background-paths--strong.background-paths--dark {
+  color: color-mix(in oklab, white 86%, var(--accent));
+}
+
+.background-paths__veil {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--canvas) 58%, transparent) 0%,
+    color-mix(in oklab, var(--canvas) 74%, transparent) 100%
+  );
+}
+
+.background-paths--dark .background-paths__veil {
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--canvas) 32%, transparent) 0%,
+    color-mix(in oklab, var(--canvas) 56%, transparent) 100%
+  );
+}
+
+.background-paths--strong .background-paths__svg {
+  opacity: 1;
+}
+
+.background-paths--strong .background-paths__veil {
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--canvas) 18%, transparent) 0%,
+    color-mix(in oklab, var(--canvas) 28%, transparent) 100%
+  );
+}
+
+.background-paths--strong.background-paths--dark .background-paths__veil {
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--canvas) 22%, transparent) 0%,
+    color-mix(in oklab, var(--canvas) 36%, transparent) 100%
+  );
+}

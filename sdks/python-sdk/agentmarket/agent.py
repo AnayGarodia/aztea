@@ -32,8 +32,8 @@ import threading
 import time
 from typing import Any, Callable, Dict, List
 
-from .client import AgentMarketClient, _parse_payload
-from .exceptions import AgentMarketError, ClarificationNeeded, InputError
+from .client import AzteaClient, _parse_payload
+from .exceptions import AzteaError, ClarificationNeeded, InputError
 
 _HEARTBEAT_INTERVAL = 20  # seconds
 _POLL_INTERVAL = 2        # seconds between job-list polls
@@ -75,7 +75,7 @@ class AgentServer:
     port
         Port for the optional HTTP server (sync call path).
     base_url
-        AgentMarket server base URL.
+        Aztea server base URL.
     """
 
     def __init__(
@@ -89,7 +89,7 @@ class AgentServer:
         tags: List[str] | None = None,
         endpoint_url: str | None = None,
         port: int = 8080,
-        base_url: str = "https://api.agentmarket.dev",
+        base_url: str = "https://api.aztea.dev",
     ) -> None:
         self._key = api_key
         self.name = name
@@ -102,7 +102,7 @@ class AgentServer:
         self._endpoint_url = endpoint_url or f"http://localhost:{port}"
         self._base_url = base_url
 
-        self._client = AgentMarketClient(api_key=api_key, base_url=base_url)
+        self._client = AzteaClient(api_key=api_key, base_url=base_url)
         self._handler_func: Callable[[Dict[str, Any]], Dict[str, Any]] | None = None
         self._agent_id: str | None = None
 
@@ -160,7 +160,7 @@ class AgentServer:
             _print_status(
                 f"[agentmarket] Registered new agent '{self.name}' → {self._agent_id}"
             )
-        except AgentMarketError as exc:
+        except AzteaError as exc:
             # 409 Conflict means the name is already registered under our key
             if exc.status_code == 409:
                 self._agent_id = self._locate_existing_agent()
@@ -181,7 +181,7 @@ class AgentServer:
             for a in data.get("agents") or []:
                 if a.get("name") == self.name:
                     return a["agent_id"]
-        except AgentMarketError:
+        except AzteaError:
             pass
         return None
 
@@ -198,7 +198,7 @@ class AgentServer:
                 jobs = data.get("jobs") or [] if isinstance(data, dict) else []
                 for job in jobs:
                     self._process_job(job)
-            except AgentMarketError as exc:
+            except AzteaError as exc:
                 _print_status(f"[agentmarket] Poll error: {exc}")
             except Exception as exc:
                 _print_status(f"[agentmarket] Unexpected error: {exc}")
@@ -217,7 +217,7 @@ class AgentServer:
                 f"/jobs/{job_id}/claim",
                 json={"lease_seconds": _LEASE_SECONDS},
             )
-        except AgentMarketError:
+        except AzteaError:
             # Another worker may have claimed it first — skip silently
             return
         if not isinstance(claim_data, dict):
@@ -277,7 +277,7 @@ class AgentServer:
                         "claim_token": claim_token,
                     },
                 )
-            except AgentMarketError:
+            except AzteaError:
                 pass
 
             # Poll for a clarification_response (up to 10 min)
@@ -297,7 +297,7 @@ class AgentServer:
                             "refund_fraction": 1.0,
                         },
                     )
-                except AgentMarketError:
+                except AzteaError:
                     pass
                 _print_status(f"[agentmarket] Job {job_id} timed out awaiting clarification")
             else:
@@ -323,7 +323,7 @@ class AgentServer:
                                 "refund_fraction": 1.0,
                             },
                         )
-                    except AgentMarketError:
+                    except AzteaError:
                         pass
                     _print_status(f"[agentmarket] Failed job {job_id} after clarification: {retry_exc}")
 
@@ -342,7 +342,7 @@ class AgentServer:
                         "refund_fraction": exc.refund_fraction,
                     },
                 )
-            except AgentMarketError:
+            except AzteaError:
                 pass
             _print_status(
                 f"[agentmarket] Job {job_id} rejected (bad input, "
@@ -365,7 +365,7 @@ class AgentServer:
                         "refund_fraction": 1.0,
                     },
                 )
-            except AgentMarketError:
+            except AzteaError:
                 pass
 
             _print_status(f"[agentmarket] Failed job {job_id}: {error_msg}")
@@ -392,7 +392,7 @@ class AgentServer:
                         if isinstance(content, dict):
                             return content.get("text") or str(content)
                         return str(content) if content is not None else ""
-            except AgentMarketError:
+            except AzteaError:
                 pass
             time.sleep(5)
         return None
@@ -414,7 +414,7 @@ class AgentServer:
                         "claim_token": claim_token,
                     },
                 )
-            except AgentMarketError:
+            except AzteaError:
                 break
 
 
@@ -428,14 +428,14 @@ def verify_callback_signature(
     secret: str,
 ) -> bool:
     """
-    Verify an X-AgentMarket-Signature header value against a raw request body.
+    Verify an X-Aztea-Signature header value against a raw request body.
 
     Parameters
     ----------
     body
         Raw bytes of the POST body.
     signature_header
-        Value of the ``X-AgentMarket-Signature`` header (``sha256=<hex>``).
+        Value of the ``X-Aztea-Signature`` header (``sha256=<hex>``).
     secret
         The ``callback_secret`` you set when creating the job.
 
@@ -456,7 +456,7 @@ def verify_callback_signature(
 class CallbackReceiver:
     """
     Lightweight WSGI/ASGI-agnostic helper for receiving job completion
-    callbacks from AgentMarket.
+    callbacks from Aztea.
 
     Usage (Flask example)::
 
@@ -471,7 +471,7 @@ class CallbackReceiver:
         @app.route("/callback", methods=["POST"])
         def callback():
             raw = request.get_data()
-            sig = request.headers.get("X-AgentMarket-Signature", "")
+            sig = request.headers.get("X-Aztea-Signature", "")
             receiver.dispatch(raw, sig)
             return "", 204
 
@@ -489,7 +489,7 @@ class CallbackReceiver:
         @app.post("/callback")
         async def callback(request: Request):
             raw = await request.body()
-            sig = request.headers.get("X-AgentMarket-Signature", "")
+            sig = request.headers.get("X-Aztea-Signature", "")
             receiver.dispatch(raw, sig)
             return {}
     """
@@ -515,7 +515,7 @@ class CallbackReceiver:
             If the signature is invalid or no handler is registered.
         """
         if not verify_callback_signature(body, signature_header, self._secret):
-            raise ValueError("Invalid X-AgentMarket-Signature — rejecting callback.")
+            raise ValueError("Invalid X-Aztea-Signature — rejecting callback.")
         if self._handler is None:
             raise ValueError("No handler registered. Use @receiver.on_job_complete.")
         payload = json.loads(body)

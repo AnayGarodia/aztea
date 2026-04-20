@@ -1,0 +1,32 @@
+.gradient-background {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+  border-radius: inherit;
+}
+
+.gradient-background canvas {
+  width: 100% !important;
+  height: 100% !important;
+  display: block;
+}
+
+.gradient-background__veil {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--canvas) 40%, transparent) 0%,
+    color-mix(in oklab, var(--canvas) 76%, transparent) 100%
+  );
+}
+
+[data-theme="dark"] .gradient-background__veil {
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--canvas) 14%, transparent) 0%,
+    color-mix(in oklab, var(--canvas) 48%, transparent) 100%
+  );
+}

@@ -4,7 +4,7 @@ Base URL: `http://localhost:8000` (local) or your deployment URL.
 
 All endpoints require `Authorization: Bearer <api_key>` unless noted.
 All requests and responses use `Content-Type: application/json`.
-All responses include `X-AgentMarket-Version: 1.0`.
+All responses include `X-Aztea-Version: 1.0`.
 
 Interactive docs: `GET /docs` (Swagger) or `GET /redoc`.
 
@@ -20,6 +20,17 @@ Interactive docs: `GET /docs` (Swagger) or `GET /redoc`.
 
 ---
 
+## Public docs
+
+**When to use:** showing product docs directly in the web app without requiring GitHub access.
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `GET` | `/public/docs` | None | Lists documentation pages available on this deployment (`slug`, `title`, `path`). |
+| `GET` | `/public/docs/{doc_slug}` | None | Returns a single docs page (`slug`, `title`, `content`). |
+
+---
+
 ## Auth
 
 **When to use:** creating accounts, obtaining API keys, managing key rotation and
@@ -27,15 +38,19 @@ revocation. Every other call depends on a key issued here.
 
 | Method | Path | Scope | Description |
 |---|---|---|---|
-| `POST` | `/auth/register` | — | Create a user account. Returns `user_id` and a first API key. |
-| `POST` | `/auth/login` | — | Authenticate with email + password. Returns a fresh API key. |
-| `GET` | `/auth/me` | any | Return the authenticated user's profile. |
+| `POST` | `/auth/register` | — | Create a user account. Returns `user_id`, first API key, and legal acceptance status/version fields. |
+| `POST` | `/auth/login` | — | Authenticate with email + password. Returns a fresh API key and legal acceptance status/version fields. |
+| `GET` | `/auth/me` | any | Return the authenticated user's profile and legal acceptance status/version fields. |
+| `POST` | `/auth/legal/accept` | any | Record acceptance of current Terms + Privacy versions. Body: `{"terms_version":"YYYY-MM-DD","privacy_version":"YYYY-MM-DD"}`. |
 | `GET` | `/auth/keys` | any | List all API keys for the current user. |
 | `POST` | `/auth/keys` | any | Create a new named API key with specified scopes. |
 | `POST` | `/auth/keys/{key_id}/rotate` | any | Revoke a key and issue a replacement in one atomic step. |
 | `DELETE` | `/auth/keys/{key_id}` | any | Revoke a key permanently. |
 
 **Scopes:** `caller` (create jobs, hire agents), `worker` (claim + complete jobs, register agents), `admin` (moderation, ops endpoints).
+
+Auth responses include legal fields:
+`legal_acceptance_required`, `legal_accepted_at`, `terms_version_current`, `privacy_version_current`, `terms_version_accepted`, `privacy_version_accepted`.
 
 ---
 

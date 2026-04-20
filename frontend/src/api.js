@@ -152,6 +152,18 @@ export async function authMe(key) {
   return body
 }
 
+export async function authAcceptLegal(key, termsVersion, privacyVersion) {
+  const { body } = await request('/auth/legal/accept', {
+    method: 'POST',
+    key,
+    body: {
+      terms_version: termsVersion,
+      privacy_version: privacyVersion,
+    },
+  })
+  return body
+}
+
 export async function fetchAuthKeys(key) {
   const { body } = await request('/auth/keys', { key })
   return body
@@ -187,6 +199,16 @@ export async function deleteAuthKey(key, keyId) {
 
 export async function fetchHealth(key) {
   const { body } = await request('/health', { key })
+  return body
+}
+
+export async function fetchPublicDocsIndex() {
+  const { body } = await request('/public/docs')
+  return body
+}
+
+export async function fetchPublicDoc(slug) {
+  const { body } = await request(`/public/docs/${encodeURIComponent(String(slug ?? '').trim())}`)
   return body
 }
 

@@ -1,5 +1,5 @@
 """
-client.py — AgentMarketClient: high-level API for callers.
+client.py — AzteaClient: high-level API for callers.
 
 Callers use this to discover agents, hire them (async or sync), and manage
 their wallet.  All methods raise typed exceptions from exceptions.py rather
@@ -16,7 +16,7 @@ from typing import Any, Callable, Dict, List, Optional, Union
 import httpx
 
 from .exceptions import (
-    AgentMarketError,
+    AzteaError,
     AgentNotFoundError,
     AuthenticationError,
     ContractVerificationError,
@@ -59,23 +59,23 @@ def _retry_after_seconds(headers: Any, default: int = 60) -> int:
 
 def _require_job_id(payload: Any, *, context: str) -> str:
     if not isinstance(payload, dict):
-        raise AgentMarketError(f"{context} expected a JSON object response.")
+        raise AzteaError(f"{context} expected a JSON object response.")
     job_id = payload.get("job_id")
     if not isinstance(job_id, str) or not job_id.strip():
-        raise AgentMarketError(f"{context} response is missing a valid job_id.")
+        raise AzteaError(f"{context} response is missing a valid job_id.")
     return job_id
 
 
-class AgentMarketClient:
+class AzteaClient:
     """
-    High-level client for the AgentMarket platform.
+    High-level client for the Aztea platform.
 
     Parameters
     ----------
     api_key
-        Your AgentMarket API key (starts with ``am_``).
+        Your Aztea API key (starts with ``am_``).
     base_url
-        Base URL of the AgentMarket server.  Defaults to the hosted platform.
+        Base URL of the Aztea server.  Defaults to the hosted platform.
         For local development use ``http://localhost:8000``.
     timeout
         Default HTTP timeout in seconds.
@@ -84,7 +84,7 @@ class AgentMarketClient:
     def __init__(
         self,
         api_key: str,
-        base_url: str = "https://api.agentmarket.dev",  # override for self-hosted
+        base_url: str = "https://api.aztea.dev",  # override for self-hosted
         timeout: float = 30.0,
     ) -> None:
         self._key = api_key
@@ -93,7 +93,7 @@ class AgentMarketClient:
             base_url=self._base,
             headers={
                 "Authorization": f"Bearer {api_key}",
-                "X-AgentMarket-Version": _VERSION_HEADER,
+                "X-Aztea-Version": _VERSION_HEADER,
                 "Content-Type": "application/json",
                 "User-Agent": f"agentmarket-python/{__import__('agentmarket').__version__}",
             },
@@ -104,7 +104,7 @@ class AgentMarketClient:
         """Close the underlying HTTP connection pool."""
         self._http.close()
 
-    def __enter__(self) -> "AgentMarketClient":
+    def __enter__(self) -> "AzteaClient":
         return self
 
     def __exit__(self, *_: Any) -> None:
@@ -123,7 +123,7 @@ class AgentMarketClient:
         try:
             resp = self._http.request(method, path, json=json, params=params)
         except httpx.TransportError as exc:
-            raise AgentMarketError(f"Network error: {exc}") from exc
+            raise AzteaError(f"Network error: {exc}") from exc
 
         body: Any = None
         if resp.content:
@@ -148,7 +148,7 @@ class AgentMarketClient:
             raise RateLimitError(_retry_after_seconds(resp.headers))
         if not resp.is_success:
             detail = _extract_detail(body) or f"HTTP {resp.status_code}"
-            raise AgentMarketError(detail, status_code=resp.status_code)
+            raise AzteaError(detail, status_code=resp.status_code)
 
         return body
 
@@ -237,7 +237,7 @@ class AgentMarketClient:
             Optional HTTPS URL. Platform POSTs job result when complete — no polling needed.
         callback_secret
             Optional secret used to sign callback deliveries via
-            ``X-AgentMarket-Signature`` (HMAC-SHA256 over raw body).
+            ``X-Aztea-Signature`` (HMAC-SHA256 over raw body).
         verification_contract
             Optional contract checked against the output.
         wait
@@ -577,7 +577,7 @@ class AgentMarketClient:
 
         The server will POST a signed JSON payload to *target_url* whenever a
         job you own changes state.  Use *secret* to verify the
-        ``X-AgentMarket-Signature`` HMAC-SHA256 header.
+        ``X-Aztea-Signature`` HMAC-SHA256 header.
 
         Returns the created hook dict (``hook_id``, ``target_url``, etc.).
         """
@@ -607,7 +607,7 @@ class AgentMarketClient:
                     if isinstance(content, dict):
                         return content.get("text") or str(content)
                     return str(content) if content is not None else "Agent needs clarification."
-        except AgentMarketError:
+        except AzteaError:
             pass
         return "Agent needs clarification."
 
@@ -660,14 +660,14 @@ class AgentMarketClient:
         return self._request("GET", "/wallets/spend-summary", params={"period": period})
 
 
-class AsyncAgentMarketClient:
+class AsyncAzteaClient:
     """
-    Async variant of AgentMarketClient using ``httpx.AsyncClient``.
+    Async variant of AzteaClient using ``httpx.AsyncClient``.
 
     Designed for orchestrators built on LangGraph, AutoGen, CrewAI, or any
     other async Python framework::
 
-        async with AsyncAgentMarketClient(api_key="am_...") as client:
+        async with AsyncAzteaClient(api_key="am_...") as client:
             # Fire off 3 specialists concurrently
             results = await asyncio.gather(
                 client.hire("agt-abc", {"code": "..."}),
@@ -679,7 +679,7 @@ class AsyncAgentMarketClient:
     def __init__(
         self,
         api_key: str,
-        base_url: str = "https://api.agentmarket.dev",
+        base_url: str = "https://api.aztea.dev",
         timeout: float = 30.0,
     ) -> None:
         import httpx as _httpx
@@ -689,7 +689,7 @@ class AsyncAgentMarketClient:
             base_url=self._base,
             headers={
                 "Authorization": f"Bearer {api_key}",
-                "X-AgentMarket-Version": _VERSION_HEADER,
+                "X-Aztea-Version": _VERSION_HEADER,
                 "Content-Type": "application/json",
                 "User-Agent": f"agentmarket-python/{__import__('agentmarket').__version__}",
             },
@@ -699,7 +699,7 @@ class AsyncAgentMarketClient:
     async def close(self) -> None:
         await self._http.aclose()
 
-    async def __aenter__(self) -> "AsyncAgentMarketClient":
+    async def __aenter__(self) -> "AsyncAzteaClient":
         return self
 
     async def __aexit__(self, *_: Any) -> None:
@@ -710,7 +710,7 @@ class AsyncAgentMarketClient:
         try:
             resp = await self._http.request(method, path, json=json, params=params)
         except _httpx.TransportError as exc:
-            raise AgentMarketError(f"Network error: {exc}") from exc
+            raise AzteaError(f"Network error: {exc}") from exc
 
         body: Any = None
         if resp.content:
@@ -730,7 +730,7 @@ class AsyncAgentMarketClient:
         if resp.status_code == 429:
             raise RateLimitError(_retry_after_seconds(resp.headers))
         if not resp.is_success:
-            raise AgentMarketError(_extract_detail(body) or f"HTTP {resp.status_code}", status_code=resp.status_code)
+            raise AzteaError(_extract_detail(body) or f"HTTP {resp.status_code}", status_code=resp.status_code)
         return body
 
     async def hire(
@@ -755,7 +755,7 @@ class AsyncAgentMarketClient:
 
         Example::
 
-            async with AsyncAgentMarketClient(api_key="am_...") as client:
+            async with AsyncAzteaClient(api_key="am_...") as client:
                 result = await client.hire("agt-abc123", {"task": "summarise this"})
                 print(result.output)
         """
@@ -814,7 +814,7 @@ class AsyncAgentMarketClient:
 
         Example::
 
-            async with AsyncAgentMarketClient(api_key="am_...") as client:
+            async with AsyncAzteaClient(api_key="am_...") as client:
                 results = await client.hire_many([
                     {"agent_id": "agt-abc", "input_payload": {"task": "..."}},
                     {"agent_id": "agt-xyz", "input_payload": {"code": "..."}},

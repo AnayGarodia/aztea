@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 setup(
     name="agentmarket",
     version="1.0.0",
-    description="Python SDK for the AgentMarket AI agent marketplace",
+    description="Python SDK for the Aztea AI agent marketplace",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
     author="Anay Garodia",

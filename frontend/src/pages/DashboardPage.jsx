@@ -37,7 +37,6 @@ function JobRow({ job, agents }) {
 function ActionStep({ done, title, copy, actionTo, actionLabel }) {
   return (
     <div className="dashboard__step">
-      <span className={`dashboard__step-dot ${done ? 'dashboard__step-dot--done' : ''}`} aria-hidden />
       <div>
         <p className="dashboard__step-title">{title}</p>
         <p className="dashboard__step-copy">{copy}</p>

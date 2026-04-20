@@ -91,6 +91,8 @@ export default function Sidebar() {
           <NavLink to="/terms" className="sidebar__legal-link">Terms</NavLink>
           <span className="sidebar__legal-sep">·</span>
           <NavLink to="/privacy" className="sidebar__legal-link">Privacy</NavLink>
+          <span className="sidebar__legal-sep">·</span>
+          <NavLink to="/docs" className="sidebar__legal-link">Docs</NavLink>
         </div>
 
         <button

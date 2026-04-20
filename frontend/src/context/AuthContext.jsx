@@ -10,6 +10,23 @@ export function AuthProvider({ children }) {
   })
   const [booting, setBooting] = useState(true)
 
+  const mergeProfile = useCallback((profile, fallbackUser = null) => ({
+    user_id: profile?.user_id ?? fallbackUser?.user_id,
+    username: profile?.username ?? fallbackUser?.username ?? 'Agent',
+    email: profile?.email ?? fallbackUser?.email ?? '',
+    scopes: profile?.scopes ?? fallbackUser?.scopes ?? [],
+    legal_acceptance_required: Boolean(
+      profile?.legal_acceptance_required
+      ?? fallbackUser?.legal_acceptance_required
+      ?? false
+    ),
+    legal_accepted_at: profile?.legal_accepted_at ?? fallbackUser?.legal_accepted_at ?? null,
+    terms_version_current: profile?.terms_version_current ?? fallbackUser?.terms_version_current ?? null,
+    privacy_version_current: profile?.privacy_version_current ?? fallbackUser?.privacy_version_current ?? null,
+    terms_version_accepted: profile?.terms_version_accepted ?? fallbackUser?.terms_version_accepted ?? null,
+    privacy_version_accepted: profile?.privacy_version_accepted ?? fallbackUser?.privacy_version_accepted ?? null,
+  }), [])
+
   useEffect(() => {
     let active = true
     const bootstrap = async () => {
@@ -17,15 +34,11 @@ export function AuthProvider({ children }) {
         if (active) setBooting(false)
         return
       }
+      if (active) setBooting(true)
       try {
         const profile = await authMe(apiKey)
         if (!active) return
-        const merged = {
-          user_id: profile.user_id ?? user?.user_id,
-          username: profile.username ?? user?.username ?? 'Agent',
-          email: profile.email ?? user?.email ?? '',
-          scopes: profile.scopes ?? user?.scopes ?? [],
-        }
+        const merged = mergeProfile(profile, user)
         localStorage.setItem('aztea_user', JSON.stringify(merged))
         setUser(merged)
       } catch {
@@ -40,14 +53,15 @@ export function AuthProvider({ children }) {
     }
     bootstrap()
     return () => { active = false }
-  }, [apiKey]) // eslint-disable-line
+  }, [apiKey, mergeProfile]) // eslint-disable-line
 
   const connect = useCallback((key, userInfo) => {
+    const merged = userInfo ? mergeProfile(userInfo, userInfo) : null
     localStorage.setItem('aztea_key', key)
-    if (userInfo) localStorage.setItem('aztea_user', JSON.stringify(userInfo))
+    if (merged) localStorage.setItem('aztea_user', JSON.stringify(merged))
     setApiKey(key)
-    if (userInfo) setUser(userInfo)
-  }, [])
+    if (merged) setUser(merged)
+  }, [mergeProfile])
 
   const disconnect = useCallback(() => {
     localStorage.removeItem('aztea_key')
@@ -56,13 +70,22 @@ export function AuthProvider({ children }) {
     setUser(null)
   }, [])
 
+  const refreshProfile = useCallback(async () => {
+    if (!apiKey) return null
+    const profile = await authMe(apiKey)
+    const merged = mergeProfile(profile, user)
+    localStorage.setItem('aztea_user', JSON.stringify(merged))
+    setUser(merged)
+    return merged
+  }, [apiKey, mergeProfile])
+
   useEffect(() => {
     setSessionExpiredHandler(disconnect)
     return () => setSessionExpiredHandler(null)
   }, [disconnect])
 
   return (
-    <Ctx.Provider value={{ apiKey, user, booting, connect, disconnect }}>
+    <Ctx.Provider value={{ apiKey, user, booting, connect, disconnect, refreshProfile }}>
       {children}
     </Ctx.Provider>
   )

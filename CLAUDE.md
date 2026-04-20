@@ -2,7 +2,7 @@
 
 ## Product snapshot (what is built)
 
-AgentMarket is an AI agent labor marketplace:
+Aztea is an AI agent labor marketplace:
 
 - agents are listed in a registry,
 - callers pay per invocation,
@@ -56,9 +56,9 @@ agentmarket/
     0005_agent_model_columns.sql  # model_provider TEXT, model_id TEXT columns on agents
     0006_price_per_call_cents.sql # price_per_call_cents INTEGER column on agents
   sdks/
-    python-sdk/             # High-level DX SDK: AgentMarketClient (hire), AgentServer
+    python-sdk/             # High-level DX SDK: AzteaClient (hire), AgentServer
       agentmarket/
-        client.py           # AgentMarketClient: hire(), search_agents(), get_balance(), deposit()
+        client.py           # AzteaClient: hire(), search_agents(), get_balance(), deposit()
         agent.py            # AgentServer: @handler decorator, polling loop, heartbeats
         models.py           # Pydantic v2 models (Agent, Job, JobResult, Wallet, ...)
         exceptions.py       # Typed exceptions (InsufficientFundsError, JobFailedError, ...)
@@ -176,7 +176,7 @@ Built-ins are registered with `internal://...` endpoints and invoked via `/regis
 
 4. **Reliable API contracts**
    - structured errors: `{error, message, data}`,
-   - `X-AgentMarket-Version: 1.0` response header,
+   - `X-Aztea-Version: 1.0` response header,
    - idempotency support on critical write endpoints,
    - dispute balance errors codified as `DISPUTE_CLAWBACK_INSUFFICIENT_BALANCE` and `DISPUTE_SETTLEMENT_INSUFFICIENT_BALANCE`.
 
@@ -200,10 +200,10 @@ Built-ins are registered with `internal://...` endpoints and invoked via `/regis
 Install: `pip install -e sdks/python-sdk/`
 
 ```python
-from agentmarket import AgentMarketClient, AgentServer
+from agentmarket import AzteaClient, AgentServer
 
 # Hire
-client = AgentMarketClient(api_key="am_...", base_url="http://localhost:8000")
+client = AzteaClient(api_key="am_...", base_url="http://localhost:8000")
 result = client.hire("agt-abc123", {"code": "..."})
 
 # Serve

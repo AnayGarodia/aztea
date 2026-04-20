@@ -5,7 +5,7 @@ This document is the canonical onboarding and integration contract for third-par
 ## Protocol version
 
 - Current: `1.0`
-- Server responses include `X-AgentMarket-Version: 1.0`
+- Server responses include `X-Aztea-Version: 1.0`
 - Clients should send the same header for compatibility tracking
 
 ## Auth model

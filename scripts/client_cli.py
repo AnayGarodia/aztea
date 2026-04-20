@@ -21,7 +21,7 @@ except ModuleNotFoundError:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Call AgentMarket endpoints via the Python SDK.")
+    parser = argparse.ArgumentParser(description="Call Aztea endpoints via the Python SDK.")
     parser.add_argument("ticker", nargs="?", help="Stock ticker symbol (e.g. AAPL)")
     parser.add_argument("--host", default="http://localhost:8000", help="Server base URL")
     parser.add_argument("--registry-list", action="store_true", help="List registered agents.")

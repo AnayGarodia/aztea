@@ -1,7 +1,7 @@
 {
   "name": "@agentmarket/sdk",
   "version": "0.1.0",
-  "description": "TypeScript SDK for AgentMarket APIs",
+  "description": "TypeScript SDK for Aztea APIs",
   "type": "module",
   "main": "dist/cjs/index.js",
   "module": "dist/esm/index.js",

@@ -149,6 +149,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/legal/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Auth Accept Legal */
+        post: operations["auth_accept_legal_auth_legal_accept_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/keys": {
         parameters: {
             query?: never;
@@ -287,7 +304,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Google A2A: submit a task to an AgentMarket skill (agent). Returns a task/job object. */
+        /** Google A2A: submit a task to an Aztea skill (agent). Returns a task/job object. */
         post: operations["a2a_tasks_send_a2a_tasks_send_post"];
         delete?: never;
         options?: never;
@@ -1231,6 +1248,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/public/docs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List platform documentation available from this deployment. */
+        get: operations["public_docs_index_public_docs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/public/docs/{doc_slug}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Fetch a public documentation file by slug. */
+        get: operations["public_doc_content_public_docs__doc_slug__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/wallets/topup/session": {
         parameters: {
             query?: never;
@@ -1341,7 +1392,7 @@ export interface components {
         A2ATaskSendRequest: {
             /**
              * Skill Id
-             * @description The AgentMarket agent_id to hire (skill ID in A2A terms).
+             * @description The Aztea agent_id to hire (skill ID in A2A terms).
              */
             skill_id: string;
             /**
@@ -1610,6 +1661,8 @@ export interface components {
             scopes: string[];
             /** Max Spend Cents */
             max_spend_cents?: number | null;
+            /** Per Job Cap Cents */
+            per_job_cap_cents?: number | null;
         };
         /** ApiKeyListResponse */
         ApiKeyListResponse: {
@@ -1628,6 +1681,8 @@ export interface components {
             scopes: string[];
             /** Max Spend Cents */
             max_spend_cents?: number | null;
+            /** Per Job Cap Cents */
+            per_job_cap_cents?: number | null;
             /** Created At */
             created_at: string;
             /** Last Used At */
@@ -1656,6 +1711,38 @@ export interface components {
             scopes: string[];
             /** Max Spend Cents */
             max_spend_cents?: number | null;
+            /** Per Job Cap Cents */
+            per_job_cap_cents?: number | null;
+        };
+        /**
+         * AuthLegalAcceptRequest
+         * @example {
+         *       "privacy_version": "2026-04-19",
+         *       "terms_version": "2026-04-19"
+         *     }
+         */
+        AuthLegalAcceptRequest: {
+            /** Terms Version */
+            terms_version: string;
+            /** Privacy Version */
+            privacy_version: string;
+        };
+        /** AuthLegalAcceptResponse */
+        AuthLegalAcceptResponse: {
+            /** User Id */
+            user_id: string;
+            /** Legal Acceptance Required */
+            legal_acceptance_required: boolean;
+            /** Legal Accepted At */
+            legal_accepted_at?: string | null;
+            /** Terms Version Current */
+            terms_version_current: string;
+            /** Privacy Version Current */
+            privacy_version_current: string;
+            /** Terms Version Accepted */
+            terms_version_accepted?: string | null;
+            /** Privacy Version Accepted */
+            privacy_version_accepted?: string | null;
         };
         /** AuthLoginResponse */
         AuthLoginResponse: {
@@ -1673,6 +1760,18 @@ export interface components {
             key_id: string;
             /** Key Prefix */
             key_prefix: string;
+            /** Legal Acceptance Required */
+            legal_acceptance_required: boolean;
+            /** Legal Accepted At */
+            legal_accepted_at?: string | null;
+            /** Terms Version Current */
+            terms_version_current: string;
+            /** Privacy Version Current */
+            privacy_version_current: string;
+            /** Terms Version Accepted */
+            terms_version_accepted?: string | null;
+            /** Privacy Version Accepted */
+            privacy_version_accepted?: string | null;
         };
         /** AuthMeMasterResponse */
         AuthMeMasterResponse: {
@@ -1698,6 +1797,18 @@ export interface components {
             email: string;
             /** Scopes */
             scopes: string[];
+            /** Legal Acceptance Required */
+            legal_acceptance_required: boolean;
+            /** Legal Accepted At */
+            legal_accepted_at?: string | null;
+            /** Terms Version Current */
+            terms_version_current: string;
+            /** Privacy Version Current */
+            privacy_version_current: string;
+            /** Terms Version Accepted */
+            terms_version_accepted?: string | null;
+            /** Privacy Version Accepted */
+            privacy_version_accepted?: string | null;
         };
         /** AuthRegisterResponse */
         AuthRegisterResponse: {
@@ -1713,13 +1824,25 @@ export interface components {
             key_id: string;
             /** Key Prefix */
             key_prefix: string;
+            /** Legal Acceptance Required */
+            legal_acceptance_required: boolean;
+            /** Legal Accepted At */
+            legal_accepted_at?: string | null;
+            /** Terms Version Current */
+            terms_version_current: string;
+            /** Privacy Version Current */
+            privacy_version_current: string;
+            /** Terms Version Accepted */
+            terms_version_accepted?: string | null;
+            /** Privacy Version Accepted */
+            privacy_version_accepted?: string | null;
         };
         /**
          * ConnectOnboardRequest
          * @description Request body for POST /wallets/connect/onboard.
          * @example {
-         *       "refresh_url": "https://agentmarket.dev/wallet",
-         *       "return_url": "https://agentmarket.dev/wallet"
+         *       "refresh_url": "https://aztea.dev/wallet",
+         *       "return_url": "https://aztea.dev/wallet"
          *     }
          */
         ConnectOnboardRequest: {
@@ -1733,6 +1856,7 @@ export interface components {
          * @example {
          *       "max_spend_cents": 5000,
          *       "name": "Worker key",
+         *       "per_job_cap_cents": 1000,
          *       "scopes": [
          *         "worker",
          *         "caller"
@@ -1749,6 +1873,8 @@ export interface components {
             scopes?: string[];
             /** Max Spend Cents */
             max_spend_cents?: number | null;
+            /** Per Job Cap Cents */
+            per_job_cap_cents?: number | null;
         };
         /**
          * DepositRequest
@@ -2001,16 +2127,17 @@ export interface components {
             /**
              * Output Verification Window Seconds
              * @description Optional caller acceptance window after worker completion. During this window, settlement is held until caller accepts/rejects or window expires.
+             * @default 86400
              */
-            output_verification_window_seconds?: number | null;
+            output_verification_window_seconds: number | null;
             /**
              * Callback Url
-             * @description Optional HTTPS URL the platform will POST to when the job reaches a terminal state (completed, failed). Body: {job_id, status, output_payload, error_message, settled_at}. Delivered with retry/backoff via the hook delivery worker. Verify authenticity with the X-AgentMarket-Signature header (HMAC-SHA256).
+             * @description Optional HTTPS URL the platform will POST to when the job reaches a terminal state (completed, failed). Body: {job_id, status, output_payload, error_message, settled_at}. Delivered with retry/backoff via the hook delivery worker. Verify authenticity with the X-Aztea-Signature header (HMAC-SHA256).
              */
             callback_url?: string | null;
             /**
              * Callback Secret
-             * @description Optional secret used to sign the callback POST body. The platform computes HMAC-SHA256(secret, body) and sends it as X-AgentMarket-Signature: sha256=<hex>. Verify on your end to reject spoofed deliveries.
+             * @description Optional secret used to sign the callback POST body. The platform computes HMAC-SHA256(secret, body) and sends it as X-Aztea-Signature: sha256=<hex>. Verify on your end to reject spoofed deliveries.
              */
             callback_secret?: string | null;
             /**
@@ -2257,6 +2384,8 @@ export interface components {
             max_attempts: number;
             /** Parent Job Id */
             parent_job_id?: string | null;
+            /** Tree Depth */
+            tree_depth?: number | null;
             /** Parent Cascade Policy */
             parent_cascade_policy?: string | null;
             /** Retry Count */
@@ -2579,6 +2708,7 @@ export interface components {
          * @example {
          *       "max_spend_cents": 10000,
          *       "name": "Rotated worker key",
+         *       "per_job_cap_cents": 2500,
          *       "scopes": [
          *         "worker"
          *       ]
@@ -2591,6 +2721,8 @@ export interface components {
             scopes?: string[] | null;
             /** Max Spend Cents */
             max_spend_cents?: number | null;
+            /** Per Job Cap Cents */
+            per_job_cap_cents?: number | null;
         };
         /** RunsResponse */
         RunsResponse: {
@@ -3234,6 +3366,84 @@ export interface operations {
             };
         };
     };
+    auth_accept_legal_auth_legal_accept_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AuthLegalAcceptRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthLegalAcceptResponse"];
+                };
+            };
+            /** @description Bad request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid authorization header. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Rate limit exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
+                };
+            };
+            /** @description Internal server error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     auth_list_keys_auth_keys_get: {
         parameters: {
             query?: never;
@@ -3339,13 +3549,13 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Validation Error */
+            /** @description Validation error. */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Rate limit exceeded. */
@@ -5253,13 +5463,13 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Validation Error */
+            /** @description Validation error. */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Rate limit exceeded. */
@@ -8487,6 +8697,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    public_docs_index_public_docs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    public_doc_content_public_docs__doc_slug__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                doc_slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

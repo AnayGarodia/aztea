@@ -34,6 +34,13 @@ class AuthUser(TypedDict):
     key_name: str
     scopes: list[str]
     max_spend_cents: NotRequired[int | None]
+    per_job_cap_cents: NotRequired[int | None]
+    legal_acceptance_required: NotRequired[bool]
+    legal_accepted_at: NotRequired[str | None]
+    terms_version_current: NotRequired[str]
+    privacy_version_current: NotRequired[str]
+    terms_version_accepted: NotRequired[str | None]
+    privacy_version_accepted: NotRequired[str | None]
 
 
 class CallerContext(TypedDict):
@@ -385,7 +392,7 @@ class TopupSessionRequest(BaseModel):
 class ConnectOnboardRequest(BaseModel):
     """Request body for POST /wallets/connect/onboard."""
     model_config = ConfigDict(
-        json_schema_extra={"example": {"return_url": "https://agentmarket.dev/wallet", "refresh_url": "https://agentmarket.dev/wallet"}}
+        json_schema_extra={"example": {"return_url": "https://aztea.dev/wallet", "refresh_url": "https://aztea.dev/wallet"}}
     )
     return_url: str | None = None
     refresh_url: str | None = None
@@ -433,6 +440,8 @@ class UserRegisterRequest(BaseModel):
     def password_length(cls, v):
         if len(v) < 8:
             raise ValueError("Password must be at least 8 characters")
+        if len(v) > 1024:
+            raise ValueError("Password must be at most 1024 characters")
         return v
 
 
@@ -442,15 +451,39 @@ class UserLoginRequest(BaseModel):
     email: str
     password: str
 
+    @field_validator("password")
+    @classmethod
+    def login_password_length(cls, v):
+        if len(v) > 1024:
+            raise ValueError("Password must be at most 1024 characters")
+        return v
+
+
+class AuthLegalAcceptRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={"example": {"terms_version": "2026-04-19", "privacy_version": "2026-04-19"}}
+    )
+
+    terms_version: str
+    privacy_version: str
+
 
 class CreateKeyRequest(BaseModel):
     model_config = ConfigDict(
-        json_schema_extra={"example": {"name": "Worker key", "scopes": ["worker", "caller"], "max_spend_cents": 5000}}
+        json_schema_extra={
+            "example": {
+                "name": "Worker key",
+                "scopes": ["worker", "caller"],
+                "max_spend_cents": 5000,
+                "per_job_cap_cents": 1000,
+            }
+        }
     )
 
     name: str = "New key"
     scopes: list[str] = Field(default_factory=lambda: list(_auth.DEFAULT_KEY_SCOPES))
     max_spend_cents: int | None = Field(default=None, ge=0)
+    per_job_cap_cents: int | None = Field(default=None, ge=0)
 
     @field_validator("scopes")
     @classmethod
@@ -470,12 +503,20 @@ class CreateKeyRequest(BaseModel):
 
 class RotateKeyRequest(BaseModel):
     model_config = ConfigDict(
-        json_schema_extra={"example": {"name": "Rotated worker key", "scopes": ["worker"], "max_spend_cents": 10000}}
+        json_schema_extra={
+            "example": {
+                "name": "Rotated worker key",
+                "scopes": ["worker"],
+                "max_spend_cents": 10000,
+                "per_job_cap_cents": 2500,
+            }
+        }
     )
 
     name: str | None = None
     scopes: list[str] | None = None
     max_spend_cents: int | None = Field(default=None, ge=0)
+    per_job_cap_cents: int | None = Field(default=None, ge=0)
 
     @field_validator("scopes")
     @classmethod
@@ -546,7 +587,7 @@ class JobCreateRequest(BaseModel):
     )
     dispute_window_hours: int = Field(default=72, ge=1, le=24 * 30)
     output_verification_window_seconds: int | None = Field(
-        default=None,
+        default=86400,
         ge=0,
         le=7 * 24 * 3600,
         description=(
@@ -560,7 +601,7 @@ class JobCreateRequest(BaseModel):
             "Optional HTTPS URL the platform will POST to when the job reaches a terminal state "
             "(completed, failed). Body: {job_id, status, output_payload, error_message, settled_at}. "
             "Delivered with retry/backoff via the hook delivery worker. "
-            "Verify authenticity with the X-AgentMarket-Signature header (HMAC-SHA256)."
+            "Verify authenticity with the X-Aztea-Signature header (HMAC-SHA256)."
         ),
     )
     callback_secret: str | None = Field(
@@ -568,7 +609,7 @@ class JobCreateRequest(BaseModel):
         description=(
             "Optional secret used to sign the callback POST body. "
             "The platform computes HMAC-SHA256(secret, body) and sends it as "
-            "X-AgentMarket-Signature: sha256=<hex>. Verify on your end to reject spoofed deliveries."
+            "X-Aztea-Signature: sha256=<hex>. Verify on your end to reject spoofed deliveries."
         ),
     )
     budget_cents: int | None = Field(
@@ -1378,6 +1419,12 @@ class AuthRegisterResponse(BaseModel):
     raw_api_key: str
     key_id: str
     key_prefix: str
+    legal_acceptance_required: bool
+    legal_accepted_at: str | None = None
+    terms_version_current: str
+    privacy_version_current: str
+    terms_version_accepted: str | None = None
+    privacy_version_accepted: str | None = None
 
 
 class AuthLoginResponse(BaseModel):
@@ -1388,6 +1435,12 @@ class AuthLoginResponse(BaseModel):
     raw_api_key: str
     key_id: str
     key_prefix: str
+    legal_acceptance_required: bool
+    legal_accepted_at: str | None = None
+    terms_version_current: str
+    privacy_version_current: str
+    terms_version_accepted: str | None = None
+    privacy_version_accepted: str | None = None
 
 
 class AuthMeMasterResponse(BaseModel):
@@ -1402,9 +1455,25 @@ class AuthMeUserResponse(BaseModel):
     username: str
     email: str
     scopes: list[str]
+    legal_acceptance_required: bool
+    legal_accepted_at: str | None = None
+    terms_version_current: str
+    privacy_version_current: str
+    terms_version_accepted: str | None = None
+    privacy_version_accepted: str | None = None
 
 
 AuthMeResponse = AuthMeMasterResponse | AuthMeUserResponse
+
+
+class AuthLegalAcceptResponse(BaseModel):
+    user_id: str
+    legal_acceptance_required: bool
+    legal_accepted_at: str | None = None
+    terms_version_current: str
+    privacy_version_current: str
+    terms_version_accepted: str | None = None
+    privacy_version_accepted: str | None = None
 
 
 class ApiKeyMetadataResponse(BaseModel):
@@ -1413,6 +1482,7 @@ class ApiKeyMetadataResponse(BaseModel):
     name: str
     scopes: list[str]
     max_spend_cents: int | None = None
+    per_job_cap_cents: int | None = None
     created_at: str
     last_used_at: str | None = None
     is_active: int
@@ -1429,6 +1499,7 @@ class ApiKeyCreateResponse(BaseModel):
     name: str
     scopes: list[str]
     max_spend_cents: int | None = None
+    per_job_cap_cents: int | None = None
 
 
 class ApiKeyRotateResponse(BaseModel):
@@ -1439,6 +1510,7 @@ class ApiKeyRotateResponse(BaseModel):
     name: str
     scopes: list[str]
     max_spend_cents: int | None = None
+    per_job_cap_cents: int | None = None
 
 
 class ApiKeyRevokeResponse(BaseModel):
@@ -1550,6 +1622,7 @@ class JobResponse(BaseModel):
     attempt_count: int
     max_attempts: int
     parent_job_id: str | None = None
+    tree_depth: int | None = None
     parent_cascade_policy: str | None = None
     retry_count: int
     next_retry_at: str | None = None
@@ -1581,7 +1654,7 @@ class JobsListResponse(BaseModel):
 
 
 class A2ATaskSendRequest(BaseModel):
-    skill_id: str = Field(description="The AgentMarket agent_id to hire (skill ID in A2A terms).")
+    skill_id: str = Field(description="The Aztea agent_id to hire (skill ID in A2A terms).")
     input: JSONObject = Field(default_factory=dict, description="Input payload for the agent.")
     callback_url: str | None = Field(default=None, description="Optional webhook URL for task completion push.")
     metadata: JSONObject = Field(default_factory=dict, description="Optional A2A passthrough metadata.")

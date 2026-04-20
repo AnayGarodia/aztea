@@ -1,0 +1,67 @@
+.animated-shader-hero {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.animated-shader-hero__canvas {
+  width: 124%;
+  max-width: none;
+  height: 100%;
+  display: block;
+  transform: translateX(-14%);
+}
+
+.animated-shader-hero__veil {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 9% 20%, color-mix(in oklab, var(--info) 4%, transparent), transparent 30%),
+    radial-gradient(circle at 50% 80%, color-mix(in oklab, var(--violet) 3%, transparent), transparent 36%),
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--canvas) 3%, transparent) 0%,
+      color-mix(in oklab, var(--canvas) 8%, transparent) 100%
+    );
+}
+
+.animated-shader-hero--light .animated-shader-hero__canvas {
+  opacity: 0.58;
+  filter: saturate(0.82) contrast(1.08) brightness(1.18);
+}
+
+.animated-shader-hero--light .animated-shader-hero__veil {
+  background:
+    radial-gradient(circle at 10% 18%, color-mix(in oklab, var(--accent) 9%, transparent), transparent 34%),
+    radial-gradient(circle at 50% 80%, color-mix(in oklab, var(--warn) 7%, transparent), transparent 40%),
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--canvas) 6%, transparent) 0%,
+      color-mix(in oklab, var(--canvas) 14%, transparent) 100%
+    );
+}
+
+.animated-shader-hero--dark .animated-shader-hero__canvas {
+  opacity: 0.72;
+  filter: saturate(0.86) contrast(1.08) brightness(0.88);
+}
+
+.animated-shader-hero--dark .animated-shader-hero__veil {
+  background:
+    radial-gradient(circle at 13% 22%, color-mix(in oklab, var(--info) 18%, transparent), transparent 44%),
+    radial-gradient(circle at 55% 80%, color-mix(in oklab, var(--violet) 14%, transparent), transparent 48%),
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--canvas) 18%, transparent) 0%,
+      color-mix(in oklab, var(--canvas) 34%, transparent) 100%
+    );
+}
+
+@media (max-width: 768px) {
+  .animated-shader-hero__canvas {
+    width: 136%;
+    transform: translateX(-20%);
+  }
+}

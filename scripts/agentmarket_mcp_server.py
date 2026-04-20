@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""stdio MCP server that exposes AgentMarket registry listings as tools."""
+"""stdio MCP server that exposes Aztea registry listings as tools."""
 
 from __future__ import annotations
 
@@ -20,21 +20,21 @@ if str(ROOT_DIR) not in sys.path:
 
 from core import mcp_manifest
 
-_LOG = logging.getLogger("agentmarket.mcp")
-_SERVER_NAME = "agentmarket-registry-mcp"
+_LOG = logging.getLogger("aztea.mcp")
+_SERVER_NAME = "aztea-registry-mcp"
 _SERVER_VERSION = "0.1.0"
 _PROTOCOL_VERSION = "2024-11-05"
-_REQUEST_VERSION_HEADER = "X-AgentMarket-Version"
-_AGENTMARKET_PROTOCOL_VERSION = "1.0"
+_REQUEST_VERSION_HEADER = "X-Aztea-Version"
+_AZTEA_PROTOCOL_VERSION = "1.0"
 
 
-_AUTH_TOOL_NAME = "agentmarket_setup"
+_AUTH_TOOL_NAME = "aztea_setup"
 _AUTH_TOOL: dict[str, Any] = {
     "name": _AUTH_TOOL_NAME,
     "description": (
-        "AgentMarket requires an API key to call agents. "
+        "Aztea requires an API key to call agents. "
         "Sign up at the signup_url below — you get $1 free credit, no card required. "
-        "Then set AGENTMARKET_API_KEY=am_... and restart this MCP server."
+        "Then set AZTEA_API_KEY=am_... and restart this MCP server."
     ),
     "input_schema": {
         "type": "object",
@@ -63,7 +63,7 @@ class RegistryBridge:
     def _headers(self) -> dict[str, str]:
         return {
             "Authorization": f"Bearer {self.api_key}",
-            _REQUEST_VERSION_HEADER: _AGENTMARKET_PROTOCOL_VERSION,
+            _REQUEST_VERSION_HEADER: _AZTEA_PROTOCOL_VERSION,
             "Content-Type": "application/json",
         }
 
@@ -82,7 +82,7 @@ class RegistryBridge:
             return self._manifest
 
         if response.status_code in (401, 403):
-            _LOG.warning("AgentMarket API key invalid or missing (HTTP %s). Switch to auth mode.", response.status_code)
+            _LOG.warning("Aztea API key invalid or missing (HTTP %s). Switch to auth mode.", response.status_code)
             try:
                 body = response.json()
                 if isinstance(body, dict) and "detail" in body:
@@ -128,12 +128,12 @@ class RegistryBridge:
         return False, {
             "error": "AUTHENTICATION_REQUIRED",
             "message": (
-                "You need an AgentMarket API key to call agents. "
+                "You need an Aztea API key to call agents. "
                 "Sign up — it's free and you get $1 credit instantly, no card required."
             ),
             "signup_url": self._signup_url,
             "docs_url": "https://github.com/AnayGarodia/agentmarket/blob/main/docs/quickstart.md",
-            "next_step": "Set AGENTMARKET_API_KEY=am_... in your environment and restart the MCP server.",
+            "next_step": "Set AZTEA_API_KEY=am_... in your environment and restart the MCP server.",
         }
 
     def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
@@ -324,28 +324,32 @@ class MCPStdioServer:
             refresh_thread.join(timeout=2)
 
 
+def _env_with_legacy(new_name: str, legacy_name: str, default: str) -> str:
+    return os.environ.get(new_name) or os.environ.get(legacy_name) or default
+
+
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Expose AgentMarket registry as MCP tools over stdio.")
+    parser = argparse.ArgumentParser(description="Expose Aztea registry as MCP tools over stdio.")
     parser.add_argument(
         "--base-url",
-        default=os.environ.get("AGENTMARKET_BASE_URL", "http://localhost:8000"),
-        help="AgentMarket HTTP base URL (default: AGENTMARKET_BASE_URL or http://localhost:8000).",
+        default=_env_with_legacy("AZTEA_BASE_URL", "AGENTMARKET_BASE_URL", "http://localhost:8000"),
+        help="Aztea HTTP base URL (default: AZTEA_BASE_URL/AGENTMARKET_BASE_URL or http://localhost:8000).",
     )
     parser.add_argument(
         "--api-key",
-        default=os.environ.get("AGENTMARKET_API_KEY", ""),
-        help="Caller API key (default: AGENTMARKET_API_KEY).",
+        default=_env_with_legacy("AZTEA_API_KEY", "AGENTMARKET_API_KEY", ""),
+        help="Caller API key (default: AZTEA_API_KEY or AGENTMARKET_API_KEY).",
     )
     parser.add_argument(
         "--refresh-seconds",
         type=int,
-        default=int(os.environ.get("AGENTMARKET_MCP_REFRESH_SECONDS", "60")),
+        default=int(_env_with_legacy("AZTEA_MCP_REFRESH_SECONDS", "AGENTMARKET_MCP_REFRESH_SECONDS", "60")),
         help="Tool manifest refresh interval in seconds (default: 60).",
     )
     parser.add_argument(
         "--timeout-seconds",
         type=float,
-        default=float(os.environ.get("AGENTMARKET_MCP_TIMEOUT_SECONDS", "10")),
+        default=float(_env_with_legacy("AZTEA_MCP_TIMEOUT_SECONDS", "AGENTMARKET_MCP_TIMEOUT_SECONDS", "10")),
         help="HTTP timeout for registry and tool calls (default: 10).",
     )
     parser.add_argument(
@@ -357,13 +361,13 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="[agentmarket-mcp] %(message)s")
+    logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="[aztea-mcp] %(message)s")
     args = _parse_args()
     api_key = str(args.api_key or "").strip()
     if not api_key:
         _LOG.warning(
             "No API key set. The MCP server will start in unauthenticated mode — "
-            "tool calls will return a sign-up link. Set AGENTMARKET_API_KEY=am_... to enable full access."
+            "tool calls will return a sign-up link. Set AZTEA_API_KEY=am_... (or AGENTMARKET_API_KEY) to enable full access."
         )
 
     bridge = RegistryBridge(

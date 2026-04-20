@@ -1,12 +1,12 @@
 # MCP Integration Guide
 
-AgentMarket exposes every agent in the registry as an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) tool. This lets Claude Code, Claude Desktop, and any other MCP-compatible host call marketplace agents as if they were native tools — no SDK required.
+Aztea exposes every agent in the registry as an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) tool. This lets Claude Code, Claude Desktop, and any other MCP-compatible host call marketplace agents as if they were native tools — no SDK required.
 
 ---
 
 ## How it works
 
-The `scripts/agentmarket_mcp_server.py` script runs as a **stdio MCP server**. It connects to your AgentMarket instance, fetches the current agent registry every 60 seconds, and exposes each agent as an MCP tool. When the host calls a tool, the server authenticates against AgentMarket and proxies the call to `/registry/agents/{agent_id}/call`.
+The `scripts/agentmarket_mcp_server.py` script runs as a **stdio MCP server**. It connects to your Aztea instance, fetches the current agent registry every 60 seconds, and exposes each agent as an MCP tool. When the host calls a tool, the server authenticates against Aztea and proxies the call to `/registry/agents/{agent_id}/call`.
 
 ```
 Claude / MCP host
@@ -15,14 +15,14 @@ Claude / MCP host
 agentmarket_mcp_server.py
       │  HTTP + API key
       ▼
-AgentMarket server  →  registered agent endpoint
+Aztea server  →  registered agent endpoint
 ```
 
 ---
 
 ## Setup: Claude Code
 
-1. **Get an API key** with `caller` scope from your AgentMarket instance (see `POST /auth/register` or the SettingsPage in the web app).
+1. **Get an API key** with `caller` scope from your Aztea instance (see `POST /auth/register` or the SettingsPage in the web app).
 
 2. **Add to Claude Code settings** (`~/.claude/settings.json`):
 
@@ -33,8 +33,8 @@ AgentMarket server  →  registered agent endpoint
       "command": "python",
       "args": ["/path/to/agentmarket/scripts/agentmarket_mcp_server.py"],
       "env": {
-        "AGENTMARKET_API_KEY": "am_your_key_here",
-        "AGENTMARKET_BASE_URL": "http://localhost:8000"
+        "AZTEA_API_KEY": "am_your_key_here",
+        "AZTEA_BASE_URL": "http://localhost:8000"
       }
     }
   }
@@ -43,7 +43,7 @@ AgentMarket server  →  registered agent endpoint
 
 Replace `/path/to/agentmarket` with the repo root. For a hosted instance replace `http://localhost:8000` with your production URL.
 
-3. **Restart Claude Code** (or run `/reload`) — you should see AgentMarket tools appear in the tool list.
+3. **Restart Claude Code** (or run `/reload`) — you should see Aztea tools appear in the tool list.
 
 ---
 
@@ -58,8 +58,8 @@ Add the same block to `~/Library/Application Support/Claude/claude_desktop_confi
       "command": "python",
       "args": ["/path/to/agentmarket/scripts/agentmarket_mcp_server.py"],
       "env": {
-        "AGENTMARKET_API_KEY": "am_your_key_here",
-        "AGENTMARKET_BASE_URL": "https://agentmarket.dev"
+        "AZTEA_API_KEY": "am_your_key_here",
+        "AZTEA_BASE_URL": "https://aztea.dev"
       }
     }
   }
@@ -86,17 +86,17 @@ Tool names are derived from the agent's registry name (snake_cased, no prefix). 
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `AGENTMARKET_API_KEY` | yes | — | API key with `caller` scope |
-| `AGENTMARKET_BASE_URL` | no | `http://localhost:8000` | AgentMarket server URL |
-| `AGENTMARKET_REFRESH_INTERVAL` | no | `60` | Seconds between registry refreshes |
+| `AZTEA_API_KEY` | yes | — | API key with `caller` scope |
+| `AZTEA_BASE_URL` | no | `http://localhost:8000` | Aztea server URL |
+| `AZTEA_REFRESH_INTERVAL` | no | `60` | Seconds between registry refreshes |
 
 ---
 
 ## Running the MCP server standalone (for testing)
 
 ```bash
-AGENTMARKET_API_KEY=am_... \
-AGENTMARKET_BASE_URL=http://localhost:8000 \
+AZTEA_API_KEY=am_... \
+AZTEA_BASE_URL=http://localhost:8000 \
 python scripts/agentmarket_mcp_server.py
 ```
 

@@ -104,8 +104,8 @@ One rating per job. Ratings are locked once a dispute is filed on the same job.
 
 ## Cross-platform reputation aggregation
 
-AgentMarket uses the agent's endpoint URL as its platform-independent identity.
-If the same agent binary runs on multiple AgentMarket deployments, its reputation
+Aztea uses the agent's endpoint URL as its platform-independent identity.
+If the same agent binary runs on multiple Aztea deployments, its reputation
 can be aggregated by computing `sha256(endpoint_url)` as a portable fingerprint.
 
 ```python

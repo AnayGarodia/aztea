@@ -1,4 +1,4 @@
-# AgentMarket — Pre-launch TODO
+# Aztea — Pre-launch TODO
 
 Items are grouped by area and roughly prioritized within each section.
 **P0** = launch blocker · **P1** = launch week · **P2** = soon after
@@ -56,7 +56,7 @@ DISCOVER → CONTRACT → WORK ASYNC → SETTLE → REPEAT
 ## 1. Launch Infrastructure (P0)
 
 ### 1.1 Domain & Hosting
-- [ ] **Register domain** — pick and register `agentmarket.dev` (or preferred domain); configure DNS.
+- [ ] **Register domain** — pick and register `aztea.dev` (or preferred domain); configure DNS.
 - [ ] **SSL/TLS certificate** — Let's Encrypt via Certbot or managed cert (Render/Railway/Fly handle this automatically).
 - [ ] **Pick hosting provider** — deploy backend to Railway / Render / Fly.io / EC2; document the chosen stack.
 - [ ] **Deploy frontend** — Vercel or Netlify for the React app; or serve via nginx on the same host. Configure `VITE_API_URL` env var to point to production backend.
@@ -88,7 +88,7 @@ DISCOVER → CONTRACT → WORK ASYNC → SETTLE → REPEAT
 ## 3. Agent-to-Agent Workflows (P0)
 
 ### 3.1 Webhook Callbacks
-- [x] ~~**Callback HMAC secret** — `callback_secret` field on `JobCreateRequest`; backend signs POST body with `X-AgentMarket-Signature: sha256=...` header.~~
+- [x] ~~**Callback HMAC secret** — `callback_secret` field on `JobCreateRequest`; backend signs POST body with `X-Aztea-Signature: sha256=...` header.~~
 - [x] ~~**SDK `CallbackReceiver` helper** — `CallbackReceiver(secret)` class with `@receiver.on_job_complete` decorator and `dispatch(body, sig)` method. Also exports `verify_callback_signature()`.~~
 - [x] ~~**Test: end-to-end orchestrator hires specialist with callback** — agent A hires agent B, does own work, receives callback when B completes, verifies result.~~
 
@@ -179,7 +179,7 @@ DISCOVER → CONTRACT → WORK ASYNC → SETTLE → REPEAT
 - [ ] **Publish to PyPI** — add GitHub Actions release job that publishes on tag push.
 
 ### 8.2 TypeScript / JavaScript SDK
-- [x] ~~**`sdks/typescript/`** — `AgentMarketClient` now exposes high-level `hire()`, `hireMany()`, `search()`, `getWallet()`, `getBalance()`, and `deposit()`.~~
+- [x] ~~**`sdks/typescript/`** — `AzteaClient` now exposes high-level `hire()`, `hireMany()`, `search()`, `getWallet()`, `getBalance()`, and `deposit()`.~~
 - [ ] **Publish to npm** as `agentmarket`.
 - [ ] **Node.js + browser compatibility** — use `fetch` API; no Node-specific imports.
 
@@ -240,7 +240,7 @@ DISCOVER → CONTRACT → WORK ASYNC → SETTLE → REPEAT
 
 - [ ] **API reference** — audit every endpoint in `server.py` against `docs/api-reference.md`; update stale entries.
 - [x] ~~**MCP integration guide** — `docs/mcp-integration.md` covers Claude Code, Claude Desktop, env vars, A2A vs MCP choice.~~
-- [ ] **A2A integration guide** — how to configure AgentMarket as a participant in Google A2A networks.
+- [ ] **A2A integration guide** — how to configure Aztea as a participant in Google A2A networks.
 - [ ] **Dispute guide** — for callers: how to file, timeline. For agents: how to respond.
 - [ ] **`output_examples` on landing page** — show 2–3 real input→output pairs for built-in agents on the homepage/agent list. Biggest single UX improvement for cold visitors deciding whether to fund a wallet. (Backend data is now populated for built-ins; frontend component still needed.)
 
@@ -372,7 +372,7 @@ def resolve(spec: str) -> tuple[LLMProvider, str]:
     Raises ValueError on unknown provider prefix."""
 
 DEFAULT_CHAIN: list[str]
-# Read from AGENTMARKET_LLM_DEFAULT_CHAIN env var (comma-separated "<provider>:<model>" specs).
+# Read from AZTEA_LLM_DEFAULT_CHAIN env var (comma-separated "<provider>:<model>" specs).
 # Falls back to: ["groq:llama-3.3-70b-versatile", "openai:gpt-4o-mini", "anthropic:claude-sonnet-4-6"]
 ```
 
@@ -629,7 +629,7 @@ OPENAI_API_KEY=
 ANTHROPIC_API_KEY=
 
 # Optional: override fallback chain (comma-separated "<provider>:<model_id>")
-# AGENTMARKET_LLM_DEFAULT_CHAIN=groq:llama-3.3-70b-versatile,openai:gpt-4o-mini,anthropic:claude-sonnet-4-6
+# AZTEA_LLM_DEFAULT_CHAIN=groq:llama-3.3-70b-versatile,openai:gpt-4o-mini,anthropic:claude-sonnet-4-6
 ```
 
 **`requirements.txt`** — add:
@@ -648,7 +648,7 @@ anthropic>=0.39
 - [x] `test_registry_resolves_prefixed_spec` — `resolve("groq:llama-3.3-70b-versatile")` returns (GroqProvider, "llama-3.3-70b-versatile")
 - [x] `test_registry_resolves_bare_spec_defaults_to_groq` — back-compat
 - [x] `test_registry_raises_on_unknown_provider` — `resolve("foobar:x")` raises ValueError
-- [x] `test_default_chain_env_override` — set `AGENTMARKET_LLM_DEFAULT_CHAIN="openai:gpt-4o-mini"`, assert `DEFAULT_CHAIN == ["openai:gpt-4o-mini"]`
+- [x] `test_default_chain_env_override` — set `AZTEA_LLM_DEFAULT_CHAIN="openai:gpt-4o-mini"`, assert `DEFAULT_CHAIN == ["openai:gpt-4o-mini"]`
 - [x] `test_provider_unavailable_when_sdk_missing` — patch `groq` as un-importable; `GroqProvider().is_available()` returns False
 - [x] `test_provider_unavailable_when_key_missing` — `monkeypatch.delenv("GROQ_API_KEY")`, `GroqProvider().is_available()` returns False
 - [x] `test_fallback_skips_unavailable_providers` — mark Groq+OpenAI unavailable; only Anthropic available; verify Anthropic provider is called

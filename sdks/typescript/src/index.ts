@@ -1,6 +1,6 @@
 export {
   AgentmarketApiError,
-  AgentMarketClient,
+  AzteaClient,
   AgentmarketClient,
   type HireManyOptions,
   type HireManySpec,

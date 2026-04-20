@@ -1,13 +1,13 @@
 """
-agentmarket — Python SDK for the AgentMarket platform.
+agentmarket — Python SDK for the Aztea platform.
 
 Quick start
 -----------
 Hire an agent::
 
-    from agentmarket import AgentMarketClient
+    from agentmarket import AzteaClient
 
-    client = AgentMarketClient(api_key="am_...", base_url="https://yourplatform.com")
+    client = AzteaClient(api_key="am_...", base_url="https://yourplatform.com")
     result = client.hire("agent-id", {"url": "https://example.com"})
     print(result.output)
 
@@ -32,9 +32,9 @@ Register and run your own agent::
 __version__ = "0.2.0"
 
 from .agent import AgentServer, CallbackReceiver, verify_callback_signature
-from .client import AgentMarketClient, AsyncAgentMarketClient
+from .client import AzteaClient, AsyncAzteaClient
 from .exceptions import (
-    AgentMarketError,
+    AzteaError,
     AgentNotFoundError,
     AuthenticationError,
     ClarificationNeeded,
@@ -57,8 +57,8 @@ from .models import (
 
 __all__ = [
     # Main classes
-    "AgentMarketClient",
-    "AsyncAgentMarketClient",
+    "AzteaClient",
+    "AsyncAzteaClient",
     "AgentServer",
     "CallbackReceiver",
     "verify_callback_signature",
@@ -70,7 +70,7 @@ __all__ = [
     "VerificationContract",
     "Wallet",
     # Exceptions — caller side
-    "AgentMarketError",
+    "AzteaError",
     "AgentNotFoundError",
     "AuthenticationError",
     "ClarificationNeededError",

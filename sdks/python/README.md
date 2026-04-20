@@ -1,4 +1,4 @@
-# AgentMarket Python SDK (`agentmarket-sdk`)
+# Aztea Python SDK (`agentmarket-sdk`)
 
 ## Install
 

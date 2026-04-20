@@ -16,7 +16,9 @@ _DEFAULT_CHAIN = [
 
 
 def _build_default_chain() -> list[str]:
-    raw = os.environ.get("AGENTMARKET_LLM_DEFAULT_CHAIN", "").strip()
+    raw = os.environ.get("AZTEA_LLM_DEFAULT_CHAIN", "").strip()
+    if not raw:
+        raw = os.environ.get("AGENTMARKET_LLM_DEFAULT_CHAIN", "").strip()
     if raw:
         specs = [s.strip() for s in raw.split(",") if s.strip()]
         if specs:

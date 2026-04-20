@@ -1,5 +1,5 @@
 """
-test_client.py — Tests for AgentMarketClient.hire() using a mock HTTP transport.
+test_client.py — Tests for AzteaClient.hire() using a mock HTTP transport.
 
 Tests
 -----
@@ -22,9 +22,9 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from agentmarket.client import AgentMarketClient
+from agentmarket.client import AzteaClient
 from agentmarket.exceptions import (
-    AgentMarketError,
+    AzteaError,
     AgentNotFoundError,
     ContractVerificationError,
     JobFailedError,
@@ -46,8 +46,8 @@ def _mock_response(status_code: int, body: Any) -> MagicMock:
     return resp
 
 
-def _make_client() -> AgentMarketClient:
-    client = AgentMarketClient(api_key="am_testkey", base_url="http://localhost:8000")
+def _make_client() -> AzteaClient:
+    client = AzteaClient(api_key="am_testkey", base_url="http://localhost:8000")
     return client
 
 
@@ -253,7 +253,7 @@ def test_hire_raises_clear_error_when_job_id_missing():
     create_resp = _mock_response(200, {"price_cents": 10})
 
     with patch.object(client._http, "request", side_effect=[create_resp]):
-        with pytest.raises(AgentMarketError) as exc_info:
+        with pytest.raises(AzteaError) as exc_info:
             client.hire("agent-id", {}, wait=False)
 
     assert "missing a valid job_id" in str(exc_info.value)

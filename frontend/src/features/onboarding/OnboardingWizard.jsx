@@ -2,9 +2,11 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'motion/react'
 import { ArrowRight, X, Wallet, Bot, Zap, ChevronLeft } from 'lucide-react'
+import { useAuth } from '../../context/AuthContext'
+import { useMarket } from '../../context/MarketContext'
 import './OnboardingWizard.css'
 
-const STORAGE_KEY = 'aztea_onboarding_done'
+const STORAGE_KEY_PREFIX = 'aztea_onboarding_done'
 
 // Inline visual widgets per step
 function WalletVisual() {
@@ -44,10 +46,10 @@ function WalletVisual() {
 
 function AgentsVisual() {
   const agents = [
-    { name: 'SQL Builder', color: '#6366f1', score: '9.4' },
-    { name: 'Email Writer', color: '#f59e0b', score: '9.1' },
-    { name: 'Data Insights', color: '#10b981', score: '8.8' },
-    { name: 'Resume Review', color: '#ec4899', score: '9.6' },
+    { name: 'System Design Reviewer', color: '#6366f1', score: '9.6' },
+    { name: 'Incident Response Commander', color: '#f59e0b', score: '9.5' },
+    { name: 'Code Review Agent', color: '#10b981', score: '9.4' },
+    { name: 'Scenario Simulator', color: '#ec4899', score: '9.3' },
   ]
   return (
     <div className="ob-visual ob-visual--agents">
@@ -73,14 +75,14 @@ function AgentsVisual() {
 
 function CallVisual() {
   const lines = [
-    { text: '$ aztea call sql-builder \\', delay: 0 },
-    { text: '  --question "top 5 users by revenue"', delay: 0.15 },
+    { text: '$ aztea call incident-response-commander \\', delay: 0 },
+    { text: '  --incident "api latency spikes across regions"', delay: 0.15 },
     { text: '', delay: 0.3 },
     { text: '✓ Charged $0.01', color: '#10b981', delay: 0.45 },
     { text: '✓ Running...', color: '#10b981', delay: 0.65 },
     { text: '', delay: 0.8 },
-    { text: 'SELECT u.id, SUM(o.total)', color: '#a78bfa', delay: 0.9 },
-    { text: 'FROM orders o JOIN users u...', color: '#a78bfa', delay: 1.0 },
+    { text: 'Root cause candidates: cache saturation, DB pool pressure', color: '#a78bfa', delay: 0.9 },
+    { text: 'Immediate actions: rate-limit + rollback + observability checks', color: '#a78bfa', delay: 1.0 },
   ]
   return (
     <div className="ob-visual ob-visual--call">
@@ -141,27 +143,52 @@ const STEPS = [
     icon: Zap,
     accentColor: '#f59e0b',
     eyebrow: '03 / 03',
-    title: 'Sync, async,\nor via SDK',
-    subtitle: 'Every job is stored, ratable, and disputable',
-    body: 'Run agents synchronously and see results right on the page, or queue async jobs and monitor them in Jobs. Grab your API key from Settings to integrate programmatically.',
-    cta: 'Start exploring',
-    ctaPath: '/agents',
+    title: 'Secure your key,\nthen automate',
+    subtitle: 'Scoped API keys keep production calls safe',
+    body: 'Create caller-only or worker-only keys in Settings before automation. Start with one scoped key per integration so rotating credentials never interrupts your whole stack.',
+    cta: 'Open settings',
+    ctaPath: '/settings',
     Visual: CallVisual,
   },
 ]
 
 export default function OnboardingWizard() {
+  const { user } = useAuth()
+  const { loading, jobs, wallet } = useMarket()
   const [visible, setVisible] = useState(false)
   const [step, setStep] = useState(0)
   const [dir, setDir] = useState(1)
   const navigate = useNavigate()
+  const userId = String(user?.user_id || '').trim()
+  const storageKey = userId ? `${STORAGE_KEY_PREFIX}:${userId}` : ''
+  const hasRecentActivity =
+    (Array.isArray(jobs) && jobs.length > 0) ||
+    Number(wallet?.balance_cents || 0) > 100
 
   useEffect(() => {
-    if (!localStorage.getItem(STORAGE_KEY)) setVisible(true)
-  }, [])
+    if (!userId || loading) {
+      setVisible(false)
+      return
+    }
+    if (hasRecentActivity) {
+      localStorage.setItem(storageKey, '1')
+      setVisible(false)
+      return
+    }
+    setVisible(!localStorage.getItem(storageKey))
+  }, [userId, storageKey, loading, hasRecentActivity])
+
+  useEffect(() => {
+    if (!visible) return undefined
+    const onKeydown = (event) => {
+      if (event.key === 'Escape') dismiss()
+    }
+    window.addEventListener('keydown', onKeydown)
+    return () => window.removeEventListener('keydown', onKeydown)
+  }, [visible, storageKey])
 
   const dismiss = () => {
-    localStorage.setItem(STORAGE_KEY, '1')
+    if (storageKey) localStorage.setItem(storageKey, '1')
     setVisible(false)
   }
 
@@ -217,7 +244,7 @@ export default function OnboardingWizard() {
           transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
         >
           {/* Close */}
-          <button className="ob-close" onClick={dismiss} aria-label="Skip onboarding">
+          <button className="ob-close" onClick={dismiss} aria-label="Close onboarding">
             <X size={15} />
           </button>
 
@@ -296,7 +323,7 @@ export default function OnboardingWizard() {
               </div>
               <div className="ob-footer-right">
                 <button className="ob-skip" onClick={handleNext}>
-                  {step === STEPS.length - 1 ? 'Done' : 'Skip'}
+                  {step === STEPS.length - 1 ? 'Done' : 'Next'}
                 </button>
                 <button
                   className="ob-cta"

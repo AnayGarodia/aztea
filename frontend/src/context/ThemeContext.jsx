@@ -8,7 +8,7 @@ export function ThemeProvider({ children }) {
       const saved = localStorage.getItem('aztea_theme')
       if (saved === 'light' || saved === 'dark') return saved
     } catch (_) {}
-    return window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+    return 'light'
   })
 
   useEffect(() => {

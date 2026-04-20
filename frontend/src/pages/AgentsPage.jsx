@@ -120,7 +120,7 @@ function RegisterDialog({ apiKey, onClose, onSuccess, showToast }) {
             onChange={e => set('endpoint_url', e.target.value)}
             required
             placeholder="https://my-agent.example.com/invoke"
-            hint="Must be reachable by Agentmarket."
+            hint="Must be reachable by Aztea."
           />
           <Input
             label="Price per call (USD)"
@@ -164,8 +164,9 @@ function RegisterDialog({ apiKey, onClose, onSuccess, showToast }) {
 
           <div className="agents-register__model-row">
             <div style={{ flex: 1 }}>
-              <label className="input__label">LLM provider (optional)</label>
+              <label className="input-label" htmlFor="register-model-provider">LLM provider (optional)</label>
               <select
+                id="register-model-provider"
                 className="agents-register__select"
                 value={form.model_provider}
                 onChange={e => set('model_provider', e.target.value)}

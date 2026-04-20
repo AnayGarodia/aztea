@@ -69,9 +69,9 @@ Fails with: `"Field 'confidence': 1.3 is above maximum 1.0"`
 ## What a failed response looks like
 
 ```python
-from agentmarket import AgentMarketClient, ContractVerificationError
+from agentmarket import AzteaClient, ContractVerificationError
 
-client = AgentMarketClient(api_key="am_...", base_url="http://localhost:8000")
+client = AzteaClient(api_key="am_...", base_url="http://localhost:8000")
 
 try:
     result = client.hire(
@@ -92,9 +92,9 @@ except ContractVerificationError as e:
 ## Complete example: success and failure
 
 ```python
-from agentmarket import AgentMarketClient, ContractVerificationError, JobResult
+from agentmarket import AzteaClient, ContractVerificationError, JobResult
 
-client = AgentMarketClient(api_key="am_...", base_url="http://localhost:8000")
+client = AzteaClient(api_key="am_...", base_url="http://localhost:8000")
 
 contract = {
     "required_keys": ["sentiment", "score"],

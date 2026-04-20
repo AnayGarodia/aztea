@@ -51,14 +51,14 @@ def test_registry_raises_on_unknown_provider():
 
 
 def test_default_chain_env_override(monkeypatch):
-    monkeypatch.setenv("AGENTMARKET_LLM_DEFAULT_CHAIN", "openai:gpt-4o-mini,groq:llama-3.3-70b-versatile")
+    monkeypatch.setenv("AZTEA_LLM_DEFAULT_CHAIN", "openai:gpt-4o-mini,groq:llama-3.3-70b-versatile")
     from core.llm import registry as reg_mod
     chain = reg_mod._build_default_chain()
     assert chain == ["openai:gpt-4o-mini", "groq:llama-3.3-70b-versatile"]
 
 
 def test_default_chain_env_empty_uses_hardcoded(monkeypatch):
-    monkeypatch.setenv("AGENTMARKET_LLM_DEFAULT_CHAIN", "")
+    monkeypatch.setenv("AZTEA_LLM_DEFAULT_CHAIN", "")
     from core.llm import registry as reg_mod
     chain = reg_mod._build_default_chain()
     assert "groq:llama-3.3-70b-versatile" in chain
