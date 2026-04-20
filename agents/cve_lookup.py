@@ -24,13 +24,10 @@ Output: {
 }
 """
 
-import json
 import re
 import time
 
 import requests
-
-from core.llm import CompletionRequest, Message, run_with_fallback
 
 _NVD_API = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 _NVD_TIMEOUT = 10

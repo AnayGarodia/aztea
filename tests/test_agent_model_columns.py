@@ -163,10 +163,12 @@ def test_get_agents_no_filter_returns_all(isolated_db):
     assert len(all_agents) == 2
 
 
-def test_get_agents_invalid_provider_raises(isolated_db):
+def test_get_agents_unknown_provider_returns_empty(isolated_db):
     registry.init_db()
-    with pytest.raises(ValueError, match="model_provider"):
-        registry.get_agents(model_provider="martian")
+    # Provider list is fully open — unknown providers return empty results, not errors
+    result = registry.get_agents(model_provider="martian")
+    assert isinstance(result, list)
+    assert len(result) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -226,10 +228,12 @@ def test_api_filter_agents_by_provider(isolated_db):
             assert a["model_provider"] == "groq"
 
 
-def test_api_filter_agents_invalid_provider(isolated_db):
+def test_api_filter_agents_unknown_provider_returns_empty(isolated_db):
+    # Provider list is fully open — filtering by an unknown provider returns empty, not 400
     with TestClient(server.app) as client:
         resp = client.get(
             "/registry/agents?model_provider=martian",
             headers=_auth_headers(TEST_MASTER_KEY),
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 200
+        assert resp.json()["agents"] == []

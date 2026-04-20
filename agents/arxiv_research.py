@@ -30,7 +30,6 @@ Output: {
 """
 
 import re
-import urllib.parse
 import xml.etree.ElementTree as ET
 
 import requests
