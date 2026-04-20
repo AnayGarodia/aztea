@@ -258,13 +258,13 @@ def test_wallet_deposit_blocks_cross_owner_topup(client):
     user_b = _register_user()
     wallet_b = payments.get_or_create_wallet(f"user:{user_b['user_id']}")
 
+    # Non-admin keys are now rejected at the scope check before reaching ownership check.
     denied = client.post(
         "/wallets/deposit",
         headers=_auth_headers(user_a["raw_api_key"]),
         json={"wallet_id": wallet_b["wallet_id"], "amount_cents": 50, "memo": "unauthorized topup"},
     )
     assert denied.status_code == 403
-    assert denied.json()["message"] == "Not authorized to deposit into this wallet."
 
     master_ok = client.post(
         "/wallets/deposit",

@@ -114,7 +114,13 @@ def test_python_sdk_contract_major_flow(sdk_server):
     )
     assert approve.status_code == 200, approve.text
     wallet = caller.wallets.me()
-    caller.wallets.deposit(wallet_id=str(wallet["wallet_id"]), amount_cents=2_000, memo="sdk test")
+    dep = requests.post(
+        f"{sdk_server}/wallets/deposit",
+        headers={"Authorization": f"Bearer {TEST_MASTER_KEY}"},
+        json={"wallet_id": str(wallet["wallet_id"]), "amount_cents": 2_000, "memo": "sdk test"},
+        timeout=10,
+    )
+    assert dep.status_code == 200, dep.text
     listed = caller.registry.list(tag="sdk-contract")
     assert any(str(item["agent_id"]) == agent_id for item in listed.get("agents", []))
 

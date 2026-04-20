@@ -100,7 +100,7 @@ def run(payload: dict) -> dict:
     )
 
     raw = run_with_fallback(req)
-    text = raw.content.strip()
+    text = raw.text.strip()
 
     # Strip markdown fences if present
     text = re.sub(r"^```(?:json)?\s*", "", text)

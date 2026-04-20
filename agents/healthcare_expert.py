@@ -108,7 +108,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         max_tokens=1800,
     )
     llm = run_with_fallback(req)
-    result = _parse_json_response(llm.content)
+    result = _parse_json_response(llm.text)
     if "disclaimer" not in result:
         result["disclaimer"] = "Educational guidance only, not a diagnosis or treatment plan."
     return result

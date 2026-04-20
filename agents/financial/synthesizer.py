@@ -1,14 +1,15 @@
 """
-synthesizer.py — Groq-powered brief generation
+synthesizer.py — LLM-powered brief generation
 
-Takes raw SEC filing data and uses Groq to produce a structured
-investment brief as a Python dict. All prompt logic lives here.
+Takes raw SEC filing data and uses the provider-agnostic LLM layer to produce
+a structured investment brief as a Python dict. All prompt logic lives here.
 """
 
 import json
 import re
-import groq as _groq
-from groq import Groq
+
+from core.llm import CompletionRequest, Message, run_with_fallback
+from core.llm.errors import LLMError
 
 BRIEF_SCHEMA = {
     "ticker": "string",
@@ -49,26 +50,13 @@ Filing text (first ~20,000 characters):
 """
 
 
-# Models to try in order — largest/best first, fall back when rate-limited
-_MODELS = [
-    "llama-3.3-70b-versatile",
-    "llama-3.1-70b-versatile",
-    "llama3-70b-8192",
-    "mixtral-8x7b-32768",
-    "gemma2-9b-it",
-    "llama-3.1-8b-instant",
-]
-
-
 def synthesize_brief(filing_data: dict) -> dict:
     """
-    Call Groq with the filing text and return a parsed investment brief dict.
-    Tries each model in _MODELS in order, skipping to the next on rate-limit.
+    Call the LLM fallback chain with the filing text and return a parsed
+    investment brief dict.
     Raises ValueError if the response cannot be parsed as JSON.
-    Raises groq.RateLimitError if every model is rate-limited.
+    Raises LLMError if all providers in the chain fail.
     """
-    client = Groq()
-
     schema_str = json.dumps(BRIEF_SCHEMA, indent=2)
     user_prompt = USER_PROMPT_TEMPLATE.format(
         filing_type=filing_data["filing_type"],
@@ -78,35 +66,29 @@ def synthesize_brief(filing_data: dict) -> dict:
         schema=schema_str,
         filing_text=filing_data["text"],
     )
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": user_prompt},
-    ]
 
-    last_rate_limit_err = None
-    for model in _MODELS:
-        try:
-            completion = client.chat.completions.create(
-                model=model,
-                max_tokens=1024,
-                messages=messages,
-            )
-        except _groq.RateLimitError as e:
-            last_rate_limit_err = e
-            continue  # try next model
+    req = CompletionRequest(
+        messages=[
+            Message(role="system", content=SYSTEM_PROMPT),
+            Message(role="user", content=user_prompt),
+        ],
+        temperature=0.1,
+        max_tokens=1024,
+    )
 
-        raw = completion.choices[0].message.content.strip()
-        raw = _strip_fences(raw)
+    try:
+        response = run_with_fallback(req)
+    except LLMError as exc:
+        raise LLMError(f"All LLM providers failed during brief synthesis: {exc}") from exc
 
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError as e:
-            raise ValueError(
-                f"Model {model} returned non-JSON response: {e}\n\nRaw:\n{raw[:500]}"
-            ) from e
+    raw = _strip_fences(response.text.strip())
 
-    # All models exhausted
-    raise last_rate_limit_err
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError(
+            f"LLM returned non-JSON response: {e}\n\nRaw:\n{raw[:500]}"
+        ) from e
 
 
 def _strip_fences(text: str) -> str:

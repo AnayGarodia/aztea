@@ -101,5 +101,5 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         max_tokens=2000,
     )
     llm = run_with_fallback(req)
-    return _parse_json_response(llm.content)
+    return _parse_json_response(llm.text)
 

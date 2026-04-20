@@ -2062,7 +2062,7 @@ def test_wallet_deposit_enforces_minimum_amount(client):
 
     below = client.post(
         "/wallets/deposit",
-        headers=_auth_headers(user["raw_api_key"]),
+        headers=_auth_headers(TEST_MASTER_KEY),
         json={"wallet_id": wallet["wallet_id"], "amount_cents": 499, "memo": "too low"},
     )
     assert below.status_code == 422, below.text
@@ -2073,7 +2073,7 @@ def test_wallet_deposit_enforces_minimum_amount(client):
 
     allowed = client.post(
         "/wallets/deposit",
-        headers=_auth_headers(user["raw_api_key"]),
+        headers=_auth_headers(TEST_MASTER_KEY),
         json={"wallet_id": wallet["wallet_id"], "amount_cents": 500, "memo": "ok"},
     )
     assert allowed.status_code == 200, allowed.text

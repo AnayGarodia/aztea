@@ -140,7 +140,7 @@
 }
 
 .lp__hero-em {
-  background: linear-gradient(135deg, var(--accent) 0%, var(--violet) 100%);
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent) 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;

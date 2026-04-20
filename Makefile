@@ -13,7 +13,7 @@ migrate:
 	python -m core.migrate
 
 demo:
-	python scripts/demo_verification.py
+	python scripts/seed-demo.py
 
 lint:
 	flake8 .

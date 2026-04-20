@@ -23,22 +23,15 @@ Output: {
 import re
 import html
 from datetime import datetime, timezone
-from urllib.parse import urlparse
 
 import requests
 
 from core.llm import CompletionRequest, Message, run_with_fallback
+from core.url_security import validate_outbound_url
 
 _FETCH_TIMEOUT = 15
 _MAX_CONTENT_CHARS = 12000
 _MAX_URL_LENGTH = 2048
-
-_ALLOWED_SCHEMES = {"http", "https"}
-_BLOCKED_HOSTS = {
-    "localhost", "127.0.0.1", "0.0.0.0", "::1",
-    "169.254.169.254",  # AWS metadata
-    "metadata.google.internal",
-}
 
 _SYSTEM = """\
 You are an expert research analyst. Given the text content of a web page, produce a structured analysis.
@@ -63,28 +56,6 @@ Return JSON with exactly:
   "content_type": "article|documentation|product_page|forum|blog|news|academic|other"
 }}"""
 
-
-def _validate_url(url: str) -> str | None:
-    if len(url) > _MAX_URL_LENGTH:
-        return None
-    try:
-        parsed = urlparse(url)
-    except Exception:
-        return None
-    if parsed.scheme not in _ALLOWED_SCHEMES:
-        return None
-    host = parsed.hostname or ""
-    if host.lower() in _BLOCKED_HOSTS:
-        return None
-    # Block private IP ranges
-    import ipaddress
-    try:
-        ip = ipaddress.ip_address(host)
-        if ip.is_private or ip.is_loopback or ip.is_link_local:
-            return None
-    except ValueError:
-        pass  # hostname, not IP
-    return url
 
 
 def _strip_html(raw_html: str) -> tuple[str, list[dict], str]:
@@ -115,9 +86,12 @@ def run(payload: dict) -> dict:
     url = str(payload.get("url", "")).strip()
     if not url:
         return {"error": "url is required"}
+    if len(url) > _MAX_URL_LENGTH:
+        return {"error": "URL is invalid or not allowed (must be public http/https)"}
 
-    safe_url = _validate_url(url)
-    if safe_url is None:
+    try:
+        safe_url = validate_outbound_url(url, "url")
+    except ValueError:
         return {"error": "URL is invalid or not allowed (must be public http/https)"}
 
     question = str(payload.get("question", "")).strip()

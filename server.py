@@ -3367,6 +3367,20 @@ def _caller_can_access_agent(caller: core_models.CallerContext, agent: dict) -> 
     return True
 
 
+def _assert_agent_callable(agent_id: str, agent: dict) -> None:
+    if agent.get("status") == "banned":
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    if agent.get("status") == "suspended":
+        raise HTTPException(
+            status_code=503,
+            detail=error_codes.make_error(
+                error_codes.AGENT_SUSPENDED,
+                f"Agent '{agent_id}' is suspended.",
+                {"agent_id": agent_id},
+            ),
+        )
+
+
 def _caller_worker_authorized_for_job(caller: core_models.CallerContext, job: dict) -> bool:
     if caller["type"] == "master":
         return True
@@ -8452,17 +8466,7 @@ def registry_call(
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
     if not _caller_can_access_agent(caller, agent):
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
-    if agent.get("status") == "banned":
-        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
-    if agent.get("status") == "suspended":
-        raise HTTPException(
-            status_code=503,
-            detail=error_codes.make_error(
-                error_codes.AGENT_SUSPENDED,
-                f"Agent '{agent_id}' is suspended.",
-                {"agent_id": agent_id},
-            ),
-        )
+    _assert_agent_callable(agent_id, agent)
     builtin_agent_id = _resolve_builtin_agent_id(agent)
     safe_endpoint_url = ""
     if builtin_agent_id is None:
@@ -8720,17 +8724,7 @@ def jobs_create(
     agent = registry.get_agent(body.agent_id, include_unapproved=True)
     if agent is None or not _caller_can_access_agent(caller, agent):
         raise HTTPException(status_code=404, detail=f"Agent '{body.agent_id}' not found.")
-    if agent.get("status") == "banned":
-        raise HTTPException(status_code=404, detail=f"Agent '{body.agent_id}' not found.")
-    if agent.get("status") == "suspended":
-        raise HTTPException(
-            status_code=503,
-            detail=error_codes.make_error(
-                error_codes.AGENT_SUSPENDED,
-                f"Agent '{body.agent_id}' is suspended.",
-                {"agent_id": body.agent_id},
-            ),
-        )
+    _assert_agent_callable(body.agent_id, agent)
 
     caller_owner_id = _caller_owner_id(request)
     min_caller_trust = _extract_caller_trust_min(agent.get("input_schema"))
@@ -8926,10 +8920,9 @@ def jobs_batch_create(
                 ),
             )
         agent = registry.get_agent(spec.agent_id, include_unapproved=True)
-        if agent is None or not _caller_can_access_agent(caller, agent) or agent.get("status") == "banned":
+        if agent is None or not _caller_can_access_agent(caller, agent):
             raise HTTPException(status_code=404, detail=f"Agent '{spec.agent_id}' not found.")
-        if agent.get("status") == "suspended":
-            raise HTTPException(status_code=503, detail=f"Agent '{spec.agent_id}' is suspended.")
+        _assert_agent_callable(spec.agent_id, agent)
         price_cents = _usd_to_cents(agent["price_per_call_usd"])
         if price_cents > 5000 and not _agent_has_verified_contract(agent):
             raise HTTPException(
@@ -10504,6 +10497,7 @@ def jobs_settlement_trace(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.JobSettlementTraceResponse:
     _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
+    _require_admin_ip_allowlist(request)
     job = jobs.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
@@ -10612,6 +10606,7 @@ def job_event_hook_process(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.DynamicObjectResponse:
     _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
+    _require_admin_ip_allowlist(request)
     summary = _process_due_hook_deliveries(limit=body.limit)
     return JSONResponse(content=summary)
 
@@ -10644,6 +10639,7 @@ def jobs_sweep(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.DynamicObjectResponse:
     _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
+    _require_admin_ip_allowlist(request)
     started = _utc_now_iso()
     try:
         summary = _sweep_jobs(
@@ -10671,6 +10667,7 @@ def jobs_metrics(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.DynamicObjectResponse:
     _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
+    _require_admin_ip_allowlist(request)
     if sla_seconds <= 0:
         raise HTTPException(status_code=422, detail="sla_seconds must be > 0.")
     return JSONResponse(content=_jobs_metrics(sla_seconds=sla_seconds))
@@ -10688,6 +10685,7 @@ def jobs_slo(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.DynamicObjectResponse:
     _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
+    _require_admin_ip_allowlist(request)
     if sla_seconds <= 0:
         raise HTTPException(status_code=422, detail="sla_seconds must be > 0.")
     metrics = _jobs_metrics(sla_seconds=sla_seconds)
@@ -10710,6 +10708,7 @@ def payments_reconcile_preview(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.DynamicObjectResponse:
     _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
+    _require_admin_ip_allowlist(request)
     if max_mismatches <= 0:
         raise HTTPException(status_code=422, detail="max_mismatches must be > 0.")
     summary = payments.compute_ledger_invariants(max_mismatches=max_mismatches)
@@ -10729,6 +10728,7 @@ def payments_reconcile_run(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.DynamicObjectResponse:
     _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
+    _require_admin_ip_allowlist(request)
     summary = payments.record_reconciliation_run(max_mismatches=body.max_mismatches)
     return JSONResponse(content=summary, status_code=201)
 
@@ -10745,6 +10745,7 @@ def payments_reconcile_runs(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.DynamicObjectResponse:
     _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
+    _require_admin_ip_allowlist(request)
     if limit <= 0:
         raise HTTPException(status_code=422, detail="limit must be > 0.")
     runs = payments.list_reconciliation_runs(limit=limit)
@@ -10834,7 +10835,8 @@ def wallet_deposit(
     body: DepositRequest,
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.WalletDepositResponse:
-    _require_scope(caller, "caller")
+    _require_scope(caller, "admin")
+    _require_admin_ip_allowlist(request)
     wallet = payments.get_wallet(body.wallet_id)
     if wallet is None:
         raise HTTPException(status_code=404, detail=f"Wallet '{body.wallet_id}' not found.")
@@ -11308,6 +11310,7 @@ def create_topup_session(
     summary="Stripe webhook receiver — credits wallet on successful checkout.",
     include_in_schema=False,
 )
+@limiter.limit("300/minute")
 async def stripe_webhook(request: Request) -> JSONResponse:
     if not _STRIPE_AVAILABLE or not _STRIPE_SECRET_KEY or not _STRIPE_WEBHOOK_SECRET:
         raise HTTPException(status_code=503, detail="Stripe not configured.")

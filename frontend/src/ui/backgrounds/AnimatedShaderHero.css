@@ -19,7 +19,7 @@
   inset: 0;
   background:
     radial-gradient(circle at 9% 20%, color-mix(in oklab, var(--info) 4%, transparent), transparent 30%),
-    radial-gradient(circle at 50% 80%, color-mix(in oklab, var(--violet) 3%, transparent), transparent 36%),
+    radial-gradient(circle at 50% 80%, color-mix(in oklab, var(--accent) 3%, transparent), transparent 36%),
     linear-gradient(
       180deg,
       color-mix(in oklab, var(--canvas) 3%, transparent) 0%,
@@ -51,7 +51,7 @@
 .animated-shader-hero--dark .animated-shader-hero__veil {
   background:
     radial-gradient(circle at 13% 22%, color-mix(in oklab, var(--info) 18%, transparent), transparent 44%),
-    radial-gradient(circle at 55% 80%, color-mix(in oklab, var(--violet) 14%, transparent), transparent 48%),
+    radial-gradient(circle at 55% 80%, color-mix(in oklab, var(--accent) 14%, transparent), transparent 48%),
     linear-gradient(
       180deg,
       color-mix(in oklab, var(--canvas) 18%, transparent) 0%,

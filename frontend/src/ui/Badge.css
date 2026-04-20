@@ -27,7 +27,7 @@
 .badge--warn     { background: var(--warn-bg);     color: var(--warn);     border-color: var(--warn-border); }
 .badge--info     { background: var(--info-bg);     color: var(--info);     border-color: var(--info-border); }
 .badge--accent   { background: var(--accent-bg);   color: var(--accent);   border-color: var(--accent-border); }
-.badge--violet   { background: var(--violet-bg);   color: var(--violet);   border-color: var(--violet-border); }
+.badge--violet   { background: var(--accent-bg);   color: var(--accent);   border-color: var(--accent-border); }
 
 .badge--pulse .badge__dot {
   animation: badge-pulse 1.4s ease-in-out infinite;

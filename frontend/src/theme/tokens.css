@@ -89,11 +89,6 @@
   --text-muted:     #98928A;
   --text-inverse:   #FAF8F3;
 
-  /* Legacy violet — kept for backward compat */
-  --violet:        #8B7235;
-  --violet-bg:     rgba(139, 114, 53, 0.08);
-  --violet-border: rgba(139, 114, 53, 0.2);
-
   /* Mineral gold accent */
   --accent:        #8B7235;
   --accent-hover:  #9B8245;
@@ -166,11 +161,6 @@
   --text-secondary: #A3B6D7;
   --text-muted:     #6D84AA;
   --text-inverse:   #070B14;
-
-  /* Legacy violet — kept for backward compat */
-  --violet:        #8FA2FF;
-  --violet-bg:     rgba(143, 162, 255, 0.14);
-  --violet-border: rgba(143, 162, 255, 0.34);
 
   /* Cool electric accent */
   --accent:        #61ADFF;

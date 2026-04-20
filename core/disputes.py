@@ -146,6 +146,19 @@ def create_dispute(
     normalized_reason = str(reason or "").strip()
     if not normalized_reason:
         raise ValueError("reason must be a non-empty string.")
+
+    # Enforce that the filer is actually a party to the job, regardless of call site.
+    with _conn() as _check_conn:
+        job_row = _check_conn.execute(
+            "SELECT caller_owner_id, agent_owner_id FROM jobs WHERE job_id = ?",
+            (job_id,),
+        ).fetchone()
+    if job_row is None:
+        raise ValueError(f"Job '{job_id}' not found.")
+    parties = {job_row["caller_owner_id"], job_row["agent_owner_id"]}
+    if str(filed_by_owner_id).strip() not in parties:
+        raise PermissionError("Only a party to the job may file a dispute.")
+
     dispute_id = str(uuid.uuid4())
     now = _now()
     normalized_filing_deposit = int(filing_deposit_cents)

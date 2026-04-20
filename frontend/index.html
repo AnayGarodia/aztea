@@ -17,7 +17,7 @@
     <script>
       // Prevent FOUC: apply saved theme before first paint
       try {
-        const saved = localStorage.getItem('aztea_theme') || localStorage.getItem('agentmarket_theme')
+        const saved = localStorage.getItem('aztea_theme')
         const sys = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
         document.documentElement.setAttribute('data-theme', saved || sys)
       } catch(_) {}
