@@ -32,7 +32,7 @@ if __name__ != "__main__":
 
 HOST     = os.environ.get("SERVER_BASE_URL", "http://localhost:8000")
 KEY      = os.environ.get("API_KEY", "")
-AGENT_ID = "00000000-0000-0000-0000-000000000001"
+AGENT_ID = "b7741251-d7ac-5423-b57d-8e12cd80885f"  # Financial Research Agent
 
 HEADERS = {
     "Content-Type": "application/json",

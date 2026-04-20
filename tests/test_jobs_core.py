@@ -859,6 +859,18 @@ def test_terminal_status_updates_are_idempotent_after_completion(isolated_jobs_d
             "note",
             None,
         ),
+        (
+            {
+                "type": "agent_message",
+                "payload": {
+                    "channel": "rendering",
+                    "body": {"request": "generate-stl"},
+                    "to_id": "agent:cad-specialist",
+                },
+            },
+            "agent_message",
+            None,
+        ),
     ],
 )
 def test_parse_typed_job_message_accepts_all_supported_types(
@@ -883,6 +895,7 @@ def test_parse_typed_job_message_accepts_all_supported_types(
             "type": "artifact",
             "payload": {"name": "n", "mime": "m", "url_or_base64": "u", "size_bytes": -1},
         },
+        {"type": "agent_message", "payload": {"channel": " ", "body": {"ok": True}}},
         {"type": "tool_call", "payload": {"tool_name": " ", "args": {}}},
         {"type": "tool_result", "payload": {"payload": {"ok": True}}},
         {"type": "note", "payload": {"text": " "}},
@@ -1082,6 +1095,59 @@ def test_tool_call_correlation_helpers_and_tool_result_reference_checks(isolated
     )
     assert tool_result["correlation_id"] == "corr-1"
     assert jobs.message_correlation_exists(job["job_id"], "corr-1", msg_type="tool_result")
+
+
+def test_get_messages_supports_type_sender_and_channel_filters(isolated_jobs_db):
+    _init_jobs_db()
+    job = _create_job(agent_owner_id="worker:filters")
+    claimed = jobs.claim_job(job["job_id"], claim_owner_id="worker:filters", lease_seconds=60)
+    assert claimed is not None
+
+    jobs.add_message(
+        job["job_id"],
+        from_id="worker:filters",
+        msg_type="progress",
+        payload={"percent": 10, "note": "starting"},
+        lease_seconds=60,
+    )
+    cad_1 = jobs.add_message(
+        job["job_id"],
+        from_id="worker:filters",
+        msg_type="agent_message",
+        payload={"channel": "cad", "body": {"phase": "draft"}, "to_id": "agent:cad-specialist"},
+        lease_seconds=60,
+    )
+    jobs.add_message(
+        job["job_id"],
+        from_id="worker:filters",
+        msg_type="agent_message",
+        payload={"channel": "video", "body": {"phase": "render"}, "to_id": "agent:video-specialist"},
+        lease_seconds=60,
+    )
+    cad_2 = jobs.add_message(
+        job["job_id"],
+        from_id="worker:filters",
+        msg_type="agent_message",
+        payload={"channel": "cad", "body": {"phase": "final"}, "to_id": "agent:cad-specialist"},
+        lease_seconds=60,
+    )
+
+    filtered = jobs.get_messages(
+        job["job_id"],
+        msg_type="agent_message",
+        from_id="worker:filters",
+        channel="cad",
+        to_id="agent:cad-specialist",
+    )
+    assert [item["message_id"] for item in filtered] == [cad_1["message_id"], cad_2["message_id"]]
+
+    since_filtered = jobs.get_messages(
+        job["job_id"],
+        since_id=cad_1["message_id"],
+        msg_type="agent_message",
+        channel="cad",
+    )
+    assert [item["message_id"] for item in since_filtered] == [cad_2["message_id"]]
 
 
 def test_init_jobs_db_migrates_job_messages_for_correlation_id(isolated_jobs_db):

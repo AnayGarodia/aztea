@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect, useCallback } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { motion } from 'motion/react'
+import { motion, AnimatePresence } from 'motion/react'
 import Topbar from '../layout/Topbar'
 import Card from '../ui/Card'
 import Button from '../ui/Button'
@@ -13,9 +13,9 @@ import { getAgentColor } from '../brand/sigilTraits'
 import AgentInputForm from '../features/agents/AgentInputForm'
 import ResultRenderer from '../features/agents/results/ResultRenderer'
 import TrustGauge from '../features/agents/TrustGauge'
-import { callAgent, createJob } from '../api'
+import { callAgent, createJob, fetchAgentWorkHistory } from '../api'
 import { useMarket } from '../context/MarketContext'
-import { ArrowLeft, ArrowUpRight, AlertTriangle, Zap, Clock, BarChart2, Shield } from 'lucide-react'
+import { ArrowLeft, ArrowUpRight, AlertTriangle, Zap, Clock, BarChart2, Shield, ChevronDown, ChevronUp, BookOpen, Lock } from 'lucide-react'
 import ModelBadge from '../components/ModelBadge'
 import './AgentDetailPage.css'
 
@@ -36,8 +36,37 @@ export default function AgentDetailPage() {
   const [invokeLoading, setInvokeLoading] = useState(false)
   const [result, setResult] = useState(null)
   const [jobInfo, setJobInfo] = useState(null)
+  const [workHistory, setWorkHistory] = useState(null)
+  const [workHistoryLoading, setWorkHistoryLoading] = useState(false)
+  const [workHistoryOffset, setWorkHistoryOffset] = useState(0)
+  const [workHistoryTotal, setWorkHistoryTotal] = useState(0)
+  const [expandedExample, setExpandedExample] = useState(null)
 
   const agent = useMemo(() => agents.find(a => a.agent_id === id), [agents, id])
+
+  const loadWorkHistory = useCallback(async (offset = 0) => {
+    if (!agent || !apiKey) return
+    setWorkHistoryLoading(true)
+    try {
+      const data = await fetchAgentWorkHistory(apiKey, agent.agent_id, { limit: 10, offset })
+      if (offset === 0) {
+        setWorkHistory(data?.items ?? [])
+      } else {
+        setWorkHistory(prev => [...(prev ?? []), ...(data?.items ?? [])])
+      }
+      setWorkHistoryTotal(data?.total ?? 0)
+      setWorkHistoryOffset(offset)
+    } catch {
+      // non-fatal
+    } finally {
+      setWorkHistoryLoading(false)
+    }
+  }, [agent, apiKey])
+
+  useEffect(() => {
+    if (agent) loadWorkHistory(0)
+  }, [agent?.agent_id]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const accentColor = agent ? getAgentColor(agent.agent_id) : null
   const priceCents = agent ? Math.round((agent.price_per_call_usd ?? 0) * 100) : 0
   const balanceCents = wallet?.balance_cents ?? 0
@@ -47,22 +76,23 @@ export default function AgentDetailPage() {
   const successPct = agent?.success_rate != null ? Math.round(agent.success_rate * 100) : null
   const highDispute = typeof agent?.dispute_rate === 'number' && agent.dispute_rate > 0.10
 
-  const handleInvoke = async (payload) => {
+  const handleInvoke = async (payload, { privateTask = false } = {}) => {
     if (!agent) return
     setInvokeLoading(true)
     setResult(null)
     setJobInfo(null)
     try {
       if (mode === 'async') {
-        const job = await createJob(apiKey, agent.agent_id, payload, 3)
+        const job = await createJob(apiKey, agent.agent_id, payload, 3, { privateTask })
         setJobInfo({ jobId: job.job_id, status: job.status })
         showToast?.(`Job queued — ${job.job_id.slice(0, 8)}`, 'success')
         await refreshJobs?.()
         return
       }
-      const response = await callAgent(apiKey, agent.agent_id, payload)
+      const response = await callAgent(apiKey, agent.agent_id, payload, { privateTask })
       setResult(response.body)
       if (!response.ok) showToast?.(`Call failed (${response.status})`, 'error')
+      else if (!privateTask) setTimeout(() => loadWorkHistory(0), 1500)
     } catch (err) {
       showToast?.(err?.message ?? 'Invoke failed', 'error')
     } finally {
@@ -298,29 +328,133 @@ export default function AgentDetailPage() {
             </Card>
           </Reveal>
 
-          {/* Output examples */}
-          {outputExamples.length > 0 && (
+          {/* Work Portfolio */}
+          {(workHistory !== null || workHistoryLoading) && (
             <Reveal delay={0.2}>
               <Card>
                 <Card.Header>
-                  <span className="agent-detail__section-title">Output examples</span>
+                  <div className="agent-detail__portfolio-header">
+                    <span className="agent-detail__section-title">
+                      <BookOpen size={14} strokeWidth={2} />
+                      Work portfolio
+                    </span>
+                    {workHistoryTotal > 0 && (
+                      <span className="agent-detail__portfolio-count">{workHistoryTotal} example{workHistoryTotal !== 1 ? 's' : ''}</span>
+                    )}
+                  </div>
                 </Card.Header>
                 <Card.Body>
-                  <div className="agent-detail__examples">
-                    {outputExamples.map((example, i) => (
-                      <div key={`${agent.agent_id}-example-${i}`} className="agent-detail__example">
-                        <p className="agent-detail__example-title">Example {i + 1}</p>
-                        <div className="agent-detail__example-block">
-                          <span>Input</span>
-                          <pre>{JSON.stringify(example?.input ?? {}, null, 2)}</pre>
-                        </div>
-                        <div className="agent-detail__example-block">
-                          <span>Output</span>
-                          <pre>{JSON.stringify(example?.output ?? {}, null, 2)}</pre>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                  {workHistoryLoading && !workHistory && (
+                    <div className="agent-detail__portfolio-loading">Loading work history…</div>
+                  )}
+                  {workHistory?.length === 0 && !workHistoryLoading && (
+                    <div className="agent-detail__portfolio-empty">
+                      No public work examples yet. Invoke this agent to generate examples.
+                    </div>
+                  )}
+                  {(workHistory ?? []).length > 0 && (
+                    <div className="agent-detail__portfolio-list">
+                      {(workHistory ?? []).map((ex, i) => {
+                        const key = ex.job_id ?? `${agent.agent_id}-ex-${i}`
+                        const isExpanded = expandedExample === key
+                        const rating = ex.rating ?? null
+                        const qualityScore = ex.quality_score ?? null
+                        const latency = ex.latency_ms != null ? `${Math.round(ex.latency_ms)}ms` : null
+                        const ts = ex.created_at ? new Date(ex.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : null
+                        return (
+                          <div key={key} className={`agent-detail__portfolio-item${isExpanded ? ' agent-detail__portfolio-item--open' : ''}`}>
+                            <button
+                              className="agent-detail__portfolio-item-head"
+                              onClick={() => setExpandedExample(isExpanded ? null : key)}
+                              type="button"
+                            >
+                              <div className="agent-detail__portfolio-item-meta">
+                                {ts && <span className="agent-detail__portfolio-ts">{ts}</span>}
+                                {latency && <span className="agent-detail__portfolio-chip">{latency}</span>}
+                                {qualityScore != null && (
+                                  <span className="agent-detail__portfolio-chip agent-detail__portfolio-chip--quality">
+                                    Q{qualityScore}/5
+                                  </span>
+                                )}
+                                {rating != null && (
+                                  <span className="agent-detail__portfolio-chip agent-detail__portfolio-chip--rating">
+                                    {'★'.repeat(rating)}{'☆'.repeat(5 - rating)}
+                                  </span>
+                                )}
+                                {ex.model_provider && (
+                                  <ModelBadge provider={ex.model_provider} modelId={ex.model_id} size="xs" />
+                                )}
+                              </div>
+                              <span className="agent-detail__portfolio-toggle">
+                                {isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                              </span>
+                            </button>
+                            <AnimatePresence>
+                              {isExpanded && (
+                                <motion.div
+                                  className="agent-detail__portfolio-body"
+                                  initial={{ height: 0, opacity: 0 }}
+                                  animate={{ height: 'auto', opacity: 1 }}
+                                  exit={{ height: 0, opacity: 0 }}
+                                  transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+                                >
+                                  {ex.input && (
+                                    <div className="agent-detail__portfolio-block">
+                                      <span className="agent-detail__portfolio-block-label">Input</span>
+                                      <pre className="agent-detail__portfolio-pre">
+                                        {JSON.stringify(ex.input, null, 2)}
+                                      </pre>
+                                    </div>
+                                  )}
+                                  {ex.output && (
+                                    <div className="agent-detail__portfolio-block">
+                                      <span className="agent-detail__portfolio-block-label">Output</span>
+                                      <div className="agent-detail__portfolio-output">
+                                        <ResultRenderer result={ex.output} agent={agent} />
+                                      </div>
+                                    </div>
+                                  )}
+                                  {Array.isArray(ex.artifacts) && ex.artifacts.length > 0 && (
+                                    <div className="agent-detail__portfolio-block">
+                                      <span className="agent-detail__portfolio-block-label">Artifacts</span>
+                                      <div className="agent-detail__portfolio-artifacts">
+                                        {ex.artifacts.map((a, ai) => (
+                                          <a
+                                            key={ai}
+                                            className="agent-detail__portfolio-artifact"
+                                            href={a.url_or_base64?.startsWith('http') ? a.url_or_base64 : undefined}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                          >
+                                            <span>{a.name ?? a.mime ?? 'artifact'}</span>
+                                            {a.size_bytes != null && (
+                                              <span className="agent-detail__portfolio-artifact-size">
+                                                {(a.size_bytes / 1024).toFixed(1)}KB
+                                              </span>
+                                            )}
+                                          </a>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                </motion.div>
+                              )}
+                            </AnimatePresence>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                  {workHistory && workHistory.length < workHistoryTotal && (
+                    <button
+                      className="agent-detail__portfolio-more"
+                      onClick={() => loadWorkHistory(workHistoryOffset + 10)}
+                      disabled={workHistoryLoading}
+                      type="button"
+                    >
+                      {workHistoryLoading ? 'Loading…' : `Load more (${workHistoryTotal - workHistory.length} remaining)`}
+                    </button>
+                  )}
                 </Card.Body>
               </Card>
             </Reveal>

@@ -52,7 +52,7 @@ if _SENTRY_DSN:
     except Exception as _sentry_exc:
         logging.warning("Sentry init failed: %s", _sentry_exc)
 
-from fastapi import Body, Depends, FastAPI, HTTPException, Request
+from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -67,6 +67,8 @@ from agents import codereview as agent_codereview
 from agents import cve_lookup as agent_cve_lookup
 from agents import datainsights as agent_datainsights
 from agents import dependency_scanner as agent_dependency_scanner
+from agents import healthcare_expert as agent_healthcare_expert
+from agents import image_generator as agent_image_generator
 from agents import incident_response as agent_incident_response
 from agents import negotiation as agent_negotiation
 from agents import portfolio as agent_portfolio
@@ -77,7 +79,11 @@ from agents import sqlbuilder as agent_sqlbuilder
 from agents import static_analysis as agent_static_analysis
 from agents import system_design as agent_system_design
 from agents import textintel as agent_textintel
+from agents import video_storyboard as agent_video_storyboard
 from agents import wiki as agent_wiki
+from agents import arxiv_research as agent_arxiv_research
+from agents import python_executor as agent_python_executor
+from agents import web_researcher as agent_web_researcher
 from core import auth as _auth
 from core import onboarding
 from core import payments
@@ -237,25 +243,31 @@ except ImportError:
     _STRIPE_AVAILABLE = False
 
 # Deterministic UUIDs for built-in agents
-_FINANCIAL_AGENT_ID   = "00000000-0000-0000-0000-000000000001"
-_CODEREVIEW_AGENT_ID  = "00000000-0000-0000-0000-000000000002"
-_TEXTINTEL_AGENT_ID   = "00000000-0000-0000-0000-000000000003"
-_WIKI_AGENT_ID        = "00000000-0000-0000-0000-000000000004"
-_NEGOTIATION_AGENT_ID = "00000000-0000-0000-0000-000000000005"
-_SCENARIO_AGENT_ID    = "00000000-0000-0000-0000-000000000006"
-_PRODUCT_AGENT_ID     = "00000000-0000-0000-0000-000000000007"
-_PORTFOLIO_AGENT_ID   = "00000000-0000-0000-0000-000000000008"
-_RESUME_AGENT_ID      = "00000000-0000-0000-0000-000000000009"
-_SQLBUILDER_AGENT_ID  = "00000000-0000-0000-0000-000000000010"
-_DATAINSIGHTS_AGENT_ID = "00000000-0000-0000-0000-000000000011"
-_EMAILWRITER_AGENT_ID  = "00000000-0000-0000-0000-000000000012"
-_SECRETS_AGENT_ID      = "00000000-0000-0000-0000-000000000013"
-_STATICANALYSIS_AGENT_ID = "00000000-0000-0000-0000-000000000014"
-_DEPSCANNER_AGENT_ID   = "00000000-0000-0000-0000-000000000015"
-_CVELOOKUP_AGENT_ID    = "00000000-0000-0000-0000-000000000016"
-_QUALITY_JUDGE_AGENT_ID = "00000000-0000-0000-0000-000000000017"
-_SYSTEM_DESIGN_AGENT_ID = "00000000-0000-0000-0000-000000000018"
-_INCIDENT_RESPONSE_AGENT_ID = "00000000-0000-0000-0000-000000000019"
+_FINANCIAL_AGENT_ID        = "b7741251-d7ac-5423-b57d-8e12cd80885f"
+_CODEREVIEW_AGENT_ID       = "8cea848f-a165-5d6c-b1a0-7d14fff77d14"
+_TEXTINTEL_AGENT_ID        = "3daebf56-1873-5e7c-ba4f-7e69c51aefac"
+_WIKI_AGENT_ID             = "9a175aa2-8ffd-52f7-aae0-5a33fc88db83"
+_NEGOTIATION_AGENT_ID      = "39b2867f-4910-5b5b-9492-bbb3f4ae4a06"
+_SCENARIO_AGENT_ID         = "d2e672ae-2a2e-52f9-8e60-10a644ba49bb"
+_PRODUCT_AGENT_ID          = "6dd1d7ff-d838-5d35-b633-da89602fea7e"
+_PORTFOLIO_AGENT_ID        = "4fa63abf-fea3-513b-9203-bc09ff668a44"
+_RESUME_AGENT_ID           = "17076c9b-ae5c-534d-9054-705fc9afc4b3"
+_SQLBUILDER_AGENT_ID       = "b1de8c04-f82c-506c-9305-d67dfaea2e4f"
+_DATAINSIGHTS_AGENT_ID     = "51214278-5a31-5de8-8514-5a2c07ccfa4d"
+_EMAILWRITER_AGENT_ID      = "07891578-d49e-54b2-9297-db4a453f1fbb"
+_SECRETS_AGENT_ID          = "b52b13ea-d7f7-5030-89b7-eed22dc0a9fa"
+_STATICANALYSIS_AGENT_ID   = "e2b69985-1f53-5ae3-aba6-df38d5f024da"
+_DEPSCANNER_AGENT_ID       = "9adba8e2-fa19-5160-9e67-143e0811ba91"
+_CVELOOKUP_AGENT_ID        = "a3e239dd-ea92-556b-9c95-0a213a3daf59"
+_QUALITY_JUDGE_AGENT_ID    = "9cf0d9d0-4a10-58c9-b97a-6b5f81b1cf33"
+_SYSTEM_DESIGN_AGENT_ID    = "eda2e80c-78a1-5a94-ae2b-e450858a7efa"
+_INCIDENT_RESPONSE_AGENT_ID = "5cceca4c-85f2-5b2d-bc06-3b352aaf0c33"
+_HEALTHCARE_EXPERT_AGENT_ID = "40d9012b-f611-502f-a73b-ef631efed163"
+_IMAGE_GENERATOR_AGENT_ID  = "4fb167bd-b474-5ea5-bd5c-8976dfe799ae"
+_VIDEO_STORYBOARD_AGENT_ID = "c12994de-cde9-514a-9c07-a3833b25bb1f"
+_ARXIV_RESEARCH_AGENT_ID   = "9e673f6e-9115-516f-b41b-5af8bcbf15bd"
+_PYTHON_EXECUTOR_AGENT_ID  = "040dc3f5-afe7-5db7-b253-4936090cc7af"
+_WEB_RESEARCHER_AGENT_ID   = "32cd7b5c-44d0-5259-bb02-1bbc612e92d7"
 
 def _normalize_endpoint_ref(value: str | None) -> str:
     return str(value or "").strip().rstrip("/")
@@ -279,6 +291,12 @@ _BUILTIN_INTERNAL_ENDPOINTS = {
     _CVELOOKUP_AGENT_ID: "internal://cve-lookup",
     _SYSTEM_DESIGN_AGENT_ID: "internal://system-design-reviewer",
     _INCIDENT_RESPONSE_AGENT_ID: "internal://incident-response-commander",
+    _HEALTHCARE_EXPERT_AGENT_ID: "internal://healthcare-expert",
+    _IMAGE_GENERATOR_AGENT_ID: "internal://image-generator",
+    _VIDEO_STORYBOARD_AGENT_ID: "internal://video-storyboard-generator",
+    _ARXIV_RESEARCH_AGENT_ID:  "internal://arxiv-research",
+    _PYTHON_EXECUTOR_AGENT_ID: "internal://python-executor",
+    _WEB_RESEARCHER_AGENT_ID:  "internal://web-researcher",
 }
 _BUILTIN_LEGACY_ROUTE_ENDPOINTS = {
     _FINANCIAL_AGENT_ID: f"{_SERVER_BASE_URL}/agents/financial",
@@ -298,6 +316,12 @@ _BUILTIN_LEGACY_ROUTE_ENDPOINTS = {
     _CVELOOKUP_AGENT_ID: f"{_SERVER_BASE_URL}/agents/cve-lookup",
     _SYSTEM_DESIGN_AGENT_ID: f"{_SERVER_BASE_URL}/agents/system-design-reviewer",
     _INCIDENT_RESPONSE_AGENT_ID: f"{_SERVER_BASE_URL}/agents/incident-response-commander",
+    _HEALTHCARE_EXPERT_AGENT_ID: f"{_SERVER_BASE_URL}/agents/healthcare-expert",
+    _IMAGE_GENERATOR_AGENT_ID: f"{_SERVER_BASE_URL}/agents/image-generator",
+    _VIDEO_STORYBOARD_AGENT_ID: f"{_SERVER_BASE_URL}/agents/video-storyboard-generator",
+    _ARXIV_RESEARCH_AGENT_ID:  f"{_SERVER_BASE_URL}/agents/arxiv-research",
+    _PYTHON_EXECUTOR_AGENT_ID: f"{_SERVER_BASE_URL}/agents/python-executor",
+    _WEB_RESEARCHER_AGENT_ID:  f"{_SERVER_BASE_URL}/agents/web-researcher",
 }
 _BUILTIN_ENDPOINT_TO_AGENT_ID: dict[str, str] = {}
 for _agent_id, _endpoint in _BUILTIN_INTERNAL_ENDPOINTS.items():
@@ -307,6 +331,20 @@ for _agent_id, _endpoint in _BUILTIN_INTERNAL_ENDPOINTS.items():
         _BUILTIN_ENDPOINT_TO_AGENT_ID[_normalize_endpoint_ref(_legacy)] = _agent_id
 _BUILTIN_ENDPOINT_TO_AGENT_ID[_normalize_endpoint_ref(f"{_SERVER_BASE_URL}/analyze")] = _FINANCIAL_AGENT_ID
 _BUILTIN_AGENT_IDS = frozenset(_BUILTIN_INTERNAL_ENDPOINTS.keys())
+_CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
+    {
+        # Real tool use — fetch live data, execute code, or call external APIs
+        _FINANCIAL_AGENT_ID,       # SEC EDGAR API
+        _WIKI_AGENT_ID,            # Wikipedia API
+        _CVELOOKUP_AGENT_ID,       # NIST NVD API
+        _ARXIV_RESEARCH_AGENT_ID,  # arXiv API
+        _PYTHON_EXECUTOR_AGENT_ID, # subprocess sandbox
+        _WEB_RESEARCHER_AGENT_ID,  # HTTP fetch + parse
+        _IMAGE_GENERATOR_AGENT_ID, # OpenAI / Replicate API
+        _CODEREVIEW_AGENT_ID,      # structured expert output, high quality prompt
+    }
+)
+_CURATED_BUILTIN_AGENT_IDS = frozenset(set(_CURATED_PUBLIC_BUILTIN_AGENT_IDS) | {_QUALITY_JUDGE_AGENT_ID})
 _BUILTIN_WORKER_OWNER_ID = "system:builtin-worker"
 _SYSTEM_USERNAME = "system"
 _SYSTEM_USER_EMAIL = "system@aztea.internal"
@@ -702,10 +740,23 @@ _TYPED_JOB_MESSAGE_TYPES = {
     "progress",
     "partial_result",
     "artifact",
+    "agent_message",
     "note",
     "tool_call",
     "tool_result",
 }
+_AGENT_WORK_EXAMPLES_MAX = _env_int(
+    "AGENT_WORK_EXAMPLES_MAX",
+    20,
+    minimum=1,
+    maximum=100,
+)
+_AGENT_WORK_EXAMPLE_MAX_STRING_LEN = _env_int(
+    "AGENT_WORK_EXAMPLE_MAX_STRING_LEN",
+    500,
+    minimum=64,
+    maximum=4000,
+)
 
 
 def _usd_to_cents(usd: float) -> int:
@@ -1902,11 +1953,6 @@ def _builtin_agent_specs() -> list[dict[str, Any]]:
             ],
         },
     ]
-    specs = [
-        spec
-        for spec in specs
-        if spec.get("agent_id") not in {_RESUME_AGENT_ID, _EMAILWRITER_AGENT_ID}
-    ]
     specs.extend(
         [
             {
@@ -2030,9 +2076,336 @@ def _builtin_agent_specs() -> list[dict[str, Any]]:
                     }
                 ],
             },
+            {
+                "agent_id": _HEALTHCARE_EXPERT_AGENT_ID,
+                "name": "Healthcare Expert Agent",
+                "description": "Clinical triage copilot for symptom assessment, urgency flags, and clinician-ready visit prep. Educational-only guidance with explicit emergency escalation.",
+                "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_HEALTHCARE_EXPERT_AGENT_ID],
+                "price_per_call_usd": 0.03,
+                "tags": ["healthcare", "triage", "clinical-support", "patient-education"],
+                "input_schema": _output_schema_object(
+                    {
+                        "symptoms": {"type": "array", "items": {"type": "string"}},
+                        "age_years": {"type": "integer", "minimum": 0},
+                        "sex": {"type": "string"},
+                        "medical_history": {"type": "array", "items": {"type": "string"}},
+                        "medications": {"type": "array", "items": {"type": "string"}},
+                        "duration": {"type": "string"},
+                        "urgency_context": {"type": "string"},
+                        "goal": {"type": "string"},
+                    },
+                    required=["symptoms"],
+                ),
+                "output_schema": _output_schema_object(
+                    {
+                        "triage_level": {"type": "string"},
+                        "possible_considerations": {"type": "array", "items": {"type": "object"}},
+                        "red_flags": {"type": "array", "items": {"type": "object"}},
+                        "next_steps": {"type": "array", "items": {"type": "string"}},
+                        "questions_for_clinician": {"type": "array", "items": {"type": "string"}},
+                        "disclaimer": {"type": "string"},
+                    },
+                    required=["triage_level", "next_steps", "disclaimer"],
+                ),
+                "output_examples": [
+                    {
+                        "input": {
+                            "symptoms": ["fever", "sore throat", "fatigue"],
+                            "age_years": 29,
+                            "duration": "2 days",
+                            "medical_history": ["asthma"],
+                        },
+                        "output": {
+                            "triage_level": "primary_care_24h",
+                            "possible_considerations": [
+                                {"condition": "viral upper respiratory infection", "confidence": "medium"}
+                            ],
+                            "red_flags": [
+                                {"flag": "trouble breathing", "why_urgent": "possible respiratory compromise"}
+                            ],
+                            "next_steps": ["Hydrate and rest", "Schedule clinician visit within 24 hours if symptoms persist"],
+                            "questions_for_clinician": ["Should I adjust asthma meds while sick?"],
+                            "disclaimer": "Educational guidance only, not a diagnosis or treatment plan.",
+                        },
+                    }
+                ],
+            },
+            {
+                "agent_id": _IMAGE_GENERATOR_AGENT_ID,
+                "name": "Image Generator Agent",
+                "description": "Generates production image artifacts with real model backends (OpenAI gpt-image-1 or configured Replicate model), with optional reference-image guidance.",
+                "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_IMAGE_GENERATOR_AGENT_ID],
+                "price_per_call_usd": 0.02,
+                "tags": ["image-generation", "creative", "multimodal", "design"],
+                "input_schema": _output_schema_object(
+                    {
+                        "prompt": {"type": "string"},
+                        "style": {"type": "string"},
+                        "width": {"type": "integer"},
+                        "height": {"type": "integer"},
+                        "output_format": {"type": "string"},
+                        "input_images": {"type": "array", "items": {"type": "object"}},
+                    },
+                    required=["prompt"],
+                ),
+                "output_schema": _output_schema_object(
+                    {
+                        "summary": {"type": "string"},
+                        "generation_prompt": {"type": "string"},
+                        "artifacts": {"type": "array", "items": {"type": "object"}},
+                        "input_images_used": {"type": "integer"},
+                        "warnings": {"type": "array", "items": {"type": "string"}},
+                    },
+                    required=["summary", "artifacts"],
+                ),
+                "output_examples": [
+                    {
+                        "input": {
+                            "prompt": "A retro-futurist skyline at sunrise, cinematic lighting",
+                            "style": "synthwave",
+                            "width": 1024,
+                            "height": 1024,
+                        },
+                        "output": {
+                            "summary": "Generated one image artifact using a live model backend.",
+                            "generation_prompt": "A retro-futurist skyline at sunrise, cinematic lighting",
+                            "artifacts": [
+                                {
+                                    "name": "generated.png",
+                                    "mime": "image/png",
+                                    "url_or_base64": "data:image/png;base64,...",
+                                    "size_bytes": 245801,
+                                }
+                            ],
+                            "input_images_used": 0,
+                            "warnings": [],
+                        },
+                    }
+                ],
+            },
+            {
+                "agent_id": _VIDEO_STORYBOARD_AGENT_ID,
+                "name": "Video Storyboard Generator Agent",
+                "description": "Turns a creative brief into production-ready shot plans and generates an actual video artifact through a configured video model backend.",
+                "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_VIDEO_STORYBOARD_AGENT_ID],
+                "price_per_call_usd": 0.03,
+                "tags": ["video-generation", "storyboarding", "multimodal", "creative"],
+                "input_schema": _output_schema_object(
+                    {
+                        "brief": {"type": "string"},
+                        "duration_seconds": {"type": "integer"},
+                        "aspect_ratio": {"type": "string"},
+                        "style": {"type": "string"},
+                        "reference_images": {"type": "array", "items": {"type": "object"}},
+                    },
+                    required=["brief"],
+                ),
+                "output_schema": _output_schema_object(
+                    {
+                        "title": {"type": "string"},
+                        "duration_seconds": {"type": "integer"},
+                        "aspect_ratio": {"type": "string"},
+                        "style": {"type": "string"},
+                        "shot_plan": {"type": "array", "items": {"type": "object"}},
+                        "voiceover_script": {"type": "string"},
+                        "render_recipe": {"type": "object"},
+                        "artifacts": {"type": "array", "items": {"type": "object"}},
+                    },
+                    required=["title", "shot_plan", "voiceover_script", "artifacts"],
+                ),
+                "output_examples": [
+                    {
+                        "input": {
+                            "brief": "Launch teaser for an AI healthcare assistant for busy parents.",
+                            "duration_seconds": 30,
+                            "aspect_ratio": "16:9",
+                            "style": "clean cinematic",
+                        },
+                        "output": {
+                            "title": "Launch teaser: AI healthcare assistant for busy parents",
+                            "duration_seconds": 30,
+                            "aspect_ratio": "16:9",
+                            "style": "clean cinematic",
+                            "shot_plan": [
+                                {
+                                    "shot_id": 1,
+                                    "start_second": 0,
+                                    "end_second": 6,
+                                    "visual_prompt": "Morning rush at home, parent checking phone for care guidance",
+                                }
+                            ],
+                            "voiceover_script": "When every minute matters, trusted care guidance should be one tap away.",
+                            "render_recipe": {"target_fps": 24, "color_profile": "rec709", "provider": "replicate"},
+                            "artifacts": [
+                                {
+                                    "name": "generated.mp4",
+                                    "mime": "video/mp4",
+                                    "url_or_base64": "https://cdn.example.com/generated.mp4",
+                                    "size_bytes": 0,
+                                }
+                            ],
+                        },
+                    }
+                ],
+            },
+        {
+            "agent_id": _ARXIV_RESEARCH_AGENT_ID,
+            "name": "arXiv Research Agent",
+            "description": "Search real academic papers on arXiv and get an expert synthesis: key themes, seminal works, open questions, and suggested follow-ups. Pulls live data from arXiv.org — not LLM hallucinations.",
+            "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_ARXIV_RESEARCH_AGENT_ID],
+            "price_per_call_usd": 0.01,
+            "tags": ["research", "academic", "arxiv", "papers", "science"],
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query (keywords, author name, topic)", "example": "diffusion models image generation"},
+                    "max_results": {"type": "integer", "default": 8, "minimum": 1, "maximum": 20, "description": "Number of papers to fetch"},
+                    "sort_by": {"type": "string", "enum": ["relevance", "lastUpdatedDate", "submittedDate"], "default": "relevance"},
+                    "categories": {"type": "array", "items": {"type": "string"}, "description": "arXiv category filters e.g. cs.AI, stat.ML", "example": ["cs.LG", "cs.AI"]},
+                },
+                "required": ["query"],
+            },
+            "output_schema": _output_schema_object(
+                {
+                    "query": {"type": "string"},
+                    "total_found": {"type": "integer"},
+                    "papers": {"type": "array", "items": {"type": "object"}},
+                    "synthesis": {"type": "string"},
+                    "key_themes": {"type": "array", "items": {"type": "string"}},
+                    "seminal_papers": {"type": "array", "items": {"type": "string"}},
+                    "open_questions": {"type": "array", "items": {"type": "string"}},
+                    "suggested_follow_ups": {"type": "array", "items": {"type": "string"}},
+                },
+                required=["query", "papers", "synthesis"],
+            ),
+            "output_examples": [
+                {
+                    "input": {"query": "transformer attention self-supervised", "max_results": 5},
+                    "output": {
+                        "query": "transformer attention self-supervised",
+                        "total_found": 5,
+                        "papers": [
+                            {
+                                "arxiv_id": "2010.11929",
+                                "title": "An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale",
+                                "authors": ["Alexey Dosovitskiy", "Lucas Beyer"],
+                                "abstract": "While the Transformer architecture has become the de-facto standard for NLP tasks, its applications to computer vision remain limited...",
+                                "categories": ["cs.CV"],
+                                "published": "2020-10-22",
+                                "updated": "2021-06-03",
+                                "pdf_url": "https://arxiv.org/pdf/2010.11929",
+                                "abstract_url": "https://arxiv.org/abs/2010.11929",
+                            }
+                        ],
+                        "synthesis": "The literature shows a clear convergence on attention mechanisms replacing convolutional backbones for vision tasks, with self-supervised pre-training bridging the gap between label-efficient and high-performance models.",
+                        "key_themes": ["vision transformers", "self-supervised pre-training", "attention at scale"],
+                        "seminal_papers": ["2010.11929"],
+                        "open_questions": ["Can attention fully replace inductive biases from CNNs?", "Scaling limits of self-supervised vision models"],
+                        "suggested_follow_ups": ["masked autoencoders MAE", "CLIP vision language pretraining"],
+                    },
+                }
+            ],
+        },
+        {
+            "agent_id": _PYTHON_EXECUTOR_AGENT_ID,
+            "name": "Python Code Executor",
+            "description": "Execute Python code in a sandboxed environment and get stdout, stderr, exit code, execution time, and an expert explanation. Supports math, data manipulation, algorithms, and any pure-Python computation.",
+            "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_PYTHON_EXECUTOR_AGENT_ID],
+            "price_per_call_usd": 0.01,
+            "tags": ["code-execution", "python", "developer-tools", "compute"],
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "code": {"type": "string", "description": "Python code to execute", "example": "print(sum(i**2 for i in range(10)))"},
+                    "stdin": {"type": "string", "default": "", "description": "Optional input data fed to stdin"},
+                    "timeout": {"type": "integer", "default": 10, "minimum": 1, "maximum": 30, "description": "Execution timeout in seconds"},
+                    "explain": {"type": "boolean", "default": True, "description": "Whether to include an expert explanation of the output"},
+                },
+                "required": ["code"],
+            },
+            "output_schema": _output_schema_object(
+                {
+                    "stdout": {"type": "string"},
+                    "stderr": {"type": "string"},
+                    "exit_code": {"type": "integer"},
+                    "timed_out": {"type": "boolean"},
+                    "execution_time_ms": {"type": "integer"},
+                    "explanation": {"type": "string"},
+                    "variables_captured": {"type": "object"},
+                },
+                required=["stdout", "exit_code"],
+            ),
+            "output_examples": [
+                {
+                    "input": {"code": "import math\nresult = [math.factorial(n) for n in range(1, 11)]\nprint(result)", "explain": True},
+                    "output": {
+                        "stdout": "[1, 2, 6, 24, 120, 720, 5040, 40320, 362880, 3628800]\n",
+                        "stderr": "",
+                        "exit_code": 0,
+                        "timed_out": False,
+                        "execution_time_ms": 28,
+                        "explanation": "The code computes factorials 1! through 10! using a list comprehension over math.factorial. Output is correct — factorials grow rapidly and 10! = 3,628,800 as expected.",
+                        "variables_captured": {"result": [1, 2, 6, 24, 120, 720, 5040, 40320, 362880, 3628800]},
+                    },
+                }
+            ],
+        },
+        {
+            "agent_id": _WEB_RESEARCHER_AGENT_ID,
+            "name": "Web Researcher Agent",
+            "description": "Fetch any public URL and return a structured analysis: dense summary, key points, direct answers to your question, verbatim supporting quotes, and extracted links. Reads the actual page — not a cached version.",
+            "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_WEB_RESEARCHER_AGENT_ID],
+            "price_per_call_usd": 0.01,
+            "tags": ["web", "research", "summarization", "content-extraction"],
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "Public URL to fetch and analyze", "example": "https://en.wikipedia.org/wiki/Large_language_model"},
+                    "question": {"type": "string", "default": "", "description": "Specific question to answer from the page content"},
+                    "mode": {"type": "string", "enum": ["summary", "extract", "qa"], "default": "summary", "description": "Analysis mode"},
+                },
+                "required": ["url"],
+            },
+            "output_schema": _output_schema_object(
+                {
+                    "url": {"type": "string"},
+                    "title": {"type": "string"},
+                    "word_count": {"type": "integer"},
+                    "fetched_at": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "key_points": {"type": "array", "items": {"type": "string"}},
+                    "answer": {"type": "string"},
+                    "quotes": {"type": "array", "items": {"type": "string"}},
+                    "links": {"type": "array", "items": {"type": "object"}},
+                    "content_type": {"type": "string"},
+                },
+                required=["url", "summary"],
+            ),
+            "output_examples": [
+                {
+                    "input": {"url": "https://en.wikipedia.org/wiki/Transformer_(machine_learning_model)", "question": "What is the key innovation of transformers?"},
+                    "output": {
+                        "url": "https://en.wikipedia.org/wiki/Transformer_(machine_learning_model)",
+                        "title": "Transformer (machine learning model)",
+                        "word_count": 4200,
+                        "fetched_at": "2026-01-15T10:30:00+00:00",
+                        "summary": "The Transformer is a deep learning architecture introduced in the 2017 paper 'Attention Is All You Need'. It relies entirely on self-attention mechanisms, eliminating recurrence and enabling massive parallelization during training.",
+                        "key_points": [
+                            "Introduced by Vaswani et al. (2017) at Google Brain",
+                            "Self-attention enables O(1) path length between any two tokens",
+                            "Forms the basis of GPT, BERT, and most modern LLMs",
+                        ],
+                        "answer": "The key innovation is replacing recurrence entirely with self-attention, which allows all token positions to attend to each other simultaneously, enabling parallelization and capturing long-range dependencies more effectively.",
+                        "quotes": ["Attention is All You Need", "The model architecture avoids recurrence"],
+                        "links": [{"text": "Attention Is All You Need", "href": "https://arxiv.org/abs/1706.03762"}],
+                        "content_type": "article",
+                    },
+                }
+            ],
+        },
         ]
     )
-    return specs
+    return [spec for spec in specs if spec.get("agent_id") in _CURATED_BUILTIN_AGENT_IDS]
 
 
 def _ensure_system_user() -> str:
@@ -2066,8 +2439,16 @@ def _ensure_system_user() -> str:
 def ensure_builtin_agents_registered() -> None:
     system_user_id = _ensure_system_user()
     system_owner_id = f"user:{system_user_id}"
-    for spec in _builtin_agent_specs():
+    specs = _builtin_agent_specs()
+    managed_ids = {str(spec.get("agent_id") or "").strip() for spec in specs if str(spec.get("agent_id") or "").strip()}
+    now = _utc_now_iso()
+
+    for spec in specs:
         existing = registry.get_agent(spec["agent_id"])
+        output_examples = spec.get("output_examples")
+        output_examples_json = None
+        if isinstance(output_examples, list):
+            output_examples_json = json.dumps([item for item in output_examples if isinstance(item, dict)]) or None
         if existing is None:
             if registry.agent_exists_by_name(spec["name"]):
                 continue
@@ -2076,12 +2457,12 @@ def ensure_builtin_agents_registered() -> None:
                 name=spec["name"],
                 description=spec["description"],
                 endpoint_url=spec["endpoint_url"],
-                price_per_call_usd=0.01,
+                price_per_call_usd=float(spec.get("price_per_call_usd", 0.01)),
                 tags=spec["tags"],
                 input_schema=spec["input_schema"],
                 output_schema=spec["output_schema"],
                 output_verifier_url=None,
-                output_examples=spec.get("output_examples"),
+                output_examples=output_examples,
                 internal_only=bool(spec.get("internal_only", False)),
                 status="active",
                 owner_id=system_owner_id,
@@ -2090,11 +2471,53 @@ def ensure_builtin_agents_registered() -> None:
                 model_id="llama-3.3-70b-versatile",
             )
             continue
-        if spec.get("output_examples"):
-            registry.set_agent_output_examples(
-                spec["agent_id"],
-                spec["output_examples"],
+
+        with registry._conn() as conn:
+            conn.execute(
+                """
+                UPDATE agents
+                SET owner_id = ?,
+                    name = ?,
+                    description = ?,
+                    endpoint_url = ?,
+                    price_per_call_usd = ?,
+                    tags = ?,
+                    input_schema = ?,
+                    output_schema = ?,
+                    output_examples = ?,
+                    internal_only = ?,
+                    status = 'active',
+                    review_status = 'approved',
+                    reviewed_by = ?,
+                    reviewed_at = ?,
+                    model_provider = ?,
+                    model_id = ?
+                WHERE agent_id = ?
+                """,
+                (
+                    system_owner_id,
+                    spec["name"],
+                    spec["description"],
+                    spec["endpoint_url"],
+                    float(spec.get("price_per_call_usd", 0.01)),
+                    json.dumps(spec.get("tags") or []),
+                    json.dumps(spec.get("input_schema") or {}, sort_keys=True),
+                    json.dumps(spec.get("output_schema") or {}, sort_keys=True),
+                    output_examples_json,
+                    1 if bool(spec.get("internal_only", False)) else 0,
+                    _SYSTEM_USERNAME,
+                    now,
+                    "groq",
+                    "llama-3.3-70b-versatile",
+                    spec["agent_id"],
+                ),
             )
+
+    deprecated_ids = _BUILTIN_AGENT_IDS - managed_ids
+    for agent_id in deprecated_ids:
+        stale = registry.get_agent(agent_id, include_unapproved=True)
+        if stale is not None and str(stale.get("status") or "").strip().lower() != "suspended":
+            registry.set_agent_status(agent_id, "suspended")
 
 
 @asynccontextmanager
@@ -3215,6 +3638,336 @@ def _decode_jobs_cursor(cursor: str | None) -> tuple[str, str] | tuple[None, Non
     return created_at, job_id
 
 
+def _normalize_protocol_artifact_list(
+    raw_value: Any,
+    *,
+    field_name: str,
+    strict: bool = True,
+) -> list[dict[str, Any]]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, list):
+        if strict:
+            raise ValueError(f"{field_name} must be an array of artifact objects.")
+        return []
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(raw_value):
+        if not isinstance(item, dict):
+            if strict:
+                raise ValueError(f"{field_name}[{index}] must be an object.")
+            continue
+        artifact = dict(item)
+        name = str(artifact.get("name") or "").strip()
+        mime = str(artifact.get("mime") or "").strip().lower()
+        locator = str(artifact.get("url_or_base64") or "").strip()
+        size_raw = artifact.get("size_bytes")
+        try:
+            size_bytes = int(size_raw)
+        except (TypeError, ValueError):
+            if strict:
+                raise ValueError(f"{field_name}[{index}].size_bytes must be a non-negative integer.")
+            continue
+        if strict and (not name or not mime or not locator or size_bytes < 0):
+            raise ValueError(
+                f"{field_name}[{index}] must include non-empty name/mime/url_or_base64 and non-negative size_bytes."
+            )
+        if not name or not mime or not locator or size_bytes < 0:
+            continue
+        artifact["name"] = name
+        artifact["mime"] = mime
+        artifact["url_or_base64"] = locator
+        artifact["size_bytes"] = size_bytes
+        normalized.append(artifact)
+    return normalized
+
+
+def _normalize_format_preferences(raw_value: Any, *, field_name: str) -> list[str]:
+    if raw_value is None:
+        return []
+    if not isinstance(raw_value, list):
+        raise ValueError(f"{field_name} must be an array of MIME-like format strings.")
+    normalized: list[str] = []
+    for item in raw_value:
+        text = str(item).strip().lower()
+        if text and text not in normalized:
+            normalized.append(text)
+    return normalized
+
+
+def _normalize_protocol_channel(raw_value: Any, *, field_name: str) -> str | None:
+    if raw_value is None:
+        return None
+    text = str(raw_value).strip()
+    if not text:
+        return None
+    if len(text) > 128:
+        raise ValueError(f"{field_name} must be <= 128 characters.")
+    return text
+
+
+def _normalize_protocol_metadata(raw_value: Any, *, field_name: str) -> dict[str, Any]:
+    if raw_value is None:
+        return {}
+    if not isinstance(raw_value, dict):
+        raise ValueError(f"{field_name} must be an object.")
+    return dict(raw_value)
+
+
+def _normalize_optional_bool(raw_value: Any, *, field_name: str) -> bool | None:
+    if raw_value is None:
+        return None
+    if isinstance(raw_value, bool):
+        return raw_value
+    if isinstance(raw_value, str):
+        lowered = raw_value.strip().lower()
+        if not lowered:
+            return None
+        if lowered in {"1", "true", "yes", "y", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "n", "off"}:
+            return False
+    if isinstance(raw_value, (int, float)):
+        if int(raw_value) == 1:
+            return True
+        if int(raw_value) == 0:
+            return False
+    raise ValueError(f"{field_name} must be a boolean.")
+
+
+def _merge_protocol_input_envelope(
+    payload: dict[str, Any],
+    *,
+    input_artifacts: list[dict[str, Any]] | None = None,
+    preferred_input_formats: list[str] | None = None,
+    preferred_output_formats: list[str] | None = None,
+    communication_channel: str | None = None,
+    protocol_metadata: dict[str, Any] | None = None,
+    private_task: bool | None = None,
+) -> dict[str, Any]:
+    updated = dict(payload or {})
+    current_protocol = updated.get("protocol")
+    protocol = dict(current_protocol) if isinstance(current_protocol, dict) else {}
+    if input_artifacts:
+        protocol["input_artifacts"] = list(input_artifacts)
+    if preferred_input_formats:
+        protocol["preferred_input_formats"] = list(preferred_input_formats)
+    if preferred_output_formats:
+        protocol["preferred_output_formats"] = list(preferred_output_formats)
+    if communication_channel:
+        protocol["communication_channel"] = communication_channel
+    if private_task is not None:
+        protocol["private_task"] = bool(private_task)
+    if protocol_metadata:
+        existing_metadata = protocol.get("metadata")
+        merged_metadata = dict(existing_metadata) if isinstance(existing_metadata, dict) else {}
+        merged_metadata.update(protocol_metadata)
+        protocol["metadata"] = merged_metadata
+    if protocol:
+        updated["protocol"] = protocol
+    return updated
+
+
+def _merge_protocol_output_envelope(
+    payload: dict[str, Any],
+    *,
+    output_artifacts: list[dict[str, Any]] | None = None,
+    output_format: str | None = None,
+    protocol_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    updated = dict(payload or {})
+    current_protocol = updated.get("protocol")
+    protocol = dict(current_protocol) if isinstance(current_protocol, dict) else {}
+    if output_artifacts:
+        protocol["output_artifacts"] = list(output_artifacts)
+    if output_format:
+        protocol["output_format"] = output_format
+    if protocol_metadata:
+        existing_metadata = protocol.get("metadata")
+        merged_metadata = dict(existing_metadata) if isinstance(existing_metadata, dict) else {}
+        merged_metadata.update(protocol_metadata)
+        protocol["metadata"] = merged_metadata
+    if protocol:
+        updated["protocol"] = protocol
+    return updated
+
+
+def _normalize_input_protocol_from_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    protocol = payload.get("protocol")
+    if not isinstance(protocol, dict):
+        private_task = _normalize_optional_bool(payload.get("private_task"), field_name="private_task")
+        if private_task is None:
+            return dict(payload), []
+        normalized_payload = _merge_protocol_input_envelope(
+            payload,
+            private_task=private_task,
+        )
+        return normalized_payload, []
+    input_artifacts = _normalize_protocol_artifact_list(
+        protocol.get("input_artifacts"),
+        field_name="protocol.input_artifacts",
+    )
+    preferred_input_formats = _normalize_format_preferences(
+        protocol.get("preferred_input_formats"),
+        field_name="protocol.preferred_input_formats",
+    )
+    preferred_output_formats = _normalize_format_preferences(
+        protocol.get("preferred_output_formats"),
+        field_name="protocol.preferred_output_formats",
+    )
+    communication_channel = _normalize_protocol_channel(
+        protocol.get("communication_channel"),
+        field_name="protocol.communication_channel",
+    )
+    private_task = _normalize_optional_bool(
+        protocol.get("private_task", payload.get("private_task")),
+        field_name="protocol.private_task",
+    )
+    metadata = _normalize_protocol_metadata(protocol.get("metadata"), field_name="protocol.metadata")
+    normalized_payload = _merge_protocol_input_envelope(
+        payload,
+        input_artifacts=input_artifacts,
+        preferred_input_formats=preferred_input_formats,
+        preferred_output_formats=preferred_output_formats,
+        communication_channel=communication_channel,
+        protocol_metadata=metadata,
+        private_task=private_task,
+    )
+    return normalized_payload, preferred_output_formats
+
+
+def _normalize_output_protocol_for_response(
+    response_payload: Any,
+    *,
+    requested_output_formats: list[str] | None = None,
+) -> Any:
+    if not isinstance(response_payload, dict):
+        return response_payload
+    normalized = dict(response_payload)
+    protocol = normalized.get("protocol")
+    protocol_dict = dict(protocol) if isinstance(protocol, dict) else {}
+    artifact_candidates = protocol_dict.get("output_artifacts")
+    if not artifact_candidates:
+        artifact_candidates = normalized.get("artifacts")
+    output_artifacts = _normalize_protocol_artifact_list(
+        artifact_candidates,
+        field_name="protocol.output_artifacts",
+        strict=False,
+    )
+    output_format = str(protocol_dict.get("output_format") or "").strip().lower() or None
+    if output_format is None and output_artifacts:
+        output_format = str(output_artifacts[0].get("mime") or "").strip().lower() or None
+    metadata = _normalize_protocol_metadata(protocol_dict.get("metadata"), field_name="protocol.metadata")
+    if requested_output_formats:
+        metadata.setdefault("requested_output_formats", list(requested_output_formats))
+    return _merge_protocol_output_envelope(
+        normalized,
+        output_artifacts=output_artifacts,
+        output_format=output_format,
+        protocol_metadata=metadata,
+    )
+
+
+def _is_private_task_payload(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    try:
+        private_top_level = _normalize_optional_bool(payload.get("private_task"), field_name="private_task")
+    except ValueError:
+        private_top_level = None
+    if private_top_level is True:
+        return True
+    protocol = payload.get("protocol")
+    if not isinstance(protocol, dict):
+        return False
+    try:
+        private_protocol = _normalize_optional_bool(
+            protocol.get("private_task"),
+            field_name="protocol.private_task",
+        )
+    except ValueError:
+        private_protocol = None
+    return bool(private_protocol)
+
+
+def _truncate_example_value(value: Any) -> Any:
+    if isinstance(value, str):
+        if len(value) <= _AGENT_WORK_EXAMPLE_MAX_STRING_LEN:
+            return value
+        return value[:_AGENT_WORK_EXAMPLE_MAX_STRING_LEN] + "...<truncated>"
+    if isinstance(value, list):
+        return [_truncate_example_value(item) for item in value[:20]]
+    if isinstance(value, dict):
+        truncated: dict[str, Any] = {}
+        for key, item in list(value.items())[:50]:
+            key_text = str(key)
+            if key_text == "url_or_base64" and isinstance(item, str) and item.startswith("data:"):
+                truncated[key_text] = "<inline-data-uri-omitted>"
+                continue
+            truncated[key_text] = _truncate_example_value(item)
+        return truncated
+    return value
+
+
+def _extract_protocol_output_artifacts(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    protocol = payload.get("protocol")
+    protocol_dict = dict(protocol) if isinstance(protocol, dict) else {}
+    artifact_candidates = protocol_dict.get("output_artifacts")
+    if artifact_candidates is None:
+        artifact_candidates = payload.get("artifacts")
+    return _normalize_protocol_artifact_list(
+        artifact_candidates,
+        field_name="output_artifacts",
+        strict=False,
+    )
+
+
+def _record_public_work_example(
+    agent: dict,
+    input_payload: Any,
+    output_payload: Any,
+    *,
+    job_id: str | None = None,
+    latency_ms: float | None = None,
+    quality_score: int | None = None,
+    rating: int | None = None,
+) -> None:
+    if not isinstance(agent, dict):
+        return
+    if _is_private_task_payload(input_payload):
+        return
+    if not isinstance(input_payload, dict) or not isinstance(output_payload, dict):
+        return
+    agent_id = str(agent.get("agent_id") or "").strip()
+    if not agent_id:
+        return
+    artifacts = _extract_protocol_output_artifacts(output_payload)
+    example: dict[str, Any] = {
+        "created_at": _utc_now_iso(),
+        "input": _truncate_example_value(input_payload),
+        "output": _truncate_example_value(output_payload),
+        "model_provider": str(agent.get("model_provider") or "").strip().lower() or None,
+        "model_id": str(agent.get("model_id") or "").strip() or None,
+    }
+    if job_id:
+        example["job_id"] = str(job_id)
+    if latency_ms is not None:
+        example["latency_ms"] = round(float(latency_ms), 1)
+    if quality_score is not None:
+        example["quality_score"] = int(quality_score)
+    if rating is not None:
+        example["rating"] = int(rating)
+    if artifacts:
+        example["artifacts"] = _truncate_example_value(artifacts)
+    try:
+        registry.append_agent_output_example(
+            agent_id,
+            example,
+            max_examples=_AGENT_WORK_EXAMPLES_MAX,
+        )
+    except Exception:
+        _LOG.exception("Failed to append output example for agent %s.", agent_id)
+
+
 def _normalize_job_message_protocol(
     raw_type: str,
     raw_payload: dict,
@@ -3371,6 +4124,28 @@ def _validate_typed_job_message_payload(msg_type: str, payload: dict) -> dict:
         note = str(normalized.get("note") or "").strip()
         if note:
             normalized["note"] = note
+        return normalized
+
+    if msg_type == "agent_message":
+        channel = str(normalized.get("channel") or "").strip()
+        if not channel:
+            raise ValueError("agent_message payload.channel is required.")
+        normalized["channel"] = channel
+        body = normalized.get("body")
+        if isinstance(body, str):
+            body_text = body.strip()
+            if not body_text:
+                raise ValueError("agent_message payload.body must not be empty.")
+            normalized["body"] = body_text
+        elif isinstance(body, dict):
+            normalized["body"] = dict(body)
+        else:
+            raise ValueError("agent_message payload.body must be an object or non-empty string.")
+        to_id = str(normalized.get("to_id") or "").strip()
+        if to_id:
+            normalized["to_id"] = to_id
+        else:
+            normalized.pop("to_id", None)
         return normalized
 
     if msg_type == "tool_call":
@@ -3888,6 +4663,18 @@ def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict
         return agent_system_design.run(payload)
     if agent_id == _INCIDENT_RESPONSE_AGENT_ID:
         return agent_incident_response.run(payload)
+    if agent_id == _HEALTHCARE_EXPERT_AGENT_ID:
+        return agent_healthcare_expert.run(payload)
+    if agent_id == _IMAGE_GENERATOR_AGENT_ID:
+        return agent_image_generator.run(payload)
+    if agent_id == _VIDEO_STORYBOARD_AGENT_ID:
+        return agent_video_storyboard.run(payload)
+    if agent_id == _ARXIV_RESEARCH_AGENT_ID:
+        return agent_arxiv_research.run(payload)
+    if agent_id == _PYTHON_EXECUTOR_AGENT_ID:
+        return agent_python_executor.run(payload)
+    if agent_id == _WEB_RESEARCHER_AGENT_ID:
+        return agent_web_researcher.run(payload)
     raise ValueError(f"Unsupported built-in agent '{agent_id}'.")
 
 
@@ -6777,6 +7564,75 @@ def _mcp_text_from_response(response: Response) -> str:
         return json.dumps(body_text, ensure_ascii=False)
 
 
+def _mcp_payload_from_response(response: Response) -> Any:
+    body_bytes = bytes(getattr(response, "body", b"") or b"")
+    if not body_bytes:
+        return None
+    body_text = body_bytes.decode("utf-8", errors="replace")
+    try:
+        return json.loads(body_text)
+    except json.JSONDecodeError:
+        return body_text
+
+
+def _parse_data_uri(value: str) -> tuple[str | None, str | None]:
+    text = str(value or "").strip()
+    if not text:
+        return None, None
+    match = re.match(r"^data:([^;,]+);base64,([A-Za-z0-9+/=]+)$", text, re.IGNORECASE)
+    if not match:
+        return None, None
+    return match.group(1).strip().lower(), match.group(2).strip()
+
+
+def _mcp_text_from_payload(payload: Any) -> str:
+    if isinstance(payload, dict):
+        for key in ("summary", "message", "answer", "title", "one_line_summary", "signal_reasoning"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return json.dumps(payload, ensure_ascii=False)
+    if isinstance(payload, str):
+        return payload
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _mcp_media_content_from_artifacts(artifacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rendered: list[dict[str, Any]] = []
+    for artifact in artifacts[:6]:
+        mime = str(artifact.get("mime") or "").strip().lower()
+        source = str(artifact.get("url_or_base64") or "").strip()
+        if not mime or not source:
+            continue
+        parsed_mime, base64_payload = _parse_data_uri(source)
+        effective_mime = parsed_mime or mime
+        if effective_mime.startswith("image/") and base64_payload:
+            rendered.append({"type": "image", "mimeType": effective_mime, "data": base64_payload})
+            continue
+        if source.startswith("http://") or source.startswith("https://"):
+            rendered.append({"type": "resource", "resource": {"uri": source, "mimeType": effective_mime}})
+            continue
+        if base64_payload:
+            rendered.append(
+                {
+                    "type": "resource",
+                    "resource": {"uri": f"data:{effective_mime};base64,{base64_payload}", "mimeType": effective_mime},
+                }
+            )
+            continue
+    return rendered
+
+
+def _mcp_content_from_payload(payload: Any) -> list[dict[str, Any]]:
+    content: list[dict[str, Any]] = [{"type": "text", "text": _mcp_text_from_payload(payload)}]
+    if isinstance(payload, dict):
+        raw_artifacts = payload.get("artifacts")
+        if isinstance(raw_artifacts, list):
+            artifact_rows = [item for item in raw_artifacts if isinstance(item, dict)]
+            content.extend(_mcp_media_content_from_artifacts(artifact_rows))
+    return content
+
+
 def _a2a_agent_card(agent: dict) -> dict:
     """Build a Google A2A Agent Card for a single registered agent."""
     price_usd = float(agent.get("price_per_call_usd") or 0.0)
@@ -7134,16 +7990,137 @@ def mcp_invoke(
         body=core_models.RegistryCallRequest(root=body.input),
         caller=caller,
     )
+    payload = _mcp_payload_from_response(delegated)
+    response_body: dict[str, Any] = {
+        "content": _mcp_content_from_payload(payload),
+    }
+    if isinstance(payload, dict):
+        response_body["structuredContent"] = payload
+    elif payload is not None:
+        response_body["structuredContent"] = {"result": payload}
     return JSONResponse(
-        content={
-            "content": [
-                {
-                    "type": "text",
-                    "text": _mcp_text_from_response(delegated),
-                }
-            ]
-        }
+        content=response_body
     )
+
+
+def _normalize_model_provider_filter(raw_value: str | None) -> str | None:
+    text = str(raw_value or "").strip().lower()
+    if not text:
+        return None
+    normalized = re.sub(r"[^a-z0-9._-]+", "-", text).strip("-")
+    return normalized or None
+
+
+def _build_model_catalog(
+    agents: list[dict[str, Any]],
+    *,
+    model_provider: str | None = None,
+    model_id: str | None = None,
+    include_examples: bool = True,
+    example_limit: int = 5,
+) -> list[dict[str, Any]]:
+    normalized_provider = _normalize_model_provider_filter(model_provider)
+    normalized_model_id = str(model_id or "").strip() or None
+    capped_examples = min(max(0, int(example_limit)), 20)
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+    for agent in agents:
+        provider = _normalize_model_provider_filter(agent.get("model_provider"))
+        model = str(agent.get("model_id") or "").strip()
+        if not provider or not model:
+            continue
+        if normalized_provider and provider != normalized_provider:
+            continue
+        if normalized_model_id and model != normalized_model_id:
+            continue
+        key = (provider, model)
+        bucket = grouped.get(key)
+        if bucket is None:
+            bucket = {
+                "model_provider": provider,
+                "model_id": model,
+                "agent_count": 0,
+                "total_calls": 0,
+                "avg_success_rate": 0.0,
+                "agents": [],
+                "work_examples": [],
+            }
+            grouped[key] = bucket
+        bucket["agent_count"] += 1
+        bucket["total_calls"] += int(agent.get("total_calls") or 0)
+        bucket["agents"].append(
+            {
+                "agent_id": str(agent.get("agent_id") or ""),
+                "name": str(agent.get("name") or ""),
+                "price_per_call_usd": float(agent.get("price_per_call_usd") or 0.0),
+                "success_rate": float(agent.get("success_rate") or 0.0),
+            }
+        )
+        if include_examples and capped_examples > 0 and len(bucket["work_examples"]) < capped_examples:
+            examples = agent.get("output_examples")
+            if isinstance(examples, list):
+                for example in examples:
+                    if not isinstance(example, dict):
+                        continue
+                    bucket["work_examples"].append(
+                        {
+                            "agent_id": str(agent.get("agent_id") or ""),
+                            "agent_name": str(agent.get("name") or ""),
+                            "example": example,
+                        }
+                    )
+                    if len(bucket["work_examples"]) >= capped_examples:
+                        break
+
+    models: list[dict[str, Any]] = []
+    for bucket in grouped.values():
+        model_agents = bucket.pop("agents")
+        if model_agents:
+            bucket["avg_success_rate"] = round(
+                sum(float(item.get("success_rate") or 0.0) for item in model_agents) / len(model_agents),
+                6,
+            )
+        else:
+            bucket["avg_success_rate"] = 0.0
+        bucket["agents"] = sorted(
+            model_agents,
+            key=lambda item: (item.get("success_rate") or 0.0, -(item.get("price_per_call_usd") or 0.0)),
+            reverse=True,
+        )
+        models.append(bucket)
+
+    return sorted(
+        models,
+        key=lambda item: (item.get("agent_count") or 0, item.get("total_calls") or 0),
+        reverse=True,
+    )
+
+
+@app.get(
+    "/registry/models",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(401, 403, 429, 500),
+)
+@limiter.limit("60/minute")
+def registry_models_list(
+    request: Request,
+    model_provider: str | None = None,
+    model_id: str | None = None,
+    include_examples: bool = True,
+    example_limit: int = 5,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
+    include_unapproved = _caller_is_admin(caller)
+    agents = registry.get_agents_with_reputation(
+        include_unapproved=include_unapproved,
+    )
+    models = _build_model_catalog(
+        agents,
+        model_provider=model_provider,
+        model_id=model_id,
+        include_examples=include_examples,
+        example_limit=example_limit,
+    )
+    return JSONResponse(content={"models": models, "count": len(models)})
 
 
 @app.get(
@@ -7244,6 +8221,45 @@ def registry_get(
     if agent is None or agent.get("status") == "banned" or not _caller_can_access_agent(caller, agent):
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
     return JSONResponse(content=_agent_response(agent, caller))
+
+
+@app.get(
+    "/registry/agents/{agent_id}/work-history",
+    response_model=core_models.DynamicListResponse,
+    responses=_error_responses(401, 404, 429, 500),
+)
+@limiter.limit("60/minute")
+def registry_agent_work_history(
+    request: Request,
+    agent_id: str,
+    limit: int = 20,
+    offset: int = 0,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicListResponse:
+    """Return paginated public work examples for an agent."""
+    capped_limit = max(1, min(int(limit), 50))
+    capped_offset = max(0, int(offset))
+    agent = registry.get_agent(agent_id)
+    if agent is None or agent.get("status") == "banned" or not _caller_can_access_agent(caller, agent):
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    examples: list = agent.get("output_examples") or []
+    page = examples[capped_offset: capped_offset + capped_limit]
+    return JSONResponse(content={"items": page, "total": len(examples), "limit": capped_limit, "offset": capped_offset})
+
+
+@app.get(
+    "/llm/providers",
+    responses=_error_responses(401, 429, 500),
+)
+@limiter.limit("60/minute")
+def llm_providers_list(
+    request: Request,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+):
+    """List all registered LLM providers and their availability."""
+    from core.llm import registry as llm_registry
+    providers = llm_registry.list_providers()
+    return JSONResponse(content={"providers": providers})
 
 
 @app.get(
@@ -7479,7 +8495,19 @@ def registry_call(
         agent_id=agent_id,
     )
 
-    payload = body.root if body is not None else {}
+    payload = dict(body.root) if body is not None else {}
+    requested_output_formats: list[str] = []
+    try:
+        payload, requested_output_formats = _normalize_input_protocol_from_payload(payload)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=error_codes.make_error(
+                error_codes.INVALID_INPUT,
+                str(exc),
+                {"agent_id": agent_id},
+            ),
+        )
     start = time.monotonic()
     if builtin_agent_id is not None:
         try:
@@ -7514,6 +8542,10 @@ def registry_call(
         )
         try:
             output = _execute_builtin_agent(builtin_agent_id, payload)
+            output = _normalize_output_protocol_for_response(
+                output,
+                requested_output_formats=requested_output_formats,
+            )
             completed = jobs.update_job_status(
                 job["job_id"],
                 "complete",
@@ -7529,6 +8561,13 @@ def registry_call(
                 payload={"status": completed["status"], "source": "registry_call_sync"},
             )
             _settle_successful_job(completed, actor_owner_id=caller["owner_id"])
+            _record_public_work_example(
+                agent,
+                payload,
+                output,
+                job_id=job["job_id"],
+                latency_ms=_job_latency_ms(completed),
+            )
             return JSONResponse(content=output)
         except ValidationError as exc:
             failed = jobs.update_job_status(
@@ -7758,6 +8797,33 @@ def jobs_create(
         if body.output_verification_window_seconds is None
         else body.output_verification_window_seconds
     )
+    try:
+        input_payload = _merge_protocol_input_envelope(
+            body.input_payload,
+            input_artifacts=_normalize_protocol_artifact_list(
+                body.input_artifacts,
+                field_name="input_artifacts",
+            ),
+            preferred_input_formats=_normalize_format_preferences(
+                body.preferred_input_formats,
+                field_name="preferred_input_formats",
+            ),
+            preferred_output_formats=_normalize_format_preferences(
+                body.preferred_output_formats,
+                field_name="preferred_output_formats",
+            ),
+            communication_channel=_normalize_protocol_channel(
+                body.communication_channel,
+                field_name="communication_channel",
+            ),
+            protocol_metadata=_normalize_protocol_metadata(
+                body.protocol_metadata,
+                field_name="protocol_metadata",
+            ),
+            private_task=bool(body.private_task),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     caller_wallet = payments.get_or_create_wallet(caller_owner_id)
     _agent_payout_owner2 = f"agent:{agent['agent_id']}"
     agent_wallet = payments.get_or_create_wallet(_agent_payout_owner2)
@@ -7782,7 +8848,7 @@ def jobs_create(
             platform_fee_pct_at_create=platform_fee_pct_at_create,
             fee_bearer_policy=fee_bearer_policy,
             charge_tx_id=charge_tx_id,
-            input_payload=body.input_payload,
+            input_payload=input_payload,
             agent_owner_id=agent.get("owner_id"),
             max_attempts=body.max_attempts,
             parent_job_id=(parent_job or {}).get("job_id"),
@@ -7906,6 +8972,33 @@ def jobs_batch_create(
                     {"agent_id": spec.agent_id, "price_cents": price_cents, "budget_cents": spec.budget_cents},
                 ),
             )
+        try:
+            normalized_spec_input_payload = _merge_protocol_input_envelope(
+                spec.input_payload,
+                input_artifacts=_normalize_protocol_artifact_list(
+                    spec.input_artifacts,
+                    field_name="jobs[].input_artifacts",
+                ),
+                preferred_input_formats=_normalize_format_preferences(
+                    spec.preferred_input_formats,
+                    field_name="jobs[].preferred_input_formats",
+                ),
+                preferred_output_formats=_normalize_format_preferences(
+                    spec.preferred_output_formats,
+                    field_name="jobs[].preferred_output_formats",
+                ),
+                communication_channel=_normalize_protocol_channel(
+                    spec.communication_channel,
+                    field_name="jobs[].communication_channel",
+                ),
+                protocol_metadata=_normalize_protocol_metadata(
+                    spec.protocol_metadata,
+                    field_name="jobs[].protocol_metadata",
+                ),
+                private_task=bool(spec.private_task),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
         total_price_cents += caller_charge_cents
         resolved.append(
             {
@@ -7915,6 +9008,7 @@ def jobs_batch_create(
                 "platform_fee_pct_at_create": platform_fee_pct_at_create,
                 "fee_bearer_policy": fee_bearer_policy,
                 "spec": spec,
+                "input_payload": normalized_spec_input_payload,
                 "parent_job_id": (parent_job or {}).get("job_id"),
                 "tree_depth": tree_depth,
             }
@@ -7941,6 +9035,7 @@ def jobs_batch_create(
             platform_fee_pct_at_create = item["platform_fee_pct_at_create"]
             fee_bearer_policy = item["fee_bearer_policy"]
             spec = item["spec"]
+            input_payload = item["input_payload"]
             parent_job_id = item["parent_job_id"]
             tree_depth = item["tree_depth"]
             agent_wallet = payments.get_or_create_wallet(f"agent:{agent['agent_id']}")
@@ -7963,7 +9058,7 @@ def jobs_batch_create(
                 platform_fee_pct_at_create=platform_fee_pct_at_create,
                 fee_bearer_policy=fee_bearer_policy,
                 charge_tx_id=charge_tx_id,
-                input_payload=spec.input_payload,
+                input_payload=input_payload,
                 agent_owner_id=agent.get("owner_id"),
                 max_attempts=spec.max_attempts,
                 parent_job_id=parent_job_id,
@@ -8386,6 +9481,21 @@ def jobs_complete(
             claim_token=body.claim_token,
             action="complete",
         )
+        try:
+            normalized_output_payload = _merge_protocol_output_envelope(
+                body.output_payload,
+                output_artifacts=_normalize_protocol_artifact_list(
+                    body.output_artifacts,
+                    field_name="output_artifacts",
+                ),
+                output_format=(str(body.output_format).strip().lower() if body.output_format else None),
+                protocol_metadata=_normalize_protocol_metadata(
+                    body.protocol_metadata,
+                    field_name="protocol_metadata",
+                ),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
 
         agent = registry.get_agent(job["agent_id"], include_unapproved=True)
         if agent is None:
@@ -8423,7 +9533,7 @@ def jobs_complete(
             return _job_response(settled_failed, caller), 200
 
         updated = jobs.update_job_status(
-            job_id, "complete", output_payload=body.output_payload, completed=True
+            job_id, "complete", output_payload=normalized_output_payload, completed=True
         )
         if updated is None:
             raise HTTPException(status_code=409, detail="Unable to update job status.")
@@ -8463,13 +9573,27 @@ def jobs_complete(
             _agent_row = registry.get_agent(settled.get("agent_id", ""))
             _agent_name = (_agent_row or {}).get("name", "agent")
             _email.send_job_complete(caller_email, job_id, _agent_name, int(settled.get("price_cents") or 0))
+        _record_public_work_example(
+            agent,
+            settled.get("input_payload") or {},
+            normalized_output_payload,
+            job_id=job_id,
+            latency_ms=_job_latency_ms(settled),
+            quality_score=quality.get("quality_score"),
+        )
         return _job_response(settled, caller), 200
 
     return _run_idempotent_json_response(
         request=request,
         caller=caller,
         scope=f"jobs.complete:{job_id}",
-        payload={"output_payload": body.output_payload, "claim_token": body.claim_token},
+        payload={
+            "output_payload": body.output_payload,
+            "output_artifacts": body.output_artifacts,
+            "output_format": body.output_format,
+            "protocol_metadata": body.protocol_metadata,
+            "claim_token": body.claim_token,
+        },
         operation=_operation,
     )
 
@@ -8769,12 +9893,17 @@ def jobs_message_create(
         raise HTTPException(status_code=403, detail="Not authorized to post to this job.")
 
     raw_type = body.type
-    raw_payload = body.payload
+    raw_payload = dict(body.payload or {})
     raw_correlation_id = body.correlation_id
     raw_from_id = body.from_id
     from_id_override = None
     if raw_from_id is not None:
         from_id_override = str(raw_from_id).strip() or None
+    if str(raw_type or "").strip().lower() == "agent_message":
+        if body.channel is not None and "channel" not in raw_payload:
+            raw_payload["channel"] = body.channel
+        if body.to_id is not None and "to_id" not in raw_payload:
+            raw_payload["to_id"] = body.to_id
 
     try:
         parsed = _normalize_job_message_protocol(
@@ -8821,10 +9950,56 @@ def jobs_message_create(
         updated_job,
         "job.message_added",
         actor_owner_id=caller["owner_id"],
-        payload={"type": msg_type, "message_id": msg["message_id"]},
+        payload={
+            "type": msg_type,
+            "message_id": msg["message_id"],
+            "channel": payload.get("channel") if isinstance(payload, dict) else None,
+            "to_id": payload.get("to_id") if isinstance(payload, dict) else None,
+        },
     )
 
     return JSONResponse(content=msg, status_code=201)
+
+
+def _extract_job_message_filters(
+    *,
+    msg_type: str | None = None,
+    from_id: str | None = None,
+    channel: str | None = None,
+    to_id: str | None = None,
+) -> dict[str, str | None]:
+    normalized_type = str(msg_type or "").strip().lower() or None
+    if normalized_type is not None and normalized_type not in _TYPED_JOB_MESSAGE_TYPES.union(_LEGACY_JOB_MESSAGE_TYPES):
+        raise HTTPException(status_code=400, detail=f"Unsupported job message type filter: {normalized_type}")
+    normalized_from_id = str(from_id or "").strip() or None
+    normalized_channel = str(channel or "").strip().lower() or None
+    normalized_to_id = str(to_id or "").strip() or None
+    return {
+        "msg_type": normalized_type,
+        "from_id": normalized_from_id,
+        "channel": normalized_channel,
+        "to_id": normalized_to_id,
+    }
+
+
+def _job_message_matches_filters(message: dict, filters: dict[str, str | None]) -> bool:
+    expected_type = filters.get("msg_type")
+    expected_from_id = filters.get("from_id")
+    expected_channel = filters.get("channel")
+    expected_to_id = filters.get("to_id")
+    if expected_type and str(message.get("type") or "").strip().lower() != expected_type:
+        return False
+    if expected_from_id and str(message.get("from_id") or "").strip() != expected_from_id:
+        return False
+    payload = message.get("payload")
+    if expected_channel or expected_to_id:
+        if not isinstance(payload, dict):
+            return False
+        if expected_channel and str(payload.get("channel") or "").strip().lower() != expected_channel:
+            return False
+        if expected_to_id and str(payload.get("to_id") or "").strip() != expected_to_id:
+            return False
+    return True
 
 
 @app.get(
@@ -8837,6 +10012,10 @@ def jobs_message_list(
     request: Request,
     job_id: str,
     since: int | None = None,
+    msg_type: str | None = Query(default=None, alias="type"),
+    from_id: str | None = None,
+    channel: str | None = None,
+    to_id: str | None = None,
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.JobMessagesResponse:
     job = jobs.get_job(job_id)
@@ -8844,7 +10023,20 @@ def jobs_message_list(
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
     if not _caller_can_view_job(caller, job):
         raise HTTPException(status_code=403, detail="Not authorized to view messages.")
-    items = jobs.get_messages(job_id, since_id=since)
+    filters = _extract_job_message_filters(
+        msg_type=msg_type,
+        from_id=from_id,
+        channel=channel,
+        to_id=to_id,
+    )
+    items = jobs.get_messages(
+        job_id,
+        since_id=since,
+        msg_type=filters["msg_type"],
+        from_id=filters["from_id"],
+        channel=filters["channel"],
+        to_id=filters["to_id"],
+    )
     return JSONResponse(content={"messages": items})
 
 
@@ -8861,6 +10053,10 @@ def jobs_message_stream(
     request: Request,
     job_id: str,
     since: int | None = None,
+    msg_type: str | None = Query(default=None, alias="type"),
+    from_id: str | None = None,
+    channel: str | None = None,
+    to_id: str | None = None,
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> StreamingResponse:
     job = jobs.get_job(job_id)
@@ -8868,6 +10064,12 @@ def jobs_message_stream(
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
     if not _caller_can_view_job(caller, job):
         raise HTTPException(status_code=403, detail="Not authorized to view messages.")
+    filters = _extract_job_message_filters(
+        msg_type=msg_type,
+        from_id=from_id,
+        channel=channel,
+        to_id=to_id,
+    )
 
     def _iter_events():
         subscriber = _subscribe_job_stream(job_id)
@@ -8875,9 +10077,19 @@ def jobs_message_stream(
         try:
             yield ": heartbeat\n\n"
             while True:
-                batch = jobs.get_messages(job_id, since_id=last_seen, limit=200)
+                batch = jobs.get_messages(
+                    job_id,
+                    since_id=last_seen,
+                    limit=200,
+                    msg_type=filters["msg_type"],
+                    from_id=filters["from_id"],
+                    channel=filters["channel"],
+                    to_id=filters["to_id"],
+                )
                 if batch:
                     for item in batch:
+                        if not _job_message_matches_filters(item, filters):
+                            continue
                         message_id = int(item["message_id"])
                         if last_seen is not None and message_id <= last_seen:
                             continue
@@ -8900,6 +10112,8 @@ def jobs_message_stream(
 
                 queued_id = int(queued.get("message_id") or 0)
                 if last_seen is not None and queued_id <= last_seen:
+                    continue
+                if not _job_message_matches_filters(queued, filters):
                     continue
                 last_seen = queued_id
                 yield _job_message_to_sse(queued)

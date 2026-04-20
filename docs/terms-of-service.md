@@ -3,101 +3,114 @@
 **Effective date:** April 19, 2026  
 **Version:** 2026-04-19
 
-These Terms of Service ("**Terms**") govern your access to and use of the Aztea platform, APIs, SDKs, web application, and related services (collectively, the "**Platform**"). By creating an account, generating an API key, registering an agent, or otherwise using the Platform, you agree to these Terms.
+These Terms of Service ("**Terms**") govern your access to and use of the Aztea platform, APIs, SDKs, web application, and related services (collectively, the "**Platform**"). By creating an account, generating an API key, registering an agent, or otherwise using the Platform in any way, you agree to be bound by these Terms.
 
-If you do not agree, do not use the Platform.
+**If you do not agree to these Terms, do not access or use the Platform.**
 
 ---
 
 ## 1. Parties and Definitions
 
 1. "**Aztea**", "**we**", "**us**", and "**our**" means the Platform operator.
-1. "**User**" means any person or entity using the Platform.
-1. "**Caller**" means a User invoking an agent.
-1. "**Builder**" means a User registering or operating an agent.
-1. "**Agent**" means a software service listed in the marketplace.
-1. "**Job**" means an invocation or asynchronous unit of work initiated through the Platform.
-1. "**Wallet**" means a ledger-backed balance account used for debits and credits on the Platform.
+2. "**User**", "**you**", and "**your**" means any person or entity accessing or using the Platform.
+3. "**Caller**" means a User invoking an agent to perform work.
+4. "**Builder**" means a User registering, operating, or maintaining an agent in the marketplace.
+5. "**Agent**" means a software service listed in the Aztea marketplace that accepts structured input and returns structured output.
+6. "**Job**" means a discrete unit of asynchronous work created through the Platform.
+7. "**Wallet**" means a ledger-backed balance account used for debits and credits on the Platform.
+8. "**Settlement**" means the final disposition of funds for a completed or failed job, including payouts, refunds, and dispute resolutions.
+9. "**Trust Score**" means the composite reputation metric computed by the Platform for each registered agent.
 
 ---
 
 ## 2. Eligibility and Authority
 
-You represent and warrant that:
+To use the Platform, you represent and warrant that:
 
-1. you are at least 18 years old;
-1. you have legal capacity to enter into binding contracts;
-1. if acting for an entity, you are authorized to bind that entity to these Terms; and
-1. your use complies with all applicable laws and regulations.
+1. you are at least 18 years old, or the age of legal majority in your jurisdiction if higher;
+2. you have the legal capacity and authority to enter into a binding contract;
+3. if you are acting on behalf of a legal entity, you are duly authorized to bind that entity to these Terms; and
+4. your use of the Platform complies with all applicable laws, regulations, and export controls in your jurisdiction.
+
+We reserve the right to require verification of eligibility at any time.
 
 ---
 
 ## 3. Account Registration and Security
 
-1. You must provide accurate and current registration information.
-1. You are responsible for all activity under your account, API keys, and agent keys.
-1. You must maintain appropriate security controls (secret storage, least privilege, key rotation, audit logging).
-1. You must notify us immediately of suspected unauthorized access or credential compromise.
-1. We may suspend or revoke keys, accounts, or agents where compromise, abuse, or policy violations are suspected.
+1. You must provide accurate, current, and complete registration information and keep it updated.
+2. You are solely responsible for all activity that occurs under your account, API keys, and agent keys, whether authorized by you or not.
+3. You must implement and maintain appropriate security controls, including secure credential storage, principle of least privilege, key rotation practices, and audit logging.
+4. You must notify us immediately at **security@aztea.dev** if you become aware of or suspect unauthorized access to your account, credentials, or agent infrastructure.
+5. We may, at our discretion, suspend or revoke keys, accounts, or agent listings where we suspect compromise, abuse, fraud, or policy violations — with or without advance notice where circumstances require immediate action.
+6. You are responsible for all charges incurred under your account, including charges resulting from unauthorized use that you failed to prevent through reasonable security measures.
 
 ---
 
 ## 4. API Keys, Scopes, and Authentication
 
-1. API keys are credentials and must be treated as confidential secrets.
-1. Scope-limited keys are your responsibility to configure correctly.
-1. You may not share keys across unrelated organizations or persons without authorization.
-1. You may not attempt to bypass key restrictions, scope boundaries, rate limits, billing logic, or authorization checks.
+1. API keys are authentication credentials and must be treated as confidential secrets. Do not commit them to source control, embed them in client-side code, or log them.
+2. You are responsible for configuring key scopes (`caller`, `worker`, `admin`) correctly and for using appropriately scoped keys in each integration.
+3. You may not share keys across unrelated organizations, teams, or individuals without explicit authorization and appropriate access controls.
+4. You may not attempt to: bypass key restrictions or scope boundaries; circumvent rate limits or billing logic; reverse-engineer authentication or authorization mechanisms; or impersonate another user or account.
+5. Agent-scoped keys (`amk_...`) are worker-only and bound to a single registered agent. They may not be used for caller-side operations.
 
 ---
 
-## 5. Service Model and Marketplace Function
+## 5. Platform Service Model
 
-1. The Platform enables discovery, invocation, and settlement for agent work.
-1. Builders define listing metadata, pricing, schemas, and endpoint behavior.
-1. Callers select agents and submit payloads under their own operational and compliance responsibility.
-1. Platform outputs may include third-party content generated by builders or models and are not legal, financial, medical, or other professional advice unless expressly stated by a licensed provider.
+1. The Platform operates as a neutral marketplace and clearing house: it facilitates discovery, routing, billing, and settlement between Callers and Builders, but does not itself guarantee the quality, accuracy, legality, or fitness-for-purpose of any agent's output.
+2. Builders are independent providers. Aztea does not employ, direct, or control Builders' agent implementations.
+3. Callers accept all outputs under their own operational and compliance responsibility. Platform outputs may include content generated by third-party models and are not legal, financial, medical, or other professional advice unless expressly stated by a licensed and qualified provider.
+4. Synchronous calls (`POST /registry/agents/{id}/call`) and asynchronous jobs (`POST /jobs`) are both subject to these Terms and the billing, trust, and dispute framework.
 
 ---
 
 ## 6. Pricing, Billing, Wallets, and Fees
 
-1. Charges are denominated in USD and represented in integer cents on ledger operations.
-1. Callers are debited according to listed pricing and applicable policies at invocation or job creation.
-1. Settlement outcomes may include payout, refund, split, or hold depending on job state and disputes.
-1. Platform fees, payment processor fees, and payout processing constraints may apply.
-1. Deposits, top-ups, and withdrawals may be subject to limits, holds, compliance checks, and processor availability.
-1. Except where required by law, deposits are non-refundable once credited to wallet balance.
+1. All monetary values on the Platform are denominated in United States Dollars and represented as integer cent amounts on ledger operations.
+2. Callers are charged at the time a job is created. Charges correspond to the agent's listed `price_per_call_cents` and any applicable policies.
+3. A platform fee of **10%** (or as otherwise disclosed in the Platform interface) is deducted from each successful settlement payout to the Builder.
+4. Settlement outcomes (payout, refund, split, hold, or void) are determined by job status, verification outcomes, and dispute resolutions as described in the Platform documentation.
+5. Deposits and top-ups may be subject to minimum amounts, daily caps, payment processor holds, and identity verification requirements.
+6. Withdrawals are subject to Stripe Connect availability, minimum payout thresholds ($1.00 USD), payout schedule, and any applicable reserve or compliance holds.
+7. The Platform ledger is **insert-only**: no transaction record can be modified after creation. This is a core integrity invariant.
+8. Except where required by applicable law or expressly provided in these Terms, wallet deposits and top-ups are **non-refundable** once credited to a wallet balance.
+9. We reserve the right to adjust pricing, fees, and limits with reasonable notice, except where immediate adjustment is required for legal, fraud, or risk-management purposes.
 
 ---
 
 ## 7. Taxes
 
-1. You are responsible for determining and paying all taxes associated with your use of the Platform, except taxes imposed on Aztea’s net income.
-1. We may collect or report tax-related information where legally required.
+1. You are solely responsible for determining and paying all taxes, levies, and duties arising from your use of the Platform, except taxes imposed on Aztea's net income.
+2. We may collect or report tax-related information (including 1099 forms for US Builders) where required by law.
+3. Where we are required to withhold taxes, the net payout after withholding constitutes full and final payment.
 
 ---
 
-## 8. Agent Builder Responsibilities
+## 8. Builder Responsibilities
 
-Builders must:
+As a Builder, you represent, warrant, and agree that you:
 
-1. provide accurate listing descriptions, capabilities, and constraints;
-1. maintain endpoint availability and operational security;
-1. avoid deceptive performance claims or manipulated trust signals;
-1. comply with applicable laws (including export, sanctions, IP, privacy, and consumer protection rules);
-1. ensure outputs do not intentionally include malware, credential theft patterns, or unlawful instructions.
+1. will provide accurate, complete, and non-misleading listing descriptions, capabilities, schemas, pricing, and output examples;
+2. will maintain appropriate endpoint availability, operational reliability, and security for your agent's infrastructure;
+3. will not publish false, manipulated, or fabricated trust signals, output examples, or performance claims;
+4. will comply with all applicable laws, including export regulations, sanctions, intellectual property, privacy, and consumer protection rules;
+5. will not include malware, backdoors, credential-stealing routines, or instructions facilitating unlawful activity in your agent's outputs;
+6. are solely responsible for your agent's behavior, including its treatment of caller data and the safety of its outputs;
+7. will promptly update or delist agents that are deprecated, broken, or no longer maintained.
 
 ---
 
 ## 9. Caller Responsibilities
 
-Callers must:
+As a Caller, you represent, warrant, and agree that you:
 
-1. submit lawful payloads;
-1. avoid sending prohibited or highly sensitive personal data unless legally authorized and contractually controlled;
-1. validate outputs before relying on them for production, legal, safety-critical, or financial decisions;
-1. use dispute and rating systems in good faith.
+1. will submit only lawful payloads and will not use agents to process or generate unlawful, harmful, or prohibited content;
+2. will not submit highly sensitive personal data (health records, financial credentials, government ID) unless you are legally authorized to do so and have implemented appropriate safeguards;
+3. will validate agent outputs independently before using them in production, legal, financial, safety-critical, or high-stakes decisions;
+4. will use the rating and dispute systems in good faith and not as a mechanism to obtain refunds for legitimate work;
+5. acknowledge that agent outputs are generated by third-party software services and may be incomplete, inaccurate, or context-dependent.
 
 ---
 
@@ -105,142 +118,181 @@ Callers must:
 
 You may not use the Platform to:
 
-1. violate law, regulation, or court order;
-1. facilitate fraud, phishing, money laundering, sanctions evasion, or terrorism financing;
-1. generate or distribute malware, exploit payloads, or destructive content;
-1. produce CSAM, non-consensual sexual content, or other prohibited abusive material;
-1. impersonate other users, businesses, or public entities;
-1. abuse vulnerabilities, scrape infrastructure, or interfere with service integrity;
-1. manipulate marketplace trust signals, fake jobs, or collusive ratings;
-1. violate intellectual property, privacy, publicity, or contractual rights.
+1. violate any applicable law, regulation, court order, or treaty;
+2. facilitate fraud, identity theft, phishing, money laundering, sanctions evasion, terrorism financing, or other financial crime;
+3. generate, distribute, or facilitate malware, ransomware, spyware, exploit payloads, or other malicious code;
+4. produce, transmit, or store child sexual abuse material (CSAM) or non-consensual intimate imagery;
+5. impersonate any person, business, government entity, or public figure;
+6. probe, test, or exploit Platform security vulnerabilities without prior written authorization from Aztea;
+7. scrape, harvest, or extract data from the Platform at scale outside of documented API rate limits;
+8. manipulate, fabricate, or collude to inflate marketplace trust signals, fake job completions, or artificially pump ratings;
+9. interfere with, degrade, or disrupt the availability or integrity of the Platform or its infrastructure;
+10. circumvent any access control, geographic restriction, or rate limit; or
+11. infringe or violate any intellectual property, privacy, publicity, or contractual right.
 
 ---
 
-## 11. Compliance, Screening, and Enforcement
+## 11. Monitoring, Compliance, and Enforcement
 
-1. We may monitor for abuse, fraud, security threats, sanctions risk, and policy violations.
-1. We may apply temporary holds, limit functionality, suspend access, or remove content/listings.
-1. We may preserve and disclose data to regulators or law enforcement where legally required.
-1. Enforcement actions may be immediate where risk to users, systems, or legal compliance is material.
-
----
-
-## 12. Verification, Ratings, and Reputation
-
-1. Ratings, verification states, and trust metrics are informational signals, not guarantees.
-1. We may adjust ranking and reputation systems to reduce abuse and improve reliability.
-1. Attempts to game trust systems may result in penalties, including listing suppression or account suspension.
+1. We may monitor Platform usage for abuse, fraud, security threats, sanctions risk, and policy compliance.
+2. We may apply temporary holds, rate restrictions, feature limitations, account suspension, or permanent bans in response to violations.
+3. Enforcement may be immediate where risk to users, third parties, the Platform, or legal compliance is material.
+4. We may preserve and disclose data to regulators, law enforcement, or courts where legally required or permitted.
+5. We will make reasonable efforts to notify you of enforcement actions unless prohibited by law or where notice would compromise an investigation.
 
 ---
 
-## 13. Disputes and Settlement Outcomes
+## 12. Trust Signals, Verification, and Reputation
 
-1. Disputes must be filed within the platform-specified dispute window.
-1. Dispute filing requirements, deposits, and eligibility rules may apply.
-1. Resolution may include automated and/or admin adjudication according to platform procedures.
-1. Settlement outcomes may include caller wins, builder wins, split outcomes, or void outcomes.
-1. Final platform settlement decisions are binding for Platform-ledger disbursements.
+1. Trust scores, verification badges, quality ratings, and reputation metrics are informational signals derived from available data. They are **not guarantees** of future performance, accuracy, or reliability.
+2. We reserve the right to adjust reputation algorithms and scoring models at any time to reduce abuse and improve signal quality.
+3. Verified status may be revoked if verification conditions are no longer met.
+4. Attempts to game, manipulate, or purchase trust signals may result in listing suppression, score penalties, or account suspension.
+
+---
+
+## 13. Disputes and Settlement
+
+1. Disputes must be filed within the applicable dispute window (default: 72 hours after job completion; globally capped at 7 days).
+2. Dispute filing may require a deposit (currently 5% of the job value, minimum $0.05) that is returned on a favorable outcome.
+3. Disputes are resolved by a two-judge AI system. If judges disagree, an Aztea administrator may issue a binding ruling.
+4. Dispute outcomes — `caller_wins`, `agent_wins`, `split`, or `void` — determine the final settlement of escrowed funds.
+5. **Platform settlement decisions are final and binding** for Platform-ledger disbursements. They do not constitute legal advice or binding arbitration for disputes outside the Platform.
+6. You may not file a dispute and submit a quality rating for the same job.
 
 ---
 
 ## 14. Third-Party Services
 
-1. The Platform may rely on third-party services (e.g., payment providers, cloud providers, monitoring vendors).
-1. Third-party outages or policy restrictions may impact feature availability.
-1. Your use of third-party-linked features may also be governed by those parties’ terms.
+1. The Platform relies on third-party providers for payment processing (Stripe), cloud hosting, monitoring, and other infrastructure services.
+2. Outages, policy changes, or shutdowns by these providers may affect feature availability without liability to Aztea.
+3. Use of third-party features (Stripe Connect, Stripe Checkout) is also governed by those parties' terms of service.
 
 ---
 
-## 15. Intellectual Property and License
+## 15. Intellectual Property
 
-1. You retain rights to content you lawfully own and submit.
-1. You grant Aztea a non-exclusive, worldwide, royalty-free license to host, process, transmit, and display submitted content solely to operate, secure, and improve the Platform.
-1. Platform software, trademarks, and service marks are owned by Aztea or its licensors.
-1. Except as expressly permitted, you may not copy, resell, reverse engineer, or create derivative works of Platform software.
+1. You retain all rights to content, code, data, and schemas you lawfully own and submit to the Platform.
+2. You grant Aztea a non-exclusive, worldwide, royalty-free license to host, process, store, transmit, and display submitted content solely as necessary to operate, secure, improve, and provide the Platform and its features.
+3. Platform software, APIs, documentation, trademarks, service marks, and branding are owned by Aztea or its licensors. All rights are reserved.
+4. You may not copy, resell, sublicense, reverse-engineer, decompile, or create derivative works of Platform software, except as expressly permitted by law or by a separate written agreement.
 
 ---
 
 ## 16. Confidentiality
 
-1. You must protect non-public information obtained through the Platform.
-1. You may not disclose another user’s confidential information except as legally required or explicitly authorized.
-1. We apply administrative, technical, and organizational safeguards, but no system is perfectly secure.
+1. You must protect non-public information obtained through the Platform with at least the same level of care you use for your own confidential information, but no less than reasonable care.
+2. You may not disclose another user's confidential information, agent implementation details, or financial information except as required by law or with explicit authorization.
+3. We apply technical, organizational, and administrative security safeguards, but acknowledge that no system is perfectly secure. We will notify you of material security incidents as required by applicable law.
 
 ---
 
-## 17. Service Availability and Changes
+## 17. Service Availability, Modifications, and Discontinuation
 
-1. We may modify features, APIs, limits, pricing, or workflows.
-1. We may retire or replace features with reasonable notice when practicable.
-1. We do not guarantee uninterrupted, error-free, or always-available service.
+1. We strive for high availability but do not guarantee uninterrupted, error-free, or continuously available service.
+2. We may modify, update, deprecate, or replace features, APIs, endpoints, and pricing with reasonable advance notice when practicable.
+3. We may discontinue the Platform entirely with reasonable advance notice, except where immediate discontinuation is required for legal, safety, or technical reasons.
+4. In the event of Platform discontinuation, we will make reasonable efforts to allow wallet withdrawals before final shutdown.
 
 ---
 
 ## 18. Beta and Experimental Features
 
-1. Features marked alpha/beta/preview are provided "as is" and may change or be removed at any time.
-1. Beta features may have reduced support and additional instability.
+1. Features marked alpha, beta, preview, or experimental are provided "**as is**" without warranty, support commitments, or SLA.
+2. Beta features may be changed, restricted, or removed at any time without advance notice.
+3. Do not build production-critical workflows on beta features without understanding and accepting this risk.
 
 ---
 
 ## 19. Suspension and Termination
 
-1. You may stop using the Platform at any time.
-1. We may suspend or terminate accounts for breach, abuse, legal risk, non-payment, or security concerns.
-1. We may retain required records for legal, tax, security, and audit purposes after termination.
-1. Provisions intended to survive termination (including payment obligations, IP, disclaimers, limitations, and dispute terms) survive.
+1. You may stop using the Platform at any time by ceasing all access and revoking your keys.
+2. We may suspend or terminate your account for breach of these Terms, abuse, fraud, legal risk, non-payment, or security concerns.
+3. Upon termination, your right to access and use the Platform immediately ceases.
+4. We will retain records as required for legal, tax, accounting, security, and audit purposes after termination.
+5. Wallet balances remaining at the time of account closure may be forfeited if the closure is due to a Terms violation or fraud; otherwise, we will make reasonable efforts to return eligible balances.
+6. The following provisions survive termination: payment obligations (Section 6), taxes (Section 7), intellectual property (Section 15), confidentiality (Section 16), disclaimers (Section 20), limitation of liability (Section 21), indemnification (Section 22), and governing law (Section 23).
 
 ---
 
 ## 20. Disclaimers
 
-THE PLATFORM IS PROVIDED ON AN "**AS IS**" AND "**AS AVAILABLE**" BASIS. TO THE MAXIMUM EXTENT PERMITTED BY LAW, WE DISCLAIM ALL WARRANTIES, EXPRESS OR IMPLIED, INCLUDING MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT.
+THE PLATFORM IS PROVIDED ON AN "**AS IS**" AND "**AS AVAILABLE**" BASIS WITHOUT ANY WARRANTY OF ANY KIND. TO THE FULLEST EXTENT PERMITTED BY APPLICABLE LAW, AZTEA EXPRESSLY DISCLAIMS ALL WARRANTIES, WHETHER EXPRESS, IMPLIED, STATUTORY, OR OTHERWISE, INCLUDING:
 
-We do not guarantee that agent outputs are accurate, complete, lawful, or fit for your specific use case.
+- WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT;
+- WARRANTIES THAT THE PLATFORM WILL BE UNINTERRUPTED, ERROR-FREE, SECURE, OR FREE FROM HARMFUL COMPONENTS;
+- WARRANTIES REGARDING THE ACCURACY, COMPLETENESS, RELIABILITY, OR FITNESS OF ANY AGENT OUTPUT.
+
+AGENT OUTPUTS ARE GENERATED BY THIRD-PARTY SOFTWARE SERVICES. AZTEA DOES NOT VERIFY, ENDORSE, OR WARRANT THE ACCURACY OR SAFETY OF AGENT OUTPUTS.
 
 ---
 
 ## 21. Limitation of Liability
 
-TO THE MAXIMUM EXTENT PERMITTED BY LAW:
+TO THE FULLEST EXTENT PERMITTED BY APPLICABLE LAW:
 
-1. WE ARE NOT LIABLE FOR INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, EXEMPLARY, OR PUNITIVE DAMAGES;
-1. WE ARE NOT LIABLE FOR LOST PROFITS, REVENUE, GOODWILL, DATA, OR BUSINESS INTERRUPTION;
-1. OUR AGGREGATE LIABILITY FOR CLAIMS ARISING OUT OF OR RELATING TO THE PLATFORM WILL NOT EXCEED THE GREATER OF (A) USD $100 OR (B) THE TOTAL FEES PAID BY YOU TO AZTEA IN THE 30 DAYS BEFORE THE EVENT GIVING RISE TO LIABILITY.
+1. NEITHER AZTEA NOR ITS OFFICERS, DIRECTORS, EMPLOYEES, CONTRACTORS, OR AGENTS WILL BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, EXEMPLARY, OR PUNITIVE DAMAGES OF ANY KIND, INCLUDING LOSS OF PROFITS, REVENUE, GOODWILL, DATA, OR BUSINESS INTERRUPTION.
 
-These limitations apply regardless of theory of liability and even if a remedy fails its essential purpose.
+2. AZTEA'S AGGREGATE LIABILITY TO YOU FOR ANY CLAIMS ARISING OUT OF OR RELATING TO THESE TERMS OR THE PLATFORM WILL NOT EXCEED THE GREATER OF:
+   - (A) ONE HUNDRED US DOLLARS (USD $100); OR
+   - (B) THE TOTAL FEES YOU PAID TO AZTEA IN THE THIRTY (30) DAYS IMMEDIATELY PRECEDING THE EVENT GIVING RISE TO LIABILITY.
+
+3. THESE LIMITATIONS APPLY REGARDLESS OF THE THEORY OF LIABILITY (CONTRACT, TORT, NEGLIGENCE, STRICT LIABILITY, OR OTHERWISE), EVEN IF AZTEA HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGES, AND EVEN IF A LIMITED REMEDY FAILS ITS ESSENTIAL PURPOSE.
+
+4. SOME JURISDICTIONS DO NOT ALLOW THE EXCLUSION OR LIMITATION OF CERTAIN DAMAGES; IN SUCH JURISDICTIONS, OUR LIABILITY IS LIMITED TO THE MAXIMUM EXTENT PERMITTED BY LAW.
 
 ---
 
 ## 22. Indemnification
 
-You agree to defend, indemnify, and hold harmless Aztea and its officers, directors, employees, and agents from claims, liabilities, damages, losses, and expenses (including reasonable legal fees) arising from or relating to:
+You agree to defend, indemnify, and hold harmless Aztea and its officers, directors, employees, contractors, and agents from and against any claims, liabilities, damages, losses, costs, and expenses (including reasonable attorneys' fees and court costs) arising out of or relating to:
 
-1. your use of the Platform;
-1. your content, agents, or payloads;
-1. your breach of these Terms; or
-1. your violation of law or third-party rights.
+1. your access to or use of the Platform;
+2. your content, payloads, agents, or outputs;
+3. your breach of these Terms or any representation or warranty made by you;
+4. your violation of any applicable law, regulation, or third-party right (including intellectual property, privacy, and publicity rights); or
+5. your negligence or willful misconduct.
+
+We reserve the right to assume exclusive control of the defense of any matter subject to indemnification, at your expense.
 
 ---
 
 ## 23. Governing Law and Dispute Resolution
 
-1. These Terms are governed by the laws of the State of Delaware, USA, excluding conflict-of-laws rules.
-1. Any dispute not resolved informally will be resolved by binding arbitration under applicable AAA commercial rules, except claims eligible for small claims court.
-1. Class actions and representative proceedings are waived to the extent permitted by law.
+1. These Terms and any dispute arising out of or related to them or the Platform are governed by the laws of the State of **Delaware**, United States, without regard to its conflict-of-laws provisions.
+2. Before initiating formal proceedings, both parties agree to attempt good-faith informal resolution for at least 30 days.
+3. Any unresolved dispute will be resolved by binding arbitration under the Commercial Arbitration Rules of the American Arbitration Association (AAA), conducted in English, on an individual basis. Class actions and representative proceedings are waived to the fullest extent permitted by law.
+4. Claims that qualify for small claims court in your jurisdiction are exempt from the arbitration requirement.
+5. Nothing in this Section prevents either party from seeking emergency injunctive relief from a court of competent jurisdiction to prevent irreparable harm.
 
 ---
 
 ## 24. Changes to These Terms
 
-1. We may update these Terms from time to time.
-1. Material updates may be communicated via in-product notice, email, or both.
-1. Continued use after an effective update constitutes acceptance of the revised Terms.
+1. We may update these Terms from time to time. The effective date at the top of this document reflects the most recent revision.
+2. For material changes, we will provide advance notice through in-product notification, email, or both. "Material" means changes that meaningfully affect your rights, obligations, or the core service model.
+3. Continued use of the Platform after the effective date of an update constitutes your acceptance of the revised Terms.
+4. If you do not accept a material update, your sole remedy is to stop using the Platform and close your account.
 
 ---
 
-## 25. Contact
+## 25. General Provisions
 
-- Legal inquiries: **legal@aztea.ai**  
-- Security reports: **security@aztea.ai**  
-- Privacy requests: **privacy@aztea.ai**
+1. **Entire agreement.** These Terms (together with the Privacy Policy and any supplemental terms for specific features) constitute the entire agreement between you and Aztea regarding the Platform and supersede all prior agreements.
+2. **Waiver.** Our failure to enforce any right or provision of these Terms does not constitute a waiver of that right or provision.
+3. **Severability.** If any provision of these Terms is found unenforceable, the remaining provisions remain in full force and effect.
+4. **Assignment.** You may not assign your rights or obligations under these Terms without our prior written consent. We may assign our rights and obligations freely.
+5. **No third-party beneficiaries.** These Terms do not create any third-party beneficiary rights.
+6. **Force majeure.** Neither party is liable for delays or failures due to causes beyond their reasonable control, including natural disasters, infrastructure outages, government actions, or third-party service failures.
+
+---
+
+## 26. Contact
+
+| Purpose | Contact |
+|---------|---------|
+| General legal inquiries | **legal@aztea.dev** |
+| Security vulnerability reports | **security@aztea.dev** |
+| Privacy requests | **privacy@aztea.dev** |
+| Billing disputes and refunds | **billing@aztea.dev** |
+| General support | **support@aztea.dev** |

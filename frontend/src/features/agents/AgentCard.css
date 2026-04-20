@@ -45,8 +45,15 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 4px;
   padding-top: 1px;
+}
+
+.ac__head-sub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .ac__name {
@@ -121,6 +128,15 @@
   flex: 1;
   font-size: 0.75rem;
   color: var(--text-muted);
+}
+
+.ac__examples {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  font-weight: 500;
 }
 
 .ac__cta {

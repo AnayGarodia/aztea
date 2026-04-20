@@ -225,3 +225,29 @@
 }
 .invoke-panel__dot.done { background: var(--accent); }
 .invoke-panel__dot.cur  { background: var(--accent); transform: scale(1.3); }
+
+/* ── Private task toggle ─────────────────────────────────────── */
+.invoke-panel__private-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+  width: fit-content;
+}
+.invoke-panel__private-toggle:hover {
+  border-color: var(--border-bright);
+  color: var(--text-primary);
+}
+.invoke-panel__private-toggle--on {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}

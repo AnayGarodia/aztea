@@ -50,6 +50,19 @@ def test_registry_raises_on_unknown_provider():
         resolve("martian:some-model")
 
 
+def test_registry_resolves_alias_provider_names():
+    from core.llm.registry import resolve
+    provider, model = resolve("xai:grok-2-vision")
+    assert provider.name == "grok"
+    assert model == "grok-2-vision"
+
+
+def test_registry_rejects_empty_model_spec():
+    from core.llm.registry import resolve
+    with pytest.raises(ValueError, match="LLM model is required"):
+        resolve("openai:   ")
+
+
 def test_default_chain_env_override(monkeypatch):
     monkeypatch.setenv("AZTEA_LLM_DEFAULT_CHAIN", "openai:gpt-4o-mini,groq:llama-3.3-70b-versatile")
     from core.llm import registry as reg_mod
@@ -110,6 +123,19 @@ def test_anthropic_provider_unavailable_when_key_missing(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     from core.llm.providers.anthropic_provider import AnthropicProvider
     p = AnthropicProvider()
+    assert not p.is_available()
+
+
+def test_openai_compatible_provider_unavailable_when_key_or_base_url_missing(monkeypatch):
+    monkeypatch.delenv("OPENAI_COMPAT_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_COMPAT_BASE_URL", raising=False)
+    from core.llm.providers.openai_compatible_provider import OpenAICompatibleProvider
+    p = OpenAICompatibleProvider(
+        name="openai_compat",
+        api_key_env="OPENAI_COMPAT_API_KEY",
+        base_url_env="OPENAI_COMPAT_BASE_URL",
+        default_base_url="",
+    )
     assert not p.is_available()
 
 

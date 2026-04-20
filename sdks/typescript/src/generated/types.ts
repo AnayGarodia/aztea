@@ -414,6 +414,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/registry/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Registry Models List */
+        get: operations["registry_models_list_registry_models_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/registry/agents": {
         parameters: {
             query?: never;
@@ -462,6 +479,46 @@ export interface paths {
         };
         /** Registry Get */
         get: operations["registry_get_registry_agents__agent_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/registry/agents/{agent_id}/work-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Registry Agent Work History
+         * @description Return paginated public work examples for an agent.
+         */
+        get: operations["registry_agent_work_history_registry_agents__agent_id__work_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/llm/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Llm Providers List
+         * @description List all registered LLM providers and their availability.
+         */
+        get: operations["llm_providers_list_llm_providers_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1308,7 +1365,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Create a Stripe Connect Express account and return an onboarding URL. */
+        /** Create a Stripe connected account and return an onboarding URL. */
         post: operations["connect_onboard_wallets_connect_onboard_post"];
         delete?: never;
         options?: never;
@@ -1550,7 +1607,7 @@ export interface components {
              * Model Provider
              * @description LLM provider used by this agent, if any.
              */
-            model_provider?: ("groq" | "openai" | "anthropic" | "other") | null;
+            model_provider?: string | null;
             /**
              * Model Id
              * @description Specific model identifier (e.g. 'llama-3.3-70b-versatile').
@@ -1956,6 +2013,13 @@ export interface components {
             /** Judgments */
             judgments?: components["schemas"]["DisputeJudgmentResponse"][];
         };
+        /** DynamicListResponse */
+        DynamicListResponse: {
+            /** Items */
+            items: {
+                [key: string]: components["schemas"]["JsonValue"];
+            }[];
+        };
         /** DynamicObjectResponse */
         DynamicObjectResponse: {
             [key: string]: unknown;
@@ -2070,6 +2134,25 @@ export interface components {
             output_payload: {
                 [key: string]: components["schemas"]["JsonValue"];
             };
+            /**
+             * Output Artifacts
+             * @description Optional artifact descriptors for non-JSON or binary outputs. Each artifact should include at least {name, mime, url_or_base64, size_bytes}.
+             */
+            output_artifacts?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            }[];
+            /**
+             * Output Format
+             * @description Optional primary output MIME type hint (e.g., video/mp4, image/png, application/step).
+             */
+            output_format?: string | null;
+            /**
+             * Protocol Metadata
+             * @description Optional protocol metadata attached to output payload.
+             */
+            protocol_metadata?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
             /** Claim Token */
             claim_token?: string | null;
         };
@@ -2090,6 +2173,41 @@ export interface components {
             input_payload?: {
                 [key: string]: components["schemas"]["JsonValue"];
             };
+            /**
+             * Input Artifacts
+             * @description Optional artifact descriptors for non-JSON or binary inputs. Each artifact should include at least {name, mime, url_or_base64, size_bytes}.
+             */
+            input_artifacts?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            }[];
+            /**
+             * Preferred Input Formats
+             * @description Optional ordered format preferences (e.g., ['application/json', 'image/png', 'application/dwg']).
+             */
+            preferred_input_formats?: string[];
+            /**
+             * Preferred Output Formats
+             * @description Optional ordered desired output formats (e.g., ['video/mp4', 'model/stl', 'application/pdf']).
+             */
+            preferred_output_formats?: string[];
+            /**
+             * Communication Channel
+             * @description Optional logical channel name for multi-agent collaboration threads.
+             */
+            communication_channel?: string | null;
+            /**
+             * Protocol Metadata
+             * @description Optional protocol metadata carried into worker input payload.
+             */
+            protocol_metadata?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /**
+             * Private Task
+             * @description When true, output examples from this job are not persisted to the agent/model work history.
+             * @default false
+             */
+            private_task: boolean;
             /**
              * Max Attempts
              * @default 3
@@ -2267,6 +2385,10 @@ export interface components {
             from_id?: string | null;
             /** Correlation Id */
             correlation_id?: string | null;
+            /** Channel */
+            channel?: string | null;
+            /** To Id */
+            to_id?: string | null;
         };
         /** JobMessageResponse */
         JobMessageResponse: {
@@ -2682,7 +2804,7 @@ export interface components {
              */
             respect_caller_trust_min: boolean;
             /** Model Provider */
-            model_provider?: ("groq" | "openai" | "anthropic" | "other") | null;
+            model_provider?: string | null;
         };
         /** RegistrySearchResponse */
         RegistrySearchResponse: {
@@ -4507,6 +4629,76 @@ export interface operations {
             };
         };
     };
+    registry_models_list_registry_models_get: {
+        parameters: {
+            query?: {
+                model_provider?: string | null;
+                model_id?: string | null;
+                include_examples?: boolean;
+                example_limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DynamicObjectResponse"];
+                };
+            };
+            /** @description Missing or invalid authorization header. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Rate limit exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
+                };
+            };
+            /** @description Internal server error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     registry_list_registry_agents_get: {
         parameters: {
             query?: {
@@ -4709,6 +4901,123 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Rate limit exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
+                };
+            };
+            /** @description Internal server error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    registry_agent_work_history_registry_agents__agent_id__work_history_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DynamicListResponse"];
+                };
+            };
+            /** @description Missing or invalid authorization header. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Rate limit exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RateLimitErrorResponse"];
+                };
+            };
+            /** @description Internal server error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    llm_providers_list_llm_providers_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Missing or invalid authorization header. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Rate limit exceeded. */
@@ -6492,6 +6801,10 @@ export interface operations {
         parameters: {
             query?: {
                 since?: number | null;
+                type?: string | null;
+                from_id?: string | null;
+                channel?: string | null;
+                to_id?: string | null;
             };
             header?: never;
             path: {
@@ -6659,6 +6972,10 @@ export interface operations {
         parameters: {
             query?: {
                 since?: number | null;
+                type?: string | null;
+                from_id?: string | null;
+                channel?: string | null;
+                to_id?: string | null;
             };
             header?: never;
             path: {

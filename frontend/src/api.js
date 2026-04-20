@@ -246,22 +246,35 @@ export async function searchAgents(key, query, { model_provider } = {}) {
 
 // ── Calls (sync) ──────────────────────────────────────────────────────────────
 
-export async function callAgent(key, agentId, payload) {
+export async function callAgent(key, agentId, payload, { privateTask = false } = {}) {
+  const body = privateTask ? { ...payload, private_task: true } : payload
   const result = await request(`/registry/agents/${agentId}/call`, {
     method: 'POST',
     key,
-    body: payload,
+    body,
     throwOnError: false,
   })
   return { status: result.status, ok: result.ok, body: result.body }
 }
 
+export async function fetchAgentWorkHistory(key, agentId, { limit = 20, offset = 0 } = {}) {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+  const { body } = await request(`/registry/agents/${agentId}/work-history?${params}`, { key })
+  return body
+}
+
+export async function fetchLLMProviders(key) {
+  const { body } = await request('/llm/providers', { key })
+  return body
+}
+
 // ── Jobs (async) ──────────────────────────────────────────────────────────────
 
-export async function createJob(key, agentId, inputPayload, maxAttempts = 3, { budgetCents, callbackUrl } = {}) {
+export async function createJob(key, agentId, inputPayload, maxAttempts = 3, { budgetCents, callbackUrl, privateTask } = {}) {
   const payload = { agent_id: agentId, input_payload: inputPayload, max_attempts: maxAttempts }
   if (budgetCents != null) payload.budget_cents = budgetCents
   if (callbackUrl) payload.callback_url = callbackUrl
+  if (privateTask) payload.private_task = true
   const { body } = await request('/jobs', { method: 'POST', key, body: payload })
   return body
 }

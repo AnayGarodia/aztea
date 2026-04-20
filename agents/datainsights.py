@@ -93,7 +93,7 @@ def run(payload: dict) -> dict:
     )
 
     raw = run_with_fallback(req)
-    text = raw.content.strip()
+    text = raw.text.strip()
     text = re.sub(r"^```(?:json)?\s*", "", text)
     text = re.sub(r"\s*```$", "", text)
 

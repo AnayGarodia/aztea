@@ -2,6 +2,7 @@
 api_models.py — Request body schemas shared by server routes.
 """
 
+import re
 from typing import Annotated, Literal, NotRequired, TypeAlias, TypedDict
 
 from pydantic import (
@@ -61,6 +62,7 @@ TYPED_JOB_MESSAGE_TYPES = frozenset(
         "progress",
         "partial_result",
         "artifact",
+        "agent_message",
         "tool_call",
         "tool_result",
         "note",
@@ -358,7 +360,7 @@ class AgentRegisterRequest(BaseModel):
             "so orchestrators can evaluate quality before hiring."
         ),
     )
-    model_provider: Literal["groq", "openai", "anthropic", "other"] | None = Field(
+    model_provider: str | None = Field(
         default=None,
         description="LLM provider used by this agent, if any.",
     )
@@ -367,6 +369,26 @@ class AgentRegisterRequest(BaseModel):
         max_length=128,
         description="Specific model identifier (e.g. 'llama-3.3-70b-versatile').",
     )
+
+    @field_validator("model_provider")
+    @classmethod
+    def model_provider_valid(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = re.sub(r"[^a-z0-9._-]+", "-", str(value).strip().lower()).strip("-")
+        if not normalized:
+            return None
+        if len(normalized) > 64:
+            raise ValueError("model_provider must be <= 64 characters.")
+        return normalized
+
+    @field_validator("model_id")
+    @classmethod
+    def model_id_valid(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
 
 
 class DepositRequest(BaseModel):
@@ -557,6 +579,36 @@ class JobCreateRequest(BaseModel):
 
     agent_id: str
     input_payload: JSONObject = Field(default_factory=dict)
+    input_artifacts: list[JSONObject] = Field(
+        default_factory=list,
+        description=(
+            "Optional artifact descriptors for non-JSON or binary inputs. "
+            "Each artifact should include at least {name, mime, url_or_base64, size_bytes}."
+        ),
+    )
+    preferred_input_formats: list[str] = Field(
+        default_factory=list,
+        description="Optional ordered format preferences (e.g., ['application/json', 'image/png', 'application/dwg']).",
+    )
+    preferred_output_formats: list[str] = Field(
+        default_factory=list,
+        description="Optional ordered desired output formats (e.g., ['video/mp4', 'model/stl', 'application/pdf']).",
+    )
+    communication_channel: str | None = Field(
+        default=None,
+        description="Optional logical channel name for multi-agent collaboration threads.",
+    )
+    protocol_metadata: JSONObject = Field(
+        default_factory=dict,
+        description="Optional protocol metadata carried into worker input payload.",
+    )
+    private_task: bool = Field(
+        default=False,
+        description=(
+            "When true, output examples from this job are not persisted to the "
+            "agent/model work history."
+        ),
+    )
     max_attempts: int = Field(default=3, ge=1, le=10)
     parent_job_id: str | None = Field(
         default=None,
@@ -627,6 +679,40 @@ class JobCreateRequest(BaseModel):
         ),
     )
 
+    @field_validator("input_artifacts")
+    @classmethod
+    def input_artifacts_valid(cls, value: list[JSONObject]) -> list[JSONObject]:
+        normalized: list[JSONObject] = []
+        for item in value or []:
+            if not isinstance(item, dict):
+                raise ValueError("input_artifacts entries must be objects.")
+            normalized.append(item)
+        return normalized
+
+    @field_validator("preferred_input_formats", "preferred_output_formats")
+    @classmethod
+    def format_preferences_valid(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for item in value or []:
+            text = str(item).strip().lower()
+            if not text:
+                continue
+            if text not in normalized:
+                normalized.append(text)
+        return normalized
+
+    @field_validator("communication_channel")
+    @classmethod
+    def communication_channel_valid(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        if len(text) > 128:
+            raise ValueError("communication_channel must be <= 128 characters.")
+        return text
+
 
 class JobBatchCreateRequest(BaseModel):
     jobs: list["JobCreateRequest"] = Field(
@@ -640,7 +726,40 @@ class JobCompleteRequest(BaseModel):
     )
 
     output_payload: JSONObject
+    output_artifacts: list[JSONObject] = Field(
+        default_factory=list,
+        description=(
+            "Optional artifact descriptors for non-JSON or binary outputs. "
+            "Each artifact should include at least {name, mime, url_or_base64, size_bytes}."
+        ),
+    )
+    output_format: str | None = Field(
+        default=None,
+        description="Optional primary output MIME type hint (e.g., video/mp4, image/png, application/step).",
+    )
+    protocol_metadata: JSONObject = Field(
+        default_factory=dict,
+        description="Optional protocol metadata attached to output payload.",
+    )
     claim_token: str | None = None
+
+    @field_validator("output_artifacts")
+    @classmethod
+    def output_artifacts_valid(cls, value: list[JSONObject]) -> list[JSONObject]:
+        normalized: list[JSONObject] = []
+        for item in value or []:
+            if not isinstance(item, dict):
+                raise ValueError("output_artifacts entries must be objects.")
+            normalized.append(item)
+        return normalized
+
+    @field_validator("output_format")
+    @classmethod
+    def output_format_valid(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip().lower()
+        return text or None
 
 
 class JobFailRequest(BaseModel):
@@ -887,6 +1006,8 @@ class PartialResultPayload(BaseModel):
 
 
 class ArtifactPayload(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     name: str
     mime: str
     url_or_base64: str
@@ -987,6 +1108,44 @@ class ArtifactMessage(_TypedJobMessageBase):
     payload: ArtifactPayload
 
 
+class AgentMessagePayload(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    channel: str
+    body: JSONObject | str
+    to_id: str | None = None
+
+    @field_validator("channel")
+    @classmethod
+    def channel_not_empty(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("channel must not be empty")
+        if len(text) > 128:
+            raise ValueError("channel must be <= 128 characters")
+        return text
+
+    @field_validator("body")
+    @classmethod
+    def body_valid(cls, value: JSONObject | str) -> JSONObject | str:
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                raise ValueError("body must not be empty")
+            return text
+        return value
+
+    @field_validator("to_id")
+    @classmethod
+    def to_id_normalized(cls, value: str | None) -> str | None:
+        return _normalize_optional_text(value)
+
+
+class AgentMessage(_TypedJobMessageBase):
+    type: Literal["agent_message"]
+    payload: AgentMessagePayload
+
+
 class ToolCallMessage(_TypedJobMessageBase):
     type: Literal["tool_call"]
     payload: ToolCallPayload
@@ -1025,6 +1184,7 @@ TypedJobMessage = Annotated[
         | ProgressMessage
         | PartialResultMessage
         | ArtifactMessage
+        | AgentMessage
         | ToolCallMessage
         | ToolResultMessage
         | NoteMessage
@@ -1104,6 +1264,28 @@ def _normalize_typed_payload_for_compat(msg_type: str, payload: JSONObject) -> J
         if not text:
             raise ValueError("note payload.text is required.")
         normalized["text"] = text
+        return normalized
+
+    if msg_type == "agent_message":
+        channel = str(normalized.get("channel") or "").strip()
+        if not channel:
+            raise ValueError("agent_message payload.channel is required.")
+        normalized["channel"] = channel
+        body = normalized.get("body")
+        if isinstance(body, str):
+            body_text = body.strip()
+            if not body_text:
+                raise ValueError("agent_message payload.body must not be empty.")
+            normalized["body"] = body_text
+        elif body is None:
+            raise ValueError("agent_message payload.body is required.")
+        elif not isinstance(body, dict):
+            raise ValueError("agent_message payload.body must be an object or non-empty string.")
+        to_id = _normalize_optional_text(normalized.get("to_id"))
+        if to_id is None:
+            normalized.pop("to_id", None)
+        else:
+            normalized["to_id"] = to_id
         return normalized
 
     if msg_type == "tool_call":
@@ -1231,6 +1413,18 @@ class JobMessageRequest(BaseModel):
     payload: JSONObject = Field(default_factory=dict)
     from_id: str | None = None
     correlation_id: str | None = None
+    channel: str | None = None
+    to_id: str | None = None
+
+    @field_validator("channel")
+    @classmethod
+    def channel_valid(cls, value: str | None) -> str | None:
+        return _normalize_optional_text(value)
+
+    @field_validator("to_id")
+    @classmethod
+    def to_id_valid(cls, value: str | None) -> str | None:
+        return _normalize_optional_text(value)
 
 
 class OnboardingValidateRequest(BaseModel):
@@ -1329,7 +1523,7 @@ class RegistrySearchRequest(BaseModel):
     max_price_cents: int | None = Field(default=None, ge=0)
     required_input_fields: list[str] | None = None
     respect_caller_trust_min: bool = False
-    model_provider: Literal["groq", "openai", "anthropic", "other"] | None = None
+    model_provider: str | None = None
 
     @field_validator("query")
     @classmethod
@@ -1355,6 +1549,14 @@ class RegistrySearchRequest(BaseModel):
             seen.add(field_name)
             normalized.append(field_name)
         return normalized
+
+    @field_validator("model_provider")
+    @classmethod
+    def search_model_provider_valid(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = re.sub(r"[^a-z0-9._-]+", "-", str(value).strip().lower()).strip("-")
+        return normalized or None
 
 
 class ErrorResponse(BaseModel):

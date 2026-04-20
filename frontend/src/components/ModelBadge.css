@@ -1,6 +1,7 @@
 .model-badge {
   display: inline-flex;
   align-items: center;
+  gap: 2px;
   padding: 2px 7px;
   border-radius: 4px;
   font-size: 11px;
@@ -8,4 +9,21 @@
   letter-spacing: 0.01em;
   line-height: 1.6;
   white-space: nowrap;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
+
+.model-badge__model {
+  opacity: 0.75;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 110px;
+  display: inline-block;
+}
+
+.model-badge--xs { font-size: 10px; padding: 1px 5px; }
+.model-badge--sm { font-size: 11px; }
+.model-badge--md { font-size: 12px; padding: 3px 8px; }

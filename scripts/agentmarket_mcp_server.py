@@ -7,6 +7,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import sys
 import threading
 from pathlib import Path
@@ -42,6 +43,64 @@ _AUTH_TOOL: dict[str, Any] = {
         "required": [],
     },
 }
+
+
+def _parse_data_uri(value: str) -> tuple[str | None, str | None]:
+    text = str(value or "").strip()
+    if not text:
+        return None, None
+    match = re.match(r"^data:([^;,]+);base64,([A-Za-z0-9+/=]+)$", text, re.IGNORECASE)
+    if not match:
+        return None, None
+    return match.group(1).strip().lower(), match.group(2).strip()
+
+
+def _mcp_text_from_payload(payload: Any) -> str:
+    if isinstance(payload, dict):
+        for key in ("summary", "message", "answer", "title", "one_line_summary", "signal_reasoning"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return json.dumps(payload, ensure_ascii=False)
+    if isinstance(payload, str):
+        return payload
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _mcp_media_content_from_artifacts(artifacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    content: list[dict[str, Any]] = []
+    for artifact in artifacts[:6]:
+        mime = str(artifact.get("mime") or "").strip().lower()
+        source = str(artifact.get("url_or_base64") or "").strip()
+        if not mime or not source:
+            continue
+        parsed_mime, base64_payload = _parse_data_uri(source)
+        effective_mime = parsed_mime or mime
+        if effective_mime.startswith("image/") and base64_payload:
+            content.append({"type": "image", "mimeType": effective_mime, "data": base64_payload})
+            continue
+        if source.startswith("http://") or source.startswith("https://"):
+            content.append({"type": "resource", "resource": {"uri": source, "mimeType": effective_mime}})
+            continue
+        if base64_payload:
+            content.append(
+                {
+                    "type": "resource",
+                    "resource": {"uri": f"data:{effective_mime};base64,{base64_payload}", "mimeType": effective_mime},
+                }
+            )
+            continue
+    return content
+
+
+def _mcp_content_from_payload(payload: Any) -> list[dict[str, Any]]:
+    content: list[dict[str, Any]] = [{"type": "text", "text": _mcp_text_from_payload(payload)}]
+    if isinstance(payload, dict):
+        raw_artifacts = payload.get("artifacts")
+        if isinstance(raw_artifacts, list):
+            artifacts = [item for item in raw_artifacts if isinstance(item, dict)]
+            content.extend(_mcp_media_content_from_artifacts(artifacts))
+    return content
 
 
 class RegistryBridge:
@@ -247,10 +306,14 @@ class MCPStdioServer:
         }
 
     def _format_tool_result(self, *, ok: bool, payload: dict[str, Any]) -> dict[str, Any]:
-        text = json.dumps(payload, ensure_ascii=False)
+        structured: dict[str, Any]
+        if isinstance(payload, dict):
+            structured = payload
+        else:
+            structured = {"result": payload}
         result: dict[str, Any] = {
-            "content": [{"type": "text", "text": text}],
-            "structuredContent": payload,
+            "content": _mcp_content_from_payload(payload),
+            "structuredContent": structured,
         }
         if not ok:
             result["isError"] = True

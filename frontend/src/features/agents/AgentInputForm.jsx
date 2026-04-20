@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
 import Button from '../../ui/Button'
 import Segmented from '../../ui/Segmented'
-import { Zap, Radio } from 'lucide-react'
+import { Zap, Radio, Lock, Unlock } from 'lucide-react'
 import './AgentInputForm.css'
 
 const MODE_OPTIONS = [
@@ -49,6 +49,7 @@ export default function AgentInputForm({ agent, onSubmit, loading, mode, onModeC
   const [values, setValues] = useState(() =>
     Object.fromEntries(fields.map(f => [f.name, f.default ?? '']))
   )
+  const [privateTask, setPrivateTask] = useState(false)
 
   const inputRef = useRef(null)
 
@@ -92,7 +93,7 @@ export default function AgentInputForm({ agent, onSubmit, loading, mode, onModeC
       if (f.transform === 'uppercase') v = String(v).toUpperCase()
       payload[f.name] = v
     })
-    onSubmit(payload)
+    onSubmit(payload, { privateTask })
   }
 
   const price = `$${Number(agent?.price_per_call_usd ?? 0).toFixed(2)}`
@@ -116,6 +117,15 @@ export default function AgentInputForm({ agent, onSubmit, loading, mode, onModeC
             <span className="invoke-panel__price-label">Cost per call</span>
             <span className="invoke-panel__price-val">{price}</span>
           </div>
+          <button
+            type="button"
+            className={`invoke-panel__private-toggle${privateTask ? ' invoke-panel__private-toggle--on' : ''}`}
+            onClick={() => setPrivateTask(p => !p)}
+            title={privateTask ? 'Private: output will not be saved to work history' : 'Public: output may be saved as a work example'}
+          >
+            {privateTask ? <Lock size={11} /> : <Unlock size={11} />}
+            {privateTask ? 'Private task' : 'Public task'}
+          </button>
           <Button
             type="submit"
             variant="primary"
@@ -235,6 +245,15 @@ export default function AgentInputForm({ agent, onSubmit, loading, mode, onModeC
           <span className="invoke-panel__price-label">Cost per call</span>
           <span className="invoke-panel__price-val">{price}</span>
         </div>
+        <button
+          type="button"
+          className={`invoke-panel__private-toggle${privateTask ? ' invoke-panel__private-toggle--on' : ''}`}
+          onClick={() => setPrivateTask(p => !p)}
+          title={privateTask ? 'Private: output will not be saved to work history' : 'Public: output may be saved as a work example'}
+        >
+          {privateTask ? <Lock size={11} /> : <Unlock size={11} />}
+          {privateTask ? 'Private task' : 'Public task'}
+        </button>
         <Button
           type="submit"
           variant="primary"

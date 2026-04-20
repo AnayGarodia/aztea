@@ -145,44 +145,44 @@
   --warn-line:   var(--warn-border);
 }
 
-/* ── Dark theme ───────────────────────────────────────────── */
+/* ── Dark theme (midnight blue) ───────────────────────────── */
 [data-theme="dark"] {
   color-scheme: dark;
 
-  /* Surfaces — carbon */
-  --canvas:    #0A0908;
-  --surface:   #111009;
-  --surface-2: #1A1814;
-  --surface-3: #222018;
-  --overlay:   rgba(17, 16, 9, 0.92);
+  /* Surfaces */
+  --canvas:    #070B14;
+  --surface:   #0D1424;
+  --surface-2: #121D33;
+  --surface-3: #1A2944;
+  --overlay:   rgba(13, 20, 36, 0.92);
 
   /* Borders */
-  --border:        #2A2620;
-  --border-bright: #3A3530;
+  --border:        #24324D;
+  --border-bright: #324765;
   --divider:       rgba(255, 255, 255, 0.05);
 
   /* Text */
-  --text-primary:   #F0EBE0;
-  --text-secondary: #A09080;
-  --text-muted:     #6A5E50;
-  --text-inverse:   #0A0908;
+  --text-primary:   #E8F0FF;
+  --text-secondary: #A3B6D7;
+  --text-muted:     #6D84AA;
+  --text-inverse:   #070B14;
 
   /* Legacy violet — kept for backward compat */
-  --violet:        #C4A864;
-  --violet-bg:     rgba(196, 168, 100, 0.1);
-  --violet-border: rgba(196, 168, 100, 0.25);
+  --violet:        #8FA2FF;
+  --violet-bg:     rgba(143, 162, 255, 0.14);
+  --violet-border: rgba(143, 162, 255, 0.34);
 
-  /* Mineral gold accent — brightened for dark bg */
-  --accent:        #C4A864;
-  --accent-hover:  #D4B874;
-  --accent-press:  #A89050;
-  --accent-bg:     rgba(196, 168, 100, 0.1);
-  --accent-border: rgba(196, 168, 100, 0.25);
-  --accent-glow:   rgba(196, 168, 100, 0.2);
-  --accent-glow-lg: rgba(196, 168, 100, 0.08);
-  --accent-ink:    #0A0908;
+  /* Cool electric accent */
+  --accent:        #61ADFF;
+  --accent-hover:  #7BBCFF;
+  --accent-press:  #4389D8;
+  --accent-bg:     rgba(97, 173, 255, 0.16);
+  --accent-border: rgba(97, 173, 255, 0.38);
+  --accent-glow:   rgba(97, 173, 255, 0.28);
+  --accent-glow-lg: rgba(97, 173, 255, 0.14);
+  --accent-ink:    #041024;
   /* Legacy alias */
-  --accent-2:      #A89050;
+  --accent-2:      #4389D8;
 
   /* Signals — vivid, unmistakable */
   --positive:        #22C55E;
@@ -193,20 +193,20 @@
   --negative-bg:     rgba(239, 68, 68, 0.1);
   --negative-border: rgba(239, 68, 68, 0.3);
 
-  --warn:        #F59E0B;
-  --warn-bg:     rgba(245, 158, 11, 0.1);
-  --warn-border: rgba(245, 158, 11, 0.3);
+  --warn:        #F7C35E;
+  --warn-bg:     rgba(247, 195, 94, 0.12);
+  --warn-border: rgba(247, 195, 94, 0.36);
 
-  --info:        #3B82F6;
-  --info-bg:     rgba(59, 130, 246, 0.1);
-  --info-border: rgba(59, 130, 246, 0.25);
+  --info:        #75BAFF;
+  --info-bg:     rgba(117, 186, 255, 0.13);
+  --info-border: rgba(117, 186, 255, 0.34);
 
   /* Shadows */
   --shadow-xs: 0 1px 3px rgba(0,0,0,.5);
   --shadow-sm: 0 2px 8px rgba(0,0,0,.55), 0 1px 2px rgba(0,0,0,.35);
   --shadow-md: 0 4px 20px rgba(0,0,0,.65), 0 2px 6px rgba(0,0,0,.4);
   --shadow-lg: 0 12px 48px rgba(0,0,0,.75), 0 4px 12px rgba(0,0,0,.4);
-  --shadow-accent: 0 4px 24px rgba(196,168,100,0.22), 0 0 0 1px var(--accent-border);
+  --shadow-accent: 0 4px 24px rgba(97,173,255,0.26), 0 0 0 1px var(--accent-border);
   --focus-ring: 0 0 0 2px var(--canvas), 0 0 0 4px var(--accent);
 
   /* Legacy aliases */

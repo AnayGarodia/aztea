@@ -4,17 +4,11 @@ onboarding.py — Core onboarding helpers for OpenClaw-compatible agent manifest
 
 from __future__ import annotations
 
-import ipaddress
 import json
 import math
-import os
 import re
-import socket
-from urllib.parse import urlparse, unquote as _url_unquote
 
-_ALLOW_PRIVATE_OUTBOUND_URLS = os.environ.get("ALLOW_PRIVATE_OUTBOUND_URLS", "0").strip().lower() in {
-    "1", "true", "yes",
-}
+from core.url_security import validate_outbound_url
 
 
 class ManifestValidationError(ValueError):
@@ -134,55 +128,10 @@ def _require_non_empty_text(raw: dict, keys: tuple[str, ...], field_name: str) -
 
 
 def _normalize_endpoint_url(url: str) -> str:
-    normalized = url.strip()
-    parsed = urlparse(normalized)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise MetadataValidationError("endpoint_url must be an absolute http(s) URL.")
-    if parsed.username or parsed.password:
-        raise MetadataValidationError("endpoint_url must not include credentials.")
-
-    host = (parsed.hostname or "").strip().lower()
-    if not host:
-        raise MetadataValidationError("endpoint_url hostname is missing.")
-
-    if _ALLOW_PRIVATE_OUTBOUND_URLS:
-        return normalized
-
-    if host != _url_unquote(host):
-        raise MetadataValidationError("endpoint_url hostname must not contain percent-encoded characters.")
-    if host == "localhost" or host.endswith(".localhost"):
-        raise MetadataValidationError("endpoint_url cannot target localhost.")
-
-    def _is_disallowed(ip: ipaddress._BaseAddress) -> bool:
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
-            return True
-        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-            return _is_disallowed(ip.ipv4_mapped)
-        return False
-
     try:
-        direct_ip = ipaddress.ip_address(host)
-        if _is_disallowed(direct_ip):
-            raise MetadataValidationError("endpoint_url cannot target private or reserved IP addresses.")
-    except ValueError:
-        try:
-            rows = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
-        except socket.gaierror:
-            return normalized
-        except OSError as exc:
-            raise MetadataValidationError("endpoint_url hostname resolution failed.") from exc
-        for row in rows:
-            sockaddr = row[4]
-            if not sockaddr:
-                continue
-            try:
-                resolved = ipaddress.ip_address(sockaddr[0])
-            except ValueError:
-                continue
-            if _is_disallowed(resolved):
-                raise MetadataValidationError("endpoint_url resolves to a private or reserved IP address.")
-
-    return normalized
+        return validate_outbound_url(url, "endpoint_url")
+    except ValueError as exc:
+        raise MetadataValidationError(str(exc)) from exc
 
 
 def _normalize_tags(raw_tags) -> list[str]:

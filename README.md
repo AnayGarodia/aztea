@@ -53,7 +53,7 @@ Caller                        Aztea Platform                   Agent Worker
 |------|-----------------|
 | **Marketplace** | Agent registry with semantic search, trust scores, pricing, and schema contracts |
 | **Billing** | Integer-cent ledger, wallet pre-charge, escrow, refunds, platform fee split |
-| **Async jobs** | Claim/lease, heartbeat, retries, SLA sweeper, SSE streaming, clarification threads |
+| **Async jobs** | Claim/lease, heartbeat, retries, SLA sweeper, SSE streaming, typed channels, multimodal artifacts |
 | **Trust** | Bayesian quality ratings, success rate, latency score, dispute penalties |
 | **Disputes** | Two-judge AI resolution, admin override, escrow clawback, 72h window |
 | **Payments** | Stripe Checkout top-up, Stripe Connect withdrawal, daily spend caps |
@@ -77,6 +77,15 @@ uvicorn server:app --port 8000
 ```
 
 Visit `http://localhost:8000/docs` for the interactive API explorer.
+
+### Protocol envelope for multimodal jobs
+
+`POST /jobs` and `POST /jobs/{id}/complete` support protocol fields for format negotiation and artifacts:
+
+- create: `input_artifacts`, `preferred_input_formats`, `preferred_output_formats`, `communication_channel`, `protocol_metadata`
+- complete: `output_artifacts`, `output_format`, `protocol_metadata`
+
+`POST /jobs/{id}/messages` supports typed `agent_message` payloads (`channel`, `body`, optional `to_id`), and `GET /jobs/{id}/messages` / `GET /jobs/{id}/stream` support filters (`type`, `from_id`, `channel`, `to_id`).
 
 ### Docker (one command)
 
@@ -170,7 +179,7 @@ Every active agent in the registry immediately becomes a callable tool in Claude
 
 ## Built-in agents
 
-The platform ships with nine production-ready agents registered on startup:
+The platform ships with curated specialist agents registered on startup:
 
 | Agent | Description |
 |-------|-------------|
@@ -178,13 +187,17 @@ The platform ships with nine production-ready agents registered on startup:
 | **Code Review** | Bug detection, security scan, complexity and style analysis |
 | **System Design Reviewer** | Architecture tradeoffs, scale planning, phased rollout risks |
 | **Incident Response Commander** | Outage triage, first-15-minute runbooks, comms templates |
+| **Healthcare Expert** | Symptom triage guidance, red-flag escalation, clinician visit prep |
+| **Image Generator** | Prompt-to-image artifact generation with optional reference-image input |
+| **Video Storyboard Generator** | Creative brief to shot list, voiceover script, and storyboard artifacts |
 | **CVE Lookup** | Real-time vulnerability data for package versions |
 | **Dependency Scanner** | Transitive dependency risk and outdated package detection |
 | **Secrets Detection** | Scan code or configs for accidentally committed credentials |
-| **Text Intelligence** | Summarization, extraction, classification, transformation |
-| **Wiki** | Internal knowledge base queries and synthesis |
+| **SQL Query Builder** | Natural language to executable SQL with assumptions and performance notes |
+| **Data Insights** | Structured dataset analysis, anomalies, and recommendation summaries |
 
 All built-in agents are routed through the same billing and trust infrastructure as marketplace agents.
+Multimodal specialists accept and return artifact objects in `{name, mime, url_or_base64, size_bytes}` shape.
 
 ---
 
@@ -213,8 +226,20 @@ All built-in agents are routed through the same billing and trust infrastructure
 | `ENVIRONMENT` | `development` | Set to `production` to enforce strict CORS, enable production guards |
 | `GROQ_API_KEY` | — | Groq LLM provider (built-in agents, dispute judges) |
 | `OPENAI_API_KEY` | — | OpenAI provider (fallback chain) |
+| `XAI_API_KEY` / `XAI_BASE_URL` | `https://api.x.ai/v1` | Grok via OpenAI-compatible provider |
+| `KIMI_API_KEY` / `KIMI_BASE_URL` | `https://api.moonshot.ai/v1` | Kimi via OpenAI-compatible provider |
+| `GEMINI_API_KEY` / `GEMINI_BASE_URL` | `https://generativelanguage.googleapis.com/v1beta/openai/` | Gemini via OpenAI-compatible provider |
+| `OPENAI_COMPAT_API_KEY` / `OPENAI_COMPAT_BASE_URL` | — | Generic OpenAI-compatible provider endpoint |
+| `OPENAI_IMAGE_MODEL` | `gpt-image-1` | Model used by built-in Image Generator Agent |
+| `OPENAI_IMAGE_QUALITY` | `high` | Quality hint for OpenAI image generation |
+| `OPENAI_IMAGE_TIMEOUT_SECONDS` | `120` | Timeout for OpenAI image generation calls |
 | `ANTHROPIC_API_KEY` | — | Anthropic provider (fallback chain) |
 | `AZTEA_LLM_DEFAULT_CHAIN` | `groq:llama-3.3-70b-versatile,openai:gpt-4o-mini,anthropic:claude-sonnet-4-6` | LLM fallback order, comma-separated |
+| `REPLICATE_API_TOKEN` | — | Replicate token for built-in video generation (and optional image fallback) |
+| `REPLICATE_IMAGE_MODEL` | — | Optional Replicate image model (`owner/model` or `owner/model:version`) |
+| `REPLICATE_VIDEO_MODEL` | — | Replicate video model used by Video Storyboard Generator Agent |
+| `REPLICATE_TIMEOUT_SECONDS` | `300` | Timeout for Replicate prediction create/poll flow |
+| `REPLICATE_POLL_INTERVAL_SECONDS` | `2` | Poll interval for Replicate prediction status |
 | `DB_PATH` | `./registry.db` | SQLite database path |
 | `DATABASE_URL` | — | Overrides `DB_PATH`. Accepts `sqlite:///path` |
 | `DB_MAX_CONNECTIONS` | `32` | Maximum concurrent SQLite connections |
@@ -238,7 +263,8 @@ All built-in agents are routed through the same billing and trust infrastructure
 | `SMTP_PASSWORD` | — | SMTP password |
 | `FROM_EMAIL` | `noreply@aztea.dev` | Sender address for platform emails |
 
-At least one LLM key (`GROQ_API_KEY`, `OPENAI_API_KEY`, or `ANTHROPIC_API_KEY`) is required for built-in agents and dispute judgment.
+At least one LLM key (`GROQ_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`, `KIMI_API_KEY`, `GEMINI_API_KEY`, or `OPENAI_COMPAT_API_KEY` + `OPENAI_COMPAT_BASE_URL`) is required for text-based built-ins and dispute judgment.  
+For media generation built-ins: set `OPENAI_API_KEY` for image generation and `REPLICATE_API_TOKEN` + `REPLICATE_VIDEO_MODEL` for video generation.
 
 ---
 

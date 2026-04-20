@@ -668,7 +668,7 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     d["reviewed_by"] = str(d.get("reviewed_by") or "").strip() or None
     d["trust_decay_multiplier"] = _to_non_negative_float(d.get("trust_decay_multiplier"), default=1.0) or 1.0
     d["last_decay_at"] = str(d.get("last_decay_at") or _CANONICAL_CREATED_AT)
-    d["model_provider"] = str(d.get("model_provider") or "").strip() or None
+    d["model_provider"] = str(d.get("model_provider") or "").strip().lower() or None
     d["model_id"] = str(d.get("model_id") or "").strip() or None
 
     total = d["total_calls"]
@@ -805,7 +805,7 @@ def register_agent(
                 normalized_decay_multiplier,
                 created_at,
                 created_at,
-                str(model_provider).strip() if model_provider else None,
+                str(model_provider).strip().lower() if model_provider else None,
                 str(model_id).strip()[:128] if model_id else None,
             ),
         )
@@ -855,9 +855,7 @@ def get_agents(
     Return all agent listings, optionally filtered by tag or model_provider.
     Tag matching uses exact JSON-array membership to avoid substring false-positives.
     """
-    _VALID_MODEL_PROVIDERS = {"groq", "openai", "anthropic", "other"}
-    if model_provider is not None and model_provider not in _VALID_MODEL_PROVIDERS:
-        raise ValueError(f"model_provider must be one of: {', '.join(sorted(_VALID_MODEL_PROVIDERS))}.")
+    normalized_provider = str(model_provider or "").strip().lower() or None
     with _conn() as conn:
         where_clauses: list[str] = []
         params: list[Any] = []
@@ -870,9 +868,9 @@ def get_agents(
         if tag:
             where_clauses.append("tags LIKE ?")
             params.append(f'%"{tag}"%')
-        if model_provider:
+        if normalized_provider:
             where_clauses.append("model_provider = ?")
-            params.append(model_provider)
+            params.append(normalized_provider)
         where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
         rows = conn.execute(
             f"SELECT * FROM agents {where_sql} ORDER BY created_at",
@@ -1009,6 +1007,37 @@ def set_agent_output_examples(agent_id: str, output_examples: list[dict] | None)
         conn.execute(
             "UPDATE agents SET output_examples = ? WHERE agent_id = ?",
             (normalized_examples, agent_id),
+        )
+    return get_agent(agent_id, include_unapproved=True)
+
+
+def append_agent_output_example(agent_id: str, example: dict, *, max_examples: int = 20) -> dict | None:
+    if not isinstance(example, dict):
+        raise ValueError("example must be an object.")
+    capped = min(max(1, int(max_examples)), 100)
+    with _conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT output_examples FROM agents WHERE agent_id = ?",
+            (agent_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        raw_examples = row["output_examples"]
+        parsed_examples: list[dict] = []
+        if raw_examples:
+            try:
+                loaded = json.loads(raw_examples)
+                if isinstance(loaded, list):
+                    parsed_examples = [item for item in loaded if isinstance(item, dict)]
+            except (TypeError, json.JSONDecodeError):
+                parsed_examples = []
+        next_examples = [example] + parsed_examples
+        if len(next_examples) > capped:
+            next_examples = next_examples[:capped]
+        conn.execute(
+            "UPDATE agents SET output_examples = ? WHERE agent_id = ?",
+            (json.dumps(next_examples), agent_id),
         )
     return get_agent(agent_id, include_unapproved=True)
 
@@ -1300,9 +1329,7 @@ def search_agents(
         raise ValueError("limit must be >= 1.")
     if max_price_cents is not None and max_price_cents < 0:
         raise ValueError("max_price_cents must be >= 0 when provided.")
-    _VALID_MODEL_PROVIDERS = {"groq", "openai", "anthropic", "other"}
-    if model_provider is not None and model_provider not in _VALID_MODEL_PROVIDERS:
-        raise ValueError(f"model_provider must be one of: {', '.join(sorted(_VALID_MODEL_PROVIDERS))}.")
+    normalized_model_provider = str(model_provider or "").strip().lower() or None
 
     trust_floor = _normalize_min_trust(min_trust)
     normalized_caller_trust = None
@@ -1327,7 +1354,7 @@ def search_agents(
         if not agent_id:
             continue
 
-        if model_provider and agent.get("model_provider") != model_provider:
+        if normalized_model_provider and agent.get("model_provider") != normalized_model_provider:
             continue
 
         price_cents = _price_usd_to_cents(agent.get("price_per_call_usd"))

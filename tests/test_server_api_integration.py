@@ -627,6 +627,140 @@ def test_job_message_protocol_validation_and_correlation_rules(client):
     assert "Unsupported job message type" in unsupported_legacy.json()["message"]
 
 
+def test_job_message_filters_and_agent_channel_routing(client):
+    worker = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 300)
+
+    agent_id = _register_agent_via_api(
+        client,
+        worker["raw_api_key"],
+        name=f"Agent Channel Filters {uuid.uuid4().hex[:6]}",
+        tags=["typed-messages", "agent-channel"],
+    )
+    created = _create_job_via_api(client, caller["raw_api_key"], agent_id=agent_id, max_attempts=2)
+    job_id = created["job_id"]
+
+    claimed = client.post(
+        f"/jobs/{job_id}/claim",
+        headers=_auth_headers(worker["raw_api_key"]),
+        json={"lease_seconds": 300},
+    )
+    assert claimed.status_code == 200, claimed.text
+
+    cad_message = client.post(
+        f"/jobs/{job_id}/messages",
+        headers=_auth_headers(worker["raw_api_key"]),
+        json={
+            "type": "agent_message",
+            "channel": "cad",
+            "to_id": "agent:cad-specialist",
+            "payload": {"body": {"task": "generate-step-file"}},
+        },
+    )
+    assert cad_message.status_code == 201, cad_message.text
+
+    video_message = client.post(
+        f"/jobs/{job_id}/messages",
+        headers=_auth_headers(worker["raw_api_key"]),
+        json={
+            "type": "agent_message",
+            "channel": "video",
+            "to_id": "agent:video-specialist",
+            "payload": {"body": {"task": "render-preview"}},
+        },
+    )
+    assert video_message.status_code == 201, video_message.text
+
+    filtered = client.get(
+        f"/jobs/{job_id}/messages?type=agent_message&channel=cad&to_id=agent:cad-specialist",
+        headers=_auth_headers(worker["raw_api_key"]),
+    )
+    assert filtered.status_code == 200, filtered.text
+    messages = filtered.json()["messages"]
+    assert len(messages) == 1
+    assert messages[0]["message_id"] == cad_message.json()["message_id"]
+    assert messages[0]["payload"]["channel"] == "cad"
+
+    rejected_type = client.get(
+        f"/jobs/{job_id}/messages?type=unknown-new-type",
+        headers=_auth_headers(worker["raw_api_key"]),
+    )
+    assert rejected_type.status_code == 400
+    assert "Unsupported job message type filter" in rejected_type.json()["message"]
+
+
+def test_jobs_protocol_envelope_persists_across_create_and_complete(client):
+    worker = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 400)
+
+    agent_id = _register_agent_via_api(
+        client,
+        worker["raw_api_key"],
+        name=f"Protocol Envelope Agent {uuid.uuid4().hex[:6]}",
+        tags=["protocol-envelope"],
+    )
+
+    created = client.post(
+        "/jobs",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={
+            "agent_id": agent_id,
+            "input_payload": {"task": "convert design to preview"},
+            "input_artifacts": [
+                {
+                    "name": "design.step",
+                    "mime": "model/step",
+                    "url_or_base64": "https://example.com/design.step",
+                    "size_bytes": 128,
+                }
+            ],
+            "preferred_input_formats": ["model/step", "application/sla"],
+            "preferred_output_formats": ["video/mp4", "image/png"],
+            "communication_channel": "design-review",
+            "protocol_metadata": {"workflow_id": "wf-123"},
+        },
+    )
+    assert created.status_code == 201, created.text
+    created_job = created.json()
+    protocol = created_job["input_payload"]["protocol"]
+    assert protocol["communication_channel"] == "design-review"
+    assert protocol["preferred_output_formats"] == ["video/mp4", "image/png"]
+    assert protocol["metadata"]["workflow_id"] == "wf-123"
+
+    claim = client.post(
+        f"/jobs/{created_job['job_id']}/claim",
+        headers=_auth_headers(worker["raw_api_key"]),
+        json={"lease_seconds": 120},
+    )
+    assert claim.status_code == 200, claim.text
+
+    completed = client.post(
+        f"/jobs/{created_job['job_id']}/complete",
+        headers=_auth_headers(worker["raw_api_key"]),
+        json={
+            "claim_token": claim.json()["claim_token"],
+            "output_payload": {"summary": "render complete"},
+            "output_artifacts": [
+                {
+                    "name": "preview.mp4",
+                    "mime": "video/mp4",
+                    "url_or_base64": "https://example.com/preview.mp4",
+                    "size_bytes": 256,
+                }
+            ],
+            "output_format": "video/mp4",
+            "protocol_metadata": {"engine": "renderer-v2"},
+        },
+    )
+    assert completed.status_code == 200, completed.text
+    output_protocol = completed.json()["output_payload"]["protocol"]
+    assert output_protocol["output_format"] == "video/mp4"
+    assert output_protocol["metadata"]["engine"] == "renderer-v2"
+    assert output_protocol["output_artifacts"][0]["mime"] == "video/mp4"
+
+
 def test_concurrent_complete_and_sweeper_timeout_race_has_no_lost_work(client):
     worker = _register_user()
     caller = _register_user()
@@ -2546,12 +2680,16 @@ def test_quality_gate_honest_fallback_without_contract_or_judge(monkeypatch):
 
 def test_builtin_worker_auto_completes_async_jobs(client, monkeypatch):
     monkeypatch.setattr(
-        server.agent_textintel,
+        server.agent_python_executor,
         "run",
-        lambda text, mode: {
-            "word_count": len(str(text).split()),
-            "mode": mode,
-            "summary": "processed by test builtin worker",
+        lambda payload: {
+            "stdout": "processed by test builtin worker\n",
+            "stderr": "",
+            "exit_code": 0,
+            "timed_out": False,
+            "execution_time_ms": 10,
+            "explanation": "processed by test builtin worker",
+            "variables_captured": {},
         },
     )
 
@@ -2562,8 +2700,8 @@ def test_builtin_worker_auto_completes_async_jobs(client, monkeypatch):
         "/jobs",
         headers=_auth_headers(TEST_MASTER_KEY),
         json={
-            "agent_id": server._TEXTINTEL_AGENT_ID,
-            "input_payload": {"text": "hello world from async job", "mode": "quick"},
+            "agent_id": server._PYTHON_EXECUTOR_AGENT_ID,
+            "input_payload": {"code": "print('hello')"},
             "max_attempts": 2,
         },
     )
@@ -2582,7 +2720,7 @@ def test_builtin_worker_auto_completes_async_jobs(client, monkeypatch):
 
     assert terminal is not None
     assert terminal["status"] == "complete"
-    assert terminal["output_payload"]["summary"] == "processed by test builtin worker"
+    assert terminal["output_payload"]["explanation"] == "processed by test builtin worker"
 
 
 def test_registry_lists_new_builtin_agents(client):
@@ -2590,12 +2728,11 @@ def test_registry_lists_new_builtin_agents(client):
     assert listed.status_code == 200, listed.text
     names = {agent["name"] for agent in listed.json()["agents"]}
     assert {
-        "Negotiation Strategist Agent",
-        "Scenario Simulator Agent",
-        "Product Strategy Lab Agent",
-        "Portfolio Planner Agent",
-        "System Design Reviewer Agent",
-        "Incident Response Commander Agent",
+        "arXiv Research Agent",
+        "Python Code Executor",
+        "Web Researcher Agent",
+        "CVE Lookup Agent",
+        "Image Generator Agent",
     }.issubset(names)
 
 
@@ -2603,8 +2740,18 @@ def test_registry_hides_deprecated_builtin_agents(client):
     listed = client.get("/registry/agents", headers=_auth_headers(TEST_MASTER_KEY))
     assert listed.status_code == 200, listed.text
     names = {agent["name"] for agent in listed.json()["agents"]}
+    # Pure LLM wrappers removed from public marketplace
     assert "Resume Analyzer Agent" not in names
     assert "Email Sequence Writer Agent" not in names
+    assert "Text Intelligence Agent" not in names
+    assert "Negotiation Strategist Agent" not in names
+    assert "Scenario Simulator Agent" not in names
+    assert "Product Strategy Lab Agent" not in names
+    assert "Portfolio Planner Agent" not in names
+    assert "Video Storyboard Generator Agent" not in names
+    assert "Healthcare Expert Agent" not in names
+    assert "System Design Reviewer Agent" not in names
+    assert "Incident Response Commander Agent" not in names
 
 
 def test_builtin_agents_registered_to_system_owner_with_internal_endpoints(client):
@@ -2617,24 +2764,36 @@ def test_builtin_agents_registered_to_system_owner_with_internal_endpoints(clien
     assert str(system_row["status"]).lower() == "suspended"
     system_owner = f"user:{system_row['user_id']}"
 
-    for builtin_id in (
-        server._FINANCIAL_AGENT_ID,
-        server._CODEREVIEW_AGENT_ID,
+    for builtin_id in server._CURATED_BUILTIN_AGENT_IDS:
+        agent = registry.get_agent(builtin_id, include_unapproved=True)
+        assert agent is not None
+        assert agent["owner_id"] == system_owner
+        assert str(agent["endpoint_url"]).startswith("internal://")
+        assert float(agent["price_per_call_usd"]) > 0
+        assert isinstance(agent.get("output_examples"), list)
+        assert len(agent["output_examples"]) >= 1
+
+    for deprecated_id in (
         server._TEXTINTEL_AGENT_ID,
-        server._WIKI_AGENT_ID,
         server._NEGOTIATION_AGENT_ID,
         server._SCENARIO_AGENT_ID,
         server._PRODUCT_AGENT_ID,
         server._PORTFOLIO_AGENT_ID,
-        server._QUALITY_JUDGE_AGENT_ID,
+        server._RESUME_AGENT_ID,
+        server._EMAILWRITER_AGENT_ID,
+        server._SQLBUILDER_AGENT_ID,
+        server._DATAINSIGHTS_AGENT_ID,
+        server._SECRETS_AGENT_ID,
+        server._STATICANALYSIS_AGENT_ID,
+        server._DEPSCANNER_AGENT_ID,
+        server._SYSTEM_DESIGN_AGENT_ID,
+        server._INCIDENT_RESPONSE_AGENT_ID,
+        server._HEALTHCARE_EXPERT_AGENT_ID,
+        server._VIDEO_STORYBOARD_AGENT_ID,
     ):
-        agent = registry.get_agent(builtin_id)
-        assert agent is not None
-        assert agent["owner_id"] == system_owner
-        assert str(agent["endpoint_url"]).startswith("internal://")
-        assert float(agent["price_per_call_usd"]) == pytest.approx(0.01)
-        assert isinstance(agent.get("output_examples"), list)
-        assert len(agent["output_examples"]) >= 1
+        agent = registry.get_agent(deprecated_id, include_unapproved=True)
+        if agent is not None:
+            assert agent["status"] == "suspended"
 
 
 def test_registry_call_routes_internal_builtin_without_http_and_records_job(client, monkeypatch):
@@ -2642,9 +2801,9 @@ def test_registry_call_routes_internal_builtin_without_http_and_records_job(clie
     _fund_user_wallet(caller, 100)
 
     monkeypatch.setattr(
-        server.agent_textintel,
+        server.agent_cve_lookup,
         "run",
-        lambda text, mode: {"summary": f"internal::{mode}", "word_count": len(str(text).split())},
+        lambda payload: {"results": [], "total_vulnerable": 0, "total_packages_checked": 1, "summary": f"internal::ok", "source": "nvd"},
     )
 
     def _fail_post(*args, **kwargs):
@@ -2653,26 +2812,124 @@ def test_registry_call_routes_internal_builtin_without_http_and_records_job(clie
     monkeypatch.setattr(server.http, "post", _fail_post)
 
     call = client.post(
-        f"/registry/agents/{server._TEXTINTEL_AGENT_ID}/call",
+        f"/registry/agents/{server._CVELOOKUP_AGENT_ID}/call",
         headers=_auth_headers(caller["raw_api_key"]),
-        json={"text": "hello from internal route", "mode": "quick"},
+        json={"packages": ["lodash@4.17.21"]},
     )
     assert call.status_code == 200, call.text
-    assert call.json()["summary"] == "internal::quick"
+    assert call.json()["summary"] == "internal::ok"
 
     caller_owner = f"user:{caller['user_id']}"
     jobs_for_caller = jobs.list_jobs_for_owner(caller_owner, limit=20)
-    synced = [item for item in jobs_for_caller if item["agent_id"] == server._TEXTINTEL_AGENT_ID]
+    synced = [item for item in jobs_for_caller if item["agent_id"] == server._CVELOOKUP_AGENT_ID]
     assert synced
     assert synced[0]["status"] == "complete"
-    assert synced[0]["output_payload"]["summary"] == "internal::quick"
+    assert synced[0]["output_payload"]["summary"] == "internal::ok"
     settled = _force_settle_completed_job(synced[0]["job_id"])
     assert settled["settled_at"] is not None
 
     caller_wallet = payments.get_or_create_wallet(caller_owner)
-    agent_wallet = payments.get_or_create_wallet(f"agent:{server._TEXTINTEL_AGENT_ID}")
-    assert payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"] == 99
+    agent_wallet = payments.get_or_create_wallet(f"agent:{server._CVELOOKUP_AGENT_ID}")
+    # CVE Lookup is priced at $0.06 + $0.01 platform fee = $0.07 total
+    assert payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"] < 100
     assert payments.get_wallet(agent_wallet["wallet_id"])["balance_cents"] >= 1
+
+
+def test_registry_call_normalizes_protocol_envelope_for_builtin_responses(client, monkeypatch):
+    caller = _register_user()
+    _fund_user_wallet(caller, 100)
+    captured: dict[str, dict] = {}
+
+    def _run(payload: dict) -> dict:
+        captured["payload"] = payload
+        return {
+            "stdout": "result",
+            "exit_code": 0,
+            "artifacts": [
+                {
+                    "name": "result.json",
+                    "mime": "application/json",
+                    "url_or_base64": "https://example.com/result.json",
+                    "size_bytes": 42,
+                }
+            ],
+        }
+
+    monkeypatch.setattr(server.agent_python_executor, "run", _run)
+    response = client.post(
+        f"/registry/agents/{server._PYTHON_EXECUTOR_AGENT_ID}/call",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={
+            "code": "print('test')",
+            "protocol": {
+                "input_artifacts": [
+                    {
+                        "name": "requirements.json",
+                        "mime": "application/json",
+                        "url_or_base64": "https://example.com/requirements.json",
+                        "size_bytes": 10,
+                    }
+                ],
+                "preferred_output_formats": ["application/json"],
+                "communication_channel": "analysis",
+                "metadata": {"request_id": "req-42"},
+            },
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["protocol"]["output_artifacts"][0]["mime"] == "application/json"
+    assert body["protocol"]["metadata"]["requested_output_formats"] == ["application/json"]
+
+    sent_protocol = captured["payload"]["protocol"]
+    assert sent_protocol["communication_channel"] == "analysis"
+    assert sent_protocol["metadata"]["request_id"] == "req-42"
+    assert sent_protocol["preferred_output_formats"] == ["application/json"]
+
+
+def test_image_generator_builtin_accepts_multimodal_input_and_returns_artifact(client, monkeypatch):
+    caller = _register_user()
+    _fund_user_wallet(caller, 200)
+    monkeypatch.setattr(
+        server.agent_image_generator,
+        "_generate_image_artifact",
+        lambda **kwargs: {
+            "provider": "openai",
+            "model": "gpt-image-1",
+            "artifact": {
+                "name": "generated.png",
+                "mime": "image/png",
+                "url_or_base64": "data:image/png;base64,AAAA",
+                "size_bytes": 4,
+            },
+            "warnings": [],
+            "generation_prompt": kwargs["prompt"],
+        },
+    )
+    response = client.post(
+        f"/registry/agents/{server._IMAGE_GENERATOR_AGENT_ID}/call",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={
+            "prompt": "Minimal logo concept for a robotics startup",
+            "style": "flat vector",
+            "width": 768,
+            "height": 768,
+            "input_images": [
+                {
+                    "mime": "image/png",
+                    "url_or_base64": "https://example.com/reference-logo.png",
+                    "role": "style_reference",
+                }
+            ],
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["input_images_used"] == 1
+    assert isinstance(body.get("artifacts"), list) and body["artifacts"]
+    artifact = body["artifacts"][0]
+    assert artifact["mime"] == "image/png"
+    assert str(artifact["url_or_base64"]).startswith("data:image/png;base64,")
 
 
 def test_mcp_tools_manifest_exposes_registered_agent_schema(client):
@@ -2760,16 +3017,17 @@ def test_mcp_invoke_delegates_to_registry_call_path(client, monkeypatch):
     caller = _register_user()
     _fund_user_wallet(caller, 100)
     monkeypatch.setattr(
-        server.agent_textintel,
+        server.agent_python_executor,
         "run",
-        lambda text, mode: {"summary": f"mcp::{mode}", "word_count": len(str(text).split())},
+        lambda payload: {"stdout": "mcp::ok\n", "stderr": "", "exit_code": 0, "timed_out": False,
+                         "execution_time_ms": 5, "explanation": "mcp::ok", "variables_captured": {}},
     )
 
     response = client.post(
         "/mcp/invoke",
         json={
-            "tool_name": "text_intelligence_agent",
-            "input": {"text": "mcp invoke payload", "mode": "quick"},
+            "tool_name": "python_code_executor",
+            "input": {"code": "print('mcp::ok')"},
             "api_key": caller["raw_api_key"],
         },
     )
@@ -2777,11 +3035,73 @@ def test_mcp_invoke_delegates_to_registry_call_path(client, monkeypatch):
     body = response.json()
     assert isinstance(body.get("content"), list) and body["content"]
     assert body["content"][0]["type"] == "text"
-    invoked_payload = json.loads(body["content"][0]["text"])
-    assert invoked_payload["summary"] == "mcp::quick"
+    assert "mcp::ok" in body["content"][0]["text"]
+    assert body["structuredContent"]["explanation"] == "mcp::ok"
 
     caller_wallet = payments.get_or_create_wallet(f"user:{caller['user_id']}")
     assert payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"] == 99
+
+
+def test_mcp_invoke_emits_image_content_for_artifact_outputs(client, monkeypatch):
+    caller = _register_user()
+    _fund_user_wallet(caller, 100)
+    monkeypatch.setattr(
+        server.agent_image_generator,
+        "_generate_image_artifact",
+        lambda **kwargs: {
+            "provider": "openai",
+            "model": "gpt-image-1",
+            "artifact": {
+                "name": "generated.png",
+                "mime": "image/png",
+                "url_or_base64": "data:image/png;base64,AAAA",
+                "size_bytes": 4,
+            },
+            "warnings": [],
+            "generation_prompt": kwargs["prompt"],
+        },
+    )
+    response = client.post(
+        "/mcp/invoke",
+        json={
+            "tool_name": "image_generator_agent",
+            "input": {"prompt": "Simple gradient logo"},
+            "api_key": caller["raw_api_key"],
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    content = body.get("content") or []
+    assert any(item.get("type") == "image" for item in content)
+    assert body["structuredContent"]["artifacts"][0]["mime"] == "image/png"
+
+
+def test_python_executor_builtin_runs_code_and_returns_output(client, monkeypatch):
+    caller = _register_user()
+    _fund_user_wallet(caller, 200)
+    monkeypatch.setattr(
+        server.agent_python_executor,
+        "run",
+        lambda payload: {
+            "stdout": "1024\n",
+            "stderr": "",
+            "exit_code": 0,
+            "timed_out": False,
+            "execution_time_ms": 12,
+            "explanation": "2**10 equals 1024.",
+            "variables_captured": {},
+        },
+    )
+    response = client.post(
+        f"/registry/agents/{server._PYTHON_EXECUTOR_AGENT_ID}/call",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={"code": "print(2**10)", "explain": True},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["stdout"] == "1024\n"
+    assert body["exit_code"] == 0
+    assert "1024" in body["explanation"]
 
 
 def test_mcp_manifest_returns_server_manifest_shape(client):

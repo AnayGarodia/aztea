@@ -39,6 +39,7 @@ MESSAGE_TYPE_LEASE_BEHAVIOR = {
     "progress": _LEASE_BEHAVIOR_EXTEND,
     "partial_result": _LEASE_BEHAVIOR_EXTEND,
     "artifact": _LEASE_BEHAVIOR_EXTEND,
+    "agent_message": _LEASE_BEHAVIOR_EXTEND,
     "tool_call": _LEASE_BEHAVIOR_EXTEND,
     "tool_result": _LEASE_BEHAVIOR_EXTEND,
     "note": _LEASE_BEHAVIOR_EXTEND,
@@ -2142,30 +2143,62 @@ def get_message(job_id: str, message_id: int) -> dict | None:
     return _msg_to_dict(row) if row else None
 
 
-def get_messages(job_id: str, since_id: int | None = None, limit: int = 100) -> list:
+def get_messages(
+    job_id: str,
+    since_id: int | None = None,
+    limit: int = 100,
+    msg_type: str | None = None,
+    from_id: str | None = None,
+    channel: str | None = None,
+    to_id: str | None = None,
+) -> list:
     limit = min(max(1, limit), 200)
+    filters: list[str] = ["job_id = ?"]
+    params: list[object] = [job_id]
+    if since_id is not None:
+        filters.append("message_id > ?")
+        params.append(since_id)
+    normalized_type = (msg_type or "").strip().lower()
+    if normalized_type:
+        filters.append("type = ?")
+        params.append(normalized_type)
+    normalized_from_id = (from_id or "").strip()
+    if normalized_from_id:
+        filters.append("from_id = ?")
+        params.append(normalized_from_id)
+    where_sql = " AND ".join(filters)
+    params.append(limit)
     with _conn() as conn:
-        if since_id is not None:
-            rows = conn.execute(
-                """
-                SELECT * FROM job_messages
-                WHERE job_id = ? AND message_id > ?
-                ORDER BY message_id ASC
-                LIMIT ?
-                """,
-                (job_id, since_id, limit),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """
-                SELECT * FROM job_messages
-                WHERE job_id = ?
-                ORDER BY message_id ASC
-                LIMIT ?
-                """,
-                (job_id, limit),
-            ).fetchall()
-    return [_msg_to_dict(r) for r in rows]
+        rows = conn.execute(
+            f"""
+            SELECT * FROM job_messages
+            WHERE {where_sql}
+            ORDER BY message_id ASC
+            LIMIT ?
+            """,
+            tuple(params),
+        ).fetchall()
+    messages = [_msg_to_dict(r) for r in rows]
+    normalized_channel = (channel or "").strip().lower()
+    normalized_to_id = (to_id or "").strip()
+    if not normalized_channel and not normalized_to_id:
+        return messages
+
+    filtered: list[dict] = []
+    for message in messages:
+        payload = message.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        if normalized_channel:
+            payload_channel = str(payload.get("channel") or "").strip().lower()
+            if payload_channel != normalized_channel:
+                continue
+        if normalized_to_id:
+            payload_to_id = str(payload.get("to_id") or "").strip()
+            if payload_to_id != normalized_to_id:
+                continue
+        filtered.append(message)
+    return filtered
 
 
 def get_latest_message_id(job_id: str) -> int | None:
