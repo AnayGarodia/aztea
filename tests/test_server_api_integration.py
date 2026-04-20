@@ -1977,6 +1977,65 @@ def test_wallet_topup_session_enforces_minimum_amount(client, monkeypatch):
     assert allowed.json()["session_id"] == "cs_test_minimum"
 
 
+def test_stripe_webhook_retries_after_transient_deposit_failure(client, monkeypatch):
+    user = _register_user()
+    wallet = payments.get_or_create_wallet(f"user:{user['user_id']}")
+    session_id = f"cs_{uuid.uuid4().hex[:10]}"
+    amount_cents = 1500
+    fake_event = {
+        "type": "checkout.session.completed",
+        "data": {
+            "object": SimpleNamespace(
+                id=session_id,
+                client_reference_id=wallet["wallet_id"],
+                amount_total=amount_cents,
+                metadata={},
+            )
+        },
+    }
+
+    class _FakeWebhook:
+        @staticmethod
+        def construct_event(_payload, _sig, _secret):
+            return fake_event
+
+    monkeypatch.setattr(server, "_STRIPE_AVAILABLE", True)
+    monkeypatch.setattr(server, "_STRIPE_SECRET_KEY", "sk_test_123")
+    monkeypatch.setattr(server, "_STRIPE_WEBHOOK_SECRET", "whsec_test_123")
+    monkeypatch.setattr(server, "_stripe_lib", SimpleNamespace(api_key=None, Webhook=_FakeWebhook))
+
+    real_deposit = payments.deposit
+    attempts = {"count": 0}
+
+    def _flaky_deposit(wallet_id: str, cents: int, memo: str):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise RuntimeError("temporary downstream failure")
+        return real_deposit(wallet_id, cents, memo)
+
+    monkeypatch.setattr(payments, "deposit", _flaky_deposit)
+
+    first = client.post(
+        "/stripe/webhook",
+        headers={"stripe-signature": "sig_test"},
+        content=b"{}",
+    )
+    assert first.status_code == 500, first.text
+    assert first.json()["status"] == "deposit_failed"
+
+    second = client.post(
+        "/stripe/webhook",
+        headers={"stripe-signature": "sig_test"},
+        content=b"{}",
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["status"] == "ok"
+
+    refreshed_wallet = payments.get_wallet(wallet["wallet_id"])
+    assert refreshed_wallet is not None
+    assert refreshed_wallet["balance_cents"] == amount_cents
+
+
 def test_wallet_withdrawals_returns_only_caller_wallet_history(client):
     user = _register_user()
     other = _register_user()

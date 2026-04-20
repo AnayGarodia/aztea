@@ -8,6 +8,7 @@ a SQLite connection is needed.
 
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 import threading
@@ -31,7 +32,8 @@ DB_PATH = os.environ.get("DB_PATH", _DEFAULT_DB_PATH)
 # readers, but unbounded threads will exhaust OS file descriptors. Override via
 # DB_MAX_CONNECTIONS env var (default: 32).
 _MAX_CONNECTIONS = max(1, int(os.environ.get("DB_MAX_CONNECTIONS", "32")))
-_conn_semaphore = threading.Semaphore(_MAX_CONNECTIONS)
+_LOG = logging.getLogger(__name__)
+_conn_semaphore = threading.BoundedSemaphore(_MAX_CONNECTIONS)
 
 _local = threading.local()
 # Track all open connections so close_all_connections() can checkpoint WAL on shutdown.
@@ -40,26 +42,46 @@ _open_connections_lock = threading.Lock()
 
 
 def _open_connection(db_path: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path, check_same_thread=False, timeout=10)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA busy_timeout=5000")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA cache_size=-64000")
+    _conn_semaphore.acquire()
+    try:
+        conn = sqlite3.connect(db_path, check_same_thread=False, timeout=10)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA cache_size=-64000")
+    except Exception:
+        _conn_semaphore.release()
+        raise
     with _open_connections_lock:
         _open_connections.append(conn)
     return conn
 
 
 def get_raw_connection(db_path: str = DB_PATH) -> sqlite3.Connection:
-    """Return the thread-local connection, opening it (or reopening if closed) as needed."""
+    """Return the thread-local connection, opening it (or reopening if closed) as needed.
+
+    Only ``sqlite3.ProgrammingError`` (raised when operating on a closed connection)
+    triggers a reopen. Other errors — e.g. ``OperationalError`` from a locked DB
+    mid-query — must propagate so callers can handle them, not be silently
+    swallowed into a fresh connection.
+    """
     conn = getattr(_local, "conn", None)
     if conn is not None:
         try:
             conn.execute("SELECT 1")
             return conn
-        except Exception:
+        except sqlite3.ProgrammingError:
+            with _open_connections_lock:
+                try:
+                    _open_connections.remove(conn)
+                except ValueError:
+                    pass
+            try:
+                _conn_semaphore.release()
+            except ValueError:
+                pass
             _local.conn = None
     _local.conn = _open_connection(db_path)
     return _local.conn
@@ -73,8 +95,15 @@ def close_all_connections() -> None:
     for conn in conns:
         try:
             conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except Exception:
+            _LOG.exception("Failed to checkpoint SQLite WAL during shutdown.")
+        try:
             conn.close()
         except Exception:
+            _LOG.exception("Failed to close SQLite connection during shutdown.")
+        try:
+            _conn_semaphore.release()
+        except ValueError:
             pass
 
 

@@ -20,7 +20,6 @@ import threading
 import time
 import uuid
 from contextvars import Token
-import socket
 from queue import Empty, Queue
 from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
@@ -93,6 +92,7 @@ from core import error_codes
 from core.migrate import apply_migrations
 from core import logging_utils
 from core import email as _email
+from core import url_security as _url_security
 from scripts.financial_cli import run as _run_financial
 from core.models import (
     AgentRegisterRequest,
@@ -144,10 +144,9 @@ _LOG = logging.getLogger(__name__)
 
 class _SecretRedactFilter(logging.Filter):
     """Strip API key values and sensitive env-var patterns from log records."""
-    import re as _re
-    _PATTERNS = _re.compile(
+    _PATTERNS = re.compile(
         r'((?:am_|amk_|sk_live_|sk_test_|Bearer\s+)[A-Za-z0-9_\-]{8,})',
-        _re.IGNORECASE,
+        re.IGNORECASE,
     )
 
     def filter(self, record: logging.LogRecord) -> bool:
@@ -940,7 +939,7 @@ def _init_ops_db() -> None:
 
 
 def _init_stripe_db() -> None:
-    """Create the stripe_sessions idempotency table (processed payment events)."""
+    """Create Stripe bookkeeping tables used for top-ups and webhook idempotency."""
     with sqlite3.connect(jobs.DB_PATH) as conn:
         conn.execute(
             """
@@ -951,6 +950,24 @@ def _init_stripe_db() -> None:
                 processed_at  TEXT NOT NULL
             )
             """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS stripe_webhook_events (
+                session_id    TEXT PRIMARY KEY,
+                wallet_id     TEXT NOT NULL,
+                amount_cents  INTEGER NOT NULL,
+                status        TEXT NOT NULL CHECK(status IN ('processing', 'processed', 'failed')),
+                attempts      INTEGER NOT NULL DEFAULT 0,
+                last_error    TEXT,
+                created_at    TEXT NOT NULL,
+                updated_at    TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_stripe_webhook_events_status_updated "
+            "ON stripe_webhook_events(status, updated_at DESC)"
         )
 
 
@@ -2218,7 +2235,8 @@ def _key_from_request(request: Request) -> str:
         if key_id:
             return f"key:{key_id}"
         return caller["owner_id"]
-    return request.client.host if request.client else "unknown"
+    client_ip = _request_client_ip(request)
+    return str(client_ip) if client_ip is not None else "unknown"
 
 
 limiter = Limiter(key_func=_key_from_request, default_limits=[_DEFAULT_RATE_LIMIT])
@@ -2257,14 +2275,12 @@ app.add_middleware(
     max_age=600,
 )
 
-# Trust X-Forwarded-For from the immediate upstream proxy only.
-# TRUSTED_PROXY_IPS defaults to 127.0.0.1 (local nginx / Docker internal).
-# Set to a comma-separated list of proxy CIDRs in production.
-_trusted_proxies = [
-    h.strip()
-    for h in os.environ.get("TRUSTED_PROXY_IPS", "127.0.0.1").split(",")
-    if h.strip()
-]
+# Trust X-Forwarded-For only from explicitly trusted proxy networks.
+# TRUSTED_PROXY_IPS defaults to loopback for local reverse-proxy setups.
+_TRUSTED_PROXY_NETWORKS = _parse_ip_allowlist(
+    "TRUSTED_PROXY_IPS",
+    os.environ.get("TRUSTED_PROXY_IPS", "127.0.0.1"),
+)
 
 
 # ---------------------------------------------------------------------------
@@ -2354,15 +2370,23 @@ if _PROM_AVAILABLE:
         buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0],
     )
 
+    def _metrics_path_label(request: Request) -> str:
+        route = request.scope.get("route")
+        route_path = getattr(route, "path", None)
+        if isinstance(route_path, str) and route_path.strip():
+            return route_path
+        return request.url.path
+
     @app.middleware("http")
     async def prometheus_middleware(request: Request, call_next):
-        path = request.url.path
+        raw_path = request.url.path
         # Don't instrument /metrics itself to avoid recursion noise
-        if path == "/metrics":
+        if raw_path == "/metrics":
             return await call_next(request)
         start = time.perf_counter()
         response = await call_next(request)
         latency = time.perf_counter() - start
+        path = _metrics_path_label(request)
         _prom_requests_total.labels(
             method=request.method, path=path, status=response.status_code
         ).inc()
@@ -2374,10 +2398,10 @@ if _PROM_AVAILABLE:
 def metrics_endpoint(request: Request):
     """Prometheus-compatible metrics. Restricted to internal/admin callers."""
     allow_cidr = os.environ.get("METRICS_ALLOW_CIDR", "127.0.0.1/32")
-    client_ip = request.client.host if request.client else ""
+    client_ip = _request_client_ip(request)
     try:
         network = ipaddress.ip_network(allow_cidr, strict=False)
-        if ipaddress.ip_address(client_ip) not in network:
+        if client_ip is None or client_ip not in network:
             raise HTTPException(status_code=403, detail="Forbidden")
     except ValueError:
         pass
@@ -2408,7 +2432,7 @@ async def request_tracing(request: Request, call_next):
                 "path": request.url.path,
                 "duration_ms": duration_ms,
                 "status_code": response.status_code if response is not None else 500,
-                "client_ip": request.client.host if request.client else None,
+                "client_ip": str(_request_client_ip(request) or ""),
             },
         )
         logging_utils.reset_request_id(token)
@@ -2683,9 +2707,23 @@ def _deposit_below_minimum_error(attempted_cents: int) -> HTTPException:
 def _request_client_ip(request: Request) -> Any | None:
     host = (request.client.host if request.client else "") or ""
     try:
-        return ipaddress.ip_address(host)
+        direct_ip = ipaddress.ip_address(host)
     except ValueError:
         return None
+    if any(direct_ip in network for network in _TRUSTED_PROXY_NETWORKS):
+        forwarded_for = (request.headers.get("x-forwarded-for", "") or "").split(",")[0].strip()
+        if forwarded_for:
+            try:
+                return ipaddress.ip_address(forwarded_for)
+            except ValueError:
+                pass
+        real_ip = (request.headers.get("x-real-ip", "") or "").strip()
+        if real_ip:
+            try:
+                return ipaddress.ip_address(real_ip)
+            except ValueError:
+                pass
+    return direct_ip
 
 
 def _require_admin_ip_allowlist(request: Request) -> None:
@@ -3636,78 +3674,11 @@ def _hook_row_to_dict(row: sqlite3.Row) -> dict:
 
 
 def _validate_outbound_url(target_url: str, field_name: str) -> str:
-    normalized = target_url.strip()
-    parsed = urlparse(normalized)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ValueError(f"{field_name} must be an absolute http(s) URL.")
-    if parsed.username or parsed.password:
-        raise ValueError(f"{field_name} must not include username or password.")
-    if parsed.fragment:
-        raise ValueError(f"{field_name} must not include URL fragments.")
-
-    host = (parsed.hostname or "").strip().lower()
-    if not host:
-        raise ValueError(f"{field_name} hostname is missing.")
-    try:
-        parsed.port
-    except ValueError as exc:
-        raise ValueError(f"{field_name} has an invalid port.") from exc
-    if _ALLOW_PRIVATE_OUTBOUND_URLS:
-        return normalized
-
-    # Reject URL-encoded characters in the hostname (e.g. 127%2E0%2E0%2E1 or %00 null-byte tricks)
-    from urllib.parse import unquote as _url_unquote
-    if host != _url_unquote(host):
-        raise ValueError(f"{field_name} hostname must not contain percent-encoded characters.")
-
-    if host == "localhost" or host.endswith(".localhost"):
-        raise ValueError(f"{field_name} cannot target localhost unless ALLOW_PRIVATE_OUTBOUND_URLS=1.")
-
-    def _is_disallowed_ip(ip_value: ipaddress._BaseAddress) -> bool:
-        if (
-            ip_value.is_private
-            or ip_value.is_loopback
-            or ip_value.is_link_local
-            or ip_value.is_reserved
-            or ip_value.is_multicast
-            or ip_value.is_unspecified
-        ):
-            return True
-        # Block IPv4-mapped IPv6 addresses (e.g. ::ffff:127.0.0.1)
-        if isinstance(ip_value, ipaddress.IPv6Address) and ip_value.ipv4_mapped is not None:
-            return _is_disallowed_ip(ip_value.ipv4_mapped)
-        return False
-
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        try:
-            resolved_rows = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
-        except socket.gaierror:
-            return normalized
-        except OSError as exc:
-            raise ValueError(f"{field_name} hostname resolution failed.") from exc
-        for row in resolved_rows:
-            sockaddr = row[4]
-            if not sockaddr:
-                continue
-            candidate = sockaddr[0]
-            try:
-                resolved_ip = ipaddress.ip_address(candidate)
-            except ValueError:
-                continue
-            if _is_disallowed_ip(resolved_ip):
-                raise ValueError(
-                    f"{field_name} cannot target hostnames resolving to private/loopback/reserved IPs unless "
-                    "ALLOW_PRIVATE_OUTBOUND_URLS=1."
-                )
-        return normalized
-
-    if _is_disallowed_ip(ip):
-        raise ValueError(
-            f"{field_name} cannot target private/loopback/reserved IPs unless ALLOW_PRIVATE_OUTBOUND_URLS=1."
-        )
-    return normalized
+    return _url_security.validate_outbound_url(
+        target_url,
+        field_name,
+        allow_private=_ALLOW_PRIVATE_OUTBOUND_URLS,
+    )
 
 
 def _validate_hook_url(target_url: str) -> str:
@@ -9907,6 +9878,128 @@ def _stripe_http_error(operation: str, exc: Exception) -> tuple[int, dict[str, A
     }
 
 
+def _stripe_obj_get(obj: Any, key: str, default: Any = None) -> Any:
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
+def _stripe_obj_id(obj: Any) -> str:
+    value = _stripe_obj_get(obj, "id", "") or ""
+    return str(value).strip()
+
+
+def _stripe_begin_checkout_webhook_event(
+    *,
+    session_id: str,
+    wallet_id: str,
+    amount_cents: int,
+) -> str:
+    now = _utc_now_iso()
+    with sqlite3.connect(jobs.DB_PATH) as conn:
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("BEGIN IMMEDIATE")
+        processed_row = conn.execute(
+            "SELECT 1 FROM stripe_sessions WHERE session_id = ? LIMIT 1",
+            (session_id,),
+        ).fetchone()
+        if processed_row is not None:
+            conn.commit()
+            return "already_processed"
+        state_row = conn.execute(
+            """
+            SELECT status
+            FROM stripe_webhook_events
+            WHERE session_id = ?
+            LIMIT 1
+            """,
+            (session_id,),
+        ).fetchone()
+        if state_row is None:
+            conn.execute(
+                """
+                INSERT INTO stripe_webhook_events
+                    (session_id, wallet_id, amount_cents, status, attempts, created_at, updated_at)
+                VALUES (?, ?, ?, 'processing', 1, ?, ?)
+                """,
+                (session_id, wallet_id, int(amount_cents), now, now),
+            )
+            conn.commit()
+            return "acquired"
+        status = str(state_row[0] or "").strip().lower()
+        if status == "processed":
+            conn.commit()
+            return "already_processed"
+        if status == "processing":
+            conn.commit()
+            return "already_processing"
+        conn.execute(
+            """
+            UPDATE stripe_webhook_events
+            SET wallet_id = ?,
+                amount_cents = ?,
+                status = 'processing',
+                attempts = attempts + 1,
+                last_error = NULL,
+                updated_at = ?
+            WHERE session_id = ?
+            """,
+            (wallet_id, int(amount_cents), now, session_id),
+        )
+        conn.commit()
+    return "acquired"
+
+
+def _stripe_mark_checkout_webhook_failed(
+    *,
+    session_id: str,
+    error_message: str,
+) -> None:
+    with sqlite3.connect(jobs.DB_PATH) as conn:
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute(
+            """
+            UPDATE stripe_webhook_events
+            SET status = 'failed',
+                last_error = ?,
+                updated_at = ?
+            WHERE session_id = ?
+            """,
+            (str(error_message or "")[:1000], _utc_now_iso(), session_id),
+        )
+        conn.commit()
+
+
+def _stripe_mark_checkout_webhook_processed(
+    *,
+    session_id: str,
+    wallet_id: str,
+    amount_cents: int,
+) -> None:
+    now = _utc_now_iso()
+    with sqlite3.connect(jobs.DB_PATH) as conn:
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO stripe_sessions (session_id, wallet_id, amount_cents, processed_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (session_id, wallet_id, int(amount_cents), now),
+        )
+        conn.execute(
+            """
+            UPDATE stripe_webhook_events
+            SET status = 'processed',
+                last_error = NULL,
+                updated_at = ?
+            WHERE session_id = ?
+            """,
+            (now, session_id),
+        )
+        conn.commit()
+
+
 def _wallet_stripe_topup_total_last_24h(wallet_id: str) -> int:
     window_start = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
     with sqlite3.connect(jobs.DB_PATH) as conn:
@@ -10018,39 +10111,47 @@ async def stripe_webhook(request: Request) -> JSONResponse:
         # Stripe SDK v15 returns StripeObjects, not plain dicts — use attribute
         # access and fall back via getattr to avoid KeyError / AttributeError.
         session_obj = event["data"]["object"]
-        _meta       = getattr(session_obj, "metadata", None) or {}
-        wallet_id   = (getattr(session_obj, "client_reference_id", None)
-                       or (_meta.get("wallet_id") if hasattr(_meta, "get") else getattr(_meta, "wallet_id", None)))
-        amount_cents = getattr(session_obj, "amount_total", None)
-        session_id   = getattr(session_obj, "id", "") or ""
+        _meta = _stripe_obj_get(session_obj, "metadata", None) or {}
+        wallet_id = (
+            _stripe_obj_get(session_obj, "client_reference_id", None)
+            or _stripe_obj_get(_meta, "wallet_id", None)
+        )
+        amount_cents = _stripe_obj_get(session_obj, "amount_total", None)
+        session_id = _stripe_obj_id(session_obj)
 
         if not wallet_id or not amount_cents or not session_id:
             _LOG.warning("Stripe webhook: missing wallet_id/amount/session_id in %s", session_id)
             return JSONResponse({"received": True, "status": "skipped"})
 
-        # Idempotency: INSERT OR IGNORE so duplicate webhook fires are no-ops.
-        # Use a fresh connection (not the thread-local one) — async handlers may
-        # run on a different thread than the one that initialised _conn().
-        with sqlite3.connect(jobs.DB_PATH) as _idem_conn:
-            cur = _idem_conn.execute(
-                "INSERT OR IGNORE INTO stripe_sessions (session_id, wallet_id, amount_cents, processed_at)"
-                " VALUES (?, ?, ?, ?)",
-                (session_id, wallet_id, amount_cents, _utc_now_iso()),
-            )
-            _idem_conn.commit()
-            if cur.rowcount == 0:
-                return JSONResponse({"received": True, "status": "already_processed"})
+        idempotency_state = _stripe_begin_checkout_webhook_event(
+            session_id=session_id,
+            wallet_id=str(wallet_id),
+            amount_cents=int(amount_cents),
+        )
+        if idempotency_state == "already_processed":
+            return JSONResponse({"received": True, "status": "already_processed"})
+        if idempotency_state == "already_processing":
+            return JSONResponse({"received": True, "status": "processing"})
 
         try:
-            payments.deposit(wallet_id, amount_cents, f"Stripe payment [{session_id[:12]}]")
-        except Exception:
+            payments.deposit(str(wallet_id), int(amount_cents), f"Stripe payment [{session_id[:12]}]")
+        except Exception as exc:
+            _stripe_mark_checkout_webhook_failed(
+                session_id=session_id,
+                error_message=str(exc),
+            )
             _LOG.exception("Failed to deposit Stripe payment for session %s wallet %s", session_id, wallet_id)
             return JSONResponse({"received": True, "status": "deposit_failed"}, status_code=500)
+        _stripe_mark_checkout_webhook_processed(
+            session_id=session_id,
+            wallet_id=str(wallet_id),
+            amount_cents=int(amount_cents),
+        )
 
         _LOG.info("Stripe top-up: %d cents → wallet %s (session %s)", amount_cents, wallet_id, session_id)
         # Notify wallet owner
         try:
-            _wallet_row = payments.get_wallet(wallet_id)
+            _wallet_row = payments.get_wallet(str(wallet_id))
             if _wallet_row:
                 _deposit_email = _get_owner_email(_wallet_row.get("owner_id", ""))
                 if _deposit_email:
@@ -10061,9 +10162,9 @@ async def stripe_webhook(request: Request) -> JSONResponse:
     if event["type"] == "account.updated":
         # Stripe Connect: account completed onboarding or details changed
         account_obj = event["data"]["object"]
-        account_id = getattr(account_obj, "id", None) or account_obj.get("id", "")
-        charges_enabled = getattr(account_obj, "charges_enabled", False) or account_obj.get("charges_enabled", False)
-        payouts_enabled = getattr(account_obj, "payouts_enabled", False) or account_obj.get("payouts_enabled", False)
+        account_id = _stripe_obj_id(account_obj)
+        charges_enabled = bool(_stripe_obj_get(account_obj, "charges_enabled", False))
+        payouts_enabled = bool(_stripe_obj_get(account_obj, "payouts_enabled", False))
         fully_enabled = bool(charges_enabled and payouts_enabled)
         if account_id:
             with sqlite3.connect(jobs.DB_PATH) as _ac_conn:
@@ -10080,15 +10181,48 @@ async def stripe_webhook(request: Request) -> JSONResponse:
     return JSONResponse({"received": True, "status": "ok"})
 
 
+# Prefer Accounts v2 for new Connect integrations; keep v1 fallback for SDK
+# compatibility in environments where v2 resources are not yet available.
+def _create_connect_account() -> str:
+    v2 = _stripe_obj_get(_stripe_lib, "v2", None)
+    core = _stripe_obj_get(v2, "core", None) if v2 is not None else None
+    accounts = _stripe_obj_get(core, "accounts", None) if core is not None else None
+    create_v2 = _stripe_obj_get(accounts, "create", None) if accounts is not None else None
+    if callable(create_v2):
+        try:
+            account_v2 = create_v2(
+                controller={
+                    "losses": {"payments": "application"},
+                    "fees": {"payer": "application"},
+                    "stripe_dashboard": {"type": "express"},
+                    "requirement_collection": "stripe",
+                }
+            )
+            account_id = _stripe_obj_id(account_v2)
+            if account_id:
+                return account_id
+        except Exception as exc:
+            _LOG.warning("Stripe Accounts v2 account creation failed, falling back to v1: %s", exc)
+
+    account_v1 = _stripe_lib.Account.create(
+        type="express",
+        capabilities={"transfers": {"requested": True}},
+    )
+    account_id = _stripe_obj_id(account_v1)
+    if not account_id:
+        raise RuntimeError("Stripe account creation returned no account id.")
+    return account_id
+
+
 # ---------------------------------------------------------------------------
-# Stripe Connect Express — onboard, status, withdraw
+# Stripe Connect — onboard, status, withdraw
 # ---------------------------------------------------------------------------
 
 
 @app.post(
     "/wallets/connect/onboard",
     tags=["wallet"],
-    summary="Create a Stripe Connect Express account and return an onboarding URL.",
+    summary="Create a Stripe connected account and return an onboarding URL.",
     responses=_error_responses(400, 401, 403, 503),
 )
 @limiter.limit("10/minute")
@@ -10111,14 +10245,10 @@ def connect_onboard(
     existing_account_id = wallet.get("stripe_connect_account_id")
     if not existing_account_id:
         try:
-            account = _stripe_lib.Account.create(
-                type="express",
-                capabilities={"transfers": {"requested": True}},
-            )
+            existing_account_id = _create_connect_account()
         except Exception as exc:
             status_code, payload = _stripe_http_error("connect_onboard_account_create", exc)
             raise HTTPException(status_code=status_code, detail=payload)
-        existing_account_id = account.id
         with sqlite3.connect(jobs.DB_PATH) as _ac_conn:
             _ac_conn.execute(
                 "UPDATE wallets SET stripe_connect_account_id = ? WHERE wallet_id = ?",
@@ -10203,97 +10333,117 @@ def withdraw(
     if not _STRIPE_AVAILABLE or not _STRIPE_SECRET_KEY:
         raise HTTPException(status_code=503, detail="Payment processing is not configured on this server.")
     _require_scope(caller, "caller")
+    def _operation() -> tuple[dict[str, Any], int]:
+        if body.amount_cents < 100:
+            raise HTTPException(status_code=400, detail="Minimum withdrawal is $1.00.")
+        if body.amount_cents > 1_000_000:
+            raise HTTPException(status_code=400, detail="Maximum withdrawal is $10,000.00.")
 
-    if body.amount_cents < 100:
-        raise HTTPException(status_code=400, detail="Minimum withdrawal is $1.00.")
-    if body.amount_cents > 1_000_000:
-        raise HTTPException(status_code=400, detail="Maximum withdrawal is $10,000.00.")
+        wallet = payments.get_wallet_by_owner(caller["owner_id"])
+        if wallet is None:
+            raise HTTPException(status_code=404, detail="Wallet not found.")
 
-    wallet = payments.get_wallet_by_owner(caller["owner_id"])
-    if wallet is None:
-        raise HTTPException(status_code=404, detail="Wallet not found.")
-
-    account_id = wallet.get("stripe_connect_account_id")
-    if not account_id:
-        raise HTTPException(
-            status_code=400,
-            detail="No bank account connected. Use POST /wallets/connect/onboard first.",
-        )
-
-    if not wallet.get("stripe_connect_enabled"):
-        raise HTTPException(
-            status_code=400,
-            detail="Your Stripe Connect account is not yet active. Complete onboarding first.",
-        )
-
-    if wallet["balance_cents"] < body.amount_cents:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Insufficient balance: have {wallet['balance_cents']}¢, need {body.amount_cents}¢.",
-        )
-
-    _stripe_lib.api_key = _STRIPE_SECRET_KEY
-
-    # Debit wallet first (raises InsufficientBalanceError if something changed)
-    try:
-        payments.charge(
-            wallet["wallet_id"],
-            body.amount_cents,
-            memo=f"Withdrawal to Stripe Connect [{account_id[:12]}]",
-        )
-    except payments.InsufficientBalanceError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-
-    try:
-        transfer = _stripe_lib.Transfer.create(
-            amount=body.amount_cents,
-            currency="usd",
-            destination=account_id,
-        )
-    except Exception as exc:
-        # Refund the wallet charge on Stripe failure
-        try:
-            payments.deposit(
-                wallet["wallet_id"],
-                body.amount_cents,
-                memo=f"Withdrawal refund (Stripe error): {exc}",
+        account_id = str(wallet.get("stripe_connect_account_id") or "").strip()
+        if not account_id:
+            raise HTTPException(
+                status_code=400,
+                detail="No bank account connected. Use POST /wallets/connect/onboard first.",
             )
-        except Exception:
-            _LOG.exception("Critical: failed to refund withdrawal for wallet %s", wallet["wallet_id"])
-        status_code, payload = _stripe_http_error("withdraw_transfer", exc)
-        raise HTTPException(status_code=status_code, detail=payload)
 
-    # Record the transfer for audit
-    with sqlite3.connect(jobs.DB_PATH) as _tr_conn:
-        _tr_conn.execute(
-            "INSERT INTO stripe_connect_transfers (transfer_id, wallet_id, amount_cents, stripe_tx_id, memo, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (
-                str(uuid.uuid4()),
+        if not wallet.get("stripe_connect_enabled"):
+            raise HTTPException(
+                status_code=400,
+                detail="Your Stripe Connect account is not yet active. Complete onboarding first.",
+            )
+
+        if wallet["balance_cents"] < body.amount_cents:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Insufficient balance: have {wallet['balance_cents']}¢, need {body.amount_cents}¢.",
+            )
+
+        _stripe_lib.api_key = _STRIPE_SECRET_KEY
+        request_idempotency_key = (request.headers.get(_IDEMPOTENCY_KEY_HEADER, "") or "").strip()
+        stripe_idempotency_basis = request_idempotency_key or str(uuid.uuid4())
+        stripe_idempotency_key = "aztea-withdraw-" + hashlib.sha256(
+            f"{caller['owner_id']}:{wallet['wallet_id']}:{body.amount_cents}:{stripe_idempotency_basis}".encode(
+                "utf-8"
+            )
+        ).hexdigest()
+
+        # Debit wallet first (raises InsufficientBalanceError if something changed).
+        try:
+            payments.charge(
                 wallet["wallet_id"],
                 body.amount_cents,
-                transfer.id,
-                f"Withdrawal to {account_id[:12]}",
-                _utc_now_iso(),
-            ),
-        )
-        _tr_conn.commit()
+                memo=f"Withdrawal to Stripe Connect [{account_id[:12]}]",
+            )
+        except payments.InsufficientBalanceError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
-    _LOG.info(
-        "Stripe Connect withdrawal: %d¢ from wallet %s → account %s (transfer %s)",
-        body.amount_cents, wallet["wallet_id"], account_id, transfer.id,
+        try:
+            transfer = _stripe_lib.Transfer.create(
+                amount=body.amount_cents,
+                currency="usd",
+                destination=account_id,
+                idempotency_key=stripe_idempotency_key,
+            )
+        except Exception as exc:
+            # Refund the wallet charge on Stripe failure.
+            try:
+                payments.deposit(
+                    wallet["wallet_id"],
+                    body.amount_cents,
+                    memo=f"Withdrawal refund (Stripe error): {exc}",
+                )
+            except Exception:
+                _LOG.exception("Critical: failed to refund withdrawal for wallet %s", wallet["wallet_id"])
+            status_code, payload = _stripe_http_error("withdraw_transfer", exc)
+            raise HTTPException(status_code=status_code, detail=payload)
+
+        transfer_id = _stripe_obj_id(transfer)
+        if not transfer_id:
+            raise HTTPException(status_code=502, detail="Stripe transfer response did not include an ID.")
+
+        # Record the transfer for audit.
+        with sqlite3.connect(jobs.DB_PATH) as _tr_conn:
+            _tr_conn.execute(
+                "INSERT INTO stripe_connect_transfers (transfer_id, wallet_id, amount_cents, stripe_tx_id, memo, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    str(uuid.uuid4()),
+                    wallet["wallet_id"],
+                    body.amount_cents,
+                    transfer_id,
+                    f"Withdrawal to {account_id[:12]}",
+                    _utc_now_iso(),
+                ),
+            )
+            _tr_conn.commit()
+
+        _LOG.info(
+            "Stripe Connect withdrawal: %d¢ from wallet %s → account %s (transfer %s)",
+            body.amount_cents, wallet["wallet_id"], account_id, transfer_id,
+        )
+        try:
+            _withdraw_email = _get_owner_email(caller.get("owner_id", ""))
+            if _withdraw_email:
+                _email.send_withdrawal_processed(_withdraw_email, body.amount_cents)
+        except Exception:
+            _LOG.warning("Failed to send withdrawal email for owner %s", caller.get("owner_id", ""))
+        return {
+            "status": "ok",
+            "transfer_id": transfer_id,
+            "amount_cents": body.amount_cents,
+        }, 200
+
+    return _run_idempotent_json_response(
+        request=request,
+        caller=caller,
+        scope="wallets.withdraw",
+        payload=body.model_dump(),
+        operation=_operation,
     )
-    try:
-        _withdraw_email = _get_owner_email(caller.get("owner_id", ""))
-        if _withdraw_email:
-            _email.send_withdrawal_processed(_withdraw_email, body.amount_cents)
-    except Exception:
-        pass
-    return JSONResponse({
-        "status": "ok",
-        "transfer_id": transfer.id,
-        "amount_cents": body.amount_cents,
-    })
 
 
 @app.get(

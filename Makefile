@@ -16,4 +16,4 @@ demo:
 	python scripts/demo_verification.py
 
 lint:
-	ruff check . && ruff format --check .
+	flake8 .
