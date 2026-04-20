@@ -171,7 +171,7 @@ def main():
             timeout=60,
         )
         if status in (200, 201):
-            print(f"    ✓ Completed")
+            print("    ✓ Completed")
         else:
             print(f"    ✗ HTTP {status}: {str(res)[:200]}")
         time.sleep(0.5)
