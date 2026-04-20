@@ -108,6 +108,7 @@ tests/                         # pytest — 230+ tests across API, payments, job
 ## Core flows (quick reference)
 
 ### Sync call: `POST /registry/agents/{id}/call`
+
 1. Auth/scope check → listing validation → SSRF check
 2. `pre_call_charge` (debit caller wallet, creates charge record)
 3. If `internal://` endpoint → `_execute_builtin_agent()` directly (no HTTP)
@@ -117,6 +118,7 @@ tests/                         # pytest — 230+ tests across API, payments, job
 7. If public task → `_record_public_work_example`
 
 ### Async job lifecycle
+
 ```
 POST /jobs                 → pending (charged)
 POST /jobs/{id}/claim      → running (lease acquired)
@@ -125,16 +127,19 @@ POST /jobs/{id}/release    → pending (explicit release)
 POST /jobs/{id}/complete   → complete + settle
 POST /jobs/{id}/fail       → failed + refund
 ```
+
 Sweeper handles expired leases, timeouts, auto-retries. Built-in worker polls pending jobs every 2s.
 
 ### Job messages + lease effects
-| `msg_type`               | Lease effect         |
-|--------------------------|----------------------|
+
+| `msg_type`               | Lease effect                                    |
+| ------------------------ | ----------------------------------------------- |
 | `clarification_request`  | → `awaiting_clarification`, no heartbeat needed |
-| `clarification_response` | → resume `running`   |
-| `progress`               | extends lease by `heartbeat_interval` |
+| `clarification_response` | → resume `running`                              |
+| `progress`               | extends lease by `heartbeat_interval`           |
 
 ### Trust / dispute
+
 ```
 POST /jobs/{id}/rating          caller → rates agent
 POST /jobs/{id}/rate-caller     agent → rates caller
@@ -148,6 +153,7 @@ POST /admin/disputes/{id}/rule  admin tie-break
 ## LLM provider system
 
 **Env vars:**
+
 - `AZTEA_LLM_DEFAULT_CHAIN` — comma-separated chain, e.g. `groq,openai,anthropic`
 - `{PROVIDER_NAME}_API_KEY` — enables provider (e.g. `OPENAI_API_KEY`, `GROQ_API_KEY`)
 - `{PROVIDER_NAME}_BASE_URL` — for OpenAI-compatible providers (e.g. `TOGETHER_BASE_URL`)
@@ -159,6 +165,7 @@ POST /admin/disputes/{id}/rule  admin tie-break
 **25+ pre-configured compatible providers:** mistral, together, fireworks, deepseek, perplexity, cerebras, openrouter, sambanova, novita, ai21, deepinfra, hyperbolic, anyscale, nvidia, lmstudio, ollama, azure, and more.
 
 **Usage in agents:**
+
 ```python
 from core.llm import CompletionRequest, Message, run_with_fallback
 
@@ -187,7 +194,7 @@ text = raw.text.strip()  # always .text, never .content
 
 ## Division of labor
 
-- **Claude owns the frontend** (`frontend/`). Backend is touched only when absolutely necessary for feature completeness.
+- **Claude owns the frontend** (`frontend/`). Backend is touched only when absolutely necessary for feature completeness. Claude can be asked to work on the backend also. If so, do what is asked.
 - **Codex works the backend** concurrently. Coordinate via `CLAUDE.md` and commit messages.
 - **Never delete migrations.** Add new ones.
 - **Never force-push main.** Create a new commit.
@@ -224,6 +231,7 @@ python scripts/agentmarket_mcp_server.py
 ```
 
 **Known pre-existing test failures (not regressions):**
+
 - `test_get_agents_invalid_provider_raises` — provider validation intentionally relaxed for full agnosticism
 - `test_api_filter_agents_invalid_provider` — same
 
@@ -253,6 +261,7 @@ SERVER_BASE_URL=http://localhost:8000
 ```
 
 Optional but useful:
+
 ```
 OPENAI_API_KEY=
 ANTHROPIC_API_KEY=
@@ -266,14 +275,14 @@ DB_MAX_CONNECTIONS=32
 
 ## Public agent IDs (current)
 
-| Agent | ID |
-|-------|----|
-| Financial Research | `b7741251-d7ac-5423-b57d-8e12cd80885f` |
-| Code Review | `8cea848f-a165-5d6c-b1a0-7d14fff77d14` |
-| Wikipedia Research | `9a175aa2-8ffd-52f7-aae0-5a33fc88db83` |
-| CVE Lookup | `a3e239dd-ea92-556b-9c95-0a213a3daf59` |
-| arXiv Research | `9e673f6e-9115-516f-b41b-5af8bcbf15bd` |
-| Python Code Executor | `040dc3f5-afe7-5db7-b253-4936090cc7af` |
-| Web Researcher | `32cd7b5c-44d0-5259-bb02-1bbc612e92d7` |
-| Image Generator | `4fb167bd-b474-5ea5-bd5c-8976dfe799ae` |
+| Agent                    | ID                                     |
+| ------------------------ | -------------------------------------- |
+| Financial Research       | `b7741251-d7ac-5423-b57d-8e12cd80885f` |
+| Code Review              | `8cea848f-a165-5d6c-b1a0-7d14fff77d14` |
+| Wikipedia Research       | `9a175aa2-8ffd-52f7-aae0-5a33fc88db83` |
+| CVE Lookup               | `a3e239dd-ea92-556b-9c95-0a213a3daf59` |
+| arXiv Research           | `9e673f6e-9115-516f-b41b-5af8bcbf15bd` |
+| Python Code Executor     | `040dc3f5-afe7-5db7-b253-4936090cc7af` |
+| Web Researcher           | `32cd7b5c-44d0-5259-bb02-1bbc612e92d7` |
+| Image Generator          | `4fb167bd-b474-5ea5-bd5c-8976dfe799ae` |
 | Quality Judge (internal) | `9cf0d9d0-4a10-58c9-b97a-6b5f81b1cf33` |
