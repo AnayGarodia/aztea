@@ -8,6 +8,7 @@ import Badge from '../ui/Badge'
 import Pill from '../ui/Pill'
 import EmptyState from '../ui/EmptyState'
 import Reveal from '../ui/motion/Reveal'
+import Stagger from '../ui/motion/Stagger'
 import AgentSigil from '../brand/AgentSigil'
 import { getAgentColor } from '../brand/sigilTraits'
 import AgentInputForm from '../features/agents/AgentInputForm'
@@ -29,6 +30,36 @@ function fmtMs(value) {
   return `${Math.round(value)} ms`
 }
 
+function relativeTime(isoString) {
+  if (!isoString) return null
+  const diff = Date.now() - new Date(isoString).getTime()
+  const mins = Math.floor(diff / 60000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  const days = Math.floor(hrs / 24)
+  if (days < 7) return `${days} day${days !== 1 ? 's' : ''} ago`
+  const weeks = Math.floor(days / 7)
+  return `${weeks} week${weeks !== 1 ? 's' : ''} ago`
+}
+
+function extractInputPreview(input) {
+  if (!input || typeof input !== 'object') return String(input ?? '')
+  for (const key of ['prompt', 'query', 'text', 'input']) {
+    if (typeof input[key] === 'string' && input[key].length > 0) return input[key]
+  }
+  return JSON.stringify(input)
+}
+
+function extractOutputPreview(output) {
+  if (!output || typeof output !== 'object') return String(output ?? '')
+  for (const key of ['text', 'summary', 'result', 'answer']) {
+    if (typeof output[key] === 'string' && output[key].length > 0) return output[key]
+  }
+  return JSON.stringify(output)
+}
+
 export default function AgentDetailPage() {
   const { id } = useParams()
   const { agents, wallet, apiKey, showToast, refreshJobs } = useMarket()
@@ -41,6 +72,14 @@ export default function AgentDetailPage() {
   const [workHistoryOffset, setWorkHistoryOffset] = useState(0)
   const [workHistoryTotal, setWorkHistoryTotal] = useState(0)
   const [expandedExample, setExpandedExample] = useState(null)
+  const [expandedFields, setExpandedFields] = useState(new Set())
+
+  const toggleField = (fieldKey) =>
+    setExpandedFields(prev => {
+      const next = new Set(prev)
+      next.has(fieldKey) ? next.delete(fieldKey) : next.add(fieldKey)
+      return next
+    })
 
   const agent = useMemo(() => agents.find(a => a.agent_id === id), [agents, id])
 
@@ -48,7 +87,7 @@ export default function AgentDetailPage() {
     if (!agent || !apiKey) return
     setWorkHistoryLoading(true)
     try {
-      const data = await fetchAgentWorkHistory(apiKey, agent.agent_id, { limit: 10, offset })
+      const data = await fetchAgentWorkHistory(apiKey, agent.agent_id, { limit: 5, offset })
       if (offset === 0) {
         setWorkHistory(data?.items ?? [])
       } else {
@@ -328,7 +367,7 @@ export default function AgentDetailPage() {
             </Card>
           </Reveal>
 
-          {/* Work Portfolio */}
+          {/* Recent Work */}
           {(workHistory !== null || workHistoryLoading) && (
             <Reveal delay={0.2}>
               <Card>
@@ -336,7 +375,7 @@ export default function AgentDetailPage() {
                   <div className="agent-detail__portfolio-header">
                     <span className="agent-detail__section-title">
                       <BookOpen size={14} strokeWidth={2} />
-                      Work portfolio
+                      Recent Work
                     </span>
                     {workHistoryTotal > 0 && (
                       <span className="agent-detail__portfolio-count">{workHistoryTotal} example{workHistoryTotal !== 1 ? 's' : ''}</span>
@@ -349,18 +388,24 @@ export default function AgentDetailPage() {
                   )}
                   {workHistory?.length === 0 && !workHistoryLoading && (
                     <div className="agent-detail__portfolio-empty">
-                      No public work examples yet. Invoke this agent to generate examples.
+                      No public work examples yet — be the first to hire this agent.
                     </div>
                   )}
                   {(workHistory ?? []).length > 0 && (
-                    <div className="agent-detail__portfolio-list">
+                    <Stagger className="agent-detail__portfolio-list" staggerDelay={0.07} delayStart={0.05}>
                       {(workHistory ?? []).map((ex, i) => {
                         const key = ex.job_id ?? `${agent.agent_id}-ex-${i}`
                         const isExpanded = expandedExample === key
+                        const inputFieldKey = `${key}-input`
+                        const outputFieldKey = `${key}-output`
+                        const inputExpanded = expandedFields.has(inputFieldKey)
+                        const outputExpanded = expandedFields.has(outputFieldKey)
                         const rating = ex.rating ?? null
                         const qualityScore = ex.quality_score ?? null
                         const latency = ex.latency_ms != null ? `${Math.round(ex.latency_ms)}ms` : null
-                        const ts = ex.created_at ? new Date(ex.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : null
+                        const ts = relativeTime(ex.created_at)
+                        const inputPreview = ex.input ? extractInputPreview(ex.input) : null
+                        const outputPreview = ex.output ? extractOutputPreview(ex.output) : null
                         return (
                           <div key={key} className={`agent-detail__portfolio-item${isExpanded ? ' agent-detail__portfolio-item--open' : ''}`}>
                             <button
@@ -398,20 +443,52 @@ export default function AgentDetailPage() {
                                   exit={{ height: 0, opacity: 0 }}
                                   transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
                                 >
-                                  {ex.input && (
+                                  {inputPreview != null && (
                                     <div className="agent-detail__portfolio-block">
                                       <span className="agent-detail__portfolio-block-label">Input</span>
-                                      <pre className="agent-detail__portfolio-pre">
-                                        {JSON.stringify(ex.input, null, 2)}
-                                      </pre>
+                                      {inputExpanded ? (
+                                        <>
+                                          <pre className="agent-detail__portfolio-pre">
+                                            {JSON.stringify(ex.input, null, 2)}
+                                          </pre>
+                                          <button className="agent-detail__portfolio-expand-link" onClick={() => toggleField(inputFieldKey)} type="button">
+                                            collapse
+                                          </button>
+                                        </>
+                                      ) : (
+                                        <p className="agent-detail__portfolio-summary">
+                                          {inputPreview.length > 200 ? inputPreview.slice(0, 200) + '…' : inputPreview}
+                                          {inputPreview.length > 200 && (
+                                            <button className="agent-detail__portfolio-expand-link" onClick={() => toggleField(inputFieldKey)} type="button">
+                                              show more
+                                            </button>
+                                          )}
+                                        </p>
+                                      )}
                                     </div>
                                   )}
-                                  {ex.output && (
+                                  {outputPreview != null && (
                                     <div className="agent-detail__portfolio-block">
                                       <span className="agent-detail__portfolio-block-label">Output</span>
-                                      <div className="agent-detail__portfolio-output">
-                                        <ResultRenderer result={ex.output} agent={agent} />
-                                      </div>
+                                      {outputExpanded ? (
+                                        <>
+                                          <div className="agent-detail__portfolio-output">
+                                            <ResultRenderer result={ex.output} agent={agent} />
+                                          </div>
+                                          <button className="agent-detail__portfolio-expand-link" onClick={() => toggleField(outputFieldKey)} type="button">
+                                            collapse
+                                          </button>
+                                        </>
+                                      ) : (
+                                        <p className="agent-detail__portfolio-summary">
+                                          {outputPreview.length > 200 ? outputPreview.slice(0, 200) + '…' : outputPreview}
+                                          {outputPreview.length > 200 && (
+                                            <button className="agent-detail__portfolio-expand-link" onClick={() => toggleField(outputFieldKey)} type="button">
+                                              show more
+                                            </button>
+                                          )}
+                                        </p>
+                                      )}
                                     </div>
                                   )}
                                   {Array.isArray(ex.artifacts) && ex.artifacts.length > 0 && (
@@ -443,17 +520,7 @@ export default function AgentDetailPage() {
                           </div>
                         )
                       })}
-                    </div>
-                  )}
-                  {workHistory && workHistory.length < workHistoryTotal && (
-                    <button
-                      className="agent-detail__portfolio-more"
-                      onClick={() => loadWorkHistory(workHistoryOffset + 10)}
-                      disabled={workHistoryLoading}
-                      type="button"
-                    >
-                      {workHistoryLoading ? 'Loading…' : `Load more (${workHistoryTotal - workHistory.length} remaining)`}
-                    </button>
+                    </Stagger>
                   )}
                 </Card.Body>
               </Card>

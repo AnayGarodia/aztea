@@ -535,3 +535,23 @@
   color: var(--accent);
 }
 .agent-detail__portfolio-more:disabled { opacity: 0.5; cursor: default; }
+.agent-detail__portfolio-summary {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.agent-detail__portfolio-expand-link {
+  font-size: 0.75rem;
+  color: var(--accent);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  margin-left: 4px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
