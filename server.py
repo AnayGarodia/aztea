@@ -10412,6 +10412,74 @@ def disputes_judge(
     return JSONResponse(content={"dispute": dispute_payload, "settlement": settlement})
 
 
+@app.get(
+    "/admin/disputes",
+    responses=_error_responses(401, 403, 429, 500),
+)
+@limiter.limit("60/minute")
+def admin_list_disputes(
+    request: Request,
+    limit: int = 200,
+    status: str | None = None,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    """List all disputes with job context and verdict summary, oldest first."""
+    _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
+    _require_admin_ip_allowlist(request)
+    capped_limit = max(1, min(int(limit), 500))
+    rows = disputes.list_disputes(status=status or None, limit=capped_limit)
+    result = []
+    for d in rows:
+        job = jobs.get_job(d["job_id"])
+        judgments_list = disputes.get_judgments(d["dispute_id"])
+        llm_judgments = [j for j in judgments_list if j.get("judge_kind") != "human_admin"]
+        if len(llm_judgments) >= 2:
+            v0, v1 = llm_judgments[0]["verdict"], llm_judgments[1]["verdict"]
+            verdict_summary = (
+                f"Both agreed: {v0.replace('_', ' ')}"
+                if v0 == v1
+                else "Judges disagreed — needs ruling"
+            )
+        elif len(llm_judgments) == 1:
+            verdict_summary = f"1 judge: {llm_judgments[0]['verdict'].replace('_', ' ')}"
+        else:
+            verdict_summary = "Awaiting judgment"
+        result.append({
+            **d,
+            "price_cents": int((job or {}).get("price_cents") or 0),
+            "caller_owner_id": (job or {}).get("caller_owner_id"),
+            "agent_owner_id": (job or {}).get("agent_owner_id"),
+            "agent_id": (job or {}).get("agent_id"),
+            "verdict_summary": verdict_summary,
+            "judgment_count": len(judgments_list),
+        })
+    result.sort(key=lambda x: x.get("filed_at") or "")
+    return JSONResponse(content={"disputes": result, "total": len(result)})
+
+
+@app.get(
+    "/admin/disputes/{dispute_id}",
+    responses=_error_responses(401, 403, 404, 429, 500),
+)
+@limiter.limit("60/minute")
+def admin_get_dispute(
+    request: Request,
+    dispute_id: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    """Full dispute context including job input/output and escrow balance."""
+    _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
+    _require_admin_ip_allowlist(request)
+    ctx = disputes.get_dispute_context(dispute_id)
+    if ctx is None:
+        raise HTTPException(status_code=404, detail=f"Dispute '{dispute_id}' not found.")
+    escrow_wallet = payments.get_wallet_by_owner(
+        payments.DISPUTE_ESCROW_OWNER_PREFIX + dispute_id
+    )
+    ctx["escrow_balance_cents"] = int((escrow_wallet or {}).get("balance_cents") or 0)
+    return JSONResponse(content=ctx)
+
+
 @app.post(
     "/admin/disputes/{dispute_id}/rule",
     response_model=core_models.DisputeJudgeResponse,

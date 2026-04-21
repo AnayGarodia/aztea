@@ -257,6 +257,32 @@ export async function callAgent(key, agentId, payload, { privateTask = false } =
   return { status: result.status, ok: result.ok, body: result.body }
 }
 
+export async function fetchAdminDisputes(key, { limit = 200, status } = {}) {
+  const params = new URLSearchParams({ limit: String(limit) })
+  if (status) params.set('status', status)
+  const { body } = await request(`/admin/disputes?${params}`, { key })
+  return body
+}
+
+export async function fetchAdminDispute(key, disputeId) {
+  const { body } = await request(`/admin/disputes/${disputeId}`, { key })
+  return body
+}
+
+export async function ruleDispute(key, disputeId, { outcome, reasoning, split_caller_cents, split_agent_cents } = {}) {
+  const payload = { outcome, reasoning }
+  if (outcome === 'split') {
+    payload.split_caller_cents = split_caller_cents
+    payload.split_agent_cents = split_agent_cents
+  }
+  const { body } = await request(`/admin/disputes/${disputeId}/rule`, {
+    method: 'POST',
+    key,
+    body: payload,
+  })
+  return body
+}
+
 export async function verifyJob(key, jobId, { decision, reason } = {}) {
   const { body } = await request(`/jobs/${jobId}/verification`, {
     method: 'POST',

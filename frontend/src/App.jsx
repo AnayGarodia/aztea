@@ -19,11 +19,24 @@ import JobDetailPage  from './pages/JobDetailPage'
 import WorkerPage     from './pages/WorkerPage'
 import WalletPage     from './pages/WalletPage'
 import SettingsPage   from './pages/SettingsPage'
+import AdminDisputesPage from './pages/AdminDisputesPage'
 
 function RequireAuth({ children }) {
   const { apiKey, booting } = useAuth()
   if (booting) return <AppBoot />
   if (!apiKey) return <Navigate to="/welcome" replace />
+  return children
+}
+
+function RequireAdmin({ children }) {
+  const { user } = useAuth()
+  if (!user?.scopes?.includes('admin')) {
+    return (
+      <main style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--canvas)', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: '0.875rem' }}>
+        Admin access required.
+      </main>
+    )
+  }
   return children
 }
 
@@ -72,6 +85,7 @@ function AuthedApp() {
             <Route path="/worker"   element={<WorkerPage />} />
             <Route path="/wallet"   element={<WalletPage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/admin/disputes" element={<RequireAdmin><AdminDisputesPage /></RequireAdmin>} />
             <Route path="*"         element={<Navigate to="/overview" replace />} />
           </Route>
         </Routes>

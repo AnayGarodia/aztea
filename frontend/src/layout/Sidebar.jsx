@@ -1,7 +1,7 @@
 import { NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { motion, AnimatePresence } from 'motion/react'
 import {
-  LayoutDashboard, Bot, Briefcase, Hammer, Wallet, Settings, LogOut, Sun, Moon
+  LayoutDashboard, Bot, Briefcase, Hammer, Wallet, Settings, LogOut, Sun, Moon, Shield
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useMarket } from '../context/MarketContext'
@@ -63,6 +63,27 @@ export default function Sidebar() {
           )
         })}
       </nav>
+
+      {/* Admin link */}
+      {user?.scopes?.includes('admin') && (
+        <nav className="sidebar__nav sidebar__nav--admin">
+          <NavLink to="/admin/disputes" className="sidebar__link-wrap">
+            {({ isActive }) => (
+              <div className={`sidebar__link ${isActive ? 'sidebar__link--active' : ''}`}>
+                {isActive && (
+                  <motion.div
+                    layoutId="sidebar-active"
+                    className="sidebar__link-bg"
+                    transition={{ type: 'spring', bounce: 0.2, duration: 0.4 }}
+                  />
+                )}
+                <Shield size={16} className="sidebar__link-icon" />
+                <span className="sidebar__link-label">Disputes</span>
+              </div>
+            )}
+          </NavLink>
+        </nav>
+      )}
 
       {/* Live agents strip */}
       {agents.length > 0 && (
