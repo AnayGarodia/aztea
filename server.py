@@ -6312,6 +6312,7 @@ def _sweep_jobs(
             payload={"previous_next_retry_at": previous_next_retry_at},
         )
     output_verification_expired_job_ids: list[str] = []
+    output_verification_auto_settled_job_ids: list[str] = []
     for item in jobs.list_jobs_with_expired_output_verification(limit=limit):
         expired = jobs.mark_output_verification_expired(item["job_id"])
         if expired is None:
@@ -6323,6 +6324,9 @@ def _sweep_jobs(
             actor_owner_id=actor_owner_id,
             payload={"output_verification_deadline_at": item.get("output_verification_deadline_at")},
         )
+        auto_settled = _settle_successful_job(expired, actor_owner_id=actor_owner_id)
+        if auto_settled.get("settled_at"):
+            output_verification_auto_settled_job_ids.append(auto_settled["job_id"])
     completed_pending_settlement = jobs.list_completed_jobs_pending_settlement(limit=limit)
     settled_successful_job_ids: list[str] = []
     for item in completed_pending_settlement:
@@ -6344,6 +6348,7 @@ def _sweep_jobs(
         "clarification_timeout_proceeded_job_ids": clarification_timeout_proceeded_job_ids,
         "sla_failed_job_ids": sla_failed_job_ids,
         "output_verification_expired_job_ids": output_verification_expired_job_ids,
+        "output_verification_auto_settled_job_ids": output_verification_auto_settled_job_ids,
         "completed_pending_settlement_scanned": len(completed_pending_settlement),
         "settled_successful_count": len(settled_successful_job_ids),
         "settled_successful_job_ids": settled_successful_job_ids,

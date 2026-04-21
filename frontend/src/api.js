@@ -257,6 +257,15 @@ export async function callAgent(key, agentId, payload, { privateTask = false } =
   return { status: result.status, ok: result.ok, body: result.body }
 }
 
+export async function verifyJob(key, jobId, { decision, reason } = {}) {
+  const { body } = await request(`/jobs/${jobId}/verification`, {
+    method: 'POST',
+    key,
+    body: { decision, ...(reason ? { reason } : {}) },
+  })
+  return body
+}
+
 export async function fetchAgentWorkHistory(key, agentId, { limit = 20, offset = 0 } = {}) {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
   const { body } = await request(`/registry/agents/${agentId}/work-history?${params}`, { key })

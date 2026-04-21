@@ -231,6 +231,62 @@
   resize: vertical;
 }
 
+.job-detail__verify-card .card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.job-detail__verify-countdown {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+.job-detail__verify-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.job-detail__verify-reject-form {
+  display: grid;
+  gap: 10px;
+}
+.job-detail__verify-label {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.job-detail__verify-required {
+  color: var(--negative, #e05252);
+}
+.job-detail__verify-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  padding: 10px 12px;
+  resize: vertical;
+}
+.job-detail__verify-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.job-detail__verify-accepted {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--positive, #4caf82);
+  color: var(--positive, #4caf82);
+  font-size: 0.875rem;
+}
+
 @media (max-width: 780px) {
   .job-detail__scroll { padding: 20px 16px; }
   .job-detail__info-label { min-width: 100px; }

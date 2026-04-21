@@ -9,11 +9,22 @@ import Skeleton from '../ui/Skeleton'
 import Reveal from '../ui/motion/Reveal'
 import AgentSigil from '../brand/AgentSigil'
 import ResultRenderer from '../features/agents/results/ResultRenderer'
-import { getJobMessages, postJobMessage, rateJob, getJobDispute, fileDispute } from '../api'
+import { getJobMessages, postJobMessage, rateJob, getJobDispute, fileDispute, verifyJob } from '../api'
 import { useMarket } from '../context/MarketContext'
 import JobTimeline from '../features/jobs/JobTimeline'
 import { ArrowLeft, RefreshCw, Star, AlertTriangle, CheckCircle, Clock } from 'lucide-react'
 import './JobDetailPage.css'
+
+function fmtCountdown(isoDeadline) {
+  if (!isoDeadline) return null
+  const diff = new Date(isoDeadline).getTime() - Date.now()
+  if (diff <= 0) return 'Expired'
+  const totalMins = Math.floor(diff / 60000)
+  const hrs = Math.floor(totalMins / 60)
+  const mins = totalMins % 60
+  if (hrs > 0) return `${hrs}h ${mins}m`
+  return `${mins}m`
+}
 
 function fmtDate(str) {
   if (!str) return '--'
@@ -95,6 +106,11 @@ export default function JobDetailPage() {
   const [ratingDone, setRatingDone] = useState(false)
   const [clarificationAnswer, setClarificationAnswer] = useState('')
   const [clarificationSubmitting, setClarificationSubmitting] = useState(false)
+  const [verifyLoading, setVerifyLoading] = useState(false)
+  const [verifyDone, setVerifyDone] = useState(null) // 'accepted' | 'rejected'
+  const [showRejectForm, setShowRejectForm] = useState(false)
+  const [rejectReason, setRejectReason] = useState('')
+  const [countdown, setCountdown] = useState(null)
 
   const job = useMemo(() => jobs.find(j => j.job_id === id), [jobs, id])
   const agent = useMemo(() => agents.find(a => a.agent_id === job?.agent_id), [agents, job])
@@ -202,6 +218,35 @@ export default function JobDetailPage() {
       showToast?.(err?.message || 'Could not send clarification response.', 'error')
     } finally {
       setClarificationSubmitting(false)
+    }
+  }
+
+  useEffect(() => {
+    const deadline = job?.output_verification_deadline_at
+    if (!deadline || job?.output_verification_status !== 'pending') return
+    const update = () => setCountdown(fmtCountdown(deadline))
+    update()
+    const interval = setInterval(update, 30000)
+    return () => clearInterval(interval)
+  }, [job?.output_verification_deadline_at, job?.output_verification_status])
+
+  const handleVerify = async (decision) => {
+    if (!apiKey) return
+    setVerifyLoading(true)
+    try {
+      await verifyJob(apiKey, id, { decision, reason: decision === 'reject' ? rejectReason.trim() : undefined })
+      setVerifyDone(decision)
+      if (decision === 'accept') {
+        showToast?.('Payment released — the agent has been paid.', 'success')
+      } else {
+        showToast?.('Output rejected — dispute opened.', 'success')
+        await loadDispute()
+      }
+      await refreshJobs?.()
+    } catch (err) {
+      showToast?.(err?.message || 'Verification action failed.', 'error')
+    } finally {
+      setVerifyLoading(false)
     }
   }
 
@@ -328,6 +373,77 @@ export default function JobDetailPage() {
                   )}
                 </Card.Body>
               </Card>
+            </Reveal>
+          )}
+
+          {/* Verification panel */}
+          {job.status === 'complete' && !verifyDone && job.output_verification_status === 'pending' && (
+            <Reveal delay={0.22}>
+              <Card className="job-detail__verify-card">
+                <Card.Header>
+                  <span className="job-detail__section-title">Verify Output</span>
+                  {countdown && (
+                    <span className="job-detail__verify-countdown">
+                      <Clock size={12} />
+                      Auto-accepts in {countdown}
+                    </span>
+                  )}
+                </Card.Header>
+                <Card.Body>
+                  {!showRejectForm ? (
+                    <div className="job-detail__verify-actions">
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        icon={<CheckCircle size={14} />}
+                        onClick={() => handleVerify('accept')}
+                        loading={verifyLoading}
+                      >
+                        Accept &amp; Release Payment
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        icon={<AlertTriangle size={13} />}
+                        onClick={() => setShowRejectForm(true)}
+                        disabled={verifyLoading}
+                      >
+                        Reject &amp; Dispute
+                      </Button>
+                    </div>
+                  ) : (
+                    <form onSubmit={e => { e.preventDefault(); handleVerify('reject') }} className="job-detail__verify-reject-form">
+                      <label className="job-detail__verify-label">
+                        Reason <span className="job-detail__verify-required">*</span>
+                      </label>
+                      <textarea
+                        required
+                        rows={3}
+                        value={rejectReason}
+                        onChange={e => setRejectReason(e.target.value)}
+                        placeholder="Describe what's wrong with the output."
+                        className="job-detail__verify-textarea"
+                      />
+                      <div className="job-detail__verify-actions">
+                        <Button type="submit" variant="danger" size="sm" loading={verifyLoading} disabled={!rejectReason.trim()}>
+                          Reject &amp; Dispute
+                        </Button>
+                        <Button type="button" variant="secondary" size="sm" onClick={() => setShowRejectForm(false)} disabled={verifyLoading}>
+                          Cancel
+                        </Button>
+                      </div>
+                    </form>
+                  )}
+                </Card.Body>
+              </Card>
+            </Reveal>
+          )}
+          {verifyDone === 'accepted' && (
+            <Reveal delay={0.22}>
+              <div className="job-detail__verify-accepted">
+                <CheckCircle size={15} />
+                Payment released — the agent has been paid.
+              </div>
             </Reveal>
           )}
 
