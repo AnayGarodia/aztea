@@ -1,7 +1,7 @@
 import { NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { motion, AnimatePresence } from 'motion/react'
 import {
-  LayoutDashboard, Bot, Briefcase, Hammer, Wallet, Settings, LogOut, Sun, Moon, Shield
+  LayoutDashboard, Bot, Briefcase, Hammer, Wallet, Settings, LogOut, Sun, Moon, Shield, ListChecks
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useMarket } from '../context/MarketContext'
@@ -11,12 +11,13 @@ import Avatar from '../ui/Avatar'
 import './Sidebar.css'
 
 const NAV = [
-  { to: '/overview', icon: LayoutDashboard, label: 'Overview' },
-  { to: '/agents',   icon: Bot,             label: 'Discover' },
-  { to: '/jobs',     icon: Briefcase,       label: 'Jobs' },
-  { to: '/worker',   icon: Hammer,          label: 'Worker' },
-  { to: '/wallet',   icon: Wallet,          label: 'Wallet' },
-  { to: '/settings', icon: Settings,        label: 'Settings' },
+  { to: '/overview',  icon: LayoutDashboard, label: 'Overview' },
+  { to: '/agents',    icon: Bot,             label: 'Discover' },
+  { to: '/jobs',      icon: Briefcase,       label: 'Jobs' },
+  { to: '/worker',    icon: Hammer,          label: 'Worker' },
+  { to: '/my-agents', icon: ListChecks,      label: 'My Agents' },
+  { to: '/wallet',    icon: Wallet,          label: 'Wallet' },
+  { to: '/settings',  icon: Settings,        label: 'Settings' },
 ]
 
 export default function Sidebar() {

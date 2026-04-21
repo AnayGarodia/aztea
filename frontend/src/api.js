@@ -232,6 +232,28 @@ export async function registerAgent(key, data) {
   return body
 }
 
+export async function fetchMyAgents(key) {
+  const { body } = await request('/registry/agents/mine', { key })
+  return body
+}
+
+export async function updateAgent(key, agentId, data) {
+  const { body } = await request(`/registry/agents/${agentId}`, {
+    method: 'PATCH',
+    key,
+    body: data,
+  })
+  return body
+}
+
+export async function delistAgent(key, agentId) {
+  const { body } = await request(`/registry/agents/${agentId}`, {
+    method: 'DELETE',
+    key,
+  })
+  return body
+}
+
 export async function searchAgents(key, query, { model_provider } = {}) {
   const trimmed = String(query ?? '').trim()
   const bodyData = { query: trimmed }

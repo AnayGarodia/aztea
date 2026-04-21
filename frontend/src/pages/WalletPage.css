@@ -222,6 +222,122 @@
   font-feature-settings: 'tnum';
 }
 
+/* Period selector */
+.wallet__period-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.wallet__period-btn {
+  padding: 4px 10px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--border);
+  background: transparent;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+  transition: color 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+}
+
+.wallet__period-btn:hover { color: var(--text-secondary); }
+
+.wallet__period-btn--active {
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+
+/* Spend summary */
+.wallet__spend-totals {
+  display: flex;
+  gap: 32px;
+  flex-wrap: wrap;
+  padding-bottom: 16px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.wallet__spend-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.wallet__spend-stat-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.wallet__spend-stat-value {
+  font-family: var(--font-mono);
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-feature-settings: 'tnum';
+}
+
+.wallet__spend-agents-head {
+  display: grid;
+  grid-template-columns: 1fr 60px 90px;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 0.625rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+
+.wallet__spend-agents-head span:not(:first-child),
+.wallet__spend-agent-count,
+.wallet__spend-agent-total {
+  text-align: right;
+}
+
+.wallet__spend-agent-row {
+  display: grid;
+  grid-template-columns: 1fr 60px 90px;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  align-items: center;
+}
+
+.wallet__spend-agent-row:last-child { border-bottom: none; }
+
+.wallet__spend-agent-name {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wallet__spend-agent-count {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  text-align: right;
+}
+
+.wallet__spend-agent-total {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--negative, #ef4444);
+  font-family: var(--font-mono);
+  font-feature-settings: 'tnum';
+  text-align: right;
+}
+
 @media (max-width: 980px) {
   .wallet__scroll { padding: 20px 16px; }
   .wallet__grid { grid-template-columns: 1fr; }

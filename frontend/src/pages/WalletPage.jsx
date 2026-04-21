@@ -9,9 +9,9 @@ import Skeleton from '../ui/Skeleton'
 import Input from '../ui/Input'
 import Reveal from '../ui/motion/Reveal'
 import SpendChart from '../features/analytics/SpendChart'
-import { createTopupSession, depositToWallet, fetchPublicConfig, fetchAgentEarnings, connectOnboard, getConnectStatus, withdrawFunds, fetchWithdrawals } from '../api'
+import { createTopupSession, depositToWallet, fetchPublicConfig, fetchAgentEarnings, connectOnboard, getConnectStatus, withdrawFunds, fetchWithdrawals, fetchSpendSummary } from '../api'
 import { useMarket } from '../context/MarketContext'
-import { ArrowDownLeft, ArrowUpRight, Plus, CreditCard, CheckCircle, X, TrendingUp, Bot, Banknote, ExternalLink, AlertCircle } from 'lucide-react'
+import { ArrowDownLeft, ArrowUpRight, Plus, CreditCard, CheckCircle, X, TrendingUp, Bot, Banknote, ExternalLink, AlertCircle, BarChart2 } from 'lucide-react'
 import './WalletPage.css'
 
 function fmtUsd(cents) {
@@ -105,7 +105,7 @@ function WithdrawalRow({ item }) {
 }
 
 export default function WalletPage() {
-  const { wallet, apiKey, refreshWallet, showToast } = useMarket()
+  const { wallet, apiKey, refreshWallet, showToast, agents } = useMarket()
   const [searchParams, setSearchParams] = useSearchParams()
   const [amount, setAmount] = useState('10')
   const [stripeLoading, setStripeLoading] = useState(false)
@@ -118,6 +118,9 @@ export default function WalletPage() {
   const [withdrawAmount, setWithdrawAmount] = useState('10')
   const [withdrawLoading, setWithdrawLoading] = useState(false)
   const [withdrawalHistory, setWithdrawalHistory] = useState(null)
+  const [spendPeriod, setSpendPeriod] = useState('7d')
+  const [spendSummary, setSpendSummary] = useState(null)
+  const [spendLoading, setSpendLoading] = useState(false)
 
   const transactions = wallet?.transactions ?? []
   const lowBalance = (wallet?.balance_cents ?? 0) < 500
@@ -151,6 +154,25 @@ export default function WalletPage() {
       .then(data => setWithdrawalHistory(data?.withdrawals ?? []))
       .catch(() => setWithdrawalHistory([]))
   }, [apiKey])
+
+  useEffect(() => {
+    if (!apiKey) return
+    setSpendLoading(true)
+    fetchSpendSummary(apiKey, spendPeriod)
+      .then(data => {
+        if (!data) return setSpendSummary(null)
+        const agentMap = Object.fromEntries((agents ?? []).map(a => [a.agent_id, a.name]))
+        setSpendSummary({
+          ...data,
+          by_agent: (data.by_agent ?? []).map(row => ({
+            ...row,
+            agent_name: agentMap[row.agent_id] ?? row.agent_id,
+          })),
+        })
+      })
+      .catch(() => setSpendSummary(null))
+      .finally(() => setSpendLoading(false))
+  }, [apiKey, spendPeriod])
 
   // Handle Stripe redirect-back query params
   useEffect(() => {
@@ -338,6 +360,75 @@ export default function WalletPage() {
               <Badge label="Refund on failure" dot />
             </div>
           </section>
+
+          <Reveal delay={0.08}>
+          <Card>
+            <Card.Header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--sp-3)', flexWrap: 'wrap' }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
+                <BarChart2 size={14} color="var(--accent)" />
+                <span className="wallet__section-title">Spending overview</span>
+              </span>
+              <div className="wallet__period-tabs">
+                {['1d', '7d', '30d', '90d'].map(p => (
+                  <button
+                    key={p}
+                    type="button"
+                    className={`wallet__period-btn${spendPeriod === p ? ' wallet__period-btn--active' : ''}`}
+                    onClick={() => setSpendPeriod(p)}
+                  >
+                    {p}
+                  </button>
+                ))}
+              </div>
+            </Card.Header>
+            <Card.Body>
+              {spendLoading ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)' }}>
+                  <Skeleton variant="rect" height={32} />
+                  <Skeleton variant="rect" height={32} />
+                  <Skeleton variant="rect" height={32} />
+                </div>
+              ) : !spendSummary || spendSummary.total_cents === 0 ? (
+                <EmptyState title="No spend this period" sub="Charges for agent calls will appear here." />
+              ) : (
+                <div>
+                  <div className="wallet__spend-totals">
+                    <div className="wallet__spend-stat">
+                      <span className="wallet__spend-stat-label">Total spent</span>
+                      <span className="wallet__spend-stat-value">{fmtUsd(spendSummary.total_cents)}</span>
+                    </div>
+                    <div className="wallet__spend-stat">
+                      <span className="wallet__spend-stat-label">Jobs run</span>
+                      <span className="wallet__spend-stat-value">{spendSummary.total_jobs}</span>
+                    </div>
+                    <div className="wallet__spend-stat">
+                      <span className="wallet__spend-stat-label">Avg per job</span>
+                      <span className="wallet__spend-stat-value">
+                        {spendSummary.total_jobs > 0 ? fmtUsd(Math.round(spendSummary.total_cents / spendSummary.total_jobs)) : '—'}
+                      </span>
+                    </div>
+                  </div>
+                  {spendSummary.by_agent?.length > 0 && (
+                    <div className="wallet__spend-agents">
+                      <div className="wallet__spend-agents-head">
+                        <span>Agent</span>
+                        <span>Jobs</span>
+                        <span>Spent</span>
+                      </div>
+                      {spendSummary.by_agent.map((row, i) => (
+                        <div key={row.agent_id ?? i} className="wallet__spend-agent-row">
+                          <span className="wallet__spend-agent-name">{row.agent_name ?? row.agent_id}</span>
+                          <span className="wallet__spend-agent-count">{row.job_count}</span>
+                          <span className="wallet__spend-agent-total">{fmtUsd(row.total_cents)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </Card.Body>
+          </Card>
+          </Reveal>
 
           <div className="wallet__grid">
             <Reveal>

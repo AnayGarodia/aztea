@@ -8177,6 +8177,21 @@ def registry_list(
     return JSONResponse(content={"agents": [_agent_response(a, caller) for a in agents], "count": len(agents)})
 
 
+@app.get(
+    "/registry/agents/mine",
+    responses=_error_responses(401, 403, 429, 500),
+    tags=["Registry"],
+    summary="List agents owned by the authenticated caller.",
+)
+@limiter.limit("60/minute")
+def registry_list_mine(
+    request: Request,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    agents = registry.get_agents_by_owner(caller["owner_id"])
+    return JSONResponse(content={"agents": [_agent_response(a, caller) for a in agents], "count": len(agents)})
+
+
 @app.post(
     "/registry/search",
     response_model=core_models.RegistrySearchResponse,

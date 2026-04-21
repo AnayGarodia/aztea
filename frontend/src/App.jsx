@@ -20,6 +20,8 @@ import WorkerPage     from './pages/WorkerPage'
 import WalletPage     from './pages/WalletPage'
 import SettingsPage   from './pages/SettingsPage'
 import AdminDisputesPage from './pages/AdminDisputesPage'
+import MyAgentsPage from './pages/MyAgentsPage'
+import RegisterAgentPage from './pages/RegisterAgentPage'
 
 function RequireAuth({ children }) {
   const { apiKey, booting } = useAuth()
@@ -85,6 +87,8 @@ function AuthedApp() {
             <Route path="/worker"   element={<WorkerPage />} />
             <Route path="/wallet"   element={<WalletPage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/my-agents" element={<MyAgentsPage />} />
+            <Route path="/register-agent" element={<RegisterAgentPage />} />
             <Route path="/admin/disputes" element={<RequireAdmin><AdminDisputesPage /></RequireAdmin>} />
             <Route path="*"         element={<Navigate to="/overview" replace />} />
           </Route>
