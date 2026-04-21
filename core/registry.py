@@ -1083,6 +1083,15 @@ def get_agents_by_owner(owner_id: str) -> list:
     return [_row_to_dict(r) for r in rows]
 
 
+def update_agent_health(agent_id: str, status: str, checked_at: str) -> None:
+    """Record the result of a health check probe."""
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE agents SET last_health_status = ?, last_health_check_at = ? WHERE agent_id = ?",
+            (status, checked_at, agent_id),
+        )
+
+
 def agent_exists_by_name(name: str) -> bool:
     """Return True if any agent with this name is already registered."""
     with _conn() as conn:

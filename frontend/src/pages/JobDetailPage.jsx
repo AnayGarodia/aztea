@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useParams, Link, useNavigate } from 'react-router-dom'
 import Topbar from '../layout/Topbar'
 import Card from '../ui/Card'
 import Badge from '../ui/Badge'
@@ -9,10 +9,10 @@ import Skeleton from '../ui/Skeleton'
 import Reveal from '../ui/motion/Reveal'
 import AgentSigil from '../brand/AgentSigil'
 import ResultRenderer from '../features/agents/results/ResultRenderer'
-import { getJobMessages, postJobMessage, rateJob, getJobDispute, fileDispute, verifyJob } from '../api'
+import { getJob, getJobMessages, postJobMessage, rateJob, getJobDispute, fileDispute, verifyJob } from '../api'
 import { useMarket } from '../context/MarketContext'
 import JobTimeline from '../features/jobs/JobTimeline'
-import { ArrowLeft, RefreshCw, Star, AlertTriangle, CheckCircle, Clock } from 'lucide-react'
+import { ArrowLeft, RefreshCw, Star, AlertTriangle, CheckCircle, Clock, RotateCcw } from 'lucide-react'
 import './JobDetailPage.css'
 
 function fmtCountdown(isoDeadline) {
@@ -92,7 +92,9 @@ const DISPUTE_STATUS_COLORS = {
 
 export default function JobDetailPage() {
   const { id } = useParams()
+  const navigate = useNavigate()
   const { jobs, agents, apiKey, refreshJobs, showToast } = useMarket()
+  const [localJob, setLocalJob] = useState(null)
   const [messages, setMessages] = useState([])
   const [loadingMsgs, setLoadingMsgs] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
@@ -112,7 +114,8 @@ export default function JobDetailPage() {
   const [rejectReason, setRejectReason] = useState('')
   const [countdown, setCountdown] = useState(null)
 
-  const job = useMemo(() => jobs.find(j => j.job_id === id), [jobs, id])
+  const contextJob = useMemo(() => jobs.find(j => j.job_id === id), [jobs, id])
+  const job = localJob ?? contextJob
   const agent = useMemo(() => agents.find(a => a.agent_id === job?.agent_id), [agents, job])
 
   const loadMessages = async () => {
@@ -138,14 +141,45 @@ export default function JobDetailPage() {
     }
   }
 
+  const TERMINAL = useMemo(() => new Set(['complete', 'failed', 'cancelled']), [])
+
+  const pollJob = useCallback(async () => {
+    if (!id || !apiKey) return
+    try {
+      const data = await getJob(apiKey, id)
+      if (data?.job_id) setLocalJob(data)
+      if (data?.status === 'complete' || data?.status === 'failed') {
+        await loadMessages()
+        if (data.status === 'complete') await loadDispute()
+      }
+    } catch { /* silent */ }
+  }, [id, apiKey]) // eslint-disable-line
+
   useEffect(() => { loadMessages() }, [apiKey, id]) // eslint-disable-line
   useEffect(() => {
     if (job?.status === 'complete') loadDispute()
   }, [apiKey, id, job?.status]) // eslint-disable-line
 
+  // Initial load
+  useEffect(() => { pollJob() }, [pollJob])
+
+  // Auto-poll every 3s while non-terminal
+  const pollingRef = useRef(null)
+  useEffect(() => {
+    if (!id || !apiKey || TERMINAL.has(job?.status)) {
+      if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null }
+      return
+    }
+    pollingRef.current = setInterval(() => {
+      pollJob()
+      loadMessages()
+    }, 3000)
+    return () => { if (pollingRef.current) clearInterval(pollingRef.current) }
+  }, [id, apiKey, job?.status, TERMINAL, pollJob]) // eslint-disable-line
+
   const handleRefresh = async () => {
     setRefreshing(true)
-    await Promise.all([refreshJobs?.(), loadMessages()])
+    await Promise.all([pollJob(), loadMessages()])
     if (job?.status === 'complete') await loadDispute()
     setRefreshing(false)
   }
@@ -311,8 +345,16 @@ export default function JobDetailPage() {
           {/* Timeline */}
           <Reveal delay={0.05}>
             <div className="job-detail__timeline">
-              <p className="job-detail__timeline-title">Progress</p>
-              <JobTimeline status={job.status} />
+              <JobTimeline
+                status={job.status}
+                timestamps={{
+                  pending: job.created_at,
+                  running: job.claimed_at,
+                  awaiting_clarification: job.clarification_requested_at,
+                  complete: job.completed_at,
+                  failed: job.completed_at,
+                }}
+              />
             </div>
           </Reveal>
 
@@ -334,6 +376,19 @@ export default function JobDetailPage() {
                   <div className="job-detail__error-box">
                     <p className="job-detail__error-title">Error</p>
                     <p className="job-detail__error-msg">{job.error_message}</p>
+                    {agent && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        icon={<RotateCcw size={13} />}
+                        onClick={() => navigate(`/agents/${agent.agent_id}`, {
+                          state: { prefillInput: job.input_payload },
+                        })}
+                        style={{ marginTop: 12 }}
+                      >
+                        Hire again
+                      </Button>
+                    )}
                   </div>
                 )}
               </Card.Body>

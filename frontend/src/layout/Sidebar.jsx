@@ -1,7 +1,7 @@
 import { NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { motion, AnimatePresence } from 'motion/react'
 import {
-  LayoutDashboard, Bot, Briefcase, Hammer, Wallet, Settings, LogOut, Sun, Moon, Shield, ListChecks
+  LayoutDashboard, Bot, Briefcase, Hammer, Wallet, Settings, LogOut, Sun, Moon, Shield, ListChecks, Activity
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useMarket } from '../context/MarketContext'
@@ -115,6 +115,8 @@ export default function Sidebar() {
           <NavLink to="/privacy" className="sidebar__legal-link">Privacy</NavLink>
           <span className="sidebar__legal-sep">·</span>
           <NavLink to="/docs" className="sidebar__legal-link">Docs</NavLink>
+          <span className="sidebar__legal-sep">·</span>
+          <NavLink to="/platform" className="sidebar__legal-link">Platform</NavLink>
         </div>
 
         <button

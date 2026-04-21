@@ -3,12 +3,6 @@ import './JobTimeline.css'
 
 const STATUS_FLOW = ['pending', 'running', 'awaiting_clarification', 'complete']
 
-// Map a status to its position in the flow, treating 'failed' specially
-function statusIndex(status) {
-  if (status === 'failed') return -1
-  return STATUS_FLOW.indexOf(status)
-}
-
 const LABELS = {
   pending:                 'Queued',
   running:                 'Running',
@@ -17,15 +11,17 @@ const LABELS = {
   failed:                  'Failed',
 }
 
-// The nodes we always show (skip awaiting_clarification if job doesn't use it)
 function deriveNodes(status) {
-  if (status === 'awaiting_clarification') {
-    return STATUS_FLOW  // show all 4
-  }
-  return ['pending', 'running', 'complete']  // compact 3-step
+  if (status === 'awaiting_clarification') return STATUS_FLOW
+  return ['pending', 'running', 'complete']
 }
 
-export default function JobTimeline({ status }) {
+function fmtTs(isoString) {
+  if (!isoString) return null
+  return new Date(isoString).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+}
+
+export default function JobTimeline({ status, timestamps = {} }) {
   if (!status) return null
 
   const isFailed  = status === 'failed'
@@ -84,16 +80,21 @@ export default function JobTimeline({ status }) {
               )}
             </div>
 
-            {/* Label */}
-            <span className={[
-              'jtl__label',
-              isPast   ? 'jtl__label--past'   : '',
-              isActive ? 'jtl__label--active'  : '',
-              isFuture ? 'jtl__label--future'  : '',
-              isFailNode ? 'jtl__label--fail'  : '',
-            ].filter(Boolean).join(' ')}>
-              {LABELS[node] ?? node}
-            </span>
+            {/* Label + timestamp */}
+            <div className="jtl__label-wrap">
+              <span className={[
+                'jtl__label',
+                isPast   ? 'jtl__label--past'   : '',
+                isActive ? 'jtl__label--active'  : '',
+                isFuture ? 'jtl__label--future'  : '',
+                isFailNode ? 'jtl__label--fail'  : '',
+              ].filter(Boolean).join(' ')}>
+                {LABELS[node] ?? node}
+              </span>
+              {fmtTs(timestamps[node]) && (isPast || isActive) && (
+                <span className="jtl__ts">{fmtTs(timestamps[node])}</span>
+              )}
+            </div>
           </div>
         )
       })}

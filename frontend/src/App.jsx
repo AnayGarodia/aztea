@@ -22,6 +22,7 @@ import SettingsPage   from './pages/SettingsPage'
 import AdminDisputesPage from './pages/AdminDisputesPage'
 import MyAgentsPage from './pages/MyAgentsPage'
 import RegisterAgentPage from './pages/RegisterAgentPage'
+import PlatformPage from './pages/PlatformPage'
 
 function RequireAuth({ children }) {
   const { apiKey, booting } = useAuth()
@@ -89,6 +90,7 @@ function AuthedApp() {
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/my-agents" element={<MyAgentsPage />} />
             <Route path="/register-agent" element={<RegisterAgentPage />} />
+            <Route path="/platform" element={<PlatformPage />} />
             <Route path="/admin/disputes" element={<RequireAdmin><AdminDisputesPage /></RequireAdmin>} />
             <Route path="*"         element={<Navigate to="/overview" replace />} />
           </Route>

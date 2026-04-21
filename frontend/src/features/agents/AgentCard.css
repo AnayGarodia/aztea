@@ -155,3 +155,48 @@
   color: var(--ac-accent, var(--accent));
   gap: 5px;
 }
+
+/* Health dot */
+.ac__health-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  margin-left: 6px;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+.ac__health-dot--healthy {
+  background: var(--positive, #22c55e);
+  animation: health-pulse 2.5s ease-in-out infinite;
+}
+
+.ac__health-dot--warn {
+  background: var(--warn, #f59e0b);
+}
+
+@keyframes health-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--positive, #22c55e) 40%, transparent); }
+  50%       { box-shadow: 0 0 0 4px color-mix(in srgb, var(--positive, #22c55e) 0%, transparent); }
+}
+
+/* Reliability stats */
+.ac__reliability {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ac__stat-chip {
+  font-size: 0.625rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  padding: 2px 7px;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}

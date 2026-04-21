@@ -79,6 +79,13 @@
   pointer-events: none;
 }
 
+.jtl__label-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-left: 6px;
+}
+
 .jtl__label {
   font-size: 0.6875rem;
   font-weight: 600;
@@ -86,7 +93,14 @@
   text-transform: uppercase;
   color: var(--text-muted);
   white-space: nowrap;
-  margin-left: 6px;
+}
+
+.jtl__ts {
+  font-size: 0.5625rem;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  opacity: 0.7;
+  white-space: nowrap;
 }
 
 .jtl__label--past   { color: var(--text-muted); }
@@ -94,4 +108,4 @@
 .jtl__label--future { color: var(--text-muted); opacity: 0.5; }
 .jtl__label--fail   { color: var(--negative); }
 
-.jtl__step:first-child .jtl__label { margin-left: 6px; }
+.jtl__step:first-child .jtl__label-wrap { margin-left: 6px; }

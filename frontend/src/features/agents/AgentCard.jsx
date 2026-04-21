@@ -6,6 +6,24 @@ import ModelBadge from '../../components/ModelBadge'
 import { ArrowRight, AlertTriangle, BookOpen } from 'lucide-react'
 import './AgentCard.css'
 
+function healthDot(agent) {
+  const status = agent.last_health_status
+  const checkedAt = agent.last_health_check_at
+  if (!status || status === 'unknown') return null
+  const ageMs = checkedAt ? Date.now() - new Date(checkedAt).getTime() : Infinity
+  const stale = ageMs > 10 * 60 * 1000 // >10 min
+  let cls = 'ac__health-dot'
+  let title = 'Health unknown'
+  if (status === 'healthy' && !stale) {
+    cls += ' ac__health-dot--healthy'
+    title = `Healthy · checked ${new Date(checkedAt).toLocaleTimeString()}`
+  } else if (status === 'unhealthy' || stale) {
+    cls += ' ac__health-dot--warn'
+    title = stale ? `Last check >10 min ago` : `Unhealthy · last checked ${new Date(checkedAt).toLocaleTimeString()}`
+  }
+  return <span className={cls} title={title} aria-label={title} />
+}
+
 export default function AgentCard({ agent, index = 0 }) {
   const navigate = useNavigate()
   const price    = `$${Number(agent.price_per_call_usd ?? 0).toFixed(2)}`
@@ -35,7 +53,7 @@ export default function AgentCard({ agent, index = 0 }) {
       <div className="ac__head">
         <AgentSigil agentId={agent.agent_id} size="md" className="ac__sigil" />
         <div className="ac__head-meta">
-          <p className="ac__name">{agent.name}</p>
+          <p className="ac__name">{agent.name}{healthDot(agent)}</p>
           <div className="ac__head-sub">
             <span className="ac__price">{price}</span>
             {agent.model_provider && (
@@ -57,6 +75,21 @@ export default function AgentCard({ agent, index = 0 }) {
       {(agent.tags ?? []).length > 0 && (
         <div className="ac__tags">
           {(agent.tags ?? []).slice(0, 3).map(t => <Pill key={t} size="sm">{t}</Pill>)}
+        </div>
+      )}
+
+      {/* Reliability stats */}
+      {(agent.jobs_last_30_days > 0 || agent.job_completion_rate != null || agent.median_latency_seconds != null) && (
+        <div className="ac__reliability">
+          {agent.jobs_last_30_days > 0 && (
+            <span className="ac__stat-chip">{agent.jobs_last_30_days} jobs/30d</span>
+          )}
+          {agent.job_completion_rate != null && (
+            <span className="ac__stat-chip">{Math.round(agent.job_completion_rate * 100)}% success</span>
+          )}
+          {agent.median_latency_seconds != null && (
+            <span className="ac__stat-chip">~{agent.median_latency_seconds}s</span>
+          )}
         </div>
       )}
 

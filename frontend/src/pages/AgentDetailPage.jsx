@@ -18,7 +18,26 @@ import { callAgent, createJob, fetchAgentWorkHistory } from '../api'
 import { useMarket } from '../context/MarketContext'
 import { ArrowLeft, ArrowUpRight, AlertTriangle, Zap, Clock, BarChart2, Shield, ChevronDown, ChevronUp, BookOpen, Lock } from 'lucide-react'
 import ModelBadge from '../components/ModelBadge'
+import { BarChart, Bar, ResponsiveContainer, Tooltip as RechartTooltip } from 'recharts'
 import './AgentDetailPage.css'
+
+function healthDot(agent) {
+  const status = agent.last_health_status
+  const checkedAt = agent.last_health_check_at
+  if (!status || status === 'unknown') return null
+  const ageMs = checkedAt ? Date.now() - new Date(checkedAt).getTime() : Infinity
+  const stale = ageMs > 10 * 60 * 1000
+  let cls = 'ad__health-dot'
+  let title = 'Health unknown'
+  if (status === 'healthy' && !stale) {
+    cls += ' ad__health-dot--healthy'
+    title = `Healthy · checked ${new Date(checkedAt).toLocaleTimeString()}`
+  } else if (status === 'unhealthy' || stale) {
+    cls += ' ad__health-dot--warn'
+    title = stale ? `Last check >10 min ago` : `Unhealthy · last checked ${new Date(checkedAt).toLocaleTimeString()}`
+  }
+  return <span className={cls} title={title} aria-label={title} />
+}
 
 function fmtPct(value) {
   if (typeof value !== 'number' || Number.isNaN(value)) return '—'
@@ -115,6 +134,25 @@ export default function AgentDetailPage() {
   const successPct = agent?.success_rate != null ? Math.round(agent.success_rate * 100) : null
   const highDispute = typeof agent?.dispute_rate === 'number' && agent.dispute_rate > 0.10
 
+  const sparklineData = useMemo(() => {
+    const days = 30
+    const now = Date.now()
+    const buckets = Array.from({ length: days }, (_, i) => {
+      const d = new Date(now - (days - 1 - i) * 86400000)
+      return { day: d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }), jobs: 0 }
+    })
+    if (Array.isArray(workHistory)) {
+      for (const item of workHistory) {
+        const ts = item.completed_at || item.created_at
+        if (!ts) continue
+        const age = Math.floor((now - new Date(ts).getTime()) / 86400000)
+        const idx = days - 1 - age
+        if (idx >= 0 && idx < days) buckets[idx].jobs += 1
+      }
+    }
+    return buckets
+  }, [workHistory])
+
   const handleInvoke = async (payload, { privateTask = false } = {}) => {
     if (!agent) return
     setInvokeLoading(true)
@@ -174,6 +212,7 @@ export default function AgentDetailPage() {
                 <div className="agent-detail__hero-meta">
                   <div className="agent-detail__hero-name-row">
                     <h1 className="agent-detail__name">{agent.name}</h1>
+                    {healthDot(agent)}
                     {agent.verified && (
                       <span className="agent-detail__verified-badge" title="Verified agent">
                         <Zap size={12} fill="currentColor" /> Verified
@@ -227,11 +266,45 @@ export default function AgentDetailPage() {
                         </span>
                       )}
                     </div>
+                    {(agent.jobs_last_30_days > 0 || agent.job_completion_rate != null || agent.median_latency_seconds != null) && (
+                      <div className="ad__reliability">
+                        {agent.jobs_last_30_days > 0 && (
+                          <span className="ad__stat-chip">{agent.jobs_last_30_days} jobs/30d</span>
+                        )}
+                        {agent.job_completion_rate != null && (
+                          <span className="ad__stat-chip">{Math.round(agent.job_completion_rate * 100)}% completion</span>
+                        )}
+                        {agent.median_latency_seconds != null && (
+                          <span className="ad__stat-chip">~{agent.median_latency_seconds}s median</span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
             </div>
           </Reveal>
+
+          {/* Activity sparkline */}
+          {workHistory != null && (
+            <Reveal delay={0.06}>
+              <div className="ad__sparkline-card">
+                <p className="ad__sparkline-title">Job volume · last 30 days</p>
+                <ResponsiveContainer width="100%" height={48}>
+                  <BarChart data={sparklineData} margin={{ top: 2, right: 0, left: 0, bottom: 0 }}>
+                    <Bar dataKey="jobs" fill="var(--accent)" radius={[2, 2, 0, 0]} isAnimationActive={false} />
+                    <RechartTooltip
+                      cursor={false}
+                      contentStyle={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11 }}
+                      itemStyle={{ color: 'var(--text)' }}
+                      formatter={(v, _, p) => [v, p.payload.day]}
+                      labelFormatter={() => ''}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </Reveal>
+          )}
 
           {/* Trust gauge */}
           <Reveal delay={0.08}>

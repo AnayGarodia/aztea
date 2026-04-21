@@ -555,3 +555,61 @@
   text-decoration: underline;
   text-underline-offset: 2px;
 }
+
+/* ── Health dot ──────────────────────────────────────────────────── */
+.ad__health-dot {
+  display: inline-block;
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--border-bright);
+  margin-left: 8px;
+  vertical-align: middle;
+  position: relative;
+  top: -1px;
+}
+.ad__health-dot--healthy {
+  background: var(--positive, #22c55e);
+  animation: ad-health-pulse 2.4s ease-in-out infinite;
+}
+.ad__health-dot--warn {
+  background: var(--warn, #f59e0b);
+}
+@keyframes ad-health-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--positive, #22c55e) 40%, transparent); }
+  50%       { box-shadow: 0 0 0 5px color-mix(in srgb, var(--positive, #22c55e) 0%, transparent); }
+}
+
+/* ── Reliability chips ───────────────────────────────────────────── */
+.ad__reliability {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.ad__stat-chip {
+  font-size: 0.6875rem;
+  font-family: var(--font-mono);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 2px 8px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* ── Sparkline card ──────────────────────────────────────────────── */
+.ad__sparkline-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 14px 20px 12px;
+}
+.ad__sparkline-title {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 0 0 10px;
+}

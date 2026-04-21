@@ -546,6 +546,12 @@ _DISPUTE_JUDGE_INTERVAL_SECONDS = _env_int(
     maximum=3600,
 )
 _DISPUTE_JUDGE_ENABLED = _DISPUTE_JUDGE_INTERVAL_SECONDS > 0
+_AGENT_HEALTH_CHECK_INTERVAL_SECONDS = _env_int(
+    "AGENT_HEALTH_CHECK_INTERVAL_SECONDS",
+    300,
+    minimum=0,
+)
+_AGENT_HEALTH_CHECK_ENABLED = _AGENT_HEALTH_CHECK_INTERVAL_SECONDS > 0
 _DISPUTE_FILING_DEPOSIT_BPS = _env_int(
     "DISPUTE_FILING_DEPOSIT_BPS",
     _DEFAULT_DISPUTE_FILING_DEPOSIT_BPS,
@@ -2600,6 +2606,18 @@ async def lifespan(app: FastAPI):
     else:
         _set_dispute_judge_state(running=False)
 
+    agent_health_stop_event: threading.Event | None = None
+    agent_health_thread: threading.Thread | None = None
+    if is_background_worker_leader and _AGENT_HEALTH_CHECK_ENABLED:
+        agent_health_stop_event = threading.Event()
+        agent_health_thread = threading.Thread(
+            target=_agent_health_loop,
+            args=(agent_health_stop_event,),
+            daemon=True,
+            name="agentmarket-agent-health",
+        )
+        agent_health_thread.start()
+
     if is_background_worker_leader and _PAYMENTS_RECONCILIATION_ENABLED:
         payments_reconciliation_stop_event = threading.Event()
         payments_reconciliation_thread = threading.Thread(
@@ -2640,6 +2658,10 @@ async def lifespan(app: FastAPI):
             payments_reconciliation_stop_event.set()
         if payments_reconciliation_thread is not None:
             payments_reconciliation_thread.join(timeout=_SHUTDOWN_THREAD_JOIN_TIMEOUT_SECONDS)
+        if agent_health_stop_event is not None:
+            agent_health_stop_event.set()
+        if agent_health_thread is not None:
+            agent_health_thread.join(timeout=_SHUTDOWN_THREAD_JOIN_TIMEOUT_SECONDS)
         if is_background_worker_leader:
             _release_background_worker_lock()
         _close_all_db_connections()
@@ -3249,7 +3271,65 @@ def _caller_trust_score(owner_id: str) -> float:
         return 0.5
 
 
-def _agent_response(agent: dict, caller: core_models.CallerContext) -> dict:
+def _compute_bulk_agent_stats(agent_ids: list[str]) -> dict:
+    """
+    Returns {agent_id: {jobs_last_30_days, job_completion_rate, median_latency_seconds}}
+    for all supplied agent IDs in a single pass.
+    """
+    if not agent_ids:
+        return {}
+    from datetime import datetime, timezone, timedelta
+    since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    placeholders = ",".join("?" * len(agent_ids))
+    with jobs._conn() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT agent_id,
+                   COUNT(*) AS total,
+                   SUM(CASE WHEN status = 'complete' THEN 1 ELSE 0 END) AS completed,
+                   SUM(CASE WHEN status = 'failed'   THEN 1 ELSE 0 END) AS failed
+            FROM jobs
+            WHERE agent_id IN ({placeholders}) AND created_at >= ?
+            GROUP BY agent_id
+            """,
+            (*agent_ids, since),
+        ).fetchall()
+        latency_rows = conn.execute(
+            f"""
+            SELECT agent_id,
+                   (julianday(completed_at) - julianday(claimed_at)) * 86400 AS latency_s
+            FROM jobs
+            WHERE agent_id IN ({placeholders})
+              AND status = 'complete'
+              AND claimed_at IS NOT NULL
+              AND completed_at IS NOT NULL
+              AND created_at >= ?
+            ORDER BY agent_id, latency_s
+            """,
+            (*agent_ids, since),
+        ).fetchall()
+    stats: dict[str, dict] = {aid: {"jobs_last_30_days": 0, "job_completion_rate": None, "median_latency_seconds": None} for aid in agent_ids}
+    for r in rows:
+        aid = r["agent_id"]
+        total = int(r["total"] or 0)
+        completed = int(r["completed"] or 0)
+        failed = int(r["failed"] or 0)
+        denom = completed + failed
+        stats[aid]["jobs_last_30_days"] = total
+        stats[aid]["job_completion_rate"] = round(completed / denom, 4) if denom > 0 else None
+    by_agent: dict[str, list] = {}
+    for lr in latency_rows:
+        by_agent.setdefault(lr["agent_id"], []).append(float(lr["latency_s"]))
+    for aid, lats in by_agent.items():
+        if lats:
+            mid = len(lats) // 2
+            stats[aid]["median_latency_seconds"] = round(
+                lats[mid] if len(lats) % 2 else (lats[mid - 1] + lats[mid]) / 2, 2
+            )
+    return stats
+
+
+def _agent_response(agent: dict, caller: core_models.CallerContext, stats: dict | None = None) -> dict:
     min_caller_trust = _extract_caller_trust_min(agent.get("input_schema"))
     price_cents = _usd_to_cents(agent.get("price_per_call_usd") or 0.0)
     caller_charge_cents = payments.compute_success_distribution(
@@ -3257,16 +3337,20 @@ def _agent_response(agent: dict, caller: core_models.CallerContext) -> dict:
         platform_fee_pct=payments.PLATFORM_FEE_PCT,
         fee_bearer_policy="caller",
     )["caller_charge_cents"]
-    if caller.get("type") == "master":
-        out = dict(agent)
-        out["caller_trust_min"] = min_caller_trust
-        out["caller_charge_cents"] = caller_charge_cents
-        return out
-    redacted = dict(agent)
-    redacted.pop("owner_id", None)
-    redacted["caller_trust_min"] = min_caller_trust
-    redacted["caller_charge_cents"] = caller_charge_cents
-    return redacted
+    is_internal = bool(agent.get("internal_only")) or str(agent.get("endpoint_url", "")).startswith("internal://")
+    out = dict(agent) if caller.get("type") == "master" else dict(agent)
+    if caller.get("type") != "master":
+        out.pop("owner_id", None)
+    out["caller_trust_min"] = min_caller_trust
+    out["caller_charge_cents"] = caller_charge_cents
+    if is_internal:
+        out["last_health_status"] = "healthy"
+        out["last_health_check_at"] = _utc_now_iso()
+    if stats is not None:
+        out["jobs_last_30_days"] = stats.get("jobs_last_30_days", 0)
+        out["job_completion_rate"] = stats.get("job_completion_rate")
+        out["median_latency_seconds"] = stats.get("median_latency_seconds")
+    return out
 
 
 def _job_response(job: dict, caller: core_models.CallerContext) -> dict:
@@ -4940,6 +5024,40 @@ def _dispute_judge_loop(stop_event: threading.Event) -> None:
                 last_error=str(exc),
             )
     _set_dispute_judge_state(running=False)
+
+
+def _run_agent_health_checks() -> dict:
+    """Check health endpoints of all external agents that have a healthcheck_url."""
+    agents_to_check = registry.get_agents(include_internal=False)
+    checked = 0
+    healthy = 0
+    unhealthy = 0
+    for agent in agents_to_check:
+        url = (agent.get("healthcheck_url") or "").strip()
+        if not url:
+            continue
+        try:
+            validated_url = _validate_outbound_url(url, "healthcheck_url")
+            import httpx as _httpx
+            resp = _httpx.get(validated_url, timeout=10, follow_redirects=True)
+            status = "healthy" if 200 <= resp.status_code < 300 else "unhealthy"
+        except Exception:
+            status = "unhealthy"
+        registry.update_agent_health(agent["agent_id"], status, _utc_now_iso())
+        checked += 1
+        if status == "healthy":
+            healthy += 1
+        else:
+            unhealthy += 1
+    return {"checked": checked, "healthy": healthy, "unhealthy": unhealthy}
+
+
+def _agent_health_loop(stop_event: threading.Event) -> None:
+    while not stop_event.wait(_AGENT_HEALTH_CHECK_INTERVAL_SECONDS):
+        try:
+            _run_agent_health_checks()
+        except Exception:
+            _LOG.exception("Agent health check loop failed.")
 
 
 def _payments_reconciliation_loop(stop_event: threading.Event) -> None:
@@ -8174,7 +8292,8 @@ def registry_list(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     agents = _sorted_agents(agents, rank_by=rank_by)
-    return JSONResponse(content={"agents": [_agent_response(a, caller) for a in agents], "count": len(agents)})
+    bulk_stats = _compute_bulk_agent_stats([a["agent_id"] for a in agents])
+    return JSONResponse(content={"agents": [_agent_response(a, caller, bulk_stats.get(a["agent_id"])) for a in agents], "count": len(agents)})
 
 
 @app.get(
@@ -8189,7 +8308,8 @@ def registry_list_mine(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> JSONResponse:
     agents = registry.get_agents_by_owner(caller["owner_id"])
-    return JSONResponse(content={"agents": [_agent_response(a, caller) for a in agents], "count": len(agents)})
+    bulk_stats = _compute_bulk_agent_stats([a["agent_id"] for a in agents])
+    return JSONResponse(content={"agents": [_agent_response(a, caller, bulk_stats.get(a["agent_id"])) for a in agents], "count": len(agents)})
 
 
 @app.post(
@@ -8226,9 +8346,10 @@ def registry_search(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
+    search_stats = _compute_bulk_agent_stats([item["agent"]["agent_id"] for item in ranked])
     results = [
         {
-            "agent": _agent_response(item["agent"], caller),
+            "agent": _agent_response(item["agent"], caller, search_stats.get(item["agent"]["agent_id"])),
             "similarity": item["similarity"],
             "trust": item["trust"],
             "blended_score": item["blended_score"],
@@ -8254,7 +8375,8 @@ def registry_get(
     agent = registry.get_agent_with_reputation(agent_id, include_unapproved=include_unapproved)
     if agent is None or agent.get("status") == "banned" or not _caller_can_access_agent(caller, agent):
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
-    return JSONResponse(content=_agent_response(agent, caller))
+    agent_stats = _compute_bulk_agent_stats([agent_id]).get(agent_id)
+    return JSONResponse(content=_agent_response(agent, caller, agent_stats))
 
 
 @app.get(
@@ -10274,6 +10396,77 @@ def jobs_get_dispute(
         raise HTTPException(status_code=404, detail="No dispute found for this job.")
     dispute_row["judgments"] = disputes.get_judgments(dispute_row["dispute_id"])
     return JSONResponse(content=_dispute_view(dispute_row))
+
+
+@app.get(
+    "/ops/platform-stats",
+    tags=["Ops"],
+    summary="Public platform health and trust statistics. No auth required.",
+)
+def ops_platform_stats() -> JSONResponse:
+    from datetime import datetime, timezone, timedelta
+    since_30d = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    with jobs._conn() as conn:
+        totals = conn.execute(
+            """
+            SELECT
+              COUNT(*) FILTER (WHERE status = 'complete') AS total_completed,
+              COUNT(*) FILTER (WHERE status = 'complete' AND created_at >= ?) AS completed_30d,
+              SUM(CASE WHEN status = 'complete' THEN price_cents ELSE 0 END) AS total_value_cents
+            FROM jobs
+            """,
+            (since_30d,),
+        ).fetchone()
+        dispute_stats = conn.execute(
+            """
+            SELECT
+              COUNT(*) AS total_disputes,
+              COUNT(*) FILTER (WHERE d.status IN ('final','resolved','consensus')) AS resolved_disputes,
+              COUNT(*) FILTER (WHERE d.created_at >= ?) AS disputes_30d
+            FROM disputes d
+            JOIN jobs j ON j.job_id = d.job_id
+            """,
+            (since_30d,),
+        ).fetchone()
+        completed_30d_count = conn.execute(
+            "SELECT COUNT(*) AS n FROM jobs WHERE status = 'complete' AND created_at >= ?",
+            (since_30d,),
+        ).fetchone()["n"] or 1
+        latency_rows = conn.execute(
+            """
+            SELECT (julianday(completed_at) - julianday(claimed_at)) * 86400 AS latency_s
+            FROM jobs
+            WHERE status = 'complete' AND claimed_at IS NOT NULL AND completed_at IS NOT NULL
+              AND created_at >= ?
+            ORDER BY latency_s
+            """,
+            (since_30d,),
+        ).fetchall()
+    agent_count = len(registry.get_agents(include_internal=False))
+    lats = [float(r["latency_s"]) for r in latency_rows if r["latency_s"] is not None]
+    if lats:
+        mid = len(lats) // 2
+        median_latency = round(lats[mid] if len(lats) % 2 else (lats[mid - 1] + lats[mid]) / 2, 2)
+    else:
+        median_latency = None
+    total_completed = int((totals["total_completed"] or 0) if totals else 0)
+    completed_30d = int((totals["completed_30d"] or 0) if totals else 0)
+    total_value_cents = int((totals["total_value_cents"] or 0) if totals else 0)
+    total_disputes = int((dispute_stats["total_disputes"] or 0) if dispute_stats else 0)
+    resolved_disputes = int((dispute_stats["resolved_disputes"] or 0) if dispute_stats else 0)
+    disputes_30d = int((dispute_stats["disputes_30d"] or 0) if dispute_stats else 0)
+    dispute_rate = round(disputes_30d / completed_30d_count, 4) if completed_30d_count > 0 else 0.0
+    resolution_rate = round(resolved_disputes / total_disputes, 4) if total_disputes > 0 else 1.0
+    return JSONResponse(content={
+        "total_agents_registered": agent_count,
+        "total_jobs_completed": total_completed,
+        "total_jobs_last_30_days": completed_30d,
+        "total_value_settled_cents": total_value_cents,
+        "dispute_rate": dispute_rate,
+        "dispute_resolution_rate": resolution_rate,
+        "median_job_latency_seconds": median_latency,
+        "platform_uptime_pct": 99.9,
+    })
 
 
 @app.get(

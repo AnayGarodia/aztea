@@ -559,6 +559,11 @@ export async function withdrawFunds(key, amountCents) {
   return body // { status, transfer_id, amount_cents }
 }
 
+export async function fetchPlatformStats() {
+  const { body } = await request('/ops/platform-stats', {})
+  return body
+}
+
 export async function fetchReconciliationRuns(key, limit = 5) {
   const { body } = await request(`/ops/payments/reconcile/runs?limit=${encodeURIComponent(String(limit))}`, { key })
   return body // { runs, count }
