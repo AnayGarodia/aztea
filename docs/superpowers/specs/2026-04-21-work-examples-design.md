@@ -41,7 +41,7 @@ Replace `toLocaleDateString(...)` in the timestamp chip.
 
 **3. Input truncation**  
 Replace `JSON.stringify(ex.input, null, 2)` full dump with:
-- Collapsed state: extract the first string value from the input dict (or stringify the whole thing), truncate to 200 chars, show with "…" + an inline "expand" toggle button.
+- Collapsed state: extract a preview string from the input dict by checking keys `prompt`, `query`, `text`, `input` in that order; fall back to `JSON.stringify` of the whole dict if none match. Truncate to 200 chars, show with "…" + an inline "expand" toggle button.
 - Expanded state: full `JSON.stringify` as before.
 - State tracked per-item via a `Set` in a `useState` (separate from `expandedExample` which controls the accordion).
 
