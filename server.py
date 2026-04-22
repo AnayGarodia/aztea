@@ -15,6 +15,7 @@ import hashlib
 import logging
 import re
 import ipaddress
+import collections
 import sqlite3
 import threading
 import time
@@ -85,6 +86,7 @@ from agents import arxiv_research as agent_arxiv_research
 from agents import python_executor as agent_python_executor
 from agents import web_researcher as agent_web_researcher
 from core import auth as _auth
+from core import embeddings
 from core import onboarding
 from core import payments
 from core.db import close_all_connections as _close_all_db_connections
@@ -390,6 +392,50 @@ _DEFAULT_RATE_LIMIT = "60/minute"
 _AUTH_RATE_LIMIT = "10/minute"
 _SEARCH_RATE_LIMIT = "30/minute"
 _JOBS_CREATE_RATE_LIMIT = "20/minute"
+
+# In-memory sliding-window rate limiter for /mcp/invoke (per API key).
+_MCP_RATE_LIMIT_PER_MIN = 60
+_mcp_rate_windows: dict[str, collections.deque] = {}
+_mcp_rate_lock = threading.Lock()
+
+
+def _mcp_check_rate_limit(key_id: str) -> bool:
+    """Return True if the key is within limit, False if exceeded."""
+    now = time.monotonic()
+    window = 60.0
+    with _mcp_rate_lock:
+        dq = _mcp_rate_windows.setdefault(key_id, collections.deque())
+        while dq and now - dq[0] >= window:
+            dq.popleft()
+        if len(dq) >= _MCP_RATE_LIMIT_PER_MIN:
+            return False
+        dq.append(now)
+        return True
+
+
+def _mcp_log_invocation(
+    agent_id: str,
+    caller_key_id: str,
+    tool_name: str,
+    input_json: str,
+    duration_ms: int,
+    success: bool,
+) -> None:
+    input_hash = hashlib.sha256(input_json.encode("utf-8", errors="replace")).hexdigest()
+    row_id = str(uuid.uuid4())
+    now = _utc_now_iso()
+    try:
+        with jobs._conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO mcp_invocation_log
+                    (id, agent_id, caller_key_id, tool_name, input_hash, invoked_at, duration_ms, success)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (row_id, agent_id, caller_key_id, tool_name, input_hash, now, duration_ms, int(success)),
+            )
+    except Exception:
+        _LOG.warning("Failed to write MCP invocation log for tool '%s'", tool_name)
 
 
 def _env_int(name: str, default: int, minimum: int | None = None, maximum: int | None = None) -> int:
@@ -2629,6 +2675,13 @@ async def lifespan(app: FastAPI):
         payments_reconciliation_thread.start()
     else:
         _set_payments_reconciliation_state(running=False)
+
+    if os.environ.get("OPENAI_API_KEY"):
+        try:
+            embeddings.embed_text("warmup")
+        except Exception as exc:
+            _LOG.warning("Embedding warmup failed: %s", exc)
+
     try:
         yield
     finally:
@@ -3211,7 +3264,24 @@ def _require_scope(caller: core_models.CallerContext, required_scope: str, detai
     scope_name = required_scope.strip().lower()
     raise HTTPException(
         status_code=403,
-        detail=detail or f"This endpoint requires an API key with '{scope_name}' scope.",
+        detail=error_codes.make_error(
+            error_codes.INSUFFICIENT_SCOPE,
+            detail or f"This endpoint requires an API key with '{scope_name}' scope.",
+        ),
+    )
+
+
+def _require_any_scope(caller: core_models.CallerContext, *scopes: str) -> None:
+    """Raise 403 if the caller has none of the given scopes."""
+    if any(_caller_has_scope(caller, s) for s in scopes):
+        return
+    joined = " or ".join(f"'{s}'" for s in scopes)
+    raise HTTPException(
+        status_code=403,
+        detail=error_codes.make_error(
+            error_codes.INSUFFICIENT_SCOPE,
+            f"This endpoint requires caller or worker scope.",
+        ),
     )
 
 
@@ -4965,16 +5035,24 @@ def _builtin_worker_loop(stop_event: threading.Event) -> None:
     _set_builtin_worker_state(running=False)
 
 
+_TIE_TIMEOUT_HOURS = 48
+_TIE_TIMEOUT_REASONING = (
+    "Judges tied after two rounds. Defaulting to caller per platform policy."
+)
+
+
 def _run_pending_dispute_judgments(limit: int = 100, actor_owner_id: str = "system:dispute-judge") -> dict:
     capped = min(max(1, int(limit)), 500)
     pending = disputes.list_disputes(status="pending", limit=capped)
     judged_count = 0
     resolved_count = 0
     tied_count = 0
+    tie_timeout_count = 0
     errors: list[dict[str, str]] = []
     processed_ids: list[str] = []
     resolved_ids: list[str] = []
     tied_ids: list[str] = []
+
     for dispute_row in pending:
         dispute_id = str(dispute_row.get("dispute_id") or "").strip()
         if not dispute_id:
@@ -4993,11 +5071,56 @@ def _run_pending_dispute_judgments(limit: int = 100, actor_owner_id: str = "syst
         elif status == "tied":
             tied_count += 1
             tied_ids.append(dispute_id)
+
+    # Auto-rule tied disputes older than _TIE_TIMEOUT_HOURS in favour of caller.
+    stale_tied = disputes.get_stale_tied_disputes(older_than_hours=_TIE_TIMEOUT_HOURS, limit=capped)
+    for dispute_row in stale_tied:
+        dispute_id = str(dispute_row.get("dispute_id") or "").strip()
+        if not dispute_id:
+            continue
+        try:
+            disputes.record_judgment(
+                dispute_id,
+                judge_kind="human_admin",
+                verdict="caller_wins",
+                reasoning=_TIE_TIMEOUT_REASONING,
+                model=None,
+                admin_user_id="system_tie_timeout",
+            )
+            settlement = payments.post_dispute_settlement(
+                dispute_id,
+                outcome="caller_wins",
+            )
+            finalized = disputes.finalize_dispute(
+                dispute_id,
+                status="final",
+                outcome="caller_wins",
+            )
+            if finalized is not None:
+                _apply_dispute_effects(finalized, "caller_wins")
+                job = jobs.get_job(finalized["job_id"])
+                if job is not None:
+                    _record_job_event(
+                        job,
+                        "job.dispute_finalized",
+                        actor_owner_id=actor_owner_id,
+                        payload={"dispute_id": dispute_id, "outcome": "caller_wins", "reason": "tie_timeout"},
+                    )
+            tie_timeout_count += 1
+            _LOG.warning(
+                "Tie-timeout auto-ruling: dispute %s → caller_wins after %dh",
+                dispute_id,
+                _TIE_TIMEOUT_HOURS,
+            )
+        except Exception as exc:
+            errors.append({"dispute_id": dispute_id, "error": f"tie_timeout: {exc}"})
+
     return {
         "pending_scanned": len(pending),
         "judged_count": judged_count,
         "resolved_count": resolved_count,
         "tied_count": tied_count,
+        "tie_timeout_count": tie_timeout_count,
         "failed_count": len(errors),
         "processed_dispute_ids": processed_ids,
         "resolved_dispute_ids": resolved_ids,
@@ -6103,7 +6226,7 @@ def _resolve_dispute_with_judges(dispute_id: str, actor_owner_id: str) -> tuple[
         if latest_dispute is not None:
             _apply_dispute_effects(latest_dispute, outcome)
     elif status == "tied":
-        disputes.set_dispute_status(dispute_id, "tied")
+        disputes.set_dispute_tied(dispute_id)
 
     latest = disputes.get_dispute(dispute_id)
     if latest is None:
@@ -8103,30 +8226,111 @@ def mcp_manifest_payload(
     )
 
 
+_MCP_COMPUTE_HEAVY_AGENT_IDS = frozenset({
+    _PYTHON_EXECUTOR_AGENT_ID,
+    _IMAGE_GENERATOR_AGENT_ID,
+})
+
+
 @app.post(
     "/mcp/invoke",
     response_model=core_models.DynamicObjectResponse,
-    responses=_error_responses(400, 403, 404, 429, 500),
+    responses=_error_responses(400, 401, 403, 402, 404, 429, 500),
 )
-@limiter.limit("60/minute")
 def mcp_invoke(
     request: Request,
     body: MCPInvokeRequest,
 ) -> core_models.DynamicObjectResponse:
-    caller = _caller_from_raw_api_key(body.api_key)
-    if caller is None:
-        raise HTTPException(status_code=403, detail="Invalid API key.")
+    # 1. Auth: require a valid agent API key (amk_ prefix).
+    raw_key = str(body.api_key or "").strip()
+    if not raw_key:
+        raise HTTPException(
+            status_code=401,
+            detail=error_codes.make_error("auth.invalid_key", "API key is required."),
+        )
+    agent_key = _auth.verify_agent_api_key(raw_key)
+    # Also allow master key for internal tooling.
+    if agent_key is None and not hmac.compare_digest(raw_key, _MASTER_KEY):
+        raise HTTPException(
+            status_code=403,
+            detail=error_codes.make_error("auth.invalid_key", "Invalid or inactive agent API key."),
+        )
+    caller_key_id = str((agent_key or {}).get("key_id") or "master")
+
+    # 2. Per-key sliding-window rate limit: 60 req/min.
+    if not _mcp_check_rate_limit(caller_key_id):
+        raise HTTPException(
+            status_code=429,
+            headers={"Retry-After": "60"},
+            detail=error_codes.make_error(
+                error_codes.RATE_LIMITED,
+                "MCP rate limit exceeded. Maximum 60 requests per minute per key.",
+            ),
+        )
+
+    # 3. Tool lookup.
     _, lookup = _mcp_tools_and_lookup()
     agent = lookup.get(body.tool_name)
     if agent is None:
         raise HTTPException(status_code=404, detail=f"Tool '{body.tool_name}' not found.")
+
+    # Build caller context from the agent key.
+    if agent_key is not None:
+        caller: core_models.CallerContext = {
+            "type": "agent_key",
+            "owner_id": f"agent_key:{agent_key['agent_id']}",
+            "agent_id": str(agent_key["agent_id"]),
+            "key_id": caller_key_id,
+            "scopes": ["worker"],
+        }
+    else:
+        caller = {"type": "master", "owner_id": "master", "scopes": ["caller", "worker", "admin"]}
+
+    # 4. Wallet deduction for compute-heavy agents.
+    agent_id = str(agent["agent_id"])
+    charge_tx_id: str | None = None
+    if agent_id in _MCP_COMPUTE_HEAVY_AGENT_IDS and caller["type"] != "master":
+        price_cents = _usd_to_cents(agent.get("price_per_call_usd") or 0)
+        if price_cents > 0:
+            owner_id = caller["owner_id"]
+            caller_wallet = payments.get_or_create_wallet(owner_id)
+            charge_tx_id = _pre_call_charge_or_402(
+                caller=caller,
+                caller_wallet_id=caller_wallet["wallet_id"],
+                charge_cents=price_cents,
+                agent_id=agent_id,
+            )
+
+    # 5. Dispatch.
     request.state._caller = caller
-    delegated = registry_call(
-        request=request,
-        agent_id=str(agent["agent_id"]),
-        body=core_models.RegistryCallRequest(root=body.input),
-        caller=caller,
-    )
+    t0 = time.monotonic()
+    success = False
+    try:
+        delegated = registry_call(
+            request=request,
+            agent_id=agent_id,
+            body=core_models.RegistryCallRequest(root=body.input),
+            caller=caller,
+        )
+        success = True
+    except Exception:
+        if charge_tx_id is not None:
+            try:
+                caller_wallet = payments.get_or_create_wallet(caller["owner_id"])
+                payments.post_call_refund(
+                    caller_wallet["wallet_id"],
+                    charge_tx_id,
+                    agent_id,
+                )
+            except Exception:
+                _LOG.warning("MCP: failed to refund charge %s after dispatch error", charge_tx_id)
+        raise
+    duration_ms = int((time.monotonic() - t0) * 1000)
+
+    # 6. Audit log (non-blocking; failure does not abort the response).
+    input_json = json.dumps(body.input, default=str) if body.input is not None else "{}"
+    _mcp_log_invocation(agent_id, caller_key_id, body.tool_name, input_json, duration_ms, success)
+
     payload = _mcp_payload_from_response(delegated)
     response_body: dict[str, Any] = {
         "content": _mcp_content_from_payload(payload),
@@ -8135,9 +8339,7 @@ def mcp_invoke(
         response_body["structuredContent"] = payload
     elif payload is not None:
         response_body["structuredContent"] = {"result": payload}
-    return JSONResponse(
-        content=response_body
-    )
+    return JSONResponse(content=response_body)
 
 
 def _normalize_model_provider_filter(raw_value: str | None) -> str | None:
@@ -8274,6 +8476,7 @@ def registry_list(
     model_provider: str | None = None,
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.RegistryAgentsResponse:
+    _require_any_scope(caller, "caller", "worker")
     include_unapproved = _caller_is_admin(caller)
     try:
         agents = (
@@ -8371,6 +8574,7 @@ def registry_get(
     agent_id: str,
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.AgentResponse:
+    _require_any_scope(caller, "caller", "worker")
     include_unapproved = _caller_is_admin(caller)
     agent = registry.get_agent_with_reputation(agent_id, include_unapproved=include_unapproved)
     if agent is None or agent.get("status") == "banned" or not _caller_can_access_agent(caller, agent):
@@ -8895,6 +9099,24 @@ def jobs_create(
         fee_bearer_policy=fee_bearer_policy,
     )
     caller_charge_cents = int(success_distribution["caller_charge_cents"])
+    if caller_charge_cents <= 0 and price_cents > 0:
+        raise HTTPException(
+            status_code=422,
+            detail=error_codes.make_error(
+                error_codes.INVALID_CHARGE_AMOUNT,
+                "Computed caller charge is non-positive.",
+                {"caller_charge_cents": caller_charge_cents, "price_cents": price_cents},
+            ),
+        )
+    if caller_charge_cents > price_cents * 2:
+        raise HTTPException(
+            status_code=422,
+            detail=error_codes.make_error(
+                error_codes.CHARGE_EXCEEDS_LISTED_PRICE,
+                "Caller charge must not exceed twice the listed price.",
+                {"caller_charge_cents": caller_charge_cents, "price_cents": price_cents},
+            ),
+        )
     if body.budget_cents is not None and price_cents > body.budget_cents:
         raise HTTPException(
             status_code=400,
@@ -9320,6 +9542,7 @@ def jobs_list(
     cursor: str | None = None,
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.JobsListResponse:
+    _require_scope(caller, "caller")
     if status and status not in jobs.VALID_STATUSES:
         raise HTTPException(status_code=422, detail=f"Invalid status: {status}")
     page_size = min(max(1, limit), 200)
@@ -9358,6 +9581,7 @@ def jobs_get(
     job_id: str,
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.JobResponse:
+    _require_scope(caller, "caller")
     job = jobs.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
@@ -10021,6 +10245,7 @@ def jobs_message_create(
     accepted for one compatibility window. New integrations should use the
     typed protocol message shapes.
     """
+    _require_any_scope(caller, "caller", "worker")
     job = jobs.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
@@ -10401,9 +10626,14 @@ def jobs_get_dispute(
 @app.get(
     "/ops/platform-stats",
     tags=["Ops"],
-    summary="Public platform health and trust statistics. No auth required.",
+    summary="Platform health and trust statistics. Requires admin scope.",
+    responses=_error_responses(401, 403, 429, 500),
 )
-def ops_platform_stats() -> JSONResponse:
+def ops_platform_stats(
+    request: Request,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
     from datetime import datetime, timezone, timedelta
     since_30d = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
     with jobs._conn() as conn:
@@ -11144,8 +11374,9 @@ def wallet_deposit(
 @limiter.limit("60/minute")
 def wallet_me(
     request: Request,
-    _: core_models.CallerContext = Depends(_require_api_key),
+    caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.WalletResponse:
+    _require_any_scope(caller, "caller", "worker")
     owner_id = _caller_owner_id(request)
     wallet = payments.get_or_create_wallet(owner_id)
     txs = payments.get_wallet_transactions(wallet["wallet_id"], limit=50)

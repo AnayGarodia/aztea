@@ -262,6 +262,41 @@ def set_dispute_status(dispute_id: str, status: str) -> dict | None:
     return get_dispute(dispute_id)
 
 
+def set_dispute_tied(dispute_id: str) -> dict | None:
+    """Transition to 'tied' and stamp tied_since only on the first transition."""
+    now = _now()
+    with _conn() as conn:
+        conn.execute(
+            """
+            UPDATE disputes
+            SET status = 'tied',
+                tied_since = CASE WHEN tied_since IS NULL THEN ? ELSE tied_since END
+            WHERE dispute_id = ?
+            """,
+            (now, dispute_id),
+        )
+    return get_dispute(dispute_id)
+
+
+def get_stale_tied_disputes(older_than_hours: int = 48, limit: int = 100) -> list[dict]:
+    """Return tied disputes whose tied_since is older than the given threshold."""
+    from datetime import timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=older_than_hours)).isoformat()
+    with _conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM disputes
+            WHERE status = 'tied'
+              AND tied_since IS NOT NULL
+              AND tied_since <= ?
+            ORDER BY tied_since ASC
+            LIMIT ?
+            """,
+            (cutoff, max(1, min(int(limit), 500))),
+        ).fetchall()
+    return [_row_to_dispute(row) for row in rows]
+
+
 def set_dispute_consensus(dispute_id: str, outcome: str) -> dict | None:
     normalized_outcome = _validate_outcome(outcome)
     with _conn() as conn:

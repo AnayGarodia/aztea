@@ -1,28 +1,15 @@
 """
-embeddings.py — local text embedding helpers for semantic registry matching.
+embeddings.py — text embedding helpers using the OpenAI API.
 """
 
 from __future__ import annotations
 
-import threading
+import os
 
 import numpy as np
-from sentence_transformers import SentenceTransformer
 
-_MODEL_NAME = "all-MiniLM-L6-v2"
+_MODEL_NAME = "text-embedding-3-small"
 EMBEDDING_DIM = 384
-
-_MODEL_LOCK = threading.Lock()
-_MODEL: SentenceTransformer | None = None
-
-
-def _get_model() -> SentenceTransformer:
-    global _MODEL
-    if _MODEL is None:
-        with _MODEL_LOCK:
-            if _MODEL is None:
-                _MODEL = SentenceTransformer(_MODEL_NAME)
-    return _MODEL
 
 
 def embed_text(text: str) -> list[float]:
@@ -30,8 +17,16 @@ def embed_text(text: str) -> list[float]:
     if not normalized:
         raise ValueError("text must be a non-empty string.")
 
-    model = _get_model()
-    vector = model.encode(normalized, convert_to_numpy=True, normalize_embeddings=False)
+    import openai  # deferred so tests that don't set OPENAI_API_KEY can import this module
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+    client = openai.OpenAI(api_key=api_key)
+    response = client.embeddings.create(
+        model=_MODEL_NAME,
+        input=normalized,
+        dimensions=EMBEDDING_DIM,
+    )
+    vector = response.data[0].embedding
     arr = np.asarray(vector, dtype=np.float32).reshape(-1)
     if arr.size != EMBEDDING_DIM:
         raise RuntimeError(

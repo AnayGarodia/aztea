@@ -10,6 +10,7 @@ Production notes:
 """
 
 import json
+import logging
 import math
 import re
 import sqlite3
@@ -27,6 +28,10 @@ from core import db as _db
 
 DB_PATH = _db.DB_PATH
 _local = _db._local
+
+_logger = logging.getLogger(__name__)
+
+HEALTH_SUSPENSION_THRESHOLD = 5
 
 _CANONICAL_CREATED_AT = "1970-01-01T00:00:00+00:00"
 _PRICE_CHECK_RE = re.compile(
@@ -990,6 +995,35 @@ def set_agent_endpoint_health(
                 agent_id,
             ),
         )
+        if normalized_failures >= HEALTH_SUSPENSION_THRESHOLD:
+            result = conn.execute(
+                """
+                UPDATE agents
+                SET status = 'suspended', suspension_reason = 'health_check'
+                WHERE agent_id = ? AND status = 'active'
+                """,
+                (agent_id,),
+            )
+            if result.rowcount:
+                _logger.warning(
+                    "agent %s auto-suspended after %d consecutive endpoint failures",
+                    agent_id,
+                    normalized_failures,
+                )
+        elif normalized_failures == 0:
+            result = conn.execute(
+                """
+                UPDATE agents
+                SET status = 'active', suspension_reason = NULL
+                WHERE agent_id = ? AND status = 'suspended' AND suspension_reason = 'health_check'
+                """,
+                (agent_id,),
+            )
+            if result.rowcount:
+                _logger.info(
+                    "agent %s reinstated after endpoint health recovery",
+                    agent_id,
+                )
     return get_agent(agent_id, include_unapproved=True)
 
 

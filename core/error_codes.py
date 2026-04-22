@@ -27,6 +27,10 @@ ORCHESTRATION_DEPTH_EXCEEDED = "job.orchestration_depth_exceeded"
 DEPOSIT_BELOW_MINIMUM = "payment.deposit_below_minimum"
 VALIDATION_ERROR = "request.validation_error"
 LEGAL_VERSION_MISMATCH = "auth.legal_version_mismatch"
+INSUFFICIENT_SCOPE = "auth.insufficient_scope"
+CHARGE_EXCEEDS_LISTED_PRICE = "job.charge_exceeds_listed_price"
+INVALID_CHARGE_AMOUNT = "job.invalid_charge_amount"
+INVALID_OR_EXPIRED_TOKEN = "auth.invalid_or_expired_token"
 
 DEFAULT_BY_STATUS: dict[int, str] = {
     400: INVALID_INPUT,

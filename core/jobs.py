@@ -800,8 +800,18 @@ def create_job(
     if price_cents < 0:
         raise ValueError("price_cents must be non-negative.")
     parsed_caller_charge_cents = _to_non_negative_int(caller_charge_cents, default=price_cents)
+    if parsed_caller_charge_cents <= 0 and price_cents > 0:
+        raise ValueError(
+            "invalid_charge_amount: caller_charge_cents must be positive when price is non-zero."
+        )
     if parsed_caller_charge_cents < price_cents:
         raise ValueError("caller_charge_cents must be >= price_cents.")
+    # Hard cap: caller_charge_cents must not exceed price_cents * 2 (room for 100% platform fee)
+    # to prevent inflated charges that would produce a negative net payout on partial refund.
+    if parsed_caller_charge_cents > max(price_cents * 2, price_cents + 1000):
+        raise ValueError(
+            "charge_exceeds_listed_price: caller_charge_cents must not exceed 2x price_cents."
+        )
     parsed_platform_fee_pct = _to_non_negative_int(platform_fee_pct_at_create, default=10)
     if parsed_platform_fee_pct > 100:
         raise ValueError("platform_fee_pct_at_create must be <= 100.")

@@ -218,7 +218,7 @@ def run_judgment(dispute_id: str) -> dict:
         status = "consensus"
         outcome = primary["verdict"]
     else:
-        disputes.set_dispute_status(dispute_id, "tied")
+        disputes.set_dispute_tied(dispute_id)
         status = "tied"
         outcome = None
 
