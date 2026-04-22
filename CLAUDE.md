@@ -1,10 +1,12 @@
-# Aztea — agentmarket contributor guide
+# Aztea — contributor guide
 
 ## What this is
 
 Aztea is an AI agent labor marketplace: callers hire agents by the task, workers earn revenue, and the platform handles billing, escrow, settlement, trust, and dispute resolution transparently. Think Stripe + Upwork + Dun & Bradstreet — but for AI agents.
 
 Architecture in one sentence: **FastAPI monolith on SQLite WAL, provider-agnostic LLM layer, async job lifecycle, insert-only ledger, MCP-native agent surface.**
+
+Live at **https://aztea.ai**
 
 ---
 
@@ -57,7 +59,105 @@ scripts/
   agentmarket_mcp_server.py    # stdio MCP server — refreshes tools every 60s
   client_cli.py                # CLI shim over Python SDK
 tests/                         # pytest — 230+ tests across API, payments, jobs, LLM, SDK
+docker-compose.yml             # dev compose (no SSL, mounts ./data)
+docker-compose.prod.yml        # prod compose (nginx + API, named volume for DB)
+nginx.prod.conf                # nginx reverse proxy — /api/* → FastAPI, /* → React SPA
+Makefile                       # dev shortcuts: make dev / test / docker / migrate
 ```
+
+---
+
+## Production deployment
+
+### Infrastructure
+
+- **Server:** single Linux VPS
+- **Stack:** Docker Compose (`docker-compose.prod.yml`) — two services: `api` (FastAPI/uvicorn) + `frontend` (nginx serving the built React SPA)
+- **Database:** SQLite WAL at `/data/registry.db` inside a named Docker volume (`agentmarket_data`), persisted across deploys
+- **Reverse proxy:** nginx on ports 80/443, proxies `/api/*` → FastAPI container, serves `frontend/dist/` for everything else
+- **SSL:** managed outside Docker (certbot / cloud load balancer); nginx.prod.conf currently listens on 80 only — SSL termination happens upstream
+
+### Deploying a new version
+
+Run these commands **on the server** after SSH-ing in:
+
+```bash
+cd /path/to/agentmarket
+
+# 1. Pull latest code
+git pull origin main
+
+# 2. Rebuild the React frontend
+cd frontend && npm ci && npm run build && cd ..
+
+# 3. Rebuild and restart containers (zero-downtime for nginx; brief restart for API)
+docker compose -f docker-compose.prod.yml up --build -d
+
+# 4. Verify both containers are healthy
+docker compose -f docker-compose.prod.yml ps
+docker compose -f docker-compose.prod.yml logs api --tail=50
+```
+
+Migrations run automatically on API startup via `core/migrate.py` — no manual step needed.
+
+### Useful server commands
+
+```bash
+# Live API logs
+docker compose -f docker-compose.prod.yml logs -f api
+
+# Live nginx logs
+docker compose -f docker-compose.prod.yml logs -f frontend
+
+# Restart just the API (e.g. after env change)
+docker compose -f docker-compose.prod.yml restart api
+
+# Open a shell in the API container
+docker compose -f docker-compose.prod.yml exec api bash
+
+# Manual DB backup (run before risky migrations)
+docker compose -f docker-compose.prod.yml exec api \
+  sqlite3 /data/registry.db ".backup /data/registry.db.bak"
+
+# Check DB health
+docker compose -f docker-compose.prod.yml exec api \
+  sqlite3 /data/registry.db "PRAGMA integrity_check; PRAGMA wal_checkpoint;"
+```
+
+### Environment variables (prod)
+
+Stored in `.env` on the server (never committed). Key vars:
+
+```
+# Core
+ENVIRONMENT=production
+API_KEY=                        # master key — openssl rand -hex 32
+SERVER_BASE_URL=https://aztea.ai
+FRONTEND_BASE_URL=https://aztea.ai
+CORS_ALLOW_ORIGINS=https://aztea.ai
+AZTEA_FRONTEND_URL=https://aztea.ai
+
+# Stripe (use live keys in prod)
+STRIPE_SECRET_KEY=sk_live_...
+STRIPE_WEBHOOK_SECRET=whsec_...
+STRIPE_PUBLISHABLE_KEY=pk_live_...
+
+# LLM (at least one required)
+GROQ_API_KEY=
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
+AZTEA_LLM_DEFAULT_CHAIN=groq,openai,anthropic
+
+# Optional features
+AZTEA_ENABLE_LIVE_DISPUTE_JUDGES=1
+AZTEA_ENABLE_LIVE_QUALITY_JUDGE=1
+```
+
+### Stripe webhook
+
+The webhook endpoint is `POST https://aztea.ai/api/payments/webhook`.
+Register it in the Stripe dashboard and set `STRIPE_WEBHOOK_SECRET` to the signing secret.
+Required events: `checkout.session.completed`, `payment_intent.succeeded`.
 
 ---
 
@@ -100,7 +200,7 @@ tests/                         # pytest — 230+ tests across API, payments, job
 
 - Tool names are plain `snake_case` from the agent name — no prefix.
 - All manifest keys use `snake_case` (`input_schema`, `output_schema`, `price_per_call_usd`).
-- `/mcp/invoke` authenticates via `auth.verify_agent_api_key`.
+- `/mcp/invoke` authenticates via `auth.verify_agent_api_key` or a caller-scoped user key.
 - `scripts/agentmarket_mcp_server.py` refreshes tools every 60s via the HTTP registry.
 
 ---
@@ -186,18 +286,10 @@ text = raw.text.strip()  # always .text, never .content
 - **CSS variables** for theming in `src/theme/tokens.css` — never hardcode colors
 - **Feature-based structure:** `src/features/agents/`, `src/features/jobs/`, `src/features/auth/`, etc.
 - **UI primitives** in `src/ui/` (Button, Pill, Segmented, Input, etc.) — always use these, never raw HTML equivalents
-- **`src/api.js`** — all API calls go through here; `fetchAgentWorkHistory` and `fetchLLMProviders` already exist
+- **`src/api.js`** — all API calls go through here
 - **`ResultRenderer`** in `src/features/agents/results/` handles rich output display
+- **Error handling pattern:** every user action must show inline errors (not just toasts); toasts are for success confirmations only
 - **Aesthetic rule:** Never use Inter/Roboto/Arial. Never use purple gradients. Commit to a cohesive theme with distinctive typography, dominant colors with sharp accents, and intentional motion at load time. One well-orchestrated stagger beats scattered micro-animations.
-
----
-
-## Division of labor
-
-- **Claude owns the frontend** (`frontend/`). Backend is touched only when absolutely necessary for feature completeness. Claude can be asked to work on the backend also. If so, do what is asked.
-- **Codex works the backend** concurrently. Coordinate via `CLAUDE.md` and commit messages.
-- **Never delete migrations.** Add new ones.
-- **Never force-push main.** Create a new commit.
 
 ---
 
@@ -208,7 +300,7 @@ text = raw.text.strip()  # always .text, never .content
 pip install -r requirements.txt
 uvicorn server:app --host 0.0.0.0 --port 8000 --reload
 
-# Docker (SQLite persisted at /data/registry.db)
+# Docker dev (SQLite at ./data/registry.db)
 cp .env.example .env && make docker
 
 # Frontend
@@ -252,7 +344,7 @@ python scripts/agentmarket_mcp_server.py
 
 ---
 
-## Required env vars (minimum to run)
+## Required env vars (minimum to run locally)
 
 ```
 API_KEY=                     # master API key
@@ -260,7 +352,7 @@ GROQ_API_KEY=                # or any other LLM provider key
 SERVER_BASE_URL=http://localhost:8000
 ```
 
-Optional but useful:
+Optional but useful locally:
 
 ```
 OPENAI_API_KEY=
@@ -286,3 +378,13 @@ DB_MAX_CONNECTIONS=32
 | Web Researcher           | `32cd7b5c-44d0-5259-bb02-1bbc612e92d7` |
 | Image Generator          | `4fb167bd-b474-5ea5-bd5c-8976dfe799ae` |
 | Quality Judge (internal) | `9cf0d9d0-4a10-58c9-b97a-6b5f81b1cf33` |
+
+---
+
+## Ground rules
+
+- **Never delete migrations.** Add new ones with the next sequence number.
+- **Never force-push main.** Always create a new commit.
+- **Never open raw `sqlite3.connect()`.** Use `core/db.py` exclusively.
+- **Never store floats in the ledger.** Integer cents only.
+- **Frontend errors must be inline.** Toasts for success; inline error state for failures.
