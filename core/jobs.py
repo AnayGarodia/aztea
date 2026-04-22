@@ -2211,6 +2211,32 @@ def get_messages(
     return filtered
 
 
+def count_job_messages(job_id: str) -> int:
+    """Return the total number of messages on a job."""
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM job_messages WHERE job_id = ?",
+            (job_id,),
+        ).fetchone()
+    return int(row["n"]) if row else 0
+
+
+def count_open_clarification_requests(job_id: str) -> int:
+    """Count unanswered clarification_request messages on a job."""
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM job_messages WHERE job_id = ? AND type = 'clarification_request'",
+            (job_id,),
+        ).fetchone()
+    answered = conn.execute(
+        "SELECT COUNT(*) AS n FROM job_messages WHERE job_id = ? AND type = 'clarification_response'",
+        (job_id,),
+    ).fetchone() if conn else None
+    requests = int(row["n"]) if row else 0
+    responses = int(answered["n"]) if answered else 0
+    return max(0, requests - responses)
+
+
 def get_latest_message_id(job_id: str) -> int | None:
     with _conn() as conn:
         row = conn.execute(

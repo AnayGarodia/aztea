@@ -1118,6 +1118,16 @@ def get_agents_by_owner(owner_id: str) -> list:
     return [_row_to_dict(r) for r in rows]
 
 
+def count_owner_agents(owner_id: str) -> int:
+    """Return the number of non-deleted agents owned by this user."""
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM agents WHERE owner_id = ? AND (status IS NULL OR status != 'deleted')",
+            (owner_id,),
+        ).fetchone()
+    return int(row["n"]) if row else 0
+
+
 def update_agent_health(agent_id: str, status: str, checked_at: str) -> None:
     """Record the result of a health check probe."""
     with _conn() as conn:

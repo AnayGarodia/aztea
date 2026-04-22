@@ -578,9 +578,14 @@ def register_user(username: str, email: str, password: str) -> dict:
     }
 
 
+class AccountSuspendedError(Exception):
+    """Raised when a suspended or banned account attempts to log in."""
+
+
 def login_user(email: str, password: str) -> dict | None:
     """
-    Verify credentials. Returns user dict, or None if wrong.
+    Verify credentials. Returns user dict, or None if wrong credentials.
+    Raises AccountSuspendedError if the account is suspended or banned.
     Always mints a fresh API key so the caller always gets a usable key.
     """
     with _conn() as conn:
@@ -590,8 +595,9 @@ def login_user(email: str, password: str) -> dict | None:
     if row is None:
         return None
     user = dict(row)
-    if str(user.get("status") or "active").strip().lower() != "active":
-        return None
+    status = str(user.get("status") or "active").strip().lower()
+    if status != "active":
+        raise AccountSuspendedError(status)
     expected = _hash_password(password, user["salt"])
     if not secrets.compare_digest(user["password_hash"], expected):
         return None
@@ -674,6 +680,23 @@ def _create_key_for_user(
     }
 
 
+_MAX_KEYS_PER_USER = 10
+
+
+class KeyLimitExceededError(Exception):
+    """Raised when a user tries to create more keys than the platform allows."""
+
+
+def count_user_active_keys(user_id: str) -> int:
+    """Return the number of active non-session API keys for a user."""
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM api_keys WHERE user_id = ? AND is_active = 1 AND name != 'Session key'",
+            (user_id,),
+        ).fetchone()
+    return int(row["n"]) if row else 0
+
+
 def create_api_key(
     user_id: str,
     name: str = "New key",
@@ -682,6 +705,12 @@ def create_api_key(
     per_job_cap_cents: int | None = None,
 ) -> dict:
     """Create a named API key for a user. Returns {"raw_key", "key_id", "key_prefix", "name"}."""
+    active = count_user_active_keys(user_id)
+    if active >= _MAX_KEYS_PER_USER:
+        raise KeyLimitExceededError(
+            f"You've reached the {_MAX_KEYS_PER_USER} active key limit. "
+            "Revoke an unused key to create a new one."
+        )
     return _create_key_for_user(
         user_id,
         name,

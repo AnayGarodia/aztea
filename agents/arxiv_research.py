@@ -90,8 +90,12 @@ def _fetch_arxiv(query: str, max_results: int, sort_by: str, categories: list[st
             headers={"User-Agent": "aztea-arxiv-agent/1.0"},
         )
         resp.raise_for_status()
-    except Exception:
-        return []
+    except requests.exceptions.Timeout:
+        raise RuntimeError("arXiv API timed out. Try again in a moment.")
+    except requests.exceptions.HTTPError as e:
+        raise RuntimeError(f"arXiv API returned an error ({e.response.status_code}). Try again later.")
+    except Exception as e:
+        raise RuntimeError(f"Could not reach arXiv API: {type(e).__name__}.")
 
     root = ET.fromstring(resp.text)
     papers = []
@@ -150,16 +154,34 @@ def _fetch_arxiv(query: str, max_results: int, sort_by: str, categories: list[st
     return papers
 
 
+_VALID_SORT_BY = {"relevance", "lastUpdatedDate", "submittedDate"}
+
+
 def run(payload: dict) -> dict:
     query = str(payload.get("query", "")).strip()
     if not query:
         return {"error": "query is required"}
+    if len(query) > 500:
+        return {"error": "query must be 500 characters or fewer"}
 
-    max_results = max(1, min(int(payload.get("max_results", 8)), 20))
+    try:
+        max_results = max(1, min(int(payload.get("max_results", 8)), 20))
+    except (TypeError, ValueError):
+        return {"error": "max_results must be a number between 1 and 20"}
+
     sort_by = str(payload.get("sort_by", "relevance"))
-    categories = payload.get("categories") or []
+    if sort_by not in _VALID_SORT_BY:
+        sort_by = "relevance"
 
-    papers = _fetch_arxiv(query, max_results, sort_by, categories)
+    raw_categories = payload.get("categories") or []
+    if not isinstance(raw_categories, list):
+        return {"error": "categories must be a list of arXiv category strings (e.g. [\"cs.AI\"])"}
+    categories = [str(c).strip() for c in raw_categories if str(c).strip()][:10]
+
+    try:
+        papers = _fetch_arxiv(query, max_results, sort_by, categories)
+    except RuntimeError as exc:
+        return {"error": str(exc)}
 
     if not papers:
         return {

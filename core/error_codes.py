@@ -33,6 +33,37 @@ INVALID_CHARGE_AMOUNT = "job.invalid_charge_amount"
 INVALID_OR_EXPIRED_TOKEN = "auth.invalid_or_expired_token"
 REGISTRY_ENDPOINT_UNREACHABLE = "registry.endpoint_unreachable"
 
+# Agent proxy errors — all result in automatic refund
+AGENT_CALL_TIMEOUT        = "agent.call_timeout"
+AGENT_ENDPOINT_OFFLINE    = "agent.endpoint_offline"
+AGENT_INTERNAL_ERROR      = "agent.internal_error"
+AGENT_REJECTED_REQUEST    = "agent.rejected_request"
+AGENT_INVALID_RESPONSE    = "agent.invalid_response"
+AGENT_RESPONSE_TOO_LARGE  = "agent.response_too_large"
+
+# Input / payload errors
+PAYLOAD_TOO_LARGE         = "request.payload_too_large"
+INPUT_SCHEMA_VIOLATION    = "request.input_schema_violation"
+
+# Registry / agent management
+REGISTRY_AGENT_LIMIT      = "registry.agent_limit_reached"
+REGISTRY_INVALID_SCHEMA   = "registry.invalid_schema"
+
+# Job lifecycle structured errors
+JOB_NOT_CLAIMABLE         = "job.not_claimable"
+JOB_HEARTBEAT_FAILED      = "job.heartbeat_failed"
+JOB_COMPLETE_FAILED       = "job.complete_failed"
+JOB_FAIL_FAILED           = "job.fail_failed"
+
+# Auth / account limits
+AUTH_KEY_LIMIT            = "auth.key_limit_reached"
+AUTH_HOOK_LIMIT           = "auth.hook_limit_reached"
+
+# Self-interaction blocks
+JOB_SELF_RATE             = "job.self_rate_not_allowed"
+JOB_SELF_DISPUTE          = "job.self_dispute_not_allowed"
+JOB_RATE_STATUS_INVALID   = "job.rate_invalid_status"
+
 DEFAULT_BY_STATUS: dict[int, str] = {
     400: INVALID_INPUT,
     401: "auth.invalid_key",

@@ -4668,9 +4668,12 @@ def _validate_agent_endpoint_url(request: Request, endpoint_url: str) -> str:
 
 def _probe_register_endpoint_or_400(url: str) -> None:
     """
-    Best-effort liveness probe for an agent endpoint_url at registration time.
-    Rejects URLs that fail to connect or return 5xx. 4xx responses are accepted
-    (the endpoint is reachable; auth/route shape is validated elsewhere).
+    Liveness + agent-shape probe for an agent endpoint_url at registration time.
+
+    Rejects if:
+    - Connection fails or times out
+    - Endpoint returns 5xx
+    - POST probe returns an HTML page (indicates a website, not an agent API)
     """
     try:
         resp = http.head(url, timeout=5.0, allow_redirects=False)
@@ -4693,9 +4696,33 @@ def _probe_register_endpoint_or_400(url: str) -> None:
             status_code=400,
             detail=error_codes.make_error(
                 error_codes.REGISTRY_ENDPOINT_UNREACHABLE,
-                f"Could not reach endpoint: {exc}",
+                f"Could not reach endpoint: {type(exc).__name__}. Check the URL and make sure the server is running.",
             ),
         )
+
+    # POST probe: check that the endpoint responds like an API, not a website.
+    try:
+        post_resp = http.post(
+            url,
+            json={},
+            timeout=5.0,
+            allow_redirects=False,
+            headers={"Content-Type": "application/json"},
+        )
+        content_type = post_resp.headers.get("content-type", "").lower()
+        if "text/html" in content_type:
+            raise HTTPException(
+                status_code=400,
+                detail=error_codes.make_error(
+                    error_codes.REGISTRY_ENDPOINT_UNREACHABLE,
+                    "Your endpoint returned an HTML page instead of JSON — it doesn't look like an agent API. "
+                    "Make sure POST requests to this URL accept a JSON body and return a JSON response.",
+                ),
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        pass  # POST probe failure is non-fatal; liveness check above already passed
 
 
 def _create_job_event_hook(owner_id: str, target_url: str, secret: str | None = None) -> dict:
@@ -7300,6 +7327,19 @@ def onboarding_ingest(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.OnboardingIngestResponse:
     _require_scope(caller, "worker")
+    if caller["type"] != "master":
+        _MAX_AGENTS_PER_OWNER = 20
+        current_count = registry.count_owner_agents(caller["owner_id"])
+        if current_count >= _MAX_AGENTS_PER_OWNER:
+            raise HTTPException(
+                status_code=403,
+                detail=error_codes.make_error(
+                    error_codes.REGISTRY_AGENT_LIMIT,
+                    f"You've reached the {_MAX_AGENTS_PER_OWNER}-agent limit. "
+                    "Delete or archive an existing agent to register a new one.",
+                    {"current": current_count, "max": _MAX_AGENTS_PER_OWNER},
+                ),
+            )
     manifest_content, source = _load_manifest_content(body.manifest_content, body.manifest_url)
     try:
         payload = onboarding.build_registration_payload_from_manifest(manifest_content, source=source)
@@ -7408,11 +7448,21 @@ def auth_login(request: Request, body: UserLoginRequest) -> core_models.AuthLogi
     try:
         _auth.init_auth_db()
         result = _auth.login_user(body.email, body.password)
+    except _auth.AccountSuspendedError:
+        raise HTTPException(
+            status_code=403,
+            detail="This account has been suspended. Please contact support if you believe this is an error.",
+        )
     except sqlite3.DatabaseError:
         _LOG.exception("Auth login failed; retrying after auth schema init.")
         try:
             _auth.init_auth_db()
             result = _auth.login_user(body.email, body.password)
+        except _auth.AccountSuspendedError:
+            raise HTTPException(
+                status_code=403,
+                detail="This account has been suspended. Please contact support if you believe this is an error.",
+            )
         except sqlite3.DatabaseError:
             _LOG.exception("Auth login failed due to auth DB error.")
             raise HTTPException(
@@ -7535,6 +7585,15 @@ def auth_create_key(
             scopes=body.scopes,
             max_spend_cents=body.max_spend_cents,
             per_job_cap_cents=body.per_job_cap_cents,
+        )
+    except _auth.KeyLimitExceededError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=error_codes.make_error(
+                error_codes.AUTH_KEY_LIMIT,
+                str(exc),
+                {"max": _auth._MAX_KEYS_PER_USER},
+            ),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -7698,6 +7757,19 @@ def registry_register(
     _require_scope(caller, "worker")
     if caller["type"] == "agent_key":
         raise HTTPException(status_code=403, detail="Agent-scoped keys cannot register new agents.")
+    _MAX_AGENTS_PER_OWNER = 20
+    if caller["type"] != "master":
+        current_count = registry.count_owner_agents(caller["owner_id"])
+        if current_count >= _MAX_AGENTS_PER_OWNER:
+            raise HTTPException(
+                status_code=403,
+                detail=error_codes.make_error(
+                    error_codes.REGISTRY_AGENT_LIMIT,
+                    f"You've reached the {_MAX_AGENTS_PER_OWNER}-agent limit. "
+                    "Delete or archive an existing agent to register a new one.",
+                    {"current": current_count, "max": _MAX_AGENTS_PER_OWNER},
+                ),
+            )
     try:
         safe_endpoint_url = _validate_agent_endpoint_url(request, body.endpoint_url)
         if not os.environ.get("AZTEA_SKIP_REGISTER_ENDPOINT_PROBE"):
@@ -9022,6 +9094,46 @@ def registry_call(
                 )
             raise HTTPException(status_code=500, detail="Agent execution failed.")
 
+    # --- Input payload size cap (256 KB) ---
+    try:
+        payload_bytes = len(json.dumps(payload).encode("utf-8"))
+    except Exception:
+        payload_bytes = 0
+    if payload_bytes > 256 * 1024:
+        payments.post_call_refund(
+            caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent_id
+        )
+        raise HTTPException(
+            status_code=413,
+            detail=error_codes.make_error(
+                error_codes.PAYLOAD_TOO_LARGE,
+                "Input payload exceeds the 256 KB limit. Agents cannot process payloads this large — "
+                "try summarizing or splitting into multiple calls.",
+                {"size_bytes": payload_bytes, "limit_bytes": 256 * 1024},
+            ),
+        )
+
+    # --- Input schema validation (if agent declared one) ---
+    agent_input_schema = agent.get("input_schema")
+    if isinstance(agent_input_schema, dict) and agent_input_schema:
+        try:
+            import jsonschema as _jsc
+            _jsc.validate(instance=payload, schema=agent_input_schema)
+        except ImportError:
+            pass
+        except Exception as _schema_exc:
+            payments.post_call_refund(
+                caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent_id
+            )
+            raise HTTPException(
+                status_code=422,
+                detail=error_codes.make_error(
+                    error_codes.INPUT_SCHEMA_VIOLATION,
+                    f"Input validation failed: {_schema_exc.message if hasattr(_schema_exc, 'message') else str(_schema_exc)}",
+                    {"path": list(getattr(_schema_exc, "absolute_path", []))},
+                ),
+            )
+
     try:
         proxy_agent = dict(agent)
         proxy_agent["endpoint_url"] = safe_endpoint_url
@@ -9032,30 +9144,112 @@ def registry_call(
             timeout=120,
             allow_redirects=False,
         )
+    except http.exceptions.Timeout:
+        latency_ms = (time.monotonic() - start) * 1000
+        registry.update_call_stats(agent_id, latency_ms, False)
+        payments.post_call_refund(
+            caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent_id
+        )
+        _LOG.warning("Agent call timed out for %s", agent_id)
+        raise HTTPException(
+            status_code=504,
+            detail=error_codes.make_error(
+                error_codes.AGENT_CALL_TIMEOUT,
+                "Agent didn't respond within 120 seconds. You were not charged.",
+                {"agent_id": agent_id},
+            ),
+        )
     except http.RequestException as e:
         latency_ms = (time.monotonic() - start) * 1000
         registry.update_call_stats(agent_id, latency_ms, False)
         payments.post_call_refund(
             caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent_id
         )
-        _LOG.warning("Upstream agent unreachable for %s: %s", agent_id, e)
-        raise HTTPException(status_code=502, detail="Upstream agent unreachable.")
+        _LOG.warning("Upstream agent unreachable for %s: %s", agent_id, type(e).__name__)
+        raise HTTPException(
+            status_code=502,
+            detail=error_codes.make_error(
+                error_codes.AGENT_ENDPOINT_OFFLINE,
+                "This agent's endpoint is offline or unreachable. You were not charged.",
+                {"agent_id": agent_id},
+            ),
+        )
 
-    success = 200 <= int(resp.status_code) < 300
     latency_ms = (time.monotonic() - start) * 1000
+    status_code = int(resp.status_code)
+    success = 200 <= status_code < 300
     registry.update_call_stats(agent_id, latency_ms, success)
 
-    if success:
-        payments.post_call_payout(
-            agent_wallet["wallet_id"], platform_wallet["wallet_id"],
-            charge_tx_id, price_cents, agent_id,
-            platform_fee_pct=platform_fee_pct_at_create,
-            fee_bearer_policy=fee_bearer_policy,
-        )
-    else:
+    if not success:
         payments.post_call_refund(
             caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent_id
         )
+        if 400 <= status_code < 500:
+            # Surface agent's own error message (truncated) but never expose internals
+            try:
+                agent_err = resp.json()
+                agent_msg = str(agent_err.get("error") or agent_err.get("message") or agent_err.get("detail") or "")[:500]
+            except Exception:
+                agent_msg = ""
+            msg = f"Agent rejected the request. You were not charged."
+            if agent_msg:
+                msg = f"Agent rejected the request: {agent_msg}. You were not charged."
+            raise HTTPException(
+                status_code=status_code,
+                detail=error_codes.make_error(
+                    error_codes.AGENT_REJECTED_REQUEST,
+                    msg,
+                    {"agent_id": agent_id, "agent_status": status_code},
+                ),
+            )
+        raise HTTPException(
+            status_code=502,
+            detail=error_codes.make_error(
+                error_codes.AGENT_INTERNAL_ERROR,
+                "Agent is experiencing errors. You were not charged.",
+                {"agent_id": agent_id, "agent_status": status_code},
+            ),
+        )
+
+    # --- Output size cap (1 MB) ---
+    raw_content = resp.content
+    if len(raw_content) > 1_048_576:
+        payments.post_call_refund(
+            caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent_id
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=error_codes.make_error(
+                error_codes.AGENT_RESPONSE_TOO_LARGE,
+                "Agent returned a response larger than 1 MB. You were not charged. Contact the agent owner.",
+                {"agent_id": agent_id, "size_bytes": len(raw_content)},
+            ),
+        )
+
+    # --- Non-JSON response handling ---
+    content_type = resp.headers.get("content-type", "").lower()
+    if "application/json" not in content_type and "text/json" not in content_type:
+        try:
+            json.loads(raw_content)
+        except Exception:
+            payments.post_call_refund(
+                caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent_id
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=error_codes.make_error(
+                    error_codes.AGENT_INVALID_RESPONSE,
+                    "Agent returned a malformed response (not valid JSON). You were not charged.",
+                    {"agent_id": agent_id},
+                ),
+            )
+
+    payments.post_call_payout(
+        agent_wallet["wallet_id"], platform_wallet["wallet_id"],
+        charge_tx_id, price_cents, agent_id,
+        platform_fee_pct=platform_fee_pct_at_create,
+        fee_bearer_policy=fee_bearer_policy,
+    )
 
     return _proxy_response(resp)
 
@@ -9097,6 +9291,20 @@ def jobs_create(
     if agent is None or not _caller_can_access_agent(caller, agent):
         raise HTTPException(status_code=404, detail=f"Agent '{body.agent_id}' not found.")
     _assert_agent_callable(body.agent_id, agent)
+
+    # Validate callback_url at creation time (not just at delivery)
+    if body.callback_url:
+        try:
+            _validate_hook_url(str(body.callback_url))
+        except (ValueError, HTTPException) as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=error_codes.make_error(
+                    error_codes.INVALID_INPUT,
+                    f"callback_url is invalid: {exc}",
+                    {"field": "callback_url"},
+                ),
+            )
 
     caller_owner_id = _caller_owner_id(request)
     min_caller_trust = _extract_caller_trust_min(agent.get("input_schema"))
@@ -9152,12 +9360,12 @@ def jobs_create(
                 {"price_cents": price_cents, "budget_cents": body.budget_cents, "agent_id": agent["agent_id"]},
             ),
         )
-    if price_cents > 5000 and not _agent_has_verified_contract(agent):
+    if price_cents > 2000 and not _agent_has_verified_contract(agent):
         raise HTTPException(
             status_code=422,
             detail=error_codes.make_error(
                 error_codes.VERIFIED_CONTRACT_REQUIRED,
-                "Jobs above $50 require a worker with a verified input/output contract.",
+                "Jobs above $20 require a worker with a verified input/output contract.",
                 {"agent_id": agent["agent_id"], "price_cents": price_cents},
             ),
         )
@@ -9314,12 +9522,12 @@ def jobs_batch_create(
             raise HTTPException(status_code=404, detail=f"Agent '{spec.agent_id}' not found.")
         _assert_agent_callable(spec.agent_id, agent)
         price_cents = _usd_to_cents(agent["price_per_call_usd"])
-        if price_cents > 5000 and not _agent_has_verified_contract(agent):
+        if price_cents > 2000 and not _agent_has_verified_contract(agent):
             raise HTTPException(
                 status_code=422,
                 detail=error_codes.make_error(
                     error_codes.VERIFIED_CONTRACT_REQUIRED,
-                    "Jobs above $50 require a worker with a verified input/output contract.",
+                    "Jobs above $20 require a worker with a verified input/output contract.",
                     {"agent_id": agent["agent_id"], "price_cents": price_cents},
                 ),
             )
@@ -10281,15 +10489,24 @@ def jobs_message_create(
     raw_type = body.type
     raw_payload = dict(body.payload or {})
     raw_correlation_id = body.correlation_id
-    raw_from_id = body.from_id
-    from_id_override = None
-    if raw_from_id is not None:
-        from_id_override = str(raw_from_id).strip() or None
+    # from_id is always derived from the authenticated caller — no impersonation allowed.
     if str(raw_type or "").strip().lower() == "agent_message":
         if body.channel is not None and "channel" not in raw_payload:
-            raw_payload["channel"] = body.channel
+            raw_payload["channel"] = str(body.channel or "")[:64]
         if body.to_id is not None and "to_id" not in raw_payload:
-            raw_payload["to_id"] = body.to_id
+            raw_payload["to_id"] = str(body.to_id or "")[:64]
+
+    # Per-job message cap
+    existing_count = jobs.count_job_messages(job_id)
+    if existing_count >= 200:
+        raise HTTPException(
+            status_code=429,
+            detail=error_codes.make_error(
+                error_codes.RATE_LIMITED,
+                "This job has reached the 200-message limit. No further messages can be added.",
+                {"job_id": job_id, "max_messages": 200},
+            ),
+        )
 
     try:
         parsed = _normalize_job_message_protocol(
@@ -10303,12 +10520,41 @@ def jobs_message_create(
     msg_type = parsed["type"]
     payload = parsed["payload"]
 
+    # Enforce message payload size cap (16 KB)
+    try:
+        msg_payload_bytes = len(json.dumps(payload).encode("utf-8"))
+    except Exception:
+        msg_payload_bytes = 0
+    if msg_payload_bytes > 16 * 1024:
+        raise HTTPException(
+            status_code=413,
+            detail=error_codes.make_error(
+                error_codes.PAYLOAD_TOO_LARGE,
+                "Message payload exceeds the 16 KB limit.",
+                {"size_bytes": msg_payload_bytes, "limit_bytes": 16 * 1024},
+            ),
+        )
+
+    # Clarification loop cap: max 20 unanswered clarification_requests per job
+    if msg_type == "clarification_request":
+        open_clarifications = jobs.count_open_clarification_requests(job_id)
+        if open_clarifications >= 20:
+            raise HTTPException(
+                status_code=429,
+                detail=error_codes.make_error(
+                    error_codes.RATE_LIMITED,
+                    "This job has too many unanswered clarification requests (max 20). "
+                    "Respond to pending clarifications before sending more.",
+                    {"job_id": job_id, "open_count": open_clarifications},
+                ),
+            )
+
     if caller["type"] == "master":
-        from_id = from_id_override or f"agent:{job['agent_id']}"
+        from_id = f"agent:{job['agent_id']}"
     elif caller["owner_id"] == job["caller_owner_id"]:
-        from_id = from_id_override or job["caller_owner_id"]
+        from_id = job["caller_owner_id"]
     else:
-        from_id = from_id_override or caller["owner_id"]
+        from_id = caller["owner_id"]
 
     if msg_type == "tool_call":
         correlation_id = str(payload.get("correlation_id") or "").strip()
@@ -10537,6 +10783,30 @@ def jobs_rate(
             raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
         if job["caller_owner_id"] != caller["owner_id"]:
             raise HTTPException(status_code=403, detail="Only the original caller can rate this job.")
+
+        # Block rating on non-terminal jobs (prevents trust farming)
+        if job["status"] not in ("complete", "verified"):
+            raise HTTPException(
+                status_code=400,
+                detail=error_codes.make_error(
+                    error_codes.JOB_RATE_STATUS_INVALID,
+                    f"You can only rate a completed job. This job is currently '{job['status']}'.",
+                    {"status": job["status"], "job_id": job_id},
+                ),
+            )
+
+        # Block self-rating (caller rates their own agent)
+        agent = registry.get_agent(str(job.get("agent_id") or ""), include_unapproved=True)
+        if agent and agent.get("owner_id") == caller["owner_id"]:
+            raise HTTPException(
+                status_code=400,
+                detail=error_codes.make_error(
+                    error_codes.JOB_SELF_RATE,
+                    "You can't rate a job on an agent you own.",
+                    {"job_id": job_id},
+                ),
+            )
+
         if disputes.has_dispute_for_job(job_id):
             raise HTTPException(status_code=409, detail="Ratings are locked once a dispute is filed.")
 
@@ -10598,6 +10868,18 @@ def jobs_rate_caller(
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
     if not _caller_worker_authorized_for_job(caller, job):
         raise HTTPException(status_code=403, detail="Only the job's agent owner can rate the caller.")
+
+    # Block rating on non-terminal jobs
+    if job["status"] not in ("complete", "verified", "failed"):
+        raise HTTPException(
+            status_code=400,
+            detail=error_codes.make_error(
+                error_codes.JOB_RATE_STATUS_INVALID,
+                f"You can only rate a caller after the job has finished. This job is currently '{job['status']}'.",
+                {"status": job["status"], "job_id": job_id},
+            ),
+        )
+
     agent_owner_for_rating = job["agent_owner_id"] if caller["type"] == "agent_key" else caller["owner_id"]
 
     try:
@@ -10780,6 +11062,19 @@ def jobs_dispute(
         raise HTTPException(status_code=400, detail="Dispute window has expired for this job.")
 
     side = _dispute_side_for_caller(caller, job)
+
+    # Block self-disputes (caller and agent have same owner)
+    if job.get("caller_owner_id") and job.get("agent_owner_id") and \
+            job["caller_owner_id"] == job["agent_owner_id"]:
+        raise HTTPException(
+            status_code=400,
+            detail=error_codes.make_error(
+                error_codes.JOB_SELF_DISPUTE,
+                "You can't dispute a job on an agent you own.",
+                {"job_id": job_id},
+            ),
+        )
+
     if reputation.get_job_quality_rating(job_id) is not None:
         raise HTTPException(status_code=409, detail="Disputes must be filed before the caller submits a rating.")
     if disputes.has_dispute_for_job(job_id):
@@ -11088,6 +11383,19 @@ def job_event_hook_create(
     body: JobEventHookCreateRequest,
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.DynamicObjectResponse:
+    _MAX_HOOKS_PER_OWNER = 20
+    if caller["type"] != "master":
+        existing = _list_job_event_hooks(owner_id=caller["owner_id"])
+        if len(existing) >= _MAX_HOOKS_PER_OWNER:
+            raise HTTPException(
+                status_code=409,
+                detail=error_codes.make_error(
+                    error_codes.AUTH_HOOK_LIMIT,
+                    f"You've reached the {_MAX_HOOKS_PER_OWNER} webhook limit. "
+                    "Delete an existing hook to create a new one.",
+                    {"max": _MAX_HOOKS_PER_OWNER, "current": len(existing)},
+                ),
+            )
     try:
         hook = _create_job_event_hook(caller["owner_id"], body.target_url, body.secret)
     except ValueError as exc:

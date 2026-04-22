@@ -1345,7 +1345,7 @@ def test_registry_register_auto_verifies_with_verifier_url(client, monkeypatch):
         headers=_auth_headers(worker["raw_api_key"]),
         json={
             "name": f"Verified Agent {uuid.uuid4().hex[:6]}",
-            "description": "Verifier-backed listing",
+            "description": "Verifier backed agent listing",
             "endpoint_url": f"https://agents.aztea.dev/{uuid.uuid4().hex[:8]}",
             "price_per_call_usd": 0.1,
             "tags": ["verified-test"],
@@ -1669,7 +1669,7 @@ def test_jobs_above_50_require_verified_contract(client):
         client,
         worker_owner["raw_api_key"],
         name=f"High Value Unverified Agent {uuid.uuid4().hex[:6]}",
-        price=51.00,
+        price=21.00,
         tags=["high-value"],
     )
 
@@ -3833,7 +3833,7 @@ def test_registry_register_marks_new_worker_agents_pending_review(client):
         headers=_auth_headers(worker["raw_api_key"]),
         json={
             "name": f"Pending Queue Agent {uuid.uuid4().hex[:6]}",
-            "description": "awaiting review",
+            "description": "awaiting platform review",
             "endpoint_url": f"https://agents.example.com/{uuid.uuid4().hex[:8]}",
             "price_per_call_usd": 0.10,
             "tags": ["pending-review"],
@@ -3855,7 +3855,7 @@ def test_pending_review_agent_hidden_from_public_listing_and_visible_in_admin_qu
         headers=_auth_headers(worker["raw_api_key"]),
         json={
             "name": f"Pending Hidden Agent {uuid.uuid4().hex[:6]}",
-            "description": "awaiting review",
+            "description": "awaiting platform review",
             "endpoint_url": f"https://agents.example.com/{uuid.uuid4().hex[:8]}",
             "price_per_call_usd": 0.10,
             "tags": ["pending-hidden"],
@@ -3889,7 +3889,7 @@ def test_pending_review_agent_cannot_accept_job_claim(client):
         headers=_auth_headers(worker["raw_api_key"]),
         json={
             "name": f"Pending Claim Agent {uuid.uuid4().hex[:6]}",
-            "description": "awaiting review",
+            "description": "awaiting platform review",
             "endpoint_url": f"https://agents.example.com/{uuid.uuid4().hex[:8]}",
             "price_per_call_usd": 0.10,
             "tags": ["pending-claim"],
@@ -3935,7 +3935,7 @@ def test_admin_review_approve_and_reject_paths(client, monkeypatch):
         headers=_auth_headers(worker["raw_api_key"]),
         json={
             "name": f"Review Flow Agent {uuid.uuid4().hex[:6]}",
-            "description": "awaiting review",
+            "description": "awaiting platform review",
             "endpoint_url": f"https://agents.example.com/{uuid.uuid4().hex[:8]}",
             "healthcheck_url": f"https://agents.example.com/{uuid.uuid4().hex[:8]}/health",
             "price_per_call_usd": 0.10,
@@ -3977,7 +3977,7 @@ def test_admin_review_approve_and_reject_paths(client, monkeypatch):
         headers=_auth_headers(worker["raw_api_key"]),
         json={
             "name": f"Review Reject Agent {uuid.uuid4().hex[:6]}",
-            "description": "awaiting review",
+            "description": "awaiting platform review",
             "endpoint_url": f"https://agents.example.com/{uuid.uuid4().hex[:8]}",
             "price_per_call_usd": 0.10,
             "tags": ["review-reject"],

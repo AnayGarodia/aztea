@@ -95,6 +95,9 @@ def run(payload: dict) -> dict:
         return {"error": "URL is invalid or not allowed (must be public http/https)"}
 
     question = str(payload.get("question", "")).strip()
+    if len(question) > 1000:
+        return {"error": "question must be 1000 characters or fewer"}
+
     mode = str(payload.get("mode", "summary")).lower()
     if mode not in ("summary", "extract", "qa"):
         mode = "summary"
@@ -109,9 +112,18 @@ def run(payload: dict) -> dict:
                 "Accept": "text/html,application/xhtml+xml",
             },
             allow_redirects=True,
+            stream=True,
         )
         resp.raise_for_status()
-        raw_html = resp.text
+        # Enforce a 5 MB response size limit
+        chunks = []
+        total = 0
+        for chunk in resp.iter_content(chunk_size=65536, decode_unicode=False):
+            total += len(chunk)
+            if total > 5 * 1024 * 1024:
+                return {"error": "Page is too large to process (over 5 MB). Try a more specific URL."}
+            chunks.append(chunk)
+        raw_html = b"".join(chunks).decode("utf-8", errors="replace")
     except requests.exceptions.Timeout:
         return {"error": "Request timed out fetching the URL"}
     except requests.exceptions.HTTPError as e:

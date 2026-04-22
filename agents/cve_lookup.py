@@ -57,7 +57,8 @@ def _extract_cvss(metrics: dict) -> float:
     return 0.0
 
 
-def _query_nvd(keyword: str) -> list[dict]:
+def _query_nvd(keyword: str) -> list[dict] | str:
+    """Returns a list of CVE dicts, or an error string on failure."""
     try:
         resp = requests.get(
             _NVD_API,
@@ -65,11 +66,15 @@ def _query_nvd(keyword: str) -> list[dict]:
             timeout=_NVD_TIMEOUT,
             headers={"User-Agent": "aztea-cve-lookup/1.0"},
         )
+        if resp.status_code == 429:
+            return "NVD API rate limit reached. Try again in a minute."
         if resp.status_code != 200:
-            return []
+            return f"NVD API returned status {resp.status_code}. Try again later."
         data = resp.json()
-    except Exception:
-        return []
+    except requests.exceptions.Timeout:
+        return "NVD API timed out. Try again in a moment."
+    except Exception as e:
+        return f"Could not reach NVD API: {type(e).__name__}."
 
     results = []
     for item in data.get("vulnerabilities", []):
@@ -121,22 +126,37 @@ def run(payload: dict) -> dict:
     packages = payload.get("packages") or []
     include_patched = bool(payload.get("include_patched", False))
 
+    if not isinstance(packages, list):
+        return {"error": "packages must be a list of strings (e.g. [\"express@4.17.1\"])"}
+
     if not packages:
         return {
             "results": [],
             "total_vulnerable": 0,
             "total_packages_checked": 0,
-            "summary": "No packages provided.",
+            "summary": "No packages provided. Pass a list like: [\"express@4.17.1\", \"lodash@4.17.20\"]",
             "source": "nvd",
         }
+
+    if len(packages) > 10:
+        return {"error": f"At most 10 packages can be checked per call. You provided {len(packages)}."}
+
+    for raw_pkg in packages:
+        if not isinstance(raw_pkg, str):
+            return {"error": "Each package must be a string like \"express@4.17.1\"."}
+        if len(str(raw_pkg)) > 200:
+            return {"error": f"Package name is too long (max 200 characters): {str(raw_pkg)[:40]}..."}
 
     all_results: list[dict] = []
     seen_cves: set[str] = set()
 
     for raw_pkg in packages[:10]:  # cap at 10 packages per call
         pkg_name, pkg_version = _parse_package_version(str(raw_pkg))
-        nvd_cves = _query_nvd(pkg_name)
+        nvd_result = _query_nvd(pkg_name)
         time.sleep(_NVD_RATE_DELAY)
+        if isinstance(nvd_result, str):
+            return {"error": nvd_result}
+        nvd_cves = nvd_result
 
         for item in nvd_cves:
             if item["cve"] in seen_cves:

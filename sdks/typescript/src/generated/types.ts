@@ -2416,7 +2416,7 @@ export interface components {
             claim_token?: string | null;
             /**
              * Refund Fraction
-             * @description Fraction of the charge to refund to the caller (0.0–1.0). Default 1.0 = full refund. Set lower when the agent spent compute before failing, e.g. 0.0 for bad-input rejections the agent couldn't have avoided.
+             * @description Fraction of the charge to refund to the caller (0.5–1.0). Default 1.0 = full refund. Minimum 0.5 — callers always get at least 50% back on a worker-reported failure.
              * @default 1
              */
             refund_fraction: number;

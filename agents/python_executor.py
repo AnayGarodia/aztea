@@ -101,7 +101,14 @@ def run(payload: dict) -> dict:
         }
 
     stdin_data = str(payload.get("stdin", "") or "")
-    timeout = max(1, min(int(payload.get("timeout", 10)), 30))
+    if len(stdin_data) > 65536:
+        return {"error": "stdin must be 65536 characters or fewer"}
+
+    try:
+        timeout = max(1, min(int(payload.get("timeout", 10)), 30))
+    except (TypeError, ValueError):
+        return {"error": "timeout must be a number between 1 and 30"}
+
     explain = bool(payload.get("explain", True))
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:

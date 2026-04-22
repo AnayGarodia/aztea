@@ -5,6 +5,12 @@ api_models.py — Request body schemas shared by server routes.
 import re
 from typing import Annotated, Literal, NotRequired, TypeAlias, TypedDict
 
+try:
+    import jsonschema as _jsonschema
+    _JSONSCHEMA_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    _JSONSCHEMA_AVAILABLE = False
+
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -159,9 +165,12 @@ class WikiRequest(BaseModel):
     @field_validator("topic")
     @classmethod
     def topic_not_empty(cls, v):
-        if not v.strip():
-            raise ValueError("topic must not be empty")
-        return v.strip()
+        s = v.strip()
+        if not s:
+            raise ValueError("topic must not be empty.")
+        if len(s) > 300:
+            raise ValueError("topic must be 300 characters or fewer.")
+        return s
 
     @field_validator("depth")
     @classmethod
@@ -350,6 +359,98 @@ class AgentRegisterRequest(BaseModel):
     healthcheck_url: str | None = None
     price_per_call_usd: float
     tags: list[str] = Field(default_factory=list)
+
+    @field_validator("name")
+    @classmethod
+    def name_valid(cls, v: str) -> str:
+        s = v.strip()
+        if not s:
+            raise ValueError("Agent name is required.")
+        if len(s) < 3:
+            raise ValueError("Agent name must be at least 3 characters.")
+        if len(s) > 100:
+            raise ValueError("Agent name must be 100 characters or fewer.")
+        letters = [c for c in s if c.isalpha()]
+        if letters and sum(1 for c in letters if c.isupper()) / len(letters) >= 0.8:
+            raise ValueError("Agent name appears to be all-caps. Use title case, e.g. 'Financial Analyst'.")
+        if not re.search(r'[A-Za-z]', s):
+            raise ValueError("Agent name must contain at least one letter.")
+        return s
+
+    @field_validator("description")
+    @classmethod
+    def description_valid(cls, v: str) -> str:
+        s = v.strip()
+        if not s:
+            raise ValueError("Description is required.")
+        if len(s) < 10:
+            raise ValueError("Description must be at least 10 characters.")
+        if len(s) > 2000:
+            raise ValueError("Description must be 2000 characters or fewer.")
+        return s
+
+    @field_validator("description")
+    @classmethod
+    def description_quality(cls, v: str) -> str:
+        s = v.strip()
+        words = s.split()
+        if len(words) < 3:
+            raise ValueError("Description must be at least 3 words — help callers understand what your agent does.")
+        if not re.search(r'[A-Za-z]', s):
+            raise ValueError("Description must contain at least one letter.")
+        return s
+
+    @field_validator("price_per_call_usd")
+    @classmethod
+    def price_valid(cls, v: float) -> float:
+        if v < 0:
+            raise ValueError("Price cannot be negative.")
+        if v > 25.0:
+            raise ValueError("Price per call cannot exceed $25.00.")
+        return v
+
+    @field_validator("tags")
+    @classmethod
+    def tags_valid(cls, v: list[str]) -> list[str]:
+        cleaned = [t.strip().lower() for t in v if t.strip()]
+        seen: set[str] = set()
+        deduped = []
+        for t in cleaned:
+            if t not in seen:
+                seen.add(t)
+                deduped.append(t)
+        if len(deduped) > 10:
+            raise ValueError("At most 10 tags are allowed.")
+        for t in deduped:
+            if len(t) > 32:
+                raise ValueError(f"Tag '{t[:20]}...' is too long — tags must be 32 characters or fewer.")
+        return deduped
+
+    @field_validator("input_schema", "output_schema")
+    @classmethod
+    def schema_valid(cls, v: dict) -> dict:
+        if not v:
+            return v
+        if _JSONSCHEMA_AVAILABLE:
+            try:
+                _jsonschema.Draft202012Validator.check_schema(v)
+            except _jsonschema.exceptions.SchemaError as exc:
+                raise ValueError(f"Invalid JSON schema: {exc.message}") from exc
+        # Depth and property count guards
+        def _depth(obj, current=0):
+            if current > 5:
+                return current
+            if isinstance(obj, dict):
+                return max((_depth(vv, current + 1) for vv in obj.values()), default=current)
+            if isinstance(obj, list):
+                return max((_depth(item, current + 1) for item in obj), default=current)
+            return current
+        if _depth(v) > 5:
+            raise ValueError("Schema nesting depth exceeds 5 levels. Flatten your schema.")
+        props = v.get("properties", {})
+        if isinstance(props, dict) and len(props) > 50:
+            raise ValueError(f"Schema defines {len(props)} properties — maximum is 50.")
+        return v
     input_schema: JSONObject = Field(default_factory=dict)
     output_schema: JSONObject = Field(default_factory=dict)
     output_verifier_url: str | None = None
@@ -446,24 +547,36 @@ class UserRegisterRequest(BaseModel):
     @field_validator("username")
     @classmethod
     def username_not_empty(cls, v):
-        if not v.strip():
-            raise ValueError("Username cannot be empty")
-        return v.strip()
+        s = v.strip()
+        if not s:
+            raise ValueError("Username is required.")
+        if len(s) < 3:
+            raise ValueError("Username must be at least 3 characters.")
+        if len(s) > 32:
+            raise ValueError("Username must be 32 characters or fewer.")
+        if not re.match(r'^[a-zA-Z0-9_-]+$', s):
+            raise ValueError("Username may only contain letters, numbers, underscores, and hyphens.")
+        return s
 
     @field_validator("email")
     @classmethod
     def email_valid(cls, v):
-        if "@" not in v or "." not in v:
-            raise ValueError("Enter a valid email address")
-        return v.strip().lower()
+        s = v.strip().lower()
+        if not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]{2,}$', s):
+            raise ValueError("Enter a valid email address.")
+        return s
 
     @field_validator("password")
     @classmethod
     def password_length(cls, v):
         if len(v) < 8:
-            raise ValueError("Password must be at least 8 characters")
+            raise ValueError("Password must be at least 8 characters.")
         if len(v) > 1024:
-            raise ValueError("Password must be at most 1024 characters")
+            raise ValueError("Password must be at most 1024 characters.")
+        if not re.search(r'[A-Za-z]', v):
+            raise ValueError("Password must contain at least one letter.")
+        if not re.search(r'\d', v):
+            raise ValueError("Password must contain at least one number.")
         return v
 
 
@@ -502,10 +615,10 @@ class CreateKeyRequest(BaseModel):
         }
     )
 
-    name: str = "New key"
+    name: str = Field(default="New key", max_length=64)
     scopes: list[str] = Field(default_factory=lambda: list(_auth.DEFAULT_KEY_SCOPES))
-    max_spend_cents: int | None = Field(default=None, ge=0)
-    per_job_cap_cents: int | None = Field(default=None, ge=0)
+    max_spend_cents: int | None = Field(default=None, ge=0, le=1_000_000)
+    per_job_cap_cents: int | None = Field(default=None, ge=0, le=1_000_000)
 
     @field_validator("scopes")
     @classmethod
@@ -741,7 +854,7 @@ class JobCompleteRequest(BaseModel):
         default_factory=dict,
         description="Optional protocol metadata attached to output payload.",
     )
-    claim_token: str | None = None
+    claim_token: str | None = Field(default=None, max_length=128)
 
     @field_validator("output_artifacts")
     @classmethod
@@ -773,17 +886,16 @@ class JobFailRequest(BaseModel):
         }
     )
 
-    error_message: str | None = None
-    claim_token: str | None = None
+    error_message: str | None = Field(default=None, max_length=2000)
+    claim_token: str | None = Field(default=None, max_length=128)
     refund_fraction: float = Field(
         default=1.0,
-        ge=0.0,
+        ge=0.5,
         le=1.0,
         description=(
-            "Fraction of the charge to refund to the caller (0.0–1.0). "
-            "Default 1.0 = full refund. Set lower when the agent spent compute "
-            "before failing, e.g. 0.0 for bad-input rejections the agent "
-            "couldn't have avoided."
+            "Fraction of the charge to refund to the caller (0.5–1.0). "
+            "Default 1.0 = full refund. Minimum 0.5 — callers always get at least "
+            "50% back on a worker-reported failure."
         ),
     )
 
@@ -793,9 +905,9 @@ class JobRetryRequest(BaseModel):
         json_schema_extra={"example": {"error_message": "Dependency timeout", "retry_delay_seconds": 30}}
     )
 
-    error_message: str | None = None
+    error_message: str | None = Field(default=None, max_length=2000)
     retry_delay_seconds: int = Field(default=DEFAULT_RETRY_DELAY_SECONDS, ge=0, le=3600)
-    claim_token: str | None = None
+    claim_token: str | None = Field(default=None, max_length=128)
 
 
 class JobClaimRequest(BaseModel):
@@ -808,13 +920,13 @@ class JobHeartbeatRequest(BaseModel):
     model_config = ConfigDict(json_schema_extra={"example": {"lease_seconds": 300, "claim_token": "claim-token-123"}})
 
     lease_seconds: int = Field(default=DEFAULT_LEASE_SECONDS, ge=1, le=3600)
-    claim_token: str | None = None
+    claim_token: str | None = Field(default=None, max_length=128)
 
 
 class JobReleaseRequest(BaseModel):
     model_config = ConfigDict(json_schema_extra={"example": {"claim_token": "claim-token-123"}})
 
-    claim_token: str | None = None
+    claim_token: str | None = Field(default=None, max_length=128)
 
 
 class JobRatingRequest(BaseModel):

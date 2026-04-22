@@ -202,7 +202,7 @@ def test_api_register_agent_with_model_fields(isolated_db):
             headers=_auth_headers(api_key),
             json={
                 "name": "My Anthropic Agent",
-                "description": "Uses Claude",
+                "description": "Uses Claude API directly",
                 "endpoint_url": "https://example.com/claude-agent",
                 "price_per_call_usd": 0.03,
                 "tags": ["ai"],
