@@ -1,9 +1,15 @@
 """
 embeddings.py — text embedding helpers using the OpenAI API.
+
+When OPENAI_API_KEY is not set (CI, local dev without a key), embed_text falls
+back to a deterministic hash-seeded vector so tests and offline tooling work
+without any external API call. The fallback is not semantically meaningful but
+is consistent: the same text always returns the same vector.
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
 
 import numpy as np
@@ -12,14 +18,28 @@ _MODEL_NAME = "text-embedding-3-small"
 EMBEDDING_DIM = 384
 
 
+def _fallback_embed(text: str) -> list[float]:
+    digest = hashlib.sha256(text.encode("utf-8")).digest()
+    seed = int.from_bytes(digest[:4], "big")
+    rng = np.random.default_rng(seed)
+    vec = rng.standard_normal(EMBEDDING_DIM).astype(np.float32)
+    norm = float(np.linalg.norm(vec))
+    if norm > 0:
+        vec = vec / norm
+    return vec.tolist()
+
+
 def embed_text(text: str) -> list[float]:
     normalized = str(text or "").strip()
     if not normalized:
         raise ValueError("text must be a non-empty string.")
 
-    import openai  # deferred so tests that don't set OPENAI_API_KEY can import this module
-
     api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return _fallback_embed(normalized)
+
+    import openai
+
     client = openai.OpenAI(api_key=api_key)
     response = client.embeddings.create(
         model=_MODEL_NAME,
