@@ -134,6 +134,7 @@ def _create_agents_table(conn: sqlite3.Connection, table_name: str = "agents") -
                 endpoint_last_error TEXT,
                 internal_only       INTEGER NOT NULL DEFAULT 0,
                 status              TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','suspended','banned')),
+                suspension_reason   TEXT,
                 review_status       TEXT NOT NULL DEFAULT 'approved',
                 review_note         TEXT,
                 reviewed_at         TEXT,

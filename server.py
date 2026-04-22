@@ -8241,7 +8241,7 @@ def mcp_invoke(
     request: Request,
     body: MCPInvokeRequest,
 ) -> core_models.DynamicObjectResponse:
-    # 1. Auth: require a valid agent API key (amk_ prefix).
+    # 1. Auth: accept agent keys (amk_), regular user caller keys (am_), or master key.
     raw_key = str(body.api_key or "").strip()
     if not raw_key:
         raise HTTPException(
@@ -8249,13 +8249,22 @@ def mcp_invoke(
             detail=error_codes.make_error("auth.invalid_key", "API key is required."),
         )
     agent_key = _auth.verify_agent_api_key(raw_key)
-    # Also allow master key for internal tooling.
-    if agent_key is None and not hmac.compare_digest(raw_key, _MASTER_KEY):
+    user_key = None
+    if agent_key is None:
+        user_key = _auth.verify_api_key(raw_key)
+        if user_key is not None and "caller" not in (user_key.get("scopes") or []):
+            user_key = None
+    is_master = hmac.compare_digest(raw_key, _MASTER_KEY)
+    if agent_key is None and user_key is None and not is_master:
         raise HTTPException(
             status_code=403,
-            detail=error_codes.make_error("auth.invalid_key", "Invalid or inactive agent API key."),
+            detail=error_codes.make_error("auth.invalid_key", "Invalid or inactive API key."),
         )
-    caller_key_id = str((agent_key or {}).get("key_id") or "master")
+    caller_key_id = str(
+        (agent_key or {}).get("key_id")
+        or (user_key or {}).get("key_id")
+        or "master"
+    )
 
     # 2. Per-key sliding-window rate limit: 60 req/min.
     if not _mcp_check_rate_limit(caller_key_id):
@@ -8282,6 +8291,13 @@ def mcp_invoke(
             "agent_id": str(agent_key["agent_id"]),
             "key_id": caller_key_id,
             "scopes": ["worker"],
+        }
+    elif user_key is not None:
+        caller = {
+            "type": "user",
+            "owner_id": str(user_key["user_id"]),
+            "key_id": caller_key_id,
+            "scopes": user_key.get("scopes") or ["caller"],
         }
     else:
         caller = {"type": "master", "owner_id": "master", "scopes": ["caller", "worker", "admin"]}
