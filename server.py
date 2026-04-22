@@ -2738,7 +2738,7 @@ def _key_from_request(request: Request) -> str:
 
 
 limiter = Limiter(key_func=_key_from_request, default_limits=[_DEFAULT_RATE_LIMIT])
-app = FastAPI(title="agentmarket", lifespan=lifespan)
+app = FastAPI(title="agentmarket v1", lifespan=lifespan)
 app.state.limiter = limiter
 
 # CORS — origins come from CORS_ALLOW_ORIGINS env var (comma-separated).
