@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useRef, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import Topbar from '../layout/Topbar'
 import Card from '../ui/Card'
 import Button from '../ui/Button'
@@ -7,7 +7,7 @@ import Input from '../ui/Input'
 import Reveal from '../ui/motion/Reveal'
 import { registerAgent } from '../api'
 import { useAuth } from '../context/AuthContext'
-import { ChevronDown, ChevronUp } from 'lucide-react'
+import { CheckCircle, ChevronDown, ChevronUp } from 'lucide-react'
 import './RegisterAgentPage.css'
 
 const REQUIRED_FIELDS = {
@@ -36,25 +36,78 @@ function tagsFromString(str) {
   return str.split(',').map(t => t.trim()).filter(Boolean)
 }
 
+function validateUrl(raw, fieldName) {
+  const url = raw.trim()
+  if (!url) return `${fieldName} is required.`
+  let parsed
+  try { parsed = new URL(url) } catch {
+    return `${fieldName} must be a valid URL (e.g. https://your-agent.example.com/run).`
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    return `${fieldName} must use https:// or http://.`
+  }
+  if (parsed.protocol === 'http:') {
+    return `${fieldName} should use https:// for security. http:// endpoints will be rejected by most callers.`
+  }
+  const host = parsed.hostname.toLowerCase()
+  if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.endsWith('.local')) {
+    return `${fieldName} cannot point to localhost or a local address — callers can't reach it.`
+  }
+  return null
+}
+
+function validateForm(form) {
+  const name = form.name.trim()
+  if (!name) return 'Agent name is required.'
+  if (name.length < 3) return 'Agent name must be at least 3 characters.'
+  if (name.length > 80) return 'Agent name must be 80 characters or fewer.'
+
+  const desc = form.description.trim()
+  if (!desc) return 'Description is required.'
+  if (desc.length < 20) return 'Description must be at least 20 characters — help callers understand what your agent does.'
+  if (desc.length > 2000) return 'Description must be 2 000 characters or fewer.'
+
+  const urlErr = validateUrl(form.endpoint_url, 'Endpoint URL')
+  if (urlErr) return urlErr
+
+  const price = parseFloat(form.price_per_call_usd)
+  if (!Number.isFinite(price) || price < 0) return 'Price must be a non-negative number.'
+  if (price > 1000) return 'Price per call cannot exceed $1 000.'
+
+  if (form.healthcheck_url.trim()) {
+    const hcErr = validateUrl(form.healthcheck_url, 'Healthcheck URL')
+    if (hcErr) return hcErr
+  }
+
+  return null
+}
+
 export default function RegisterAgentPage() {
   const { apiKey } = useAuth()
   const navigate = useNavigate()
+  const errorRef = useRef(null)
   const [form, setForm] = useState({ ...REQUIRED_FIELDS, ...OPTIONAL_DEFAULTS })
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [registered, setRegistered] = useState(null)
 
   const set = (field, value) => setForm(prev => ({ ...prev, [field]: value }))
 
   const handleSubmit = async (e) => {
     e.preventDefault()
     setError(null)
-    setLoading(true)
 
+    const validationError = validateForm(form)
+    if (validationError) {
+      setError(validationError)
+      setTimeout(() => errorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 50)
+      return
+    }
+
+    setLoading(true)
     try {
       const price = parseFloat(form.price_per_call_usd)
-      if (!Number.isFinite(price) || price < 0) throw new Error('Price must be a non-negative number.')
-
       let inputSchema = {}
       let outputSchema = {}
       try { inputSchema = parseJsonOrNull(form.input_schema) } catch {
@@ -77,13 +130,51 @@ export default function RegisterAgentPage() {
       if (form.model_provider.trim()) payload.model_provider = form.model_provider.trim()
       if (form.model_id.trim()) payload.model_id = form.model_id.trim()
 
-      await registerAgent(apiKey, payload)
-      navigate('/my-agents')
+      const result = await registerAgent(apiKey, payload)
+      setRegistered(result)
     } catch (err) {
       setError(err?.message || 'Registration failed.')
+      setTimeout(() => errorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 50)
     } finally {
       setLoading(false)
     }
+  }
+
+  if (registered) {
+    return (
+      <main className="regagent">
+        <Topbar crumbs={[{ label: 'Worker' }, { label: 'My Agents', to: '/my-agents' }, { label: 'Register' }]} />
+        <div className="regagent__scroll">
+          <div className="regagent__content">
+            <Reveal>
+              <div className="regagent__success">
+                <CheckCircle size={32} className="regagent__success-icon" />
+                <h2 className="regagent__success-title">Agent registered</h2>
+                <p className="regagent__success-name">{registered.name ?? form.name}</p>
+                {registered.status && registered.status !== 'active' ? (
+                  <p className="regagent__success-sub">
+                    Your agent is <strong>{registered.status}</strong>
+                    {registered.suspension_reason ? ` — ${registered.suspension_reason}` : ' and pending review before it appears publicly.'}
+                  </p>
+                ) : (
+                  <p className="regagent__success-sub">
+                    Your agent is live on the marketplace. It may take a few seconds to appear in search.
+                  </p>
+                )}
+                <div className="regagent__success-actions">
+                  <Link to="/my-agents">
+                    <Button variant="primary">View my agents</Button>
+                  </Link>
+                  <Button variant="ghost" onClick={() => { setRegistered(null); setForm({ ...REQUIRED_FIELDS, ...OPTIONAL_DEFAULTS }) }}>
+                    Register another
+                  </Button>
+                </div>
+              </div>
+            </Reveal>
+          </div>
+        </div>
+      </main>
+    )
   }
 
   return (
@@ -220,7 +311,7 @@ export default function RegisterAgentPage() {
                 )}
               </Card>
 
-              {error && <p className="regagent__error">{error}</p>}
+              {error && <p className="regagent__error" ref={errorRef}>{error}</p>}
 
               <div className="regagent__actions">
                 <Button

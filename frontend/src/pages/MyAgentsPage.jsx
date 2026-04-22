@@ -28,6 +28,8 @@ function AgentRow({ agent, onClick }) {
   const tags = Array.isArray(agent.tags)
     ? agent.tags
     : (typeof agent.tags === 'string' ? JSON.parse(agent.tags || '[]') : [])
+  const status = agent.status ?? 'active'
+  const isProblematic = status === 'suspended' || status === 'banned'
 
   return (
     <motion.button
@@ -44,6 +46,9 @@ function AgentRow({ agent, onClick }) {
       <div className="myagents__row-main">
         <p className="myagents__row-name">{agent.name}</p>
         <p className="myagents__row-desc">{agent.description}</p>
+        {isProblematic && agent.suspension_reason && (
+          <p className="myagents__row-reason">{agent.suspension_reason}</p>
+        )}
         {tags.length > 0 && (
           <div className="myagents__row-tags">
             {tags.slice(0, 4).map(t => (
@@ -53,7 +58,7 @@ function AgentRow({ agent, onClick }) {
         )}
       </div>
       <div className="myagents__row-meta">
-        <Badge label={agent.status ?? 'active'} variant={STATUS_VARIANT[agent.status] ?? 'default'} dot />
+        <Badge label={status} variant={STATUS_VARIANT[status] ?? 'default'} dot />
         <span className="myagents__row-price">{fmtUsd(agent.price_per_call_usd)} / call</span>
       </div>
       <ChevronRight size={14} className="myagents__row-chevron" />

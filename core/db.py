@@ -88,15 +88,18 @@ def get_raw_connection(db_path: str = DB_PATH) -> sqlite3.Connection:
 
 
 def close_all_connections() -> None:
-    """Checkpoint WAL and close all tracked connections. Call on process shutdown."""
+    """Close all tracked connections. Call on process shutdown."""
     with _open_connections_lock:
         conns = list(_open_connections)
         _open_connections.clear()
     for conn in conns:
         try:
-            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            # PASSIVE checkpoint: writes dirty pages without blocking or waiting for
+            # readers still active on background threads (SSE streams, polling loops).
+            # TRUNCATE would block/segfault if another thread holds the connection.
+            conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
         except Exception:
-            _LOG.exception("Failed to checkpoint SQLite WAL during shutdown.")
+            pass
         try:
             conn.close()
         except Exception:

@@ -117,6 +117,15 @@
   text-overflow: ellipsis;
 }
 
+.myagents__row-reason {
+  margin: 0 0 6px;
+  font-size: 0.75rem;
+  color: var(--warn, #d97706);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .myagents__row-tags {
   display: flex;
   gap: 4px;

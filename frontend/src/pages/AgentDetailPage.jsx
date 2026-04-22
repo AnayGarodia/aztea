@@ -16,7 +16,7 @@ import ResultRenderer from '../features/agents/results/ResultRenderer'
 import TrustGauge from '../features/agents/TrustGauge'
 import { callAgent, createJob, fetchAgentWorkHistory, fetchMyAgents } from '../api'
 import { useMarket } from '../context/MarketContext'
-import { ArrowLeft, ArrowUpRight, AlertTriangle, Zap, Clock, BarChart2, Shield, ChevronDown, ChevronUp, BookOpen, Lock } from 'lucide-react'
+import { ArrowLeft, ArrowUpRight, AlertTriangle, XCircle, Zap, Clock, BarChart2, Shield, ChevronDown, ChevronUp, BookOpen, Lock } from 'lucide-react'
 import ModelBadge from '../components/ModelBadge'
 import { BarChart, Bar, ResponsiveContainer, Tooltip as RechartTooltip } from 'recharts'
 import './AgentDetailPage.css'
@@ -85,6 +85,7 @@ export default function AgentDetailPage() {
   const [mode, setMode] = useState('sync')
   const [invokeLoading, setInvokeLoading] = useState(false)
   const [result, setResult] = useState(null)
+  const [invokeError, setInvokeError] = useState(null)
   const [jobInfo, setJobInfo] = useState(null)
   const [workHistory, setWorkHistory] = useState(null)
   const [workHistoryLoading, setWorkHistoryLoading] = useState(false)
@@ -177,10 +178,31 @@ export default function AgentDetailPage() {
     return buckets
   }, [workHistory])
 
+  function extractErrorMessage(body, status) {
+    if (!body) return `Call failed (HTTP ${status})`
+    if (typeof body === 'string') return body
+    if (typeof body.message === 'string' && body.message) {
+      const errors = body.data?.errors
+      if (Array.isArray(errors) && errors.length > 0) {
+        const sub = errors[0]?.msg ?? errors[0]?.message ?? null
+        if (sub) return sub.replace(/^Value error,\s*/i, '')
+      }
+      return body.message
+    }
+    if (typeof body.detail === 'string') return body.detail
+    if (Array.isArray(body.detail)) {
+      const first = body.detail[0]
+      if (first?.msg) return first.msg
+    }
+    if (typeof body.error === 'string') return body.error
+    return `Call failed (HTTP ${status})`
+  }
+
   const handleInvoke = async (payload, { privateTask = false } = {}) => {
     if (!agent) return
     setInvokeLoading(true)
     setResult(null)
+    setInvokeError(null)
     setJobInfo(null)
     try {
       if (mode === 'async') {
@@ -191,11 +213,14 @@ export default function AgentDetailPage() {
         return
       }
       const response = await callAgent(apiKey, agent.agent_id, payload, { privateTask })
-      setResult(response.body)
-      if (!response.ok) showToast?.(`Call failed (${response.status})`, 'error')
-      else if (!privateTask) setTimeout(() => loadWorkHistory(0), 1500)
+      if (!response.ok) {
+        setInvokeError(extractErrorMessage(response.body, response.status))
+      } else {
+        setResult(response.body)
+        if (!privateTask) setTimeout(() => loadWorkHistory(0), 1500)
+      }
     } catch (err) {
-      showToast?.(err?.message ?? 'Invoke failed', 'error')
+      setInvokeError(err?.message ?? 'Invoke failed — please try again.')
     } finally {
       setInvokeLoading(false)
     }
@@ -402,11 +427,21 @@ export default function AgentDetailPage() {
                     </div>
                   )}
 
-                  {result && !jobInfo && (
+                  {invokeError && (
+                    <div className="agent-detail__invoke-error">
+                      <XCircle size={15} className="agent-detail__invoke-error-icon" />
+                      <div>
+                        <p className="agent-detail__invoke-error-title">Call failed</p>
+                        <p className="agent-detail__invoke-error-msg">{invokeError}</p>
+                      </div>
+                    </div>
+                  )}
+
+                  {result && !invokeError && !jobInfo && (
                     <ResultRenderer result={result} agent={agent} />
                   )}
 
-                  {!result && !jobInfo && (
+                  {!result && !invokeError && !jobInfo && (
                     <div className="agent-detail__output-empty">
                       <div className="agent-detail__output-empty-icon">
                         <BarChart2 size={28} strokeWidth={1.5} />
