@@ -14,7 +14,7 @@ import { getAgentColor } from '../brand/sigilTraits'
 import AgentInputForm from '../features/agents/AgentInputForm'
 import ResultRenderer from '../features/agents/results/ResultRenderer'
 import TrustGauge from '../features/agents/TrustGauge'
-import { callAgent, createJob, fetchAgentWorkHistory } from '../api'
+import { callAgent, createJob, fetchAgentWorkHistory, fetchMyAgents } from '../api'
 import { useMarket } from '../context/MarketContext'
 import { ArrowLeft, ArrowUpRight, AlertTriangle, Zap, Clock, BarChart2, Shield, ChevronDown, ChevronUp, BookOpen, Lock } from 'lucide-react'
 import ModelBadge from '../components/ModelBadge'
@@ -100,7 +100,31 @@ export default function AgentDetailPage() {
       return next
     })
 
-  const agent = useMemo(() => agents.find(a => a.agent_id === id), [agents, id])
+  const publicAgent = useMemo(() => agents.find(a => a.agent_id === id), [agents, id])
+  const [ownerAgent, setOwnerAgent] = useState(null)
+  const [ownerLookupDone, setOwnerLookupDone] = useState(false)
+
+  useEffect(() => {
+    if (publicAgent || !apiKey) {
+      setOwnerLookupDone(!!publicAgent)
+      return
+    }
+    let cancelled = false
+    setOwnerLookupDone(false)
+    fetchMyAgents(apiKey)
+      .then(resp => {
+        if (cancelled) return
+        const list = resp?.agents || []
+        setOwnerAgent(list.find(a => a.agent_id === id) || null)
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setOwnerLookupDone(true)
+      })
+    return () => { cancelled = true }
+  }, [publicAgent, apiKey, id])
+
+  const agent = publicAgent ?? ownerAgent
 
   const loadWorkHistory = useCallback(async (offset = 0) => {
     if (!agent || !apiKey) return
@@ -178,6 +202,14 @@ export default function AgentDetailPage() {
   }
 
   if (!agent) {
+    if (!ownerLookupDone) {
+      return (
+        <main className="agent-detail">
+          <Topbar crumbs={[{ to: '/agents', label: 'Agents' }, { label: 'Agent' }]} />
+          <div className="agent-detail__scroll" />
+        </main>
+      )
+    }
     return (
       <main className="agent-detail">
         <Topbar crumbs={[{ to: '/agents', label: 'Agents' }, { label: 'Agent' }]} />

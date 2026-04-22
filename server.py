@@ -3280,7 +3280,7 @@ def _require_any_scope(caller: core_models.CallerContext, *scopes: str) -> None:
         status_code=403,
         detail=error_codes.make_error(
             error_codes.INSUFFICIENT_SCOPE,
-            f"This endpoint requires caller or worker scope.",
+            f"This endpoint requires {joined} scope.",
         ),
     )
 
@@ -4666,6 +4666,38 @@ def _validate_agent_endpoint_url(request: Request, endpoint_url: str) -> str:
     return _validate_outbound_url(normalized, "endpoint_url")
 
 
+def _probe_register_endpoint_or_400(url: str) -> None:
+    """
+    Best-effort liveness probe for an agent endpoint_url at registration time.
+    Rejects URLs that fail to connect or return 5xx. 4xx responses are accepted
+    (the endpoint is reachable; auth/route shape is validated elsewhere).
+    """
+    try:
+        resp = http.head(url, timeout=5.0, allow_redirects=False)
+        status = resp.status_code
+        if status in (405, 501) or status >= 500:
+            resp = http.get(url, timeout=5.0, allow_redirects=False)
+            status = resp.status_code
+        if status >= 500:
+            raise HTTPException(
+                status_code=400,
+                detail=error_codes.make_error(
+                    error_codes.REGISTRY_ENDPOINT_UNREACHABLE,
+                    f"Endpoint responded with status {status}. Provide a reachable URL.",
+                ),
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=error_codes.make_error(
+                error_codes.REGISTRY_ENDPOINT_UNREACHABLE,
+                f"Could not reach endpoint: {exc}",
+            ),
+        )
+
+
 def _create_job_event_hook(owner_id: str, target_url: str, secret: str | None = None) -> dict:
     hook_id = str(uuid.uuid4())
     now = _utc_now_iso()
@@ -5087,7 +5119,7 @@ def _run_pending_dispute_judgments(limit: int = 100, actor_owner_id: str = "syst
                 model=None,
                 admin_user_id="system_tie_timeout",
             )
-            settlement = payments.post_dispute_settlement(
+            payments.post_dispute_settlement(
                 dispute_id,
                 outcome="caller_wins",
             )
@@ -7668,6 +7700,8 @@ def registry_register(
         raise HTTPException(status_code=403, detail="Agent-scoped keys cannot register new agents.")
     try:
         safe_endpoint_url = _validate_agent_endpoint_url(request, body.endpoint_url)
+        if not os.environ.get("AZTEA_SKIP_REGISTER_ENDPOINT_PROBE"):
+            _probe_register_endpoint_or_400(safe_endpoint_url)
         safe_healthcheck_url = None
         if body.healthcheck_url:
             safe_healthcheck_url = _validate_outbound_url(body.healthcheck_url, "healthcheck_url")
@@ -8295,29 +8329,15 @@ def mcp_invoke(
     elif user_key is not None:
         caller = {
             "type": "user",
-            "owner_id": str(user_key["user_id"]),
+            "owner_id": f"user:{user_key['user_id']}",
             "key_id": caller_key_id,
             "scopes": user_key.get("scopes") or ["caller"],
         }
     else:
         caller = {"type": "master", "owner_id": "master", "scopes": ["caller", "worker", "admin"]}
 
-    # 4. Wallet deduction for compute-heavy agents.
+    # 4. Dispatch. registry_call owns pre-call charge, payout, and refund-on-failure.
     agent_id = str(agent["agent_id"])
-    charge_tx_id: str | None = None
-    if agent_id in _MCP_COMPUTE_HEAVY_AGENT_IDS and caller["type"] != "master":
-        price_cents = _usd_to_cents(agent.get("price_per_call_usd") or 0)
-        if price_cents > 0:
-            owner_id = caller["owner_id"]
-            caller_wallet = payments.get_or_create_wallet(owner_id)
-            charge_tx_id = _pre_call_charge_or_402(
-                caller=caller,
-                caller_wallet_id=caller_wallet["wallet_id"],
-                charge_cents=price_cents,
-                agent_id=agent_id,
-            )
-
-    # 5. Dispatch.
     request.state._caller = caller
     t0 = time.monotonic()
     success = False
@@ -8330,16 +8350,6 @@ def mcp_invoke(
         )
         success = True
     except Exception:
-        if charge_tx_id is not None:
-            try:
-                caller_wallet = payments.get_or_create_wallet(caller["owner_id"])
-                payments.post_call_refund(
-                    caller_wallet["wallet_id"],
-                    charge_tx_id,
-                    agent_id,
-                )
-            except Exception:
-                _LOG.warning("MCP: failed to refund charge %s after dispatch error", charge_tx_id)
         raise
     duration_ms = int((time.monotonic() - t0) * 1000)
 

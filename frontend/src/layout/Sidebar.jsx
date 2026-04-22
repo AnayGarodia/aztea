@@ -1,11 +1,10 @@
 import { NavLink, useNavigate, useLocation } from 'react-router-dom'
-import { motion, AnimatePresence } from 'motion/react'
+import { motion } from 'motion/react'
 import {
-  LayoutDashboard, Bot, Briefcase, Hammer, Wallet, Settings, LogOut, Sun, Moon, Shield, ListChecks, Activity
+  LayoutDashboard, Bot, Briefcase, Hammer, Wallet, Settings, LogOut, Shield, ListChecks, Activity
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useMarket } from '../context/MarketContext'
-import { useTheme } from '../context/ThemeContext'
 import AgentSigil from '../brand/AgentSigil'
 import Avatar from '../ui/Avatar'
 import './Sidebar.css'
@@ -23,7 +22,6 @@ const NAV = [
 export default function Sidebar() {
   const { user, disconnect } = useAuth()
   const { agents = [] } = useMarket()
-  const { toggle, isDark } = useTheme()
   const navigate = useNavigate()
   const location = useLocation()
 
@@ -118,25 +116,6 @@ export default function Sidebar() {
           <span className="sidebar__legal-sep">·</span>
           <NavLink to="/platform" className="sidebar__legal-link">Platform</NavLink>
         </div>
-
-        <button
-          className="sidebar__theme-btn"
-          onClick={toggle}
-          title={isDark ? 'Switch to light' : 'Switch to dark'}
-          aria-label="Toggle theme"
-        >
-          <AnimatePresence mode="wait" initial={false}>
-            <motion.span
-              key={isDark ? 'moon' : 'sun'}
-              initial={{ opacity: 0, rotate: -30, scale: 0.8 }}
-              animate={{ opacity: 1, rotate: 0, scale: 1 }}
-              exit={{ opacity: 0, rotate: 30, scale: 0.8 }}
-              transition={{ duration: 0.2 }}
-            >
-              {isDark ? <Sun size={14} /> : <Moon size={14} />}
-            </motion.span>
-          </AnimatePresence>
-        </button>
 
         <div
           className="sidebar__user"

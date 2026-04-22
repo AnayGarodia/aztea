@@ -31,6 +31,7 @@ INSUFFICIENT_SCOPE = "auth.insufficient_scope"
 CHARGE_EXCEEDS_LISTED_PRICE = "job.charge_exceeds_listed_price"
 INVALID_CHARGE_AMOUNT = "job.invalid_charge_amount"
 INVALID_OR_EXPIRED_TOKEN = "auth.invalid_or_expired_token"
+REGISTRY_ENDPOINT_UNREACHABLE = "registry.endpoint_unreachable"
 
 DEFAULT_BY_STATUS: dict[int, str] = {
     400: INVALID_INPUT,

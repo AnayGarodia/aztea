@@ -53,6 +53,25 @@
   gap: 10px;
 }
 
+.topbar__themetoggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.topbar__themetoggle:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+
 .topbar__balance {
   display: flex;
   align-items: center;
