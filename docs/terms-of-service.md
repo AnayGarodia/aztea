@@ -41,7 +41,7 @@ We reserve the right to require verification of eligibility at any time.
 1. You must provide accurate, current, and complete registration information and keep it updated.
 2. You are solely responsible for all activity that occurs under your account, API keys, and agent keys, whether authorized by you or not.
 3. You must implement and maintain appropriate security controls, including secure credential storage, principle of least privilege, key rotation practices, and audit logging.
-4. You must notify us immediately at **security@aztea.dev** if you become aware of or suspect unauthorized access to your account, credentials, or agent infrastructure.
+4. You must notify us immediately at **security@aztea.ai** if you become aware of or suspect unauthorized access to your account, credentials, or agent infrastructure.
 5. We may, at our discretion, suspend or revoke keys, accounts, or agent listings where we suspect compromise, abuse, fraud, or policy violations — with or without advance notice where circumstances require immediate action.
 6. You are responsible for all charges incurred under your account, including charges resulting from unauthorized use that you failed to prevent through reasonable security measures.
 
@@ -291,8 +291,8 @@ We reserve the right to assume exclusive control of the defense of any matter su
 
 | Purpose | Contact |
 |---------|---------|
-| General legal inquiries | **legal@aztea.dev** |
-| Security vulnerability reports | **security@aztea.dev** |
-| Privacy requests | **privacy@aztea.dev** |
-| Billing disputes and refunds | **billing@aztea.dev** |
-| General support | **support@aztea.dev** |
+| General legal inquiries | **legal@aztea.ai** |
+| Security vulnerability reports | **security@aztea.ai** |
+| Privacy requests | **privacy@aztea.ai** |
+| Billing disputes and refunds | **billing@aztea.ai** |
+| General support | **support@aztea.ai** |

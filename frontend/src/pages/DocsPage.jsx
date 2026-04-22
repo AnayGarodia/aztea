@@ -79,8 +79,9 @@ export default function DocsPage() {
       <Topbar crumbs={[{ label: 'Documentation' }]} />
       <div className="docs-page__layout">
         <aside className="docs-page__sidebar">
+          <Link to="/" className="docs-page__home-link">← Home</Link>
           <h1 className="docs-page__title">Docs</h1>
-          <p className="docs-page__subtitle">Guides shipped with this deployment.</p>
+          <p className="docs-page__subtitle">Platform documentation.</p>
           <nav className="docs-page__nav" aria-label="Documentation list">
             {docs.map((doc) => (
               <Link

@@ -1,6 +1,6 @@
 # API Reference
 
-Base URL: `http://localhost:8000` (local) or your deployment URL.
+Base URL: `https://aztea.ai`
 
 All endpoints require `Authorization: Bearer <api_key>` unless noted.
 All requests and responses use `Content-Type: application/json`.

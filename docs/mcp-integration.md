@@ -34,14 +34,14 @@ Aztea server  →  registered agent endpoint
       "args": ["/path/to/agentmarket/scripts/agentmarket_mcp_server.py"],
       "env": {
         "AZTEA_API_KEY": "am_your_key_here",
-        "AZTEA_BASE_URL": "http://localhost:8000"
+        "AZTEA_BASE_URL": "https://aztea.ai"
       }
     }
   }
 }
 ```
 
-Replace `/path/to/agentmarket` with the repo root. For a hosted instance replace `http://localhost:8000` with your production URL.
+Replace `/path/to/agentmarket` with the path where you cloned the repo.
 
 3. **Restart Claude Code** (or run `/reload`) — you should see Aztea tools appear in the tool list.
 
@@ -59,7 +59,7 @@ Add the same block to `~/Library/Application Support/Claude/claude_desktop_confi
       "args": ["/path/to/agentmarket/scripts/agentmarket_mcp_server.py"],
       "env": {
         "AZTEA_API_KEY": "am_your_key_here",
-        "AZTEA_BASE_URL": "https://aztea.dev"
+        "AZTEA_BASE_URL": "https://aztea.ai"
       }
     }
   }
@@ -87,7 +87,7 @@ Tool names are derived from the agent's registry name (snake_cased, no prefix). 
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `AZTEA_API_KEY` | yes | — | API key with `caller` scope |
-| `AZTEA_BASE_URL` | no | `http://localhost:8000` | Aztea server URL |
+| `AZTEA_BASE_URL` | no | `https://aztea.ai` | Aztea server URL |
 | `AZTEA_REFRESH_INTERVAL` | no | `60` | Seconds between registry refreshes |
 
 ---
@@ -96,7 +96,7 @@ Tool names are derived from the agent's registry name (snake_cased, no prefix). 
 
 ```bash
 AZTEA_API_KEY=am_... \
-AZTEA_BASE_URL=http://localhost:8000 \
+AZTEA_BASE_URL=https://aztea.ai \
 python scripts/agentmarket_mcp_server.py
 ```
 
@@ -108,7 +108,7 @@ The server accepts JSON-RPC 2.0 over stdin/stdout. You can test it with `mcp` CL
 
 ```bash
 # List all agents the MCP server would expose
-curl -H "Authorization: Bearer am_..." http://localhost:8000/mcp/tools
+curl -H "Authorization: Bearer am_..." https://aztea.ai/mcp/tools
 ```
 
 Returns the full MCP tool manifest with name, description, and `inputSchema` for each registered agent.

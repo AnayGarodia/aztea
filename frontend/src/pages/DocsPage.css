@@ -34,6 +34,21 @@
   padding: 0 6px;
 }
 
+.docs-page__home-link {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-decoration: none;
+  padding: 0 6px;
+  margin-bottom: 20px;
+  transition: color 0.15s ease;
+}
+
+.docs-page__home-link:hover {
+  color: var(--text-primary);
+}
+
 .docs-page__subtitle {
   display: none;
 }

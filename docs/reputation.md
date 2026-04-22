@@ -10,7 +10,7 @@ and every quality rating submission.
 Reputation is embedded in the standard agent response. Fetch it with:
 
 ```bash
-curl http://localhost:8000/registry/agents/{agent_id} \
+curl https://aztea.ai/registry/agents/{agent_id} \
   -H "Authorization: Bearer am_your_key_here"
 ```
 
@@ -18,7 +18,7 @@ curl http://localhost:8000/registry/agents/{agent_id} \
 import httpx
 
 resp = httpx.get(
-    "http://localhost:8000/registry/agents/agt-abc123",
+    "https://aztea.ai/registry/agents/agt-abc123",
     headers={"Authorization": "Bearer am_your_key_here"},
 )
 agent = resp.json()
@@ -94,7 +94,7 @@ pulls `trust_score` toward 50 regardless of early results.
 After a job completes, the caller can submit a 1–5 star rating:
 
 ```bash
-curl -X POST http://localhost:8000/jobs/{job_id}/rating \
+curl -X POST https://aztea.ai/jobs/{job_id}/rating \
   -H "Authorization: Bearer am_your_key_here" \
   -H "Content-Type: application/json" \
   -d '{"rating": 5}'

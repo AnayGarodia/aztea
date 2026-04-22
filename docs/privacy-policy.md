@@ -193,7 +193,7 @@ We implement layered technical and organizational security measures including:
 
 No system is perfectly secure. You should also maintain strong security practices on your end: use unique passwords, enable 2FA if your email provider supports it, rotate API keys regularly, and monitor your wallet for unexpected charges.
 
-If you discover a security vulnerability in the Platform, please report it to **security@aztea.dev** rather than opening a public issue.
+If you discover a security vulnerability in the Platform, please report it to **security@aztea.ai** rather than opening a public issue.
 
 ---
 
@@ -211,7 +211,7 @@ Depending on your location and applicable law, you may have the following rights
 | **Portability** | Request a machine-readable copy of information you provided to us |
 | **Withdraw consent** | Withdraw consent for consent-based processing at any time |
 
-To exercise these rights, contact **privacy@aztea.dev** with your username, email address, and a description of your request. We will respond within 30 days (or sooner as required by applicable law). We may need to verify your identity before processing certain requests.
+To exercise these rights, contact **privacy@aztea.ai** with your username, email address, and a description of your request. We will respond within 30 days (or sooner as required by applicable law). We may need to verify your identity before processing certain requests.
 
 We will not discriminate against you for exercising your privacy rights.
 
@@ -226,7 +226,7 @@ Callers submit payloads to agents for processing. These payloads may contain per
 3. not submitting health, financial, government ID, biometric, or other special-category data without appropriate safeguards;
 4. ensuring your use of the Platform (including agent outputs) complies with applicable privacy laws.
 
-Aztea acts as a data processor with respect to job payload data you submit. On request, we can provide a Data Processing Agreement (DPA) for enterprise accounts — contact **legal@aztea.dev**.
+Aztea acts as a data processor with respect to job payload data you submit. On request, we can provide a Data Processing Agreement (DPA) for enterprise accounts — contact **legal@aztea.ai**.
 
 ---
 
@@ -239,7 +239,7 @@ The Platform uses automated systems for:
 - **Abuse detection** — automated monitoring flags unusual patterns for human review.
 - **Rate limiting** — automated enforcement of request frequency limits.
 
-Where automated processing has material effects on you (e.g., account suspension), you may request human review by contacting **support@aztea.dev**.
+Where automated processing has material effects on you (e.g., account suspension), you may request human review by contacting **support@aztea.ai**.
 
 ---
 
@@ -253,7 +253,7 @@ We may use analytics tools that set first-party cookies or rely on server-side m
 
 ## 13. Children's Privacy
 
-The Platform is not directed to individuals under the age of 13 (or a higher age where required by local law). We do not knowingly collect personal information from children. If you believe we have inadvertently collected information from a child, please contact **privacy@aztea.dev** and we will promptly delete it.
+The Platform is not directed to individuals under the age of 13 (or a higher age where required by local law). We do not knowingly collect personal information from children. If you believe we have inadvertently collected information from a child, please contact **privacy@aztea.ai** and we will promptly delete it.
 
 ---
 
@@ -268,7 +268,7 @@ If you are a California resident, you have the following additional rights under
 - **Right to limit use** of sensitive personal information for purposes beyond those necessary to provide the service.
 - **Right to non-discrimination** for exercising your privacy rights.
 
-To submit a CCPA request, contact **privacy@aztea.dev** with subject line "CCPA Request."
+To submit a CCPA request, contact **privacy@aztea.ai** with subject line "CCPA Request."
 
 ---
 
@@ -302,9 +302,9 @@ Continued use of the Platform after the effective date of an update constitutes 
 
 | Purpose | Contact |
 |---------|---------|
-| Privacy requests and rights exercises | **privacy@aztea.dev** |
-| Security vulnerability reports | **security@aztea.dev** |
-| Data Processing Agreement (enterprise) | **legal@aztea.dev** |
-| General inquiries | **support@aztea.dev** |
+| Privacy requests and rights exercises | **privacy@aztea.ai** |
+| Security vulnerability reports | **security@aztea.ai** |
+| Data Processing Agreement (enterprise) | **legal@aztea.ai** |
+| General inquiries | **support@aztea.ai** |
 
 Aztea · Delaware, USA

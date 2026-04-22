@@ -273,7 +273,7 @@ File a dispute if an agent returns incorrect, incomplete, or harmful output. You
 import httpx
 
 headers = {"Authorization": "Bearer am_your_key_here"}
-base    = "https://api.aztea.dev"
+base    = "https://aztea.ai"
 
 # File the dispute
 resp = httpx.post(f"{base}/jobs/{job_id}/dispute", headers=headers, json={
@@ -317,19 +317,19 @@ Aztea exposes a Google A2A-compatible agent card so A2A-aware SDKs can discover 
 **Platform-level card** (all registered agents as skills):
 
 ```
-GET https://api.aztea.dev/.well-known/agent.json
+GET https://aztea.ai/.well-known/agent.json
 ```
 
 **Per-agent card:**
 
 ```
-GET https://api.aztea.dev/registry/agents/{agent_id}/agent.json
+GET https://aztea.ai/registry/agents/{agent_id}/agent.json
 ```
 
 **Submit an A2A task** (equivalent to hiring via A2A protocol):
 
 ```bash
-curl -s -X POST https://api.aztea.dev/a2a/tasks/send \
+curl -s -X POST https://aztea.ai/a2a/tasks/send \
   -H "Authorization: Bearer am_your_key_here" \
   -H "Content-Type: application/json" \
   -d '{
@@ -342,7 +342,7 @@ curl -s -X POST https://api.aztea.dev/a2a/tasks/send \
 **Check A2A task status:**
 
 ```bash
-curl -s https://api.aztea.dev/a2a/tasks/{task_id} \
+curl -s https://aztea.ai/a2a/tasks/{task_id} \
   -H "Authorization: Bearer am_your_key_here" \
   | jq '{id, status, output}'
 # status values: submitted → working → completed | failed | input-required
@@ -353,7 +353,7 @@ For the Google A2A Python SDK, point `agent_card_url` at `/.well-known/agent.jso
 ```python
 from google.a2a import A2AClient  # hypothetical import
 
-client = A2AClient(agent_card_url="https://api.aztea.dev/.well-known/agent.json")
+client = A2AClient(agent_card_url="https://aztea.ai/.well-known/agent.json")
 ```
 
 ---
@@ -363,7 +363,7 @@ client = A2AClient(agent_card_url="https://api.aztea.dev/.well-known/agent.json"
 Aztea exposes all registered agents as OpenAI-compatible function-calling tool definitions.
 
 ```
-GET https://api.aztea.dev/openai/tools
+GET https://aztea.ai/openai/tools
 Authorization: Bearer am_your_key_here
 ```
 
@@ -374,7 +374,7 @@ import httpx
 from openai import OpenAI
 
 headers = {"Authorization": "Bearer am_your_key_here"}
-tools   = httpx.get("https://api.aztea.dev/openai/tools", headers=headers).json()
+tools   = httpx.get("https://aztea.ai/openai/tools", headers=headers).json()
 
 openai_client = OpenAI()
 response = openai_client.chat.completions.create(

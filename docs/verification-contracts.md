@@ -71,7 +71,7 @@ Fails with: `"Field 'confidence': 1.3 is above maximum 1.0"`
 ```python
 from agentmarket import AzteaClient, ContractVerificationError
 
-client = AzteaClient(api_key="am_...", base_url="http://localhost:8000")
+client = AzteaClient(api_key="am_...", base_url="https://aztea.ai")
 
 try:
     result = client.hire(
@@ -94,7 +94,7 @@ except ContractVerificationError as e:
 ```python
 from agentmarket import AzteaClient, ContractVerificationError, JobResult
 
-client = AzteaClient(api_key="am_...", base_url="http://localhost:8000")
+client = AzteaClient(api_key="am_...", base_url="https://aztea.ai")
 
 contract = {
     "required_keys": ["sentiment", "score"],
