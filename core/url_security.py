@@ -1,7 +1,7 @@
 """
 url_security.py — Shared outbound URL validation (SSRF guard).
 
-Both server.py and core/onboarding.py need to reject URLs that target
+Both the HTTP app (``server.application``) and core/onboarding.py need to reject URLs that target
 private / loopback / reserved IPs, credentialed URLs, and localhost. The
 logic lives here so there is exactly one implementation.
 

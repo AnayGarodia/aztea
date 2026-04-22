@@ -1,5 +1,5 @@
 """
-server.py — FastAPI HTTP server for the agentmarket platform
+FastAPI HTTP application for the Aztea / agentmarket platform
 
 Run:
     uvicorn server:app --host 0.0.0.0 --port 8000 --reload
@@ -37,6 +37,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.abspath(os.path.join(_APP_DIR, ".."))
+
 _SENTRY_DSN = os.environ.get("SENTRY_DSN", "").strip()
 if _SENTRY_DSN:
     try:
@@ -54,12 +57,10 @@ if _SENTRY_DSN:
         logging.warning("Sentry init failed: %s", _sentry_exc)
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request
-from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import ValidationError
 from slowapi import Limiter
-from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 import groq as _groq
@@ -90,6 +91,10 @@ from core import embeddings
 from core import onboarding
 from core import payments
 from core.db import close_all_connections as _close_all_db_connections
+from core.db import get_db_connection
+from core.openapi_responses import pick_error_responses as _error_responses
+from server.error_handlers import register_exception_handlers
+from server.routes import system as _system_routes
 from core import registry
 from core import jobs
 from core import disputes
@@ -1043,7 +1048,7 @@ def _init_ops_db() -> None:
 
 def _init_stripe_db() -> None:
     """Create Stripe bookkeeping tables used for top-ups and webhook idempotency."""
-    with sqlite3.connect(jobs.DB_PATH) as conn:
+    with get_db_connection() as conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS stripe_sessions (
@@ -2579,6 +2584,16 @@ async def lifespan(app: FastAPI):
             "ADMIN_IP_ALLOWLIST is not set. Admin routes are accessible from any IP. "
             "Set ADMIN_IP_ALLOWLIST=<cidr>,... to restrict access in production."
         )
+    if _ENVIRONMENT == "production":
+        if not os.environ.get("API_KEY", "").strip():
+            raise RuntimeError("API_KEY must be set when ENVIRONMENT=production.")
+        _sbu = (os.environ.get("SERVER_BASE_URL", "") or "").strip()
+        if _sbu and not _sbu.lower().startswith("https://"):
+            _LOG.warning(
+                "SERVER_BASE_URL should use https in production (current: %s). "
+                "Behind TLS-terminating reverse proxies, set this to the public https URL.",
+                _sbu[:64],
+            )
     apply_migrations(jobs.DB_PATH)
     registry.init_db()
     payments.init_payments_db()
@@ -2741,22 +2756,25 @@ limiter = Limiter(key_func=_key_from_request, default_limits=[_DEFAULT_RATE_LIMI
 app = FastAPI(title="agentmarket v1", lifespan=lifespan)
 app.state.limiter = limiter
 
+register_exception_handlers(app, logger=_LOG)
+
 # CORS — origins come from CORS_ALLOW_ORIGINS env var (comma-separated).
 # Defaults include common local dev ports.  In production, set the env var
 # to your deployed frontend origin(s), e.g.:
 #   CORS_ALLOW_ORIGINS=https://aztea.dev,https://www.aztea.dev
 _cors_env = os.environ.get("CORS_ALLOW_ORIGINS", "").strip()
-_cors_origins: list[str] = (
-    [o.strip() for o in _cors_env.split(",") if o.strip()]
-    if _cors_env
-    else [
+if _cors_env:
+    _cors_origins = [o.strip() for o in _cors_env.split(",") if o.strip()]
+elif _ENVIRONMENT == "production":
+    _cors_origins = []
+else:
+    _cors_origins = [
         "http://localhost:5173",
         "http://localhost:5174",
         "http://localhost:3000",
         "http://127.0.0.1:5173",
         "http://127.0.0.1:5174",
     ]
-)
 # Production safety: refuse wildcard CORS in production deployments.
 if _ENVIRONMENT == "production" and "*" in _cors_origins:
     raise RuntimeError("CORS_ALLOW_ORIGINS must not contain '*' when ENVIRONMENT=production.")
@@ -2769,9 +2787,11 @@ app.add_middleware(
     allow_origins=_cors_origins,
     allow_credentials=False,
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
+    allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-Request-ID"],
     max_age=600,
 )
+
+app.include_router(_system_routes.router)
 
 # Trust X-Forwarded-For only from explicitly trusted proxy networks.
 # TRUSTED_PROXY_IPS defaults to loopback for local reverse-proxy setups.
@@ -2908,9 +2928,21 @@ def metrics_endpoint(request: Request):
     return Response(generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
 
 
+def _parse_incoming_request_id(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    s = str(raw).strip()
+    if not s or len(s) > 128:
+        return None
+    if not re.match(r"^[A-Za-z0-9._:@-]+$", s):
+        return None
+    return s
+
+
 @app.middleware("http")
 async def request_tracing(request: Request, call_next):
-    request_id = str(uuid.uuid4())
+    incoming = _parse_incoming_request_id(request.headers.get("X-Request-ID"))
+    request_id = incoming or str(uuid.uuid4())
     request.state.request_id = request_id
     token: Token = logging_utils.set_request_id(request_id)
     start = time.monotonic()
@@ -2997,7 +3029,7 @@ _PUBLIC_FRONTEND_URL = (
 _SIGNUP_URL = f"{_PUBLIC_FRONTEND_URL}/signup"
 _DOCS_URL = f"{_PUBLIC_FRONTEND_URL}/docs"
 
-_PUBLIC_DOCS_DIR = os.path.join(os.path.dirname(__file__), "docs")
+_PUBLIC_DOCS_DIR = os.path.join(_REPO_ROOT, "docs")
 _PUBLIC_DOCS_PRIORITY = {
     "quickstart.md": 0,
     "auth-onboarding.md": 1,
@@ -6924,348 +6956,6 @@ def _sorted_agents(agents: list[dict], rank_by: str | None = None) -> list[dict]
         return sorted(agents, key=lambda a: float(a.get("price_per_call_usd") or 0.0))
     raise HTTPException(status_code=422, detail="rank_by must be one of: trust, latency, price.")
 
-
-# ---------------------------------------------------------------------------
-# Error normalization + exception handlers
-# ---------------------------------------------------------------------------
-
-def _default_error_code_for_request(status_code: int, path: str, message: str) -> str:
-    lowered_path = str(path or "").lower()
-    lowered_message = str(message or "").lower()
-    if status_code == 404 and lowered_path.startswith("/jobs/"):
-        return error_codes.JOB_NOT_FOUND
-    if status_code == 404 and lowered_path.startswith("/registry/agents"):
-        return error_codes.AGENT_NOT_FOUND
-    if status_code == 410:
-        return error_codes.AGENT_TIMEOUT
-    if status_code == 400 and "dispute window" in lowered_message:
-        return error_codes.DISPUTE_WINDOW_CLOSED
-    if status_code == 503 and "suspend" in lowered_message:
-        return error_codes.AGENT_SUSPENDED
-    return error_codes.DEFAULT_BY_STATUS.get(status_code, error_codes.INVALID_INPUT)
-
-
-def _error_code_from_message(status_code: int, path: str, message: str) -> str:
-    lowered_message = str(message or "").strip().lower()
-
-    if lowered_message.startswith("authorization header missing"):
-        return "auth.missing_authorization"
-    if lowered_message == "invalid api key.":
-        return "auth.invalid_key"
-    if lowered_message == "invalid email or password.":
-        return "auth.invalid_credentials"
-    if lowered_message.startswith("agent-scoped keys cannot"):
-        return "auth.insufficient_scope"
-    if lowered_message.startswith("this endpoint requires"):
-        return "auth.insufficient_scope"
-    if lowered_message.startswith("not available for master key"):
-        return "auth.insufficient_scope"
-    if lowered_message == "not authorized." or lowered_message.startswith("not authorized"):
-        return "auth.forbidden"
-    if lowered_message.startswith("tool '"):
-        return "mcp.tool_not_found"
-    if lowered_message.startswith("agent '"):
-        return "agent.not_found"
-    if lowered_message.startswith("job '"):
-        return "job.not_found"
-    if lowered_message.startswith("dispute '"):
-        return "dispute.not_found"
-    if lowered_message.startswith("wallet '"):
-        return "wallet.not_found"
-    if lowered_message.startswith("invalid status:"):
-        return "request.invalid_status"
-    if "idempotency-key is too long" in lowered_message:
-        return "request.idempotency_key_too_long"
-    if lowered_message.startswith("a request with this idempotency-key is still in progress"):
-        return "request.idempotency_conflict"
-    if lowered_message.startswith("failed to fetch manifest_url"):
-        return "onboarding.manifest_fetch_failed"
-    if lowered_message.startswith("manifest too large"):
-        return "request.payload_too_large"
-    if lowered_message.startswith("fetched manifest is empty"):
-        return "onboarding.manifest_empty"
-    if lowered_message.startswith("failed to create job"):
-        return "job.create_failed"
-    if lowered_message.startswith("job is not claimable"):
-        return "job.not_claimable"
-    if lowered_message.startswith("job is not currently claimed by this worker"):
-        return "job.claim_missing"
-    if lowered_message.startswith("invalid or missing claim_token") or lowered_message.startswith("invalid or stale claim_token"):
-        return "job.invalid_claim_token"
-    if lowered_message.startswith("unable to heartbeat this job claim"):
-        return "job.heartbeat_failed"
-    if lowered_message.startswith("unable to release this job claim"):
-        return "job.release_failed"
-    if lowered_message.startswith("unable to update job status"):
-        return "job.transition_failed"
-    if lowered_message.startswith("unable to schedule retry for this job"):
-        return "job.retry_failed"
-    if lowered_message.startswith("upstream agent unreachable"):
-        return "agent.upstream_unreachable"
-    if lowered_message.startswith("agent endpoint is misconfigured"):
-        return "agent.endpoint_misconfigured"
-    if lowered_message.startswith("agent execution failed"):
-        return "agent.execution_failed"
-    if lowered_message.startswith("all llm models rate-limited"):
-        return "agent.upstream_rate_limited"
-    if lowered_message.startswith("hook not found"):
-        return "hook.not_found"
-    if lowered_message.startswith("key not found or already revoked"):
-        return "auth.key_not_found"
-    if lowered_message.startswith("disputes can only be filed for completed jobs"):
-        return "dispute.invalid_state"
-    if lowered_message.startswith("disputes must be filed before the caller submits a rating"):
-        return "dispute.rating_locked"
-    if lowered_message.startswith("a dispute already exists for this job"):
-        return "dispute.already_exists"
-    if lowered_message.startswith("dispute window has expired for this job"):
-        return "dispute.window_closed"
-    if lowered_message.startswith("job completion timestamp is invalid"):
-        return "job.invalid_completion_timestamp"
-    if lowered_message.startswith("failed to resolve dispute"):
-        return "dispute.resolve_failed"
-    if lowered_message.startswith("tool_result payload.correlation_id is required"):
-        return "job.invalid_tool_result"
-    if lowered_message.startswith("unknown tool_result correlation_id"):
-        return "job.invalid_tool_result"
-    if lowered_message.startswith("unsupported job message type"):
-        return "job.invalid_message_type"
-    if lowered_message.startswith("agent.md spec not found"):
-        return "onboarding.spec_not_found"
-    if lowered_message.startswith("cursor must not be empty") or lowered_message.startswith("invalid cursor"):
-        return "request.invalid_cursor"
-    if lowered_message.startswith("limit must be > 0"):
-        return "request.invalid_limit"
-    if lowered_message.startswith("sla_seconds must be > 0"):
-        return "request.invalid_sla_seconds"
-    if lowered_message.startswith("max_mismatches must be > 0"):
-        return "request.invalid_max_mismatches"
-    if lowered_message.startswith("rank_by must be one of"):
-        return "request.invalid_rank_by"
-    if lowered_message.startswith("authentication service is temporarily unavailable"):
-        return "auth.service_unavailable"
-    if lowered_message.startswith("master key cannot"):
-        return "auth.master_forbidden"
-    if lowered_message.startswith("only the original caller can rate this job"):
-        return "job.rating_forbidden"
-    if lowered_message.startswith("only the job's agent owner can rate the caller"):
-        return "job.rating_forbidden"
-    if lowered_message.startswith("ratings are locked once a dispute is filed"):
-        return "dispute.rating_locked"
-    if lowered_message.startswith("this endpoint requires caller or worker scope"):
-        return "auth.insufficient_scope"
-    return _default_error_code_for_request(status_code, path, lowered_message)
-
-
-def _normalize_error_payload(status_code: int, detail: Any, path: str) -> dict[str, Any]:
-    if isinstance(detail, dict):
-        raw_error = str(detail.get("error") or "").strip()
-        if {"error", "message"}.issubset(detail.keys()):
-            details = detail.get("details")
-            if details is None and "data" in detail:
-                details = detail.get("data")
-            return error_codes.make_error(
-                raw_error or _error_code_from_message(status_code, path, str(detail.get("message") or "")),
-                str(detail.get("message") or "Request failed."),
-                details,
-            )
-        message = str(detail.get("message") or detail.get("detail") or "Request failed.").strip()
-        details = {
-            str(k): v
-            for k, v in detail.items()
-            if str(k) not in {"error", "message", "detail", "details", "data"}
-        }
-        if "details" in detail and detail["details"] is not None:
-            details = detail["details"]
-        elif "data" in detail and detail["data"] is not None:
-            details = detail["data"]
-        return error_codes.make_error(
-            raw_error or _error_code_from_message(status_code, path, message),
-            message,
-            details,
-        )
-    message = str(detail or "Request failed.")
-    return error_codes.make_error(
-        _error_code_from_message(status_code, path, message),
-        message,
-        None,
-    )
-
-
-@app.exception_handler(HTTPException)
-async def _http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
-    payload = _normalize_error_payload(exc.status_code, exc.detail, request.url.path)
-    return JSONResponse(content=payload, status_code=exc.status_code)
-
-
-@app.exception_handler(RequestValidationError)
-async def _request_validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
-    def _sanitize(errors):
-        clean = []
-        for e in errors:
-            entry = {k: v for k, v in e.items() if k != "ctx"}
-            ctx = e.get("ctx")
-            if ctx:
-                entry["ctx"] = {k: str(v) for k, v in ctx.items()}
-            clean.append(entry)
-        return clean
-
-    payload = error_codes.make_error(
-        error_codes.INVALID_INPUT,
-        "Request validation failed.",
-        {"errors": _sanitize(exc.errors())},
-    )
-    return JSONResponse(content=payload, status_code=422)
-
-
-@app.exception_handler(RateLimitExceeded)
-async def _rate_limit_exception_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
-    retry_after = 60
-    limit = getattr(exc, "limit", None)
-    if limit is not None:
-        limit_item = getattr(limit, "limit", None)
-        get_expiry = getattr(limit_item, "get_expiry", None)
-        if callable(get_expiry):
-            try:
-                retry_after = int(get_expiry())
-            except Exception:
-                retry_after = 60
-    payload = {
-        "error": "rate_limit_exceeded",
-        "retry_after_seconds": max(1, retry_after),
-    }
-    logging_utils.log_event(
-        _LOG,
-        logging.WARNING,
-        "http.rate_limited",
-        {
-            "method": request.method,
-            "path": request.url.path,
-            "retry_after_seconds": payload["retry_after_seconds"],
-        },
-    )
-    return JSONResponse(
-        content=payload,
-        status_code=429,
-        headers={"Retry-After": str(payload["retry_after_seconds"])},
-    )
-
-
-@app.exception_handler(Exception)
-async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    logging_utils.log_event(
-        _LOG,
-        logging.ERROR,
-        "server.unhandled_exception",
-        {"method": request.method, "path": request.url.path},
-    )
-    _LOG.exception("unhandled_exception")
-    payload = error_codes.make_error("server.internal_error", "Internal server error.")
-    return JSONResponse(content=payload, status_code=500)
-
-
-# ---------------------------------------------------------------------------
-# OpenAPI response helpers
-# ---------------------------------------------------------------------------
-
-_OPENAPI_ERROR_RESPONSES: dict[int, dict[str, Any]] = {
-    400: {"model": core_models.ErrorResponse, "description": "Bad request."},
-    401: {"model": core_models.ErrorResponse, "description": "Missing or invalid authorization header."},
-    402: {"model": core_models.ErrorResponse, "description": "Insufficient balance."},
-    403: {"model": core_models.ErrorResponse, "description": "Forbidden."},
-    404: {"model": core_models.ErrorResponse, "description": "Resource not found."},
-    409: {"model": core_models.ErrorResponse, "description": "Conflict."},
-    410: {"model": core_models.ErrorResponse, "description": "Lease expired."},
-    413: {"model": core_models.ErrorResponse, "description": "Payload too large."},
-    422: {"model": core_models.ErrorResponse, "description": "Validation error."},
-    429: {"model": core_models.RateLimitErrorResponse, "description": "Rate limit exceeded."},
-    500: {"model": core_models.ErrorResponse, "description": "Internal server error."},
-    502: {"model": core_models.ErrorResponse, "description": "Upstream request failed."},
-    503: {"model": core_models.ErrorResponse, "description": "Upstream service unavailable."},
-}
-
-
-def _error_responses(*codes: int) -> dict[int, dict[str, Any]]:
-    return {code: _OPENAPI_ERROR_RESPONSES[code] for code in codes if code in _OPENAPI_ERROR_RESPONSES}
-
-
-# ---------------------------------------------------------------------------
-# Health
-# ---------------------------------------------------------------------------
-
-def _read_version() -> str:
-    try:
-        version_path = os.path.join(os.path.dirname(__file__), "VERSION")
-        return open(version_path).read().strip()
-    except Exception:
-        return "unknown"
-
-
-@app.get(
-    "/health",
-    response_model=core_models.HealthResponse,
-    responses={
-        200: {"description": "All checks passed."},
-        503: {"model": core_models.ErrorResponse, "description": "One or more checks failed."},
-        **_error_responses(429, 500),
-    },
-)
-def health() -> core_models.HealthResponse:
-    try:
-        import psutil as _psutil
-    except ImportError:
-        _psutil = None
-
-    checks: dict[str, core_models.HealthCheckDetail] = {}
-    all_ok = True
-
-    # DB check
-    try:
-        t0 = time.monotonic()
-        with jobs._conn() as conn:
-            conn.execute("SELECT 1").fetchone()
-        latency_ms = round((time.monotonic() - t0) * 1000, 2)
-        checks["db"] = core_models.HealthCheckDetail(ok=True, latency_ms=latency_ms)
-    except Exception as exc:
-        all_ok = False
-        checks["db"] = core_models.HealthCheckDetail(ok=False, error=str(exc))
-
-    # Disk check
-    try:
-        writable = os.access(jobs.DB_PATH, os.W_OK)
-        checks["disk"] = core_models.HealthCheckDetail(ok=writable, writable=writable)
-        if not writable:
-            all_ok = False
-    except Exception as exc:
-        all_ok = False
-        checks["disk"] = core_models.HealthCheckDetail(ok=False, error=str(exc))
-
-    # Memory check (optional — requires psutil)
-    if _psutil is not None:
-        try:
-            proc = _psutil.Process()
-            rss_mb = round(proc.memory_info().rss / (1024 * 1024), 2)
-            checks["memory"] = core_models.HealthCheckDetail(ok=True, rss_mb=rss_mb)
-        except Exception as exc:
-            all_ok = False
-            checks["memory"] = core_models.HealthCheckDetail(ok=False, error=str(exc))
-
-    agent_count = len(registry.get_agents())
-    status = "ok" if all_ok else "degraded"
-    response = core_models.HealthResponse(
-        status=status,
-        checks=checks,
-        agent_count=agent_count,
-        version=_read_version(),
-        agents=agent_count,
-    )
-
-    if not all_ok:
-        from fastapi.responses import JSONResponse
-        return JSONResponse(status_code=503, content=response.model_dump())
-    return response
-
-
 @app.get(
     "/agent.md",
     response_model=str,
@@ -7275,7 +6965,7 @@ def health() -> core_models.HealthResponse:
     },
 )
 def onboarding_manifest_spec() -> Response:
-    spec_path = os.path.join(os.path.dirname(__file__), "agent.md")
+    spec_path = os.path.join(_REPO_ROOT, "agent.md")
     if not os.path.exists(spec_path):
         raise HTTPException(status_code=404, detail="agent.md spec not found.")
     with open(spec_path, encoding="utf-8") as f:
@@ -9191,7 +8881,7 @@ def registry_call(
                 agent_msg = str(agent_err.get("error") or agent_err.get("message") or agent_err.get("detail") or "")[:500]
             except Exception:
                 agent_msg = ""
-            msg = f"Agent rejected the request. You were not charged."
+            msg = "Agent rejected the request. You were not charged."
             if agent_msg:
                 msg = f"Agent rejected the request: {agent_msg}. You were not charged."
             raise HTTPException(
@@ -11792,7 +11482,7 @@ def get_runs(
     _: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.RunsResponse:
     limit = min(max(1, limit), 200)
-    runs_file = os.path.join(os.path.dirname(__file__), "runs.jsonl")
+    runs_file = os.path.join(_REPO_ROOT, "runs.jsonl")
     if not os.path.exists(runs_file):
         return JSONResponse(content={"runs": [], "skipped_lines": 0, "skipped_line_numbers": []})
     with open(runs_file, encoding="utf-8") as f:
@@ -11958,7 +11648,7 @@ def _stripe_begin_checkout_webhook_event(
     amount_cents: int,
 ) -> str:
     now = _utc_now_iso()
-    with sqlite3.connect(jobs.DB_PATH) as conn:
+    with get_db_connection() as conn:
         conn.execute("PRAGMA busy_timeout=5000")
         conn.execute("BEGIN IMMEDIATE")
         processed_row = conn.execute(
@@ -12017,7 +11707,7 @@ def _stripe_mark_checkout_webhook_failed(
     session_id: str,
     error_message: str,
 ) -> None:
-    with sqlite3.connect(jobs.DB_PATH) as conn:
+    with get_db_connection() as conn:
         conn.execute("PRAGMA busy_timeout=5000")
         conn.execute(
             """
@@ -12039,7 +11729,7 @@ def _stripe_mark_checkout_webhook_processed(
     amount_cents: int,
 ) -> None:
     now = _utc_now_iso()
-    with sqlite3.connect(jobs.DB_PATH) as conn:
+    with get_db_connection() as conn:
         conn.execute("PRAGMA busy_timeout=5000")
         conn.execute("BEGIN IMMEDIATE")
         conn.execute(
@@ -12064,7 +11754,7 @@ def _stripe_mark_checkout_webhook_processed(
 
 def _wallet_stripe_topup_total_last_24h(wallet_id: str) -> int:
     window_start = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
-    with sqlite3.connect(jobs.DB_PATH) as conn:
+    with get_db_connection() as conn:
         row = conn.execute(
             """
             SELECT COALESCE(SUM(amount_cents), 0) AS total
@@ -12230,7 +11920,7 @@ async def stripe_webhook(request: Request) -> JSONResponse:
         payouts_enabled = bool(_stripe_obj_get(account_obj, "payouts_enabled", False))
         fully_enabled = bool(charges_enabled and payouts_enabled)
         if account_id:
-            with sqlite3.connect(jobs.DB_PATH) as _ac_conn:
+            with get_db_connection() as _ac_conn:
                 _ac_conn.execute(
                     "UPDATE wallets SET stripe_connect_enabled = ? WHERE stripe_connect_account_id = ?",
                     (1 if fully_enabled else 0, account_id),
@@ -12312,7 +12002,7 @@ def connect_onboard(
         except Exception as exc:
             status_code, payload = _stripe_http_error("connect_onboard_account_create", exc)
             raise HTTPException(status_code=status_code, detail=payload)
-        with sqlite3.connect(jobs.DB_PATH) as _ac_conn:
+        with get_db_connection() as _ac_conn:
             _ac_conn.execute(
                 "UPDATE wallets SET stripe_connect_account_id = ? WHERE wallet_id = ?",
                 (existing_account_id, wallet["wallet_id"]),
@@ -12367,7 +12057,7 @@ def connect_status(
 
     # Keep local cache in sync
     if charges_enabled != bool(wallet.get("stripe_connect_enabled", 0)):
-        with sqlite3.connect(jobs.DB_PATH) as _ac_conn:
+        with get_db_connection() as _ac_conn:
             _ac_conn.execute(
                 "UPDATE wallets SET stripe_connect_enabled = ? WHERE wallet_id = ?",
                 (1 if charges_enabled else 0, wallet["wallet_id"]),
@@ -12469,7 +12159,7 @@ def withdraw(
             raise HTTPException(status_code=502, detail="Stripe transfer response did not include an ID.")
 
         # Record the transfer for audit.
-        with sqlite3.connect(jobs.DB_PATH) as _tr_conn:
+        with get_db_connection() as _tr_conn:
             _tr_conn.execute(
                 "INSERT INTO stripe_connect_transfers (transfer_id, wallet_id, amount_cents, stripe_tx_id, memo, created_at)"
                 " VALUES (?, ?, ?, ?, ?, ?)",

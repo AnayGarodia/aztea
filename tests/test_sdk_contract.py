@@ -21,7 +21,7 @@ from core import jobs
 from core import payments
 from core import registry
 from core import reputation
-import server
+import server.application as server
 
 SDK_PYTHON_ROOT = Path(__file__).resolve().parents[1] / "sdks" / "python"
 sys.path.insert(0, str(SDK_PYTHON_ROOT))

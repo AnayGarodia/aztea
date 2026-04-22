@@ -5,13 +5,19 @@ const VERSION = '1.0'
 let _onSessionExpired = null
 export function setSessionExpiredHandler(fn) { _onSessionExpired = fn }
 
-function requestHeaders(key, { idempotencyKey } = {}) {
+function makeRequestId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID()
+  return `req_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 12)}`
+}
+
+function requestHeaders(key, { idempotencyKey, requestId } = {}) {
   const out = {
     'Content-Type': 'application/json',
     'X-Aztea-Version': VERSION,
   }
   if (key) out.Authorization = `Bearer ${key}`
   if (idempotencyKey) out['Idempotency-Key'] = idempotencyKey
+  if (requestId) out['X-Request-ID'] = String(requestId)
   return out
 }
 
@@ -82,7 +88,7 @@ function makeApiError(response, parsedBody) {
     if (!message && typeof parsedBody.message === 'string' && parsedBody.message.trim()) {
       message = parsedBody.message.trim()
       // Surface the first validation sub-error (strip pydantic's "Value error, " prefix)
-      const errors = parsedBody.data?.errors
+      const errors = parsedBody.data?.errors ?? parsedBody.details?.errors
       if (Array.isArray(errors) && errors.length > 0) {
         const sub = errors[0]?.msg ?? errors[0]?.message ?? null
         if (sub && typeof sub === 'string') {
@@ -101,6 +107,12 @@ function makeApiError(response, parsedBody) {
   err.status = response.status
   err.body = parsedBody
   err.code = errorCode || null
+  if (parsedBody && typeof parsedBody === 'object' && typeof parsedBody.request_id === 'string' && parsedBody.request_id) {
+    err.requestId = parsedBody.request_id
+  } else {
+    const hdrRid = response.headers?.get?.('X-Request-ID')
+    if (hdrRid) err.requestId = String(hdrRid)
+  }
   return err
 }
 
@@ -109,11 +121,13 @@ async function request(path, {
   key,
   body,
   idempotencyKey,
+  requestId: explicitRequestId,
   throwOnError = true,
 } = {}) {
+  const requestId = explicitRequestId ?? makeRequestId()
   const response = await fetch(`${BASE}${path}`, {
     method,
-    headers: requestHeaders(key, { idempotencyKey }),
+    headers: requestHeaders(key, { idempotencyKey, requestId }),
     body: body === undefined ? undefined : JSON.stringify(body),
   })
   const parsedBody = await parseResponseBody(response)

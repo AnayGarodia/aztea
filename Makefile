@@ -1,7 +1,11 @@
-.PHONY: dev test docker migrate demo lint
+.PHONY: dev test test-venv docker migrate demo lint
 
 dev:
 	uvicorn server:app --reload
+
+# Prefer project venv when present (avoids Anaconda/numpy segfaults and version skew).
+test-venv:
+	@bash -c 'set -e; test -d .venv && . .venv/bin/activate; export API_KEY=$${API_KEY:-test-master-key}; python -m pytest -q tests'
 
 test:
 	pytest tests/ -v

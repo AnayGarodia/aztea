@@ -12,7 +12,7 @@ from core import jobs
 from core import payments
 from core import registry
 from core import reputation
-import server
+import server.application as server
 
 TEST_MASTER_KEY = "test-master-key"
 

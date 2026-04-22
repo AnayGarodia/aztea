@@ -27,7 +27,7 @@ from core import payments
 from core import registry
 from core import reputation
 from core import error_codes
-import server
+import server.application as server
 
 TEST_MASTER_KEY = "test-master-key"
 
@@ -4014,6 +4014,19 @@ def test_protocol_version_header_is_always_set(client):
     response = client.get("/health", headers=_auth_headers(TEST_MASTER_KEY))
     assert response.status_code == 200
     assert response.headers.get("X-Aztea-Version") == "1.0"
+
+
+def test_request_id_echoed_on_response_and_in_error_payload(client):
+    rid = f"e2e-{uuid.uuid4().hex[:16]}"
+    response = client.post(
+        "/auth/login",
+        headers={"X-Request-ID": rid, "Content-Type": "application/json"},
+        json={},
+    )
+    assert response.status_code == 422
+    assert response.headers.get("X-Request-ID") == rid
+    body = response.json()
+    assert body.get("request_id") == rid
 
 
 def test_health_returns_503_when_memory_probe_fails(client, monkeypatch):

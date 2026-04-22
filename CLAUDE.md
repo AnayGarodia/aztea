@@ -13,7 +13,7 @@ Live at **https://aztea.ai**
 ## Repository map
 
 ```
-server.py                      # ~5 000-line FastAPI app — auth, registry, jobs, trust, ops, MCP
+server/                        # HTTP app package: ``application.py`` (routes + workers), ``error_handlers.py``, ``routes/``
 agents/                        # Built-in agent implementations (one module each)
   financial/                   # SEC EDGAR fetcher + synthesizer
   wiki.py                      # Wikipedia API
@@ -54,7 +54,7 @@ sdks/
   python-sdk/                  # AzteaClient (hire), AgentServer (@handler + polling loop)
   python/                      # Resource-oriented HTTP SDK
   typescript/                  # TypeScript SDK
-frontend/                      # React 19 / Vite / motion
+frontend/                      # React 18 + Vite + motion
 scripts/
   agentmarket_mcp_server.py    # stdio MCP server — refreshes tools every 60s
   client_cli.py                # CLI shim over Python SDK
@@ -69,59 +69,74 @@ Makefile                       # dev shortcuts: make dev / test / docker / migra
 
 ## Production deployment
 
+### Cloudflare + EC2 (typical)
+
+- **DNS:** Point the hostname to the EC2 public IP (A/AAAA) or a suitable CNAME. With Cloudflare proxy (orange cloud) on, set SSL/TLS to **Full** or **Full (strict)**; **Full (strict)** needs a valid certificate on the origin (e.g. certbot + nginx).
+- **Client IP:** Terminate at nginx, forward `X-Forwarded-For` / `X-Real-IP`, and configure `TRUSTED_PROXY_IPS` so `slowapi` and admin checks see the real client (include your nginx/Cloudflare hop as required).
+- **Env URLs:** `SERVER_BASE_URL`, `FRONTEND_BASE_URL`, and `CORS_ALLOW_ORIGINS` must use the public `https://` site name, not the raw EC2 IP.
+
 ### Infrastructure
 
-- **Server:** single Linux VPS
-- **Stack:** Docker Compose (`docker-compose.prod.yml`) — two services: `api` (FastAPI/uvicorn) + `frontend` (nginx serving the built React SPA)
-- **Database:** SQLite WAL at `/data/registry.db` inside a named Docker volume (`agentmarket_data`), persisted across deploys
-- **Reverse proxy:** nginx on ports 80/443, proxies `/api/*` → FastAPI container, serves `frontend/dist/` for everything else
-- **SSL:** managed outside Docker (certbot / cloud load balancer); nginx.prod.conf currently listens on 80 only — SSL termination happens upstream
+- **Server:** AWS EC2 Ubuntu — `/home/aztea/app`
+- **Stack:** systemd service (`aztea.service`) running uvicorn directly — no Docker
+- **Process:** `/home/aztea/app/venv/bin/uvicorn server:app --host 127.0.0.1 --port 8000 --workers 1`
+- **Database:** SQLite WAL at the path set in `.env` (`DB_PATH`), on the host filesystem
+- **Reverse proxy:** nginx on ports 80/443, proxies `/api/*` → uvicorn on 127.0.0.1:8000, serves `frontend/dist/` for everything else
+- **SSL:** managed by certbot on the host; nginx handles termination
 
 ### Deploying a new version
 
-Run these commands **on the server** after SSH-ing in:
+SSH into the server, then:
 
 ```bash
-cd /path/to/agentmarket
+cd /home/aztea/app
 
-# 1. Pull latest code
+# 1. Pull latest code (stash first if any local changes exist)
+git stash
 git pull origin main
+git stash pop
 
 # 2. Rebuild the React frontend
 cd frontend && npm ci && npm run build && cd ..
 
-# 3. Rebuild and restart containers (zero-downtime for nginx; brief restart for API)
-docker compose -f docker-compose.prod.yml up --build -d
+# 3. Restart the API (migrations run automatically on startup)
+sudo systemctl kill -s SIGKILL aztea   # force-kill if stuck in shutdown
+sudo systemctl start aztea
 
-# 4. Verify both containers are healthy
-docker compose -f docker-compose.prod.yml ps
-docker compose -f docker-compose.prod.yml logs api --tail=50
+# 4. Verify
+sudo systemctl status aztea
 ```
 
-Migrations run automatically on API startup via `core/migrate.py` — no manual step needed.
+**If the service stops cleanly** (not stuck), you can use `restart` instead of kill+start:
+```bash
+sudo systemctl restart aztea
+```
+
+Migrations run automatically on startup via `core/migrate.py` — no manual step needed.
 
 ### Useful server commands
 
 ```bash
-# Live API logs
-docker compose -f docker-compose.prod.yml logs -f api
+# Live logs
+sudo journalctl -u aztea -f
 
-# Live nginx logs
-docker compose -f docker-compose.prod.yml logs -f frontend
+# Last 100 lines of logs
+sudo journalctl -u aztea -n 100
 
-# Restart just the API (e.g. after env change)
-docker compose -f docker-compose.prod.yml restart api
+# Restart API
+sudo systemctl restart aztea
 
-# Open a shell in the API container
-docker compose -f docker-compose.prod.yml exec api bash
+# Force kill if stuck (background threads blocking shutdown)
+sudo systemctl kill -s SIGKILL aztea && sudo systemctl start aztea
 
-# Manual DB backup (run before risky migrations)
-docker compose -f docker-compose.prod.yml exec api \
-  sqlite3 /data/registry.db ".backup /data/registry.db.bak"
+# Check service status
+sudo systemctl status aztea
 
-# Check DB health
-docker compose -f docker-compose.prod.yml exec api \
-  sqlite3 /data/registry.db "PRAGMA integrity_check; PRAGMA wal_checkpoint;"
+# Manual DB backup
+sqlite3 /path/to/registry.db ".backup /path/to/registry.db.bak"
+
+# Open a Python shell with app context
+cd /home/aztea/app && source venv/bin/activate && python
 ```
 
 ### Environment variables (prod)
@@ -155,7 +170,7 @@ AZTEA_ENABLE_LIVE_QUALITY_JUDGE=1
 
 ### Stripe webhook
 
-The webhook endpoint is `POST https://aztea.ai/api/payments/webhook`.
+The webhook endpoint is `POST https://aztea.ai/stripe/webhook` (path `/stripe/webhook` on the API; nginx often exposes it as the same path under the site origin).
 Register it in the Stripe dashboard and set `STRIPE_WEBHOOK_SECRET` to the signing secret.
 Required events: `checkout.session.completed`, `payment_intent.succeeded`.
 
@@ -282,7 +297,7 @@ text = raw.text.strip()  # always .text, never .content
 
 ## Frontend
 
-- **React 19 + Vite + motion/react** (`framer-motion` fork) for animations
+- **React 18 + Vite + motion/react** (`framer-motion` fork) for animations
 - **CSS variables** for theming in `src/theme/tokens.css` — never hardcode colors
 - **Feature-based structure:** `src/features/agents/`, `src/features/jobs/`, `src/features/auth/`, etc.
 - **UI primitives** in `src/ui/` (Button, Pill, Segmented, Input, etc.) — always use these, never raw HTML equivalents

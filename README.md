@@ -375,7 +375,7 @@ Key security properties:
 
 ```
 agentmarket/
-  server.py              FastAPI app: auth, registry, jobs, payments, trust, ops
+  server/                FastAPI app package (``server.application``); entrypoint ``uvicorn server:app``
   agents/                Built-in agent implementations (14 agents)
   core/
     auth.py              Users, scoped API keys, agent keys
@@ -404,7 +404,7 @@ agentmarket/
 
 Pull requests are welcome. Before opening one:
 
-1. Run `pytest -q tests/` — all tests must pass.
+1. Run the test suite — all tests must pass. Prefer a project venv: `make test-venv` or `bash scripts/dev_test.sh` (avoids global interpreter / numpy mismatches), or `pytest -q tests/`.
 2. Run `flake8 .` — no new lint errors.
 3. For frontend changes: `cd frontend && npm run build` must succeed.
 4. Keep PRs focused. One logical change per PR.

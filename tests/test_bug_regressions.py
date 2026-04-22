@@ -33,7 +33,7 @@ def test_fix1_auth_module_exposes_verify_agent_api_key_not_verify_agent_key():
 def test_fix1_server_calls_verify_agent_api_key(tmp_path):
     """The _caller_from_raw_api_key function in server.py must call verify_agent_api_key."""
     import inspect
-    import server
+    import server.application as server
     src = inspect.getsource(server._caller_from_raw_api_key)
     assert "verify_agent_api_key" in src, (
         "_caller_from_raw_api_key must call verify_agent_api_key"
@@ -224,7 +224,7 @@ def test_fix7_caller_ratings_defined_in_reputation():
 
 def test_fix8_runs_endpoint_emits_skipped_lines_header(tmp_path, monkeypatch):
     """When runs.jsonl contains invalid JSON lines the header must count them."""
-    import server
+    import server.application as server
     from fastapi.testclient import TestClient
 
     runs_file = tmp_path / "runs.jsonl"
@@ -236,10 +236,7 @@ def test_fix8_runs_endpoint_emits_skipped_lines_header(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(
-        server.os.path, "dirname",
-        lambda _: str(tmp_path),
-    )
+    monkeypatch.setattr(server, "_REPO_ROOT", str(tmp_path))
 
     master_key = "test-skip-header-key"
     monkeypatch.setattr(server, "_MASTER_KEY", master_key)
