@@ -103,6 +103,7 @@ def run(payload: dict) -> dict:
         key_points_str = str(key_points)[:500]
 
     req = CompletionRequest(
+        model="",
         messages=[
             Message(role="system", content=_SYSTEM),
             Message(

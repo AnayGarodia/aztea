@@ -83,6 +83,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         return {"error": "symptoms must contain at least one item"}
 
     req = CompletionRequest(
+        model="",
         messages=[
             Message(role="system", content=_SYSTEM_PROMPT),
             Message(

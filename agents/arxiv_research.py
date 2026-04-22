@@ -179,6 +179,7 @@ def run(payload: dict) -> dict:
     )
 
     req = CompletionRequest(
+        model="",
         messages=[
             Message(role="system", content=_SYNTHESIS_SYSTEM),
             Message(role="user", content=_SYNTHESIS_USER.format(

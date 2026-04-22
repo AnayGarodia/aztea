@@ -99,6 +99,7 @@ def run(payload: dict) -> dict:
 
     t0 = time.time()
     req = CompletionRequest(
+        model="",
         messages=[
             Message(role="system", content=_SYSTEM),
             Message(role="user", content=_USER.format(repo=repo, scan=scan, branch=branch)),

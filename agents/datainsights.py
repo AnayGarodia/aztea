@@ -77,6 +77,7 @@ def run(payload: dict) -> dict:
         question = "Provide a comprehensive analysis of this dataset — key patterns, anomalies, and insights."
 
     req = CompletionRequest(
+        model="",
         messages=[
             Message(role="system", content=_SYSTEM),
             Message(

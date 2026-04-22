@@ -126,6 +126,7 @@ def run(payload: dict) -> dict:
     truncated = text[:_MAX_CONTENT_CHARS]
 
     req = CompletionRequest(
+        model="",
         messages=[
             Message(role="system", content=_SYSTEM),
             Message(role="user", content=_USER.format(

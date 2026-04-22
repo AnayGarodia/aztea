@@ -156,6 +156,7 @@ def run(payload: dict) -> dict:
     if explain and (stdout or stderr or exit_code != 0):
         prompt = f"Code:\n```python\n{code[:2000]}\n```\n\nstdout:\n{stdout[:1000]}\nstderr:\n{stderr[:500]}\nexit code: {exit_code}"
         req = CompletionRequest(
+            model="",
             messages=[
                 Message(role="system", content=_EXPLAIN_SYSTEM),
                 Message(role="user", content=prompt),

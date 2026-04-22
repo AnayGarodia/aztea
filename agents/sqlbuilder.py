@@ -82,6 +82,7 @@ def run(payload: dict) -> dict:
     context_section = f"\nAdditional context: {context[:500]}\n" if context else ""
 
     req = CompletionRequest(
+        model="",
         messages=[
             Message(role="system", content=_SYSTEM),
             Message(

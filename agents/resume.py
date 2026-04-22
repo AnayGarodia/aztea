@@ -84,6 +84,7 @@ def run(payload: dict) -> dict:
     )
 
     req = CompletionRequest(
+        model="",
         messages=[
             Message(role="system", content=_SYSTEM),
             Message(

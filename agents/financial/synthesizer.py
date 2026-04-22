@@ -68,6 +68,7 @@ def synthesize_brief(filing_data: dict) -> dict:
     )
 
     req = CompletionRequest(
+        model="",
         messages=[
             Message(role="system", content=SYSTEM_PROMPT),
             Message(role="user", content=user_prompt),

@@ -88,6 +88,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     goal = str(payload.get("goal") or "").strip() or "triage guidance"
 
     req = CompletionRequest(
+        model="",
         messages=[
             Message(role="system", content=_SYSTEM_PROMPT),
             Message(
