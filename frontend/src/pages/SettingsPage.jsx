@@ -6,11 +6,12 @@ import Input from '../ui/Input'
 import Avatar from '../ui/Avatar'
 import Badge from '../ui/Badge'
 import EmptyState from '../ui/EmptyState'
+import Skeleton from '../ui/Skeleton'
 import Reveal from '../ui/motion/Reveal'
 import { createAuthKey, deleteAuthKey, fetchAuthKeys } from '../api'
 import { useMarket } from '../context/MarketContext'
 import { useAuth } from '../context/AuthContext'
-import { Key, Plus, Trash2, Copy } from 'lucide-react'
+import { Key, Plus, Trash2, Copy, AlertTriangle } from 'lucide-react'
 import Pill from '../ui/Pill'
 import './SettingsPage.css'
 
@@ -24,7 +25,40 @@ const SCOPE_OPTIONS = [
   { value: 'worker', label: 'Worker', desc: 'claim and complete jobs' },
 ]
 
-function ApiKeyRow({ item, onRevoke }) {
+function ApiKeyRow({ item, onRevoke, revoking }) {
+  const [confirming, setConfirming] = useState(false)
+
+  if (confirming) {
+    return (
+      <div className="settings__key-row settings__key-row--confirming">
+        <div className="settings__revoke-confirm">
+          <AlertTriangle size={13} color="var(--negative, #ef4444)" />
+          <p className="settings__revoke-confirm-msg">
+            Revoke <strong>{item.name}</strong>? Any code using this key will immediately stop working.
+          </p>
+        </div>
+        <div className="settings__revoke-confirm-actions">
+          <Button
+            size="sm"
+            variant="danger"
+            loading={revoking}
+            onClick={() => onRevoke(item.key_id)}
+          >
+            Revoke
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={revoking}
+            onClick={() => setConfirming(false)}
+          >
+            Cancel
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="settings__key-row">
       <div>
@@ -40,7 +74,7 @@ function ApiKeyRow({ item, onRevoke }) {
       </div>
       <span className="settings__key-created">{fmtDate(item.created_at)}</span>
       <button
-        onClick={() => onRevoke(item.key_id)}
+        onClick={() => setConfirming(true)}
         className="settings__revoke-btn"
         aria-label={`Revoke key ${item.name}`}
       >
@@ -55,17 +89,24 @@ export default function SettingsPage() {
   const { apiKey, showToast } = useMarket()
   const { user, disconnect } = useAuth()
   const [keys, setKeys] = useState([])
+  const [keysLoading, setKeysLoading] = useState(true)
+  const [keysError, setKeysError] = useState(null)
   const [keyName, setKeyName] = useState('')
   const [keyScopes, setKeyScopes] = useState(['caller', 'worker'])
   const [creating, setCreating] = useState(false)
+  const [createError, setCreateError] = useState(null)
   const [newKey, setNewKey] = useState(null)
+  const [revoking, setRevoking] = useState(null) // key_id being revoked
 
   const refreshKeys = async () => {
+    setKeysError(null)
     try {
       const result = await fetchAuthKeys(apiKey)
       setKeys(Array.isArray(result?.keys) ? result.keys : [])
     } catch (err) {
-      showToast?.(err?.message ?? 'Failed to load API keys.', 'error')
+      setKeysError(err?.message ?? 'Failed to load API keys.')
+    } finally {
+      setKeysLoading(false)
     }
   }
 
@@ -73,30 +114,38 @@ export default function SettingsPage() {
 
   const handleCreateKey = async (e) => {
     e.preventDefault()
-    if (!keyName.trim()) return
-    if (keyScopes.length === 0) { showToast?.('Select at least one scope.', 'error'); return }
+    const name = keyName.trim()
+    if (!name) return
+    if (keyScopes.length === 0) {
+      setCreateError('Select at least one scope.')
+      return
+    }
     setCreating(true)
+    setCreateError(null)
     setNewKey(null)
     try {
-      const created = await createAuthKey(apiKey, keyName.trim(), keyScopes)
+      const created = await createAuthKey(apiKey, name, keyScopes)
       setNewKey(created.raw_key ?? null)
-      showToast?.(`Key "${keyName}" created.`, 'success')
+      showToast?.(`Key "${name}" created.`, 'success')
       setKeyName('')
       await refreshKeys()
     } catch (err) {
-      showToast?.(err?.message ?? 'Failed to create key.', 'error')
+      setCreateError(err?.message ?? 'Failed to create key.')
     } finally {
       setCreating(false)
     }
   }
 
   const handleRevoke = async (keyId) => {
+    setRevoking(keyId)
     try {
       await deleteAuthKey(apiKey, keyId)
       showToast?.('Key revoked.', 'success')
       await refreshKeys()
     } catch (err) {
       showToast?.(err?.message ?? 'Failed to revoke key.', 'error')
+    } finally {
+      setRevoking(null)
     }
   }
 
@@ -174,7 +223,7 @@ export default function SettingsPage() {
                     <Input
                       label="Key name"
                       value={keyName}
-                      onChange={e => setKeyName(e.target.value)}
+                      onChange={e => { setKeyName(e.target.value); setCreateError(null) }}
                       placeholder="Production key"
                       required
                     />
@@ -192,9 +241,12 @@ export default function SettingsPage() {
                             title={opt.desc}
                             role="checkbox"
                             aria-checked={active}
-                            onClick={() => setKeyScopes(prev =>
-                              active ? prev.filter(s => s !== opt.value) : [...prev, opt.value]
-                            )}
+                            onClick={() => {
+                              setCreateError(null)
+                              setKeyScopes(prev =>
+                                active ? prev.filter(s => s !== opt.value) : [...prev, opt.value]
+                              )
+                            }}
                           >
                             {opt.label}
                           </Pill>
@@ -202,12 +254,29 @@ export default function SettingsPage() {
                       })}
                     </div>
                   </div>
-                  <Button type="submit" variant="primary" size="md" loading={creating} icon={<Plus size={14} />}>
+                  {createError && <p className="settings__create-error">{createError}</p>}
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    size="md"
+                    loading={creating}
+                    disabled={!keyName.trim()}
+                    icon={<Plus size={14} />}
+                  >
                     Create key
                   </Button>
                 </form>
 
-                {keys.length === 0 ? (
+                {keysLoading ? (
+                  <div className="settings__keys-loading">
+                    {[1, 2].map(i => <Skeleton key={i} variant="rect" height={72} />)}
+                  </div>
+                ) : keysError ? (
+                  <div className="settings__keys-error">
+                    <p>{keysError}</p>
+                    <Button variant="ghost" size="sm" onClick={refreshKeys}>Retry</Button>
+                  </div>
+                ) : keys.length === 0 ? (
                   <EmptyState title="No API keys" sub="Create a key to authenticate API calls." />
                 ) : (
                   <div>
@@ -217,7 +286,12 @@ export default function SettingsPage() {
                       <span aria-hidden="true" />
                     </div>
                     {keys.filter(k => k.is_active !== 0).map(item => (
-                      <ApiKeyRow key={item.key_id} item={item} onRevoke={handleRevoke} />
+                      <ApiKeyRow
+                        key={item.key_id}
+                        item={item}
+                        onRevoke={handleRevoke}
+                        revoking={revoking === item.key_id}
+                      />
                     ))}
                   </div>
                 )}

@@ -87,6 +87,15 @@ export default function AgentInputForm({ agent, onSubmit, loading, mode, onModeC
 
   const handleSubmit = (e) => {
     e.preventDefault()
+    // Validate required fields are non-empty after trimming
+    for (const f of fields) {
+      if (f.required && !String(values[f.name] ?? '').trim()) {
+        // Scroll the user to the offending field
+        const idx = fields.indexOf(f)
+        setStep(idx)
+        return
+      }
+    }
     const payload = {}
     fields.forEach(f => {
       let v = values[f.name] ?? ''

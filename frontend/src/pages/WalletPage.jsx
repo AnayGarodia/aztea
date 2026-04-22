@@ -242,8 +242,13 @@ export default function WalletPage() {
   const handleWithdraw = async (e) => {
     e.preventDefault()
     const cents = Math.round(Number(withdrawAmount) * 100)
+    const available = wallet?.balance_cents ?? 0
     if (!Number.isFinite(cents) || cents < 100) {
       showToast?.('Minimum withdrawal is $1.00.', 'error')
+      return
+    }
+    if (cents > available) {
+      showToast?.(`You only have ${fmtUsd(available)} available. Enter a smaller amount.`, 'error')
       return
     }
     setWithdrawLoading(true)
@@ -252,7 +257,7 @@ export default function WalletPage() {
       await refreshWallet?.()
       const history = await fetchWithdrawals(apiKey, 10)
       setWithdrawalHistory(history?.withdrawals ?? [])
-      showToast?.(`Withdrawal of $${(cents / 100).toFixed(2)} initiated.`, 'success')
+      showToast?.(`Withdrawal of ${fmtUsd(cents)} initiated.`, 'success')
       setWithdrawAmount('10')
     } catch (err) {
       showToast?.(err?.message ?? 'Withdrawal failed.', 'error')

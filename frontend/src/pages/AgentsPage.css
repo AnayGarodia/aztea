@@ -200,6 +200,16 @@
 }
 .agents-register__schema-header button:hover { background: var(--accent-border); }
 
+.agents-register__error {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--negative, #ef4444);
+  padding: 9px 12px;
+  background: color-mix(in srgb, var(--negative, #ef4444) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--negative, #ef4444) 22%, transparent);
+  border-radius: var(--r-md);
+}
+
 .agents-register__actions {
   display: flex;
   gap: 10px;

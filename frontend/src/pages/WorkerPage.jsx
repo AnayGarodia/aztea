@@ -69,6 +69,8 @@ export default function WorkerPage() {
   const [loadingJobs, setLoadingJobs] = useState(true)
   const [discovering, setDiscovering] = useState(false)
   const [actionLoading, setActionLoading] = useState({})
+  const [actionErrors, setActionErrors] = useState({})
+  const [refreshingNow, setRefreshingNow] = useState(false)
   const [outputDrafts, setOutputDrafts] = useState({})
   const [failDrafts, setFailDrafts] = useState({})
   const [messageDrafts, setMessageDrafts] = useState({})
@@ -87,6 +89,8 @@ export default function WorkerPage() {
     setActionLoading(prev => ({ ...prev, [key]: value }))
   }
   const isLoadingFor = (jobId, action) => Boolean(actionLoading[`${jobId}:${action}`])
+  const setErrorFor = (jobId, msg) => setActionErrors(prev => ({ ...prev, [jobId]: msg }))
+  const clearErrorFor = (jobId) => setActionErrors(prev => { const n = { ...prev }; delete n[jobId]; return n })
 
   const loadMessagesForJob = useCallback(async (jobId) => {
     setThreadLoading(prev => ({ ...prev, [jobId]: true }))
@@ -199,35 +203,44 @@ export default function WorkerPage() {
   )
 
   const handleClaim = async (job) => {
+    clearErrorFor(job.job_id)
     setLoadingFor(job.job_id, 'claim', true)
     try {
       await claimJob(apiKey, job.job_id, 300)
       showToast?.('Job claimed.', 'success')
       await refreshWorkerJobs()
     } catch (err) {
-      showToast?.(err?.message ?? 'Claim failed.', 'error')
+      setErrorFor(job.job_id, err?.message ?? 'Claim failed.')
     } finally {
       setLoadingFor(job.job_id, 'claim', false)
     }
   }
 
   const handleHeartbeat = async (job) => {
+    clearErrorFor(job.job_id)
     setLoadingFor(job.job_id, 'heartbeat', true)
     try {
       await heartbeatJob(apiKey, job.job_id, 300, job.claim_token)
-      showToast?.('Lease heartbeat sent.', 'success')
+      showToast?.('Lease extended.', 'success')
       await refreshWorkerJobs()
     } catch (err) {
-      showToast?.(err?.message ?? 'Heartbeat failed.', 'error')
+      setErrorFor(job.job_id, err?.message ?? 'Heartbeat failed.')
     } finally {
       setLoadingFor(job.job_id, 'heartbeat', false)
     }
   }
 
   const handleComplete = async (job) => {
+    clearErrorFor(job.job_id)
+    let parsedOutput
+    try {
+      parsedOutput = parseJsonObject(outputDrafts[job.job_id] ?? '{}', 'Output payload')
+    } catch (err) {
+      setErrorFor(job.job_id, err.message)
+      return
+    }
     setLoadingFor(job.job_id, 'complete', true)
     try {
-      const parsedOutput = parseJsonObject(outputDrafts[job.job_id] ?? '{}', 'Output payload')
       await completeJob(apiKey, job.job_id, parsedOutput, {
         claimToken: job.claim_token,
         idempotencyKey: `worker-complete-${job.job_id}-${Date.now()}`,
@@ -235,13 +248,14 @@ export default function WorkerPage() {
       showToast?.('Job completed.', 'success')
       await refreshWorkerJobs()
     } catch (err) {
-      showToast?.(err?.message ?? 'Complete failed.', 'error')
+      setErrorFor(job.job_id, err?.message ?? 'Complete failed.')
     } finally {
       setLoadingFor(job.job_id, 'complete', false)
     }
   }
 
   const handleFail = async (job) => {
+    clearErrorFor(job.job_id)
     setLoadingFor(job.job_id, 'fail', true)
     try {
       await failJob(apiKey, job.job_id, failDrafts[job.job_id] ?? '', {
@@ -251,7 +265,7 @@ export default function WorkerPage() {
       showToast?.('Job marked failed.', 'success')
       await refreshWorkerJobs()
     } catch (err) {
-      showToast?.(err?.message ?? 'Fail request failed.', 'error')
+      setErrorFor(job.job_id, err?.message ?? 'Fail request failed.')
     } finally {
       setLoadingFor(job.job_id, 'fail', false)
     }
@@ -292,7 +306,16 @@ export default function WorkerPage() {
                 <h1>Claim + run jobs</h1>
                 <p>Manage open jobs for your agent listings, keep leases alive, and settle with complete/fail actions.</p>
               </div>
-              <Button variant="secondary" size="sm" onClick={refreshWorkerJobs}>
+              <Button
+                variant="secondary"
+                size="sm"
+                loading={refreshingNow}
+                onClick={async () => {
+                  setRefreshingNow(true)
+                  await refreshWorkerJobs()
+                  setRefreshingNow(false)
+                }}
+              >
                 Refresh now
               </Button>
             </header>
@@ -373,11 +396,19 @@ export default function WorkerPage() {
                       </div>
                     </div>
 
+                    {actionErrors[job.job_id] && (
+                      <div className="worker-page__action-error">
+                        <span>{actionErrors[job.job_id]}</span>
+                        <button type="button" className="worker-page__action-error-dismiss" onClick={() => clearErrorFor(job.job_id)}>✕</button>
+                      </div>
+                    )}
+
                     <div className="worker-page__actions">
                       <Button
                         size="sm"
                         variant="secondary"
                         loading={isLoadingFor(job.job_id, 'claim')}
+                        disabled={job.status === 'running'}
                         onClick={() => handleClaim(job)}
                       >
                         Claim
@@ -386,6 +417,7 @@ export default function WorkerPage() {
                         size="sm"
                         variant="secondary"
                         loading={isLoadingFor(job.job_id, 'heartbeat')}
+                        disabled={job.status !== 'running'}
                         onClick={() => handleHeartbeat(job)}
                       >
                         Heartbeat
@@ -394,6 +426,7 @@ export default function WorkerPage() {
                         size="sm"
                         variant="primary"
                         loading={isLoadingFor(job.job_id, 'complete')}
+                        disabled={job.status !== 'running'}
                         onClick={() => handleComplete(job)}
                       >
                         Complete
@@ -402,6 +435,7 @@ export default function WorkerPage() {
                         size="sm"
                         variant="ghost"
                         loading={isLoadingFor(job.job_id, 'fail')}
+                        disabled={job.status !== 'running'}
                         onClick={() => handleFail(job)}
                       >
                         Fail

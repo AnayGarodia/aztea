@@ -45,7 +45,8 @@ function RegisterDialog({ apiKey, onClose, onSuccess, showToast }) {
     model_id: '',
   })
   const [loading, setLoading] = useState(false)
-  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+  const [formError, setFormError] = useState(null)
+  const set = (k, v) => { setForm(f => ({ ...f, [k]: v })); setFormError(null) }
 
   const useSchemaExample = () => {
     set('input_schema_text', JSON.stringify({
@@ -59,17 +60,32 @@ function RegisterDialog({ apiKey, onClose, onSuccess, showToast }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault()
+    setFormError(null)
+
+    // Client-side validation
+    const name = form.name.trim()
+    if (!name || name.length < 3) { setFormError('Agent name must be at least 3 characters.'); return }
+    const desc = form.description.trim()
+    if (!desc || desc.length < 10) { setFormError('Description must be at least 10 characters.'); return }
+    const url = form.endpoint_url.trim()
+    if (!url) { setFormError('Endpoint URL is required.'); return }
+    try { const p = new URL(url); if (p.protocol !== 'https:' && p.protocol !== 'http:') throw new Error() }
+    catch { setFormError('Endpoint URL must be a valid https:// address.'); return }
+    const price = parseFloat(form.price_per_call_usd)
+    if (!Number.isFinite(price) || price < 0) { setFormError('Price must be a non-negative number.'); return }
+
+    let input_schema, output_schema
+    try { input_schema = parseSchema(form.input_schema_text, 'Input schema') } catch (err) { setFormError(err.message); return }
+    try { output_schema = parseSchema(form.output_schema_text, 'Output schema') } catch (err) { setFormError(err.message); return }
+
     setLoading(true)
     try {
       const tags = form.tags.split(',').map(t => t.trim()).filter(Boolean)
-      const input_schema = parseSchema(form.input_schema_text, 'Input schema')
-      const output_schema = parseSchema(form.output_schema_text, 'Output schema')
-
       const payload = {
-        name: form.name.trim(),
-        description: form.description.trim(),
-        endpoint_url: form.endpoint_url.trim(),
-        price_per_call_usd: parseFloat(form.price_per_call_usd) || 0.01,
+        name,
+        description: desc,
+        endpoint_url: url,
+        price_per_call_usd: price,
         tags,
         input_schema,
         output_schema,
@@ -80,7 +96,7 @@ function RegisterDialog({ apiKey, onClose, onSuccess, showToast }) {
       showToast?.('Agent registered and listed.', 'success')
       onSuccess()
     } catch (err) {
-      showToast?.(err?.message ?? 'Registration failed.', 'error')
+      setFormError(err?.message ?? 'Registration failed. Check your inputs and try again.')
     } finally {
       setLoading(false)
     }
@@ -120,7 +136,7 @@ function RegisterDialog({ apiKey, onClose, onSuccess, showToast }) {
             onChange={e => set('endpoint_url', e.target.value)}
             required
             placeholder="https://my-agent.example.com/invoke"
-            hint="Must be reachable by Aztea."
+            hint="Must be a public https:// address reachable by Aztea."
           />
           <Input
             label="Price per call (USD)"
@@ -188,8 +204,10 @@ function RegisterDialog({ apiKey, onClose, onSuccess, showToast }) {
             />
           </div>
 
+          {formError && <p className="agents-register__error">{formError}</p>}
+
           <div className="agents-register__actions">
-            <Button variant="ghost" type="button" onClick={onClose}>Cancel</Button>
+            <Button variant="ghost" type="button" onClick={onClose} disabled={loading}>Cancel</Button>
             <Button variant="primary" type="submit" loading={loading}>Register listing</Button>
           </div>
         </form>

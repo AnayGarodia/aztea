@@ -110,6 +110,7 @@ export default function JobDetailPage() {
   const [clarificationSubmitting, setClarificationSubmitting] = useState(false)
   const [verifyLoading, setVerifyLoading] = useState(false)
   const [verifyDone, setVerifyDone] = useState(null) // 'accepted' | 'rejected'
+  const [verifyConfirming, setVerifyConfirming] = useState(false)
   const [showRejectForm, setShowRejectForm] = useState(false)
   const [rejectReason, setRejectReason] = useState('')
   const [countdown, setCountdown] = useState(null)
@@ -124,8 +125,9 @@ export default function JobDetailPage() {
     try {
       const res = await getJobMessages(apiKey, id)
       setMessages(Array.isArray(res?.messages) ? res.messages : [])
-    } catch {
-      setMessages([])
+    } catch (err) {
+      // Non-fatal: keep whatever messages we had; only clear on first load
+      if (messages.length === 0) setMessages([])
     } finally {
       setLoadingMsgs(false)
     }
@@ -137,7 +139,7 @@ export default function JobDetailPage() {
       const d = await getJobDispute(apiKey, id)
       setDispute(d ?? null)
     } catch {
-      setDispute(null)
+      if (dispute === undefined) setDispute(null)
     }
   }
 
@@ -152,7 +154,9 @@ export default function JobDetailPage() {
         await loadMessages()
         if (data.status === 'complete') await loadDispute()
       }
-    } catch { /* silent */ }
+    } catch {
+      // Network blip during polling — keep stale data rather than clearing
+    }
   }, [id, apiKey]) // eslint-disable-line
 
   useEffect(() => { loadMessages() }, [apiKey, id]) // eslint-disable-line
@@ -235,7 +239,10 @@ export default function JobDetailPage() {
 
   const handleClarificationResponse = async (e) => {
     e.preventDefault()
-    if (!latestClarificationRequest || !clarificationAnswer.trim()) return
+    const answer = clarificationAnswer.trim()
+    if (!latestClarificationRequest || !answer) return
+    // Shadow-update the value so we use the trimmed version
+    setClarificationAnswer(answer)
     setClarificationSubmitting(true)
     try {
       await postJobMessage(apiKey, id, {
@@ -447,24 +454,53 @@ export default function JobDetailPage() {
                 <Card.Body>
                   {!showRejectForm ? (
                     <div className="job-detail__verify-actions">
-                      <Button
-                        variant="primary"
-                        size="sm"
-                        icon={<CheckCircle size={14} />}
-                        onClick={() => handleVerify('accept')}
-                        loading={verifyLoading}
-                      >
-                        Accept &amp; Release Payment
-                      </Button>
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        icon={<AlertTriangle size={13} />}
-                        onClick={() => setShowRejectForm(true)}
-                        disabled={verifyLoading}
-                      >
-                        Reject &amp; Dispute
-                      </Button>
+                      {verifyConfirming ? (
+                        <div className="job-detail__verify-confirm">
+                          <p className="job-detail__verify-confirm-msg">
+                            Release payment to the agent? This is irreversible.
+                          </p>
+                          <div className="job-detail__verify-confirm-row">
+                            <Button
+                              variant="primary"
+                              size="sm"
+                              icon={<CheckCircle size={14} />}
+                              onClick={() => handleVerify('accept')}
+                              loading={verifyLoading}
+                            >
+                              Yes, release payment
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              disabled={verifyLoading}
+                              onClick={() => setVerifyConfirming(false)}
+                            >
+                              Cancel
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            icon={<CheckCircle size={14} />}
+                            onClick={() => setVerifyConfirming(true)}
+                            disabled={verifyLoading}
+                          >
+                            Accept &amp; Release Payment
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            icon={<AlertTriangle size={13} />}
+                            onClick={() => setShowRejectForm(true)}
+                            disabled={verifyLoading}
+                          >
+                            Reject &amp; Dispute
+                          </Button>
+                        </>
+                      )}
                     </div>
                   ) : (
                     <form onSubmit={e => { e.preventDefault(); handleVerify('reject') }} className="job-detail__verify-reject-form">
@@ -552,11 +588,18 @@ export default function JobDetailPage() {
                     </p>
                     <textarea
                       rows={3}
+                      required
                       value={clarificationAnswer}
                       onChange={event => setClarificationAnswer(event.target.value)}
                       placeholder="Add clarification context for the worker."
                     />
-                    <Button type="submit" variant="primary" size="sm" loading={clarificationSubmitting}>
+                    <Button
+                      type="submit"
+                      variant="primary"
+                      size="sm"
+                      loading={clarificationSubmitting}
+                      disabled={!clarificationAnswer.trim()}
+                    >
                       Send clarification
                     </Button>
                   </form>

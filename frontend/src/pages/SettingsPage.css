@@ -252,6 +252,69 @@
   background: var(--negative-border);
 }
 
+/* Revoke confirmation */
+.settings__key-row--confirming {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  background: color-mix(in srgb, var(--negative, #ef4444) 5%, transparent);
+  border-radius: var(--r-md);
+  padding: 12px 14px;
+}
+
+.settings__revoke-confirm {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.settings__revoke-confirm-msg {
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.settings__revoke-confirm-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* Create error */
+.settings__create-error {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--negative, #ef4444);
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--negative, #ef4444) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--negative, #ef4444) 22%, transparent);
+  border-radius: var(--r-md);
+}
+
+/* Keys loading / error */
+.settings__keys-loading {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.settings__keys-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  margin-top: 16px;
+  background: color-mix(in srgb, var(--negative, #ef4444) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--negative, #ef4444) 20%, transparent);
+  border-radius: var(--r-md);
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+
+.settings__keys-error p { margin: 0; }
+
 @media (max-width: 780px) {
   .settings__scroll { padding: 20px 16px; }
   .settings__key-create { flex-direction: column; }
