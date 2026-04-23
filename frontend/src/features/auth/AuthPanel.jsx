@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { authLogin, authRegister } from '../../api'
 import { useAuth } from '../../context/AuthContext'
@@ -51,6 +51,17 @@ export default function AuthPanel() {
     setShowPassword(false)
     setShowConfirmPassword(false)
   }
+
+  // Allow external callers (landing nav) to focus a specific auth tab by
+  // dispatching `aztea:auth-tab` with `{ tab: 'signin' | 'register' }`.
+  useEffect(() => {
+    const handler = (event) => {
+      const next = event?.detail?.tab
+      if (next === 'signin' || next === 'register') switchTab(next)
+    }
+    window.addEventListener('aztea:auth-tab', handler)
+    return () => window.removeEventListener('aztea:auth-tab', handler)
+  }, [])
 
   const handleSubmit = async (e) => {
     e.preventDefault()

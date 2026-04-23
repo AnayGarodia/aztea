@@ -1,20 +1,23 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { motion } from 'motion/react'
-import { ArrowRightLeft, Coins, ShieldCheck } from 'lucide-react'
+import { ArrowRightLeft, Coins, ShieldCheck, Moon, Sun, Menu, X } from 'lucide-react'
 import { useTheme } from '../context/ThemeContext'
 import { fetchAgents } from '../api'
 import AuthPanel from '../features/auth/AuthPanel'
 import AgentSigil from '../brand/AgentSigil'
-import PixelScene from '../ui/motion/PixelScene'
 import Reveal from '../ui/motion/Reveal'
 import Stagger from '../ui/motion/Stagger'
 import Spotlight from '../ui/motion/Spotlight'
 import ContainerScroll from '../ui/motion/ContainerScroll'
-import BackgroundPaths from '../ui/backgrounds/BackgroundPaths'
-import GradientBackground from '../ui/backgrounds/GradientBackground'
-import AnimatedShaderHero from '../ui/backgrounds/AnimatedShaderHero'
 import './LandingPage.css'
+
+// Decorative backgrounds are pulled in lazily so the landing route's initial
+// JS payload stays small. Each renders nothing on the server or during
+// hydration; a CSS-only gradient fallback keeps the section from flashing.
+const PixelScene = lazy(() => import('../ui/motion/PixelScene'))
+const BackgroundPaths = lazy(() => import('../ui/backgrounds/BackgroundPaths'))
+const GradientBackground = lazy(() => import('../ui/backgrounds/GradientBackground'))
+const AnimatedShaderHero = lazy(() => import('../ui/backgrounds/AnimatedShaderHero'))
 
 const INTEGRATION_TRACKS = [
   {
@@ -127,6 +130,28 @@ function clampUnit(value) {
   return value
 }
 
+function useInView(rootMargin = '300px') {
+  const ref = useRef(null)
+  const [inView, setInView] = useState(false)
+  useEffect(() => {
+    if (typeof IntersectionObserver === 'undefined') { setInView(true); return }
+    const node = ref.current
+    if (!node) return
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setInView(true)
+          obs.disconnect()
+        }
+      },
+      { rootMargin },
+    )
+    obs.observe(node)
+    return () => obs.disconnect()
+  }, [rootMargin])
+  return [ref, inView]
+}
+
 function PricingCard({ label, num, denom, items, accent }) {
   return (
     <div className={`lp__pricing-card${accent ? ' lp__pricing-card--accent' : ''}`}>
@@ -217,10 +242,26 @@ function WorkflowScene({ progress }) {
   )
 }
 
+function scrollToId(id) {
+  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+function focusAuthTab(tab) {
+  scrollToId('lp-auth')
+  // The AuthPanel owns its tab state; emit a custom event that AuthPanel
+  // listens for on mount. Falls back to a straight scroll if no listener.
+  window.dispatchEvent(new CustomEvent('aztea:auth-tab', { detail: { tab } }))
+}
+
 export default function LandingPage() {
   const [agents, setAgents] = useState([])
   const [agentCount, setAgentCount] = useState(0)
-  const { isDark } = useTheme()
+  const [menuOpen, setMenuOpen] = useState(false)
+  const { isDark, toggle: toggleTheme } = useTheme()
+
+  const [programmaticRef, programmaticInView] = useInView()
+  const [pricingRef, pricingInView] = useInView()
+  const [authRef, authInView] = useInView()
 
   useEffect(() => {
     fetchAgents(null)
@@ -233,128 +274,158 @@ export default function LandingPage() {
       .catch(() => {})
   }, [])
 
-  const scrollTo = (id) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })
+  useEffect(() => {
+    if (!menuOpen) return
+    const onKey = (e) => { if (e.key === 'Escape') setMenuOpen(false) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [menuOpen])
+
+  const closeMenu = () => setMenuOpen(false)
+
   return (
     <div className="lp">
       {/* ── Nav ── */}
       <header className="lp__nav glass">
-        <div className="lp__nav-brand">
+        <Link to="/" className="lp__nav-brand" aria-label="Aztea home">
           <div className="lp__nav-logo">
-            <svg width="16" height="16" viewBox="0 0 18 18" fill="none">
+            <svg width="16" height="16" viewBox="0 0 18 18" fill="none" aria-hidden>
               <path d="M9 2L16 14H2L9 2Z" fill="currentColor" opacity="0.9" />
               <path d="M9 6L13 14H5L9 6Z" fill="currentColor" opacity="0.45" />
             </svg>
           </div>
           <span className="lp__nav-wordmark">Aztea</span>
-        </div>
+        </Link>
+
+        <nav className="lp__nav-links" aria-label="Primary">
+          <button type="button" className="lp__nav-link" onClick={() => scrollToId('lp-how')}>Roles</button>
+          <button type="button" className="lp__nav-link" onClick={() => scrollToId('lp-lifecycle')}>Lifecycle</button>
+          <button type="button" className="lp__nav-link" onClick={() => scrollToId('lp-pricing')}>Pricing</button>
+          <Link className="lp__nav-link" to="/docs">Docs</Link>
+        </nav>
+
         <div className="lp__nav-actions">
-          <button className="lp__nav-link" onClick={() => scrollTo('lp-how')}>Roles</button>
-          <button className="lp__nav-link" onClick={() => scrollTo('lp-lifecycle')}>Lifecycle</button>
-          <button className="lp__nav-link" onClick={() => scrollTo('lp-pricing')}>Economics</button>
-          <button className="lp__nav-link" onClick={() => scrollTo('lp-docs')}>Docs</button>
-          <motion.button
-            className="lp__nav-cta"
-            onClick={() => scrollTo('lp-auth')}
-            whileHover={{ scale: 1.03, boxShadow: '0 0 20px var(--accent-glow)' }}
-            whileTap={{ scale: 0.97 }}
+          <button
+            type="button"
+            className="lp__nav-icon"
+            onClick={toggleTheme}
+            aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+            title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
           >
-            Get started
-          </motion.button>
+            {isDark ? <Sun size={14} /> : <Moon size={14} />}
+          </button>
+          <button
+            type="button"
+            className="lp__nav-signin"
+            onClick={() => focusAuthTab('signin')}
+          >
+            Sign in
+          </button>
+          <button
+            type="button"
+            className="lp__nav-cta"
+            onClick={() => focusAuthTab('register')}
+          >
+            Sign up
+          </button>
+          <button
+            type="button"
+            className="lp__nav-menu-btn"
+            onClick={() => setMenuOpen(v => !v)}
+            aria-label={menuOpen ? 'Close menu' : 'Open menu'}
+            aria-expanded={menuOpen}
+          >
+            {menuOpen ? <X size={16} /> : <Menu size={16} />}
+          </button>
         </div>
       </header>
 
+      {/* Mobile drawer */}
+      {menuOpen && (
+        <div className="lp__mobile-drawer" role="dialog" aria-modal="true" aria-label="Menu">
+          <button type="button" className="lp__mobile-drawer-backdrop" aria-label="Close menu" onClick={closeMenu} />
+          <div className="lp__mobile-drawer-panel">
+            <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); scrollToId('lp-how') }}>Roles</button>
+            <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); scrollToId('lp-lifecycle') }}>Lifecycle</button>
+            <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); scrollToId('lp-pricing') }}>Pricing</button>
+            <Link to="/docs" className="lp__mobile-link" onClick={closeMenu}>Docs</Link>
+            <div className="lp__mobile-sep" />
+            <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); focusAuthTab('signin') }}>Sign in</button>
+            <button type="button" className="lp__mobile-link lp__mobile-link--primary" onClick={() => { closeMenu(); focusAuthTab('register') }}>Create free account</button>
+            <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); toggleTheme() }}>
+              {isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ── Hero ── */}
       <section className="lp__hero">
-        <PixelScene />
+        <div className="lp__hero-bg" aria-hidden>
+          <Suspense fallback={<div className="lp__hero-fallback" />}>
+            <PixelScene />
+          </Suspense>
+        </div>
         <div className="lp__hero-inner">
           {agentCount > 0 && (
-            <motion.div
-              className="lp__hero-badge"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.2, duration: 0.5 }}
-            >
+            <div className="lp__hero-badge">
               <span className="status-dot" style={{ width: 6, height: 6 }} />
               <span className="t-mono" style={{ fontSize: '0.75rem', color: 'var(--accent)' }}>
                 {agentCount} agents live
               </span>
-            </motion.div>
+            </div>
           )}
 
-          <motion.h1
-            className="lp__hero-title t-display-xl"
-            initial={{ opacity: 0, y: 24 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.35, duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
-          >
+          <h1 className="lp__hero-title t-display-xl">
             A marketplace<br />
             <span className="lp__hero-em">for AI agents.</span>
-          </motion.h1>
+          </h1>
 
-          <motion.p
-            className="lp__hero-sub"
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.5, duration: 0.55 }}
-          >
+          <p className="lp__hero-sub">
             Hire AI agents built by independent developers. You pay only when a call succeeds.
             Or register your own agent and get paid per successful call.
-          </motion.p>
+          </p>
 
-          <motion.div
-            className="lp__hero-actions"
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.65, duration: 0.5 }}
-          >
-            <motion.button
+          <div className="lp__hero-actions">
+            <button
+              type="button"
               className="lp__btn-primary"
-              onClick={() => scrollTo('lp-auth')}
-              whileHover={{ y: -2, boxShadow: '0 0 32px var(--accent-glow)' }}
-              whileTap={{ scale: 0.97 }}
+              onClick={() => focusAuthTab('register')}
             >
               Create an account — $1 free credit
-            </motion.button>
-            <motion.button
+            </button>
+            <button
+              type="button"
               className="lp__btn-ghost"
-              onClick={() => scrollTo('lp-how')}
-              whileHover={{ y: -1 }}
-              whileTap={{ scale: 0.98 }}
+              onClick={() => scrollToId('lp-how')}
             >
               See how it works ↓
-            </motion.button>
-          </motion.div>
+            </button>
+          </div>
 
-          {/* Agent sigil grid */}
           {agents.length > 0 && (
-            <motion.div
-              className="lp__sigil-grid"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.8, duration: 0.6 }}
-            >
-              {agents.slice(0, 6).map((a, i) => (
-                <motion.div
-                  key={a.agent_id}
-                  className="lp__sigil-item"
-                  initial={{ opacity: 0, scale: 0.7 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  transition={{ delay: 0.9 + i * 0.07, duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-                  title={a.name}
-                >
+            <div className="lp__sigil-grid">
+              {agents.slice(0, 6).map((a) => (
+                <div key={a.agent_id} className="lp__sigil-item" title={a.name}>
                   <AgentSigil agentId={a.agent_id} size="sm" />
                   <span className="lp__sigil-name">{a.name.split(' ')[0]}</span>
-                </motion.div>
+                </div>
               ))}
-            </motion.div>
+            </div>
           )}
         </div>
       </section>
 
 
       {/* ── Programmatic section ── */}
-      <section className="lp__programmatic" id="lp-how">
-        <GradientBackground isDark={isDark} className="lp__programmatic-bg" />
+      <section className="lp__programmatic" id="lp-how" ref={programmaticRef}>
+        <div className="lp__programmatic-bg" aria-hidden>
+          {programmaticInView && (
+            <Suspense fallback={null}>
+              <GradientBackground isDark={isDark} />
+            </Suspense>
+          )}
+        </div>
         <div className="lp__programmatic-inner">
           <Reveal className="lp__programmatic-intro">
             <p className="t-micro lp__section-eyebrow">Two roles</p>
@@ -379,7 +450,7 @@ export default function LandingPage() {
           titleComponent={(
             <div className="lp__workflow-title">
               <p className="t-micro lp__section-eyebrow">Lifecycle</p>
-              <h2 className="t-h1 lp__section-title">What actually happens when you call an agent</h2>
+              <h2 className="t-h1 lp__section-title">What happens when you call an agent</h2>
               <p className="lp__section-sub lp__workflow-sub">
                 Every job runs through the same three steps in the same order — no hidden fees, no surprise charges.
               </p>
@@ -391,9 +462,13 @@ export default function LandingPage() {
       </section>
 
       {/* ── Pricing ── */}
-      <section className="lp__pricing" id="lp-pricing">
+      <section className="lp__pricing" id="lp-pricing" ref={pricingRef}>
         <div className="lp__pricing-bg" aria-hidden>
-          <BackgroundPaths isDark={isDark} className="lp__pricing-paths" variant="strong" count={40} />
+          {pricingInView && (
+            <Suspense fallback={null}>
+              <BackgroundPaths isDark={isDark} className="lp__pricing-paths" variant="strong" count={40} />
+            </Suspense>
+          )}
         </div>
         <div className="lp__pricing-inner">
           <Reveal>
@@ -410,9 +485,13 @@ export default function LandingPage() {
       </section>
 
       {/* ── Auth section ── */}
-      <section className="lp__auth" id="lp-auth">
+      <section className="lp__auth" id="lp-auth" ref={authRef}>
         <div className="lp__auth-bg" aria-hidden>
-          <AnimatedShaderHero isDark={isDark} className="lp__auth-shader" />
+          {authInView && (
+            <Suspense fallback={null}>
+              <AnimatedShaderHero isDark={isDark} className="lp__auth-shader" />
+            </Suspense>
+          )}
         </div>
         <Reveal className="lp__auth-content">
           <div className="lp__auth-inner">
@@ -471,7 +550,7 @@ export default function LandingPage() {
       <footer className="lp__footer">
         <div className="lp__footer-brand">
           <div className="lp__nav-logo" style={{ width: 20, height: 20, borderRadius: 6 }}>
-            <svg width="12" height="12" viewBox="0 0 18 18" fill="none">
+            <svg width="12" height="12" viewBox="0 0 18 18" fill="none" aria-hidden>
               <path d="M9 2L16 14H2L9 2Z" fill="currentColor" opacity="0.9" />
             </svg>
           </div>

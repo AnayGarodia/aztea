@@ -1,64 +1,145 @@
 /* ============================================================
    Mobile-first responsive overrides — imported in main.jsx
-   Breakpoints: 375px (phone), 768px (tablet), 1024px (small laptop)
+   Breakpoints: 375px (phone), 768px (tablet), 1280px (small laptop)
    ============================================================ */
+
+/* --- Globals: kill accidental horizontal scroll on small viewports --- */
+@media (max-width: 768px) {
+  html, body { overflow-x: hidden; }
+  main, section, article { max-width: 100%; }
+  img, video, canvas, svg { max-width: 100%; height: auto; }
+}
+
+/* --- Tap-target sizing on phones --- */
+@media (max-width: 640px) {
+  button,
+  [role="button"],
+  a.btn,
+  .btn {
+    min-height: 40px;
+  }
+}
+
+/* --- Topbar / breadcrumbs --- */
+@media (max-width: 768px) {
+  .topbar { padding: 0 14px !important; height: 48px !important; }
+  .topbar__breadcrumb { gap: 4px; }
+  .topbar__crumb-current,
+  .topbar__crumb-link { font-size: 0.75rem; }
+  .topbar__balance-label { display: none; }
+}
+
+@media (max-width: 375px) {
+  .topbar__crumbs,
+  .topbar__breadcrumb { font-size: 0.6875rem; max-width: 60vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
 
 /* --- AgentsPage / agent grid --- */
 @media (max-width: 768px) {
-  .agents-page__scroll { padding: 16px 12px; }
+  .agents-page__scroll { padding: 16px 12px !important; }
+  .agents-page__content { gap: 14px !important; }
   .agents-page__grid { grid-template-columns: 1fr !important; }
-  .agents-page__controls { flex-direction: column; gap: 8px; }
-  .agents-page__provider-filters { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 4px; }
-  .agents-register__model-row { flex-direction: column; }
+  .agents-page__filter-row { flex-direction: column; align-items: stretch; gap: 8px !important; }
+  .agents-page__filter-row > *,
+  .agents-page__filter-row input,
+  .agents-page__filter-row select { width: 100% !important; }
+  .agents-page__tag-row { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 4px; }
+  .agents-page__header { flex-direction: column; align-items: stretch; }
+  .agents-page__header-actions { flex-wrap: wrap; gap: 8px; }
+  .agents-register__model-row { flex-direction: column; gap: 12px; }
+  .agents-register__actions { flex-direction: column-reverse; align-items: stretch; }
+  .agents-register__actions > * { width: 100%; }
 }
 
 /* --- AgentDetailPage --- */
 @media (max-width: 768px) {
-  .agent-detail__scroll { padding: 16px 12px; }
-  .agent-detail__hero-row { flex-direction: column; gap: 16px; }
-  .agent-detail__price-col { align-self: flex-start; }
-  .agent-detail__invoke-grid { grid-template-columns: 1fr !important; }
+  .agent-detail__scroll { padding: 14px 12px !important; }
+  .agent-detail__hero { padding: 20px 18px; }
+  .agent-detail__hero-row { gap: 14px; }
+  .agent-detail__work-grid { grid-template-columns: 1fr !important; }
   .agent-detail__stats-grid { grid-template-columns: repeat(2, 1fr) !important; }
+  .agent-detail__inline-stats { gap: 10px !important; }
+  .agent-detail__portfolio-item-head { flex-wrap: wrap; gap: 6px; }
+}
+@media (max-width: 375px) {
+  .agent-detail__stats-grid { grid-template-columns: 1fr !important; }
+  .agent-detail__scroll { padding: 12px 10px !important; }
+  .agent-detail__hero { padding: 18px 14px; }
 }
 
-/* --- JobsPage --- */
-@media (max-width: 768px) {
-  .jobs-page__scroll { padding: 16px 12px; }
-  .jobs-page__filters { flex-wrap: wrap; gap: 6px; }
+/* --- JobsPage / JobDetailPage --- */
+@media (max-width: 780px) {
+  .jobs__scroll { padding: 16px 12px !important; }
+  .jobs__header { flex-direction: column; align-items: stretch; }
 }
-
-/* --- JobDetailPage --- */
 @media (max-width: 768px) {
-  .job-detail__scroll { padding: 16px 12px; }
+  .job-detail__scroll { padding: 16px 12px !important; }
   .job-detail__grid { grid-template-columns: 1fr !important; }
   .job-detail__meta-row { flex-wrap: wrap; gap: 8px; }
 }
 
 /* --- WalletPage --- */
-@media (max-width: 768px) {
-  .wallet__scroll { padding: 16px 12px; }
-  .wallet__cards { grid-template-columns: 1fr !important; }
-  .wallet__actions { flex-direction: column; }
-  .wallet__stripe-row { flex-direction: column; gap: 8px; }
+@media (max-width: 980px) {
+  .wallet__scroll { padding: 20px 16px !important; }
+  .wallet__grid { grid-template-columns: 1fr !important; }
+  .wallet__tx-row { grid-template-columns: auto 1fr auto !important; }
+  .wallet__tx-row > :nth-child(3) { display: none; }
+  .wallet__spend-totals { gap: 18px; }
+  .wallet__header { flex-direction: column; align-items: flex-start; }
+}
+@media (max-width: 540px) {
+  .wallet__spend-agents-head,
+  .wallet__spend-agent-row { grid-template-columns: 1fr 50px 80px !important; }
+}
+@media (max-width: 375px) {
+  .wallet__scroll { padding: 12px 10px !important; }
+  .wallet__balance { font-size: 2rem; }
 }
 
 /* --- DashboardPage --- */
-@media (max-width: 768px) {
-  .dashboard__scroll { padding: 16px 12px; }
-  .dashboard__stats { grid-template-columns: repeat(2, 1fr) !important; }
-  .dashboard__hero { flex-direction: column; gap: 12px; }
+@media (max-width: 980px) {
+  .dashboard__scroll { padding: 20px 16px !important; }
+  .dashboard__main-grid { grid-template-columns: 1fr !important; }
+  .dashboard__welcome { padding: 24px; }
+  .dashboard__welcome-actions { width: 100%; }
+  .dashboard__welcome-actions a { flex: 1; }
+  .dashboard__welcome-actions .btn { width: 100%; }
+}
+@media (max-width: 640px) {
+  .dashboard__kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  .dashboard__step { grid-template-columns: 1fr; gap: 10px; }
+  .dashboard__step > :last-child { justify-self: stretch; }
+  .dashboard__step .btn { width: 100%; }
+}
+@media (max-width: 375px) {
+  .dashboard__kpi-grid { grid-template-columns: 1fr !important; }
+  .dashboard__scroll { padding: 14px 12px !important; }
 }
 
 /* --- SettingsPage --- */
 @media (max-width: 768px) {
-  .settings__scroll { padding: 16px 12px; }
+  .settings__scroll { padding: 16px 12px !important; }
   .settings__key-row { flex-wrap: wrap; gap: 8px; }
+}
+@media (max-width: 375px) {
+  .settings__scroll { padding: 12px 10px !important; }
+  .settings__key-value { max-width: 100%; font-size: 0.6875rem; word-break: break-all; }
 }
 
 /* --- WorkerPage --- */
-@media (max-width: 768px) {
-  .worker__scroll { padding: 16px 12px; }
+@media (max-width: 780px) {
+  .worker__scroll { padding: 16px 12px !important; }
   .worker__controls { flex-direction: column; gap: 8px; }
+}
+
+/* --- MyAgentsPage --- */
+@media (max-width: 640px) {
+  .myagents__scroll { padding: 16px 12px !important; }
+}
+
+/* --- PlatformPage --- */
+@media (max-width: 540px) {
+  .platform__grid { grid-template-columns: 1fr !important; }
 }
 
 /* --- AgentCard --- */
@@ -72,60 +153,26 @@
   .card { border-radius: var(--r-lg); }
 }
 
-/* --- Topbar breadcrumbs --- */
-@media (max-width: 480px) {
-  .topbar__crumbs { font-size: 0.75rem; }
-}
-
 /* --- Modal/overlay sizing --- */
 @media (max-width: 480px) {
-  .modal, .dialog {
-    margin: 8px;
-    max-width: calc(100vw - 16px);
-    border-radius: var(--r-xl);
+  .dialog-overlay { padding: 8px; align-items: flex-end; }
+  .dialog {
+    max-width: 100%;
+    max-height: 92dvh;
+    border-radius: var(--r-xl) var(--r-xl) 0 0;
   }
+  .dialog__header { padding: 18px 18px 0; }
+  .dialog__body { padding: 18px; }
+  .dialog__footer { padding: 12px 18px 18px; flex-direction: column-reverse; }
+  .dialog__footer > * { width: 100%; }
 }
 
-/* ============================================================
-   375px — narrow phones (iPhone SE, Galaxy A series)
-   ============================================================ */
-
-/* --- DashboardPage --- */
-@media (max-width: 375px) {
-  .dashboard__stats { grid-template-columns: 1fr !important; }
-  .dashboard__scroll { padding: 12px 10px; }
-  .dashboard__hero { gap: 10px; }
+/* --- Register dialog form on phones --- */
+@media (max-width: 480px) {
+  .agents-register__schema-header { flex-direction: column; align-items: flex-start; gap: 4px; }
 }
 
-/* --- SettingsPage --- */
-@media (max-width: 375px) {
-  .settings__scroll { padding: 12px 10px; }
-  .settings__key-value { max-width: 120px; font-size: 0.7rem; }
-}
-
-/* --- WalletPage --- */
-@media (max-width: 375px) {
-  .wallet__scroll { padding: 12px 10px; }
-  .wallet__balance-amount { font-size: 1.75rem; }
-}
-
-/* --- LandingPage --- */
-@media (max-width: 375px) {
-  .lp__nav { padding: 0 14px; }
-  .lp__nav-wordmark { font-size: 0.875rem; }
-  .lp__hero-actions { flex-direction: column; gap: 10px; }
-  .lp__auth-inner { gap: 20px; }
-  .lp__pricing-grid { grid-template-columns: 1fr !important; }
-  .lp__pricing-card { padding: 20px; }
-}
-
-/* --- AgentDetailPage --- */
-@media (max-width: 375px) {
-  .agent-detail__stats-grid { grid-template-columns: 1fr !important; }
-  .agent-detail__scroll { padding: 12px 10px; }
-}
-
-/* --- Topbar --- */
-@media (max-width: 375px) {
-  .topbar__crumbs { font-size: 0.6875rem; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* --- ContainerScroll / landing workflow --- */
+@media (max-width: 768px) {
+  .container-scroll__card { margin: 0 !important; }
 }
