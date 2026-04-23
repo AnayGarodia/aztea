@@ -6,7 +6,7 @@ Aztea is an AI agent labor marketplace: callers hire agents by the task, workers
 
 Architecture in one sentence: **FastAPI monolith on SQLite WAL, provider-agnostic LLM layer, async job lifecycle, insert-only ledger, MCP-native agent surface.**
 
-Live at **https://aztea.ai**
+Live at **[https://aztea.ai](https://aztea.ai)**
 
 ---
 
@@ -81,7 +81,7 @@ Makefile                       # dev shortcuts: make dev / test / docker / migra
 - **Stack:** systemd service (`aztea.service`) running uvicorn directly — no Docker
 - **Process:** `/home/aztea/app/venv/bin/uvicorn server:app --host 127.0.0.1 --port 8000 --workers 1`
 - **Database:** SQLite WAL at the path set in `.env` (`DB_PATH`), on the host filesystem
-- **Reverse proxy:** nginx on ports 80/443, proxies `/api/*` → uvicorn on 127.0.0.1:8000, serves `frontend/dist/` for everything else
+- **Reverse proxy:** nginx on ports 80/443, proxies `/api/`* → uvicorn on 127.0.0.1:8000, serves `frontend/dist/` for everything else
 - **SSL:** managed by certbot on the host; nginx handles termination
 
 ### Deploying a new version
@@ -108,6 +108,7 @@ sudo systemctl status aztea
 ```
 
 **If the service stops cleanly** (not stuck), you can use `restart` instead of kill+start:
+
 ```bash
 sudo systemctl restart aztea
 ```
@@ -189,7 +190,7 @@ Required events: `checkout.session.completed`, `payment_intent.succeeded`.
 
 - **Single connection manager.** All modules use `core/db.py`. Never open a raw `sqlite3.connect()` anywhere.
 - **WAL mode + thread-local pool.** `DB_MAX_CONNECTIONS` (default 32) caps connections. HTTP calls to downstream agents happen **between** transactions — network I/O never holds a write lock.
-- **`caller_ratings` lives only in `reputation.py`.** `disputes.py` does not declare it. Do not re-declare or migrate this table anywhere else.
+- `**caller_ratings` lives only in `reputation.py`.** `disputes.py` does not declare it. Do not re-declare or migrate this table anywhere else.
 - **Migrations are idempotent.** Each `.sql` file is applied once via a `schema_migrations` table. Never re-use a migration filename; add a new one.
 
 ### Auth & security
@@ -200,7 +201,7 @@ Required events: `checkout.session.completed`, `payment_intent.succeeded`.
 
 ### LLM layer
 
-- **`LLMResponse.text` — not `.content`.** The response field is `.text`. Every agent module must use `raw.text`, not `raw.content`.
+- `**LLMResponse.text` — not `.content`.** The response field is `.text`. Every agent module must use `raw.text`, not `raw.content`.
 - **Never pass `model=` to `CompletionRequest` when using `run_with_fallback`.** The fallback chain selects the model. Pass `model=""` or let the default apply.
 - **Provider-agnostic.** Don't hardcode a provider or model name in any built-in agent. Use `run_with_fallback(req)` which tries `AZTEA_LLM_DEFAULT_CHAIN` (env-overridable).
 
@@ -247,11 +248,13 @@ Sweeper handles expired leases, timeouts, auto-retries. Built-in worker polls pe
 
 ### Job messages + lease effects
 
+
 | `msg_type`               | Lease effect                                    |
 | ------------------------ | ----------------------------------------------- |
 | `clarification_request`  | → `awaiting_clarification`, no heartbeat needed |
 | `clarification_response` | → resume `running`                              |
 | `progress`               | extends lease by `heartbeat_interval`           |
+
 
 ### Trust / dispute
 
@@ -301,8 +304,8 @@ text = raw.text.strip()  # always .text, never .content
 - **CSS variables** for theming in `src/theme/tokens.css` — never hardcode colors
 - **Feature-based structure:** `src/features/agents/`, `src/features/jobs/`, `src/features/auth/`, etc.
 - **UI primitives** in `src/ui/` (Button, Pill, Segmented, Input, etc.) — always use these, never raw HTML equivalents
-- **`src/api.js`** — all API calls go through here
-- **`ResultRenderer`** in `src/features/agents/results/` handles rich output display
+- `**src/api.js`** — all API calls go through here
+- `**ResultRenderer**` in `src/features/agents/results/` handles rich output display
 - **Error handling pattern:** every user action must show inline errors (not just toasts); toasts are for success confirmations only
 - **Aesthetic rule:** Never use Inter/Roboto/Arial. Never use purple gradients. Commit to a cohesive theme with distinctive typography, dominant colors with sharp accents, and intentional motion at load time. One well-orchestrated stagger beats scattered micro-animations.
 
@@ -382,6 +385,7 @@ DB_MAX_CONNECTIONS=32
 
 ## Public agent IDs (current)
 
+
 | Agent                    | ID                                     |
 | ------------------------ | -------------------------------------- |
 | Financial Research       | `b7741251-d7ac-5423-b57d-8e12cd80885f` |
@@ -394,6 +398,7 @@ DB_MAX_CONNECTIONS=32
 | Image Generator          | `4fb167bd-b474-5ea5-bd5c-8976dfe799ae` |
 | Quality Judge (internal) | `9cf0d9d0-4a10-58c9-b97a-6b5f81b1cf33` |
 
+
 ---
 
 ## Ground rules
@@ -403,3 +408,4 @@ DB_MAX_CONNECTIONS=32
 - **Never open raw `sqlite3.connect()`.** Use `core/db.py` exclusively.
 - **Never store floats in the ledger.** Integer cents only.
 - **Frontend errors must be inline.** Toasts for success; inline error state for failures.
+

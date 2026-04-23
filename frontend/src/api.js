@@ -63,7 +63,12 @@ const HTTP_STATUS_MESSAGES = {
   503: 'Service temporarily unavailable.',
 }
 
+// Friendly fallbacks used ONLY when the server returns a generic/missing message.
+// Specific server messages (e.g. pydantic validation errors) always take priority.
 const API_ERROR_MESSAGE_BY_CODE = {
+  'registry.url_forbidden': 'That URL is blocked for safety. Use a public HTTPS endpoint.',
+  'registry.url_invalid': 'Endpoint URL is invalid. Use a public HTTPS URL.',
+  'registry.agent_limit': 'You reached your agent limit. Delete/archive an existing agent or use another account.',
   'payment.stripe_insufficient_funds': 'Payouts are temporarily unavailable because platform Stripe balance is low. Please retry later.',
   'payment.stripe_destination_invalid': 'Your payout account is unavailable. Reconnect your bank account and try again.',
   'payment.stripe_connect_unavailable': 'Stripe Connect is not enabled on this server yet. Please contact support.',
@@ -74,6 +79,22 @@ const API_ERROR_MESSAGE_BY_CODE = {
   'payment.topup_daily_limit_exceeded': 'Daily top-up limit reached. Try a smaller amount or wait until the rolling 24h window resets.',
 }
 
+// Server messages that are too generic to show to users as-is.
+const GENERIC_SERVER_MESSAGES = new Set([
+  'not found',
+  'request failed.',
+  'internal server error.',
+  'bad request',
+  'forbidden',
+  'unauthorized',
+])
+
+function isGenericMessage(message) {
+  if (!message) return true
+  const lowered = String(message).trim().toLowerCase()
+  return GENERIC_SERVER_MESSAGES.has(lowered)
+}
+
 function makeApiError(response, parsedBody) {
   let message = null
   let errorCode = null
@@ -81,13 +102,11 @@ function makeApiError(response, parsedBody) {
   if (parsedBody && typeof parsedBody === 'object') {
     if (typeof parsedBody.error === 'string' && parsedBody.error.trim()) {
       errorCode = parsedBody.error.trim()
-      const mapped = API_ERROR_MESSAGE_BY_CODE[errorCode]
-      if (mapped) message = mapped
     }
-    // Structured server error: { error, message, data }
-    if (!message && typeof parsedBody.message === 'string' && parsedBody.message.trim()) {
+    // Prefer server-provided structured message/sub-errors so users see the
+    // most specific, actionable guidance possible.
+    if (typeof parsedBody.message === 'string' && parsedBody.message.trim()) {
       message = parsedBody.message.trim()
-      // Surface the first validation sub-error (strip pydantic's "Value error, " prefix)
       const errors = parsedBody.data?.errors ?? parsedBody.details?.errors
       if (Array.isArray(errors) && errors.length > 0) {
         const sub = errors[0]?.msg ?? errors[0]?.message ?? null
@@ -96,11 +115,24 @@ function makeApiError(response, parsedBody) {
         }
       }
     }
-    // FastAPI default detail field
-    if (!message) message = detailToString(parsedBody.detail)
+    if (!message || isGenericMessage(message)) {
+      const fromDetail = detailToString(parsedBody.detail)
+      if (fromDetail && !isGenericMessage(fromDetail)) message = fromDetail
+    }
+  }
+
+  if ((!message || isGenericMessage(message)) && errorCode && API_ERROR_MESSAGE_BY_CODE[errorCode]) {
+    message = API_ERROR_MESSAGE_BY_CODE[errorCode]
   }
 
   if (!message && typeof parsedBody === 'string' && parsedBody.trim()) message = parsedBody.trim()
+
+  if ((!message || isGenericMessage(message)) && response.status === 404) {
+    const pathname = pathnameFromResponse(response)
+    if (pathname.startsWith('/api/')) {
+      message = 'API route not found. If you are self-hosting, ensure /api/* is proxied to the backend (or the /api prefix shim is active).'
+    }
+  }
   if (!message) message = HTTP_STATUS_MESSAGES[response.status] ?? `Unexpected error (HTTP ${response.status})`
 
   const err = new Error(message)
@@ -114,6 +146,14 @@ function makeApiError(response, parsedBody) {
     if (hdrRid) err.requestId = String(hdrRid)
   }
   return err
+}
+
+function pathnameFromResponse(response) {
+  try {
+    return new URL(response.url).pathname || ''
+  } catch {
+    return ''
+  }
 }
 
 async function request(path, {

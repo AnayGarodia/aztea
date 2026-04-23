@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'motion/react'
 import Button from '../../ui/Button'
 import Segmented from '../../ui/Segmented'
 import { Zap, Radio, Lock, Unlock } from 'lucide-react'
+import { validateInvokePayload } from '../../utils/inputGuards'
 import './AgentInputForm.css'
 
 const MODE_OPTIONS = [
@@ -50,6 +51,7 @@ export default function AgentInputForm({ agent, onSubmit, loading, mode, onModeC
     Object.fromEntries(fields.map(f => [f.name, f.default ?? '']))
   )
   const [privateTask, setPrivateTask] = useState(false)
+  const [inputError, setInputError] = useState('')
 
   const inputRef = useRef(null)
 
@@ -87,12 +89,14 @@ export default function AgentInputForm({ agent, onSubmit, loading, mode, onModeC
 
   const handleSubmit = (e) => {
     e.preventDefault()
+    setInputError('')
     // Validate required fields are non-empty after trimming
     for (const f of fields) {
       if (f.required && !String(values[f.name] ?? '').trim()) {
         // Scroll the user to the offending field
         const idx = fields.indexOf(f)
         setStep(idx)
+        setInputError(`"${f.label ?? f.name}" is required. Fill it in before running this agent.`)
         return
       }
     }
@@ -102,6 +106,11 @@ export default function AgentInputForm({ agent, onSubmit, loading, mode, onModeC
       if (f.transform === 'uppercase') v = String(v).toUpperCase()
       payload[f.name] = v
     })
+    const payloadError = validateInvokePayload(payload)
+    if (payloadError) {
+      setInputError(payloadError)
+      return
+    }
     onSubmit(payload, { privateTask })
   }
 
@@ -250,6 +259,7 @@ export default function AgentInputForm({ agent, onSubmit, loading, mode, onModeC
             ? 'Async queues a job you can monitor in Jobs.'
             : 'Sync returns output immediately in this panel.'}
         </p>
+        {inputError && <p className="invoke-panel__error-text" role="alert">{inputError}</p>}
         <div className="invoke-panel__price-bar">
           <span className="invoke-panel__price-label">Cost per call</span>
           <span className="invoke-panel__price-val">{price}</span>

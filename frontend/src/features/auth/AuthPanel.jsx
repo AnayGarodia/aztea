@@ -32,7 +32,9 @@ export default function AuthPanel() {
   }
   const emailValid = EMAIL_RE.test(normalizedEmail)
   const registerFormValid =
-    normalizedUsername.length > 0 &&
+    normalizedUsername.length >= 3 &&
+    normalizedUsername.length <= 32 &&
+    /^[a-zA-Z0-9_-]+$/.test(normalizedUsername) &&
     emailValid &&
     passwordChecks.length &&
     passwordChecks.letter &&
@@ -54,7 +56,23 @@ export default function AuthPanel() {
     e.preventDefault()
     setError('')
     if (!canSubmit) {
-      setError(registerMode ? 'Please complete all required fields before creating your account.' : 'Enter a valid email and password.')
+      if (!registerMode) {
+        setError('Enter a valid email and password to sign in.')
+      } else if (normalizedUsername.length < 3) {
+        setError('Username must be at least 3 characters.')
+      } else if (normalizedUsername.length > 32) {
+        setError('Username must be 32 characters or fewer.')
+      } else if (!/^[a-zA-Z0-9_-]+$/.test(normalizedUsername)) {
+        setError('Username can only use letters, numbers, underscore, and hyphen.')
+      } else if (!emailValid) {
+        setError('Enter a valid email address.')
+      } else if (!passwordChecks.length || !passwordChecks.letter || !passwordChecks.number) {
+        setError('Password must be at least 8 characters and include letters and numbers.')
+      } else if (password !== confirmPassword) {
+        setError('Passwords do not match yet.')
+      } else {
+        setError('Please complete all required fields before creating your account.')
+      }
       return
     }
     setLoading(true)
@@ -116,9 +134,11 @@ export default function AuthPanel() {
               placeholder="satoshi"
               value={username}
               onChange={e => setUsername(e.target.value)}
+              maxLength={32}
               required
               autoComplete="username"
               iconLeft={<User size={14} />}
+              hint="3-32 chars; letters, numbers, underscore, hyphen."
             />
           )}
           <Input

@@ -628,3 +628,17 @@ def test_verified_contract_required_error_code_is_defined():
 
 def test_orchestration_depth_exceeded_error_code_is_defined():
     assert error_codes.ORCHESTRATION_DEPTH_EXCEEDED == "job.orchestration_depth_exceeded"
+
+
+def test_registry_call_request_rejects_overly_large_payload():
+    oversized_text = "x" * (70 * 1024)
+    with pytest.raises(ValidationError) as exc_info:
+        models.RegistryCallRequest.model_validate({"blob": oversized_text})
+    assert "too large" in str(exc_info.value)
+
+
+def test_registry_call_request_rejects_excessive_field_count():
+    payload = {f"k{i}": i for i in range(130)}
+    with pytest.raises(ValidationError) as exc_info:
+        models.RegistryCallRequest.model_validate(payload)
+    assert "too many fields" in str(exc_info.value)

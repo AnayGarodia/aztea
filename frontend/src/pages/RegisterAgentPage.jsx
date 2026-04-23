@@ -8,6 +8,7 @@ import Reveal from '../ui/motion/Reveal'
 import { registerAgent } from '../api'
 import { useAuth } from '../context/AuthContext'
 import { CheckCircle, ChevronDown, ChevronUp } from 'lucide-react'
+import { guardLimits, normalizeTags, validateAgentRegistrationForm } from '../utils/inputGuards'
 import './RegisterAgentPage.css'
 
 const REQUIRED_FIELDS = {
@@ -26,60 +27,19 @@ const OPTIONAL_DEFAULTS = {
   output_schema: '',
 }
 
-function parseJsonOrNull(str) {
+function parseJsonOrNull(str, fieldName) {
   const s = (str ?? '').trim()
   if (!s) return {}
-  return JSON.parse(s)
-}
-
-function tagsFromString(str) {
-  return str.split(',').map(t => t.trim()).filter(Boolean)
-}
-
-function validateUrl(raw, fieldName) {
-  const url = raw.trim()
-  if (!url) return `${fieldName} is required.`
   let parsed
-  try { parsed = new URL(url) } catch {
-    return `${fieldName} must be a valid URL (e.g. https://your-agent.example.com/run).`
+  try {
+    parsed = JSON.parse(s)
+  } catch {
+    throw new Error(`${fieldName} must be valid JSON.`)
   }
-  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
-    return `${fieldName} must use https:// or http://.`
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`${fieldName} must be a JSON object.`)
   }
-  if (parsed.protocol === 'http:') {
-    return `${fieldName} should use https:// for security. http:// endpoints will be rejected by most callers.`
-  }
-  const host = parsed.hostname.toLowerCase()
-  if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.endsWith('.local')) {
-    return `${fieldName} cannot point to localhost or a local address — callers can't reach it.`
-  }
-  return null
-}
-
-function validateForm(form) {
-  const name = form.name.trim()
-  if (!name) return 'Agent name is required.'
-  if (name.length < 3) return 'Agent name must be at least 3 characters.'
-  if (name.length > 80) return 'Agent name must be 80 characters or fewer.'
-
-  const desc = form.description.trim()
-  if (!desc) return 'Description is required.'
-  if (desc.length < 20) return 'Description must be at least 20 characters — help callers understand what your agent does.'
-  if (desc.length > 2000) return 'Description must be 2 000 characters or fewer.'
-
-  const urlErr = validateUrl(form.endpoint_url, 'Endpoint URL')
-  if (urlErr) return urlErr
-
-  const price = parseFloat(form.price_per_call_usd)
-  if (!Number.isFinite(price) || price < 0) return 'Price must be a non-negative number.'
-  if (price > 1000) return 'Price per call cannot exceed $1 000.'
-
-  if (form.healthcheck_url.trim()) {
-    const hcErr = validateUrl(form.healthcheck_url, 'Healthcheck URL')
-    if (hcErr) return hcErr
-  }
-
-  return null
+  return parsed
 }
 
 export default function RegisterAgentPage() {
@@ -98,7 +58,7 @@ export default function RegisterAgentPage() {
     e.preventDefault()
     setError(null)
 
-    const validationError = validateForm(form)
+    const validationError = validateAgentRegistrationForm(form)
     if (validationError) {
       setError(validationError)
       setTimeout(() => errorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 50)
@@ -110,11 +70,11 @@ export default function RegisterAgentPage() {
       const price = parseFloat(form.price_per_call_usd)
       let inputSchema = {}
       let outputSchema = {}
-      try { inputSchema = parseJsonOrNull(form.input_schema) } catch {
-        throw new Error('Input schema must be valid JSON.')
+      try { inputSchema = parseJsonOrNull(form.input_schema, 'Input schema') } catch (parseErr) {
+        throw new Error(parseErr?.message || 'Input schema must be valid JSON.')
       }
-      try { outputSchema = parseJsonOrNull(form.output_schema) } catch {
-        throw new Error('Output schema must be valid JSON.')
+      try { outputSchema = parseJsonOrNull(form.output_schema, 'Output schema') } catch (parseErr) {
+        throw new Error(parseErr?.message || 'Output schema must be valid JSON.')
       }
 
       const payload = {
@@ -122,7 +82,7 @@ export default function RegisterAgentPage() {
         description: form.description.trim(),
         endpoint_url: form.endpoint_url.trim(),
         price_per_call_usd: price,
-        tags: tagsFromString(form.tags),
+        tags: normalizeTags(form.tags),
         input_schema: inputSchema,
         output_schema: outputSchema,
       }
@@ -150,17 +110,33 @@ export default function RegisterAgentPage() {
               <div className="regagent__success">
                 <CheckCircle size={32} className="regagent__success-icon" />
                 <h2 className="regagent__success-title">Agent registered</h2>
-                <p className="regagent__success-name">{registered.name ?? form.name}</p>
-                {registered.status && registered.status !== 'active' ? (
-                  <p className="regagent__success-sub">
-                    Your agent is <strong>{registered.status}</strong>
-                    {registered.suspension_reason ? ` — ${registered.suspension_reason}` : ' and pending review before it appears publicly.'}
-                  </p>
-                ) : (
-                  <p className="regagent__success-sub">
-                    Your agent is live on the marketplace. It may take a few seconds to appear in search.
-                  </p>
-                )}
+                <p className="regagent__success-name">{registered?.agent?.name ?? form.name}</p>
+                {(() => {
+                  const status = registered?.agent?.status ?? null
+                  const reviewStatus = registered?.review_status ?? registered?.agent?.review_status ?? null
+                  if (reviewStatus === 'pending_review') {
+                    return (
+                      <p className="regagent__success-sub">
+                        Your agent is <strong>pending review</strong>. You'll be notified when it goes live.
+                      </p>
+                    )
+                  }
+                  if (status && status !== 'active') {
+                    return (
+                      <p className="regagent__success-sub">
+                        Your agent is <strong>{status}</strong>
+                        {registered?.agent?.suspension_reason
+                          ? ` — ${registered.agent.suspension_reason}`
+                          : '.'}
+                      </p>
+                    )
+                  }
+                  return (
+                    <p className="regagent__success-sub">
+                      Your agent is live on the marketplace. It may take a few seconds to appear in search.
+                    </p>
+                  )
+                })()}
                 <div className="regagent__success-actions">
                   <Link to="/my-agents">
                     <Button variant="primary">View my agents</Button>
@@ -233,11 +209,12 @@ export default function RegisterAgentPage() {
                       type="number"
                       min="0"
                       step="0.0001"
+                      max={guardLimits.MAX_AGENT_PRICE_USD}
                       value={form.price_per_call_usd}
                       onChange={e => set('price_per_call_usd', e.target.value)}
                       required
                       mono
-                      hint="You receive 90% of this after the platform fee."
+                      hint={`You receive 90% of this after the platform fee (max $${guardLimits.MAX_AGENT_PRICE_USD.toFixed(2)}).`}
                     />
                   </div>
                 </Card.Body>

@@ -12,6 +12,7 @@ import Stagger from '../ui/motion/Stagger'
 import AgentSigil from '../brand/AgentSigil'
 import { getAgentColor } from '../brand/sigilTraits'
 import AgentInputForm from '../features/agents/AgentInputForm'
+import { validateInvokePayload } from '../utils/inputGuards'
 import ResultRenderer from '../features/agents/results/ResultRenderer'
 import TrustGauge from '../features/agents/TrustGauge'
 import { callAgent, createJob, fetchAgentWorkHistory, fetchMyAgents } from '../api'
@@ -200,6 +201,11 @@ export default function AgentDetailPage() {
 
   const handleInvoke = async (payload, { privateTask = false } = {}) => {
     if (!agent) return
+    const payloadError = validateInvokePayload(payload)
+    if (payloadError) {
+      setInvokeError(payloadError)
+      return
+    }
     setInvokeLoading(true)
     setResult(null)
     setInvokeError(null)

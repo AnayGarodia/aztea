@@ -578,6 +578,18 @@ _TRUSTED_PROXY_NETWORKS = _parse_ip_allowlist(
 # ---------------------------------------------------------------------------
 
 @app.middleware("http")
+async def api_prefix_compat(request: Request, call_next):
+    # Compatibility shim for deployments that send requests as /api/* directly
+    # to FastAPI (without an upstream rewrite).
+    path = request.scope.get("path") or ""
+    if path == "/api" or path.startswith("/api/"):
+        rewritten = path[4:] or "/"
+        request.scope["path"] = rewritten
+        request.scope["raw_path"] = rewritten.encode("utf-8")
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def shutdown_draining(request: Request, call_next):
     _inc_inflight_requests()
     try:

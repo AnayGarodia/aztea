@@ -1,6 +1,7 @@
 """Pydantic models (split from legacy models.py for maintainability)."""
 from __future__ import annotations
 
+import json
 import re
 from typing import Annotated, Literal, NotRequired, TypeAlias, TypedDict
 
@@ -553,6 +554,54 @@ class ReconciliationRunRequest(BaseModel):
 
 class RegistryCallRequest(RootModel[JSONObject]):
     model_config = ConfigDict(json_schema_extra={"example": {"ticker": "AAPL"}})
+
+    @model_validator(mode="after")
+    def guard_payload_shape(self):
+        payload = self.root
+        encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        if len(encoded) > 64 * 1024:
+            raise ValueError("Input payload is too large (max 64KB). Reduce field count or text size.")
+
+        max_depth = 8
+        max_keys = 120
+        max_array_items = 200
+        max_string_len = 4000
+
+        state = {"keys": 0}
+
+        def _walk(value, depth: int) -> None:
+            if depth > max_depth:
+                raise ValueError(f"Input payload is too deeply nested (max depth {max_depth}).")
+            if isinstance(value, str):
+                if len(value) > max_string_len:
+                    raise ValueError(
+                        f"Input text is too long (max {max_string_len} chars per field)."
+                    )
+                return
+            if isinstance(value, list):
+                if len(value) > max_array_items:
+                    raise ValueError(
+                        f"Input array has too many items (max {max_array_items} per array)."
+                    )
+                for item in value:
+                    _walk(item, depth + 1)
+                return
+            if isinstance(value, dict):
+                state["keys"] += len(value)
+                if state["keys"] > max_keys:
+                    raise ValueError(
+                        f"Input payload has too many fields (max {max_keys} total keys)."
+                    )
+                for raw_key, nested in value.items():
+                    key = str(raw_key).strip()
+                    if not key:
+                        raise ValueError("Input payload contains an empty field name.")
+                    if len(key) > 100:
+                        raise ValueError("Input field names must be 100 characters or fewer.")
+                    _walk(nested, depth + 1)
+
+        _walk(payload, depth=0)
+        return self
 
 
 class MCPInvokeRequest(BaseModel):

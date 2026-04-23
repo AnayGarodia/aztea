@@ -183,6 +183,13 @@
   line-height: 1.45;
 }
 
+.invoke-panel__error-text {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--danger);
+  line-height: 1.45;
+}
+
 .invoke-panel__price-bar {
   display: flex;
   align-items: center;

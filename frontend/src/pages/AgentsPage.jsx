@@ -13,6 +13,7 @@ import Reveal from '../ui/motion/Reveal'
 import { registerAgent, searchAgents } from '../api'
 import { useMarket } from '../context/MarketContext'
 import { Plus, Search } from 'lucide-react'
+import { guardLimits, normalizeTags, validateAgentRegistrationForm } from '../utils/inputGuards'
 import './AgentsPage.css'
 
 const ALL = '__all__'
@@ -62,17 +63,12 @@ function RegisterDialog({ apiKey, onClose, onSuccess, showToast }) {
     e.preventDefault()
     setFormError(null)
 
-    // Client-side validation
+    const validationError = validateAgentRegistrationForm(form)
+    if (validationError) { setFormError(validationError); return }
     const name = form.name.trim()
-    if (!name || name.length < 3) { setFormError('Agent name must be at least 3 characters.'); return }
     const desc = form.description.trim()
-    if (!desc || desc.length < 10) { setFormError('Description must be at least 10 characters.'); return }
     const url = form.endpoint_url.trim()
-    if (!url) { setFormError('Endpoint URL is required.'); return }
-    try { const p = new URL(url); if (p.protocol !== 'https:' && p.protocol !== 'http:') throw new Error() }
-    catch { setFormError('Endpoint URL must be a valid https:// address.'); return }
     const price = parseFloat(form.price_per_call_usd)
-    if (!Number.isFinite(price) || price < 0) { setFormError('Price must be a non-negative number.'); return }
 
     let input_schema, output_schema
     try { input_schema = parseSchema(form.input_schema_text, 'Input schema') } catch (err) { setFormError(err.message); return }
@@ -80,7 +76,7 @@ function RegisterDialog({ apiKey, onClose, onSuccess, showToast }) {
 
     setLoading(true)
     try {
-      const tags = form.tags.split(',').map(t => t.trim()).filter(Boolean)
+      const tags = normalizeTags(form.tags)
       const payload = {
         name,
         description: desc,
@@ -143,9 +139,11 @@ function RegisterDialog({ apiKey, onClose, onSuccess, showToast }) {
             type="number"
             step="0.001"
             min="0"
+            max={guardLimits.MAX_AGENT_PRICE_USD}
             value={form.price_per_call_usd}
             onChange={e => set('price_per_call_usd', e.target.value)}
             required
+            hint={`Maximum $${guardLimits.MAX_AGENT_PRICE_USD.toFixed(2)} per call.`}
           />
           <Input
             label="Tags"
