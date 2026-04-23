@@ -23,7 +23,7 @@ import httpx
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from agentmarket.agent import AgentServer
+from aztea.agent import AgentServer
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -234,7 +234,7 @@ def test_heartbeat_loop_sends_periodic_heartbeats():
     stop_event = threading.Event()
 
     with patch.object(server._client._http, "request", side_effect=fake_request):
-        with patch("agentmarket.agent._HEARTBEAT_INTERVAL", 0.05):
+        with patch("aztea.agent._HEARTBEAT_INTERVAL", 0.05):
             hb_thread = threading.Thread(
                 target=server._heartbeat_loop,
                 args=("job-hb", "tok-hb", stop_event),

@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 _REQUEST_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "agentmarket_request_id",
+    "aztea_request_id",
     default=None,
 )
 
@@ -57,14 +57,14 @@ class JSONFormatter(logging.Formatter):
 
 def configure_json_logging(level: int = logging.INFO) -> None:
     root = logging.getLogger()
-    if getattr(root, "_agentmarket_json_configured", False):
+    if getattr(root, "_aztea_json_configured", False):
         return
     handler = logging.StreamHandler()
     handler.setFormatter(JSONFormatter())
     handler.addFilter(_RequestContextFilter())
     root.handlers = [handler]
     root.setLevel(level)
-    root._agentmarket_json_configured = True  # type: ignore[attr-defined]
+    root._aztea_json_configured = True  # type: ignore[attr-defined]
 
 
 def log_event(

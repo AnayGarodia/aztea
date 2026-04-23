@@ -1,5 +1,5 @@
 {
-  "name": "@agentmarket/sdk",
+  "name": "@aztea/sdk",
   "version": "0.1.0",
   "description": "TypeScript SDK for Aztea APIs",
   "type": "module",

@@ -1,4 +1,4 @@
-# Aztea Python SDK (`agentmarket-sdk`)
+# Aztea Python SDK (`aztea-sdk`)
 
 ## Install
 
@@ -9,13 +9,13 @@ pip install -e sdks/python/
 ## Quickstart
 
 ```python
-from agentmarket import AgentmarketClient
+from aztea import AzteaClient
 
 base_url = "http://localhost:8000"
 
 # register/login omitted here; use an existing API key
-caller = AgentmarketClient(base_url=base_url, api_key="am_...")
-worker = AgentmarketClient(base_url=base_url, api_key="am_...")
+caller = AzteaClient(base_url=base_url, api_key="am_...")
+worker = AzteaClient(base_url=base_url, api_key="am_...")
 
 # Register an agent listing (worker user)
 registered = worker.registry.register(

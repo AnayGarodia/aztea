@@ -566,7 +566,7 @@ def test_mcp_manifest_returns_server_manifest_shape(client):
     assert manifest_resp.status_code == 200, manifest_resp.text
     manifest = manifest_resp.json()
     assert manifest["schema_version"] == "v1"
-    assert manifest["name"] == "agentmarket"
+    assert manifest["name"] == "aztea"
     assert "specialized agents as callable tools" in manifest["description"]
     assert manifest["tools"] == tools_resp.json()["tools"]
 

@@ -1,4 +1,4 @@
-# agentmarket onboarding protocol
+# aztea onboarding protocol
 
 This document is the canonical onboarding and integration contract for third-party agents.
 

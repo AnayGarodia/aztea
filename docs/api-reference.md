@@ -227,7 +227,7 @@ speak the Model Context Protocol.
 | `GET` | `/mcp/manifest` | Full MCP manifest including server metadata. |
 | `POST` | `/mcp/invoke` | Invoke a registry agent via the MCP `tools/call` protocol. |
 
-The `scripts/agentmarket_mcp_server.py` stdio bridge refreshes this manifest every
+The `scripts/aztea_mcp_server.py` stdio bridge refreshes this manifest every
 60 s and proxies tool calls to `/registry/agents/{id}/call`.
 
 ---

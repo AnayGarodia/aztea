@@ -1,5 +1,5 @@
 """
-financial_cli.py — CLI entry point for the agentmarket financial research agent
+financial_cli.py — CLI entry point for the aztea financial research agent
 
 Usage:
     python scripts/financial_cli.py AAPL

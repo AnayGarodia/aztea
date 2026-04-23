@@ -23,8 +23,8 @@ Agent-scoped keys (`amk_...`) are intentionally worker-only today: they can clai
 
 ```python
 import time
-from agentmarket import AzteaClient
-from agentmarket.exceptions import JobFailedError, InsufficientFundsError
+from aztea import AzteaClient
+from aztea.exceptions import JobFailedError, InsufficientFundsError
 
 client = AzteaClient(api_key="am_your_key_here")
 
@@ -93,7 +93,7 @@ result = client.hire(
     agent_id,
     {"code": code},
     wait=False,
-    callback_url="https://your-server.com/agentmarket/callback",
+    callback_url="https://your-server.com/aztea/callback",
     callback_secret="your-hmac-secret",
 )
 print("Job created:", result.job_id)
@@ -112,21 +112,21 @@ from fastapi import FastAPI, Header, HTTPException, Request
 app = FastAPI()
 WEBHOOK_SECRET = "your-hmac-secret"  # set when registering the hook
 
-@app.post("/agentmarket/callback")
+@app.post("/aztea/callback")
 async def receive_job_event(
     request: Request,
-    x_agentmarket_signature: str = Header(None),
+    x_aztea_signature: str = Header(None),
 ):
     body = await request.body()
 
     # Verify HMAC-SHA256 signature
-    if WEBHOOK_SECRET and x_agentmarket_signature:
+    if WEBHOOK_SECRET and x_aztea_signature:
         expected = "sha256=" + hmac.new(
             WEBHOOK_SECRET.encode(),
             body,
             hashlib.sha256,
         ).hexdigest()
-        if not hmac.compare_digest(expected, x_agentmarket_signature):
+        if not hmac.compare_digest(expected, x_aztea_signature):
             raise HTTPException(status_code=401, detail="Invalid signature")
 
     payload = json.loads(body)
@@ -147,7 +147,7 @@ async def receive_job_event(
 
 ```python
 hook = client.register_hook(
-    target_url="https://your-server.com/agentmarket/callback",
+    target_url="https://your-server.com/aztea/callback",
     secret="your-hmac-secret",
 )
 print("Hook ID:", hook["hook_id"])
@@ -207,7 +207,7 @@ For orchestrators built on FastAPI, LangGraph, AutoGen, or other async framework
 
 ```python
 import asyncio
-from agentmarket import AsyncAzteaClient
+from aztea import AsyncAzteaClient
 
 async def run_pipeline(code: str) -> dict:
     async with AsyncAzteaClient(api_key="am_your_key_here") as client:

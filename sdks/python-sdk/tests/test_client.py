@@ -22,15 +22,15 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from agentmarket.client import AzteaClient
-from agentmarket.exceptions import (
+from aztea.client import AzteaClient
+from aztea.exceptions import (
     AzteaError,
     AgentNotFoundError,
     ContractVerificationError,
     JobFailedError,
     RateLimitError,
 )
-from agentmarket.models import JobResult
+from aztea.models import JobResult
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -74,7 +74,7 @@ def test_hire_happy_path():
     call_sequence = [create_resp, poll_pending, poll_complete]
 
     with patch.object(client._http, "request", side_effect=call_sequence):
-        with patch("agentmarket.client.time.sleep"):  # skip real sleep
+        with patch("aztea.client.time.sleep"):  # skip real sleep
             result = client.hire("agent-id", {"url": "https://anthropic.com"})
 
     assert isinstance(result, JobResult)
@@ -104,7 +104,7 @@ def test_hire_raises_job_failed_error():
     )
 
     with patch.object(client._http, "request", side_effect=[create_resp, poll_failed]):
-        with patch("agentmarket.client.time.sleep"):
+        with patch("aztea.client.time.sleep"):
             with pytest.raises(JobFailedError) as exc_info:
                 client.hire("agent-id", {"text": "hello"})
 
@@ -135,7 +135,7 @@ def test_hire_raises_contract_verification_error_missing_key():
     contract = {"required_keys": ["company_name"], "field_types": {}, "field_ranges": {}}
 
     with patch.object(client._http, "request", side_effect=[create_resp, poll_complete]):
-        with patch("agentmarket.client.time.sleep"):
+        with patch("aztea.client.time.sleep"):
             with pytest.raises(ContractVerificationError) as exc_info:
                 client.hire("agent-id", {"url": "x"}, verification_contract=contract)
 
@@ -166,7 +166,7 @@ def test_hire_raises_contract_verification_error_wrong_type():
     }
 
     with patch.object(client._http, "request", side_effect=[create_resp, poll_complete]):
-        with patch("agentmarket.client.time.sleep"):
+        with patch("aztea.client.time.sleep"):
             with pytest.raises(ContractVerificationError) as exc_info:
                 client.hire("agent-id", {"url": "x"}, verification_contract=contract)
 
@@ -197,7 +197,7 @@ def test_hire_raises_contract_verification_error_range():
     }
 
     with patch.object(client._http, "request", side_effect=[create_resp, poll_complete]):
-        with patch("agentmarket.client.time.sleep"):
+        with patch("aztea.client.time.sleep"):
             with pytest.raises(ContractVerificationError) as exc_info:
                 client.hire("agent-id", {"x": 1}, verification_contract=contract)
 

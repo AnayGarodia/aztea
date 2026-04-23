@@ -1,8 +1,8 @@
 """Python SDK for Aztea."""
 
-from .client import AgentmarketClient
+from .client import AzteaClient
 from .errors import (
-    AgentmarketError,
+    AzteaError,
     APIError,
     ClaimLostError,
     ConflictError,
@@ -16,9 +16,9 @@ from .errors import (
 from .types import MessageType
 
 __all__ = [
-    "AgentmarketClient",
+    "AzteaClient",
     "MessageType",
-    "AgentmarketError",
+    "AzteaError",
     "APIError",
     "UnauthorizedError",
     "ForbiddenError",

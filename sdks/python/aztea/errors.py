@@ -6,12 +6,12 @@ from typing import Any
 import requests
 
 
-class AgentmarketError(Exception):
+class AzteaError(Exception):
     """Base SDK error."""
 
 
 @dataclass
-class APIError(AgentmarketError):
+class APIError(AzteaError):
     status_code: int
     message: str
     detail: Any
@@ -67,7 +67,7 @@ class ClaimLostError(APIError):
     pass
 
 
-class JobTimeoutError(AgentmarketError):
+class JobTimeoutError(AzteaError):
     pass
 
 

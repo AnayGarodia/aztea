@@ -402,7 +402,7 @@ async def lifespan(app: FastAPI):
             target=_jobs_sweeper_loop,
             args=(stop_event,),
             daemon=True,
-            name="agentmarket-job-sweeper",
+            name="aztea-job-sweeper",
         )
         sweeper_thread.start()
     else:
@@ -414,7 +414,7 @@ async def lifespan(app: FastAPI):
             target=_hook_delivery_loop,
             args=(hook_stop_event,),
             daemon=True,
-            name="agentmarket-hook-delivery",
+            name="aztea-hook-delivery",
         )
         hook_thread.start()
     else:
@@ -426,7 +426,7 @@ async def lifespan(app: FastAPI):
             target=_builtin_worker_loop,
             args=(builtin_stop_event,),
             daemon=True,
-            name="agentmarket-builtin-worker",
+            name="aztea-builtin-worker",
         )
         builtin_thread.start()
     else:
@@ -438,7 +438,7 @@ async def lifespan(app: FastAPI):
             target=_dispute_judge_loop,
             args=(dispute_judge_stop_event,),
             daemon=True,
-            name="agentmarket-dispute-judge",
+            name="aztea-dispute-judge",
         )
         dispute_judge_thread.start()
     else:
@@ -452,7 +452,7 @@ async def lifespan(app: FastAPI):
             target=_agent_health_loop,
             args=(agent_health_stop_event,),
             daemon=True,
-            name="agentmarket-agent-health",
+            name="aztea-agent-health",
         )
         agent_health_thread.start()
 
@@ -462,7 +462,7 @@ async def lifespan(app: FastAPI):
             target=_payments_reconciliation_loop,
             args=(payments_reconciliation_stop_event,),
             daemon=True,
-            name="agentmarket-payments-reconciliation",
+            name="aztea-payments-reconciliation",
         )
         payments_reconciliation_thread.start()
     else:
@@ -530,7 +530,7 @@ def _key_from_request(request: Request) -> str:
 
 
 limiter = Limiter(key_func=_key_from_request, default_limits=[_DEFAULT_RATE_LIMIT])
-app = FastAPI(title="agentmarket v1", lifespan=lifespan)
+app = FastAPI(title="aztea v1", lifespan=lifespan)
 app.state.limiter = limiter
 
 register_exception_handlers(app, logger=_LOG)
@@ -677,12 +677,12 @@ except ImportError:
 
 if _PROM_AVAILABLE:
     _prom_requests_total = Counter(
-        "agentmarket_http_requests_total",
+        "aztea_http_requests_total",
         "Total HTTP requests",
         ["method", "path", "status"],
     )
     _prom_request_latency = Histogram(
-        "agentmarket_http_request_duration_seconds",
+        "aztea_http_request_duration_seconds",
         "HTTP request latency",
         ["method", "path"],
         buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0],
@@ -823,7 +823,7 @@ def _resolve_caller(request: Request) -> core_models.CallerContext | None:
 
 _PUBLIC_FRONTEND_URL = (
     os.environ.get("AZTEA_FRONTEND_URL")
-    or os.environ.get("AGENTMARKET_FRONTEND_URL")
+    or os.environ.get("AZTEA_FRONTEND_URL")
     or "https://aztea.dev"
 ).rstrip("/")
 _SIGNUP_URL = f"{_PUBLIC_FRONTEND_URL}/signup"

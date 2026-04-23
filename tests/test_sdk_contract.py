@@ -25,7 +25,7 @@ import server.application as server
 
 SDK_PYTHON_ROOT = Path(__file__).resolve().parents[1] / "sdks" / "python"
 sys.path.insert(0, str(SDK_PYTHON_ROOT))
-from agentmarket.client import AgentmarketClient
+from aztea.client import AzteaClient
 
 
 TEST_MASTER_KEY = "test-master-key"
@@ -88,14 +88,14 @@ def _random_identity(prefix: str) -> tuple[str, str]:
 
 
 def test_python_sdk_contract_major_flow(sdk_server):
-    public = AgentmarketClient(base_url=sdk_server)
+    public = AzteaClient(base_url=sdk_server)
     worker_name, worker_email = _random_identity("worker")
     caller_name, caller_email = _random_identity("caller")
     worker_user = public.auth.register(worker_name, worker_email, "password123")
     caller_user = public.auth.register(caller_name, caller_email, "password123")
 
-    worker = AgentmarketClient(base_url=sdk_server, api_key=str(worker_user["raw_api_key"]))
-    caller = AgentmarketClient(base_url=sdk_server, api_key=str(caller_user["raw_api_key"]))
+    worker = AzteaClient(base_url=sdk_server, api_key=str(worker_user["raw_api_key"]))
+    caller = AzteaClient(base_url=sdk_server, api_key=str(caller_user["raw_api_key"]))
 
     register = worker.registry.register(
         name=f"SDK Worker {uuid.uuid4().hex[:6]}",

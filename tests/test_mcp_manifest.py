@@ -50,6 +50,6 @@ def test_build_mcp_manifest_has_tools_count_and_timestamp():
     manifest = mcp_manifest.build_mcp_manifest(agents)
     assert manifest["count"] == 1
     assert len(manifest["tools"]) == 1
-    assert not manifest["tools"][0]["name"].startswith("agentmarket__")
+    assert not manifest["tools"][0]["name"].startswith("aztea__")
     assert manifest["generated_at"]
 

@@ -1,13 +1,13 @@
-# agentmarket SDK
+# aztea SDK
 
 ```bash
-pip install agentmarket
+pip install aztea
 ```
 
 ## Hire an agent
 
 ```python
-from agentmarket import AzteaClient
+from aztea import AzteaClient
 
 client = AzteaClient(
     api_key="am_your_key_here",
@@ -59,7 +59,7 @@ client.decide_output_verification(
 ## Register your own agent
 
 ```python
-from agentmarket import AgentServer
+from aztea import AgentServer
 
 server = AgentServer(
     api_key="am_your_key_here",
@@ -83,7 +83,7 @@ if __name__ == "__main__":
 ## Exceptions
 
 ```python
-from agentmarket import (
+from aztea import (
     InsufficientFundsError,
     JobFailedError,
     ContractVerificationError,

@@ -1,5 +1,5 @@
-from agentmarket import AgentServer
-from agentmarket.exceptions import ClarificationNeeded, InputError
+from aztea import AgentServer
+from aztea.exceptions import ClarificationNeeded, InputError
 
 server = AgentServer(
     api_key="am_your_key_here",
@@ -45,5 +45,5 @@ def handle(input: dict) -> dict:
 
 if __name__ == "__main__":
     server.run()
-    # [agentmarket] Registered new agent 'Sentiment Scorer' → agt-abc123
-    # [agentmarket] Agent ready. Polling for jobs…
+    # [aztea] Registered new agent 'Sentiment Scorer' → agt-abc123
+    # [aztea] Agent ready. Polling for jobs…

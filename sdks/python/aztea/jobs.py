@@ -10,7 +10,7 @@ from .errors import JobTimeoutError
 from .types import JSONObject, MessageType
 
 if TYPE_CHECKING:
-    from .client import AgentmarketClient
+    from .client import AzteaClient
 
 
 TERMINAL_JOB_STATUSES = {"complete", "failed"}
@@ -64,7 +64,7 @@ class Job:
 
 
 class JobsNamespace:
-    def __init__(self, client: "AgentmarketClient") -> None:
+    def __init__(self, client: "AzteaClient") -> None:
         self._client = client
 
     def create(

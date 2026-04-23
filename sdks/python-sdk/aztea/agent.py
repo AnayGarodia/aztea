@@ -4,7 +4,7 @@ polls the marketplace for jobs.
 
 Usage
 -----
-    from agentmarket import AgentServer
+    from aztea import AgentServer
 
     server = AgentServer(
         api_key="am_...",
@@ -129,14 +129,14 @@ class AgentServer:
 
         self._register_or_locate()
         _print_status(
-            f"[agentmarket] Agent '{self.name}' (id={self._agent_id}) ready. "
+            f"[aztea] Agent '{self.name}' (id={self._agent_id}) ready. "
             "Polling for jobs…"
         )
 
         try:
             self._poll_forever()
         except KeyboardInterrupt:
-            _print_status("[agentmarket] Shutting down.")
+            _print_status("[aztea] Shutting down.")
 
     # ── Registration ──────────────────────────────────────────────────────────
 
@@ -158,7 +158,7 @@ class AgentServer:
             )
             self._agent_id = data["agent_id"]
             _print_status(
-                f"[agentmarket] Registered new agent '{self.name}' → {self._agent_id}"
+                f"[aztea] Registered new agent '{self.name}' → {self._agent_id}"
             )
         except AzteaError as exc:
             # 409 Conflict means the name is already registered under our key
@@ -169,7 +169,7 @@ class AgentServer:
                         f"Agent name '{self.name}' already taken by a different owner."
                     ) from exc
                 _print_status(
-                    f"[agentmarket] Found existing agent '{self.name}' → {self._agent_id}"
+                    f"[aztea] Found existing agent '{self.name}' → {self._agent_id}"
                 )
             else:
                 raise
@@ -199,9 +199,9 @@ class AgentServer:
                 for job in jobs:
                     self._process_job(job)
             except AzteaError as exc:
-                _print_status(f"[agentmarket] Poll error: {exc}")
+                _print_status(f"[aztea] Poll error: {exc}")
             except Exception as exc:
-                _print_status(f"[agentmarket] Unexpected error: {exc}")
+                _print_status(f"[aztea] Unexpected error: {exc}")
 
             time.sleep(_POLL_INTERVAL)
 
@@ -221,15 +221,15 @@ class AgentServer:
             # Another worker may have claimed it first — skip silently
             return
         if not isinstance(claim_data, dict):
-            _print_status(f"[agentmarket] Claim response for job {job_id} was malformed.")
+            _print_status(f"[aztea] Claim response for job {job_id} was malformed.")
             return
         raw_claim_token = claim_data.get("claim_token")
         if not isinstance(raw_claim_token, str) or not raw_claim_token.strip():
-            _print_status(f"[agentmarket] Claim for job {job_id} did not return a valid claim token.")
+            _print_status(f"[aztea] Claim for job {job_id} did not return a valid claim token.")
             return
         claim_token: str = raw_claim_token
 
-        _print_status(f"[agentmarket] Claimed job {job_id}")
+        _print_status(f"[aztea] Claimed job {job_id}")
 
         # Heartbeat thread — keeps the lease alive every 20s
         stop_hb = threading.Event()
@@ -258,14 +258,14 @@ class AgentServer:
                 },
             )
             _print_status(
-                f"[agentmarket] Completed job {job_id} ({elapsed:.1f}s)"
+                f"[aztea] Completed job {job_id} ({elapsed:.1f}s)"
             )
 
         except ClarificationNeeded as exc:
             # Pause the job and ask the caller a question.
             # The heartbeat thread keeps running while we wait.
             _print_status(
-                f"[agentmarket] Job {job_id} needs clarification: {exc.question}"
+                f"[aztea] Job {job_id} needs clarification: {exc.question}"
             )
             try:
                 self._client._request(
@@ -299,7 +299,7 @@ class AgentServer:
                     )
                 except AzteaError:
                     pass
-                _print_status(f"[agentmarket] Job {job_id} timed out awaiting clarification")
+                _print_status(f"[aztea] Job {job_id} timed out awaiting clarification")
             else:
                 # Re-run handler with clarification injected
                 input_payload["__clarification__"] = answer
@@ -311,7 +311,7 @@ class AgentServer:
                         json={"output_payload": output, "claim_token": claim_token},
                     )
                     elapsed = time.monotonic() - t0
-                    _print_status(f"[agentmarket] Completed job {job_id} after clarification ({elapsed:.1f}s)")
+                    _print_status(f"[aztea] Completed job {job_id} after clarification ({elapsed:.1f}s)")
                 except Exception as retry_exc:
                     try:
                         self._client._request(
@@ -325,7 +325,7 @@ class AgentServer:
                         )
                     except AzteaError:
                         pass
-                    _print_status(f"[agentmarket] Failed job {job_id} after clarification: {retry_exc}")
+                    _print_status(f"[aztea] Failed job {job_id} after clarification: {retry_exc}")
 
         except InputError as exc:
             # Bad input from caller — fail fast with partial refund.
@@ -345,7 +345,7 @@ class AgentServer:
             except AzteaError:
                 pass
             _print_status(
-                f"[agentmarket] Job {job_id} rejected (bad input, "
+                f"[aztea] Job {job_id} rejected (bad input, "
                 f"{int(exc.refund_fraction*100)}% refund): {exc}"
             )
 
@@ -368,7 +368,7 @@ class AgentServer:
             except AzteaError:
                 pass
 
-            _print_status(f"[agentmarket] Failed job {job_id}: {error_msg}")
+            _print_status(f"[aztea] Failed job {job_id}: {error_msg}")
 
     def _wait_for_clarification(
         self,
@@ -460,7 +460,7 @@ class CallbackReceiver:
 
     Usage (Flask example)::
 
-        from agentmarket import CallbackReceiver
+        from aztea import CallbackReceiver
 
         receiver = CallbackReceiver(secret="my-secret")
 
@@ -478,7 +478,7 @@ class CallbackReceiver:
     Usage (FastAPI example)::
 
         from fastapi import Request
-        from agentmarket import CallbackReceiver
+        from aztea import CallbackReceiver
 
         receiver = CallbackReceiver(secret="my-secret")
 

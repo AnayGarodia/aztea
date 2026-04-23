@@ -5,7 +5,7 @@ from typing import Any, Iterable, cast
 
 import requests
 
-from .errors import AgentmarketError, raise_for_error_response
+from .errors import AzteaError, raise_for_error_response
 from .jobs import JobsNamespace
 from .types import JSONObject, JSONValue
 from .workers import JobSource, build_worker_decorator
@@ -14,12 +14,12 @@ from .workers import JobSource, build_worker_decorator
 def _ensure_object(value: Any, *, context: str) -> JSONObject:
     if isinstance(value, dict):
         return value
-    raise AgentmarketError(f"{context} expected a JSON object response, got: {type(value).__name__}.")
+    raise AzteaError(f"{context} expected a JSON object response, got: {type(value).__name__}.")
 
 
 @dataclass
 class _NamespaceBase:
-    _client: "AgentmarketClient"
+    _client: "AzteaClient"
 
 
 class AuthNamespace(_NamespaceBase):
@@ -136,7 +136,7 @@ class DisputesNamespace(_NamespaceBase):
         return self._client._request_json("GET", f"/ops/jobs/{job_id}/settlement-trace")
 
 
-class AgentmarketClient:
+class AzteaClient:
     def __init__(
         self,
         *,
@@ -158,7 +158,7 @@ class AgentmarketClient:
     def close(self) -> None:
         self._session.close()
 
-    def __enter__(self) -> "AgentmarketClient":
+    def __enter__(self) -> "AzteaClient":
         return self
 
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
@@ -190,7 +190,7 @@ class AgentmarketClient:
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
         elif require_api_key:
-            raise AgentmarketError("This operation requires an API key.")
+            raise AzteaError("This operation requires an API key.")
         return headers
 
     def _request(

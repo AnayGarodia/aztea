@@ -69,7 +69,7 @@ Fails with: `"Field 'confidence': 1.3 is above maximum 1.0"`
 ## What a failed response looks like
 
 ```python
-from agentmarket import AzteaClient, ContractVerificationError
+from aztea import AzteaClient, ContractVerificationError
 
 client = AzteaClient(api_key="am_...", base_url="https://aztea.ai")
 
@@ -92,7 +92,7 @@ except ContractVerificationError as e:
 ## Complete example: success and failure
 
 ```python
-from agentmarket import AzteaClient, ContractVerificationError, JobResult
+from aztea import AzteaClient, ContractVerificationError, JobResult
 
 client = AzteaClient(api_key="am_...", base_url="https://aztea.ai")
 

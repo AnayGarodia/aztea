@@ -191,7 +191,7 @@ class RegistryBridge:
                 "Sign up — it's free and you get $1 credit instantly, no card required."
             ),
             "signup_url": self._signup_url,
-            "docs_url": "https://github.com/AnayGarodia/agentmarket/blob/main/docs/quickstart.md",
+            "docs_url": "https://github.com/AnayGarodia/aztea/blob/main/docs/quickstart.md",
             "next_step": "Set AZTEA_API_KEY=am_... in your environment and restart the MCP server.",
         }
 
@@ -363,7 +363,7 @@ class MCPStdioServer:
             target=self._refresh_loop,
             args=(stop_event,),
             daemon=True,
-            name="agentmarket-mcp-refresh",
+            name="aztea-mcp-refresh",
         )
         refresh_thread.start()
         try:
@@ -395,24 +395,24 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Expose Aztea registry as MCP tools over stdio.")
     parser.add_argument(
         "--base-url",
-        default=_env_with_legacy("AZTEA_BASE_URL", "AGENTMARKET_BASE_URL", "http://localhost:8000"),
-        help="Aztea HTTP base URL (default: AZTEA_BASE_URL/AGENTMARKET_BASE_URL or http://localhost:8000).",
+        default=_env_with_legacy("AZTEA_BASE_URL", "AZTEA_BASE_URL", "http://localhost:8000"),
+        help="Aztea HTTP base URL (default: AZTEA_BASE_URL/AZTEA_BASE_URL or http://localhost:8000).",
     )
     parser.add_argument(
         "--api-key",
-        default=_env_with_legacy("AZTEA_API_KEY", "AGENTMARKET_API_KEY", ""),
-        help="Caller API key (default: AZTEA_API_KEY or AGENTMARKET_API_KEY).",
+        default=_env_with_legacy("AZTEA_API_KEY", "AZTEA_API_KEY", ""),
+        help="Caller API key (default: AZTEA_API_KEY or AZTEA_API_KEY).",
     )
     parser.add_argument(
         "--refresh-seconds",
         type=int,
-        default=int(_env_with_legacy("AZTEA_MCP_REFRESH_SECONDS", "AGENTMARKET_MCP_REFRESH_SECONDS", "60")),
+        default=int(_env_with_legacy("AZTEA_MCP_REFRESH_SECONDS", "AZTEA_MCP_REFRESH_SECONDS", "60")),
         help="Tool manifest refresh interval in seconds (default: 60).",
     )
     parser.add_argument(
         "--timeout-seconds",
         type=float,
-        default=float(_env_with_legacy("AZTEA_MCP_TIMEOUT_SECONDS", "AGENTMARKET_MCP_TIMEOUT_SECONDS", "10")),
+        default=float(_env_with_legacy("AZTEA_MCP_TIMEOUT_SECONDS", "AZTEA_MCP_TIMEOUT_SECONDS", "10")),
         help="HTTP timeout for registry and tool calls (default: 10).",
     )
     parser.add_argument(
@@ -430,7 +430,7 @@ def main() -> None:
     if not api_key:
         _LOG.warning(
             "No API key set. The MCP server will start in unauthenticated mode — "
-            "tool calls will return a sign-up link. Set AZTEA_API_KEY=am_... (or AGENTMARKET_API_KEY) to enable full access."
+            "tool calls will return a sign-up link. Set AZTEA_API_KEY=am_... (or AZTEA_API_KEY) to enable full access."
         )
 
     bridge = RegistryBridge(

@@ -4,10 +4,10 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OPENAPI_PATH="$ROOT_DIR/openapi.json"
 HOST="127.0.0.1"
-PORT="${AGENTMARKET_SDK_PORT:-8000}"
+PORT="${AZTEA_SDK_PORT:-8000}"
 BASE_URL="http://${HOST}:${PORT}"
 
-export API_KEY="${API_KEY:-agentmarket-sdk-master-key}"
+export API_KEY="${API_KEY:-aztea-sdk-master-key}"
 export SERVER_BASE_URL="${SERVER_BASE_URL:-$BASE_URL}"
 
 cleanup() {
@@ -19,7 +19,7 @@ trap cleanup EXIT
 
 cd "$ROOT_DIR"
 
-python -m uvicorn server:app --host "$HOST" --port "$PORT" --log-level warning >/tmp/agentmarket-sdk-openapi.log 2>&1 &
+python -m uvicorn server:app --host "$HOST" --port "$PORT" --log-level warning >/tmp/aztea-sdk-openapi.log 2>&1 &
 SERVER_PID=$!
 
 for _ in {1..60}; do
@@ -42,4 +42,4 @@ cd "$ROOT_DIR"
 python -m pip install --quiet mypy
 python -m pip install --quiet -e "$ROOT_DIR/sdks/python"
 cd "$ROOT_DIR/sdks/python"
-python -m mypy --strict agentmarket
+python -m mypy --strict aztea

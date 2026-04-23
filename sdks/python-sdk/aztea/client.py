@@ -95,7 +95,7 @@ class AzteaClient:
                 "Authorization": f"Bearer {api_key}",
                 "X-Aztea-Version": _VERSION_HEADER,
                 "Content-Type": "application/json",
-                "User-Agent": f"agentmarket-python/{__import__('agentmarket').__version__}",
+                "User-Agent": f"aztea-python/{__import__('aztea').__version__}",
             },
             timeout=timeout,
         )
@@ -524,7 +524,7 @@ class AzteaClient:
                     if on_error is not None:
                         on_error(exc)
 
-            t = threading.Thread(target=_watch, daemon=True, name=f"agentmarket-watch-{job_id[:8]}")
+            t = threading.Thread(target=_watch, daemon=True, name=f"aztea-watch-{job_id[:8]}")
             t.start()
 
         return job_id
@@ -691,7 +691,7 @@ class AsyncAzteaClient:
                 "Authorization": f"Bearer {api_key}",
                 "X-Aztea-Version": _VERSION_HEADER,
                 "Content-Type": "application/json",
-                "User-Agent": f"agentmarket-python/{__import__('agentmarket').__version__}",
+                "User-Agent": f"aztea-python/{__import__('aztea').__version__}",
             },
             timeout=timeout,
         )

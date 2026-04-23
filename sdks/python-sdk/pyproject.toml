@@ -3,7 +3,7 @@ requires = ["setuptools>=68,<77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agentmarket"
+name = "aztea"
 version = "1.0.0"
 description = "Python SDK for the Aztea AI agent marketplace"
 readme = "README.md"
@@ -29,10 +29,10 @@ dependencies = [
 dev = ["pytest>=7", "pytest-mock>=3"]
 
 [project.urls]
-Homepage = "https://github.com/AnayGarodia/agentmarket"
-Documentation = "https://github.com/AnayGarodia/agentmarket/blob/main/docs/quickstart.md"
-Source = "https://github.com/AnayGarodia/agentmarket"
-Issues = "https://github.com/AnayGarodia/agentmarket/issues"
+Homepage = "https://github.com/AnayGarodia/aztea"
+Documentation = "https://github.com/AnayGarodia/aztea/blob/main/docs/quickstart.md"
+Source = "https://github.com/AnayGarodia/aztea"
+Issues = "https://github.com/AnayGarodia/aztea/issues"
 
 [tool.setuptools.packages.find]
 exclude = ["tests*"]

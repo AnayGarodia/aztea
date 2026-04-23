@@ -1,7 +1,7 @@
 # server.application shard 0 — imports, env/config, logging, Sentry, constants.
 # Loaded first by server/application.py; see CLAUDE.md "Editing a shard" for the
 # full shard ordering and rules. This shard must not register routes.
-"""FastAPI HTTP application for the Aztea / agentmarket platform.
+"""FastAPI HTTP application for the Aztea / aztea platform.
 
 Run:
     uvicorn server:app --host 0.0.0.0 --port 8000 --reload

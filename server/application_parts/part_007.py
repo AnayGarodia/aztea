@@ -291,7 +291,7 @@ def _a2a_agent_card(agent: dict) -> dict:
             }
         ],
         "authentication": {"schemes": ["ApiKey"]},
-        "agentmarket": {
+        "aztea": {
             "agent_id": agent["agent_id"],
             "price_per_call_usd": price_usd,
             "trust_score": agent.get("trust_score"),
@@ -323,7 +323,7 @@ def a2a_platform_agent_card(request: Request) -> JSONResponse:
                 "tags": list(agent.get("tags") or []),
                 "inputModes": ["application/json"],
                 "outputModes": ["application/json"],
-                "agentmarket": {
+                "aztea": {
                     "agent_id": agent["agent_id"],
                     "price_per_call_usd": float(agent.get("price_per_call_usd") or 0.0),
                     "trust_score": agent.get("trust_score"),
@@ -348,7 +348,7 @@ def a2a_platform_agent_card(request: Request) -> JSONResponse:
         },
         "skills": skills,
         "authentication": {"schemes": ["ApiKey"]},
-        "agentmarket": {
+        "aztea": {
             "hire_endpoint": f"{_SERVER_BASE_URL}/jobs",
             "search_endpoint": f"{_SERVER_BASE_URL}/registry/search",
             "list_endpoint": f"{_SERVER_BASE_URL}/registry/agents",
@@ -452,7 +452,7 @@ def a2a_tasks_send(
         "price_cents": price_cents,
         "caller_charge_cents": caller_charge_cents,
         "created_at": job["created_at"],
-        "agentmarket_job": _job_response(job, caller),
+        "aztea_job": _job_response(job, caller),
     }, status_code=201)
 
 
@@ -485,7 +485,7 @@ def a2a_tasks_get(
         "error": job.get("error_message"),
         "created_at": job.get("created_at"),
         "completed_at": job.get("completed_at"),
-        "agentmarket_job": _job_response(job, caller),
+        "aztea_job": _job_response(job, caller),
     })
 
 
@@ -547,7 +547,7 @@ def openai_tools(
                     "required": required if required else [],
                 },
                 "metadata": {
-                    "agentmarket_agent_id": agent["agent_id"],
+                    "aztea_agent_id": agent["agent_id"],
                     "price_per_call_usd": float(agent.get("price_per_call_usd", 0)),
                     "trust_score": agent.get("trust_score"),
                     "success_rate": agent.get("success_rate"),
@@ -588,7 +588,7 @@ def mcp_manifest_payload(
     return JSONResponse(
         content={
             "schema_version": "v1",
-            "name": "agentmarket",
+            "name": "aztea",
             "description": "AI agent marketplace — specialized agents as callable tools",
             "tools": tools,
         }

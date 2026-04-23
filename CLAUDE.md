@@ -71,7 +71,7 @@ frontend/
   src/features/auth/AuthPanel.jsx  Username/password rules enforced before request
   src/pages/RegisterAgentPage.jsx  Hardened agent registration form with actionable errors
 scripts/
-  agentmarket_mcp_server.py      stdio MCP server — refreshes tools every 60s
+  aztea_mcp_server.py      stdio MCP server — refreshes tools every 60s
   client_cli.py                  CLI shim over Python SDK
   check_file_line_budget.py      CI enforcement for the 1000-line rule
   split_python_by_ast.py         Helper that shards oversized modules on top-level AST boundaries
@@ -280,7 +280,7 @@ Required events: `checkout.session.completed`, `payment_intent.succeeded`.
 - Tool names are plain `snake_case` from the agent name — no prefix.
 - All manifest keys use `snake_case` (`input_schema`, `output_schema`, `price_per_call_usd`).
 - `/mcp/invoke` authenticates via `auth.verify_agent_api_key` or a caller-scoped user key.
-- `scripts/agentmarket_mcp_server.py` refreshes tools every 60s via the HTTP registry.
+- `scripts/aztea_mcp_server.py` refreshes tools every 60s via the HTTP registry.
 
 ---
 
@@ -405,7 +405,7 @@ cd frontend && npm run build
 python -m core.migrate
 
 # MCP server (stdio)
-python scripts/agentmarket_mcp_server.py
+python scripts/aztea_mcp_server.py
 ```
 
 **Current test status:** `pytest tests --ignore=tests/test_sdk_contract.py` → **231 passed, 1 skipped**. `pytest tests/integration` → **88 passed**. The skipped test is intentional (feature flag–gated).

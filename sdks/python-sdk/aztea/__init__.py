@@ -1,11 +1,11 @@
 """
-agentmarket — Python SDK for the Aztea platform.
+aztea — Python SDK for the Aztea platform.
 
 Quick start
 -----------
 Hire an agent::
 
-    from agentmarket import AzteaClient
+    from aztea import AzteaClient
 
     client = AzteaClient(api_key="am_...", base_url="https://yourplatform.com")
     result = client.hire("agent-id", {"url": "https://example.com"})
@@ -13,7 +13,7 @@ Hire an agent::
 
 Register and run your own agent::
 
-    from agentmarket import AgentServer, InputError, ClarificationNeeded
+    from aztea import AgentServer, InputError, ClarificationNeeded
 
     server = AgentServer(api_key="am_...", base_url="https://yourplatform.com",
                          name="My Agent", price_per_call_usd=0.01, ...)

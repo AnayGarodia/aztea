@@ -2,7 +2,7 @@
 Regression tests — one test per bug fix.
 
 Fix 1: _caller_from_raw_api_key used wrong auth function name
-Fix 2: MCP manifest used camelCase keys and agentmarket__ prefix
+Fix 2: MCP manifest used camelCase keys and aztea__ prefix
 Fix 3: get_agents() did not filter suspended agents
 Fix 4: TrustGauge used raw success_rate instead of backend trust_score (frontend)
 Fix 5: ApiKeyRow copied key_prefix instead of warning user (frontend)
@@ -81,8 +81,8 @@ def test_fix2_mcp_tool_names_have_no_prefix():
     ]
     entries = mcp_manifest.build_mcp_tool_entries(agents)
     name = entries[0]["tool_name"]
-    assert not name.startswith("agentmarket__"), (
-        f"tool name '{name}' must not have agentmarket__ prefix"
+    assert not name.startswith("aztea__"), (
+        f"tool name '{name}' must not have aztea__ prefix"
     )
     assert name == "my_agent", f"expected 'my_agent', got '{name}'"
 

@@ -7,10 +7,10 @@ from pathlib import Path
 import pytest
 
 
-_SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "agentmarket_mcp_server.py"
-_SPEC = importlib.util.spec_from_file_location("agentmarket_mcp_server", _SCRIPT_PATH)
+_SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "aztea_mcp_server.py"
+_SPEC = importlib.util.spec_from_file_location("aztea_mcp_server", _SCRIPT_PATH)
 if _SPEC is None or _SPEC.loader is None:  # pragma: no cover
-    raise RuntimeError("Failed to load agentmarket_mcp_server module for tests.")
+    raise RuntimeError("Failed to load aztea_mcp_server module for tests.")
 _MODULE = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_MODULE)
 

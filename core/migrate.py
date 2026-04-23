@@ -1,5 +1,5 @@
 """
-migrate.py — SQLite schema migration runner for agentmarket.
+migrate.py — SQLite schema migration runner for aztea.
 
 Migrations are plain .sql files in the migrations/ directory at the repo root,
 named with a numeric prefix: 0001_initial.sql, 0002_add_foo.sql, etc.

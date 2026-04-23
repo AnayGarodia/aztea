@@ -1,5 +1,5 @@
 """
-reputation.py — SQLite-backed reputation and trust-score primitives for agentmarket.
+reputation.py — SQLite-backed reputation and trust-score primitives for aztea.
 
 Stores one caller quality rating (1-5) per completed job and computes trust
 metrics from quality + success rate + latency + confidence(volume).

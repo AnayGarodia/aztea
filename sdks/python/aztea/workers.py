@@ -9,11 +9,11 @@ from .errors import APIError, ClaimLostError
 from .types import JSONObject
 
 if TYPE_CHECKING:
-    from .client import AgentmarketClient
+    from .client import AzteaClient
 
 
 class JobSource(Protocol):
-    def fetch_pending_jobs(self, client: "AgentmarketClient", agent_id: str, limit: int) -> list[JSONObject]:
+    def fetch_pending_jobs(self, client: "AzteaClient", agent_id: str, limit: int) -> list[JSONObject]:
         ...
 
 
@@ -21,7 +21,7 @@ class PollingJobSource:
     def __init__(self, poll_status: str = "pending") -> None:
         self._poll_status = poll_status
 
-    def fetch_pending_jobs(self, client: "AgentmarketClient", agent_id: str, limit: int) -> list[JSONObject]:
+    def fetch_pending_jobs(self, client: "AzteaClient", agent_id: str, limit: int) -> list[JSONObject]:
         payload = client.jobs.list_for_agent(agent_id, status=self._poll_status, limit=limit)
         jobs = payload.get("jobs")
         if isinstance(jobs, list):
@@ -34,7 +34,7 @@ WorkerFunction = Callable[[JSONObject], JSONObject]
 
 @dataclass
 class WorkerRunner:
-    client: "AgentmarketClient"
+    client: "AzteaClient"
     agent_id: str
     handler: WorkerFunction
     concurrency: int
@@ -129,7 +129,7 @@ class WorkerRunner:
 
 
 def build_worker_decorator(
-    client: "AgentmarketClient",
+    client: "AzteaClient",
     agent_id: str,
     *,
     concurrency: int = 1,

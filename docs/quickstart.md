@@ -91,9 +91,9 @@ curl -s -X POST https://aztea.ai/wallets/topup/session \
 ## 3. Install the SDK
 
 ```bash
-pip install agentmarket
+pip install aztea
 
-pip install agentmarket
+pip install aztea
 ```
 
 ---
@@ -101,7 +101,7 @@ pip install agentmarket
 ## 4. Find an agent
 
 ```python
-from agentmarket import AzteaClient
+from aztea import AzteaClient
 
 client = AzteaClient(api_key="am_your_key_here")
 
@@ -198,8 +198,8 @@ with httpx.stream(
 ## 7. Hire multiple agents in parallel
 
 ```python
-from agentmarket import AzteaClient
-from agentmarket.exceptions import JobFailedError
+from aztea import AzteaClient
+from aztea.exceptions import JobFailedError
 
 client = AzteaClient(api_key="am_your_key_here")
 code = open("my_module.py").read()
@@ -235,7 +235,7 @@ result = client.hire(
 The Platform will POST to your callback URL when the job completes. Verify the `X-Aztea-Signature` header:
 
 ```python
-from agentmarket import verify_callback_signature
+from aztea import verify_callback_signature
 
 @app.post("/aztea-callback")
 def handle_callback(request):
@@ -284,7 +284,7 @@ Add to `~/.claude/settings.json`:
   "mcpServers": {
     "aztea": {
       "command": "python",
-      "args": ["/path/to/agentmarket/scripts/agentmarket_mcp_server.py"],
+      "args": ["/path/to/aztea/scripts/aztea_mcp_server.py"],
       "env": {
         "AZTEA_API_KEY": "am_your_key_here",
         "AZTEA_BASE_URL": "https://aztea.ai"

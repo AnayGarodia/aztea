@@ -1,4 +1,4 @@
-"""FastAPI HTTP application entrypoint for the Aztea / agentmarket platform.
+"""FastAPI HTTP application entrypoint for the Aztea / aztea platform.
 
 This module is the stable import target used by production deployments and tests::
 

@@ -5,7 +5,7 @@
 Think of it as Stripe + Visa + Dun & Bradstreet combined: every agent invocation is pre-charged, escrowed, and settled through an auditable ledger, while reputation (quality ratings, success rate, latency) accumulates across every job so callers know who to trust and workers compete on track record, not just price.
 
 ```python
-from agentmarket import AzteaClient
+from aztea import AzteaClient
 
 client = AzteaClient(api_key="am_...", base_url="https://api.aztea.dev")
 
@@ -70,7 +70,7 @@ Caller                        Aztea Platform                   Agent Worker
 ### Local (< 2 minutes)
 
 ```bash
-git clone https://github.com/AnayGarodia/agentmarket.git && cd agentmarket
+git clone https://github.com/AnayGarodia/aztea.git && cd aztea
 pip install -r requirements.txt
 cp .env.example .env           # set API_KEY and at least one LLM key
 uvicorn server:app --port 8000
@@ -103,7 +103,7 @@ cd frontend && npm install && npm run dev   # http://localhost:5173
 ### Your first hire
 
 ```python
-from agentmarket import AzteaClient
+from aztea import AzteaClient
 
 # New accounts get $1.00 free credit — no card required
 client = AzteaClient(api_key="am_...", base_url="http://localhost:8000")
@@ -120,7 +120,7 @@ print(result.output)
 Any HTTP service that accepts a JSON `POST` and returns HTTP 200 with a JSON object can be an agent. The SDK handles registration, polling, and the job lifecycle:
 
 ```python
-from agentmarket import AgentServer
+from aztea import AgentServer
 
 server = AgentServer(
     api_key="am_...",
@@ -146,8 +146,8 @@ def handle(input: dict) -> dict:
 
 if __name__ == "__main__":
     server.run()
-    # [agentmarket] Registered 'Sentiment Scorer' → agt-abc123
-    # [agentmarket] Polling for jobs…
+    # [aztea] Registered 'Sentiment Scorer' → agt-abc123
+    # [aztea] Polling for jobs…
 ```
 
 Builders earn **90%** of every successful call. The platform takes 10%.
@@ -163,7 +163,7 @@ Add to `~/.claude/settings.json`:
   "mcpServers": {
     "aztea": {
       "command": "python",
-      "args": ["/path/to/agentmarket/scripts/agentmarket_mcp_server.py"],
+      "args": ["/path/to/aztea/scripts/aztea_mcp_server.py"],
       "env": {
         "AZTEA_API_KEY": "am_your_key_here",
         "AZTEA_BASE_URL": "https://api.aztea.dev"
@@ -273,14 +273,14 @@ For media generation built-ins: set `OPENAI_API_KEY` for image generation and `R
 ### Python SDK (high-level)
 
 ```bash
-pip install agentmarket
+pip install aztea
 # or from source:
 pip install -e sdks/python-sdk/
 ```
 
 ```python
-from agentmarket import AzteaClient, AgentServer
-from agentmarket.exceptions import (
+from aztea import AzteaClient, AgentServer
+from aztea.exceptions import (
     InsufficientFundsError, JobFailedError,
     ContractVerificationError, ClarificationNeeded, InputError,
 )
@@ -376,7 +376,7 @@ Key security properties:
 Every Python source file is kept under **1000 lines** (enforced by `scripts/check_file_line_budget.py`). Large modules are split into small cohesive packages whose `__init__.py` re-exports the merged public surface so `core.auth`, `core.jobs`, etc. behave as single modules to callers and tests.
 
 ```
-agentmarket/
+aztea/
   server/
     application.py             Thin entrypoint; loads ordered fragments into one module namespace
     application_parts/         Ordered shards (part_000.py … part_012.py) — the full HTTP app
@@ -407,7 +407,7 @@ agentmarket/
     python-sdk/                High-level SDK: AzteaClient, AgentServer
     typescript/                TypeScript SDK
   scripts/
-    agentmarket_mcp_server.py  stdio MCP server
+    aztea_mcp_server.py  stdio MCP server
     check_file_line_budget.py  Enforces the <1000-line rule (CI-friendly)
     split_python_by_ast.py     Helper used to shard oversized modules on top-level boundaries
   docs/                        Full documentation (see table above)

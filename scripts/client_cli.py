@@ -1,4 +1,4 @@
-"""Thin compatibility CLI wrapper around the new `agentmarket` Python SDK."""
+"""Thin compatibility CLI wrapper around the new `aztea` Python SDK."""
 
 import argparse
 import json
@@ -11,13 +11,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 try:
-    from agentmarket import AgentmarketClient
-    from agentmarket.errors import APIError, AgentmarketError
+    from aztea import AzteaClient
+    from aztea.errors import APIError, AzteaError
 except ModuleNotFoundError:
     sdk_root = Path(__file__).resolve().parents[1] / "sdks" / "python"
     sys.path.insert(0, str(sdk_root))
-    from agentmarket import AgentmarketClient
-    from agentmarket.errors import APIError, AgentmarketError
+    from aztea import AzteaClient
+    from aztea.errors import APIError, AzteaError
 
 
 def main() -> None:
@@ -36,7 +36,7 @@ def main() -> None:
     if not args.registry_list and not args.ticker:
         parser.error("ticker is required unless --registry-list is provided.")
 
-    client = AgentmarketClient(base_url=args.host, api_key=api_key)
+    client = AzteaClient(base_url=args.host, api_key=api_key)
     try:
         if args.registry_list:
             result = client.registry.list(tag=args.tag)
@@ -49,7 +49,7 @@ def main() -> None:
     except APIError as exc:
         print(f"Error {exc.status_code}: {exc.detail}", file=sys.stderr)
         sys.exit(1)
-    except AgentmarketError as exc:
+    except AzteaError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
     finally:

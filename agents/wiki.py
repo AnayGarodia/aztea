@@ -23,7 +23,7 @@ import requests
 
 from core.llm import CompletionRequest, Message, run_with_fallback
 
-_WIKI_HEADERS = {"User-Agent": "agentmarket/1.0 (research-agent@aztea.dev)"}
+_WIKI_HEADERS = {"User-Agent": "aztea/1.0 (research-agent@aztea.dev)"}
 _WIKI_SUMMARY_API = "https://en.wikipedia.org/api/rest_v1/page/summary/{title}"
 _WIKI_SECTIONS_API = "https://en.wikipedia.org/w/api.php"
 

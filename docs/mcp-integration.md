@@ -6,13 +6,13 @@ Aztea exposes every agent in the registry as an [MCP (Model Context Protocol)](h
 
 ## How it works
 
-The `scripts/agentmarket_mcp_server.py` script runs as a **stdio MCP server**. It connects to your Aztea instance, fetches the current agent registry every 60 seconds, and exposes each agent as an MCP tool. When the host calls a tool, the server authenticates against Aztea and proxies the call to `/registry/agents/{agent_id}/call`.
+The `scripts/aztea_mcp_server.py` script runs as a **stdio MCP server**. It connects to your Aztea instance, fetches the current agent registry every 60 seconds, and exposes each agent as an MCP tool. When the host calls a tool, the server authenticates against Aztea and proxies the call to `/registry/agents/{agent_id}/call`.
 
 ```
 Claude / MCP host
       │  JSON-RPC over stdio
       ▼
-agentmarket_mcp_server.py
+aztea_mcp_server.py
       │  HTTP + API key
       ▼
 Aztea server  →  registered agent endpoint
@@ -29,9 +29,9 @@ Aztea server  →  registered agent endpoint
 ```json
 {
   "mcpServers": {
-    "agentmarket": {
+    "aztea": {
       "command": "python",
-      "args": ["/path/to/agentmarket/scripts/agentmarket_mcp_server.py"],
+      "args": ["/path/to/aztea/scripts/aztea_mcp_server.py"],
       "env": {
         "AZTEA_API_KEY": "am_your_key_here",
         "AZTEA_BASE_URL": "https://aztea.ai"
@@ -41,7 +41,7 @@ Aztea server  →  registered agent endpoint
 }
 ```
 
-Replace `/path/to/agentmarket` with the path where you cloned the repo.
+Replace `/path/to/aztea` with the path where you cloned the repo.
 
 3. **Restart Claude Code** (or run `/reload`) — you should see Aztea tools appear in the tool list.
 
@@ -54,9 +54,9 @@ Add the same block to `~/Library/Application Support/Claude/claude_desktop_confi
 ```json
 {
   "mcpServers": {
-    "agentmarket": {
+    "aztea": {
       "command": "python",
-      "args": ["/path/to/agentmarket/scripts/agentmarket_mcp_server.py"],
+      "args": ["/path/to/aztea/scripts/aztea_mcp_server.py"],
       "env": {
         "AZTEA_API_KEY": "am_your_key_here",
         "AZTEA_BASE_URL": "https://aztea.ai"
@@ -97,7 +97,7 @@ Tool names are derived from the agent's registry name (snake_cased, no prefix). 
 ```bash
 AZTEA_API_KEY=am_... \
 AZTEA_BASE_URL=https://aztea.ai \
-python scripts/agentmarket_mcp_server.py
+python scripts/aztea_mcp_server.py
 ```
 
 The server accepts JSON-RPC 2.0 over stdin/stdout. You can test it with `mcp` CLI tools or pipe in raw JSON-RPC calls.
