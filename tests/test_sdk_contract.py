@@ -103,7 +103,8 @@ def test_python_sdk_contract_major_flow(sdk_server):
         endpoint_url=f"{sdk_server}/agents/financial",
         price_per_call_usd=0.05,
         tags=["sdk-contract"],
-        input_schema={"type": "object", "properties": {"ticker": {"type": "string"}}},
+        input_schema={"type": "object", "properties": {"ticker": {"type": "string", "title": "Ticker", "description": "Stock ticker symbol"}}},
+        output_examples=[{"input": {"ticker": "AAPL"}, "output": {"summary": "Apple Inc."}}],
     )
     agent_id = str(register["agent_id"])
     approve = requests.post(
