@@ -324,8 +324,8 @@ cd frontend && npm install && npm run dev
 # Tests (should pass 230+ / 2 known pre-existing failures re: provider validation)
 pytest -q tests
 
-# Single test
-pytest tests/test_server_api_integration.py::test_name -q
+# Single integration test
+pytest tests/integration/test_workers_jobs_core.py::test_worker_claim_heartbeat_and_complete_with_owner_auth -q
 
 # Frontend prod build
 cd frontend && npm run build
