@@ -1,5 +1,38 @@
-"""
-HTTP exception handlers and error payload normalization for the FastAPI app.
+"""HTTP exception handlers and error payload normalisation for the FastAPI app.
+
+This module guarantees that every error response the platform emits uses the
+stable envelope defined in ``core.error_codes.make_error``:
+
+::
+
+    {
+        "error":      "<dot.namespaced.code>",
+        "message":    "<human-readable, actionable text>",
+        "details":    <null | structured context>,
+        "request_id": "<X-Request-ID header value>",
+    }
+
+Responsibilities:
+
+- ``HTTPException`` raised anywhere in a route handler is normalised so the
+  ``detail`` field (dict or string) collapses into the ``error`` / ``message``
+  / ``details`` fields above. Legacy string details are mapped to specific
+  error codes via ``_error_code_from_message`` — this keeps the client SDKs
+  able to branch on machine-readable codes without forcing every route to
+  spell them out explicitly.
+- ``RequestValidationError`` from FastAPI (body/query/path validation) is
+  converted into ``request.invalid_input`` with the sanitised pydantic
+  error list under ``details.errors``.
+- ``RateLimitExceeded`` from slowapi returns a ``rate_limit_exceeded`` payload
+  plus a ``Retry-After`` header in seconds.
+- Any other unhandled exception logs a ``server.unhandled_exception`` event
+  and returns a generic ``server.internal_error`` 500 so we never leak stack
+  traces to the wire.
+
+The SPA fallback (``server.application_parts.part_012.spa_fallback``) and the
+``api_prefix_compat`` middleware (``part_001``) sit **outside** this module but
+rely on the same envelope, so users always see structured, actionable errors
+regardless of how the request reached FastAPI.
 """
 
 from __future__ import annotations

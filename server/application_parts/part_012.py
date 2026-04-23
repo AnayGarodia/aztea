@@ -529,6 +529,14 @@ def _resolved_under(parent: _SpaPath, candidate: _SpaPath) -> bool:
 
 @app.get("/", include_in_schema=False)
 def spa_root() -> _SpaFileResponse:
+    """Serve ``frontend/dist/index.html`` at the site root.
+
+    Without this route an unmatched request for ``/`` would fall through to
+    Starlette's default ``{"detail": "Not Found"}`` handler, producing a
+    broken public URL whenever nginx forwards ``/`` to FastAPI. If the SPA
+    has not been built yet we surface an actionable 404 that tells the
+    operator exactly what to run.
+    """
     index_file = _FRONTEND_DIST_DIR / "index.html"
     if index_file.is_file():
         return _SpaFileResponse(str(index_file))
@@ -543,6 +551,24 @@ def spa_root() -> _SpaFileResponse:
 
 @app.get("/{full_path:path}", include_in_schema=False)
 def spa_fallback(full_path: str) -> _SpaFileResponse:
+    """Serve static assets or the React SPA shell for any non-API path.
+
+    Because this route is registered last, every concrete API route (``/auth``,
+    ``/jobs``, ``/wallets``, …) wins during FastAPI's sequential matching and
+    this handler only fires for paths that would otherwise 404. Resolution
+    order for the requested fragment:
+
+    1. If the fragment looks like an API prefix (see ``_SPA_API_PREFIXES``),
+       return a structured 404 so clients do not receive an HTML page when
+       they meant to hit JSON.
+    2. If ``frontend/dist`` is missing (frontend not yet built), return a
+       human-readable 404 telling the operator how to build the SPA.
+    3. If the fragment maps to an existing file inside ``frontend/dist`` (and
+       path traversal is blocked by ``_resolved_under``), stream that file —
+       this is how hashed assets under ``/assets/...`` are served.
+    4. Otherwise fall back to ``index.html`` so React Router can resolve the
+       URL on the client.
+    """
     if _path_is_api(full_path):
         raise HTTPException(status_code=404, detail=f"Not Found: /{full_path}")
 

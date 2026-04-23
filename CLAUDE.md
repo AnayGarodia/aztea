@@ -12,57 +12,77 @@ Live at **[https://aztea.ai](https://aztea.ai)**
 
 ## Repository map
 
+Every Python source file is kept **< 1000 lines**. Large modules are split into cohesive packages whose `__init__.py` re-exports the merged public surface so `import core.jobs as jobs` (and similar) continue to behave like a single module. `scripts/check_file_line_budget.py` enforces this rule.
+
 ```
-server/                        # HTTP app package: ``application.py`` (routes + workers), ``error_handlers.py``, ``routes/``
-agents/                        # Built-in agent implementations (one module each)
-  financial/                   # SEC EDGAR fetcher + synthesizer
-  wiki.py                      # Wikipedia API
-  codereview.py                # Structured LLM-based code review
-  cve_lookup.py                # NIST NVD live API
-  arxiv_research.py            # arXiv live API + LLM synthesis
-  python_executor.py           # Subprocess sandbox (real code execution)
-  web_researcher.py            # HTTP fetch + HTML strip + LLM analysis
-  image_generator.py           # OpenAI / Replicate image gen
-  media_generation.py          # Shared media helpers (used by image/video agents)
-  (others: suspended from public marketplace — LLM wrappers with no real tool use)
+server/
+  application.py                 Thin entrypoint; loads ordered shards into one namespace
+  application_parts/             Ordered implementation shards (part_000.py … part_012.py)
+  application_parts/part_001.py  CORS, middleware, /api/* compat shim, request tracing, prometheus
+  application_parts/part_012.py  SPA fallback: serves frontend/dist/index.html for non-API paths
+  builtin_agents/                Built-in IDs (constants.py), schemas (schemas.py), and registration specs
+  builtin_agents/specs.py        Merges specs_part1 + specs_part2; returns only curated public builtins
+  error_handlers.py              Shared HTTPException / validation / rate-limit handlers
+  persistence/ops_schema.py      ops + stripe event tables initialisation
+  routes/system.py               Small sub-router for system routes
+agents/                          Built-in agent implementations (one module each)
+  financial/                     SEC EDGAR fetcher + synthesizer
+  wiki.py                        Wikipedia API
+  codereview.py                  Structured LLM-based code review
+  cve_lookup.py                  NIST NVD live API
+  arxiv_research.py              arXiv live API + LLM synthesis
+  python_executor.py             Subprocess sandbox (real code execution)
+  web_researcher.py              HTTP fetch + HTML strip + LLM analysis
+  image_generator.py             OpenAI / Replicate image gen
+  media_generation.py            Shared media helpers (used by image/video agents)
+  (others: LLM-only wrappers retained in internal routing but not in curated public set)
 core/
-  db.py                        # SQLite connection manager — WAL, thread-local pool, PRAGMAs
-  migrate.py                   # Idempotent migration runner (apply_migrations)
-  auth.py                      # users, scoped API keys, agent-scoped keys
-  registry.py                  # agent listings, semantic search, embeddings cache
-  mcp_manifest.py              # registry → MCP tool manifest (snake_case keys, no prefix)
-  embeddings.py                # sentence-transformers backend
-  jobs.py                      # async job lifecycle, claim/lease, retries, messages
-  payments.py                  # wallets, insert-only ledger, settlement helpers
-  disputes.py                  # disputes, judgments (does NOT declare caller_ratings)
-  judges.py                    # LLM-based dispute + quality judge logic
-  reputation.py                # trust scores; SOLE owner of caller_ratings table
-  onboarding.py                # agent.md parsing/validation/ingestion
-  models.py                    # Pydantic v2 request/response contracts
-  error_codes.py               # machine-readable error taxonomy
-  url_security.py              # SSRF validation for all outbound URLs
+  db.py                          SQLite connection manager — WAL, thread-local pool, PRAGMAs
+  migrate.py                     Idempotent migration runner (apply_migrations)
+  auth/                          Users + scoped keys (schema.py, users.py) merged into ``core.auth``
+  registry/                      Agent listings (core_schema.py, agents_ops.py) + embeddings cache
+  jobs/                          Async job lifecycle: db.py, crud.py, leases.py, messaging.py
+  payments/                      Wallets + insert-only ledger (base.py) + trust/dispute helpers (trust_disputes.py)
+  models/                        Pydantic v2 contracts: core_types, job_requests, messages_ops, responses
+  mcp_manifest.py                registry → MCP tool manifest (snake_case keys, no prefix)
+  embeddings.py                  sentence-transformers backend
+  disputes.py                    Disputes and judgments (does NOT declare caller_ratings)
+  judges.py                      LLM-based dispute + quality judge logic
+  reputation.py                  Trust scores; SOLE owner of the caller_ratings table
+  onboarding.py                  agent.md parsing/validation/ingestion
+  error_codes.py                 Machine-readable error taxonomy
+  url_security.py                SSRF validation for all outbound URLs
   llm/
-    base.py                    # Message, CompletionRequest, LLMResponse, LLMProvider Protocol
-    errors.py                  # LLMError, LLMRateLimitError, LLMTimeoutError, LLMBadResponseError
-    registry.py                # PROVIDERS dict, resolve(spec), DEFAULT_CHAIN, list_providers()
-    fallback.py                # run_with_fallback() — chain-tries, skips unavailable, retries on rate limit
-    providers/                 # groq, openai, anthropic, cohere, bedrock, openai_compatible (25+ via env)
+    base.py                      Message, CompletionRequest, LLMResponse, LLMProvider Protocol
+    errors.py                    LLMError, LLMRateLimitError, LLMTimeoutError, LLMBadResponseError
+    registry.py                  PROVIDERS dict, resolve(spec), DEFAULT_CHAIN, list_providers()
+    fallback.py                  run_with_fallback() — chain-tries, skips unavailable, retries on rate limit
+    providers/                   groq, openai, anthropic, cohere, bedrock, openai_compatible (25+ via env)
 migrations/
-  0001_initial.sql             # canonical schema — all CREATE TABLE / INDEX
-  0002–0007_*.sql              # incremental additions (applied once on startup)
+  0001_initial.sql               Canonical schema — all CREATE TABLE / INDEX
+  0002–0007_*.sql                Incremental additions (applied once on startup)
 sdks/
-  python-sdk/                  # AzteaClient (hire), AgentServer (@handler + polling loop)
-  python/                      # Resource-oriented HTTP SDK
-  typescript/                  # TypeScript SDK
-frontend/                      # React 18 + Vite + motion
+  python-sdk/                    AzteaClient (hire), AgentServer (@handler + polling loop)
+  python/                        Resource-oriented HTTP SDK
+  typescript/                    TypeScript SDK
+frontend/
+  src/utils/inputGuards.js       Shared client-side validators: public HTTPS URLs, price ceilings, invoke payload
+  src/api.js                     Normalises API errors (prefers server messages over generic mappings)
+  src/features/auth/AuthPanel.jsx  Username/password rules enforced before request
+  src/pages/RegisterAgentPage.jsx  Hardened agent registration form with actionable errors
 scripts/
-  agentmarket_mcp_server.py    # stdio MCP server — refreshes tools every 60s
-  client_cli.py                # CLI shim over Python SDK
-tests/                         # pytest — 230+ tests across API, payments, jobs, LLM, SDK
-docker-compose.yml             # dev compose (no SSL, mounts ./data)
-docker-compose.prod.yml        # prod compose (nginx + API, named volume for DB)
-nginx.prod.conf                # nginx reverse proxy — /api/* → FastAPI, /* → React SPA
-Makefile                       # dev shortcuts: make dev / test / docker / migrate
+  agentmarket_mcp_server.py      stdio MCP server — refreshes tools every 60s
+  client_cli.py                  CLI shim over Python SDK
+  check_file_line_budget.py      CI enforcement for the 1000-line rule
+  split_python_by_ast.py         Helper that shards oversized modules on top-level AST boundaries
+  split_integration_tests.py     Splits the old integration-test file into tests/integration/
+tests/
+  integration/                   Split integration suite — helpers in support.py and helpers.py
+  …                              Unit tests for jobs, payments, registry, auth, LLM, SDK
+docker-compose.yml               dev compose (no SSL, mounts ./data)
+docker-compose.prod.yml          prod compose (nginx + API, named volume for DB)
+nginx.prod.conf                  nginx reverse proxy — /api/* → FastAPI, /* → React SPA
+Makefile                         dev shortcuts: make dev / test / docker / migrate
 ```
 
 ---
@@ -81,7 +101,7 @@ Makefile                       # dev shortcuts: make dev / test / docker / migra
 - **Stack:** systemd service (`aztea.service`) running uvicorn directly — no Docker
 - **Process:** `/home/aztea/app/venv/bin/uvicorn server:app --host 127.0.0.1 --port 8000 --workers 1`
 - **Database:** SQLite WAL at the path set in `.env` (`DB_PATH`), on the host filesystem
-- **Reverse proxy:** nginx on ports 80/443, proxies `/api/`* → uvicorn on 127.0.0.1:8000, serves `frontend/dist/` for everything else
+- **Reverse proxy:** nginx on ports 80/443. Recommended layout: `/api/*` → uvicorn on `127.0.0.1:8000` (strip the `/api` prefix with `proxy_pass http://127.0.0.1:8000/;`), and `try_files $uri $uri/ /index.html;` for everything else against `/home/aztea/app/frontend/dist/`. The backend also tolerates an un-stripped `/api/*` prefix via a compatibility middleware and — if nginx ever forwards `/` to uvicorn — serves `frontend/dist/index.html` itself as a SPA fallback. The site therefore keeps working even when nginx and FastAPI disagree on which layer owns static assets.
 - **SSL:** managed by certbot on the host; nginx handles termination
 
 ### Deploying a new version
@@ -91,10 +111,11 @@ SSH into the server, then:
 ```bash
 cd /home/aztea/app
 
-# 1. Pull latest code (stash first if any local changes exist)
-git stash
-git pull origin main
-git stash pop
+# 1. Pull latest code as the service user so file ownership stays clean.
+#    NEVER run `sudo git pull` here — it makes files root-owned and breaks the
+#    systemd unit that runs as `aztea`.
+sudo -u aztea git fetch origin main
+sudo -u aztea git reset --hard origin/main
 
 # 2. Rebuild the React frontend
 cd frontend && npm ci && npm run build && cd ..
@@ -114,6 +135,48 @@ sudo systemctl restart aztea
 ```
 
 Migrations run automatically on startup via `core/migrate.py` — no manual step needed.
+
+### Recommended nginx config
+
+The backend already ships a SPA fallback and an `/api/*` compatibility shim, so nginx just needs to proxy the API and serve the React build. Minimal `server` block:
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name aztea.ai www.aztea.ai;
+
+    root /home/aztea/app/frontend/dist;
+    index index.html;
+
+    # Hashed Vite assets — long cache
+    location ~* ^/assets/.*\.(js|css|woff2?|ttf|eot|svg|png|jpg|jpeg|gif|webp|ico|map)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        try_files $uri =404;
+    }
+
+    # API + server routes → uvicorn (strip the /api prefix)
+    location ~ ^/(api|auth|admin|agents|jobs|registry|wallets|ops|mcp|public|config|stripe|llm|health|metrics|onboarding|disputes|reputation|runs|webhooks|openapi.json)(/|$) {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 120s;
+    }
+
+    # SPA fallback for client-side routes
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+```
+
+If you simplify by sending **everything** to uvicorn, the backend still
+serves the SPA from `frontend/dist/` and strips any leftover `/api/` prefix —
+so the site stays functional; you just lose nginx's direct-file performance
+benefit on static assets.
 
 ### Useful server commands
 
@@ -324,8 +387,13 @@ cp .env.example .env && make docker
 # Frontend
 cd frontend && npm install && npm run dev
 
-# Tests (should pass 230+ / 2 known pre-existing failures re: provider validation)
-pytest -q tests
+# Tests (expect 231 passed + 1 skipped on the main suite; run the SDK contract suite
+# separately because it can segfault under Python 3.14 on macOS in the default interpreter)
+pytest -q tests --ignore=tests/test_sdk_contract.py
+pytest -q tests/test_sdk_contract.py
+
+# Line-budget enforcement (every Python source file must be < 1000 lines)
+python scripts/check_file_line_budget.py
 
 # Single integration test
 pytest tests/integration/test_workers_jobs_core.py::test_worker_claim_heartbeat_and_complete_with_owner_auth -q
@@ -340,10 +408,7 @@ python -m core.migrate
 python scripts/agentmarket_mcp_server.py
 ```
 
-**Known pre-existing test failures (not regressions):**
-
-- `test_get_agents_invalid_provider_raises` — provider validation intentionally relaxed for full agnosticism
-- `test_api_filter_agents_invalid_provider` — same
+**Current test status:** `pytest tests --ignore=tests/test_sdk_contract.py` → **231 passed, 1 skipped**. `pytest tests/integration` → **88 passed**. The skipped test is intentional (feature flag–gated).
 
 ---
 
@@ -351,14 +416,22 @@ python scripts/agentmarket_mcp_server.py
 
 1. Create `agents/{slug}.py` with a `run(payload: dict) -> dict` function.
 2. Generate a stable ID: `uuid.uuid5(uuid.UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8'), 'aztea.builtin.{slug}')`.
-3. Add constant at top of `server.py` (`_{NAME}_AGENT_ID`).
-4. Add to `_BUILTIN_INTERNAL_ENDPOINTS` and `_BUILTIN_LEGACY_ROUTE_ENDPOINTS`.
-5. Add to `_CURATED_PUBLIC_BUILTIN_AGENT_IDS` **only if it uses real external tools or compute** (not pure LLM).
-6. Add case to `_execute_builtin_agent()`.
-7. Add spec to `_builtin_agent_specs()` (name, description, input_schema, output_schema, output_examples, price_per_call_usd).
-8. Add import at top of `server.py`.
+3. Add the ID as a constant in `server/builtin_agents/constants.py` (`{NAME}_AGENT_ID`) and wire it into `BUILTIN_INTERNAL_ENDPOINTS` + `CURATED_BUILTIN_AGENT_IDS` (only if the agent performs real external work beyond pure LLM prompting).
+4. Add the agent import at the top of `server/application_parts/part_000.py` (this is the shard that holds all agent imports).
+5. Add a case to `_execute_builtin_agent()` (lives in the routing shard — `grep -n "_execute_builtin_agent" server/application_parts/part_*.py`).
+6. Add a spec entry to `server/builtin_agents/specs_part1.py` **or** `specs_part2.py` (whichever keeps each file under ~900 lines). The final curated list is assembled by `server/builtin_agents/specs.py::builtin_agent_specs()`.
+7. Run `pytest tests/integration/test_hooks_builtin_mcp.py -q` to confirm the registration + MCP manifest pick up the new agent.
 
 **Agents earn a place in the public marketplace by doing something Claude can't do in a chat session.** Real API data, live fetches, actual code execution — not LLM prompting with a nice schema.
+
+### Editing a shard (`server/application_parts/part_NNN.py`)
+
+The shards share a single logical namespace — `server/application.py` compiles each shard in order into its own module globals. Practical rules:
+
+- Add new imports to **`part_000.py`** (the import shard); other shards should reference symbols already in scope.
+- Add new top-level routes/middleware at the end of the shard that naturally owns the concern (e.g. wallet routes live in `part_012.py`, SPA fallback is in `part_012.py`).
+- Keep each shard **< 900 lines**. Use `scripts/check_file_line_budget.py` — CI fails on any file > 1000 lines.
+- If a function grows too big, move it into a helper module under `core/` or a new sub-package; do **not** re-split the shards by hand.
 
 ---
 

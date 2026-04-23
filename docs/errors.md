@@ -4,14 +4,25 @@ All API errors return JSON in this envelope:
 
 ```json
 {
-  "error":   "job.not_found",
-  "message": "Job 'job-xyz' not found.",
-  "details": null
+  "error":      "job.not_found",
+  "message":    "Job 'job-xyz' not found.",
+  "details":    null,
+  "request_id": "7f6a..."
 }
 ```
 
-`error` is a dot-namespaced machine-readable code. `message` is human-readable.
-`details` is `null` or an object with additional context (validation errors, etc.).
+| Field | Meaning |
+|---|---|
+| `error` | Dot-namespaced machine-readable code — safe to branch on in SDKs. |
+| `message` | Human-readable, actionable description suitable for showing to a user. |
+| `details` | `null` or an object with field-level context (for validation errors, `details.errors[]` contains the pydantic sub-errors). |
+| `request_id` | Mirrors the `X-Request-ID` response header. Include it when filing support tickets. |
+
+**Client-side guidance:** use `error` to switch on behaviour (retry, redirect
+to login, open wallet top-up dialog, etc.) and use `message` for the text you
+show to a user. The web app's `src/api.js` already prefers the server-provided
+`message` (and the first entry in `details.errors` when present) over generic
+HTTP-status fallbacks, so your custom messages will surface correctly.
 
 ---
 

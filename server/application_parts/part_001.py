@@ -579,8 +579,19 @@ _TRUSTED_PROXY_NETWORKS = _parse_ip_allowlist(
 
 @app.middleware("http")
 async def api_prefix_compat(request: Request, call_next):
-    # Compatibility shim for deployments that send requests as /api/* directly
-    # to FastAPI (without an upstream rewrite).
+    """Transparently strip a leading ``/api`` from incoming requests.
+
+    The canonical nginx layout proxies ``/api/*`` to uvicorn and rewrites the
+    prefix so FastAPI receives ``/auth/...``, ``/jobs/...``, etc. Some setups
+    (dev servers, alternative reverse proxies, single-host Docker compose)
+    forward the prefix verbatim. Without this shim every such request would
+    404 because no FastAPI route is registered under ``/api``.
+
+    The middleware rewrites ``request.scope`` before routing runs, so the
+    Pydantic body/dependency machinery and the real handler all see the
+    canonical path. The public API surface is therefore ``/api/<path>`` and
+    ``/<path>`` — fully interchangeable.
+    """
     path = request.scope.get("path") or ""
     if path == "/api" or path.startswith("/api/"):
         rewritten = path[4:] or "/"

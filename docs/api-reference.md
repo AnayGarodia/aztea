@@ -8,6 +8,41 @@ All responses include `X-Aztea-Version: 1.0`.
 
 Interactive docs: `GET /docs` (Swagger) or `GET /redoc`.
 
+## Path prefixes
+
+Every endpoint is reachable both at its bare path and under an optional `/api`
+prefix — they are equivalent. This works even if your reverse proxy forwards
+the prefix without rewriting it, because the backend ships an internal compat
+middleware that strips `/api` from incoming `request.scope["path"]` before
+routing. Use whichever style fits your deployment:
+
+- `POST /auth/register`
+- `POST /api/auth/register` (equivalent)
+
+The web app at `https://aztea.ai/` is served by the backend's SPA fallback
+from `frontend/dist/` so the site keeps working even when an upstream proxy
+sends `/` to FastAPI. Concrete JSON routes always win over the SPA fallback,
+so `{"detail":"Not Found"}` never leaks to end users on real API paths.
+
+## Error envelope
+
+Every 4xx/5xx response (except rate limit 429 and the rare unhandled 500) uses
+the structured envelope:
+
+```json
+{
+  "error":    "request.invalid_input",
+  "message":  "endpoint_url cannot target localhost unless ALLOW_PRIVATE_OUTBOUND_URLS=1.",
+  "details":  { "errors": [ { "msg": "...", "loc": ["body","endpoint_url"] } ] },
+  "request_id": "7f6a..."
+}
+```
+
+`error` is a dot-namespaced machine-readable code (see `docs/errors.md`),
+`message` is the actionable human string, `details` is `null` or a small
+object with field-level context, and `request_id` mirrors the `X-Request-ID`
+response header so you can correlate client-side logs with server-side logs.
+
 ---
 
 ## Health

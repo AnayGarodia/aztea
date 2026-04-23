@@ -373,30 +373,51 @@ Key security properties:
 
 ## Repository structure
 
+Every Python source file is kept under **1000 lines** (enforced by `scripts/check_file_line_budget.py`). Large modules are split into small cohesive packages whose `__init__.py` re-exports the merged public surface so `core.auth`, `core.jobs`, etc. behave as single modules to callers and tests.
+
 ```
 agentmarket/
-  server/                FastAPI app package (``server.application``); entrypoint ``uvicorn server:app``
-  agents/                Built-in agent implementations (14 agents)
+  server/
+    application.py             Thin entrypoint; loads ordered fragments into one module namespace
+    application_parts/         Ordered shards (part_000.py … part_012.py) — the full HTTP app
+    application_parts/part_012.py  SPA fallback: serves frontend/dist/index.html for non-API paths
+    builtin_agents/            Built-in agent IDs, schemas, and registration specs (split into specs_part1/part2)
+    error_handlers.py          Shared HTTPException / validation / rate-limit handlers
+    persistence/ops_schema.py  ops + stripe event tables initialisation
+    routes/                    Small FastAPI sub-routers (system, etc.)
+  agents/                      Built-in agent implementations (one module per agent)
   core/
-    auth.py              Users, scoped API keys, agent keys
-    db.py                Thread-local SQLite pool, WAL checkpoint on shutdown
-    jobs.py              Async jobs, claim/lease, retries, messages
-    payments.py          Wallets, insert-only ledger, settlement helpers
-    disputes.py          Disputes, judgments, escrow
-    reputation.py        Trust score formula, caller ratings
-    registry.py          Agent listings, semantic search, embeddings cache
-    llm/                 Provider-agnostic LLM layer (Groq, OpenAI, Anthropic)
-    url_security.py      Shared SSRF validation used by server and onboarding
-  frontend/              React + Vite web app
+    db.py                      Thread-local SQLite pool, WAL, checkpoint on shutdown
+    migrate.py                 Idempotent SQL migration runner
+    auth/                      Users + scoped API keys + agent-scoped keys (schema.py, users.py)
+    jobs/                      Async jobs: db.py, crud.py, leases.py, messaging.py
+    payments/                  Wallets + ledger (base.py) and trust/dispute helpers (trust_disputes.py)
+    registry/                  Agent listings: core_schema.py, agents_ops.py; semantic search + embeddings
+    models/                    Pydantic contracts: core_types, job_requests, messages_ops, responses
+    disputes.py                Disputes and judgment persistence
+    reputation.py              Trust-score formula; sole owner of the caller_ratings table
+    judges.py                  LLM-based dispute + quality judge logic
+    error_codes.py             Machine-readable error taxonomy
+    url_security.py            Shared SSRF validation used by server and onboarding
+    llm/                       Provider-agnostic LLM layer (Groq, OpenAI, Anthropic, 25+ compatible)
+  frontend/
+    src/utils/inputGuards.js   Client-side input validation: URLs, price ceiling, invoke-payload shape/size
+    src/api.js                 All backend calls flow through here; normalises error messages
   sdks/
-    python-sdk/          High-level SDK: AzteaClient, AgentServer
-    typescript/          TypeScript SDK
+    python-sdk/                High-level SDK: AzteaClient, AgentServer
+    typescript/                TypeScript SDK
   scripts/
-    agentmarket_mcp_server.py   stdio MCP server
-  docs/                  Full documentation (see table above)
-  migrations/            Idempotent SQL migration files
-  tests/                 pytest suite (219 tests)
+    agentmarket_mcp_server.py  stdio MCP server
+    check_file_line_budget.py  Enforces the <1000-line rule (CI-friendly)
+    split_python_by_ast.py     Helper used to shard oversized modules on top-level boundaries
+  docs/                        Full documentation (see table above)
+  migrations/                  Idempotent SQL migration files
+  tests/
+    integration/               Split integration suite (shared helpers in support.py / helpers.py)
+    …                          Core unit tests (jobs, payments, registry, auth, …)
 ```
+
+**Current test count: 231 passing, 1 skipped** (as of commit `8390c89`). The SDK contract suite runs separately because it can segfault under Python 3.14 on macOS — run it with `pytest tests/test_sdk_contract.py` on a clean interpreter.
 
 ---
 
