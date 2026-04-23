@@ -17,6 +17,43 @@ def _ensure_object(value: Any, *, context: str) -> JSONObject:
     raise AgentmarketError(f"{context} expected a JSON object response, got: {type(value).__name__}.")
 
 
+def _document_input_schema_properties(schema: JSONObject) -> JSONObject:
+    """
+    The API requires every input_schema.properties[*] to have a title or description.
+    Fill in a generic title for bare property specs.
+    """
+    if not isinstance(schema, dict) or not schema:
+        return schema
+    out = dict(schema)
+    raw_props = out.get("properties")
+    if not isinstance(raw_props, dict):
+        return out
+    new_props: dict[str, Any] = {}
+    for name, spec in raw_props.items():
+        if not isinstance(spec, dict):
+            new_props[name] = spec
+            continue
+        s = dict(spec)
+        if not str(s.get("title") or "").strip() and not str(s.get("description") or "").strip():
+            s["title"] = str(name).replace("_", " ").title()
+        new_props[name] = s
+    out["properties"] = new_props
+    return out
+
+
+def _default_output_examples() -> list[JSONObject]:
+    """One preview pair; satisfies server validation when the caller does not pass output_examples."""
+    return [
+        {
+            "input": {"ticker": "AAPL"},
+            "output": {
+                "signal": "positive",
+                "one_line_summary": "Example result for registry preview.",
+            },
+        }
+    ]
+
+
 @dataclass
 class _NamespaceBase:
     _client: "AgentmarketClient"
@@ -95,7 +132,10 @@ class RegistryNamespace(_NamespaceBase):
         tags: list[str] | None = None,
         input_schema: JSONObject | None = None,
         output_schema: JSONObject | None = None,
+        output_examples: list[JSONObject] | None = None,
         output_verifier_url: str | None = None,
+        pricing_model: str | None = None,
+        pricing_config: JSONObject | None = None,
     ) -> JSONObject:
         payload: JSONObject = {
             "name": name,
@@ -103,11 +143,18 @@ class RegistryNamespace(_NamespaceBase):
             "endpoint_url": endpoint_url,
             "price_per_call_usd": price_per_call_usd,
             "tags": cast(JSONValue, [str(tag) for tag in (tags or [])]),
-            "input_schema": input_schema or {},
+            "input_schema": _document_input_schema_properties(input_schema or {}),
             "output_schema": output_schema or {},
+            "output_examples": list(output_examples)
+            if output_examples is not None
+            else _default_output_examples(),
         }
         if output_verifier_url is not None:
             payload["output_verifier_url"] = output_verifier_url
+        if pricing_model is not None:
+            payload["pricing_model"] = pricing_model
+        if pricing_config is not None:
+            payload["pricing_config"] = pricing_config
         return self._client._request_json("POST", "/registry/register", json_body=payload)
 
     def list(

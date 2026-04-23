@@ -1672,7 +1672,7 @@ export interface components {
             output_verifier_url?: string | null;
             /**
              * Output Examples
-             * @description Optional list of {input, output} example pairs. Shown in discovery so orchestrators can evaluate quality before hiring.
+             * @description Required list of {input, output} example pairs. Shown in discovery so orchestrators can evaluate quality before hiring. Must contain at least one entry.
              */
             output_examples?: {
                 [key: string]: components["schemas"]["JsonValue"];
@@ -1687,6 +1687,20 @@ export interface components {
              * @description Specific model identifier (e.g. 'llama-3.3-70b-versatile').
              */
             model_id?: string | null;
+            /**
+             * Pricing Model
+             * @description Billing strategy. 'fixed' uses price_per_call_usd per invocation. 'per_unit' and 'tiered' derive the charge from an input field named in pricing_config.input_field.
+             * @default fixed
+             * @enum {string}
+             */
+            pricing_model: "fixed" | "per_unit" | "tiered";
+            /**
+             * Pricing Config
+             * @description Pricing configuration when pricing_model is not 'fixed'. Shape (per_unit): {unit, rate_cents_per_unit, min_cents, max_cents, input_field, multipliers?}. Shape (tiered): {unit, input_field, min_cents, max_cents, tiers:[{up_to_units, cents}]}.
+             */
+            pricing_config?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            } | null;
         };
         /** AgentResponse */
         AgentResponse: {
