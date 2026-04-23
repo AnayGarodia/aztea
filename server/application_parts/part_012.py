@@ -470,3 +470,102 @@ def wallet_get(
         raise HTTPException(status_code=403, detail="Not authorized to view this wallet.")
     txs = payments.get_wallet_transactions(wallet_id, limit=50)
     return JSONResponse(content={**wallet, "transactions": txs})
+
+
+# ---------------------------------------------------------------------------
+# SPA fallback: serve the built React app for non-API routes.
+#
+# Keeps the site working even when an upstream proxy forwards "/" to FastAPI
+# (e.g. nginx misconfig or missing frontend/dist short-circuit), and replaces
+# Starlette's default `{"detail": "Not Found"}` with either the SPA or a
+# structured, user-actionable 404 payload.
+# ---------------------------------------------------------------------------
+
+from pathlib import Path as _SpaPath
+from fastapi.responses import FileResponse as _SpaFileResponse
+
+_FRONTEND_DIST_DIR = _SpaPath(_REPO_ROOT) / "frontend" / "dist"
+_SPA_API_PREFIXES: tuple[str, ...] = (
+    "api/",
+    "auth/",
+    "admin/",
+    "agents/",
+    "builtin/",
+    "config/",
+    "disputes/",
+    "health",
+    "jobs",
+    "llm/",
+    "mcp/",
+    "metrics",
+    "onboarding/",
+    "ops/",
+    "openapi.json",
+    "public/",
+    "registry/",
+    "reputation/",
+    "runs",
+    "stripe/",
+    "wallets/",
+    "webhooks/",
+)
+
+
+def _path_is_api(path_fragment: str) -> bool:
+    normalized = path_fragment.lstrip("/").lower()
+    if not normalized:
+        return False
+    return normalized.startswith(_SPA_API_PREFIXES)
+
+
+def _resolved_under(parent: _SpaPath, candidate: _SpaPath) -> bool:
+    try:
+        candidate_resolved = candidate.resolve()
+        parent_resolved = parent.resolve()
+    except (OSError, RuntimeError):
+        return False
+    return parent_resolved in candidate_resolved.parents or candidate_resolved == parent_resolved
+
+
+@app.get("/", include_in_schema=False)
+def spa_root() -> _SpaFileResponse:
+    index_file = _FRONTEND_DIST_DIR / "index.html"
+    if index_file.is_file():
+        return _SpaFileResponse(str(index_file))
+    raise HTTPException(
+        status_code=404,
+        detail=(
+            "Frontend is not built on this server. "
+            "Run `cd frontend && npm ci && npm run build`, then restart the API."
+        ),
+    )
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+def spa_fallback(full_path: str) -> _SpaFileResponse:
+    if _path_is_api(full_path):
+        raise HTTPException(status_code=404, detail=f"Not Found: /{full_path}")
+
+    if not _FRONTEND_DIST_DIR.is_dir():
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Frontend assets are not available on this server. "
+                "Build the React app (`cd frontend && npm ci && npm run build`) and restart."
+            ),
+        )
+
+    safe_fragment = full_path.lstrip("/")
+    if safe_fragment:
+        candidate = _FRONTEND_DIST_DIR / safe_fragment
+        if candidate.is_file() and _resolved_under(_FRONTEND_DIST_DIR, candidate):
+            return _SpaFileResponse(str(candidate))
+
+    index_file = _FRONTEND_DIST_DIR / "index.html"
+    if index_file.is_file():
+        return _SpaFileResponse(str(index_file))
+
+    raise HTTPException(
+        status_code=404,
+        detail="index.html missing from frontend/dist. Rebuild the frontend and restart.",
+    )
