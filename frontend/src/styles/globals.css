@@ -73,13 +73,6 @@ select {
   cursor: pointer;
 }
 
-/* ── Focus ─────────────────────────────────────────────────── */
-:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-  border-radius: var(--r-sm);
-}
-
 /* ── Typography utilities ──────────────────────────────────── */
 .t-display-xl {
   font-family: var(--font-display);
@@ -217,4 +210,38 @@ select {
 /* ── Utility ────────────────────────────────────────────────── */
 .animate-pulse {
   animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* ── Boot / suspense placeholders ───────────────────────────── */
+.app-boot {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--canvas);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  letter-spacing: 0.05em;
+}
+
+.app-gate {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--canvas);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+}
+
+/* Focus ring */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: none;
+  border-radius: var(--r-sm);
 }
