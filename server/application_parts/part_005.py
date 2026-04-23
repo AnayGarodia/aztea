@@ -1,3 +1,10 @@
+# server.application shard 5 — verification, settlement, and dispute
+# adjudication: output-verifier calls, registration verifier, quality-gate
+# judge, dispute effects, cascaded child-job failure, dispute-window math,
+# successful/failed settlement, judge resolution, reputation decay, endpoint
+# health probes, and auto-suspension of low-performing agents. No HTTP routes.
+
+
 def _list_job_events(caller: core_models.CallerContext, since: int | None = None, limit: int = 100) -> list[dict]:
     limit = min(max(1, limit), 200)
     params: list[Any] = []

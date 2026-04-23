@@ -1,3 +1,9 @@
+# server.application shard 3 — protocol envelope + work-example helpers:
+# artifact normalisation, typed job-message payload validation, SSE stream
+# fan-out, job-event recording, idempotency-key bookkeeping, outbound URL
+# validation, rate-limited hook URL checks. No routes here.
+
+
 def _normalize_input_protocol_from_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     protocol = payload.get("protocol")
     if not isinstance(protocol, dict):

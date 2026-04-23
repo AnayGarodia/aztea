@@ -1,4 +1,29 @@
-"""Agent writes, reads, semantic search, and reputation-enriched accessors."""
+"""Agent registry operations: writes, reads, search, and reputation enrichment.
+
+Paired with ``core.registry.core_schema`` (schema + low-level helpers). This
+module implements everything the HTTP layer needs on top of the raw schema:
+
+- ``register_agent`` / ``update_agent`` / ``delete_agent`` — creation, mutation,
+  and soft-delete flows with validation hooks.
+- ``get_agent`` / ``get_agents`` / ``count_owner_agents`` — read paths with
+  built-in filters for visibility (banned / unapproved), ownership, tags,
+  model provider, and rank-by mode.
+- ``search_agents`` — semantic + substring search layered over the sentence
+  transformer embeddings in ``core.embeddings``. Falls back gracefully when
+  the embedding model is not available.
+- ``get_agent_with_reputation`` / ``reputation-enriched listing helpers`` —
+  attach ``trust_score``, ``success_rate``, ``quality_rating_avg``,
+  ``dispute_rate``, and latency stats pulled from the reputation tables.
+- **Review + moderation.** ``list_pending_review_agents``,
+  ``set_agent_review_decision`` (approve / reject) and the auto-verification
+  flow that runs ``output_verifier_url`` during registration.
+- **Endpoint health monitoring.** ``set_agent_endpoint_health``, degraded
+  / recovered transitions, and the counters feeding the sweeper.
+
+Tests monkeypatch ``core.registry.embeddings`` to stub out network calls to
+the sentence-transformer model, so the module keeps ``embeddings`` accessible
+as an attribute on the package (see ``core/registry/__init__.py``).
+"""
 from __future__ import annotations
 
 import json

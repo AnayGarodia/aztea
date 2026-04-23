@@ -1,3 +1,8 @@
+# server.application shard 8 — registry search + admin review + registry
+# sync call flow (pre-charge → dispatch → settle/refund, with built-in
+# agent routing, verifier hooks, and dispute-window enforcement).
+
+
 @app.post(
     "/registry/search",
     response_model=core_models.RegistrySearchResponse,

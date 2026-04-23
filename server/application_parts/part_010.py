@@ -1,3 +1,8 @@
+# server.application shard 10 — jobs fail/retry + typed messages + SSE
+# stream + ratings (caller → agent, agent → caller) + disputes (get, file,
+# trust-dispute management) + platform-level ops endpoints.
+
+
 @app.post(
     "/jobs/{job_id}/fail",
     response_model=core_models.JobResponse,

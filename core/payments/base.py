@@ -1,25 +1,34 @@
-"""
-payments.py — SQLite-backed payment ledger for the agentmarket platform.
+"""Core payment ledger: wallets, insert-only transactions, and settlement math.
 
-Two tables live in the same registry.db as the agent registry:
+This is the base half of the ``core.payments`` package. ``core.payments.trust_disputes``
+layers dispute-specific helpers on top of what is defined here.
 
-  wallets:
-    wallet_id (uuid), owner_id (caller identity or "agent:<id>" or "platform"),
-    balance_cents (integer cache), created_at
+Schema (lives alongside the agent registry in the same SQLite database):
 
-  transactions:
-    tx_id (uuid), wallet_id, type (deposit|charge|fee|refund|payout),
-    amount_cents (positive = credit, negative = debit), related_tx_id (nullable),
-    agent_id (nullable), memo, created_at
+- ``wallets`` — ``wallet_id`` (uuid), ``owner_id`` (caller identity,
+  ``"agent:<id>"``, or the shared ``"platform"`` owner),
+  ``balance_cents`` (integer cache of the ledger-derived total),
+  ``created_at``.
+- ``transactions`` — ``tx_id`` (uuid), ``wallet_id``,
+  ``type`` (``deposit | charge | fee | refund | payout``),
+  ``amount_cents`` (positive = credit, negative = debit), ``related_tx_id``,
+  ``agent_id``, ``memo``, ``created_at``.
 
-Design rules:
-  - All amounts are integer cents. No floats, ever.
-  - Transactions are insert-only. No UPDATE or DELETE on the transactions table.
-  - balance_cents in wallets is a cache, always updated in the same DB transaction
-    as the ledger insert that caused it to change.
-  - The HTTP call to the downstream agent happens BETWEEN two short DB transactions
-    so we never hold a write lock during network I/O.
-  - WAL mode enabled; thread-local connections.
+Non-negotiable invariants enforced everywhere in this package:
+
+- All amounts are integer cents. No floats are stored or exchanged; float
+  values in listing schemas are display-only.
+- Transactions are insert-only. No ``UPDATE`` / ``DELETE`` against the
+  ``transactions`` table — corrections are compensating entries.
+- ``wallets.balance_cents`` is a cache that must be updated in the same SQL
+  transaction as the ledger row that changes it. The cache is validated
+  against the ledger in reconciliation runs (``ops/payments/reconcile``).
+- Network I/O to downstream agents happens *between* short DB transactions
+  so that writes never hold a lock during HTTP calls.
+- WAL mode is enabled; connections are thread-local.
+
+See also ``core.payments.trust_disputes`` for dispute-deposit escrow, payout
+splits on dispute resolution, and reconciliation helpers.
 """
 
 import json

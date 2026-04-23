@@ -1,3 +1,10 @@
+# server.application shard 12 — wallet routes (top-up, deposit, withdraw,
+# connect onboard, wallet read), run history, and the catch-all SPA
+# fallback that serves frontend/dist/ for non-API URLs. MUST remain the
+# last shard so the SPA catch-all route is registered after every API
+# route.
+
+
 @app.post(
     "/wallets/topup/session",
     tags=["wallet"],

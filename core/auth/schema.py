@@ -1,5 +1,18 @@
-"""
-auth — schema, connection, hashing, and legal-state helpers.
+"""Auth persistence: schema, connection helpers, hashing, and legal-state constants.
+
+This is the lower half of the ``core.auth`` package. It declares:
+
+- SQLite table definitions for ``users``, ``user_api_keys``, and
+  ``agent_api_keys`` plus their indexes.
+- Thread-local connection helpers (``_conn``, ``_local``) used by the
+  user-level operations in ``core.auth.users``. Integration tests monkeypatch
+  ``DB_PATH`` and close these connections between runs — that's why the
+  helpers are module-level and public under single-underscore names.
+- Deterministic hashing routines: PBKDF2-SHA256 for passwords,
+  HMAC-style hashing for API keys (raw keys are never stored).
+- Legal acceptance constants (``LEGAL_TERMS_VERSION``,
+  ``LEGAL_PRIVACY_VERSION``) that every auth response echoes so the frontend
+  can prompt for re-acceptance when they change.
 
 User/session/key operations live in ``core.auth.users``.
 """

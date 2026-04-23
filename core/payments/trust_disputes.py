@@ -1,4 +1,26 @@
-"""Split from payments.py — trust, disputes, reconciliation (see base for core ledger)."""
+"""Payments helpers for disputes and reconciliation.
+
+Pairs with ``core.payments.base`` (which owns the wallet / ledger schema and
+settlement primitives). This module implements the money movements that are
+specific to the dispute lifecycle:
+
+- **Filing deposits.** Dispute filers post a small escrow (``5% of job value``
+  with a ``$0.05`` minimum) that is returned on win / split / void and
+  forfeited to the platform on loss.
+- **Escrow clawback.** When a caller wins a dispute on a job that already
+  settled, this module compensates with a clawback entry against the agent
+  wallet so the caller can be made whole without violating the insert-only
+  invariant.
+- **Settlement redistribution.** Dispute outcomes (``caller_wins``,
+  ``agent_wins``, ``split``, ``void``) each produce a specific set of
+  ledger entries that keep the balance invariant intact.
+- **Reconciliation.** Background helpers compare ``wallets.balance_cents``
+  against the ledger sum and surface mismatches via
+  ``ops/payments/reconcile``.
+
+All helpers require both the ledger + disputes state to be consistent, so
+they run inside the shared ``_conn()`` transaction from ``core.payments.base``.
+"""
 from __future__ import annotations
 
 import json

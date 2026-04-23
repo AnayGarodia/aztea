@@ -1,4 +1,25 @@
-"""Job messages, correlation, and quality/dispute fields."""
+"""Typed job messages, correlation tracking, and quality / dispute state writes.
+
+This module owns two related concerns:
+
+1. **Structured job messages** — progress, clarifications, typed agent
+   messages, tool calls, tool results, artifacts, and partial results. Each
+   message type has different effects on the lease (for example,
+   ``clarification_request`` sets the job to ``awaiting_clarification`` and
+   relaxes heartbeats; ``clarification_response`` resumes ``running``). See
+   ``_resolve_message_lease_behavior`` imported from ``leases`` for the
+   table.
+
+2. **Quality and dispute outcome writes** — ``set_job_quality_result`` and
+   ``set_job_dispute_outcome`` persist the final judgment fields on the
+   ``jobs`` row. These live here (not in ``db``) because they read the
+   updated row back via ``get_job`` from ``crud`` — the quality judge writes
+   are the one place where the three split submodules all meet.
+
+The earlier monolithic ``core/jobs.py`` used to contain duplicate versions of
+these helpers that referenced an unresolved ``get_job``; those duplicates
+have been removed and this module is the single source of truth.
+"""
 from __future__ import annotations
 
 from core import models as _models

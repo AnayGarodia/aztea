@@ -1,4 +1,24 @@
-"""Job leases, claims, retries, and output-verification state transitions."""
+"""Job leases, claims, retries, and verification state transitions.
+
+A lease is the window during which exactly one worker "owns" a job and may
+heartbeat / complete / fail it. This module owns every transition that
+changes the active lease:
+
+- ``claim_job`` — atomically move ``pending`` → ``running`` and issue a
+  cryptographically unique ``claim_token``.
+- ``heartbeat_job_lease`` — extend the active lease when the worker is making
+  progress.
+- ``release_job_claim`` — explicit early release (e.g. worker decides it can't
+  complete the job).
+- ``list_jobs_with_expired_leases`` / ``_lease_is_active`` / ``_lease_is_expired``
+  — scan helpers used by the background sweeper to reclaim stuck leases.
+- Retry and verification-window helpers drive automatic re-queueing on lease
+  expiry and the optional caller-accept / reject window before settlement.
+
+Correlation-id bookkeeping for tool calls and streamed messages also lives
+here because it shares the lease-state machine (a correlation is only valid
+while the originating worker still holds the lease).
+"""
 from __future__ import annotations
 
 import json

@@ -1,12 +1,29 @@
-"""
-registry.py — SQLite-backed agent registry for the agentmarket platform.
+"""Registry persistence: schema, connection helpers, row serialisation.
+
+This is the lower half of the ``core.registry`` package. The higher-level
+operations (writes, semantic search, reputation enrichment, endpoint health
+telemetry) live in ``core.registry.agents_ops``.
+
+Responsibilities:
+
+- SQLite schema creation for the ``agents`` table and its supporting indexes,
+  plus migration-safe defaults for columns added post-launch (verified badge,
+  model provider / id, review status, endpoint health, trust cache).
+- Thread-local connection helpers (``_conn``, ``_local``) — tests monkeypatch
+  ``DB_PATH`` between runs, so these are intentionally module-level.
+- Row → dict projection (``_row_to_dict``) that handles JSON columns
+  (``input_schema``, ``output_schema``, ``output_examples``, ``tags``) and
+  normalises optional columns to ``None`` for clients that pre-date a
+  schema addition.
+- Shared constants (status enums, default rank-by values) used by both the
+  write path and the server shards.
 
 Production notes:
-  - WAL mode enabled for concurrent read performance under load.
-  - Thread-local connections (SQLite is not thread-safe across connections;
-    each thread gets its own handle).
-  - Indexes on name and created_at for fast discovery lookups.
-  - input_schema stored as JSON; describes the fields a caller must supply.
+
+- WAL mode is enabled for concurrent read performance under marketplace load.
+- Indexes on ``name`` and ``created_at`` keep discovery lookups fast.
+- ``input_schema`` / ``output_schema`` / ``output_examples`` are stored as JSON
+  and validated before insert via ``core.models.AgentRegisterRequest``.
 """
 
 import json

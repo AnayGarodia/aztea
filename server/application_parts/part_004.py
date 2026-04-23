@@ -1,3 +1,9 @@
+# server.application shard 4 — built-in agent execution (no-HTTP routing for
+# internal agents), builtin worker + dispute judge + endpoint health +
+# payments reconciliation + hook-delivery background loops, and the job
+# callback / hook delivery pipeline. No HTTP routes here.
+
+
 def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict:
     payload = input_payload or {}
     if agent_id == _FINANCIAL_AGENT_ID:

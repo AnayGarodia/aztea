@@ -1,3 +1,8 @@
+# server.application shard 6 — background sweeper, jobs metrics, onboarding
+# routes (agent.md spec, validate, ingest), and auth routes (register, login,
+# me, legal accept, keys CRUD). First shard that registers HTTP routes.
+
+
 def _sweep_jobs(
     retry_delay_seconds: int = _DEFAULT_RETRY_DELAY_SECONDS,
     sla_seconds: int = _DEFAULT_SLA_SECONDS,

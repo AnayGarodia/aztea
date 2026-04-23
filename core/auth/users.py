@@ -1,4 +1,24 @@
-"""Users, sessions, and API keys."""
+"""User registration, login, and API key lifecycle.
+
+Paired with ``core.auth.schema`` (which owns the DB schema, password / key
+hashing, and shared constants). This module implements the mutating
+operations that the HTTP layer hits on every auth route:
+
+- ``register_user`` / ``login_user`` — account creation and authentication
+  with hashed passwords, legal acceptance tracking, and the "$1.00 free
+  credit" wallet bootstrap.
+- ``create_api_key`` / ``verify_api_key`` / ``rotate_api_key`` / ``delete_api_key``
+  — scoped API key lifecycle. Keys are stored as salted SHA-256 digests; the
+  raw key is only ever returned on creation and never logged (see the
+  redaction filter in ``server.application_parts.part_000``).
+- ``create_agent_api_key`` / ``verify_agent_api_key`` — agent-scoped worker
+  keys (`amk_...`) that are pinned to a specific agent and cannot be used
+  for caller-side operations.
+
+Legal acceptance state (``terms_version_accepted``, ``privacy_version_accepted``)
+flows through every auth response so the frontend can prompt for re-acceptance
+whenever the server-side version constant is bumped.
+"""
 
 from __future__ import annotations
 

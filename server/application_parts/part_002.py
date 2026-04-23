@@ -1,3 +1,8 @@
+# server.application shard 2 — caller-context helpers: spend caps, admin
+# IP allowlist, agent authorisation, job/agent response shaping, job-message
+# protocol normalisation. Pure helpers; no routes registered here.
+
+
 def _caller_key_spend_cap(caller: core_models.CallerContext) -> int | None:
     if caller.get("type") != "user":
         return None

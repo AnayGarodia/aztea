@@ -1,8 +1,23 @@
-"""
-jobs.py — Async job system for agentmarket.
+"""Async job persistence layer: schema, connections, JSON helpers.
 
-Jobs are created by callers and settled by agents. Each job is charged up front,
-then paid out (or refunded) on completion. Messages attach to jobs to allow
+This module owns the SQLite schema definitions for the ``jobs``,
+``job_messages``, and claim-event tables, plus low-level utilities used by the
+rest of the ``core.jobs`` package:
+
+- Connection pool wiring (thread-local handles, WAL PRAGMAs, deferred writes)
+- JSON encode/decode helpers that tolerate legacy rows written pre-migration
+- Row-to-dict projectors for jobs and messages
+- Constants and validation helpers for enums that bleed into other layers
+  (lease behaviours, claim-event types, fee-bearer policies)
+
+Higher-level operations live in sibling modules:
+
+- ``core.jobs.crud`` — creation, listings, authorisation helpers
+- ``core.jobs.leases`` — claim/heartbeat/release/retry lifecycle
+- ``core.jobs.messaging`` — typed messages and quality/dispute state writes
+
+Jobs are charged up front (see ``core.payments``), and either paid out or
+refunded on terminal status. Messages attach to a job so workers can request
 clarifications without holding open HTTP connections.
 """
 

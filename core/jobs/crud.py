@@ -1,4 +1,18 @@
-"""Job creation and listing (CRUD read paths)."""
+"""Job CRUD: creation, listings, and authorisation lookups.
+
+Everything here builds on the primitives in ``core.jobs.db`` (schema,
+connection, JSON helpers). Functions in this module:
+
+- ``create_job`` — insert a new job row and the accompanying ``pending`` claim
+  event. Charging happens in the server route before this is called.
+- ``get_job`` / ``get_jobs_by_caller`` / ``list_jobs_for_agent`` — paginated
+  read helpers with stable cursors.
+- ``get_job_authorization_context`` and the ``is_worker_authorized`` family —
+  resolve whether a given caller/worker/admin may see or mutate a job.
+
+These helpers never touch wallets, the ledger, or dispute state — those are
+owned by ``core.payments`` and the server shards, respectively.
+"""
 from __future__ import annotations
 
 import json

@@ -1,3 +1,9 @@
+# server.application shard 11 — admin dispute review, job event hooks
+# (CRUD + process + dead-letter), background sweep trigger, ops metrics +
+# SLO, Stripe webhook + Connect onboarding, and spend / reconciliation
+# helpers. This shard concentrates the operator-facing surface.
+
+
 @app.get(
     "/admin/disputes/{dispute_id}",
     responses=_error_responses(401, 403, 404, 429, 500),

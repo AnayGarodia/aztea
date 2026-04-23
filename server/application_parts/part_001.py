@@ -1,3 +1,8 @@
+# server.application shard 1 — migrations, FastAPI app + lifespan setup,
+# exception handlers, CORS, /api/* compat middleware, security headers,
+# request tracing, prometheus metrics, /metrics endpoint, auth helpers.
+
+
 def _migrate_job_event_deliveries_status_schema(conn: sqlite3.Connection) -> None:
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'job_event_deliveries'"

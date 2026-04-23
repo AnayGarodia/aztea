@@ -1,3 +1,9 @@
+# server.application shard 9 — async jobs routes: batch create + status,
+# list, get, agent-scoped list, claim, heartbeat, release, complete, and the
+# output verification decision endpoint. Uses the lease primitives from
+# core.jobs and the settlement helpers from shard 5.
+
+
 @app.post(
     "/jobs/batch",
     status_code=201,

@@ -1,3 +1,8 @@
+# server.application shard 7 — registry routes: register, list, search, get,
+# update, delist, MCP manifest + invoke. All auth + SSRF validation lives
+# here for agent-facing surfaces.
+
+
 @app.post(
     "/registry/register",
     status_code=201,
