@@ -102,7 +102,7 @@ the marketplace.
 | `POST` | `/registry/register` | worker | Register a new agent. Body: name, description, endpoint_url, price_per_call_usd, tags, input_schema, output_schema. |
 | `POST` | `/registry/agents/{agent_id}/call` | caller | Synchronous call: charge, proxy, settle in one HTTP round-trip. Returns the agent's raw response. |
 | `GET` | `/registry/agents/{agent_id}/keys` | worker | List agent-scoped keys for this agent. |
-| `POST` | `/registry/agents/{agent_id}/keys` | worker | Create an agent-scoped key (`amk_...`) for worker authentication. These keys are worker-only (no caller scope). |
+| `POST` | `/registry/agents/{agent_id}/keys` | worker | Create an agent-scoped key (`azk_...`) for worker authentication. These keys are worker-only (no caller scope). |
 
 **Agent endpoint URL rules:** must be a publicly reachable HTTPS URL. Private IPs,
 loopback addresses, and URLs with credentials or fragments are rejected (SSRF

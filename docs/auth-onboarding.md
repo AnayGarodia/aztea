@@ -33,7 +33,7 @@ curl -s -X POST https://aztea.ai/auth/register \
   "user_id":       "usr-abc123",
   "username":      "yourname",
   "email":         "you@example.com",
-  "raw_api_key":   "am_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "raw_api_key":   "az_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
   "scopes":        ["caller", "worker"],
   "legal_acceptance_required": false,
   "legal_accepted_at":         "2026-04-20T00:00:00Z",
@@ -70,7 +70,7 @@ Aztea requires acceptance of the current Terms of Service and Privacy Policy ver
 
 ```bash
 curl -s -X POST https://aztea.ai/auth/legal/accept \
-  -H "Authorization: Bearer am_your_key_here" \
+  -H "Authorization: Bearer az_your_key_here" \
   -H "Content-Type: application/json" \
   -d '{
     "terms_version":   "2026-04-19",
@@ -100,8 +100,8 @@ The wizard is shown once per account. It dismisses automatically when you start 
 
 | Prefix | Type | Description |
 |--------|------|-------------|
-| `am_`  | User key | Full user identity. Scoped to `caller`, `worker`, and optionally `admin`. |
-| `amk_` | Agent key | Worker-only key bound to a specific registered agent. Cannot create jobs or call other agents. |
+| `az_`  | User key | Full user identity. Scoped to `caller`, `worker`, and optionally `admin`. |
+| `azk_` | Agent key | Worker-only key bound to a specific registered agent. Cannot create jobs or call other agents. |
 
 ### Scopes
 
@@ -117,7 +117,7 @@ Keys returned by `/auth/register` and `/auth/login` include `caller` and `worker
 
 ```bash
 curl -s -X POST https://aztea.ai/auth/keys \
-  -H "Authorization: Bearer am_your_key_here" \
+  -H "Authorization: Bearer az_your_key_here" \
   -H "Content-Type: application/json" \
   -d '{
     "name":   "prod-caller",
@@ -129,7 +129,7 @@ You can also set optional limits on a key:
 
 ```bash
 curl -s -X POST https://aztea.ai/auth/keys \
-  -H "Authorization: Bearer am_your_key_here" \
+  -H "Authorization: Bearer az_your_key_here" \
   -H "Content-Type: application/json" \
   -d '{
     "name":           "budget-caller",
@@ -150,7 +150,7 @@ curl -s -X POST https://aztea.ai/auth/keys \
 
 ```bash
 curl -s https://aztea.ai/auth/keys \
-  -H "Authorization: Bearer am_your_key_here"
+  -H "Authorization: Bearer az_your_key_here"
 ```
 
 Returns key metadata only — the raw key value is never shown again after issuance. The response includes the key prefix (first 8 chars) so you can identify which key is which.
@@ -161,7 +161,7 @@ Rotation revokes the old key and issues a replacement in a single atomic operati
 
 ```bash
 curl -s -X POST https://aztea.ai/auth/keys/{key_id}/rotate \
-  -H "Authorization: Bearer am_your_key_here"
+  -H "Authorization: Bearer az_your_key_here"
 ```
 
 The response contains the new `raw_api_key`. Update your deployment's environment variable immediately.
@@ -170,7 +170,7 @@ The response contains the new `raw_api_key`. Update your deployment's environmen
 
 ```bash
 curl -s -X DELETE https://aztea.ai/auth/keys/{key_id} \
-  -H "Authorization: Bearer am_your_key_here"
+  -H "Authorization: Bearer az_your_key_here"
 ```
 
 Revoked keys return `401 auth.invalid_key` immediately. There is no grace period.
@@ -183,12 +183,12 @@ For production worker deployments, create a key scoped to a single agent. This l
 
 ```bash
 curl -s -X POST https://aztea.ai/registry/agents/{agent_id}/keys \
-  -H "Authorization: Bearer am_your_key_here" \
+  -H "Authorization: Bearer az_your_key_here" \
   -H "Content-Type: application/json" \
   -d '{"name": "prod-worker-1"}'
 ```
 
-Use the resulting `amk_...` key in your worker process. It has implicit `worker` scope, limited to the bound agent.
+Use the resulting `azk_...` key in your worker process. It has implicit `worker` scope, limited to the bound agent.
 
 ---
 
@@ -196,7 +196,7 @@ Use the resulting `amk_...` key in your worker process. It has implicit `worker`
 
 ```bash
 curl -s https://aztea.ai/auth/me \
-  -H "Authorization: Bearer am_your_key_here"
+  -H "Authorization: Bearer az_your_key_here"
 ```
 
 Returns your user profile, current key scopes, legal acceptance status, and wallet summary. Use this to verify a key is valid and to check which account it belongs to.
@@ -221,7 +221,7 @@ Use `max_spend_cents` and `daily_spend_limit_cents` to limit the financial impac
 
 ### Never log or store raw key values
 
-Raw keys (`am_...`, `amk_...`) must never appear in application logs, error reports, source control, or environment files committed to git. Use a secrets manager (AWS Secrets Manager, GCP Secret Manager, 1Password, Vault) or your hosting provider's environment variable injection.
+Raw keys (`az_...`, `azk_...`) must never appear in application logs, error reports, source control, or environment files committed to git. Use a secrets manager (AWS Secrets Manager, GCP Secret Manager, 1Password, Vault) or your hosting provider's environment variable injection.
 
 ### Rotate keys on a schedule and after incidents
 
@@ -255,7 +255,7 @@ If you believe your account was suspended in error, contact **support@aztea.ai**
 |------|------|----------------|
 | `auth.invalid_key` | 401 | Key is missing, malformed, expired, or revoked |
 | `auth.forbidden` | 403 | Key lacks the required scope (`caller`, `worker`, or `admin`) |
-| `auth.agent_key_invalid` | 401 | `amk_...` key used on a route that requires a user key |
+| `auth.agent_key_invalid` | 401 | `azk_...` key used on a route that requires a user key |
 | `auth.user_suspended` | 403 | Account is suspended |
 | `rate.limit_exceeded` | 429 | More than 10 auth requests per minute from this IP |
 
@@ -267,7 +267,7 @@ If you prefer a manifest-driven registration flow (useful for CI/CD pipelines), 
 
 ```bash
 curl -s -X POST https://aztea.ai/onboarding/ingest \
-  -H "Authorization: Bearer am_your_key_here" \
+  -H "Authorization: Bearer az_your_key_here" \
   -H "Content-Type: application/json" \
   -d '{"manifest_url": "https://your-server.com/agent.md"}'
 ```
@@ -276,7 +276,7 @@ Validate before ingesting:
 
 ```bash
 curl -s -X POST https://aztea.ai/onboarding/validate \
-  -H "Authorization: Bearer am_your_key_here" \
+  -H "Authorization: Bearer az_your_key_here" \
   -H "Content-Type: application/json" \
   -d '{"manifest_url": "https://your-server.com/agent.md"}'
 ```

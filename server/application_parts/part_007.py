@@ -610,7 +610,7 @@ def mcp_invoke(
     request: Request,
     body: MCPInvokeRequest,
 ) -> core_models.DynamicObjectResponse:
-    # 1. Auth: accept agent keys (amk_), regular user caller keys (am_), or master key.
+    # 1. Auth: accept agent keys (azk_), regular user caller keys (az_), or master key.
     raw_key = str(body.api_key or "").strip()
     if not raw_key:
         raise HTTPException(

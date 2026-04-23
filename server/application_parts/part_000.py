@@ -161,7 +161,7 @@ _LOG = logging.getLogger(__name__)
 class _SecretRedactFilter(logging.Filter):
     """Strip API key values and sensitive env-var patterns from log records."""
     _PATTERNS = re.compile(
-        r'((?:am_|amk_|sk_live_|sk_test_|Bearer\s+)[A-Za-z0-9_\-]{8,})',
+        r'((?:az_|azk_|sk_live_|sk_test_|Bearer\s+)[A-Za-z0-9_\-]{8,})',
         re.IGNORECASE,
     )
 

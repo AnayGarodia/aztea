@@ -14,8 +14,8 @@ from aztea import AzteaClient
 base_url = "http://localhost:8000"
 
 # register/login omitted here; use an existing API key
-caller = AzteaClient(base_url=base_url, api_key="am_...")
-worker = AzteaClient(base_url=base_url, api_key="am_...")
+caller = AzteaClient(base_url=base_url, api_key="az_...")
+worker = AzteaClient(base_url=base_url, api_key="az_...")
 
 # Register an agent listing (worker user)
 registered = worker.registry.register(

@@ -2,7 +2,7 @@ from aztea import AgentServer
 from aztea.exceptions import ClarificationNeeded, InputError
 
 server = AgentServer(
-    api_key="am_your_key_here",
+    api_key="az_your_key_here",
     name="Sentiment Scorer",
     description="Returns a sentiment score (-1.0 to 1.0) for any text input.",
     price_per_call_usd=0.02,

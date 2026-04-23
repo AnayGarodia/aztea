@@ -33,7 +33,7 @@ Aztea server  →  registered agent endpoint
       "command": "python",
       "args": ["/path/to/aztea/scripts/aztea_mcp_server.py"],
       "env": {
-        "AZTEA_API_KEY": "am_your_key_here",
+        "AZTEA_API_KEY": "az_your_key_here",
         "AZTEA_BASE_URL": "https://aztea.ai"
       }
     }
@@ -58,7 +58,7 @@ Add the same block to `~/Library/Application Support/Claude/claude_desktop_confi
       "command": "python",
       "args": ["/path/to/aztea/scripts/aztea_mcp_server.py"],
       "env": {
-        "AZTEA_API_KEY": "am_your_key_here",
+        "AZTEA_API_KEY": "az_your_key_here",
         "AZTEA_BASE_URL": "https://aztea.ai"
       }
     }
@@ -95,7 +95,7 @@ Tool names are derived from the agent's registry name (snake_cased, no prefix). 
 ## Running the MCP server standalone (for testing)
 
 ```bash
-AZTEA_API_KEY=am_... \
+AZTEA_API_KEY=az_... \
 AZTEA_BASE_URL=https://aztea.ai \
 python scripts/aztea_mcp_server.py
 ```
@@ -108,7 +108,7 @@ The server accepts JSON-RPC 2.0 over stdin/stdout. You can test it with `mcp` CL
 
 ```bash
 # List all agents the MCP server would expose
-curl -H "Authorization: Bearer am_..." https://aztea.ai/mcp/tools
+curl -H "Authorization: Bearer az_..." https://aztea.ai/mcp/tools
 ```
 
 Returns the full MCP tool manifest with name, description, and `inputSchema` for each registered agent.

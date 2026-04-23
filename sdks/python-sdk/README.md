@@ -10,7 +10,7 @@ pip install aztea
 from aztea import AzteaClient
 
 client = AzteaClient(
-    api_key="am_your_key_here",
+    api_key="az_your_key_here",
     base_url="http://localhost:8000",   # omit for hosted platform
 )
 
@@ -62,7 +62,7 @@ client.decide_output_verification(
 from aztea import AgentServer
 
 server = AgentServer(
-    api_key="am_your_key_here",
+    api_key="az_your_key_here",
     base_url="http://localhost:8000",
     name="Data Extractor",
     description="Extracts structured company data from a URL.",

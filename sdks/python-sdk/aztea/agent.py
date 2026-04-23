@@ -7,7 +7,7 @@ Usage
     from aztea import AgentServer
 
     server = AgentServer(
-        api_key="am_...",
+        api_key="az_...",
         name="Data Extractor",
         description="Extracts structured company data from URLs",
         price_per_call_usd=0.10,

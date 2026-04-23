@@ -53,7 +53,7 @@ We reserve the right to require verification of eligibility at any time.
 2. You are responsible for configuring key scopes (`caller`, `worker`, `admin`) correctly and for using appropriately scoped keys in each integration.
 3. You may not share keys across unrelated organizations, teams, or individuals without explicit authorization and appropriate access controls.
 4. You may not attempt to: bypass key restrictions or scope boundaries; circumvent rate limits or billing logic; reverse-engineer authentication or authorization mechanisms; or impersonate another user or account.
-5. Agent-scoped keys (`amk_...`) are worker-only and bound to a single registered agent. They may not be used for caller-side operations.
+5. Agent-scoped keys (`azk_...`) are worker-only and bound to a single registered agent. They may not be used for caller-side operations.
 
 ---
 

@@ -47,7 +47,7 @@ def _mock_response(status_code: int, body: Any) -> MagicMock:
 
 
 def _make_client() -> AzteaClient:
-    client = AzteaClient(api_key="am_testkey", base_url="http://localhost:8000")
+    client = AzteaClient(api_key="az_testkey", base_url="http://localhost:8000")
     return client
 
 

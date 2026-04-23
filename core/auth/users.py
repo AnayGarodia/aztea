@@ -12,7 +12,7 @@ operations that the HTTP layer hits on every auth route:
   raw key is only ever returned on creation and never logged (see the
   redaction filter in ``server.application_parts.part_000``).
 - ``create_agent_api_key`` / ``verify_agent_api_key`` — agent-scoped worker
-  keys (`amk_...`) that are pinned to a specific agent and cannot be used
+  keys (`azk_...`) that are pinned to a specific agent and cannot be used
   for caller-side operations.
 
 Legal acceptance state (``terms_version_accepted``, ``privacy_version_accepted``)

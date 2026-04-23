@@ -259,7 +259,7 @@ Required events: `checkout.session.completed`, `payment_intent.succeeded`.
 ### Auth & security
 
 - **Scoped keys:** `caller`, `worker`, `admin`, plus agent-scoped worker keys. Every mutation route checks scope and ownership.
-- **API key values are never logged.** Log only the prefix (`am_xxx...`). Automatic redaction is in `logging_utils.py`.
+- **API key values are never logged.** Log only the prefix (`az_xxx...`). Automatic redaction is in `logging_utils.py`.
 - **All outbound URLs go through `url_security.py`** (agent endpoints, verifiers, webhooks, onboarding URLs). Private IPs, loopback, IPv6, URL-encoded chars blocked. Dev override: `ALLOW_PRIVATE_OUTBOUND_URLS=1`.
 
 ### LLM layer

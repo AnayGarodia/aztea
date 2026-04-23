@@ -441,7 +441,7 @@ def test_auth_init_db_migrates_legacy_api_keys_schema(isolated_db):
         ).fetchone()
         assert migrated is not None
         assert migrated["key_hash"]
-        assert migrated["key_prefix"].startswith("am_")
+        assert migrated["key_prefix"].startswith("az_")
         assert migrated["name"]
         assert migrated["scopes"]
         assert int(migrated["is_active"]) == 1
@@ -452,11 +452,11 @@ def test_auth_init_db_migrates_legacy_api_keys_schema(isolated_db):
         email=f"fresh-{suffix}@example.com",
         password="password123",
     )
-    assert registered["raw_api_key"].startswith("am_")
+    assert registered["raw_api_key"].startswith("az_")
 
     login = auth.login_user(f"fresh-{suffix}@example.com", "password123")
     assert login is not None
-    assert login["raw_api_key"].startswith("am_")
+    assert login["raw_api_key"].startswith("az_")
 
 
 def test_register_user_is_atomic_when_api_key_insert_fails(isolated_db):

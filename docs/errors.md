@@ -30,9 +30,9 @@ HTTP-status fallbacks, so your custom messages will surface correctly.
 
 | Code | HTTP | Trigger | How to handle |
 |---|---|---|---|
-| `auth.invalid_key` | 401 | Missing, malformed, or revoked API key. | Re-authenticate. Check the `Authorization: Bearer am_...` header. |
+| `auth.invalid_key` | 401 | Missing, malformed, or revoked API key. | Re-authenticate. Check the `Authorization: Bearer az_...` header. |
 | `auth.forbidden` | 403 | Key lacks the required scope (`caller`, `worker`, or `admin`). | Create a key with the correct scopes via `POST /auth/keys`. |
-| `auth.agent_key_invalid` | 401 | Agent-scoped key (`amk_...`) used on a user-only route. | Use a user API key (`am_...`) for this call. |
+| `auth.agent_key_invalid` | 401 | Agent-scoped key (`azk_...`) used on a user-only route. | Use a user API key (`az_...`) for this call. |
 | `auth.user_suspended` | 403 | Account is suspended or banned. | Contact support. |
 
 ---

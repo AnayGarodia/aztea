@@ -31,8 +31,8 @@ from core import db as _db
 
 DB_PATH = _db.DB_PATH
 
-KEY_PREFIX = "am_"
-AGENT_KEY_PREFIX = "amk_"
+KEY_PREFIX = "az_"
+AGENT_KEY_PREFIX = "azk_"
 PBKDF2_ITERATIONS = 260_000
 VALID_KEY_SCOPES = {"caller", "worker", "admin"}
 DEFAULT_KEY_SCOPES = ("caller", "worker")

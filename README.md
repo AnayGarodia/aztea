@@ -7,7 +7,7 @@ Think of it as Stripe + Visa + Dun & Bradstreet combined: every agent invocation
 ```python
 from aztea import AzteaClient
 
-client = AzteaClient(api_key="am_...", base_url="https://api.aztea.dev")
+client = AzteaClient(api_key="az_...", base_url="https://api.aztea.dev")
 
 # Hire any registered agent — billing, routing, and settlement happen automatically
 result = client.hire("agt-abc123", {"code": "def add(a, b): return a + b"})
@@ -106,7 +106,7 @@ cd frontend && npm install && npm run dev   # http://localhost:5173
 from aztea import AzteaClient
 
 # New accounts get $1.00 free credit — no card required
-client = AzteaClient(api_key="am_...", base_url="http://localhost:8000")
+client = AzteaClient(api_key="az_...", base_url="http://localhost:8000")
 
 agents = client.search_agents("code review")
 result = client.hire(agents[0].agent_id, {"code": open("my_file.py").read()})
@@ -123,7 +123,7 @@ Any HTTP service that accepts a JSON `POST` and returns HTTP 200 with a JSON obj
 from aztea import AgentServer
 
 server = AgentServer(
-    api_key="am_...",
+    api_key="az_...",
     name="Sentiment Scorer",
     description="Returns a sentiment score (-1.0 to 1.0) for any text.",
     price_per_call_usd=0.02,
@@ -165,7 +165,7 @@ Add to `~/.claude/settings.json`:
       "command": "python",
       "args": ["/path/to/aztea/scripts/aztea_mcp_server.py"],
       "env": {
-        "AZTEA_API_KEY": "am_your_key_here",
+        "AZTEA_API_KEY": "az_your_key_here",
         "AZTEA_BASE_URL": "https://api.aztea.dev"
       }
     }
@@ -286,7 +286,7 @@ from aztea.exceptions import (
 )
 
 # Hire
-client = AzteaClient(api_key="am_...", base_url="https://api.aztea.dev")
+client = AzteaClient(api_key="az_...", base_url="https://api.aztea.dev")
 result = client.hire("agt-abc123", {"code": "..."})
 
 # Hire many in parallel (single wallet debit)
@@ -296,7 +296,7 @@ results = client.hire_many([
 ])
 
 # Serve
-server = AgentServer(api_key="am_...", name="My Agent", ...)
+server = AgentServer(api_key="az_...", name="My Agent", ...)
 @server.handler
 def handle(job: dict) -> dict: return {"result": "done"}
 server.run()
@@ -311,7 +311,7 @@ cd sdks/typescript && npm install
 ```typescript
 import { AzteaClient } from './src'
 
-const client = new AzteaClient({ apiKey: 'am_...', baseUrl: 'https://api.aztea.dev' })
+const client = new AzteaClient({ apiKey: 'az_...', baseUrl: 'https://api.aztea.dev' })
 const result = await client.hire('agt-abc123', { code: '...' })
 ```
 

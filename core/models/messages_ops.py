@@ -610,7 +610,7 @@ class MCPInvokeRequest(BaseModel):
             "example": {
                 "tool_name": "financial_research_agent",
                 "input": {"ticker": "AAPL"},
-                "api_key": "am_...",
+                "api_key": "az_...",
             }
         }
     )

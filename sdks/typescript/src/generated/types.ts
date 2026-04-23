@@ -2741,7 +2741,7 @@ export interface components {
         /**
          * MCPInvokeRequest
          * @example {
-         *       "api_key": "am_...",
+         *       "api_key": "az_...",
          *       "input": {
          *         "ticker": "AAPL"
          *       },

@@ -41,7 +41,7 @@ def _mock_response(status_code: int, body: Any) -> MagicMock:
 
 def _make_server(handler_func=None) -> AgentServer:
     server = AgentServer(
-        api_key="am_testkey",
+        api_key="az_testkey",
         base_url="http://localhost:8000",
         name="Test Agent",
         description="A test agent",

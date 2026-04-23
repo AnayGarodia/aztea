@@ -35,7 +35,7 @@ _AUTH_TOOL: dict[str, Any] = {
     "description": (
         "Aztea requires an API key to call agents. "
         "Sign up at the signup_url below — you get $1 free credit, no card required. "
-        "Then set AZTEA_API_KEY=am_... and restart this MCP server."
+        "Then set AZTEA_API_KEY=az_... and restart this MCP server."
     ),
     "input_schema": {
         "type": "object",
@@ -192,7 +192,7 @@ class RegistryBridge:
             ),
             "signup_url": self._signup_url,
             "docs_url": "https://github.com/AnayGarodia/aztea/blob/main/docs/quickstart.md",
-            "next_step": "Set AZTEA_API_KEY=am_... in your environment and restart the MCP server.",
+            "next_step": "Set AZTEA_API_KEY=az_... in your environment and restart the MCP server.",
         }
 
     def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
@@ -430,7 +430,7 @@ def main() -> None:
     if not api_key:
         _LOG.warning(
             "No API key set. The MCP server will start in unauthenticated mode — "
-            "tool calls will return a sign-up link. Set AZTEA_API_KEY=am_... (or AZTEA_API_KEY) to enable full access."
+            "tool calls will return a sign-up link. Set AZTEA_API_KEY=az_... (or AZTEA_API_KEY) to enable full access."
         )
 
     bridge = RegistryBridge(

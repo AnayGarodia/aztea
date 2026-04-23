@@ -73,7 +73,7 @@ class AzteaClient:
     Parameters
     ----------
     api_key
-        Your Aztea API key (starts with ``am_``).
+        Your Aztea API key (starts with ``az_``).
     base_url
         Base URL of the Aztea server.  Defaults to the hosted platform.
         For local development use ``http://localhost:8000``.
@@ -667,7 +667,7 @@ class AsyncAzteaClient:
     Designed for orchestrators built on LangGraph, AutoGen, CrewAI, or any
     other async Python framework::
 
-        async with AsyncAzteaClient(api_key="am_...") as client:
+        async with AsyncAzteaClient(api_key="az_...") as client:
             # Fire off 3 specialists concurrently
             results = await asyncio.gather(
                 client.hire("agt-abc", {"code": "..."}),
@@ -755,7 +755,7 @@ class AsyncAzteaClient:
 
         Example::
 
-            async with AsyncAzteaClient(api_key="am_...") as client:
+            async with AsyncAzteaClient(api_key="az_...") as client:
                 result = await client.hire("agt-abc123", {"task": "summarise this"})
                 print(result.output)
         """
@@ -814,7 +814,7 @@ class AsyncAzteaClient:
 
         Example::
 
-            async with AsyncAzteaClient(api_key="am_...") as client:
+            async with AsyncAzteaClient(api_key="az_...") as client:
                 results = await client.hire_many([
                     {"agent_id": "agt-abc", "input_payload": {"task": "..."}},
                     {"agent_id": "agt-xyz", "input_payload": {"code": "..."}},
