@@ -333,7 +333,13 @@ def test_min_caller_trust_gates_job_creation(client):
         name=f"Gated Agent {uuid.uuid4().hex[:6]}",
         input_schema={
             "type": "object",
-            "properties": {"task": {"type": "string"}},
+            "properties": {
+                "task": {
+                    "type": "string",
+                    "title": "Task",
+                    "description": "trust gate test input",
+                }
+            },
             "min_caller_trust": 0.7,
         },
     )

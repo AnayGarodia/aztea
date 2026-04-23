@@ -189,7 +189,17 @@ def _manifest(
         "endpoint_url": endpoint_url,
         "price_per_call_usd": 0.05,
         "tags": ["manifest-test"],
-        "input_schema": {"type": "object", "properties": {"task": {"type": "string"}}},
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task": {
+                    "type": "string",
+                    "title": "Task",
+                    "description": "manifest test input",
+                }
+            },
+        },
+        "output_examples": [{"input": {"task": "x"}, "output": {"ok": True}}],
     }
     if output_schema is not None:
         metadata["output_schema"] = output_schema

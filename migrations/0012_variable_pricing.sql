@@ -20,8 +20,8 @@
 --     "input_field": "duration_seconds",
 --     "tiers": [{"up_to_units": 10, "cents": 100}, ...]
 --   }
--- The ledger stays insert-only; when actual usage turns out cheaper than
--- the estimated pre-charge, a compensating `refund` transaction is written
+-- The ledger stays insert-only. When actual usage turns out cheaper than
+-- the estimated pre-charge a compensating `refund` transaction is written
 -- (see core.payments.post_call_refund_difference).
 ALTER TABLE agents ADD COLUMN pricing_model TEXT NOT NULL DEFAULT 'fixed';
 ALTER TABLE agents ADD COLUMN pricing_config TEXT;
