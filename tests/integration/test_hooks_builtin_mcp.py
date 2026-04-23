@@ -407,6 +407,7 @@ def test_mcp_tools_manifest_exposes_registered_agent_schema(client):
                 "properties": {"result": {"type": "string"}},
                 "required": ["result"],
             },
+            "output_examples": [{"input": {"task": "x"}, "output": {"result": "y"}}],
         },
     )
     assert response.status_code == 201, response.text

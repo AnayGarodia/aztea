@@ -483,8 +483,9 @@ class AgentRegisterRequest(BaseModel):
     output_examples: list[JSONObject] | None = Field(
         default=None,
         description=(
-            "Optional list of {input, output} example pairs. Shown in discovery "
-            "so orchestrators can evaluate quality before hiring."
+            "Required list of {input, output} example pairs. Shown in "
+            "discovery so orchestrators can evaluate quality before hiring. "
+            "Must contain at least one entry."
         ),
     )
     model_provider: str | None = Field(
@@ -496,6 +497,74 @@ class AgentRegisterRequest(BaseModel):
         max_length=128,
         description="Specific model identifier (e.g. 'llama-3.3-70b-versatile').",
     )
+    pricing_model: Literal["fixed", "per_unit", "tiered"] = Field(
+        default="fixed",
+        description=(
+            "Billing strategy. 'fixed' uses price_per_call_usd per invocation. "
+            "'per_unit' and 'tiered' derive the charge from an input field "
+            "named in pricing_config.input_field."
+        ),
+    )
+    pricing_config: JSONObject | None = Field(
+        default=None,
+        description=(
+            "Pricing configuration when pricing_model is not 'fixed'. "
+            "Shape (per_unit): {unit, rate_cents_per_unit, min_cents, max_cents, input_field, multipliers?}. "
+            "Shape (tiered): {unit, input_field, min_cents, max_cents, tiers:[{up_to_units, cents}]}."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _require_documented_schema(self) -> "AgentRegisterRequest":
+        schema = self.input_schema or {}
+        props = schema.get("properties") if isinstance(schema, dict) else None
+        if isinstance(props, dict) and props:
+            undocumented: list[str] = []
+            for name, spec in props.items():
+                if not isinstance(spec, dict):
+                    undocumented.append(str(name))
+                    continue
+                title = str(spec.get("title") or "").strip()
+                description = str(spec.get("description") or "").strip()
+                if not title and not description:
+                    undocumented.append(str(name))
+            if undocumented:
+                bad = ", ".join(undocumented[:5])
+                raise ValueError(
+                    "Every input_schema.properties[*] must have a `title` or "
+                    f"`description`. Missing on: {bad}."
+                )
+        examples = self.output_examples or []
+        if not isinstance(examples, list) or not examples:
+            raise ValueError(
+                "output_examples is required and must contain at least one "
+                "{input, output} pair so the marketplace UI can preview the "
+                "agent's behaviour before a caller hires it."
+            )
+        for idx, example in enumerate(examples):
+            if not isinstance(example, dict):
+                raise ValueError(
+                    f"output_examples[{idx}] must be an object with 'input' and 'output' keys."
+                )
+            if "input" not in example or "output" not in example:
+                raise ValueError(
+                    f"output_examples[{idx}] must include both 'input' and 'output' keys."
+                )
+        if self.pricing_model != "fixed" and not self.pricing_config:
+            raise ValueError(
+                "pricing_config is required when pricing_model is not 'fixed'."
+            )
+        if self.pricing_model == "fixed" and self.pricing_config:
+            raise ValueError(
+                "pricing_config must be null when pricing_model is 'fixed'."
+            )
+        if self.pricing_config is not None:
+            try:
+                from core.registry.pricing import validate_pricing_config
+                validate_pricing_config(self.pricing_model, self.pricing_config)
+            except ValueError as exc:
+                raise ValueError(str(exc)) from exc
+        return self
 
     @field_validator("model_provider")
     @classmethod

@@ -4,6 +4,14 @@
 # callback / hook delivery pipeline. No HTTP routes here.
 
 
+from server.pricing_helpers import (  # noqa: E402
+    builtin_pricing_overlay as _builtin_pricing_overlay,  # noqa: F401
+    resolve_agent_pricing as _resolve_agent_pricing,  # noqa: F401
+    estimate_variable_charge as _estimate_variable_charge,  # noqa: F401
+    maybe_refund_pricing_diff as _maybe_refund_pricing_diff,  # noqa: F401
+)
+
+
 def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict:
     payload = input_payload or {}
     if agent_id == _FINANCIAL_AGENT_ID:

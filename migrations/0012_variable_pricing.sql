@@ -1,0 +1,27 @@
+-- Variable pricing support for listings.
+--
+-- `pricing_model` selects the billing strategy. 'fixed' preserves the
+-- historical behaviour (price_per_call_usd per invocation). 'per_unit'
+-- charges a linear rate against an integer quantity extracted from an
+-- input field (e.g. duration_seconds for video, image_count for images).
+-- 'tiered' charges the cents amount of the first tier whose up_to_units
+-- threshold covers the request. Tiered/per-unit configs are always clamped
+-- to optional `min_cents` / `max_cents` ceilings so callers cannot be
+-- billed more than they agreed to. The invariant that every caller charge
+-- stays under `budget_cents` and the key's `per_job_cap_cents` is enforced
+-- in the pre-charge flow.
+--
+-- `pricing_config` holds the per-model configuration as JSON. Example shape:
+--   {
+--     "unit": "second",
+--     "rate_cents_per_unit": 50,
+--     "min_cents": 100,
+--     "max_cents": 2500,
+--     "input_field": "duration_seconds",
+--     "tiers": [{"up_to_units": 10, "cents": 100}, ...]
+--   }
+-- The ledger stays insert-only; when actual usage turns out cheaper than
+-- the estimated pre-charge, a compensating `refund` transaction is written
+-- (see core.payments.post_call_refund_difference).
+ALTER TABLE agents ADD COLUMN pricing_model TEXT NOT NULL DEFAULT 'fixed';
+ALTER TABLE agents ADD COLUMN pricing_config TEXT;

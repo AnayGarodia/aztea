@@ -73,6 +73,8 @@ def registry_register(
             owner_id=caller["owner_id"],
             model_provider=body.model_provider,
             model_id=body.model_id,
+            pricing_model=body.pricing_model,
+            pricing_config=body.pricing_config,
         )
         agent = registry.get_agent_with_reputation(agent_id, include_unapproved=True) or registry.get_agent(
             agent_id,

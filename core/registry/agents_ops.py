@@ -65,6 +65,12 @@ from .core_schema import (
     _to_non_negative_int,
     _upsert_agent_embedding_row,
 )
+from .pricing import (
+    VALID_PRICING_MODELS,
+    VariablePricingError,
+    normalize_pricing_model,
+    validate_pricing_config,
+)
 
 
 def register_agent(
@@ -92,6 +98,8 @@ def register_agent(
     embed_listing: bool = True,
     model_provider: str | None = None,
     model_id: str | None = None,
+    pricing_model: str | None = None,
+    pricing_config: dict | None = None,
 ) -> str:
     """
     Insert a new agent listing. Returns the agent_id.
@@ -149,6 +157,20 @@ def register_agent(
     if normalized_decay_multiplier <= 0:
         normalized_decay_multiplier = 1.0
     internal_only_int = 1 if internal_only else 0
+    try:
+        normalized_pricing_model = normalize_pricing_model(pricing_model)
+    except VariablePricingError as exc:
+        raise ValueError(str(exc))
+    pricing_config_json: str | None = None
+    if normalized_pricing_model != "fixed":
+        try:
+            canonical_config = validate_pricing_config(
+                normalized_pricing_model, pricing_config
+            )
+        except VariablePricingError as exc:
+            raise ValueError(str(exc))
+        if canonical_config is not None:
+            pricing_config_json = json.dumps(canonical_config, sort_keys=True)
     source_text = ""
     embedding_vector: list[float] | None = None
     if embed_listing:
@@ -164,8 +186,8 @@ def register_agent(
                  endpoint_last_checked_at, endpoint_last_error,
                  internal_only, status, review_status, review_note, reviewed_at, reviewed_by,
                  trust_decay_multiplier, last_decay_at, created_at,
-                 model_provider, model_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 model_provider, model_id, pricing_model, pricing_config)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 aid,
@@ -193,6 +215,8 @@ def register_agent(
                 created_at,
                 str(model_provider).strip().lower() if model_provider else None,
                 str(model_id).strip()[:128] if model_id else None,
+                normalized_pricing_model,
+                pricing_config_json,
             ),
         )
         if embed_listing and embedding_vector is not None:
@@ -205,6 +229,43 @@ def register_agent(
     if embed_listing:
         _invalidate_embeddings_cache()
     return aid
+
+
+def set_agent_pricing(
+    agent_id: str,
+    *,
+    pricing_model: str,
+    pricing_config: dict | None,
+) -> dict | None:
+    """Update the pricing model/config columns for an existing agent.
+
+    Returns the refreshed agent row, or ``None`` if no agent with
+    ``agent_id`` exists.
+    """
+    try:
+        normalized_model = normalize_pricing_model(pricing_model)
+    except VariablePricingError as exc:
+        raise ValueError(str(exc))
+    serialized: str | None = None
+    if normalized_model != "fixed":
+        try:
+            canonical = validate_pricing_config(normalized_model, pricing_config)
+        except VariablePricingError as exc:
+            raise ValueError(str(exc))
+        if canonical is not None:
+            serialized = json.dumps(canonical, sort_keys=True)
+    with _conn() as conn:
+        updated = conn.execute(
+            """
+            UPDATE agents
+            SET pricing_model = ?, pricing_config = ?
+            WHERE agent_id = ?
+            """,
+            (normalized_model, serialized, agent_id),
+        ).rowcount
+    if updated == 0:
+        return None
+    return get_agent(agent_id, include_unapproved=True)
 
 
 def update_call_stats(agent_id: str, latency_ms: float, success: bool) -> None:

@@ -62,7 +62,19 @@ def _register_agent_via_api(
             "endpoint_url": f"https://agents.example.com/{uuid.uuid4().hex[:8]}",
             "price_per_call_usd": price,
             "tags": ["dispute-test"],
-            "input_schema": input_schema or {"type": "object", "properties": {"task": {"type": "string"}}},
+            "input_schema": input_schema or {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "title": "Task",
+                        "description": "dispute test input",
+                    }
+                },
+            },
+            "output_examples": [
+                {"input": {"task": "analyze"}, "output": {"ok": True}}
+            ],
         },
     )
     assert resp.status_code == 201, resp.text

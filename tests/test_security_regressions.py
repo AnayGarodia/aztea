@@ -179,7 +179,8 @@ def test_admin_ip_allowlist_blocks_forwarded_for_spoofing(client, monkeypatch):
             "endpoint_url": f"https://agents.example.com/{uuid.uuid4().hex[:8]}",
             "price_per_call_usd": 0.05,
             "tags": ["allowlist-test"],
-            "input_schema": {"type": "object", "properties": {"task": {"type": "string"}}},
+            "input_schema": {"type": "object", "properties": {"task": {"type": "string", "description": "task text"}}},
+            "output_examples": [{"input": {"task": "x"}, "output": {"ok": True}}],
         },
     )
     assert register.status_code == 201, register.text
@@ -333,6 +334,7 @@ def test_registry_register_blocks_private_endpoint_urls(client):
             "price_per_call_usd": 0.05,
             "tags": ["security"],
             "input_schema": {"type": "object"},
+            "output_examples": [{"input": {}, "output": {}}],
         },
     )
     assert resp.status_code == 400
@@ -591,6 +593,7 @@ def test_registry_register_rejects_endpoint_url_credentials(client):
             "price_per_call_usd": 0.05,
             "tags": ["security"],
             "input_schema": {"type": "object"},
+            "output_examples": [{"input": {}, "output": {}}],
         },
     )
     assert resp.status_code == 400

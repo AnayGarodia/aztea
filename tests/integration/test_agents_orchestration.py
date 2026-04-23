@@ -537,7 +537,8 @@ def test_registry_register_marks_new_worker_agents_pending_review(client):
             "endpoint_url": f"https://agents.example.com/{uuid.uuid4().hex[:8]}",
             "price_per_call_usd": 0.10,
             "tags": ["pending-review"],
-            "input_schema": {"type": "object", "properties": {"task": {"type": "string"}}},
+            "input_schema": {"type": "object", "properties": {"task": {"type": "string", "description": "task text"}}},
+            "output_examples": [{"input": {"task": "x"}, "output": {"ok": True}}],
         },
     )
     assert response.status_code == 201, response.text
@@ -559,7 +560,8 @@ def test_pending_review_agent_hidden_from_public_listing_and_visible_in_admin_qu
             "endpoint_url": f"https://agents.example.com/{uuid.uuid4().hex[:8]}",
             "price_per_call_usd": 0.10,
             "tags": ["pending-hidden"],
-            "input_schema": {"type": "object", "properties": {"task": {"type": "string"}}},
+            "input_schema": {"type": "object", "properties": {"task": {"type": "string", "description": "task text"}}},
+            "output_examples": [{"input": {"task": "x"}, "output": {"ok": True}}],
         },
     )
     assert register.status_code == 201, register.text
@@ -593,7 +595,8 @@ def test_pending_review_agent_cannot_accept_job_claim(client):
             "endpoint_url": f"https://agents.example.com/{uuid.uuid4().hex[:8]}",
             "price_per_call_usd": 0.10,
             "tags": ["pending-claim"],
-            "input_schema": {"type": "object", "properties": {"task": {"type": "string"}}},
+            "input_schema": {"type": "object", "properties": {"task": {"type": "string", "description": "task text"}}},
+            "output_examples": [{"input": {"task": "x"}, "output": {"ok": True}}],
         },
     )
     assert register.status_code == 201, register.text
@@ -640,7 +643,8 @@ def test_admin_review_approve_and_reject_paths(client, monkeypatch):
             "healthcheck_url": f"https://agents.example.com/{uuid.uuid4().hex[:8]}/health",
             "price_per_call_usd": 0.10,
             "tags": ["review-flow"],
-            "input_schema": {"type": "object", "properties": {"task": {"type": "string"}}},
+            "input_schema": {"type": "object", "properties": {"task": {"type": "string", "description": "task text"}}},
+            "output_examples": [{"input": {"task": "x"}, "output": {"ok": True}}],
         },
     )
     assert register.status_code == 201, register.text
@@ -681,7 +685,8 @@ def test_admin_review_approve_and_reject_paths(client, monkeypatch):
             "endpoint_url": f"https://agents.example.com/{uuid.uuid4().hex[:8]}",
             "price_per_call_usd": 0.10,
             "tags": ["review-reject"],
-            "input_schema": {"type": "object", "properties": {"task": {"type": "string"}}},
+            "input_schema": {"type": "object", "properties": {"task": {"type": "string", "description": "task text"}}},
+            "output_examples": [{"input": {"task": "x"}, "output": {"ok": True}}],
         },
     )
     assert reject_register.status_code == 201, reject_register.text

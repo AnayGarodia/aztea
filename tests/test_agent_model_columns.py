@@ -208,6 +208,7 @@ def test_api_register_agent_with_model_fields(isolated_db):
                 "tags": ["ai"],
                 "model_provider": "anthropic",
                 "model_id": "claude-sonnet-4-6",
+                "output_examples": [{"input": {}, "output": {"ok": True}}],
             },
         )
         assert resp.status_code == 201, resp.text

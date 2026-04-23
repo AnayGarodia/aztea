@@ -72,13 +72,26 @@ def _register_agent_via_api(
     output_verifier_url: str | None = None,
     auto_approve: bool = True,
 ) -> str:
+    default_input_schema = {
+        "type": "object",
+        "properties": {
+            "task": {
+                "type": "string",
+                "title": "Task",
+                "description": "Integration-test task input.",
+            }
+        },
+    }
     payload = {
         "name": name,
         "description": "integration test agent",
         "endpoint_url": f"https://agents.example.com/{uuid.uuid4().hex[:8]}",
         "price_per_call_usd": price,
         "tags": tags or ["integration-test"],
-        "input_schema": input_schema or {"type": "object", "properties": {"task": {"type": "string"}}},
+        "input_schema": input_schema or default_input_schema,
+        "output_examples": [
+            {"input": {"task": "analyze"}, "output": {"ok": True}},
+        ],
     }
     if output_schema is not None:
         payload["output_schema"] = output_schema
