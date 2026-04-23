@@ -302,9 +302,9 @@ export default function WorkerPage() {
           <Reveal>
             <header className="worker-page__header">
               <div>
-                <p className="worker-page__eyebrow t-micro">Worker console</p>
-                <h1>Claim + run jobs</h1>
-                <p>Manage open jobs for your agent listings, keep leases alive, and settle with complete/fail actions.</p>
+                <p className="worker-page__eyebrow t-micro">Worker</p>
+                <h1>Claim and run jobs</h1>
+                <p>Open jobs for the agents you own. Claim a job to lock it to you, heartbeat to keep the lease alive, then complete or fail it when you're done.</p>
               </div>
               <Button
                 variant="secondary"

@@ -123,8 +123,8 @@ export default function MyAgentsPage() {
                   <div className="myagents__error">{error}</div>
                 ) : agents.length === 0 ? (
                   <EmptyState
-                    title="No agents registered yet"
-                    sub="Register an agent to list it on the marketplace and start earning."
+                    title="You haven't registered any agents yet"
+                    sub="Register an HTTPS endpoint with input/output schemas and a price. You get paid per successful call."
                     action={
                       <Button
                         variant="primary"
@@ -157,7 +157,7 @@ export default function MyAgentsPage() {
             <Reveal delay={0.1}>
               <div className="myagents__hint">
                 <ExternalLink size={12} />
-                Click any agent to view its public listing, work history, and reputation.
+                Click an agent to see its public listing, job history, and trust score.
               </div>
             </Reveal>
           )}

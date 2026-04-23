@@ -110,10 +110,10 @@ export default function DashboardPage() {
                   </div>
                   <div>
                     <p style={{ fontWeight: 700, fontSize: '0.9375rem', color: 'var(--ink)', marginBottom: 2 }}>
-                      Welcome{user?.username ? `, ${user.username}` : ''}! You have a $1.00 starter credit.
+                      Welcome{user?.username ? `, ${user.username}` : ''} — you have $1.00 of free credit.
                     </p>
                     <p style={{ fontSize: '0.8125rem', color: 'var(--ink-soft)' }}>
-                      Your wallet is ready — browse agents and make your first call at $0.01.
+                      That's enough for about 100 calls at $0.01 each. No card needed to try it.
                     </p>
                   </div>
                 </div>
@@ -133,13 +133,13 @@ export default function DashboardPage() {
           <Reveal>
             <div className="dashboard__welcome">
               <div>
-                <p className="dashboard__welcome-eyebrow t-micro">Control center</p>
+                <p className="dashboard__welcome-eyebrow t-micro">Overview</p>
                 <h1>Welcome{user?.username ? `, ${user.username}` : ''}</h1>
-                <p>Discover agents, run jobs, and track outcomes from one place.</p>
+                <p>Browse agents, run jobs, and see every charge and payout in one place.</p>
               </div>
               <div className="dashboard__welcome-actions">
-                <Link to="/agents"><Button variant="primary">Discover agents</Button></Link>
-                <Link to="/jobs"><Button variant="secondary">Monitor jobs</Button></Link>
+                <Link to="/agents"><Button variant="primary">Browse agents</Button></Link>
+                <Link to="/jobs"><Button variant="secondary">View jobs</Button></Link>
               </div>
             </div>
           </Reveal>
@@ -190,13 +190,13 @@ export default function DashboardPage() {
           <Reveal delay={0.1}>
             <Card>
               <Card.Header>
-                <span className="dashboard__section-title">Getting started checklist</span>
+                <span className="dashboard__section-title">Getting started</span>
               </Card.Header>
               <Card.Body className="dashboard__steps">
-                <ActionStep done={agents.length > 0} title="Discover marketplace listings" copy="Compare capabilities, trust signals, and pricing." actionTo="/agents" actionLabel={agents.length > 0 ? 'Browse agents' : 'Start here'} />
-                <ActionStep done={jobs.length > 0} title="Create your first call or job" copy="Open an agent, submit schema-based input, choose sync or async." actionTo="/agents" actionLabel={jobs.length > 0 ? 'Run another' : 'First job'} />
-                <ActionStep done={jobs.length > 0} title="Monitor status and outputs" copy="Track pending / running / completed jobs in one timeline." actionTo="/jobs" actionLabel="Open jobs" />
-                <ActionStep done={hasBalance} title="Keep wallet funded and auditable" copy="Charges, refunds, and payouts are visible in wallet transactions." actionTo="/wallet" actionLabel={hasBalance ? 'View wallet' : 'Add funds'} />
+                <ActionStep done={agents.length > 0} title="Browse the marketplace" copy="Compare prices, trust scores, and what each agent is built to do." actionTo="/agents" actionLabel={agents.length > 0 ? 'Browse agents' : 'Start here'} />
+                <ActionStep done={jobs.length > 0} title="Run your first job" copy="Pick an agent, fill in the required fields, and choose sync (wait for result) or async (queue and poll)." actionTo="/agents" actionLabel={jobs.length > 0 ? 'Run another' : 'First job'} />
+                <ActionStep done={jobs.length > 0} title="Check on your jobs" copy="See pending, running, and completed jobs in one list." actionTo="/jobs" actionLabel="Open jobs" />
+                <ActionStep done={hasBalance} title="Keep your wallet funded" copy="Every charge, refund, and payout shows up in your wallet transactions." actionTo="/wallet" actionLabel={hasBalance ? 'View wallet' : 'Add funds'} />
               </Card.Body>
             </Card>
           </Reveal>
@@ -219,7 +219,7 @@ export default function DashboardPage() {
                       agentId="empty-jobs"
                       title="No jobs yet"
                       sub="Start by hiring an agent from the marketplace."
-                      action={<Link to="/agents"><Button variant="primary">Discover agents</Button></Link>}
+                      action={<Link to="/agents"><Button variant="primary">Browse agents</Button></Link>}
                     />
                   ) : (
                     <div className="dashboard__jobs">
@@ -233,10 +233,10 @@ export default function DashboardPage() {
             <Reveal delay={0.2}>
               <Card>
                 <Card.Header>
-                  <span className="dashboard__section-title">Payment model</span>
+                  <span className="dashboard__section-title">How payment works</span>
                 </Card.Header>
                 <Card.Body className="dashboard__trust">
-                  <p>Calls are charged from your wallet before execution. Successful jobs pay agents automatically; failures are fully refunded.</p>
+                  <p>We charge your wallet before a call runs. If the agent succeeds, the payout happens automatically. If it fails, you get a full refund. Every movement shows up in your ledger.</p>
                   <div className="dashboard__trust-pills">
                     <Badge label="deposit" dot />
                     <Badge label="payout" dot />

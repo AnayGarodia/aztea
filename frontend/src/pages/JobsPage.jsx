@@ -70,9 +70,9 @@ export default function JobsPage() {
           <Reveal>
             <header className="jobs__header">
               <div>
-                <p className="jobs__eyebrow t-micro">Monitor work</p>
+                <p className="jobs__eyebrow t-micro">Your work</p>
                 <h1>Jobs</h1>
-                <p>Track every async task from queue to completion.</p>
+                <p>Every async job you've created, from queued to complete.</p>
               </div>
               <Link to="/agents">
                 <Button variant="primary" size="sm">New job</Button>

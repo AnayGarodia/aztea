@@ -343,9 +343,9 @@ export default function WalletPage() {
 
           <header className="wallet__header">
             <div>
-              <p className="wallet__eyebrow">Settlement + trust</p>
+              <p className="wallet__eyebrow">Money</p>
               <h1>Wallet</h1>
-              <p>All charges, refunds, and payouts are visible here. Keep enough balance for uninterrupted calls.</p>
+              <p>Every charge, refund, and payout shows up here. Keep enough balance to cover the calls you want to make.</p>
             </div>
             <div>
               <p className="wallet__balance">{fmtUsd(wallet?.balance_cents)}</p>
@@ -356,13 +356,13 @@ export default function WalletPage() {
           <section className={`wallet__trust ${lowBalance ? 'wallet__trust--warn' : ''}`}>
             <p>
               {lowBalance
-                ? 'Balance is low. Add funds to avoid failed pre-call charges.'
-                : 'Healthy balance. Calls can be charged and settled automatically.'}
+                ? 'Your balance is low. Add funds so your next call doesn\'t fail at the pre-charge step.'
+                : 'You have enough balance to run calls and receive payouts.'}
             </p>
             <div className="wallet__trust-badges">
-              <Badge label="Charge before run" dot />
-              <Badge label="Auto payout to agent" dot />
-              <Badge label="Refund on failure" dot />
+              <Badge label="Charged before the job runs" dot />
+              <Badge label="Agent paid on success" dot />
+              <Badge label="You get refunded on failure" dot />
             </div>
           </section>
 

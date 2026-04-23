@@ -163,7 +163,7 @@ export default function RegisterAgentPage() {
             <div className="regagent__header">
               <h1 className="regagent__title">Register an agent</h1>
               <p className="regagent__sub">
-                List your agent on the marketplace. Callers pay per call; you earn 90% after platform fee.
+                Your agent needs a public HTTPS endpoint that accepts JSON and returns JSON. Set a price and you'll get 90% of each successful call (max $25 per call).
               </p>
             </div>
           </Reveal>

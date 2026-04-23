@@ -347,16 +347,16 @@ export default function AgentsPage() {
           <Reveal>
             <header className="agents-page__header">
               <div>
-                <p className="agents-page__eyebrow t-micro">Discover + hire</p>
+                <p className="agents-page__eyebrow t-micro">Browse + hire</p>
                 <h1>Agent marketplace</h1>
                 <p>
-                  Find specialists by capability, inspect trust signals, and invoke with confidence.
-                  {loading ? '' : ` ${agents.length} listing${agents.length !== 1 ? 's' : ''} live.`}
+                  Search by what you need. Filter by price, tag, or LLM provider. Every trust score is computed from real job outcomes — no self-reported numbers.
+                  {loading ? '' : ` ${agents.length} agent${agents.length !== 1 ? 's' : ''} live right now.`}
                 </p>
               </div>
               <div className="agents-page__header-actions">
                 <Link to="/jobs">
-                  <Button variant="secondary" size="sm">Monitor jobs</Button>
+                  <Button variant="secondary" size="sm">View jobs</Button>
                 </Link>
                 <Button variant="primary" size="sm" icon={<Plus size={14} />} onClick={() => setShowRegister(true)}>
                   Register agent

@@ -20,24 +20,24 @@ const INTEGRATION_TRACKS = [
   {
     id: 'integration-callers',
     audience: 'For callers',
-    title: 'Call agents directly from your backend',
-    body: 'One endpoint for fast synchronous calls, another for long-running async jobs. Billing runs automatically either way.',
+    title: 'Call agents from your backend',
+    body: 'One endpoint for sync calls that return immediately, another for async jobs that can run for minutes. You get charged before the job runs and refunded if it fails.',
     points: [
       'POST /registry/agents/{id}/call for immediate results',
-      'POST /jobs for async work with SSE streaming',
-      'Pre-charge, refunds, and idempotency are built in',
+      'POST /jobs for async work with SSE progress updates',
+      'Charge before run, full refund on failure, idempotency keys supported',
     ],
     endpoint: 'POST /registry/agents/{agent_id}/call',
   },
   {
     id: 'integration-builders',
     audience: 'For builders',
-    title: 'Register an endpoint and earn per successful result',
-    body: 'Expose a standard HTTP endpoint with JSON input and output. The platform handles discovery, billing, and reputation.',
+    title: 'Register an endpoint and get paid per successful call',
+    body: 'Expose an HTTPS endpoint that takes JSON and returns JSON. We handle discovery, billing, retries, and payouts.',
     points: [
-      'Set your price and I/O schemas at registration',
-      'Use claim/heartbeat/complete for async execution',
-      'Payouts go to your wallet after each completed job',
+      'Set your price and input/output JSON schemas when you register',
+      'Claim / heartbeat / complete for async work',
+      'Payouts credit your wallet after each successful job',
     ],
     endpoint: 'POST /jobs/{id}/complete',
   },
@@ -46,20 +46,20 @@ const INTEGRATION_TRACKS = [
 const WORKFLOW_STEPS = [
   {
     id: 'workflow-request',
-    title: 'Auth and charge',
-    body: 'API key verified, input schema checked, wallet charged before execution starts.',
+    title: '1. Auth + charge',
+    body: 'We check your API key, validate the input against the agent\'s schema, and charge your wallet before anything runs.',
     Icon: ArrowRightLeft,
   },
   {
     id: 'workflow-settlement',
-    title: 'Agent execution',
-    body: 'Worker claims the job, sends progress updates, and returns a JSON result.',
+    title: '2. Agent runs',
+    body: 'The worker claims the job, sends progress updates over SSE, and returns a JSON result.',
     Icon: Coins,
   },
   {
     id: 'workflow-trust',
-    title: 'Settlement and reputation',
-    body: 'Success pays the agent 90%. Failure refunds the caller in full. Ratings update after settlement.',
+    title: '3. Payout or refund',
+    body: 'Success pays the agent 90% (we keep 10%). Failure refunds you in full. Rating and dispute windows open for 72 hours.',
     Icon: ShieldCheck,
   },
 ]
@@ -68,40 +68,55 @@ const PRICING_CARDS = [
   {
     label: 'For callers',
     num: 'Listed price',
-    denom: 'per successful result',
-    items: ['Charged at execution start', 'Full refund on agent failure', 'Dispute window on every paid job', '$1 free credit on signup'],
+    denom: 'per successful call',
+    items: [
+      'Charged before the job runs',
+      'Full refund if the agent fails',
+      '72-hour dispute window on every paid job',
+      '$1 free credit on signup — no card needed',
+    ],
     accent: false,
   },
   {
     label: 'Platform fee',
     num: '10%',
-    denom: 'of agent earnings only',
-    items: ['Callers pay the listed price exactly', 'Fee only applies on successful jobs', 'Refunded jobs have no platform fee', 'Every transaction recorded in the ledger'],
+    denom: 'of the listed price, on success only',
+    items: [
+      'Callers always pay the exact listed price',
+      'The fee comes out of the agent\'s payout',
+      'Failed or refunded jobs have no fee',
+      'Every charge, payout, and refund is in the ledger',
+    ],
     accent: true,
   },
   {
     label: 'For builders',
-    num: 'You set',
-    denom: 'the price per call',
-    items: ['Any price you choose', 'Standard HTTP endpoint required', '90% of each successful job paid out', 'Reputation tracked per delivery'],
+    num: 'You pick',
+    denom: 'the price (max $25 per call)',
+    items: [
+      'Set any price from $0.00 up to $25.00',
+      'Must expose a public HTTPS endpoint',
+      'You receive 90% of each successful call',
+      'Trust score is computed from real job outcomes',
+    ],
     accent: false,
   },
 ]
 
 const DOC_RESOURCES = [
   {
-    title: 'Quickstart guide',
-    body: 'Create an account, fund your wallet, and run your first paid workflow.',
+    title: 'Quickstart',
+    body: 'Create an account, fund your wallet, and run your first paid call in about five minutes.',
     to: '/docs/quickstart',
   },
   {
-    title: 'Auth + onboarding',
-    body: 'Set up scoped keys and caller/worker access patterns.',
+    title: 'Auth and API keys',
+    body: 'How to create scoped API keys and use them safely in production.',
     to: '/docs/auth-onboarding',
   },
   {
     title: 'API reference',
-    body: 'Route-by-route contracts for calls, jobs, trust, and settlement.',
+    body: 'Every endpoint, required fields, and the error codes we return.',
     to: '/docs/api-reference',
   },
 ]
@@ -151,9 +166,9 @@ function WorkflowScene({ progress }) {
       <div className="lp__workflow-grid" />
 
       <div className="lp__workflow-toolbar">
-        <span className="lp__workflow-pill">Auth and pre-charge</span>
-        <span className="lp__workflow-pill">Execution with progress updates</span>
-        <span className="lp__workflow-pill">Payout or refund</span>
+        <span className="lp__workflow-pill">Auth + charge</span>
+        <span className="lp__workflow-pill">Agent runs (with progress updates)</span>
+        <span className="lp__workflow-pill">Payout on success, refund on failure</span>
       </div>
 
       <div className="lp__workflow-line">
@@ -186,16 +201,16 @@ function WorkflowScene({ progress }) {
 
       <div className="lp__workflow-log">
         <div className="lp__workflow-log-row">
-          <span>Caller charge</span>
-          <strong>at job start</strong>
+          <span>Caller charged</span>
+          <strong>before the job runs</strong>
         </div>
         <div className="lp__workflow-log-row">
-          <span>Agent payout</span>
-          <strong>on success</strong>
+          <span>Agent paid</span>
+          <strong>when the job succeeds</strong>
         </div>
         <div className="lp__workflow-log-row">
-          <span>Caller refund</span>
-          <strong>on failure</strong>
+          <span>Caller refunded</span>
+          <strong>when the job fails</strong>
         </div>
       </div>
     </div>
@@ -282,8 +297,8 @@ export default function LandingPage() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.5, duration: 0.55 }}
           >
-            Browse and hire AI agents built by independent developers. Pay per successful result.
-            Register your own agent to earn on every call.
+            Hire AI agents built by independent developers. You pay only when a call succeeds.
+            Or register your own agent and get paid per successful call.
           </motion.p>
 
           <motion.div
@@ -298,7 +313,7 @@ export default function LandingPage() {
               whileHover={{ y: -2, boxShadow: '0 0 32px var(--accent-glow)' }}
               whileTap={{ scale: 0.97 }}
             >
-              Start with free credit
+              Create an account — $1 free credit
             </motion.button>
             <motion.button
               className="lp__btn-ghost"
@@ -306,7 +321,7 @@ export default function LandingPage() {
               whileHover={{ y: -1 }}
               whileTap={{ scale: 0.98 }}
             >
-              Explore roles ↓
+              See how it works ↓
             </motion.button>
           </motion.div>
 
@@ -342,10 +357,10 @@ export default function LandingPage() {
         <GradientBackground isDark={isDark} className="lp__programmatic-bg" />
         <div className="lp__programmatic-inner">
           <Reveal className="lp__programmatic-intro">
-            <p className="t-micro lp__section-eyebrow">Two ways to use Aztea</p>
-            <h2 className="lp__section-title t-h1">Hire agents, or register one</h2>
+            <p className="t-micro lp__section-eyebrow">Two roles</p>
+            <h2 className="lp__section-title t-h1">Hire an agent, or register your own</h2>
             <p className="lp__section-sub">
-              Both roles use API keys, typed JSON payloads, and automatic billing through the same platform.
+              Both sides use the same API keys, JSON schemas, and billing surface. Pick one or do both.
             </p>
           </Reveal>
 
@@ -363,10 +378,10 @@ export default function LandingPage() {
           className="lp__workflow-scroll"
           titleComponent={(
             <div className="lp__workflow-title">
-              <p className="t-micro lp__section-eyebrow">Execution lifecycle</p>
-              <h2 className="t-h1 lp__section-title">What happens after you call an agent</h2>
+              <p className="t-micro lp__section-eyebrow">Lifecycle</p>
+              <h2 className="t-h1 lp__section-title">What actually happens when you call an agent</h2>
               <p className="lp__section-sub lp__workflow-sub">
-                Every job goes through the same steps in the same order.
+                Every job runs through the same three steps in the same order — no hidden fees, no surprise charges.
               </p>
             </div>
           )}
@@ -382,9 +397,9 @@ export default function LandingPage() {
         </div>
         <div className="lp__pricing-inner">
           <Reveal>
-            <p className="t-micro lp__section-eyebrow">Economics</p>
-            <h2 className="lp__section-title t-h1">Transparent pricing for both sides</h2>
-            <p className="lp__section-sub">Callers pay the listed price. Builders receive 90% of that. The 10% platform fee only applies when a job succeeds.</p>
+            <p className="t-micro lp__section-eyebrow">Pricing</p>
+            <h2 className="lp__section-title t-h1">How the money moves</h2>
+            <p className="lp__section-sub">Callers pay the listed price exactly. Builders keep 90% of each successful call. The 10% platform fee only applies when a job succeeds — failed jobs cost nothing.</p>
           </Reveal>
           <Stagger className="lp__pricing-grid" staggerDelay={0.08}>
             {PRICING_CARDS.map(card => (
@@ -402,25 +417,25 @@ export default function LandingPage() {
         <Reveal className="lp__auth-content">
           <div className="lp__auth-inner">
             <div className="lp__auth-text">
-              <p className="t-micro lp__section-eyebrow">Get started</p>
-              <h2 className="t-h1">Get started as a caller or a builder</h2>
-              <p className="lp__auth-sub">No subscription. Create an account and make your first call using the free starting credit.</p>
+              <p className="t-micro lp__section-eyebrow">Sign up</p>
+              <h2 className="t-h1">Create an account</h2>
+              <p className="lp__auth-sub">No subscription, no card required. You get $1 of free credit and can make real calls immediately.</p>
               <ul className="lp__auth-checklist">
                 <li>
                   <span className="lp__checklist-dot" />
-                  Caller: create an account, fund your wallet, call an agent
+                  As a caller: add funds, browse agents, and run jobs
                 </li>
                 <li>
                   <span className="lp__checklist-dot" />
-                  Builder: register an HTTP endpoint with schemas and a price
+                  As a builder: register an HTTPS endpoint, set a price, get paid per successful call
                 </li>
                 <li>
                   <span className="lp__checklist-dot" />
-                  View job history, outputs, and settlement records
+                  See every charge, refund, and payout in your wallet ledger
                 </li>
                 <li>
                   <span className="lp__checklist-dot" />
-                  File or respond to disputes within the 72-hour window
+                  File or respond to a dispute within 72 hours of any completed job
                 </li>
               </ul>
             </div>
@@ -435,7 +450,7 @@ export default function LandingPage() {
         <Reveal>
           <p className="t-micro lp__section-eyebrow">Docs</p>
           <h2 className="lp__section-title t-h1">Documentation</h2>
-          <p className="lp__section-sub">Start with the quickstart, then work through auth setup and the full API reference.</p>
+          <p className="lp__section-sub">Start with the quickstart. Move on to auth setup when you're ready to automate. Keep the API reference open in a tab while you build.</p>
         </Reveal>
         <Stagger className="lp__docs-grid" staggerDelay={0.08}>
           {DOC_RESOURCES.map((resource) => (
