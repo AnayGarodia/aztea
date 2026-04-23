@@ -17,6 +17,53 @@ extend-ignore =
     E402,
     # do not require two blank lines in nested contexts
     E701, E711, E712,
+    # whitespace before ':' (conflicts with Black-style slice formatting)
+    E203,
+
+# Per-file ignores for split packages that intentionally share a single logical
+# namespace via their package __init__.py (or, for server.application, via the
+# explicit part-loader). flake8 cannot reason across module boundaries, so it
+# flags legitimate cross-part references as unused/undefined; tests exercise the
+# merged surface and are the real source of truth.
+per-file-ignores =
+    # Application is sharded into ordered parts loaded into a single namespace
+    # by server/application.py; imports and names are shared across parts.
+    server/application_parts/*.py: F401, F403, F405, F811, F821
+    server/application.py: F401
+    # core.models is composed of peer files that star-import from core_types.
+    core/models/__init__.py: F401, F403, F405
+    core/models/core_types.py: F401, F403, F405, F811
+    core/models/job_requests.py: F401, F403, F405, F811
+    core/models/messages_ops.py: F401, F403, F405, F811
+    core/models/responses.py: F401, F403, F405, F811
+    # core.jobs package merges submodules into a single namespace in __init__.
+    core/jobs/__init__.py: F401, F403
+    core/jobs/crud.py: F401
+    core/jobs/db.py: F401
+    core/jobs/leases.py: F401
+    core/jobs/messaging.py: F401, F811
+    # core.payments / core.registry / core.auth package merging.
+    core/payments/__init__.py: F401, F403
+    core/payments/base.py: F401
+    core/payments/trust_disputes.py: F401
+    core/registry/__init__.py: F401, F403
+    core/registry/agents_ops.py: F401
+    core/registry/core_schema.py: F401
+    core/auth/__init__.py: F401, F403
+    core/auth/schema.py: F401
+    core/auth/users.py: F401
+    # Helper scripts: keep unused imports tolerated so generators stay readable.
+    scripts/*.py: F401
+    # Integration test modules `from tests.integration.support import *` so
+    # helpers/constants/imports are shared; flake8 can't follow the star import.
+    tests/integration/helpers.py: F401
+    tests/integration/support.py: F401, F403
+    tests/integration/test_*.py: F401, F403, F405
+    # Pytest fixture imports show as unused to flake8 even though pytest uses
+    # them via the fixture injection protocol. Tests also alias shared fixtures
+    # as function parameters, which trips F811. These are not real issues.
+    tests/*.py: F401, F811
+
 exclude =
     .git,
     __pycache__,

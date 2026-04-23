@@ -382,22 +382,6 @@ def get_latest_message_id(job_id: str) -> int | None:
     return int(latest) if latest is not None else None
 
 
-def _decode_json(raw, default):
-    if raw is None:
-        return default
-    try:
-        return json.loads(raw)
-    except (TypeError, json.JSONDecodeError):
-        return default
-
-
-def _row_to_dict(row: sqlite3.Row) -> dict:
-    d = dict(row)
-    d["input_payload"] = _decode_json(d.get("input_payload"), default={})
-    d["output_payload"] = _decode_json(d.get("output_payload"), default=None)
-    return d
-
-
 def set_job_quality_result(job_id: str, *, judge_verdict: str, quality_score: int | None, judge_agent_id: str | None) -> dict | None:
     now = _now()
     with _conn() as conn:

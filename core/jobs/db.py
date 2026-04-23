@@ -797,40 +797,6 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     return d
 
 
-def set_job_quality_result(job_id: str, *, judge_verdict: str, quality_score: int | None, judge_agent_id: str | None) -> dict | None:
-    now = _now()
-    with _conn() as conn:
-        conn.execute(
-            """
-            UPDATE jobs
-            SET judge_verdict = ?, quality_score = ?, judge_agent_id = ?, updated_at = ?
-            WHERE job_id = ?
-            """,
-            (
-                _clean_optional_text(judge_verdict),
-                int(quality_score) if quality_score is not None else None,
-                _clean_optional_text(judge_agent_id),
-                now,
-                job_id,
-            ),
-        )
-    return get_job(job_id)
-
-
-def set_job_dispute_outcome(job_id: str, outcome: str | None) -> dict | None:
-    now = _now()
-    with _conn() as conn:
-        conn.execute(
-            """
-            UPDATE jobs
-            SET dispute_outcome = ?, updated_at = ?
-            WHERE job_id = ?
-            """,
-            (_clean_optional_text(outcome), now, job_id),
-        )
-    return get_job(job_id)
-
-
 def _msg_to_dict(row: sqlite3.Row) -> dict:
     d = dict(row)
     d["payload"] = _decode_json(d.get("payload"), default={})
