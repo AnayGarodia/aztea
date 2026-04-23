@@ -4,7 +4,7 @@ import { authLogin, authRegister } from '../../api'
 import { useAuth } from '../../context/AuthContext'
 import Button from '../../ui/Button'
 import Input from '../../ui/Input'
-import { Mail, Lock, User, Eye, EyeOff } from 'lucide-react'
+import { Mail, Lock, User, Eye, EyeOff, Copy, Check, KeyRound } from 'lucide-react'
 import './AuthPanel.css'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -21,6 +21,9 @@ export default function AuthPanel() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [apiKeyReveal, setApiKeyReveal] = useState(null) // { rawKey, userInfo } after register
+  const [copied, setCopied] = useState(false)
+  const [keyAcknowledged, setKeyAcknowledged] = useState(false)
 
   const registerMode = tab === 'register'
   const normalizedEmail = email.trim().toLowerCase()
@@ -109,6 +112,12 @@ export default function AuthPanel() {
       if (registerMode && result.user_id) {
         localStorage.removeItem(`aztea_onboarding_done:${result.user_id}`)
       }
+      if (registerMode && result.raw_api_key) {
+        // Pause before auto-login so the user can copy the key — it is only
+        // shown once. `Continue` wires up the session and navigates.
+        setApiKeyReveal({ rawKey: result.raw_api_key, userInfo })
+        return
+      }
       connect(result.raw_api_key, userInfo)
       navigate('/')
     } catch (err) {
@@ -116,6 +125,75 @@ export default function AuthPanel() {
     } finally {
       setLoading(false)
     }
+  }
+
+  const handleCopyKey = async () => {
+    if (!apiKeyReveal?.rawKey) return
+    try {
+      await navigator.clipboard.writeText(apiKeyReveal.rawKey)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1800)
+    } catch {
+      setError('Unable to copy — select the key manually and copy it.')
+    }
+  }
+
+  const handleContinueAfterReveal = () => {
+    if (!apiKeyReveal) return
+    connect(apiKeyReveal.rawKey, apiKeyReveal.userInfo)
+    setApiKeyReveal(null)
+    setKeyAcknowledged(false)
+    navigate('/')
+  }
+
+  if (apiKeyReveal) {
+    return (
+      <div className="auth-panel">
+        <div className="auth-panel__body">
+          <div className="auth-panel__reveal">
+            <div className="auth-panel__reveal-icon" aria-hidden>
+              <KeyRound size={18} />
+            </div>
+            <h3 className="auth-panel__reveal-title">Save your API key</h3>
+            <p className="auth-panel__reveal-sub">
+              This is the only time we show your full key. Store it somewhere safe — a password manager
+              or a local .env file. You can mint scoped keys later in Settings → API Keys.
+            </p>
+            <div className="auth-panel__reveal-keybox">
+              <code className="auth-panel__reveal-key">{apiKeyReveal.rawKey}</code>
+              <button
+                type="button"
+                className="auth-panel__reveal-copy"
+                onClick={handleCopyKey}
+                aria-label="Copy API key"
+              >
+                {copied ? <Check size={14} /> : <Copy size={14} />}
+                <span>{copied ? 'Copied' : 'Copy'}</span>
+              </button>
+            </div>
+            <label className="auth-panel__reveal-ack">
+              <input
+                type="checkbox"
+                checked={keyAcknowledged}
+                onChange={e => setKeyAcknowledged(e.target.checked)}
+              />
+              <span>I've saved this key somewhere safe.</span>
+            </label>
+            {error && <p className="auth-panel__error">{error}</p>}
+            <Button
+              type="button"
+              variant="primary"
+              size="md"
+              onClick={handleContinueAfterReveal}
+              disabled={!keyAcknowledged}
+              style={{ width: '100%' }}
+            >
+              Continue
+            </Button>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   return (

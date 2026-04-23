@@ -156,6 +156,17 @@ function pathnameFromResponse(response) {
   }
 }
 
+const REQUEST_TIMEOUT_MS = 30_000
+
+function timeoutSignal(ms) {
+  if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+    return AbortSignal.timeout(ms)
+  }
+  const controller = new AbortController()
+  setTimeout(() => controller.abort(), ms)
+  return controller.signal
+}
+
 async function request(path, {
   method = 'GET',
   key,
@@ -165,11 +176,26 @@ async function request(path, {
   throwOnError = true,
 } = {}) {
   const requestId = explicitRequestId ?? makeRequestId()
-  const response = await fetch(`${BASE}${path}`, {
-    method,
-    headers: requestHeaders(key, { idempotencyKey, requestId }),
-    body: body === undefined ? undefined : JSON.stringify(body),
-  })
+  let response
+  try {
+    response = await fetch(`${BASE}${path}`, {
+      method,
+      headers: requestHeaders(key, { idempotencyKey, requestId }),
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: timeoutSignal(REQUEST_TIMEOUT_MS),
+    })
+  } catch (err) {
+    if (err?.name === 'AbortError' || err?.name === 'TimeoutError') {
+      const timeoutErr = new Error('Request timed out. The server may be unreachable — please try again.')
+      timeoutErr.status = 0
+      timeoutErr.code = 'network.timeout'
+      throw timeoutErr
+    }
+    const netErr = new Error(err?.message || 'Network error. Check your connection and try again.')
+    netErr.status = 0
+    netErr.code = 'network.error'
+    throw netErr
+  }
   const parsedBody = await parseResponseBody(response)
   if (!response.ok && throwOnError) {
     if (response.status === 401 && _onSessionExpired && !path.startsWith('/auth/')) _onSessionExpired()

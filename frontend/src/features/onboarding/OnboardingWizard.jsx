@@ -166,11 +166,14 @@ export default function OnboardingWizard() {
     Number(wallet?.balance_cents || 0) > 100
 
   useEffect(() => {
-    if (!userId || loading) {
+    if (!userId) {
       setVisible(false)
       return
     }
-    if (hasRecentActivity) {
+    // Dismiss as soon as we can prove the user is not new. Do NOT gate on
+    // market `loading` — if the API stalls the wizard would never appear for
+    // the exact users who need it most.
+    if (!loading && hasRecentActivity) {
       localStorage.setItem(storageKey, '1')
       setVisible(false)
       return
