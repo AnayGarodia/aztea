@@ -336,9 +336,19 @@ def test_registry_register_auto_verifies_with_verifier_url(client, monkeypatch):
             "endpoint_url": f"https://agents.aztea.dev/{uuid.uuid4().hex[:8]}",
             "price_per_call_usd": 0.1,
             "tags": ["verified-test"],
-            "input_schema": {"type": "object", "properties": {"task": {"type": "string"}}},
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "title": "Task",
+                        "description": "verifier input",
+                    }
+                },
+            },
             "output_schema": {"type": "object", "properties": {"ok": {"type": "boolean"}}},
             "output_verifier_url": verifier_url,
+            "output_examples": [{"input": {"task": "x"}, "output": {"ok": True}}],
         },
     )
     assert response.status_code == 201, response.text
@@ -362,7 +372,17 @@ def test_endpoint_health_monitor_marks_degraded_and_recovers(client, monkeypatch
             "endpoint_url": f"https://health.aztea.dev/{uuid.uuid4().hex[:8]}",
             "price_per_call_usd": 0.1,
             "tags": ["health-monitor"],
-            "input_schema": {"type": "object", "properties": {"task": {"type": "string"}}},
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "title": "Task",
+                        "description": "health monitor input",
+                    }
+                },
+            },
+            "output_examples": [{"input": {"task": "x"}, "output": {"ok": True}}],
         },
     )
     assert response.status_code == 201, response.text

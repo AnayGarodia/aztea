@@ -9,6 +9,7 @@ from server.builtin_agents.constants import (
     CURATED_BUILTIN_AGENT_IDS,
     CURATED_PUBLIC_BUILTIN_AGENT_IDS,
 )
+from server.builtin_agents.pricing_overlay import get_pricing_overlay
 from server.builtin_agents.specs import builtin_agent_specs
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "CURATED_BUILTIN_AGENT_IDS",
     "CURATED_PUBLIC_BUILTIN_AGENT_IDS",
     "builtin_agent_specs",
+    "get_pricing_overlay",
 ]

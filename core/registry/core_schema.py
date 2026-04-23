@@ -173,7 +173,9 @@ def _create_agents_table(conn: sqlite3.Connection, table_name: str = "agents") -
                 created_at          TEXT NOT NULL,
                 model_provider      TEXT,
                 model_id            TEXT,
-                price_per_call_cents INTEGER
+                price_per_call_cents INTEGER,
+                pricing_model       TEXT NOT NULL DEFAULT 'fixed',
+                pricing_config      TEXT
             )
         """)
 
@@ -705,6 +707,21 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     d["last_decay_at"] = str(d.get("last_decay_at") or _CANONICAL_CREATED_AT)
     d["model_provider"] = str(d.get("model_provider") or "").strip().lower() or None
     d["model_id"] = str(d.get("model_id") or "").strip() or None
+    raw_pricing_model = str(d.get("pricing_model") or "fixed").strip().lower()
+    if raw_pricing_model not in {"fixed", "per_unit", "tiered"}:
+        raw_pricing_model = "fixed"
+    d["pricing_model"] = raw_pricing_model
+    raw_pricing_config = d.get("pricing_config")
+    parsed_pricing_config: dict | None = None
+    if isinstance(raw_pricing_config, str) and raw_pricing_config.strip():
+        try:
+            candidate = json.loads(raw_pricing_config)
+            parsed_pricing_config = candidate if isinstance(candidate, dict) else None
+        except (json.JSONDecodeError, TypeError):
+            parsed_pricing_config = None
+    elif isinstance(raw_pricing_config, dict):
+        parsed_pricing_config = raw_pricing_config
+    d["pricing_config"] = parsed_pricing_config
 
     total = d["total_calls"]
     successful = d.pop("successful_calls")

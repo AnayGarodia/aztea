@@ -1,6 +1,8 @@
 # server.application shard 8 — registry search + admin review + registry
 # sync call flow (pre-charge → dispatch → settle/refund, with built-in
 # agent routing, verifier hooks, and dispute-window enforcement).
+# Variable-pricing helpers (_estimate_variable_charge,
+# _resolve_agent_pricing, _maybe_refund_pricing_diff) live in part_004.
 
 
 @app.post(
@@ -311,9 +313,43 @@ def registry_call(
             raise HTTPException(status_code=502, detail="Agent endpoint is misconfigured.")
 
     caller_owner_id = _caller_owner_id(request)
-    price_cents     = _usd_to_cents(agent["price_per_call_usd"])
     fee_bearer_policy = "caller"
     platform_fee_pct_at_create = int(payments.PLATFORM_FEE_PCT)
+    payload = dict(body.root) if body is not None else {}
+    requested_output_formats: list[str] = []
+    try:
+        payload, requested_output_formats = _normalize_input_protocol_from_payload(payload)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=error_codes.make_error(
+                error_codes.INVALID_INPUT,
+                str(exc),
+                {"agent_id": agent_id},
+            ),
+        )
+    pricing_estimate = _estimate_variable_charge(
+        agent=agent,
+        payload=payload,
+        per_job_cap_cents=_caller_key_per_job_cap(caller),
+    )
+    if pricing_estimate.get("cap_violated"):
+        violation = pricing_estimate["cap_violated"]
+        raise HTTPException(
+            status_code=402,
+            detail=error_codes.make_error(
+                error_codes.SPEND_LIMIT_EXCEEDED,
+                "Variable-price estimate exceeds your API key's per-job cap.",
+                {
+                    "scope": "api_key_per_job",
+                    "limit_cents": violation["limit_cents"],
+                    "attempted_cents": violation["price_cents"],
+                    "pricing_model": pricing_estimate["pricing_model"],
+                    "detail": pricing_estimate.get("detail"),
+                },
+            ),
+        )
+    price_cents = int(pricing_estimate["price_cents"])
     success_distribution = payments.compute_success_distribution(
         price_cents,
         platform_fee_pct=platform_fee_pct_at_create,
@@ -332,20 +368,6 @@ def registry_call(
         charge_cents=caller_charge_cents,
         agent_id=agent_id,
     )
-
-    payload = dict(body.root) if body is not None else {}
-    requested_output_formats: list[str] = []
-    try:
-        payload, requested_output_formats = _normalize_input_protocol_from_payload(payload)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=error_codes.make_error(
-                error_codes.INVALID_INPUT,
-                str(exc),
-                {"agent_id": agent_id},
-            ),
-        )
     start = time.monotonic()
     if builtin_agent_id is not None:
         try:
@@ -399,6 +421,16 @@ def registry_call(
                 payload={"status": completed["status"], "source": "registry_call_sync"},
             )
             _settle_successful_job(completed, actor_owner_id=caller["owner_id"])
+            _maybe_refund_pricing_diff(
+                agent=agent,
+                payload=payload,
+                output=output,
+                caller_wallet_id=caller_wallet["wallet_id"],
+                charge_tx_id=charge_tx_id,
+                estimate=pricing_estimate,
+                caller_charge_cents=caller_charge_cents,
+                success_distribution=success_distribution,
+            )
             _record_public_work_example(
                 agent,
                 payload,
@@ -714,7 +746,48 @@ def jobs_create(
                 ),
             )
 
-    price_cents = _usd_to_cents(agent["price_per_call_usd"])
+    pricing_estimate = _estimate_variable_charge(
+        agent=agent,
+        payload=body.input_payload,
+        budget_cents=body.budget_cents,
+        per_job_cap_cents=_caller_key_per_job_cap(caller),
+    )
+    if pricing_estimate.get("cap_violated"):
+        violation = pricing_estimate["cap_violated"]
+        if violation["scope"] == "budget":
+            raise HTTPException(
+                status_code=400,
+                detail=error_codes.make_error(
+                    error_codes.BUDGET_EXCEEDED,
+                    (
+                        f"Variable-price estimate "
+                        f"({violation['price_cents']}¢) exceeds your budget "
+                        f"({violation['limit_cents']}¢)."
+                    ),
+                    {
+                        "price_cents": violation["price_cents"],
+                        "budget_cents": violation["limit_cents"],
+                        "pricing_model": pricing_estimate["pricing_model"],
+                        "detail": pricing_estimate.get("detail"),
+                        "agent_id": agent["agent_id"],
+                    },
+                ),
+            )
+        raise HTTPException(
+            status_code=402,
+            detail=error_codes.make_error(
+                error_codes.SPEND_LIMIT_EXCEEDED,
+                "Variable-price estimate exceeds your API key's per-job cap.",
+                {
+                    "scope": "api_key_per_job",
+                    "limit_cents": violation["limit_cents"],
+                    "attempted_cents": violation["price_cents"],
+                    "pricing_model": pricing_estimate["pricing_model"],
+                    "detail": pricing_estimate.get("detail"),
+                },
+            ),
+        )
+    price_cents = int(pricing_estimate["price_cents"])
     fee_bearer_policy = payments.normalize_fee_bearer_policy(body.fee_bearer_policy)
     platform_fee_pct_at_create = int(payments.PLATFORM_FEE_PCT)
     success_distribution = payments.compute_success_distribution(

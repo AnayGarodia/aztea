@@ -123,4 +123,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
             "prediction_id": str(generated.get("prediction_id") or ""),
         },
         "artifacts": [generated["artifact"]],
+        # Report the actual seconds rendered so the registry can refund
+        # callers who pre-charged for a longer duration than we produced.
+        "billing_units_actual": duration_seconds,
     }
