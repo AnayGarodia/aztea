@@ -426,10 +426,14 @@ def registry_call(
                 payload=payload,
                 output=output,
                 caller_wallet_id=caller_wallet["wallet_id"],
+                agent_wallet_id=agent_wallet["wallet_id"],
+                platform_wallet_id=platform_wallet["wallet_id"],
                 charge_tx_id=charge_tx_id,
                 estimate=pricing_estimate,
                 caller_charge_cents=caller_charge_cents,
                 success_distribution=success_distribution,
+                platform_fee_pct=platform_fee_pct_at_create,
+                fee_bearer_policy=fee_bearer_policy,
             )
             _record_public_work_example(
                 agent,

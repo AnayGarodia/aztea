@@ -100,18 +100,24 @@ def maybe_refund_pricing_diff(
     payload: dict | None,
     output: dict | None,
     caller_wallet_id: str,
+    agent_wallet_id: str,
+    platform_wallet_id: str,
     charge_tx_id: str,
     estimate: dict,
     caller_charge_cents: int,
     success_distribution: dict,
+    platform_fee_pct: int | None = None,
+    fee_bearer_policy: str | None = None,
 ) -> int:
-    """Insert a compensating refund when actual usage < estimated usage.
+    """Insert zero-sum compensating entries when actual usage < estimate.
 
     Agents report their actual quantity under ``billing_units_actual``
     or under the same key as ``pricing_config.input_field``. When it's
-    lower than the pre-charge estimate we recompute the charge, and
-    refund the difference to the caller. The original charge row is
-    never mutated — the ledger stays insert-only.
+    lower than the pre-charge estimate we recompute the charge and
+    insert a refund row on the caller wallet plus proportional clawback
+    rows on the agent and platform wallets so the three legs net to
+    zero. The original charge / payout / fee rows are never mutated —
+    the ledger stays insert-only.
     """
     if not isinstance(output, dict) or not output:
         return 0
@@ -134,6 +140,10 @@ def maybe_refund_pricing_diff(
     actual_payload = dict(payload or {})
     if input_field:
         actual_payload[input_field] = actual_units
+    resolved_fee_pct = (
+        int(platform_fee_pct) if platform_fee_pct is not None else int(payments.PLATFORM_FEE_PCT)
+    )
+    resolved_bearer = str(fee_bearer_policy or "caller")
     actual_estimate = registry.estimate_price_cents(
         pricing_model=pricing_model,
         pricing_config=pricing_config,
@@ -145,19 +155,50 @@ def maybe_refund_pricing_diff(
         return 0
     actual_distribution = payments.compute_success_distribution(
         actual_price_cents,
-        platform_fee_pct=int(payments.PLATFORM_FEE_PCT),
-        fee_bearer_policy="caller",
+        platform_fee_pct=resolved_fee_pct,
+        fee_bearer_policy=resolved_bearer,
     )
-    actual_caller_cents = int(actual_distribution["caller_charge_cents"])
-    diff_cents = max(0, caller_charge_cents - actual_caller_cents)
-    if diff_cents <= 0:
+    # Compute the diff on each leg so the three together net to zero.
+    # Using the forward distribution math for both the billed and actual
+    # prices means rounding propagates identically — their difference
+    # stays a valid zero-sum triple.
+    caller_refund_cents = max(
+        0, caller_charge_cents - int(actual_distribution["caller_charge_cents"])
+    )
+    agent_clawback_cents = max(
+        0,
+        int(success_distribution["agent_payout_cents"])
+        - int(actual_distribution["agent_payout_cents"]),
+    )
+    platform_clawback_cents = max(
+        0,
+        int(success_distribution["platform_fee_cents"])
+        - int(actual_distribution["platform_fee_cents"]),
+    )
+    if caller_refund_cents <= 0:
         return 0
+    # Absorb any 1¢ rounding residue on the platform leg so the three
+    # legs net exactly to zero regardless of fee-policy rounding.
+    residue = caller_refund_cents - agent_clawback_cents - platform_clawback_cents
+    platform_clawback_cents += residue
+    if platform_clawback_cents < 0:
+        # Under extreme rounding, shift the residue onto the agent leg so
+        # no leg goes negative. post_call_refund_difference validates the
+        # zero-sum invariant and will raise if we get this wrong.
+        agent_clawback_cents += platform_clawback_cents
+        platform_clawback_cents = 0
+    if agent_clawback_cents < 0:
+        agent_clawback_cents = 0
     try:
-        payments.post_call_refund_difference(
+        applied = payments.post_call_refund_difference(
             caller_wallet_id,
             charge_tx_id,
-            diff_cents,
+            caller_refund_cents,
             str(agent.get("agent_id") or ""),
+            agent_wallet_id=agent_wallet_id,
+            platform_wallet_id=platform_wallet_id,
+            agent_clawback_cents=agent_clawback_cents,
+            platform_clawback_cents=platform_clawback_cents,
             memo=(
                 f"Variable-pricing adjustment: billed {original_units} "
                 f"{estimate.get('unit') or 'units'}, actual {actual_units}."
@@ -166,4 +207,4 @@ def maybe_refund_pricing_diff(
     except Exception:
         _LOG.exception("Variable-pricing refund failed for charge %s", charge_tx_id)
         return 0
-    return diff_cents
+    return caller_refund_cents if applied else 0

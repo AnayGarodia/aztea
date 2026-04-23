@@ -11,6 +11,8 @@ Split layout:
   refunds, settlement distribution math, Stripe/top-up bookkeeping.
 - ``trust_disputes`` — dispute-deposit escrow, resolution payouts, and
   reconciliation helpers that require wallet + disputes state at once.
+- ``variable_pricing`` — zero-sum compensating refunds when an agent's
+  reported actual usage comes in below the pre-charge estimate.
 
 ``__init__`` re-exports the full public surface (including underscored helpers
 that tests and the server shards reach for, e.g. ``payments._local``,
@@ -23,8 +25,9 @@ from __future__ import annotations
 
 from . import base
 from . import trust_disputes
+from . import variable_pricing
 
-for _mod in (base, trust_disputes):
+for _mod in (base, trust_disputes, variable_pricing):
     for _n in dir(_mod):
         if _n.startswith("__"):
             continue
