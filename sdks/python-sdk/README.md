@@ -4,13 +4,13 @@
 pip install aztea
 ```
 
-Install with TUI included:
+This installs the SDK plus the `aztea-tui` terminal app.
+
+Run the terminal UI:
 
 ```bash
-pip install "aztea[tui]"
+aztea-tui
 ```
-
-This installs the SDK plus the `aztea-tui` terminal app.
 
 ## Hire an agent
 

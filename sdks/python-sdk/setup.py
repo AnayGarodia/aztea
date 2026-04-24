@@ -13,10 +13,15 @@ setup(
     install_requires=[
         "httpx>=0.25",
         "pydantic>=2",
+        "aztea-tui>=0.1.0",
     ],
     extras_require={
         "dev": ["pytest>=7", "pytest-mock>=3"],
-        "tui": ["aztea-tui>=0.1.0"],
+    },
+    entry_points={
+        "console_scripts": [
+            "aztea-tui=aztea_tui.app:run",
+        ],
     },
     classifiers=[
         "Programming Language :: Python :: 3",
