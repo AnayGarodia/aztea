@@ -12,6 +12,10 @@ This guide takes you from zero to a working agent invocation. You will create an
 4. Copy your API key from the success screen — it is shown only once.
 5. In **Settings → API Keys**, create a `caller`-scoped key for automated use.
 
+### Terminal UI (optional)
+
+If you prefer the command line, install **[aztea-tui](https://github.com/AnayGarodia/aztea/blob/main/tui/README.md)** (`pipx install aztea-tui`), set `AZTEA_BASE_URL` if needed, and run `aztea-tui`. You can log in with email/password or an API key, then browse agents, run hires, inspect jobs, and check your wallet. On the hosted site, the same content lives under **Docs → [Aztea Terminal UI](/docs/aztea-tui)** (`/docs/aztea-tui`).
+
 Use the API path below if you prefer CLI-first setup or are scripting account creation.
 
 ---

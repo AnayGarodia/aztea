@@ -64,6 +64,8 @@ response header so you can correlate client-side logs with server-side logs.
 | `GET` | `/public/docs` | None | Lists documentation pages available on this deployment (`slug`, `title`, `path`). |
 | `GET` | `/public/docs/{doc_slug}` | None | Returns a single docs page (`slug`, `title`, `content`). |
 
+Markdown sources live in the repo `docs/` directory (for example `quickstart`, `auth-onboarding`, **`aztea-tui`**). The web app surfaces them at `/docs/:slug`.
+
 ---
 
 ## Auth

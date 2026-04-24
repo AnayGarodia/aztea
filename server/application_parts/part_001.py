@@ -834,6 +834,7 @@ _PUBLIC_DOCS_PRIORITY = {
     "quickstart.md": 0,
     "auth-onboarding.md": 1,
     "api-reference.md": 2,
+    "aztea-tui.md": 3,
 }
 
 
