@@ -192,6 +192,11 @@ export default function MyAgentsPage() {
 
   useEffect(() => { load() }, [load])
 
+  const earningsRows = Object.values(earningsMap)
+  const totalRevenueCents = earningsRows.reduce((sum, r) => sum + (r.total_earned_cents ?? 0), 0)
+  const totalCalls = earningsRows.reduce((sum, r) => sum + (r.call_count ?? 0), 0)
+  const activeAgentCount = agents.filter(a => (a.status ?? 'active') === 'active').length
+
   return (
     <main className="myagents">
       <Topbar crumbs={[{ label: 'Worker' }, { label: 'My Agents' }]} />
@@ -215,7 +220,37 @@ export default function MyAgentsPage() {
             </div>
           </Reveal>
 
-          <Reveal delay={0.05}>
+          {(agents.length > 0 || loading) && (
+            <Reveal delay={0.05}>
+              <Card>
+                <Card.Body>
+                  <div style={{ display: 'flex', gap: 'var(--sp-4)' }}>
+                    <div style={{ flex: 1 }}>
+                      <Stat
+                        label="Total revenue"
+                        value={loading ? '-' : '$' + (totalRevenueCents / 100).toFixed(2)}
+                        variant={!loading && totalRevenueCents > 0 ? 'positive' : ''}
+                      />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <Stat
+                        label="Total calls"
+                        value={loading ? '-' : totalCalls.toLocaleString()}
+                      />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <Stat
+                        label="Active agents"
+                        value={loading ? '-' : activeAgentCount}
+                      />
+                    </div>
+                  </div>
+                </Card.Body>
+              </Card>
+            </Reveal>
+          )}
+
+          <Reveal delay={0.08}>
             <Card>
               <Card.Body>
                 {loading ? (

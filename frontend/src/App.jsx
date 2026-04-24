@@ -30,6 +30,7 @@ const MyAgentsPage = lazy(() => import('./pages/MyAgentsPage'))
 const RegisterAgentPage = lazy(() => import('./pages/RegisterAgentPage'))
 const PlatformPage = lazy(() => import('./pages/PlatformPage'))
 const KeysPage = lazy(() => import('./pages/KeysPage'))
+const IntegrationsPage = lazy(() => import('./pages/IntegrationsPage'))
 
 function RequireAuth({ children }) {
   const { apiKey, booting } = useAuth()
@@ -86,6 +87,7 @@ function AuthedApp() {
               <Route path="/my-agents" element={<MyAgentsPage />} />
               <Route path="/register-agent" element={<RegisterAgentPage />} />
               <Route path="/platform" element={<PlatformPage />} />
+              <Route path="/integrations" element={<IntegrationsPage />} />
               <Route path="/admin/disputes" element={<RequireAdmin><AdminDisputesPage /></RequireAdmin>} />
               <Route path="/admin/earnings" element={<RequireAdmin><AdminEarningsPage /></RequireAdmin>} />
               <Route path="*"         element={<Navigate to="/overview" replace />} />

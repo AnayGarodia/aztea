@@ -346,6 +346,11 @@ export async function searchAgents(key, query, { model_provider } = {}) {
   return body
 }
 
+export async function fetchMcpTools(key) {
+  const { body } = await request('/mcp/tools', { key })
+  return body // { tools: [...], count: N }
+}
+
 // ── Calls (sync) ──────────────────────────────────────────────────────────────
 
 export async function callAgent(key, agentId, payload, { privateTask = false } = {}) {

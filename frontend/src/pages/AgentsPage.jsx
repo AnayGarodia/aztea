@@ -326,7 +326,7 @@ export default function AgentsPage() {
   const featured = useMemo(() => {
     if (search.trim() || activeTag !== ALL || maxPriceCents) return []
     return agents
-      .filter(a => (a.tags ?? []).some(t => ['financial-research','code-review','text-intel','wiki','negotiation','scenario','product-strategy','portfolio'].includes(t)))
+      .filter(a => (a.tags ?? []).some(t => ['financial-research','code-review','wikipedia','cve','arxiv','code-execution','image-generation','github','hacker-news','dns'].includes(t)))
       .sort((a, b) => (b.trust_score ?? 0) - (a.trust_score ?? 0))
       .slice(0, 3)
   }, [agents, search, activeTag, maxPriceCents])

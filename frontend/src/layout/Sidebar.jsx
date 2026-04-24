@@ -1,7 +1,7 @@
 import { NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { motion } from 'motion/react'
 import {
-  LayoutDashboard, Bot, Briefcase, Hammer, Wallet, Settings, LogOut, Shield, ListChecks, Activity, BookOpen, KeyRound, Coins
+  LayoutDashboard, Bot, Briefcase, Hammer, Wallet, Settings, LogOut, Shield, ListChecks, Activity, BookOpen, KeyRound, Coins, Puzzle
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useMarket } from '../context/MarketContext'
@@ -17,8 +17,9 @@ const NAV = [
   { to: '/my-agents', icon: ListChecks,      label: 'My Agents' },
   { to: '/wallet',    icon: Wallet,          label: 'Wallet' },
   { to: '/keys',      icon: KeyRound,        label: 'API Keys' },
-  { to: '/docs',      icon: BookOpen,        label: 'Docs' },
-  { to: '/settings',  icon: Settings,        label: 'Settings' },
+  { to: '/docs',          icon: BookOpen,  label: 'Docs' },
+  { to: '/integrations',  icon: Puzzle,    label: 'Integrations' },
+  { to: '/settings',      icon: Settings,  label: 'Settings' },
 ]
 
 export default function Sidebar() {

@@ -192,17 +192,65 @@ export default function JobDetailPage() {
   // Initial load
   useEffect(() => { pollJob() }, [pollJob])
 
-  // Auto-poll every 3s while non-terminal
-  const pollingRef = useRef(null)
+  // SSE stream for live progress while non-terminal; fall back to 5s polling if EventSource unavailable
+  const sseRef = useRef(null)
   useEffect(() => {
     if (!id || !apiKey || TERMINAL.has(job?.status)) {
+      if (sseRef.current) { sseRef.current.close(); sseRef.current = null }
+      return
+    }
+
+    const RAW_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').trim()
+    const BASE_URL = (RAW_BASE || '/api').replace(/\/+$/, '')
+    const url = `${BASE_URL}/jobs/${id}/stream?since=0`
+
+    if (!window.EventSource) {
+      // Polling fallback
+      const t = setInterval(() => { pollJob(); loadMessages() }, 5000)
+      return () => clearInterval(t)
+    }
+
+    const es = new EventSource(`${url}&key=${encodeURIComponent(apiKey)}`)
+    sseRef.current = es
+
+    es.onmessage = (evt) => {
+      try {
+        const msg = JSON.parse(evt.data)
+        if (msg && msg.message_id) {
+          setMessages(prev => {
+            if (prev.some(m => m.message_id === msg.message_id)) return prev
+            return [...prev, msg]
+          })
+        }
+        // If stream signals job completion, do a final refresh
+        if (msg?.type === 'complete' || msg?.type === 'failed' || msg?.status === 'complete' || msg?.status === 'failed') {
+          pollJob()
+          loadMessages()
+        }
+      } catch {
+        // non-JSON keepalive line — ignore
+      }
+    }
+
+    es.onerror = () => {
+      // Reconnect automatically via browser; do a manual poll on error too
+      pollJob()
+    }
+
+    return () => { es.close(); sseRef.current = null }
+  }, [id, apiKey, job?.status, TERMINAL]) // eslint-disable-line
+
+  // Fallback poll every 5s for non-SSE environments (belt-and-suspenders)
+  const pollingRef = useRef(null)
+  useEffect(() => {
+    if (!id || !apiKey || TERMINAL.has(job?.status) || window.EventSource) {
       if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null }
       return
     }
     pollingRef.current = setInterval(() => {
       pollJob()
       loadMessages()
-    }, 3000)
+    }, 5000)
     return () => { if (pollingRef.current) clearInterval(pollingRef.current) }
   }, [id, apiKey, job?.status, TERMINAL, pollJob]) // eslint-disable-line
 

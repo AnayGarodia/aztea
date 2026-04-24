@@ -1,0 +1,189 @@
+/* ── IntegrationsPage ──────────────────────────────────────── */
+
+.integrations {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.integrations__scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--sp-6);
+}
+
+.integrations__content {
+  display: grid;
+  gap: var(--sp-5);
+  max-width: 860px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.integrations__page-title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--ink);
+  margin: 0 0 6px;
+  letter-spacing: -0.01em;
+}
+
+.integrations__page-sub {
+  font-size: 0.875rem;
+  color: var(--ink-soft);
+  margin: 0;
+  line-height: 1.6;
+}
+
+/* ── Code blocks ─────────────────────────────────────────── */
+
+.integrations__code {
+  background: var(--surface-2, var(--surface-raised, #111));
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  padding: var(--sp-4);
+  font-size: 0.8125rem;
+  font-family: var(--font-mono, monospace);
+  overflow-x: auto;
+  white-space: pre;
+  margin: 0;
+  color: var(--ink);
+  line-height: 1.65;
+}
+
+/* ── MCP tool cards ──────────────────────────────────────── */
+
+.integrations__tools-header {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--ink-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 0 0 var(--sp-3);
+}
+
+.integrations__tool-list {
+  display: grid;
+  gap: var(--sp-3);
+}
+
+.integrations__tool-card {
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  padding: var(--sp-4);
+}
+
+.integrations__tool-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--sp-2);
+}
+
+.integrations__tool-name {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--ink);
+  font-family: var(--font-mono, monospace);
+  margin: 0;
+}
+
+.integrations__tool-price {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--accent);
+  border-radius: var(--r-pill);
+  padding: 2px 8px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  border: 1px solid var(--line-mid);
+}
+
+.integrations__tool-desc {
+  font-size: 0.8125rem;
+  color: var(--ink-soft);
+  margin: 0 0 var(--sp-3);
+  line-height: 1.55;
+}
+
+.integrations__tool-schema {
+  border: none;
+  padding: 0;
+  margin: 0;
+}
+
+.integrations__tool-schema > summary {
+  font-size: 0.75rem;
+  color: var(--ink-mute);
+  cursor: pointer;
+  user-select: none;
+  padding: var(--sp-2) 0;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.integrations__tool-schema > summary::before {
+  content: '›';
+  font-size: 1rem;
+  line-height: 1;
+  transition: transform 150ms ease;
+  display: inline-block;
+}
+
+.integrations__tool-schema[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.integrations__tool-schema > summary:hover {
+  color: var(--ink-soft);
+}
+
+.integrations__schema-code {
+  margin-top: var(--sp-2);
+}
+
+/* ── Loading / error states ──────────────────────────────── */
+
+.integrations__loading {
+  display: grid;
+  gap: var(--sp-3);
+}
+
+.integrations__error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  border: 1px solid var(--line-mid);
+  border-radius: var(--r-md);
+}
+
+.integrations__error p {
+  font-size: 0.875rem;
+  color: var(--ink);
+  margin: 0;
+}
+
+/* ── Static sections (SDK / curl) ────────────────────────── */
+
+.integrations__code-block {
+  display: grid;
+  gap: var(--sp-4);
+}
+
+.integrations__code-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--ink-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 0 0 var(--sp-2);
+}
