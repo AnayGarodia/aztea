@@ -140,15 +140,36 @@ class AzteaAPI:
         self._base_url = base_url
 
     def set_api_key(self, key: str) -> None:
-        self._client.set_api_key(key)
+        if hasattr(self._client, "set_api_key"):
+            self._client.set_api_key(key)
+            return
+        # python-sdk client has immutable auth headers; rebuild client.
+        self._client.close()
+        self._client = _make_client(key, self._base_url)
+
+    @staticmethod
+    def _obj_to_dict(value: object) -> dict:
+        if isinstance(value, dict):
+            return value
+        if hasattr(value, "model_dump"):
+            return dict(value.model_dump())  # type: ignore[call-arg]
+        if hasattr(value, "dict"):
+            return dict(value.dict())  # type: ignore[call-arg]
+        return dict(getattr(value, "__dict__", {}))
 
     # ── Auth ──────────────────────────────────────────────────────────────────
 
     async def login(self, email: str, password: str) -> LoginResult:
         try:
-            data = await asyncio.to_thread(self._client.auth.login, email, password)
+            if hasattr(self._client, "auth"):
+                data = await asyncio.to_thread(self._client.auth.login, email, password)
+            else:
+                data = await asyncio.to_thread(
+                    self._client._request, "POST", "/auth/login", json={"email": email, "password": password}
+                )
         except AzteaError as e:
             raise AzteaAPIError(str(e)) from e
+        data = self._obj_to_dict(data)
         return LoginResult(
             user_id=str(data.get("user_id", "")),
             username=str(data.get("username", "")),
@@ -159,26 +180,39 @@ class AzteaAPI:
         """Validate an API key via /auth/me. Returns username."""
         tmp = _make_client(api_key, self._base_url)
         try:
-            data = await asyncio.to_thread(tmp.auth.me)
+            if hasattr(tmp, "auth"):
+                data = await asyncio.to_thread(tmp.auth.me)
+            else:
+                data = await asyncio.to_thread(tmp._request, "GET", "/auth/me")
         except AzteaError as e:
             raise AzteaAPIError(str(e)) from e
         finally:
             tmp.close()
+        data = self._obj_to_dict(data)
         return str(data.get("username", ""))
 
     async def me(self) -> dict:
         try:
-            return await asyncio.to_thread(self._client.auth.me)
+            if hasattr(self._client, "auth"):
+                data = await asyncio.to_thread(self._client.auth.me)
+            else:
+                data = await asyncio.to_thread(self._client._request, "GET", "/auth/me")
         except AzteaError as e:
             raise AzteaAPIError(str(e)) from e
+        return self._obj_to_dict(data)
 
     # ── Registry ──────────────────────────────────────────────────────────────
 
     async def list_agents(self, tag: str | None = None) -> list[AgentRow]:
         try:
-            data = await asyncio.to_thread(
-                self._client.registry.list, tag=tag, rank_by="trust_score"
-            )
+            if hasattr(self._client, "registry"):
+                data = await asyncio.to_thread(
+                    self._client.registry.list, tag=tag, rank_by="trust_score"
+                )
+                raw_agents = (self._obj_to_dict(data).get("agents") or [])
+            else:
+                agents = await asyncio.to_thread(self._client.list_agents, tag=tag, rank_by="trust")
+                raw_agents = [self._obj_to_dict(a) for a in (agents or [])]
         except AzteaError as e:
             raise AzteaAPIError(str(e)) from e
         return [
@@ -195,16 +229,22 @@ class AzteaAPI:
                 health=str(a.get("endpoint_health_status") or "unknown"),
                 tags=list(a.get("tags") or []),
             )
-            for a in (data.get("agents") or [])
+            for a in raw_agents
         ]
 
     async def list_my_agents(self) -> list[AgentRow]:
         try:
-            data = await asyncio.to_thread(
-                self._client._request_json, "GET", "/registry/agents/mine"
-            )
+            if hasattr(self._client, "_request_json"):
+                data = await asyncio.to_thread(
+                    self._client._request_json, "GET", "/registry/agents/mine"
+                )
+            else:
+                data = await asyncio.to_thread(
+                    self._client._request, "GET", "/registry/agents/mine"
+                )
         except AzteaError as e:
             raise AzteaAPIError(str(e)) from e
+        data = self._obj_to_dict(data)
         return [
             AgentRow(
                 agent_id=str(a.get("agent_id", "")),
@@ -224,9 +264,13 @@ class AzteaAPI:
 
     async def get_agent(self, agent_id: str) -> AgentDetail:
         try:
-            a = await asyncio.to_thread(self._client.registry.get, agent_id)
+            if hasattr(self._client, "registry"):
+                a = await asyncio.to_thread(self._client.registry.get, agent_id)
+            else:
+                a = await asyncio.to_thread(self._client.get_agent, agent_id)
         except AzteaError as e:
             raise AzteaAPIError(str(e)) from e
+        a = self._obj_to_dict(a)
         return AgentDetail(
             agent_id=str(a.get("agent_id", "")),
             name=str(a.get("name", "")),
@@ -244,10 +288,15 @@ class AzteaAPI:
 
     async def hire_agent(self, agent_id: str, payload: dict) -> dict:
         try:
-            result = await asyncio.to_thread(self._client.registry.call, agent_id, payload)
+            if hasattr(self._client, "registry"):
+                result = await asyncio.to_thread(self._client.registry.call, agent_id, payload)
+            else:
+                result = await asyncio.to_thread(
+                    self._client._request, "POST", f"/registry/agents/{agent_id}/call", json=payload
+                )
         except AzteaError as e:
             raise AzteaAPIError(str(e)) from e
-        return dict(result)
+        return self._obj_to_dict(result)
 
     # ── Jobs ──────────────────────────────────────────────────────────────────
 
@@ -259,9 +308,19 @@ class AzteaAPI:
         limit: int = 50,
     ) -> tuple[list[JobRow], str | None]:
         try:
-            data = await asyncio.to_thread(
-                self._client.jobs.list, status=status, cursor=cursor, limit=limit
-            )
+            if hasattr(self._client, "jobs"):
+                data = await asyncio.to_thread(
+                    self._client.jobs.list, status=status, cursor=cursor, limit=limit
+                )
+                data = self._obj_to_dict(data)
+            else:
+                params = {"limit": limit}
+                if status:
+                    params["status"] = status
+                if cursor:
+                    params["cursor"] = cursor
+                data = await asyncio.to_thread(self._client._request, "GET", "/jobs", params=params)
+                data = self._obj_to_dict(data)
         except AzteaError as e:
             raise AzteaAPIError(str(e)) from e
         rows = [
@@ -281,9 +340,13 @@ class AzteaAPI:
 
     async def get_job(self, job_id: str) -> JobDetail:
         try:
-            j = await asyncio.to_thread(self._client.jobs.get_raw, job_id)
+            if hasattr(self._client, "jobs") and hasattr(self._client.jobs, "get_raw"):
+                j = await asyncio.to_thread(self._client.jobs.get_raw, job_id)
+            else:
+                j = await asyncio.to_thread(self._client._request, "GET", f"/jobs/{job_id}")
         except AzteaError as e:
             raise AzteaAPIError(str(e)) from e
+        j = self._obj_to_dict(j)
         return JobDetail(
             job_id=str(j.get("job_id", "")),
             agent_id=str(j.get("agent_id", "")),
@@ -325,20 +388,31 @@ class AzteaAPI:
 
     async def list_job_messages(self, job_id: str, since: int | None = None) -> list[dict]:
         try:
-            data = await asyncio.to_thread(
-                self._client.jobs.list_messages, job_id, since=since
-            )
+            if hasattr(self._client, "jobs") and hasattr(self._client.jobs, "list_messages"):
+                data = await asyncio.to_thread(
+                    self._client.jobs.list_messages, job_id, since=since
+                )
+            else:
+                params = {"since": since} if since is not None else None
+                data = await asyncio.to_thread(
+                    self._client._request, "GET", f"/jobs/{job_id}/messages", params=params
+                )
         except AzteaError as e:
             raise AzteaAPIError(str(e)) from e
+        data = self._obj_to_dict(data)
         return list(data.get("messages") or [])
 
     # ── Wallet ────────────────────────────────────────────────────────────────
 
     async def get_wallet(self) -> WalletInfo:
         try:
-            w = await asyncio.to_thread(self._client.wallets.me)
+            if hasattr(self._client, "wallets"):
+                w = await asyncio.to_thread(self._client.wallets.me)
+            else:
+                w = await asyncio.to_thread(self._client._request, "GET", "/wallets/me")
         except AzteaError as e:
             raise AzteaAPIError(str(e)) from e
+        w = self._obj_to_dict(w)
         cents = int(w.get("balance_cents") or 0)
         return WalletInfo(
             wallet_id=str(w.get("wallet_id", "")),
@@ -349,12 +423,16 @@ class AzteaAPI:
 
     async def deposit(self, wallet_id: str, amount_cents: int, memo: str = "TUI deposit") -> dict:
         try:
-            result = await asyncio.to_thread(
-                self._client.wallets.deposit, wallet_id, amount_cents, memo
-            )
+            if hasattr(self._client, "wallets"):
+                result = await asyncio.to_thread(
+                    self._client.wallets.deposit, wallet_id, amount_cents, memo
+                )
+            else:
+                # python-sdk deposit() derives wallet_id internally.
+                result = await asyncio.to_thread(self._client.deposit, amount_cents, memo)
         except AzteaError as e:
             raise AzteaAPIError(str(e)) from e
-        return dict(result)
+        return self._obj_to_dict(result)
 
     def close(self) -> None:
         self._client.close()
