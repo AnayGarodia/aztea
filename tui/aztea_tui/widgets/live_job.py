@@ -51,10 +51,10 @@ class LiveJobWidget(Widget):
         try:
             job = await self.app.api.get_job(self.job_id)
         except AzteaAPIError as e:
-            self.notify(f"Job load failed: {e.message}", severity="error")
+            self.notify(e.user_message, severity="error")
             return
-        except Exception as e:
-            self.notify(f"Unexpected error: {e}", severity="error")
+        except Exception:
+            self.notify("Unexpected error while loading the job.", severity="error")
             return
 
         self.job_status = job.status
@@ -81,7 +81,8 @@ class LiveJobWidget(Widget):
     async def _load_messages(self) -> None:
         try:
             msgs = await self.app.api.list_job_messages(self.job_id)
-        except AzteaAPIError:
+        except AzteaAPIError as e:
+            self.query_one("#job-messages", Log).write_line(f"[error] {e.user_message}")
             return
         log = self.query_one("#job-messages", Log)
         for m in msgs:
@@ -93,7 +94,8 @@ class LiveJobWidget(Widget):
     async def _poll(self) -> None:
         try:
             job = await self.app.api.get_job(self.job_id)
-        except AzteaAPIError:
+        except AzteaAPIError as e:
+            self.query_one("#job-messages", Log).write_line(f"[poll] {e.user_message}")
             return
         self.job_status = job.status
         try:

@@ -76,5 +76,35 @@ async def test_api_error_on_exception():
     mock.registry.list.side_effect = AzteaError("server down")
     with patch("aztea_tui.api._make_client", return_value=mock):
         api = AzteaAPI("az_test", "http://localhost:8000")
-        with pytest.raises(AzteaAPIError, match="server down"):
+        with pytest.raises(AzteaAPIError, match="Could not load agents"):
             await api.list_agents()
+
+
+@pytest.mark.asyncio
+async def test_api_error_connection_refused_has_actionable_hint():
+    from aztea_tui.api import AzteaAPI, AzteaAPIError
+    from aztea.errors import AzteaError
+
+    mock = _mock_client()
+    mock.registry.list.side_effect = AzteaError("[Errno 61] Connection refused")
+    with patch("aztea_tui.api._make_client", return_value=mock):
+        api = AzteaAPI("az_test", "https://aztea.ai")
+        with pytest.raises(AzteaAPIError) as excinfo:
+            await api.list_agents()
+    err = excinfo.value
+    assert "Cannot connect to the Aztea API." in err.message
+    assert "https://aztea.ai" in (err.hint or "")
+
+
+@pytest.mark.asyncio
+async def test_api_error_auth_failure_is_human_readable():
+    from aztea_tui.api import AzteaAPI, AzteaAPIError
+    from aztea.errors import AzteaError
+
+    mock = _mock_client()
+    mock.auth.login.side_effect = AzteaError("401 Unauthorized: invalid api key")
+    with patch("aztea_tui.api._make_client", return_value=mock):
+        api = AzteaAPI(None, "https://aztea.ai")
+        with pytest.raises(AzteaAPIError) as excinfo:
+            await api.login("alice@example.com", "bad-password")
+    assert excinfo.value.message == "Authentication failed."

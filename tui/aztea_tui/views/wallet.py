@@ -37,10 +37,14 @@ class WalletView(Widget):
             wallet = await self.app.api.get_wallet()
             jobs, _ = await self.app.api.list_jobs(limit=25)
         except AzteaAPIError as e:
-            self.notify(f"Wallet error: {e.message}", severity="error")
+            self.query_one("#wallet-empty", Static).update(f"[red]{e.user_message}[/red]")
+            self.notify(e.message, severity="error")
             return
-        except Exception as e:
-            self.notify(f"Error: {e}", severity="error")
+        except Exception:
+            self.query_one("#wallet-empty", Static).update(
+                "[red]Unexpected wallet error. Please refresh.[/red]"
+            )
+            self.notify("Unexpected wallet error.", severity="error")
             return
         finally:
             loader.display = False

@@ -11,7 +11,7 @@ from textual.widgets import Button, Input, Static
 from ..api import AzteaAPI, AzteaAPIError
 from ..config import load_config, save_config
 
-_DEFAULT_URL = os.environ.get("AZTEA_BASE_URL", "http://localhost:8000")
+_DEFAULT_URL = os.environ.get("AZTEA_BASE_URL", "https://aztea.ai")
 
 
 class LoginScreen(Screen):
@@ -98,8 +98,10 @@ class LoginScreen(Screen):
             from .main import MainScreen
             await self.app.switch_screen(MainScreen(username=cfg.get("username", "")))
         except AzteaAPIError as e:
-            error_label.update(f"[red]{e.message}[/red]")
-        except Exception as e:
-            error_label.update(f"[red]Unexpected error: {e}[/red]")
+            error_label.update(f"[red]{e.user_message}[/red]")
+        except Exception:
+            error_label.update(
+                "[red]Unexpected login error. Please verify your URL, credentials, and network, then try again.[/red]"
+            )
         finally:
             btn.disabled = False

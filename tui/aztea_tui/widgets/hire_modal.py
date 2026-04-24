@@ -64,10 +64,10 @@ class HireModal(ModalScreen):
             preview = pretty[:1200] + ("\n…" if len(pretty) > 1200 else "")
             result_label.update(f"[green]✓ Done[/green]\n\n[dim]{preview}[/dim]")
         except AzteaAPIError as e:
-            error_label.update(f"[red]Error: {e.message}[/red]")
+            error_label.update(f"[red]{e.user_message}[/red]")
             result_label.update("")
-        except Exception as e:
-            error_label.update(f"[red]Unexpected error: {e}[/red]")
+        except Exception:
+            error_label.update("[red]Unexpected error while submitting this job.[/red]")
             result_label.update("")
         finally:
             btn.disabled = False

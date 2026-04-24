@@ -38,10 +38,14 @@ class MyAgentsView(Widget):
         try:
             agents = await self.app.api.list_my_agents()
         except AzteaAPIError as e:
-            self.notify(f"Could not load your agents: {e.message}", severity="error")
+            self.query_one("#my-empty", Static).update(f"[red]{e.user_message}[/red]")
+            self.notify(e.message, severity="error")
             return
-        except Exception as e:
-            self.notify(f"Error: {e}", severity="error")
+        except Exception:
+            self.query_one("#my-empty", Static).update(
+                "[red]Unexpected error while loading your agents.[/red]"
+            )
+            self.notify("Unexpected error while loading your agents.", severity="error")
             return
         finally:
             loader.display = False

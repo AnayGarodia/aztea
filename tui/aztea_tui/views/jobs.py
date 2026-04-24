@@ -56,10 +56,14 @@ class JobListView(Widget):
         try:
             rows, cursor = await self.app.api.list_jobs()
         except AzteaAPIError as e:
-            self.notify(f"Failed to load jobs: {e.message}", severity="error")
+            self.query_one("#job-empty", Static).update(f"[red]{e.user_message}[/red]")
+            self.notify(e.message, severity="error")
             return
-        except Exception as e:
-            self.notify(f"Error: {e}", severity="error")
+        except Exception:
+            self.query_one("#job-empty", Static).update(
+                "[red]Unexpected error while loading jobs. Please refresh.[/red]"
+            )
+            self.notify("Unexpected error while loading jobs.", severity="error")
             return
         finally:
             loader.display = False
@@ -98,7 +102,7 @@ class JobListView(Widget):
         try:
             rows, cursor = await self.app.api.list_jobs(cursor=self._next_cursor)
         except AzteaAPIError as e:
-            self.notify(f"Load more failed: {e.message}", severity="error")
+            self.notify(e.user_message, severity="error")
             return
         self._next_cursor = cursor
         table = self.query_one("#job-table", DataTable)

@@ -69,10 +69,14 @@ class AgentBrowserView(Widget):
         try:
             agents = await self.app.api.list_agents(tag=tag or None)
         except AzteaAPIError as e:
-            self.notify(f"Failed to load agents: {e.message}", severity="error")
+            self.query_one("#agent-empty", Static).update(f"[red]{e.user_message}[/red]")
+            self.notify(e.message, severity="error")
             return
-        except Exception as e:
-            self.notify(f"Unexpected error: {e}", severity="error")
+        except Exception:
+            self.query_one("#agent-empty", Static).update(
+                "[red]Unexpected error while loading agents. Please refresh.[/red]"
+            )
+            self.notify("Unexpected error while loading agents.", severity="error")
             return
         finally:
             loader.display = False
@@ -101,7 +105,7 @@ class AgentBrowserView(Widget):
         try:
             detail = await self.app.api.get_agent(agent_id)
         except AzteaAPIError as e:
-            self.notify(f"Could not load agent: {e.message}", severity="error")
+            self.notify(e.user_message, severity="error")
             return
         self.query_one(AgentDetailPanel).show(detail)
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import re
+import socket
 import sys
 import threading
 from dataclasses import dataclass
@@ -23,10 +25,113 @@ except ModuleNotFoundError:  # noqa: E402
 
 
 class AzteaAPIError(Exception):
-    def __init__(self, message: str, status_code: int = 0) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int = 0,
+        hint: str | None = None,
+        technical_details: str | None = None,
+        retryable: bool = False,
+    ) -> None:
         super().__init__(message)
         self.message = message
         self.status_code = status_code
+        self.hint = hint
+        self.technical_details = technical_details
+        self.retryable = retryable
+
+    @property
+    def user_message(self) -> str:
+        if self.hint:
+            return f"{self.message} {self.hint}"
+        return self.message
+
+
+def _extract_status_code(error_text: str) -> int:
+    match = re.search(r"\b([1-5]\d{2})\b", error_text)
+    return int(match.group(1)) if match else 0
+
+
+def _normalize_api_error(exc: Exception, *, action: str, base_url: str) -> AzteaAPIError:
+    status_code = int(getattr(exc, "status_code", 0) or 0)
+    raw = str(exc).strip() or f"Unknown error while trying to {action}."
+    if status_code == 0:
+        status_code = _extract_status_code(raw)
+
+    lower = raw.lower()
+    if any(
+        token in lower
+        for token in (
+            "connection refused",
+            "failed to establish a new connection",
+            "name or service not known",
+            "nodename nor servname provided",
+            "temporary failure in name resolution",
+            "errno 61",
+        )
+    ):
+        return AzteaAPIError(
+            "Cannot connect to the Aztea API.",
+            status_code=status_code,
+            hint=f"Check your API URL ({base_url}) and make sure the server is reachable.",
+            technical_details=raw,
+            retryable=True,
+        )
+    if isinstance(exc, socket.timeout) or "timed out" in lower or "timeout" in lower:
+        return AzteaAPIError(
+            "The request timed out.",
+            status_code=status_code,
+            hint="Please try again. If this keeps happening, check your network connection.",
+            technical_details=raw,
+            retryable=True,
+        )
+    if status_code in (401, 403) or any(
+        token in lower for token in ("unauthorized", "forbidden", "invalid api key", "authentication")
+    ):
+        return AzteaAPIError(
+            "Authentication failed.",
+            status_code=status_code,
+            hint="Log in again or verify your API key permissions.",
+            technical_details=raw,
+        )
+    if status_code == 404:
+        return AzteaAPIError(
+            "The requested API route was not found.",
+            status_code=status_code,
+            hint="Verify your base URL and make sure the server version supports this action.",
+            technical_details=raw,
+        )
+    if status_code == 422 or "validation" in lower:
+        return AzteaAPIError(
+            "The server rejected the request payload.",
+            status_code=status_code,
+            hint="Review your input fields and JSON payload, then try again.",
+            technical_details=raw,
+        )
+    if status_code == 429 or "rate limit" in lower:
+        return AzteaAPIError(
+            "Rate limit reached.",
+            status_code=status_code,
+            hint="Wait a moment and retry.",
+            technical_details=raw,
+            retryable=True,
+        )
+    if status_code >= 500 or "internal server error" in lower:
+        return AzteaAPIError(
+            "The Aztea server returned an internal error.",
+            status_code=status_code,
+            hint="Retry shortly. If this persists, check server logs.",
+            technical_details=raw,
+            retryable=True,
+        )
+
+    return AzteaAPIError(
+        f"Could not {action}.",
+        status_code=status_code,
+        hint=raw,
+        technical_details=raw,
+    )
 
 
 # ── Formatting helpers ────────────────────────────────────────────────────────
@@ -168,7 +273,7 @@ class AzteaAPI:
                     self._client._request, "POST", "/auth/login", json={"email": email, "password": password}
                 )
         except AzteaError as e:
-            raise AzteaAPIError(str(e)) from e
+            raise _normalize_api_error(e, action="log in", base_url=self._base_url) from e
         data = self._obj_to_dict(data)
         return LoginResult(
             user_id=str(data.get("user_id", "")),
@@ -185,7 +290,7 @@ class AzteaAPI:
             else:
                 data = await asyncio.to_thread(tmp._request, "GET", "/auth/me")
         except AzteaError as e:
-            raise AzteaAPIError(str(e)) from e
+            raise _normalize_api_error(e, action="validate API key", base_url=self._base_url) from e
         finally:
             tmp.close()
         data = self._obj_to_dict(data)
@@ -198,7 +303,7 @@ class AzteaAPI:
             else:
                 data = await asyncio.to_thread(self._client._request, "GET", "/auth/me")
         except AzteaError as e:
-            raise AzteaAPIError(str(e)) from e
+            raise _normalize_api_error(e, action="load your profile", base_url=self._base_url) from e
         return self._obj_to_dict(data)
 
     # ── Registry ──────────────────────────────────────────────────────────────
@@ -214,7 +319,7 @@ class AzteaAPI:
                 agents = await asyncio.to_thread(self._client.list_agents, tag=tag, rank_by="trust")
                 raw_agents = [self._obj_to_dict(a) for a in (agents or [])]
         except AzteaError as e:
-            raise AzteaAPIError(str(e)) from e
+            raise _normalize_api_error(e, action="load agents", base_url=self._base_url) from e
         return [
             AgentRow(
                 agent_id=str(a.get("agent_id", "")),
@@ -243,7 +348,7 @@ class AzteaAPI:
                     self._client._request, "GET", "/registry/agents/mine"
                 )
         except AzteaError as e:
-            raise AzteaAPIError(str(e)) from e
+            raise _normalize_api_error(e, action="load your agents", base_url=self._base_url) from e
         data = self._obj_to_dict(data)
         return [
             AgentRow(
@@ -269,7 +374,7 @@ class AzteaAPI:
             else:
                 a = await asyncio.to_thread(self._client.get_agent, agent_id)
         except AzteaError as e:
-            raise AzteaAPIError(str(e)) from e
+            raise _normalize_api_error(e, action="load agent details", base_url=self._base_url) from e
         a = self._obj_to_dict(a)
         return AgentDetail(
             agent_id=str(a.get("agent_id", "")),
@@ -295,7 +400,7 @@ class AzteaAPI:
                     self._client._request, "POST", f"/registry/agents/{agent_id}/call", json=payload
                 )
         except AzteaError as e:
-            raise AzteaAPIError(str(e)) from e
+            raise _normalize_api_error(e, action="hire agent", base_url=self._base_url) from e
         return self._obj_to_dict(result)
 
     # ── Jobs ──────────────────────────────────────────────────────────────────
@@ -322,7 +427,7 @@ class AzteaAPI:
                 data = await asyncio.to_thread(self._client._request, "GET", "/jobs", params=params)
                 data = self._obj_to_dict(data)
         except AzteaError as e:
-            raise AzteaAPIError(str(e)) from e
+            raise _normalize_api_error(e, action="load jobs", base_url=self._base_url) from e
         rows = [
             JobRow(
                 job_id=str(j.get("job_id", "")),
@@ -345,7 +450,7 @@ class AzteaAPI:
             else:
                 j = await asyncio.to_thread(self._client._request, "GET", f"/jobs/{job_id}")
         except AzteaError as e:
-            raise AzteaAPIError(str(e)) from e
+            raise _normalize_api_error(e, action="load job details", base_url=self._base_url) from e
         j = self._obj_to_dict(j)
         return JobDetail(
             job_id=str(j.get("job_id", "")),
@@ -372,8 +477,14 @@ class AzteaAPI:
             try:
                 for event in self._client.jobs.stream_messages(job_id, since=since):
                     loop.call_soon_threadsafe(queue.put_nowait, event)
-            except Exception:
-                pass
+            except Exception as e:
+                api_error = _normalize_api_error(
+                    e, action="stream job messages", base_url=self._base_url
+                )
+                loop.call_soon_threadsafe(
+                    queue.put_nowait,
+                    {"type": "error", "payload": {"message": api_error.user_message}},
+                )
             finally:
                 loop.call_soon_threadsafe(queue.put_nowait, None)
 
@@ -398,7 +509,7 @@ class AzteaAPI:
                     self._client._request, "GET", f"/jobs/{job_id}/messages", params=params
                 )
         except AzteaError as e:
-            raise AzteaAPIError(str(e)) from e
+            raise _normalize_api_error(e, action="load job messages", base_url=self._base_url) from e
         data = self._obj_to_dict(data)
         return list(data.get("messages") or [])
 
@@ -411,7 +522,7 @@ class AzteaAPI:
             else:
                 w = await asyncio.to_thread(self._client._request, "GET", "/wallets/me")
         except AzteaError as e:
-            raise AzteaAPIError(str(e)) from e
+            raise _normalize_api_error(e, action="load wallet", base_url=self._base_url) from e
         w = self._obj_to_dict(w)
         cents = int(w.get("balance_cents") or 0)
         return WalletInfo(
@@ -431,7 +542,7 @@ class AzteaAPI:
                 # python-sdk deposit() derives wallet_id internally.
                 result = await asyncio.to_thread(self._client.deposit, amount_cents, memo)
         except AzteaError as e:
-            raise AzteaAPIError(str(e)) from e
+            raise _normalize_api_error(e, action="create deposit", base_url=self._base_url) from e
         return self._obj_to_dict(result)
 
     def close(self) -> None:
