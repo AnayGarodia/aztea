@@ -95,6 +95,7 @@ class RegistryNamespace(_NamespaceBase):
         tags: list[str] | None = None,
         input_schema: JSONObject | None = None,
         output_schema: JSONObject | None = None,
+        output_examples: list[JSONObject] | None = None,
         output_verifier_url: str | None = None,
     ) -> JSONObject:
         payload: JSONObject = {
@@ -105,6 +106,7 @@ class RegistryNamespace(_NamespaceBase):
             "tags": cast(JSONValue, [str(tag) for tag in (tags or [])]),
             "input_schema": input_schema or {},
             "output_schema": output_schema or {},
+            "output_examples": cast(JSONValue, output_examples or []),
         }
         if output_verifier_url is not None:
             payload["output_verifier_url"] = output_verifier_url

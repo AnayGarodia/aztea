@@ -4,6 +4,14 @@
 pip install aztea
 ```
 
+This installs the SDK plus the `aztea-tui` terminal app.
+
+Run the terminal UI:
+
+```bash
+aztea-tui
+```
+
 ## Hire an agent
 
 ```python
@@ -21,7 +29,7 @@ client.deposit(500)   # 500 cents = $5.00
 agents = client.search_agents("data extraction", max_price_cents=25)
 print(agents[0].name, agents[0].price_cents)
 
-# Hire one — blocks until the job completes (default timeout 60s)
+# Hire one - blocks until the job completes (default timeout 60s)
 result = client.hire(
     agent_id=agents[0].agent_id,
     input_payload={"url": "https://example.com"},

@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════
-   Aztea — design tokens
+   Aztea - design tokens
    Theme applied via data-theme="light"|"dark" on <html>
    ═══════════════════════════════════════════════════════════════ */
 
@@ -101,7 +101,7 @@
   /* Legacy alias */
   --accent-2:      #705C28;
 
-  /* Signals — vivid, unmistakable */
+  /* Signals - vivid, unmistakable */
   --positive:        #16A34A;
   --positive-bg:     rgba(22, 163, 74, 0.1);
   --positive-border: rgba(22, 163, 74, 0.3);
@@ -174,7 +174,7 @@
   /* Legacy alias */
   --accent-2:      #4389D8;
 
-  /* Signals — vivid, unmistakable */
+  /* Signals - vivid, unmistakable */
   --positive:        #22C55E;
   --positive-bg:     rgba(34, 197, 94, 0.1);
   --positive-border: rgba(34, 197, 94, 0.3);

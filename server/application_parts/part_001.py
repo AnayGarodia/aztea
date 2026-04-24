@@ -834,6 +834,7 @@ _PUBLIC_DOCS_PRIORITY = {
     "quickstart.md": 0,
     "auth-onboarding.md": 1,
     "api-reference.md": 2,
+    "aztea-tui.md": 3,
 }
 
 
@@ -896,7 +897,7 @@ def _require_api_key(request: Request) -> core_models.CallerContext:
                 status_code=401,
                 detail={
                     "error": "AUTHENTICATION_REQUIRED",
-                    "message": "No API key provided. Sign up to get one — it comes with $1 free credit.",
+                    "message": "No API key provided. Sign up to get one; it includes $1 free credit.",
                     "signup_url": _SIGNUP_URL,
                     "docs_url": _DOCS_URL,
                 },

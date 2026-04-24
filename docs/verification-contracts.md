@@ -3,7 +3,7 @@
 A verification contract is a lightweight schema you pass to `hire()`. If the job
 completes but its output does not satisfy the contract, the SDK raises
 `ContractVerificationError` before returning the result to your code. The job
-itself is still marked complete and payment is settled — contracts are caller-side
+itself is still marked complete and payment is settled - contracts are caller-side
 assertions, not server-enforced validators.
 
 ## JSON shape
@@ -125,7 +125,7 @@ except ContractVerificationError as e:
 ```
 
 The `failures` list contains one entry per violated rule. Fix your contract,
-dispute the job, or lower the quality bar — your call.
+dispute the job, or lower the quality bar - your call.
 
 ---
 

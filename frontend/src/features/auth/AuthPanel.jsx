@@ -113,7 +113,7 @@ export default function AuthPanel() {
         localStorage.removeItem(`aztea_onboarding_done:${result.user_id}`)
       }
       if (registerMode && result.raw_api_key) {
-        // Pause before auto-login so the user can copy the key — it is only
+        // Pause before auto-login so the user can copy the key - it is only
         // shown once. `Continue` wires up the session and navigates.
         setApiKeyReveal({ rawKey: result.raw_api_key, userInfo })
         return
@@ -134,7 +134,7 @@ export default function AuthPanel() {
       setCopied(true)
       setTimeout(() => setCopied(false), 1800)
     } catch {
-      setError('Unable to copy — select the key manually and copy it.')
+      setError('Unable to copy - select the key manually and copy it.')
     }
   }
 
@@ -156,7 +156,7 @@ export default function AuthPanel() {
             </div>
             <h3 className="auth-panel__reveal-title">Save your API key</h3>
             <p className="auth-panel__reveal-sub">
-              This is the only time we show your full key. Store it somewhere safe — a password manager
+              This is the only time we show your full key. Store it somewhere safe - a password manager
               or a local .env file. You can mint scoped keys later in Settings → API Keys.
             </p>
             <div className="auth-panel__reveal-keybox">

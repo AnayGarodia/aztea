@@ -413,3 +413,12 @@
   .wallet__grid { grid-template-columns: 1fr; }
   .wallet__tx-row { grid-template-columns: auto 1fr auto; }
 }
+
+@media (max-width: 480px) {
+  .wallet__scroll { padding: var(--sp-4) var(--sp-3); }
+  .wallet__header { padding: var(--sp-5); }
+  .wallet__balance { font-size: 2rem; }
+  .wallet__tx-row { gap: var(--sp-2); }
+  .wallet__tx-row > .badge { display: none; }
+  .wallet__tx-amount { font-size: 0.875rem; }
+}

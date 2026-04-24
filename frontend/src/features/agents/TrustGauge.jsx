@@ -1,7 +1,7 @@
 import { motion } from 'motion/react'
 import './TrustGauge.css'
 
-// SVG arc gauge — draws from 7 o'clock to 5 o'clock (270° arc matching design system)
+// SVG arc gauge - draws from 7 o'clock to 5 o'clock (270° arc matching design system)
 function describeArc(cx, cy, r, startAngle, endAngle) {
   const toRad = (deg) => (deg * Math.PI) / 180
   const x1 = cx + r * Math.cos(toRad(startAngle))
@@ -52,7 +52,7 @@ function TrustArc({ pct }) {
         fill="var(--text-primary)"
         letterSpacing="-0.02em"
       >
-        {pct != null ? Math.round(pct * 100) : '—'}
+        {pct != null ? Math.round(pct * 100) : '-'}
       </text>
       <text
         x={CX} y={CY + 16}
@@ -105,7 +105,7 @@ export default function TrustGauge({ agent }) {
       <div className="tg__stats">
         <div className="tg__stat">
           <span className="tg__stat-val">
-            {calls > 0 ? calls.toLocaleString() : '—'}
+            {calls > 0 ? calls.toLocaleString() : '-'}
           </span>
           <span className="tg__stat-key">Total jobs</span>
           {calls > 0 && <CallBar total={calls} max={Math.max(calls, 200)} color="var(--accent)" />}
@@ -117,14 +117,14 @@ export default function TrustGauge({ agent }) {
               ? ms < 1000
                 ? `${Math.round(ms)}ms`
                 : `${(ms / 1000).toFixed(1)}s`
-              : '—'}
+              : '-'}
           </span>
           <span className="tg__stat-key">Avg latency</span>
         </div>
 
         <div className="tg__stat">
           <span className="tg__stat-val">
-            {confidencePct != null ? `${Math.round(confidencePct * 100)}%` : '—'}
+            {confidencePct != null ? `${Math.round(confidencePct * 100)}%` : '-'}
           </span>
           <span className="tg__stat-key">Confidence</span>
           {confidencePct != null && (

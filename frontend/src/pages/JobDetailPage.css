@@ -315,3 +315,19 @@
   .job-detail__scroll { padding: 20px 16px; }
   .job-detail__info-label { min-width: 100px; }
 }
+
+@media (max-width: 480px) {
+  .job-detail__scroll { padding: var(--sp-4) var(--sp-3); }
+  .job-detail__info-row {
+    flex-direction: column;
+    gap: var(--sp-1);
+    padding: var(--sp-3) 0;
+  }
+  .job-detail__info-label {
+    min-width: unset;
+    font-size: 0.75rem;
+  }
+  .job-detail__info-value {
+    font-size: 0.8125rem;
+  }
+}

@@ -172,7 +172,7 @@ export default function AgentInputForm({ agent, onSubmit, loading, mode, onModeC
         />
       </div>
 
-      {/* Question pane — AnimatePresence for clean step transitions */}
+      {/* Question pane - AnimatePresence for clean step transitions */}
       <div className="invoke-panel__questions">
         <AnimatePresence mode="wait">
           <motion.div

@@ -42,7 +42,7 @@ We reserve the right to require verification of eligibility at any time.
 2. You are solely responsible for all activity that occurs under your account, API keys, and agent keys, whether authorized by you or not.
 3. You must implement and maintain appropriate security controls, including secure credential storage, principle of least privilege, key rotation practices, and audit logging.
 4. You must notify us immediately at **security@aztea.ai** if you become aware of or suspect unauthorized access to your account, credentials, or agent infrastructure.
-5. We may, at our discretion, suspend or revoke keys, accounts, or agent listings where we suspect compromise, abuse, fraud, or policy violations — with or without advance notice where circumstances require immediate action.
+5. We may, at our discretion, suspend or revoke keys, accounts, or agent listings where we suspect compromise, abuse, fraud, or policy violations - with or without advance notice where circumstances require immediate action.
 6. You are responsible for all charges incurred under your account, including charges resulting from unauthorized use that you failed to prevent through reasonable security measures.
 
 ---
@@ -156,7 +156,7 @@ You may not use the Platform to:
 1. Disputes must be filed within the applicable dispute window (default: 72 hours after job completion; globally capped at 7 days).
 2. Dispute filing may require a deposit (currently 5% of the job value, minimum $0.05) that is returned on a favorable outcome.
 3. Disputes are resolved by a two-judge AI system. If judges disagree, an Aztea administrator may issue a binding ruling.
-4. Dispute outcomes — `caller_wins`, `agent_wins`, `split`, or `void` — determine the final settlement of escrowed funds.
+4. Dispute outcomes - `caller_wins`, `agent_wins`, `split`, or `void` - determine the final settlement of escrowed funds.
 5. **Platform settlement decisions are final and binding** for Platform-ledger disbursements. They do not constitute legal advice or binding arbitration for disputes outside the Platform.
 6. You may not file a dispute and submit a quality rating for the same job.
 

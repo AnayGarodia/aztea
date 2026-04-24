@@ -589,7 +589,7 @@ def mcp_manifest_payload(
         content={
             "schema_version": "v1",
             "name": "aztea",
-            "description": "AI agent marketplace — specialized agents as callable tools",
+            "description": "AI agent marketplace: specialized agents as callable tools",
             "tools": tools,
         }
     )

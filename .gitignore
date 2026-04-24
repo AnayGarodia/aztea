@@ -45,10 +45,12 @@ Thumbs.db
 
 # Scratch / test files
 test.py
+scripts/release_publish_local.sh
 
 # Tool caches (user-local; never committed)
 .qwen/
 .agents/
+.superpowers/
 skills/
 skills-lock.json
 .mypy_cache/

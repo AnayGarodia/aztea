@@ -760,7 +760,7 @@ def _probe_register_endpoint_or_400(url: str) -> None:
                 status_code=400,
                 detail=error_codes.make_error(
                     error_codes.REGISTRY_ENDPOINT_UNREACHABLE,
-                    "Your endpoint returned an HTML page instead of JSON — it doesn't look like an agent API. "
+                    "Your endpoint returned an HTML page instead of JSON. It does not look like an agent API. "
                     "Make sure POST requests to this URL accept a JSON body and return a JSON response.",
                 ),
             )

@@ -155,7 +155,7 @@ export default function JobDetailPage() {
         if (data.status === 'complete') await loadDispute()
       }
     } catch {
-      // Network blip during polling — keep stale data rather than clearing
+      // Network blip during polling - keep stale data rather than clearing
     }
   }, [id, apiKey]) // eslint-disable-line
 
@@ -278,9 +278,9 @@ export default function JobDetailPage() {
       await verifyJob(apiKey, id, { decision, reason: decision === 'reject' ? rejectReason.trim() : undefined })
       setVerifyDone(decision)
       if (decision === 'accept') {
-        showToast?.('Payment released — the agent has been paid.', 'success')
+        showToast?.('Payment released - the agent has been paid.', 'success')
       } else {
-        showToast?.('Output rejected — dispute opened.', 'success')
+        showToast?.('Output rejected - dispute opened.', 'success')
         await loadDispute()
       }
       await refreshJobs?.()
@@ -375,7 +375,7 @@ export default function JobDetailPage() {
                 <InfoRow label="Status" value={<Badge label={job.status} dot />} />
                 {fmtUsd(job.price_cents) && <InfoRow label="Cost" value={fmtUsd(job.price_cents)} mono />}
                 {job.attempt_count != null && (
-                  <InfoRow label="Attempts" value={`${job.attempt_count} / ${job.max_attempts ?? '—'}`} mono />
+                  <InfoRow label="Attempts" value={`${job.attempt_count} / ${job.max_attempts ?? '-'}`} mono />
                 )}
                 <InfoRow label="Created" value={fmtDate(job.created_at)} />
                 {job.completed_at && <InfoRow label="Completed" value={fmtDate(job.completed_at)} />}
@@ -533,7 +533,7 @@ export default function JobDetailPage() {
             <Reveal delay={0.22}>
               <div className="job-detail__verify-accepted">
                 <CheckCircle size={15} />
-                Payment released — the agent has been paid.
+                Payment released - the agent has been paid.
               </div>
             </Reveal>
           )}
@@ -608,7 +608,7 @@ export default function JobDetailPage() {
             </Card>
           </Reveal>
 
-          {/* Rating + Dispute — only for completed jobs */}
+          {/* Rating + Dispute - only for completed jobs */}
           {job.status === 'complete' && (
             <Reveal delay={0.3}>
               <Card>
@@ -643,7 +643,7 @@ export default function JobDetailPage() {
                   {ratingDone && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', marginBottom: 'var(--sp-4)', color: 'var(--positive)' }}>
                       <CheckCircle size={16} />
-                      <span style={{ fontSize: '0.875rem' }}>Rating submitted — thank you.</span>
+                      <span style={{ fontSize: '0.875rem' }}>Rating submitted - thank you.</span>
                     </div>
                   )}
 
@@ -675,7 +675,7 @@ export default function JobDetailPage() {
                       {dispute.status === 'pending' && (
                         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)', marginTop: 'var(--sp-3)', color: 'var(--ink-mute)', fontSize: '0.75rem' }}>
                           <Clock size={13} />
-                          Under review — typically resolved within 24 hours.
+                          Under review - typically resolved within 24 hours.
                         </div>
                       )}
                       {dispute.judgments?.length > 0 && (
@@ -683,7 +683,7 @@ export default function JobDetailPage() {
                           <p style={{ fontSize: '0.75rem', fontWeight: 600, marginBottom: 'var(--sp-2)', color: 'var(--ink-mute)' }}>Judgments</p>
                           {dispute.judgments.map((j, i) => (
                             <div key={i} style={{ fontSize: '0.8125rem', color: 'var(--ink-soft)', marginBottom: 'var(--sp-1)' }}>
-                              <Badge label={j.judge_kind} /> {OUTCOME_LABELS[j.verdict] || j.verdict} — {j.reasoning}
+                              <Badge label={j.judge_kind} /> {OUTCOME_LABELS[j.verdict] || j.verdict} - {j.reasoning}
                             </div>
                           ))}
                         </div>
@@ -702,7 +702,7 @@ export default function JobDetailPage() {
                               rows={3}
                               value={disputeReason}
                               onChange={e => setDisputeReason(e.target.value)}
-                              placeholder="Describe what went wrong — wrong output, no response, etc."
+                              placeholder="Describe what went wrong - wrong output, no response, etc."
                               style={{
                                 width: '100%', padding: 'var(--sp-2) var(--sp-3)',
                                 border: '1px solid var(--line-mid)', borderRadius: 'var(--r-sm)',

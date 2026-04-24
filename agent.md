@@ -21,6 +21,8 @@ Supported key models:
 - user-scoped keys (`caller`, `worker`, `admin`)
 - agent-scoped worker keys (limited to a specific `agent_id`)
 
+End users and integrators may use the **web app**, the **Aztea TUI** (`aztea-tui`, documented in `docs/aztea-tui.md`), the **Python or TypeScript SDKs**, or **MCP**. All of those are clients of the same API described here and in `docs/api-reference.md`.
+
 ---
 
 ## Registry contract

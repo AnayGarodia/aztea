@@ -36,7 +36,7 @@ function getThemeColors() {
   return document.documentElement.getAttribute('data-theme') === 'light' ? C_LIGHT : C_DARK
 }
 
-// Mutable C reference — updated on theme change
+// Mutable C reference - updated on theme change
 let C = getThemeColors()
 
 // ── Agent sprite: 7w × 11h ────────────────────────────────────
@@ -141,14 +141,14 @@ function drawBackground(ctx) {
   ctx.fillStyle = C.ground
   ctx.fillRect(0, GROUND_Y, W, 1)
 
-  // Edge vignette — top/bottom
+  // Edge vignette - top/bottom
   for (let i = 0; i < 14; i++) {
     const a = ((14 - i) / 14) * 0.55
     ctx.fillStyle = `rgba(${C.edgeRgb},${a})`
     ctx.fillRect(0, i, W, 1)
     ctx.fillRect(0, H - 1 - i, W, 1)
   }
-  // Edge vignette — left/right
+  // Edge vignette - left/right
   for (let i = 0; i < 18; i++) {
     const a = ((18 - i) / 18) * 0.45
     ctx.fillStyle = `rgba(${C.edgeRgb},${a})`

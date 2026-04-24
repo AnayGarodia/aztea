@@ -533,7 +533,7 @@ def registry_call(
             status_code=413,
             detail=error_codes.make_error(
                 error_codes.PAYLOAD_TOO_LARGE,
-                "Input payload exceeds the 256 KB limit. Agents cannot process payloads this large — "
+                "Input payload exceeds the 256 KB limit. Agents cannot process payloads this large. "
                 "try summarizing or splitting into multiple calls.",
                 {"size_bytes": payload_bytes, "limit_bytes": 256 * 1024},
             ),

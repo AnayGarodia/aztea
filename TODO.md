@@ -1,4 +1,4 @@
-# Aztea — current roadmap
+# Aztea - current roadmap
 
 _Last updated: 2026-04-23_
 
@@ -30,42 +30,42 @@ Legend: **P0** launch blocker · **P1** next release · **P2** nice-to-have · �
 
 ## Open work
 
-### P1 — infrastructure and reliability
+### P1 - infrastructure and reliability
 
-- [ ] **Postgres readiness** — `DATABASE_URL` already routes through `core/db.py`; a Postgres dialect layer is still the long-term plan for multi-host deployments. Until then SQLite WAL + daily backup is sufficient.
-- [ ] **Automated DB backups** — nightly `sqlite3 ".backup"` to S3 with a tested restore runbook. The current prod EC2 host does not have this cron installed.
-- [ ] **Uptime monitoring** — external probe hitting `GET /health` every 60s with alerting on two consecutive failures.
-- [ ] **Structured log shipping** — JSON logs are emitted via `core.logging_utils`; still need a Datadog / Logtail / CloudWatch sink in production.
-- [ ] **Connection-pool tuning** — `DB_MAX_CONNECTIONS=32` is the current cap; add a queue-timeout guard so bursty traffic does not starve background workers.
+- [ ] **Postgres readiness** - `DATABASE_URL` already routes through `core/db.py`; a Postgres dialect layer is still the long-term plan for multi-host deployments. Until then SQLite WAL + daily backup is sufficient.
+- [ ] **Automated DB backups** - nightly `sqlite3 ".backup"` to S3 with a tested restore runbook. The current prod EC2 host does not have this cron installed.
+- [ ] **Uptime monitoring** - external probe hitting `GET /health` every 60s with alerting on two consecutive failures.
+- [ ] **Structured log shipping** - JSON logs are emitted via `core.logging_utils`; still need a Datadog / Logtail / CloudWatch sink in production.
+- [ ] **Connection-pool tuning** - `DB_MAX_CONNECTIONS=32` is the current cap; add a queue-timeout guard so bursty traffic does not starve background workers.
 
-### P1 — product
+### P1 - product
 
-- [ ] **Onboarding wizard** — a 3-step flow (fund wallet, browse agents, first hire) for cold users. Logged-in state is tracked server-side (`legal_acceptance_required` / first-run flag already exist); the UI still needs to route new users through a guided experience instead of dropping them on the dashboard.
-- [ ] **Mobile polish** — pages work at 375px but have minor layout quirks; audit `AgentDetailPage`, `JobDetailPage`, and `WalletPage`.
-- [ ] **User notification preferences** — currently every transactional email fires; add an opt-out surface in Settings.
-- [ ] **Agent analytics dashboard** — agent owners want per-agent call volume, revenue, and dispute rate on `MyAgentsPage`.
-- [ ] **A2A integration guide** — a separate doc next to `docs/mcp-integration.md` covering how Aztea participates in Google A2A and other agent-to-agent networks.
+- [ ] **Onboarding wizard** - a 3-step flow (fund wallet, browse agents, first hire) for cold users. Logged-in state is tracked server-side (`legal_acceptance_required` / first-run flag already exist); the UI still needs to route new users through a guided experience instead of dropping them on the dashboard.
+- [ ] **Mobile polish** - pages work at 375px but have minor layout quirks; audit `AgentDetailPage`, `JobDetailPage`, and `WalletPage`.
+- [ ] **User notification preferences** - currently every transactional email fires; add an opt-out surface in Settings.
+- [ ] **Agent analytics dashboard** - agent owners want per-agent call volume, revenue, and dispute rate on `MyAgentsPage`.
+- [ ] **A2A integration guide** - a separate doc next to `docs/mcp-integration.md` covering how Aztea participates in Google A2A and other agent-to-agent networks.
 
-### P1 — security and compliance
+### P1 - security and compliance
 
-- [ ] **Dependency audit cadence** — schedule monthly `pip-audit` + `npm audit`; currently only manual.
-- [ ] **Secrets rotation runbook** — document how to rotate `API_KEY`, Stripe keys, Groq/OpenAI/Anthropic keys, and PyPI token. (A reminder: the `.env` leaked during a support session on 2026-04-23 should already have been rotated end-to-end.)
+- [ ] **Dependency audit cadence** - schedule monthly `pip-audit` + `npm audit`; currently only manual.
+- [ ] **Secrets rotation runbook** - document how to rotate `API_KEY`, Stripe keys, Groq/OpenAI/Anthropic keys, and PyPI token. (A reminder: the `.env` leaked during a support session on 2026-04-23 should already have been rotated end-to-end.)
 
-### P2 — developer experience
+### P2 - developer experience
 
-- [ ] **PyPI publish automation** — currently the SDK has to be tagged + pushed manually. Add a GitHub Actions job that publishes `sdks/python-sdk/` on every `v*` tag using the stored `PYPI_TOKEN`.
-- [ ] **npm publish automation** — same pattern for the TypeScript SDK.
-- [ ] **Frontend test coverage** — Vitest is not wired up yet; add smoke tests for the critical user flows (register, hire, wallet top-up).
-- [ ] **Pre-commit hook** — run `flake8` + `check_file_line_budget.py` before commit to avoid CI round-trips.
+- [ ] **PyPI publish automation** - currently the SDK has to be tagged + pushed manually. Add a GitHub Actions job that publishes `sdks/python-sdk/` on every `v*` tag using the stored `PYPI_TOKEN`.
+- [ ] **npm publish automation** - same pattern for the TypeScript SDK.
+- [ ] **Frontend test coverage** - Vitest is not wired up yet; add smoke tests for the critical user flows (register, hire, wallet top-up).
+- [ ] **Pre-commit hook** - run `flake8` + `check_file_line_budget.py` before commit to avoid CI round-trips.
 
-### P2 — agent quality
+### P2 - agent quality
 
-- [ ] **Benchmark suites** — per built-in agent, a fixed eval set that produces comparable quality numbers surfaced in the marketplace.
-- [ ] **More built-ins with real tool use** — the curated public set favours agents that do external work. Good candidates: translation via a real API, OCR via a real API, data-analyst backed by DuckDB.
+- [ ] **Benchmark suites** - per built-in agent, a fixed eval set that produces comparable quality numbers surfaced in the marketplace.
+- [ ] **More built-ins with real tool use** - the curated public set favours agents that do external work. Good candidates: translation via a real API, OCR via a real API, data-analyst backed by DuckDB.
 
 ---
 
-## Shipped (selected — last 60 days)
+## Shipped (selected - last 60 days)
 
 These are not exhaustive, but capture the headline work already in production:
 
@@ -85,4 +85,4 @@ These are not exhaustive, but capture the headline work already in production:
 
 1. When you ship something that was on this list, move it to "Shipped (selected)" with a short sentence describing the outcome.
 2. When you find a new gap, add it to the matching priority bucket with a short actionable description.
-3. Keep the priority buckets short — if P1 has more than ~8 items, promote the most urgent to P0 or split into a dedicated planning doc.
+3. Keep the priority buckets short - if P1 has more than ~8 items, promote the most urgent to P0 or split into a dedicated planning doc.

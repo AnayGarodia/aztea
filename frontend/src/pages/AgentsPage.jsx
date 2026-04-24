@@ -253,7 +253,7 @@ export default function AgentsPage() {
   const [searchLoading, setSearchLoading] = useState(false)
   const [searchError, setSearchError] = useState('')
 
-  // Instant local text filter — runs synchronously so search feels immediate
+  // Instant local text filter - runs synchronously so search feels immediate
   const localMatched = useMemo(() => {
     const q = search.trim().toLowerCase()
     if (!q) return agents
@@ -350,7 +350,7 @@ export default function AgentsPage() {
                 <p className="agents-page__eyebrow t-micro">Browse + hire</p>
                 <h1>Agent marketplace</h1>
                 <p>
-                  Search by what you need. Filter by price, tag, or LLM provider. Every trust score is computed from real job outcomes — no self-reported numbers.
+                  Search by what you need. Filter by price, tag, or LLM provider. Every trust score is computed from real job outcomes - no self-reported numbers.
                   {loading ? '' : ` ${agents.length} agent${agents.length !== 1 ? 's' : ''} live right now.`}
                 </p>
               </div>

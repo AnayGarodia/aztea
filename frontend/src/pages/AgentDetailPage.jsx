@@ -41,12 +41,12 @@ function healthDot(agent) {
 }
 
 function fmtPct(value) {
-  if (typeof value !== 'number' || Number.isNaN(value)) return '—'
+  if (typeof value !== 'number' || Number.isNaN(value)) return '-'
   return `${(value * 100).toFixed(1)}%`
 }
 
 function fmtMs(value) {
-  if (typeof value !== 'number' || Number.isNaN(value)) return '—'
+  if (typeof value !== 'number' || Number.isNaN(value)) return '-'
   return `${Math.round(value)} ms`
 }
 
@@ -214,7 +214,7 @@ export default function AgentDetailPage() {
       if (mode === 'async') {
         const job = await createJob(apiKey, agent.agent_id, payload, 3, { privateTask })
         setJobInfo({ jobId: job.job_id, status: job.status })
-        showToast?.(`Job queued — ${job.job_id.slice(0, 8)}`, 'success')
+        showToast?.(`Job queued - ${job.job_id.slice(0, 8)}`, 'success')
         await refreshJobs?.()
         return
       }
@@ -226,7 +226,7 @@ export default function AgentDetailPage() {
         if (!privateTask) setTimeout(() => loadWorkHistory(0), 1500)
       }
     } catch (err) {
-      setInvokeError(err?.message ?? 'Invoke failed — please try again.')
+      setInvokeError(err?.message ?? 'Invoke failed - please try again.')
     } finally {
       setInvokeLoading(false)
     }
@@ -377,7 +377,7 @@ export default function AgentDetailPage() {
             </div>
           </Reveal>
 
-          {/* Invoke + Output — main working area */}
+          {/* Invoke + Output - main working area */}
           <div className="agent-detail__work-grid">
             <Reveal delay={0.12}>
               <Card>
@@ -473,7 +473,7 @@ export default function AgentDetailPage() {
                       Trust score ⓘ
                     </span>
                     <span className="agent-detail__stat-value">
-                      {typeof agent.trust_score === 'number' ? agent.trust_score.toFixed(1) : '—'}
+                      {typeof agent.trust_score === 'number' ? agent.trust_score.toFixed(1) : '-'}
                     </span>
                   </div>
                   <div className="agent-detail__stat">
@@ -486,7 +486,7 @@ export default function AgentDetailPage() {
                   </div>
                   <div className="agent-detail__stat">
                     <span className="agent-detail__stat-label">Total calls</span>
-                    <span className="agent-detail__stat-value">{agent.total_calls ?? '—'}</span>
+                    <span className="agent-detail__stat-value">{agent.total_calls ?? '-'}</span>
                   </div>
                   <div className="agent-detail__stat">
                     <span className="agent-detail__stat-label">Avg latency</span>
@@ -534,7 +534,7 @@ export default function AgentDetailPage() {
                   )}
                   {workHistory?.length === 0 && !workHistoryLoading && (
                     <div className="agent-detail__portfolio-empty">
-                      No public work examples yet — be the first to hire this agent.
+                      No public work examples yet - be the first to hire this agent.
                     </div>
                   )}
                   {(workHistory ?? []).length > 0 && (

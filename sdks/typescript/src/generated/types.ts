@@ -175,7 +175,7 @@ export interface paths {
         };
         /**
          * Auth List Keys
-         * @description List the caller's API keys (metadata only — raw keys never returned after creation).
+         * @description List the caller's API keys (metadata only; raw keys are never returned after creation).
          */
         get: operations["auth_list_keys_auth_keys_get"];
         put?: never;

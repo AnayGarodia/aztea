@@ -126,7 +126,7 @@ export default function RegisterAgentPage() {
                       <p className="regagent__success-sub">
                         Your agent is <strong>{status}</strong>
                         {registered?.agent?.suspension_reason
-                          ? ` — ${registered.agent.suspension_reason}`
+                          ? ` - ${registered.agent.suspension_reason}`
                           : '.'}
                       </p>
                     )

@@ -33,8 +33,8 @@ export default function SettingsPage() {
                 <div className="settings__account-row">
                   <Avatar name={user?.username ?? '?'} size="lg" />
                   <div className="settings__account-info">
-                    <p className="settings__username">{user?.username ?? '—'}</p>
-                    <p className="settings__email">{user?.email ?? '—'}</p>
+                    <p className="settings__username">{user?.username ?? '-'}</p>
+                    <p className="settings__email">{user?.email ?? '-'}</p>
                     {(user?.scopes ?? []).length > 0 && (
                       <div className="settings__scopes">
                         {user.scopes.map(s => <Badge key={s} label={s} />)}

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'motion/react'
 import { ArrowRight, X, Wallet, Bot, Zap, ChevronLeft } from 'lucide-react'
@@ -145,7 +145,7 @@ const STEPS = [
     eyebrow: '03 / 03',
     title: 'Use scoped keys\nbefore you automate',
     subtitle: 'One key per integration is the safe default',
-    body: 'Create caller-only or worker-only keys in Settings. If a key leaks or needs rotating, only one integration is affected — not everything at once.',
+    body: 'Create caller-only or worker-only keys in Settings. If a key leaks or needs rotating, only one integration is affected - not everything at once.',
     cta: 'Open settings',
     ctaPath: '/settings',
     Visual: CallVisual,
@@ -183,6 +183,9 @@ export default function OnboardingWizard() {
       setVisible(false)
       return
     }
+    // Dismiss as soon as we can prove the user is not new. Do NOT gate on
+    // market `loading` - if the API stalls the wizard would never appear for
+    // the exact users who need it most.
     if (!loading && hasRecentActivity) {
       try { localStorage.setItem(storageKey, '1') } catch {}
       setVisible(false)
@@ -193,6 +196,14 @@ export default function OnboardingWizard() {
     setVisible(!stored)
   }, [storageKey, loading, hasRecentActivity])
 
+  const dismiss = useCallback(() => {
+    dismissedRef.current = true
+    if (storageKey) {
+      try { localStorage.setItem(storageKey, '1') } catch {}
+    }
+    setVisible(false)
+  }, [storageKey])
+
   useEffect(() => {
     if (!visible) return undefined
     const onKeydown = (event) => {
@@ -200,15 +211,7 @@ export default function OnboardingWizard() {
     }
     window.addEventListener('keydown', onKeydown)
     return () => window.removeEventListener('keydown', onKeydown)
-  }, [visible, storageKey])
-
-  const dismiss = () => {
-    dismissedRef.current = true
-    if (storageKey) {
-      try { localStorage.setItem(storageKey, '1') } catch {}
-    }
-    setVisible(false)
-  }
+  }, [visible, dismiss])
 
   const goTo = (next) => {
     setDir(next > step ? 1 : -1)

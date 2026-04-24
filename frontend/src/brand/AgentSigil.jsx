@@ -92,7 +92,7 @@ export default function AgentSigil({ agentId, size = 'md', className, style }) {
   // md, lg, xl: Mondrian subdivision
   const rects = splitRect(0, 0, px, px, depth, rand)
 
-  // Assign colors — avoid placing same color adjacent (simple modulo rule)
+  // Assign colors - avoid placing same color adjacent (simple modulo rule)
   const coloredRects = rects.map((r, i) => ({
     ...r,
     fill: palette[i % palette.length],

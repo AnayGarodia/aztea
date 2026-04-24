@@ -22,7 +22,7 @@ function buildDailySpend(transactions = []) {
     const key = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
     if (!map[key]) return
     if (tx.amount_cents < 0) {
-      // Debit — this is spend
+      // Debit - this is spend
       map[key].spend += Math.abs(tx.amount_cents)
     }
   })

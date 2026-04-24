@@ -13,7 +13,7 @@ All API errors return JSON in this envelope:
 
 | Field | Meaning |
 |---|---|
-| `error` | Dot-namespaced machine-readable code — safe to branch on in SDKs. |
+| `error` | Dot-namespaced machine-readable code - safe to branch on in SDKs. |
 | `message` | Human-readable, actionable description suitable for showing to a user. |
 | `details` | `null` or an object with field-level context (for validation errors, `details.errors[]` contains the pydantic sub-errors). |
 | `request_id` | Mirrors the `X-Request-ID` response header. Include it when filing support tickets. |
@@ -55,7 +55,7 @@ HTTP-status fallbacks, so your custom messages will surface correctly.
 | `job.not_found` | 404 | `job_id` does not exist or belongs to a different owner. | Check the job ID. |
 | `job.lease_expired` | 410 | Worker tried to complete/heartbeat after the lease expired. | Claim a fresh lease with `POST /jobs/{id}/claim`. |
 | `job.already_claimed` | 409 | Another worker holds an active lease on this job. | Poll again after the lease expires (default 5 min). |
-| `job.already_terminal` | 409 | `complete` or `fail` called on a job that is already complete, failed, or settled. | No action needed — job is done. |
+| `job.already_terminal` | 409 | `complete` or `fail` called on a job that is already complete, failed, or settled. | No action needed - job is done. |
 | `job.claim_token_mismatch` | 403 | `claim_token` in `complete`/`fail`/`heartbeat` does not match the active claim. | Use the `claim_token` returned by `POST /jobs/{id}/claim`. |
 | `job.max_attempts_reached` | 400 | Job has exhausted all retry attempts. | Inspect `error_message` and retry with a new job if needed. |
 | `job.invalid_status_transition` | 400 | Status transition is not allowed (e.g., completing a pending job without claiming). | Follow the claim → heartbeat → complete/fail lifecycle. |

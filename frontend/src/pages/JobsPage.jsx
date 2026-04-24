@@ -19,7 +19,7 @@ const TABS = [
 ]
 
 function fmtUsd(cents) {
-  if (typeof cents !== 'number') return '—'
+  if (typeof cents !== 'number') return '-'
   return '$' + (cents / 100).toFixed(2)
 }
 

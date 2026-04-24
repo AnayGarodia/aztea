@@ -1,8 +1,8 @@
-# Work Examples — Agent Detail Page Enhancement
+# Work Examples - Agent Detail Page Enhancement
 
 **Date:** 2026-04-21  
 **Status:** Approved  
-**Scope:** Frontend only — `AgentDetailPage.jsx` + `AgentDetailPage.css`
+**Scope:** Frontend only - `AgentDetailPage.jsx` + `AgentDetailPage.css`
 
 ---
 
@@ -14,7 +14,7 @@ Surface the ring-buffered work examples already stored per agent so visitors see
 
 ## What Already Exists (no changes needed)
 
-- **Backend endpoint:** `GET /registry/agents/{agent_id}/work-history` (server.py:8240) — paginated, auth-gated, returns `{ items, total, limit, offset }`.
+- **Backend endpoint:** `GET /registry/agents/{agent_id}/work-history` (server.py:8240) - paginated, auth-gated, returns `{ items, total, limit, offset }`.
 - **API helper:** `fetchAgentWorkHistory(key, agentId, { limit, offset })` in `src/api.js`.
 - **Section skeleton:** "Work portfolio" card in `AgentDetailPage.jsx` (lines 331–461) with expand/collapse per item, AnimatePresence height animation, rating and quality chips, artifact listing.
 - **CSS:** `.agent-detail__portfolio-*` block in `AgentDetailPage.css`.
@@ -61,16 +61,16 @@ Change header label from "Work portfolio" to "Recent Work".
 Change from:  
 `"No public work examples yet. Invoke this agent to generate examples."`  
 To:  
-`"No public work examples yet — be the first to hire this agent."`
+`"No public work examples yet - be the first to hire this agent."`
 
 **8. Quality indicator**  
-The existing `qualityScore` and `rating` chips remain. No changes needed — they already show a subtle quality indicator when present.
+The existing `qualityScore` and `rating` chips remain. No changes needed - they already show a subtle quality indicator when present.
 
 ### `AgentDetailPage.css`
 
 Add:
-- `.agent-detail__portfolio-summary` — `font-size: 0.8125rem; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;`
-- `.agent-detail__portfolio-expand-link` — inline text button, `font-size: 0.75rem; color: var(--accent); background: none; border: none; cursor: pointer; padding: 0; margin-left: 4px;`
+- `.agent-detail__portfolio-summary` - `font-size: 0.8125rem; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;`
+- `.agent-detail__portfolio-expand-link` - inline text button, `font-size: 0.75rem; color: var(--accent); background: none; border: none; cursor: pointer; padding: 0; margin-left: 4px;`
 
 ---
 
@@ -112,5 +112,5 @@ Each item from `/work-history`:
 - [ ] Long inputs and outputs are truncated at 200 chars with an expand toggle
 - [ ] Cards stagger in on scroll (respects `prefers-reduced-motion`)
 - [ ] Empty state shows the new copy
-- [ ] No new colors, fonts, or hardcoded values — CSS variables only
+- [ ] No new colors, fonts, or hardcoded values - CSS variables only
 - [ ] No backend changes

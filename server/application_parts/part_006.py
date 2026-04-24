@@ -579,7 +579,7 @@ def auth_register(request: Request, body: UserRegisterRequest) -> core_models.Au
     try:
         _owner_id = f"user:{result['user_id']}"
         _starter_wallet = payments.get_or_create_wallet(_owner_id)
-        payments.deposit(_starter_wallet["wallet_id"], 100, "Welcome credit — $1.00 to get started")
+        payments.deposit(_starter_wallet["wallet_id"], 100, "Welcome credit ($1.00 to get started)")
     except Exception:
         _LOG.warning("Failed to credit starter balance for new user %s", result.get("user_id"))
     _email.send_welcome(result.get("email", ""), result.get("username", "there"))
@@ -695,7 +695,7 @@ def auth_accept_legal(
 )
 @limiter.limit("30/minute")
 def auth_list_keys(request: Request, caller: core_models.CallerContext = Depends(_require_api_key)) -> core_models.ApiKeyListResponse:
-    """List the caller's API keys (metadata only — raw keys never returned after creation)."""
+    """List the caller's API keys (metadata only; raw keys are never returned after creation)."""
     if caller["type"] != "user":
         raise HTTPException(status_code=403, detail="Not available for master key.")
     keys = _auth.list_api_keys(caller["user"]["user_id"])

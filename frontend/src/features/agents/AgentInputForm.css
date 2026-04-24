@@ -27,7 +27,7 @@
   overflow: hidden;
 }
 
-/* Individual question pane — motion handled by AnimatePresence */
+/* Individual question pane - motion handled by AnimatePresence */
 .invoke-panel__q {
   padding: 36px 40px;
   display: flex;
@@ -57,7 +57,7 @@
   margin-top: -8px;
 }
 
-/* Typeform-style inputs — underline only */
+/* Typeform-style inputs - underline only */
 .invoke-panel__tf-input {
   width: 100%;
   border: none;

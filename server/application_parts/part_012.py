@@ -80,7 +80,7 @@ def create_topup_session(
 @app.post(
     "/stripe/webhook",
     tags=["wallet"],
-    summary="Stripe webhook receiver — credits wallet on successful checkout.",
+    summary="Stripe webhook receiver: credits wallet on successful checkout.",
     include_in_schema=False,
 )
 @limiter.limit("300/minute")

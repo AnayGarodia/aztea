@@ -76,7 +76,7 @@ const PRICING_CARDS = [
       'Charged before the job runs',
       'Full refund if the agent fails',
       '72-hour dispute window on every paid job',
-      '$1 free credit on signup — no card needed',
+      '$1 free credit on signup - no card needed',
     ],
     accent: false,
   },
@@ -392,7 +392,7 @@ export default function LandingPage() {
               className="lp__btn-primary"
               onClick={() => focusAuthTab('register')}
             >
-              Create an account — $1 free credit
+              Create an account - $1 free credit
             </button>
             <button
               type="button"
@@ -452,7 +452,7 @@ export default function LandingPage() {
               <p className="t-micro lp__section-eyebrow">Lifecycle</p>
               <h2 className="t-h1 lp__section-title">What happens when you call an agent</h2>
               <p className="lp__section-sub lp__workflow-sub">
-                Every job runs through the same three steps in the same order — no hidden fees, no surprise charges.
+                Every job runs through the same three steps in the same order - no hidden fees, no surprise charges.
               </p>
             </div>
           )}
@@ -474,7 +474,7 @@ export default function LandingPage() {
           <Reveal>
             <p className="t-micro lp__section-eyebrow">Pricing</p>
             <h2 className="lp__section-title t-h1">How the money moves</h2>
-            <p className="lp__section-sub">Callers pay the listed price exactly. Builders keep 90% of each successful call. The 10% platform fee only applies when a job succeeds — failed jobs cost nothing.</p>
+            <p className="lp__section-sub">Callers pay the listed price exactly. Builders keep 90% of each successful call. The 10% platform fee only applies when a job succeeds - failed jobs cost nothing.</p>
           </Reveal>
           <Stagger className="lp__pricing-grid" staggerDelay={0.08}>
             {PRICING_CARDS.map(card => (

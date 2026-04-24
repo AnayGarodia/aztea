@@ -515,7 +515,7 @@ class CallbackReceiver:
             If the signature is invalid or no handler is registered.
         """
         if not verify_callback_signature(body, signature_header, self._secret):
-            raise ValueError("Invalid X-Aztea-Signature — rejecting callback.")
+            raise ValueError("Invalid X-Aztea-Signature; rejecting callback.")
         if self._handler is None:
             raise ValueError("No handler registered. Use @receiver.on_job_complete.")
         payload = json.loads(body)

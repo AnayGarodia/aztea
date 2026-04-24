@@ -126,7 +126,7 @@ def test_quality_gate_honest_fallback_without_contract_or_judge(monkeypatch):
     assert result["judge_verdict"] == "pass"
     assert result["quality_score"] == 5
     assert result["passed"] is True
-    assert result["reason"] == "No output contract defined — structural check passed."
+    assert result["reason"] == "No output contract defined. Structural check passed."
 
 
 def test_builtin_worker_auto_completes_async_jobs(client, monkeypatch):
