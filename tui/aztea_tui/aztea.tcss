@@ -1,0 +1,265 @@
+/* ══════════════════════════════════════════════════════════════
+   AZTEA TUI  — Dark theme, teal accent, no purple gradients
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── Root ──────────────────────────────────────────────────────── */
+Screen {
+    background: #0d0d14;
+    color: #e2e8f0;
+}
+
+/* ── Header ────────────────────────────────────────────────────── */
+#header-bar {
+    height: 3;
+    background: #13131f;
+    border-bottom: tall #2a2a40;
+    layout: horizontal;
+    align: left middle;
+    padding: 0 2;
+}
+#header-logo {
+    color: #00d4aa;
+    width: 14;
+    text-style: bold;
+    padding: 0 1;
+}
+#header-spacer { width: 1fr; }
+#header-user  { color: #e2e8f0; width: auto; padding: 0 2; }
+#header-bal   { color: #00d4aa; width: auto; padding: 0 2; text-style: bold; }
+#header-conn  { width: 4; text-align: right; padding: 0 1; }
+
+/* ── App Layout ────────────────────────────────────────────────── */
+#app-layout {
+    height: 1fr;
+    layout: horizontal;
+}
+
+/* ── Sidebar ───────────────────────────────────────────────────── */
+#sidebar {
+    width: 22;
+    background: #13131f;
+    border-right: tall #2a2a40;
+    padding: 1 0;
+}
+#sidebar ListView {
+    background: #13131f;
+    border: none;
+    padding: 0;
+}
+#sidebar ListItem {
+    padding: 1 2;
+    color: #64748b;
+    border-left: tall #13131f;
+}
+#sidebar ListItem:hover {
+    background: #1a1a2e;
+    color: #e2e8f0;
+}
+#sidebar ListItem.--highlight {
+    background: #1a1a2e;
+    color: #00d4aa;
+    border-left: tall #00d4aa;
+    text-style: bold;
+}
+
+/* ── Content ───────────────────────────────────────────────────── */
+#content-area {
+    width: 1fr;
+    height: 1fr;
+    background: #0d0d14;
+    padding: 1 2;
+}
+ContentSwitcher {
+    width: 1fr;
+    height: 1fr;
+}
+
+/* ── DataTable ─────────────────────────────────────────────────── */
+DataTable {
+    background: #13131f;
+    color: #e2e8f0;
+    border: tall #2a2a40;
+    height: 1fr;
+}
+DataTable > .datatable--header {
+    color: #64748b;
+    background: #1a1a2e;
+    text-style: bold;
+}
+DataTable > .datatable--cursor {
+    background: #1a1a2e;
+    color: #00d4aa;
+}
+DataTable > .datatable--hover {
+    background: #1a1a2e;
+}
+
+/* ── Inputs ────────────────────────────────────────────────────── */
+Input {
+    background: #1a1a2e;
+    color: #e2e8f0;
+    border: tall #2a2a40;
+    margin-bottom: 1;
+}
+Input:focus {
+    border: tall #00d4aa;
+}
+TextArea {
+    background: #1a1a2e;
+    color: #e2e8f0;
+    border: tall #2a2a40;
+    min-height: 8;
+}
+TextArea:focus {
+    border: tall #00d4aa;
+}
+
+/* ── Buttons ───────────────────────────────────────────────────── */
+Button {
+    background: #1a1a2e;
+    color: #e2e8f0;
+    border: tall #2a2a40;
+    margin-right: 1;
+    margin-top: 1;
+}
+Button:hover {
+    background: #00806a;
+    color: #0d0d14;
+    border: tall #00d4aa;
+}
+Button.primary {
+    background: #00d4aa;
+    color: #0d0d14;
+    text-style: bold;
+    border: tall #00d4aa;
+}
+Button.primary:hover {
+    background: #00806a;
+}
+
+/* ── Login Screen ──────────────────────────────────────────────── */
+LoginScreen {
+    align: center middle;
+}
+#login-box {
+    width: 52;
+    height: auto;
+    background: #13131f;
+    border: thick #2a2a40;
+    padding: 3 4;
+}
+#login-logo {
+    color: #00d4aa;
+    text-align: center;
+    text-style: bold;
+    content-align: center middle;
+    height: 3;
+    margin-bottom: 1;
+}
+#login-tagline {
+    color: #64748b;
+    text-align: center;
+    margin-bottom: 2;
+}
+#login-error {
+    color: #ef4444;
+    margin-top: 1;
+    height: auto;
+}
+#login-buttons { height: auto; layout: horizontal; }
+
+/* ── Hire Modal ────────────────────────────────────────────────── */
+HireModal {
+    align: center middle;
+    background: rgba(0,0,0,0);
+}
+#hire-dialog {
+    width: 80;
+    height: auto;
+    background: #13131f;
+    border: thick #00d4aa;
+    padding: 2 4;
+}
+#hire-title {
+    color: #00d4aa;
+    text-style: bold;
+    margin-bottom: 1;
+}
+#hire-price  { color: #64748b; margin-bottom: 1; }
+#hire-result { margin-top: 1; }
+#hire-error  { color: #ef4444; margin-top: 1; }
+#hire-actions { layout: horizontal; height: auto; }
+
+/* ── Two-panel layout ──────────────────────────────────────────── */
+#panel-left {
+    width: 1fr;
+    height: 1fr;
+    layout: vertical;
+}
+#panel-right {
+    width: 42;
+    height: 1fr;
+    background: #13131f;
+    border: tall #2a2a40;
+    border-left: tall #2a2a40;
+    padding: 1 2;
+    overflow-y: auto;
+}
+#detail-placeholder {
+    color: #64748b;
+    text-align: center;
+    padding: 4 2;
+}
+
+/* ── Agent detail ──────────────────────────────────────────────── */
+#detail-name  { text-style: bold; margin-bottom: 1; }
+#detail-desc  { color: #94a3b8; margin-bottom: 1; }
+#detail-price { color: #00d4aa; }
+#detail-meta  { color: #e2e8f0; }
+#detail-tags  { color: #64748b; margin-bottom: 1; }
+
+/* ── Search input ──────────────────────────────────────────────── */
+#agent-search { margin-bottom: 1; }
+
+/* ── Wallet ────────────────────────────────────────────────────── */
+#wallet-heading   { text-style: bold; color: #e2e8f0; margin-bottom: 1; }
+#wallet-balance   { color: #00d4aa; text-style: bold; margin-bottom: 0; }
+#wallet-trust     { color: #64748b; margin-bottom: 1; }
+#charges-heading  { color: #64748b; margin-top: 1; margin-bottom: 1; }
+
+/* ── My Agents ─────────────────────────────────────────────────── */
+#my-agents-heading { text-style: bold; color: #e2e8f0; margin-bottom: 1; }
+#my-hint           { color: #64748b; margin-top: 1; }
+
+/* ── Job detail ────────────────────────────────────────────────── */
+#job-status-badge { margin-bottom: 1; text-style: bold; }
+#job-cost         { color: #64748b; margin-bottom: 1; }
+
+/* ── Loading / empty states ────────────────────────────────────── */
+LoadingIndicator { color: #00d4aa; }
+.empty-state {
+    color: #64748b;
+    text-align: center;
+    padding: 3;
+}
+
+/* ── Footer ────────────────────────────────────────────────────── */
+Footer {
+    background: #13131f;
+    color: #64748b;
+    border-top: tall #2a2a40;
+}
+
+/* ── TabbedContent ─────────────────────────────────────────────── */
+TabbedContent {
+    height: 1fr;
+}
+TabbedContent Tab {
+    color: #64748b;
+}
+TabbedContent Tab.-active {
+    color: #00d4aa;
+}
+TabPane {
+    padding: 1 0;
+}

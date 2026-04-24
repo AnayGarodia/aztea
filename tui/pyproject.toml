@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aztea-tui"
+version = "0.1.0"
+description = "Terminal UI for the Aztea AI agent marketplace"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+keywords = ["aztea", "ai", "agents", "tui", "terminal"]
+dependencies = [
+    "textual>=0.47,<1.0",
+    "rich>=13.0",
+    "requests>=2.31",
+]
+
+[project.scripts]
+aztea-tui = "aztea_tui.app:run"
+
+[project.urls]
+Homepage = "https://aztea.ai"
+Source   = "https://github.com/AnayGarodia/aztea"
+
+[tool.hatch.build.targets.wheel]
+packages = ["aztea_tui"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths   = ["tests"]
