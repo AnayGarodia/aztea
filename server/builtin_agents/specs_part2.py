@@ -450,6 +450,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
             "topic_filter": {"type": "string", "description": "Filter stories by keyword in title"},
             "mode": {"type": "string", "enum": ["digest", "trends", "hot"], "default": "digest"},
         },
+        "required": [],
     },
     "output_schema": {
         "type": "object",
