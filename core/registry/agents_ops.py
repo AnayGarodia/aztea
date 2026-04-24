@@ -569,6 +569,75 @@ def count_owner_agents(owner_id: str) -> int:
     return int(row["n"]) if row else 0
 
 
+def update_agent(
+    agent_id: str,
+    owner_id: str,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    tags: list | None = None,
+    price_per_call_usd: float | None = None,
+) -> dict | None:
+    """
+    Update mutable fields on an agent. Only the owner can call this.
+    Returns the updated agent dict, or None if not found / wrong owner.
+    """
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM agents WHERE agent_id = ? AND owner_id = ?",
+            (agent_id, owner_id),
+        ).fetchone()
+        if row is None:
+            return None
+        agent = _row_to_dict(row)
+
+        updates: dict[str, object] = {}
+        if name is not None:
+            n = str(name).strip()
+            if not n:
+                raise ValueError("name must not be empty.")
+            updates["name"] = n
+        if description is not None:
+            updates["description"] = str(description).strip()
+        if tags is not None:
+            updates["tags"] = json.dumps(_parse_tags(tags))
+        if price_per_call_usd is not None:
+            try:
+                price = float(price_per_call_usd)
+            except (TypeError, ValueError):
+                raise ValueError("price_per_call_usd must be a number.")
+            if not math.isfinite(price) or price < 0:
+                raise ValueError("price_per_call_usd must be a non-negative finite number.")
+            updates["price_per_call_usd"] = price
+
+        if not updates:
+            return agent
+
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        values = list(updates.values()) + [agent_id, owner_id]
+        conn.execute(
+            f"UPDATE agents SET {set_clause} WHERE agent_id = ? AND owner_id = ?",
+            values,
+        )
+        updated_row = conn.execute(
+            "SELECT * FROM agents WHERE agent_id = ?", (agent_id,)
+        ).fetchone()
+    return _row_to_dict(updated_row) if updated_row else None
+
+
+def delist_agent(agent_id: str, owner_id: str) -> bool:
+    """
+    Soft-delete an agent by setting status='deleted'. Only the owner can do this.
+    Returns True if found and updated, False if not found or wrong owner.
+    """
+    with _conn() as conn:
+        result = conn.execute(
+            "UPDATE agents SET status = 'deleted' WHERE agent_id = ? AND owner_id = ? AND status != 'deleted'",
+            (agent_id, owner_id),
+        )
+    return result.rowcount > 0
+
+
 def update_agent_health(agent_id: str, status: str, checked_at: str) -> None:
     """Record the result of a health check probe."""
     with _conn() as conn:

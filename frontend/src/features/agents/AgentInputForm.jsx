@@ -50,16 +50,22 @@ function deriveFields(schema) {
     const label = name.charAt(0).toUpperCase() + name.slice(1).replace(/_/g, ' ')
     let type = 'text'
     if (def.enum) type = 'select'
+    else if (def.type === 'boolean') type = 'checkbox'
+    else if (def.type === 'integer' || def.type === 'number') type = 'number'
+    else if (def.type === 'array') type = 'array'
     else if (['code', 'text', 'content', 'body', 'source'].includes(name)) type = 'textarea'
     return {
       name, label, type,
       options: def.enum,
       required: required.has(name),
-      placeholder: def.example ?? def.examples?.[0] ?? '',
+      placeholder: def.example ?? def.examples?.[0] ?? (def.type === 'array' ? 'val1, val2, val3' : ''),
       hint: def.description,
       transform: ['ticker', 'symbol'].includes(name) ? 'uppercase' : undefined,
-      default: def.default ?? '',
+      default: def.default ?? (def.type === 'boolean' ? false : ''),
       max_length: def.maxLength,
+      min: def.minimum,
+      max: def.maximum,
+      schema_type: def.type,
     }
   })
 }
@@ -78,7 +84,7 @@ export default function AgentInputForm({ agent, onSubmit, loading, mode, onModeC
 
   const [step, setStep] = useState(0)
   const [values, setValues] = useState(() =>
-    Object.fromEntries(fields.map(f => [f.name, f.default ?? '']))
+    Object.fromEntries(fields.map(f => [f.name, f.default ?? (f.type === 'checkbox' ? false : '')]))
   )
   const [privateTask, setPrivateTask] = useState(false)
   const [inputError, setInputError] = useState('')
@@ -132,9 +138,23 @@ export default function AgentInputForm({ agent, onSubmit, loading, mode, onModeC
     }
     const payload = {}
     fields.forEach(f => {
-      let v = values[f.name] ?? ''
-      if (f.transform === 'uppercase') v = String(v).toUpperCase()
-      payload[f.name] = v
+      let v = values[f.name]
+      if (f.type === 'checkbox') {
+        payload[f.name] = Boolean(v)
+      } else if (f.type === 'number') {
+        const n = f.schema_type === 'integer' ? parseInt(v, 10) : parseFloat(v)
+        payload[f.name] = isNaN(n) ? v : n
+      } else if (f.type === 'array') {
+        const str = String(v ?? '').trim()
+        if (str.startsWith('[')) {
+          try { payload[f.name] = JSON.parse(str) } catch { payload[f.name] = str }
+        } else {
+          payload[f.name] = str ? str.split(',').map(s => s.trim()).filter(Boolean) : []
+        }
+      } else {
+        if (f.transform === 'uppercase') v = String(v ?? '').toUpperCase()
+        payload[f.name] = v
+      }
     })
     const payloadError = validateInvokePayload(payload)
     if (payloadError) {
@@ -265,6 +285,44 @@ export default function AgentInputForm({ agent, onSubmit, loading, mode, onModeC
                 <option value="">Select an option…</option>
                 {(f.options ?? []).map(o => <option key={o} value={o}>{o}</option>)}
               </select>
+            ) : f.type === 'checkbox' ? (
+              <label className="invoke-panel__tf-checkbox">
+                <input
+                  id={`tf-${f.name}`}
+                  ref={inputRef}
+                  type="checkbox"
+                  checked={Boolean(values[f.name])}
+                  onChange={e => set(f.name, e.target.checked)}
+                />
+                <span>{f.label}</span>
+              </label>
+            ) : f.type === 'number' ? (
+              <input
+                id={`tf-${f.name}`}
+                ref={inputRef}
+                className="invoke-panel__tf-input"
+                type="number"
+                placeholder={f.placeholder || String(f.default ?? '')}
+                value={values[f.name]}
+                onChange={e => set(f.name, e.target.value)}
+                required={f.required}
+                min={f.min}
+                max={f.max}
+                step={f.schema_type === 'integer' ? 1 : 'any'}
+                onKeyDown={handleKeyDown}
+                autoComplete="off"
+              />
+            ) : f.type === 'array' ? (
+              <textarea
+                id={`tf-${f.name}`}
+                ref={inputRef}
+                className="invoke-panel__tf-textarea invoke-panel__tf-textarea--short"
+                placeholder={f.placeholder || 'val1, val2, val3'}
+                value={values[f.name]}
+                onChange={e => set(f.name, e.target.value)}
+                required={f.required}
+                rows={2}
+              />
             ) : (
               <input
                 id={`tf-${f.name}`}

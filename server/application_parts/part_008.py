@@ -5,6 +5,52 @@
 # _resolve_agent_pricing, _maybe_refund_pricing_diff) live in part_004.
 
 
+def _coerce_payload_to_schema(payload: dict, schema: dict) -> dict:
+    """
+    Coerce string values in payload to the types declared in JSON Schema properties.
+    HTML form inputs always arrive as strings; this lets integer/number/boolean
+    fields pass jsonschema validation without a 422 error.
+    Only touches top-level properties — nested objects are not recursed.
+    """
+    props = schema.get("properties")
+    if not isinstance(props, dict) or not payload:
+        return payload
+    out = dict(payload)
+    for key, defn in props.items():
+        if key not in out:
+            continue
+        raw = out[key]
+        if not isinstance(raw, str):
+            continue
+        declared = defn.get("type") if isinstance(defn, dict) else None
+        if declared == "integer":
+            try:
+                out[key] = int(raw)
+            except (ValueError, TypeError):
+                pass
+        elif declared == "number":
+            try:
+                out[key] = float(raw)
+            except (ValueError, TypeError):
+                pass
+        elif declared == "boolean":
+            out[key] = raw.lower() not in ("", "false", "0", "no")
+        elif declared == "array":
+            # Accept JSON-encoded arrays or comma-separated strings
+            stripped = raw.strip()
+            if stripped.startswith("["):
+                try:
+                    import json as _json
+                    out[key] = _json.loads(stripped)
+                except Exception:
+                    pass
+            elif stripped:
+                out[key] = [s.strip() for s in stripped.split(",") if s.strip()]
+            else:
+                out[key] = []
+    return out
+
+
 @app.post(
     "/registry/search",
     response_model=core_models.RegistrySearchResponse,
@@ -542,6 +588,9 @@ def registry_call(
     # --- Input schema validation (if agent declared one) ---
     agent_input_schema = agent.get("input_schema")
     if isinstance(agent_input_schema, dict) and agent_input_schema:
+        # Coerce string values from HTML form inputs to the types declared in the schema.
+        # e.g. "8" → 8 for fields with "type": "integer".
+        payload = _coerce_payload_to_schema(payload, agent_input_schema)
         try:
             import jsonschema as _jsc
             _jsc.validate(instance=payload, schema=agent_input_schema)

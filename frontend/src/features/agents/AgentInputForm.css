@@ -111,6 +111,29 @@
 }
 .invoke-panel__tf-select:focus { border-color: var(--accent); }
 
+/* Checkbox field */
+.invoke-panel__tf-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 8px 0;
+}
+.invoke-panel__tf-checkbox input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+/* Short textarea for array inputs */
+.invoke-panel__tf-textarea--short {
+  min-height: 60px;
+}
+
 /* Action row */
 .invoke-panel__q-row {
   display: flex;

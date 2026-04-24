@@ -666,6 +666,67 @@ def public_doc_content(doc_slug: str) -> JSONResponse:
     })
 
 
+@app.post(
+    "/public/docs/ask",
+    tags=["docs"],
+    summary="Ask an AI question grounded in a documentation page.",
+)
+@limiter.limit("20/minute", key_func=get_remote_address)
+def public_docs_ask(request: Request, body: dict) -> JSONResponse:
+    question = str(body.get("question") or "").strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="question is required.")
+    if len(question) > 1000:
+        raise HTTPException(status_code=400, detail="question must be 1000 characters or fewer.")
+
+    doc_slug = str(body.get("doc_slug") or "").strip()
+    context_text = ""
+    if doc_slug:
+        doc = _find_public_doc(doc_slug)
+        if doc:
+            try:
+                with open(doc["full_path"], encoding="utf-8") as fh:
+                    context_text = fh.read()[:12000]
+            except OSError:
+                pass
+    if not context_text:
+        # Fallback: concatenate all docs (truncated)
+        all_entries = _public_docs_entries()
+        parts = []
+        for entry in all_entries:
+            try:
+                with open(entry["full_path"], encoding="utf-8") as fh:
+                    parts.append(fh.read()[:3000])
+            except OSError:
+                pass
+        context_text = "\n\n---\n\n".join(parts)[:12000]
+
+    system_prompt = (
+        "You are a helpful assistant for the Aztea platform. "
+        "Answer questions accurately and concisely using only the documentation provided. "
+        "If the answer is not in the docs, say so. Keep answers under 300 words."
+    )
+    user_msg = f"Documentation:\n{context_text}\n\nQuestion: {question}"
+    try:
+        from core.llm import CompletionRequest as _CR, Message as _Msg, run_with_fallback as _rwf
+        raw = _rwf(
+            _CR(
+                model="",
+                messages=[
+                    _Msg(role="system", content=system_prompt),
+                    _Msg(role="user", content=user_msg),
+                ],
+                temperature=0.2,
+                max_tokens=600,
+            )
+        )
+        answer = raw.text.strip()
+    except Exception as exc:
+        _LOG.warning("docs/ask LLM failure: %s", exc)
+        raise HTTPException(status_code=503, detail="AI service temporarily unavailable.") from None
+    return JSONResponse({"answer": answer})
+
+
 # ---------------------------------------------------------------------------
 # Stripe: create checkout session + webhook
 # ---------------------------------------------------------------------------

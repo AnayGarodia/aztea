@@ -876,3 +876,62 @@ def registry_list_mine(
     return JSONResponse(content={"agents": [_agent_response(a, caller, bulk_stats.get(a["agent_id"])) for a in agents], "count": len(agents)})
 
 
+class AgentUpdateRequest(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    tags: list[str] | None = None
+    price_per_call_usd: float | None = None
+
+
+@app.patch(
+    "/registry/agents/{agent_id}",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(400, 401, 403, 404, 429, 500),
+    tags=["Registry"],
+    summary="Update mutable fields on your own agent.",
+)
+@limiter.limit("30/minute")
+def registry_update_agent(
+    request: Request,
+    agent_id: str,
+    body: AgentUpdateRequest,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    _require_scope(caller, "worker")
+    try:
+        updated = registry.update_agent(
+            agent_id,
+            caller["owner_id"],
+            name=body.name,
+            description=body.description,
+            tags=body.tags,
+            price_per_call_usd=body.price_per_call_usd,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Agent not found or you don't own it.")
+    bulk_stats = _compute_bulk_agent_stats([agent_id])
+    return JSONResponse(content=_agent_response(updated, caller, bulk_stats.get(agent_id)))
+
+
+@app.delete(
+    "/registry/agents/{agent_id}",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(401, 403, 404, 429, 500),
+    tags=["Registry"],
+    summary="Delist (soft-delete) your own agent.",
+)
+@limiter.limit("10/minute")
+def registry_delist_agent(
+    request: Request,
+    agent_id: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    _require_scope(caller, "worker")
+    ok = registry.delist_agent(agent_id, caller["owner_id"])
+    if not ok:
+        raise HTTPException(status_code=404, detail="Agent not found or you don't own it.")
+    return JSONResponse(content={"delisted": True, "agent_id": agent_id})
+
+

@@ -8,10 +8,11 @@ import Button from '../ui/Button'
 import Skeleton from '../ui/Skeleton'
 import Stat from '../ui/Stat'
 import EmptyState from '../ui/EmptyState'
+import Input from '../ui/Input'
 import Reveal from '../ui/motion/Reveal'
-import { fetchMyAgents, fetchAgentEarnings } from '../api'
+import { fetchMyAgents, fetchAgentEarnings, updateAgent, delistAgent } from '../api'
 import { useAuth } from '../context/AuthContext'
-import { Plus, Bot, ExternalLink, ChevronDown } from 'lucide-react'
+import { Plus, Bot, ExternalLink, ChevronDown, Edit2, Trash2, Play, Copy, Check, X } from 'lucide-react'
 import './MyAgentsPage.css'
 
 const STATUS_VARIANT = {
@@ -45,8 +46,87 @@ function fmtLatency(sec) {
   return `${sec}s`
 }
 
-function AgentRow({ agent, earnings, onClick }) {
+function EditModal({ agent, onSave, onClose }) {
+  const [name, setName] = useState(agent.name ?? '')
+  const [description, setDescription] = useState(agent.description ?? '')
+  const [price, setPrice] = useState(String(agent.price_per_call_usd ?? ''))
+  const [tags, setTags] = useState(
+    Array.isArray(agent.tags) ? agent.tags.join(', ')
+    : typeof agent.tags === 'string' ? JSON.parse(agent.tags || '[]').join(', ')
+    : ''
+  )
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  const handleSave = async (e) => {
+    e.preventDefault()
+    setSaving(true)
+    setError('')
+    try {
+      const tagList = tags.split(',').map(t => t.trim()).filter(Boolean)
+      const priceNum = parseFloat(price)
+      if (isNaN(priceNum) || priceNum < 0) {
+        setError('Price must be a non-negative number.')
+        return
+      }
+      await onSave({ name: name.trim(), description: description.trim(), tags: tagList, price_per_call_usd: priceNum })
+    } catch (err) {
+      setError(err?.message || 'Save failed.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="myagents__modal-backdrop" onClick={onClose}>
+      <div className="myagents__modal" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
+        <div className="myagents__modal-head">
+          <span className="myagents__modal-title">Edit agent</span>
+          <button type="button" className="myagents__modal-close" onClick={onClose} aria-label="Close"><X size={14} /></button>
+        </div>
+        <form className="myagents__modal-body" onSubmit={handleSave}>
+          <Input label="Name" value={name} onChange={e => setName(e.target.value)} required maxLength={80} />
+          <div className="myagents__modal-field">
+            <label className="myagents__modal-label">Description</label>
+            <textarea
+              className="myagents__modal-textarea"
+              value={description}
+              onChange={e => setDescription(e.target.value)}
+              maxLength={1000}
+              rows={3}
+            />
+          </div>
+          <Input
+            label="Tags (comma-separated)"
+            value={tags}
+            onChange={e => setTags(e.target.value)}
+            placeholder="research, api, tool"
+          />
+          <Input
+            label="Price per call (USD)"
+            type="number"
+            value={price}
+            onChange={e => setPrice(e.target.value)}
+            min={0}
+            step="0.0001"
+          />
+          {error && <p className="myagents__modal-error">{error}</p>}
+          <div className="myagents__modal-actions">
+            <Button type="button" variant="secondary" size="sm" onClick={onClose}>Cancel</Button>
+            <Button type="submit" variant="primary" size="sm" loading={saving}>Save changes</Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+function AgentRow({ agent, earnings, onNavigate, onRefresh, apiKey }) {
   const [open, setOpen] = useState(false)
+  const [editOpen, setEditOpen] = useState(false)
+  const [delisting, setDelisting] = useState(false)
+  const [confirmDelist, setConfirmDelist] = useState(false)
+  const [copied, setCopied] = useState(false)
 
   const tags = Array.isArray(agent.tags)
     ? agent.tags
@@ -59,6 +139,34 @@ function AgentRow({ agent, earnings, onClick }) {
     ? '$' + (earnedCents / 100).toFixed(2)
     : '--'
 
+  const handleCopyId = async () => {
+    try {
+      await navigator.clipboard.writeText(agent.agent_id)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {
+      // ignore
+    }
+  }
+
+  const handleSaveEdit = async (data) => {
+    await updateAgent(apiKey, agent.agent_id, data)
+    setEditOpen(false)
+    onRefresh()
+  }
+
+  const handleDelist = async () => {
+    if (!confirmDelist) { setConfirmDelist(true); return }
+    setDelisting(true)
+    try {
+      await delistAgent(apiKey, agent.agent_id)
+      onRefresh()
+    } catch {
+      setDelisting(false)
+      setConfirmDelist(false)
+    }
+  }
+
   return (
     <motion.div
       className="myagents__row-wrap"
@@ -67,17 +175,13 @@ function AgentRow({ agent, earnings, onClick }) {
       transition={{ duration: prefersReducedMotion() ? 0 : 0.2 }}
     >
       <div className="myagents__row-header">
-        {/* Navigation area */}
         <div
           className="myagents__row"
           role="button"
           tabIndex={0}
-          onClick={onClick}
+          onClick={onNavigate}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault()
-              onClick()
-            }
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onNavigate() }
           }}
         >
           <div className="myagents__row-icon">
@@ -103,13 +207,11 @@ function AgentRow({ agent, earnings, onClick }) {
           </div>
         </div>
 
-        {/* Expand toggle */}
         <button
           className="myagents__expand-btn"
           onClick={(e) => { e.stopPropagation(); setOpen(o => !o) }}
-          aria-label={open ? 'Hide analytics' : 'Show analytics'}
+          aria-label={open ? 'Collapse' : 'Expand'}
           aria-expanded={open}
-          aria-controls={`analytics-panel-${agent.agent_id}`}
           type="button"
         >
           <ChevronDown
@@ -119,7 +221,6 @@ function AgentRow({ agent, earnings, onClick }) {
         </button>
       </div>
 
-      {/* Collapsible analytics panel */}
       <AnimatePresence>
         {open && (
           <motion.div
@@ -133,29 +234,81 @@ function AgentRow({ agent, earnings, onClick }) {
           >
             <div className="myagents__panel-inner">
               <div className="myagents__panel-grid">
-                <Stat
-                  label="Total calls"
-                  value={agent.total_calls ?? '--'}
-                />
+                <Stat label="Total calls" value={agent.total_calls ?? '--'} />
                 <Stat
                   label="30d completion"
                   value={fmtCompletion(agent.job_completion_rate)}
                   variant={completionVariant(agent.job_completion_rate)}
                 />
-                <Stat
-                  label="Median latency"
-                  value={fmtLatency(agent.median_latency_seconds)}
-                />
+                <Stat label="Median latency" value={fmtLatency(agent.median_latency_seconds)} />
                 <Stat
                   label="Revenue earned"
                   value={earnedFmt}
                   variant={typeof earnedCents === 'number' && earnedCents > 0 ? 'positive' : ''}
                 />
               </div>
+
+              {/* Management actions */}
+              <div className="myagents__actions">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  icon={<Play size={12} />}
+                  onClick={() => onNavigate()}
+                >
+                  Test / invoke
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  icon={<Edit2 size={12} />}
+                  onClick={() => setEditOpen(true)}
+                >
+                  Edit
+                </Button>
+                <button
+                  type="button"
+                  className="myagents__copy-id"
+                  onClick={handleCopyId}
+                  title="Copy agent ID"
+                >
+                  {copied ? <Check size={12} /> : <Copy size={12} />}
+                  <span>{copied ? 'Copied' : agent.agent_id.slice(0, 8) + '…'}</span>
+                </button>
+                {status !== 'deleted' && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    icon={<Trash2 size={12} />}
+                    loading={delisting}
+                    onClick={handleDelist}
+                    style={{ color: confirmDelist ? 'var(--negative)' : undefined }}
+                  >
+                    {confirmDelist ? 'Confirm delist' : 'Delist'}
+                  </Button>
+                )}
+                {confirmDelist && (
+                  <button
+                    type="button"
+                    className="myagents__cancel-delist"
+                    onClick={() => setConfirmDelist(false)}
+                  >
+                    Cancel
+                  </button>
+                )}
+              </div>
             </div>
           </motion.div>
         )}
       </AnimatePresence>
+
+      {editOpen && (
+        <EditModal
+          agent={agent}
+          onSave={handleSaveEdit}
+          onClose={() => setEditOpen(false)}
+        />
+      )}
     </motion.div>
   )
 }
@@ -233,16 +386,10 @@ export default function MyAgentsPage() {
                       />
                     </div>
                     <div style={{ flex: 1 }}>
-                      <Stat
-                        label="Total calls"
-                        value={loading ? '-' : totalCalls.toLocaleString()}
-                      />
+                      <Stat label="Total calls" value={loading ? '-' : totalCalls.toLocaleString()} />
                     </div>
                     <div style={{ flex: 1 }}>
-                      <Stat
-                        label="Active agents"
-                        value={loading ? '-' : activeAgentCount}
-                      />
+                      <Stat label="Active agents" value={loading ? '-' : activeAgentCount} />
                     </div>
                   </div>
                 </Card.Body>
@@ -281,7 +428,9 @@ export default function MyAgentsPage() {
                         key={agent.agent_id}
                         agent={agent}
                         earnings={earningsMap[agent.agent_id] ?? null}
-                        onClick={() => navigate(`/agents/${agent.agent_id}`)}
+                        apiKey={apiKey}
+                        onNavigate={() => navigate(`/agents/${agent.agent_id}`)}
+                        onRefresh={load}
                       />
                     ))}
                   </div>
@@ -294,7 +443,7 @@ export default function MyAgentsPage() {
             <Reveal delay={0.1}>
               <div className="myagents__hint">
                 <ExternalLink size={12} />
-                Click an agent to see its public listing, job history, and trust score.
+                Click an agent row to see its public listing, job history, and trust score.
               </div>
             </Reveal>
           )}
