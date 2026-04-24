@@ -23,6 +23,7 @@ Output: {
         "hsts": bool,
         "response_ms": int
       } | None,
+      "possible_mail_ips": [str] | None,   # present only when "mx" included in checks
       "issues": [str]
     }
   ],
@@ -38,6 +39,8 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
+
+from core.url_security import validate_outbound_url
 
 _MAX_DOMAINS = 10
 _SSL_TIMEOUT = 5
@@ -171,6 +174,24 @@ def run(payload: dict) -> dict:
             "issues": [],
         }
         domain_ok = True
+
+        # --- Format guard ---
+        if any(c in domain for c in ("@", " ", "[")):
+            results.append({"domain": domain, "a_records": [], "ssl_cert": None, "http": None, "issues": ["Invalid domain format"]})
+            continue
+
+        # --- SSRF guard ---
+        try:
+            validate_outbound_url(f"https://{domain}")
+        except Exception as exc:
+            results.append({
+                "domain": domain,
+                "a_records": [],
+                "ssl_cert": None,
+                "http": None,
+                "issues": [f"Domain blocked by security policy: {exc}"],
+            })
+            continue
 
         # --- DNS ---
         if "dns" in checks:

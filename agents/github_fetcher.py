@@ -24,6 +24,8 @@ Output: {
 }
 """
 
+import posixpath
+
 import httpx
 
 from core.llm import CompletionRequest, Message, run_with_fallback
@@ -61,13 +63,26 @@ def run(payload: dict) -> dict:
     if not raw_paths or not isinstance(raw_paths, list):
         return {"error": "paths must be a non-empty list of file path strings"}
     if len(raw_paths) > _MAX_PATHS:
-        raise ValueError(f"paths list exceeds maximum of {_MAX_PATHS} entries")
+        return {"error": f"paths list exceeds maximum of {_MAX_PATHS} entries"}
 
-    paths = [str(p).strip() for p in raw_paths if str(p).strip()]
+    branch = str(payload.get("branch", "main")).strip() or "main"
+
+    # Validate branch contains no special characters
+    if any(c in branch for c in ("?", "#", "..", "/")):
+        return {"error": "branch name contains invalid characters"}
+
+    # Sanitize each path: normalize to prevent traversal
+    sanitized_paths = []
+    for p in raw_paths:
+        normalized = posixpath.normpath("/" + str(p).strip()).lstrip("/")
+        if not normalized or normalized == ".":
+            return {"error": f"invalid path: {p!r}"}
+        sanitized_paths.append(normalized)
+    paths = sanitized_paths
+
     if not paths:
         return {"error": "paths list contains no valid entries"}
 
-    branch = str(payload.get("branch", "main")).strip() or "main"
     summarize = bool(payload.get("summarize", False))
 
     files: list[dict] = []

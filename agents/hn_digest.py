@@ -75,9 +75,8 @@ def _parse_topics(text: str) -> list[str]:
             raw = line.split(":", 1)[1].strip()
             topics = [t.strip() for t in raw.split(",") if t.strip()]
             return topics[:5]
-    # Fallback: first 5 words of the synthesis as topic labels
-    words = text.split()
-    return words[:5]
+    # Fallback: no TOPICS line found
+    return []
 
 
 def run(payload: dict) -> dict:
