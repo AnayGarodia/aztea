@@ -14,7 +14,12 @@ if str(_SDK_PATH) not in sys.path:
     sys.path.insert(0, str(_SDK_PATH))
 
 from aztea import AzteaClient  # noqa: E402
-from aztea.errors import AzteaError  # noqa: E402
+try:  # noqa: E402
+    # sdks/python package layout
+    from aztea.errors import AzteaError
+except ModuleNotFoundError:  # noqa: E402
+    # sdks/python-sdk package layout
+    from aztea.exceptions import AzteaError
 
 
 class AzteaAPIError(Exception):
