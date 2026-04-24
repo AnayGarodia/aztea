@@ -69,20 +69,7 @@ import groq as _groq
 
 from agents import codereview as agent_codereview
 from agents import cve_lookup as agent_cve_lookup
-from agents import datainsights as agent_datainsights
-from agents import dependency_scanner as agent_dependency_scanner
-from agents import healthcare_expert as agent_healthcare_expert
 from agents import image_generator as agent_image_generator
-from agents import incident_response as agent_incident_response
-from agents import negotiation as agent_negotiation
-from agents import portfolio as agent_portfolio
-from agents import product as agent_product
-from agents import scenario as agent_scenario
-from agents import secrets_detection as agent_secrets_detection
-from agents import sqlbuilder as agent_sqlbuilder
-from agents import static_analysis as agent_static_analysis
-from agents import system_design as agent_system_design
-from agents import textintel as agent_textintel
 from agents import video_storyboard as agent_video_storyboard
 from agents import wiki as agent_wiki
 from agents import arxiv_research as agent_arxiv_research
@@ -132,10 +119,6 @@ from core.models import (
     JobRetryRequest,
     JobsSweepRequest,
     MCPInvokeRequest,
-    NegotiationRequest,
-    PortfolioRequest,
-    ProductStrategyRequest,
-    ScenarioRequest,
     AdminDisputeRuleRequest,
     OnboardingValidateRequest,
     ReconciliationRunRequest,
@@ -144,7 +127,6 @@ from core.models import (
     AgentKeyCreateRequest,
     AgentReviewDecisionRequest,
     AuthLegalAcceptRequest,
-    TextIntelRequest,
     UserLoginRequest,
     UserRegisterRequest,
     WikiRequest,
@@ -255,24 +237,9 @@ except ImportError:
 # Deterministic UUIDs for built-in agents
 _FINANCIAL_AGENT_ID        = "b7741251-d7ac-5423-b57d-8e12cd80885f"
 _CODEREVIEW_AGENT_ID       = "8cea848f-a165-5d6c-b1a0-7d14fff77d14"
-_TEXTINTEL_AGENT_ID        = "3daebf56-1873-5e7c-ba4f-7e69c51aefac"
 _WIKI_AGENT_ID             = "9a175aa2-8ffd-52f7-aae0-5a33fc88db83"
-_NEGOTIATION_AGENT_ID      = "39b2867f-4910-5b5b-9492-bbb3f4ae4a06"
-_SCENARIO_AGENT_ID         = "d2e672ae-2a2e-52f9-8e60-10a644ba49bb"
-_PRODUCT_AGENT_ID          = "6dd1d7ff-d838-5d35-b633-da89602fea7e"
-_PORTFOLIO_AGENT_ID        = "4fa63abf-fea3-513b-9203-bc09ff668a44"
-_RESUME_AGENT_ID           = "17076c9b-ae5c-534d-9054-705fc9afc4b3"
-_SQLBUILDER_AGENT_ID       = "b1de8c04-f82c-506c-9305-d67dfaea2e4f"
-_DATAINSIGHTS_AGENT_ID     = "51214278-5a31-5de8-8514-5a2c07ccfa4d"
-_EMAILWRITER_AGENT_ID      = "07891578-d49e-54b2-9297-db4a453f1fbb"
-_SECRETS_AGENT_ID          = "b52b13ea-d7f7-5030-89b7-eed22dc0a9fa"
-_STATICANALYSIS_AGENT_ID   = "e2b69985-1f53-5ae3-aba6-df38d5f024da"
-_DEPSCANNER_AGENT_ID       = "9adba8e2-fa19-5160-9e67-143e0811ba91"
 _CVELOOKUP_AGENT_ID        = "a3e239dd-ea92-556b-9c95-0a213a3daf59"
 _QUALITY_JUDGE_AGENT_ID    = "9cf0d9d0-4a10-58c9-b97a-6b5f81b1cf33"
-_SYSTEM_DESIGN_AGENT_ID    = "eda2e80c-78a1-5a94-ae2b-e450858a7efa"
-_INCIDENT_RESPONSE_AGENT_ID = "5cceca4c-85f2-5b2d-bc06-3b352aaf0c33"
-_HEALTHCARE_EXPERT_AGENT_ID = "40d9012b-f611-502f-a73b-ef631efed163"
 _IMAGE_GENERATOR_AGENT_ID  = "4fb167bd-b474-5ea5-bd5c-8976dfe799ae"
 _VIDEO_STORYBOARD_AGENT_ID = "c12994de-cde9-514a-9c07-a3833b25bb1f"
 _ARXIV_RESEARCH_AGENT_ID   = "9e673f6e-9115-516f-b41b-5af8bcbf15bd"
@@ -286,22 +253,9 @@ def _normalize_endpoint_ref(value: str | None) -> str:
 _BUILTIN_INTERNAL_ENDPOINTS = {
     _FINANCIAL_AGENT_ID: "internal://financial",
     _CODEREVIEW_AGENT_ID: "internal://code-review",
-    _TEXTINTEL_AGENT_ID: "internal://text-intel",
     _WIKI_AGENT_ID: "internal://wiki",
-    _NEGOTIATION_AGENT_ID: "internal://negotiation",
-    _SCENARIO_AGENT_ID: "internal://scenario",
-    _PRODUCT_AGENT_ID: "internal://product-strategy",
-    _PORTFOLIO_AGENT_ID: "internal://portfolio",
     _QUALITY_JUDGE_AGENT_ID: "internal://quality-judge",
-    _SQLBUILDER_AGENT_ID: "internal://sql-builder",
-    _DATAINSIGHTS_AGENT_ID: "internal://data-insights",
-    _SECRETS_AGENT_ID: "internal://secrets-detection",
-    _STATICANALYSIS_AGENT_ID: "internal://static-analysis",
-    _DEPSCANNER_AGENT_ID: "internal://dependency-scanner",
     _CVELOOKUP_AGENT_ID: "internal://cve-lookup",
-    _SYSTEM_DESIGN_AGENT_ID: "internal://system-design-reviewer",
-    _INCIDENT_RESPONSE_AGENT_ID: "internal://incident-response-commander",
-    _HEALTHCARE_EXPERT_AGENT_ID: "internal://healthcare-expert",
     _IMAGE_GENERATOR_AGENT_ID: "internal://image-generator",
     _VIDEO_STORYBOARD_AGENT_ID: "internal://video-storyboard-generator",
     _ARXIV_RESEARCH_AGENT_ID:  "internal://arxiv-research",
@@ -311,22 +265,9 @@ _BUILTIN_INTERNAL_ENDPOINTS = {
 _BUILTIN_LEGACY_ROUTE_ENDPOINTS = {
     _FINANCIAL_AGENT_ID: f"{_SERVER_BASE_URL}/agents/financial",
     _CODEREVIEW_AGENT_ID: f"{_SERVER_BASE_URL}/agents/code-review",
-    _TEXTINTEL_AGENT_ID: f"{_SERVER_BASE_URL}/agents/text-intel",
     _WIKI_AGENT_ID: f"{_SERVER_BASE_URL}/agents/wiki",
-    _NEGOTIATION_AGENT_ID: f"{_SERVER_BASE_URL}/agents/negotiation",
-    _SCENARIO_AGENT_ID: f"{_SERVER_BASE_URL}/agents/scenario",
-    _PRODUCT_AGENT_ID: f"{_SERVER_BASE_URL}/agents/product-strategy",
-    _PORTFOLIO_AGENT_ID: f"{_SERVER_BASE_URL}/agents/portfolio",
     _QUALITY_JUDGE_AGENT_ID: f"{_SERVER_BASE_URL}/agents/quality-judge",
-    _SQLBUILDER_AGENT_ID: f"{_SERVER_BASE_URL}/agents/sql-builder",
-    _DATAINSIGHTS_AGENT_ID: f"{_SERVER_BASE_URL}/agents/data-insights",
-    _SECRETS_AGENT_ID: f"{_SERVER_BASE_URL}/agents/secrets-detection",
-    _STATICANALYSIS_AGENT_ID: f"{_SERVER_BASE_URL}/agents/static-analysis",
-    _DEPSCANNER_AGENT_ID: f"{_SERVER_BASE_URL}/agents/dependency-scanner",
     _CVELOOKUP_AGENT_ID: f"{_SERVER_BASE_URL}/agents/cve-lookup",
-    _SYSTEM_DESIGN_AGENT_ID: f"{_SERVER_BASE_URL}/agents/system-design-reviewer",
-    _INCIDENT_RESPONSE_AGENT_ID: f"{_SERVER_BASE_URL}/agents/incident-response-commander",
-    _HEALTHCARE_EXPERT_AGENT_ID: f"{_SERVER_BASE_URL}/agents/healthcare-expert",
     _IMAGE_GENERATOR_AGENT_ID: f"{_SERVER_BASE_URL}/agents/image-generator",
     _VIDEO_STORYBOARD_AGENT_ID: f"{_SERVER_BASE_URL}/agents/video-storyboard-generator",
     _ARXIV_RESEARCH_AGENT_ID:  f"{_SERVER_BASE_URL}/agents/arxiv-research",
@@ -351,7 +292,7 @@ _CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
         _PYTHON_EXECUTOR_AGENT_ID,  # subprocess sandbox
         _WEB_RESEARCHER_AGENT_ID,   # HTTP fetch + parse
         _IMAGE_GENERATOR_AGENT_ID,  # OpenAI / Replicate API
-        _CODEREVIEW_AGENT_ID,      # structured expert output, high quality prompt
+        _CODEREVIEW_AGENT_ID,       # structured expert output, high quality prompt
     }
 )
 _CURATED_BUILTIN_AGENT_IDS = frozenset(set(_CURATED_PUBLIC_BUILTIN_AGENT_IDS) | {_QUALITY_JUDGE_AGENT_ID})

@@ -819,53 +819,8 @@ def _invoke_code_review_agent(body: CodeReviewRequest) -> dict:
     return agent_codereview.run(body.code, body.language, body.focus, getattr(body, "context", ""))
 
 
-def _invoke_text_intel_agent(body: TextIntelRequest) -> dict:
-    return agent_textintel.run(body.text, body.mode)
-
-
 def _invoke_wiki_agent(body: WikiRequest) -> dict:
     return agent_wiki.run(body.topic, depth=body.depth)
-
-
-def _invoke_negotiation_agent(body: NegotiationRequest) -> dict:
-    return agent_negotiation.run(
-        objective=body.objective,
-        counterparty_profile=body.counterparty_profile,
-        constraints=_coerce_string_list(body.constraints),
-        context=body.context,
-        style=getattr(body, "style", "principled"),
-    )
-
-
-def _invoke_scenario_agent(body: ScenarioRequest) -> dict:
-    return agent_scenario.run(
-        decision=body.decision,
-        assumptions=body.assumptions,
-        horizon=body.horizon,
-        risk_tolerance=body.risk_tolerance,
-        key_variables=getattr(body, "key_variables", None),
-    )
-
-
-def _invoke_product_strategy_agent(body: ProductStrategyRequest) -> dict:
-    return agent_product.run(
-        product_idea=body.product_idea,
-        target_users=body.target_users,
-        market_context=body.market_context,
-        horizon_quarters=body.horizon_quarters,
-        stage=getattr(body, "stage", "seed"),
-    )
-
-
-def _invoke_portfolio_agent(body: PortfolioRequest) -> dict:
-    return agent_portfolio.run(
-        investment_goal=body.investment_goal,
-        risk_profile=body.risk_profile,
-        time_horizon_years=body.time_horizon_years,
-        capital_usd=body.capital_usd,
-        existing_holdings=getattr(body, "existing_holdings", ""),
-        constraints=getattr(body, "constraints", ""),
-    )
 
 
 @app.post(

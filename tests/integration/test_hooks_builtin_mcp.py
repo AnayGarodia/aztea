@@ -224,27 +224,13 @@ def test_builtin_agents_registered_to_system_owner_with_internal_endpoints(clien
         assert isinstance(agent.get("output_examples"), list)
         assert len(agent["output_examples"]) >= 1
 
-    for deprecated_id in (
-        server._TEXTINTEL_AGENT_ID,
-        server._NEGOTIATION_AGENT_ID,
-        server._SCENARIO_AGENT_ID,
-        server._PRODUCT_AGENT_ID,
-        server._PORTFOLIO_AGENT_ID,
-        server._RESUME_AGENT_ID,
-        server._EMAILWRITER_AGENT_ID,
-        server._SQLBUILDER_AGENT_ID,
-        server._DATAINSIGHTS_AGENT_ID,
-        server._SECRETS_AGENT_ID,
-        server._STATICANALYSIS_AGENT_ID,
-        server._DEPSCANNER_AGENT_ID,
-        server._SYSTEM_DESIGN_AGENT_ID,
-        server._INCIDENT_RESPONSE_AGENT_ID,
-        server._HEALTHCARE_EXPERT_AGENT_ID,
+    # Video storyboard is still a builtin but not in the curated public set
+    for non_curated_id in (
         server._VIDEO_STORYBOARD_AGENT_ID,
     ):
-        agent = registry.get_agent(deprecated_id, include_unapproved=True)
+        agent = registry.get_agent(non_curated_id, include_unapproved=True)
         if agent is not None:
-            assert agent["status"] == "suspended"
+            assert str(agent["endpoint_url"]).startswith("internal://")
 
 
 def test_registry_call_routes_internal_builtin_without_http_and_records_job(client, monkeypatch):

@@ -20,48 +20,17 @@ def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict
     if agent_id == _CODEREVIEW_AGENT_ID:
         body = CodeReviewRequest.model_validate(payload)
         return _invoke_code_review_agent(body)
-    if agent_id == _TEXTINTEL_AGENT_ID:
-        body = TextIntelRequest.model_validate(payload)
-        return _invoke_text_intel_agent(body)
     if agent_id == _WIKI_AGENT_ID:
         body = WikiRequest.model_validate(payload)
         return _invoke_wiki_agent(body)
-    if agent_id == _NEGOTIATION_AGENT_ID:
-        body = NegotiationRequest.model_validate(payload)
-        return _invoke_negotiation_agent(body)
-    if agent_id == _SCENARIO_AGENT_ID:
-        body = ScenarioRequest.model_validate(payload)
-        return _invoke_scenario_agent(body)
-    if agent_id == _PRODUCT_AGENT_ID:
-        body = ProductStrategyRequest.model_validate(payload)
-        return _invoke_product_strategy_agent(body)
-    if agent_id == _PORTFOLIO_AGENT_ID:
-        body = PortfolioRequest.model_validate(payload)
-        return _invoke_portfolio_agent(body)
     if agent_id == _QUALITY_JUDGE_AGENT_ID:
         return judges.run_quality_judgment(
             input_payload=payload.get("input_payload") if isinstance(payload, dict) else {},
             output_payload=payload.get("output_payload") if isinstance(payload, dict) else {},
             agent_description=str(payload.get("agent_description") or "") if isinstance(payload, dict) else "",
         )
-    if agent_id == _SQLBUILDER_AGENT_ID:
-        return agent_sqlbuilder.run(payload)
-    if agent_id == _DATAINSIGHTS_AGENT_ID:
-        return agent_datainsights.run(payload)
-    if agent_id == _SECRETS_AGENT_ID:
-        return agent_secrets_detection.run(payload)
-    if agent_id == _STATICANALYSIS_AGENT_ID:
-        return agent_static_analysis.run(payload)
-    if agent_id == _DEPSCANNER_AGENT_ID:
-        return agent_dependency_scanner.run(payload)
     if agent_id == _CVELOOKUP_AGENT_ID:
         return agent_cve_lookup.run(payload)
-    if agent_id == _SYSTEM_DESIGN_AGENT_ID:
-        return agent_system_design.run(payload)
-    if agent_id == _INCIDENT_RESPONSE_AGENT_ID:
-        return agent_incident_response.run(payload)
-    if agent_id == _HEALTHCARE_EXPERT_AGENT_ID:
-        return agent_healthcare_expert.run(payload)
     if agent_id == _IMAGE_GENERATOR_AGENT_ID:
         return agent_image_generator.run(payload)
     if agent_id == _VIDEO_STORYBOARD_AGENT_ID:
