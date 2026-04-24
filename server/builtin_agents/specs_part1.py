@@ -255,6 +255,17 @@ def load_builtin_specs_part1() -> list[dict[str, Any]]:
             "summary": {"type": "string"},
         },
     },
+    "variable_pricing": {
+        "model": "tiered",
+        "field": "cve_ids",
+        "field_type": "array",
+        "unit_label": "CVE",
+        "tiers": [
+            {"max_units": 1,  "price_usd": 0.01},
+            {"max_units": 5,  "price_usd": 0.03},
+            {"max_units": 10, "price_usd": 0.06},
+        ],
+    },
     "output_examples": [
         {
             "input": {"packages": ["lodash@4.17.20", "express@4.17.1"]},

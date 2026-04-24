@@ -273,6 +273,14 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
         },
         required=["query", "papers", "synthesis"],
     ),
+    "variable_pricing": {
+        "model": "per_unit",
+        "field": "max_results",
+        "field_type": "scalar",
+        "unit_label": "paper",
+        "rate_usd": 0.03,
+        "min_usd": 0.05,
+    },
     "output_examples": [
         {
             "input": {"query": "transformer attention self-supervised", "max_results": 5},
@@ -330,6 +338,14 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
         },
         required=["stdout", "exit_code"],
     ),
+    "variable_pricing": {
+        "model": "per_unit",
+        "field": "timeout",
+        "field_type": "scalar",
+        "unit_label": "second",
+        "rate_usd": 0.02,
+        "min_usd": 0.05,
+    },
     "output_examples": [
         {
             "input": {"code": "import math\nresult = [math.factorial(n) for n in range(1, 11)]\nprint(result)", "explain": True},
@@ -382,6 +398,18 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
         },
         required=["synthesis", "per_url_findings", "billing_units_actual"],
     ),
+    "variable_pricing": {
+        "model": "tiered",
+        "field": "urls",
+        "field_type": "array",
+        "unit_label": "URL",
+        "tiers": [
+            {"max_units": 1,  "price_usd": 0.02},
+            {"max_units": 3,  "price_usd": 0.05},
+            {"max_units": 6,  "price_usd": 0.09},
+            {"max_units": 10, "price_usd": 0.15},
+        ],
+    },
     "output_examples": [
         {
             "input": {"url": "https://en.wikipedia.org/wiki/Transformer_(machine_learning_model)", "question": "What is the key innovation of transformers?"},
@@ -431,6 +459,17 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
             "billing_units_actual": {"type": "integer"},
         },
     },
+    "variable_pricing": {
+        "model": "tiered",
+        "field": "paths",
+        "field_type": "array",
+        "unit_label": "file",
+        "tiers": [
+            {"max_units": 1,  "price_usd": 0.03},
+            {"max_units": 5,  "price_usd": 0.08},
+            {"max_units": 20, "price_usd": 0.18},
+        ],
+    },
     "output_examples": [
         {
             "input": {"repo": "openai/openai-python", "paths": ["README.md"], "branch": "main"},
@@ -470,6 +509,14 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
             "billing_units_actual": {"type": "integer"},
         },
     },
+    "variable_pricing": {
+        "model": "per_unit",
+        "field": "count",
+        "field_type": "scalar",
+        "unit_label": "story",
+        "rate_usd": 0.02,
+        "min_usd": 0.05,
+    },
     "output_examples": [
         {
             "input": {"count": 5, "mode": "digest"},
@@ -504,6 +551,17 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
             "results": {"type": "array"},
             "billing_units_actual": {"type": "integer"},
         },
+    },
+    "variable_pricing": {
+        "model": "tiered",
+        "field": "domains",
+        "field_type": "array",
+        "unit_label": "domain",
+        "tiers": [
+            {"max_units": 1,  "price_usd": 0.04},
+            {"max_units": 3,  "price_usd": 0.09},
+            {"max_units": 10, "price_usd": 0.16},
+        ],
     },
     "output_examples": [
         {
