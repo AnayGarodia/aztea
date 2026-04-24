@@ -24,33 +24,6 @@ from pydantic import (
 
 from core import auth as _auth
 
-"""
-api_models.py — Request body schemas shared by server routes.
-"""
-
-import re
-from typing import Annotated, Literal, NotRequired, TypeAlias, TypedDict
-
-try:
-    import jsonschema as _jsonschema
-    _JSONSCHEMA_AVAILABLE = True
-except ImportError:  # pragma: no cover
-    _JSONSCHEMA_AVAILABLE = False
-
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    JsonValue,
-    RootModel,
-    TypeAdapter,
-    ValidationError,
-    field_validator,
-    model_validator,
-)
-
-from core import auth as _auth
-
 DEFAULT_LEASE_SECONDS = 300
 DEFAULT_RETRY_DELAY_SECONDS = 30
 DEFAULT_SLA_SECONDS = 900
