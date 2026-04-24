@@ -11,6 +11,36 @@ const MODE_OPTIONS = [
   { value: 'async', label: 'Async' },
 ]
 
+function estimateCost(variablePricing, payload) {
+  if (!variablePricing) return null
+  const { model, field, field_type, tiers, rate_usd, min_usd } = variablePricing
+
+  const raw = payload?.[field]
+  if (raw == null || raw === '') return null
+
+  let units
+  if (field_type === 'array') {
+    if (Array.isArray(raw)) {
+      units = raw.filter(Boolean).length
+    } else {
+      units = String(raw).split(/[\n,]+/).map(s => s.trim()).filter(Boolean).length
+    }
+  } else {
+    units = parseInt(raw, 10)
+    if (isNaN(units) || units <= 0) return null
+  }
+
+  if (units <= 0) return null
+
+  if (model === 'tiered') {
+    const tier = tiers.find(t => units <= t.max_units) ?? tiers[tiers.length - 1]
+    return { cost: tier.price_usd, units }
+  } else if (model === 'per_unit') {
+    return { cost: Math.max(min_usd ?? 0, units * (rate_usd ?? 0)), units }
+  }
+  return null
+}
+
 // Support both legacy {fields:[]} format and standard JSON Schema {properties:{}}
 function deriveFields(schema) {
   if (Array.isArray(schema?.fields) && schema.fields.length > 0) return schema.fields
@@ -114,7 +144,11 @@ export default function AgentInputForm({ agent, onSubmit, loading, mode, onModeC
     onSubmit(payload, { privateTask })
   }
 
-  const price = `$${Number(agent?.price_per_call_usd ?? 0).toFixed(2)}`
+  const basePrice = `$${Number(agent?.price_per_call_usd ?? 0).toFixed(2)}`
+  const estimatedCost = estimateCost(agent?.variable_pricing, values)
+  const price = estimatedCost != null
+    ? `$${Number(estimatedCost.cost).toFixed(2)}`
+    : basePrice
   const progressPct = total > 0 ? (step / total) * 100 : 0
 
   // No schema fallback
@@ -132,8 +166,21 @@ export default function AgentInputForm({ agent, onSubmit, loading, mode, onModeC
               : 'Sync returns output immediately in this panel.'}
           </p>
           <div className="invoke-panel__price-bar">
-            <span className="invoke-panel__price-label">Cost per call</span>
-            <span className="invoke-panel__price-val">{price}</span>
+            <span className="invoke-panel__price-label">
+              {estimatedCost != null
+                ? 'Estimated cost'
+                : agent?.variable_pricing
+                  ? 'Price varies by usage'
+                  : 'Cost per call'}
+            </span>
+            <span className="invoke-panel__price-val">
+              {price}
+              {estimatedCost != null && agent?.variable_pricing?.unit_label && (
+                <span className="invoke-panel__price-hint">
+                  {' '}for {estimatedCost.units} {agent.variable_pricing.unit_label}{estimatedCost.units !== 1 ? 's' : ''}
+                </span>
+              )}
+            </span>
           </div>
           <button
             type="button"
@@ -261,8 +308,21 @@ export default function AgentInputForm({ agent, onSubmit, loading, mode, onModeC
         </p>
         {inputError && <p className="invoke-panel__error-text" role="alert">{inputError}</p>}
         <div className="invoke-panel__price-bar">
-          <span className="invoke-panel__price-label">Cost per call</span>
-          <span className="invoke-panel__price-val">{price}</span>
+          <span className="invoke-panel__price-label">
+            {estimatedCost != null
+              ? 'Estimated cost'
+              : agent?.variable_pricing
+                ? 'Price varies by usage'
+                : 'Cost per call'}
+          </span>
+          <span className="invoke-panel__price-val">
+            {price}
+            {estimatedCost != null && agent?.variable_pricing?.unit_label && (
+              <span className="invoke-panel__price-hint">
+                {' '}for {estimatedCost.units} {agent.variable_pricing.unit_label}{estimatedCost.units !== 1 ? 's' : ''}
+              </span>
+            )}
+          </span>
         </div>
         <button
           type="button"
