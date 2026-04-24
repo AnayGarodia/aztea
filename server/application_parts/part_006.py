@@ -803,6 +803,40 @@ def auth_revoke_key(
     return JSONResponse(content={"revoked": True})
 
 
+@app.post(
+    "/auth/forgot-password",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(429, 500),
+)
+@limiter.limit("5/minute", key_func=get_remote_address)
+def auth_forgot_password(request: Request, body: dict) -> JSONResponse:
+    """Request a password reset OTP. Always returns 200 to avoid leaking account existence."""
+    email = str(body.get("email") or "").strip().lower()
+    otp = _auth.create_password_reset_token(email)
+    if otp:
+        user_email = email
+        _email.send_password_reset_otp(user_email, otp)
+    return JSONResponse(content={"sent": True})
+
+
+@app.post(
+    "/auth/reset-password",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(400, 429, 500),
+)
+@limiter.limit("10/minute", key_func=get_remote_address)
+def auth_reset_password(request: Request, body: dict) -> JSONResponse:
+    """Verify OTP and set a new password. Revokes all existing sessions."""
+    email = str(body.get("email") or "").strip().lower()
+    otp = str(body.get("otp") or "").strip()
+    new_password = str(body.get("new_password") or "")
+    try:
+        _auth.consume_password_reset_token(email, otp, new_password)
+    except _auth.PasswordResetError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return JSONResponse(content={"reset": True})
+
+
 # ---------------------------------------------------------------------------
 # Built-in agent handlers (invoked via registry/internal routing)
 # ---------------------------------------------------------------------------

@@ -132,6 +132,18 @@ def send_dispute_resolved(to: str, job_id: str, dispute_id: str, outcome: str) -
     )
 
 
+def send_password_reset_otp(to: str, otp: str) -> None:
+    safe_otp = _esc(otp)
+    send(
+        to,
+        "Your Aztea password reset code",
+        f"<p>Your one-time password reset code is:</p>"
+        f"<p style='font-size:2rem;font-weight:700;letter-spacing:0.15em;font-family:monospace'>{safe_otp}</p>"
+        f"<p>This code expires in 15 minutes. If you didn't request a reset, you can safely ignore this email.</p>",
+        f"Your Aztea password reset code: {otp}\n\nExpires in 15 minutes. Ignore if you didn't request this.",
+    )
+
+
 def send_withdrawal_processed(to: str, amount_cents: int) -> None:
     amount_fmt = f"${amount_cents / 100:.2f}"
     send(

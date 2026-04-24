@@ -24,11 +24,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import random
 import secrets
 import sqlite3
 import threading
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 
 from .schema import (
     AGENT_KEY_PREFIX,
@@ -619,3 +621,115 @@ def rotate_api_key(
         "max_spend_cents": final_max_spend,
         "per_job_cap_cents": final_per_job_cap,
     }
+
+
+# ── Password reset (OTP via email) ────────────────────────────────────────────
+
+_OTP_EXPIRY_MINUTES = 15
+_OTP_LENGTH = 6
+
+
+class PasswordResetError(Exception):
+    pass
+
+
+def _otp_hash(otp: str) -> str:
+    return hashlib.sha256(otp.encode()).hexdigest()
+
+
+def create_password_reset_token(email: str) -> str | None:
+    """
+    Generate a 6-digit OTP for the given email. Stores a hash in the DB.
+    Returns the raw OTP (to be emailed), or None if no account found.
+    Silently succeeds for unknown emails (don't leak account existence).
+    """
+    normalized = str(email or "").strip().lower()
+    if not normalized:
+        return None
+
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT user_id FROM users WHERE LOWER(email) = ? AND status = 'active'",
+            (normalized,),
+        ).fetchone()
+    if row is None:
+        return None
+
+    user_id = str(row["user_id"])
+    otp = "".join(str(random.randint(0, 9)) for _ in range(_OTP_LENGTH))
+    token_hash = _otp_hash(otp)
+    token_id = str(uuid.uuid4())
+    expires_at = (
+        datetime.now(timezone.utc) + timedelta(minutes=_OTP_EXPIRY_MINUTES)
+    ).isoformat()
+
+    with _conn() as conn:
+        # Invalidate any previous unused tokens for this user
+        conn.execute(
+            "UPDATE password_reset_tokens SET used_at = ? WHERE user_id = ? AND used_at IS NULL",
+            (_now(), user_id),
+        )
+        conn.execute(
+            "INSERT INTO password_reset_tokens (token_id, user_id, token_hash, expires_at) VALUES (?, ?, ?, ?)",
+            (token_id, user_id, token_hash, expires_at),
+        )
+
+    return otp
+
+
+def consume_password_reset_token(email: str, otp: str, new_password: str) -> None:
+    """
+    Verify OTP for email and set new password. Raises PasswordResetError on any failure.
+    """
+    normalized_email = str(email or "").strip().lower()
+    normalized_otp = str(otp or "").strip()
+    if not normalized_email or not normalized_otp:
+        raise PasswordResetError("Email and code are required.")
+
+    if len(new_password) < 8 or not any(c.isalpha() for c in new_password) or not any(c.isdigit() for c in new_password):
+        raise PasswordResetError("Password must be at least 8 characters and include letters and numbers.")
+
+    token_hash = _otp_hash(normalized_otp)
+    now_iso = _now()
+
+    with _conn() as conn:
+        row = conn.execute(
+            """
+            SELECT prt.token_id, prt.user_id, prt.expires_at, prt.used_at
+            FROM password_reset_tokens prt
+            JOIN users u ON prt.user_id = u.user_id
+            WHERE prt.token_hash = ?
+              AND LOWER(u.email) = ?
+              AND u.status = 'active'
+            """,
+            (token_hash, normalized_email),
+        ).fetchone()
+
+        if row is None:
+            raise PasswordResetError("Invalid or expired code. Request a new one.")
+        if row["used_at"] is not None:
+            raise PasswordResetError("This code has already been used. Request a new one.")
+        if row["expires_at"] < now_iso:
+            raise PasswordResetError("This code has expired. Request a new one.")
+
+        user_id = str(row["user_id"])
+        token_id = str(row["token_id"])
+        salt = secrets.token_hex(16)
+        new_hash = _hash_password(new_password, salt)
+
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "UPDATE users SET password_hash = ?, salt = ? WHERE user_id = ?",
+            (new_hash, salt, user_id),
+        )
+        conn.execute(
+            "UPDATE password_reset_tokens SET used_at = ? WHERE token_id = ?",
+            (now_iso, token_id),
+        )
+        # Revoke all existing API keys so old sessions are invalidated
+        conn.execute(
+            "UPDATE api_keys SET is_active = 0 WHERE user_id = ?",
+            (user_id,),
+        )
+
+    invalidate_key_cache_for_user(user_id)

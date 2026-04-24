@@ -232,6 +232,22 @@ export async function authMe(key) {
   return body
 }
 
+export async function authForgotPassword(email) {
+  const { body } = await request('/auth/forgot-password', {
+    method: 'POST',
+    body: { email },
+  })
+  return body
+}
+
+export async function authResetPassword(email, otp, new_password) {
+  const { body } = await request('/auth/reset-password', {
+    method: 'POST',
+    body: { email, otp, new_password },
+  })
+  return body
+}
+
 export async function authAcceptLegal(key, termsVersion, privacyVersion) {
   const { body } = await request('/auth/legal/accept', {
     method: 'POST',

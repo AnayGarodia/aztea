@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { authLogin, authRegister } from '../../api'
+import { authLogin, authRegister, authForgotPassword, authResetPassword } from '../../api'
 import { useAuth } from '../../context/AuthContext'
 import Button from '../../ui/Button'
 import Input from '../../ui/Input'
-import { Mail, Lock, User, Eye, EyeOff, Copy, Check, KeyRound } from 'lucide-react'
+import { Mail, Lock, User, Eye, EyeOff, Copy, Check, KeyRound, ArrowLeft } from 'lucide-react'
 import './AuthPanel.css'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -21,11 +21,20 @@ export default function AuthPanel() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [apiKeyReveal, setApiKeyReveal] = useState(null) // { rawKey, userInfo } after register
+  const [apiKeyReveal, setApiKeyReveal] = useState(null)
   const [copied, setCopied] = useState(false)
   const [keyAcknowledged, setKeyAcknowledged] = useState(false)
 
+  // Forgot password state
+  const [forgotStep, setForgotStep] = useState(1) // 1 = email, 2 = otp+newpw
+  const [forgotEmail, setForgotEmail] = useState('')
+  const [otp, setOtp] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [showNewPassword, setShowNewPassword] = useState(false)
+  const [forgotSuccess, setForgotSuccess] = useState(false)
+
   const registerMode = tab === 'register'
+  const forgotMode = tab === 'forgot'
   const normalizedEmail = email.trim().toLowerCase()
   const normalizedUsername = username.trim()
   const passwordChecks = {
@@ -53,10 +62,15 @@ export default function AuthPanel() {
     setConfirmPassword('')
     setShowPassword(false)
     setShowConfirmPassword(false)
+    if (nextTab === 'forgot') {
+      setForgotStep(1)
+      setForgotEmail(email) // pre-fill from signin email if present
+      setOtp('')
+      setNewPassword('')
+      setForgotSuccess(false)
+    }
   }
 
-  // Allow external callers (landing nav) to focus a specific auth tab by
-  // dispatching `aztea:auth-tab` with `{ tab: 'signin' | 'register' }`.
   useEffect(() => {
     const handler = (event) => {
       const next = event?.detail?.tab
@@ -68,6 +82,7 @@ export default function AuthPanel() {
 
   const handleSubmit = async (e) => {
     e.preventDefault()
+    if (loading) return // double-submit guard
     setError('')
     if (!canSubmit) {
       if (!registerMode) {
@@ -113,8 +128,6 @@ export default function AuthPanel() {
         localStorage.removeItem(`aztea_onboarding_done:${result.user_id}`)
       }
       if (registerMode && result.raw_api_key) {
-        // Pause before auto-login so the user can copy the key - it is only
-        // shown once. `Continue` wires up the session and navigates.
         setApiKeyReveal({ rawKey: result.raw_api_key, userInfo })
         return
       }
@@ -144,6 +157,50 @@ export default function AuthPanel() {
     setApiKeyReveal(null)
     setKeyAcknowledged(false)
     navigate('/')
+  }
+
+  const handleForgotSendOtp = async (e) => {
+    e.preventDefault()
+    if (loading) return
+    const normalized = forgotEmail.trim().toLowerCase()
+    if (!EMAIL_RE.test(normalized)) {
+      setError('Enter a valid email address.')
+      return
+    }
+    setLoading(true)
+    setError('')
+    try {
+      await authForgotPassword(normalized)
+      setForgotEmail(normalized)
+      setForgotStep(2)
+    } catch (err) {
+      setError(err.message ?? 'Failed to send reset code. Try again.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleForgotReset = async (e) => {
+    e.preventDefault()
+    if (loading) return
+    if (otp.trim().length !== 6) {
+      setError('Enter the 6-digit code from your email.')
+      return
+    }
+    if (newPassword.length < 8 || !/[A-Za-z]/.test(newPassword) || !/\d/.test(newPassword)) {
+      setError('Password must be at least 8 characters and include letters and numbers.')
+      return
+    }
+    setLoading(true)
+    setError('')
+    try {
+      await authResetPassword(forgotEmail, otp.trim(), newPassword)
+      setForgotSuccess(true)
+    } catch (err) {
+      setError(err.message ?? 'Reset failed. Check your code and try again.')
+    } finally {
+      setLoading(false)
+    }
   }
 
   if (apiKeyReveal) {
@@ -191,6 +248,125 @@ export default function AuthPanel() {
               Continue
             </Button>
           </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (forgotMode) {
+    return (
+      <div className="auth-panel">
+        <div className="auth-panel__tabs">
+          <button
+            className="auth-panel__tab-back"
+            type="button"
+            onClick={() => switchTab('signin')}
+          >
+            <ArrowLeft size={13} />
+            <span>Back to sign in</span>
+          </button>
+        </div>
+        <div className="auth-panel__body">
+          {forgotSuccess ? (
+            <div className="auth-panel__forgot-success">
+              <p className="auth-panel__forgot-success-msg">
+                Password reset. You can now sign in with your new password.
+              </p>
+              <Button
+                type="button"
+                variant="primary"
+                size="md"
+                onClick={() => switchTab('signin')}
+                style={{ width: '100%' }}
+              >
+                Sign in
+              </Button>
+            </div>
+          ) : forgotStep === 1 ? (
+            <form className="auth-panel__form" onSubmit={handleForgotSendOtp}>
+              <p className="auth-panel__forgot-desc">
+                Enter your account email and we'll send a one-time code to reset your password.
+              </p>
+              <Input
+                label="Email"
+                type="email"
+                placeholder="you@example.com"
+                value={forgotEmail}
+                onChange={e => setForgotEmail(e.target.value)}
+                onBlur={e => setForgotEmail(e.target.value.trim().toLowerCase())}
+                required
+                autoComplete="email"
+                iconLeft={<Mail size={14} />}
+              />
+              {error && <p className="auth-panel__error">{error}</p>}
+              <Button
+                type="submit"
+                variant="primary"
+                size="md"
+                loading={loading}
+                disabled={loading}
+                style={{ width: '100%' }}
+              >
+                Send reset code
+              </Button>
+            </form>
+          ) : (
+            <form className="auth-panel__form" onSubmit={handleForgotReset}>
+              <p className="auth-panel__forgot-desc">
+                We sent a 6-digit code to <strong>{forgotEmail}</strong>. Enter it below along with your new password.
+              </p>
+              <Input
+                label="One-time code"
+                type="text"
+                placeholder="123456"
+                value={otp}
+                onChange={e => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                required
+                autoComplete="one-time-code"
+                iconLeft={<KeyRound size={14} />}
+                hint="Check your inbox (and spam folder)."
+              />
+              <Input
+                label="New password"
+                type={showNewPassword ? 'text' : 'password'}
+                placeholder="••••••••"
+                value={newPassword}
+                onChange={e => setNewPassword(e.target.value)}
+                required
+                autoComplete="new-password"
+                iconLeft={<Lock size={14} />}
+                iconRight={
+                  <button
+                    type="button"
+                    className="auth-panel__pw-toggle"
+                    onClick={() => setShowNewPassword(v => !v)}
+                    aria-label={showNewPassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showNewPassword ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </button>
+                }
+                hint="8+ characters with letters and numbers."
+              />
+              {error && <p className="auth-panel__error">{error}</p>}
+              <Button
+                type="submit"
+                variant="primary"
+                size="md"
+                loading={loading}
+                disabled={loading}
+                style={{ width: '100%' }}
+              >
+                Reset password
+              </Button>
+              <button
+                type="button"
+                className="auth-panel__resend"
+                onClick={() => { setForgotStep(1); setError(''); setOtp('') }}
+              >
+                Didn't receive the code? Go back
+              </button>
+            </form>
+          )}
         </div>
       </div>
     )
@@ -297,9 +473,18 @@ export default function AuthPanel() {
               </div>
             )}
             {error && <p className="auth-panel__error">{error}</p>}
-            <Button type="submit" variant="primary" size="md" loading={loading} disabled={!canSubmit} style={{ width: '100%' }}>
+            <Button type="submit" variant="primary" size="md" loading={loading} disabled={loading || !canSubmit} style={{ width: '100%' }}>
               {tab === 'signin' ? 'Sign in' : 'Create account'}
             </Button>
+            {tab === 'signin' && (
+              <button
+                type="button"
+                className="auth-panel__forgot-link"
+                onClick={() => switchTab('forgot')}
+              >
+                Forgot password?
+              </button>
+            )}
           <p className="auth-panel__hint">
             {tab === 'signin'
               ? 'New here? Switch to "Create account" above.'
