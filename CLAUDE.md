@@ -420,6 +420,50 @@ python scripts/aztea_mcp_server.py
 
 ---
 
+## Package distribution (PyPI + npm)
+
+Current release coupling:
+
+- `aztea-tui` publishes independently (`tui/pyproject.toml`).
+- `aztea` depends on `aztea-tui` so `pip install aztea` provides the `aztea-tui` CLI.
+
+Publish order is important:
+
+1. Publish `aztea-tui` first.
+2. Publish `aztea` second (with dependency floor set to the new `aztea-tui` version).
+
+Build and upload commands:
+
+```bash
+# 1) TUI (PyPI)
+cd tui
+python3 -m venv .release-venv && source .release-venv/bin/activate
+python -m pip install -U pip build twine
+python -m build
+python -m twine upload dist/aztea_tui-*
+
+# 2) SDK (PyPI)
+cd ../sdks/python-sdk
+source ../../tui/.release-venv/bin/activate
+python -m build
+python -m twine upload dist/aztea-*
+
+# 3) npm wrapper
+cd ../../tui/npm
+npm publish --access public --otp <code>
+```
+
+Quick verification in a clean environment:
+
+```bash
+python3 -m venv /tmp/aztea-check && source /tmp/aztea-check/bin/activate
+pip install -U aztea
+python -c "import aztea; print(aztea.__version__)"
+which aztea-tui
+```
+
+---
+
 ## Adding a new built-in agent
 
 1. Create `agents/{slug}.py` with a `run(payload: dict) -> dict` function.

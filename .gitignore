@@ -49,6 +49,7 @@ test.py
 # Tool caches (user-local; never committed)
 .qwen/
 .agents/
+.superpowers/
 skills/
 skills-lock.json
 .mypy_cache/
