@@ -6,11 +6,12 @@ import Card from '../ui/Card'
 import Badge from '../ui/Badge'
 import Button from '../ui/Button'
 import Skeleton from '../ui/Skeleton'
+import Stat from '../ui/Stat'
 import EmptyState from '../ui/EmptyState'
 import Reveal from '../ui/motion/Reveal'
-import { fetchMyAgents } from '../api'
+import { fetchMyAgents, fetchAgentEarnings } from '../api'
 import { useAuth } from '../context/AuthContext'
-import { Plus, Bot, ExternalLink, ChevronRight } from 'lucide-react'
+import { Plus, Bot, ExternalLink, ChevronDown } from 'lucide-react'
 import './MyAgentsPage.css'
 
 const STATUS_VARIANT = {
@@ -24,45 +25,138 @@ function fmtUsd(val) {
   return '$' + val.toFixed(4).replace(/\.?0+$/, '')
 }
 
-function AgentRow({ agent, onClick }) {
+const prefersReducedMotion = () =>
+  typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
+function completionVariant(rate) {
+  if (rate === null || rate === undefined) return ''
+  if (rate >= 0.8) return 'positive'
+  if (rate >= 0.6) return 'warn'
+  return 'negative'
+}
+
+function fmtCompletion(rate) {
+  if (rate === null || rate === undefined) return '--'
+  return `${Math.round(rate * 100)}%`
+}
+
+function fmtLatency(sec) {
+  if (sec === null || sec === undefined) return '--'
+  return `${sec}s`
+}
+
+function AgentRow({ agent, earnings, onClick }) {
+  const [open, setOpen] = useState(false)
+
   const tags = Array.isArray(agent.tags)
     ? agent.tags
     : (typeof agent.tags === 'string' ? JSON.parse(agent.tags || '[]') : [])
   const status = agent.status ?? 'active'
   const isProblematic = status === 'suspended' || status === 'banned'
 
+  const earnedCents = earnings?.total_earned_cents ?? null
+  const earnedFmt = typeof earnedCents === 'number'
+    ? '$' + (earnedCents / 100).toFixed(2)
+    : '--'
+
   return (
-    <motion.button
-      className="myagents__row"
-      onClick={onClick}
+    <motion.div
+      className="myagents__row-wrap"
       initial={{ opacity: 0, y: 6 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.2 }}
-      type="button"
+      transition={{ duration: prefersReducedMotion() ? 0 : 0.2 }}
     >
-      <div className="myagents__row-icon">
-        <Bot size={15} color="var(--accent)" />
-      </div>
-      <div className="myagents__row-main">
-        <p className="myagents__row-name">{agent.name}</p>
-        <p className="myagents__row-desc">{agent.description}</p>
-        {isProblematic && agent.suspension_reason && (
-          <p className="myagents__row-reason">{agent.suspension_reason}</p>
-        )}
-        {tags.length > 0 && (
-          <div className="myagents__row-tags">
-            {tags.slice(0, 4).map(t => (
-              <span key={t} className="myagents__row-tag">{t}</span>
-            ))}
+      <div className="myagents__row-header">
+        {/* Navigation area */}
+        <div
+          className="myagents__row"
+          role="button"
+          tabIndex={0}
+          onClick={onClick}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              onClick()
+            }
+          }}
+        >
+          <div className="myagents__row-icon">
+            <Bot size={15} color="var(--accent)" />
           </div>
+          <div className="myagents__row-main">
+            <p className="myagents__row-name">{agent.name}</p>
+            <p className="myagents__row-desc">{agent.description}</p>
+            {isProblematic && agent.suspension_reason && (
+              <p className="myagents__row-reason">{agent.suspension_reason}</p>
+            )}
+            {tags.length > 0 && (
+              <div className="myagents__row-tags">
+                {tags.slice(0, 4).map(t => (
+                  <span key={t} className="myagents__row-tag">{t}</span>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="myagents__row-meta">
+            <Badge label={status} variant={STATUS_VARIANT[status] ?? 'default'} dot />
+            <span className="myagents__row-price">{fmtUsd(agent.price_per_call_usd)} / call</span>
+          </div>
+        </div>
+
+        {/* Expand toggle */}
+        <button
+          className="myagents__expand-btn"
+          onClick={(e) => { e.stopPropagation(); setOpen(o => !o) }}
+          aria-label={open ? 'Hide analytics' : 'Show analytics'}
+          aria-expanded={open}
+          aria-controls={`analytics-panel-${agent.agent_id}`}
+          type="button"
+        >
+          <ChevronDown
+            size={14}
+            className={`myagents__expand-icon${open ? ' myagents__expand-icon--open' : ''}`}
+          />
+        </button>
+      </div>
+
+      {/* Collapsible analytics panel */}
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            className="myagents__panel"
+            id={`analytics-panel-${agent.agent_id}`}
+            key="panel"
+            initial={prefersReducedMotion() ? false : { height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={prefersReducedMotion() ? undefined : { height: 0, opacity: 0 }}
+            transition={{ duration: prefersReducedMotion() ? 0 : 0.25, ease: [0.16, 1, 0.3, 1] }}
+          >
+            <div className="myagents__panel-inner">
+              <div className="myagents__panel-grid">
+                <Stat
+                  label="Total calls"
+                  value={agent.total_calls ?? '--'}
+                />
+                <Stat
+                  label="30d completion"
+                  value={fmtCompletion(agent.job_completion_rate)}
+                  variant={completionVariant(agent.job_completion_rate)}
+                />
+                <Stat
+                  label="Median latency"
+                  value={fmtLatency(agent.median_latency_seconds)}
+                />
+                <Stat
+                  label="Revenue earned"
+                  value={earnedFmt}
+                  variant={typeof earnedCents === 'number' && earnedCents > 0 ? 'positive' : ''}
+                />
+              </div>
+            </div>
+          </motion.div>
         )}
-      </div>
-      <div className="myagents__row-meta">
-        <Badge label={status} variant={STATUS_VARIANT[status] ?? 'default'} dot />
-        <span className="myagents__row-price">{fmtUsd(agent.price_per_call_usd)} / call</span>
-      </div>
-      <ChevronRight size={14} className="myagents__row-chevron" />
-    </motion.button>
+      </AnimatePresence>
+    </motion.div>
   )
 }
 
@@ -70,6 +164,7 @@ export default function MyAgentsPage() {
   const { apiKey } = useAuth()
   const navigate = useNavigate()
   const [agents, setAgents] = useState([])
+  const [earningsMap, setEarningsMap] = useState({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
@@ -78,8 +173,16 @@ export default function MyAgentsPage() {
     setLoading(true)
     setError(null)
     try {
-      const data = await fetchMyAgents(apiKey)
-      setAgents(data?.agents ?? [])
+      const [agentsData, earningsData] = await Promise.all([
+        fetchMyAgents(apiKey),
+        fetchAgentEarnings(apiKey),
+      ])
+      setAgents(agentsData?.agents ?? [])
+      const map = {}
+      for (const row of (earningsData?.earnings ?? [])) {
+        map[row.agent_id] = row
+      }
+      setEarningsMap(map)
     } catch (err) {
       setError(err?.message || 'Failed to load agents.')
     } finally {
@@ -137,17 +240,16 @@ export default function MyAgentsPage() {
                     }
                   />
                 ) : (
-                  <AnimatePresence>
-                    <div className="myagents__list">
-                      {agents.map(agent => (
-                        <AgentRow
-                          key={agent.agent_id}
-                          agent={agent}
-                          onClick={() => navigate(`/agents/${agent.agent_id}`)}
-                        />
-                      ))}
-                    </div>
-                  </AnimatePresence>
+                  <div className="myagents__list">
+                    {agents.map(agent => (
+                      <AgentRow
+                        key={agent.agent_id}
+                        agent={agent}
+                        earnings={earningsMap[agent.agent_id] ?? null}
+                        onClick={() => navigate(`/agents/${agent.agent_id}`)}
+                      />
+                    ))}
+                  </div>
                 )}
               </Card.Body>
             </Card>
