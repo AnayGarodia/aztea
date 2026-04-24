@@ -16,6 +16,7 @@ class MainScreen(Screen):
         Binding("2", "show_jobs",      "Jobs",      show=True),
         Binding("3", "show_wallet",    "Wallet",    show=True),
         Binding("4", "show_my_agents", "My Agents", show=True),
+        Binding("escape", "focus_nav", "Focus Nav", show=False),
         Binding("r", "refresh",        "Refresh",   show=True),
         Binding("q", "app.quit",       "Quit",      show=True),
     ]
@@ -82,6 +83,8 @@ class MainScreen(Screen):
     def action_show_wallet(self) -> None:    self._switch("wallet")
     def action_show_my_agents(self) -> None: self._switch("my-agents")
     def action_refresh(self) -> None:        self._load_current()
+    def action_focus_nav(self) -> None:
+        self.query_one("#nav-list", ListView).focus()
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         view_id = event.item.name

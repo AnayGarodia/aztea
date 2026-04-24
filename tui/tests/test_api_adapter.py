@@ -38,13 +38,15 @@ def _mock_client():
 @pytest.mark.asyncio
 async def test_list_agents_returns_agent_rows():
     from aztea_tui.api import AzteaAPI
-    with patch("aztea_tui.api._make_client", return_value=_mock_client()):
+    mock_client = _mock_client()
+    with patch("aztea_tui.api._make_client", return_value=mock_client):
         api = AzteaAPI("az_test", "http://localhost:8000")
         agents = await api.list_agents()
     assert len(agents) == 1
     assert agents[0].name == "Test Agent"
     assert agents[0].price_display == "$0.05"
     assert agents[0].trust_score == 87.5
+    mock_client.registry.list.assert_called_once_with(tag=None, rank_by="trust")
 
 
 @pytest.mark.asyncio

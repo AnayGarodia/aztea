@@ -312,7 +312,7 @@ class AzteaAPI:
         try:
             if hasattr(self._client, "registry"):
                 data = await asyncio.to_thread(
-                    self._client.registry.list, tag=tag, rank_by="trust_score"
+                    self._client.registry.list, tag=tag, rank_by="trust"
                 )
                 raw_agents = (self._obj_to_dict(data).get("agents") or [])
             else:

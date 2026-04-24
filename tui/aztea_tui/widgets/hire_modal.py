@@ -12,7 +12,11 @@ from ..api import AgentDetail, AzteaAPIError
 
 
 class HireModal(ModalScreen):
-    BINDINGS = [Binding("escape", "dismiss", "Cancel", show=True)]
+    BINDINGS = [
+        Binding("escape", "dismiss", "Cancel", show=True),
+        Binding("ctrl+q", "app.quit", "Quit", show=False, priority=True),
+        Binding("ctrl+c", "app.quit", "Quit", show=False, priority=True),
+    ]
 
     def __init__(self, agent: AgentDetail) -> None:
         super().__init__()

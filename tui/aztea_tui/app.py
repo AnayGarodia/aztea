@@ -11,6 +11,8 @@ class AzteaApp(App):
     CSS_PATH = "aztea.tcss"
     TITLE = "Aztea"
     BINDINGS = [
+        Binding("ctrl+q", "app.quit", "Quit", show=True, priority=True),
+        Binding("ctrl+c", "app.quit", "Quit", show=False, priority=True),
         Binding("ctrl+l", "logout", "Logout", show=False),
     ]
 

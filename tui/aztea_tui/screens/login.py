@@ -15,7 +15,10 @@ _DEFAULT_URL = os.environ.get("AZTEA_BASE_URL", "https://aztea.ai")
 
 
 class LoginScreen(Screen):
-    BINDINGS = [Binding("escape", "app.quit", "Quit", show=True)]
+    BINDINGS = [
+        Binding("escape", "app.quit", "Quit", show=True),
+        Binding("tab", "toggle_mode", "Toggle Login Mode", show=False),
+    ]
 
     def __init__(self) -> None:
         super().__init__()
@@ -46,6 +49,9 @@ class LoginScreen(Screen):
         self.query_one("#btn-login", Button).label = (
             "Connect" if self._key_mode else "Login"
         )
+
+    def action_toggle_mode(self) -> None:
+        self._toggle_mode()
 
     # ── Events ────────────────────────────────────────────────────────────────
 
