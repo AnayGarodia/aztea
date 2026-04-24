@@ -25,6 +25,24 @@ Source   = "https://github.com/AnayGarodia/aztea"
 
 [tool.hatch.build.targets.wheel]
 packages = ["aztea_tui"]
+exclude = [
+    "/.release-venv/**",
+    "/.venv/**",
+    "/venv/**",
+    "/build/**",
+    "/dist/**",
+    "/.pytest_cache/**",
+]
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "/.release-venv/**",
+    "/.venv/**",
+    "/venv/**",
+    "/build/**",
+    "/dist/**",
+    "/.pytest_cache/**",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
