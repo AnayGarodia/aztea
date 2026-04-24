@@ -8,8 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import AsyncIterator
 
-# Add SDK to path when not installed as a package
-_SDK_PATH = Path(__file__).resolve().parents[3] / "sdks" / "python"
+# Add SDK to path when not installed as a package (…/repo/tui/aztea_tui/api.py → repo root)
+_SDK_PATH = Path(__file__).resolve().parents[2] / "sdks" / "python"
 if str(_SDK_PATH) not in sys.path:
     sys.path.insert(0, str(_SDK_PATH))
 

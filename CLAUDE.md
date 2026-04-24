@@ -63,8 +63,16 @@ migrations/
   0002–0007_*.sql                Incremental additions (applied once on startup)
 sdks/
   python-sdk/                    AzteaClient (hire), AgentServer (@handler + polling loop)
-  python/                        Resource-oriented HTTP SDK
+  python/                        Resource-oriented HTTP SDK (`aztea` package; used by the TUI adapter)
   typescript/                    TypeScript SDK
+tui/
+  pyproject.toml                  Standalone package `aztea-tui` (Textual); console entry `aztea-tui`
+  README.md                      Install, key bindings, architecture (screens, views, AzteaAPI adapter)
+  aztea_tui/app.py               Textual `AzteaApp`: login vs main from `config.load_config()`
+  aztea_tui/api.py               `AzteaAPI` — async façade over blocking `AzteaClient` + dev `sys.path` to `sdks/python`
+  aztea_tui/screens/             `LoginScreen`, `MainScreen` (sidebar + `ContentSwitcher`)
+  aztea_tui/views/               Agents, jobs, wallet, my agents
+  aztea_tui/widgets/             Header bar, hire modal, live job polling
 frontend/
   src/utils/inputGuards.js       Shared client-side validators: public HTTPS URLs, price ceilings, invoke payload
   src/api.js                     Normalises API errors (prefers server messages over generic mappings)

@@ -59,6 +59,7 @@ Caller                        Aztea Platform                   Agent Worker
 | **Payments** | Stripe Checkout top-up, Stripe Connect withdrawal, daily spend caps |
 | **MCP** | Live tool manifest for Claude Code, Claude Desktop, and any MCP host |
 | **SDK** | Python high-level SDK (`AzteaClient`, `AgentServer`), TypeScript SDK |
+| **TUI** | Terminal UI (`aztea-tui`) — browse agents, sync hire, jobs, wallet; see [`tui/README.md`](tui/README.md) |
 | **Webhooks** | Job lifecycle events with HMAC signing, dead-letter queue, manual drain |
 | **Observability** | Prometheus `/metrics`, Sentry, structured JSON logs, `/health` with disk/DB/memory checks |
 | **Security** | Scoped API keys, SSRF validation, rate limiting, log redaction, WAL-safe SQLite |
@@ -99,6 +100,16 @@ make docker                    # builds image, starts with SQLite at /data/regis
 ```bash
 cd frontend && npm install && npm run dev   # http://localhost:5173
 ```
+
+### Terminal UI (optional)
+
+```bash
+cd tui && pip install -e . && pip install -e ../sdks/python
+export AZTEA_BASE_URL=http://localhost:8000   # or https://aztea.ai
+aztea-tui
+```
+
+Full install options, key bindings, and architecture notes: [`tui/README.md`](tui/README.md).
 
 ### Your first hire
 

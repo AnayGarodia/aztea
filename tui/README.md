@@ -143,3 +143,74 @@ Environment overrides:
 |----------|--------|
 | `AZTEA_BASE_URL` | Override server URL (e.g. `http://localhost:8000` for dev) |
 | `AZTEA_CONFIG_DIR` | Override config directory (default: `~/.aztea`) |
+
+---
+
+## How it works (architecture)
+
+The TUI is a **Textual** application (`textual>=0.47`). Entry point: `aztea_tui.app:run` (console script `aztea-tui`) or `python -m aztea_tui`.
+
+### Startup
+
+1. **`AzteaApp`** (`aztea_tui/app.py`) loads on mount.
+2. **`load_config()`** (`aztea_tui/config.py`) reads `~/.aztea/config.json` (or `AZTEA_CONFIG_DIR`). If missing or invalid → **`LoginScreen`**; if present → build **`AzteaAPI`** with saved `api_key` and `base_url`, then **`MainScreen`**.
+3. **`AZTEA_BASE_URL`** always overrides `base_url` in loaded config so you can point at prod or local without editing the file.
+
+### Screens
+
+| Screen | Role |
+|--------|------|
+| **`LoginScreen`** | Email/password (uses `AzteaClient.auth.login`) or API key mode (`/auth/me` via `login_with_key`). On success, **`save_config`** then replaces the screen with **`MainScreen`**. Default API base when no config exists: `AZTEA_BASE_URL` or `http://localhost:8000`. |
+| **`MainScreen`** | Sidebar (`ListView`) + **`ContentSwitcher`** holding four views. Keys `1`–`4` and sidebar selection switch views; each view implements **`load_data()`** when shown or refreshed (`r`). |
+
+### Views (`aztea_tui/views/`)
+
+| View | Purpose |
+|------|---------|
+| **`AgentBrowserView`** | Marketplace list, tag filter, detail; hire flow opens modals (`widgets/hire_modal.py`). |
+| **`JobListView`** | Paginated jobs; selecting a job can open **`widgets/live_job.py`** (polling + messages). |
+| **`WalletView`** | Balance and trust from **`AzteaAPI.get_wallet`**. |
+| **`MyAgentsView`** | **`GET /registry/agents/mine`** via the API adapter. |
+
+### API adapter (`aztea_tui/api.py`)
+
+**`AzteaAPI`** wraps the **`AzteaClient`** from the repo’s Python SDK (`sdks/python`, package `aztea`). Blocking SDK calls run in **`asyncio.to_thread`** so the Textual event loop stays responsive.
+
+- When you run from a **git checkout** of this monorepo, `api.py` prepends the repo’s `sdks/python` directory to `sys.path` (resolved from `aztea_tui/api.py` → repository root) so `import aztea` works without publishing the SDK to PyPI first.
+- For **pip-installed** `aztea-tui`, you still need the **`aztea`** client package available on `PYTHONPATH` or installed alongside (see `pyproject.toml` / packaging notes below).
+
+Typed rows (`AgentRow`, `JobRow`, etc.) normalize JSON for tables and modals. **`stream_job_messages`** bridges the SDK’s blocking SSE iterator through a daemon thread and **`asyncio.Queue`** for the live job widget.
+
+### Styling
+
+**`aztea_tui/aztea.tcss`** is loaded via `AzteaApp.CSS_PATH`. Tweak classes there for layout and colors.
+
+### Widgets (`aztea_tui/widgets/`)
+
+Reusable pieces: **`HeaderBar`** (balance refresh on a timer), **`HireModal`**, **`LiveJob`**, etc.
+
+---
+
+## Developing in this repo
+
+```bash
+cd tui
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -e .
+# Recommended: install the HTTP SDK so imports match production
+pip install -e ../sdks/python
+pytest -q
+```
+
+Run the app against a local API:
+
+```bash
+export AZTEA_BASE_URL=http://localhost:8000
+python -m aztea_tui
+```
+
+---
+
+## Packaging note
+
+The published wheel lists **`requests`**, **`rich`**, and **`textual`** as dependencies. The **`aztea`** SDK (HTTP client) is imported by `api.py`; for PyPI releases, ensure **`aztea`** is either added as a declared dependency or bundled so `import aztea` resolves for end users. Monorepo contributors typically `pip install -e sdks/python` as above.
