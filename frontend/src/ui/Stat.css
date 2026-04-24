@@ -26,3 +26,4 @@
 .stat--accent .stat__value { color: var(--accent); }
 .stat--positive .stat__value { color: var(--positive); }
 .stat--negative .stat__value { color: var(--negative); }
+.stat--warn .stat__value { color: var(--warn); }
