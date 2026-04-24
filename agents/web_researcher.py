@@ -209,7 +209,11 @@ def run(payload: dict) -> dict:
     with ThreadPoolExecutor(max_workers=5) as pool:
         future_to_url = {pool.submit(_fetch_one, u): u for u in urls}
         for future in as_completed(future_to_url):
-            res = future.result()
+            try:
+                res = future.result()
+            except Exception as exc:
+                u = future_to_url[future]
+                res = {"url": u, "content": None, "status": "error", "error": f"Unexpected fetch error: {type(exc).__name__}"}
             results_map[res["url"]] = res
 
     # Preserve original URL order

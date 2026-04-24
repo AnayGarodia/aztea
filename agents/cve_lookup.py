@@ -265,6 +265,7 @@ def run(payload: dict) -> dict:
             "total_packages_checked": 0,
             "summary": "No packages provided. Pass a list like: [\"express@4.17.1\", \"lodash@4.17.20\"]",
             "source": "nvd",
+            "billing_units_actual": 0,
         }
 
     if len(packages) > 10:
@@ -350,4 +351,5 @@ def run(payload: dict) -> dict:
         "total_packages_checked": len(packages),
         "summary": " ".join(summary_parts),
         "source": "nvd",
+        "billing_units_actual": len(all_results),
     }

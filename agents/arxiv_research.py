@@ -29,10 +29,10 @@ Output: {
 }
 """
 
+import json
 import re
 import xml.etree.ElementTree as ET
 
-import httpx
 import requests
 
 from core.llm import CompletionRequest, Message, run_with_fallback
@@ -172,7 +172,7 @@ def _fetch_full_abstract_data(arxiv_id: str) -> dict:
     affiliations: list[str] = []
     related_links: list[str] = []
     try:
-        resp = httpx.get(url, timeout=10, follow_redirects=True)
+        resp = requests.get(url, timeout=10, allow_redirects=True)
         resp.raise_for_status()
         html = resp.text
 
@@ -211,7 +211,7 @@ def _fetch_full_abstract_data(arxiv_id: str) -> dict:
                 seen.add(lnk)
                 deduped.append(lnk)
         related_links = deduped[:10]
-    except Exception:
+    except requests.exceptions.RequestException:
         pass  # Best-effort; don't fail the whole call
 
     return {"affiliations": affiliations[:10], "related_links": related_links}
@@ -289,7 +289,6 @@ def run(payload: dict) -> dict:
     text = re.sub(r"^```(?:json)?\s*", "", text)
     text = re.sub(r"\s*```$", "", text)
 
-    import json
     try:
         synthesis_data = json.loads(text)
     except Exception:
