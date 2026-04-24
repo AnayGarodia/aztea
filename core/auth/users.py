@@ -26,6 +26,8 @@ import hashlib
 import json
 import secrets
 import sqlite3
+import threading
+import time
 import uuid
 
 from .schema import (
@@ -234,14 +236,67 @@ def create_api_key(
     )
 
 
+# Cache verified key lookups for up to 60 seconds to avoid a DB read on every request.
+# Entry: key_hash -> (result_dict, cached_at_monotonic)
+_KEY_CACHE: dict[str, tuple[dict, float]] = {}
+_KEY_CACHE_TTL = 60.0
+_KEY_CACHE_LOCK = threading.Lock()
+
+# Track which key_ids need a last_used_at write; flush at most once per minute per key.
+_LAST_USED_PENDING: dict[str, float] = {}  # key_id -> last flushed monotonic
+_LAST_USED_LOCK = threading.Lock()
+_LAST_USED_FLUSH_INTERVAL = 60.0
+
+
+def _flush_last_used(key_id: str) -> None:
+    now_m = time.monotonic()
+    with _LAST_USED_LOCK:
+        last_flushed = _LAST_USED_PENDING.get(key_id, 0.0)
+        if now_m - last_flushed < _LAST_USED_FLUSH_INTERVAL:
+            return
+        _LAST_USED_PENDING[key_id] = now_m
+    try:
+        with _conn() as conn:
+            conn.execute(
+                "UPDATE api_keys SET last_used_at = ? WHERE key_id = ?",
+                (_now(), key_id),
+            )
+    except Exception:
+        pass
+
+
+def invalidate_key_cache(key_hash: str) -> None:
+    with _KEY_CACHE_LOCK:
+        _KEY_CACHE.pop(key_hash, None)
+
+
+def invalidate_key_cache_for_user(user_id: str) -> None:
+    with _KEY_CACHE_LOCK:
+        to_drop = [h for h, (r, _) in _KEY_CACHE.items() if r.get("user_id") == user_id]
+        for h in to_drop:
+            del _KEY_CACHE[h]
+
+
 def verify_api_key(raw_key: str) -> dict | None:
     """
     Verify a raw API key against the DB. Returns user info dict or None.
-    Side-effect: updates last_used_at.
+    Caches positive results for 60s to reduce per-request DB reads.
+    Writes last_used_at at most once per minute per key.
     """
     if not raw_key.startswith(KEY_PREFIX):
         return None
     key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+
+    now_m = time.monotonic()
+    with _KEY_CACHE_LOCK:
+        cached = _KEY_CACHE.get(key_hash)
+        if cached is not None:
+            result, cached_at = cached
+            if now_m - cached_at < _KEY_CACHE_TTL:
+                _flush_last_used(result["key_id"])
+                return dict(result)
+            del _KEY_CACHE[key_hash]
+
     with _conn() as conn:
         row = conn.execute(
             """
@@ -256,11 +311,8 @@ def verify_api_key(raw_key: str) -> dict | None:
         ).fetchone()
         if row is None:
             return None
-        conn.execute(
-            "UPDATE api_keys SET last_used_at = ? WHERE key_id = ?",
-            (_now(), row["key_id"]),
-        )
-    return {
+
+    result = {
         "key_id": row["key_id"],
         "user_id": row["user_id"],
         "username": row["username"],
@@ -279,6 +331,12 @@ def verify_api_key(raw_key: str) -> dict | None:
         ),
         **_legal_state_from_row(dict(row)),
     }
+
+    with _KEY_CACHE_LOCK:
+        _KEY_CACHE[key_hash] = (result, time.monotonic())
+
+    _flush_last_used(result["key_id"])
+    return dict(result)
 
 
 def accept_legal_terms(
@@ -330,6 +388,7 @@ def accept_legal_terms(
 
     if row is None:
         raise ValueError("User not found.")
+    invalidate_key_cache_for_user(normalized_user_id)
     return {
         "user_id": str(row["user_id"]),
         **_legal_state_from_row(dict(row)),

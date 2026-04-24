@@ -44,13 +44,14 @@ _open_connections_lock = threading.Lock()
 def _open_connection(db_path: str) -> sqlite3.Connection:
     _conn_semaphore.acquire()
     try:
-        conn = sqlite3.connect(db_path, check_same_thread=False, timeout=10)
+        conn = sqlite3.connect(db_path, check_same_thread=False, timeout=15)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("PRAGMA busy_timeout=8000")
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA cache_size=-64000")
+        conn.execute("PRAGMA wal_autocheckpoint=200")
     except Exception:
         _conn_semaphore.release()
         raise
