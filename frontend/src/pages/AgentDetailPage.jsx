@@ -22,6 +22,49 @@ import ModelBadge from '../components/ModelBadge'
 import { BarChart, Bar, ResponsiveContainer, Tooltip as RechartTooltip } from 'recharts'
 import './AgentDetailPage.css'
 
+function PricingInfo({ agent }) {
+  const vp = agent?.variable_pricing
+  const basePrice = agent?.price_per_call_usd ?? 0
+
+  if (!vp) {
+    return <span>${basePrice.toFixed(2)} per call</span>
+  }
+
+  if (vp.model === 'tiered') {
+    const min = vp.tiers[0]?.price_usd ?? 0
+    const max = vp.tiers[vp.tiers.length - 1]?.price_usd ?? 0
+    return (
+      <div>
+        <span>${min.toFixed(2)}–${max.toFixed(2)} per call</span>
+        <div style={{ marginTop: 6, fontSize: '0.8em', opacity: 0.75 }}>
+          {vp.tiers.map((t, i) => {
+            const prevMax = i === 0 ? 0 : vp.tiers[i - 1].max_units
+            const rangeLabel = i === 0
+              ? `1 ${vp.unit_label}`
+              : `${prevMax + 1}–${t.max_units} ${vp.unit_label}s`
+            return (
+              <div key={i}>{rangeLabel}: ${t.price_usd.toFixed(2)}</div>
+            )
+          })}
+        </div>
+      </div>
+    )
+  }
+
+  if (vp.model === 'per_unit') {
+    return (
+      <div>
+        <span>${(vp.min_usd ?? 0).toFixed(2)} min</span>
+        <div style={{ marginTop: 6, fontSize: '0.8em', opacity: 0.75 }}>
+          ${(vp.rate_usd ?? 0).toFixed(2)} per {vp.unit_label}
+        </div>
+      </div>
+    )
+  }
+
+  return <span>${basePrice.toFixed(2)} per call</span>
+}
+
 function healthDot(agent) {
   const status = agent.last_health_status
   const checkedAt = agent.last_health_check_at
@@ -302,9 +345,8 @@ export default function AgentDetailPage() {
                     <div className="agent-detail__inline-stats">
                       <span className="agent-detail__inline-stat">
                         <span className="agent-detail__inline-stat-val">
-                          ${Number(agent.price_per_call_usd).toFixed(2)}
+                          <PricingInfo agent={agent} />
                         </span>
-                        <span className="agent-detail__inline-stat-lbl">per call</span>
                       </span>
                       {successPct != null && (
                         <span className="agent-detail__inline-stat">
