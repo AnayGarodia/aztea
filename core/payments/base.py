@@ -174,6 +174,20 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _add_column_if_missing(conn: sqlite3.Connection, ddl: str) -> None:
+    """Run ALTER TABLE ADD COLUMN and ignore duplicate-column errors.
+
+    Some CI runners have shown instability around repeated PRAGMA table_info reads
+    during concurrent startup. This keeps schema migration idempotent using SQLite's
+    own duplicate-column detection instead of pre-checking with PRAGMA.
+    """
+    try:
+        conn.execute(ddl)
+    except sqlite3.OperationalError as exc:
+        if "duplicate column name" not in str(exc).lower():
+            raise
+
+
 # ---------------------------------------------------------------------------
 # Schema
 # ---------------------------------------------------------------------------
@@ -191,14 +205,12 @@ def init_payments_db() -> None:
                 created_at    TEXT NOT NULL
             )
         """)
-        wallet_cols = {
-            row["name"]
-            for row in conn.execute("PRAGMA table_info(wallets)").fetchall()
-        }
-        if "caller_trust" not in wallet_cols:
-            conn.execute("ALTER TABLE wallets ADD COLUMN caller_trust REAL NOT NULL DEFAULT 0.5")
-        if "daily_spend_limit_cents" not in wallet_cols:
-            conn.execute("ALTER TABLE wallets ADD COLUMN daily_spend_limit_cents INTEGER")
+        _add_column_if_missing(
+            conn, "ALTER TABLE wallets ADD COLUMN caller_trust REAL NOT NULL DEFAULT 0.5"
+        )
+        _add_column_if_missing(
+            conn, "ALTER TABLE wallets ADD COLUMN daily_spend_limit_cents INTEGER"
+        )
         conn.execute(
             """
             UPDATE wallets
@@ -219,12 +231,9 @@ def init_payments_db() -> None:
                 created_at    TEXT NOT NULL
             )
         """)
-        tx_cols = {
-            row["name"]
-            for row in conn.execute("PRAGMA table_info(transactions)").fetchall()
-        }
-        if "charged_by_key_id" not in tx_cols:
-            conn.execute("ALTER TABLE transactions ADD COLUMN charged_by_key_id TEXT")
+        _add_column_if_missing(
+            conn, "ALTER TABLE transactions ADD COLUMN charged_by_key_id TEXT"
+        )
         conn.execute("""
             CREATE TABLE IF NOT EXISTS reconciliation_runs (
                 run_id          TEXT PRIMARY KEY,
