@@ -4,7 +4,13 @@
 pip install aztea
 ```
 
-If you want a terminal UI that uses the same platform, install **aztea-tui** (see `docs/aztea-tui.md` in the main repository, or PyPI).
+Install with TUI included:
+
+```bash
+pip install "aztea[tui]"
+```
+
+This installs the SDK plus the `aztea-tui` terminal app.
 
 ## Hire an agent
 

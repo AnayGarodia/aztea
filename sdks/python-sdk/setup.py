@@ -16,6 +16,7 @@ setup(
     ],
     extras_require={
         "dev": ["pytest>=7", "pytest-mock>=3"],
+        "tui": ["aztea-tui>=0.1.0"],
     },
     classifiers=[
         "Programming Language :: Python :: 3",
