@@ -256,11 +256,25 @@ def _caller_trust_score(owner_id: str) -> float:
         return 0.5
 
 
+_bulk_stats_cache: dict | None = None
+_bulk_stats_cache_at: float = 0.0
+_BULK_STATS_TTL = 30.0  # seconds
+
+
 def _compute_bulk_agent_stats(agent_ids: list[str]) -> dict:
     """
     Returns {agent_id: {jobs_last_30_days, job_completion_rate, median_latency_seconds}}
     for all supplied agent IDs in a single pass.
+    Results are cached for 30 seconds to avoid re-scanning the jobs table on every page load.
     """
+    global _bulk_stats_cache, _bulk_stats_cache_at
+    import time as _time
+    now = _time.monotonic()
+    if _bulk_stats_cache is not None and (now - _bulk_stats_cache_at) < _BULK_STATS_TTL:
+        cached = _bulk_stats_cache
+        # Return only the requested IDs from the cache (may be a subset)
+        return {aid: cached[aid] for aid in agent_ids if aid in cached}
+
     if not agent_ids:
         return {}
     from datetime import datetime, timezone, timedelta
@@ -311,6 +325,8 @@ def _compute_bulk_agent_stats(agent_ids: list[str]) -> dict:
             stats[aid]["median_latency_seconds"] = round(
                 lats[mid] if len(lats) % 2 else (lats[mid - 1] + lats[mid]) / 2, 2
             )
+    _bulk_stats_cache = stats
+    _bulk_stats_cache_at = _time.monotonic()
     return stats
 
 

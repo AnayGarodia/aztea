@@ -823,6 +823,11 @@ def registry_models_list(
     return JSONResponse(content={"models": models, "count": len(models)})
 
 
+_agents_list_cache: dict | None = None
+_agents_list_cache_at: float = 0.0
+_AGENTS_LIST_TTL = 15.0  # seconds — agents don't change by the second
+
+
 @app.get(
     "/registry/agents",
     response_model=core_models.RegistryAgentsResponse,
@@ -837,24 +842,35 @@ def registry_list(
     model_provider: str | None = None,
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.RegistryAgentsResponse:
+    global _agents_list_cache, _agents_list_cache_at
+    import time as _time
     _require_any_scope(caller, "caller", "worker")
     include_unapproved = _caller_is_admin(caller)
-    try:
-        agents = (
-            registry.get_agents_with_reputation(
-                tag=tag,
-                include_unapproved=include_unapproved,
-                model_provider=model_provider,
+    # Use cached agent+reputation rows for non-admin, no-filter requests
+    use_cache = not include_unapproved and tag is None and model_provider is None and include_reputation
+    now = _time.monotonic()
+    if use_cache and _agents_list_cache is not None and (now - _agents_list_cache_at) < _AGENTS_LIST_TTL:
+        agents = _agents_list_cache
+    else:
+        try:
+            agents = (
+                registry.get_agents_with_reputation(
+                    tag=tag,
+                    include_unapproved=include_unapproved,
+                    model_provider=model_provider,
+                )
+                if include_reputation
+                else registry.get_agents(
+                    tag=tag,
+                    include_unapproved=include_unapproved,
+                    model_provider=model_provider,
+                )
             )
-            if include_reputation
-            else registry.get_agents(
-                tag=tag,
-                include_unapproved=include_unapproved,
-                model_provider=model_provider,
-            )
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        if use_cache:
+            _agents_list_cache = agents
+            _agents_list_cache_at = now
     agents = _sorted_agents(agents, rank_by=rank_by)
     bulk_stats = _compute_bulk_agent_stats([a["agent_id"] for a in agents])
     return JSONResponse(content={"agents": [_agent_response(a, caller, bulk_stats.get(a["agent_id"])) for a in agents], "count": len(agents)})

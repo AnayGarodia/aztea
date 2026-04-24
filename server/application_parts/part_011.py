@@ -645,27 +645,6 @@ def public_docs_index() -> JSONResponse:
     return JSONResponse({"docs": docs, "count": len(docs)})
 
 
-@app.get(
-    "/public/docs/{doc_slug}",
-    tags=["docs"],
-    summary="Fetch a public documentation file by slug.",
-)
-def public_doc_content(doc_slug: str) -> JSONResponse:
-    doc = _find_public_doc(doc_slug)
-    if doc is None:
-        raise HTTPException(status_code=404, detail="Documentation page not found.")
-    try:
-        with open(doc["full_path"], encoding="utf-8") as handle:
-            content = handle.read()
-    except OSError:
-        raise HTTPException(status_code=500, detail="Unable to read documentation file.") from None
-    return JSONResponse({
-        "slug": doc["slug"],
-        "title": doc["title"],
-        "content": content,
-    })
-
-
 @app.post(
     "/public/docs/ask",
     tags=["docs"],
@@ -725,6 +704,27 @@ def public_docs_ask(request: Request, body: dict) -> JSONResponse:
         _LOG.warning("docs/ask LLM failure: %s", exc)
         raise HTTPException(status_code=503, detail="AI service temporarily unavailable.") from None
     return JSONResponse({"answer": answer})
+
+
+@app.get(
+    "/public/docs/{doc_slug}",
+    tags=["docs"],
+    summary="Fetch a public documentation file by slug.",
+)
+def public_doc_content(doc_slug: str) -> JSONResponse:
+    doc = _find_public_doc(doc_slug)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Documentation page not found.")
+    try:
+        with open(doc["full_path"], encoding="utf-8") as handle:
+            content = handle.read()
+    except OSError:
+        raise HTTPException(status_code=500, detail="Unable to read documentation file.") from None
+    return JSONResponse({
+        "slug": doc["slug"],
+        "title": doc["title"],
+        "content": content,
+    })
 
 
 # ---------------------------------------------------------------------------
