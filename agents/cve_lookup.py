@@ -1,27 +1,39 @@
 """
 cve_lookup.py — Real-time CVE lookup via NIST NVD API
 
-Input:  {
-  "packages": ["express@4.17.1", "lodash@4.17.20"],
-  "include_patched": false
-}
-Output: {
-  "results": [{
-    "package": str, "version": str,
-    "cve": str, "cvss": float,
-    "severity": "critical|high|medium|low|none",
-    "description": str,
-    "published": str,
-    "last_modified": str,
-    "affected_range": str,
-    "fixed_in": str,
-    "exploit_available": bool
-  }],
-  "total_vulnerable": int,
-  "total_packages_checked": int,
-  "summary": str,
-  "source": str
-}
+Supports two modes:
+
+Mode 1: Direct CVE ID lookup (new)
+  Input:  {"cve_id": "CVE-2021-44228"}
+       or {"cve_ids": ["CVE-2021-44228", "CVE-2019-10744"]}
+  Output: {
+    "results": [per-CVE dicts],
+    "billing_units_actual": int,
+    # Plus top-level fields mirrored from first result when single cve_id used
+  }
+
+Mode 2: Package-based CVE search (original)
+  Input:  {
+    "packages": ["express@4.17.1", "lodash@4.17.20"],
+    "include_patched": false
+  }
+  Output: {
+    "results": [{
+      "package": str, "version": str,
+      "cve": str, "cvss": float,
+      "severity": "critical|high|medium|low|none",
+      "description": str,
+      "published": str,
+      "last_modified": str,
+      "affected_range": str,
+      "fixed_in": str,
+      "exploit_available": bool
+    }],
+    "total_vulnerable": int,
+    "total_packages_checked": int,
+    "summary": str,
+    "source": str
+  }
 """
 
 import re
@@ -32,6 +44,7 @@ import requests
 _NVD_API = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 _NVD_TIMEOUT = 10
 _NVD_RATE_DELAY = 0.7  # NVD public API allows ~5 req/s without key
+_CVE_ID_PATTERN = re.compile(r'^CVE-\d{4}-\d{4,}$', re.IGNORECASE)
 
 
 def _cvss_to_severity(score: float) -> str:
@@ -97,6 +110,63 @@ def _query_nvd(keyword: str) -> list[dict] | str:
     return results
 
 
+def _fetch_cve(cve_id: str) -> dict:
+    """Fetch a single CVE by its ID from the NIST NVD API.
+
+    Returns a dict with CVE fields on success, or {"cve_id": ..., "error": ...} on failure.
+    """
+    try:
+        resp = requests.get(
+            _NVD_API,
+            params={"cveId": cve_id},
+            timeout=_NVD_TIMEOUT,
+            headers={"User-Agent": "aztea-cve-lookup/1.0"},
+        )
+        if resp.status_code == 404:
+            return {"cve_id": cve_id, "error": "not found"}
+        if resp.status_code == 429:
+            return {"cve_id": cve_id, "error": "NVD API rate limit reached"}
+        if resp.status_code != 200:
+            return {"cve_id": cve_id, "error": f"NVD API returned status {resp.status_code}"}
+        data = resp.json()
+    except requests.exceptions.Timeout:
+        return {"cve_id": cve_id, "error": "NVD API timed out"}
+    except Exception as e:
+        return {"cve_id": cve_id, "error": f"Could not reach NVD API: {type(e).__name__}"}
+
+    vulns = data.get("vulnerabilities", [])
+    if not vulns:
+        return {"cve_id": cve_id, "error": "not found"}
+
+    cve = vulns[0].get("cve", {})
+    metrics = cve.get("metrics", {})
+    cvss = _extract_cvss(metrics)
+    severity = _cvss_to_severity(cvss)
+    descriptions = cve.get("descriptions", [])
+    desc = next((d["value"] for d in descriptions if d.get("lang") == "en"), "")
+
+    weaknesses = cve.get("weaknesses", [])
+    cwe_ids = []
+    for w in weaknesses:
+        for wd in w.get("description", []):
+            if wd.get("lang") == "en" and wd.get("value", "").startswith("CWE-"):
+                cwe_ids.append(wd["value"])
+
+    references = [ref.get("url", "") for ref in cve.get("references", [])[:5]]
+
+    return {
+        "cve_id": cve.get("id", cve_id),
+        "cvss": cvss,
+        "severity": severity,
+        "description": desc[:500],
+        "published": cve.get("published", "")[:10],
+        "last_modified": cve.get("lastModified", "")[:10],
+        "cwe_ids": cwe_ids,
+        "references": references,
+        "source": "nvd",
+    }
+
+
 def _parse_package_version(pkg: str) -> tuple[str, str]:
     if "@" in pkg:
         parts = pkg.rsplit("@", 1)
@@ -122,7 +192,66 @@ def _version_in_range(version: str, affected_range: str) -> bool:
         return True
 
 
+def _run_cve_id_mode(cve_ids: list[str], single_mode: bool) -> dict:
+    """Handle direct CVE ID lookup mode."""
+    results = []
+    for cve_id in cve_ids:
+        result = _fetch_cve(cve_id)
+        results.append(result)
+        time.sleep(_NVD_RATE_DELAY)
+
+    successful = [r for r in results if "error" not in r]
+    billing_units_actual = len(successful)
+
+    output: dict = {
+        "results": results,
+        "billing_units_actual": billing_units_actual,
+    }
+
+    # Backward-compatibility: mirror first successful result's fields at top level
+    # when a single cve_id (not cve_ids) was provided.
+    if single_mode and successful:
+        first = successful[0]
+        for key, val in first.items():
+            output[key] = val
+
+    return output
+
+
 def run(payload: dict) -> dict:
+    # --- Direct CVE ID mode ---
+    cve_id_single = payload.get("cve_id")
+    cve_ids_list = payload.get("cve_ids")
+
+    if cve_id_single is not None or cve_ids_list is not None:
+        single_mode = False
+
+        if cve_ids_list is not None and len(cve_ids_list) > 0:
+            ids_to_lookup = cve_ids_list
+        elif cve_id_single is not None:
+            ids_to_lookup = [cve_id_single]
+            single_mode = True
+        else:
+            return {"error": "cve_id or cve_ids is required"}
+
+        if not isinstance(ids_to_lookup, list):
+            return {"error": "cve_ids must be a list of CVE ID strings"}
+
+        if len(ids_to_lookup) > 10:
+            return {"error": f"At most 10 CVE IDs can be looked up per call. You provided {len(ids_to_lookup)}."}
+
+        normalized = []
+        for raw_id in ids_to_lookup:
+            if not isinstance(raw_id, str):
+                return {"error": f"Each CVE ID must be a string, got: {type(raw_id).__name__}"}
+            upper_id = raw_id.strip().upper()
+            if not _CVE_ID_PATTERN.match(upper_id):
+                return {"error": f"Invalid CVE ID format: {raw_id!r}. Expected pattern: CVE-YYYY-NNNNN"}
+            normalized.append(upper_id)
+
+        return _run_cve_id_mode(normalized, single_mode)
+
+    # --- Package-based mode (original) ---
     packages = payload.get("packages") or []
     include_patched = bool(payload.get("include_patched", False))
 
