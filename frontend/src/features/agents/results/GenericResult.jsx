@@ -3,8 +3,17 @@ import './ResultRenderer.css'
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
-const SUMMARY_KEYS = ['summary', 'message', 'answer', 'title', 'one_line_summary', 'description', 'conclusion']
+const SUMMARY_KEYS = [
+  'summary', 'message', 'answer', 'title', 'one_line_summary', 'description', 'conclusion',
+  'synthesis', 'analysis', 'cross_source_consensus', 'digest', 'overview',
+]
 const ARTIFACT_KEYS = ['artifacts', 'output_artifacts']
+const METADATA_FIELDS = new Set([
+  'billing_units_actual',
+  'fetched_at',
+  'fetch_time',
+  'request_id',
+])
 
 const URL_RE = /https?:\/\/[^\s<>"')\]]+/gi
 const ISO_LIKE_RE = /^\d{4}-\d{2}-\d{2}(?:[T ][\d:.+Z-]+)?$/
@@ -227,14 +236,56 @@ function ObjectTable({ rows, columns }) {
   )
 }
 
+function CardTitle({ obj }) {
+  const titleKey = ['title', 'name', 'heading', 'label'].find(k => typeof obj[k] === 'string' && obj[k].trim())
+  const urlKey = ['url', 'link'].find(k => typeof obj[k] === 'string' && isUrl(obj[k].trim()))
+  if (!titleKey) return null
+  const text = obj[titleKey].trim()
+  if (urlKey) {
+    return (
+      <a
+        className="result-card__title-link result-link"
+        href={obj[urlKey].trim()}
+        target="_blank"
+        rel="noopener noreferrer"
+      >{text}</a>
+    )
+  }
+  return <p className="result-card__title">{text}</p>
+}
+
+function CardIssues({ issues }) {
+  if (!Array.isArray(issues) || issues.length === 0) return null
+  const strings = issues.filter(i => typeof i === 'string')
+  if (strings.length === 0) return null
+  return (
+    <ul className="result-card__issues">
+      {strings.map((issue, i) => (
+        <li key={i} className="result-card__issue">{issue}</li>
+      ))}
+    </ul>
+  )
+}
+
 function ObjectCardGrid({ items }) {
   return (
     <div className="result-card-grid">
-      {items.map((obj, i) => (
-        <div key={i} className="result-card">
-          <KeyValueBlock value={obj} compact />
-        </div>
-      ))}
+      {items.map((obj, i) => {
+        const titleKey = ['title', 'name', 'heading', 'label'].find(k => typeof obj[k] === 'string' && obj[k].trim())
+        const urlKey = ['url', 'link'].find(k => typeof obj[k] === 'string' && isUrl(obj[k].trim()))
+        const skipKeys = new Set([
+          ...(titleKey ? [titleKey] : []),
+          ...(urlKey ? [urlKey] : []),
+        ])
+        const remainingObj = Object.fromEntries(Object.entries(obj).filter(([k]) => !skipKeys.has(k) && k !== 'issues'))
+        return (
+          <div key={i} className="result-card">
+            <CardTitle obj={obj} />
+            {Object.keys(remainingObj).length > 0 && <KeyValueBlock value={remainingObj} compact />}
+            <CardIssues issues={obj.issues} />
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -383,13 +434,16 @@ export default function GenericResult({ result }) {
     return []
   }, [output])
 
-  const detailEntries = Object.entries(output).filter(([key, value]) => {
-    if (key === 'summary' && summary === value) return false
+  const allDetailEntries = Object.entries(output).filter(([key, value]) => {
+    if (SUMMARY_KEYS.includes(key) && summary === value) return false
     if (ARTIFACT_KEYS.includes(key)) return false
     return true
   })
 
-  if (detailEntries.length === 0 && !summary && artifacts.length === 0) {
+  const detailEntries = allDetailEntries.filter(([key]) => !METADATA_FIELDS.has(key))
+  const metadataEntries = allDetailEntries.filter(([key]) => METADATA_FIELDS.has(key))
+
+  if (detailEntries.length === 0 && !summary && artifacts.length === 0 && metadataEntries.length === 0) {
     return <pre className="result-json">{JSON.stringify(result, null, 2)}</pre>
   }
 
@@ -430,6 +484,20 @@ export default function GenericResult({ result }) {
             ))}
           </div>
         </div>
+      )}
+
+      {metadataEntries.length > 0 && (
+        <details className="result-metadata-details">
+          <summary className="result-metadata-details__summary">Metadata</summary>
+          <div className="result-metadata-details__body">
+            {metadataEntries.map(([key, value]) => (
+              <div key={key} className="result-metadata-details__row">
+                <span className="result-metadata-details__key">{titleize(key)}:</span>
+                <span className="result-metadata-details__value">{String(value ?? '')}</span>
+              </div>
+            ))}
+          </div>
+        </details>
       )}
     </div>
   )

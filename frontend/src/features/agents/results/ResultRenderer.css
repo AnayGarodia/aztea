@@ -430,6 +430,101 @@
   background: var(--surface-2);
 }
 
+/* ── Metadata collapsed section ─────────────────────────────────────────── */
+
+.result-metadata-details {
+  margin-top: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.result-metadata-details__summary {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: var(--sp-2) var(--sp-3);
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+
+.result-metadata-details__summary::-webkit-details-marker { display: none; }
+.result-metadata-details__summary::before {
+  content: '▶ ';
+  font-size: 0.55rem;
+  vertical-align: middle;
+}
+.result-metadata-details[open] .result-metadata-details__summary::before { content: '▼ '; }
+
+.result-metadata-details__body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--sp-2) var(--sp-3) var(--sp-3);
+  border-top: 1px solid var(--border);
+}
+
+.result-metadata-details__row {
+  display: flex;
+  gap: var(--sp-2);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.result-metadata-details__key {
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.result-metadata-details__value {
+  font-family: var(--font-mono);
+  word-break: break-all;
+}
+
+/* ── Card enhancements ───────────────────────────────────────────────────── */
+
+.result-card__title-link {
+  display: block;
+  font-weight: 600;
+  font-size: 0.875rem;
+  margin-bottom: var(--sp-2);
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.result-card__title-link:hover { text-decoration: underline; }
+
+.result-card__title {
+  font-weight: 600;
+  font-size: 0.875rem;
+  margin-bottom: var(--sp-2);
+  color: var(--text-primary);
+}
+
+.result-card__issues {
+  list-style: none;
+  margin-top: var(--sp-2);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--sp-2);
+  background: var(--negative-bg, #fff1f0);
+  border: 1px solid var(--negative-border, #ffccc7);
+  border-radius: var(--r-sm);
+}
+
+.result-card__issue {
+  font-size: 0.8125rem;
+  color: var(--negative, #cf1322);
+  line-height: 1.4;
+}
+
+.result-card__issue::before { content: '⚠ '; font-size: 0.7rem; }
+
 @media (max-width: 480px) {
   .result-kv__row { grid-template-columns: 1fr; gap: 2px; }
   .result-table th,
