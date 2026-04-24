@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'motion/react'
 import { ArrowRight, X, Wallet, Bot, Zap, ChevronLeft } from 'lucide-react'
@@ -181,6 +181,11 @@ export default function OnboardingWizard() {
     setVisible(!localStorage.getItem(storageKey))
   }, [userId, storageKey, loading, hasRecentActivity])
 
+  const dismiss = useCallback(() => {
+    if (storageKey) localStorage.setItem(storageKey, '1')
+    setVisible(false)
+  }, [storageKey])
+
   useEffect(() => {
     if (!visible) return undefined
     const onKeydown = (event) => {
@@ -188,12 +193,7 @@ export default function OnboardingWizard() {
     }
     window.addEventListener('keydown', onKeydown)
     return () => window.removeEventListener('keydown', onKeydown)
-  }, [visible, storageKey])
-
-  const dismiss = () => {
-    if (storageKey) localStorage.setItem(storageKey, '1')
-    setVisible(false)
-  }
+  }, [visible, dismiss])
 
   const goTo = (next) => {
     setDir(next > step ? 1 : -1)
