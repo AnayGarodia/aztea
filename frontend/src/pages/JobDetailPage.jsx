@@ -39,6 +39,24 @@ function fmtUsd(cents) {
   return '$' + (cents / 100).toFixed(2)
 }
 
+function computeActualCharge(variablePricing, billingUnitsActual) {
+  if (!variablePricing || billingUnitsActual == null) return null
+  const { model, tiers, rate_usd, min_usd } = variablePricing
+  const units = Number(billingUnitsActual)
+  if (!Number.isFinite(units) || units < 0) return null
+
+  let priceUsd
+  if (model === 'tiered') {
+    const tier = tiers.find(t => units <= t.max_units) ?? tiers[tiers.length - 1]
+    priceUsd = tier.price_usd
+  } else if (model === 'per_unit') {
+    priceUsd = Math.max(min_usd ?? 0, units * (rate_usd ?? 0))
+  } else {
+    return null
+  }
+  return Math.round(priceUsd * 100)
+}
+
 function InfoRow({ label, value, mono = false }) {
   return (
     <div className="job-detail__info-row">
@@ -118,6 +136,13 @@ export default function JobDetailPage() {
   const contextJob = useMemo(() => jobs.find(j => j.job_id === id), [jobs, id])
   const job = localJob ?? contextJob
   const agent = useMemo(() => agents.find(a => a.agent_id === job?.agent_id), [agents, job])
+
+  const billingUnitsActual = job?.output?.billing_units_actual
+  const vp = agent?.variable_pricing
+  const actualChargeCents = computeActualCharge(vp, billingUnitsActual)
+  const refundCents = actualChargeCents != null
+    ? Math.max(0, (job?.price_cents ?? 0) - actualChargeCents)
+    : 0
 
   const loadMessages = async () => {
     if (!id || !apiKey) return
@@ -373,7 +398,29 @@ export default function JobDetailPage() {
               </Card.Header>
               <Card.Body>
                 <InfoRow label="Status" value={<Badge label={job.status} dot />} />
-                {fmtUsd(job.price_cents) && <InfoRow label="Cost" value={fmtUsd(job.price_cents)} mono />}
+                {actualChargeCents != null ? (
+                  <div className="job-detail__info-row">
+                    <span className="job-detail__info-label">Cost</span>
+                    <span className="job-detail__info-value job-detail__info-value--mono" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+                      <span>{fmtUsd(actualChargeCents)}</span>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--ink-soft)' }}>
+                        Estimate: {fmtUsd(job.price_cents)}
+                      </span>
+                      {refundCents > 0 && (
+                        <span style={{ fontSize: '0.75rem', color: 'var(--positive)' }}>
+                          Refunded: {fmtUsd(refundCents)}
+                        </span>
+                      )}
+                      {billingUnitsActual != null && vp?.unit_label && (
+                        <span style={{ fontSize: '0.75rem', color: 'var(--ink-mute)' }}>
+                          {billingUnitsActual} {vp.unit_label}{billingUnitsActual !== 1 ? 's' : ''} processed
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                ) : (
+                  fmtUsd(job.price_cents) && <InfoRow label="Cost" value={fmtUsd(job.price_cents)} mono />
+                )}
                 {job.attempt_count != null && (
                   <InfoRow label="Attempts" value={`${job.attempt_count} / ${job.max_attempts ?? '-'}`} mono />
                 )}
