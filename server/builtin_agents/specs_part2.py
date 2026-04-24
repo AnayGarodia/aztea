@@ -6,6 +6,9 @@ from typing import Any
 from server.builtin_agents.constants import (
     ARXIV_RESEARCH_AGENT_ID as _ARXIV_RESEARCH_AGENT_ID,
     BUILTIN_INTERNAL_ENDPOINTS as _BUILTIN_INTERNAL_ENDPOINTS,
+    DNS_INSPECTOR_AGENT_ID as _DNS_INSPECTOR_AGENT_ID,
+    GITHUB_FETCHER_AGENT_ID as _GITHUB_FETCHER_AGENT_ID,
+    HN_DIGEST_AGENT_ID as _HN_DIGEST_AGENT_ID,
     IMAGE_GENERATOR_AGENT_ID as _IMAGE_GENERATOR_AGENT_ID,
     PYTHON_EXECUTOR_AGENT_ID as _PYTHON_EXECUTOR_AGENT_ID,
     VIDEO_STORYBOARD_AGENT_ID as _VIDEO_STORYBOARD_AGENT_ID,
@@ -389,6 +392,123 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
                 "quotes": ["Attention is All You Need", "The model architecture avoids recurrence"],
                 "links": [{"text": "Attention Is All You Need", "href": "https://arxiv.org/abs/1706.03762"}],
                 "content_type": "article",
+            },
+        }
+    ],
+},
+{
+    "agent_id": str(_GITHUB_FETCHER_AGENT_ID),
+    "name": "GitHub File Fetcher",
+    "description": "Fetches files from public GitHub repositories and optionally summarizes the codebase architecture. Supports up to 20 files per call with parallel retrieval.",
+    "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_GITHUB_FETCHER_AGENT_ID],
+    "price_per_call_usd": 0.08,
+    "tags": ["github", "code", "files", "repository"],
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "repo": {"type": "string", "description": "Repository in owner/repo format"},
+            "paths": {"type": "array", "items": {"type": "string"}, "description": "File paths to fetch (max 20)"},
+            "branch": {"type": "string", "default": "main", "description": "Branch name"},
+            "summarize": {"type": "boolean", "default": False, "description": "Run LLM summary of fetched files"},
+        },
+        "required": ["repo", "paths"],
+    },
+    "output_schema": {
+        "type": "object",
+        "properties": {
+            "repo": {"type": "string"},
+            "branch": {"type": "string"},
+            "files": {"type": "array"},
+            "summary": {"type": "string"},
+            "billing_units_actual": {"type": "integer"},
+        },
+    },
+    "output_examples": [
+        {
+            "input": {"repo": "openai/openai-python", "paths": ["README.md"], "branch": "main"},
+            "output": {
+                "repo": "openai/openai-python",
+                "branch": "main",
+                "files": [{"path": "README.md", "content": "# OpenAI Python SDK\n...", "size_bytes": 4096}],
+                "summary": "The openai-python repository contains the official Python client for the OpenAI API.",
+                "billing_units_actual": 1,
+            },
+        }
+    ],
+},
+{
+    "agent_id": str(_HN_DIGEST_AGENT_ID),
+    "name": "Hacker News Digest",
+    "description": "Fetches live Hacker News front-page stories and synthesizes themes, trends, and notable discussions using the HN Algolia API.",
+    "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_HN_DIGEST_AGENT_ID],
+    "price_per_call_usd": 0.10,
+    "tags": ["news", "hacker-news", "trends", "digest"],
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "count": {"type": "integer", "default": 10, "description": "Number of stories (max 20)"},
+            "topic_filter": {"type": "string", "description": "Filter stories by keyword in title"},
+            "mode": {"type": "string", "enum": ["digest", "trends", "hot"], "default": "digest"},
+        },
+    },
+    "output_schema": {
+        "type": "object",
+        "properties": {
+            "stories": {"type": "array"},
+            "synthesis": {"type": "string"},
+            "trending_topics": {"type": "array"},
+            "notable_discussions": {"type": "array"},
+            "billing_units_actual": {"type": "integer"},
+        },
+    },
+    "output_examples": [
+        {
+            "input": {"count": 5, "mode": "digest"},
+            "output": {
+                "stories": [{"title": "Show HN: Fast SQLite for Python", "score": 342, "url": "https://github.com/example/fast-sqlite"}],
+                "synthesis": "Today's HN front page is dominated by open-source developer tooling and AI infrastructure stories.",
+                "trending_topics": ["sqlite", "AI", "developer-tools"],
+                "notable_discussions": ["Show HN: Fast SQLite for Python (342 points, 87 comments)"],
+                "billing_units_actual": 5,
+            },
+        }
+    ],
+},
+{
+    "agent_id": str(_DNS_INSPECTOR_AGENT_ID),
+    "name": "DNS & SSL Inspector",
+    "description": "Inspects DNS records, SSL certificate validity, and HTTP response headers for up to 10 domains. Identifies certificate expiry risks, missing HSTS, and DNS misconfigurations.",
+    "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_DNS_INSPECTOR_AGENT_ID],
+    "price_per_call_usd": 0.09,
+    "tags": ["dns", "ssl", "security", "infrastructure"],
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "domains": {"type": "array", "items": {"type": "string"}, "description": "Domain names to inspect (max 10)"},
+            "checks": {"type": "array", "items": {"type": "string"}, "default": ["dns", "ssl", "http"], "description": "Checks to run: dns, ssl, http, mx"},
+        },
+        "required": ["domains"],
+    },
+    "output_schema": {
+        "type": "object",
+        "properties": {
+            "results": {"type": "array"},
+            "billing_units_actual": {"type": "integer"},
+        },
+    },
+    "output_examples": [
+        {
+            "input": {"domains": ["example.com"], "checks": ["dns", "ssl"]},
+            "output": {
+                "results": [
+                    {
+                        "domain": "example.com",
+                        "dns": {"a": ["93.184.216.34"], "mx": [], "ns": ["a.iana-servers.net"]},
+                        "ssl": {"valid": True, "expires_in_days": 180, "issuer": "DigiCert Inc", "subject": "example.com"},
+                        "issues": [],
+                    }
+                ],
+                "billing_units_actual": 1,
             },
         }
     ],

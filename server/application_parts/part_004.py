@@ -41,6 +41,12 @@ def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict
         return agent_python_executor.run(payload)
     if agent_id == _WEB_RESEARCHER_AGENT_ID:
         return agent_web_researcher.run(payload)
+    if agent_id == _GITHUB_FETCHER_AGENT_ID:
+        return agent_github_fetcher.run(payload)
+    if agent_id == _HN_DIGEST_AGENT_ID:
+        return agent_hn_digest.run(payload)
+    if agent_id == _DNS_INSPECTOR_AGENT_ID:
+        return agent_dns_inspector.run(payload)
     raise ValueError(f"Unsupported built-in agent '{agent_id}'.")
 
 

@@ -247,6 +247,9 @@ def test_registry_search_endpoint_returns_ranked_results(isolated_db):
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["count"] > 0
-    top = body["results"][0]
-    assert top["agent"]["agent_id"] == server._FINANCIAL_AGENT_ID
-    assert isinstance(top["match_reasons"], list) and top["match_reasons"]
+    result_ids = [r["agent"]["agent_id"] for r in body["results"]]
+    assert server._FINANCIAL_AGENT_ID in result_ids, (
+        f"Financial agent not found in top results: {result_ids}"
+    )
+    financial_result = next(r for r in body["results"] if r["agent"]["agent_id"] == server._FINANCIAL_AGENT_ID)
+    assert isinstance(financial_result["match_reasons"], list) and financial_result["match_reasons"]

@@ -75,6 +75,9 @@ from agents import wiki as agent_wiki
 from agents import arxiv_research as agent_arxiv_research
 from agents import python_executor as agent_python_executor
 from agents import web_researcher as agent_web_researcher
+from agents import github_fetcher as agent_github_fetcher
+from agents import hn_digest as agent_hn_digest
+from agents import dns_inspector as agent_dns_inspector
 from core import auth as _auth
 from core import embeddings
 from core import onboarding
@@ -245,6 +248,9 @@ _VIDEO_STORYBOARD_AGENT_ID = "c12994de-cde9-514a-9c07-a3833b25bb1f"
 _ARXIV_RESEARCH_AGENT_ID   = "9e673f6e-9115-516f-b41b-5af8bcbf15bd"
 _PYTHON_EXECUTOR_AGENT_ID  = "040dc3f5-afe7-5db7-b253-4936090cc7af"
 _WEB_RESEARCHER_AGENT_ID   = "32cd7b5c-44d0-5259-bb02-1bbc612e92d7"
+_GITHUB_FETCHER_AGENT_ID   = "5896576f-bbe6-59e4-83c1-5106002e7d10"
+_HN_DIGEST_AGENT_ID        = "31cc3a99-eca6-5202-96d4-8366f426ae1d"
+_DNS_INSPECTOR_AGENT_ID    = "3d677381-791c-5e83-8e66-5b77d0e43e2e"
 
 def _normalize_endpoint_ref(value: str | None) -> str:
     return str(value or "").strip().rstrip("/")
@@ -261,6 +267,9 @@ _BUILTIN_INTERNAL_ENDPOINTS = {
     _ARXIV_RESEARCH_AGENT_ID:  "internal://arxiv-research",
     _PYTHON_EXECUTOR_AGENT_ID: "internal://python-executor",
     _WEB_RESEARCHER_AGENT_ID:  "internal://web-researcher",
+    _GITHUB_FETCHER_AGENT_ID:  "internal://github_fetcher",
+    _HN_DIGEST_AGENT_ID:       "internal://hn_digest",
+    _DNS_INSPECTOR_AGENT_ID:   "internal://dns_inspector",
 }
 _BUILTIN_LEGACY_ROUTE_ENDPOINTS = {
     _FINANCIAL_AGENT_ID: f"{_SERVER_BASE_URL}/agents/financial",
@@ -273,6 +282,9 @@ _BUILTIN_LEGACY_ROUTE_ENDPOINTS = {
     _ARXIV_RESEARCH_AGENT_ID:  f"{_SERVER_BASE_URL}/agents/arxiv-research",
     _PYTHON_EXECUTOR_AGENT_ID: f"{_SERVER_BASE_URL}/agents/python-executor",
     _WEB_RESEARCHER_AGENT_ID:  f"{_SERVER_BASE_URL}/agents/web-researcher",
+    _GITHUB_FETCHER_AGENT_ID:  f"{_SERVER_BASE_URL}/agents/github-fetcher",
+    _HN_DIGEST_AGENT_ID:       f"{_SERVER_BASE_URL}/agents/hn-digest",
+    _DNS_INSPECTOR_AGENT_ID:   f"{_SERVER_BASE_URL}/agents/dns-inspector",
 }
 _BUILTIN_ENDPOINT_TO_AGENT_ID: dict[str, str] = {}
 for _agent_id, _endpoint in _BUILTIN_INTERNAL_ENDPOINTS.items():
@@ -293,6 +305,9 @@ _CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
         _WEB_RESEARCHER_AGENT_ID,   # HTTP fetch + parse
         _IMAGE_GENERATOR_AGENT_ID,  # OpenAI / Replicate API
         _CODEREVIEW_AGENT_ID,       # structured expert output, high quality prompt
+        _GITHUB_FETCHER_AGENT_ID,   # GitHub API live fetch
+        _HN_DIGEST_AGENT_ID,        # HN Algolia API live fetch
+        _DNS_INSPECTOR_AGENT_ID,    # DNS/SSL live inspection
     }
 )
 _CURATED_BUILTIN_AGENT_IDS = frozenset(set(_CURATED_PUBLIC_BUILTIN_AGENT_IDS) | {_QUALITY_JUDGE_AGENT_ID})
