@@ -182,7 +182,7 @@ def run(payload: dict) -> dict:
 
         # --- SSRF guard ---
         try:
-            validate_outbound_url(f"https://{domain}")
+            validate_outbound_url(f"https://{domain}", "domain")
         except Exception as exc:
             results.append({
                 "domain": domain,
