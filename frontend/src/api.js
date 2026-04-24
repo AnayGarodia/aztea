@@ -385,6 +385,20 @@ export async function ruleDispute(key, disputeId, { outcome, reasoning, split_ca
   return body
 }
 
+export async function fetchAdminPlatformEarnings(key) {
+  const { body } = await request('/admin/platform/earnings', { key })
+  return body
+}
+
+export async function adminPlatformWithdraw(key, { source, amount_cents, memo } = {}) {
+  const { body } = await request('/admin/platform/withdraw', {
+    method: 'POST',
+    key,
+    body: { source, amount_cents, ...(memo ? { memo } : {}) },
+  })
+  return body
+}
+
 export async function verifyJob(key, jobId, { decision, reason } = {}) {
   const { body } = await request(`/jobs/${jobId}/verification`, {
     method: 'POST',

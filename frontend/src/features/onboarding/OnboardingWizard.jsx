@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'motion/react'
 import { ArrowRight, X, Wallet, Bot, Zap, ChevronLeft } from 'lucide-react'
@@ -158,28 +158,40 @@ export default function OnboardingWizard() {
   const [visible, setVisible] = useState(false)
   const [step, setStep] = useState(0)
   const [dir, setDir] = useState(1)
+  const dismissedRef = useRef(false)
   const navigate = useNavigate()
   const userId = String(user?.user_id || '').trim()
-  const storageKey = userId ? `${STORAGE_KEY_PREFIX}:${userId}` : ''
+  const username = String(user?.username || '').trim()
+  // Prefer user_id; fall back to username so we still persist even if user_id
+  // races/absent. Empty only when truly unauthenticated.
+  const storageKey = userId
+    ? `${STORAGE_KEY_PREFIX}:${userId}`
+    : (username ? `${STORAGE_KEY_PREFIX}:u:${username}` : '')
   const hasRecentActivity =
     (Array.isArray(jobs) && jobs.length > 0) ||
     Number(wallet?.balance_cents || 0) > 100
 
   useEffect(() => {
-    if (!userId) {
+    // In-session dismiss wins over everything — prevents the wizard from
+    // re-opening if storage writes fail, identity reshuffles, or activity
+    // signals flicker after the user clicks Done.
+    if (dismissedRef.current) {
       setVisible(false)
       return
     }
-    // Dismiss as soon as we can prove the user is not new. Do NOT gate on
-    // market `loading` — if the API stalls the wizard would never appear for
-    // the exact users who need it most.
+    if (!storageKey) {
+      setVisible(false)
+      return
+    }
     if (!loading && hasRecentActivity) {
-      localStorage.setItem(storageKey, '1')
+      try { localStorage.setItem(storageKey, '1') } catch {}
       setVisible(false)
       return
     }
-    setVisible(!localStorage.getItem(storageKey))
-  }, [userId, storageKey, loading, hasRecentActivity])
+    let stored = null
+    try { stored = localStorage.getItem(storageKey) } catch {}
+    setVisible(!stored)
+  }, [storageKey, loading, hasRecentActivity])
 
   useEffect(() => {
     if (!visible) return undefined
@@ -191,7 +203,10 @@ export default function OnboardingWizard() {
   }, [visible, storageKey])
 
   const dismiss = () => {
-    if (storageKey) localStorage.setItem(storageKey, '1')
+    dismissedRef.current = true
+    if (storageKey) {
+      try { localStorage.setItem(storageKey, '1') } catch {}
+    }
     setVisible(false)
   }
 
@@ -202,7 +217,7 @@ export default function OnboardingWizard() {
 
   const handleCta = () => {
     const current = STEPS[step]
-    if (step === STEPS.length - 1) {
+    if (step >= STEPS.length - 1) {
       dismiss()
       navigate(current.ctaPath)
     } else {
@@ -212,7 +227,7 @@ export default function OnboardingWizard() {
   }
 
   const handleNext = () => {
-    if (step === STEPS.length - 1) { dismiss(); return }
+    if (step >= STEPS.length - 1) { dismiss(); return }
     goTo(step + 1)
   }
 

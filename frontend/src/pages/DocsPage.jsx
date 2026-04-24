@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useRef } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { Moon, Sun, Menu, X, ArrowLeft } from 'lucide-react'
+import { Moon, Sun, Menu, X, ArrowLeft, Search, Sparkles, Send } from 'lucide-react'
 import { useTheme } from '../context/ThemeContext'
 import { fetchPublicDoc, fetchPublicDocsIndex } from '../api'
 import MarkdownDoc from '../ui/MarkdownDoc'
@@ -24,6 +24,12 @@ export default function DocsPage() {
   const [error, setError] = useState('')
   const [indexError, setIndexError] = useState('')
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [askOpen, setAskOpen] = useState(false)
+  const [askInput, setAskInput] = useState('')
+  const [askChat, setAskChat] = useState([]) // [{role:'user'|'assistant', content}]
+  const [askLoading, setAskLoading] = useState(false)
+  const askBodyRef = useRef(null)
 
   const loadIndex = () => {
     let cancelled = false
@@ -92,6 +98,49 @@ export default function DocsPage() {
     return () => window.removeEventListener('keydown', onKey)
   }, [drawerOpen])
 
+  const filteredDocs = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return docs
+    return docs.filter((d) => {
+      const t = String(d.title || '').toLowerCase()
+      const s = String(d.slug || '').toLowerCase()
+      return t.includes(q) || s.includes(q)
+    })
+  }, [docs, query])
+
+  const handleAsk = async (e) => {
+    e?.preventDefault?.()
+    const q = askInput.trim()
+    if (!q || askLoading) return
+    const history = [...askChat, { role: 'user', content: q }]
+    setAskChat(history)
+    setAskInput('')
+    setAskLoading(true)
+    try {
+      // Uses the same backend request helper — kept inline to avoid circular imports.
+      const url = '/docs/ask'
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ question: q, doc_slug: selectedSlug || null }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const body = await res.json()
+      const answer = String(body?.answer || 'No answer available.')
+      setAskChat([...history, { role: 'assistant', content: answer, citations: body?.citations }])
+    } catch (err) {
+      setAskChat([...history, {
+        role: 'assistant',
+        content: `Sorry, the Ask-AI endpoint isn't available yet. (${err?.message || 'error'})\n\nIn the meantime, use the search box above to filter the docs index.`,
+      }])
+    } finally {
+      setAskLoading(false)
+      setTimeout(() => {
+        if (askBodyRef.current) askBodyRef.current.scrollTop = askBodyRef.current.scrollHeight
+      }, 40)
+    }
+  }
+
   const activeDocTitle = useMemo(() => {
     if (!selectedSlug) return ''
     const found = docs.find((d) => d.slug === selectedSlug)
@@ -100,7 +149,9 @@ export default function DocsPage() {
 
   const renderNavLinks = (onSelect) => (
     <nav className="docs-nav" aria-label="Documentation list">
-      {docs.map((doc) => (
+      {filteredDocs.length === 0 ? (
+        <p className="docs-nav__empty">No docs match "{query}".</p>
+      ) : filteredDocs.map((doc) => (
         <Link
           key={doc.slug}
           to={`/docs/${doc.slug}`}
@@ -135,6 +186,15 @@ export default function DocsPage() {
         <div className="docs-page__topbar-right">
           <button
             type="button"
+            className="docs-page__ask-btn"
+            onClick={() => setAskOpen(true)}
+            aria-label="Ask AI about the docs"
+          >
+            <Sparkles size={13} />
+            <span>Ask AI</span>
+          </button>
+          <button
+            type="button"
             className="docs-page__icon-btn"
             onClick={toggleTheme}
             aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
@@ -150,6 +210,24 @@ export default function DocsPage() {
           <div className="docs-page__sidebar-head">
             <p className="docs-page__sidebar-title">Documentation</p>
             <p className="docs-page__sidebar-sub">Setup, API reference, and integration guides.</p>
+          </div>
+          <div className="docs-page__search">
+            <Search size={13} className="docs-page__search-icon" />
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search docs…"
+              aria-label="Search docs"
+            />
+            {query && (
+              <button type="button" onClick={() => setQuery('')} aria-label="Clear search">
+                <X size={12} />
+              </button>
+            )}
+          </div>
+          <div className="docs-page__placeholder-note" aria-hidden>
+            Tip: values wrapped in angle brackets like <code>&lt;YOUR_API_KEY&gt;</code> are placeholders — replace them with your own values.
           </div>
           {loadingList && (
             <div className="docs-page__sidebar-skeletons" aria-hidden>
@@ -196,6 +274,58 @@ export default function DocsPage() {
           )}
         </section>
       </div>
+
+      {askOpen && (
+        <div className="docs-ask" role="dialog" aria-modal="true" aria-label="Ask AI">
+          <button
+            type="button"
+            className="docs-ask__backdrop"
+            aria-label="Close Ask AI"
+            onClick={() => setAskOpen(false)}
+          />
+          <div className="docs-ask__panel">
+            <div className="docs-ask__head">
+              <div className="docs-ask__head-title">
+                <Sparkles size={14} />
+                <span>Ask AI about the docs</span>
+              </div>
+              <button type="button" className="docs-ask__close" onClick={() => setAskOpen(false)} aria-label="Close">
+                <X size={15} />
+              </button>
+            </div>
+            <div className="docs-ask__body" ref={askBodyRef}>
+              {askChat.length === 0 && (
+                <div className="docs-ask__hint">
+                  <p>Ask anything about Aztea — pricing, API keys, MCP, disputes, etc.</p>
+                  <p className="docs-ask__hint-sub">Answers are grounded in the docs on this page.</p>
+                </div>
+              )}
+              {askChat.map((msg, i) => (
+                <div key={i} className={`docs-ask__msg docs-ask__msg--${msg.role}`}>
+                  <div className="docs-ask__msg-bubble">{msg.content}</div>
+                </div>
+              ))}
+              {askLoading && (
+                <div className="docs-ask__msg docs-ask__msg--assistant">
+                  <div className="docs-ask__msg-bubble docs-ask__msg-bubble--loading">Thinking…</div>
+                </div>
+              )}
+            </div>
+            <form className="docs-ask__form" onSubmit={handleAsk}>
+              <input
+                type="text"
+                value={askInput}
+                onChange={(e) => setAskInput(e.target.value)}
+                placeholder="Ask about anything in the docs…"
+                aria-label="Your question"
+              />
+              <button type="submit" disabled={!askInput.trim() || askLoading} aria-label="Send">
+                <Send size={13} />
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
 
       {drawerOpen && (
         <div className="docs-drawer" role="dialog" aria-modal="true" aria-label="Documentation index">

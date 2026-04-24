@@ -1,7 +1,7 @@
 import { NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { motion } from 'motion/react'
 import {
-  LayoutDashboard, Bot, Briefcase, Hammer, Wallet, Settings, LogOut, Shield, ListChecks, Activity
+  LayoutDashboard, Bot, Briefcase, Hammer, Wallet, Settings, LogOut, Shield, ListChecks, Activity, BookOpen, KeyRound, Coins
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useMarket } from '../context/MarketContext'
@@ -16,6 +16,8 @@ const NAV = [
   { to: '/worker',    icon: Hammer,          label: 'Worker' },
   { to: '/my-agents', icon: ListChecks,      label: 'My Agents' },
   { to: '/wallet',    icon: Wallet,          label: 'Wallet' },
+  { to: '/keys',      icon: KeyRound,        label: 'API Keys' },
+  { to: '/docs',      icon: BookOpen,        label: 'Docs' },
   { to: '/settings',  icon: Settings,        label: 'Settings' },
 ]
 
@@ -63,21 +65,22 @@ export default function Sidebar() {
         })}
       </nav>
 
-      {/* Admin link */}
+      {/* Admin links */}
       {user?.scopes?.includes('admin') && (
         <nav className="sidebar__nav sidebar__nav--admin">
           <NavLink to="/admin/disputes" className="sidebar__link-wrap">
             {({ isActive }) => (
               <div className={`sidebar__link ${isActive ? 'sidebar__link--active' : ''}`}>
-                {isActive && (
-                  <motion.div
-                    layoutId="sidebar-active"
-                    className="sidebar__link-bg"
-                    transition={{ type: 'spring', bounce: 0.2, duration: 0.4 }}
-                  />
-                )}
                 <Shield size={16} className="sidebar__link-icon" />
                 <span className="sidebar__link-label">Disputes</span>
+              </div>
+            )}
+          </NavLink>
+          <NavLink to="/admin/earnings" className="sidebar__link-wrap">
+            {({ isActive }) => (
+              <div className={`sidebar__link ${isActive ? 'sidebar__link--active' : ''}`}>
+                <Coins size={16} className="sidebar__link-icon" />
+                <span className="sidebar__link-label">Platform Earnings</span>
               </div>
             )}
           </NavLink>
@@ -111,10 +114,6 @@ export default function Sidebar() {
           <NavLink to="/terms" className="sidebar__legal-link">Terms</NavLink>
           <span className="sidebar__legal-sep">·</span>
           <NavLink to="/privacy" className="sidebar__legal-link">Privacy</NavLink>
-          <span className="sidebar__legal-sep">·</span>
-          <NavLink to="/docs" className="sidebar__legal-link">Docs</NavLink>
-          <span className="sidebar__legal-sep">·</span>
-          <NavLink to="/platform" className="sidebar__legal-link">Platform</NavLink>
         </div>
 
         <div

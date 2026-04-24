@@ -49,7 +49,8 @@ from .schema import (
 
 def register_user(username: str, email: str, password: str) -> dict:
     """
-    Create a new user and return their first API key (raw, shown once).
+    Create a new user and mint a short-lived Session key so the frontend can
+    authenticate immediately. Users create named API keys from /keys themselves.
     Raises ValueError on duplicate email.
     """
     user_id = str(uuid.uuid4())
@@ -60,7 +61,7 @@ def register_user(username: str, email: str, password: str) -> dict:
 
     raw_key, key_hash, key_prefix = _make_api_key()
     key_id = str(uuid.uuid4())
-    scopes_json = json.dumps(list(DEFAULT_KEY_SCOPES))
+    session_scopes_json = json.dumps(list(DEFAULT_KEY_SCOPES))
     now = _now()
 
     with _conn() as conn:
@@ -74,7 +75,7 @@ def register_user(username: str, email: str, password: str) -> dict:
             conn.execute(
                 "INSERT INTO api_keys (key_id, user_id, key_hash, key_prefix, name, scopes, created_at)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (key_id, user_id, key_hash, key_prefix, "Default", scopes_json, now),
+                (key_id, user_id, key_hash, key_prefix, "Session key", session_scopes_json, now),
             )
         except sqlite3.IntegrityError as exc:
             message = str(exc).lower()

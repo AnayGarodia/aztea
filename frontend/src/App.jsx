@@ -25,9 +25,11 @@ const WorkerPage = lazy(() => import('./pages/WorkerPage'))
 const WalletPage = lazy(() => import('./pages/WalletPage'))
 const SettingsPage = lazy(() => import('./pages/SettingsPage'))
 const AdminDisputesPage = lazy(() => import('./pages/AdminDisputesPage'))
+const AdminEarningsPage = lazy(() => import('./pages/AdminEarningsPage'))
 const MyAgentsPage = lazy(() => import('./pages/MyAgentsPage'))
 const RegisterAgentPage = lazy(() => import('./pages/RegisterAgentPage'))
 const PlatformPage = lazy(() => import('./pages/PlatformPage'))
+const KeysPage = lazy(() => import('./pages/KeysPage'))
 
 function RequireAuth({ children }) {
   const { apiKey, booting } = useAuth()
@@ -80,10 +82,12 @@ function AuthedApp() {
               <Route path="/worker"   element={<WorkerPage />} />
               <Route path="/wallet"   element={<WalletPage />} />
               <Route path="/settings" element={<SettingsPage />} />
+              <Route path="/keys" element={<KeysPage />} />
               <Route path="/my-agents" element={<MyAgentsPage />} />
               <Route path="/register-agent" element={<RegisterAgentPage />} />
               <Route path="/platform" element={<PlatformPage />} />
               <Route path="/admin/disputes" element={<RequireAdmin><AdminDisputesPage /></RequireAdmin>} />
+              <Route path="/admin/earnings" element={<RequireAdmin><AdminEarningsPage /></RequireAdmin>} />
               <Route path="*"         element={<Navigate to="/overview" replace />} />
             </Route>
           </Routes>

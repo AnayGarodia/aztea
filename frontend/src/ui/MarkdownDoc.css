@@ -100,6 +100,58 @@
   font-size: 0.8125rem;
 }
 
+.markdown-doc .md-codeblock {
+  position: relative;
+  margin: 0.9em 0;
+}
+
+.markdown-doc .md-codeblock > pre {
+  margin: 0;
+}
+
+.markdown-doc .md-codeblock__copy {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+  z-index: 2;
+}
+.markdown-doc .md-codeblock:hover .md-codeblock__copy {
+  opacity: 1;
+}
+.markdown-doc .md-codeblock__copy:hover {
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+.markdown-doc .md-codeblock__copy.is-copied {
+  opacity: 1;
+  color: var(--positive, #16a34a);
+  border-color: var(--positive, #16a34a);
+}
+
+.markdown-doc .doc-placeholder {
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.10);
+  border: 1px dashed rgba(245, 158, 11, 0.5);
+  border-radius: 4px;
+  padding: 0 4px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 0.95em;
+  font-weight: 600;
+}
+
 .markdown-doc blockquote {
   border-left: 3px solid var(--accent-border);
   padding-left: 1rem;

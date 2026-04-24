@@ -166,11 +166,11 @@ def test_fix4_trust_gauge_uses_trust_score_field():
 
 
 def test_fix5_settings_page_warns_about_prefix_only():
-    """SettingsPage must warn that only the key prefix is stored, not copy it silently."""
-    jsx = Path(__file__).resolve().parent.parent / "frontend/src/pages/SettingsPage.jsx"
+    """KeysPage (split out of SettingsPage) must warn that only the key prefix is stored, not copy it silently."""
+    jsx = Path(__file__).resolve().parent.parent / "frontend/src/pages/KeysPage.jsx"
     src = jsx.read_text()
     assert "Only the prefix is stored" in src, (
-        "SettingsPage must contain the prefix-only warning"
+        "KeysPage must contain the prefix-only warning"
     )
     # The old buggy handleCopy wrote the prefix+ellipsis to the clipboard
     assert "key_prefix + '…'" not in src, (

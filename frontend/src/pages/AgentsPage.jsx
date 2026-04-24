@@ -409,17 +409,6 @@ export default function AgentsPage() {
             </section>
           </Reveal>
 
-          {!isFiltered && featured.length > 0 && !listLoading && (
-            <Reveal delay={0.07}>
-              <section className="agents-page__featured">
-                <p className="agents-page__section-label t-micro">Featured agents</p>
-                <div className="agents-page__grid agents-page__grid--featured">
-                  {featured.map((agent, i) => <AgentCard key={agent.agent_id} agent={agent} index={i} featured />)}
-                </div>
-              </section>
-            </Reveal>
-          )}
-
           {listLoading ? (
             <div className="agents-page__grid">
               {[1, 2, 3, 4, 5, 6].map(i => <Skeleton key={i} variant="rect" height={212} />)}
@@ -435,14 +424,29 @@ export default function AgentsPage() {
                 </div>
               }
             />
-          ) : (
-            <>
-              {isFiltered && <p className="agents-page__results-count t-micro">{filtered.length} result{filtered.length !== 1 ? 's' : ''}</p>}
-              <div className="agents-page__grid">
-                {filtered.map((agent, index) => <AgentCard key={agent.agent_id} agent={agent} index={index} />)}
-              </div>
-            </>
-          )}
+          ) : (() => {
+              // Merge featured into the main list so the grid fills top-down with no ragged rows.
+              const featuredIds = new Set(featured.map(a => a.agent_id))
+              const merged = !isFiltered
+                ? [...featured, ...filtered.filter(a => !featuredIds.has(a.agent_id))]
+                : filtered
+              return (
+                <>
+                  {isFiltered && <p className="agents-page__results-count t-micro">{filtered.length} result{filtered.length !== 1 ? 's' : ''}</p>}
+                  <div className="agents-page__grid">
+                    {merged.map((agent, index) => (
+                      <AgentCard
+                        key={agent.agent_id}
+                        agent={agent}
+                        index={index}
+                        featured={featuredIds.has(agent.agent_id)}
+                      />
+                    ))}
+                  </div>
+                </>
+              )
+            })()
+          }
         </div>
       </div>
 

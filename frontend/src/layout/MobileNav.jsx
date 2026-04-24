@@ -1,5 +1,5 @@
 import { NavLink, useLocation } from 'react-router-dom'
-import { LayoutDashboard, Bot, Briefcase, Wallet, Settings } from 'lucide-react'
+import { LayoutDashboard, Bot, Briefcase, Wallet, BookOpen, Settings } from 'lucide-react'
 import './MobileNav.css'
 
 const NAV = [
@@ -7,6 +7,7 @@ const NAV = [
   { to: '/agents',   icon: Bot,             label: 'Discover' },
   { to: '/jobs',     icon: Briefcase,       label: 'Jobs' },
   { to: '/wallet',   icon: Wallet,          label: 'Wallet' },
+  { to: '/docs',     icon: BookOpen,        label: 'Docs' },
   { to: '/settings', icon: Settings,        label: 'Settings' },
 ]
 

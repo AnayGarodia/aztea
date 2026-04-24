@@ -866,3 +866,107 @@ def _wallet_stripe_topup_total_last_24h(wallet_id: str) -> int:
     return int(row[0] or 0)
 
 
+# ---------------------------------------------------------------------------
+# Admin platform earnings — view balances + withdraw into admin's own wallet.
+# Covers two pools:
+#   • owner_id="platform"   → 10% platform fee on every agent call
+#   • owner_id=f"user:{system_user_id}" → 90% payout to built-in agents (owned
+#     by the system user that runs every internal://... agent in the registry)
+# ---------------------------------------------------------------------------
+
+
+def _admin_earnings_pools() -> dict[str, dict]:
+    """Resolve the platform treasury and the built-in-agents (system user) wallets."""
+    system_user_id = _ensure_system_user()
+    platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
+    system_wallet = payments.get_or_create_wallet(f"user:{system_user_id}")
+    return {
+        "platform": platform_wallet,
+        "system_agents": system_wallet,
+    }
+
+
+@app.get(
+    "/admin/platform/earnings",
+    responses=_error_responses(401, 403, 429, 500),
+)
+@limiter.limit("60/minute")
+def admin_platform_earnings(
+    request: Request,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    """Return balances + recent ledger entries for both platform pools."""
+    _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
+    _require_admin_ip_allowlist(request)
+    pools = _admin_earnings_pools()
+    payload = {}
+    for source_key, wallet in pools.items():
+        txs = payments.get_wallet_transactions(wallet["wallet_id"], limit=50)
+        payload[source_key] = {
+            "owner_id": wallet["owner_id"],
+            "wallet_id": wallet["wallet_id"],
+            "balance_cents": int(wallet.get("balance_cents") or 0),
+            "recent_transactions": txs,
+        }
+    return JSONResponse(content=payload)
+
+
+@app.post(
+    "/admin/platform/withdraw",
+    responses=_error_responses(400, 401, 403, 404, 409, 429, 500),
+)
+@limiter.limit("10/minute")
+def admin_platform_withdraw(
+    request: Request,
+    body: dict = Body(...),
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    """Transfer funds from a platform pool into the authenticated admin's own wallet.
+
+    Body: ``{ "source": "platform"|"system_agents", "amount_cents": int, "memo"?: str }``
+    """
+    _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
+    _require_admin_ip_allowlist(request)
+    if caller["type"] != "user":
+        raise HTTPException(status_code=403, detail="Admin withdrawals require a user-scoped key.")
+
+    source_key = str((body or {}).get("source") or "").strip().lower()
+    pools = _admin_earnings_pools()
+    if source_key not in pools:
+        raise HTTPException(status_code=400, detail="source must be 'platform' or 'system_agents'.")
+    try:
+        amount_cents = int((body or {}).get("amount_cents") or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="amount_cents must be a positive integer.")
+    if amount_cents <= 0:
+        raise HTTPException(status_code=400, detail="amount_cents must be a positive integer.")
+    memo = str((body or {}).get("memo") or "").strip()[:240] or f"Admin withdrawal from {source_key}"
+
+    src_wallet = pools[source_key]
+    admin_user_id = caller["user"]["user_id"]
+    dest_wallet = payments.get_or_create_wallet(admin_user_id)
+
+    try:
+        result = payments.admin_transfer(
+            src_wallet["wallet_id"],
+            dest_wallet["wallet_id"],
+            amount_cents,
+            memo=memo,
+        )
+    except payments.InsufficientBalanceError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Insufficient balance: pool has {exc.balance_cents}¢, requested {exc.required_cents}¢.",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return JSONResponse(content={
+        "source": source_key,
+        "transferred_cents": result["amount_cents"],
+        "debit_tx_id": result["debit_tx_id"],
+        "credit_tx_id": result["credit_tx_id"],
+        "admin_wallet_id": dest_wallet["wallet_id"],
+    })
+
+

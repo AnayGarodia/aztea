@@ -15,7 +15,107 @@
 .settings__content {
   display: grid;
   gap: 20px;
-  max-width: 720px;
+  max-width: 760px;
+  margin: 0 auto;
+  width: 100%;
+  padding-inline: clamp(0px, 2vw, 24px);
+}
+
+.settings__page-title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 6px;
+  letter-spacing: -0.01em;
+}
+
+.settings__page-sub {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  line-height: 1.55;
+  margin: 0 0 8px;
+}
+
+.settings__intro {
+  margin-bottom: 4px;
+}
+
+.settings__keys-pointer {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.settings__keys-pointer-icon {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.settings__keys-pointer-copy {
+  flex: 1;
+  min-width: 180px;
+}
+
+.settings__keys-pointer-title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 2px;
+}
+
+.settings__keys-pointer-sub {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.settings__keys-pointer-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 12px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-decoration: none;
+  flex-shrink: 0;
+}
+.settings__keys-pointer-link:hover {
+  background: var(--surface);
+  border-color: var(--border-bright);
+}
+
+.settings__theme-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.settings__theme-chip {
+  padding: 7px 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  border-radius: var(--r-sm);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+.settings__theme-chip.is-active {
+  background: var(--accent-bg);
+  color: var(--accent);
+  border-color: var(--accent-border);
 }
 
 /* Account section */
@@ -317,9 +417,15 @@
 
 @media (max-width: 780px) {
   .settings__scroll { padding: 20px 16px; }
-  .settings__key-create { flex-direction: column; }
+  .settings__key-create { flex-direction: column; align-items: stretch; }
+  .settings__key-create .settings__input-wrap { width: 100%; }
   .settings__keys-head,
   .settings__key-row { grid-template-columns: 1fr auto; }
   .settings__keys-head span:nth-child(2),
   .settings__key-created { display: none; }
+  .settings__keys-pointer-link { width: 100%; justify-content: center; }
+}
+
+@media (min-width: 1280px) {
+  .settings__content { max-width: 880px; }
 }

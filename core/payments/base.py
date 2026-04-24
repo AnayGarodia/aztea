@@ -545,6 +545,53 @@ def list_connect_withdrawals(wallet_id: str, limit: int = 20) -> list[dict]:
     return items
 
 
+def admin_transfer(
+    from_wallet_id: str,
+    to_wallet_id: str,
+    amount_cents: int,
+    memo: str = "admin withdrawal",
+) -> dict:
+    """Atomic transfer between wallets for admin withdrawals of platform/system earnings.
+
+    Writes two ledger rows (a negative ``admin_withdraw`` on the source and a
+    positive ``admin_deposit`` on the destination) in one SQLite transaction,
+    linked via ``related_tx_id``. Balance cache is updated for both wallets.
+    """
+    if amount_cents <= 0:
+        raise ValueError("amount_cents must be positive.")
+    if from_wallet_id == to_wallet_id:
+        raise ValueError("source and destination wallets must differ.")
+    with _conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        src = conn.execute(
+            "SELECT balance_cents FROM wallets WHERE wallet_id = ?", (from_wallet_id,)
+        ).fetchone()
+        if src is None:
+            raise ValueError(f"Source wallet '{from_wallet_id}' not found.")
+        dst = conn.execute(
+            "SELECT wallet_id FROM wallets WHERE wallet_id = ?", (to_wallet_id,)
+        ).fetchone()
+        if dst is None:
+            raise ValueError(f"Destination wallet '{to_wallet_id}' not found.")
+        updated = conn.execute(
+            "UPDATE wallets SET balance_cents = balance_cents - ? WHERE wallet_id = ? AND balance_cents >= ?",
+            (amount_cents, from_wallet_id, amount_cents),
+        ).rowcount
+        if updated == 0:
+            raise InsufficientBalanceError(int(src["balance_cents"]), int(amount_cents))
+        debit_id = _insert_tx_only(
+            conn, from_wallet_id, "admin_withdraw", -int(amount_cents), None, None, memo
+        )
+        conn.execute(
+            "UPDATE wallets SET balance_cents = balance_cents + ? WHERE wallet_id = ?",
+            (int(amount_cents), to_wallet_id),
+        )
+        credit_id = _insert_tx_only(
+            conn, to_wallet_id, "admin_deposit", int(amount_cents), None, debit_id, memo
+        )
+    return {"debit_tx_id": debit_id, "credit_tx_id": credit_id, "amount_cents": int(amount_cents)}
+
+
 def deposit(wallet_id: str, amount_cents: int, memo: str = "manual deposit") -> str:
     """Credit a wallet. Returns tx_id. Raises ValueError for bad inputs."""
     if amount_cents <= 0:

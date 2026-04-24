@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
+import { ChevronLeft } from 'lucide-react'
 import Topbar from '../layout/Topbar'
 import MarkdownDoc from '../ui/MarkdownDoc'
 import { fetchPublicDoc } from '../api'
@@ -8,9 +9,15 @@ import './LegalPage.css'
 
 export default function LegalDocumentPage({ title, crumb, slug }) {
   const { user } = useAuth()
+  const navigate = useNavigate()
   const [loading, setLoading] = useState(true)
   const [content, setContent] = useState('')
   const [error, setError] = useState('')
+
+  const handleBack = () => {
+    if (window.history.length > 1) navigate(-1)
+    else navigate('/')
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -38,6 +45,10 @@ export default function LegalDocumentPage({ title, crumb, slug }) {
       <Topbar crumbs={[{ label: crumb }]} />
       <div className="legal-page__scroll">
         <div className="legal-page__content">
+          <button type="button" className="legal-page__back" onClick={handleBack}>
+            <ChevronLeft size={14} />
+            Back
+          </button>
           {needsLegalAcceptance && (
             <div className="legal-page__accept-cta">
               <p>You must accept the latest Terms of Service and Privacy Policy before accessing the marketplace.</p>
