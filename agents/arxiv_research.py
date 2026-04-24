@@ -32,6 +32,7 @@ Output: {
 import re
 import xml.etree.ElementTree as ET
 
+import httpx
 import requests
 
 from core.llm import CompletionRequest, Message, run_with_fallback
@@ -157,6 +158,65 @@ def _fetch_arxiv(query: str, max_results: int, sort_by: str, categories: list[st
 _VALID_SORT_BY = {"relevance", "lastUpdatedDate", "submittedDate"}
 
 
+def _extract_arxiv_id_from_url(id_url: str) -> str:
+    """Extract plain arxiv id (no version) from a URL like http://arxiv.org/abs/2301.12345v1."""
+    segment = id_url.rstrip("/").split("/")[-1]
+    # Strip version suffix e.g. v1, v2
+    segment = re.sub(r"v\d+$", "", segment)
+    return segment
+
+
+def _fetch_full_abstract_data(arxiv_id: str) -> dict:
+    """Fetch the HTML abstract page for an arxiv paper and extract affiliations + related links."""
+    url = f"https://arxiv.org/abs/{arxiv_id}"
+    affiliations: list[str] = []
+    related_links: list[str] = []
+    try:
+        resp = httpx.get(url, timeout=10, follow_redirects=True)
+        resp.raise_for_status()
+        html = resp.text
+
+        # Extract author affiliations from <meta name="citation_author_institution" ...>
+        affiliations = re.findall(
+            r'<meta\s+name=["\']citation_author_institution["\']\s+content=["\'](.*?)["\']',
+            html,
+            re.IGNORECASE,
+        )
+        if not affiliations:
+            # Fallback: text inside <div class="authors"> tags
+            authors_div_match = re.search(
+                r'<div[^>]+class=["\'][^"\']*authors[^"\']*["\'][^>]*>(.*?)</div>',
+                html,
+                re.IGNORECASE | re.DOTALL,
+            )
+            if authors_div_match:
+                raw = re.sub(r"<[^>]+>", "", authors_div_match.group(1))
+                affiliations = [a.strip() for a in raw.split(",") if a.strip()][:6]
+
+        # Extract DOI and related paper links
+        doi_matches = re.findall(r'https?://(?:dx\.)?doi\.org/[^\s"\'<>]+', html)
+        related_links.extend(doi_matches)
+        # Also grab any extra-ref-link hrefs
+        extra_links = re.findall(
+            r'<div[^>]+class=["\'][^"\']*extra-ref-link[^"\']*["\'][^>]*>.*?href=["\'](.*?)["\']',
+            html,
+            re.IGNORECASE | re.DOTALL,
+        )
+        related_links.extend(extra_links)
+        # Deduplicate and keep unique
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for lnk in related_links:
+            if lnk not in seen:
+                seen.add(lnk)
+                deduped.append(lnk)
+        related_links = deduped[:10]
+    except Exception:
+        pass  # Best-effort; don't fail the whole call
+
+    return {"affiliations": affiliations[:10], "related_links": related_links}
+
+
 def run(payload: dict) -> dict:
     query = str(payload.get("query", "")).strip()
     if not query:
@@ -178,6 +238,8 @@ def run(payload: dict) -> dict:
         return {"error": "categories must be a list of arXiv category strings (e.g. [\"cs.AI\"])"}
     categories = [str(c).strip() for c in raw_categories if str(c).strip()][:10]
 
+    full_abstract = bool(payload.get("full_abstract", False))
+
     try:
         papers = _fetch_arxiv(query, max_results, sort_by, categories)
     except RuntimeError as exc:
@@ -193,7 +255,17 @@ def run(payload: dict) -> dict:
             "seminal_papers": [],
             "open_questions": [],
             "suggested_follow_ups": [],
+            "billing_units_actual": 0,
         }
+
+    # full_abstract mode: enrich top 3 papers with affiliation + related link data
+    if full_abstract:
+        for paper in papers[:3]:
+            raw_id = paper.get("arxiv_id", "")
+            # arxiv_id may already be stripped or may include version; normalise
+            clean_id = _extract_arxiv_id_from_url(raw_id) if raw_id else ""
+            if clean_id:
+                paper["full_abstract_data"] = _fetch_full_abstract_data(clean_id)
 
     papers_text = "\n\n".join(
         f"[{p['arxiv_id']}] {p['title']}\nAuthors: {', '.join(p['authors'][:3])}\nAbstract: {p['abstract']}"
@@ -234,4 +306,5 @@ def run(payload: dict) -> dict:
         "total_found": len(papers),
         "papers": papers,
         **synthesis_data,
+        "billing_units_actual": len(papers),
     }

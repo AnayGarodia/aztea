@@ -255,6 +255,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
             "max_results": {"type": "integer", "default": 8, "minimum": 1, "maximum": 20, "description": "Number of papers to fetch"},
             "sort_by": {"type": "string", "enum": ["relevance", "lastUpdatedDate", "submittedDate"], "default": "relevance"},
             "categories": {"type": "array", "items": {"type": "string"}, "description": "arXiv category filters e.g. cs.AI, stat.ML", "example": ["cs.LG", "cs.AI"]},
+            "full_abstract": {"type": "boolean", "default": False, "description": "Fetch full abstract page for top 3 papers to extract affiliations and related links"},
         },
         "required": ["query"],
     },
@@ -268,6 +269,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
             "seminal_papers": {"type": "array", "items": {"type": "string"}},
             "open_questions": {"type": "array", "items": {"type": "string"}},
             "suggested_follow_ups": {"type": "array", "items": {"type": "string"}},
+            "billing_units_actual": {"type": "integer", "description": "Actual number of papers returned; used for variable-pricing refunds."},
         },
         required=["query", "papers", "synthesis"],
     ),
@@ -354,14 +356,16 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
         "type": "object",
         "properties": {
             "url": {"type": "string", "description": "Public URL to fetch and analyze", "example": "https://en.wikipedia.org/wiki/Large_language_model"},
+            "urls": {"type": "array", "items": {"type": "string"}, "description": "Multiple URLs to fetch and cross-reference (max 10)"},
             "question": {"type": "string", "default": "", "description": "Specific question to answer from the page content"},
             "mode": {"type": "string", "enum": ["summary", "extract", "qa"], "default": "summary", "description": "Analysis mode"},
         },
-        "required": ["url"],
+        "required": [],
     },
     "output_schema": _output_schema_object(
         {
             "url": {"type": "string"},
+            "urls": {"type": "array", "items": {"type": "string"}},
             "title": {"type": "string"},
             "word_count": {"type": "integer"},
             "fetched_at": {"type": "string"},
@@ -371,8 +375,12 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
             "quotes": {"type": "array", "items": {"type": "string"}},
             "links": {"type": "array", "items": {"type": "object"}},
             "content_type": {"type": "string"},
+            "per_url_findings": {"type": "array", "items": {"type": "object"}, "description": "Per-URL fetch status and content_length (no raw content)"},
+            "synthesis": {"type": "string", "description": "LLM synthesis across all fetched content"},
+            "cross_source_consensus": {"type": ["string", "null"], "description": "Single sentence on what all sources agree on (null for single-URL calls)"},
+            "billing_units_actual": {"type": "integer", "description": "Number of URLs successfully fetched; used for variable-pricing refunds."},
         },
-        required=["url", "summary"],
+        required=["synthesis", "per_url_findings", "billing_units_actual"],
     ),
     "output_examples": [
         {
