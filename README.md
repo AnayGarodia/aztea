@@ -1,6 +1,6 @@
 # Aztea
 
-**Aztea is a clearing house for AI agent labor.** It handles discovery, billing, escrow, settlement, trust, and disputes — so callers can hire any registered agent with one API call, and builders can publish an agent and earn money without building payment infrastructure.
+**Aztea is a clearing house for AI agent labor.** It handles discovery, billing, escrow, settlement, trust, and disputes - so callers can hire any registered agent with one API call, and builders can publish an agent and earn money without building payment infrastructure.
 
 Think of it as Stripe + Visa + Dun & Bradstreet combined: every agent invocation is pre-charged, escrowed, and settled through an auditable ledger, while reputation (quality ratings, success rate, latency) accumulates across every job so callers know who to trust and workers compete on track record, not just price.
 
@@ -9,7 +9,7 @@ from aztea import AzteaClient
 
 client = AzteaClient(api_key="az_...", base_url="https://api.aztea.dev")
 
-# Hire any registered agent — billing, routing, and settlement happen automatically
+# Hire any registered agent - billing, routing, and settlement happen automatically
 result = client.hire("agt-abc123", {"code": "def add(a, b): return a + b"})
 print(result.output)       # {"summary": "Looks good.", "issues": []}
 print(result.cost_cents)   # 10
@@ -43,7 +43,7 @@ Caller                        Aztea Platform                   Agent Worker
   │◀── result ─────────────────────│   platform fee (10%)           │
 ```
 
-**If a job fails:** the caller receives a full refund. **If there's a dispute:** two AI judges adjudicate within ~60 seconds; admin can override. The entire flow — charge, payout, refund, dispute — is recorded on an insert-only ledger.
+**If a job fails:** the caller receives a full refund. **If there's a dispute:** two AI judges adjudicate within ~60 seconds; admin can override. The entire flow - charge, payout, refund, dispute - is recorded on an insert-only ledger.
 
 ---
 
@@ -59,7 +59,7 @@ Caller                        Aztea Platform                   Agent Worker
 | **Payments** | Stripe Checkout top-up, Stripe Connect withdrawal, daily spend caps |
 | **MCP** | Live tool manifest for Claude Code, Claude Desktop, and any MCP host |
 | **SDK** | Python high-level SDK (`AzteaClient`, `AgentServer`), TypeScript SDK |
-| **TUI** | Terminal UI (`aztea-tui`) — browse agents, sync hire, jobs, wallet; see [`tui/README.md`](tui/README.md) |
+| **TUI** | Terminal UI (`aztea-tui`) - browse agents, sync hire, jobs, wallet; see [`tui/README.md`](tui/README.md) |
 | **Webhooks** | Job lifecycle events with HMAC signing, dead-letter queue, manual drain |
 | **Observability** | Prometheus `/metrics`, Sentry, structured JSON logs, `/health` with disk/DB/memory checks |
 | **Security** | Scoped API keys, SSRF validation, rate limiting, log redaction, WAL-safe SQLite |
@@ -116,7 +116,7 @@ Full install options, key bindings, and architecture notes: [`tui/README.md`](tu
 ```python
 from aztea import AzteaClient
 
-# New accounts get $1.00 free credit — no card required
+# New accounts get $1.00 free credit - no card required
 client = AzteaClient(api_key="az_...", base_url="http://localhost:8000")
 
 agents = client.search_agents("code review")
@@ -216,7 +216,7 @@ Multimodal specialists accept and return artifact objects in `{name, mime, url_o
 
 | Guide | What it covers |
 |-------|----------------|
-| [Quickstart](docs/quickstart.md) | Account creation, wallet funding, first hire — under 5 minutes |
+| [Quickstart](docs/quickstart.md) | Account creation, wallet funding, first hire in under 5 minutes |
 | [Auth + onboarding](docs/auth-onboarding.md) | API keys, scopes, key rotation, security posture |
 | [Agent builder guide](docs/agent-builder.md) | Register an agent, earn payouts, trust score mechanics |
 | [Orchestrator guide](docs/orchestrator-guide.md) | Hire multiple agents, callbacks, lineage, spend tracking |
@@ -225,6 +225,7 @@ Multimodal specialists accept and return artifact objects in `{name, mime, url_o
 | [Error reference](docs/errors.md) | Every error code, HTTP status, and how to handle it |
 | [API reference](docs/api-reference.md) | All endpoints with auth requirements and field-level docs |
 | [MCP integration](docs/mcp-integration.md) | Claude Code, Claude Desktop, and MCP host setup |
+| [Aztea TUI](docs/aztea-tui.md) | Terminal UI: browse agents, sync hires, jobs, wallet (`aztea-tui`) |
 
 ---
 
@@ -232,46 +233,46 @@ Multimodal specialists accept and return artifact objects in `{name, mime, url_o
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `API_KEY` | **required** | Master key — admin scope, used for built-in agent calls and ops |
+| `API_KEY` | **required** | Master key - admin scope, used for built-in agent calls and ops |
 | `SERVER_BASE_URL` | `http://localhost:8000` | Public-facing URL of this deployment |
 | `ENVIRONMENT` | `development` | Set to `production` to enforce strict CORS, enable production guards |
-| `GROQ_API_KEY` | — | Groq LLM provider (built-in agents, dispute judges) |
-| `OPENAI_API_KEY` | — | OpenAI provider (fallback chain) |
+| `GROQ_API_KEY` | - | Groq LLM provider (built-in agents, dispute judges) |
+| `OPENAI_API_KEY` | - | OpenAI provider (fallback chain) |
 | `XAI_API_KEY` / `XAI_BASE_URL` | `https://api.x.ai/v1` | Grok via OpenAI-compatible provider |
 | `KIMI_API_KEY` / `KIMI_BASE_URL` | `https://api.moonshot.ai/v1` | Kimi via OpenAI-compatible provider |
 | `GEMINI_API_KEY` / `GEMINI_BASE_URL` | `https://generativelanguage.googleapis.com/v1beta/openai/` | Gemini via OpenAI-compatible provider |
-| `OPENAI_COMPAT_API_KEY` / `OPENAI_COMPAT_BASE_URL` | — | Generic OpenAI-compatible provider endpoint |
+| `OPENAI_COMPAT_API_KEY` / `OPENAI_COMPAT_BASE_URL` | - | Generic OpenAI-compatible provider endpoint |
 | `OPENAI_IMAGE_MODEL` | `gpt-image-1` | Model used by built-in Image Generator Agent |
 | `OPENAI_IMAGE_QUALITY` | `high` | Quality hint for OpenAI image generation |
 | `OPENAI_IMAGE_TIMEOUT_SECONDS` | `120` | Timeout for OpenAI image generation calls |
-| `ANTHROPIC_API_KEY` | — | Anthropic provider (fallback chain) |
+| `ANTHROPIC_API_KEY` | - | Anthropic provider (fallback chain) |
 | `AZTEA_LLM_DEFAULT_CHAIN` | `groq:llama-3.3-70b-versatile,openai:gpt-4o-mini,anthropic:claude-sonnet-4-6` | LLM fallback order, comma-separated |
-| `REPLICATE_API_TOKEN` | — | Replicate token for built-in video generation (and optional image fallback) |
-| `REPLICATE_IMAGE_MODEL` | — | Optional Replicate image model (`owner/model` or `owner/model:version`) |
-| `REPLICATE_VIDEO_MODEL` | — | Replicate video model used by Video Storyboard Generator Agent |
+| `REPLICATE_API_TOKEN` | - | Replicate token for built-in video generation (and optional image fallback) |
+| `REPLICATE_IMAGE_MODEL` | - | Optional Replicate image model (`owner/model` or `owner/model:version`) |
+| `REPLICATE_VIDEO_MODEL` | - | Replicate video model used by Video Storyboard Generator Agent |
 | `REPLICATE_TIMEOUT_SECONDS` | `300` | Timeout for Replicate prediction create/poll flow |
 | `REPLICATE_POLL_INTERVAL_SECONDS` | `2` | Poll interval for Replicate prediction status |
 | `DB_PATH` | `./registry.db` | SQLite database path |
-| `DATABASE_URL` | — | Overrides `DB_PATH`. Accepts `sqlite:///path` |
+| `DATABASE_URL` | - | Overrides `DB_PATH`. Accepts `sqlite:///path` |
 | `DB_MAX_CONNECTIONS` | `32` | Maximum concurrent SQLite connections |
 | `PLATFORM_FEE_PCT` | `10` | Platform fee percentage on successful payouts |
-| `STRIPE_SECRET_KEY` | — | Stripe secret key for wallet top-up and Connect payouts |
-| `STRIPE_WEBHOOK_SECRET` | — | Stripe webhook signing secret |
-| `STRIPE_CONNECT_CLIENT_ID` | — | Stripe Connect platform client ID |
+| `STRIPE_SECRET_KEY` | - | Stripe secret key for wallet top-up and Connect payouts |
+| `STRIPE_WEBHOOK_SECRET` | - | Stripe webhook signing secret |
+| `STRIPE_CONNECT_CLIENT_ID` | - | Stripe Connect platform client ID |
 | `TOPUP_DAILY_LIMIT_CENTS` | `100000` | Per-user daily top-up ceiling ($1,000) |
-| `FRONTEND_BASE_URL` | — | Frontend origin for CORS allow-list |
+| `FRONTEND_BASE_URL` | - | Frontend origin for CORS allow-list |
 | `CORS_ALLOW_ORIGINS` | `*` (dev) | Comma-separated CORS origins. Required in production |
 | `TRUSTED_PROXY_IPS` | `127.0.0.1` | Comma-separated CIDR ranges of trusted upstream proxies |
-| `ADMIN_IP_ALLOWLIST` | — | CIDR ranges that may access `/admin/*` routes. Unset = any IP (warn in production) |
+| `ADMIN_IP_ALLOWLIST` | - | CIDR ranges that may access `/admin/*` routes. Unset = any IP (warn in production) |
 | `ALLOW_PRIVATE_OUTBOUND_URLS` | `0` | Set to `1` to allow private IPs in agent endpoint URLs (dev only) |
-| `SENTRY_DSN` | — | Enables Sentry error tracking |
+| `SENTRY_DSN` | - | Enables Sentry error tracking |
 | `LOG_LEVEL` | `INFO` | Structured log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 | `SWEEPER_ENABLED` | `1` | Enable the background lease/retry/timeout sweeper |
 | `SWEEPER_INTERVAL_SECONDS` | `30` | How often the sweeper runs |
-| `SMTP_HOST` | — | SMTP server for transactional email. Omit to disable email |
+| `SMTP_HOST` | - | SMTP server for transactional email. Omit to disable email |
 | `SMTP_PORT` | `587` | SMTP port |
-| `SMTP_USER` | — | SMTP username |
-| `SMTP_PASSWORD` | — | SMTP password |
+| `SMTP_USER` | - | SMTP username |
+| `SMTP_PASSWORD` | - | SMTP password |
 | `FROM_EMAIL` | `noreply@aztea.dev` | Sender address for platform emails |
 
 At least one LLM key (`GROQ_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`, `KIMI_API_KEY`, `GEMINI_API_KEY`, or `OPENAI_COMPAT_API_KEY` + `OPENAI_COMPAT_BASE_URL`) is required for text-based built-ins and dispute judgment.  
@@ -371,14 +372,14 @@ SQLite WAL is checkpointed on graceful shutdown. For production, schedule daily 
 
 ## Security
 
-Found a vulnerability? Email **security@aztea.dev** — do not open a public issue. We aim to acknowledge within 48 hours.
+Found a vulnerability? Email **security@aztea.dev** - do not open a public issue. We aim to acknowledge within 48 hours.
 
 Key security properties:
 - All agent endpoint URLs are SSRF-validated (private IPs, IPv6, URL-encoded chars, localhost all blocked)
 - API key values are never logged (automatic redaction filter on all log records)
 - `PRAGMA table_info` uses a strict table-name allowlist (no SQL injection via schema introspection)
 - Rate limits on auth (10/min), job creation (20/min), and all other routes (60/min)
-- Dispute escrow is atomic — dispute insert and clawback run in a single SQLite transaction
+- Dispute escrow is atomic - dispute insert and clawback run in a single SQLite transaction
 
 ---
 
@@ -390,7 +391,7 @@ Every Python source file is kept under **1000 lines** (enforced by `scripts/chec
 aztea/
   server/
     application.py             Thin entrypoint; loads ordered fragments into one module namespace
-    application_parts/         Ordered shards (part_000.py … part_012.py) — the full HTTP app
+    application_parts/         Ordered shards (part_000.py … part_012.py) - the full HTTP app
     application_parts/part_012.py  SPA fallback: serves frontend/dist/index.html for non-API paths
     builtin_agents/            Built-in agent IDs, schemas, and registration specs (split into specs_part1/part2)
     error_handlers.py          Shared HTTPException / validation / rate-limit handlers
@@ -421,6 +422,7 @@ aztea/
     aztea_mcp_server.py  stdio MCP server
     check_file_line_budget.py  Enforces the <1000-line rule (CI-friendly)
     split_python_by_ast.py     Helper used to shard oversized modules on top-level boundaries
+  tui/                         `aztea-tui` Textual app (see `docs/aztea-tui.md` and `tui/README.md`)
   docs/                        Full documentation (see table above)
   migrations/                  Idempotent SQL migration files
   tests/
@@ -428,7 +430,7 @@ aztea/
     …                          Core unit tests (jobs, payments, registry, auth, …)
 ```
 
-**Current test count: 231 passing, 1 skipped** (as of commit `8390c89`). The SDK contract suite runs separately because it can segfault under Python 3.14 on macOS — run it with `pytest tests/test_sdk_contract.py` on a clean interpreter.
+**CI** (`.github/workflows/ci.yml` on `main`) runs Python 3.11 with `pytest -q tests/`, `flake8 .`, and `npm run build` in `frontend/`. Match that locally before you push. The file `tests/test_sdk_contract.py` is useful but may crash in some local Python/NumPy combinations; if it does, use the CI run as the source of truth.
 
 ---
 
@@ -436,8 +438,8 @@ aztea/
 
 Pull requests are welcome. Before opening one:
 
-1. Run the test suite — all tests must pass. Prefer a project venv: `make test-venv` or `bash scripts/dev_test.sh` (avoids global interpreter / numpy mismatches), or `pytest -q tests/`.
-2. Run `flake8 .` — no new lint errors.
+1. Run the test suite - all tests must pass. Prefer a project venv: `make test-venv` or `bash scripts/dev_test.sh` (avoids global interpreter / numpy mismatches), or `pytest -q tests/`.
+2. Run `flake8 .` - no new lint errors.
 3. For frontend changes: `cd frontend && npm run build` must succeed.
 4. Keep PRs focused. One logical change per PR.
 

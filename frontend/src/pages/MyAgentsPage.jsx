@@ -20,7 +20,7 @@ const STATUS_VARIANT = {
 }
 
 function fmtUsd(val) {
-  if (typeof val !== 'number') return '—'
+  if (typeof val !== 'number') return '-'
   return '$' + val.toFixed(4).replace(/\.?0+$/, '')
 }
 

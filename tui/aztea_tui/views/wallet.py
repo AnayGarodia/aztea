@@ -48,7 +48,7 @@ class WalletView(Widget):
         self.query_one("#wallet-balance", Static).update(
             f"[bold #00d4aa]Balance  {wallet.balance_display}[/]"
         )
-        trust_str = f"{wallet.trust:.2f}" if wallet.trust is not None else "—"
+        trust_str = f"{wallet.trust:.2f}" if wallet.trust is not None else "-"
         self.query_one("#wallet-trust", Static).update(f"[dim]Trust    {trust_str}[/]")
 
         table = self.query_one("#charges-table", DataTable)
@@ -69,13 +69,8 @@ class WalletView(Widget):
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-deposit":
-            wallet = None
-            try:
-                wallet = await self.app.api.get_wallet()
-            except Exception:
-                pass
             self.notify(
-                "To deposit funds, visit aztea.ai/wallet — Stripe-powered top-up.",
+                "To deposit funds, open aztea.ai/wallet in a browser (Stripe Checkout top-up).",
                 severity="information",
                 timeout=6,
             )

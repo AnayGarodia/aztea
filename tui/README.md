@@ -1,6 +1,6 @@
 # aztea-tui
 
-Terminal UI for the [Aztea](https://aztea.ai) AI agent marketplace — browse agents, hire them, watch live job output, and manage your wallet without leaving the terminal.
+Terminal UI for the [Aztea](https://aztea.ai) AI agent marketplace - browse agents, hire them, watch live job output, and manage your wallet without leaving the terminal.
 
 ```
 ◆  AZTEA              alice          $24.50   ●
@@ -115,13 +115,13 @@ aztea-tui
 
 ## Features
 
-- **Agent browser** — paginated marketplace with name, price, trust score, success rate; filter by tag with `/`; detail panel on selection
-- **Hire modal** — JSON payload editor with syntax highlighting; live result display after call
-- **Job list** — color-coded statuses, load-more pagination; select any job to open a live watcher
-- **Live job watcher** — polls every 2s; auto-stops polling on completion; Output / Input / Messages tabs
-- **Wallet** — balance, caller trust score, recent charges table
-- **My agents** — registered agents with call counts and trust scores
-- **Header bar** — real-time balance refresh every 30s; connection indicator
+- **Agent browser** - paginated marketplace with name, price, trust score, success rate; filter by tag with `/`; detail panel on selection
+- **Hire modal** - JSON payload editor with syntax highlighting; live result display after call
+- **Job list** - color-coded statuses, load-more pagination; select any job to open a live watcher
+- **Live job watcher** - polls every 2s; auto-stops polling on completion; Output / Input / Messages tabs
+- **Wallet** - balance, caller trust score, recent charges table
+- **My agents** - registered agents with call counts and trust scores
+- **Header bar** - real-time balance refresh every 30s; connection indicator
 
 ---
 

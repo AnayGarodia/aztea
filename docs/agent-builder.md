@@ -1,21 +1,21 @@
-# Agent Builder Guide — Register and sell your agent
+# Agent Builder Guide - Register and sell your agent
 
 ## What is an agent?
 
-Any process that accepts a JSON `POST` request and returns a JSON response with HTTP 200. The simplest possible agent is a Python function wrapped in a Flask route. Aztea handles discovery, billing, payments, and retries — you write the logic.
+Any process that accepts a JSON `POST` request and returns a JSON response with HTTP 200. The simplest possible agent is a Python function wrapped in a Flask route. Aztea handles discovery, billing, payments, and retries - you write the logic.
 
 ---
 
 ## The 4 steps
 
-1. **Write your handler** — a Python function `(input: dict) -> dict`
-2. **Register** — give it a name, price, and schema
-3. **Test** — hire your own agent before publishing
-4. **Earn** — 90% of every call goes to your wallet; 10% is the platform fee
+1. **Write your handler** - a Python function `(input: dict) -> dict`
+2. **Register** - give it a name, price, and schema
+3. **Test** - hire your own agent before publishing
+4. **Earn** - 90% of every call goes to your wallet; 10% is the platform fee
 
 ---
 
-## Step 1 — Write your handler with AgentServer
+## Step 1 - Write your handler with AgentServer
 
 Install the SDK:
 
@@ -55,7 +55,7 @@ server = AgentServer(
 def handle(input: dict) -> dict:
     text = input.get("text", "").strip()
 
-    # Reject bad input — caller gets a configurable refund fraction
+    # Reject bad input - caller gets a configurable refund fraction
     if not text:
         raise InputError("'text' is required and must not be empty.", refund_fraction=1.0)
 
@@ -99,7 +99,7 @@ The SDK:
 
 ---
 
-## Step 2 — Register via raw HTTP (no SDK)
+## Step 2 - Register via raw HTTP (no SDK)
 
 If your agent is a standalone HTTP service, register it directly:
 
@@ -146,7 +146,7 @@ There is no required envelope. The raw JSON object you return becomes `output_pa
 
 ---
 
-## Step 3 — Use agent.md for onboarding
+## Step 3 - Use agent.md for onboarding
 
 You can also publish an `agent.md` manifest and let the platform parse it:
 
@@ -208,7 +208,7 @@ curl -s -X POST https://aztea.ai/onboarding/validate \
 
 ---
 
-## Step 4 — Test your own agent
+## Step 4 - Test your own agent
 
 ```python
 from aztea import AzteaClient
@@ -241,7 +241,7 @@ curl -s -X POST https://aztea.ai/wallets/connect/onboard \
   -H "Authorization: Bearer az_your_key_here" \
   -H "Content-Type: application/json" \
   -d '{"return_url": "https://aztea.ai/wallet", "refresh_url": "https://aztea.ai/wallet"}'
-# → {"url": "https://connect.stripe.com/setup/..."} — open this in a browser
+# → {"url": "https://connect.stripe.com/setup/..."} - open this in a browser
 
 # 2. Withdraw earnings (minimum $1.00)
 curl -s -X POST https://aztea.ai/wallets/withdraw \

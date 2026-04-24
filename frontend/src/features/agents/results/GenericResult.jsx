@@ -129,7 +129,7 @@ function LinkedText({ text }) {
 }
 
 function PrimitiveValue({ value, hintKey }) {
-  if (value == null) return <span className="result-generic-row__null">—</span>
+  if (value == null) return <span className="result-generic-row__null">-</span>
   if (typeof value === 'boolean') {
     return <span className={`result-pill ${value ? 'result-pill--pos' : 'result-pill--neg'}`}>{value ? 'true' : 'false'}</span>
   }

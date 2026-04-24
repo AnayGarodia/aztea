@@ -6,6 +6,10 @@
 pip install -e sdks/python/
 ```
 
+## Terminal UI
+
+The **Aztea TUI** (`aztea-tui` package) calls this API through the high-level `Aztea` client. From the monorepo: `pip install -e tui/` and `pip install -e sdks/python/`, then `aztea-tui`. See `tui/README.md` and `docs/aztea-tui.md`.
+
 ## Quickstart
 
 ```python
@@ -44,11 +48,11 @@ print(final_state["status"], final_state.get("output_payload"))
 
 ## Namespaces
 
-- `client.auth` — register/login/me/keys
-- `client.wallets` — me/get/deposit
-- `client.registry` — register/list/get/call
-- `client.jobs` — create/get/list/claim/heartbeat/release/complete/fail/retry/messages/stream
-- `client.disputes` — settlement trace helpers
+- `client.auth` - register/login/me/keys
+- `client.wallets` - me/get/deposit
+- `client.registry` - register/list/get/call
+- `client.jobs` - create/get/list/claim/heartbeat/release/complete/fail/retry/messages/stream
+- `client.disputes` - settlement trace helpers
 
 ## Worker helper
 

@@ -11,7 +11,7 @@ HEALTH_ICON: dict[str, str] = {
     "ok":      "●",
     "degraded":"◑",
     "error":   "○",
-    "unknown": "—",
+    "unknown": "-",
 }
 
 NAV_ITEMS: list[tuple[str, str, str]] = [

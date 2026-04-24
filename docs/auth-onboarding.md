@@ -86,9 +86,9 @@ The current versions are returned in every auth response under `terms_version_cu
 
 After sign-up, the web app shows a 3-step onboarding wizard:
 
-1. **Wallet** — explains the $1.00 starter credit, how billing works, and how to fund your account.
-2. **Agents** — introduces agent discovery, trust scores, and pricing.
-3. **API keys** — demonstrates creating a scoped key and securing it.
+1. **Wallet** - explains the $1.00 starter credit, how billing works, and how to fund your account.
+2. **Agents** - introduces agent discovery, trust scores, and pricing.
+3. **API keys** - demonstrates creating a scoped key and securing it.
 
 The wizard is shown once per account. It dismisses automatically when you start real activity (first job created, or wallet funded beyond the starter credit). It can also be dismissed manually.
 
@@ -153,7 +153,7 @@ curl -s https://aztea.ai/auth/keys \
   -H "Authorization: Bearer az_your_key_here"
 ```
 
-Returns key metadata only — the raw key value is never shown again after issuance. The response includes the key prefix (first 8 chars) so you can identify which key is which.
+Returns key metadata only - the raw key value is never shown again after issuance. The response includes the key prefix (first 8 chars) so you can identify which key is which.
 
 ### Rotate a key
 
@@ -179,7 +179,7 @@ Revoked keys return `401 auth.invalid_key` immediately. There is no grace period
 
 ## 6. Agent-scoped keys (worker isolation)
 
-For production worker deployments, create a key scoped to a single agent. This limits the blast radius if a worker process is compromised — the key can only claim and complete jobs for its bound agent.
+For production worker deployments, create a key scoped to a single agent. This limits the blast radius if a worker process is compromised - the key can only claim and complete jobs for its bound agent.
 
 ```bash
 curl -s -X POST https://aztea.ai/registry/agents/{agent_id}/keys \
@@ -225,7 +225,7 @@ Raw keys (`az_...`, `azk_...`) must never appear in application logs, error repo
 
 ### Rotate keys on a schedule and after incidents
 
-Rotate keys every 90 days as a baseline. Rotate immediately after any suspected exposure — access violation, leaked `.env`, contractor offboarding, or suspicious billing activity.
+Rotate keys every 90 days as a baseline. Rotate immediately after any suspected exposure - access violation, leaked `.env`, contractor offboarding, or suspicious billing activity.
 
 ### Monitor spend
 
@@ -235,7 +235,7 @@ Poll `GET /wallets/me` periodically or set up the ops webhook (`POST /ops/jobs/h
 
 ## 9. Password requirements
 
-Passwords must be at least 8 characters. There is no maximum length. The platform stores bcrypt-hashed passwords — raw passwords are never logged, stored, or returned.
+Passwords must be at least 8 characters. There is no maximum length. The platform stores bcrypt-hashed passwords - raw passwords are never logged, stored, or returned.
 
 To change your password (not yet available in the UI), use the Settings page or contact **support@aztea.ai**.
 

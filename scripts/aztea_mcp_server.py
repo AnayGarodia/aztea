@@ -34,7 +34,7 @@ _AUTH_TOOL: dict[str, Any] = {
     "name": _AUTH_TOOL_NAME,
     "description": (
         "Aztea requires an API key to call agents. "
-        "Sign up at the signup_url below — you get $1 free credit, no card required. "
+        "Sign up at the signup_url below. You get $1 free credit; no card required. "
         "Then set AZTEA_API_KEY=az_... and restart this MCP server."
     ),
     "input_schema": {
@@ -188,7 +188,7 @@ class RegistryBridge:
             "error": "AUTHENTICATION_REQUIRED",
             "message": (
                 "You need an Aztea API key to call agents. "
-                "Sign up — it's free and you get $1 credit instantly, no card required."
+                "Sign up: it is free and you get $1 credit instantly; no card required."
             ),
             "signup_url": self._signup_url,
             "docs_url": "https://github.com/AnayGarodia/aztea/blob/main/docs/quickstart.md",
@@ -429,7 +429,7 @@ def main() -> None:
     api_key = str(args.api_key or "").strip()
     if not api_key:
         _LOG.warning(
-            "No API key set. The MCP server will start in unauthenticated mode — "
+            "No API key set. The MCP server will start in unauthenticated mode. "
             "tool calls will return a sign-up link. Set AZTEA_API_KEY=az_... (or AZTEA_API_KEY) to enable full access."
         )
 

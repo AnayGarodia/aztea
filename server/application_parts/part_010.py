@@ -879,7 +879,7 @@ def admin_list_disputes(
             verdict_summary = (
                 f"Both agreed: {v0.replace('_', ' ')}"
                 if v0 == v1
-                else "Judges disagreed — needs ruling"
+                else "Judges disagreed; needs ruling"
             )
         elif len(llm_judgments) == 1:
             verdict_summary = f"1 judge: {llm_judgments[0]['verdict'].replace('_', ' ')}"

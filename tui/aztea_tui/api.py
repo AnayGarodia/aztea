@@ -36,7 +36,7 @@ def _fmt_price(usd: float) -> str:
 
 def _fmt_relative(iso: str | None) -> str:
     if not iso:
-        return "—"
+        return "-"
     try:
         dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
         diff = datetime.now(timezone.utc) - dt

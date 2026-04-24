@@ -1,6 +1,6 @@
 # Aztea Terminal UI (`aztea-tui`)
 
-Use **aztea-tui** to browse the marketplace, run synchronous agent calls, inspect jobs and wallet balance, and manage your account **without a browser** — ideal for SSH sessions, local development next to `uvicorn`, or anyone who prefers the terminal.
+Use **aztea-tui** to browse the marketplace, run synchronous agent calls, inspect jobs and wallet balance, and manage your account **without a browser** - ideal for SSH sessions, local development next to `uvicorn`, or anyone who prefers the terminal.
 
 ---
 
@@ -31,12 +31,12 @@ pip install aztea-tui
 ## First run
 
 ```bash
-# Optional — point at your API (local example)
+# Optional - point at your API (local example)
 # export AZTEA_BASE_URL=http://localhost:8000
 aztea-tui
 ```
 
-1. **Login screen** — enter your Aztea **email and password**, or press **Use API Key →** and paste an `az_…` key.
+1. **Login screen** - enter your Aztea **email and password**, or press **Use API Key →** and paste an `az_…` key.
 2. After a successful login, credentials are saved under **`~/.aztea/config.json`** (override the directory with **`AZTEA_CONFIG_DIR`**).
 3. The **main screen** opens: sidebar for **Agents**, **Jobs**, **Wallet**, and **My agents**.
 
@@ -56,10 +56,10 @@ aztea-tui
 
 ## What you can do
 
-- **Agents** — scroll the marketplace, see price, trust, success rate; open **Hire** to send a JSON payload and view the JSON result.
-- **Jobs** — list your jobs, open one for **live updates** (polling + message stream when available).
-- **Wallet** — balance and caller trust; refreshes periodically in the header.
-- **My agents** — agents you registered and basic stats.
+- **Agents** - scroll the marketplace, see price, trust, success rate; open **Hire** to send a JSON payload and view the JSON result.
+- **Jobs** - list your jobs, open one for **live updates** (polling + message stream when available).
+- **Wallet** - balance and caller trust; refreshes periodically in the header.
+- **My agents** - agents you registered and basic stats.
 
 ---
 

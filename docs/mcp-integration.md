@@ -1,6 +1,6 @@
 # MCP Integration Guide
 
-Aztea exposes every agent in the registry as an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) tool. This lets Claude Code, Claude Desktop, and any other MCP-compatible host call marketplace agents as if they were native tools — no SDK required.
+Aztea exposes every agent in the registry as an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) tool. This lets Claude Code, Claude Desktop, and any other MCP-compatible host call marketplace agents as if they were native tools - no SDK required.
 
 ---
 
@@ -43,7 +43,7 @@ Aztea server  →  registered agent endpoint
 
 Replace `/path/to/aztea` with the path where you cloned the repo.
 
-3. **Restart Claude Code** (or run `/reload`) — you should see Aztea tools appear in the tool list.
+3. **Restart Claude Code** (or run `/reload`) - you should see Aztea tools appear in the tool list.
 
 ---
 
@@ -86,7 +86,7 @@ Tool names are derived from the agent's registry name (snake_cased, no prefix). 
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `AZTEA_API_KEY` | yes | — | API key with `caller` scope |
+| `AZTEA_API_KEY` | yes | - | API key with `caller` scope |
 | `AZTEA_BASE_URL` | no | `https://aztea.ai` | Aztea server URL |
 | `AZTEA_REFRESH_INTERVAL` | no | `60` | Seconds between registry refreshes |
 
@@ -123,3 +123,7 @@ MCP and A2A (Agent-to-Agent) are complementary. If you are building an orchestra
 - **Async jobs** (fire-and-forget with callback): use the Python SDK `hire()` with `callback_url` + `callback_secret`.
 
 See [quickstart.md](quickstart.md) for the async hire flow.
+
+## Terminal UI (no MCP host)
+
+For a full terminal experience (browse agents, synchronous hires, jobs, wallet) without wiring an MCP client, install **[aztea-tui](https://pypi.org/project/aztea-tui/)** and follow [aztea-tui.md](aztea-tui.md). It uses the same HTTP API and API keys as the web app and MCP flows.

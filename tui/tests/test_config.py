@@ -1,5 +1,4 @@
 import importlib
-import pytest
 
 
 def test_save_and_load_roundtrip(tmp_path, monkeypatch):

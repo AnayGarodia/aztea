@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# aztea-tui installer — installs the Aztea terminal UI
+# aztea-tui installer  -  installs the Aztea terminal UI
 # Usage: curl -fsSL https://aztea.ai/install-tui.sh | bash
 set -euo pipefail
 

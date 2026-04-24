@@ -14,7 +14,7 @@ export default function NumberMorph({
   prefix = '',
   suffix = '',
   duration = 0.7,
-  placeholder = '—',
+  placeholder = '-',
   className,
   style,
 }) {

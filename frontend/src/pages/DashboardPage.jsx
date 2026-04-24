@@ -89,7 +89,7 @@ export default function DashboardPage() {
       <div className="dashboard__scroll">
         <div className="dashboard__content">
 
-          {/* Starter credit nudge — shown only to brand-new users with $0 balance */}
+          {/* Starter credit nudge - shown only to brand-new users with $0 balance */}
           {isNewUser && (
             <Reveal>
               <div style={{
@@ -110,7 +110,7 @@ export default function DashboardPage() {
                   </div>
                   <div>
                     <p style={{ fontWeight: 700, fontSize: '0.9375rem', color: 'var(--ink)', marginBottom: 2 }}>
-                      Welcome{user?.username ? `, ${user.username}` : ''} — you have $1.00 of free credit.
+                      Welcome{user?.username ? `, ${user.username}` : ''} - you have $1.00 of free credit.
                     </p>
                     <p style={{ fontSize: '0.8125rem', color: 'var(--ink-soft)' }}>
                       That's enough for about 100 calls at $0.01 each. No card needed to try it.

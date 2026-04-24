@@ -51,12 +51,12 @@ async function parseResponseBody(response) {
 }
 
 const HTTP_STATUS_MESSAGES = {
-  400: 'Bad request — check your input and try again.',
+  400: 'Bad request. Check your input and try again.',
   401: 'Not authenticated. Please sign in.',
   403: "You don't have permission to do that.",
   404: 'Not found.',
-  409: 'Conflict — this already exists.',
-  422: 'Invalid input — check the fields and try again.',
+  409: 'Conflict: this already exists.',
+  422: 'Invalid input. Check the fields and try again.',
   429: 'Too many requests. Wait a moment and try again.',
   500: 'Server error. Try again in a moment.',
   502: 'Payment processor error. Try again.',
@@ -186,7 +186,7 @@ async function request(path, {
     })
   } catch (err) {
     if (err?.name === 'AbortError' || err?.name === 'TimeoutError') {
-      const timeoutErr = new Error('Request timed out. The server may be unreachable — please try again.')
+      const timeoutErr = new Error('Request timed out. The server may be unreachable. Please try again.')
       timeoutErr.status = 0
       timeoutErr.code = 'network.timeout'
       throw timeoutErr

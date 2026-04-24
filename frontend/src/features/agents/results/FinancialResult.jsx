@@ -23,7 +23,7 @@ export default function FinancialResult({ result: r }) {
           <span className="result-meta__key">Filing</span>
         </div>
         <div className="result-meta__item">
-          <span className="result-meta__val">{r.filing_date ?? '—'}</span>
+          <span className="result-meta__val">{r.filing_date ?? '-'}</span>
           <span className="result-meta__key">Date</span>
         </div>
       </div>

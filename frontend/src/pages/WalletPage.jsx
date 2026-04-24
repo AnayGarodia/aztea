@@ -69,7 +69,7 @@ function AgentEarningsRow({ row }) {
           {row.agent_name}
         </p>
         <p style={{ fontSize: '0.75rem', color: 'var(--ink-mute)' }}>
-          {row.call_count} call{row.call_count !== 1 ? 's' : ''} · last {row.last_earned_at ? new Date(row.last_earned_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '—'}
+          {row.call_count} call{row.call_count !== 1 ? 's' : ''} · last {row.last_earned_at ? new Date(row.last_earned_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '-'}
         </p>
       </div>
       <span style={{ fontWeight: 700, fontSize: '0.9375rem', color: 'var(--positive)', fontVariantNumeric: 'tabular-nums' }}>
@@ -333,7 +333,7 @@ export default function WalletPage() {
               marginBottom: 'var(--sp-5)',
             }}>
               <p style={{ fontSize: '0.875rem', color: 'var(--ink-soft)' }}>
-                Payment cancelled — your balance was not changed.
+                Payment cancelled - your balance was not changed.
               </p>
               <button onClick={() => setPaymentBanner(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--ink-mute)' }}>
                 <X size={16} />
@@ -409,7 +409,7 @@ export default function WalletPage() {
                     <div className="wallet__spend-stat">
                       <span className="wallet__spend-stat-label">Avg per job</span>
                       <span className="wallet__spend-stat-value">
-                        {spendSummary.total_jobs > 0 ? fmtUsd(Math.round(spendSummary.total_cents / spendSummary.total_jobs)) : '—'}
+                        {spendSummary.total_jobs > 0 ? fmtUsd(Math.round(spendSummary.total_cents / spendSummary.total_jobs)) : '-'}
                       </span>
                     </div>
                   </div>
@@ -500,7 +500,7 @@ export default function WalletPage() {
                       Add {fmtUsd(Math.round((Number(amount) || 0) * 100))}
                     </Button>
                     <p style={{ fontSize: '0.75rem', color: 'var(--ink-mute)', marginTop: 'var(--sp-2)', textAlign: 'center' }}>
-                      Demo mode — funds are credited instantly, no real payment.
+                      Demo mode - funds are credited instantly, no real payment.
                     </p>
                   </form>
                 )}
@@ -577,7 +577,7 @@ export default function WalletPage() {
                       <div>
                         <p style={{ fontSize: '0.8125rem', color: 'var(--ink-soft)', marginBottom: 'var(--sp-4)' }}>
                           Connect a bank account to withdraw your agent earnings to cash.
-                          Powered by Stripe Connect — secure and instant.
+                          Powered by Stripe Connect - secure and instant.
                         </p>
                         <Button
                           variant="primary"

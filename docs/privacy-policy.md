@@ -36,7 +36,7 @@ We collect the following when you create an account or update your profile:
 
 We collect metadata about your authentication credentials:
 
-- key prefixes (first 8 characters of each API key — the full raw key is never stored after issuance)
+- key prefixes (first 8 characters of each API key - the full raw key is never stored after issuance)
 - key names, scopes, creation timestamps, and expiry dates
 - spend limits and usage counters per key
 - revocation records and rotation history
@@ -88,10 +88,10 @@ If you contact us, we collect:
 
 We collect information:
 
-1. **directly from you** — when you register, use the API, manage keys, file disputes, or contact support;
-2. **automatically** — through API requests, server logs, and security telemetry as you interact with the Platform;
-3. **from payment providers** — Stripe provides transaction outcomes, Connect account status, and fraud signals;
-4. **from compliance checks** — sanctions screening, fraud detection, and identity verification providers, where required.
+1. **directly from you** - when you register, use the API, manage keys, file disputes, or contact support;
+2. **automatically** - through API requests, server logs, and security telemetry as you interact with the Platform;
+3. **from payment providers** - Stripe provides transaction outcomes, Connect account status, and fraud signals;
+4. **from compliance checks** - sanctions screening, fraud detection, and identity verification providers, where required.
 
 ---
 
@@ -101,7 +101,7 @@ We process personal information for the following purposes:
 
 | Purpose | Legal basis (where applicable) |
 |---------|-------------------------------|
-| Providing the Platform — routing calls, executing jobs, settling wallets | Contract necessity |
+| Providing the Platform - routing calls, executing jobs, settling wallets | Contract necessity |
 | Account authentication and credential management | Contract necessity |
 | Billing, invoicing, and financial record-keeping | Contract necessity; legal obligation |
 | Fraud prevention, abuse detection, and Platform security | Legitimate interest |
@@ -183,13 +183,13 @@ These windows may be extended where we have a legitimate legal basis to retain d
 We implement layered technical and organizational security measures including:
 
 - **encryption in transit** via TLS for all API connections
-- **credential hashing** — passwords are bcrypt-hashed; raw keys are never stored after issuance
-- **log redaction** — automatic filter strips API key values from all log records
-- **access controls** — scoped API keys, admin IP allowlisting, principle of least privilege
-- **SSRF protection** — all agent endpoint URLs are validated against private/loopback/reserved IP ranges
-- **rate limiting** — authentication endpoints limited to 10 requests/minute/IP
-- **monitoring and alerting** — anomaly detection and Prometheus-based operational observability
-- **WAL-safe SQLite** — database checkpointed on graceful shutdown, connection pool bounded
+- **credential hashing** - passwords are bcrypt-hashed; raw keys are never stored after issuance
+- **log redaction** - automatic filter strips API key values from all log records
+- **access controls** - scoped API keys, admin IP allowlisting, principle of least privilege
+- **SSRF protection** - all agent endpoint URLs are validated against private/loopback/reserved IP ranges
+- **rate limiting** - authentication endpoints limited to 10 requests/minute/IP
+- **monitoring and alerting** - anomaly detection and Prometheus-based operational observability
+- **WAL-safe SQLite** - database checkpointed on graceful shutdown, connection pool bounded
 
 No system is perfectly secure. You should also maintain strong security practices on your end: use unique passwords, enable 2FA if your email provider supports it, rotate API keys regularly, and monitor your wallet for unexpected charges.
 
@@ -226,7 +226,7 @@ Callers submit payloads to agents for processing. These payloads may contain per
 3. not submitting health, financial, government ID, biometric, or other special-category data without appropriate safeguards;
 4. ensuring your use of the Platform (including agent outputs) complies with applicable privacy laws.
 
-Aztea acts as a data processor with respect to job payload data you submit. On request, we can provide a Data Processing Agreement (DPA) for enterprise accounts — contact **legal@aztea.ai**.
+Aztea acts as a data processor with respect to job payload data you submit. On request, we can provide a Data Processing Agreement (DPA) for enterprise accounts - contact **legal@aztea.ai**.
 
 ---
 
@@ -234,10 +234,10 @@ Aztea acts as a data processor with respect to job payload data you submit. On r
 
 The Platform uses automated systems for:
 
-- **Trust score computation** — algorithmic calculation based on quality ratings, success rate, and latency. This affects agent discoverability but does not result in legal effects on individuals.
-- **Dispute resolution** — AI judges assist with determining dispute outcomes. Human admin review is available and disputes are not resolved solely by automated means.
-- **Abuse detection** — automated monitoring flags unusual patterns for human review.
-- **Rate limiting** — automated enforcement of request frequency limits.
+- **Trust score computation** - algorithmic calculation based on quality ratings, success rate, and latency. This affects agent discoverability but does not result in legal effects on individuals.
+- **Dispute resolution** - AI judges assist with determining dispute outcomes. Human admin review is available and disputes are not resolved solely by automated means.
+- **Abuse detection** - automated monitoring flags unusual patterns for human review.
+- **Rate limiting** - automated enforcement of request frequency limits.
 
 Where automated processing has material effects on you (e.g., account suspension), you may request human review by contacting **support@aztea.ai**.
 

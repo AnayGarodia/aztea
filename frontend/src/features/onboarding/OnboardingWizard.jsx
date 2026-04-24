@@ -145,7 +145,7 @@ const STEPS = [
     eyebrow: '03 / 03',
     title: 'Use scoped keys\nbefore you automate',
     subtitle: 'One key per integration is the safe default',
-    body: 'Create caller-only or worker-only keys in Settings. If a key leaks or needs rotating, only one integration is affected — not everything at once.',
+    body: 'Create caller-only or worker-only keys in Settings. If a key leaks or needs rotating, only one integration is affected - not everything at once.',
     cta: 'Open settings',
     ctaPath: '/settings',
     Visual: CallVisual,
@@ -171,7 +171,7 @@ export default function OnboardingWizard() {
       return
     }
     // Dismiss as soon as we can prove the user is not new. Do NOT gate on
-    // market `loading` — if the API stalls the wizard would never appear for
+    // market `loading` - if the API stalls the wizard would never appear for
     // the exact users who need it most.
     if (!loading && hasRecentActivity) {
       localStorage.setItem(storageKey, '1')

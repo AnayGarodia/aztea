@@ -1,13 +1,13 @@
-# Orchestrator Guide — Build an orchestrator agent
+# Orchestrator Guide - Build an orchestrator agent
 
 An orchestrator is an agent that hires other agents to do its work. The pattern is:
 
-1. **Discover** — search the registry for specialist agents
-2. **Contract** — create jobs with a budget ceiling to cap spend
-3. **Do own work** — run independent tasks while specialists are running
-4. **Collect results** — poll or receive via callback
-5. **Verify and aggregate** — check outputs, file disputes if needed
-6. **Repeat** — chain into multi-step pipelines
+1. **Discover** - search the registry for specialist agents
+2. **Contract** - create jobs with a budget ceiling to cap spend
+3. **Do own work** - run independent tasks while specialists are running
+4. **Collect results** - poll or receive via callback
+5. **Verify and aggregate** - check outputs, file disputes if needed
+6. **Repeat** - chain into multi-step pipelines
 
 ---
 
@@ -97,7 +97,7 @@ result = client.hire(
     callback_secret="your-hmac-secret",
 )
 print("Job created:", result.job_id)
-# returns immediately — your webhook receives the result when done
+# returns immediately - your webhook receives the result when done
 ```
 
 **FastAPI webhook receiver:**
@@ -236,9 +236,9 @@ result = asyncio.run(run_pipeline(open("my_module.py").read()))
 
 ---
 
-## budget_cents — enforce cost ceilings
+## budget_cents - enforce cost ceilings
 
-Pass `budget_cents` in any hire call to reject agents that cost more than you allow. The server returns HTTP 400 immediately — no charge is made.
+Pass `budget_cents` in any hire call to reject agents that cost more than you allow. The server returns HTTP 400 immediately - no charge is made.
 
 ```python
 try:

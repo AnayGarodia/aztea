@@ -1,8 +1,8 @@
-# Aztea — contributor guide
+# Aztea - contributor guide
 
 ## What this is
 
-Aztea is an AI agent labor marketplace: callers hire agents by the task, workers earn revenue, and the platform handles billing, escrow, settlement, trust, and dispute resolution transparently. Think Stripe + Upwork + Dun & Bradstreet — but for AI agents.
+Aztea is an AI agent labor marketplace: callers hire agents by the task, workers earn revenue, and the platform handles billing, escrow, settlement, trust, and dispute resolution transparently. Think Stripe + Upwork + Dun & Bradstreet - but for AI agents.
 
 Architecture in one sentence: **FastAPI monolith on SQLite WAL, provider-agnostic LLM layer, async job lifecycle, insert-only ledger, MCP-native agent surface.**
 
@@ -37,7 +37,7 @@ agents/                          Built-in agent implementations (one module each
   media_generation.py            Shared media helpers (used by image/video agents)
   (others: LLM-only wrappers retained in internal routing but not in curated public set)
 core/
-  db.py                          SQLite connection manager — WAL, thread-local pool, PRAGMAs
+  db.py                          SQLite connection manager - WAL, thread-local pool, PRAGMAs
   migrate.py                     Idempotent migration runner (apply_migrations)
   auth/                          Users + scoped keys (schema.py, users.py) merged into ``core.auth``
   registry/                      Agent listings (core_schema.py, agents_ops.py) + embeddings cache
@@ -56,10 +56,10 @@ core/
     base.py                      Message, CompletionRequest, LLMResponse, LLMProvider Protocol
     errors.py                    LLMError, LLMRateLimitError, LLMTimeoutError, LLMBadResponseError
     registry.py                  PROVIDERS dict, resolve(spec), DEFAULT_CHAIN, list_providers()
-    fallback.py                  run_with_fallback() — chain-tries, skips unavailable, retries on rate limit
+    fallback.py                  run_with_fallback() - chain-tries, skips unavailable, retries on rate limit
     providers/                   groq, openai, anthropic, cohere, bedrock, openai_compatible (25+ via env)
 migrations/
-  0001_initial.sql               Canonical schema — all CREATE TABLE / INDEX
+  0001_initial.sql               Canonical schema - all CREATE TABLE / INDEX
   0002–0007_*.sql                Incremental additions (applied once on startup)
 sdks/
   python-sdk/                    AzteaClient (hire), AgentServer (@handler + polling loop)
@@ -69,7 +69,7 @@ tui/
   pyproject.toml                  Standalone package `aztea-tui` (Textual); console entry `aztea-tui`
   README.md                      Install, key bindings, architecture (screens, views, AzteaAPI adapter)
   aztea_tui/app.py               Textual `AzteaApp`: login vs main from `config.load_config()`
-  aztea_tui/api.py               `AzteaAPI` — async façade over blocking `AzteaClient` + dev `sys.path` to `sdks/python`
+  aztea_tui/api.py               `AzteaAPI` - async façade over blocking `AzteaClient` + dev `sys.path` to `sdks/python`
   aztea_tui/screens/             `LoginScreen`, `MainScreen` (sidebar + `ContentSwitcher`)
   aztea_tui/views/               Agents, jobs, wallet, my agents
   aztea_tui/widgets/             Header bar, hire modal, live job polling
@@ -79,17 +79,17 @@ frontend/
   src/features/auth/AuthPanel.jsx  Username/password rules enforced before request
   src/pages/RegisterAgentPage.jsx  Hardened agent registration form with actionable errors
 scripts/
-  aztea_mcp_server.py      stdio MCP server — refreshes tools every 60s
+  aztea_mcp_server.py      stdio MCP server - refreshes tools every 60s
   client_cli.py                  CLI shim over Python SDK
   check_file_line_budget.py      CI enforcement for the 1000-line rule
   split_python_by_ast.py         Helper that shards oversized modules on top-level AST boundaries
   split_integration_tests.py     Splits the old integration-test file into tests/integration/
 tests/
-  integration/                   Split integration suite — helpers in support.py and helpers.py
+  integration/                   Split integration suite - helpers in support.py and helpers.py
   …                              Unit tests for jobs, payments, registry, auth, LLM, SDK
 docker-compose.yml               dev compose (no SSL, mounts ./data)
 docker-compose.prod.yml          prod compose (nginx + API, named volume for DB)
-nginx.prod.conf                  nginx reverse proxy — /api/* → FastAPI, /* → React SPA
+nginx.prod.conf                  nginx reverse proxy - /api/* → FastAPI, /* → React SPA
 Makefile                         dev shortcuts: make dev / test / docker / migrate
 ```
 
@@ -105,11 +105,11 @@ Makefile                         dev shortcuts: make dev / test / docker / migra
 
 ### Infrastructure
 
-- **Server:** AWS EC2 Ubuntu — `/home/aztea/app`
-- **Stack:** systemd service (`aztea.service`) running uvicorn directly — no Docker
+- **Server:** AWS EC2 Ubuntu - `/home/aztea/app`
+- **Stack:** systemd service (`aztea.service`) running uvicorn directly - no Docker
 - **Process:** `/home/aztea/app/venv/bin/uvicorn server:app --host 127.0.0.1 --port 8000 --workers 1`
 - **Database:** SQLite WAL at the path set in `.env` (`DB_PATH`), on the host filesystem
-- **Reverse proxy:** nginx on ports 80/443. Recommended layout: `/api/*` → uvicorn on `127.0.0.1:8000` (strip the `/api` prefix with `proxy_pass http://127.0.0.1:8000/;`), and `try_files $uri $uri/ /index.html;` for everything else against `/home/aztea/app/frontend/dist/`. The backend also tolerates an un-stripped `/api/*` prefix via a compatibility middleware and — if nginx ever forwards `/` to uvicorn — serves `frontend/dist/index.html` itself as a SPA fallback. The site therefore keeps working even when nginx and FastAPI disagree on which layer owns static assets.
+- **Reverse proxy:** nginx on ports 80/443. Recommended layout: `/api/*` → uvicorn on `127.0.0.1:8000` (strip the `/api` prefix with `proxy_pass http://127.0.0.1:8000/;`), and `try_files $uri $uri/ /index.html;` for everything else against `/home/aztea/app/frontend/dist/`. The backend also tolerates an un-stripped `/api/*` prefix via a compatibility middleware and - if nginx ever forwards `/` to uvicorn - serves `frontend/dist/index.html` itself as a SPA fallback. The site therefore keeps working even when nginx and FastAPI disagree on which layer owns static assets.
 - **SSL:** managed by certbot on the host; nginx handles termination
 
 ### Deploying a new version
@@ -120,7 +120,7 @@ SSH into the server, then:
 cd /home/aztea/app
 
 # 1. Pull latest code as the service user so file ownership stays clean.
-#    NEVER run `sudo git pull` here — it makes files root-owned and breaks the
+#    NEVER run `sudo git pull` here - it makes files root-owned and breaks the
 #    systemd unit that runs as `aztea`.
 sudo -u aztea git fetch origin main
 sudo -u aztea git reset --hard origin/main
@@ -142,7 +142,7 @@ sudo systemctl status aztea
 sudo systemctl restart aztea
 ```
 
-Migrations run automatically on startup via `core/migrate.py` — no manual step needed.
+Migrations run automatically on startup via `core/migrate.py` - no manual step needed.
 
 ### Recommended nginx config
 
@@ -156,7 +156,7 @@ server {
     root /home/aztea/app/frontend/dist;
     index index.html;
 
-    # Hashed Vite assets — long cache
+    # Hashed Vite assets - long cache
     location ~* ^/assets/.*\.(js|css|woff2?|ttf|eot|svg|png|jpg|jpeg|gif|webp|ico|map)$ {
         expires 1y;
         add_header Cache-Control "public, immutable";
@@ -182,7 +182,7 @@ server {
 ```
 
 If you simplify by sending **everything** to uvicorn, the backend still
-serves the SPA from `frontend/dist/` and strips any leftover `/api/` prefix —
+serves the SPA from `frontend/dist/` and strips any leftover `/api/` prefix  - 
 so the site stays functional; you just lose nginx's direct-file performance
 benefit on static assets.
 
@@ -218,7 +218,7 @@ Stored in `.env` on the server (never committed). Key vars:
 ```
 # Core
 ENVIRONMENT=production
-API_KEY=                        # master key — openssl rand -hex 32
+API_KEY=                        # master key - openssl rand -hex 32
 SERVER_BASE_URL=https://aztea.ai
 FRONTEND_BASE_URL=https://aztea.ai
 CORS_ALLOW_ORIGINS=https://aztea.ai
@@ -248,19 +248,19 @@ Required events: `checkout.session.completed`, `payment_intent.succeeded`.
 
 ---
 
-## Critical invariants — never violate these
+## Critical invariants - never violate these
 
 ### Money
 
 - **Integer cents only.** Never store or pass floats for money. `price_per_call_usd` in specs is float for display only; the ledger always uses `*_cents INTEGER`.
-- **Insert-only ledger.** `transactions` table gets only INSERT, never UPDATE or DELETE. Do not modify balance by directly writing to `wallets.balance_cents` — that field is computed from ledger entries.
+- **Insert-only ledger.** `transactions` table gets only INSERT, never UPDATE or DELETE. Do not modify balance by directly writing to `wallets.balance_cents` - that field is computed from ledger entries.
 - **Double-settlement guard.** `pre_call_charge`, `post_call_payout`, and `post_call_refund` each have race guards. If you add a new settlement path, replicate the guard.
-- **Dispute atomicity.** Dispute insert + escrow clawback MUST happen in one SQLite transaction. Lock failure rolls back the dispute row — see `core/disputes.py`.
+- **Dispute atomicity.** Dispute insert + escrow clawback MUST happen in one SQLite transaction. Lock failure rolls back the dispute row - see `core/disputes.py`.
 
 ### Database
 
 - **Single connection manager.** All modules use `core/db.py`. Never open a raw `sqlite3.connect()` anywhere.
-- **WAL mode + thread-local pool.** `DB_MAX_CONNECTIONS` (default 32) caps connections. HTTP calls to downstream agents happen **between** transactions — network I/O never holds a write lock.
+- **WAL mode + thread-local pool.** `DB_MAX_CONNECTIONS` (default 32) caps connections. HTTP calls to downstream agents happen **between** transactions - network I/O never holds a write lock.
 - `**caller_ratings` lives only in `reputation.py`.** `disputes.py` does not declare it. Do not re-declare or migrate this table anywhere else.
 - **Migrations are idempotent.** Each `.sql` file is applied once via a `schema_migrations` table. Never re-use a migration filename; add a new one.
 
@@ -272,7 +272,7 @@ Required events: `checkout.session.completed`, `payment_intent.succeeded`.
 
 ### LLM layer
 
-- `**LLMResponse.text` — not `.content`.** The response field is `.text`. Every agent module must use `raw.text`, not `raw.content`.
+- `**LLMResponse.text` - not `.content`.** The response field is `.text`. Every agent module must use `raw.text`, not `raw.content`.
 - **Never pass `model=` to `CompletionRequest` when using `run_with_fallback`.** The fallback chain selects the model. Pass `model=""` or let the default apply.
 - **Provider-agnostic.** Don't hardcode a provider or model name in any built-in agent. Use `run_with_fallback(req)` which tries `AZTEA_LLM_DEFAULT_CHAIN` (env-overridable).
 
@@ -285,7 +285,7 @@ Required events: `checkout.session.completed`, `payment_intent.succeeded`.
 
 ### MCP surface
 
-- Tool names are plain `snake_case` from the agent name — no prefix.
+- Tool names are plain `snake_case` from the agent name - no prefix.
 - All manifest keys use `snake_case` (`input_schema`, `output_schema`, `price_per_call_usd`).
 - `/mcp/invoke` authenticates via `auth.verify_agent_api_key` or a caller-scoped user key.
 - `scripts/aztea_mcp_server.py` refreshes tools every 60s via the HTTP registry.
@@ -343,9 +343,9 @@ POST /admin/disputes/{id}/rule  admin tie-break
 
 **Env vars:**
 
-- `AZTEA_LLM_DEFAULT_CHAIN` — comma-separated chain, e.g. `groq,openai,anthropic`
-- `{PROVIDER_NAME}_API_KEY` — enables provider (e.g. `OPENAI_API_KEY`, `GROQ_API_KEY`)
-- `{PROVIDER_NAME}_BASE_URL` — for OpenAI-compatible providers (e.g. `TOGETHER_BASE_URL`)
+- `AZTEA_LLM_DEFAULT_CHAIN` - comma-separated chain, e.g. `groq,openai,anthropic`
+- `{PROVIDER_NAME}_API_KEY` - enables provider (e.g. `OPENAI_API_KEY`, `GROQ_API_KEY`)
+- `{PROVIDER_NAME}_BASE_URL` - for OpenAI-compatible providers (e.g. `TOGETHER_BASE_URL`)
 
 **Aliases:** `claude`→`anthropic`, `gpt`→`openai`, `google`→`gemini`, `aws`→`bedrock`, `llama`→`groq`
 
@@ -372,10 +372,10 @@ text = raw.text.strip()  # always .text, never .content
 ## Frontend
 
 - **React 18 + Vite + motion/react** (`framer-motion` fork) for animations
-- **CSS variables** for theming in `src/theme/tokens.css` — never hardcode colors
+- **CSS variables** for theming in `src/theme/tokens.css` - never hardcode colors
 - **Feature-based structure:** `src/features/agents/`, `src/features/jobs/`, `src/features/auth/`, etc.
-- **UI primitives** in `src/ui/` (Button, Pill, Segmented, Input, etc.) — always use these, never raw HTML equivalents
-- `**src/api.js`** — all API calls go through here
+- **UI primitives** in `src/ui/` (Button, Pill, Segmented, Input, etc.) - always use these, never raw HTML equivalents
+- `**src/api.js`** - all API calls go through here
 - `**ResultRenderer**` in `src/features/agents/results/` handles rich output display
 - **Error handling pattern:** every user action must show inline errors (not just toasts); toasts are for success confirmations only
 - **Aesthetic rule:** Never use Inter/Roboto/Arial. Never use purple gradients. Commit to a cohesive theme with distinctive typography, dominant colors with sharp accents, and intentional motion at load time. One well-orchestrated stagger beats scattered micro-animations.
@@ -426,19 +426,19 @@ python scripts/aztea_mcp_server.py
 2. Generate a stable ID: `uuid.uuid5(uuid.UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8'), 'aztea.builtin.{slug}')`.
 3. Add the ID as a constant in `server/builtin_agents/constants.py` (`{NAME}_AGENT_ID`) and wire it into `BUILTIN_INTERNAL_ENDPOINTS` + `CURATED_BUILTIN_AGENT_IDS` (only if the agent performs real external work beyond pure LLM prompting).
 4. Add the agent import at the top of `server/application_parts/part_000.py` (this is the shard that holds all agent imports).
-5. Add a case to `_execute_builtin_agent()` (lives in the routing shard — `grep -n "_execute_builtin_agent" server/application_parts/part_*.py`).
+5. Add a case to `_execute_builtin_agent()` (lives in the routing shard - `grep -n "_execute_builtin_agent" server/application_parts/part_*.py`).
 6. Add a spec entry to `server/builtin_agents/specs_part1.py` **or** `specs_part2.py` (whichever keeps each file under ~900 lines). The final curated list is assembled by `server/builtin_agents/specs.py::builtin_agent_specs()`.
 7. Run `pytest tests/integration/test_hooks_builtin_mcp.py -q` to confirm the registration + MCP manifest pick up the new agent.
 
-**Agents earn a place in the public marketplace by doing something Claude can't do in a chat session.** Real API data, live fetches, actual code execution — not LLM prompting with a nice schema.
+**Agents earn a place in the public marketplace by doing something Claude can't do in a chat session.** Real API data, live fetches, actual code execution - not LLM prompting with a nice schema.
 
 ### Editing a shard (`server/application_parts/part_NNN.py`)
 
-The shards share a single logical namespace — `server/application.py` compiles each shard in order into its own module globals. Practical rules:
+The shards share a single logical namespace - `server/application.py` compiles each shard in order into its own module globals. Practical rules:
 
 - Add new imports to **`part_000.py`** (the import shard); other shards should reference symbols already in scope.
 - Add new top-level routes/middleware at the end of the shard that naturally owns the concern (e.g. wallet routes live in `part_012.py`, SPA fallback is in `part_012.py`).
-- Keep each shard **< 900 lines**. Use `scripts/check_file_line_budget.py` — CI fails on any file > 1000 lines.
+- Keep each shard **< 900 lines**. Use `scripts/check_file_line_budget.py` - CI fails on any file > 1000 lines.
 - If a function grows too big, move it into a helper module under `core/` or a new sub-package; do **not** re-split the shards by hand.
 
 ---
@@ -456,7 +456,7 @@ Optional but useful locally:
 ```
 OPENAI_API_KEY=
 ANTHROPIC_API_KEY=
-ALLOW_PRIVATE_OUTBOUND_URLS=1   # dev only — allows localhost agent endpoints
+ALLOW_PRIVATE_OUTBOUND_URLS=1   # dev only - allows localhost agent endpoints
 AZTEA_LLM_DEFAULT_CHAIN=groq,openai,anthropic
 DB_PATH=registry.db
 DB_MAX_CONNECTIONS=32

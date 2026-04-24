@@ -6,13 +6,13 @@
   transform-origin: center bottom;
 }
 
-/* Idle float — gentle up-down 3px over 2s */
+/* Idle float - gentle up-down 3px over 2s */
 @keyframes char-float {
   0%, 100% { transform: translateY(0px); }
   50%       { transform: translateY(-3px); }
 }
 
-/* Celebrating bounce — single jump */
+/* Celebrating bounce - single jump */
 @keyframes char-bounce {
   0%   { transform: translateY(0px) scaleX(1); }
   20%  { transform: translateY(-10px) scaleX(0.93); }

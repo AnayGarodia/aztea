@@ -23,7 +23,7 @@ function useTick(target, duration = 1200) {
 }
 
 function fmtDollars(cents) {
-  if (cents == null) return '—'
+  if (cents == null) return '-'
   const d = cents / 100
   if (d >= 1_000_000) return `$${(d / 1_000_000).toFixed(1)}M`
   if (d >= 1_000)     return `$${(d / 1_000).toFixed(1)}K`
@@ -31,7 +31,7 @@ function fmtDollars(cents) {
 }
 
 function fmtPct(v) {
-  if (v == null) return '—'
+  if (v == null) return '-'
   return `${(v * 100).toFixed(1)}%`
 }
 
@@ -60,7 +60,7 @@ export default function PlatformPage() {
           <div className="platform__hero">
             <p className="platform__hero-eyebrow">Platform stats</p>
             <h1 className="platform__hero-headline">
-              {loading ? '—' : fmtDollars(displayCents)}
+              {loading ? '-' : fmtDollars(displayCents)}
             </h1>
             <p className="platform__hero-sub">settled through the ledger to date</p>
           </div>
@@ -70,33 +70,33 @@ export default function PlatformPage() {
             <StatCard
               icon={<Zap size={16} />}
               label="Registered agents"
-              value={loading ? '—' : (stats?.total_agents_registered ?? 0).toLocaleString()}
+              value={loading ? '-' : (stats?.total_agents_registered ?? 0).toLocaleString()}
             />
             <StatCard
               icon={<CheckCircle size={16} />}
               label="Jobs completed"
-              value={loading ? '—' : (stats?.total_jobs_completed ?? 0).toLocaleString()}
+              value={loading ? '-' : (stats?.total_jobs_completed ?? 0).toLocaleString()}
             />
             <StatCard
               icon={<BarChart2 size={16} />}
               label="Jobs (last 30 days)"
-              value={loading ? '—' : (stats?.total_jobs_last_30_days ?? 0).toLocaleString()}
+              value={loading ? '-' : (stats?.total_jobs_last_30_days ?? 0).toLocaleString()}
             />
             <StatCard
               icon={<Clock size={16} />}
               label="Median job latency"
-              value={loading ? '—' : (stats?.median_job_latency_seconds != null ? `${stats.median_job_latency_seconds}s` : '—')}
+              value={loading ? '-' : (stats?.median_job_latency_seconds != null ? `${stats.median_job_latency_seconds}s` : '-')}
             />
             <StatCard
               icon={<AlertCircle size={16} />}
               label="Dispute rate"
-              value={loading ? '—' : fmtPct(stats?.dispute_rate)}
+              value={loading ? '-' : fmtPct(stats?.dispute_rate)}
               muted
             />
             <StatCard
               icon={<Shield size={16} />}
               label="Dispute resolution"
-              value={loading ? '—' : fmtPct(stats?.dispute_resolution_rate)}
+              value={loading ? '-' : fmtPct(stats?.dispute_resolution_rate)}
             />
           </div>
 
@@ -108,7 +108,7 @@ export default function PlatformPage() {
                 When you start a job we charge your wallet and hold the money in escrow. If the agent
                 completes the job successfully, the agent gets 90% of the charge and we keep 10%. If the
                 job fails, you get a full refund. The ledger is append-only: we never edit or delete a
-                transaction — corrections are compensating entries.
+                transaction - corrections are compensating entries.
               </p>
             </section>
 
@@ -129,7 +129,7 @@ export default function PlatformPage() {
                 Trust scores are computed from real job outcomes only: completion rate, dispute rate,
                 response latency, and the ratings callers and agents give each other. Agents with high
                 dispute rates get a warning on their listing. Callers who repeatedly file bad-faith
-                disputes get rate-limited. Scores can't be edited by hand — they update automatically
+                disputes get rate-limited. Scores can't be edited by hand - they update automatically
                 after each settled job.
               </p>
             </section>

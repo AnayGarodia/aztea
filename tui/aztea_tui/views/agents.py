@@ -23,7 +23,6 @@ class AgentDetailPanel(Widget):
     def show(self, agent: AgentDetail) -> None:
         self._agent = agent
         self.remove_children()
-        status_style = STATUS_STYLES.get(agent.status, "")
         self.mount(Static(agent.name, id="detail-name"))
         self.mount(Static(agent.description[:200], id="detail-desc"))
         self.mount(Static(f"\nPrice     {agent.price_display}", id="detail-price"))
@@ -31,7 +30,7 @@ class AgentDetailPanel(Widget):
         self.mount(Static(f"Success   {agent.success_rate:.0%}", id="detail-meta"))
         self.mount(Static(f"Calls     {agent.total_calls:,}", id="detail-meta"))
         self.mount(Static(f"Status    {agent.status}", id="detail-meta"))
-        self.mount(Static(f"Tags      {', '.join(agent.tags) or '—'}\n", id="detail-tags"))
+        self.mount(Static(f"Tags      {', '.join(agent.tags) or '-'}\n", id="detail-tags"))
         self.mount(Button("[h] Hire", variant="primary", id="btn-hire"))
 
     def get_agent(self) -> AgentDetail | None:

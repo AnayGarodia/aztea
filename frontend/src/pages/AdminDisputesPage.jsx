@@ -11,7 +11,7 @@ import { ChevronDown, ChevronUp, Scale } from 'lucide-react'
 import './AdminDisputesPage.css'
 
 function relativeAge(isoString) {
-  if (!isoString) return '—'
+  if (!isoString) return '-'
   const diff = Date.now() - new Date(isoString).getTime()
   const mins = Math.floor(diff / 60000)
   if (mins < 60) return `${mins}m`
@@ -22,12 +22,12 @@ function relativeAge(isoString) {
 }
 
 function fmtUsd(cents) {
-  if (typeof cents !== 'number') return '—'
+  if (typeof cents !== 'number') return '-'
   return '$' + (cents / 100).toFixed(2)
 }
 
 function shortId(id) {
-  if (!id) return '—'
+  if (!id) return '-'
   const parts = String(id).split(':')
   const base = parts[parts.length - 1]
   return base.length > 10 ? base.slice(0, 10) + '…' : base
@@ -144,7 +144,7 @@ function RulingPanel({ disputeId, priceCents, onRuled, apiKey }) {
           </div>
           <div className="adp__split-remainder">
             Platform: {platformVal}¢
-            {splitInvalid && <span className="adp__split-err"> — exceeds job value ({priceCents}¢)</span>}
+            {splitInvalid && <span className="adp__split-err"> - exceeds job value ({priceCents}¢)</span>}
           </div>
         </div>
       )}
@@ -205,7 +205,7 @@ function DisputeDetail({ disputeId, apiKey, priceCents, onRuled, showRuling }) {
         {/* Complaint */}
         <div className="adp__detail-section">
           <p className="adp__detail-label">Reason</p>
-          <p className="adp__detail-text">{dispute?.reason || '—'}</p>
+          <p className="adp__detail-text">{dispute?.reason || ' - '}</p>
           {dispute?.evidence && (
             <>
               <p className="adp__detail-label" style={{ marginTop: 8 }}>Evidence</p>

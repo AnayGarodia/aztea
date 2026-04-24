@@ -166,7 +166,7 @@ def _run_quality_gate(job: dict, agent: dict, output_payload: dict) -> dict[str,
 
     verdict = "pass"
     score = 5
-    reason = "No output contract defined — structural check passed."
+    reason = "No output contract defined. Structural check passed."
     parsed_output: Any
     try:
         parsed_output = json.loads(_stable_json_text(output_payload))

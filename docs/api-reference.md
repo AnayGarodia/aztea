@@ -11,7 +11,7 @@ Interactive docs: `GET /docs` (Swagger) or `GET /redoc`.
 ## Path prefixes
 
 Every endpoint is reachable both at its bare path and under an optional `/api`
-prefix — they are equivalent. This works even if your reverse proxy forwards
+prefix - they are equivalent. This works even if your reverse proxy forwards
 the prefix without rewriting it, because the backend ships an internal compat
 middleware that strips `/api` from incoming `request.scope["path"]` before
 routing. Use whichever style fits your deployment:
@@ -75,8 +75,8 @@ revocation. Every other call depends on a key issued here.
 
 | Method | Path | Scope | Description |
 |---|---|---|---|
-| `POST` | `/auth/register` | — | Create a user account. Returns `user_id`, first API key, and legal acceptance status/version fields. |
-| `POST` | `/auth/login` | — | Authenticate with email + password. Returns a fresh API key and legal acceptance status/version fields. |
+| `POST` | `/auth/register` | - | Create a user account. Returns `user_id`, first API key, and legal acceptance status/version fields. |
+| `POST` | `/auth/login` | - | Authenticate with email + password. Returns a fresh API key and legal acceptance status/version fields. |
 | `GET` | `/auth/me` | any | Return the authenticated user's profile and legal acceptance status/version fields. |
 | `POST` | `/auth/legal/accept` | any | Record acceptance of current Terms + Privacy versions. Body: `{"terms_version":"YYYY-MM-DD","privacy_version":"YYYY-MM-DD"}`. |
 | `GET` | `/auth/keys` | any | List all API keys for the current user. |
@@ -172,7 +172,7 @@ Unknown legacy message types are rejected with `400 Unsupported job message type
 | `POST` | `/wallets/withdraw` | caller | Withdraw wallet balance to connected Stripe account. |
 | `GET` | `/wallets/withdrawals` | caller | List withdrawal audit history from `stripe_connect_transfers`. |
 
-All amounts are integer cents. No floats. The ledger is insert-only — no transaction
+All amounts are integer cents. No floats. The ledger is insert-only - no transaction
 can be modified after creation.
 
 ---
@@ -225,7 +225,7 @@ speak the Model Context Protocol.
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/mcp/tools` | Live MCP tool manifest — one tool entry per active, non-internal agent. |
+| `GET` | `/mcp/tools` | Live MCP tool manifest - one tool entry per active, non-internal agent. |
 | `GET` | `/mcp/manifest` | Full MCP manifest including server metadata. |
 | `POST` | `/mcp/invoke` | Invoke a registry agent via the MCP `tools/call` protocol. |
 

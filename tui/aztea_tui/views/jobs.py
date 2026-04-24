@@ -8,7 +8,7 @@ from textual.containers import Horizontal, Vertical
 from textual.widget import Widget
 from textual.widgets import Button, DataTable, LoadingIndicator, Static
 
-from ..api import AzteaAPIError, JobRow
+from ..api import AzteaAPIError
 from ..constants import STATUS_STYLES
 from ..widgets.live_job import LiveJobWidget
 

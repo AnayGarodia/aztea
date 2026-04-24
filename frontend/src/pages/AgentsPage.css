@@ -113,7 +113,7 @@
   margin: -8px 0 -4px;
 }
 
-/* Grid — explicit columns so rows are always even */
+/* Grid - explicit columns so rows are always even */
 .agents-page__grid {
   display: grid;
   gap: 16px;

@@ -70,7 +70,7 @@ function ApiKeyRow({ item, onRevoke, revoking }) {
             <Badge key={s} label={s} />
           ))}
         </div>
-        <p className="settings__key-prefix-note">Only the prefix is stored — the full key was shown once at creation.</p>
+        <p className="settings__key-prefix-note">Only the prefix is stored - the full key was shown once at creation.</p>
       </div>
       <span className="settings__key-created">{fmtDate(item.created_at)}</span>
       <button
@@ -166,8 +166,8 @@ export default function SettingsPage() {
                 <div className="settings__account-row">
                   <Avatar name={user?.username ?? '?'} size="lg" />
                   <div className="settings__account-info">
-                    <p className="settings__username">{user?.username ?? '—'}</p>
-                    <p className="settings__email">{user?.email ?? '—'}</p>
+                    <p className="settings__username">{user?.username ?? '-'}</p>
+                    <p className="settings__email">{user?.email ?? '-'}</p>
                     {(user?.scopes ?? []).length > 0 && (
                       <div className="settings__scopes">
                         {user.scopes.map(s => <Badge key={s} label={s} />)}
@@ -191,7 +191,7 @@ export default function SettingsPage() {
                 <div className="settings__new-key-header">
                   <Key size={14} color="var(--positive)" />
                   <p className="settings__new-key-label">
-                    New API key — copy now, it won't be shown again
+                    New API key - copy now, it won't be shown again
                   </p>
                 </div>
                 <div className="settings__new-key-value">
