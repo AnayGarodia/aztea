@@ -28,11 +28,13 @@ const CATALOG = [
   { id: '9a175aa2-8ffd-52f7-aae0-5a33fc88db83', name: 'Wikipedia Research','desc': 'Search and summarize Wikipedia.', category: 'Research',  price: '$0.02' },
 ]
 
+const INIT_CMD = 'npx aztea init'
+
 const MCP_JSON = `{
   "mcpServers": {
     "aztea": {
-      "command": "python",
-      "args": ["aztea_mcp_server.py"],
+      "command": "npx",
+      "args": ["-y", "aztea", "mcp"],
       "env": {
         "AZTEA_API_KEY": "your-key-here"
       }
@@ -261,16 +263,16 @@ export default function LandingPage() {
             <p className="t-micro lp__section-eyebrow">One install</p>
             <h2 className="lp__section-title t-h1">Add Aztea to Claude Code</h2>
             <p className="lp__section-sub">
-              Add this to your <code className="lp__inline-code">~/.claude/settings.json</code> and restart Claude Code. Every tool in the catalog becomes available immediately.
+              Run one command in your terminal. It creates a free account, adds $2 credit, and wires up the MCP config automatically.
             </p>
             <div className="lp__install-steps">
               <div className="lp__install-step">
                 <span className="lp__install-num">1</span>
-                <span>Sign up and copy your API key from <Link to="/keys" className="lp__text-link">Settings → API Keys</Link></span>
+                <span>Run <code className="lp__inline-code">npx aztea init</code> in your terminal — 60 seconds, no card needed</span>
               </div>
               <div className="lp__install-step">
                 <span className="lp__install-num">2</span>
-                <span>Paste the config below into <code className="lp__inline-code">~/.claude/settings.json</code></span>
+                <span>Restart Claude Code — the full tool catalog appears instantly</span>
               </div>
               <div className="lp__install-step">
                 <span className="lp__install-num">3</span>
@@ -280,13 +282,23 @@ export default function LandingPage() {
           </Reveal>
 
           <Reveal delay={0.08} className="lp__install-snippet-wrap">
-            <div className="lp__snippet">
+            <div className="lp__snippet lp__snippet--cmd">
               <div className="lp__snippet-bar">
-                <span className="lp__snippet-filename">~/.claude/settings.json</span>
-                <CopyButton text={MCP_JSON} />
+                <span className="lp__snippet-filename">Terminal</span>
+                <CopyButton text={INIT_CMD} />
               </div>
-              <pre className="lp__snippet-code">{MCP_JSON}</pre>
+              <pre className="lp__snippet-code lp__snippet-code--cmd">$ npx aztea init</pre>
             </div>
+            <details className="lp__manual-toggle">
+              <summary className="lp__manual-summary">Prefer manual setup? Add JSON to ~/.claude/settings.json</summary>
+              <div className="lp__snippet lp__snippet--json" style={{ marginTop: '0.75rem' }}>
+                <div className="lp__snippet-bar">
+                  <span className="lp__snippet-filename">~/.claude/settings.json</span>
+                  <CopyButton text={MCP_JSON} />
+                </div>
+                <pre className="lp__snippet-code">{MCP_JSON}</pre>
+              </div>
+            </details>
             <p className="lp__install-docs-link">
               <Link to="/docs/mcp-integration" className="lp__text-link">
                 Full MCP setup guide <ArrowRight size={12} style={{ display: 'inline', verticalAlign: 'middle' }} />

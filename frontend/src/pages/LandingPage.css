@@ -1618,6 +1618,35 @@
 }
 .lp__text-link:hover { text-decoration: underline; }
 
+.lp__snippet--cmd .lp__snippet-code--cmd {
+  font-size: 1rem;
+  padding: 18px 20px;
+  color: var(--accent);
+  letter-spacing: 0.01em;
+}
+.lp__manual-toggle {
+  margin-top: 10px;
+}
+.lp__manual-summary {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+}
+.lp__manual-summary::-webkit-details-marker { display: none; }
+.lp__manual-summary::before {
+  content: '▶';
+  font-size: 0.65rem;
+  transition: transform 0.15s;
+}
+details[open] .lp__manual-summary::before { transform: rotate(90deg); }
+.lp__manual-summary:hover { color: var(--text-secondary); }
+
 /* ── Catalog ── */
 .lp__cat {
   padding: 80px 24px;

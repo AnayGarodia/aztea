@@ -78,6 +78,10 @@ from agents import web_researcher as agent_web_researcher
 from agents import github_fetcher as agent_github_fetcher
 from agents import hn_digest as agent_hn_digest
 from agents import dns_inspector as agent_dns_inspector
+from agents import pr_reviewer as agent_pr_reviewer
+from agents import test_generator as agent_test_generator
+from agents import spec_writer as agent_spec_writer
+from agents import dependency_auditor as agent_dependency_auditor
 from core import auth as _auth
 from core import embeddings
 from core import onboarding
@@ -254,6 +258,10 @@ _WEB_RESEARCHER_AGENT_ID   = "32cd7b5c-44d0-5259-bb02-1bbc612e92d7"
 _GITHUB_FETCHER_AGENT_ID   = "5896576f-bbe6-59e4-83c1-5106002e7d10"
 _HN_DIGEST_AGENT_ID        = "31cc3a99-eca6-5202-96d4-8366f426ae1d"
 _DNS_INSPECTOR_AGENT_ID    = "3d677381-791c-5e83-8e66-5b77d0e43e2e"
+_PR_REVIEWER_AGENT_ID      = "3e133b66-3bc6-5003-9b64-3284b28a60c6"
+_TEST_GENERATOR_AGENT_ID   = "f515323c-7df2-5742-ac06-bc38b59a40cb"
+_SPEC_WRITER_AGENT_ID      = "ce9504a3-74c8-51a5-913e-6ae55787abc8"
+_DEPENDENCY_AUDITOR_AGENT_ID = "11fab82a-426e-513e-abf3-528d99ef2b87"
 
 def _normalize_endpoint_ref(value: str | None) -> str:
     return str(value or "").strip().rstrip("/")
@@ -273,6 +281,10 @@ _BUILTIN_INTERNAL_ENDPOINTS = {
     _GITHUB_FETCHER_AGENT_ID:  "internal://github_fetcher",
     _HN_DIGEST_AGENT_ID:       "internal://hn_digest",
     _DNS_INSPECTOR_AGENT_ID:   "internal://dns_inspector",
+    _PR_REVIEWER_AGENT_ID:     "internal://pr_reviewer",
+    _TEST_GENERATOR_AGENT_ID:  "internal://test_generator",
+    _SPEC_WRITER_AGENT_ID:     "internal://spec_writer",
+    _DEPENDENCY_AUDITOR_AGENT_ID: "internal://dependency_auditor",
 }
 _BUILTIN_LEGACY_ROUTE_ENDPOINTS = {
     _FINANCIAL_AGENT_ID: f"{_SERVER_BASE_URL}/agents/financial",
@@ -311,6 +323,10 @@ _CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
         _GITHUB_FETCHER_AGENT_ID,   # GitHub API live fetch
         _HN_DIGEST_AGENT_ID,        # HN Algolia API live fetch
         _DNS_INSPECTOR_AGENT_ID,    # DNS/SSL live inspection
+        _PR_REVIEWER_AGENT_ID,      # GitHub PR diff review
+        _TEST_GENERATOR_AGENT_ID,   # test suite generation
+        _SPEC_WRITER_AGENT_ID,      # technical spec writer
+        _DEPENDENCY_AUDITOR_AGENT_ID,  # CVE + outdated dep audit
     }
 )
 _CURATED_BUILTIN_AGENT_IDS = frozenset(set(_CURATED_PUBLIC_BUILTIN_AGENT_IDS) | {_QUALITY_JUDGE_AGENT_ID})

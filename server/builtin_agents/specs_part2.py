@@ -6,11 +6,15 @@ from typing import Any
 from server.builtin_agents.constants import (
     ARXIV_RESEARCH_AGENT_ID as _ARXIV_RESEARCH_AGENT_ID,
     BUILTIN_INTERNAL_ENDPOINTS as _BUILTIN_INTERNAL_ENDPOINTS,
+    DEPENDENCY_AUDITOR_AGENT_ID as _DEPENDENCY_AUDITOR_AGENT_ID,
     DNS_INSPECTOR_AGENT_ID as _DNS_INSPECTOR_AGENT_ID,
     GITHUB_FETCHER_AGENT_ID as _GITHUB_FETCHER_AGENT_ID,
     HN_DIGEST_AGENT_ID as _HN_DIGEST_AGENT_ID,
     IMAGE_GENERATOR_AGENT_ID as _IMAGE_GENERATOR_AGENT_ID,
+    PR_REVIEWER_AGENT_ID as _PR_REVIEWER_AGENT_ID,
     PYTHON_EXECUTOR_AGENT_ID as _PYTHON_EXECUTOR_AGENT_ID,
+    SPEC_WRITER_AGENT_ID as _SPEC_WRITER_AGENT_ID,
+    TEST_GENERATOR_AGENT_ID as _TEST_GENERATOR_AGENT_ID,
     VIDEO_STORYBOARD_AGENT_ID as _VIDEO_STORYBOARD_AGENT_ID,
     WEB_RESEARCHER_AGENT_ID as _WEB_RESEARCHER_AGENT_ID,
 )
@@ -580,4 +584,297 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
         }
     ],
 },
+    # ── PR Reviewer ──────────────────────────────────────────────────────────
+    {
+        "agent_id": _PR_REVIEWER_AGENT_ID,
+        "name": "PR Reviewer",
+        "description": "Reviews a GitHub pull request (or raw unified diff) for bugs, security issues, and logic errors. Returns structured findings ranked by severity.",
+        "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_PR_REVIEWER_AGENT_ID],
+        "price_per_call_usd": 0.05,
+        "tags": ["code-review", "github", "pull-request", "security", "developer-tools"],
+        "kind": "aztea_built",
+        "category": "Code",
+        "is_featured": True,
+        "input_schema": _output_schema_object(
+            {
+                "pr_url": {
+                    "type": "string",
+                    "title": "GitHub PR URL",
+                    "description": "Public GitHub pull request URL, e.g. https://github.com/owner/repo/pull/123",
+                    "examples": ["https://github.com/expressjs/express/pull/5742"],
+                },
+                "diff": {
+                    "type": "string",
+                    "title": "Raw Diff",
+                    "description": "Unified diff text (alternative to pr_url for private repos or non-GitHub hosts).",
+                },
+                "context": {
+                    "type": "string",
+                    "title": "Context",
+                    "description": "Optional: what does this repo do? Any coding standards to check against?",
+                    "maxLength": 600,
+                },
+            },
+            required=[],
+        ),
+        "output_schema": _output_schema_object(
+            {
+                "pr_title": {"type": "string"},
+                "total_issues": {"type": "integer"},
+                "blocking": {"type": "boolean"},
+                "issues": {"type": "array", "items": {"type": "object"}},
+                "summary": {"type": "string"},
+                "verdict": {"type": "string"},
+            },
+            required=["total_issues", "blocking", "issues", "summary", "verdict"],
+        ),
+        "output_examples": [
+            {
+                "input": {"pr_url": "https://github.com/owner/repo/pull/42"},
+                "output": {
+                    "pr_title": "PR #42",
+                    "total_issues": 2,
+                    "blocking": True,
+                    "issues": [
+                        {
+                            "file": "src/auth.js",
+                            "line_hint": "const query = `SELECT * FROM users WHERE id = ${req.params.id}`",
+                            "severity": "critical",
+                            "category": "security",
+                            "description": "SQL injection via unsanitized req.params.id",
+                            "suggestion": "Use parameterized query: db.query('SELECT * FROM users WHERE id = ?', [req.params.id])",
+                        }
+                    ],
+                    "summary": "One critical SQL injection and one missing input validation. Recommend request_changes.",
+                    "verdict": "request_changes",
+                },
+            }
+        ],
+    },
+    # ── Test Generator ───────────────────────────────────────────────────────
+    {
+        "agent_id": _TEST_GENERATOR_AGENT_ID,
+        "name": "Test Generator",
+        "description": "Generates a complete, runnable test suite from source code. Covers happy paths, edge cases, and error conditions. Supports pytest, Jest, Vitest, Go test, and JUnit.",
+        "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_TEST_GENERATOR_AGENT_ID],
+        "price_per_call_usd": 0.05,
+        "tags": ["testing", "pytest", "jest", "developer-tools", "tdd"],
+        "kind": "aztea_built",
+        "category": "Code",
+        "is_featured": True,
+        "input_schema": _output_schema_object(
+            {
+                "code": {
+                    "type": "string",
+                    "title": "Source Code",
+                    "description": "The code to generate tests for.",
+                    "maxLength": 12000,
+                },
+                "language": {
+                    "type": "string",
+                    "title": "Language",
+                    "description": "Programming language. Use 'auto' for detection.",
+                    "default": "auto",
+                    "examples": ["python", "javascript", "typescript", "go", "java"],
+                },
+                "framework": {
+                    "type": "string",
+                    "title": "Testing Framework",
+                    "description": "Test framework to use. Use 'auto' to pick based on language.",
+                    "default": "auto",
+                    "examples": ["pytest", "jest", "vitest", "go_test", "junit"],
+                },
+                "style": {
+                    "type": "string",
+                    "title": "Test Style",
+                    "description": "Whether to generate unit tests, integration tests, or both.",
+                    "default": "both",
+                    "enum": ["unit", "integration", "both"],
+                },
+                "context": {
+                    "type": "string",
+                    "title": "Context",
+                    "description": "Optional: what does this code do? Any important dependencies?",
+                    "maxLength": 500,
+                },
+            },
+            required=["code"],
+        ),
+        "output_schema": _output_schema_object(
+            {
+                "language": {"type": "string"},
+                "framework": {"type": "string"},
+                "test_count": {"type": "integer"},
+                "coverage_areas": {"type": "array", "items": {"type": "string"}},
+                "test_code": {"type": "string"},
+                "setup_notes": {"type": "string"},
+                "summary": {"type": "string"},
+            },
+            required=["language", "framework", "test_count", "test_code", "summary"],
+        ),
+        "output_examples": [
+            {
+                "input": {"code": "def add(a, b):\n    return a + b", "language": "python", "framework": "pytest"},
+                "output": {
+                    "language": "python",
+                    "framework": "pytest",
+                    "test_count": 5,
+                    "coverage_areas": ["basic addition", "negative numbers", "zero", "floats", "type error"],
+                    "test_code": "import pytest\nfrom module import add\n\ndef test_add_positive():\n    assert add(1, 2) == 3\n",
+                    "setup_notes": "",
+                    "summary": "5 tests covering positive numbers, negatives, zero, floats, and type safety.",
+                },
+            }
+        ],
+    },
+    # ── Spec Writer ──────────────────────────────────────────────────────────
+    {
+        "agent_id": _SPEC_WRITER_AGENT_ID,
+        "name": "Spec Writer",
+        "description": "Turns feature requirements into a structured technical specification (PRD, RFC, ADR, or API spec). Returns a complete markdown document with sections, open questions, and scope.",
+        "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_SPEC_WRITER_AGENT_ID],
+        "price_per_call_usd": 0.05,
+        "tags": ["documentation", "specifications", "prd", "rfc", "developer-tools"],
+        "kind": "aztea_built",
+        "category": "Code",
+        "is_featured": False,
+        "input_schema": _output_schema_object(
+            {
+                "requirements": {
+                    "type": "string",
+                    "title": "Requirements",
+                    "description": "Feature description, user story, or problem statement to turn into a spec.",
+                    "maxLength": 8000,
+                },
+                "format": {
+                    "type": "string",
+                    "title": "Spec Format",
+                    "description": "Output format. 'auto' picks the best fit.",
+                    "default": "auto",
+                    "enum": ["prd", "rfc", "adr", "api_spec", "auto"],
+                },
+                "stack": {
+                    "type": "string",
+                    "title": "Tech Stack",
+                    "description": "Optional: what stack is in use? e.g. 'FastAPI + React + PostgreSQL'",
+                    "maxLength": 300,
+                },
+                "audience": {
+                    "type": "string",
+                    "title": "Audience",
+                    "description": "Who is the spec for?",
+                    "default": "engineers",
+                    "enum": ["engineers", "product", "both"],
+                },
+                "context": {
+                    "type": "string",
+                    "title": "System Context",
+                    "description": "Optional: relevant context about the existing system.",
+                    "maxLength": 600,
+                },
+            },
+            required=["requirements"],
+        ),
+        "output_schema": _output_schema_object(
+            {
+                "title": {"type": "string"},
+                "format": {"type": "string"},
+                "sections": {"type": "array", "items": {"type": "object"}},
+                "open_questions": {"type": "array", "items": {"type": "string"}},
+                "out_of_scope": {"type": "array", "items": {"type": "string"}},
+                "estimated_complexity": {"type": "string"},
+                "full_text": {"type": "string"},
+            },
+            required=["title", "format", "sections", "full_text"],
+        ),
+        "output_examples": [
+            {
+                "input": {"requirements": "Add two-factor authentication via TOTP to the login flow.", "format": "rfc"},
+                "output": {
+                    "title": "RFC: TOTP Two-Factor Authentication",
+                    "format": "rfc",
+                    "sections": [{"heading": "Motivation", "content": "Passwords alone are insufficient..."}],
+                    "open_questions": ["Which TOTP libraries to use?", "How to handle backup codes?"],
+                    "out_of_scope": ["SMS-based 2FA", "Hardware keys"],
+                    "estimated_complexity": "M",
+                    "full_text": "# RFC: TOTP Two-Factor Authentication\n\n## Motivation\n...",
+                },
+            }
+        ],
+    },
+    # ── Dependency Auditor ───────────────────────────────────────────────────
+    {
+        "agent_id": _DEPENDENCY_AUDITOR_AGENT_ID,
+        "name": "Dependency Auditor",
+        "description": "Audits package.json or requirements.txt for CVEs, outdated packages, and license risks. Returns structured findings with upgrade recommendations.",
+        "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_DEPENDENCY_AUDITOR_AGENT_ID],
+        "price_per_call_usd": 0.04,
+        "tags": ["security", "cve", "dependencies", "npm", "pypi", "developer-tools"],
+        "kind": "aztea_built",
+        "category": "Data",
+        "is_featured": True,
+        "input_schema": _output_schema_object(
+            {
+                "manifest": {
+                    "type": "string",
+                    "title": "Package Manifest",
+                    "description": "Contents of package.json or requirements.txt (paste the full file).",
+                    "maxLength": 10000,
+                },
+                "ecosystem": {
+                    "type": "string",
+                    "title": "Ecosystem",
+                    "description": "Package ecosystem. 'auto' detects from manifest format.",
+                    "default": "auto",
+                    "enum": ["npm", "pypi", "auto"],
+                },
+                "checks": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["cve", "outdated", "license"]},
+                    "title": "Checks",
+                    "description": "Which checks to run. Defaults to all three.",
+                    "default": ["cve", "outdated", "license"],
+                },
+            },
+            required=["manifest"],
+        ),
+        "output_schema": _output_schema_object(
+            {
+                "ecosystem": {"type": "string"},
+                "total_packages": {"type": "integer"},
+                "vulnerable_count": {"type": "integer"},
+                "outdated_count": {"type": "integer"},
+                "critical_count": {"type": "integer"},
+                "packages": {"type": "array", "items": {"type": "object"}},
+                "top_priorities": {"type": "array", "items": {"type": "string"}},
+                "summary": {"type": "string"},
+            },
+            required=["ecosystem", "total_packages", "packages", "summary"],
+        ),
+        "output_examples": [
+            {
+                "input": {"manifest": '{"dependencies": {"lodash": "4.17.20"}}', "ecosystem": "npm"},
+                "output": {
+                    "ecosystem": "npm",
+                    "total_packages": 1,
+                    "vulnerable_count": 1,
+                    "outdated_count": 1,
+                    "critical_count": 1,
+                    "packages": [
+                        {
+                            "name": "lodash",
+                            "current_version": "4.17.20",
+                            "latest_version": "4.17.21",
+                            "cves": [{"id": "CVE-2021-23337", "severity": "high", "description": "Command injection via template", "fixed_in": "4.17.21"}],
+                            "license": "MIT",
+                            "license_risk": "none",
+                            "action": "upgrade",
+                        }
+                    ],
+                    "top_priorities": ["Upgrade lodash to 4.17.21 (CVE-2021-23337)"],
+                    "summary": "1 package with a high-severity CVE. Upgrade lodash immediately.",
+                },
+            }
+        ],
+    },
     ]

@@ -1,0 +1,20 @@
+{
+  "name": "aztea",
+  "version": "0.2.0",
+  "description": "Aztea CLI — add the agent marketplace to Claude Code in one command",
+  "keywords": ["aztea", "mcp", "claude", "claude-code", "agents", "ai"],
+  "license": "MIT",
+  "main": "src/mcp-server.js",
+  "bin": {
+    "aztea": "./bin/aztea.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AnayGarodia/aztea.git",
+    "directory": "sdks/aztea-cli"
+  },
+  "homepage": "https://aztea.ai"
+}
