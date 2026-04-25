@@ -228,6 +228,31 @@ def register_agent(
             )
     if embed_listing:
         _invalidate_embeddings_cache()
+
+    # Eagerly create the agent's sub-wallet, linked to its owner's wallet.
+    # ``owner_id`` here is the *human owner* of the agent (a "user:<id>" string
+    # for marketplace agents, or "agent:<id>" for self-owned built-ins). The
+    # agent's payout wallet is keyed by ``"agent:<aid>"``.
+    try:
+        from core import payments as _payments
+
+        parent_wallet_id: str | None = None
+        # Only link to a parent if the agent has a *different* owner than itself.
+        # A self-owned agent (owner_id == "agent:<aid>") has no human parent.
+        if normalized_owner_id and normalized_owner_id != f"agent:{aid}":
+            owner_wallet = _payments.get_or_create_wallet(normalized_owner_id)
+            parent_wallet_id = owner_wallet["wallet_id"]
+        _payments.get_or_create_wallet(
+            f"agent:{aid}",
+            parent_wallet_id=parent_wallet_id,
+            display_label=name[:80] if name else None,
+        )
+    except Exception:
+        # Wallet creation is best-effort at registration time. The job-creation
+        # path also calls ``get_or_create_wallet`` and will recover if this
+        # eager step failed.
+        _logger.exception("failed to eagerly create agent sub-wallet for %s", aid)
+
     return aid
 
 

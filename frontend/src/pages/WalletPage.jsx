@@ -9,7 +9,7 @@ import Skeleton from '../ui/Skeleton'
 import Input from '../ui/Input'
 import Reveal from '../ui/motion/Reveal'
 import SpendChart from '../features/analytics/SpendChart'
-import { createTopupSession, depositToWallet, fetchPublicConfig, fetchAgentEarnings, connectOnboard, getConnectStatus, withdrawFunds, fetchWithdrawals, fetchSpendSummary } from '../api'
+import { createTopupSession, depositToWallet, fetchPublicConfig, fetchAgentEarnings, fetchAgentWallets, connectOnboard, getConnectStatus, withdrawFunds, fetchWithdrawals, fetchSpendSummary } from '../api'
 import { useMarket } from '../context/MarketContext'
 import { ArrowDownLeft, ArrowUpRight, Plus, CreditCard, CheckCircle, X, TrendingUp, Bot, Banknote, ExternalLink, AlertCircle, BarChart2 } from 'lucide-react'
 import './WalletPage.css'
@@ -70,6 +70,9 @@ function AgentEarningsRow({ row }) {
         </p>
         <p style={{ fontSize: '0.75rem', color: 'var(--ink-mute)' }}>
           {row.call_count} call{row.call_count !== 1 ? 's' : ''} · last {row.last_earned_at ? new Date(row.last_earned_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '-'}
+          {typeof row.current_balance_cents === 'number' && (
+            <> · wallet {fmtUsd(row.current_balance_cents)}</>
+          )}
         </p>
       </div>
       <span style={{ fontWeight: 700, fontSize: '0.9375rem', color: 'var(--positive)', fontVariantNumeric: 'tabular-nums' }}>
@@ -132,12 +135,18 @@ export default function WalletPage() {
       .catch(() => {})
   }, [])
 
-  // Fetch per-agent earnings
+  // Fetch per-agent sub-wallet balances + earnings.
+  // Falls back to /wallets/me/agent-earnings (legacy shape) if the new endpoint
+  // is not yet deployed on the server the user is talking to.
   useEffect(() => {
     if (!apiKey) return
-    fetchAgentEarnings(apiKey)
-      .then(data => setAgentEarnings(data?.earnings ?? []))
-      .catch(() => setAgentEarnings([]))
+    fetchAgentWallets(apiKey)
+      .then(data => setAgentEarnings(data?.agents ?? []))
+      .catch(() => {
+        fetchAgentEarnings(apiKey)
+          .then(data => setAgentEarnings(data?.earnings ?? []))
+          .catch(() => setAgentEarnings([]))
+      })
   }, [apiKey])
 
   // Fetch Stripe Connect status
@@ -528,10 +537,12 @@ export default function WalletPage() {
                 <Card.Header style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
                   <TrendingUp size={14} color="var(--accent)" />
                   <span className="wallet__section-title">
-                    Agent earnings
+                    Agent wallets
                     {agentEarnings && agentEarnings.length > 0 && (
                       <span style={{ marginLeft: 'var(--sp-2)', color: 'var(--ink-mute)', fontWeight: 400 }}>
-                        · {fmtUsd(agentEarnings.reduce((s, r) => s + r.total_earned_cents, 0))} total
+                        · {fmtUsd(agentEarnings.reduce((s, r) => s + (r.current_balance_cents ?? 0), 0))} held
+                        {' · '}
+                        {fmtUsd(agentEarnings.reduce((s, r) => s + (r.total_earned_cents ?? 0), 0))} earned
                       </span>
                     )}
                   </span>

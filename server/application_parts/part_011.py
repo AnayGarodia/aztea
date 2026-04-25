@@ -537,6 +537,47 @@ def wallet_set_daily_spend_limit(
     )
 
 
+def _enrich_agent_wallet_rows(rows: list[dict]) -> list[dict]:
+    """Attach agent_name (and other registry-sourced fields) to wallet breakdown rows.
+
+    Sub-wallets without a matching agent row (orphans from deleted agents)
+    keep agent_name = agent_id so they are still visible in the UI.
+    """
+    enriched = []
+    for row in rows:
+        agent_id = row.get("agent_id")
+        name = agent_id
+        if agent_id:
+            try:
+                agent = registry.get_agent(agent_id, include_unapproved=True)
+                if agent:
+                    name = agent.get("name") or agent_id
+            except (sqlite3.DatabaseError, ValueError, TypeError) as exc:
+                _LOG.warning(
+                    "Failed to load agent name for wallet row %s: %s", agent_id, exc
+                )
+        enriched.append({**row, "agent_name": name})
+    return enriched
+
+
+@app.get(
+    "/wallets/me/agents",
+    responses=_error_responses(401, 403, 429, 500),
+    tags=["Wallets"],
+    summary="Per-agent sub-wallet balances and earnings for the authenticated user.",
+)
+@limiter.limit("60/minute")
+def wallet_me_agents(
+    request: Request,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+):
+    _require_scope(caller, "caller")
+    owner_id = _caller_owner_id(request)
+    wallet = payments.get_or_create_wallet(owner_id)
+    rows = payments.get_agent_earnings_breakdown_v2(wallet["wallet_id"])
+    return JSONResponse(content={"agents": _enrich_agent_wallet_rows(rows)})
+
+
 @app.get(
     "/wallets/me/agent-earnings",
     responses=_error_responses(401, 403, 429, 500),
@@ -546,23 +587,158 @@ def wallet_me_agent_earnings(
     request: Request,
     _: core_models.CallerContext = Depends(_require_api_key),
 ):
-    """Per-agent earnings breakdown for the authenticated user's wallet."""
+    """Compatibility shim: per-agent earnings breakdown.
+
+    The current frontend reads ``earnings[].total_earned_cents`` and
+    ``earnings[].call_count``; the v2 aggregator returns those plus
+    ``current_balance_cents`` and other sub-wallet metadata. We keep the
+    response key name ``earnings`` so older clients keep working.
+    """
     owner_id = _caller_owner_id(request)
     wallet = payments.get_or_create_wallet(owner_id)
-    breakdown = payments.get_agent_earnings_breakdown(wallet["wallet_id"])
-    # Enrich with agent names where available
-    enriched = []
-    for row in breakdown:
-        agent_id = row["agent_id"]
-        name = agent_id
-        try:
-            agent = registry.get_agent(agent_id, include_unapproved=True)
-            if agent:
-                name = agent.get("name") or agent_id
-        except (sqlite3.DatabaseError, ValueError, TypeError) as exc:
-            _LOG.warning("Failed to load agent name for earnings row %s: %s", agent_id, exc)
-        enriched.append({**row, "agent_name": name})
-    return JSONResponse(content={"earnings": enriched})
+    rows = payments.get_agent_earnings_breakdown_v2(wallet["wallet_id"])
+    return JSONResponse(content={"earnings": _enrich_agent_wallet_rows(rows)})
+
+
+def _resolve_owned_agent_wallet(
+    request: Request,
+    caller: core_models.CallerContext,
+    agent_id: str,
+) -> dict:
+    """Look up the sub-wallet for ``agent_id`` after verifying ownership.
+
+    Raises 404 if the agent does not exist or is not owned by the caller.
+    Raises 404 if the sub-wallet's parent does not match the caller's wallet.
+    """
+    agent = registry.get_agent(agent_id, include_unapproved=True)
+    if not agent or agent.get("owner_id") != caller["owner_id"]:
+        raise HTTPException(
+            status_code=404, detail="Agent not found or you don't own it."
+        )
+    owner_wallet = payments.get_or_create_wallet(_caller_owner_id(request))
+    agent_wallet = payments.get_or_create_wallet(
+        f"agent:{agent_id}",
+        parent_wallet_id=owner_wallet["wallet_id"],
+        display_label=agent.get("name") or None,
+    )
+    # Defence-in-depth: even if the wallet was created before the migration,
+    # confirm the parent link matches the authenticated user.
+    parent = agent_wallet.get("parent_wallet_id")
+    if parent and parent != owner_wallet["wallet_id"]:
+        raise HTTPException(
+            status_code=404, detail="Agent wallet is not linked to your account."
+        )
+    return agent_wallet
+
+
+@app.get(
+    "/wallets/agents/{agent_id}/transactions",
+    responses=_error_responses(401, 403, 404, 429, 500),
+    tags=["Wallets"],
+    summary="Recent transactions on one of your agent sub-wallets.",
+)
+@limiter.limit("60/minute")
+def wallet_agent_transactions(
+    request: Request,
+    agent_id: str,
+    limit: int = 50,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    _require_scope(caller, "caller")
+    agent_wallet = _resolve_owned_agent_wallet(request, caller, agent_id)
+    capped = max(1, min(int(limit or 50), 200))
+    txs = payments.get_wallet_transactions(agent_wallet["wallet_id"], limit=capped)
+    return JSONResponse(content={
+        "wallet_id": agent_wallet["wallet_id"],
+        "agent_id": agent_id,
+        "transactions": txs,
+    })
+
+
+@app.patch(
+    "/wallets/agents/{agent_id}/settings",
+    responses=_error_responses(400, 401, 403, 404, 429, 500),
+    tags=["Wallets"],
+    summary="Update label, daily spend limit, and guarantor policy for an agent's sub-wallet.",
+)
+@limiter.limit("30/minute")
+def wallet_agent_settings_update(
+    request: Request,
+    agent_id: str,
+    body: core_models.AgentWalletSettingsRequest,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    _require_scope(caller, "caller")
+    agent_wallet = _resolve_owned_agent_wallet(request, caller, agent_id)
+    wallet_id = agent_wallet["wallet_id"]
+
+    try:
+        if body.display_label is not None:
+            payments.set_wallet_label(wallet_id, body.display_label)
+        if body.daily_spend_limit_cents is not None or body.daily_spend_limit_cents == 0:
+            # Allow None semantics via explicit field absence; here we mirror the existing
+            # set_wallet_daily_spend_limit signature which accepts int or None.
+            payments.set_wallet_daily_spend_limit(
+                wallet_id, body.daily_spend_limit_cents
+            )
+        if body.guarantor_enabled is not None or body.guarantor_cap_cents is not None:
+            # Read current values so partial updates preserve the other field.
+            current = payments.get_wallet(wallet_id) or {}
+            enabled = (
+                body.guarantor_enabled
+                if body.guarantor_enabled is not None
+                else bool(current.get("guarantor_enabled"))
+            )
+            cap = (
+                body.guarantor_cap_cents
+                if body.guarantor_cap_cents is not None
+                else current.get("guarantor_cap_cents")
+            )
+            payments.set_wallet_guarantor(wallet_id, enabled=enabled, cap_cents=cap)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    refreshed = payments.get_wallet(wallet_id) or {}
+    return JSONResponse(content={
+        "wallet_id": wallet_id,
+        "agent_id": agent_id,
+        "display_label": refreshed.get("display_label"),
+        "daily_spend_limit_cents": refreshed.get("daily_spend_limit_cents"),
+        "guarantor_enabled": bool(refreshed.get("guarantor_enabled")),
+        "guarantor_cap_cents": refreshed.get("guarantor_cap_cents"),
+    })
+
+
+@app.post(
+    "/wallets/agents/{agent_id}/sweep",
+    responses=_error_responses(400, 401, 403, 404, 429, 500),
+    tags=["Wallets"],
+    summary="Move funds from an agent's sub-wallet back to the owner's wallet.",
+)
+@limiter.limit("20/minute")
+def wallet_agent_sweep(
+    request: Request,
+    agent_id: str,
+    body: core_models.AgentWalletSweepRequest,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    _require_scope(caller, "caller")
+    agent_wallet = _resolve_owned_agent_wallet(request, caller, agent_id)
+    try:
+        result = payments.sweep_to_parent(
+            agent_wallet["wallet_id"],
+            amount_cents=body.amount_cents,
+            memo=f"sweep from agent {agent_id}",
+        )
+    except payments.InsufficientBalanceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return JSONResponse(content={
+        "agent_id": agent_id,
+        "wallet_id": agent_wallet["wallet_id"],
+        **result,
+    })
 
 # ---------------------------------------------------------------------------
 # Run history

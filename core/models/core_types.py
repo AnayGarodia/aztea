@@ -413,6 +413,41 @@ class WithdrawRequest(BaseModel):
     amount_cents: int  # Minimum 100 ($1.00)
 
 
+class AgentWalletSettingsRequest(BaseModel):
+    """Request body for PATCH /wallets/agents/{agent_id}/settings.
+
+    All fields are optional; only provided fields update. Use ``None`` to clear
+    a previously-set value (e.g. ``daily_spend_limit_cents=None`` removes the cap).
+    """
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "display_label": "Production code reviewer",
+                "guarantor_enabled": True,
+                "guarantor_cap_cents": 500,
+                "daily_spend_limit_cents": 1000,
+            }
+        }
+    )
+
+    display_label: str | None = None
+    guarantor_enabled: bool | None = None
+    guarantor_cap_cents: int | None = None
+    daily_spend_limit_cents: int | None = None
+
+
+class AgentWalletSweepRequest(BaseModel):
+    """Request body for POST /wallets/agents/{agent_id}/sweep.
+
+    Omit ``amount_cents`` to sweep the full current balance.
+    """
+    model_config = ConfigDict(
+        json_schema_extra={"example": {"amount_cents": 1000}}
+    )
+
+    amount_cents: int | None = None
+
+
 class UserRegisterRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={

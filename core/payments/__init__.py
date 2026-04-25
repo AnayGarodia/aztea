@@ -26,8 +26,9 @@ from __future__ import annotations
 from . import base
 from . import trust_disputes
 from . import variable_pricing
+from . import subwallets
 
-for _mod in (base, trust_disputes, variable_pricing):
+for _mod in (base, trust_disputes, variable_pricing, subwallets):
     for _n in dir(_mod):
         if _n.startswith("__"):
             continue

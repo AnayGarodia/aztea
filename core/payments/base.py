@@ -211,6 +211,18 @@ def init_payments_db() -> None:
         _add_column_if_missing(
             conn, "ALTER TABLE wallets ADD COLUMN daily_spend_limit_cents INTEGER"
         )
+        _add_column_if_missing(
+            conn, "ALTER TABLE wallets ADD COLUMN parent_wallet_id TEXT REFERENCES wallets(wallet_id)"
+        )
+        _add_column_if_missing(
+            conn, "ALTER TABLE wallets ADD COLUMN guarantor_enabled INTEGER NOT NULL DEFAULT 0"
+        )
+        _add_column_if_missing(
+            conn, "ALTER TABLE wallets ADD COLUMN guarantor_cap_cents INTEGER"
+        )
+        _add_column_if_missing(
+            conn, "ALTER TABLE wallets ADD COLUMN display_label TEXT"
+        )
         conn.execute(
             """
             UPDATE wallets
@@ -261,6 +273,9 @@ def init_payments_db() -> None:
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_wallet_owner ON wallets(owner_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_wallets_parent_wallet_id ON wallets(parent_wallet_id)"
         )
         conn.execute(
             """
@@ -391,10 +406,19 @@ def _resolve_charged_by_key_id(
 # Wallet management
 # ---------------------------------------------------------------------------
 
-def get_or_create_wallet(owner_id: str) -> dict:
+def get_or_create_wallet(
+    owner_id: str,
+    *,
+    parent_wallet_id: str | None = None,
+    display_label: str | None = None,
+) -> dict:
     """
     Return the existing wallet for owner_id, or create one with 0 balance.
     Safe to call on every request — creation is idempotent via UNIQUE constraint.
+
+    ``parent_wallet_id`` and ``display_label`` are only applied on first creation;
+    subsequent calls return the existing row unchanged. Use ``set_wallet_label``
+    or ``set_wallet_guarantor`` to mutate metadata after creation.
     """
     with _conn() as conn:
         row = conn.execute(
@@ -406,9 +430,11 @@ def get_or_create_wallet(owner_id: str) -> dict:
         created_at = _now()
         try:
             conn.execute(
-                "INSERT INTO wallets (wallet_id, owner_id, balance_cents, caller_trust, created_at)"
-                " VALUES (?, ?, 0, 0.5, ?)",
-                (wallet_id, owner_id, created_at),
+                "INSERT INTO wallets ("
+                " wallet_id, owner_id, balance_cents, caller_trust, created_at,"
+                " parent_wallet_id, display_label"
+                ") VALUES (?, ?, 0, 0.5, ?, ?, ?)",
+                (wallet_id, owner_id, created_at, parent_wallet_id, display_label),
             )
         except sqlite3.IntegrityError:
             row = conn.execute(
@@ -421,6 +447,10 @@ def get_or_create_wallet(owner_id: str) -> dict:
             "balance_cents": 0,
             "caller_trust": 0.5,
             "daily_spend_limit_cents": None,
+            "parent_wallet_id": parent_wallet_id,
+            "guarantor_enabled": 0,
+            "guarantor_cap_cents": None,
+            "display_label": display_label,
             "created_at": created_at,
         }
 

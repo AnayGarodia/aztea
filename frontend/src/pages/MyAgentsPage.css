@@ -242,6 +242,93 @@
   .myagents__panel-skeleton { grid-template-columns: repeat(2, 1fr); }
 }
 
+/* Per-agent wallet panel */
+.myagents__wallet {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+.myagents__wallet-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.myagents__wallet-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent);
+}
+
+.myagents__wallet-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.myagents__wallet-settings-btn {
+  margin-left: auto;
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  border-radius: 6px;
+  padding: 4px 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  transition: background var(--duration-sm), color var(--duration-sm);
+}
+.myagents__wallet-settings-btn:hover { background: var(--surface-1); color: var(--text-primary); }
+
+.myagents__wallet-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.myagents__wallet-balance {
+  display: flex;
+  flex-direction: column;
+  margin-right: auto;
+}
+
+.myagents__wallet-balance-value {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.myagents__wallet-balance-sub {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.myagents__guarantor-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.myagents__modal-hint {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin: 4px 0 0 0;
+  line-height: 1.4;
+}
+
 /* Management action bar inside expanded panel */
 .myagents__actions {
   display: flex;

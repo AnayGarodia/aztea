@@ -10,10 +10,25 @@ import Stat from '../ui/Stat'
 import EmptyState from '../ui/EmptyState'
 import Input from '../ui/Input'
 import Reveal from '../ui/motion/Reveal'
-import { fetchMyAgents, fetchAgentEarnings, updateAgent, delistAgent } from '../api'
+import {
+  fetchMyAgents,
+  fetchAgentWallets,
+  updateAgent,
+  delistAgent,
+  updateAgentWalletSettings,
+  sweepAgentWallet,
+} from '../api'
 import { useAuth } from '../context/AuthContext'
-import { Plus, Bot, ExternalLink, ChevronDown, Edit2, Trash2, Play, Copy, Check, X } from 'lucide-react'
+import {
+  Plus, Bot, ExternalLink, ChevronDown, Edit2, Trash2, Play, Copy, Check, X,
+  Wallet, ArrowUpFromLine, Settings,
+} from 'lucide-react'
 import './MyAgentsPage.css'
+
+function fmtCents(cents) {
+  if (typeof cents !== 'number') return '$0.00'
+  return '$' + (cents / 100).toFixed(2)
+}
 
 const STATUS_VARIANT = {
   active: 'success',
@@ -121,11 +136,110 @@ function EditModal({ agent, onSave, onClose }) {
   )
 }
 
+function WalletSettingsModal({ agent, wallet, onSave, onClose }) {
+  const [label, setLabel] = useState(wallet?.display_label || agent.name || '')
+  const [dailyLimit, setDailyLimit] = useState(
+    wallet?.daily_spend_limit_cents != null ? String(wallet.daily_spend_limit_cents) : ''
+  )
+  const [guarantorOn, setGuarantorOn] = useState(Boolean(wallet?.guarantor_enabled))
+  const [guarantorCap, setGuarantorCap] = useState(
+    wallet?.guarantor_cap_cents != null ? String(wallet.guarantor_cap_cents) : ''
+  )
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  const handleSave = async (e) => {
+    e.preventDefault()
+    setSaving(true)
+    setError('')
+    try {
+      const payload = {
+        display_label: label.trim() || null,
+        guarantor_enabled: guarantorOn,
+      }
+      if (dailyLimit.trim() !== '') {
+        const n = parseInt(dailyLimit, 10)
+        if (Number.isNaN(n) || n < 0) { setError('Daily limit must be a non-negative integer.'); return }
+        payload.daily_spend_limit_cents = n
+      }
+      if (guarantorCap.trim() !== '') {
+        const n = parseInt(guarantorCap, 10)
+        if (Number.isNaN(n) || n < 0) { setError('Guarantor cap must be a non-negative integer.'); return }
+        payload.guarantor_cap_cents = n
+      }
+      await onSave(payload)
+    } catch (err) {
+      setError(err?.message || 'Save failed.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="myagents__modal-backdrop" onClick={onClose}>
+      <div className="myagents__modal" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
+        <div className="myagents__modal-head">
+          <span className="myagents__modal-title">Wallet settings</span>
+          <button type="button" className="myagents__modal-close" onClick={onClose} aria-label="Close"><X size={14} /></button>
+        </div>
+        <form className="myagents__modal-body" onSubmit={handleSave}>
+          <Input
+            label="Wallet label"
+            value={label}
+            onChange={e => setLabel(e.target.value)}
+            placeholder="e.g. Production code reviewer"
+            maxLength={80}
+          />
+          <Input
+            label="Daily spend limit (cents) — leave blank for no cap"
+            type="number"
+            value={dailyLimit}
+            onChange={e => setDailyLimit(e.target.value)}
+            min={0}
+            step={1}
+          />
+          <div className="myagents__modal-field">
+            <label className="myagents__guarantor-toggle">
+              <input
+                type="checkbox"
+                checked={guarantorOn}
+                onChange={e => setGuarantorOn(e.target.checked)}
+              />
+              <span>Owner backstop (used when this agent hires other agents)</span>
+            </label>
+            <p className="myagents__modal-hint">
+              When enabled, charges that exceed this agent's balance will draw from your owner wallet, up to the cap below per UTC day.
+              (Phase 2 — currently stored but not enforced.)
+            </p>
+          </div>
+          <Input
+            label="Backstop cap (cents per day)"
+            type="number"
+            value={guarantorCap}
+            onChange={e => setGuarantorCap(e.target.value)}
+            min={0}
+            step={1}
+            disabled={!guarantorOn}
+          />
+          {error && <p className="myagents__modal-error">{error}</p>}
+          <div className="myagents__modal-actions">
+            <Button type="button" variant="secondary" size="sm" onClick={onClose}>Cancel</Button>
+            <Button type="submit" variant="primary" size="sm" loading={saving}>Save settings</Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
 function AgentRow({ agent, earnings, onNavigate, onRefresh, apiKey }) {
   const [open, setOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
+  const [walletSettingsOpen, setWalletSettingsOpen] = useState(false)
+  const [sweeping, setSweeping] = useState(false)
   const [delisting, setDelisting] = useState(false)
   const [confirmDelist, setConfirmDelist] = useState(false)
+  const [confirmSweep, setConfirmSweep] = useState(false)
   const [copied, setCopied] = useState(false)
 
   const tags = Array.isArray(agent.tags)
@@ -138,6 +252,28 @@ function AgentRow({ agent, earnings, onNavigate, onRefresh, apiKey }) {
   const earnedFmt = typeof earnedCents === 'number'
     ? '$' + (earnedCents / 100).toFixed(2)
     : '--'
+  const balanceCents = earnings?.current_balance_cents ?? 0
+  const hasWallet = Boolean(earnings?.wallet_id)
+
+  const handleSaveWalletSettings = async (data) => {
+    await updateAgentWalletSettings(apiKey, agent.agent_id, data)
+    setWalletSettingsOpen(false)
+    onRefresh()
+  }
+
+  const handleSweep = async () => {
+    if (!confirmSweep) { setConfirmSweep(true); return }
+    setSweeping(true)
+    try {
+      await sweepAgentWallet(apiKey, agent.agent_id)
+      setConfirmSweep(false)
+      onRefresh()
+    } catch {
+      // surfaced via re-fetch; keep button enabled to retry
+    } finally {
+      setSweeping(false)
+    }
+  }
 
   const handleCopyId = async () => {
     try {
@@ -248,6 +384,49 @@ function AgentRow({ agent, earnings, onNavigate, onRefresh, apiKey }) {
                 />
               </div>
 
+              {/* Agent wallet */}
+              <div className="myagents__wallet">
+                <div className="myagents__wallet-head">
+                  <span className="myagents__wallet-icon"><Wallet size={13} /></span>
+                  <span className="myagents__wallet-label">Wallet</span>
+                  {hasWallet && (
+                    <button
+                      type="button"
+                      className="myagents__wallet-settings-btn"
+                      onClick={() => setWalletSettingsOpen(true)}
+                      title="Wallet settings"
+                    >
+                      <Settings size={12} />
+                    </button>
+                  )}
+                </div>
+                <div className="myagents__wallet-row">
+                  <div className="myagents__wallet-balance">
+                    <span className="myagents__wallet-balance-value">{fmtCents(balanceCents)}</span>
+                    <span className="myagents__wallet-balance-sub">current balance</span>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant={confirmSweep ? 'primary' : 'secondary'}
+                    icon={<ArrowUpFromLine size={12} />}
+                    loading={sweeping}
+                    disabled={!hasWallet || balanceCents <= 0}
+                    onClick={handleSweep}
+                  >
+                    {confirmSweep ? `Confirm sweep ${fmtCents(balanceCents)}` : 'Sweep to my wallet'}
+                  </Button>
+                  {confirmSweep && (
+                    <button
+                      type="button"
+                      className="myagents__cancel-delist"
+                      onClick={() => setConfirmSweep(false)}
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </div>
+              </div>
+
               {/* Management actions */}
               <div className="myagents__actions">
                 <Button
@@ -309,6 +488,15 @@ function AgentRow({ agent, earnings, onNavigate, onRefresh, apiKey }) {
           onClose={() => setEditOpen(false)}
         />
       )}
+
+      {walletSettingsOpen && (
+        <WalletSettingsModal
+          agent={agent}
+          wallet={earnings}
+          onSave={handleSaveWalletSettings}
+          onClose={() => setWalletSettingsOpen(false)}
+        />
+      )}
     </motion.div>
   )
 }
@@ -326,13 +514,13 @@ export default function MyAgentsPage() {
     setLoading(true)
     setError(null)
     try {
-      const [agentsData, earningsData] = await Promise.all([
+      const [agentsData, walletsData] = await Promise.all([
         fetchMyAgents(apiKey),
-        fetchAgentEarnings(apiKey),
+        fetchAgentWallets(apiKey),
       ])
       setAgents(agentsData?.agents ?? [])
       const map = {}
-      for (const row of (earningsData?.earnings ?? [])) {
+      for (const row of (walletsData?.agents ?? [])) {
         map[row.agent_id] = row
       }
       setEarningsMap(map)

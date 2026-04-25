@@ -633,7 +633,38 @@ export async function fetchWithdrawals(key, limit = 20) {
 
 export async function fetchAgentEarnings(key) {
   const { body } = await request('/wallets/me/agent-earnings', { key })
-  return body // { earnings: [{ agent_id, agent_name, total_earned_cents, call_count, last_earned_at }] }
+  return body // { earnings: [{ agent_id, agent_name, total_earned_cents, call_count, last_earned_at, current_balance_cents, ... }] }
+}
+
+// ── Agent sub-wallets ─────────────────────────────────────────────────────────
+
+export async function fetchAgentWallets(key) {
+  const { body } = await request('/wallets/me/agents', { key })
+  return body // { agents: [{ agent_id, agent_name, wallet_id, current_balance_cents, total_earned_cents, total_spent_cents, call_count, last_earned_at, guarantor_enabled, guarantor_cap_cents, daily_spend_limit_cents, display_label }] }
+}
+
+export async function fetchAgentWalletTransactions(key, agentId, limit = 50) {
+  const { body } = await request(
+    `/wallets/agents/${encodeURIComponent(agentId)}/transactions?limit=${encodeURIComponent(String(limit))}`,
+    { key },
+  )
+  return body // { wallet_id, agent_id, transactions: [...] }
+}
+
+export async function updateAgentWalletSettings(key, agentId, body) {
+  const { body: respBody } = await request(
+    `/wallets/agents/${encodeURIComponent(agentId)}/settings`,
+    { method: 'PATCH', key, body },
+  )
+  return respBody
+}
+
+export async function sweepAgentWallet(key, agentId, amountCents = null) {
+  const { body } = await request(
+    `/wallets/agents/${encodeURIComponent(agentId)}/sweep`,
+    { method: 'POST', key, body: amountCents == null ? {} : { amount_cents: amountCents } },
+  )
+  return body // { agent_id, wallet_id, sweep_tx_id, parent_deposit_tx_id, amount_cents }
 }
 
 export async function fetchPublicConfig() {
