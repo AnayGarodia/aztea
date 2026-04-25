@@ -248,7 +248,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
 {
     "agent_id": _ARXIV_RESEARCH_AGENT_ID,
     "name": "arXiv Research Agent",
-    "description": "Search real academic papers on arXiv and get an expert synthesis: key themes, seminal works, open questions, and suggested follow-ups. Pulls live data from arXiv.org — not LLM hallucinations.",
+    "description": "Use this when the user wants to find or summarize academic research papers. Searches live arXiv.org by keyword, author, or category and returns a synthesis with key themes, seminal works, and open questions. Not a hallucination — it fetches real papers.",
     "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_ARXIV_RESEARCH_AGENT_ID],
     "price_per_call_usd": 0.01,
     "tags": ["research", "academic", "arxiv", "papers", "science"],
@@ -316,7 +316,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
 {
     "agent_id": _PYTHON_EXECUTOR_AGENT_ID,
     "name": "Python Code Executor",
-    "description": "Execute Python code in a sandboxed environment and get stdout, stderr, exit code, execution time, and an expert explanation. Supports math, data manipulation, algorithms, and any pure-Python computation.",
+    "description": "Use this when the user wants to run Python code and see actual output. Executes in a real sandboxed subprocess — not a simulation. Returns stdout, stderr, exit code, execution time, and an optional expert explanation of what the output means.",
     "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_PYTHON_EXECUTOR_AGENT_ID],
     "price_per_call_usd": 0.01,
     "tags": ["code-execution", "python", "developer-tools", "compute"],
@@ -368,7 +368,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
 {
     "agent_id": _WEB_RESEARCHER_AGENT_ID,
     "name": "Web Researcher Agent",
-    "description": "Fetch any public URL and return a structured analysis: dense summary, key points, direct answers to your question, verbatim supporting quotes, and extracted links. Reads the actual page — not a cached version.",
+    "description": "Use this when the user wants to read, summarize, or extract information from a URL. Fetches the live page (not a cache) and returns a dense summary, key points, direct answers to a question, and verbatim supporting quotes. Supports up to 10 URLs in one call for cross-referencing.",
     "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_WEB_RESEARCHER_AGENT_ID],
     "price_per_call_usd": 0.01,
     "tags": ["web", "research", "summarization", "content-extraction"],
@@ -439,7 +439,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
 {
     "agent_id": str(_GITHUB_FETCHER_AGENT_ID),
     "name": "GitHub File Fetcher",
-    "description": "Fetches files from public GitHub repositories and optionally summarizes the codebase architecture. Supports up to 20 files per call with parallel retrieval.",
+    "description": "Use this when the user wants to read files from a GitHub repository. Fetches up to 20 files in parallel from any public repo (owner/repo format) and optionally summarizes the codebase architecture. Useful for reading READMEs, inspecting source, or pulling in context from a library.",
     "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_GITHUB_FETCHER_AGENT_ID],
     "price_per_call_usd": 0.08,
     "tags": ["github", "code", "files", "repository"],
@@ -588,7 +588,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
     {
         "agent_id": _PR_REVIEWER_AGENT_ID,
         "name": "PR Reviewer",
-        "description": "Reviews a GitHub pull request (or raw unified diff) for bugs, security issues, and logic errors. Returns structured findings ranked by severity.",
+        "description": "Use this when the user wants to review a GitHub PR or diff. Fetches the actual diff from GitHub and returns structured findings ranked by severity (blocking/warning/suggestion), each with a file path, line hint, CWE/category, description, and copy-paste fix. Pass a GitHub PR URL or raw unified diff text.",
         "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_PR_REVIEWER_AGENT_ID],
         "price_per_call_usd": 0.05,
         "tags": ["code-review", "github", "pull-request", "security", "developer-tools"],
@@ -655,7 +655,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
     {
         "agent_id": _TEST_GENERATOR_AGENT_ID,
         "name": "Test Generator",
-        "description": "Generates a complete, runnable test suite from source code. Covers happy paths, edge cases, and error conditions. Supports pytest, Jest, Vitest, Go test, and JUnit.",
+        "description": "Use this when the user wants tests written for their code. Accepts source code and returns a complete runnable test suite — pytest, Jest, Vitest, JUnit, or Go test depending on the language. Covers happy paths, edge cases, and error conditions. The output can be dropped directly into the project.",
         "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_TEST_GENERATOR_AGENT_ID],
         "price_per_call_usd": 0.05,
         "tags": ["testing", "pytest", "jest", "developer-tools", "tdd"],
@@ -731,7 +731,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
     {
         "agent_id": _SPEC_WRITER_AGENT_ID,
         "name": "Spec Writer",
-        "description": "Turns feature requirements into a structured technical specification (PRD, RFC, ADR, or API spec). Returns a complete markdown document with sections, open questions, and scope.",
+        "description": "Use this when the user wants to write a spec, PRD, RFC, ADR, or API spec from requirements. Accepts a description of what to build and returns a complete, formatted technical document with sections, open questions, out-of-scope items, and a complexity estimate.",
         "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_SPEC_WRITER_AGENT_ID],
         "price_per_call_usd": 0.05,
         "tags": ["documentation", "specifications", "prd", "rfc", "developer-tools"],
@@ -806,7 +806,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
     {
         "agent_id": _DEPENDENCY_AUDITOR_AGENT_ID,
         "name": "Dependency Auditor",
-        "description": "Audits package.json or requirements.txt for CVEs, outdated packages, and license risks. Returns structured findings with upgrade recommendations.",
+        "description": "Use this when the user wants to audit their dependencies for security vulnerabilities, outdated packages, or license issues. Accepts the text of a package.json or requirements.txt and returns a structured report: CVEs per package, license risks, and prioritized upgrade recommendations.",
         "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_DEPENDENCY_AUDITOR_AGENT_ID],
         "price_per_call_usd": 0.04,
         "tags": ["security", "cve", "dependencies", "npm", "pypi", "developer-tools"],

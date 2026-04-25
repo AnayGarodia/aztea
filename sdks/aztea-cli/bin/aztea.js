@@ -14,8 +14,8 @@ switch (cmd) {
     console.log(`Aztea CLI
 
 Usage:
-  npx aztea init     Add Aztea to Claude Code (creates account + writes MCP config)
-  npx aztea mcp      Start the MCP server (called by Claude Code automatically)
+  npx aztea-cli init     Add Aztea to Claude Code (creates account + writes MCP config)
+  npx aztea-cli mcp      Start the MCP server (called by Claude Code automatically)
 `)
     if (cmd && cmd !== '--help' && cmd !== '-h') {
       console.error(`Unknown command: ${cmd}`)

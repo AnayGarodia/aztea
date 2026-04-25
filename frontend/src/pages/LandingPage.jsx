@@ -18,23 +18,23 @@ const AnimatedShaderHero = lazy(() => import('../ui/backgrounds/AnimatedShaderHe
 
 // ── Hard-coded built-in catalog ──────────────────────────────
 const CATALOG = [
-  { id: '32cd7b5c-44d0-5259-bb02-1bbc612e92d7', name: 'Web Researcher',    desc: 'Fetch and analyze any public URL.', category: 'Web',      price: '$0.05' },
-  { id: '8cea848f-a165-5d6c-b1a0-7d14fff77d14', name: 'Code Reviewer',     desc: 'Structured review with issues ranked by severity.', category: 'Code', price: '$0.05' },
-  { id: '040dc3f5-afe7-5db7-b253-4936090cc7af', name: 'Python Executor',   desc: 'Run Python code in a sandboxed subprocess.', category: 'Code', price: '$0.03' },
-  { id: 'b7741251-d7ac-5423-b57d-8e12cd80885f', name: 'Financial Research','desc': 'Live SEC EDGAR filings + synthesis.', category: 'Data',      price: '$0.08' },
-  { id: '9e673f6e-9115-516f-b41b-5af8bcbf15bd', name: 'arXiv Research',   desc: 'Search and summarize research papers.', category: 'Research',  price: '$0.05' },
-  { id: 'a3e239dd-ea92-556b-9c95-0a213a3daf59', name: 'CVE Lookup',        desc: 'Live NIST NVD vulnerability data.', category: 'Data',      price: '$0.02' },
-  { id: '4fb167bd-b474-5ea5-bd5c-8976dfe799ae', name: 'Image Generator',   desc: 'Generate images via OpenAI or Replicate.', category: 'Media',    price: '$0.10' },
-  { id: '9a175aa2-8ffd-52f7-aae0-5a33fc88db83', name: 'Wikipedia Research','desc': 'Search and summarize Wikipedia.', category: 'Research',  price: '$0.02' },
+  { id: '3e133b66-3bc6-5003-9b64-3284b28a60c6', name: 'PR Reviewer',       desc: 'Reviews a GitHub PR or raw diff — findings ranked by severity with copy-paste fixes.', category: 'Code', price: '$0.05' },
+  { id: 'f515323c-7df2-5742-ac06-bc38b59a40cb', name: 'Test Generator',    desc: 'Source code → runnable test suite (pytest, Jest, Vitest, JUnit). Drop it in and run.', category: 'Code', price: '$0.05' },
+  { id: '8cea848f-a165-5d6c-b1a0-7d14fff77d14', name: 'Code Reviewer',     desc: 'Structured code review with CWE IDs and severity ratings. Catches what you miss.', category: 'Code', price: '$0.05' },
+  { id: '040dc3f5-afe7-5db7-b253-4936090cc7af', name: 'Python Executor',   desc: 'Run Python in a sandboxed subprocess — stdout, stderr, exit code, and explanation.', category: 'Code', price: '$0.03' },
+  { id: '11fab82a-426e-513e-abf3-528d99ef2b87', name: 'Dependency Auditor',desc: 'Audit package.json or requirements.txt for CVEs, outdated deps, and license risks.', category: 'Data', price: '$0.04' },
+  { id: 'a3e239dd-ea92-556b-9c95-0a213a3daf59', name: 'CVE Lookup',        desc: 'Live NIST NVD data — search by package, version, or CVE ID. No stale caches.', category: 'Data', price: '$0.02' },
+  { id: '32cd7b5c-44d0-5259-bb02-1bbc612e92d7', name: 'Web Researcher',    desc: 'Fetch and analyze any public URL — dense summary, key quotes, and direct answers.', category: 'Web',  price: '$0.05' },
+  { id: '9e673f6e-9115-516f-b41b-5af8bcbf15bd', name: 'arXiv Research',    desc: 'Search live arXiv papers and get an expert synthesis with key themes and open questions.', category: 'Research', price: '$0.05' },
 ]
 
-const INIT_CMD = 'npx aztea init'
+const INIT_CMD = 'npx aztea-cli init'
 
 const MCP_JSON = `{
   "mcpServers": {
     "aztea": {
       "command": "npx",
-      "args": ["-y", "aztea", "mcp"],
+      "args": ["-y", "aztea-cli", "mcp"],
       "env": {
         "AZTEA_API_KEY": "your-key-here"
       }
@@ -268,7 +268,7 @@ export default function LandingPage() {
             <div className="lp__install-steps">
               <div className="lp__install-step">
                 <span className="lp__install-num">1</span>
-                <span>Run <code className="lp__inline-code">npx aztea init</code> in your terminal — 60 seconds, no card needed</span>
+                <span>Run <code className="lp__inline-code">npx aztea-cli init</code> in your terminal — 60 seconds, no card needed</span>
               </div>
               <div className="lp__install-step">
                 <span className="lp__install-num">2</span>
@@ -287,7 +287,7 @@ export default function LandingPage() {
                 <span className="lp__snippet-filename">Terminal</span>
                 <CopyButton text={INIT_CMD} />
               </div>
-              <pre className="lp__snippet-code lp__snippet-code--cmd">$ npx aztea init</pre>
+              <pre className="lp__snippet-code lp__snippet-code--cmd">$ npx aztea-cli init</pre>
             </div>
             <details className="lp__manual-toggle">
               <summary className="lp__manual-summary">Prefer manual setup? Add JSON to ~/.claude/settings.json</summary>

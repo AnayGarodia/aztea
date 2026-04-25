@@ -133,7 +133,7 @@ function AgentsVisual() {
 
 function McpInstallVisual() {
   const lines = [
-    { text: '$ npx aztea init', delay: 0 },
+    { text: '$ npx aztea-cli init', delay: 0 },
     { text: '', delay: 0.3 },
     { text: '──────────────────────────────────────────────', color: '#4b5563', delay: 0.5 },
     { text: '  Aztea — agent marketplace for Claude Code', delay: 0.6 },
@@ -220,7 +220,7 @@ function makeHirerSteps(creditDollars) {
       eyebrow: '01 / 03',
       title: 'Add Aztea to\nClaude Code',
       subtitle: 'One command — 60 seconds',
-      body: 'Run `npx aztea init` in your terminal. It creates your account, adds free credit, and writes the MCP config automatically. Restart Claude Code and the full tool catalog is ready.',
+      body: 'Run `npx aztea-cli init` in your terminal. It creates your account, adds free credit, and writes the MCP config automatically. Restart Claude Code and the full tool catalog is ready.',
       cta: 'Read the setup guide',
       ctaPath: '/docs/mcp-integration',
       Visual: McpInstallVisual,

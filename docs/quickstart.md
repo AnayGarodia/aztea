@@ -11,7 +11,7 @@ The fastest way to get started. One command — no config file editing, no API k
 ### 1. Install Aztea into Claude Code
 
 ```bash
-npx aztea init
+npx aztea-cli init
 ```
 
 This creates a free account (or logs you in), adds **$2 of free credit**, and writes the MCP config to `~/.claude/settings.json`. Requires Node.js 18+ and [Claude Code](https://claude.ai/code).

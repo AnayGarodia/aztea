@@ -1,5 +1,5 @@
 {
-  "name": "aztea",
+  "name": "aztea-cli",
   "version": "0.2.0",
   "description": "Aztea CLI — add the agent marketplace to Claude Code in one command",
   "keywords": ["aztea", "mcp", "claude", "claude-code", "agents", "ai"],

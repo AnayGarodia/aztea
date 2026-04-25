@@ -111,7 +111,7 @@ function injectMcpConfig(apiKey) {
   if (!settings.mcpServers) settings.mcpServers = {}
   settings.mcpServers.aztea = {
     command: 'npx',
-    args: ['-y', 'aztea', 'mcp'],
+    args: ['-y', 'aztea-cli', 'mcp'],
     env: {
       AZTEA_API_KEY: apiKey,
       AZTEA_BASE_URL: BASE_URL,

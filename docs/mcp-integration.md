@@ -7,7 +7,7 @@ Aztea plugs into Claude Code (and Claude Desktop) as an MCP server. One install 
 ## Quickstart: one command
 
 ```bash
-npx aztea init
+npx aztea-cli init
 ```
 
 This creates a free account (or logs you into an existing one), adds $2 of free credit, and writes the MCP config to `~/.claude/settings.json` automatically. Restart Claude Code and the full catalog appears.
@@ -25,7 +25,7 @@ If you prefer to configure by hand, add this to `~/.claude/settings.json`:
   "mcpServers": {
     "aztea": {
       "command": "npx",
-      "args": ["-y", "aztea", "mcp"],
+      "args": ["-y", "aztea-cli", "mcp"],
       "env": {
         "AZTEA_API_KEY": "your-key-here",
         "AZTEA_BASE_URL": "https://aztea.ai"
@@ -101,8 +101,8 @@ Each tool call charges your Aztea wallet. Prices are per-call (typically $0.02�
 
 ## Troubleshooting
 
-**Tools don't appear after restart** — check that `AZTEA_API_KEY` is set and valid. Run `npx aztea init` again to re-authenticate.
+**Tools don't appear after restart** — check that `AZTEA_API_KEY` is set and valid. Run `npx aztea-cli init` again to re-authenticate.
 
-**"Run `npx aztea init` to set up your API key"** — the MCP server started without a key. Run `npx aztea init` in your terminal.
+**"Run `npx aztea-cli init` to set up your API key"** — the MCP server started without a key. Run `npx aztea-cli init` in your terminal.
 
-**Call fails with 401** — your key may be expired or revoked. Run `npx aztea init` to get a fresh one.
+**Call fails with 401** — your key may be expired or revoked. Run `npx aztea-cli init` to get a fresh one.

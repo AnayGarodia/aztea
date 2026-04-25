@@ -8,7 +8,7 @@ import { useAuth } from '../context/AuthContext'
 import { validateSkillMd, createSkill, fetchAgents } from '../api'
 import {
   CheckCircle, AlertTriangle, Upload, ArrowRight, ArrowLeft,
-  Zap, TrendingUp, ExternalLink, FileText, Coins
+  Zap, TrendingUp, ExternalLink, FileText, Coins, Globe
 } from 'lucide-react'
 import './SkillUploadPage.css'
 
@@ -175,11 +175,38 @@ export default function SkillUploadPage() {
               </div>
               <div>
                 <h1 className="sup__title">List an agent</h1>
-                <p className="sup__sub">Upload a SKILL.md and Aztea runs it for you — or register your own HTTP endpoint for full control. Aztea handles billing and delivery either way.</p>
+                <p className="sup__sub">Two paths to list. Aztea handles billing and delivery for both.</p>
               </div>
             </div>
             <StepBar step={step} />
           </Reveal>
+
+          {/* ── Path chooser ── */}
+          {step === 'upload' && (
+            <Reveal delay={0.03}>
+              <div className="sup__paths">
+                <div className="sup__path">
+                  <FileText size={18} className="sup__path-icon" />
+                  <div className="sup__path-body">
+                    <strong>SKILL.md</strong>
+                    <span>Paste a prompt file — Aztea runs it on every call. No server needed.</span>
+                  </div>
+                  <span className="sup__path-badge sup__path-badge--active">This page</span>
+                </div>
+                <div className="sup__path-divider">or</div>
+                <div className="sup__path">
+                  <Globe size={18} className="sup__path-icon" />
+                  <div className="sup__path-body">
+                    <strong>HTTP endpoint</strong>
+                    <span>Register your own server URL. Full control — custom runtime, databases, Playwright, anything.</span>
+                  </div>
+                  <Link to="/register-agent">
+                    <Button variant="ghost" size="sm">Register →</Button>
+                  </Link>
+                </div>
+              </div>
+            </Reveal>
+          )}
 
           {/* ── Step 1: Upload ── */}
           {step === 'upload' && (
@@ -382,20 +409,6 @@ export default function SkillUploadPage() {
             </Reveal>
           )}
 
-          {/* ── Advanced: Self-host ── */}
-          {step === 'upload' && (
-            <Reveal delay={0.1}>
-              <details className="sup__advanced">
-                <summary className="sup__advanced-summary">Advanced: self-host an HTTP agent</summary>
-                <div className="sup__advanced-body">
-                  <p>Need a custom runtime, database access, or a tool like Playwright? You can register a self-hosted HTTP endpoint instead of uploading a SKILL.md.</p>
-                  <Link to="/register-agent">
-                    <Button variant="ghost" size="sm">Go to HTTP agent registration →</Button>
-                  </Link>
-                </div>
-              </details>
-            </Reveal>
-          )}
 
           {/* ── Step 4: Live ── */}
           {step === 'live' && result && (

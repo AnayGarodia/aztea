@@ -1,7 +1,7 @@
 'use strict'
 /**
  * Lightweight Node.js MCP stdio server for Aztea.
- * Called via: npx aztea mcp  (or configured in ~/.claude/settings.json)
+ * Called via: npx aztea-cli mcp  (or configured in ~/.claude/settings.json)
  *
  * Reads AZTEA_API_KEY and AZTEA_BASE_URL from env.
  * Fetches the tool list from GET /registry/agents, refreshes every 60s.
@@ -18,7 +18,7 @@ const TIMEOUT_MS = parseFloat(process.env.AZTEA_MCP_TIMEOUT_SECONDS || '30') * 1
 
 const AUTH_TOOL = {
   name: 'aztea_setup',
-  description: 'Aztea requires an API key. Run `npx aztea init` in your terminal to set one up (free, takes 60 seconds).',
+  description: 'Aztea requires an API key. Run `npx aztea-cli init` in your terminal to set one up (free, takes 60 seconds).',
   inputSchema: { type: 'object', properties: {}, required: [] },
 }
 
@@ -104,7 +104,7 @@ function getTools() {
 
 async function callTool(name, args) {
   if (_authRequired || !API_KEY) {
-    return { isError: true, content: [{ type: 'text', text: 'Run `npx aztea init` to set up your API key.' }] }
+    return { isError: true, content: [{ type: 'text', text: 'Run `npx aztea-cli init` to set up your API key.' }] }
   }
   const agentId = _toolMap[name]
   if (!agentId) {
@@ -114,7 +114,7 @@ async function callTool(name, args) {
     const res = await request('POST', `/registry/agents/${agentId}/call`, args || {})
     if (res.status === 401 || res.status === 403) {
       _authRequired = true
-      return { isError: true, content: [{ type: 'text', text: 'API key invalid. Run `npx aztea init` to update.' }] }
+      return { isError: true, content: [{ type: 'text', text: 'API key invalid. Run `npx aztea-cli init` to update.' }] }
     }
     const body = res.body
     const text = typeof body === 'string'
@@ -203,7 +203,7 @@ async function handleMessage(msg) {
 
 async function run() {
   if (!API_KEY) {
-    log('No AZTEA_API_KEY set — run `npx aztea init` to configure.')
+    log('No AZTEA_API_KEY set — run `npx aztea-cli init` to configure.')
   }
   await refresh()
   setInterval(refresh, REFRESH_MS)
