@@ -16,14 +16,10 @@ yet.
 
 from __future__ import annotations
 
-import sqlite3
-import uuid
-
 from core.payments.base import (
     InsufficientBalanceError,
     _conn,
     _insert_tx,
-    _now,
 )
 
 
