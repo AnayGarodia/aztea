@@ -11,3 +11,4 @@ psutil
 stripe
 sentry-sdk[fastapi]
 prometheus-client
+cryptography>=41.0.0

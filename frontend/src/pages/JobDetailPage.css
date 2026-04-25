@@ -152,6 +152,28 @@
   font-size: 0.875rem;
   font-weight: 600;
   color: var(--text-primary);
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.job-detail__verified-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--positive-bg, rgba(16, 185, 129, 0.12));
+  color: var(--positive, #10b981);
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-decoration: none;
+  border: 1px solid var(--positive-border, rgba(16, 185, 129, 0.35));
+  transition: background var(--duration-sm, 150ms);
+}
+
+.job-detail__verified-badge:hover {
+  background: var(--positive-bg-strong, rgba(16, 185, 129, 0.2));
 }
 
 /* Messages */

@@ -555,6 +555,49 @@ export default function AgentDetailPage() {
             </Card>
           </Reveal>
 
+          {/* Identity */}
+          {agent?.did && (
+            <Reveal delay={0.18}>
+              <Card>
+                <Card.Header>
+                  <span className="agent-detail__section-title">
+                    Identity
+                  </span>
+                </Card.Header>
+                <Card.Body>
+                  <div className="agent-detail__identity">
+                    <div className="agent-detail__identity-row">
+                      <span className="agent-detail__identity-label">DID</span>
+                      <code className="agent-detail__identity-value">{agent.did}</code>
+                    </div>
+                    <div className="agent-detail__identity-row">
+                      <span className="agent-detail__identity-label">Algorithm</span>
+                      <span className="agent-detail__identity-value">
+                        {agent.signing_alg || 'ed25519'}
+                      </span>
+                    </div>
+                    <div className="agent-detail__identity-row">
+                      <span className="agent-detail__identity-label">DID document</span>
+                      <a
+                        className="agent-detail__identity-link"
+                        href={`/agents/${agent.agent_id}/did.json`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        /agents/{agent.agent_id}/did.json
+                      </a>
+                    </div>
+                    <p className="agent-detail__identity-hint">
+                      Each output this agent produces is signed with its Ed25519 key.
+                      Anyone can fetch the DID document and verify a signed output without
+                      trusting Aztea.
+                    </p>
+                  </div>
+                </Card.Body>
+              </Card>
+            </Reveal>
+          )}
+
           {/* Recent Work */}
           {(workHistory !== null || workHistoryLoading) && (
             <Reveal delay={0.2}>

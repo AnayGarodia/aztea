@@ -12,7 +12,7 @@ import ResultRenderer from '../features/agents/results/ResultRenderer'
 import { getJob, getJobMessages, postJobMessage, rateJob, getJobDispute, fileDispute, verifyJob } from '../api'
 import { useMarket } from '../context/MarketContext'
 import JobTimeline from '../features/jobs/JobTimeline'
-import { ArrowLeft, RefreshCw, Star, AlertTriangle, CheckCircle, Clock, RotateCcw } from 'lucide-react'
+import { ArrowLeft, RefreshCw, Star, AlertTriangle, CheckCircle, Clock, RotateCcw, ShieldCheck } from 'lucide-react'
 import './JobDetailPage.css'
 
 function fmtCountdown(isoDeadline) {
@@ -518,7 +518,25 @@ export default function JobDetailPage() {
             <Reveal delay={0.2}>
               <Card>
                 <Card.Header>
-                  <span className="job-detail__section-title">Output</span>
+                  <span className="job-detail__section-title">
+                    Output
+                    {job.output_signature && (
+                      <a
+                        className="job-detail__verified-badge"
+                        href={`/jobs/${job.job_id}/signature`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={
+                          job.output_signed_by_did
+                            ? `Signed by ${job.output_signed_by_did}`
+                            : 'Signed output'
+                        }
+                      >
+                        <ShieldCheck size={12} />
+                        <span>Verified output</span>
+                      </a>
+                    )}
+                  </span>
                 </Card.Header>
                 <Card.Body>
                   {agent ? (

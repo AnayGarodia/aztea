@@ -377,6 +377,58 @@ def a2a_agent_card(agent_id: str, request: Request) -> JSONResponse:
     )
 
 
+@app.get(
+    "/agents/{agent_id}/did.json",
+    include_in_schema=True,
+    tags=["Identity"],
+    summary="W3C did:web — DID document for the agent's cryptographic identity.",
+    responses=_error_responses(404),
+)
+def agent_did_document(agent_id: str, request: Request) -> JSONResponse:
+    """Return a W3C-compliant DID document so external parties can resolve
+    the agent's public key and verify signed outputs."""
+    agent = registry.get_agent(agent_id, include_unapproved=True)
+    if agent is None or agent.get("status") == "banned":
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    public_pem = agent.get("signing_public_key")
+    did = agent.get("did")
+    if not public_pem or not did:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Agent '{agent_id}' has no published cryptographic identity yet.",
+        )
+    try:
+        from core import crypto as _crypto
+        jwk = _crypto.public_key_to_jwk(public_pem)
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to render the agent's public key.",
+        )
+    key_id = f"{did}#key-1"
+    document = {
+        "@context": [
+            "https://www.w3.org/ns/did/v1",
+            "https://w3id.org/security/suites/jws-2020/v1",
+        ],
+        "id": did,
+        "verificationMethod": [
+            {
+                "id": key_id,
+                "type": "JsonWebKey2020",
+                "controller": did,
+                "publicKeyJwk": jwk,
+            }
+        ],
+        "authentication": [key_id],
+        "assertionMethod": [key_id],
+    }
+    return JSONResponse(
+        content=document,
+        headers={"Content-Type": "application/did+json"},
+    )
+
+
 @app.post(
     "/a2a/tasks/send",
     status_code=201,

@@ -643,6 +643,32 @@ def _migrate_agents_table(conn: sqlite3.Connection) -> None:
     conn.execute("ALTER TABLE agents__canonical RENAME TO agents")
 
 
+def _ensure_agent_identity_columns(conn: sqlite3.Connection) -> None:
+    """Add the cryptographic-identity columns to the agents table.
+
+    Mirrors what migration 0015_agent_identity.sql does, so dev and test
+    environments that bypass the migration runner still pick up the
+    schema. Idempotent — duplicate-column errors are swallowed.
+    """
+    extras = [
+        "ALTER TABLE agents ADD COLUMN did TEXT",
+        "ALTER TABLE agents ADD COLUMN signing_public_key TEXT",
+        "ALTER TABLE agents ADD COLUMN signing_private_key TEXT",
+        "ALTER TABLE agents ADD COLUMN signing_alg TEXT NOT NULL DEFAULT 'ed25519'",
+        "ALTER TABLE agents ADD COLUMN signing_keys_created_at TEXT",
+    ]
+    for ddl in extras:
+        try:
+            conn.execute(ddl)
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" not in str(exc).lower():
+                raise
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_did "
+        "ON agents(did) WHERE did IS NOT NULL"
+    )
+
+
 def init_db() -> None:
     """Create or migrate the agents table to the canonical production schema."""
     with _conn() as conn:
@@ -652,6 +678,7 @@ def init_db() -> None:
             _migrate_agents_table(conn)
         _create_agent_embeddings_table(conn)
         _ensure_agents_indexes(conn)
+        _ensure_agent_identity_columns(conn)
 
 
 # ---------------------------------------------------------------------------

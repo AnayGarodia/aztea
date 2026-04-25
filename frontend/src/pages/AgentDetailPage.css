@@ -315,6 +315,52 @@
   margin: 0;
 }
 
+/* ── Identity card ────────────────────────────────────────────── */
+.agent-detail__identity {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.agent-detail__identity-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.agent-detail__identity-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  min-width: 110px;
+}
+
+.agent-detail__identity-value {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.8rem;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.agent-detail__identity-link {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.8rem;
+  color: var(--accent);
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.agent-detail__identity-link:hover { text-decoration: underline; }
+
+.agent-detail__identity-hint {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin: 4px 0 0 0;
+  line-height: 1.45;
+}
+
 /* ── Stats grid ───────────────────────────────────────────────── */
 .agent-detail__section-title {
   font-size: 0.875rem;

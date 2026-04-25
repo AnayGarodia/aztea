@@ -650,6 +650,11 @@ def update_job_status(
     output_payload: dict | None = None,
     error_message: str | None = None,
     completed: bool = False,
+    *,
+    output_signature: str | None = None,
+    output_signature_alg: str | None = None,
+    output_signed_by_did: str | None = None,
+    output_signed_at: str | None = None,
 ) -> dict | None:
     if status not in VALID_STATUSES:
         raise ValueError(f"Invalid status: {status}")
@@ -658,6 +663,7 @@ def update_job_status(
     clear_claim = 1 if completed else 0
     clear_retry_schedule = 1 if status != "pending" else 0
     completed_flag = 1 if completed else 0
+    has_signature = 1 if output_signature else 0
 
     with _conn() as conn:
         conn.execute(
@@ -677,7 +683,11 @@ def update_job_status(
                 clarification_deadline_at = CASE
                     WHEN ? = 1 OR ? != 'awaiting_clarification' THEN NULL
                     ELSE clarification_deadline_at
-                END
+                END,
+                output_signature      = CASE WHEN ? = 1 THEN ? ELSE output_signature END,
+                output_signature_alg  = CASE WHEN ? = 1 THEN ? ELSE output_signature_alg END,
+                output_signed_by_did  = CASE WHEN ? = 1 THEN ? ELSE output_signed_by_did END,
+                output_signed_at      = CASE WHEN ? = 1 THEN ? ELSE output_signed_at END
             WHERE job_id = ? AND (? = 0 OR completed_at IS NULL)
             """,
             (
@@ -695,6 +705,10 @@ def update_job_status(
                 status,
                 clear_claim,
                 status,
+                has_signature, output_signature,
+                has_signature, output_signature_alg,
+                has_signature, output_signed_by_did,
+                has_signature, output_signed_at,
                 job_id,
                 completed_flag,
             ),

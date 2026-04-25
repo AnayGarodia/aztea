@@ -659,6 +659,30 @@ export async function updateAgentWalletSettings(key, agentId, body) {
   return respBody
 }
 
+// ── Cryptographic identity (no auth) ─────────────────────────────────────────
+
+export async function fetchAgentDidDocument(agentId) {
+  // The DID document is W3C-spec, served at the URL the DID itself resolves to.
+  // No auth required — the public key is by design publicly discoverable.
+  const { body, status } = await request(
+    `/agents/${encodeURIComponent(agentId)}/did.json`,
+    { throwOnError: false },
+  )
+  if (status === 404) return null
+  return body
+}
+
+export async function fetchJobSignature(jobId) {
+  // Signature endpoint is unauthenticated — anyone with the job id should be
+  // able to verify the output. Returns null if the job has no signature yet.
+  const { body, status } = await request(
+    `/jobs/${encodeURIComponent(jobId)}/signature`,
+    { throwOnError: false },
+  )
+  if (status === 404) return null
+  return body
+}
+
 export async function createAgentCallerKey(key, agentId, name = 'Caller key') {
   const { body } = await request(
     `/registry/agents/${encodeURIComponent(agentId)}/caller-keys`,

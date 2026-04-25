@@ -176,6 +176,25 @@ def register_agent(
     if embed_listing:
         source_text = _build_embedding_source_text(name, description, normalized_tags, normalized_schema)
         embedding_vector = embeddings.embed_text(source_text)
+
+    # Cryptographic identity. Generated up front so the same row insert
+    # carries the DID, public key, and private key. We tolerate failures
+    # (missing ``cryptography`` lib in some test envs) by leaving the
+    # fields NULL — the agent still registers, just without a signing key.
+    agent_did_value: str | None = None
+    private_pem_value: str | None = None
+    public_pem_value: str | None = None
+    signing_keys_created_at: str | None = None
+    try:
+        from core import crypto as _crypto
+        from core.identity import build_agent_did as _build_agent_did
+
+        private_pem_value, public_pem_value = _crypto.generate_signing_keypair()
+        agent_did_value = _build_agent_did(aid)
+        signing_keys_created_at = created_at
+    except Exception:
+        _logger.exception("Failed to generate signing keypair for agent %s", aid)
+
     with _conn() as conn:
         conn.execute(
             """
@@ -226,6 +245,34 @@ def register_agent(
                 source_text=source_text,
                 embedding_vector=embedding_vector,
             )
+        if agent_did_value is not None and private_pem_value is not None:
+            try:
+                conn.execute(
+                    """
+                    UPDATE agents
+                    SET did = ?,
+                        signing_public_key = ?,
+                        signing_private_key = ?,
+                        signing_keys_created_at = ?
+                    WHERE agent_id = ?
+                    """,
+                    (
+                        agent_did_value,
+                        public_pem_value,
+                        private_pem_value,
+                        signing_keys_created_at,
+                        aid,
+                    ),
+                )
+            except sqlite3.OperationalError as exc:
+                # Column may not exist on a database that hasn't picked up
+                # migration 0015 yet — log and continue. Backfill on the
+                # next startup will retry.
+                _logger.warning(
+                    "Could not persist signing keypair for agent %s (schema not yet migrated?): %s",
+                    aid,
+                    exc,
+                )
     if embed_listing:
         _invalidate_embeddings_cache()
 

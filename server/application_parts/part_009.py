@@ -356,6 +356,43 @@ def jobs_get(
 
 
 @app.get(
+    "/jobs/{job_id}/signature",
+    include_in_schema=True,
+    tags=["Identity"],
+    summary="Public Ed25519 signature attesting which agent produced this job's output.",
+    responses=_error_responses(404, 429, 500),
+)
+@limiter.limit("60/minute")
+def jobs_signature(request: Request, job_id: str) -> JSONResponse:
+    """Public — anyone with a job_id can fetch the signature so they can
+    independently verify the output via the agent's DID document."""
+    job = jobs.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+    signature = job.get("output_signature")
+    if not signature:
+        raise HTTPException(
+            status_code=404,
+            detail="This job has no signature (not yet completed, or the agent has no signing key).",
+        )
+    agent_id = job.get("agent_id")
+    base = (os.environ.get("SERVER_BASE_URL") or "").rstrip("/")
+    verify_url = (
+        f"{base}/agents/{agent_id}/did.json"
+        if base and agent_id else None
+    )
+    return JSONResponse(content={
+        "job_id": job_id,
+        "agent_id": agent_id,
+        "did": job.get("output_signed_by_did"),
+        "alg": job.get("output_signature_alg") or "ed25519",
+        "signature": signature,
+        "signed_at": job.get("output_signed_at"),
+        "verify_url": verify_url,
+    })
+
+
+@app.get(
     "/jobs/agent/{agent_id}",
     response_model=core_models.JobsListResponse,
     responses=_error_responses(401, 403, 404, 422, 429, 500),
@@ -654,8 +691,36 @@ def jobs_complete(
             settled_failed = _settle_failed_job(failed, actor_owner_id=actor_owner_id, event_type="job.failed_quality")
             return _job_response(settled_failed, caller), 200
 
+        # Sign the output with the agent's private key, if it has one.
+        # The signature attests *who* signed (the agent's DID), not that
+        # the work is correct — quality verification is a separate concern.
+        sig_b64: str | None = None
+        sig_alg: str | None = None
+        sig_did: str | None = None
+        sig_at: str | None = None
+        try:
+            from core import crypto as _crypto
+
+            private_pem = agent.get("signing_private_key")
+            agent_did_value = agent.get("did")
+            if private_pem and agent_did_value and normalized_output_payload is not None:
+                sig_b64 = _crypto.sign_payload(private_pem, normalized_output_payload)
+                sig_alg = str(agent.get("signing_alg") or "ed25519")
+                sig_did = agent_did_value
+                sig_at = datetime.now(timezone.utc).isoformat()
+        except Exception:  # signing must never break completion
+            _LOG.exception("Failed to sign output for job %s", job_id)
+            sig_b64 = sig_alg = sig_did = sig_at = None
+
         updated = jobs.update_job_status(
-            job_id, "complete", output_payload=normalized_output_payload, completed=True
+            job_id,
+            "complete",
+            output_payload=normalized_output_payload,
+            completed=True,
+            output_signature=sig_b64,
+            output_signature_alg=sig_alg,
+            output_signed_by_did=sig_did,
+            output_signed_at=sig_at,
         )
         if updated is None:
             raise HTTPException(status_code=409, detail="Unable to update job status.")

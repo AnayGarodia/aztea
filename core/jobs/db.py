@@ -777,6 +777,26 @@ def _migrate_jobs_table(conn: sqlite3.Connection) -> None:
         raise sqlite3.IntegrityError("jobs migration introduced foreign key violations.")
 
 
+def _ensure_job_signature_columns(conn: sqlite3.Connection) -> None:
+    """Add cryptographic-signature columns to the jobs table.
+
+    Mirrors migration 0015_agent_identity.sql for dev/test environments
+    that bypass the migration runner.
+    """
+    extras = [
+        "ALTER TABLE jobs ADD COLUMN output_signature TEXT",
+        "ALTER TABLE jobs ADD COLUMN output_signature_alg TEXT",
+        "ALTER TABLE jobs ADD COLUMN output_signed_by_did TEXT",
+        "ALTER TABLE jobs ADD COLUMN output_signed_at TEXT",
+    ]
+    for ddl in extras:
+        try:
+            conn.execute(ddl)
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" not in str(exc).lower():
+                raise
+
+
 def init_jobs_db() -> None:
     """Create or migrate jobs tables and indexes."""
     with _conn() as conn:
@@ -786,6 +806,7 @@ def init_jobs_db() -> None:
             _migrate_jobs_table(conn)
         _ensure_job_messages_schema(conn)
         _ensure_jobs_indexes(conn)
+        _ensure_job_signature_columns(conn)
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_job_messages_job ON job_messages(job_id, message_id)"
         )
