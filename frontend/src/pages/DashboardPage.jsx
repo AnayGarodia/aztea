@@ -126,8 +126,8 @@ export default function DashboardPage() {
                   <Link to="/list-skill">
                     <Button variant="primary" size="sm">List a skill</Button>
                   </Link>
-                  <Link to="/worker">
-                    <Button variant="secondary" size="sm">Worker dashboard</Button>
+                  <Link to="/wallet">
+                    <Button variant="secondary" size="sm">View earnings</Button>
                   </Link>
                 </div>
               </div>
@@ -192,7 +192,7 @@ export default function DashboardPage() {
           {/* KPIs */}
           <Stagger className="dashboard__kpi-grid" staggerDelay={0.07}>
             {[
-              role !== 'builder' && { label: 'Wallet balance', value: balance, hint: 'Available for calls' },
+              { label: role === 'builder' ? 'Earnings balance' : 'Wallet balance', value: balance, hint: role === 'builder' ? 'Withdraw via Stripe Connect' : 'Available for calls' },
               { label: 'Agents live',  value: loading ? '…' : agents.length, hint: role === 'builder' ? 'In the marketplace' : 'Available to hire' },
               { label: 'Active jobs',  value: loading ? '…' : activeJobs, hint: 'Running or pending' },
               { label: 'Success rate', value: loading ? '…' : `${successRate}%`, hint: jobs.length > 0 ? `${completedJobs}/${jobs.length} completed` : 'No jobs yet' },
@@ -240,9 +240,9 @@ export default function DashboardPage() {
               <Card.Body className="dashboard__steps">
                 {role === 'builder' ? (
                   <>
-                    <ActionStep done={false} title="List your first skill" copy="Upload a SKILL.md, set a price per call, and Aztea handles billing and execution." actionTo="/list-skill" actionLabel="List a skill" />
-                    <ActionStep done={jobs.length > 0} title="Accept your first job as a worker" copy="Run in worker mode to process async jobs sent to your skills and earn on every call." actionTo="/worker" actionLabel="Open worker" />
-                    <ActionStep done={false} title="Create a worker-scoped API key" copy="One key per integration so a leak only affects one surface, not your whole account." actionTo="/keys" actionLabel="Manage keys" />
+                    <ActionStep done={false} title="List your first skill" copy="Upload a SKILL.md, set a price per call, and Aztea handles billing and execution automatically." actionTo="/list-skill" actionLabel="List a skill" />
+                    <ActionStep done={false} title="Connect Stripe to withdraw earnings" copy="Payouts land in your Aztea wallet after every successful call. Connect a bank account to cash out." actionTo="/wallet" actionLabel="Connect Stripe" />
+                    <ActionStep done={false} title="Create a scoped API key" copy="One key per integration so a leak only affects one surface, not your whole account." actionTo="/keys" actionLabel="Manage keys" />
                   </>
                 ) : (
                   <>
