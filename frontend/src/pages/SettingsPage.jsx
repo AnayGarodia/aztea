@@ -19,7 +19,7 @@ const ROLE_OPTIONS = [
 ]
 
 export default function SettingsPage() {
-  const { user, disconnect, refreshProfile } = useAuth()
+  const { user, apiKey, disconnect, refreshProfile } = useAuth()
   const [roleSaving, setRoleSaving] = useState(false)
   const [roleError, setRoleError] = useState('')
   const currentRole = user?.role ?? 'both'
@@ -29,7 +29,7 @@ export default function SettingsPage() {
     setRoleSaving(true)
     setRoleError('')
     try {
-      await authUpdateRole(role)
+      await authUpdateRole(apiKey, role)
       await refreshProfile()
     } catch (e) {
       setRoleError(e?.message ?? 'Failed to update role.')

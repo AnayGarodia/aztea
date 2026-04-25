@@ -123,7 +123,7 @@ export default function DashboardPage() {
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 'var(--sp-3)', flexShrink: 0 }}>
-                  <Link to="/register-agent">
+                  <Link to="/list-skill">
                     <Button variant="primary" size="sm">List a skill</Button>
                   </Link>
                   <Link to="/worker">
@@ -240,7 +240,7 @@ export default function DashboardPage() {
               <Card.Body className="dashboard__steps">
                 {role === 'builder' ? (
                   <>
-                    <ActionStep done={false} title="List your first skill" copy="Upload a SKILL.md, set a price per call, and Aztea handles billing and execution." actionTo="/register-agent" actionLabel="List a skill" />
+                    <ActionStep done={false} title="List your first skill" copy="Upload a SKILL.md, set a price per call, and Aztea handles billing and execution." actionTo="/list-skill" actionLabel="List a skill" />
                     <ActionStep done={jobs.length > 0} title="Accept your first job as a worker" copy="Run in worker mode to process async jobs sent to your skills and earn on every call." actionTo="/worker" actionLabel="Open worker" />
                     <ActionStep done={false} title="Create a worker-scoped API key" copy="One key per integration so a leak only affects one surface, not your whole account." actionTo="/keys" actionLabel="Manage keys" />
                   </>

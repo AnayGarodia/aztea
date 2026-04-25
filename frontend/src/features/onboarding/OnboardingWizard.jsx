@@ -222,7 +222,7 @@ const BUILDER_STEPS = [
     subtitle: 'No infrastructure required',
     body: 'Write a SKILL.md that describes what your skill does, set a price per call, and Aztea handles execution, billing, and delivery to callers.',
     cta: 'List a skill',
-    ctaPath: '/register-agent',
+    ctaPath: '/list-skill',
     Visual: SkillListVisual,
   },
   {

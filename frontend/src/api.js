@@ -219,9 +219,10 @@ export async function authRegister(username, email, password, role = 'both') {
   return body
 }
 
-export async function authUpdateRole(role) {
+export async function authUpdateRole(key, role) {
   const { body } = await request('/auth/role', {
     method: 'PATCH',
+    key,
     body: { role },
   })
   return body

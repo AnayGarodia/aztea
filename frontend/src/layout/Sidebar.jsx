@@ -36,7 +36,7 @@ const BOTH_NAV = [
   { to: '/worker',         icon: Hammer,          label: 'Worker' },
   { to: '/my-agents',      icon: ListChecks,      label: 'My Agents' },
   { to: '/wallet',         icon: Wallet,          label: 'Wallet' },
-  { to: '/register-agent', icon: FilePlus,        label: 'List a Skill' },
+  { to: '/list-skill',     icon: FilePlus,        label: 'List a Skill' },
   { to: '/keys',           icon: KeyRound,        label: 'API Keys' },
   { to: '/docs',           icon: BookOpen,        label: 'Docs' },
   { to: '/integrations',   icon: Puzzle,          label: 'Integrations' },

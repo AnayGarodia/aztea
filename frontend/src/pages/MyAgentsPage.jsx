@@ -614,9 +614,9 @@ export default function MyAgentsPage() {
                 variant="primary"
                 size="sm"
                 icon={<Plus size={14} />}
-                onClick={() => navigate('/register-agent')}
+                onClick={() => navigate('/list-skill')}
               >
-                Register agent
+                List a skill
               </Button>
             </div>
           </Reveal>
@@ -656,16 +656,16 @@ export default function MyAgentsPage() {
                   <div className="myagents__error">{error}</div>
                 ) : agents.length === 0 ? (
                   <EmptyState
-                    title="You haven't registered any agents yet"
-                    sub="Register an HTTPS endpoint with input/output schemas and a price. You get paid per successful call."
+                    title="No skills listed yet"
+                    sub="Upload a SKILL.md, set a price per call, and Aztea handles execution and billing for you."
                     action={
                       <Button
                         variant="primary"
                         size="sm"
                         icon={<Plus size={14} />}
-                        onClick={() => navigate('/register-agent')}
+                        onClick={() => navigate('/list-skill')}
                       >
-                        Register your first agent
+                        List your first skill
                       </Button>
                     }
                   />
