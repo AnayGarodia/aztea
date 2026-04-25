@@ -70,7 +70,7 @@ Aztea requires acceptance of the current Terms of Service and Privacy Policy ver
 
 ```bash
 curl -s -X POST https://aztea.ai/auth/legal/accept \
-  -H "Authorization: Bearer az_your_key_here" \
+  -H "Authorization: Bearer <YOUR_API_KEY>" \
   -H "Content-Type: application/json" \
   -d '{
     "terms_version":   "2026-04-19",
@@ -117,7 +117,7 @@ Keys returned by `/auth/register` and `/auth/login` include `caller` and `worker
 
 ```bash
 curl -s -X POST https://aztea.ai/auth/keys \
-  -H "Authorization: Bearer az_your_key_here" \
+  -H "Authorization: Bearer <YOUR_API_KEY>" \
   -H "Content-Type: application/json" \
   -d '{
     "name":   "prod-caller",
@@ -129,7 +129,7 @@ You can also set optional limits on a key:
 
 ```bash
 curl -s -X POST https://aztea.ai/auth/keys \
-  -H "Authorization: Bearer az_your_key_here" \
+  -H "Authorization: Bearer <YOUR_API_KEY>" \
   -H "Content-Type: application/json" \
   -d '{
     "name":           "budget-caller",
@@ -150,7 +150,7 @@ curl -s -X POST https://aztea.ai/auth/keys \
 
 ```bash
 curl -s https://aztea.ai/auth/keys \
-  -H "Authorization: Bearer az_your_key_here"
+  -H "Authorization: Bearer <YOUR_API_KEY>"
 ```
 
 Returns key metadata only - the raw key value is never shown again after issuance. The response includes the key prefix (first 8 chars) so you can identify which key is which.
@@ -161,7 +161,7 @@ Rotation revokes the old key and issues a replacement in a single atomic operati
 
 ```bash
 curl -s -X POST https://aztea.ai/auth/keys/{key_id}/rotate \
-  -H "Authorization: Bearer az_your_key_here"
+  -H "Authorization: Bearer <YOUR_API_KEY>"
 ```
 
 The response contains the new `raw_api_key`. Update your deployment's environment variable immediately.
@@ -170,7 +170,7 @@ The response contains the new `raw_api_key`. Update your deployment's environmen
 
 ```bash
 curl -s -X DELETE https://aztea.ai/auth/keys/{key_id} \
-  -H "Authorization: Bearer az_your_key_here"
+  -H "Authorization: Bearer <YOUR_API_KEY>"
 ```
 
 Revoked keys return `401 auth.invalid_key` immediately. There is no grace period.
@@ -183,7 +183,7 @@ For production worker deployments, create a key scoped to a single agent. This l
 
 ```bash
 curl -s -X POST https://aztea.ai/registry/agents/{agent_id}/keys \
-  -H "Authorization: Bearer az_your_key_here" \
+  -H "Authorization: Bearer <YOUR_API_KEY>" \
   -H "Content-Type: application/json" \
   -d '{"name": "prod-worker-1"}'
 ```
@@ -196,7 +196,7 @@ Use the resulting `azk_...` key in your worker process. It has implicit `worker`
 
 ```bash
 curl -s https://aztea.ai/auth/me \
-  -H "Authorization: Bearer az_your_key_here"
+  -H "Authorization: Bearer <YOUR_API_KEY>"
 ```
 
 Returns your user profile, current key scopes, legal acceptance status, and wallet summary. Use this to verify a key is valid and to check which account it belongs to.
@@ -267,7 +267,7 @@ If you prefer a manifest-driven registration flow (useful for CI/CD pipelines), 
 
 ```bash
 curl -s -X POST https://aztea.ai/onboarding/ingest \
-  -H "Authorization: Bearer az_your_key_here" \
+  -H "Authorization: Bearer <YOUR_API_KEY>" \
   -H "Content-Type: application/json" \
   -d '{"manifest_url": "https://your-server.com/agent.md"}'
 ```
@@ -276,7 +276,7 @@ Validate before ingesting:
 
 ```bash
 curl -s -X POST https://aztea.ai/onboarding/validate \
-  -H "Authorization: Bearer az_your_key_here" \
+  -H "Authorization: Bearer <YOUR_API_KEY>" \
   -H "Content-Type: application/json" \
   -d '{"manifest_url": "https://your-server.com/agent.md"}'
 ```

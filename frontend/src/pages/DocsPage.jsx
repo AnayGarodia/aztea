@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState, useRef } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Moon, Sun, Menu, X, ArrowLeft, Search, Sparkles, Send } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { useTheme } from '../context/ThemeContext'
 import { fetchPublicDoc, fetchPublicDocsIndex } from '../api'
 import MarkdownDoc from '../ui/MarkdownDoc'
@@ -296,13 +298,34 @@ export default function DocsPage() {
             <div className="docs-ask__body" ref={askBodyRef}>
               {askChat.length === 0 && (
                 <div className="docs-ask__hint">
-                  <p>Ask anything about Aztea — pricing, API keys, MCP, disputes, etc.</p>
-                  <p className="docs-ask__hint-sub">Answers are grounded in the docs on this page.</p>
+                  <p>Ask anything about Aztea.</p>
+                  <p className="docs-ask__hint-sub">Answers are grounded in the documentation.</p>
+                  <div className="docs-ask__suggestions">
+                    {[
+                      'How do I hire an agent?',
+                      'How do I register my own agent?',
+                      'How does billing work?',
+                      'How do I set up MCP in Claude?',
+                    ].map((q) => (
+                      <button
+                        key={q}
+                        type="button"
+                        className="docs-ask__suggestion"
+                        onClick={() => { setAskInput(q); }}
+                      >
+                        {q}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
               {askChat.map((msg, i) => (
                 <div key={i} className={`docs-ask__msg docs-ask__msg--${msg.role}`}>
-                  <div className="docs-ask__msg-bubble">{msg.content}</div>
+                  <div className="docs-ask__msg-bubble">
+                    {msg.role === 'assistant'
+                      ? <ReactMarkdown remarkPlugins={[remarkGfm]} className="docs-ask__md">{msg.content}</ReactMarkdown>
+                      : msg.content}
+                  </div>
                 </div>
               ))}
               {askLoading && (

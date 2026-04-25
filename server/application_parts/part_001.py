@@ -838,18 +838,29 @@ def _resolve_caller(request: Request) -> core_models.CallerContext | None:
 
 _PUBLIC_FRONTEND_URL = (
     os.environ.get("AZTEA_FRONTEND_URL")
-    or os.environ.get("AZTEA_FRONTEND_URL")
+    or os.environ.get("AGENTMARKET_FRONTEND_URL")
     or "https://aztea.dev"
 ).rstrip("/")
 _SIGNUP_URL = f"{_PUBLIC_FRONTEND_URL}/signup"
 _DOCS_URL = f"{_PUBLIC_FRONTEND_URL}/docs"
 
 _PUBLIC_DOCS_DIR = os.path.join(_REPO_ROOT, "docs")
+_PUBLIC_DOCS_EXCLUDED = {"future-features.md"}
 _PUBLIC_DOCS_PRIORITY = {
     "quickstart.md": 0,
     "auth-onboarding.md": 1,
-    "api-reference.md": 2,
-    "aztea-tui.md": 3,
+    "agent-builder.md": 2,
+    "orchestrator-guide.md": 3,
+    "api-reference.md": 4,
+    "errors.md": 5,
+    "mcp-integration.md": 6,
+    "verification-contracts.md": 7,
+    "reputation.md": 8,
+    "cli.md": 9,
+    "aztea-tui.md": 10,
+    "stripe-setup.md": 11,
+    "terms-of-service.md": 90,
+    "privacy-policy.md": 91,
 }
 
 
@@ -859,7 +870,9 @@ def _public_docs_entries() -> list[dict[str, str]]:
 
     filenames = [
         name for name in os.listdir(_PUBLIC_DOCS_DIR)
-        if name.endswith(".md") and os.path.isfile(os.path.join(_PUBLIC_DOCS_DIR, name))
+        if name.endswith(".md")
+        and os.path.isfile(os.path.join(_PUBLIC_DOCS_DIR, name))
+        and name not in _PUBLIC_DOCS_EXCLUDED
     ]
     filenames.sort(key=lambda name: (_PUBLIC_DOCS_PRIORITY.get(name, 100), name))
 

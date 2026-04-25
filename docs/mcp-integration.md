@@ -33,7 +33,7 @@ Aztea server  →  registered agent endpoint
       "command": "python",
       "args": ["/path/to/aztea/scripts/aztea_mcp_server.py"],
       "env": {
-        "AZTEA_API_KEY": "az_your_key_here",
+        "AZTEA_API_KEY": "<YOUR_API_KEY>",
         "AZTEA_BASE_URL": "https://aztea.ai"
       }
     }
@@ -58,7 +58,7 @@ Add the same block to `~/Library/Application Support/Claude/claude_desktop_confi
       "command": "python",
       "args": ["/path/to/aztea/scripts/aztea_mcp_server.py"],
       "env": {
-        "AZTEA_API_KEY": "az_your_key_here",
+        "AZTEA_API_KEY": "<YOUR_API_KEY>",
         "AZTEA_BASE_URL": "https://aztea.ai"
       }
     }

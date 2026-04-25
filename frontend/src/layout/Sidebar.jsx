@@ -1,11 +1,9 @@
 import { NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { motion } from 'motion/react'
 import {
-  LayoutDashboard, Bot, Briefcase, Hammer, Wallet, Settings, LogOut, Shield, ListChecks, Activity, BookOpen, KeyRound, Coins, Puzzle
+  LayoutDashboard, Bot, Briefcase, Hammer, Wallet, Settings, LogOut, Shield, ListChecks, BookOpen, KeyRound, Coins, Puzzle
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
-import { useMarket } from '../context/MarketContext'
-import AgentSigil from '../brand/AgentSigil'
 import Avatar from '../ui/Avatar'
 import './Sidebar.css'
 
@@ -24,7 +22,6 @@ const NAV = [
 
 export default function Sidebar() {
   const { user, disconnect } = useAuth()
-  const { agents = [] } = useMarket()
   const navigate = useNavigate()
   const location = useLocation()
 
@@ -86,27 +83,6 @@ export default function Sidebar() {
             )}
           </NavLink>
         </nav>
-      )}
-
-      {/* Live agents strip */}
-      {agents.length > 0 && (
-        <div className="sidebar__agents">
-          <p className="sidebar__section-label">Live agents</p>
-          <div className="sidebar__agents-list">
-            {agents.slice(0, 5).map((agent) => (
-              <button
-                key={agent.agent_id}
-                type="button"
-                className="sidebar__agent-chip"
-                onClick={() => navigate(`/agents/${agent.agent_id}`)}
-                title={agent.name}
-              >
-                <AgentSigil agentId={agent.agent_id} size="xs" />
-                <span className="sidebar__agent-name">{agent.name}</span>
-              </button>
-            ))}
-          </div>
-        </div>
       )}
 
       {/* Footer */}
