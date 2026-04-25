@@ -257,6 +257,8 @@
   gap: 24px;
   max-width: 800px;
   width: 100%;
+  margin: 0 auto;
+  text-align: center;
 }
 
 .lp__hero-badge {
@@ -287,6 +289,9 @@
   line-height: 1.6;
   max-width: 560px;
   padding: 0 8px;
+  margin-left: auto;
+  margin-right: auto;
+  text-align: center;
 }
 
 .lp__hero-actions {
@@ -376,6 +381,8 @@
   font-size: 1rem;
   line-height: 1.65;
   max-width: 560px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 /* ── Programmatic section ─────────────────────────────────── */

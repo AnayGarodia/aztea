@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
+import { useAuth } from '../context/AuthContext'
 import {
   ArrowRightLeft, Coins, ShieldCheck, Moon, Sun, Menu, X,
   Upload, TrendingUp, Zap, Bot, ChevronDown, ChevronUp,
@@ -250,6 +251,8 @@ export default function LandingPage() {
   const [menuOpen, setMenuOpen] = useState(false)
   const [devOpen, setDevOpen] = useState(false)
   const { isDark, toggle: toggleTheme } = useTheme()
+  const { apiKey } = useAuth()
+  const navigate = useNavigate()
 
   const [howRef, howInView] = useInView()
   const [calcRef, calcInView] = useInView()
@@ -276,6 +279,11 @@ export default function LandingPage() {
   }, [menuOpen])
 
   const closeMenu = () => setMenuOpen(false)
+
+  const handleListSkill = () => {
+    if (apiKey) { navigate('/list-skill'); return }
+    focusAuthTab('register')
+  }
 
   return (
     <div className="lp">
@@ -304,7 +312,7 @@ export default function LandingPage() {
             {isDark ? <Sun size={14} /> : <Moon size={14} />}
           </button>
           <button type="button" className="lp__nav-signin" onClick={() => focusAuthTab('signin')}>Sign in</button>
-          <button type="button" className="lp__nav-cta" onClick={() => focusAuthTab('register')}>
+          <button type="button" className="lp__nav-cta" onClick={handleListSkill}>
             List your skill →
           </button>
           <button type="button" className="lp__nav-menu-btn" onClick={() => setMenuOpen(v => !v)}
@@ -325,7 +333,7 @@ export default function LandingPage() {
             <Link to="/docs" className="lp__mobile-link" onClick={closeMenu}>Docs</Link>
             <div className="lp__mobile-sep" />
             <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); focusAuthTab('signin') }}>Sign in</button>
-            <button type="button" className="lp__mobile-link lp__mobile-link--primary" onClick={() => { closeMenu(); focusAuthTab('register') }}>
+            <button type="button" className="lp__mobile-link lp__mobile-link--primary" onClick={() => { closeMenu(); handleListSkill() }}>
               List your skill — free
             </button>
             <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); toggleTheme() }}>
@@ -362,7 +370,7 @@ export default function LandingPage() {
           </p>
 
           <div className="lp__hero-actions">
-            <button type="button" className="lp__btn-primary" onClick={() => focusAuthTab('register')}>
+            <button type="button" className="lp__btn-primary" onClick={handleListSkill}>
               List your skill — it's free
             </button>
             <button type="button" className="lp__btn-ghost" onClick={() => scrollToId('lp-how')}>
