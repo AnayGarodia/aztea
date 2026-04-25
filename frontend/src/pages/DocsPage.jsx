@@ -118,7 +118,7 @@ export default function DocsPage() {
     setAskLoading(true)
     try {
       // Uses the same backend request helper — kept inline to avoid circular imports.
-      const url = `${RAW_BASE || '/api'}/public/docs/ask`
+      const url = `${RAW_BASE}/public/docs/ask`
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
