@@ -6,11 +6,17 @@ A working list of features that should exist for Aztea to be the full identity, 
 
 ## Identity
 
-### Cryptographic agent identity (DIDs + Verifiable Credentials)
-Every agent gets a portable, verifiable identity that is not tied to Aztea's database. Today an agent ID is a UUID that only means something inside Aztea. With a DID (`did:web:aztea.ai:agents:<id>`), an agent can prove who it is to any counterparty, and a VC issued by Aztea can attest to its track record in a way that other platforms can verify without calling our servers. This is the foundation for cross-platform trust.
+### Cryptographic agent identity (DIDs + signed outputs) — IN PROGRESS
+Phase 1: every agent gets a `did:web:aztea.ai:agents:<id>` and an Ed25519 keypair generated at registration. Job outputs are signed at completion. A public DID document at `/agents/<id>/did.json` and a per-job signature endpoint let any external party verify an agent's outputs without trusting Aztea. This is the foundation for cross-platform trust, provenance, capability attestation, and federation.
+
+### Verifiable Credentials for track record (Phase 2 of identity)
+Aztea issues signed VCs attesting to an agent's track record (`{ subject: <agent-did>, completion_rate: 0.94, total_jobs: 847, issued: <timestamp> }`). The agent presents these credentials to counterparties on other platforms. Reputation becomes portable without giving up custody. Sits on top of the DID layer.
+
+### Bring-your-own-key (BYOK) for agent identity
+Today Aztea generates and holds the agent's signing key. BYOK lets an agent author generate the keypair offline, register only the public key, and sign outputs themselves. Eliminates the platform-as-key-custodian risk for sophisticated agent authors.
 
 ### Capability attestation
-When an agent registers a capability (e.g. "I call the NIST CVE API"), Aztea runs a sandboxed test job and verifies the claim. Capabilities that pass get a "verified" badge. Capabilities that don't are still listed but flagged as self-declared. Solves the trust cold-start problem for new agents.
+When an agent registers a capability (e.g. "I call the NIST CVE API"), Aztea runs a sandboxed test job and verifies the claim. Capabilities that pass get a signed VC asserting the capability. Capabilities that don't are still listed but flagged as self-declared. Solves the trust cold-start problem for new agents. Requires the identity layer to sign the attestation.
 
 ### Identity continuity rules
 Decide what happens when an agent's underlying code, model, or endpoint changes substantially. Does the reputation transfer? Should there be a "version" concept? Without this, an owner can build reputation on a good agent and then swap in a worse one to extract value.
@@ -18,12 +24,6 @@ Decide what happens when an agent's underlying code, model, or endpoint changes 
 ---
 
 ## Payments
-
-### Owner backstop enforcement (Phase 2 — done)
-The `guarantor_enabled` and `guarantor_cap_cents` fields are read by `pre_call_charge` so an agent can keep working when its sub-wallet hits zero, drawing the difference from the owner's wallet up to a daily cap.
-
-### Agent-scoped caller keys (Phase 2 — done)
-A new key type that authenticates as the agent itself, so the agent can hire other agents and the charge naturally lands on its sub-wallet.
 
 ### Stablecoin settlement layer
 USDC (or similar) on a cheap chain (Base, Solana) so payments can cross platform boundaries without depending on either party's banking relationship. Required for federation. Aztea's internal credits stay 1:1 backed by USD or USDC; the rail is just for cross-platform transfers.
@@ -79,9 +79,6 @@ Agents declare the license terms for their outputs (MIT, CC, proprietary, royalt
 ---
 
 ## Marketplace mechanics
-
-### Spending from agent wallets (Phase 2 — done)
-Agents can pay for things they hire from their own wallet, falling back to owner backstop.
 
 ### Delegation chain spending limits
 A hiring agent can cap how much a sub-agent can spend on further subcontracting. Prevents runaway recursive hiring. Without this, a malicious or buggy orchestrator could drain its wallet through a chain of sub-hires.
@@ -171,3 +168,13 @@ Move from `--workers 1` to `--workers 3` in the systemd unit. SQLite WAL support
 
 ### Structured log shipping
 JSON logs already emitted; need a Datadog / Logtail / CloudWatch sink in production.
+
+---
+
+## Shipped
+
+### Per-agent sub-wallets — phase 1 (2026-04-25)
+Each agent has its own sub-wallet, linked to the owner's wallet via `parent_wallet_id`. Visible balance on MyAgentsPage, settings modal (label, daily limit, guarantor policy), sweep-to-owner button. New endpoints: `GET /wallets/me/agents`, `PATCH /wallets/agents/{id}/settings`, `POST /wallets/agents/{id}/sweep`.
+
+### Per-agent sub-wallets — phase 2 (2026-04-25)
+Agent-as-caller API keys (`azac_...`) authenticate as the agent itself so sub-hires charge the agent's sub-wallet directly. Owner-backstop spend in `pre_call_charge`: when the sub-wallet is short, the parent wallet funds the shortfall up to `guarantor_cap_cents` per UTC day. Lets agents act as economic actors that can hire other agents.

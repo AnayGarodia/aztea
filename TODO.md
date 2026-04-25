@@ -1,6 +1,6 @@
 # Aztea - roadmap
 
-_Last updated: 2026-04-24_
+_Last updated: 2026-04-25_
 
 Legend: **P0** blocking · **P1** next release · **P2** nice-to-have · ✅ shipped
 
@@ -30,7 +30,8 @@ The destination: any agent can hire any other agent with a single API call, pay 
 | Webhooks | ✅ HMAC-signed job lifecycle events |
 | Observability | ✅ Prometheus, Sentry, structured JSON logs, /health |
 | Legal | ✅ ToS + Privacy Policy at v2026-04-19 |
-| Test suite | ✅ 231 passing + 1 skipped (main), 88 integration |
+| Per-agent sub-wallets | ✅ visible balances, settings, sweep, owner-backstop spend, agent caller keys |
+| Test suite | ✅ 266 passing + 1 skipped (main), CI green |
 
 ---
 
@@ -38,18 +39,18 @@ The destination: any agent can hire any other agent with a single API call, pay 
 
 ### P0 - A2A infrastructure (the core bet)
 
-- [ ] **Cryptographic agent identity** — stable, portable agent identity that doesn't depend on Aztea being the sole issuer. An agent should be able to prove who it is to any counterparty, not just within Aztea's registry. Design options: DID-based identity, signed capability tokens, or public-key attestation tied to the agent's owner account.
-- [ ] **Self-enforcing contracts** — today disputes require a judge. The goal is contracts that settle without one: output commitments before execution, cryptographic proofs of work, and economic slashing for non-delivery. The dispute judge is the fallback, not the primary path.
-- [ ] **Delegation chain accounting** — when agent A hires agent B which hires agent C, liability and settlement need to flow correctly through the chain. Currently Aztea assumes a flat one-hop hire. Multi-hop escrow semantics need to be designed explicitly.
-- [ ] **Cross-platform identity** — an agent registered on Aztea should be recognizable (and its trust record portable) when operating in other A2A networks (Google A2A, OpenAI Agents, etc.). Define what the minimal exportable identity record looks like.
-- [ ] **Agent-scoped spending limits** — a hiring agent should be able to cap how much a sub-agent can spend on further subcontracting. Prevents runaway recursive hiring.
+- [ ] **Cryptographic agent identity (DIDs + signed outputs)** — IN PROGRESS. Each agent gets a `did:web:aztea.ai:agents:<id>` and an Ed25519 keypair generated at registration. Job outputs are signed at completion. Public DID document + per-job signature endpoint let any external party verify outputs without trusting Aztea. Foundational — every other identity / provenance / federation feature is blocked on this.
+- [ ] **Capability attestation** — sandbox-verify what an agent claims to do. New agents declare capabilities; Aztea runs a test job to confirm the external call actually happens. Verified capabilities get a badge. Most direct fix for the trust cold-start problem. Requires the identity layer above for signing the attestation.
+- [ ] **Output provenance records** — every artifact carries a signed metadata record (who made it, under what job, what license). Builds directly on the identity layer. Enables a secondary market in agent-produced assets and royalty flows when outputs are reused downstream.
 
-### P1 - trust layer
+### P1 - A2A infrastructure (next after P0)
 
-- [ ] **Trust score at low volume** — the current Bayesian score is thin for new agents. Add a bootstrapping mechanism: verified developer account, agent capability attestation (what tools does it actually call?), and a sandbox evaluation run against a fixed eval set.
-- [ ] **Programmatic trust queries** — a hiring agent needs to query trust signals in structured form, not just read a score. Expose completion rate, dispute rate, latency p50/p95, and sample output artifacts via the registry API so orchestrators can route work automatically.
-- [ ] **Dispute rate as a first-class signal** — surface dispute rate prominently in the registry and penalize it more aggressively in ranking. An agent with a high dispute rate should fall out of the curated set fast.
-- [ ] **Output verification contracts** — agents can declare a verifier: a function or endpoint that asserts output shape before payment settles. Make this easy to configure at registration time.
+- [ ] **Self-enforcing contracts** — today disputes require a judge. The goal is contracts that settle without one: output commitments before execution, cryptographic proofs of work, and economic slashing for non-delivery. The dispute judge is the fallback, not the primary path. Sits on top of the identity + provenance layers.
+- [ ] **Delegation chain spending limits** — Phase 2 sub-wallets let agents spend; need a `max_subhire_spend_cents` cap per job that flows down the delegation chain so a buggy orchestrator can't drain its wallet via recursive sub-hires. 2–3 day safety feature.
+- [ ] **Staking** — the owner locks capital behind an agent. Publicly visible, slashed on lost disputes. Credible quality signal that works on day one before reputation accumulates.
+- [ ] **Capability bonds** — per-skill staking. Listing "I can analyze SEC filings" requires a bond on that specific claim. Drained on consistent failures. Stops over-claiming and makes the marketplace self-cleaning.
+- [ ] **Programmatic trust queries** — structured trust signals API (completion rate per capability, latency p50/p95, dispute rate by category, sample outputs). Now critical because Phase 2 caller keys let agents hire other agents automatically — without granular signals, orchestrators have nothing to choose from.
+- [ ] **Cross-platform identity** — federation. An agent registered on Aztea should be recognizable when operating in other A2A networks. Sits on the DID layer once it exists.
 
 ### P1 - developer ecosystem (distribution)
 
@@ -82,6 +83,8 @@ The destination: any agent can hire any other agent with a single API call, pay 
 
 ## Shipped (last 60 days)
 
+- **Per-agent sub-wallets, phase 2 (2026-04-25).** Agent caller keys (`azac_...`) authenticate as the agent itself so sub-hires charge the agent's sub-wallet. Owner-backstop spend in `pre_call_charge`: when a sub-wallet is short, the parent funds the shortfall up to a daily cap. 13 new tests, CI green.
+- **Per-agent sub-wallets, phase 1 (2026-04-25).** Each agent has a visible, manageable sub-wallet linked to its owner: balance display on MyAgentsPage, settings modal (label, daily limit, guarantor policy), sweep-to-owner button. New endpoints `GET /wallets/me/agents`, `PATCH /wallets/agents/{id}/settings`, `POST /wallets/agents/{id}/sweep`.
 - **Forgot password flow.** OTP-based reset with two-step UI (email → OTP + new password). Double-submit guard on all auth actions.
 - **Agent input type coercion.** HTML forms send strings; backend now coerces to declared JSON schema types before validation. Frontend renders typed inputs (number, checkbox, textarea for arrays).
 - **Agent management.** PATCH and DELETE endpoints for agent owners. EditModal (name, description, tags, price) and delist with two-click confirm on MyAgentsPage.
