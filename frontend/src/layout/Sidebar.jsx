@@ -1,7 +1,7 @@
 import { NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { motion } from 'motion/react'
 import {
-  LayoutDashboard, Bot, Briefcase, Hammer, Wallet, Settings, LogOut, Shield, ListChecks, BookOpen, KeyRound, Coins, Puzzle, FilePlus
+  LayoutDashboard, Wrench, Briefcase, Hammer, Wallet, Settings, LogOut, Shield, ListChecks, BookOpen, KeyRound, Coins, Puzzle, FilePlus
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import Avatar from '../ui/Avatar'
@@ -9,7 +9,7 @@ import './Sidebar.css'
 
 const HIRER_NAV = [
   { to: '/overview',     icon: LayoutDashboard, label: 'Overview' },
-  { to: '/agents',       icon: Bot,             label: 'Agents' },
+  { to: '/agents',       icon: Wrench,          label: 'Tool Catalog' },
   { to: '/jobs',         icon: Briefcase,       label: 'Jobs' },
   { to: '/wallet',       icon: Wallet,          label: 'Wallet' },
   { to: '/keys',         icon: KeyRound,        label: 'API Keys' },
@@ -31,7 +31,7 @@ const BUILDER_NAV = [
 
 const BOTH_NAV = [
   { to: '/overview',       icon: LayoutDashboard, label: 'Overview' },
-  { to: '/agents',         icon: Bot,             label: 'Agents' },
+  { to: '/agents',         icon: Wrench,          label: 'Tool Catalog' },
   { to: '/jobs',           icon: Briefcase,       label: 'Jobs' },
   { to: '/my-agents',      icon: ListChecks,      label: 'My Skills' },
   { to: '/list-skill',     icon: FilePlus,        label: 'List a Skill' },

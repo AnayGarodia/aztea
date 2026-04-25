@@ -1,39 +1,33 @@
-# MCP Integration Guide
+# MCP Integration
 
-Aztea exposes every agent in the registry as an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) tool. This lets Claude Code, Claude Desktop, and any other MCP-compatible host call marketplace agents as if they were native tools - no SDK required.
-
----
-
-## How it works
-
-The `scripts/aztea_mcp_server.py` script runs as a **stdio MCP server**. It connects to your Aztea instance, fetches the current agent registry every 60 seconds, and exposes each agent as an MCP tool. When the host calls a tool, the server authenticates against Aztea and proxies the call to `/registry/agents/{agent_id}/call`.
-
-```
-Claude / MCP host
-      │  JSON-RPC over stdio
-      ▼
-aztea_mcp_server.py
-      │  HTTP + API key
-      ▼
-Aztea server  →  registered agent endpoint
-```
+Aztea plugs into Claude Code (and Claude Desktop) as an MCP server. One install gives Claude access to the full tool catalog — code review, test generation, PR review, dependency auditing, live web research, CVE lookups, arXiv papers, and more.
 
 ---
 
-## Setup: Claude Code
+## Quickstart: one command
 
-1. **Get an API key** with `caller` scope from your Aztea instance (see `POST /auth/register` or the SettingsPage in the web app).
+```bash
+npx aztea init
+```
 
-2. **Add to Claude Code settings** (`~/.claude/settings.json`):
+This creates a free account (or logs you into an existing one), adds $2 of free credit, and writes the MCP config to `~/.claude/settings.json` automatically. Restart Claude Code and the full catalog appears.
+
+**Requires:** Node.js 18+ and [Claude Code](https://claude.ai/code).
+
+---
+
+## Manual setup
+
+If you prefer to configure by hand, add this to `~/.claude/settings.json`:
 
 ```json
 {
   "mcpServers": {
     "aztea": {
-      "command": "python",
-      "args": ["/path/to/aztea/scripts/aztea_mcp_server.py"],
+      "command": "npx",
+      "args": ["-y", "aztea", "mcp"],
       "env": {
-        "AZTEA_API_KEY": "<YOUR_API_KEY>",
+        "AZTEA_API_KEY": "your-key-here",
         "AZTEA_BASE_URL": "https://aztea.ai"
       }
     }
@@ -41,89 +35,74 @@ Aztea server  →  registered agent endpoint
 }
 ```
 
-Replace `/path/to/aztea` with the path where you cloned the repo.
-
-3. **Restart Claude Code** (or run `/reload`) - you should see Aztea tools appear in the tool list.
+Get your API key from [aztea.ai/keys](https://aztea.ai/keys) after signing up.
 
 ---
 
-## Setup: Claude Desktop
+## Claude Desktop
 
-Add the same block to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+Same config, different file. Add the `mcpServers` block to:
 
-```json
-{
-  "mcpServers": {
-    "aztea": {
-      "command": "python",
-      "args": ["/path/to/aztea/scripts/aztea_mcp_server.py"],
-      "env": {
-        "AZTEA_API_KEY": "<YOUR_API_KEY>",
-        "AZTEA_BASE_URL": "https://aztea.ai"
-      }
-    }
-  }
-}
-```
-
-Restart Claude Desktop to pick up the new server.
+- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
 
 ---
 
-## Using agents in Claude
+## What's in the catalog
 
-Once configured, agents appear as tools. Example:
+| Tool | What it does | Category |
+|------|-------------|----------|
+| PR Reviewer | Reviews a GitHub PR or raw diff, returns findings by severity | Code |
+| Test Generator | Source code → runnable test suite (pytest, Jest, Vitest, JUnit…) | Code |
+| Code Reviewer | Structured code review with CWE IDs and copy-paste fixes | Code |
+| Spec Writer | Requirements → PRD, RFC, ADR, or API spec | Code |
+| Dependency Auditor | package.json / requirements.txt → CVEs + upgrade recommendations | Data |
+| Python Executor | Run Python in a sandboxed subprocess | Code |
+| Web Researcher | Fetch and analyze any public URL | Web |
+| GitHub Fetcher | Pull issues, PRs, and files from any public repo | Data |
+| CVE Lookup | Live NIST NVD vulnerability data | Data |
+| arXiv Research | Search and summarize research papers | Research |
+| Financial Research | Live SEC EDGAR filings + synthesis | Data |
+| DNS Inspector | DNS records + SSL cert validation | Data |
 
-> **You:** Analyze the financial health of AAPL for me.
->
-> **Claude:** *(calls `financial_research_agent` tool with `{"ticker": "AAPL"}`)*
+Browse the full catalog at [aztea.ai/agents](https://aztea.ai/agents).
 
-Tool names are derived from the agent's registry name (snake_cased, no prefix). Tool descriptions come from the agent's `description` field and `input_schema`.
+---
+
+## Using tools in Claude
+
+Once configured, just ask:
+
+> "Use Aztea to review this PR: https://github.com/owner/repo/pull/42"
+> "Use Aztea to generate tests for this function"
+> "Use Aztea to audit my package.json for CVEs"
+> "Use Aztea to look up CVEs in express 4.18"
+
+Tool names are snake_cased from the agent name (e.g. `pr_reviewer`, `test_generator`). Claude picks the right tool automatically based on your request.
 
 ---
 
 ## Environment variables
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `AZTEA_API_KEY` | yes | - | API key with `caller` scope |
-| `AZTEA_BASE_URL` | no | `https://aztea.ai` | Aztea server URL |
-| `AZTEA_REFRESH_INTERVAL` | no | `60` | Seconds between registry refreshes |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AZTEA_API_KEY` | — | Required. Get one at aztea.ai/keys |
+| `AZTEA_BASE_URL` | `https://aztea.ai` | Override for self-hosted instances |
+| `AZTEA_MCP_REFRESH_SECONDS` | `60` | How often the tool list refreshes |
+| `AZTEA_MCP_TIMEOUT_SECONDS` | `30` | Per-call timeout |
 
 ---
 
-## Running the MCP server standalone (for testing)
+## Pricing
 
-```bash
-AZTEA_API_KEY=az_... \
-AZTEA_BASE_URL=https://aztea.ai \
-python scripts/aztea_mcp_server.py
-```
-
-The server accepts JSON-RPC 2.0 over stdin/stdout. You can test it with `mcp` CLI tools or pipe in raw JSON-RPC calls.
+Each tool call charges your Aztea wallet. Prices are per-call (typically $0.02–$0.08). Your $2 free credit covers 25–100 calls depending on the tool. No subscription, no monthly fee.
 
 ---
 
-## Viewing available tools
+## Troubleshooting
 
-```bash
-# List all agents the MCP server would expose
-curl -H "Authorization: Bearer az_..." https://aztea.ai/mcp/tools
-```
+**Tools don't appear after restart** — check that `AZTEA_API_KEY` is set and valid. Run `npx aztea init` again to re-authenticate.
 
-Returns the full MCP tool manifest with name, description, and `inputSchema` for each registered agent.
+**"Run `npx aztea init` to set up your API key"** — the MCP server started without a key. Run `npx aztea init` in your terminal.
 
----
-
-## A2A agent usage
-
-MCP and A2A (Agent-to-Agent) are complementary. If you are building an orchestrating agent that needs to sub-hire specialists:
-
-- **Synchronous calls** (response needed inline): use the MCP tool interface above.
-- **Async jobs** (fire-and-forget with callback): use the Python SDK `hire()` with `callback_url` + `callback_secret`.
-
-See [quickstart.md](quickstart.md) for the async hire flow.
-
-## Terminal UI (no MCP host)
-
-For a full terminal experience (browse agents, synchronous hires, jobs, wallet) without wiring an MCP client, install **[aztea-tui](https://pypi.org/project/aztea-tui/)** and follow [aztea-tui.md](aztea-tui.md). It uses the same HTTP API and API keys as the web app and MCP flows.
+**Call fails with 401** — your key may be expired or revoked. Run `npx aztea init` to get a fresh one.

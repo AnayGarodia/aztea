@@ -311,22 +311,24 @@ _BUILTIN_ENDPOINT_TO_AGENT_ID[_normalize_endpoint_ref(f"{_SERVER_BASE_URL}/analy
 _BUILTIN_AGENT_IDS = frozenset(_BUILTIN_INTERNAL_ENDPOINTS.keys())
 _CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
     {
-        # Real tool use — fetch live data, execute code, or call external APIs
-        _FINANCIAL_AGENT_ID,       # SEC EDGAR API
-        _WIKI_AGENT_ID,            # Wikipedia API
-        _CVELOOKUP_AGENT_ID,       # NIST NVD API
-        _ARXIV_RESEARCH_AGENT_ID,  # arXiv API
-        _PYTHON_EXECUTOR_AGENT_ID,  # subprocess sandbox
-        _WEB_RESEARCHER_AGENT_ID,   # HTTP fetch + parse
-        _IMAGE_GENERATOR_AGENT_ID,  # OpenAI / Replicate API
-        _CODEREVIEW_AGENT_ID,       # structured expert output, high quality prompt
-        _GITHUB_FETCHER_AGENT_ID,   # GitHub API live fetch
-        _HN_DIGEST_AGENT_ID,        # HN Algolia API live fetch
-        _DNS_INSPECTOR_AGENT_ID,    # DNS/SSL live inspection
-        _PR_REVIEWER_AGENT_ID,      # GitHub PR diff review
-        _TEST_GENERATOR_AGENT_ID,   # test suite generation
-        _SPEC_WRITER_AGENT_ID,      # technical spec writer
+        # Developer / Claude Code tools — live APIs, code execution, or structured output
+        _CODEREVIEW_AGENT_ID,          # structured code review
+        _PR_REVIEWER_AGENT_ID,         # GitHub PR diff review
+        _TEST_GENERATOR_AGENT_ID,      # test suite generation
+        _SPEC_WRITER_AGENT_ID,         # technical spec writer
         _DEPENDENCY_AUDITOR_AGENT_ID,  # CVE + outdated dep audit
+        _PYTHON_EXECUTOR_AGENT_ID,     # subprocess sandbox
+        _WEB_RESEARCHER_AGENT_ID,      # HTTP fetch + parse
+        _GITHUB_FETCHER_AGENT_ID,      # GitHub API live fetch
+        _CVELOOKUP_AGENT_ID,           # NIST NVD API
+        _ARXIV_RESEARCH_AGENT_ID,      # arXiv API
+        _DNS_INSPECTOR_AGENT_ID,       # DNS/SSL live inspection
+        _FINANCIAL_AGENT_ID,           # SEC EDGAR API
+        # Benched (available via API/MCP but not shown in marketplace):
+        # _WIKI_AGENT_ID            — Claude can search Wikipedia natively
+        # _IMAGE_GENERATOR_AGENT_ID — creative tool, not a developer tool
+        # _VIDEO_STORYBOARD_AGENT_ID — creative tool, not a developer tool
+        # _HN_DIGEST_AGENT_ID       — nice-to-have, not Claude Code specific
     }
 )
 _CURATED_BUILTIN_AGENT_IDS = frozenset(set(_CURATED_PUBLIC_BUILTIN_AGENT_IDS) | {_QUALITY_JUDGE_AGENT_ID})

@@ -145,11 +145,11 @@ export default function AgentsPage() {
           <Reveal>
             <header className="agents-page__header">
               <div>
-                <p className="agents-page__eyebrow t-micro">Browse + hire</p>
-                <h1>Agent marketplace</h1>
+                <p className="agents-page__eyebrow t-micro">Tool catalog</p>
+                <h1>Tool catalog</h1>
                 <p>
-                  Search by what you need. Every trust score is computed from real job outcomes — no self-reported numbers.
-                  {loading ? '' : ` ${agents.length} agent${agents.length !== 1 ? 's' : ''} available.`}
+                  Pay-per-call tools for Claude Code. Every tool does something Claude can't do alone — live APIs, real code execution, structured output.
+                  {loading ? '' : ` ${agents.length} tool${agents.length !== 1 ? 's' : ''} available.`}
                 </p>
               </div>
               <div className="agents-page__header-actions">
@@ -213,7 +213,7 @@ export default function AgentsPage() {
             </div>
           ) : filtered.length === 0 ? (
             <EmptyState
-              title={isFiltered ? 'No matching agents' : 'No agents listed yet'}
+              title={isFiltered ? 'No matching tools' : 'No tools listed yet'}
               sub={isFiltered ? 'Try adjusting your filters or search query.' : 'Be the first to list a skill.'}
               action={
                 <div className="agents-page__empty-actions">

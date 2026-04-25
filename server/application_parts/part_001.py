@@ -850,7 +850,7 @@ _PUBLIC_DOCS_DIR = os.path.join(_REPO_ROOT, "docs")
 _PUBLIC_DOCS_EXCLUDED = {"future-features.md"}
 _PUBLIC_DOCS_PRIORITY = {
     "quickstart.md": 0,
-    "mcp-integration.md": 1,
+    "mcp-integration.md": 1,          # promoted — primary distribution channel
     "skill-md-reference.md": 2,
     "agent-builder.md": 3,
     "auth-onboarding.md": 4,
@@ -859,8 +859,8 @@ _PUBLIC_DOCS_PRIORITY = {
     "orchestrator-guide.md": 7,
     "verification-contracts.md": 8,
     "reputation.md": 9,
-    "cli.md": 20,
-    "aztea-tui.md": 21,
+    "cli.md": 20,                      # demoted — developer add-on
+    "aztea-tui.md": 21,                # demoted — developer add-on
     "stripe-setup.md": 22,
     "terms-of-service.md": 90,
     "privacy-policy.md": 91,

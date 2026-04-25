@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'motion/react'
-import { ArrowRight, X, Wallet, Bot, Zap, ChevronLeft, Hammer, ListChecks, Coins } from 'lucide-react'
+import { ArrowRight, X, Wallet, Bot, Zap, ChevronLeft, Hammer, ListChecks, Coins, Terminal, Wrench } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 import { useMarket } from '../../context/MarketContext'
 import './OnboardingWizard.css'
@@ -131,6 +131,46 @@ function AgentsVisual() {
   )
 }
 
+function McpInstallVisual() {
+  const lines = [
+    { text: '$ npx aztea init', delay: 0 },
+    { text: '', delay: 0.3 },
+    { text: '──────────────────────────────────────────────', color: '#4b5563', delay: 0.5 },
+    { text: '  Aztea — agent marketplace for Claude Code', delay: 0.6 },
+    { text: '──────────────────────────────────────────────', color: '#4b5563', delay: 0.7 },
+    { text: '', delay: 0.8 },
+    { text: '✓ Account created — $2.00 free credit applied', color: '#10b981', delay: 1.0 },
+    { text: '✓ Written to ~/.claude/settings.json', color: '#10b981', delay: 1.2 },
+    { text: '', delay: 1.4 },
+    { text: "  You're ready. Restart Claude Code.", color: '#a78bfa', delay: 1.5 },
+  ]
+  return (
+    <div className="ob-visual ob-visual--call">
+      <div className="ob-visual__terminal">
+        <div className="ob-visual__terminal-bar">
+          <span className="ob-visual__dot-r" />
+          <span className="ob-visual__dot-y" />
+          <span className="ob-visual__dot-g" />
+          <span className="ob-visual__terminal-title">Terminal</span>
+        </div>
+        <div className="ob-visual__terminal-body">
+          {lines.map((l, i) => (
+            <motion.div
+              key={i}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: l.delay, duration: 0.2 }}
+              style={{ color: l.color || 'var(--text-secondary)', fontFamily: 'var(--font-mono, monospace)', fontSize: '0.72rem', lineHeight: 1.5 }}
+            >
+              {l.text || ' '}
+            </motion.div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function CallVisual() {
   const lines = [
     { text: '$ aztea call incident-response-commander \\', delay: 0 },
@@ -174,40 +214,40 @@ function CallVisual() {
 function makeHirerSteps(creditDollars) {
   return [
     {
-      id: 'wallet',
-      icon: Wallet,
-      accentColor: '#22c55e',
+      id: 'install',
+      icon: Terminal,
+      accentColor: '#6366f1',
       eyebrow: '01 / 03',
-      title: `You start with\n$${creditDollars.toFixed(2)} free credit`,
-      subtitle: 'No card needed',
-      body: `We charge your wallet before an agent runs, and refund you in full if it fails. Your free credit covers about ${Math.round(creditDollars / 0.01)} calls at $0.01 each.`,
-      cta: 'View my wallet',
-      ctaPath: '/wallet',
-      Visual: () => <WalletVisual maxDollars={creditDollars} />,
+      title: 'Add Aztea to\nClaude Code',
+      subtitle: 'One command — 60 seconds',
+      body: 'Run `npx aztea init` in your terminal. It creates your account, adds free credit, and writes the MCP config automatically. Restart Claude Code and the full tool catalog is ready.',
+      cta: 'Read the setup guide',
+      ctaPath: '/docs/mcp-integration',
+      Visual: McpInstallVisual,
     },
     {
-      id: 'agents',
-      icon: Bot,
-      accentColor: '#6366f1',
+      id: 'catalog',
+      icon: Wrench,
+      accentColor: '#f59e0b',
       eyebrow: '02 / 03',
-      title: 'Pick an agent\nthat fits your task',
-      subtitle: 'Every trust score is computed from real jobs',
-      body: "The registry shows each agent's real success rate, price, and example outputs. Filter by what you need, sort by trust score, and run any agent directly in the browser.",
-      cta: 'Browse agents',
+      title: 'Browse the\ntool catalog',
+      subtitle: 'Code review, test gen, CVE lookup, and more',
+      body: 'Every tool in the catalog does something Claude can\'t do alone — live APIs, real code execution, structured output. Ask Claude to "use Aztea to..." and it picks the right tool.',
+      cta: 'Browse tools',
       ctaPath: '/agents',
       Visual: AgentsVisual,
     },
     {
-      id: 'call',
-      icon: Zap,
-      accentColor: '#f59e0b',
+      id: 'wallet',
+      icon: Wallet,
+      accentColor: '#22c55e',
       eyebrow: '03 / 03',
-      title: 'Use scoped keys\nbefore you automate',
-      subtitle: 'One key per integration is the safe default',
-      body: 'Create caller-only or worker-only keys in Settings. If a key leaks or needs rotating, only one integration is affected - not everything at once.',
-      cta: 'Open settings',
-      ctaPath: '/settings',
-      Visual: CallVisual,
+      title: `You have\n$${creditDollars.toFixed(2)} free credit`,
+      subtitle: 'No card needed',
+      body: `Your free credit covers about ${Math.round(creditDollars / 0.01)} tool calls. We charge before a call runs and refund you in full if it fails. Top up any time from your wallet.`,
+      cta: 'View my wallet',
+      ctaPath: '/wallet',
+      Visual: () => <WalletVisual maxDollars={creditDollars} />,
     },
   ]
 }
