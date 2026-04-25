@@ -807,13 +807,28 @@ def _resolve_caller(request: Request) -> core_models.CallerContext | None:
 
     agent_key = _auth.verify_agent_api_key(raw)
     if agent_key:
-        caller = {
-            "type": "agent_key",
-            "owner_id": f"agent_key:{agent_key['agent_id']}",
-            "scopes": ["worker"],
-            "agent_id": str(agent_key["agent_id"]),
-            "key_id": str(agent_key["key_id"]),
-        }
+        key_type = str(agent_key.get("key_type") or "worker").lower()
+        if key_type == "caller":
+            # Caller-scoped agent key: authenticate AS the agent so the agent's
+            # sub-wallet is the funding source. ``owner_id`` matches the wallet
+            # naming convention (``agent:<id>``) so existing wallet/billing logic
+            # naturally targets the sub-wallet without special cases.
+            caller = {
+                "type": "agent_caller",
+                "owner_id": f"agent:{agent_key['agent_id']}",
+                "scopes": ["caller"],
+                "agent_id": str(agent_key["agent_id"]),
+                "agent_owner_user_id": str(agent_key["owner_id"]),
+                "key_id": str(agent_key["key_id"]),
+            }
+        else:
+            caller = {
+                "type": "agent_key",
+                "owner_id": f"agent_key:{agent_key['agent_id']}",
+                "scopes": ["worker"],
+                "agent_id": str(agent_key["agent_id"]),
+                "key_id": str(agent_key["key_id"]),
+            }
         request.state._caller = caller
         return caller
 

@@ -674,11 +674,73 @@ def pre_call_charge(
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT balance_cents, daily_spend_limit_cents FROM wallets WHERE wallet_id = ?",
+            "SELECT balance_cents, daily_spend_limit_cents,"
+            " parent_wallet_id, guarantor_enabled, guarantor_cap_cents"
+            " FROM wallets WHERE wallet_id = ?",
             (caller_wallet_id,),
         ).fetchone()
         if row is None:
             raise ValueError(f"Wallet '{caller_wallet_id}' not found.")
+
+        # ---- Owner backstop (Phase 2) ----------------------------------------
+        # If the wallet's balance is short, the wallet has a parent_wallet_id,
+        # and guarantor_enabled is set, transfer the shortfall from the parent
+        # within the same SQL transaction. The transfer is capped to the
+        # wallet's ``guarantor_cap_cents`` per UTC day (NULL = uncapped) and
+        # bounded by the parent wallet's actual balance.
+        balance_cents = int(row["balance_cents"] or 0)
+        parent_wallet_id = row["parent_wallet_id"]
+        guarantor_on = bool(row["guarantor_enabled"])
+        guarantor_cap = row["guarantor_cap_cents"]
+        if (
+            balance_cents < price_cents
+            and parent_wallet_id
+            and guarantor_on
+        ):
+            shortfall = price_cents - balance_cents
+            # How much has already been backstopped from this parent today?
+            today_iso = datetime.now(timezone.utc).date().isoformat()
+            since_iso = today_iso + "T00:00:00+00:00"
+            today_used_row = conn.execute(
+                """
+                SELECT COALESCE(SUM(amount_cents), 0) AS used_cents
+                FROM transactions
+                WHERE wallet_id = ?
+                  AND type = 'deposit'
+                  AND memo LIKE 'guarantor:%'
+                  AND created_at >= ?
+                """,
+                (caller_wallet_id, since_iso),
+            ).fetchone()
+            used_today = int(today_used_row["used_cents"] or 0) if today_used_row else 0
+            available_cap = (
+                None if guarantor_cap is None
+                else max(0, int(guarantor_cap) - used_today)
+            )
+            if available_cap is not None and shortfall > available_cap:
+                # Cap reached — fall through to InsufficientBalanceError below.
+                pass
+            else:
+                parent_row = conn.execute(
+                    "SELECT balance_cents FROM wallets WHERE wallet_id = ?",
+                    (parent_wallet_id,),
+                ).fetchone()
+                parent_balance = int(parent_row["balance_cents"] or 0) if parent_row else 0
+                if parent_balance >= shortfall:
+                    # Atomic intra-transaction transfer: parent → this wallet.
+                    _insert_tx(
+                        conn, parent_wallet_id, "charge", -shortfall,
+                        agent_id, None,
+                        f"guarantor: backstop for {caller_wallet_id[:8]} call to {agent_id}",
+                    )
+                    _insert_tx(
+                        conn, caller_wallet_id, "deposit", shortfall,
+                        agent_id, None,
+                        f"guarantor: from parent {parent_wallet_id[:8]}",
+                    )
+                    balance_cents = balance_cents + shortfall  # for any later checks
+        # ---- End owner backstop ----------------------------------------------
+
         if normalized_key_id is not None and normalized_max_spend is not None:
             spent_row = conn.execute(
                 """
@@ -732,7 +794,14 @@ def pre_call_charge(
             (price_cents, caller_wallet_id, price_cents),
         ).rowcount
         if updated == 0:
-            raise InsufficientBalanceError(row["balance_cents"], price_cents)
+            # Re-read the balance because the backstop branch above may have
+            # topped it up (in which case the UPDATE would have succeeded).
+            current_row = conn.execute(
+                "SELECT balance_cents FROM wallets WHERE wallet_id = ?",
+                (caller_wallet_id,),
+            ).fetchone()
+            current_balance = int(current_row["balance_cents"] or 0) if current_row else 0
+            raise InsufficientBalanceError(current_balance, price_cents)
         return _insert_tx_only(
             conn,
             caller_wallet_id,

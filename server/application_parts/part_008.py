@@ -216,6 +216,45 @@ def registry_agent_key_create(
 
 
 @app.post(
+    "/registry/agents/{agent_id}/caller-keys",
+    status_code=201,
+    responses=_error_responses(400, 401, 403, 404, 429, 500),
+    tags=["Registry"],
+    summary="Mint an agent-as-caller key (azac_) so this agent can hire other agents.",
+)
+@limiter.limit("20/minute")
+def registry_agent_caller_key_create(
+    request: Request,
+    agent_id: str,
+    body: AgentKeyCreateRequest,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    _require_scope(caller, "worker")
+    if caller["type"] in {"agent_key", "agent_caller"}:
+        raise HTTPException(
+            status_code=403,
+            detail="Agent-scoped keys cannot mint new keys.",
+        )
+    agent = registry.get_agent(agent_id, include_unapproved=True)
+    if agent is None or agent.get("status") == "banned":
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    if not _caller_can_manage_agent(caller, agent):
+        raise HTTPException(status_code=403, detail="Not authorized.")
+    key = _auth.create_agent_caller_api_key(agent_id, name=body.name)
+    return JSONResponse(
+        content={
+            "key_id": key["key_id"],
+            "agent_id": key["agent_id"],
+            "raw_key": key["raw_key"],
+            "key_prefix": key["key_prefix"],
+            "key_type": key["key_type"],
+            "created_at": key["created_at"],
+        },
+        status_code=201,
+    )
+
+
+@app.post(
     "/admin/agents/{agent_id}/suspend",
     response_model=core_models.AgentResponse,
     responses=_error_responses(400, 401, 403, 404, 429, 500),

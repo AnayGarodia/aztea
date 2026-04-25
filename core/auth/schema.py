@@ -33,6 +33,7 @@ DB_PATH = _db.DB_PATH
 
 KEY_PREFIX = "az_"
 AGENT_KEY_PREFIX = "azk_"
+AGENT_CALLER_KEY_PREFIX = "azac_"
 PBKDF2_ITERATIONS = 100_000
 VALID_KEY_SCOPES = {"caller", "worker", "admin"}
 DEFAULT_KEY_SCOPES = ("caller", "worker")
@@ -123,12 +124,17 @@ def _create_api_keys_table(conn: sqlite3.Connection, table_name: str = "api_keys
 
 
 def _create_agent_keys_table(conn: sqlite3.Connection, table_name: str = "agent_keys") -> None:
+    # ``key_type`` is 'worker' (legacy `azk_` keys, valid for claim/heartbeat/complete)
+    # or 'caller' (new `azac_` keys, valid for hiring other agents on behalf of this
+    # agent — auth resolves them with owner_id='agent:<agent_id>' so the agent's
+    # sub-wallet pays).
     conn.execute(f"""
         CREATE TABLE IF NOT EXISTS {table_name} (
             key_id      TEXT PRIMARY KEY,
             agent_id    TEXT NOT NULL,
             key_hash    TEXT NOT NULL UNIQUE,
             key_prefix  TEXT NOT NULL,
+            key_type    TEXT NOT NULL DEFAULT 'worker',
             name        TEXT NOT NULL DEFAULT 'Agent key',
             created_at  TEXT NOT NULL,
             revoked_at  TEXT
@@ -412,6 +418,8 @@ def _ensure_agent_keys_schema(conn: sqlite3.Connection) -> None:
         cols = _table_columns(conn, "agent_keys")
     if "key_prefix" not in cols:
         conn.execute(f"ALTER TABLE agent_keys ADD COLUMN key_prefix TEXT NOT NULL DEFAULT '{AGENT_KEY_PREFIX}legacy'")
+    if "key_type" not in cols:
+        conn.execute("ALTER TABLE agent_keys ADD COLUMN key_type TEXT NOT NULL DEFAULT 'worker'")
     if "name" not in cols:
         conn.execute("ALTER TABLE agent_keys ADD COLUMN name TEXT NOT NULL DEFAULT 'Agent key'")
     if "created_at" not in cols:
@@ -456,6 +464,17 @@ def _make_api_key() -> tuple[str, str, str]:
 def _make_agent_api_key() -> tuple[str, str, str]:
     raw = AGENT_KEY_PREFIX + secrets.token_hex(32)
     return raw, hashlib.sha256(raw.encode()).hexdigest(), raw[:12]
+
+
+def _make_agent_caller_api_key() -> tuple[str, str, str]:
+    """Caller-scoped agent key (azac_) — authenticates *as the agent itself*.
+
+    Used by an agent to hire other agents from its own sub-wallet. Distinct
+    from the worker key (`azk_`) which is only valid for claim/heartbeat/complete
+    on jobs assigned to the agent.
+    """
+    raw = AGENT_CALLER_KEY_PREFIX + secrets.token_hex(32)
+    return raw, hashlib.sha256(raw.encode()).hexdigest(), raw[:13]
 
 
 def _decode_scopes_json(raw_scopes: str | None) -> list[str]:

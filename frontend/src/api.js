@@ -659,6 +659,14 @@ export async function updateAgentWalletSettings(key, agentId, body) {
   return respBody
 }
 
+export async function createAgentCallerKey(key, agentId, name = 'Caller key') {
+  const { body } = await request(
+    `/registry/agents/${encodeURIComponent(agentId)}/caller-keys`,
+    { method: 'POST', key, body: { name } },
+  )
+  return body // { key_id, agent_id, raw_key, key_prefix, key_type, created_at }
+}
+
 export async function sweepAgentWallet(key, agentId, amountCents = null) {
   const { body } = await request(
     `/wallets/agents/${encodeURIComponent(agentId)}/sweep`,

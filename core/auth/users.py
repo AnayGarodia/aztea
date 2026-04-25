@@ -33,6 +33,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from .schema import (
+    AGENT_CALLER_KEY_PREFIX,
     AGENT_KEY_PREFIX,
     DEFAULT_KEY_SCOPES,
     KEY_PREFIX,
@@ -43,6 +44,7 @@ from .schema import (
     _hash_password,
     _legal_state_from_row,
     _make_agent_api_key,
+    _make_agent_caller_api_key,
     _make_api_key,
     _normalize_optional_non_negative_int,
     _normalize_optional_text,
@@ -398,6 +400,11 @@ def accept_legal_terms(
 
 
 def create_agent_api_key(agent_id: str, name: str = "Agent key") -> dict:
+    """Create a *worker* key (`azk_...`) for the agent.
+
+    Worker keys are valid only for claim/heartbeat/complete/release on jobs
+    assigned to this agent. They cannot be used to hire other agents.
+    """
     normalized_agent_id = str(agent_id or "").strip()
     if not normalized_agent_id:
         raise ValueError("agent_id must be a non-empty string.")
@@ -408,8 +415,8 @@ def create_agent_api_key(agent_id: str, name: str = "Agent key") -> dict:
     with _conn() as conn:
         conn.execute(
             """
-            INSERT INTO agent_keys (key_id, agent_id, key_hash, key_prefix, name, created_at, revoked_at)
-            VALUES (?, ?, ?, ?, ?, ?, NULL)
+            INSERT INTO agent_keys (key_id, agent_id, key_hash, key_prefix, key_type, name, created_at, revoked_at)
+            VALUES (?, ?, ?, ?, 'worker', ?, ?, NULL)
             """,
             (key_id, normalized_agent_id, key_hash, key_prefix, normalized_name, created_at),
         )
@@ -418,20 +425,60 @@ def create_agent_api_key(agent_id: str, name: str = "Agent key") -> dict:
         "agent_id": normalized_agent_id,
         "raw_key": raw_key,
         "key_prefix": key_prefix,
+        "key_type": "worker",
+        "name": normalized_name,
+        "created_at": created_at,
+    }
+
+
+def create_agent_caller_api_key(agent_id: str, name: str = "Caller key") -> dict:
+    """Create a *caller* key (`azac_...`) that authenticates as the agent itself.
+
+    When a request comes in with this key, ``verify_agent_api_key`` returns
+    ``key_type='caller'`` and the auth layer sets ``owner_id='agent:<agent_id>'``
+    so all wallet/billing logic naturally charges the agent's sub-wallet.
+    """
+    normalized_agent_id = str(agent_id or "").strip()
+    if not normalized_agent_id:
+        raise ValueError("agent_id must be a non-empty string.")
+    normalized_name = str(name or "").strip() or "Caller key"
+    raw_key, key_hash, key_prefix = _make_agent_caller_api_key()
+    key_id = str(uuid.uuid4())
+    created_at = _now()
+    with _conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO agent_keys (key_id, agent_id, key_hash, key_prefix, key_type, name, created_at, revoked_at)
+            VALUES (?, ?, ?, ?, 'caller', ?, ?, NULL)
+            """,
+            (key_id, normalized_agent_id, key_hash, key_prefix, normalized_name, created_at),
+        )
+    return {
+        "key_id": key_id,
+        "agent_id": normalized_agent_id,
+        "raw_key": raw_key,
+        "key_prefix": key_prefix,
+        "key_type": "caller",
         "name": normalized_name,
         "created_at": created_at,
     }
 
 
 def verify_agent_api_key(raw_key: str) -> dict | None:
-    if not raw_key.startswith(AGENT_KEY_PREFIX):
+    """Verify any agent key (worker `azk_` or caller `azac_`).
+
+    Returns ``{key_id, agent_id, owner_id, key_type}`` where ``key_type`` is
+    ``'worker'`` or ``'caller'``. The auth layer in ``server.application_parts``
+    branches on ``key_type`` to build the right ``CallerContext``.
+    """
+    if not (raw_key.startswith(AGENT_KEY_PREFIX) or raw_key.startswith(AGENT_CALLER_KEY_PREFIX)):
         return None
     key_hash = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
     with _conn() as conn:
         try:
             row = conn.execute(
                 """
-                SELECT ak.key_id, ak.agent_id, a.owner_id, a.status AS agent_status
+                SELECT ak.key_id, ak.agent_id, ak.key_type, a.owner_id, a.status AS agent_status
                 FROM agent_keys ak
                 JOIN agents a ON a.agent_id = ak.agent_id
                 WHERE ak.key_hash = ? AND ak.revoked_at IS NULL
@@ -445,10 +492,14 @@ def verify_agent_api_key(raw_key: str) -> dict | None:
     status = str(row["agent_status"] or "active").strip().lower()
     if status != "active":
         return None
+    key_type = str(row["key_type"] or "worker").strip().lower()
+    if key_type not in {"worker", "caller"}:
+        key_type = "worker"
     return {
         "key_id": row["key_id"],
         "agent_id": row["agent_id"],
         "owner_id": row["owner_id"],
+        "key_type": key_type,
     }
 
 

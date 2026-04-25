@@ -17,11 +17,12 @@ import {
   delistAgent,
   updateAgentWalletSettings,
   sweepAgentWallet,
+  createAgentCallerKey,
 } from '../api'
 import { useAuth } from '../context/AuthContext'
 import {
   Plus, Bot, ExternalLink, ChevronDown, Edit2, Trash2, Play, Copy, Check, X,
-  Wallet, ArrowUpFromLine, Settings,
+  Wallet, ArrowUpFromLine, Settings, KeyRound,
 } from 'lucide-react'
 import './MyAgentsPage.css'
 
@@ -241,6 +242,9 @@ function AgentRow({ agent, earnings, onNavigate, onRefresh, apiKey }) {
   const [confirmDelist, setConfirmDelist] = useState(false)
   const [confirmSweep, setConfirmSweep] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [callerKey, setCallerKey] = useState(null) // {raw_key, ...}
+  const [mintingCallerKey, setMintingCallerKey] = useState(false)
+  const [callerKeyCopied, setCallerKeyCopied] = useState(false)
 
   const tags = Array.isArray(agent.tags)
     ? agent.tags
@@ -259,6 +263,27 @@ function AgentRow({ agent, earnings, onNavigate, onRefresh, apiKey }) {
     await updateAgentWalletSettings(apiKey, agent.agent_id, data)
     setWalletSettingsOpen(false)
     onRefresh()
+  }
+
+  const handleMintCallerKey = async () => {
+    setMintingCallerKey(true)
+    try {
+      const data = await createAgentCallerKey(apiKey, agent.agent_id, `${agent.name} caller`)
+      setCallerKey(data)
+    } catch {
+      // surfaced via UI; let user retry
+    } finally {
+      setMintingCallerKey(false)
+    }
+  }
+
+  const handleCopyCallerKey = async () => {
+    if (!callerKey) return
+    try {
+      await navigator.clipboard.writeText(callerKey.raw_key)
+      setCallerKeyCopied(true)
+      setTimeout(() => setCallerKeyCopied(false), 2000)
+    } catch { /* ignore */ }
   }
 
   const handleSweep = async () => {
@@ -424,7 +449,42 @@ function AgentRow({ agent, earnings, onNavigate, onRefresh, apiKey }) {
                       Cancel
                     </button>
                   )}
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    icon={<KeyRound size={12} />}
+                    loading={mintingCallerKey}
+                    disabled={!hasWallet || Boolean(callerKey)}
+                    onClick={handleMintCallerKey}
+                    title="Mint a key this agent can use to hire other agents"
+                  >
+                    Mint caller key
+                  </Button>
                 </div>
+                {callerKey && (
+                  <div className="myagents__caller-key">
+                    <div className="myagents__caller-key-head">
+                      <span className="myagents__caller-key-label">
+                        Save this — it will not be shown again.
+                      </span>
+                      <button
+                        type="button"
+                        className="myagents__modal-close"
+                        onClick={() => setCallerKey(null)}
+                        aria-label="Dismiss"
+                      ><X size={12} /></button>
+                    </div>
+                    <code className="myagents__caller-key-value">{callerKey.raw_key}</code>
+                    <button
+                      type="button"
+                      className="myagents__copy-id"
+                      onClick={handleCopyCallerKey}
+                    >
+                      {callerKeyCopied ? <Check size={12} /> : <Copy size={12} />}
+                      <span>{callerKeyCopied ? 'Copied' : 'Copy'}</span>
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* Management actions */}
