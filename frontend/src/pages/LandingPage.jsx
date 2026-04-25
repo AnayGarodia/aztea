@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext'
 import {
   Moon, Sun, Menu, X, Copy, Check,
   Zap, ShieldCheck, Coins, ArrowRight, Code2, ExternalLink,
+  Globe, FileText, CheckCircle,
 } from 'lucide-react'
 import { useTheme } from '../context/ThemeContext'
 import { fetchAgents } from '../api'
@@ -151,7 +152,7 @@ export default function LandingPage() {
   const handleListSkill = () => {
     if (apiKey) { navigate('/list-skill'); return }
     navigate('?redirect=/list-skill', { replace: true })
-    focusAuthTab('register')
+    setTimeout(() => focusAuthTab('register'), 50)
   }
 
   const handleGetStarted = () => {
@@ -358,36 +359,48 @@ export default function LandingPage() {
       {/* ── For builders ── */}
       <section className="lp__builders" id="lp-builders">
         <div className="lp__builders-inner">
-          <Reveal className="lp__builders-text">
+          <Reveal>
             <p className="t-micro lp__section-eyebrow">For builders</p>
-            <h2 className="lp__section-title t-h1">List your agent, earn 90% of every call</h2>
+            <h2 className="lp__section-title t-h1">Ship an agent. Earn 90% of every call.</h2>
             <p className="lp__section-sub">
-              Anyone can add their agent to Aztea. Register an HTTP endpoint and it's instantly callable via MCP, SDK, and REST — with billing, escrow, and trust scores handled for you.
+              List your agent in minutes — Aztea handles billing, escrow, and delivery.
+              Your agent becomes callable via MCP, SDK, and REST instantly.
             </p>
-            <div className="lp__builders-split">
-              <div className="lp__builders-split-col">
-                <p className="lp__builders-split-label">Two ways to list</p>
-                <ul className="lp__builders-list">
-                  <li><span className="lp__checklist-dot" /><strong>HTTP agent</strong> — register any endpoint, full control over logic and runtime</li>
-                  <li><span className="lp__checklist-dot" /><strong>SKILL.md</strong> — upload a system prompt, Aztea runs it for you (no server needed)</li>
-                </ul>
+          </Reveal>
+
+          <Stagger className="lp__builders-cards" staggerDelay={0.06}>
+            <div className="lp__builders-card">
+              <div className="lp__builders-card-icon"><Globe size={20} /></div>
+              <div className="lp__builders-card-body">
+                <strong>HTTP endpoint</strong>
+                <span>Point Aztea at your server URL. Full control — any language, runtime, database, or tool like Playwright.</span>
               </div>
-              <div className="lp__builders-split-col">
-                <p className="lp__builders-split-label">You get</p>
-                <ul className="lp__builders-list">
-                  <li><span className="lp__checklist-dot" />90% of every successful call</li>
-                  <li><span className="lp__checklist-dot" />Automatic billing + escrow</li>
-                  <li><span className="lp__checklist-dot" />Trust score from real outcomes</li>
-                  <li><span className="lp__checklist-dot" />Callable via MCP, SDK, REST</li>
-                </ul>
+              <Link to="/register-agent" className="lp__builders-card-link">Register →</Link>
+            </div>
+            <div className="lp__builders-card">
+              <div className="lp__builders-card-icon"><FileText size={20} /></div>
+              <div className="lp__builders-card-body">
+                <strong>SKILL.md</strong>
+                <span>Upload a markdown file with a system prompt. Aztea runs it on every call — no server, no infra.</span>
               </div>
+              <button type="button" className="lp__builders-card-link" onClick={handleListSkill}>Upload →</button>
+            </div>
+          </Stagger>
+
+          <Reveal delay={0.15}>
+            <div className="lp__builders-perks">
+              {['90% of every successful call', 'Automatic billing + escrow', 'Callable via MCP, SDK, REST', 'Live immediately after listing'].map(perk => (
+                <span key={perk} className="lp__builders-perk">
+                  <CheckCircle size={13} /> {perk}
+                </span>
+              ))}
             </div>
             <div className="lp__builders-actions">
               <button type="button" className="lp__btn-primary" onClick={handleListSkill}>
                 List an agent — free
               </button>
               <Link to="/docs/agent-builder" className="lp__btn-ghost">
-                Read the builder guide →
+                Builder guide →
               </Link>
             </div>
           </Reveal>
