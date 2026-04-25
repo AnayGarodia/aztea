@@ -39,13 +39,14 @@ function highlightPlaceholders(text) {
   return out.length === 1 && typeof out[0] === 'string' ? out[0] : out
 }
 
-function CodeBlock({ inline, className, children, ...rest }) {
+// react-markdown v10 removed the `inline` prop from the code component.
+// Block code content always ends with a trailing newline; inline code never does.
+// We use that to reliably distinguish them.
+function CodeBlock({ className, children }) {
   const [copied, setCopied] = useState(false)
-  const raw = useMemo(() => extractText(children).replace(/\n$/, ''), [children])
-
-  if (inline) {
-    return <code className={className} {...rest}>{highlightPlaceholders(raw)}</code>
-  }
+  const rawFull = useMemo(() => extractText(children), [children])
+  const raw = rawFull.replace(/\n$/, '')
+  const isBlock = rawFull.includes('\n')
 
   const onCopy = async () => {
     try {
@@ -53,8 +54,12 @@ function CodeBlock({ inline, className, children, ...rest }) {
       setCopied(true)
       setTimeout(() => setCopied(false), 1600)
     } catch {
-      // ignore — clipboard blocked
+      // clipboard blocked in some contexts
     }
+  }
+
+  if (!isBlock) {
+    return <code className={className}>{highlightPlaceholders(raw)}</code>
   }
 
   return (
