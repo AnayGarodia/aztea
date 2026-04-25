@@ -170,6 +170,8 @@ def _ensure_users_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE users ADD COLUMN legal_accept_ip TEXT")
     if "legal_accept_user_agent" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN legal_accept_user_agent TEXT")
+    if "role" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'both'")
 
     conn.execute(
         f"""

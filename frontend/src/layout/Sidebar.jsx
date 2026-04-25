@@ -1,29 +1,54 @@
 import { NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { motion } from 'motion/react'
 import {
-  LayoutDashboard, Bot, Briefcase, Hammer, Wallet, Settings, LogOut, Shield, ListChecks, BookOpen, KeyRound, Coins, Puzzle
+  LayoutDashboard, Bot, Briefcase, Hammer, Wallet, Settings, LogOut, Shield, ListChecks, BookOpen, KeyRound, Coins, Puzzle, FilePlus
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import Avatar from '../ui/Avatar'
 import './Sidebar.css'
 
-const NAV = [
-  { to: '/overview',  icon: LayoutDashboard, label: 'Overview' },
-  { to: '/agents',    icon: Bot,             label: 'Discover' },
-  { to: '/jobs',      icon: Briefcase,       label: 'Jobs' },
-  { to: '/worker',    icon: Hammer,          label: 'Worker' },
-  { to: '/my-agents', icon: ListChecks,      label: 'My Agents' },
-  { to: '/wallet',    icon: Wallet,          label: 'Wallet' },
-  { to: '/keys',      icon: KeyRound,        label: 'API Keys' },
-  { to: '/docs',          icon: BookOpen,  label: 'Docs' },
-  { to: '/integrations',  icon: Puzzle,    label: 'Integrations' },
-  { to: '/settings',      icon: Settings,  label: 'Settings' },
+const HIRER_NAV = [
+  { to: '/overview',     icon: LayoutDashboard, label: 'Overview' },
+  { to: '/agents',       icon: Bot,             label: 'Discover' },
+  { to: '/jobs',         icon: Briefcase,       label: 'Jobs' },
+  { to: '/wallet',       icon: Wallet,          label: 'Wallet' },
+  { to: '/keys',         icon: KeyRound,        label: 'API Keys' },
+  { to: '/docs',         icon: BookOpen,        label: 'Docs' },
+  { to: '/integrations', icon: Puzzle,          label: 'Integrations' },
+  { to: '/settings',     icon: Settings,        label: 'Settings' },
+]
+
+const BUILDER_NAV = [
+  { to: '/overview',   icon: LayoutDashboard, label: 'Overview' },
+  { to: '/my-agents',  icon: ListChecks,      label: 'My Skills' },
+  { to: '/worker',     icon: Hammer,          label: 'Worker' },
+  { to: '/list-skill', icon: FilePlus,        label: 'List a Skill' },
+  { to: '/keys',           icon: KeyRound,        label: 'API Keys' },
+  { to: '/docs',           icon: BookOpen,        label: 'Docs' },
+  { to: '/integrations',   icon: Puzzle,          label: 'Integrations' },
+  { to: '/settings',       icon: Settings,        label: 'Settings' },
+]
+
+const BOTH_NAV = [
+  { to: '/overview',       icon: LayoutDashboard, label: 'Overview' },
+  { to: '/agents',         icon: Bot,             label: 'Discover' },
+  { to: '/jobs',           icon: Briefcase,       label: 'Jobs' },
+  { to: '/worker',         icon: Hammer,          label: 'Worker' },
+  { to: '/my-agents',      icon: ListChecks,      label: 'My Agents' },
+  { to: '/wallet',         icon: Wallet,          label: 'Wallet' },
+  { to: '/register-agent', icon: FilePlus,        label: 'List a Skill' },
+  { to: '/keys',           icon: KeyRound,        label: 'API Keys' },
+  { to: '/docs',           icon: BookOpen,        label: 'Docs' },
+  { to: '/integrations',   icon: Puzzle,          label: 'Integrations' },
+  { to: '/settings',       icon: Settings,        label: 'Settings' },
 ]
 
 export default function Sidebar() {
   const { user, disconnect } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
+  const role = user?.role ?? 'both'
+  const nav = role === 'hirer' ? HIRER_NAV : role === 'builder' ? BUILDER_NAV : BOTH_NAV
 
   const handleSignOut = () => {
     disconnect()
@@ -39,7 +64,7 @@ export default function Sidebar() {
 
       {/* Nav */}
       <nav className="sidebar__nav">
-        {NAV.map(({ to, icon: Icon, label }) => {
+        {nav.map(({ to, icon: Icon, label }) => {
           const isActive = location.pathname === to || (to !== '/overview' && location.pathname.startsWith(to))
           return (
             <NavLink

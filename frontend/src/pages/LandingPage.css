@@ -999,6 +999,462 @@
   color: var(--text-muted);
 }
 
+/* ── Hero micro-line ──────────────────────────────────────── */
+.lp__hero-micro {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  letter-spacing: 0.01em;
+  margin: -8px 0 0;
+}
+
+/* ── How it works ─────────────────────────────────────────── */
+.lp__how {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  width: 100%;
+  padding: clamp(64px, 8vw, 96px) 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in oklab, var(--surface) 74%, var(--canvas));
+}
+
+.lp__how-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.68;
+}
+
+.lp__how-inner {
+  position: relative;
+  z-index: 1;
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 0 clamp(16px, 3vw, 32px);
+}
+
+.lp__how-intro {
+  max-width: 760px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.lp__how-intro .lp__section-sub { margin: 0 auto; }
+
+.lp__how-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 20px;
+  margin-top: 48px;
+}
+
+.lp__how-step {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 24px;
+  background: color-mix(in oklab, var(--surface) 86%, white 14%);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  transition: border-color 0.2s;
+}
+
+.lp__how-step:hover { border-color: var(--accent-border); }
+
+.lp__how-step-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.lp__how-step-num {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin: 0;
+}
+
+.lp__how-step-title {
+  font-size: 1.02rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+  letter-spacing: -0.01em;
+  line-height: 1.35;
+}
+
+.lp__how-step-body {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin: 0;
+}
+
+/* ── Earnings calculator ──────────────────────────────────── */
+.lp__earnings {
+  padding: clamp(64px, 8vw, 96px) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.lp__earnings-inner {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 0 clamp(16px, 3vw, 32px);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: clamp(40px, 6vw, 80px);
+  align-items: start;
+}
+
+.lp__earnings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  list-style: none;
+  margin: 24px 0 0;
+  padding: 0;
+}
+
+.lp__earnings-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.lp__checklist-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+  margin-top: 6px;
+}
+
+.lp__earnings-calc-wrap { width: 100%; }
+
+/* Calculator widget */
+.lp__calc {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  box-shadow: var(--shadow-md);
+}
+
+.lp__calc-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.lp__calc-control {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lp__calc-label {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.lp__calc-input-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface-2);
+  border: 1.5px solid var(--accent);
+  border-radius: var(--r-md);
+  padding: 8px 12px;
+  width: fit-content;
+}
+
+.lp__calc-prefix {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.lp__calc-input {
+  width: 80px;
+  background: none;
+  border: none;
+  outline: none;
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  text-align: right;
+  -moz-appearance: textfield;
+}
+.lp__calc-input--wide { width: 100px; }
+.lp__calc-input::-webkit-outer-spin-button,
+.lp__calc-input::-webkit-inner-spin-button { -webkit-appearance: none; }
+
+.lp__calc-slider {
+  width: 100%;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.lp__calc-range-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+}
+
+.lp__calc-results {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+  border-radius: var(--r-lg);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.lp__calc-result {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.lp__calc-result-label {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.lp__calc-result-value {
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: var(--text-primary);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  letter-spacing: -0.03em;
+}
+.lp__calc-result-value--accent { color: var(--accent); }
+
+.lp__calc-divider {
+  height: 1px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.lp__calc-note {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+/* ── Marketplace preview ──────────────────────────────────── */
+.lp__mkt {
+  padding: clamp(64px, 8vw, 96px) 0;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in oklab, var(--surface) 60%, var(--canvas));
+}
+
+.lp__mkt-inner {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 0 clamp(16px, 3vw, 32px);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: clamp(40px, 6vw, 72px);
+  align-items: start;
+}
+
+.lp__mkt-text { max-width: 480px; }
+
+.lp__mkt-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lp__mkt-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: border-color 0.2s;
+}
+.lp__mkt-card:hover { border-color: var(--accent-border); }
+
+.lp__mkt-card-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.lp__mkt-card-info { flex: 1; min-width: 0; }
+
+.lp__mkt-card-name {
+  font-size: 0.9375rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lp__mkt-card-desc {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  margin: 0;
+  line-height: 1.45;
+}
+
+.lp__mkt-card-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.lp__mkt-card-trust {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: #f59e0b;
+}
+
+.lp__mkt-card-price {
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+/* ── For developers (collapsible) ────────────────────────── */
+.lp__dev {
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.lp__dev-inner {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 0 clamp(16px, 3vw, 32px);
+}
+
+.lp__dev-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  color: var(--text-secondary);
+  transition: color 0.15s;
+}
+.lp__dev-toggle:hover { color: var(--text-primary); }
+
+.lp__dev-toggle-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.lp__dev-toggle-left > span:first-of-type {
+  font-size: 1rem;
+  font-weight: 600;
+  color: inherit;
+}
+
+.lp__dev-sub {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+.lp__dev-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  padding: 8px 0 24px;
+}
+
+.lp__dev-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  transition: border-color 0.2s;
+  position: relative;
+  overflow: hidden;
+}
+.lp__dev-card:hover { border-color: var(--accent-border); }
+
+.lp__dev-card-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+.lp__dev-card-title {
+  font-size: 0.9375rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.lp__dev-card-body {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin: 0;
+  flex: 1;
+}
+
+.lp__dev-card-code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.71rem;
+  color: var(--accent);
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--r-pill);
+  padding: 0.28rem 0.58rem;
+  width: fit-content;
+  margin-top: auto;
+}
+
+.lp__dev-docs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  padding: 0 0 28px;
+}
+
 /* ── Responsive ───────────────────────────────────────────── */
 @media (max-width: 960px) {
   .lp__nav-links { display: none; }
@@ -1009,12 +1465,15 @@
   .lp__nav-signin { display: none; }
   .lp__nav-menu-btn { display: inline-flex; }
   .lp__mobile-drawer { display: block; }
-  .lp__programmatic-grid { grid-template-columns: 1fr; gap: 14px; margin-top: 28px; }
+  .lp__how-steps { grid-template-columns: 1fr; gap: 14px; margin-top: 28px; }
+  .lp__earnings-inner { grid-template-columns: 1fr; gap: 40px; }
+  .lp__mkt-inner { grid-template-columns: 1fr; gap: 40px; }
+  .lp__dev-grid { grid-template-columns: 1fr; gap: 14px; }
+  .lp__dev-docs { grid-template-columns: 1fr; gap: 14px; }
   .lp__workflow-step-grid { grid-template-columns: 1fr; }
   .lp__workflow-step { min-height: auto; }
   .lp__workflow-pill { font-size: 0.64rem; }
   .lp__auth-inner { grid-template-columns: 1fr; gap: 32px; }
-  .lp__docs-grid { grid-template-columns: 1fr; gap: 14px; margin-top: 28px; }
   .lp__pricing-bg { inset: -54px 0 -8px 0; }
   .lp__pricing-paths { opacity: 0.9; }
   .lp__pricing-paths .background-paths__svg { height: 138%; transform: translateY(-21%); }

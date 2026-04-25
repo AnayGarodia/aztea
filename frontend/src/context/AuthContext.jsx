@@ -14,6 +14,7 @@ export function AuthProvider({ children }) {
     user_id: profile?.user_id ?? fallbackUser?.user_id,
     username: profile?.username ?? fallbackUser?.username ?? 'Agent',
     email: profile?.email ?? fallbackUser?.email ?? '',
+    role: profile?.role ?? fallbackUser?.role ?? 'both',
     scopes: profile?.scopes ?? fallbackUser?.scopes ?? [],
     legal_acceptance_required: Boolean(
       profile?.legal_acceptance_required

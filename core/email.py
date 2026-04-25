@@ -59,15 +59,106 @@ def send(to: str, subject: str, html: str, text: str) -> None:
     threading.Thread(target=_send_sync, args=(to, subject, html, text), daemon=True).start()
 
 
-def send_welcome(to: str, username: str) -> None:
+def send_welcome(to: str, username: str, role: str = "both") -> None:
     safe_username = _esc(username)
+    if role == "builder":
+        html_body = (
+            f"<p>Hi {safe_username},</p>"
+            "<p>Welcome to Aztea! You're signed up as a <strong>builder</strong>.</p>"
+            "<p>Upload your first <code>SKILL.md</code>, set a price, and start earning — "
+            "you keep <strong>90%</strong> of every successful call.</p>"
+            "<p><a href='https://aztea.ai/list-skill'>List your first skill →</a></p>"
+            "<p>— The Aztea team</p>"
+        )
+        text_body = (
+            f"Hi {username},\n\nWelcome to Aztea! You're signed up as a builder.\n\n"
+            "Upload your first SKILL.md, set a price, and start earning — you keep 90% of every call.\n\n"
+            "Get started: https://aztea.ai/list-skill\n\n— The Aztea team"
+        )
+    elif role == "hirer":
+        html_body = (
+            f"<p>Hi {safe_username},</p>"
+            "<p>Welcome to Aztea! We've added <strong>$2.00</strong> of free credit to your wallet — "
+            "no card needed.</p>"
+            "<p>Browse agents, run a job, and see results immediately.</p>"
+            "<p><a href='https://aztea.ai/agents'>Browse agents →</a></p>"
+            "<p>— The Aztea team</p>"
+        )
+        text_body = (
+            f"Hi {username},\n\nWelcome to Aztea! We've added $2.00 of free credit to your wallet — no card needed.\n\n"
+            "Browse agents and run your first job: https://aztea.ai/agents\n\n— The Aztea team"
+        )
+    else:
+        html_body = (
+            f"<p>Hi {safe_username},</p>"
+            "<p>Welcome to Aztea! We've added <strong>$1.00</strong> of credit to your wallet to get started.</p>"
+            "<p>Browse agents to hire, or upload a <code>SKILL.md</code> to start earning.</p>"
+            "<p>— The Aztea team</p>"
+        )
+        text_body = (
+            f"Hi {username},\n\nWelcome to Aztea! We've added $1.00 of credit to get you started.\n\n"
+            "— The Aztea team"
+        )
+    send(to, "Welcome to Aztea", html_body, text_body)
+
+
+def send_skill_live(
+    to: str,
+    username: str,
+    skill_name: str,
+    price_usd: float,
+    endpoint_url: str,
+) -> None:
+    safe_name = _esc(skill_name)
+    safe_endpoint = _esc(endpoint_url)
+    safe_username = _esc(username)
+    price_fmt = f"${price_usd:.2f}"
+    payout_fmt = f"${price_usd * 0.9:.3f}"
     send(
         to,
-        "Welcome to Aztea",
+        f"Your skill is live — {skill_name}",
         f"<p>Hi {safe_username},</p>"
-        "<p>Welcome to Aztea! We've added <strong>$1.00</strong> of credit to your wallet to get started.</p>"
+        f"<p>Your skill <strong>{safe_name}</strong> is now live on the Aztea marketplace.</p>"
+        f"<table style='border-collapse:collapse;margin:16px 0'>"
+        f"<tr><td style='padding:4px 12px 4px 0;color:#666'>Price per call</td>"
+        f"<td style='padding:4px 0'><strong>{price_fmt}</strong></td></tr>"
+        f"<tr><td style='padding:4px 12px 4px 0;color:#666'>Your cut (90%)</td>"
+        f"<td style='padding:4px 0;color:#16a34a'><strong>{payout_fmt}</strong></td></tr>"
+        f"<tr><td style='padding:4px 12px 4px 0;color:#666'>Endpoint</td>"
+        f"<td style='padding:4px 0'><code style='font-size:0.85em'>{safe_endpoint}</code></td></tr>"
+        f"</table>"
+        f"<p>Callers can discover and hire your skill now. Payouts land in your wallet after each successful job.</p>"
+        f"<p><a href='https://aztea.ai/worker'>Open your worker dashboard →</a></p>"
         "<p>— The Aztea team</p>",
-        f"Hi {username},\n\nWelcome to Aztea! We've added $1.00 of credit to get you started.\n\n— The Aztea team",
+        f"Hi {username},\n\nYour skill '{skill_name}' is now live on the Aztea marketplace.\n\n"
+        f"Price per call: {price_fmt}\nYour cut (90%): {payout_fmt}\nEndpoint: {endpoint_url}\n\n"
+        "Callers can hire it now. Payouts land in your wallet after each successful job.\n\n"
+        "Worker dashboard: https://aztea.ai/worker\n\n— The Aztea team",
+    )
+
+
+def send_payout_received(
+    to: str,
+    username: str,
+    payout_cents: int,
+    job_id: str,
+    skill_name: str,
+) -> None:
+    safe_name = _esc(skill_name)
+    safe_job_id = _esc(job_id)
+    safe_username = _esc(username)
+    payout_fmt = f"${payout_cents / 100:.2f}"
+    send(
+        to,
+        f"Payout received — {payout_fmt} for {skill_name}",
+        f"<p>Hi {safe_username},</p>"
+        f"<p><strong>{payout_fmt}</strong> has been credited to your wallet for a completed job on "
+        f"<strong>{safe_name}</strong>.</p>"
+        f"<p style='color:#666;font-size:0.9em'>Job ID: <code>{safe_job_id}</code></p>"
+        f"<p><a href='https://aztea.ai/wallet'>View your wallet →</a></p>"
+        "<p>— The Aztea team</p>",
+        f"Hi {username},\n\n{payout_fmt} credited to your wallet for a completed job on '{skill_name}'.\n"
+        f"Job ID: {job_id}\n\nWallet: https://aztea.ai/wallet\n\n— The Aztea team",
     )
 
 

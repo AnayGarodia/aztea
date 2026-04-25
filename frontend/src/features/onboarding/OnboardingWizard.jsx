@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'motion/react'
-import { ArrowRight, X, Wallet, Bot, Zap, ChevronLeft } from 'lucide-react'
+import { ArrowRight, X, Wallet, Bot, Zap, ChevronLeft, Hammer, ListChecks, Coins } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 import { useMarket } from '../../context/MarketContext'
 import './OnboardingWizard.css'
@@ -9,7 +9,7 @@ import './OnboardingWizard.css'
 const STORAGE_KEY_PREFIX = 'aztea_onboarding_done'
 
 // Inline visual widgets per step
-function WalletVisual() {
+function WalletVisual({ maxDollars = 1 }) {
   const [count, setCount] = useState(0)
   useEffect(() => {
     const start = Date.now()
@@ -28,14 +28,72 @@ function WalletVisual() {
       <div className="ob-visual__card">
         <div className="ob-visual__card-label">Available balance</div>
         <div className="ob-visual__card-amount">
-          ${(count * 1.0).toFixed(2)}
+          ${(count * maxDollars).toFixed(2)}
         </div>
         <div className="ob-visual__card-badge">Free credit applied</div>
         <div className="ob-visual__card-row">
           <div className="ob-visual__tx">
             <div className="ob-visual__tx-dot ob-visual__tx-dot--green" />
             <span>Welcome bonus</span>
-            <span className="ob-visual__tx-amt">+$1.00</span>
+            <span className="ob-visual__tx-amt">+${maxDollars.toFixed(2)}</span>
+          </div>
+        </div>
+      </div>
+      <div className="ob-visual__glow ob-visual__glow--green" />
+    </div>
+  )
+}
+
+function SkillListVisual() {
+  const skills = [
+    { name: 'PDF Summariser', price: '$0.05/call', color: '#6366f1' },
+    { name: 'SQL Explainer',  price: '$0.02/call', color: '#10b981' },
+    { name: 'Code Reviewer',  price: '$0.08/call', color: '#f59e0b' },
+  ]
+  return (
+    <div className="ob-visual ob-visual--agents">
+      {skills.map((s, i) => (
+        <motion.div
+          key={s.name}
+          className="ob-visual__agent-card"
+          initial={{ opacity: 0, x: -12 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ delay: i * 0.12, duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+        >
+          <div className="ob-visual__agent-icon" style={{ background: s.color + '22', color: s.color }}>
+            <ListChecks size={14} />
+          </div>
+          <span className="ob-visual__agent-name">{s.name}</span>
+          <span className="ob-visual__agent-score" style={{ color: s.color }}>{s.price}</span>
+        </motion.div>
+      ))}
+      <div className="ob-visual__glow ob-visual__glow--violet" />
+    </div>
+  )
+}
+
+function EarningsVisual() {
+  const [pct, setPct] = useState(0)
+  useEffect(() => {
+    const start = Date.now()
+    const raf = requestAnimationFrame(function tick() {
+      const p = Math.min((Date.now() - start) / 900, 1)
+      setPct(1 - Math.pow(1 - p, 3))
+      if (p < 1) requestAnimationFrame(tick)
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [])
+  return (
+    <div className="ob-visual ob-visual--wallet">
+      <div className="ob-visual__card">
+        <div className="ob-visual__card-label">Your earnings</div>
+        <div className="ob-visual__card-amount">${(pct * 9.00).toFixed(2)}</div>
+        <div className="ob-visual__card-badge">90% of every call</div>
+        <div className="ob-visual__card-row">
+          <div className="ob-visual__tx">
+            <div className="ob-visual__tx-dot ob-visual__tx-dot--green" />
+            <span>100 calls × $0.10</span>
+            <span className="ob-visual__tx-amt">+$9.00</span>
           </div>
         </div>
       </div>
@@ -113,41 +171,82 @@ function CallVisual() {
   )
 }
 
-const STEPS = [
+function makeHirerSteps(creditDollars) {
+  return [
+    {
+      id: 'wallet',
+      icon: Wallet,
+      accentColor: '#22c55e',
+      eyebrow: '01 / 03',
+      title: `You start with\n$${creditDollars.toFixed(2)} free credit`,
+      subtitle: 'No card needed',
+      body: `We charge your wallet before an agent runs, and refund you in full if it fails. Your free credit covers about ${Math.round(creditDollars / 0.01)} calls at $0.01 each.`,
+      cta: 'View my wallet',
+      ctaPath: '/wallet',
+      Visual: () => <WalletVisual maxDollars={creditDollars} />,
+    },
+    {
+      id: 'agents',
+      icon: Bot,
+      accentColor: '#6366f1',
+      eyebrow: '02 / 03',
+      title: 'Pick an agent\nthat fits your task',
+      subtitle: 'Every trust score is computed from real jobs',
+      body: "The registry shows each agent's real success rate, price, and example outputs. Filter by what you need, sort by trust score, and run any agent directly in the browser.",
+      cta: 'Browse agents',
+      ctaPath: '/agents',
+      Visual: AgentsVisual,
+    },
+    {
+      id: 'call',
+      icon: Zap,
+      accentColor: '#f59e0b',
+      eyebrow: '03 / 03',
+      title: 'Use scoped keys\nbefore you automate',
+      subtitle: 'One key per integration is the safe default',
+      body: 'Create caller-only or worker-only keys in Settings. If a key leaks or needs rotating, only one integration is affected - not everything at once.',
+      cta: 'Open settings',
+      ctaPath: '/settings',
+      Visual: CallVisual,
+    },
+  ]
+}
+
+const BUILDER_STEPS = [
   {
-    id: 'wallet',
-    icon: Wallet,
-    accentColor: '#22c55e',
-    eyebrow: '01 / 03',
-    title: 'You start with\n$1 free credit',
-    subtitle: 'No card needed',
-    body: 'We charge your wallet before an agent runs, and refund you in full if it fails. Your free credit covers about 100 calls at $0.01 each.',
-    cta: 'View my wallet',
-    ctaPath: '/wallet',
-    Visual: WalletVisual,
-  },
-  {
-    id: 'agents',
-    icon: Bot,
+    id: 'list',
+    icon: ListChecks,
     accentColor: '#6366f1',
-    eyebrow: '02 / 03',
-    title: 'Pick an agent\nthat fits your task',
-    subtitle: 'Every trust score is computed from real jobs',
-    body: 'The registry shows each agent\'s real success rate, price, and example outputs. Filter by what you need, sort by trust score, and run any agent directly in the browser.',
-    cta: 'Browse agents',
-    ctaPath: '/agents',
-    Visual: AgentsVisual,
+    eyebrow: '01 / 03',
+    title: 'Upload a SKILL.md\nand you\'re live',
+    subtitle: 'No infrastructure required',
+    body: 'Write a SKILL.md that describes what your skill does, set a price per call, and Aztea handles execution, billing, and delivery to callers.',
+    cta: 'List a skill',
+    ctaPath: '/register-agent',
+    Visual: SkillListVisual,
   },
   {
-    id: 'call',
-    icon: Zap,
+    id: 'earn',
+    icon: Coins,
+    accentColor: '#22c55e',
+    eyebrow: '02 / 03',
+    title: 'You keep 90%\nof every call',
+    subtitle: 'Aztea takes 10% as a platform fee',
+    body: 'Every time a caller runs your skill, 90% of the price is credited to your wallet automatically. No invoicing, no delays.',
+    cta: 'See how payment works',
+    ctaPath: '/wallet',
+    Visual: EarningsVisual,
+  },
+  {
+    id: 'worker',
+    icon: Hammer,
     accentColor: '#f59e0b',
     eyebrow: '03 / 03',
-    title: 'Use scoped keys\nbefore you automate',
-    subtitle: 'One key per integration is the safe default',
-    body: 'Create caller-only or worker-only keys in Settings. If a key leaks or needs rotating, only one integration is affected - not everything at once.',
-    cta: 'Open settings',
-    ctaPath: '/settings',
+    title: 'Track jobs in\nyour worker dashboard',
+    subtitle: 'Async jobs queue, you process them at your pace',
+    body: 'The Worker tab shows every pending job for your skills. Claim, heartbeat, and complete them from the browser or via the SDK.',
+    cta: 'Open worker',
+    ctaPath: '/worker',
     Visual: CallVisual,
   },
 ]
@@ -160,6 +259,10 @@ export default function OnboardingWizard() {
   const [dir, setDir] = useState(1)
   const dismissedRef = useRef(false)
   const navigate = useNavigate()
+  const role = user?.role ?? 'both'
+  const STEPS = role === 'builder'
+    ? BUILDER_STEPS
+    : makeHirerSteps(role === 'hirer' ? 2 : 1)
   const userId = String(user?.user_id || '').trim()
   const username = String(user?.username || '').trim()
   // Prefer user_id; fall back to username so we still persist even if user_id

@@ -77,11 +77,36 @@ def _process_pending_builtin_job(job: dict) -> bool:
         payload={"message": "Built-in worker started processing.", "percent": 5},
     )
 
-    try:
-        output = _execute_builtin_agent(
-            str(claimed["agent_id"]),
-            claimed.get("input_payload") or {},
+    agent_for_run = registry.get_agent(claimed["agent_id"], include_unapproved=True)
+    is_hosted_skill = bool(
+        agent_for_run is not None
+        and _hosted_skills.is_skill_endpoint(agent_for_run.get("endpoint_url"))
+    )
+
+    def _heartbeat() -> None:
+        jobs.heartbeat_job_lease(
+            claimed["job_id"],
+            claim_owner_id=_BUILTIN_WORKER_OWNER_ID,
+            lease_seconds=_DEFAULT_LEASE_SECONDS,
+            claim_token=claimed.get("claim_token"),
+            require_authorized_owner=False,
         )
+
+    try:
+        if is_hosted_skill:
+            skill_row = _hosted_skills.get_hosted_skill_by_agent_id(str(claimed["agent_id"]))
+            if skill_row is None:
+                raise RuntimeError("Hosted skill record is missing.")
+            output = _skill_executor.execute_hosted_skill(
+                skill_row,
+                claimed.get("input_payload") or {},
+                heartbeat_cb=_heartbeat,
+            )
+        else:
+            output = _execute_builtin_agent(
+                str(claimed["agent_id"]),
+                claimed.get("input_payload") or {},
+            )
     except _groq.RateLimitError as exc:
         retried = jobs.schedule_job_retry(
             claimed["job_id"],
@@ -206,7 +231,11 @@ def _process_pending_builtin_jobs(limit_per_agent: int = _BUILTIN_JOB_WORKER_BAT
     batch_limit = min(max(1, int(limit_per_agent)), 500)
     scanned = 0
     processed = 0
-    for agent_id in _BUILTIN_AGENT_IDS:
+    skill_agent_ids = set(_hosted_skills.list_pending_skill_agent_ids())
+    target_agent_ids = list(_BUILTIN_AGENT_IDS) + [
+        aid for aid in skill_agent_ids if aid not in _BUILTIN_AGENT_IDS
+    ]
+    for agent_id in target_agent_ids:
         pending = jobs.list_jobs_for_agent(
             agent_id,
             status="pending",

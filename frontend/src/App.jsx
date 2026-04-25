@@ -28,6 +28,7 @@ const AdminDisputesPage = lazy(() => import('./pages/AdminDisputesPage'))
 const AdminEarningsPage = lazy(() => import('./pages/AdminEarningsPage'))
 const MyAgentsPage = lazy(() => import('./pages/MyAgentsPage'))
 const RegisterAgentPage = lazy(() => import('./pages/RegisterAgentPage'))
+const SkillUploadPage = lazy(() => import('./pages/SkillUploadPage'))
 const PlatformPage = lazy(() => import('./pages/PlatformPage'))
 const KeysPage = lazy(() => import('./pages/KeysPage'))
 const IntegrationsPage = lazy(() => import('./pages/IntegrationsPage'))
@@ -86,6 +87,7 @@ function AuthedApp() {
               <Route path="/keys" element={<KeysPage />} />
               <Route path="/my-agents" element={<MyAgentsPage />} />
               <Route path="/register-agent" element={<RegisterAgentPage />} />
+              <Route path="/list-skill" element={<SkillUploadPage />} />
               <Route path="/platform" element={<PlatformPage />} />
               <Route path="/integrations" element={<IntegrationsPage />} />
               <Route path="/admin/disputes" element={<RequireAdmin><AdminDisputesPage /></RequireAdmin>} />

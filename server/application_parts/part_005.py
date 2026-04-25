@@ -457,6 +457,30 @@ def _settle_successful_job(
             actor_owner_id=actor_owner_id,
             payload={"status": settled["status"], "settled_at": settled.get("settled_at")},
         )
+        try:
+            agent_owner_id = settled.get("agent_owner_id", "")
+            agent_email = _get_owner_email(agent_owner_id)
+            if agent_email:
+                _agent_row = registry.get_agent(settled.get("agent_id", ""))
+                _agent_name = (_agent_row or {}).get("name", "agent")
+                _owner_user = _auth.get_user_by_id(agent_owner_id.replace("user:", "")) if agent_owner_id.startswith("user:") else None
+                _owner_username = (_owner_user or {}).get("username", "there")
+                distribution = payments.compute_success_distribution(
+                    int(settled.get("price_cents") or 0),
+                    platform_fee_pct=settled.get("platform_fee_pct_at_create"),
+                    fee_bearer_policy=settled.get("fee_bearer_policy"),
+                )
+                payout_cents = int(distribution.get("agent_payout_cents") or 0)
+                if payout_cents > 0:
+                    _email.send_payout_received(
+                        agent_email,
+                        _owner_username,
+                        payout_cents,
+                        settled["job_id"],
+                        _agent_name,
+                    )
+        except Exception as exc:
+            _LOG.warning("Failed to send payout email for job %s: %s", settled.get("job_id"), exc)
     return settled
 
 

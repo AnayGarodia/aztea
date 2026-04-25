@@ -462,6 +462,14 @@ class UserRegisterRequest(BaseModel):
     username: str
     email: str
     password: str
+    role: str = "both"
+
+    @field_validator("role")
+    @classmethod
+    def role_valid(cls, v):
+        if v not in {"builder", "hirer", "both"}:
+            raise ValueError("role must be 'builder', 'hirer', or 'both'.")
+        return v
 
     @field_validator("username")
     @classmethod

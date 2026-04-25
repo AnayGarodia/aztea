@@ -4,7 +4,7 @@ import { authLogin, authRegister, authForgotPassword, authResetPassword } from '
 import { useAuth } from '../../context/AuthContext'
 import Button from '../../ui/Button'
 import Input from '../../ui/Input'
-import { Mail, Lock, User, Eye, EyeOff, Copy, Check, KeyRound, ArrowLeft } from 'lucide-react'
+import { Mail, Lock, User, Eye, EyeOff, Copy, Check, KeyRound, ArrowLeft, Hammer, Zap } from 'lucide-react'
 import './AuthPanel.css'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -24,6 +24,10 @@ export default function AuthPanel() {
   const [apiKeyReveal, setApiKeyReveal] = useState(null)
   const [copied, setCopied] = useState(false)
   const [keyAcknowledged, setKeyAcknowledged] = useState(false)
+
+  // Role selector state (register flow only)
+  const [registerStep, setRegisterStep] = useState('role') // 'role' | 'form'
+  const [selectedRole, setSelectedRole] = useState(null) // 'builder' | 'hirer'
 
   // Forgot password state
   const [forgotStep, setForgotStep] = useState(1) // 1 = email, 2 = otp+newpw
@@ -62,6 +66,10 @@ export default function AuthPanel() {
     setConfirmPassword('')
     setShowPassword(false)
     setShowConfirmPassword(false)
+    if (nextTab === 'register') {
+      setRegisterStep('role')
+      setSelectedRole(null)
+    }
     if (nextTab === 'forgot') {
       setForgotStep(1)
       setForgotEmail(email) // pre-fill from signin email if present
@@ -110,12 +118,13 @@ export default function AuthPanel() {
       if (!registerMode) {
         result = await authLogin(normalizedEmail, password)
       } else {
-        result = await authRegister(normalizedUsername, normalizedEmail, password)
+        result = await authRegister(normalizedUsername, normalizedEmail, password, selectedRole || 'both')
       }
       const userInfo = {
         user_id: result.user_id,
         username: result.username ?? normalizedUsername,
         email: result.email ?? normalizedEmail,
+        role: result.role ?? selectedRole ?? 'both',
         scopes: result.scopes ?? ['caller'],
         legal_acceptance_required: Boolean(result.legal_acceptance_required),
         legal_accepted_at: result.legal_accepted_at ?? null,
@@ -391,6 +400,42 @@ export default function AuthPanel() {
         </button>
       </div>
       <div className="auth-panel__body">
+        {registerMode && registerStep === 'role' ? (
+          <div className="auth-panel__role-step">
+            <p className="auth-panel__role-heading">How will you use Aztea?</p>
+            <div className="auth-panel__role-cards">
+              <button
+                type="button"
+                className={`auth-panel__role-card ${selectedRole === 'hirer' ? 'auth-panel__role-card--selected' : ''}`}
+                onClick={() => setSelectedRole('hirer')}
+              >
+                <span className="auth-panel__role-card-icon"><Zap size={22} /></span>
+                <strong>I hire agents</strong>
+                <span>Delegate tasks, get results. $2 free credit to start.</span>
+              </button>
+              <button
+                type="button"
+                className={`auth-panel__role-card ${selectedRole === 'builder' ? 'auth-panel__role-card--selected' : ''}`}
+                onClick={() => setSelectedRole('builder')}
+              >
+                <span className="auth-panel__role-card-icon"><Hammer size={22} /></span>
+                <strong>I build agents</strong>
+                <span>List your skills and earn revenue per task.</span>
+              </button>
+            </div>
+            <Button
+              type="button"
+              variant="primary"
+              size="md"
+              disabled={!selectedRole}
+              onClick={() => setRegisterStep('form')}
+              style={{ width: '100%' }}
+            >
+              Continue
+            </Button>
+            <p className="auth-panel__hint">Already have an account? Sign in above.</p>
+          </div>
+        ) : (
         <form className="auth-panel__form" onSubmit={handleSubmit}>
           {tab === 'register' && (
             <Input
@@ -491,6 +536,7 @@ export default function AuthPanel() {
               : 'Already have an account? Sign in above.'}
           </p>
         </form>
+        )}
       </div>
     </div>
   )

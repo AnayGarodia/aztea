@@ -389,8 +389,20 @@ def registry_call(
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
     _assert_agent_callable(agent_id, agent)
     builtin_agent_id = _resolve_builtin_agent_id(agent)
+    hosted_skill_row: dict | None = None
+    if builtin_agent_id is None and _hosted_skills.is_skill_endpoint(agent.get("endpoint_url")):
+        hosted_skill_row = _hosted_skills.get_hosted_skill_by_agent_id(str(agent["agent_id"]))
+        if hosted_skill_row is None:
+            raise HTTPException(
+                status_code=502,
+                detail=error_codes.make_error(
+                    error_codes.AGENT_INTERNAL_ERROR,
+                    "Hosted skill record is missing. Contact the agent owner.",
+                    {"agent_id": agent_id},
+                ),
+            )
     safe_endpoint_url = ""
-    if builtin_agent_id is None:
+    if builtin_agent_id is None and hosted_skill_row is None:
         try:
             safe_endpoint_url = _validate_agent_endpoint_url(request, str(agent.get("endpoint_url") or ""))
         except ValueError as exc:
@@ -454,7 +466,7 @@ def registry_call(
         agent_id=agent_id,
     )
     start = time.monotonic()
-    if builtin_agent_id is not None:
+    if builtin_agent_id is not None or hosted_skill_row is not None:
         try:
             job = jobs.create_job(
                 agent_id=agent["agent_id"],
@@ -486,7 +498,10 @@ def registry_call(
             payload={"source": "registry_call_sync", "max_attempts": 1},
         )
         try:
-            output = _execute_builtin_agent(builtin_agent_id, payload)
+            if hosted_skill_row is not None:
+                output = _skill_executor.execute_hosted_skill(hosted_skill_row, payload)
+            else:
+                output = _execute_builtin_agent(builtin_agent_id, payload)
             output = _normalize_output_protocol_for_response(
                 output,
                 requested_output_formats=requested_output_formats,

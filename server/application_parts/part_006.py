@@ -557,16 +557,17 @@ def _auth_legal_payload(payload: dict[str, Any]) -> dict[str, Any]:
 @limiter.limit(_AUTH_RATE_LIMIT, key_func=get_remote_address)
 def auth_register(request: Request, body: UserRegisterRequest) -> core_models.AuthRegisterResponse:
     """Create a new user account. Returns the initial API key (shown once)."""
+    role = body.role or "both"
     try:
         _auth.init_auth_db()
-        result = _auth.register_user(body.username, body.email, body.password)
+        result = _auth.register_user(body.username, body.email, body.password, role=role)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except sqlite3.DatabaseError:
         _LOG.exception("Auth register failed; retrying after auth schema init.")
         try:
             _auth.init_auth_db()
-            result = _auth.register_user(body.username, body.email, body.password)
+            result = _auth.register_user(body.username, body.email, body.password, role=role)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         except sqlite3.DatabaseError:
@@ -575,14 +576,21 @@ def auth_register(request: Request, body: UserRegisterRequest) -> core_models.Au
                 status_code=503,
                 detail="Authentication service is temporarily unavailable. Please try again.",
             )
-    # Credit $1.00 starter balance so new users can invoke agents immediately
+    # Credit startup balance based on role:
+    #   hirer  → $2.00 signup credit (platform-funded to encourage first hire)
+    #   builder → no wallet credit (builders earn, don't spend)
+    #   both    → $1.00 welcome credit (legacy default)
     try:
         _owner_id = f"user:{result['user_id']}"
         _starter_wallet = payments.get_or_create_wallet(_owner_id)
-        payments.deposit(_starter_wallet["wallet_id"], 100, "Welcome credit ($1.00 to get started)")
+        if role == "hirer":
+            payments.deposit(_starter_wallet["wallet_id"], 200, "Signup credit ($2.00 — platform-funded)")
+        elif role == "both":
+            payments.deposit(_starter_wallet["wallet_id"], 100, "Welcome credit ($1.00 to get started)")
+        # builders get no credit — they list skills and earn
     except Exception:
         _LOG.warning("Failed to credit starter balance for new user %s", result.get("user_id"))
-    _email.send_welcome(result.get("email", ""), result.get("username", "there"))
+    _email.send_welcome(result.get("email", ""), result.get("username", "there"), role=role)
     return JSONResponse(content={**result, **_auth_legal_payload(result)}, status_code=201)
 
 
@@ -645,9 +653,34 @@ def auth_me(request: Request, caller: core_models.CallerContext = Depends(_requi
         "user_id": user["user_id"],
         "username": user["username"],
         "email": user["email"],
+        "role": user.get("role") or "both",
         "scopes": caller.get("scopes") or [],
         **_auth_legal_payload(user),
     })
+
+
+@app.patch(
+    "/auth/role",
+    responses=_error_responses(400, 401, 403, 429),
+)
+@limiter.limit("20/minute")
+def auth_update_role(
+    request: Request,
+    body: dict = Body(...),
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> dict:
+    """Switch the authenticated user's role between builder, hirer, and both."""
+    if caller["type"] != "user":
+        raise HTTPException(status_code=403, detail="Not available for master or agent-scoped keys.")
+    new_role = str((body or {}).get("role") or "").strip()
+    if new_role not in {"builder", "hirer", "both"}:
+        raise HTTPException(status_code=400, detail="role must be 'builder', 'hirer', or 'both'.")
+    user_id = caller["user"]["user_id"]
+    try:
+        _auth.update_user_role(user_id, new_role)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"role": new_role}
 
 
 @app.post(

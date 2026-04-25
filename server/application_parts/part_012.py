@@ -1,604 +1,290 @@
-# server.application shard 12 — wallet routes (top-up, deposit, withdraw,
-# connect onboard, wallet read), run history, and the catch-all SPA
-# fallback that serves frontend/dist/ for non-API URLs. MUST remain the
-# last shard so the SPA catch-all route is registered after every API
-# route.
+# server.application shard 12 — hosted skills API.
+#
+# Endpoints for OpenClaw skill builders:
+#   POST   /skills/validate    Parse a SKILL.md preview without persisting.
+#   POST   /skills             Upload a SKILL.md, register the agent, persist.
+#   GET    /skills             List the caller's hosted skills.
+#   GET    /skills/{skill_id}  Fetch one (owner-scoped).
+#   DELETE /skills/{skill_id}  Delist + remove the hosted_skills row.
+#
+# Hosted skills auto-approve: the endpoint URL is ``skill://{skill_id}`` and
+# Aztea owns execution, so the human-review gate that exists for unknown
+# external HTTP endpoints is unnecessary here. The existing review_status
+# column still exists; we just write ``approved`` on insert.
 
 
-@app.post(
-    "/wallets/topup/session",
-    tags=["wallet"],
-    summary="Create a Stripe Checkout session for wallet top-up.",
-    responses=_error_responses(400, 401, 403, 404, 422, 429, 500, 503),
-)
-@limiter.limit("20/minute")
-def create_topup_session(
-    request: Request,
-    body: core_models.TopupSessionRequest,
-    caller: core_models.CallerContext = Depends(_require_api_key),
-) -> JSONResponse:
-    if not _STRIPE_AVAILABLE or not _STRIPE_SECRET_KEY:
-        raise HTTPException(status_code=503, detail="Payment processing is not configured on this server.")
-    _require_scope(caller, "caller")
-    wallet = payments.get_wallet(body.wallet_id)
-    if wallet is None:
-        raise HTTPException(status_code=404, detail=f"Wallet '{body.wallet_id}' not found.")
-    if caller["type"] != "master" and wallet["owner_id"] != caller["owner_id"]:
-        raise HTTPException(status_code=403, detail="Not authorized to top up this wallet.")
-    if int(body.amount_cents) < MINIMUM_DEPOSIT_CENTS:
-        raise _deposit_below_minimum_error(int(body.amount_cents))
-    if not (100 <= body.amount_cents <= 50000):
-        raise HTTPException(status_code=400, detail="Amount must be between $1.00 and $500.00.")
-    if _TOPUP_DAILY_LIMIT_CENTS > 0:
-        used_last_24h = _wallet_stripe_topup_total_last_24h(body.wallet_id)
-        projected_total = used_last_24h + int(body.amount_cents)
-        if projected_total > _TOPUP_DAILY_LIMIT_CENTS:
-            limit_usd = _TOPUP_DAILY_LIMIT_CENTS / 100
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "payment.topup_daily_limit_exceeded",
-                    "message": f"Daily top-up limit exceeded (${limit_usd:,.2f}/24h).",
-                    "data": {
-                        "limit_cents": _TOPUP_DAILY_LIMIT_CENTS,
-                        "used_cents_last_24h": used_last_24h,
-                        "requested_cents": int(body.amount_cents),
-                    },
-                },
-            )
-
-    _stripe_lib.api_key = _STRIPE_SECRET_KEY
-    try:
-        session = _stripe_lib.checkout.Session.create(
-            payment_method_types=["card"],
-            line_items=[{
-                "price_data": {
-                    "currency": "usd",
-                    "product_data": {
-                        "name": "Aztea wallet top-up",
-                        "description": f"Add ${body.amount_cents / 100:.2f} to your Aztea wallet.",
-                    },
-                    "unit_amount": body.amount_cents,
-                },
-                "quantity": 1,
-            }],
-            mode="payment",
-            client_reference_id=body.wallet_id,
-            metadata={
-                "wallet_id": body.wallet_id,
-                "owner_id": caller["owner_id"],
-            },
-            success_url=f"{_FRONTEND_BASE_URL}/wallet?payment=success&session_id={{CHECKOUT_SESSION_ID}}",
-            cancel_url=f"{_FRONTEND_BASE_URL}/wallet?payment=cancelled",
-        )
-    except Exception as exc:
-        status_code, payload = _stripe_http_error("topup_session", exc)
-        raise HTTPException(status_code=status_code, detail=payload)
-    return JSONResponse({"checkout_url": session.url, "session_id": session.id})
-
-
-@app.post(
-    "/stripe/webhook",
-    tags=["wallet"],
-    summary="Stripe webhook receiver: credits wallet on successful checkout.",
-    include_in_schema=False,
-)
-@limiter.limit("300/minute")
-async def stripe_webhook(request: Request) -> JSONResponse:
-    if not _STRIPE_AVAILABLE or not _STRIPE_SECRET_KEY or not _STRIPE_WEBHOOK_SECRET:
-        raise HTTPException(status_code=503, detail="Stripe not configured.")
-
-    payload = await request.body()
-    sig_header = request.headers.get("stripe-signature", "")
-
-    try:
-        _stripe_lib.api_key = _STRIPE_SECRET_KEY
-        event = _stripe_lib.Webhook.construct_event(payload, sig_header, _STRIPE_WEBHOOK_SECRET)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid Stripe webhook signature.")
-
-    if event["type"] == "checkout.session.completed":
-        # Stripe SDK v15 returns StripeObjects, not plain dicts — use attribute
-        # access and fall back via getattr to avoid KeyError / AttributeError.
-        session_obj = event["data"]["object"]
-        _meta = _stripe_obj_get(session_obj, "metadata", None) or {}
-        wallet_id = (
-            _stripe_obj_get(session_obj, "client_reference_id", None)
-            or _stripe_obj_get(_meta, "wallet_id", None)
-        )
-        amount_cents = _stripe_obj_get(session_obj, "amount_total", None)
-        session_id = _stripe_obj_id(session_obj)
-
-        if not wallet_id or not amount_cents or not session_id:
-            _LOG.warning("Stripe webhook: missing wallet_id/amount/session_id in %s", session_id)
-            return JSONResponse({"received": True, "status": "skipped"})
-
-        idempotency_state = _stripe_begin_checkout_webhook_event(
-            session_id=session_id,
-            wallet_id=str(wallet_id),
-            amount_cents=int(amount_cents),
-        )
-        if idempotency_state == "already_processed":
-            return JSONResponse({"received": True, "status": "already_processed"})
-        if idempotency_state == "already_processing":
-            return JSONResponse({"received": True, "status": "processing"})
-
-        try:
-            payments.deposit(str(wallet_id), int(amount_cents), f"Stripe payment [{session_id[:12]}]")
-        except Exception as exc:
-            _stripe_mark_checkout_webhook_failed(
-                session_id=session_id,
-                error_message=str(exc),
-            )
-            _LOG.exception("Failed to deposit Stripe payment for session %s wallet %s", session_id, wallet_id)
-            return JSONResponse({"received": True, "status": "deposit_failed"}, status_code=500)
-        _stripe_mark_checkout_webhook_processed(
-            session_id=session_id,
-            wallet_id=str(wallet_id),
-            amount_cents=int(amount_cents),
-        )
-
-        _LOG.info("Stripe top-up: %d cents → wallet %s (session %s)", amount_cents, wallet_id, session_id)
-        # Notify wallet owner
-        try:
-            _wallet_row = payments.get_wallet(str(wallet_id))
-            if _wallet_row:
-                _deposit_email = _get_owner_email(_wallet_row.get("owner_id", ""))
-                if _deposit_email:
-                    _email.send_deposit_confirmed(_deposit_email, int(amount_cents))
-        except Exception:
-            _LOG.warning("Failed to send deposit email for wallet %s", wallet_id)
-
-    if event["type"] == "account.updated":
-        # Stripe Connect: account completed onboarding or details changed
-        account_obj = event["data"]["object"]
-        account_id = _stripe_obj_id(account_obj)
-        charges_enabled = bool(_stripe_obj_get(account_obj, "charges_enabled", False))
-        payouts_enabled = bool(_stripe_obj_get(account_obj, "payouts_enabled", False))
-        fully_enabled = bool(charges_enabled and payouts_enabled)
-        if account_id:
-            with get_db_connection() as _ac_conn:
-                _ac_conn.execute(
-                    "UPDATE wallets SET stripe_connect_enabled = ? WHERE stripe_connect_account_id = ?",
-                    (1 if fully_enabled else 0, account_id),
-                )
-                _ac_conn.commit()
-            _LOG.info(
-                "Stripe Connect account.updated: %s charges_enabled=%s payouts_enabled=%s",
-                account_id, charges_enabled, payouts_enabled,
-            )
-
-    return JSONResponse({"received": True, "status": "ok"})
-
-
-# Prefer Accounts v2 for new Connect integrations; keep v1 fallback for SDK
-# compatibility in environments where v2 resources are not yet available.
-def _create_connect_account() -> str:
-    v2 = _stripe_obj_get(_stripe_lib, "v2", None)
-    core = _stripe_obj_get(v2, "core", None) if v2 is not None else None
-    accounts = _stripe_obj_get(core, "accounts", None) if core is not None else None
-    create_v2 = _stripe_obj_get(accounts, "create", None) if accounts is not None else None
-    if callable(create_v2):
-        try:
-            account_v2 = create_v2(
-                controller={
-                    "losses": {"payments": "application"},
-                    "fees": {"payer": "application"},
-                    "stripe_dashboard": {"type": "express"},
-                    "requirement_collection": "stripe",
-                }
-            )
-            account_id = _stripe_obj_id(account_v2)
-            if account_id:
-                return account_id
-        except Exception as exc:
-            _LOG.warning("Stripe Accounts v2 account creation failed, falling back to v1: %s", exc)
-
-    account_v1 = _stripe_lib.Account.create(
-        type="express",
-        capabilities={"transfers": {"requested": True}},
-    )
-    account_id = _stripe_obj_id(account_v1)
-    if not account_id:
-        raise RuntimeError("Stripe account creation returned no account id.")
-    return account_id
-
-
-# ---------------------------------------------------------------------------
-# Stripe Connect — onboard, status, withdraw
-# ---------------------------------------------------------------------------
-
-
-@app.post(
-    "/wallets/connect/onboard",
-    tags=["wallet"],
-    summary="Create a Stripe connected account and return an onboarding URL.",
-    responses=_error_responses(400, 401, 403, 503),
-)
-@limiter.limit("10/minute")
-def connect_onboard(
-    request: Request,
-    body: core_models.ConnectOnboardRequest,
-    caller: core_models.CallerContext = Depends(_require_api_key),
-) -> JSONResponse:
-    if not _STRIPE_AVAILABLE or not _STRIPE_SECRET_KEY:
-        raise HTTPException(status_code=503, detail="Payment processing is not configured on this server.")
-    _require_scope(caller, "caller")
-
-    wallet = payments.get_wallet_by_owner(caller["owner_id"])
-    if wallet is None:
-        raise HTTPException(status_code=404, detail="Wallet not found.")
-
-    _stripe_lib.api_key = _STRIPE_SECRET_KEY
-
-    # Reuse existing Connect account if one already exists
-    existing_account_id = wallet.get("stripe_connect_account_id")
-    if not existing_account_id:
-        try:
-            existing_account_id = _create_connect_account()
-        except Exception as exc:
-            status_code, payload = _stripe_http_error("connect_onboard_account_create", exc)
-            raise HTTPException(status_code=status_code, detail=payload)
-        with get_db_connection() as _ac_conn:
-            _ac_conn.execute(
-                "UPDATE wallets SET stripe_connect_account_id = ? WHERE wallet_id = ?",
-                (existing_account_id, wallet["wallet_id"]),
-            )
-            _ac_conn.commit()
-
-    return_url = (body.return_url or "").strip() or f"{_FRONTEND_BASE_URL}/wallet?connect=success"
-    refresh_url = (body.refresh_url or "").strip() or f"{_FRONTEND_BASE_URL}/wallet?connect=refresh"
-
-    try:
-        link = _stripe_lib.AccountLink.create(
-            account=existing_account_id,
-            refresh_url=refresh_url,
-            return_url=return_url,
-            type="account_onboarding",
-        )
-    except Exception as exc:
-        status_code, payload = _stripe_http_error("connect_onboard_link_create", exc)
-        raise HTTPException(status_code=status_code, detail=payload)
-    return JSONResponse({"onboarding_url": link.url, "account_id": existing_account_id})
-
-
-@app.get(
-    "/wallets/connect/status",
-    tags=["wallet"],
-    summary="Get Stripe Connect account status for the authenticated user.",
-    responses=_error_responses(401, 403, 503),
-)
+@app.post("/skills/validate", responses=_error_responses(400, 401, 413))
 @limiter.limit("30/minute")
-def connect_status(
+def skills_validate(
     request: Request,
+    body: dict = Body(...),
     caller: core_models.CallerContext = Depends(_require_api_key),
-) -> JSONResponse:
-    if not _STRIPE_AVAILABLE or not _STRIPE_SECRET_KEY:
-        raise HTTPException(status_code=503, detail="Payment processing is not configured on this server.")
-    _require_scope(caller, "caller")
-
-    wallet = payments.get_wallet_by_owner(caller["owner_id"])
-    if wallet is None:
-        raise HTTPException(status_code=404, detail="Wallet not found.")
-
-    account_id = wallet.get("stripe_connect_account_id")
-    if not account_id:
-        return JSONResponse({"connected": False, "charges_enabled": False, "account_id": None})
-
-    _stripe_lib.api_key = _STRIPE_SECRET_KEY
+) -> dict:
+    _require_scope(caller, "worker")
+    raw_md = str((body or {}).get("skill_md") or "")
+    if not raw_md.strip():
+        raise HTTPException(status_code=400, detail="skill_md is required.")
+    if len(raw_md.encode("utf-8")) > 256 * 1024:
+        raise HTTPException(status_code=413, detail="skill_md exceeds 256 KB.")
     try:
-        account = _stripe_lib.Account.retrieve(account_id)
-        charges_enabled = bool(getattr(account, "charges_enabled", False))
-    except Exception:
-        charges_enabled = bool(wallet.get("stripe_connect_enabled", 0))
-
-    # Keep local cache in sync
-    if charges_enabled != bool(wallet.get("stripe_connect_enabled", 0)):
-        with get_db_connection() as _ac_conn:
-            _ac_conn.execute(
-                "UPDATE wallets SET stripe_connect_enabled = ? WHERE wallet_id = ?",
-                (1 if charges_enabled else 0, wallet["wallet_id"]),
-            )
-            _ac_conn.commit()
-
-    return JSONResponse({
-        "connected": True,
-        "charges_enabled": charges_enabled,
-        "account_id": account_id,
-    })
+        parsed = _skill_parser.parse_skill_md(raw_md, source="upload")
+    except _skill_parser.SkillParseError as exc:
+        raise HTTPException(status_code=400, detail=f"SKILL.md is invalid: {exc}")
+    return {
+        "valid": True,
+        "name": parsed.name,
+        "description": parsed.description,
+        "warnings": parsed.warnings,
+        "registration_preview": parsed.to_aztea_registration(),
+    }
 
 
-@app.post(
-    "/wallets/withdraw",
-    tags=["wallet"],
-    summary="Withdraw funds from wallet to connected Stripe account.",
-    responses=_error_responses(400, 401, 403, 503),
-)
+_SKILL_DEFAULT_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "task": {
+            "type": "string",
+            "description": "Natural-language request for the skill.",
+        }
+    },
+    "required": ["task"],
+}
+
+_SKILL_DEFAULT_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "result": {
+            "type": "string",
+            "description": "The skill's response.",
+        }
+    },
+    "required": ["result"],
+}
+
+
+@app.post("/skills", status_code=201, responses=_error_responses(400, 401, 403, 409, 413, 429))
 @limiter.limit("10/minute")
-def withdraw(
+def skills_create(
     request: Request,
-    body: core_models.WithdrawRequest,
+    body: dict = Body(...),
     caller: core_models.CallerContext = Depends(_require_api_key),
-) -> JSONResponse:
-    if not _STRIPE_AVAILABLE or not _STRIPE_SECRET_KEY:
-        raise HTTPException(status_code=503, detail="Payment processing is not configured on this server.")
-    _require_scope(caller, "caller")
-    def _operation() -> tuple[dict[str, Any], int]:
-        if body.amount_cents < 100:
-            raise HTTPException(status_code=400, detail="Minimum withdrawal is $1.00.")
-        if body.amount_cents > 1_000_000:
-            raise HTTPException(status_code=400, detail="Maximum withdrawal is $10,000.00.")
+) -> dict:
+    """Upload a SKILL.md, register an agent for it, and persist the skill row."""
+    _require_scope(caller, "worker")
+    if caller["type"] == "agent_key":
+        raise HTTPException(status_code=403, detail="Agent-scoped keys cannot register hosted skills.")
+    payload = body or {}
+    raw_md = str(payload.get("skill_md") or "")
+    if not raw_md.strip():
+        raise HTTPException(status_code=400, detail="skill_md is required.")
+    if len(raw_md.encode("utf-8")) > 256 * 1024:
+        raise HTTPException(status_code=413, detail="skill_md exceeds 256 KB.")
+    try:
+        price_per_call_usd = float(payload.get("price_per_call_usd"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="price_per_call_usd is required and must be a number.")
+    if not (price_per_call_usd >= 0.0 and price_per_call_usd <= 25.0):
+        raise HTTPException(status_code=400, detail="price_per_call_usd must be between 0 and 25.")
 
-        wallet = payments.get_wallet_by_owner(caller["owner_id"])
-        if wallet is None:
-            raise HTTPException(status_code=404, detail="Wallet not found.")
+    try:
+        parsed = _skill_parser.parse_skill_md(raw_md, source="upload")
+    except _skill_parser.SkillParseError as exc:
+        raise HTTPException(status_code=400, detail=f"SKILL.md is invalid: {exc}")
 
-        account_id = str(wallet.get("stripe_connect_account_id") or "").strip()
-        if not account_id:
+    if caller["type"] != "master":
+        current_count = registry.count_owner_agents(caller["owner_id"])
+        if current_count >= 20:
             raise HTTPException(
-                status_code=400,
-                detail="No bank account connected. Use POST /wallets/connect/onboard first.",
-            )
-
-        if not wallet.get("stripe_connect_enabled"):
-            raise HTTPException(
-                status_code=400,
-                detail="Your Stripe Connect account is not yet active. Complete onboarding first.",
-            )
-
-        if wallet["balance_cents"] < body.amount_cents:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Insufficient balance: have {wallet['balance_cents']}¢, need {body.amount_cents}¢.",
-            )
-
-        _stripe_lib.api_key = _STRIPE_SECRET_KEY
-        request_idempotency_key = (request.headers.get(_IDEMPOTENCY_KEY_HEADER, "") or "").strip()
-        stripe_idempotency_basis = request_idempotency_key or str(uuid.uuid4())
-        stripe_idempotency_key = "aztea-withdraw-" + hashlib.sha256(
-            f"{caller['owner_id']}:{wallet['wallet_id']}:{body.amount_cents}:{stripe_idempotency_basis}".encode(
-                "utf-8"
-            )
-        ).hexdigest()
-
-        # Debit wallet first (raises InsufficientBalanceError if something changed).
-        try:
-            payments.charge(
-                wallet["wallet_id"],
-                body.amount_cents,
-                memo=f"Withdrawal to Stripe Connect [{account_id[:12]}]",
-            )
-        except payments.InsufficientBalanceError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-
-        try:
-            transfer = _stripe_lib.Transfer.create(
-                amount=body.amount_cents,
-                currency="usd",
-                destination=account_id,
-                idempotency_key=stripe_idempotency_key,
-            )
-        except Exception as exc:
-            # Refund the wallet charge on Stripe failure.
-            try:
-                payments.deposit(
-                    wallet["wallet_id"],
-                    body.amount_cents,
-                    memo=f"Withdrawal refund (Stripe error): {exc}",
-                )
-            except Exception:
-                _LOG.exception("Critical: failed to refund withdrawal for wallet %s", wallet["wallet_id"])
-            status_code, payload = _stripe_http_error("withdraw_transfer", exc)
-            raise HTTPException(status_code=status_code, detail=payload)
-
-        transfer_id = _stripe_obj_id(transfer)
-        if not transfer_id:
-            raise HTTPException(status_code=502, detail="Stripe transfer response did not include an ID.")
-
-        # Record the transfer for audit.
-        with get_db_connection() as _tr_conn:
-            _tr_conn.execute(
-                "INSERT INTO stripe_connect_transfers (transfer_id, wallet_id, amount_cents, stripe_tx_id, memo, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    str(uuid.uuid4()),
-                    wallet["wallet_id"],
-                    body.amount_cents,
-                    transfer_id,
-                    f"Withdrawal to {account_id[:12]}",
-                    _utc_now_iso(),
+                status_code=403,
+                detail=error_codes.make_error(
+                    error_codes.REGISTRY_AGENT_LIMIT,
+                    "You've reached the 20-agent limit. Delete or archive an existing listing.",
+                    {"current": current_count, "max": 20},
                 ),
             )
-            _tr_conn.commit()
 
-        _LOG.info(
-            "Stripe Connect withdrawal: %d¢ from wallet %s → account %s (transfer %s)",
-            body.amount_cents, wallet["wallet_id"], account_id, transfer_id,
-        )
+    base = parsed.to_aztea_registration()
+    display_name = str(base.get("name") or parsed.name).strip()
+    description = str(base.get("description") or parsed.description).strip()
+    if not display_name:
+        raise HTTPException(status_code=400, detail="Skill name is empty after parsing.")
+    if not description:
+        raise HTTPException(status_code=400, detail="Skill description is empty after parsing.")
+
+    # Optional override fields the builder may set in the request body.
+    requested_temperature = payload.get("temperature")
+    requested_max_tokens = payload.get("max_output_tokens")
+    requested_chain = payload.get("model_chain")
+    if requested_chain is not None and not isinstance(requested_chain, list):
+        raise HTTPException(status_code=400, detail="model_chain must be a list of strings.")
+
+    # Resolve a unique listing name. ``agents.name`` has a UNIQUE constraint,
+    # so we retry with a numeric suffix when a collision occurs.
+    candidate_name = display_name
+    agent_id: str | None = None
+    last_error: Exception | None = None
+    for attempt in range(1, 8):
         try:
-            _withdraw_email = _get_owner_email(caller.get("owner_id", ""))
-            if _withdraw_email:
-                _email.send_withdrawal_processed(_withdraw_email, body.amount_cents)
-        except Exception:
-            _LOG.warning("Failed to send withdrawal email for owner %s", caller.get("owner_id", ""))
-        return {
-            "status": "ok",
-            "transfer_id": transfer_id,
-            "amount_cents": body.amount_cents,
-        }, 200
+            agent_id = registry.register_agent(
+                name=candidate_name,
+                description=description,
+                endpoint_url="skill://placeholder",  # rewritten below to skill://{skill_id}
+                price_per_call_usd=price_per_call_usd,
+                tags=list(base.get("tags") or []),
+                input_schema=_SKILL_DEFAULT_INPUT_SCHEMA,
+                output_schema=_SKILL_DEFAULT_OUTPUT_SCHEMA,
+                owner_id=caller["owner_id"],
+                review_status="approved",
+                review_note="Auto-approved hosted skill.",
+                reviewed_at=_utc_now_iso(),
+                reviewed_by="system:auto-approve-hosted-skill",
+            )
+            break
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except sqlite3.IntegrityError as exc:
+            last_error = exc
+            candidate_name = f"{display_name} #{attempt + 1}"
+    if agent_id is None:
+        raise HTTPException(status_code=409, detail=f"Could not allocate a unique name (last: {last_error}).")
 
-    return _run_idempotent_json_response(
-        request=request,
-        caller=caller,
-        scope="wallets.withdraw",
-        payload=body.model_dump(),
-        operation=_operation,
-    )
-
-
-@app.get(
-    "/wallets/withdrawals",
-    response_model=core_models.WalletWithdrawalsResponse,
-    tags=["wallet"],
-    summary="List withdrawal audit history for the authenticated caller wallet.",
-    responses=_error_responses(401, 403, 404, 422, 429, 500),
-)
-@limiter.limit("30/minute")
-def wallet_withdrawals(
-    request: Request,
-    limit: int = 20,
-    caller: core_models.CallerContext = Depends(_require_api_key),
-) -> core_models.WalletWithdrawalsResponse:
-    _require_scope(caller, "caller")
-    if limit <= 0:
-        raise HTTPException(status_code=422, detail="limit must be > 0.")
-    wallet = payments.get_wallet_by_owner(caller["owner_id"])
-    if wallet is None:
-        raise HTTPException(status_code=404, detail="Wallet not found.")
-    withdrawals = payments.list_connect_withdrawals(wallet["wallet_id"], limit=limit)
-    return JSONResponse(content={"withdrawals": withdrawals, "count": len(withdrawals)})
-
-
-@app.get(
-    "/wallets/{wallet_id}",
-    response_model=core_models.WalletResponse,
-    responses=_error_responses(401, 403, 404, 429, 500),
-)
-@limiter.limit("60/minute")
-def wallet_get(
-    request: Request,
-    wallet_id: str,
-    caller: core_models.CallerContext = Depends(_require_api_key),
-) -> core_models.WalletResponse:
-    wallet = payments.get_wallet(wallet_id)
-    if wallet is None:
-        raise HTTPException(status_code=404, detail=f"Wallet '{wallet_id}' not found.")
-    if caller["type"] != "master" and wallet["owner_id"] != caller["owner_id"]:
-        raise HTTPException(status_code=403, detail="Not authorized to view this wallet.")
-    txs = payments.get_wallet_transactions(wallet_id, limit=50)
-    return JSONResponse(content={**wallet, "transactions": txs})
-
-
-# ---------------------------------------------------------------------------
-# SPA fallback: serve the built React app for non-API routes.
-#
-# Keeps the site working even when an upstream proxy forwards "/" to FastAPI
-# (e.g. nginx misconfig or missing frontend/dist short-circuit), and replaces
-# Starlette's default `{"detail": "Not Found"}` with either the SPA or a
-# structured, user-actionable 404 payload.
-# ---------------------------------------------------------------------------
-
-from pathlib import Path as _SpaPath
-from fastapi.responses import FileResponse as _SpaFileResponse
-
-_FRONTEND_DIST_DIR = _SpaPath(_REPO_ROOT) / "frontend" / "dist"
-_SPA_API_PREFIXES: tuple[str, ...] = (
-    "api/",
-    "auth/",
-    "admin/",
-    "agents/",
-    "builtin/",
-    "config/",
-    "disputes/",
-    "health",
-    "jobs",
-    "llm/",
-    "mcp/",
-    "metrics",
-    "onboarding/",
-    "ops/",
-    "openapi.json",
-    "public/",
-    "registry/",
-    "reputation/",
-    "runs",
-    "stripe/",
-    "wallets/",
-    "webhooks/",
-)
-
-
-def _path_is_api(path_fragment: str) -> bool:
-    normalized = path_fragment.lstrip("/").lower()
-    if not normalized:
-        return False
-    return normalized.startswith(_SPA_API_PREFIXES)
-
-
-def _resolved_under(parent: _SpaPath, candidate: _SpaPath) -> bool:
     try:
-        candidate_resolved = candidate.resolve()
-        parent_resolved = parent.resolve()
-    except (OSError, RuntimeError):
-        return False
-    return parent_resolved in candidate_resolved.parents or candidate_resolved == parent_resolved
+        skill_row = _hosted_skills.create_hosted_skill(
+            agent_id=agent_id,
+            owner_id=caller["owner_id"],
+            slug=parsed.name,
+            raw_md=raw_md,
+            system_prompt=parsed.body,
+            parsed_metadata={
+                "emoji": parsed.emoji,
+                "homepage": parsed.homepage,
+                "primary_env": parsed.primary_env,
+                "skill_key": parsed.skill_key,
+                "user_invocable": parsed.user_invocable,
+                "allowed_tools": parsed.allowed_tools,
+                "os_constraints": parsed.os_constraints,
+                "warnings": parsed.warnings,
+                "requires": {
+                    "bins": parsed.requires.bins,
+                    "any_bins": parsed.requires.any_bins,
+                    "env": parsed.requires.env,
+                    "config": parsed.requires.config,
+                },
+            },
+            model_chain=requested_chain,
+            temperature=float(requested_temperature) if requested_temperature is not None else 0.2,
+            max_output_tokens=int(requested_max_tokens) if requested_max_tokens is not None else 1500,
+        )
+    except Exception:
+        # Roll back the agent registration so we never leave a half-persisted skill.
+        try:
+            registry.delist_agent(agent_id, caller["owner_id"])
+        except Exception:
+            _LOG.exception("Failed to roll back agent %s after hosted_skills insert failure.", agent_id)
+        raise
 
-
-@app.get("/", include_in_schema=False)
-def spa_root() -> _SpaFileResponse:
-    """Serve ``frontend/dist/index.html`` at the site root.
-
-    Without this route an unmatched request for ``/`` would fall through to
-    Starlette's default ``{"detail": "Not Found"}`` handler, producing a
-    broken public URL whenever nginx forwards ``/`` to FastAPI. If the SPA
-    has not been built yet we surface an actionable 404 that tells the
-    operator exactly what to run.
-    """
-    index_file = _FRONTEND_DIST_DIR / "index.html"
-    if index_file.is_file():
-        return _SpaFileResponse(str(index_file))
-    raise HTTPException(
-        status_code=404,
-        detail=(
-            "Frontend is not built on this server. "
-            "Run `cd frontend && npm ci && npm run build`, then restart the API."
-        ),
-    )
-
-
-@app.get("/{full_path:path}", include_in_schema=False)
-def spa_fallback(full_path: str) -> _SpaFileResponse:
-    """Serve static assets or the React SPA shell for any non-API path.
-
-    Because this route is registered last, every concrete API route (``/auth``,
-    ``/jobs``, ``/wallets``, …) wins during FastAPI's sequential matching and
-    this handler only fires for paths that would otherwise 404. Resolution
-    order for the requested fragment:
-
-    1. If the fragment looks like an API prefix (see ``_SPA_API_PREFIXES``),
-       return a structured 404 so clients do not receive an HTML page when
-       they meant to hit JSON.
-    2. If ``frontend/dist`` is missing (frontend not yet built), return a
-       human-readable 404 telling the operator how to build the SPA.
-    3. If the fragment maps to an existing file inside ``frontend/dist`` (and
-       path traversal is blocked by ``_resolved_under``), stream that file —
-       this is how hashed assets under ``/assets/...`` are served.
-    4. Otherwise fall back to ``index.html`` so React Router can resolve the
-       URL on the client.
-    """
-    if _path_is_api(full_path):
-        raise HTTPException(status_code=404, detail=f"Not Found: /{full_path}")
-
-    if not _FRONTEND_DIST_DIR.is_dir():
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                "Frontend assets are not available on this server. "
-                "Build the React app (`cd frontend && npm ci && npm run build`) and restart."
-            ),
+    # Now rewrite the agent's endpoint_url to point at the just-created skill_id.
+    # ``update_agent`` doesn't expose ``endpoint_url`` because external agents
+    # are forbidden from changing it after registration. For hosted skills we
+    # write it once at creation time.
+    final_endpoint = _hosted_skills.make_skill_endpoint_url(skill_row["skill_id"])
+    with get_db_connection() as _conn:
+        _conn.execute(
+            "UPDATE agents SET endpoint_url = ? WHERE agent_id = ? AND owner_id = ?",
+            (final_endpoint, agent_id, caller["owner_id"]),
         )
 
-    safe_fragment = full_path.lstrip("/")
-    if safe_fragment:
-        candidate = _FRONTEND_DIST_DIR / safe_fragment
-        if candidate.is_file() and _resolved_under(_FRONTEND_DIST_DIR, candidate):
-            return _SpaFileResponse(str(candidate))
+    try:
+        _owner_email = _get_owner_email(caller["owner_id"])
+        if _owner_email:
+            _user_obj = _auth.get_user_by_id(caller["owner_id"].replace("user:", ""))
+            _owner_username = (_user_obj or {}).get("username", "there")
+            _email.send_skill_live(
+                _owner_email,
+                _owner_username,
+                candidate_name,
+                price_per_call_usd,
+                final_endpoint,
+            )
+    except Exception:
+        _LOG.warning("Failed to send skill-live email for skill %s", skill_row.get("skill_id"))
 
-    index_file = _FRONTEND_DIST_DIR / "index.html"
-    if index_file.is_file():
-        return _SpaFileResponse(str(index_file))
-
-    raise HTTPException(
-        status_code=404,
-        detail="index.html missing from frontend/dist. Rebuild the frontend and restart.",
+    return JSONResponse(
+        content={
+            "skill_id": skill_row["skill_id"],
+            "agent_id": agent_id,
+            "endpoint_url": final_endpoint,
+            "name": candidate_name,
+            "price_per_call_usd": price_per_call_usd,
+            "review_status": "approved",
+            "warnings": parsed.warnings,
+            "message": "Skill is live. Callers can hire it now.",
+        },
+        status_code=201,
     )
+
+
+@app.get("/skills", responses=_error_responses(401))
+def skills_list(
+    request: Request,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> dict:
+    _require_scope(caller, "worker")
+    rows = _hosted_skills.list_hosted_skills_for_owner(caller["owner_id"], limit=200)
+    return {"skills": [_skill_response(row) for row in rows]}
+
+
+@app.get("/skills/{skill_id}", responses=_error_responses(401, 403, 404))
+def skills_get(
+    request: Request,
+    skill_id: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> dict:
+    _require_scope(caller, "worker")
+    row = _hosted_skills.get_hosted_skill(skill_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Skill not found.")
+    if caller["type"] != "master" and row.get("owner_id") != caller["owner_id"]:
+        raise HTTPException(status_code=403, detail="Skill belongs to a different owner.")
+    return _skill_response(row, include_raw_md=True)
+
+
+@app.delete("/skills/{skill_id}", responses=_error_responses(401, 403, 404))
+def skills_delete(
+    request: Request,
+    skill_id: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> dict:
+    _require_scope(caller, "worker")
+    row = _hosted_skills.get_hosted_skill(skill_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Skill not found.")
+    if caller["type"] != "master" and row.get("owner_id") != caller["owner_id"]:
+        raise HTTPException(status_code=403, detail="Skill belongs to a different owner.")
+    # Delist the agent first so callers stop seeing it; then remove the skill row.
+    try:
+        registry.delist_agent(row["agent_id"], row["owner_id"])
+    except Exception:
+        _LOG.exception("Failed to delist agent %s during skill delete.", row["agent_id"])
+    _hosted_skills.delete_hosted_skill(skill_id)
+    return {"deleted": True, "skill_id": skill_id}
+
+
+def _skill_response(row: dict, include_raw_md: bool = False) -> dict:
+    out = {
+        "skill_id": row["skill_id"],
+        "agent_id": row["agent_id"],
+        "owner_id": row["owner_id"],
+        "slug": row["slug"],
+        "endpoint_url": _hosted_skills.make_skill_endpoint_url(row["skill_id"]),
+        "temperature": row.get("temperature"),
+        "max_output_tokens": row.get("max_output_tokens"),
+        "model_chain": row.get("model_chain"),
+        "parsed_metadata": row.get("parsed_metadata") or {},
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }
+    if include_raw_md:
+        out["raw_md"] = row.get("raw_md")
+        out["system_prompt"] = row.get("system_prompt")
+    return out

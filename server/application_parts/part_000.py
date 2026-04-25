@@ -99,6 +99,9 @@ from core.migrate import apply_migrations
 from core import logging_utils
 from core import email as _email
 from core import url_security as _url_security
+from core import hosted_skills as _hosted_skills
+from core import skill_executor as _skill_executor
+from core import skill_parser as _skill_parser
 from scripts.financial_cli import run as _run_financial
 from core.models import (
     AgentRegisterRequest,

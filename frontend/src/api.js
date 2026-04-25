@@ -211,10 +211,18 @@ async function request(path, {
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
-export async function authRegister(username, email, password) {
+export async function authRegister(username, email, password, role = 'both') {
   const { body } = await request('/auth/register', {
     method: 'POST',
-    body: { username, email, password },
+    body: { username, email, password, role },
+  })
+  return body
+}
+
+export async function authUpdateRole(role) {
+  const { body } = await request('/auth/role', {
+    method: 'PATCH',
+    body: { role },
   })
   return body
 }
@@ -305,6 +313,36 @@ export async function fetchPublicDocsIndex() {
 
 export async function fetchPublicDoc(slug) {
   const { body } = await request(`/public/docs/${encodeURIComponent(String(slug ?? '').trim())}`)
+  return body
+}
+
+// ── Hosted skills ─────────────────────────────────────────────────────────────
+
+export async function validateSkillMd(key, skillMd) {
+  const { body } = await request('/skills/validate', {
+    method: 'POST',
+    key,
+    body: { skill_md: skillMd },
+  })
+  return body
+}
+
+export async function createSkill(key, skillMd, pricePerCallUsd) {
+  const { body } = await request('/skills', {
+    method: 'POST',
+    key,
+    body: { skill_md: skillMd, price_per_call_usd: pricePerCallUsd },
+  })
+  return body
+}
+
+export async function fetchMySkills(key) {
+  const { body } = await request('/skills', { key })
+  return body
+}
+
+export async function deleteSkill(key, skillId) {
+  const { body } = await request(`/skills/${skillId}`, { method: 'DELETE', key })
   return body
 }
 

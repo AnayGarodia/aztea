@@ -53,12 +53,17 @@ from .schema import (
 )
 
 
-def register_user(username: str, email: str, password: str) -> dict:
+_VALID_ROLES = frozenset({"builder", "hirer", "both"})
+
+
+def register_user(username: str, email: str, password: str, role: str = "both") -> dict:
     """
     Create a new user and mint a short-lived Session key so the frontend can
     authenticate immediately. Users create named API keys from /keys themselves.
-    Raises ValueError on duplicate email.
+    Raises ValueError on duplicate email or invalid role.
     """
+    if role not in _VALID_ROLES:
+        raise ValueError(f"Invalid role '{role}'. Must be one of: builder, hirer, both.")
     user_id = str(uuid.uuid4())
     salt = secrets.token_hex(32)
     pw_hash = _hash_password(password, salt)
@@ -74,9 +79,9 @@ def register_user(username: str, email: str, password: str) -> dict:
         try:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
-                "INSERT INTO users (user_id, username, email, password_hash, salt, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
-                (user_id, normalized_username, normalized_email, pw_hash, salt, now),
+                "INSERT INTO users (user_id, username, email, password_hash, salt, created_at, role)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (user_id, normalized_username, normalized_email, pw_hash, salt, now, role),
             )
             conn.execute(
                 "INSERT INTO api_keys (key_id, user_id, key_hash, key_prefix, name, scopes, created_at)"
@@ -93,6 +98,7 @@ def register_user(username: str, email: str, password: str) -> dict:
         "user_id": user_id,
         "username": normalized_username,
         "email": normalized_email,
+        "role": role,
         "raw_api_key": raw_key,
         "key_id": key_id,
         "key_prefix": key_prefix,
@@ -135,6 +141,7 @@ def login_user(email: str, password: str) -> dict | None:
         "user_id": user["user_id"],
         "username": user["username"],
         "email": user["email"],
+        "role": user.get("role") or "both",
         "created_at": user["created_at"],
         "raw_api_key": result["raw_key"],
         "key_id": result["key_id"],
@@ -152,6 +159,14 @@ def get_user_by_id(user_id: str) -> dict | None:
     d.pop("password_hash", None)
     d.pop("salt", None)
     return d
+
+
+def update_user_role(user_id: str, role: str) -> None:
+    """Update the role for a user. Raises ValueError for invalid role."""
+    if role not in _VALID_ROLES:
+        raise ValueError(f"Invalid role '{role}'. Must be one of: builder, hirer, both.")
+    with _conn() as conn:
+        conn.execute("UPDATE users SET role = ? WHERE user_id = ?", (role, user_id))
 
 
 def _create_key_for_user(
