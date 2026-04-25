@@ -32,8 +32,6 @@ from __future__ import annotations
 
 import json
 import re
-import urllib.request
-
 from core.llm import CompletionRequest, Message, run_with_fallback
 
 _SYSTEM = """\
