@@ -9,7 +9,7 @@ import './Sidebar.css'
 
 const HIRER_NAV = [
   { to: '/overview',     icon: LayoutDashboard, label: 'Overview' },
-  { to: '/agents',       icon: Bot,             label: 'Discover' },
+  { to: '/agents',       icon: Bot,             label: 'Agents' },
   { to: '/jobs',         icon: Briefcase,       label: 'Jobs' },
   { to: '/wallet',       icon: Wallet,          label: 'Wallet' },
   { to: '/keys',         icon: KeyRound,        label: 'API Keys' },
@@ -31,12 +31,11 @@ const BUILDER_NAV = [
 
 const BOTH_NAV = [
   { to: '/overview',       icon: LayoutDashboard, label: 'Overview' },
-  { to: '/agents',         icon: Bot,             label: 'Discover' },
+  { to: '/agents',         icon: Bot,             label: 'Agents' },
   { to: '/jobs',           icon: Briefcase,       label: 'Jobs' },
-  { to: '/worker',         icon: Hammer,          label: 'Worker' },
-  { to: '/my-agents',      icon: ListChecks,      label: 'My Agents' },
-  { to: '/wallet',         icon: Wallet,          label: 'Wallet' },
+  { to: '/my-agents',      icon: ListChecks,      label: 'My Skills' },
   { to: '/list-skill',     icon: FilePlus,        label: 'List a Skill' },
+  { to: '/wallet',         icon: Wallet,          label: 'Wallet' },
   { to: '/keys',           icon: KeyRound,        label: 'API Keys' },
   { to: '/docs',           icon: BookOpen,        label: 'Docs' },
   { to: '/integrations',   icon: Puzzle,          label: 'Integrations' },

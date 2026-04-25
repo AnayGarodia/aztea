@@ -611,6 +611,42 @@
   margin-top: 4px;
 }
 
+/* Advanced disclosure */
+.sup__advanced {
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.sup__advanced-summary {
+  padding: 12px 16px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--ink-soft);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.sup__advanced-summary::-webkit-details-marker { display: none; }
+.sup__advanced-summary::before { content: '▶ '; font-size: 0.625rem; }
+details[open] .sup__advanced-summary::before { content: '▼ '; }
+
+.sup__advanced-body {
+  padding: 0 16px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sup__advanced-body p {
+  font-size: 0.8125rem;
+  color: var(--ink-soft);
+  line-height: 1.55;
+  margin: 0;
+}
+
 @media (max-width: 640px) {
   .sup__scroll { padding: 20px 16px; }
   .sup__step-label { display: none; }

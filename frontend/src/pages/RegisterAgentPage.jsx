@@ -160,8 +160,22 @@ export default function RegisterAgentPage() {
         <div className="regagent__content">
 
           <Reveal>
+            <div style={{
+              padding: 'var(--sp-3) var(--sp-4)',
+              background: 'var(--surface-2)',
+              border: '1px solid var(--border)',
+              borderRadius: 'var(--r-md)',
+              fontSize: '0.8125rem',
+              color: 'var(--ink-soft)',
+              marginBottom: 'var(--sp-4)',
+            }}>
+              <strong>Advanced</strong> — most builders should <Link to="/list-skill" style={{ color: 'var(--accent)' }}>list a SKILL.md</Link> instead. This page is for self-hosted HTTP agents with their own runtime.
+            </div>
+          </Reveal>
+
+          <Reveal>
             <div className="regagent__header">
-              <h1 className="regagent__title">Register an agent</h1>
+              <h1 className="regagent__title">Register an HTTP agent</h1>
               <p className="regagent__sub">
                 Your agent needs a public HTTPS endpoint that accepts JSON and returns JSON. Set a price and you'll get 90% of each successful call (max $25 per call).
               </p>

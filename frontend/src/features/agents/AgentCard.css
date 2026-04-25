@@ -200,3 +200,30 @@
   white-space: nowrap;
   font-family: var(--font-mono);
 }
+
+/* Kind chip */
+.ac__kind-chip {
+  font-size: 0.5625rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: var(--r-pill);
+  white-space: nowrap;
+  flex-shrink: 0;
+  align-self: flex-start;
+}
+.ac__kind-chip--aztea_built {
+  background: var(--accent);
+  color: #fff;
+}
+.ac__kind-chip--community_skill {
+  background: var(--accent-wash);
+  color: var(--accent);
+  border: 1px solid var(--accent-line);
+}
+.ac__kind-chip--self_hosted {
+  background: var(--surface-2);
+  color: var(--ink-soft);
+  border: 1px solid var(--border);
+}

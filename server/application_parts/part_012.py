@@ -138,6 +138,7 @@ def skills_create(
                 review_note="Auto-approved hosted skill.",
                 reviewed_at=_utc_now_iso(),
                 reviewed_by="system:auto-approve-hosted-skill",
+                kind="community_skill",
             )
             break
         except ValueError as exc:

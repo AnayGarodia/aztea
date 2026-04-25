@@ -81,6 +81,7 @@ def registry_search(
             caller_trust=caller_trust,
             include_unapproved=include_unapproved,
             model_provider=body.model_provider,
+            kind=body.kind,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

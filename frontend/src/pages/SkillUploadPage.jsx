@@ -382,6 +382,21 @@ export default function SkillUploadPage() {
             </Reveal>
           )}
 
+          {/* ── Advanced: Self-host ── */}
+          {step === 'upload' && (
+            <Reveal delay={0.1}>
+              <details className="sup__advanced">
+                <summary className="sup__advanced-summary">Advanced: self-host an HTTP agent</summary>
+                <div className="sup__advanced-body">
+                  <p>Need a custom runtime, database access, or a tool like Playwright? You can register a self-hosted HTTP endpoint instead of uploading a SKILL.md.</p>
+                  <Link to="/register-agent">
+                    <Button variant="ghost" size="sm">Go to HTTP agent registration →</Button>
+                  </Link>
+                </div>
+              </details>
+            </Reveal>
+          )}
+
           {/* ── Step 4: Live ── */}
           {step === 'live' && result && (
             <Reveal delay={0.05}>
@@ -416,8 +431,8 @@ export default function SkillUploadPage() {
                       View in marketplace <ExternalLink size={13} />
                     </Button>
                   </Link>
-                  <Link to="/worker">
-                    <Button variant="secondary">Worker dashboard</Button>
+                  <Link to="/my-agents">
+                    <Button variant="secondary">My skills</Button>
                   </Link>
                   <Button variant="ghost" onClick={resetWizard}>List another</Button>
                 </div>

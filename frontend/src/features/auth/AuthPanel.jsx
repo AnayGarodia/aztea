@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { authLogin, authRegister, authForgotPassword, authResetPassword } from '../../api'
 import { useAuth } from '../../context/AuthContext'
 import Button from '../../ui/Button'
@@ -12,6 +12,10 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 export default function AuthPanel() {
   const { connect } = useAuth()
   const navigate = useNavigate()
+  const location = useLocation()
+  const [searchParams] = useSearchParams()
+  const redirectTo = searchParams.get('redirect')
+    ?? (location.state?.from && location.state.from !== '/welcome' ? location.state.from : '/')
   const [tab, setTab] = useState('signin')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -141,7 +145,7 @@ export default function AuthPanel() {
         return
       }
       connect(result.raw_api_key, userInfo)
-      navigate('/')
+      navigate(redirectTo)
     } catch (err) {
       setError(err.message ?? 'Authentication failed')
     } finally {
@@ -165,7 +169,7 @@ export default function AuthPanel() {
     connect(apiKeyReveal.rawKey, apiKeyReveal.userInfo)
     setApiKeyReveal(null)
     setKeyAcknowledged(false)
-    navigate('/')
+    navigate(redirectTo)
   }
 
   const handleForgotSendOtp = async (e) => {

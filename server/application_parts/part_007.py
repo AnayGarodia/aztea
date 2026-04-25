@@ -75,6 +75,7 @@ def registry_register(
             model_id=body.model_id,
             pricing_model=body.pricing_model,
             pricing_config=body.pricing_config,
+            kind="self_hosted",
         )
         agent = registry.get_agent_with_reputation(agent_id, include_unapproved=True) or registry.get_agent(
             agent_id,

@@ -24,12 +24,19 @@ function healthDot(agent) {
   return <span className={cls} title={title} aria-label={title} />
 }
 
+const KIND_LABELS = {
+  aztea_built: 'Aztea-built',
+  community_skill: 'SKILL.md',
+  self_hosted: 'Self-hosted',
+}
+
 export default function AgentCard({ agent, index = 0 }) {
   const navigate = useNavigate()
   const price    = `$${Number(agent.price_per_call_usd ?? 0).toFixed(2)}`
   const calls    = agent.total_calls ?? 0
   const highDispute = typeof agent.dispute_rate === 'number' && agent.dispute_rate > 0.10
   const exampleCount = Array.isArray(agent.output_examples) ? agent.output_examples.length : 0
+  const kindLabel = KIND_LABELS[agent.kind] ?? null
 
   const matchReasons = Array.isArray(agent.match_reasons)
     ? agent.match_reasons.filter(r => typeof r === 'string' && r.trim())
@@ -61,6 +68,9 @@ export default function AgentCard({ agent, index = 0 }) {
             )}
           </div>
         </div>
+        {kindLabel && (
+          <span className={`ac__kind-chip ac__kind-chip--${agent.kind}`}>{kindLabel}</span>
+        )}
       </div>
 
       {/* Description */}

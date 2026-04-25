@@ -2,9 +2,8 @@ import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import {
-  ArrowRightLeft, Coins, ShieldCheck, Moon, Sun, Menu, X,
-  Upload, TrendingUp, Zap, Bot, ChevronDown, ChevronUp,
-  Code2, Terminal, Puzzle, GitBranch
+  Moon, Sun, Menu, X, Copy, Check,
+  Zap, ShieldCheck, Coins, ArrowRight, Code2, ExternalLink,
 } from 'lucide-react'
 import { useTheme } from '../context/ThemeContext'
 import { fetchAgents } from '../api'
@@ -12,86 +11,55 @@ import AuthPanel from '../features/auth/AuthPanel'
 import AgentSigil from '../brand/AgentSigil'
 import Reveal from '../ui/motion/Reveal'
 import Stagger from '../ui/motion/Stagger'
-import Spotlight from '../ui/motion/Spotlight'
-import ContainerScroll from '../ui/motion/ContainerScroll'
 import './LandingPage.css'
 
 const PixelScene = lazy(() => import('../ui/motion/PixelScene'))
-const BackgroundPaths = lazy(() => import('../ui/backgrounds/BackgroundPaths'))
-const GradientBackground = lazy(() => import('../ui/backgrounds/GradientBackground'))
 const AnimatedShaderHero = lazy(() => import('../ui/backgrounds/AnimatedShaderHero'))
 
-// ── Builder steps ───────────────────────────────────────────
-const BUILDER_STEPS = [
+// ── Hard-coded built-in catalog ──────────────────────────────
+const CATALOG = [
+  { id: '32cd7b5c-44d0-5259-bb02-1bbc612e92d7', name: 'Web Researcher',    desc: 'Fetch and analyze any public URL.', category: 'Web',      price: '$0.05' },
+  { id: '8cea848f-a165-5d6c-b1a0-7d14fff77d14', name: 'Code Reviewer',     desc: 'Structured review with issues ranked by severity.', category: 'Code', price: '$0.05' },
+  { id: '040dc3f5-afe7-5db7-b253-4936090cc7af', name: 'Python Executor',   desc: 'Run Python code in a sandboxed subprocess.', category: 'Code', price: '$0.03' },
+  { id: 'b7741251-d7ac-5423-b57d-8e12cd80885f', name: 'Financial Research','desc': 'Live SEC EDGAR filings + synthesis.', category: 'Data',      price: '$0.08' },
+  { id: '9e673f6e-9115-516f-b41b-5af8bcbf15bd', name: 'arXiv Research',   desc: 'Search and summarize research papers.', category: 'Research',  price: '$0.05' },
+  { id: 'a3e239dd-ea92-556b-9c95-0a213a3daf59', name: 'CVE Lookup',        desc: 'Live NIST NVD vulnerability data.', category: 'Data',      price: '$0.02' },
+  { id: '4fb167bd-b474-5ea5-bd5c-8976dfe799ae', name: 'Image Generator',   desc: 'Generate images via OpenAI or Replicate.', category: 'Media',    price: '$0.10' },
+  { id: '9a175aa2-8ffd-52f7-aae0-5a33fc88db83', name: 'Wikipedia Research','desc': 'Search and summarize Wikipedia.', category: 'Research',  price: '$0.02' },
+]
+
+const MCP_JSON = `{
+  "mcpServers": {
+    "aztea": {
+      "command": "python",
+      "args": ["aztea_mcp_server.py"],
+      "env": {
+        "AZTEA_API_KEY": "your-key-here"
+      }
+    }
+  }
+}`
+
+const WHY = [
   {
-    icon: Upload,
+    icon: Zap,
     color: '#6366f1',
-    num: '01',
-    title: 'Upload your SKILL.md',
-    body: 'Write a system prompt and a one-line description. That\'s your skill definition — no code, no server, no infra.',
+    title: 'One key, every tool',
+    body: 'One Aztea API key gives Claude Code access to every tool in the catalog. No per-service signups, no OAuth dances, no managing 20 API keys.',
+  },
+  {
+    icon: ShieldCheck,
+    color: '#22c55e',
+    title: 'Sandboxed execution',
+    body: 'Playwright, code execution, external APIs — all run on Aztea\'s infrastructure. Nothing runs on your laptop. No npm install, no credentials stored locally.',
   },
   {
     icon: Coins,
-    color: '#22c55e',
-    num: '02',
-    title: 'Set a price per call',
-    body: 'You choose the price — from $0.01 to $25.00. Callers pay before the job runs. You keep 90% of every successful call.',
-  },
-  {
-    icon: Zap,
     color: '#f59e0b',
-    num: '03',
-    title: 'Aztea executes it',
-    body: 'We run your skill on every hire — with heartbeating, output normalisation, and automatic payout to your wallet.',
+    title: 'Pay per use',
+    body: 'No subscriptions, no seats. Every tool call is billed exactly at the listed price. Failed calls are fully refunded. Start free with $2 of credit — no card needed.',
   },
 ]
-
-// ── Workflow steps (how billing works) ──────────────────────
-const WORKFLOW_STEPS = [
-  { id: 'w-charge', title: '1. Auth + charge', body: 'We check the caller\'s API key, validate their input, and charge their wallet before anything runs.', Icon: ArrowRightLeft },
-  { id: 'w-run',    title: '2. Skill runs',    body: 'Your SKILL.md system prompt executes with the caller\'s task. Progress updates stream to them in real time.', Icon: Zap },
-  { id: 'w-settle', title: '3. Payout',        body: 'Success credits 90% to your wallet. Failure refunds the caller. Either way, nothing comes out of your pocket.', Icon: ShieldCheck },
-]
-
-// ── Developer integration tracks ────────────────────────────
-const DEV_TRACKS = [
-  {
-    id: 'dev-sdk',
-    icon: Code2,
-    title: 'Python & TypeScript SDKs',
-    body: 'AzteaClient.hire() for synchronous calls. AgentServer for building workers. Both ship with types.',
-    code: 'pip install aztea',
-  },
-  {
-    id: 'dev-mcp',
-    icon: Puzzle,
-    title: 'MCP-native surface',
-    body: 'Every agent in the marketplace is a tool. Configure the MCP server and your AI orchestrator can hire agents directly.',
-    code: 'scripts/aztea_mcp_server.py',
-  },
-  {
-    id: 'dev-api',
-    icon: Terminal,
-    title: 'REST API',
-    body: 'POST /jobs for async work, POST /registry/agents/{id}/call for sync. Idempotency keys and SSE progress built in.',
-    code: 'POST /jobs',
-  },
-  {
-    id: 'dev-orch',
-    icon: GitBranch,
-    title: 'Orchestrator pattern',
-    body: 'Callers can hire multiple agents in sequence or in parallel. Dispute and rating windows are per-job, not per-session.',
-    code: 'POST /registry/agents/{id}/call',
-  },
-]
-
-const DOC_RESOURCES = [
-  { title: 'Quickstart', body: 'Create an account, fund your wallet, and run your first paid call in about five minutes.', to: '/docs/quickstart' },
-  { title: 'Auth and API keys', body: 'How to create scoped API keys and use them safely in production.', to: '/docs/auth-onboarding' },
-  { title: 'API reference', body: 'Every endpoint, required fields, and the error codes we return.', to: '/docs/api-reference' },
-]
-
-function clampUnit(v) { return v < 0 ? 0 : v > 1 ? 1 : v }
 
 function useInView(rootMargin = '300px') {
   const ref = useRef(null)
@@ -109,129 +77,31 @@ function useInView(rootMargin = '300px') {
   return [ref, inView]
 }
 
-// ── Earnings calculator ─────────────────────────────────────
-function EarningsCalc() {
-  const [price, setPrice] = useState(0.10)
-  const [calls, setCalls] = useState(1000)
-  const monthly = price * calls * 0.9
-  const annual = monthly * 12
-
+function CopyButton({ text }) {
+  const [copied, setCopied] = useState(false)
+  const handle = async () => {
+    try { await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1800) } catch {}
+  }
   return (
-    <div className="lp__calc">
-      <div className="lp__calc-controls">
-        <div className="lp__calc-control">
-          <label className="lp__calc-label">Price per call</label>
-          <div className="lp__calc-input-row">
-            <span className="lp__calc-prefix">$</span>
-            <input
-              type="number"
-              className="lp__calc-input"
-              value={price}
-              min={0.01}
-              max={25}
-              step={0.01}
-              onChange={e => setPrice(Math.max(0.01, Math.min(25, parseFloat(e.target.value) || 0.01)))}
-            />
-          </div>
-          <input type="range" className="lp__calc-slider" min={0.01} max={5} step={0.01}
-            value={Math.min(price, 5)} onChange={e => setPrice(parseFloat(e.target.value))} />
-          <div className="lp__calc-range-labels"><span>$0.01</span><span>$5.00</span></div>
-        </div>
-
-        <div className="lp__calc-control">
-          <label className="lp__calc-label">Calls per month</label>
-          <div className="lp__calc-input-row">
-            <input
-              type="number"
-              className="lp__calc-input lp__calc-input--wide"
-              value={calls}
-              min={1}
-              max={100000}
-              step={100}
-              onChange={e => setCalls(Math.max(1, parseInt(e.target.value) || 1))}
-            />
-          </div>
-          <input type="range" className="lp__calc-slider" min={100} max={10000} step={100}
-            value={Math.min(calls, 10000)} onChange={e => setCalls(parseInt(e.target.value))} />
-          <div className="lp__calc-range-labels"><span>100</span><span>10k</span></div>
-        </div>
-      </div>
-
-      <div className="lp__calc-results">
-        <div className="lp__calc-result">
-          <span className="lp__calc-result-label">Monthly earnings</span>
-          <span className="lp__calc-result-value">
-            ${monthly >= 1000 ? `${(monthly / 1000).toFixed(1)}k` : monthly.toFixed(0)}
-          </span>
-        </div>
-        <div className="lp__calc-divider" />
-        <div className="lp__calc-result">
-          <span className="lp__calc-result-label">Annual earnings</span>
-          <span className="lp__calc-result-value lp__calc-result-value--accent">
-            ${annual >= 1000 ? `${(annual / 1000).toFixed(1)}k` : annual.toFixed(0)}
-          </span>
-        </div>
-        <p className="lp__calc-note">At 90% payout. {calls.toLocaleString()} calls × ${price.toFixed(2)} × 90%.</p>
-      </div>
-    </div>
+    <button type="button" className="lp__copy-btn" onClick={handle} aria-label="Copy to clipboard">
+      {copied ? <Check size={13} /> : <Copy size={13} />}
+      <span>{copied ? 'Copied' : 'Copy'}</span>
+    </button>
   )
 }
 
-// ── Marketplace preview card ────────────────────────────────
-function MarketCard({ agent }) {
-  if (!agent) return null
-  const trust = agent.trust_score != null ? Number(agent.trust_score).toFixed(1) : '—'
+function CatalogCard({ entry, liveAgent }) {
+  const agent = liveAgent ?? entry
+  const price = liveAgent ? `$${Number(liveAgent.price_per_call_usd ?? 0).toFixed(2)}` : entry.price
   return (
-    <div className="lp__mkt-card">
-      <div className="lp__mkt-card-top">
-        <AgentSigil agentId={agent.agent_id} size="sm" />
-        <div className="lp__mkt-card-info">
-          <p className="lp__mkt-card-name">{agent.name}</p>
-          <p className="lp__mkt-card-desc">{agent.description?.slice(0, 72)}{(agent.description?.length ?? 0) > 72 ? '…' : ''}</p>
-        </div>
+    <div className="lp__cat-card">
+      <div className="lp__cat-card-top">
+        <AgentSigil agentId={entry.id} size="sm" className="lp__cat-sigil" />
+        <span className="lp__cat-badge">{entry.category}</span>
       </div>
-      <div className="lp__mkt-card-bottom">
-        <span className="lp__mkt-card-trust">★ {trust}</span>
-        <span className="lp__mkt-card-price">${Number(agent.price_per_call_usd ?? 0).toFixed(2)}/call</span>
-      </div>
-    </div>
-  )
-}
-
-function WorkflowScene({ progress }) {
-  const lineFill = 9 + progress * 84
-  return (
-    <div className="lp__workflow-scene">
-      <div className="lp__workflow-grid" />
-      <div className="lp__workflow-toolbar">
-        <span className="lp__workflow-pill">Auth + charge</span>
-        <span className="lp__workflow-pill">Skill runs (with progress)</span>
-        <span className="lp__workflow-pill">Payout on success, refund on failure</span>
-      </div>
-      <div className="lp__workflow-line">
-        <div className="lp__workflow-line-fill" style={{ width: `${lineFill}%` }} />
-      </div>
-      <div className="lp__workflow-step-grid">
-        {WORKFLOW_STEPS.map((s, i) => {
-          const Icon = s.Icon
-          const reveal = clampUnit((progress - i * 0.18) / 0.64)
-          return (
-            <article key={s.id} className="lp__workflow-step"
-              style={{ transform: `translateY(${(1 - reveal) * 22}px)`, opacity: 0.42 + reveal * 0.58 }}>
-              <div className="lp__workflow-step-top">
-                <Icon size={15} strokeWidth={2} />
-                <h3>{s.title}</h3>
-              </div>
-              <p>{s.body}</p>
-            </article>
-          )
-        })}
-      </div>
-      <div className="lp__workflow-log">
-        <div className="lp__workflow-log-row"><span>Caller charged</span><strong>before the job runs</strong></div>
-        <div className="lp__workflow-log-row"><span>Builder paid</span><strong>when the job succeeds</strong></div>
-        <div className="lp__workflow-log-row"><span>Caller refunded</span><strong>when the job fails</strong></div>
-      </div>
+      <p className="lp__cat-name">{entry.name}</p>
+      <p className="lp__cat-desc">{entry.desc}</p>
+      <span className="lp__cat-price">{price}/call</span>
     </div>
   )
 }
@@ -246,27 +116,23 @@ function focusAuthTab(tab) {
 }
 
 export default function LandingPage() {
-  const [agents, setAgents] = useState([])
+  const [liveAgents, setLiveAgents] = useState({})
   const [agentCount, setAgentCount] = useState(0)
   const [menuOpen, setMenuOpen] = useState(false)
-  const [devOpen, setDevOpen] = useState(false)
   const { isDark, toggle: toggleTheme } = useTheme()
   const { apiKey } = useAuth()
   const navigate = useNavigate()
 
-  const [howRef, howInView] = useInView()
-  const [calcRef, calcInView] = useInView()
-  const [mktRef, mktInView] = useInView()
-  const [pricingRef, pricingInView] = useInView()
   const [authRef, authInView] = useInView()
 
   useEffect(() => {
     fetchAgents(null)
       .then(r => {
-        if (r?.agents?.length) {
-          setAgentCount(r.agents.length)
-          setAgents(r.agents.slice(0, 8))
-        }
+        if (!r?.agents?.length) return
+        setAgentCount(r.agents.length)
+        const map = {}
+        for (const a of r.agents) map[a.agent_id] = a
+        setLiveAgents(map)
       })
       .catch(() => {})
   }, [])
@@ -282,6 +148,12 @@ export default function LandingPage() {
 
   const handleListSkill = () => {
     if (apiKey) { navigate('/list-skill'); return }
+    navigate('?redirect=/list-skill', { replace: true })
+    focusAuthTab('register')
+  }
+
+  const handleGetStarted = () => {
+    if (apiKey) { navigate('/overview'); return }
     focusAuthTab('register')
   }
 
@@ -300,9 +172,9 @@ export default function LandingPage() {
         </Link>
 
         <nav className="lp__nav-links" aria-label="Primary">
+          <Link className="lp__nav-link" to="/agents">Tool catalog</Link>
           <button type="button" className="lp__nav-link" onClick={() => scrollToId('lp-how')}>How it works</button>
-          <button type="button" className="lp__nav-link" onClick={() => scrollToId('lp-earnings')}>Earnings</button>
-          <button type="button" className="lp__nav-link" onClick={() => scrollToId('lp-pricing')}>Pricing</button>
+          <button type="button" className="lp__nav-link" onClick={handleListSkill}>For builders</button>
           <Link className="lp__nav-link" to="/docs">Docs</Link>
         </nav>
 
@@ -312,8 +184,8 @@ export default function LandingPage() {
             {isDark ? <Sun size={14} /> : <Moon size={14} />}
           </button>
           <button type="button" className="lp__nav-signin" onClick={() => focusAuthTab('signin')}>Sign in</button>
-          <button type="button" className="lp__nav-cta" onClick={handleListSkill}>
-            List your skill →
+          <button type="button" className="lp__nav-cta" onClick={handleGetStarted}>
+            Get started free →
           </button>
           <button type="button" className="lp__nav-menu-btn" onClick={() => setMenuOpen(v => !v)}
             aria-label={menuOpen ? 'Close menu' : 'Open menu'} aria-expanded={menuOpen}>
@@ -327,14 +199,14 @@ export default function LandingPage() {
         <div className="lp__mobile-drawer" role="dialog" aria-modal="true" aria-label="Menu">
           <button type="button" className="lp__mobile-drawer-backdrop" aria-label="Close menu" onClick={closeMenu} />
           <div className="lp__mobile-drawer-panel">
+            <Link to="/agents" className="lp__mobile-link" onClick={closeMenu}>Tool catalog</Link>
             <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); scrollToId('lp-how') }}>How it works</button>
-            <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); scrollToId('lp-earnings') }}>Earnings</button>
-            <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); scrollToId('lp-pricing') }}>Pricing</button>
+            <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); handleListSkill() }}>For builders</button>
             <Link to="/docs" className="lp__mobile-link" onClick={closeMenu}>Docs</Link>
             <div className="lp__mobile-sep" />
             <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); focusAuthTab('signin') }}>Sign in</button>
-            <button type="button" className="lp__mobile-link lp__mobile-link--primary" onClick={() => { closeMenu(); handleListSkill() }}>
-              List your skill — free
+            <button type="button" className="lp__mobile-link lp__mobile-link--primary" onClick={() => { closeMenu(); handleGetStarted() }}>
+              Get started free
             </button>
             <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); toggleTheme() }}>
               {isDark ? 'Switch to light mode' : 'Switch to dark mode'}
@@ -355,178 +227,189 @@ export default function LandingPage() {
             <div className="lp__hero-badge">
               <span className="status-dot" style={{ width: 6, height: 6 }} />
               <span className="t-mono" style={{ fontSize: '0.75rem', color: 'var(--accent)' }}>
-                {agentCount} skills &amp; agents live
+                {agentCount} agents live
               </span>
             </div>
           )}
 
           <h1 className="lp__hero-title t-display-xl">
-            Your skill has users<br />
-            <span className="lp__hero-em">but earns nothing.</span>
+            Give Claude Code<br />
+            <span className="lp__hero-em">50+ tools. One install.</span>
           </h1>
 
           <p className="lp__hero-sub">
-            Aztea turns any SKILL.md into a revenue-generating API. Upload your skill, set a price, and get paid automatically — 90% of every successful call, no infrastructure required.
+            Aztea is an agent marketplace Claude Code plugs into. One MCP install replaces 20 API keys, 20 OAuth dances, and 20 hours of infra setup. Pay per call.
           </p>
 
           <div className="lp__hero-actions">
-            <button type="button" className="lp__btn-primary" onClick={handleListSkill}>
-              List your skill — it's free
+            <button type="button" className="lp__btn-primary" onClick={() => scrollToId('lp-install')}>
+              Add to Claude Code
             </button>
-            <button type="button" className="lp__btn-ghost" onClick={() => scrollToId('lp-how')}>
-              See how it works ↓
-            </button>
+            <Link to="/agents" className="lp__btn-ghost">
+              Browse the catalog →
+            </Link>
           </div>
 
-          <p className="lp__hero-micro">No server. No infra. No card to list.</p>
-
-          {agents.length > 0 && (
-            <div className="lp__sigil-grid">
-              {agents.slice(0, 6).map((a) => (
-                <div key={a.agent_id} className="lp__sigil-item" title={a.name}>
-                  <AgentSigil agentId={a.agent_id} size="sm" />
-                  <span className="lp__sigil-name">{a.name.split(' ')[0]}</span>
-                </div>
-              ))}
-            </div>
-          )}
+          <p className="lp__hero-micro">$2 free credit on signup. No card required.</p>
         </div>
       </section>
 
-      {/* ── How it works ── */}
-      <section className="lp__how" id="lp-how" ref={howRef}>
-        <div className="lp__how-bg" aria-hidden>
-          {howInView && (
-            <Suspense fallback={null}>
-              <GradientBackground isDark={isDark} />
-            </Suspense>
-          )}
-        </div>
-        <div className="lp__how-inner">
-          <Reveal className="lp__how-intro">
-            <p className="t-micro lp__section-eyebrow">How it works</p>
-            <h2 className="lp__section-title t-h1">From SKILL.md to revenue in three steps</h2>
+      {/* ── MCP Install ── */}
+      <section className="lp__install" id="lp-install">
+        <div className="lp__install-inner">
+          <Reveal className="lp__install-text">
+            <p className="t-micro lp__section-eyebrow">One install</p>
+            <h2 className="lp__section-title t-h1">Add Aztea to Claude Code</h2>
             <p className="lp__section-sub">
-              No server to run. No billing to wire up. Paste a markdown file and set a price.
+              Add this to your <code className="lp__inline-code">~/.claude/settings.json</code> and restart Claude Code. Every tool in the catalog becomes available immediately.
+            </p>
+            <div className="lp__install-steps">
+              <div className="lp__install-step">
+                <span className="lp__install-num">1</span>
+                <span>Sign up and copy your API key from <Link to="/keys" className="lp__text-link">Settings → API Keys</Link></span>
+              </div>
+              <div className="lp__install-step">
+                <span className="lp__install-num">2</span>
+                <span>Paste the config below into <code className="lp__inline-code">~/.claude/settings.json</code></span>
+              </div>
+              <div className="lp__install-step">
+                <span className="lp__install-num">3</span>
+                <span>Ask Claude: "use Aztea to research arXiv papers on transformers"</span>
+              </div>
+            </div>
+          </Reveal>
+
+          <Reveal delay={0.08} className="lp__install-snippet-wrap">
+            <div className="lp__snippet">
+              <div className="lp__snippet-bar">
+                <span className="lp__snippet-filename">~/.claude/settings.json</span>
+                <CopyButton text={MCP_JSON} />
+              </div>
+              <pre className="lp__snippet-code">{MCP_JSON}</pre>
+            </div>
+            <p className="lp__install-docs-link">
+              <Link to="/docs/mcp-integration" className="lp__text-link">
+                Full MCP setup guide <ArrowRight size={12} style={{ display: 'inline', verticalAlign: 'middle' }} />
+              </Link>
+            </p>
+          </Reveal>
+        </div>
+      </section>
+
+      {/* ── Catalog ── */}
+      <section className="lp__cat" id="lp-catalog">
+        <div className="lp__cat-inner">
+          <Reveal className="lp__cat-header">
+            <p className="t-micro lp__section-eyebrow">What's in the catalog</p>
+            <h2 className="lp__section-title t-h1">Tools Claude Code actually needs</h2>
+            <p className="lp__section-sub">
+              Every built-in tool does something Claude can't do in a chat session — live APIs, real code execution, external data.
             </p>
           </Reveal>
 
-          <Stagger staggerDelay={0.1} delayStart={0.15} className="lp__how-steps">
-            {BUILDER_STEPS.map(({ icon: Icon, color, num, title, body }) => (
-              <div key={num} className="lp__how-step">
-                <div className="lp__how-step-icon" style={{ background: color + '1a', color }}>
+          <Stagger className="lp__cat-grid" staggerDelay={0.06}>
+            {CATALOG.map(entry => (
+              <CatalogCard key={entry.id} entry={entry} liveAgent={liveAgents[entry.id]} />
+            ))}
+          </Stagger>
+
+          <Reveal delay={0.1} className="lp__cat-cta">
+            <Link to="/agents" className="lp__btn-secondary">
+              Browse all tools <ExternalLink size={13} style={{ marginLeft: 6 }} />
+            </Link>
+          </Reveal>
+        </div>
+      </section>
+
+      {/* ── Why Aztea ── */}
+      <section className="lp__why" id="lp-how">
+        <div className="lp__why-inner">
+          <Reveal className="lp__why-header">
+            <p className="t-micro lp__section-eyebrow">Why Aztea</p>
+            <h2 className="lp__section-title t-h1">One marketplace, zero friction</h2>
+          </Reveal>
+
+          <Stagger className="lp__why-grid" staggerDelay={0.1}>
+            {WHY.map(({ icon: Icon, color, title, body }) => (
+              <div key={title} className="lp__why-card">
+                <div className="lp__why-icon" style={{ background: color + '1a', color }}>
                   <Icon size={20} />
                 </div>
-                <p className="lp__how-step-num" style={{ color }}>{num}</p>
-                <h3 className="lp__how-step-title">{title}</h3>
-                <p className="lp__how-step-body">{body}</p>
+                <h3 className="lp__why-title">{title}</h3>
+                <p className="lp__why-body">{body}</p>
               </div>
             ))}
           </Stagger>
         </div>
       </section>
 
-      {/* ── Earnings calculator ── */}
-      <section className="lp__earnings" id="lp-earnings" ref={calcRef}>
-        <div className="lp__earnings-inner">
-          <div className="lp__earnings-text">
-            <Reveal>
-              <p className="t-micro lp__section-eyebrow">Revenue potential</p>
-              <h2 className="lp__section-title t-h1">How much could you earn?</h2>
-              <p className="lp__section-sub">
-                You set the price. You keep 90%. There's no monthly fee, no usage floor, and no ceiling — just price × calls × 90%.
-              </p>
-              <ul className="lp__earnings-list">
-                <li><span className="lp__checklist-dot" />Callers are charged before a job runs</li>
-                <li><span className="lp__checklist-dot" />Failed jobs cost them nothing — and nothing comes out of your wallet</li>
-                <li><span className="lp__checklist-dot" />Payouts land in your wallet automatically</li>
-                <li><span className="lp__checklist-dot" />Withdraw anytime (Stripe Connect — optional)</li>
-              </ul>
-            </Reveal>
-          </div>
-          <Reveal delay={0.1} className="lp__earnings-calc-wrap">
-            {calcInView && <EarningsCalc />}
-          </Reveal>
-        </div>
-      </section>
-
-      {/* ── Billing lifecycle ── */}
-      <section className="lp__workflow" id="lp-lifecycle">
-        <ContainerScroll
-          className="lp__workflow-scroll"
-          titleComponent={(
-            <div className="lp__workflow-title">
-              <p className="t-micro lp__section-eyebrow">Billing lifecycle</p>
-              <h2 className="t-h1 lp__section-title">What happens on every call</h2>
-              <p className="lp__section-sub lp__workflow-sub">
-                Charge before run. Payout on success. Refund on failure. Three steps, no surprises.
-              </p>
-            </div>
-          )}
-        >
-          {(progress) => <WorkflowScene progress={progress} />}
-        </ContainerScroll>
-      </section>
-
-      {/* ── Marketplace ── */}
-      <section className="lp__mkt" id="lp-marketplace" ref={mktRef}>
-        <div className="lp__mkt-inner">
-          <Reveal className="lp__mkt-text">
-            <p className="t-micro lp__section-eyebrow">Discovery</p>
-            <h2 className="lp__section-title t-h1">Your skill appears alongside every other agent</h2>
+      {/* ── For builders ── */}
+      <section className="lp__builders" id="lp-builders">
+        <div className="lp__builders-inner">
+          <Reveal className="lp__builders-text">
+            <p className="t-micro lp__section-eyebrow">For builders</p>
+            <h2 className="lp__section-title t-h1">Ship a tool, earn 90% of every call</h2>
             <p className="lp__section-sub">
-              Callers browse by trust score, price, and tags. Every job outcome feeds your score. High-quality skills rise on their own.
+              Upload a SKILL.md — a system prompt with a description and price — and Aztea handles execution, billing, and delivery. No server. No infra. Auto-approved and live immediately.
             </p>
-            <ul className="lp__earnings-list" style={{ marginTop: 20 }}>
-              <li><span className="lp__checklist-dot" />Trust score computed from real job outcomes — not reviews</li>
-              <li><span className="lp__checklist-dot" />Browsable in the marketplace and callable via REST, SDK, or MCP</li>
-              <li><span className="lp__checklist-dot" />72-hour dispute window on every job protects both sides</li>
-            </ul>
+            <div className="lp__builders-split">
+              <div className="lp__builders-split-col">
+                <p className="lp__builders-split-label">You upload</p>
+                <pre className="lp__snippet-code lp__snippet-code--sm">{`# My Skill\n\nDescription: What it does.\nPrice: $0.05\n\n---\n\nYour system prompt here.`}</pre>
+              </div>
+              <div className="lp__builders-split-col">
+                <p className="lp__builders-split-label">You get</p>
+                <ul className="lp__builders-list">
+                  <li><span className="lp__checklist-dot" />90% of every successful call</li>
+                  <li><span className="lp__checklist-dot" />Automatic billing + escrow</li>
+                  <li><span className="lp__checklist-dot" />Trust score from real outcomes</li>
+                  <li><span className="lp__checklist-dot" />Callable via MCP, SDK, REST</li>
+                </ul>
+              </div>
+            </div>
+            <div className="lp__builders-actions">
+              <button type="button" className="lp__btn-primary" onClick={handleListSkill}>
+                List a skill — free
+              </button>
+              <Link to="/docs/agent-builder" className="lp__btn-ghost">
+                Read the builder guide →
+              </Link>
+            </div>
           </Reveal>
-          <div className="lp__mkt-cards">
-            {agents.slice(0, 4).map(a => <MarketCard key={a.agent_id} agent={a} />)}
-          </div>
         </div>
       </section>
 
       {/* ── Pricing ── */}
-      <section className="lp__pricing" id="lp-pricing" ref={pricingRef}>
-        <div className="lp__pricing-bg" aria-hidden>
-          {pricingInView && (
-            <Suspense fallback={null}>
-              <BackgroundPaths isDark={isDark} className="lp__pricing-paths" variant="strong" count={40} />
-            </Suspense>
-          )}
-        </div>
+      <section className="lp__pricing" id="lp-pricing">
         <div className="lp__pricing-inner">
           <Reveal>
             <p className="t-micro lp__section-eyebrow">Pricing</p>
             <h2 className="lp__section-title t-h1">Simple math</h2>
             <p className="lp__section-sub">
-              Callers pay the listed price. Builders keep 90%. The 10% platform fee only applies when a job succeeds — failed jobs cost nothing.
+              Pay only for what you use. No seats, no monthly fees, no minimums. Failed calls are fully refunded.
             </p>
           </Reveal>
           <Stagger className="lp__pricing-grid" staggerDelay={0.08}>
             {[
               {
+                label: 'For callers',
+                num: '$2',
+                denom: 'free credit on signup',
+                items: ['No card required to start', 'Charged at the listed price', 'Full refund on failed calls', '72-hour dispute window'],
+                accent: true,
+              },
+              {
                 label: 'For builders',
                 num: '90%',
                 denom: 'of every successful call',
-                items: ['You set the price ($0.00–$25.00)', 'Auto-approved hosted skills', 'Payout lands in your wallet', 'Withdraw via Stripe Connect'],
-                accent: true,
+                items: ['You set the price ($0.01–$25)', 'Auto-approved, live immediately', 'Payouts land in your wallet', 'Withdraw via Stripe Connect'],
+                accent: false,
               },
               {
                 label: 'Platform fee',
                 num: '10%',
                 denom: 'on success only',
-                items: ['Callers pay the exact listed price', 'Fee comes out of the builder payout', 'Failed or refunded jobs: no fee', 'Every charge is in the ledger'],
-                accent: false,
-              },
-              {
-                label: 'For callers',
-                num: 'Listed price',
-                denom: 'per successful call',
-                items: ['Charged before the job runs', 'Full refund if the skill fails', '$2 free credit on signup', '72-hour dispute window'],
+                items: ['No fee on failed jobs', 'No monthly charges', 'Every charge is in the ledger', 'Open dispute resolution'],
                 accent: false,
               },
             ].map(({ label, num, denom, items, accent }) => (
@@ -545,51 +428,6 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* ── For developers (secondary) ── */}
-      <section className="lp__dev" id="lp-dev">
-        <div className="lp__dev-inner">
-          <button
-            type="button"
-            className="lp__dev-toggle"
-            onClick={() => setDevOpen(v => !v)}
-            aria-expanded={devOpen}
-          >
-            <div className="lp__dev-toggle-left">
-              <Code2 size={16} />
-              <span>For developers</span>
-              <span className="lp__dev-sub">SDK · MCP · REST · orchestration</span>
-            </div>
-            {devOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-          </button>
-
-          {devOpen && (
-            <Reveal>
-              <div className="lp__dev-grid">
-                {DEV_TRACKS.map(({ id, icon: Icon, title, body, code }) => (
-                  <Spotlight key={id} color="var(--accent-glow)">
-                    <div className="lp__dev-card">
-                      <div className="lp__dev-card-icon"><Icon size={16} /></div>
-                      <h3 className="lp__dev-card-title">{title}</h3>
-                      <p className="lp__dev-card-body">{body}</p>
-                      <code className="lp__dev-card-code">{code}</code>
-                    </div>
-                  </Spotlight>
-                ))}
-              </div>
-              <div className="lp__dev-docs">
-                {DOC_RESOURCES.map(r => (
-                  <Link key={r.to} to={r.to} className="lp__doc-card">
-                    <h3 className="lp__doc-title">{r.title}</h3>
-                    <p className="lp__doc-body">{r.body}</p>
-                    <span className="lp__doc-link">Open guide →</span>
-                  </Link>
-                ))}
-              </div>
-            </Reveal>
-          )}
-        </div>
-      </section>
-
       {/* ── Auth ── */}
       <section className="lp__auth" id="lp-auth" ref={authRef}>
         <div className="lp__auth-bg" aria-hidden>
@@ -603,15 +441,15 @@ export default function LandingPage() {
           <div className="lp__auth-inner">
             <div className="lp__auth-text">
               <p className="t-micro lp__section-eyebrow">Get started</p>
-              <h2 className="t-h1">Start earning from your skills</h2>
+              <h2 className="t-h1">Try it in under 2 minutes</h2>
               <p className="lp__auth-sub">
-                Sign up as a builder — it's free. Upload your first SKILL.md and list it in under 5 minutes.
+                Sign up, add Aztea to Claude Code, and run your first tool call — all with $2 of free credit and no card required.
               </p>
               <ul className="lp__auth-checklist">
-                <li><span className="lp__checklist-dot" />Upload a SKILL.md — no code or server required</li>
-                <li><span className="lp__checklist-dot" />Set your price and go live immediately</li>
-                <li><span className="lp__checklist-dot" />Keep 90% of every successful call</li>
-                <li><span className="lp__checklist-dot" />Or sign up as a caller — $2 free credit, no card needed</li>
+                <li><span className="lp__checklist-dot" />$2 free credit on signup — no card needed</li>
+                <li><span className="lp__checklist-dot" />Add to Claude Code in one config snippet</li>
+                <li><span className="lp__checklist-dot" />50+ tools available immediately</li>
+                <li><span className="lp__checklist-dot" />Or list a SKILL.md and start earning</li>
               </ul>
             </div>
             <div className="lp__auth-panel">
@@ -638,7 +476,7 @@ export default function LandingPage() {
           <span className="lp__footer-sep">·</span>
           <Link to="/docs" className="lp__footer-link">Docs</Link>
           <span className="lp__footer-sep">·</span>
-          <span className="lp__footer-copy">© {new Date().getFullYear()}</span>
+          <span className="lp__footer-copy">© {new Date().getFullYear()} Aztea</span>
         </div>
       </footer>
     </div>

@@ -303,6 +303,7 @@ def ensure_builtin_agents_registered() -> None:
                 embed_listing=False,
                 model_provider="groq",
                 model_id="llama-3.3-70b-versatile",
+                kind="aztea_built",
             )
             continue
 
@@ -325,7 +326,8 @@ def ensure_builtin_agents_registered() -> None:
                     reviewed_by = ?,
                     reviewed_at = ?,
                     model_provider = ?,
-                    model_id = ?
+                    model_id = ?,
+                    kind = 'aztea_built'
                 WHERE agent_id = ?
                 """,
                 (
@@ -848,18 +850,18 @@ _PUBLIC_DOCS_DIR = os.path.join(_REPO_ROOT, "docs")
 _PUBLIC_DOCS_EXCLUDED = {"future-features.md"}
 _PUBLIC_DOCS_PRIORITY = {
     "quickstart.md": 0,
-    "skill-md-reference.md": 1,
-    "auth-onboarding.md": 2,
+    "mcp-integration.md": 1,
+    "skill-md-reference.md": 2,
     "agent-builder.md": 3,
-    "orchestrator-guide.md": 4,
+    "auth-onboarding.md": 4,
     "api-reference.md": 5,
     "errors.md": 6,
-    "mcp-integration.md": 7,
+    "orchestrator-guide.md": 7,
     "verification-contracts.md": 8,
     "reputation.md": 9,
-    "cli.md": 10,
-    "aztea-tui.md": 11,
-    "stripe-setup.md": 12,
+    "cli.md": 20,
+    "aztea-tui.md": 21,
+    "stripe-setup.md": 22,
     "terms-of-service.md": 90,
     "privacy-policy.md": 91,
 }

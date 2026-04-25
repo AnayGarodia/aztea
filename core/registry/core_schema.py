@@ -175,7 +175,8 @@ def _create_agents_table(conn: sqlite3.Connection, table_name: str = "agents") -
                 model_id            TEXT,
                 price_per_call_cents INTEGER,
                 pricing_model       TEXT NOT NULL DEFAULT 'fixed',
-                pricing_config      TEXT
+                pricing_config      TEXT,
+                kind                TEXT NOT NULL DEFAULT 'self_hosted'
             )
         """)
 
@@ -669,6 +670,19 @@ def _ensure_agent_identity_columns(conn: sqlite3.Connection) -> None:
     )
 
 
+def _ensure_kind_column(conn: sqlite3.Connection) -> None:
+    """Add kind column to agents table if not present. Idempotent."""
+    try:
+        conn.execute("ALTER TABLE agents ADD COLUMN kind TEXT NOT NULL DEFAULT 'self_hosted'")
+    except sqlite3.OperationalError as exc:
+        if "duplicate column name" not in str(exc).lower():
+            raise
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_agents_kind ON agents(kind)")
+    except sqlite3.OperationalError:
+        pass
+
+
 def init_db() -> None:
     """Create or migrate the agents table to the canonical production schema."""
     with _conn() as conn:
@@ -679,6 +693,7 @@ def init_db() -> None:
         _create_agent_embeddings_table(conn)
         _ensure_agents_indexes(conn)
         _ensure_agent_identity_columns(conn)
+        _ensure_kind_column(conn)
 
 
 # ---------------------------------------------------------------------------
@@ -749,6 +764,10 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     elif isinstance(raw_pricing_config, dict):
         parsed_pricing_config = raw_pricing_config
     d["pricing_config"] = parsed_pricing_config
+
+    valid_kinds = {"aztea_built", "community_skill", "self_hosted"}
+    raw_kind = str(d.get("kind") or "self_hosted").strip().lower()
+    d["kind"] = raw_kind if raw_kind in valid_kinds else "self_hosted"
 
     total = d["total_calls"]
     successful = d.pop("successful_calls")

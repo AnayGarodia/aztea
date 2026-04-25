@@ -299,6 +299,17 @@ export default function WorkerPage() {
 
       <div className="worker-page__scroll">
         <div className="worker-page__content">
+          <div style={{
+            padding: 'var(--sp-3) var(--sp-4)',
+            background: 'var(--surface-2)',
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--r-md)',
+            fontSize: '0.8125rem',
+            color: 'var(--ink-soft)',
+            marginBottom: 'var(--sp-4)',
+          }}>
+            This page is for self-hosted HTTP agents claiming jobs via the worker protocol. If you uploaded a SKILL.md, Aztea runs your skill automatically — no worker daemon needed.
+          </div>
           <Reveal>
             <header className="worker-page__header">
               <div>

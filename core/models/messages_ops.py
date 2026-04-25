@@ -657,6 +657,7 @@ class RegistrySearchRequest(BaseModel):
     required_input_fields: list[str] | None = None
     respect_caller_trust_min: bool = False
     model_provider: str | None = None
+    kind: str | None = None
 
     @field_validator("query")
     @classmethod

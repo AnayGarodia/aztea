@@ -193,7 +193,7 @@ export default function DashboardPage() {
           <Stagger className="dashboard__kpi-grid" staggerDelay={0.07}>
             {[
               { label: role === 'builder' ? 'Earnings balance' : 'Wallet balance', value: balance, hint: role === 'builder' ? 'Withdraw via Stripe Connect' : 'Available for calls' },
-              { label: 'Agents live',  value: loading ? '…' : agents.length, hint: role === 'builder' ? 'In the marketplace' : 'Available to hire' },
+              { label: 'Agents available', value: loading ? '…' : agents.length, hint: role === 'builder' ? 'In the marketplace' : 'Available to hire' },
               { label: 'Active jobs',  value: loading ? '…' : activeJobs, hint: 'Running or pending' },
               { label: 'Success rate', value: loading ? '…' : `${successRate}%`, hint: jobs.length > 0 ? `${completedJobs}/${jobs.length} completed` : 'No jobs yet' },
             ].filter(Boolean).map(s => (

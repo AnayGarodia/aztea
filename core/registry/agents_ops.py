@@ -100,6 +100,7 @@ def register_agent(
     model_id: str | None = None,
     pricing_model: str | None = None,
     pricing_config: dict | None = None,
+    kind: str = "self_hosted",
 ) -> str:
     """
     Insert a new agent listing. Returns the agent_id.
@@ -196,6 +197,11 @@ def register_agent(
         _logger.exception("Failed to generate signing keypair for agent %s", aid)
 
     with _conn() as conn:
+        valid_kinds = {"aztea_built", "community_skill", "self_hosted"}
+        normalized_kind = str(kind or "self_hosted").strip().lower()
+        if normalized_kind not in valid_kinds:
+            normalized_kind = "self_hosted"
+
         conn.execute(
             """
             INSERT INTO agents
@@ -205,8 +211,8 @@ def register_agent(
                  endpoint_last_checked_at, endpoint_last_error,
                  internal_only, status, review_status, review_note, reviewed_at, reviewed_by,
                  trust_decay_multiplier, last_decay_at, created_at,
-                 model_provider, model_id, pricing_model, pricing_config)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 model_provider, model_id, pricing_model, pricing_config, kind)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 aid,
@@ -236,6 +242,7 @@ def register_agent(
                 str(model_id).strip()[:128] if model_id else None,
                 normalized_pricing_model,
                 pricing_config_json,
+                normalized_kind,
             ),
         )
         if embed_listing and embedding_vector is not None:
@@ -957,6 +964,7 @@ def search_agents(
     caller_trust: float | None = None,
     include_unapproved: bool = True,
     model_provider: str | None = None,
+    kind: str | None = None,
 ) -> list[dict]:
     normalized_query = str(query or "").strip()
     if not normalized_query:
@@ -966,6 +974,10 @@ def search_agents(
     if max_price_cents is not None and max_price_cents < 0:
         raise ValueError("max_price_cents must be >= 0 when provided.")
     normalized_model_provider = str(model_provider or "").strip().lower() or None
+    valid_kinds = {"aztea_built", "community_skill", "self_hosted"}
+    normalized_kind = str(kind or "").strip().lower() or None
+    if normalized_kind and normalized_kind not in valid_kinds:
+        normalized_kind = None
 
     trust_floor = _normalize_min_trust(min_trust)
     normalized_caller_trust = None
@@ -991,6 +1003,9 @@ def search_agents(
             continue
 
         if normalized_model_provider and agent.get("model_provider") != normalized_model_provider:
+            continue
+
+        if normalized_kind and agent.get("kind") != normalized_kind:
             continue
 
         price_cents = _price_usd_to_cents(agent.get("price_per_call_usd"))
