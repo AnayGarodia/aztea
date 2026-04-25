@@ -180,7 +180,7 @@ export default function DashboardPage() {
               <div>
                 <p className="dashboard__welcome-eyebrow t-micro">Overview</p>
                 <h1>Welcome{user?.username ? `, ${user.username}` : ''}</h1>
-                <p>Browse agents, run jobs, and see every charge and payout in one place.</p>
+                <p>Hire agents, track jobs, and see every charge and payout in one place.</p>
               </div>
               <div className="dashboard__welcome-actions">
                 <Link to="/agents"><Button variant="primary">Browse agents</Button></Link>
@@ -240,14 +240,14 @@ export default function DashboardPage() {
               <Card.Body className="dashboard__steps">
                 {role === 'builder' ? (
                   <>
-                    <ActionStep done={false} title="List your first skill" copy="Upload a SKILL.md, set a price per call, and Aztea handles billing and execution automatically." actionTo="/list-skill" actionLabel="List a skill" />
+                    <ActionStep done={false} title="List your first agent" copy="Register an HTTP endpoint or upload a SKILL.md. Set a price per call — Aztea handles billing and delivery." actionTo="/list-skill" actionLabel="List an agent" />
                     <ActionStep done={false} title="Connect Stripe to withdraw earnings" copy="Payouts land in your Aztea wallet after every successful call. Connect a bank account to cash out." actionTo="/wallet" actionLabel="Connect Stripe" />
                     <ActionStep done={false} title="Create a scoped API key" copy="One key per integration so a leak only affects one surface, not your whole account." actionTo="/keys" actionLabel="Manage keys" />
                   </>
                 ) : (
                   <>
-                    <ActionStep done={agents.length > 0} title="Browse the marketplace" copy="Compare prices, trust scores, and what each agent is built to do." actionTo="/agents" actionLabel={agents.length > 0 ? 'Browse agents' : 'Start here'} />
-                    <ActionStep done={jobs.length > 0} title="Run your first job" copy="Pick an agent, fill in the required fields, and choose sync (wait for result) or async (queue and poll)." actionTo="/agents" actionLabel={jobs.length > 0 ? 'Run another' : 'First job'} />
+                    <ActionStep done={agents.length > 0} title="Browse agents to hire" copy="Each listing shows what the agent does, what it costs per call, and example outputs." actionTo="/agents" actionLabel={agents.length > 0 ? 'Browse agents' : 'Start here'} />
+                    <ActionStep done={jobs.length > 0} title="Hire your first agent" copy="Pick an agent, send it a task. Sync mode waits for the result. Async mode queues it and you poll later." actionTo="/agents" actionLabel={jobs.length > 0 ? 'Hire another' : 'Hire an agent'} />
                     <ActionStep done={jobs.length > 0} title="Check on your jobs" copy="See pending, running, and completed jobs in one list." actionTo="/jobs" actionLabel="Open jobs" />
                     <ActionStep done={hasBalance} title="Keep your wallet funded" copy="Every charge, refund, and payout shows up in your wallet transactions." actionTo="/wallet" actionLabel={hasBalance ? 'View wallet' : 'Add funds'} />
                   </>
@@ -273,7 +273,7 @@ export default function DashboardPage() {
                     <EmptyState
                       agentId="empty-jobs"
                       title="No jobs yet"
-                      sub="Start by hiring an agent from the marketplace."
+                      sub="Hire an agent from the marketplace to get started."
                       action={<Link to="/agents"><Button variant="primary">Browse agents</Button></Link>}
                     />
                   ) : (

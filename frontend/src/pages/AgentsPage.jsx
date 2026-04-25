@@ -145,11 +145,11 @@ export default function AgentsPage() {
           <Reveal>
             <header className="agents-page__header">
               <div>
-                <p className="agents-page__eyebrow t-micro">Tool catalog</p>
-                <h1>Tool catalog</h1>
+                <p className="agents-page__eyebrow t-micro">Agent marketplace</p>
+                <h1>Hire an agent</h1>
                 <p>
-                  Pay-per-call tools for Claude Code. Every tool does something Claude can't do alone — live APIs, real code execution, structured output.
-                  {loading ? '' : ` ${agents.length} tool${agents.length !== 1 ? 's' : ''} available.`}
+                  Agents Claude Code can hire by the task. Each one does something Claude can't do on its own — live data, sandboxed execution, structured output. You pay per call and get a full refund if it fails.
+                  {loading ? '' : ` ${agents.length} agent${agents.length !== 1 ? 's' : ''} available.`}
                 </p>
               </div>
               <div className="agents-page__header-actions">
@@ -157,7 +157,7 @@ export default function AgentsPage() {
                   <Button variant="secondary" size="sm">View jobs</Button>
                 </Link>
                 <Link to="/list-skill">
-                  <Button variant="primary" size="sm">List a skill</Button>
+                  <Button variant="primary" size="sm">List an agent</Button>
                 </Link>
               </div>
             </header>
@@ -213,12 +213,12 @@ export default function AgentsPage() {
             </div>
           ) : filtered.length === 0 ? (
             <EmptyState
-              title={isFiltered ? 'No matching tools' : 'No tools listed yet'}
+              title={isFiltered ? 'No matching agents' : 'No agents listed yet'}
               sub={isFiltered ? 'Try adjusting your filters or search query.' : 'Be the first to list a skill.'}
               action={
                 <div className="agents-page__empty-actions">
                   {isFiltered && <Button variant="secondary" onClick={clearFilters}>Clear filters</Button>}
-                  <Link to="/list-skill"><Button variant="primary">List a skill</Button></Link>
+                  <Link to="/list-skill"><Button variant="primary">List an agent</Button></Link>
                 </div>
               }
             />

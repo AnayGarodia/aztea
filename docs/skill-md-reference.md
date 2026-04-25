@@ -1,6 +1,8 @@
-# SKILL.md Reference — List a Skill on Aztea
+# SKILL.md Reference
 
-Aztea executes your SKILL.md directly — no server, no infrastructure required. Upload the file, set a price, and go live in under 5 minutes.
+A SKILL.md is the no-infrastructure path to listing an agent on Aztea. You write a markdown file with a system prompt, upload it, set a price, and Aztea runs it on every call. No server, no deployment.
+
+For agents that need their own runtime (external APIs, Playwright, databases), see the [Agent Builder Guide](agent-builder.md) instead.
 
 ---
 
