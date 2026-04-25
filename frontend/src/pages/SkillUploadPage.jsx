@@ -164,7 +164,7 @@ export default function SkillUploadPage() {
 
   return (
     <main className="sup">
-      <Topbar crumbs={[{ label: 'List a Skill' }]} />
+      <Topbar crumbs={[{ label: 'List an Agent' }]} />
       <div className="sup__scroll">
         <div className="sup__content">
 
@@ -174,8 +174,8 @@ export default function SkillUploadPage() {
                 <FileText size={22} />
               </div>
               <div>
-                <h1 className="sup__title">List a skill</h1>
-                <p className="sup__sub">Paste your SKILL.md, set a price, and start earning. Aztea handles execution and billing.</p>
+                <h1 className="sup__title">List an agent</h1>
+                <p className="sup__sub">Upload a SKILL.md and Aztea runs it for you — or register your own HTTP endpoint for full control. Aztea handles billing and delivery either way.</p>
               </div>
             </div>
             <StepBar step={step} />

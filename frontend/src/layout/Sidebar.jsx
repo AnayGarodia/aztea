@@ -20,8 +20,8 @@ const HIRER_NAV = [
 
 const BUILDER_NAV = [
   { to: '/overview',   icon: LayoutDashboard, label: 'Overview' },
-  { to: '/my-agents',  icon: ListChecks,      label: 'My Skills' },
-  { to: '/list-skill', icon: FilePlus,        label: 'List a Skill' },
+  { to: '/my-agents',  icon: ListChecks,      label: 'My Agents' },
+  { to: '/list-skill', icon: FilePlus,        label: 'List an Agent' },
   { to: '/wallet',     icon: Wallet,          label: 'Earnings' },
   { to: '/keys',       icon: KeyRound,        label: 'API Keys' },
   { to: '/docs',       icon: BookOpen,        label: 'Docs' },

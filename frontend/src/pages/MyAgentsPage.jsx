@@ -600,15 +600,15 @@ export default function MyAgentsPage() {
 
   return (
     <main className="myagents">
-      <Topbar crumbs={[{ label: 'My Skills' }]} />
+      <Topbar crumbs={[{ label: 'My Agents' }]} />
       <div className="myagents__scroll">
         <div className="myagents__content">
 
           <Reveal>
             <div className="myagents__header">
               <div>
-                <h1 className="myagents__title">My Skills</h1>
-                <p className="myagents__sub">Skills you've listed on the marketplace.</p>
+                <h1 className="myagents__title">My Agents</h1>
+                <p className="myagents__sub">Agents you've listed on the marketplace.</p>
               </div>
               <Button
                 variant="primary"
@@ -637,7 +637,7 @@ export default function MyAgentsPage() {
                       <Stat label="Total calls" value={loading ? '-' : totalCalls.toLocaleString()} />
                     </div>
                     <div style={{ flex: 1 }}>
-                      <Stat label="Active skills" value={loading ? '-' : activeAgentCount} />
+                      <Stat label="Active agents" value={loading ? '-' : activeAgentCount} />
                     </div>
                   </div>
                 </Card.Body>

@@ -360,14 +360,17 @@ export default function LandingPage() {
         <div className="lp__builders-inner">
           <Reveal className="lp__builders-text">
             <p className="t-micro lp__section-eyebrow">For builders</p>
-            <h2 className="lp__section-title t-h1">Ship a tool, earn 90% of every call</h2>
+            <h2 className="lp__section-title t-h1">List your agent, earn 90% of every call</h2>
             <p className="lp__section-sub">
-              Upload a SKILL.md — a system prompt with a description and price — and Aztea handles execution, billing, and delivery. No server. No infra. Auto-approved and live immediately.
+              Anyone can add their agent to Aztea. Register an HTTP endpoint and it's instantly callable via MCP, SDK, and REST — with billing, escrow, and trust scores handled for you.
             </p>
             <div className="lp__builders-split">
               <div className="lp__builders-split-col">
-                <p className="lp__builders-split-label">You upload</p>
-                <pre className="lp__snippet-code lp__snippet-code--sm">{`# My Skill\n\nDescription: What it does.\nPrice: $0.05\n\n---\n\nYour system prompt here.`}</pre>
+                <p className="lp__builders-split-label">Two ways to list</p>
+                <ul className="lp__builders-list">
+                  <li><span className="lp__checklist-dot" /><strong>HTTP agent</strong> — register any endpoint, full control over logic and runtime</li>
+                  <li><span className="lp__checklist-dot" /><strong>SKILL.md</strong> — upload a system prompt, Aztea runs it for you (no server needed)</li>
+                </ul>
               </div>
               <div className="lp__builders-split-col">
                 <p className="lp__builders-split-label">You get</p>
@@ -381,7 +384,7 @@ export default function LandingPage() {
             </div>
             <div className="lp__builders-actions">
               <button type="button" className="lp__btn-primary" onClick={handleListSkill}>
-                List a skill — free
+                List an agent — free
               </button>
               <Link to="/docs/agent-builder" className="lp__btn-ghost">
                 Read the builder guide →
@@ -461,7 +464,7 @@ export default function LandingPage() {
                 <li><span className="lp__checklist-dot" />$2 free credit on signup — no card needed</li>
                 <li><span className="lp__checklist-dot" />Add to Claude Code in one config snippet</li>
                 <li><span className="lp__checklist-dot" />50+ tools available immediately</li>
-                <li><span className="lp__checklist-dot" />Or list a SKILL.md and start earning</li>
+                <li><span className="lp__checklist-dot" />Or list your own agent and start earning</li>
               </ul>
             </div>
             <div className="lp__auth-panel">
