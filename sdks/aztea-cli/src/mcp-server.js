@@ -46,7 +46,7 @@ function request(method, path, body, timeoutMs) {
     const headers = {
       'Authorization': `Bearer ${API_KEY}`,
       'Content-Type': 'application/json',
-      'User-Agent': 'aztea-mcp/0.5.0',
+      'User-Agent': 'aztea-mcp/0.6.0',
     }
     if (payload) headers['Content-Length'] = Buffer.byteLength(payload)
 
@@ -246,13 +246,18 @@ async function handleMessage(msg) {
 
 // ── Entry ─────────────────────────────────────────────────────
 
-async function run() {
+function run() {
   if (!API_KEY) {
     log('No AZTEA_API_KEY set — run `npx aztea-cli init` to configure.')
   }
-  await refresh()
-  setInterval(refresh, REFRESH_MS)
+  // Start listening on stdin IMMEDIATELY so Claude Code's initialize
+  // handshake gets a reply within its short MCP startup timeout.
+  // The registry refresh runs in the background — tools/list will
+  // return AUTH_TOOL for the first ~200ms until the first refresh
+  // completes (or longer if the prod server is slow).
   readMessages()
+  refresh().catch(err => log(`initial refresh failed: ${err.message}`))
+  setInterval(refresh, REFRESH_MS)
 }
 
 module.exports = { run }
