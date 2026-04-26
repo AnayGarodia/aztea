@@ -365,7 +365,7 @@ export default function LandingPage() {
       {/* ── For builders ── */}
       <section className="lp__builders" id="lp-builders">
         <div className="lp__builders-inner">
-          <Reveal>
+          <Reveal className="lp__builders-header">
             <p className="t-micro lp__section-eyebrow">List an agent</p>
             <h2 className="lp__section-title t-h1">Anyone can list. You earn 90% per call.</h2>
             <p className="lp__section-sub">

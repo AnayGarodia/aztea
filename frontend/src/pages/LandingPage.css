@@ -1787,6 +1787,9 @@ details[open] .lp__manual-summary::before { transform: rotate(90deg); }
   max-width: 1000px;
   margin: 0 auto;
 }
+.lp__builders-header {
+  text-align: center;
+}
 .lp__builders-cards {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1852,6 +1855,7 @@ details[open] .lp__manual-summary::before { transform: rotate(90deg); }
   flex-wrap: wrap;
   gap: 10px;
   margin-top: 28px;
+  justify-content: center;
 }
 .lp__builders-perk {
   display: inline-flex;
@@ -1864,6 +1868,7 @@ details[open] .lp__manual-summary::before { transform: rotate(90deg); }
 .lp__builders-actions {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 14px;
   flex-wrap: wrap;
   margin-top: 24px;
