@@ -42,7 +42,7 @@ function request(method, path, body, timeoutMs) {
     const headers = {
       'Authorization': `Bearer ${API_KEY}`,
       'Content-Type': 'application/json',
-      'User-Agent': 'aztea-mcp/0.11.0',
+      'User-Agent': 'aztea-mcp/0.12.0',
     }
     if (payload) headers['Content-Length'] = Buffer.byteLength(payload)
 
@@ -70,17 +70,14 @@ function request(method, path, body, timeoutMs) {
 }
 
 // ── Tool description builder ─────────────────────────────────
-// Front-loads keywords Claude's tool-search ranks on so these tools
-// surface for the user's intent (e.g. "review this code") even when
-// the user doesn't say "use Aztea".
+// Keep descriptions short — tools/list is loaded into context every
+// session. A one-liner per tool beats a paragraph.
 function buildToolDescription(agent) {
-  const base = (agent.description || '').trim()
+  const hint = inferUseWhenHint(agent)
   const price = agent.price_per_call_usd != null
-    ? `~$${Number(agent.price_per_call_usd).toFixed(2)}/call, refunded on failure`
+    ? `$${Number(agent.price_per_call_usd).toFixed(2)}/call`
     : ''
-  const tags = Array.isArray(agent.tags) ? agent.tags.slice(0, 6).join(', ') : ''
-  const useWhen = inferUseWhenHint(agent)
-  return [useWhen, base, tags && `Tags: ${tags}`, price].filter(Boolean).join(' — ')
+  return [hint, price].filter(Boolean).join(' · ')
 }
 
 function inferUseWhenHint(agent) {

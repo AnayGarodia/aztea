@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { motion, AnimatePresence } from 'motion/react'
 import { ArrowRight, X, Wallet, Bot, Zap, ChevronLeft, Hammer, ListChecks, Coins, Terminal, Wrench } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
@@ -291,6 +291,8 @@ const BUILDER_STEPS = [
   },
 ]
 
+const BUILDER_PATHS = ['/list-skill', '/register-agent', '/my-agents']
+
 export default function OnboardingWizard() {
   const { user } = useAuth()
   const { loading, jobs, wallet } = useMarket()
@@ -299,8 +301,14 @@ export default function OnboardingWizard() {
   const [dir, setDir] = useState(1)
   const dismissedRef = useRef(false)
   const navigate = useNavigate()
+  const location = useLocation()
   const role = user?.role ?? 'both'
-  const STEPS = role === 'builder'
+  // 'both' users on a builder page get builder steps — avoids showing the
+  // "run npx aztea-cli init" terminal step to someone who just clicked
+  // "List your agent" and landed on /list-skill.
+  const isBuilderContext = role === 'builder' ||
+    (role === 'both' && BUILDER_PATHS.some(p => location.pathname.startsWith(p)))
+  const STEPS = isBuilderContext
     ? BUILDER_STEPS
     : makeHirerSteps(role === 'hirer' ? 2 : 1)
   const userId = String(user?.user_id || '').trim()
