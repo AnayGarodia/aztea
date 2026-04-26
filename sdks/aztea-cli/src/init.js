@@ -6,6 +6,7 @@ const fs = require('fs')
 const path = require('path')
 const os = require('os')
 const readline = require('readline')
+const { execFileSync, spawnSync } = require('child_process')
 
 const BASE_URL = process.env.AZTEA_BASE_URL || 'https://aztea.ai'
 
@@ -27,7 +28,7 @@ function post(url, body) {
       headers: {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(payload),
-        'User-Agent': 'aztea-cli/0.3.0',
+        'User-Agent': 'aztea-cli/0.4.0',
       },
     }, (res) => {
       let data = ''
@@ -127,28 +128,51 @@ function promptPassword(question) {
   })
 }
 
-// ── Settings file helpers ────────────────────────────────────
+// ── Claude Code MCP config ───────────────────────────────────
+//
+// Claude Code reads user-scoped MCP servers from ~/.claude.json (NOT
+// ~/.claude/settings.json — that file holds general settings only).
+// The canonical way to register a server is `claude mcp add`; we fall
+// back to writing the JSON file directly when the `claude` binary is
+// not on PATH.
 
-const CLAUDE_SETTINGS_PATH = path.join(os.homedir(), '.claude', 'settings.json')
+const CLAUDE_USER_CONFIG_PATH = path.join(os.homedir(), '.claude.json')
 
-function readSettings() {
+function hasClaudeCli() {
   try {
-    return JSON.parse(fs.readFileSync(CLAUDE_SETTINGS_PATH, 'utf8'))
+    const r = spawnSync('claude', ['--version'], { stdio: 'ignore' })
+    return r.status === 0
   } catch {
-    return {}
+    return false
   }
 }
 
-function writeSettings(obj) {
-  const dir = path.dirname(CLAUDE_SETTINGS_PATH)
-  fs.mkdirSync(dir, { recursive: true })
-  fs.writeFileSync(CLAUDE_SETTINGS_PATH, JSON.stringify(obj, null, 2) + '\n', 'utf8')
+function injectViaClaudeCli(apiKey) {
+  // Remove first so re-running init updates an existing entry cleanly.
+  spawnSync('claude', ['mcp', 'remove', 'aztea', '--scope', 'user'], { stdio: 'ignore' })
+  const args = [
+    'mcp', 'add',
+    '--scope', 'user',
+    '--transport', 'stdio',
+    '--env', `AZTEA_API_KEY=${apiKey}`,
+    '--env', `AZTEA_BASE_URL=${BASE_URL}`,
+    'aztea',
+    '--',
+    'npx', '-y', 'aztea-cli', 'mcp',
+  ]
+  execFileSync('claude', args, { stdio: ['ignore', 'pipe', 'pipe'] })
 }
 
-function injectMcpConfig(apiKey) {
-  const settings = readSettings()
-  if (!settings.mcpServers) settings.mcpServers = {}
-  settings.mcpServers.aztea = {
+function injectViaFile(apiKey) {
+  let cfg = {}
+  try {
+    cfg = JSON.parse(fs.readFileSync(CLAUDE_USER_CONFIG_PATH, 'utf8'))
+  } catch {
+    cfg = {}
+  }
+  if (!cfg.mcpServers || typeof cfg.mcpServers !== 'object') cfg.mcpServers = {}
+  cfg.mcpServers.aztea = {
+    type: 'stdio',
     command: 'npx',
     args: ['-y', 'aztea-cli', 'mcp'],
     env: {
@@ -156,7 +180,36 @@ function injectMcpConfig(apiKey) {
       AZTEA_BASE_URL: BASE_URL,
     },
   }
-  writeSettings(settings)
+  fs.writeFileSync(CLAUDE_USER_CONFIG_PATH, JSON.stringify(cfg, null, 2) + '\n', 'utf8')
+}
+
+function injectMcpConfig(apiKey) {
+  if (hasClaudeCli()) {
+    injectViaClaudeCli(apiKey)
+    return { method: 'claude mcp add', path: '~/.claude.json (managed by claude)' }
+  }
+  injectViaFile(apiKey)
+  return { method: 'direct write', path: CLAUDE_USER_CONFIG_PATH }
+}
+
+// ── Stale config cleanup ─────────────────────────────────────
+//
+// Earlier CLI versions wrote the MCP config to ~/.claude/settings.json
+// (wrong file — Claude Code never read MCP servers from there). Strip
+// the legacy entry so users upgrading from <0.4.0 don't end up with
+// two conflicting "aztea" registrations.
+function removeLegacyMcpEntry() {
+  const legacyPath = path.join(os.homedir(), '.claude', 'settings.json')
+  try {
+    const settings = JSON.parse(fs.readFileSync(legacyPath, 'utf8'))
+    if (settings.mcpServers && settings.mcpServers.aztea) {
+      delete settings.mcpServers.aztea
+      if (Object.keys(settings.mcpServers).length === 0) delete settings.mcpServers
+      fs.writeFileSync(legacyPath, JSON.stringify(settings, null, 2) + '\n', 'utf8')
+    }
+  } catch {
+    // file missing or unparseable → nothing to clean
+  }
 }
 
 // ── Main ─────────────────────────────────────────────────────
@@ -258,15 +311,18 @@ async function run() {
   }
 
   // ── Write config ──
+  removeLegacyMcpEntry()
+  let result
   try {
-    injectMcpConfig(apiKey)
-    console.log(`✓ Added Aztea to Claude Code (${CLAUDE_SETTINGS_PATH})`)
+    result = injectMcpConfig(apiKey)
+    console.log(`✓ Added Aztea to Claude Code (${result.method})`)
   } catch (err) {
-    console.error(`Could not write to ${CLAUDE_SETTINGS_PATH}: ${err.message}`)
-    console.log('\nAdd this manually to ~/.claude/settings.json:')
+    console.error(`Could not register MCP server: ${err.message}`)
+    console.log('\nAdd this manually to ~/.claude.json:')
     console.log(JSON.stringify({
       mcpServers: {
         aztea: {
+          type: 'stdio',
           command: 'npx', args: ['-y', 'aztea-cli', 'mcp'],
           env: { AZTEA_API_KEY: apiKey, AZTEA_BASE_URL: BASE_URL },
         }
@@ -279,11 +335,13 @@ async function run() {
   console.log('─'.repeat(52))
   console.log("  You're ready. Restart Claude Code, then try:")
   console.log()
-  console.log('  "Use Aztea to review this code for bugs"')
-  console.log('  "Use Aztea to run this Python snippet"')
-  console.log('  "Use Aztea to look up CVEs in express 4.18"')
+  console.log('  "Review this file for bugs"')
+  console.log('  "Generate tests for src/foo.py"')
+  console.log('  "Audit my dependencies for CVEs"')
+  console.log('  "Run this Python snippet in a sandbox"')
   console.log()
-  console.log(`  Browse all tools: ${BASE_URL}/agents`)
+  console.log('  Verify it loaded:    claude mcp list')
+  console.log(`  Browse agents:       ${BASE_URL}/agents`)
   console.log('─'.repeat(52))
   console.log()
 }

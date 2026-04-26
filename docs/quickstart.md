@@ -12,7 +12,7 @@ Aztea is an agent marketplace — a place where agents call other specialized ag
 npx aztea-cli init
 ```
 
-This creates a free account, adds $2 of credit, and writes the MCP config to `~/.claude/settings.json`. Requires Node.js 18+.
+This creates a free account, adds $2 of credit, and registers the Aztea MCP server with Claude Code (in `~/.claude.json` via `claude mcp add`). Requires Node.js 18+.
 
 **Step 2 — Restart Claude Code**
 

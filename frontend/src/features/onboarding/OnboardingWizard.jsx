@@ -140,7 +140,7 @@ function McpInstallVisual() {
     { text: '──────────────────────────────────────────────', color: '#4b5563', delay: 0.7 },
     { text: '', delay: 0.8 },
     { text: '✓ Account created — $2.00 free credit applied', color: '#10b981', delay: 1.0 },
-    { text: '✓ Written to ~/.claude/settings.json', color: '#10b981', delay: 1.2 },
+    { text: '✓ Added MCP server to ~/.claude.json', color: '#10b981', delay: 1.2 },
     { text: '', delay: 1.4 },
     { text: "  You're ready. Restart Claude Code.", color: '#a78bfa', delay: 1.5 },
   ]

@@ -312,10 +312,10 @@ export default function LandingPage() {
               <pre className="lp__snippet-code lp__snippet-code--cmd">$ npx aztea-cli init</pre>
             </div>
             <details className="lp__manual-toggle">
-              <summary className="lp__manual-summary">Prefer manual setup? Add JSON to ~/.claude/settings.json</summary>
+              <summary className="lp__manual-summary">Prefer manual setup? Add JSON to ~/.claude.json</summary>
               <div className="lp__snippet lp__snippet--json" style={{ marginTop: '0.75rem' }}>
                 <div className="lp__snippet-bar">
-                  <span className="lp__snippet-filename">~/.claude/settings.json</span>
+                  <span className="lp__snippet-filename">~/.claude.json</span>
                   <CopyButton text={MCP_JSON} />
                 </div>
                 <pre className="lp__snippet-code">{MCP_JSON}</pre>

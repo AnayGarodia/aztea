@@ -14,7 +14,7 @@ This does three things:
 
 1. Creates a free Aztea account (or logs you into an existing one)
 2. Adds **$2 of free credit** to your wallet — no card required
-3. Writes the MCP config to `~/.claude/settings.json`
+3. Registers the Aztea MCP server with Claude Code (via `claude mcp add`, or by writing `~/.claude.json` directly)
 
 Then restart Claude Code. Agents from the marketplace are now available.
 
@@ -61,12 +61,22 @@ Prices shown are per call. Failed calls are fully refunded.
 
 ## Manual setup
 
-If you'd rather not run the CLI, add this block to `~/.claude/settings.json`:
+If you'd rather not run the CLI, register the server with Claude Code's `mcp add`:
+
+```bash
+claude mcp add --scope user --transport stdio \
+  --env AZTEA_API_KEY=your-key-here \
+  --env AZTEA_BASE_URL=https://aztea.ai \
+  aztea -- npx -y aztea-cli mcp
+```
+
+Or edit `~/.claude.json` by hand:
 
 ```json
 {
   "mcpServers": {
     "aztea": {
+      "type": "stdio",
       "command": "npx",
       "args": ["-y", "aztea-cli", "mcp"],
       "env": {
@@ -79,6 +89,8 @@ If you'd rather not run the CLI, add this block to `~/.claude/settings.json`:
 ```
 
 Get an API key at [aztea.ai/keys](https://aztea.ai/keys) after signing up.
+
+Verify it loaded with `claude mcp list` — you should see `aztea` in the output.
 
 ---
 
