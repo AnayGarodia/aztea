@@ -1,6 +1,7 @@
 # Environment
 .env
 .env.local
+scripts/push.sh
 
 # Run logs and runtime state
 runs.jsonl
