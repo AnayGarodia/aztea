@@ -6,7 +6,7 @@ Configure via environment variables:
   SMTP_PORT       e.g. 587
   SMTP_USER       e.g. apikey
   SMTP_PASSWORD   e.g. your SMTP password or API key
-  FROM_EMAIL      e.g. noreply@aztea.dev
+  FROM_EMAIL      e.g. noreply@aztea.ai
   FROM_NAME       e.g. Aztea
 """
 from __future__ import annotations
@@ -25,7 +25,7 @@ _SMTP_HOST     = os.environ.get("SMTP_HOST", "").strip()
 _SMTP_PORT     = int(os.environ.get("SMTP_PORT", "587") or "587")
 _SMTP_USER     = os.environ.get("SMTP_USER", "").strip()
 _SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "").strip()
-_FROM_EMAIL    = os.environ.get("FROM_EMAIL", "noreply@aztea.dev").strip()
+_FROM_EMAIL    = os.environ.get("FROM_EMAIL", "noreply@aztea.ai").strip()
 _FROM_NAME     = os.environ.get("FROM_NAME", "Aztea").strip()
 
 ENABLED = bool(_SMTP_HOST and _SMTP_USER and _SMTP_PASSWORD)
