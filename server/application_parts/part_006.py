@@ -537,6 +537,19 @@ def onboarding_ingest(
 # ---------------------------------------------------------------------------
 
 
+def _credit_starter_balance(result: dict[str, Any]) -> None:
+    """hirer → $2.00 platform credit; both → $1.00 welcome credit; builder → none."""
+    role = result.get("role", "both")
+    try:
+        wallet = payments.get_or_create_wallet(f"user:{result['user_id']}")
+        if role == "hirer":
+            payments.deposit(wallet["wallet_id"], 200, "Signup credit ($2.00 — platform-funded)")
+        elif role == "both":
+            payments.deposit(wallet["wallet_id"], 100, "Welcome credit ($1.00 to get started)")
+    except Exception:
+        _LOG.warning("Failed to credit starter balance for new user %s", result.get("user_id"))
+
+
 def _auth_legal_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "legal_acceptance_required": bool(payload.get("legal_acceptance_required", True)),
@@ -576,20 +589,7 @@ def auth_register(request: Request, body: UserRegisterRequest) -> core_models.Au
                 status_code=503,
                 detail="Authentication service is temporarily unavailable. Please try again.",
             )
-    # Credit startup balance based on role:
-    #   hirer  → $2.00 signup credit (platform-funded to encourage first hire)
-    #   builder → no wallet credit (builders earn, don't spend)
-    #   both    → $1.00 welcome credit (legacy default)
-    try:
-        _owner_id = f"user:{result['user_id']}"
-        _starter_wallet = payments.get_or_create_wallet(_owner_id)
-        if role == "hirer":
-            payments.deposit(_starter_wallet["wallet_id"], 200, "Signup credit ($2.00 — platform-funded)")
-        elif role == "both":
-            payments.deposit(_starter_wallet["wallet_id"], 100, "Welcome credit ($1.00 to get started)")
-        # builders get no credit — they list skills and earn
-    except Exception:
-        _LOG.warning("Failed to credit starter balance for new user %s", result.get("user_id"))
+    _credit_starter_balance(result)
     _email.send_welcome(result.get("email", ""), result.get("username", "there"), role=role)
     return JSONResponse(content={**result, **_auth_legal_payload(result)}, status_code=201)
 
@@ -834,6 +834,64 @@ def auth_revoke_key(
     if not ok:
         raise HTTPException(status_code=404, detail="Key not found or already revoked.")
     return JSONResponse(content={"revoked": True})
+
+
+@app.post(
+    "/auth/signup/start",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(400, 429, 500),
+)
+@limiter.limit(_AUTH_RATE_LIMIT, key_func=get_remote_address)
+def auth_signup_start(request: Request, body: UserRegisterRequest) -> JSONResponse:
+    """Begin email-verified signup. Sends a 6-digit OTP and stores the pending
+    registration; the account is only created when /auth/signup/verify succeeds."""
+    email = body.email.strip().lower()
+    try:
+        _auth.init_auth_db()
+        otp = _auth.issue_signup_verification(body.username, body.email, body.password, role=body.role or "both")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    _email.send_signup_verification_otp(email, otp)
+    return JSONResponse(content={"sent": True, "email": email})
+
+
+@app.post(
+    "/auth/signup/resend",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(400, 429, 500),
+)
+@limiter.limit("3/minute", key_func=get_remote_address)
+def auth_signup_resend(request: Request, body: dict) -> JSONResponse:
+    """Resend the verification OTP for an in-progress signup."""
+    email = str(body.get("email") or "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required.")
+    otp = _auth.reissue_signup_verification_otp(email)
+    if otp is None:
+        raise HTTPException(status_code=400, detail="No pending signup for that email. Start over.")
+    _email.send_signup_verification_otp(email, otp)
+    return JSONResponse(content={"sent": True, "email": email})
+
+
+@app.post(
+    "/auth/signup/verify",
+    status_code=201,
+    response_model=core_models.AuthRegisterResponse,
+    responses=_error_responses(400, 429, 500),
+)
+@limiter.limit(_AUTH_RATE_LIMIT, key_func=get_remote_address)
+def auth_signup_verify(request: Request, body: dict) -> JSONResponse:
+    """Verify the OTP and finalize account creation."""
+    email = str(body.get("email") or "").strip().lower()
+    otp = str(body.get("otp") or "").strip()
+    try:
+        _auth.init_auth_db()
+        result = _auth.consume_signup_verification(email, otp)
+    except _auth.SignupVerificationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    _credit_starter_balance(result)
+    _email.send_welcome(result.get("email", ""), result.get("username", "there"), role=result.get("role", "both"))
+    return JSONResponse(content={**result, **_auth_legal_payload(result)}, status_code=201)
 
 
 @app.post(

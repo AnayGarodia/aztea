@@ -352,6 +352,8 @@ def jobs_get(
         raise HTTPException(status_code=403, detail="Not authorized to view this job.")
     response = _job_response(job, caller)
     response["latest_message_id"] = jobs.get_latest_message_id(job_id)
+    quality = reputation.get_job_quality_rating(job_id)
+    response["caller_quality_rating"] = quality.get("rating") if quality else None
     return JSONResponse(content=response)
 
 

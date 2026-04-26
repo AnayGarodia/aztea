@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom'
-import { authLogin, authRegister, authForgotPassword, authResetPassword } from '../../api'
+import { authLogin, authSignupStart, authSignupVerify, authSignupResend, authForgotPassword, authResetPassword } from '../../api'
 import { useAuth } from '../../context/AuthContext'
 import Button from '../../ui/Button'
 import Input from '../../ui/Input'
-import { Mail, Lock, User, Eye, EyeOff, Copy, Check, KeyRound, ArrowLeft, Hammer, Zap } from 'lucide-react'
+import { Mail, Lock, User, Eye, EyeOff, KeyRound, ArrowLeft, Hammer, Zap } from 'lucide-react'
 import './AuthPanel.css'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -25,13 +25,15 @@ export default function AuthPanel() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [apiKeyReveal, setApiKeyReveal] = useState(null)
-  const [copied, setCopied] = useState(false)
-  const [keyAcknowledged, setKeyAcknowledged] = useState(false)
 
   // Role selector state (register flow only)
-  const [registerStep, setRegisterStep] = useState('role') // 'role' | 'form'
+  const [registerStep, setRegisterStep] = useState('role') // 'role' | 'form' | 'verify'
   const [selectedRole, setSelectedRole] = useState(null) // 'builder' | 'hirer'
+
+  // Signup OTP state
+  const [signupOtp, setSignupOtp] = useState('')
+  const [resending, setResending] = useState(false)
+  const [resentNote, setResentNote] = useState('')
 
   // Forgot password state
   const [forgotStep, setForgotStep] = useState(1) // 1 = email, 2 = otp+newpw
@@ -73,6 +75,8 @@ export default function AuthPanel() {
     if (nextTab === 'register') {
       setRegisterStep('role')
       setSelectedRole(null)
+      setSignupOtp('')
+      setResentNote('')
     }
     if (nextTab === 'forgot') {
       setForgotStep(1)
@@ -118,34 +122,19 @@ export default function AuthPanel() {
     }
     setLoading(true)
     try {
-      let result
       if (!registerMode) {
-        result = await authLogin(normalizedEmail, password)
+        const result = await authLogin(normalizedEmail, password)
+        const userInfo = buildUserInfo(result, normalizedEmail, selectedRole)
+        connect(result.raw_api_key, userInfo)
+        navigate(redirectTo)
       } else {
-        result = await authRegister(normalizedUsername, normalizedEmail, password, selectedRole || 'both')
+        // Register: kick off email-OTP signup. We do NOT create an account
+        // until /auth/signup/verify succeeds.
+        await authSignupStart(normalizedUsername, normalizedEmail, password, selectedRole || 'both')
+        setSignupOtp('')
+        setResentNote('')
+        setRegisterStep('verify')
       }
-      const userInfo = {
-        user_id: result.user_id,
-        username: result.username ?? normalizedUsername,
-        email: result.email ?? normalizedEmail,
-        role: result.role ?? selectedRole ?? 'both',
-        scopes: result.scopes ?? ['caller'],
-        legal_acceptance_required: Boolean(result.legal_acceptance_required),
-        legal_accepted_at: result.legal_accepted_at ?? null,
-        terms_version_current: result.terms_version_current ?? null,
-        privacy_version_current: result.privacy_version_current ?? null,
-        terms_version_accepted: result.terms_version_accepted ?? null,
-        privacy_version_accepted: result.privacy_version_accepted ?? null,
-      }
-      if (registerMode && result.user_id) {
-        localStorage.removeItem(`aztea_onboarding_done:${result.user_id}`)
-      }
-      if (registerMode && result.raw_api_key) {
-        setApiKeyReveal({ rawKey: result.raw_api_key, userInfo })
-        return
-      }
-      connect(result.raw_api_key, userInfo)
-      navigate(redirectTo)
     } catch (err) {
       setError(err.message ?? 'Authentication failed')
     } finally {
@@ -153,23 +142,57 @@ export default function AuthPanel() {
     }
   }
 
-  const handleCopyKey = async () => {
-    if (!apiKeyReveal?.rawKey) return
+  const buildUserInfo = (result, fallbackEmail, fallbackRole) => ({
+    user_id: result.user_id,
+    username: result.username ?? normalizedUsername,
+    email: result.email ?? fallbackEmail,
+    role: result.role ?? fallbackRole ?? 'both',
+    scopes: result.scopes ?? ['caller'],
+    legal_acceptance_required: Boolean(result.legal_acceptance_required),
+    legal_accepted_at: result.legal_accepted_at ?? null,
+    terms_version_current: result.terms_version_current ?? null,
+    privacy_version_current: result.privacy_version_current ?? null,
+    terms_version_accepted: result.terms_version_accepted ?? null,
+    privacy_version_accepted: result.privacy_version_accepted ?? null,
+  })
+
+  const handleVerifySignup = async (e) => {
+    e.preventDefault()
+    if (loading) return
+    setError('')
+    if (signupOtp.trim().length !== 6) {
+      setError('Enter the 6-digit code from your email.')
+      return
+    }
+    setLoading(true)
     try {
-      await navigator.clipboard.writeText(apiKeyReveal.rawKey)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1800)
-    } catch {
-      setError('Unable to copy - select the key manually and copy it.')
+      const result = await authSignupVerify(normalizedEmail, signupOtp.trim())
+      const userInfo = buildUserInfo(result, normalizedEmail, selectedRole)
+      if (result.user_id) {
+        localStorage.removeItem(`aztea_onboarding_done:${result.user_id}`)
+      }
+      connect(result.raw_api_key, userInfo)
+      navigate(redirectTo)
+    } catch (err) {
+      setError(err.message ?? 'Verification failed')
+    } finally {
+      setLoading(false)
     }
   }
 
-  const handleContinueAfterReveal = () => {
-    if (!apiKeyReveal) return
-    connect(apiKeyReveal.rawKey, apiKeyReveal.userInfo)
-    setApiKeyReveal(null)
-    setKeyAcknowledged(false)
-    navigate(redirectTo)
+  const handleResendSignupOtp = async () => {
+    if (resending) return
+    setError('')
+    setResentNote('')
+    setResending(true)
+    try {
+      await authSignupResend(normalizedEmail)
+      setResentNote('A new code is on its way.')
+    } catch (err) {
+      setError(err.message ?? 'Could not resend code.')
+    } finally {
+      setResending(false)
+    }
   }
 
   const handleForgotSendOtp = async (e) => {
@@ -214,56 +237,6 @@ export default function AuthPanel() {
     } finally {
       setLoading(false)
     }
-  }
-
-  if (apiKeyReveal) {
-    return (
-      <div className="auth-panel">
-        <div className="auth-panel__body">
-          <div className="auth-panel__reveal">
-            <div className="auth-panel__reveal-icon" aria-hidden>
-              <KeyRound size={18} />
-            </div>
-            <h3 className="auth-panel__reveal-title">Save your API key</h3>
-            <p className="auth-panel__reveal-sub">
-              This is the only time we show your full key. Store it somewhere safe - a password manager
-              or a local .env file. You can mint scoped keys later in Settings → API Keys.
-            </p>
-            <div className="auth-panel__reveal-keybox">
-              <code className="auth-panel__reveal-key">{apiKeyReveal.rawKey}</code>
-              <button
-                type="button"
-                className="auth-panel__reveal-copy"
-                onClick={handleCopyKey}
-                aria-label="Copy API key"
-              >
-                {copied ? <Check size={14} /> : <Copy size={14} />}
-                <span>{copied ? 'Copied' : 'Copy'}</span>
-              </button>
-            </div>
-            <label className="auth-panel__reveal-ack">
-              <input
-                type="checkbox"
-                checked={keyAcknowledged}
-                onChange={e => setKeyAcknowledged(e.target.checked)}
-              />
-              <span>I've saved this key somewhere safe.</span>
-            </label>
-            {error && <p className="auth-panel__error">{error}</p>}
-            <Button
-              type="button"
-              variant="primary"
-              size="md"
-              onClick={handleContinueAfterReveal}
-              disabled={!keyAcknowledged}
-              style={{ width: '100%' }}
-            >
-              Continue
-            </Button>
-          </div>
-        </div>
-      </div>
-    )
   }
 
   if (forgotMode) {
@@ -404,7 +377,53 @@ export default function AuthPanel() {
         </button>
       </div>
       <div className="auth-panel__body">
-        {registerMode && registerStep === 'role' ? (
+        {registerMode && registerStep === 'verify' ? (
+          <form className="auth-panel__form" onSubmit={handleVerifySignup}>
+            <p className="auth-panel__forgot-desc">
+              We sent a 6-digit code to <strong>{normalizedEmail}</strong>. Enter it below to finish creating your account.
+            </p>
+            <Input
+              label="Verification code"
+              type="text"
+              placeholder="123456"
+              value={signupOtp}
+              onChange={e => setSignupOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              required
+              autoComplete="one-time-code"
+              iconLeft={<KeyRound size={14} />}
+              hint="Check your inbox (and spam folder)."
+            />
+            {error && <p className="auth-panel__error">{error}</p>}
+            {resentNote && !error && (
+              <p className="auth-panel__hint" style={{ color: 'var(--positive)' }}>{resentNote}</p>
+            )}
+            <Button
+              type="submit"
+              variant="primary"
+              size="md"
+              loading={loading}
+              disabled={loading}
+              style={{ width: '100%' }}
+            >
+              Verify & continue
+            </Button>
+            <button
+              type="button"
+              className="auth-panel__resend"
+              onClick={handleResendSignupOtp}
+              disabled={resending}
+            >
+              {resending ? 'Sending…' : "Didn't get it? Resend code"}
+            </button>
+            <button
+              type="button"
+              className="auth-panel__resend"
+              onClick={() => { setRegisterStep('form'); setError('') }}
+            >
+              Use a different email
+            </button>
+          </form>
+        ) : registerMode && registerStep === 'role' ? (
           <div className="auth-panel__role-step">
             <p className="auth-panel__role-heading">How will you use Aztea?</p>
             <div className="auth-panel__role-cards">
@@ -531,7 +550,7 @@ export default function AuthPanel() {
               aria-disabled={!canSubmit}
               style={{ width: '100%' }}
             >
-              {tab === 'signin' ? 'Sign in' : 'Create account'}
+              {tab === 'signin' ? 'Sign in' : 'Send verification code'}
             </Button>
             {tab === 'signin' && (
               <button

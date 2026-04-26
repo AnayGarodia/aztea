@@ -757,10 +757,13 @@ def jobs_dispute(
             ),
         )
 
-    if reputation.get_job_quality_rating(job_id) is not None:
-        raise HTTPException(status_code=409, detail="Disputes must be filed before the caller submits a rating.")
     if disputes.has_dispute_for_job(job_id):
         raise HTTPException(status_code=409, detail="A dispute already exists for this job.")
+    if reputation.get_job_quality_rating(job_id) is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="You already rated this job; disputes can only be filed before submitting a rating.",
+        )
 
     filing_deposit_cents = _compute_dispute_filing_deposit_cents(int(job.get("price_cents") or 0))
     conn = payments._conn()

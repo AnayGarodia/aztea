@@ -174,7 +174,13 @@ export default function JobDetailPage() {
     if (!id || !apiKey) return
     try {
       const data = await getJob(apiKey, id)
-      if (data?.job_id) setLocalJob(data)
+      if (data?.job_id) {
+        setLocalJob(data)
+        if (data?.caller_quality_rating != null) {
+          setRating(data.caller_quality_rating)
+          setRatingDone(true)
+        }
+      }
       if (data?.status === 'complete' || data?.status === 'failed') {
         await loadMessages()
         if (data.status === 'complete') await loadDispute()
@@ -735,12 +741,14 @@ export default function JobDetailPage() {
                       <p style={{ fontSize: '0.8125rem', color: 'var(--ink-soft)', marginBottom: 'var(--sp-2)' }}>
                         Rate this job (1–5). Submitting a rating closes the dispute window.
                       </p>
-                      <div style={{ display: 'flex', gap: 'var(--sp-2)' }}>
+                      <div style={{ display: 'flex', gap: 'var(--sp-2)', alignItems: 'center', flexWrap: 'wrap' }}>
                         {[1, 2, 3, 4, 5].map(s => (
                           <button
                             key={s}
+                            type="button"
                             disabled={ratingSubmitting}
-                            onClick={() => handleRating(s)}
+                            onClick={() => setRating(s)}
+                            aria-label={`${s} star${s === 1 ? '' : 's'}`}
                             style={{
                               background: 'none', border: 'none', cursor: 'pointer', padding: '4px',
                               color: s <= (rating ?? 0) ? 'var(--warn-line, #f0c060)' : 'var(--line-mid)',
@@ -750,6 +758,17 @@ export default function JobDetailPage() {
                             <Star size={22} fill={s <= (rating ?? 0) ? 'currentColor' : 'none'} />
                           </button>
                         ))}
+                        <Button
+                          type="button"
+                          variant="primary"
+                          size="sm"
+                          loading={ratingSubmitting}
+                          disabled={!rating || ratingSubmitting}
+                          onClick={() => rating && handleRating(rating)}
+                          style={{ marginLeft: 'var(--sp-2)' }}
+                        >
+                          Submit rating
+                        </Button>
                       </div>
                     </div>
                   )}

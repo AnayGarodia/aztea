@@ -133,7 +133,19 @@
 .agent-detail__tags {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px;
+  gap: 6px;
+  align-items: center;
+}
+
+.agent-detail__tags .pill,
+.agent-detail__tags .pill--sm {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 3px 9px;
+  color: var(--text-secondary);
 }
 
 /* Inline stats strip */
@@ -152,11 +164,13 @@
 
 .agent-detail__inline-stat-val {
   font-family: var(--font-mono);
-  font-size: 0.9375rem;
-  font-weight: 700;
+  font-size: 0.875rem;
+  font-weight: 600;
   color: var(--text-primary);
   font-feature-settings: 'tnum';
+  font-variant-numeric: tabular-nums;
   line-height: 1.2;
+  letter-spacing: 0.01em;
 }
 
 .agent-detail__inline-stat-val--green {
@@ -164,6 +178,7 @@
 }
 
 .agent-detail__inline-stat-lbl {
+  font-family: var(--font-mono);
   font-size: 0.625rem;
   color: var(--text-muted);
   text-transform: uppercase;

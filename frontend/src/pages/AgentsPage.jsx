@@ -5,15 +5,12 @@ import AgentCard from '../features/agents/AgentCard'
 import EmptyState from '../ui/EmptyState'
 import Button from '../ui/Button'
 import Input from '../ui/Input'
-import Pill from '../ui/Pill'
 import Skeleton from '../ui/Skeleton'
 import Reveal from '../ui/motion/Reveal'
 import { searchAgents } from '../api'
 import { useMarket } from '../context/MarketContext'
 import { Search } from 'lucide-react'
 import './AgentsPage.css'
-
-const ALL = '__all__'
 
 const SORT_OPTIONS = [
   { value: 'trust', label: 'Trust score' },
@@ -34,18 +31,9 @@ function sortAgents(list, sortBy) {
   }
 }
 
-const KIND_FILTERS = [
-  { value: ALL, label: 'All agents' },
-  { value: 'aztea_built', label: 'Aztea-built' },
-  { value: 'community_skill', label: 'Community skills' },
-  { value: 'self_hosted', label: 'Self-hosted' },
-]
-
 export default function AgentsPage() {
   const { agents, loading, apiKey, refresh } = useMarket()
   const [search, setSearch] = useState('')
-  const [activeTag, setActiveTag] = useState(ALL)
-  const [activeKind, setActiveKind] = useState(ALL)
   const [sortBy, setSortBy] = useState('trust')
   const [maxPriceCents, setMaxPriceCents] = useState('')
   const [searchResults, setSearchResults] = useState([])
@@ -77,8 +65,7 @@ export default function AgentsPage() {
     let cancelled = false
     const timer = setTimeout(async () => {
       try {
-        const kindParam = activeKind !== ALL ? activeKind : undefined
-        const data = await searchAgents(apiKey, query, { kind: kindParam })
+        const data = await searchAgents(apiKey, query)
         if (cancelled) return
         const normalized = (data?.results ?? []).map(item => {
           const matchReasons = Array.isArray(item?.match_reasons)
@@ -97,13 +84,7 @@ export default function AgentsPage() {
     }, 380)
 
     return () => { cancelled = true; clearTimeout(timer) }
-  }, [apiKey, search, activeKind])
-
-  const allTags = useMemo(() => {
-    const s = new Set()
-    agents.forEach(a => (a.tags ?? []).forEach(t => s.add(t)))
-    return [...s].sort()
-  }, [agents])
+  }, [apiKey, search])
 
   const filtered = useMemo(() => {
     // Use API results when available, local results as instant fallback while API loads
@@ -112,29 +93,27 @@ export default function AgentsPage() {
       : agents
     const maxCents = maxPriceCents ? parseFloat(maxPriceCents) * 100 : null
     let list = source.filter(a => {
-      if (activeTag !== ALL && !(a.tags ?? []).includes(activeTag)) return false
-      if (activeKind !== ALL && a.kind !== activeKind) return false
       if (maxCents != null && (a.price_per_call_usd ?? 0) * 100 > maxCents) return false
       return true
     })
     if (!search.trim()) list = sortAgents(list, sortBy)
     return list
-  }, [agents, search, searchResults, localMatched, activeTag, activeKind, sortBy, maxPriceCents])
+  }, [agents, search, searchResults, localMatched, sortBy, maxPriceCents])
 
   // Featured = Aztea-built agents sorted by trust, shown before others when no filter active
   const featured = useMemo(() => {
-    if (search.trim() || activeTag !== ALL || activeKind !== ALL || maxPriceCents) return []
+    if (search.trim() || maxPriceCents) return []
     return agents
       .filter(a => a.kind === 'aztea_built')
       .sort((a, b) => (b.trust_score ?? 0) - (a.trust_score ?? 0))
       .slice(0, 3)
-  }, [agents, search, activeTag, maxPriceCents])
+  }, [agents, search, maxPriceCents])
 
-  const isFiltered = Boolean(search || activeTag !== ALL || activeKind !== ALL || maxPriceCents)
+  const isFiltered = Boolean(search || maxPriceCents)
   const listLoading = loading
   const isSemanticSearching = search.trim() && searchLoading
 
-  const clearFilters = () => { setSearch(''); setActiveTag(ALL); setActiveKind(ALL); setMaxPriceCents('') }
+  const clearFilters = () => { setSearch(''); setMaxPriceCents('') }
 
   return (
     <main className="agents-page">
@@ -191,19 +170,6 @@ export default function AgentsPage() {
                   {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
               </div>
-              <div className="agents-page__tag-row">
-                {KIND_FILTERS.map(k => (
-                  <Pill key={k.value} interactive active={activeKind === k.value} onClick={() => setActiveKind(k.value)}>
-                    {k.label}
-                  </Pill>
-                ))}
-              </div>
-              <div className="agents-page__tag-row">
-                <Pill interactive active={activeTag === ALL} onClick={() => setActiveTag(ALL)}>All tags</Pill>
-                {allTags.map(tag => (
-                  <Pill key={tag} interactive active={activeTag === tag} onClick={() => setActiveTag(tag)}>{tag}</Pill>
-                ))}
-              </div>
             </section>
           </Reveal>
 
@@ -237,6 +203,7 @@ export default function AgentsPage() {
                         agent={agent}
                         index={index}
                         featured={featuredIds.has(agent.agent_id)}
+                        showTrust={sortBy === 'trust'}
                       />
                     ))}
                   </div>

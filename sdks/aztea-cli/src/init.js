@@ -158,7 +158,7 @@ async function run() {
       console.error(`\nLogin failed (HTTP ${res.status}): ${JSON.stringify(res.body)}`)
       process.exit(1)
     }
-    apiKey = res.body.api_key
+    apiKey = res.body.raw_api_key ?? res.body.api_key
     if (!apiKey) {
       console.error('\nServer did not return an API key. Please try again or visit aztea.ai.')
       process.exit(1)

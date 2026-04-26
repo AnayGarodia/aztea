@@ -138,6 +138,12 @@ export default function AgentDetailPage() {
   const [expandedExample, setExpandedExample] = useState(null)
   const [expandedFields, setExpandedFields] = useState(new Set())
 
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'auto' })
+    const scrollEl = document.querySelector('.agent-detail__scroll')
+    if (scrollEl) scrollEl.scrollTop = 0
+  }, [id])
+
   const toggleField = (fieldKey) =>
     setExpandedFields(prev => {
       const next = new Set(prev)

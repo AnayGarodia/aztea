@@ -30,10 +30,13 @@ const KIND_LABELS = {
   self_hosted: 'Self-hosted',
 }
 
-export default function AgentCard({ agent, index = 0 }) {
+export default function AgentCard({ agent, index = 0, showTrust = false }) {
   const navigate = useNavigate()
   const price    = `$${Number(agent.price_per_call_usd ?? 0).toFixed(2)}`
   const calls    = agent.total_calls ?? 0
+  const trust    = typeof agent.trust_score === 'number'
+    ? Math.round(agent.trust_score * 100)
+    : null
   const highDispute = typeof agent.dispute_rate === 'number' && agent.dispute_rate > 0.10
   const exampleCount = Array.isArray(agent.output_examples) ? agent.output_examples.length : 0
   const kindLabel = KIND_LABELS[agent.kind] ?? null
@@ -108,6 +111,9 @@ export default function AgentCard({ agent, index = 0 }) {
         <span className="ac__calls">
           {calls > 0 ? `${calls.toLocaleString()} calls` : 'New'}
         </span>
+        {showTrust && trust != null && (
+          <span className="ac__trust" title="Trust score (0–100)">★ {trust}</span>
+        )}
         {exampleCount > 0 && (
           <span className="ac__examples" title="Work examples available">
             <BookOpen size={10} strokeWidth={2} />

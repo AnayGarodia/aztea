@@ -223,6 +223,18 @@ def send_dispute_resolved(to: str, job_id: str, dispute_id: str, outcome: str) -
     )
 
 
+def send_signup_verification_otp(to: str, otp: str) -> None:
+    safe_otp = _esc(otp)
+    send(
+        to,
+        "Your Aztea verification code",
+        f"<p>Welcome to Aztea! Use this code to finish creating your account:</p>"
+        f"<p style='font-size:2rem;font-weight:700;letter-spacing:0.15em;font-family:monospace'>{safe_otp}</p>"
+        f"<p>This code expires in 15 minutes. If you didn't try to sign up, you can safely ignore this email.</p>",
+        f"Your Aztea verification code: {otp}\n\nExpires in 15 minutes. Ignore if you didn't try to sign up.",
+    )
+
+
 def send_password_reset_otp(to: str, otp: str) -> None:
     safe_otp = _esc(otp)
     send(

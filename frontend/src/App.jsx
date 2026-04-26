@@ -73,7 +73,9 @@ function AuthedApp() {
         <OnboardingWizard />
       </Suspense>
       <ErrorBoundary>
-        <Suspense fallback={<AppBoot />}>
+        {/* Use a near-empty fallback so route switches don't flash the
+            full "connecting…" screen on every navigation. */}
+        <Suspense fallback={<div className="app-boot-thin" />}>
           <Routes>
             <Route element={<AppShell />}>
               <Route path="/overview" element={<DashboardPage />} />

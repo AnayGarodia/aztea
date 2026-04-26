@@ -130,6 +130,14 @@
   color: var(--text-muted);
 }
 
+.ac__trust {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--accent);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
 .ac__examples {
   display: flex;
   align-items: center;

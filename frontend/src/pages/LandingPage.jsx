@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import {
   Moon, Sun, Menu, X, Copy, Check,
@@ -125,6 +125,16 @@ export default function LandingPage() {
   const { isDark, toggle: toggleTheme } = useTheme()
   const { apiKey } = useAuth()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+
+  const focusAuthWithRedirect = (tab, redirect) => {
+    if (redirect && searchParams.get('redirect') !== redirect) {
+      const next = new URLSearchParams(searchParams)
+      next.set('redirect', redirect)
+      setSearchParams(next, { replace: true })
+    }
+    focusAuthTab(tab)
+  }
 
   const [authRef, authInView] = useInView()
 
@@ -151,12 +161,12 @@ export default function LandingPage() {
 
   const handleListSkill = () => {
     if (apiKey) { navigate('/list-skill'); return }
-    focusAuthTab('register')
+    focusAuthWithRedirect('register', '/list-skill')
   }
 
   const handleGetStarted = () => {
     if (apiKey) { navigate('/overview'); return }
-    focusAuthTab('register')
+    focusAuthWithRedirect('register', '/overview')
   }
 
   const handleBrowseAgents = () => {

@@ -219,6 +219,30 @@ export async function authRegister(username, email, password, role = 'both') {
   return body
 }
 
+export async function authSignupStart(username, email, password, role = 'both') {
+  const { body } = await request('/auth/signup/start', {
+    method: 'POST',
+    body: { username, email, password, role },
+  })
+  return body
+}
+
+export async function authSignupVerify(email, otp) {
+  const { body } = await request('/auth/signup/verify', {
+    method: 'POST',
+    body: { email, otp },
+  })
+  return body
+}
+
+export async function authSignupResend(email) {
+  const { body } = await request('/auth/signup/resend', {
+    method: 'POST',
+    body: { email },
+  })
+  return body
+}
+
 export async function authUpdateRole(key, role) {
   const { body } = await request('/auth/role', {
     method: 'PATCH',

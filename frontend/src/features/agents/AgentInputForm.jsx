@@ -117,8 +117,12 @@ export default function AgentInputForm({ agent, onSubmit, loading, mode, onModeC
     if (e.key === 'Enter' && !e.shiftKey) {
       const f = fields[step]
       if (f?.type !== 'textarea') {
-        e.preventDefault()
-        goNext()
+        // On the last field let the form's native submit run; on earlier fields
+        // Enter advances to the next field instead.
+        if (step < total - 1) {
+          e.preventDefault()
+          goNext()
+        }
       }
     }
   }

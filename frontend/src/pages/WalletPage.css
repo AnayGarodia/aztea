@@ -192,12 +192,6 @@
   background: var(--warn-bg);
 }
 
-.wallet__trust-badges {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
 /* Grid — two balanced columns; Add funds + summary left, earnings/withdraw right */
 .wallet__grid {
   display: grid;

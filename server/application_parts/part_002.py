@@ -108,7 +108,7 @@ def _deposit_below_minimum_error(attempted_cents: int) -> HTTPException:
         status_code=422,
         detail=error_codes.make_error(
             error_codes.DEPOSIT_BELOW_MINIMUM,
-            f"Minimum deposit is {MINIMUM_DEPOSIT_CENTS} cents.",
+            f"Minimum deposit is ${MINIMUM_DEPOSIT_CENTS / 100:.2f}.",
             {
                 "minimum_cents": MINIMUM_DEPOSIT_CENTS,
                 "attempted_cents": int(attempted_cents),

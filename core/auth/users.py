@@ -799,3 +799,200 @@ def consume_password_reset_token(email: str, otp: str, new_password: str) -> Non
         )
 
     invalidate_key_cache_for_user(user_id)
+
+
+# ─── Signup email verification ──────────────────────────────────────────────
+
+
+class SignupVerificationError(Exception):
+    """Raised when a pending signup token cannot be issued or consumed."""
+
+
+def _validate_signup_inputs(username: str, email: str, password: str, role: str) -> tuple[str, str]:
+    if role not in _VALID_ROLES:
+        raise ValueError(f"Invalid role '{role}'. Must be one of: builder, hirer, both.")
+    normalized_email = str(email or "").strip().lower()
+    normalized_username = str(username or "").strip()
+    if not normalized_email or "@" not in normalized_email:
+        raise ValueError("Enter a valid email address.")
+    if len(normalized_username) < 3 or len(normalized_username) > 32:
+        raise ValueError("Username must be between 3 and 32 characters.")
+    if len(password) < 8 or not any(c.isalpha() for c in password) or not any(c.isdigit() for c in password):
+        raise ValueError("Password must be at least 8 characters and include letters and numbers.")
+    return normalized_email, normalized_username
+
+
+def issue_signup_verification(username: str, email: str, password: str, role: str = "both") -> str:
+    """
+    Validate registration input, ensure the email is free, and store a pending
+    signup row keyed by a 6-digit OTP. Returns the raw OTP so the caller can
+    email it. Does NOT create the user row — that only happens on consume.
+    """
+    normalized_email, normalized_username = _validate_signup_inputs(username, email, password, role)
+
+    with _conn() as conn:
+        existing = conn.execute(
+            "SELECT user_id FROM users WHERE LOWER(email) = ?",
+            (normalized_email,),
+        ).fetchone()
+    if existing is not None:
+        raise ValueError("An account with that email already exists.")
+
+    salt = secrets.token_hex(32)
+    pw_hash = _hash_password(password, salt)
+    otp = "".join(str(random.randint(0, 9)) for _ in range(_OTP_LENGTH))
+    code_hash = _otp_hash(otp)
+    token_id = str(uuid.uuid4())
+    now = _now()
+    expires_at = (
+        datetime.now(timezone.utc) + timedelta(minutes=_OTP_EXPIRY_MINUTES)
+    ).isoformat()
+
+    with _conn() as conn:
+        # Invalidate prior unconsumed tokens for this email so only the latest works.
+        conn.execute(
+            "UPDATE signup_verification_tokens SET consumed_at = ? "
+            "WHERE LOWER(email) = ? AND consumed_at IS NULL",
+            (now, normalized_email),
+        )
+        conn.execute(
+            "INSERT INTO signup_verification_tokens "
+            "(token_id, email, username, password_hash, salt, role, code_hash, created_at, expires_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                token_id,
+                normalized_email,
+                normalized_username,
+                pw_hash,
+                salt,
+                role,
+                code_hash,
+                now,
+                expires_at,
+            ),
+        )
+
+    return otp
+
+
+def reissue_signup_verification_otp(email: str) -> str | None:
+    """Mint a new OTP for the most recent pending signup row, invalidating
+    earlier ones. Returns None if no pending signup exists."""
+    normalized_email = str(email or "").strip().lower()
+    if not normalized_email:
+        return None
+
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT token_id FROM signup_verification_tokens "
+            "WHERE LOWER(email) = ? AND consumed_at IS NULL "
+            "ORDER BY created_at DESC LIMIT 1",
+            (normalized_email,),
+        ).fetchone()
+    if row is None:
+        return None
+
+    otp = "".join(str(random.randint(0, 9)) for _ in range(_OTP_LENGTH))
+    code_hash = _otp_hash(otp)
+    now = _now()
+    expires_at = (
+        datetime.now(timezone.utc) + timedelta(minutes=_OTP_EXPIRY_MINUTES)
+    ).isoformat()
+
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE signup_verification_tokens SET code_hash = ?, expires_at = ?, created_at = ? "
+            "WHERE token_id = ?",
+            (code_hash, expires_at, now, row["token_id"]),
+        )
+
+    return otp
+
+
+def consume_signup_verification(email: str, otp: str) -> dict:
+    """
+    Verify the OTP for a pending signup, create the user + initial Session API
+    key, and return the same payload `register_user` produced. Raises
+    SignupVerificationError on any failure.
+    """
+    normalized_email = str(email or "").strip().lower()
+    normalized_otp = str(otp or "").strip()
+    if not normalized_email or len(normalized_otp) != _OTP_LENGTH or not normalized_otp.isdigit():
+        raise SignupVerificationError("Enter the 6-digit code from your email.")
+
+    code_hash = _otp_hash(normalized_otp)
+    now_iso = _now()
+
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT token_id, email, username, password_hash, salt, role, expires_at, consumed_at "
+            "FROM signup_verification_tokens "
+            "WHERE LOWER(email) = ? AND code_hash = ? "
+            "ORDER BY created_at DESC LIMIT 1",
+            (normalized_email, code_hash),
+        ).fetchone()
+
+        if row is None:
+            raise SignupVerificationError("Invalid or expired code. Request a new one.")
+        if row["consumed_at"] is not None:
+            raise SignupVerificationError("This code has already been used. Request a new one.")
+        if row["expires_at"] < now_iso:
+            raise SignupVerificationError("This code has expired. Request a new one.")
+
+        # Re-check email is still free (someone might have registered concurrently).
+        existing = conn.execute(
+            "SELECT user_id FROM users WHERE LOWER(email) = ?",
+            (normalized_email,),
+        ).fetchone()
+        if existing is not None:
+            conn.execute(
+                "UPDATE signup_verification_tokens SET consumed_at = ? WHERE token_id = ?",
+                (now_iso, row["token_id"]),
+            )
+            raise SignupVerificationError("An account with that email already exists.")
+
+        user_id = str(uuid.uuid4())
+        raw_key, key_hash, key_prefix = _make_api_key()
+        key_id = str(uuid.uuid4())
+        session_scopes_json = json.dumps(list(DEFAULT_KEY_SCOPES))
+
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "INSERT INTO users (user_id, username, email, password_hash, salt, created_at, role)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    user_id,
+                    row["username"],
+                    row["email"],
+                    row["password_hash"],
+                    row["salt"],
+                    now_iso,
+                    row["role"],
+                ),
+            )
+            conn.execute(
+                "INSERT INTO api_keys (key_id, user_id, key_hash, key_prefix, name, scopes, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (key_id, user_id, key_hash, key_prefix, "Session key", session_scopes_json, now_iso),
+            )
+            conn.execute(
+                "UPDATE signup_verification_tokens SET consumed_at = ? WHERE token_id = ?",
+                (now_iso, row["token_id"]),
+            )
+        except sqlite3.IntegrityError as exc:
+            message = str(exc).lower()
+            if "users.email" in message or "unique constraint failed: users.email" in message:
+                raise SignupVerificationError("An account with that email already exists.") from exc
+            raise
+
+    return {
+        "user_id": user_id,
+        "username": row["username"],
+        "email": row["email"],
+        "role": row["role"],
+        "raw_api_key": raw_key,
+        "key_id": key_id,
+        "key_prefix": key_prefix,
+        **_legal_state_from_row({}),
+    }

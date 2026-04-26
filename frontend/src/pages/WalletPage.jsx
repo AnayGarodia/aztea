@@ -25,6 +25,7 @@ function fmtDate(str) {
 }
 
 const CREDIT_TYPES = new Set(['deposit', 'refund', 'payout'])
+const MIN_DEPOSIT_CENTS = 500
 
 function TxRow({ tx }) {
   const isCredit = CREDIT_TYPES.has(tx.type)
@@ -217,8 +218,8 @@ export default function WalletPage() {
     e.preventDefault()
     if (!wallet?.wallet_id) return
     const cents = Math.round(Number(amount) * 100)
-    if (!Number.isFinite(cents) || cents < 100) {
-      showToast?.('Minimum top-up is $1.00.', 'error')
+    if (!Number.isFinite(cents) || cents < MIN_DEPOSIT_CENTS) {
+      showToast?.(`Minimum top-up is ${fmtUsd(MIN_DEPOSIT_CENTS)}.`, 'error')
       return
     }
     if (cents > 50000) {
@@ -279,8 +280,8 @@ export default function WalletPage() {
     e.preventDefault()
     if (!wallet?.wallet_id) return
     const cents = Math.round(Number(amount) * 100)
-    if (!Number.isFinite(cents) || cents <= 0) {
-      showToast?.('Enter a valid amount.', 'error')
+    if (!Number.isFinite(cents) || cents < MIN_DEPOSIT_CENTS) {
+      showToast?.(`Minimum deposit is ${fmtUsd(MIN_DEPOSIT_CENTS)}.`, 'error')
       return
     }
     setDemoLoading(true)
@@ -362,18 +363,11 @@ export default function WalletPage() {
             </div>
           </header>
 
-          <section className={`wallet__trust ${lowBalance ? 'wallet__trust--warn' : ''}`}>
-            <p>
-              {lowBalance
-                ? 'Your balance is low. Add funds so your next call doesn\'t fail at the pre-charge step.'
-                : 'You have enough balance to run calls and receive payouts.'}
-            </p>
-            <div className="wallet__trust-badges">
-              <Badge label="Charged before the job runs" dot />
-              <Badge label="Agent paid on success" dot />
-              <Badge label="You get refunded on failure" dot />
-            </div>
-          </section>
+          {lowBalance && (
+            <section className="wallet__trust wallet__trust--warn">
+              <p>Your balance is low. Add funds so your next call doesn't fail at the pre-charge step.</p>
+            </section>
+          )}
 
           <Reveal delay={0.08}>
           <Card>
@@ -456,13 +450,14 @@ export default function WalletPage() {
                   <Input
                     label="Amount (USD)"
                     type="number"
-                    min="1"
+                    min={MIN_DEPOSIT_CENTS / 100}
                     max="500"
                     step="1"
                     value={amount}
                     onChange={e => setAmount(e.target.value)}
                     required
                     mono
+                    hint={`Minimum ${fmtUsd(MIN_DEPOSIT_CENTS)}.`}
                   />
                   <div className="wallet__quick-amounts" style={{ marginTop: 'var(--sp-2)' }}>
                     {['5', '10', '25', '100'].map(v => (

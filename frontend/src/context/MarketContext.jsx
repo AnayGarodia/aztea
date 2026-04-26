@@ -20,6 +20,11 @@ export function MarketProvider({ apiKey, children }) {
   }, [])
 
   const reportRefreshError = useCallback((err, fallbackMsg) => {
+    // Background polls fail constantly during transient network blips. Don't
+    // toast for timeouts/network errors — the next successful poll silently
+    // recovers and surfacing them just spams the corner.
+    const code = err?.code
+    if (code === 'network.timeout' || code === 'network.error') return
     const msg = (err && err.message) ? err.message : fallbackMsg
     if (lastRefreshError.current !== msg) {
       showToast(msg, 'error')
@@ -66,7 +71,7 @@ export function MarketProvider({ apiKey, children }) {
 
   useEffect(() => {
     refresh().finally(() => setLoading(false))
-    const id = setInterval(refresh, 8000)
+    const id = setInterval(refresh, 20000)
     return () => clearInterval(id)
   }, [refresh])
 
