@@ -114,39 +114,25 @@ function scrollToId(id) {
 }
 
 function focusAuthTab(tab, redirect) {
-  // Dispatch FIRST so AuthPanel's tab is correct by the time we focus its
-  // input — listeners run synchronously.
+  // Dispatch FIRST so AuthPanel switches tabs synchronously before we focus.
   window.dispatchEvent(new CustomEvent('aztea:auth-tab', { detail: { tab, redirect } }))
 
   const el = document.getElementById('lp-auth')
   if (el) {
-    // Two-step scroll: the section's top minus the 60px sticky nav, with
-    // smooth behavior. scrollIntoView is the fallback for browsers that
-    // ignore behavior:'smooth' on window.scrollTo (older Safari).
+    // INSTANT jump — no smooth animation. Smooth scroll on a long landing
+    // page takes 600-1000ms and feels like the click did nothing.
     const top = el.getBoundingClientRect().top + window.scrollY - 64
-    try {
-      window.scrollTo({ top, behavior: 'smooth' })
-    } catch {
-      el.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    }
-    // Brief outline pulse so even users already at the auth section see
-    // that the click registered. The class is removed after the animation.
-    el.classList.remove('lp__auth--pulse')
-    // Force reflow so the animation re-triggers if clicked twice.
-    void el.offsetWidth
-    el.classList.add('lp__auth--pulse')
-    setTimeout(() => el.classList.remove('lp__auth--pulse'), 1200)
+    window.scrollTo({ top, behavior: 'auto' })
   }
 
-  // After the smooth scroll settles, pull focus into the auth panel.
-  setTimeout(() => {
-    const target = document.querySelector(
-      tab === 'register'
-        ? '.auth-panel input[autocomplete="username"], .auth-panel input[type="email"]'
-        : '.auth-panel input[type="email"]'
-    )
-    target?.focus({ preventScroll: true })
-  }, 500)
+  // Focus the right field immediately. The tab swap above is synchronous,
+  // so the input we want is already in the DOM.
+  const target = document.querySelector(
+    tab === 'register'
+      ? '.auth-panel input[autocomplete="username"], .auth-panel input[type="email"]'
+      : '.auth-panel input[type="email"]'
+  )
+  target?.focus({ preventScroll: true })
 }
 
 export default function LandingPage() {
