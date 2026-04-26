@@ -46,7 +46,7 @@ function request(method, path, body, timeoutMs) {
     const headers = {
       'Authorization': `Bearer ${API_KEY}`,
       'Content-Type': 'application/json',
-      'User-Agent': 'aztea-mcp/0.8.0',
+      'User-Agent': 'aztea-mcp/0.9.0',
     }
     if (payload) headers['Content-Length'] = Buffer.byteLength(payload)
 
@@ -110,6 +110,11 @@ function inferUseWhenHint(agent) {
 let _tools = []         // MCP tool descriptors
 let _toolMap = {}       // tool_name → agent_id
 let _authRequired = !API_KEY
+let _initialRefreshDone = false
+
+function notifyToolsChanged() {
+  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' }) + '\n')
+}
 
 async function refresh() {
   if (_authRequired) return
@@ -136,6 +141,12 @@ async function refresh() {
     _tools = tools
     _toolMap = map
     _authRequired = false
+    // Notify Claude Code to re-fetch the tool list. On first load this
+    // replaces the empty AUTH_TOOL placeholder with the real catalog.
+    if (!_initialRefreshDone) {
+      _initialRefreshDone = true
+      notifyToolsChanged()
+    }
   } catch (err) {
     log(`Registry refresh failed: ${err.message}`)
   }
@@ -219,7 +230,7 @@ async function handleMessage(msg) {
   if (method === 'initialize') {
     return reply({
       protocolVersion: '2024-11-05',
-      capabilities: { tools: { listChanged: false } },
+      capabilities: { tools: { listChanged: true } },
       serverInfo: { name: 'aztea-registry-mcp', version: '0.3.0' },
       instructions: SERVER_INSTRUCTIONS,
     })
@@ -243,11 +254,10 @@ function run() {
   if (!API_KEY) {
     log('No AZTEA_API_KEY set — run `npx aztea-cli init` to configure.')
   }
-  // Start listening on stdin IMMEDIATELY so Claude Code's initialize
-  // handshake gets a reply within its short MCP startup timeout.
-  // The registry refresh runs in the background — tools/list will
-  // return AUTH_TOOL for the first ~200ms until the first refresh
-  // completes (or longer if the prod server is slow).
+  // Start listening immediately so the initialize handshake is instant.
+  // The registry refresh runs in the background; once done it fires
+  // notifications/tools/list_changed so Claude Code re-fetches the
+  // real catalog instead of the placeholder AUTH_TOOL.
   readMessages()
   refresh().catch(err => log(`initial refresh failed: ${err.message}`))
   setInterval(refresh, REFRESH_MS)
