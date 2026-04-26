@@ -147,39 +147,61 @@ function hasClaudeCli() {
   }
 }
 
-// Claude Code spawns the MCP server fresh on every startup with a short
-// timeout (~5s). `npx -y aztea-cli mcp` cold-starts in 5–10s while npm
-// resolves the package — too slow. We install the CLI globally (puts a
-// real `aztea` binary on PATH) so the spawn is instant.
-function ensureGlobalInstall() {
-  const r = spawnSync('npm', ['install', '-g', '--silent', 'aztea-cli@latest'], {
+// Claude Code spawns the MCP server with a short startup timeout.
+// `npx -y aztea-cli mcp` is slow because npx re-resolves the package
+// on every spawn. Instead we install aztea-cli to ~/.aztea/ (no sudo
+// needed) and point Claude Code at `node ~/.aztea/.../mcp-server.js`
+// directly — instant startup every time.
+const AZTEA_LOCAL_DIR = path.join(os.homedir(), '.aztea')
+
+function ensureLocalInstall() {
+  fs.mkdirSync(AZTEA_LOCAL_DIR, { recursive: true })
+  const r = spawnSync('npm', ['install', '--silent', '--prefix', AZTEA_LOCAL_DIR, 'aztea-cli@latest'], {
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   if (r.status !== 0) {
     const err = (r.stderr ? r.stderr.toString() : '').trim().split('\n').pop()
-    throw new Error(`npm install -g aztea-cli failed: ${err || 'unknown error'}`)
+    throw new Error(`npm install aztea-cli to ~/.aztea failed: ${err || 'unknown error'}`)
   }
+  // Return path to the installed mcp-server.js
+  const mcpScript = path.join(AZTEA_LOCAL_DIR, 'node_modules', 'aztea-cli', 'src', 'mcp-server.js')
+  if (!fs.existsSync(mcpScript)) throw new Error('mcp-server.js not found after install')
+  return mcpScript
 }
 
-function injectViaClaudeCli(apiKey, useGlobal) {
+function injectViaClaudeCli(apiKey, mcpScript) {
+  // Try removing any existing entry first (ignore errors — flag may differ by version)
+  spawnSync('claude', ['mcp', 'remove', 'aztea'], { stdio: 'ignore' })
   spawnSync('claude', ['mcp', 'remove', 'aztea', '--scope', 'user'], { stdio: 'ignore' })
-  const [cmd, ...mcpArgs] = useGlobal
-    ? ['aztea', 'mcp']
+
+  const nodeExe = process.execPath
+  const mcpArgs = mcpScript
+    ? [nodeExe, mcpScript]
     : ['npx', '-y', 'aztea-cli', 'mcp']
-  const args = [
-    'mcp', 'add',
-    '--scope', 'user',
-    '--transport', 'stdio',
-    '-e', `AZTEA_API_KEY=${apiKey}`,
-    '-e', `AZTEA_BASE_URL=${BASE_URL}`,
-    'aztea',
-    '--',
-    cmd, ...mcpArgs,
-  ]
-  execFileSync('claude', args, { stdio: ['ignore', 'pipe', 'pipe'] })
+
+  // Try with --scope user first, then without (older Claude Code versions)
+  for (const scopeArgs of [['--scope', 'user'], []]) {
+    const args = [
+      'mcp', 'add',
+      ...scopeArgs,
+      '--transport', 'stdio',
+      '-e', `AZTEA_API_KEY=${apiKey}`,
+      '-e', `AZTEA_BASE_URL=${BASE_URL}`,
+      'aztea',
+      '--',
+      ...mcpArgs,
+    ]
+    try {
+      execFileSync('claude', args, { stdio: ['ignore', 'pipe', 'pipe'] })
+      return
+    } catch {
+      // try next variant
+    }
+  }
+  throw new Error('all claude mcp add variants failed')
 }
 
-function injectViaFile(apiKey, useGlobal) {
+function injectViaFile(apiKey, mcpScript) {
   let cfg = {}
   try {
     cfg = JSON.parse(fs.readFileSync(CLAUDE_USER_CONFIG_PATH, 'utf8'))
@@ -187,11 +209,11 @@ function injectViaFile(apiKey, useGlobal) {
     cfg = {}
   }
   if (!cfg.mcpServers || typeof cfg.mcpServers !== 'object') cfg.mcpServers = {}
-  cfg.mcpServers.aztea = useGlobal
+  cfg.mcpServers.aztea = mcpScript
     ? {
         type: 'stdio',
-        command: 'aztea',
-        args: ['mcp'],
+        command: process.execPath,
+        args: [mcpScript],
         env: { AZTEA_API_KEY: apiKey, AZTEA_BASE_URL: BASE_URL },
       }
     : {
@@ -204,26 +226,24 @@ function injectViaFile(apiKey, useGlobal) {
 }
 
 function injectMcpConfig(apiKey) {
-  // Install globally first so `aztea mcp` is on PATH for Claude Code to
-  // spawn instantly. If this fails, fall back to the npx form (slower
-  // first startup but still works).
-  let useGlobal = true
+  // Install to ~/.aztea/ so Claude Code can spawn `node mcp-server.js`
+  // directly — no npx delay, no sudo required.
+  let mcpScript = null
   try {
-    ensureGlobalInstall()
+    mcpScript = ensureLocalInstall()
   } catch (err) {
-    console.warn(`(could not install aztea-cli globally: ${err.message} — falling back to npx, MCP startup may be slow)`)
-    useGlobal = false
+    console.warn(`(could not install aztea-cli to ~/.aztea: ${err.message} — falling back to npx)`)
   }
 
   if (hasClaudeCli()) {
     try {
-      injectViaClaudeCli(apiKey, useGlobal)
+      injectViaClaudeCli(apiKey, mcpScript)
       return { method: 'claude mcp add', path: '~/.claude.json (managed by claude)' }
     } catch (err) {
-      console.warn(`(claude mcp add failed: ${err.message.split('\n')[0]} — falling back to direct file write)`)
+      console.warn(`(claude mcp add failed — falling back to direct file write)`)
     }
   }
-  injectViaFile(apiKey, useGlobal)
+  injectViaFile(apiKey, mcpScript)
   return { method: 'direct write', path: CLAUDE_USER_CONFIG_PATH }
 }
 
