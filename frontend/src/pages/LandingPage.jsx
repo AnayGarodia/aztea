@@ -114,17 +114,31 @@ function scrollToId(id) {
 }
 
 function focusAuthTab(tab, redirect) {
-  // Account for the 60px sticky nav so the auth heading isn't hidden under it.
+  // Dispatch FIRST so AuthPanel's tab is correct by the time we focus its
+  // input — listeners run synchronously.
+  window.dispatchEvent(new CustomEvent('aztea:auth-tab', { detail: { tab, redirect } }))
+
   const el = document.getElementById('lp-auth')
   if (el) {
+    // Two-step scroll: the section's top minus the 60px sticky nav, with
+    // smooth behavior. scrollIntoView is the fallback for browsers that
+    // ignore behavior:'smooth' on window.scrollTo (older Safari).
     const top = el.getBoundingClientRect().top + window.scrollY - 64
-    window.scrollTo({ top, behavior: 'smooth' })
-  } else {
-    scrollToId('lp-auth')
+    try {
+      window.scrollTo({ top, behavior: 'smooth' })
+    } catch {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+    // Brief outline pulse so even users already at the auth section see
+    // that the click registered. The class is removed after the animation.
+    el.classList.remove('lp__auth--pulse')
+    // Force reflow so the animation re-triggers if clicked twice.
+    void el.offsetWidth
+    el.classList.add('lp__auth--pulse')
+    setTimeout(() => el.classList.remove('lp__auth--pulse'), 1200)
   }
-  window.dispatchEvent(new CustomEvent('aztea:auth-tab', { detail: { tab, redirect } }))
-  // After the smooth scroll settles, pull focus into the auth panel so the
-  // user gets clear tactile feedback that the CTA worked.
+
+  // After the smooth scroll settles, pull focus into the auth panel.
   setTimeout(() => {
     const target = document.querySelector(
       tab === 'register'
@@ -132,7 +146,7 @@ function focusAuthTab(tab, redirect) {
         : '.auth-panel input[type="email"]'
     )
     target?.focus({ preventScroll: true })
-  }, 450)
+  }, 500)
 }
 
 export default function LandingPage() {
@@ -206,7 +220,7 @@ export default function LandingPage() {
           <nav className="lp__nav-links" aria-label="Primary">
             <button type="button" className="lp__nav-link" onClick={handleBrowseAgents}>Agents</button>
             <button type="button" className="lp__nav-link" onClick={() => scrollToId('lp-how')}>How it works</button>
-            <button type="button" className="lp__nav-link" onClick={handleListSkill}>For builders</button>
+            <button type="button" className="lp__nav-link" onClick={() => focusAuthTab('register', '/list-skill')}>For builders</button>
             <Link className="lp__nav-link" to="/docs">Docs</Link>
           </nav>
 
@@ -216,7 +230,7 @@ export default function LandingPage() {
               {isDark ? <Sun size={14} /> : <Moon size={14} />}
             </button>
             <button type="button" className="lp__nav-signin" onClick={() => focusAuthTab('signin')}>Sign in</button>
-            <button type="button" className="lp__nav-cta" onClick={handleGetStarted}>
+            <button type="button" className="lp__nav-cta" onClick={() => focusAuthTab('register', '/overview')}>
               Get started free →
             </button>
             <button type="button" className="lp__nav-menu-btn" onClick={() => setMenuOpen(v => !v)}
@@ -234,11 +248,11 @@ export default function LandingPage() {
           <div className="lp__mobile-drawer-panel">
             <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); handleBrowseAgents() }}>Agents</button>
             <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); scrollToId('lp-how') }}>How it works</button>
-            <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); handleListSkill() }}>For builders</button>
+            <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); focusAuthTab('register', '/list-skill') }}>For builders</button>
             <Link to="/docs" className="lp__mobile-link" onClick={closeMenu}>Docs</Link>
             <div className="lp__mobile-sep" />
             <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); focusAuthTab('signin') }}>Sign in</button>
-            <button type="button" className="lp__mobile-link lp__mobile-link--primary" onClick={() => { closeMenu(); handleGetStarted() }}>
+            <button type="button" className="lp__mobile-link lp__mobile-link--primary" onClick={() => { closeMenu(); focusAuthTab('register', '/overview') }}>
               Get started free
             </button>
             <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); toggleTheme() }}>
