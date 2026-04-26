@@ -113,7 +113,7 @@ function scrollToId(id) {
   document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
-function focusAuthTab(tab) {
+function focusAuthTab(tab, redirect) {
   // Account for the 60px sticky nav so the auth heading isn't hidden under it.
   const el = document.getElementById('lp-auth')
   if (el) {
@@ -122,7 +122,7 @@ function focusAuthTab(tab) {
   } else {
     scrollToId('lp-auth')
   }
-  window.dispatchEvent(new CustomEvent('aztea:auth-tab', { detail: { tab } }))
+  window.dispatchEvent(new CustomEvent('aztea:auth-tab', { detail: { tab, redirect } }))
   // After the smooth scroll settles, pull focus into the auth panel so the
   // user gets clear tactile feedback that the CTA worked.
   setTimeout(() => {
@@ -166,11 +166,22 @@ export default function LandingPage() {
 
   const closeMenu = () => setMenuOpen(false)
 
-  // Always navigate directly — RequireLegalAcceptance handles the auth
-  // redirect cleanly with the correct ?tab= and ?redirect= params.
-  const handleListSkill = () => navigate('/list-skill')
-  const handleRegisterAgent = () => navigate('/register-agent')
-  const handleGetStarted = () => navigate('/overview')
+  // For logged-in users, navigate straight to the destination. For logged-out
+  // users, scroll to the auth panel and queue the redirect via the
+  // aztea:auth-tab event payload — this avoids URL mutation (which used to
+  // reset the form mid-typing) and gives clear visual feedback.
+  const handleListSkill = () => {
+    if (apiKey) { navigate('/list-skill'); return }
+    focusAuthTab('register', '/list-skill')
+  }
+  const handleRegisterAgent = () => {
+    if (apiKey) { navigate('/register-agent'); return }
+    focusAuthTab('register', '/register-agent')
+  }
+  const handleGetStarted = () => {
+    if (apiKey) { navigate('/overview'); return }
+    focusAuthTab('register', '/overview')
+  }
 
   const handleBrowseAgents = () => {
     if (apiKey) { navigate('/agents'); return }

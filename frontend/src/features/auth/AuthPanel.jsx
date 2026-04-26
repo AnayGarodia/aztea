@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom'
-import { authLogin, authSignupStart, authSignupVerify, authSignupResend, authForgotPassword, authResetPassword } from '../../api'
+import { authLogin, authGoogle, authSignupStart, authSignupVerify, authSignupResend, authForgotPassword, authResetPassword } from '../../api'
 import { useAuth } from '../../context/AuthContext'
 import Button from '../../ui/Button'
 import Input from '../../ui/Input'
@@ -8,18 +8,88 @@ import { Mail, Lock, User, Eye, EyeOff, KeyRound, ArrowLeft } from 'lucide-react
 import './AuthPanel.css'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+const GOOGLE_CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID ?? '').trim()
+
+function GoogleSignInButton({ tab, onCredential }) {
+  const containerRef = useRef(null)
+  const callbackRef = useRef(onCredential)
+  callbackRef.current = onCredential
+
+  useEffect(() => {
+    if (!GOOGLE_CLIENT_ID) return
+    let cancelled = false
+    let pollId = null
+
+    const render = () => {
+      if (cancelled) return
+      const gid = window.google?.accounts?.id
+      if (!gid || !containerRef.current) return false
+      try {
+        gid.initialize({
+          client_id: GOOGLE_CLIENT_ID,
+          callback: (response) => {
+            const token = response?.credential
+            if (token) callbackRef.current?.(token)
+          },
+          ux_mode: 'popup',
+          auto_select: false,
+        })
+        containerRef.current.innerHTML = ''
+        gid.renderButton(containerRef.current, {
+          theme: 'outline',
+          size: 'large',
+          width: 320,
+          text: tab === 'register' ? 'signup_with' : 'signin_with',
+          logo_alignment: 'center',
+        })
+      } catch {
+        // GIS sometimes throws on first render in dev; retry next tick.
+        return false
+      }
+      return true
+    }
+
+    if (!render()) {
+      pollId = setInterval(() => {
+        if (render()) {
+          clearInterval(pollId)
+          pollId = null
+        }
+      }, 200)
+    }
+    return () => {
+      cancelled = true
+      if (pollId) clearInterval(pollId)
+    }
+  }, [tab])
+
+  if (!GOOGLE_CLIENT_ID) return null
+  return (
+    <div className="auth-panel__google">
+      <div ref={containerRef} className="auth-panel__google-btn" />
+      <div className="auth-panel__divider"><span>or</span></div>
+    </div>
+  )
+}
 
 export default function AuthPanel() {
   const { connect } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
   const [searchParams] = useSearchParams()
-  // Read redirect destination and initial tab directly from URL params.
-  // With the new flow, navigate('/list-skill') is called directly and
-  // RequireLegalAcceptance sets ?tab=register&redirect=/list-skill, so
-  // these params are present at mount time and never mutated mid-flow.
-  const redirectTo = searchParams.get('redirect')
+  // Redirect destination is held in a ref so it can be updated by the
+  // landing-page CTAs (which dispatch aztea:auth-tab events with a redirect
+  // payload) without forcing a re-mount or mutating the URL — URL mutation
+  // mid-form is what caused the previous "List an Agent" reset bug.
+  const redirectRef = useRef(
+    searchParams.get('redirect')
     ?? (location.state?.from && location.state.from !== '/welcome' ? location.state.from : '/overview')
+  )
+  // Keep ref in sync if the URL itself supplies a fresher redirect value
+  // (e.g. RequireLegalAcceptance bouncing the user from a protected route).
+  const urlRedirect = searchParams.get('redirect')
+  if (urlRedirect && urlRedirect !== redirectRef.current) redirectRef.current = urlRedirect
+  const redirectTo = redirectRef.current
   const [tab, setTab] = useState(() => searchParams.get('tab') === 'register' ? 'register' : 'signin')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -100,6 +170,8 @@ export default function AuthPanel() {
   useEffect(() => {
     const handler = (event) => {
       const next = event?.detail?.tab
+      const nextRedirect = event?.detail?.redirect
+      if (nextRedirect) redirectRef.current = nextRedirect
       if (next === 'signin' || next === 'register') switchTabRef.current(next)
     }
     window.addEventListener('aztea:auth-tab', handler)
@@ -150,6 +222,26 @@ export default function AuthPanel() {
       }
     } catch (err) {
       setError(err.message ?? 'Authentication failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleGoogleCredential = async (idToken) => {
+    if (loading) return
+    setError('')
+    setLoading(true)
+    try {
+      const result = await authGoogle(idToken)
+      const userInfo = buildUserInfo(result, result?.email ?? '', result?.role ?? 'both')
+      if (result?.user_id) {
+        // Re-show onboarding for any first-time Google account.
+        localStorage.removeItem(`aztea_onboarding_done:${result.user_id}`)
+      }
+      connect(result.raw_api_key, userInfo)
+      navigate(redirectTo, { replace: true })
+    } catch (err) {
+      setError(err.message ?? 'Google sign-in failed. Try again.')
     } finally {
       setLoading(false)
     }
@@ -438,6 +530,7 @@ export default function AuthPanel() {
           </form>
         ) : (
         <form className="auth-panel__form" onSubmit={handleSubmit}>
+          <GoogleSignInButton tab={tab} onCredential={handleGoogleCredential} />
           {tab === 'register' && (
             <Input
               label="Username"

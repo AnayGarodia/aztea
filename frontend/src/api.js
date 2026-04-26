@@ -287,6 +287,14 @@ export async function authLogin(email, password) {
   return body
 }
 
+export async function authGoogle(idToken) {
+  const { body } = await request('/auth/google', {
+    method: 'POST',
+    body: { id_token: idToken },
+  })
+  return body
+}
+
 export async function authMe(key) {
   const { body } = await request('/auth/me', { key })
   return body

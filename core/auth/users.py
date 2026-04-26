@@ -150,6 +150,72 @@ def login_user(email: str, password: str) -> dict | None:
     }
 
 
+def login_or_register_via_google(email: str, name: str = "") -> tuple[dict, bool]:
+    """Log in (or create) a user identified by a Google-verified email.
+
+    Returns (user_dict, created). The dict has the same shape as the result
+    from `login_user` / `register_user` so the HTTP layer can return a single
+    AuthLoginResponse. Caller is responsible for crediting the starter
+    balance and sending the welcome email when `created` is True.
+    """
+    normalized_email = email.lower().strip()
+    if not normalized_email:
+        raise ValueError("Email is required.")
+
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM users WHERE email = ?", (normalized_email,)
+        ).fetchone()
+
+    if row is not None:
+        user = dict(row)
+        status = str(user.get("status") or "active").strip().lower()
+        if status != "active":
+            raise AccountSuspendedError(status)
+        # Revoke prior session keys, mint a fresh one — same pattern as login_user.
+        with _conn() as conn:
+            conn.execute(
+                "UPDATE api_keys SET is_active = 0 WHERE user_id = ? AND name = 'Session key' AND is_active = 1",
+                (user["user_id"],),
+            )
+        result = _create_key_for_user(user["user_id"], "Session key")
+        return (
+            {
+                "user_id": user["user_id"],
+                "username": user["username"],
+                "email": user["email"],
+                "role": user.get("role") or "both",
+                "created_at": user["created_at"],
+                "raw_api_key": result["raw_key"],
+                "key_id": result["key_id"],
+                "key_prefix": result["key_prefix"],
+                **_legal_state_from_row(user),
+            },
+            False,
+        )
+
+    # No existing account — create one. Username derived from the email local
+    # part (sanitised + uniqueness suffix). Password is randomized; the user
+    # can use 'Forgot password' to set a real one if they ever want to log in
+    # without Google.
+    local_part = normalized_email.split("@", 1)[0]
+    base_username = "".join(c for c in local_part if c.isalnum() or c in "-_") or "user"
+    base_username = base_username[:24] or "user"
+    candidate = base_username
+    suffix = 0
+    with _conn() as conn:
+        while conn.execute(
+            "SELECT 1 FROM users WHERE username = ?", (candidate,)
+        ).fetchone() is not None:
+            suffix += 1
+            candidate = f"{base_username}{suffix}"[:32]
+            if suffix > 9999:
+                candidate = f"user{secrets.token_hex(4)}"
+                break
+    random_password = secrets.token_urlsafe(24)
+    return register_user(candidate, normalized_email, random_password, role="both"), True
+
+
 def get_user_by_id(user_id: str) -> dict | None:
     with _conn() as conn:
         row = conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()

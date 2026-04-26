@@ -521,6 +521,22 @@ class UserLoginRequest(BaseModel):
         return v
 
 
+class GoogleAuthRequest(BaseModel):
+    model_config = ConfigDict(json_schema_extra={"example": {"id_token": "eyJhbGciOi..."}})
+
+    id_token: str
+
+    @field_validator("id_token")
+    @classmethod
+    def id_token_nonempty(cls, v):
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("Google ID token is required.")
+        if len(v) > 8192:
+            raise ValueError("Google ID token is unexpectedly large.")
+        return v
+
+
 class AuthLegalAcceptRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={"example": {"terms_version": "2026-04-19", "privacy_version": "2026-04-19"}}

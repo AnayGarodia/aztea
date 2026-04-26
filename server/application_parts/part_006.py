@@ -631,6 +631,79 @@ def auth_login(request: Request, body: UserLoginRequest) -> core_models.AuthLogi
     return JSONResponse(content={**result, **_auth_legal_payload(result)})
 
 
+@app.post(
+    "/auth/google",
+    response_model=core_models.AuthLoginResponse,
+    responses=_error_responses(400, 401, 429, 500, 503),
+)
+@limiter.limit(_AUTH_RATE_LIMIT, key_func=get_remote_address)
+def auth_google(request: Request, body: GoogleAuthRequest) -> core_models.AuthLoginResponse:
+    """Verify a Google ID token and log in (or create) the matching account.
+
+    Verification uses Google's public ``tokeninfo`` endpoint so we don't need
+    a heavyweight OAuth library. Requires ``GOOGLE_CLIENT_ID`` to be set on
+    the server; if it isn't, the route returns 503 and the frontend hides the
+    Google button.
+    """
+    client_id = (os.environ.get("GOOGLE_CLIENT_ID", "") or "").strip()
+    if not client_id:
+        raise HTTPException(
+            status_code=503,
+            detail="Google sign-in is not configured on this server.",
+        )
+    try:
+        resp = http.get(
+            "https://oauth2.googleapis.com/tokeninfo",
+            params={"id_token": body.id_token},
+            timeout=5.0,
+        )
+    except Exception:
+        _LOG.exception("Google tokeninfo request failed")
+        raise HTTPException(
+            status_code=503,
+            detail="Could not reach Google to verify sign-in. Try again.",
+        )
+    if resp.status_code != 200:
+        raise HTTPException(status_code=401, detail="Google sign-in failed. Try again.")
+    try:
+        claims = resp.json()
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Google sign-in returned an invalid response.")
+    if claims.get("aud") != client_id:
+        raise HTTPException(status_code=401, detail="Google sign-in token is for a different app.")
+    if str(claims.get("email_verified")).lower() != "true":
+        raise HTTPException(status_code=401, detail="Your Google account email is not verified.")
+    email = (claims.get("email") or "").strip().lower()
+    name = (claims.get("name") or "").strip()
+    if not email:
+        raise HTTPException(status_code=400, detail="Google sign-in did not return an email address.")
+    try:
+        _auth.init_auth_db()
+        result, created = _auth.login_or_register_via_google(email, name)
+    except _auth.AccountSuspendedError:
+        raise HTTPException(
+            status_code=403,
+            detail="This account has been suspended. Please contact support if you believe this is an error.",
+        )
+    except sqlite3.DatabaseError:
+        _LOG.exception("Google sign-in failed due to auth DB error.")
+        raise HTTPException(
+            status_code=503,
+            detail="Authentication service is temporarily unavailable. Please try again.",
+        )
+    if created:
+        _credit_starter_balance(result)
+        try:
+            _email.send_welcome(
+                result.get("email", ""),
+                result.get("username", "there"),
+                role=result.get("role", "both"),
+            )
+        except Exception:  # pragma: no cover - welcome email is non-fatal
+            _LOG.exception("Welcome email failed for Google signup")
+    return JSONResponse(content={**result, **_auth_legal_payload(result)})
+
+
 @app.get(
     "/auth/me",
     response_model=core_models.AuthMeResponse,

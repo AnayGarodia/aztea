@@ -303,3 +303,33 @@
   color: var(--text-muted);
   line-height: 1.45;
 }
+
+.auth-panel__google {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+.auth-panel__google-btn {
+  display: flex;
+  justify-content: center;
+  min-height: 40px;
+}
+.auth-panel__divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-muted);
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin: 4px 0;
+}
+.auth-panel__divider::before,
+.auth-panel__divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}

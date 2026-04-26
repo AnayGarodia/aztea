@@ -56,3 +56,4 @@ skills/
 skills-lock.json
 .mypy_cache/
 .pytest_cache/
+.release-venv/

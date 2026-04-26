@@ -141,6 +141,7 @@ from core.models import (
     AgentKeyCreateRequest,
     AgentReviewDecisionRequest,
     AuthLegalAcceptRequest,
+    GoogleAuthRequest,
     UserLoginRequest,
     UserRegisterRequest,
     WikiRequest,
