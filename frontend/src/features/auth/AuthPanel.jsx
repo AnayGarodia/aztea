@@ -101,12 +101,10 @@ export default function AuthPanel() {
     }
   }, [email]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Sync tab from URL param (so "List an Agent" links that pass ?tab=register work).
-  useEffect(() => {
-    if (tabParam === 'register' || tabParam === 'signin') {
-      switchTab(tabParam)
-    }
-  }, [tabParam]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Tab is initialised from ?tab= on mount (see useState above).
+  // We intentionally do NOT sync it dynamically — other "List an Agent"
+  // buttons on the same page also update ?tab, and re-syncing mid-form
+  // would clear the user's typed credentials and switch the form on them.
 
   useEffect(() => {
     const handler = (event) => {
