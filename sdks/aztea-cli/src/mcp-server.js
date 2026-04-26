@@ -26,14 +26,20 @@ const AUTH_TOOL = {
 // when to reach for these tools proactively. Keep this short and action-
 // oriented — it's the "elevator pitch" Claude reads before deciding to call.
 const SERVER_INSTRUCTIONS = [
-  'Aztea is a marketplace of specialist AI agents callable by the task.',
-  'Use these tools whenever the user asks for something an agent can do better than a chat reply:',
-  '- Reviewing code, generating tests, or auditing dependencies → use the code/test/dependency agents.',
-  '- Running Python or shell snippets in a sandbox → use python_executor.',
-  '- Looking up CVEs, papers, or live web data → use cve_lookup, arxiv_research, web_researcher.',
-  '- Generating images → use image_generator.',
-  'Each tool returns a structured result. Pricing is small ($0.02–$0.10/call) and refunded on failure.',
-  'Prefer these tools over writing the same thing inline when the user asks for a real artifact.',
+  'Aztea gives Claude Code capabilities it cannot do on its own:',
+  '- EXECUTE code in a real sandbox (not simulate it) → python_code_executor',
+  '- FETCH live web pages Claude cannot browse → web_researcher_agent',
+  '- QUERY live external APIs with no local credentials needed:',
+  '    CVE / NVD database → cve_lookup_agent',
+  '    arXiv papers (real search, not training data) → arxiv_research_agent',
+  '    SEC EDGAR filings → financial_research_agent',
+  '    Hacker News live feed → hacker_news_digest',
+  '- GENERATE images via DALL-E / Replicate → image_generator_agent',
+  'Do NOT use Aztea for tasks Claude can handle inline: code review, writing tests,',
+  'writing specs, summarising known facts. Those are slower and costlier via Aztea.',
+  'Use Aztea only when the task requires real execution, live external data, or an API',
+  'Claude Code has no built-in access to.',
+  'Pricing: $0.01–$0.10/call, refunded on failure.',
 ].join('\n')
 
 // ── HTTP ─────────────────────────────────────────────────────
@@ -46,7 +52,7 @@ function request(method, path, body, timeoutMs) {
     const headers = {
       'Authorization': `Bearer ${API_KEY}`,
       'Content-Type': 'application/json',
-      'User-Agent': 'aztea-mcp/0.9.0',
+      'User-Agent': 'aztea-mcp/0.10.0',
     }
     if (payload) headers['Content-Length'] = Buffer.byteLength(payload)
 
@@ -91,18 +97,25 @@ function inferUseWhenHint(agent) {
   const name = String(agent.name || '').toLowerCase()
   const desc = String(agent.description || '').toLowerCase()
   const all = `${name} ${desc}`
-  if (/code review|reviewer/.test(all)) return 'Use when reviewing code, looking for bugs, or auditing a diff'
-  if (/test (gen|writer)|generate test/.test(all)) return 'Use when generating unit tests for source code'
-  if (/dependency|cve|vulnerab/.test(all)) return 'Use when auditing dependencies or looking up CVEs'
-  if (/python (executor|runner)|sandbox/.test(all)) return 'Use when running Python code in a sandbox'
-  if (/web (research|fetch)|url/.test(all)) return 'Use when fetching or summarizing a public web page'
-  if (/wiki/.test(all)) return 'Use when researching a topic with Wikipedia-grade depth'
-  if (/arxiv|paper/.test(all)) return 'Use when searching academic papers (arXiv)'
-  if (/financial|sec|ticker|edgar/.test(all)) return 'Use when researching public-company financials or SEC filings'
-  if (/image (gen|generator)|draw|illustration/.test(all)) return 'Use when generating an image from a text prompt'
-  if (/spec writer|specification/.test(all)) return 'Use when writing a technical specification or PRD'
-  if (/pr review/.test(all)) return 'Use when reviewing a GitHub pull request'
-  return 'Use this Aztea agent when the task matches its description'
+  // Real execution — Claude Code cannot run code itself
+  if (/python (executor|runner)|sandbox/.test(all)) return 'Use when you need to actually execute Python code (not simulate it)'
+  // Live external APIs — Claude has no built-in access to these
+  if (/cve|nvd|vulnerab/.test(all)) return 'Use for live CVE lookups — queries NIST NVD in real time, not training data'
+  if (/dependency.*audit|audit.*depend/.test(all)) return 'Use to audit package.json or requirements.txt against live CVE databases'
+  if (/arxiv|preprint/.test(all)) return 'Use to search live arXiv — returns real papers published after training cutoff'
+  if (/financial|sec|ticker|edgar/.test(all)) return 'Use for live SEC EDGAR filings — real financial data Claude cannot access'
+  if (/hacker.?news|hn digest/.test(all)) return 'Use for the live Hacker News front page — Claude cannot browse the web'
+  if (/web (research|fetch)|url fetch/.test(all)) return 'Use to fetch and read a live URL — Claude Code cannot browse the web'
+  if (/github.*(fetch|file|repo)/.test(all)) return 'Use to fetch files from a public GitHub repo without cloning it'
+  // Media generation — requires real API credentials
+  if (/image (gen|generator)|draw|illustration/.test(all)) return 'Use to generate an image via DALL-E or Replicate (real API call)'
+  // LLM-only tasks — note that Claude handles these better inline
+  if (/code review|reviewer/.test(all)) return 'Note: Claude Code reviews code faster inline — use Aztea only if you want a second-opinion pass'
+  if (/test (gen|writer)|generate test/.test(all)) return 'Note: Claude Code writes tests inline — use Aztea for a dedicated isolated pass'
+  if (/spec writer|specification/.test(all)) return 'Note: Claude Code writes specs inline — use Aztea for a structured template output'
+  if (/pr review/.test(all)) return 'Use to review a public GitHub PR diff (fetches from GitHub, not local files)'
+  if (/wiki/.test(all)) return 'Use for structured Wikipedia extraction — dense timelines and stats'
+  return 'Use this Aztea tool when the task needs live data or external execution'
 }
 
 // ── Registry ─────────────────────────────────────────────────

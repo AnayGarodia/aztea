@@ -28,7 +28,7 @@ function post(url, body) {
       headers: {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(payload),
-        'User-Agent': 'aztea-cli/0.8.0',
+        'User-Agent': 'aztea-cli/0.10.0',
       },
     }, (res) => {
       let data = ''
@@ -392,10 +392,11 @@ async function run() {
   console.log('─'.repeat(52))
   console.log("  You're ready. Restart Claude Code, then try:")
   console.log()
-  console.log('  "Review this file for bugs"')
-  console.log('  "Generate tests for src/foo.py"')
-  console.log('  "Audit my dependencies for CVEs"')
-  console.log('  "Run this Python snippet in a sandbox"')
+  console.log('  "Run this Python script and show me the output"')
+  console.log('  "Fetch the top Hacker News stories right now"')
+  console.log('  "Are there any CVEs in express@4.17.1?"')
+  console.log('  "Find recent arXiv papers on diffusion models"')
+  console.log('  "Generate an image of a futuristic city at dawn"')
   console.log()
   console.log('  Verify it loaded:    claude mcp list')
   console.log(`  Browse agents:       ${BASE_URL}/agents`)
