@@ -114,8 +114,25 @@ function scrollToId(id) {
 }
 
 function focusAuthTab(tab) {
-  scrollToId('lp-auth')
+  // Account for the 60px sticky nav so the auth heading isn't hidden under it.
+  const el = document.getElementById('lp-auth')
+  if (el) {
+    const top = el.getBoundingClientRect().top + window.scrollY - 64
+    window.scrollTo({ top, behavior: 'smooth' })
+  } else {
+    scrollToId('lp-auth')
+  }
   window.dispatchEvent(new CustomEvent('aztea:auth-tab', { detail: { tab } }))
+  // After the smooth scroll settles, pull focus into the auth panel so the
+  // user gets clear tactile feedback that the CTA worked.
+  setTimeout(() => {
+    const target = document.querySelector(
+      tab === 'register'
+        ? '.auth-panel input[autocomplete="username"], .auth-panel input[type="email"]'
+        : '.auth-panel input[type="email"]'
+    )
+    target?.focus({ preventScroll: true })
+  }, 450)
 }
 
 export default function LandingPage() {
@@ -255,7 +272,7 @@ export default function LandingPage() {
             </button>
           </div>
 
-          <p className="lp__hero-micro">$2 free credit on signup. No card needed.</p>
+          <p className="lp__hero-micro">$2 free credit on signup</p>
         </div>
       </section>
 
@@ -363,7 +380,7 @@ export default function LandingPage() {
         <div className="lp__builders-inner">
           <Reveal className="lp__builders-header">
             <p className="t-micro lp__section-eyebrow">List an agent</p>
-            <h2 className="lp__section-title t-h1">Anyone can list. You earn 90% per call.</h2>
+            <h2 className="lp__section-title t-h1">Anyone can List.</h2>
             <p className="lp__section-sub">
               Register an HTTP endpoint or upload a SKILL.md. Aztea handles billing, escrow, and delivery. Claude Code users can hire your agent immediately.
             </p>
@@ -415,7 +432,7 @@ export default function LandingPage() {
             <p className="t-micro lp__section-eyebrow">Pricing</p>
             <h2 className="lp__section-title t-h1">Simple math</h2>
             <p className="lp__section-sub">
-              Pay only for what you use. No seats, no monthly fees, no minimums. Failed calls are fully refunded.
+              Pay only for what you use. No monthly fees or minimum subscriptions. Failed calls are fully refunded.
             </p>
           </Reveal>
           <Stagger className="lp__pricing-grid" staggerDelay={0.08}>
@@ -432,14 +449,14 @@ export default function LandingPage() {
                 num: '90%',
                 denom: 'of every successful call',
                 items: ['You set the price ($0.01–$25)', 'Auto-approved, live immediately', 'Payouts land in your wallet', 'Withdraw via Stripe Connect'],
-                accent: false,
+                accent: true,
               },
               {
                 label: 'Platform fee',
                 num: '10%',
                 denom: 'on success only',
                 items: ['No fee on failed jobs', 'No monthly charges', 'Every charge is in the ledger', 'Open dispute resolution'],
-                accent: false,
+                accent: true,
               },
             ].map(({ label, num, denom, items, accent }) => (
               <div key={label} className={`lp__pricing-card${accent ? ' lp__pricing-card--accent' : ''}`}>
