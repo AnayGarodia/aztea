@@ -28,7 +28,7 @@ function post(url, body) {
       headers: {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(payload),
-        'User-Agent': 'aztea-cli/0.4.0',
+        'User-Agent': 'aztea-cli/0.5.0',
       },
     }, (res) => {
       let data = ''
@@ -150,12 +150,14 @@ function hasClaudeCli() {
 function injectViaClaudeCli(apiKey) {
   // Remove first so re-running init updates an existing entry cleanly.
   spawnSync('claude', ['mcp', 'remove', 'aztea', '--scope', 'user'], { stdio: 'ignore' })
+  // The claude CLI uses -e for env vars (not --env). All flags must come
+  // before the server name; the command + its args go after `--`.
   const args = [
     'mcp', 'add',
     '--scope', 'user',
     '--transport', 'stdio',
-    '--env', `AZTEA_API_KEY=${apiKey}`,
-    '--env', `AZTEA_BASE_URL=${BASE_URL}`,
+    '-e', `AZTEA_API_KEY=${apiKey}`,
+    '-e', `AZTEA_BASE_URL=${BASE_URL}`,
     'aztea',
     '--',
     'npx', '-y', 'aztea-cli', 'mcp',
@@ -185,8 +187,15 @@ function injectViaFile(apiKey) {
 
 function injectMcpConfig(apiKey) {
   if (hasClaudeCli()) {
-    injectViaClaudeCli(apiKey)
-    return { method: 'claude mcp add', path: '~/.claude.json (managed by claude)' }
+    try {
+      injectViaClaudeCli(apiKey)
+      return { method: 'claude mcp add', path: '~/.claude.json (managed by claude)' }
+    } catch (err) {
+      // claude CLI exists but the command failed (flag mismatch, version
+      // skew, etc.). Fall through to direct file write so install never
+      // breaks just because the CLI shape changed.
+      console.warn(`(claude mcp add failed: ${err.message.split('\n')[0]} — falling back to direct file write)`)
+    }
   }
   injectViaFile(apiKey)
   return { method: 'direct write', path: CLAUDE_USER_CONFIG_PATH }

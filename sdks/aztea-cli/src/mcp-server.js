@@ -46,7 +46,7 @@ function request(method, path, body, timeoutMs) {
     const headers = {
       'Authorization': `Bearer ${API_KEY}`,
       'Content-Type': 'application/json',
-      'User-Agent': 'aztea-mcp/0.4.0',
+      'User-Agent': 'aztea-mcp/0.5.0',
     }
     if (payload) headers['Content-Length'] = Buffer.byteLength(payload)
 
