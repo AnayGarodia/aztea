@@ -118,21 +118,32 @@ function focusAuthTab(tab, redirect) {
   window.dispatchEvent(new CustomEvent('aztea:auth-tab', { detail: { tab, redirect } }))
 
   const el = document.getElementById('lp-auth')
-  if (el) {
-    // INSTANT jump — no smooth animation. Smooth scroll on a long landing
-    // page takes 600-1000ms and feels like the click did nothing.
-    const top = el.getBoundingClientRect().top + window.scrollY - 64
-    window.scrollTo({ top, behavior: 'auto' })
+  if (!el) return
+  const targetTop = el.getBoundingClientRect().top + window.scrollY - 64
+  const startTop = window.scrollY
+  const distance = targetTop - startTop
+  const DURATION = 350 // fast — feels responsive, not jarring
+  const startTime = performance.now()
+  const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3)
+
+  const focusInput = () => {
+    const target = document.querySelector(
+      tab === 'register'
+        ? '.auth-panel input[autocomplete="username"], .auth-panel input[type="email"]'
+        : '.auth-panel input[type="email"]'
+    )
+    target?.focus({ preventScroll: true })
   }
 
-  // Focus the right field immediately. The tab swap above is synchronous,
-  // so the input we want is already in the DOM.
-  const target = document.querySelector(
-    tab === 'register'
-      ? '.auth-panel input[autocomplete="username"], .auth-panel input[type="email"]'
-      : '.auth-panel input[type="email"]'
-  )
-  target?.focus({ preventScroll: true })
+  if (Math.abs(distance) < 4) { focusInput(); return }
+
+  const step = (now) => {
+    const t = Math.min((now - startTime) / DURATION, 1)
+    window.scrollTo(0, startTop + distance * easeOutCubic(t))
+    if (t < 1) requestAnimationFrame(step)
+    else focusInput()
+  }
+  requestAnimationFrame(step)
 }
 
 export default function LandingPage() {
