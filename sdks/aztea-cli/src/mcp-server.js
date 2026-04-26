@@ -46,7 +46,7 @@ function request(method, path, body, timeoutMs) {
     const headers = {
       'Authorization': `Bearer ${API_KEY}`,
       'Content-Type': 'application/json',
-      'User-Agent': 'aztea-mcp/0.6.0',
+      'User-Agent': 'aztea-mcp/0.8.0',
     }
     if (payload) headers['Content-Length'] = Buffer.byteLength(payload)
 
@@ -189,28 +189,21 @@ function log(msg) {
 }
 
 function writeMsg(obj) {
-  const encoded = Buffer.from(JSON.stringify(obj), 'utf8')
-  process.stdout.write(`Content-Length: ${encoded.length}\r\n\r\n`)
-  process.stdout.write(encoded)
+  process.stdout.write(JSON.stringify(obj) + '\n')
 }
 
 function readMessages() {
-  let buf = Buffer.alloc(0)
+  let buf = ''
+  process.stdin.setEncoding('utf8')
   process.stdin.on('data', (chunk) => {
-    buf = Buffer.concat([buf, chunk])
-    while (true) {
-      const headerEnd = buf.indexOf('\r\n\r\n')
-      if (headerEnd === -1) break
-      const headerStr = buf.slice(0, headerEnd).toString('utf8')
-      const clMatch = headerStr.match(/Content-Length:\s*(\d+)/i)
-      if (!clMatch) { buf = buf.slice(headerEnd + 4); continue }
-      const cl = parseInt(clMatch[1], 10)
-      const bodyStart = headerEnd + 4
-      if (buf.length < bodyStart + cl) break
-      const body = buf.slice(bodyStart, bodyStart + cl).toString('utf8')
-      buf = buf.slice(bodyStart + cl)
+    buf += chunk
+    let nl
+    while ((nl = buf.indexOf('\n')) !== -1) {
+      const line = buf.slice(0, nl).replace(/\r$/, '')
+      buf = buf.slice(nl + 1)
+      if (!line.trim()) continue
       let msg
-      try { msg = JSON.parse(body) } catch { continue }
+      try { msg = JSON.parse(line) } catch { continue }
       handleMessage(msg)
     }
   })

@@ -28,7 +28,7 @@ function post(url, body) {
       headers: {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(payload),
-        'User-Agent': 'aztea-cli/0.6.0',
+        'User-Agent': 'aztea-cli/0.8.0',
       },
     }, (res) => {
       let data = ''
@@ -179,15 +179,17 @@ function injectViaClaudeCli(apiKey, mcpScript) {
     ? [nodeExe, mcpScript]
     : ['npx', '-y', 'aztea-cli', 'mcp']
 
-  // Try with --scope user first, then without (older Claude Code versions)
+  // Try with --scope user first, then without (older Claude Code versions).
+  // NOTE: name must come before -e flags — the variadic -e option otherwise
+  // consumes the server name as an env-var value and the command fails.
   for (const scopeArgs of [['--scope', 'user'], []]) {
     const args = [
       'mcp', 'add',
       ...scopeArgs,
       '--transport', 'stdio',
+      'aztea',
       '-e', `AZTEA_API_KEY=${apiKey}`,
       '-e', `AZTEA_BASE_URL=${BASE_URL}`,
-      'aztea',
       '--',
       ...mcpArgs,
     ]
