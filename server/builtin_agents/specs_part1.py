@@ -25,7 +25,7 @@ def load_builtin_specs_part1() -> list[dict[str, Any]]:
 {
     "agent_id": _FINANCIAL_AGENT_ID,
     "name": "Financial Research Agent",
-    "description": "Use this when the user wants financial data or investment analysis for a public company. Fetches the latest SEC filing (10-K or 10-Q) from EDGAR and returns a structured brief: business summary, financial highlights, key risks, and a signal with reasoning. Pass a stock ticker like AAPL or TSLA.",
+    "description": "Use when looking up financial data for a public company. Fetches the latest 10-K or 10-Q directly from SEC EDGAR — not stale LLM memory. Returns a structured brief: business summary, financial highlights, key risks, and a buy/hold/sell signal with reasoning.",
     "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_FINANCIAL_AGENT_ID],
     "price_per_call_usd": 0.01,
     "tags": ["financial-research", "sec-filings", "equity-analysis"],
@@ -81,7 +81,7 @@ def load_builtin_specs_part1() -> list[dict[str, Any]]:
 {
     "agent_id": _CODEREVIEW_AGENT_ID,
     "name": "Code Review Agent",
-    "description": "Use this when the user wants a thorough code review of a specific function, file, or snippet. Returns OWASP Top 10 vulnerabilities with CWE IDs, performance anti-patterns, a complexity score, test recommendations, and copy-paste-ready fixes. More thorough than inline review since it runs a dedicated analysis pass.",
+    "description": "Use when the user wants a dedicated code review pass rather than an inline suggestion. Runs a structured analysis against OWASP Top 10 and returns CWE IDs, CVSS-ranked vulnerabilities, a complexity score, and copy-paste-ready fixes for each issue.",
     "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_CODEREVIEW_AGENT_ID],
     "price_per_call_usd": 0.01,
     "tags": ["code-review", "security", "developer-tools"],
@@ -142,7 +142,7 @@ def load_builtin_specs_part1() -> list[dict[str, Any]]:
 {
     "agent_id": _WIKI_AGENT_ID,
     "name": "Wikipedia Research Agent",
-    "description": "Deep research synthesis from Wikipedia: dense fact extraction, chronological timelines, notable figures, statistics with source notes, controversies and debates, knowledge gaps, and primary sources worth following up. Modes: standard | deep.",
+    "description": "Use when the task requires structured Wikipedia research with more depth than a quick summary. Fetches live article content and returns key facts, timelines, notable figures, statistics with citations, and follow-up sources.",
     "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_WIKI_AGENT_ID],
     "price_per_call_usd": 0.01,
     "tags": ["research", "knowledge-base", "wikipedia"],
@@ -233,7 +233,7 @@ def load_builtin_specs_part1() -> list[dict[str, Any]]:
 {
     "agent_id": _CVELOOKUP_AGENT_ID,
     "name": "CVE Lookup Agent",
-    "description": "Use this when the user wants to look up CVEs for a package, library, or specific CVE ID. Queries live NIST NVD data — not a stale local database. Returns CVSS scores, exploit availability, affected version ranges, and recommended upgrade paths. Examples: 'CVEs in express 4.17', 'CVE-2021-44228', or 'is lodash@4.17.20 vulnerable?'.",
+    "description": "Use when the user wants live CVE data for a package or specific CVE ID. Queries NIST NVD in real time — not LLM memory. Returns CVSS score, exploit availability, affected version range, and recommended fix for each CVE.",
     "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_CVELOOKUP_AGENT_ID],
     "price_per_call_usd": 0.06,
     "tags": ["security", "cve", "vulnerability-intel", "nvd", "packages"],

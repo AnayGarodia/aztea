@@ -144,7 +144,6 @@ def run(payload: dict) -> dict:
 
         explanation = ""
         if explain:
-            sample = (stdout + stderr)[:3_000]
             req = CompletionRequest(
                 model="",
                 messages=[

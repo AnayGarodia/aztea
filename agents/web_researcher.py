@@ -151,6 +151,20 @@ def _fetch_one(url: str) -> dict:
         return {"url": url, "content": None, "status": "error", "error": f"Failed to fetch URL: {type(e).__name__}"}
 
     text, links, html_title = _strip_html(raw_html)
+
+    # Detect JS-rendered SPAs: page has a root mount point but essentially no text content
+    is_spa = (
+        bool(re.search(r'<div\s+id=["\'](?:root|app|__next)["\']', raw_html, re.IGNORECASE))
+        and len(text.strip()) < 200
+    )
+    if is_spa:
+        return {
+            "url": url,
+            "content": None,
+            "status": "error",
+            "error": "js_rendered — page is a JavaScript SPA; static fetch returned no readable content",
+        }
+
     return {
         "url": url,
         "content": text,

@@ -241,15 +241,15 @@ def test_registry_search_endpoint_returns_ranked_results(isolated_db):
         response = client.post(
             "/registry/search",
             headers=_auth_headers(TEST_MASTER_KEY),
-            json={"query": "summarize a 10-K", "limit": 5},
+            json={"query": "review code for security bugs", "limit": 5},
         )
 
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["count"] > 0
     result_ids = [r["agent"]["agent_id"] for r in body["results"]]
-    assert server._FINANCIAL_AGENT_ID in result_ids, (
-        f"Financial agent not found in top results: {result_ids}"
+    assert server._CODEREVIEW_AGENT_ID in result_ids, (
+        f"Code review agent not found in top results: {result_ids}"
     )
-    financial_result = next(r for r in body["results"] if r["agent"]["agent_id"] == server._FINANCIAL_AGENT_ID)
-    assert isinstance(financial_result["match_reasons"], list) and financial_result["match_reasons"]
+    review_result = next(r for r in body["results"] if r["agent"]["agent_id"] == server._CODEREVIEW_AGENT_ID)
+    assert isinstance(review_result["match_reasons"], list) and review_result["match_reasons"]

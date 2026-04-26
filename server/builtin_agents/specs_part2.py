@@ -26,7 +26,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
     {
         "agent_id": _IMAGE_GENERATOR_AGENT_ID,
         "name": "Image Generator Agent",
-        "description": "Generates production image artifacts with real model backends (OpenAI gpt-image-1 or configured Replicate model), with optional reference-image guidance.",
+        "description": "Use when the task requires generating an image. Runs a real model backend (OpenAI gpt-image-1 or Replicate) — not a description. Returns base64-encoded image artifacts, supports reference images for style guidance.",
         "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_IMAGE_GENERATOR_AGENT_ID],
         "price_per_call_usd": 0.02,
         "tags": ["image-generation", "creative", "multimodal", "design"],
@@ -144,7 +144,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
     {
         "agent_id": _VIDEO_STORYBOARD_AGENT_ID,
         "name": "Video Storyboard Generator Agent",
-        "description": "Turns a creative brief into production-ready shot plans and generates an actual video artifact through a configured video model backend.",
+        "description": "Use when the task requires generating a short video from a creative brief. Produces a shot plan, voiceover script, and an actual video artifact via a configured model backend — not a storyboard description.",
         "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_VIDEO_STORYBOARD_AGENT_ID],
         "price_per_call_usd": 0.03,
         "tags": ["video-generation", "storyboarding", "multimodal", "creative"],
@@ -248,7 +248,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
 {
     "agent_id": _ARXIV_RESEARCH_AGENT_ID,
     "name": "arXiv Research Agent",
-    "description": "Use this when the user wants to find or summarize academic research papers. Searches live arXiv.org by keyword, author, or category and returns a synthesis with key themes, seminal works, and open questions. Not a hallucination — it fetches real papers.",
+    "description": "Use when the user wants live academic papers from arXiv, not LLM-recalled citations. Searches arXiv.org by keyword, author, or category and returns real papers with abstracts, a synthesis of key themes, seminal works, and open research questions.",
     "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_ARXIV_RESEARCH_AGENT_ID],
     "price_per_call_usd": 0.01,
     "tags": ["research", "academic", "arxiv", "papers", "science"],
@@ -316,7 +316,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
 {
     "agent_id": _PYTHON_EXECUTOR_AGENT_ID,
     "name": "Python Code Executor",
-    "description": "Use this when the user wants to run Python code and see actual output. Executes in a real sandboxed subprocess — not a simulation. Returns stdout, stderr, exit code, execution time, and an optional expert explanation of what the output means.",
+    "description": "Use when the user wants to actually run Python code, not simulate it. Executes in a real sandboxed subprocess. Returns stdout, stderr, exit code, execution time, and an expert explanation of what the output means.",
     "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_PYTHON_EXECUTOR_AGENT_ID],
     "price_per_call_usd": 0.01,
     "tags": ["code-execution", "python", "developer-tools", "compute"],
@@ -368,7 +368,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
 {
     "agent_id": _WEB_RESEARCHER_AGENT_ID,
     "name": "Web Researcher Agent",
-    "description": "Use this when the user wants to read, summarize, or extract information from a URL. Fetches the live page (not a cache) and returns a dense summary, key points, direct answers to a question, and verbatim supporting quotes. Supports up to 10 URLs in one call for cross-referencing.",
+    "description": "Use when the task requires reading a live URL, not guessing its content. Fetches the page in real time and returns a dense summary, key points, direct answers to a specific question, and verbatim supporting quotes. Supports up to 10 URLs in one call for cross-source synthesis.",
     "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_WEB_RESEARCHER_AGENT_ID],
     "price_per_call_usd": 0.01,
     "tags": ["web", "research", "summarization", "content-extraction"],
@@ -439,7 +439,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
 {
     "agent_id": str(_GITHUB_FETCHER_AGENT_ID),
     "name": "GitHub File Fetcher",
-    "description": "Use this when the user wants to read files from a GitHub repository. Fetches up to 20 files in parallel from any public repo (owner/repo format) and optionally summarizes the codebase architecture. Useful for reading READMEs, inspecting source, or pulling in context from a library.",
+    "description": "Use when the task requires reading files from a public GitHub repository. Fetches up to 20 files in parallel, auto-detects the default branch, and optionally returns an LLM summary of the codebase architecture. Returns file content verbatim.",
     "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_GITHUB_FETCHER_AGENT_ID],
     "price_per_call_usd": 0.08,
     "tags": ["github", "code", "files", "repository"],
@@ -490,7 +490,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
 {
     "agent_id": str(_HN_DIGEST_AGENT_ID),
     "name": "Hacker News Digest",
-    "description": "Fetches live Hacker News front-page stories and synthesizes themes, trends, and notable discussions using the HN Algolia API.",
+    "description": "Use when the user wants the current Hacker News front page, not cached results. Fetches live stories via the HN Algolia API and returns a synthesis of themes, trending topics, and notable discussions.",
     "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_HN_DIGEST_AGENT_ID],
     "price_per_call_usd": 0.10,
     "tags": ["news", "hacker-news", "trends", "digest"],
@@ -537,7 +537,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
 {
     "agent_id": str(_DNS_INSPECTOR_AGENT_ID),
     "name": "DNS & SSL Inspector",
-    "description": "Inspects DNS records, SSL certificate validity, and HTTP response headers for up to 10 domains. Identifies certificate expiry risks, missing HSTS, and DNS misconfigurations.",
+    "description": "Use when the task requires checking domain health: DNS records, SSL certificate expiry, or HTTP security headers. Runs live checks against up to 10 domains and returns structured findings with actionable issues.",
     "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_DNS_INSPECTOR_AGENT_ID],
     "price_per_call_usd": 0.09,
     "tags": ["dns", "ssl", "security", "infrastructure"],

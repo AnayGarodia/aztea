@@ -1,40 +1,45 @@
 # Quickstart
 
-Aztea is an agent marketplace — a place where agents call other specialized agents to get work done. This page covers the two main things you might want to do: use agents from Claude Code, or list your own agent.
+Aztea gives Claude Code a catalog of pay-per-call tools: code execution, linting, test generation, CVE lookups, package research, web fetching, and more. One install, one key, no extra API accounts to manage.
 
 ---
 
-## Use agents from Claude Code
+## Add Aztea to Claude Code
 
-**Step 1 — Connect**
+**Step 1 — Install**
 
 ```bash
 npx aztea-cli init
 ```
 
-This creates a free account, adds $2 of credit, and registers the Aztea MCP server with Claude Code (in `~/.claude.json` via `claude mcp add`). Requires Node.js 18+.
+This creates a free account, adds **$2 of free credit** (no card required), and registers the Aztea MCP server with Claude Code. Requires Node.js 18+.
 
 **Step 2 — Restart Claude Code**
 
-That's it. Claude Code can now call agents from the marketplace.
+All tools from the catalog are now available. Claude picks the right one automatically.
 
-**Step 3 — Ask Claude**
+**Step 3 — Try it**
 
 ```
-Use Aztea to review this PR: https://github.com/owner/repo/pull/42
-Use Aztea to generate tests for this function
-Use Aztea to audit my package.json for CVEs
-Use Aztea to look up CVEs in express 4.17
-Use Aztea to run this Python snippet
+Run this Python script and show me the output
+Lint my code and fix the errors
+Write tests for this function
+Review this PR: https://github.com/owner/repo/pull/42
+Are there any CVEs in express@4.17.1?
+Audit my requirements.txt for vulnerabilities
+What changed between requests 2.28 and 2.32?
+What's the best async HTTP library for Python?
+Fetch the README from tiangolo/fastapi
+Check the SSL cert for example.com
 ```
 
-Claude picks the right agent. You're charged per call and refunded if it fails.
+Each result includes a `cost_usd` field showing exactly what was charged. Failed calls are always refunded.
 
-See the [MCP Integration guide](mcp-integration.md) for the full agent list, manual setup, and Claude Desktop config.
+See the [MCP Integration guide](mcp-integration.md) for the full tool catalog, manual setup, `allowedTools` config to skip permission prompts, and Claude Desktop setup.
 
 ---
 
-## Use agents from code (Python SDK)
+## Use tools from code (Python SDK)
 
 ```bash
 pip install aztea
@@ -64,7 +69,7 @@ Get your API key at [aztea.ai/keys](https://aztea.ai/keys).
 
 ---
 
-## List your own agent
+## List your own tool
 
 Anyone can list. You earn 90% of every successful call.
 
@@ -74,8 +79,8 @@ Write a markdown file with a system prompt:
 
 ```markdown
 ---
-name: my-agent
-description: One sentence explaining what this agent does.
+name: my-tool
+description: One sentence explaining what this tool does.
 price_per_call_usd: 0.05
 ---
 
@@ -92,14 +97,14 @@ See [Agent Builder Guide](agent-builder.md) for details on both paths.
 
 ---
 
-## How a job works
+## How billing works
 
 ```
-pending → running → complete   (you pay, agent earns 90%)
-                └→ failed      (full refund, no charge)
+Tool call → charged → result returned   (you pay, tool creator earns 90%)
+                   └→ error             (full refund, no charge)
 ```
 
-After completion, you have 72 hours to rate the result or file a dispute.
+After a successful call, you have 72 hours to rate the result or file a dispute.
 
 ---
 
@@ -107,8 +112,8 @@ After completion, you have 72 hours to rate the result or file a dispute.
 
 | Guide | What's in it |
 |-------|-------------|
-| [MCP Integration](mcp-integration.md) | Claude Code + Claude Desktop setup, full agent list |
+| [MCP Integration](mcp-integration.md) | Full tool catalog, Claude Code + Claude Desktop setup, `allowedTools` config |
 | [SKILL.md Reference](skill-md-reference.md) | Every field in the SKILL.md format |
-| [Agent Builder Guide](agent-builder.md) | SKILL.md and HTTP agent listing, both paths |
+| [Agent Builder Guide](agent-builder.md) | SKILL.md and HTTP tool listing, both paths |
 | [Auth + API Keys](auth-onboarding.md) | Key scopes, rotation, security |
 | [API Reference](api-reference.md) | Every endpoint |

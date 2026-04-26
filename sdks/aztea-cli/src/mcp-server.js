@@ -105,6 +105,7 @@ function inferUseWhenHint(agent) {
 
 let _tools = []         // MCP tool descriptors
 let _toolMap = {}       // tool_name → agent_id
+let _toolPrices = {}    // tool_name → price_per_call_usd
 let _authRequired = !API_KEY
 let _initialRefreshDone = false
 
@@ -120,6 +121,7 @@ async function refresh() {
     const agents = Array.isArray(res.body?.agents) ? res.body.agents : []
     const tools = []
     const map = {}
+    const prices = {}
     for (const a of agents) {
       const name = (a.name || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 60)
       if (!name || !a.agent_id) continue
@@ -133,9 +135,11 @@ async function refresh() {
       }
       tools.push(tool)
       map[name] = a.agent_id
+      if (a.price_per_call_usd != null) prices[name] = Number(a.price_per_call_usd)
     }
     _tools = tools
     _toolMap = map
+    _toolPrices = prices
     _authRequired = false
     // Notify Claude Code to re-fetch the tool list. On first load this
     // replaces the empty AUTH_TOOL placeholder with the real catalog.
@@ -168,7 +172,14 @@ async function callTool(name, args) {
       return { isError: true, content: [{ type: 'text', text: 'API key invalid. Run `npx aztea-cli init` to update.' }] }
     }
     const body = res.body
-    const text = typeof body === 'string' ? body : JSON.stringify(body, null, 2)
+    // Inject cost_usd so Claude can see the charge without reading response headers
+    const priceUsd = typeof body === 'object' && body !== null
+      ? (_toolPrices[name] != null ? _toolPrices[name] : null)
+      : null
+    const enriched = (typeof body === 'object' && body !== null && priceUsd != null)
+      ? { ...body, cost_usd: priceUsd }
+      : body
+    const text = typeof enriched === 'string' ? enriched : JSON.stringify(enriched, null, 2)
     const content = [{ type: 'text', text: String(text) }]
     // pass through image artifacts
     if (Array.isArray(body?.artifacts)) {

@@ -21,7 +21,7 @@ def test_github_fetcher_basic(client):
     with patch("agents.github_fetcher.httpx.get", return_value=mock_resp):
         resp = client.post(
             f"/registry/agents/{GITHUB_FETCHER_AGENT_ID}/call",
-            json={"repo": "octocat/Hello-World", "paths": ["README.md"]},
+            json={"repo": "octocat/Hello-World", "paths": ["README.md"], "branch": "main"},
             headers=_auth_headers(caller["raw_api_key"]),
         )
 
@@ -34,53 +34,13 @@ def test_github_fetcher_basic(client):
     assert body["files"][0]["content"] == "# Hello World\nThis is a README."
 
 
-def test_hn_digest_basic(client):
-    caller = _register_user()
-    _fund_user_wallet(caller, 200)
-
-    mock_hn_resp = MagicMock()
-    mock_hn_resp.status_code = 200
-    mock_hn_resp.raise_for_status = MagicMock()
-    mock_hn_resp.json.return_value = {
-        "hits": [
-            {
-                "title": "Show HN: New AI tool",
-                "url": "https://example.com",
-                "points": 150,
-                "num_comments": 45,
-                "author": "testuser",
-                "created_at": "2024-01-01T00:00:00Z",
-            },
-            {
-                "title": "Ask HN: Best practices for Python",
-                "url": None,
-                "points": 200,
-                "num_comments": 80,
-                "author": "devuser",
-                "created_at": "2024-01-01T01:00:00Z",
-            },
-        ]
-    }
-
-    mock_llm = MagicMock()
-    mock_llm.text = "SYNTHESIS: AI and developer tools dominate today.\nTOPICS: AI, Python, tools"
-
-    with patch("agents.hn_digest.httpx.get", return_value=mock_hn_resp), \
-         patch("agents.hn_digest.run_with_fallback", return_value=mock_llm):
-        resp = client.post(
-            f"/registry/agents/{HN_DIGEST_AGENT_ID}/call",
-            json={"count": 2, "mode": "digest"},
-            headers=_auth_headers(caller["raw_api_key"]),
-        )
-
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert "stories" in body
-    assert "synthesis" in body
-    assert isinstance(body["billing_units_actual"], int)
-    assert body["billing_units_actual"] == 2
-    assert len(body["stories"]) == 2
-    assert body["stories"][0]["title"] == "Show HN: New AI tool"
+def test_hn_digest_not_in_public_catalog(client):
+    """HN Digest is intentionally not in the curated public set (removed in v2)."""
+    _ = client
+    import server as _server
+    from core import registry as _registry
+    agent = _registry.get_agent(_server._HN_DIGEST_AGENT_ID, include_unapproved=True)
+    assert agent is None, "HN Digest should not be registered in the curated public catalog"
 
 
 def test_dns_inspector_basic(client):

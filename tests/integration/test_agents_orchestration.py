@@ -710,7 +710,7 @@ def test_admin_review_approve_and_reject_paths(client, monkeypatch):
 
 def test_built_in_agents_remain_auto_approved(client):
     _ = client
-    builtin = registry.get_agent(server._FINANCIAL_AGENT_ID, include_unapproved=True)
+    builtin = registry.get_agent(server._CODEREVIEW_AGENT_ID, include_unapproved=True)
     assert builtin is not None
     assert builtin["review_status"] == "approved"
 
