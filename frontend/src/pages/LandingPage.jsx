@@ -151,8 +151,8 @@ export default function LandingPage() {
 
   const handleListSkill = () => {
     if (apiKey) { navigate('/list-skill'); return }
-    navigate('?redirect=/list-skill', { replace: true })
-    setTimeout(() => focusAuthTab('register'), 50)
+    navigate('?redirect=/list-skill', { replace: true, preventScrollReset: true })
+    focusAuthTab('register')
   }
 
   const handleGetStarted = () => {
