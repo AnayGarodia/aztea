@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Link, Navigate, useNavigate } from 'react-router-dom'
+import { Link, Navigate, useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { authAcceptLegal } from '../api'
 import { useAuth } from '../context/AuthContext'
 import Button from '../ui/Button'
@@ -7,7 +7,13 @@ import './LegalAcceptancePage.css'
 
 export default function LegalAcceptancePage() {
   const navigate = useNavigate()
+  const location = useLocation()
+  const [searchParams] = useSearchParams()
   const { apiKey, user, refreshProfile } = useAuth()
+  const intendedDestination = searchParams.get('redirect')
+    ?? (location.state?.from && location.state.from !== '/welcome' && location.state.from !== '/legal/accept'
+        ? location.state.from
+        : '/overview')
   const [termsChecked, setTermsChecked] = useState(false)
   const [privacyChecked, setPrivacyChecked] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -28,7 +34,7 @@ export default function LegalAcceptancePage() {
     return <Navigate to="/welcome" replace />
   }
   if (!needsAcceptance) {
-    return <Navigate to="/overview" replace />
+    return <Navigate to={intendedDestination} replace />
   }
 
   const onAccept = async () => {
@@ -38,7 +44,7 @@ export default function LegalAcceptancePage() {
     try {
       await authAcceptLegal(apiKey, currentTermsVersion, currentPrivacyVersion)
       await refreshProfile?.()
-      navigate('/overview', { replace: true })
+      navigate(intendedDestination, { replace: true })
     } catch (err) {
       setError(err?.message || 'Failed to record acceptance. Please try again.')
     } finally {

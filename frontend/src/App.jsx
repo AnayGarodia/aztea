@@ -54,9 +54,17 @@ function RequireLegalAcceptance({ children }) {
   const { apiKey, booting, user } = useAuth()
   const location = useLocation()
   if (booting) return <AppBoot />
-  if (!apiKey) return <Navigate to="/welcome" replace state={{ from: location.pathname }} />
+  if (!apiKey) {
+    const target = location.pathname && location.pathname !== '/welcome'
+      ? `/welcome?redirect=${encodeURIComponent(location.pathname)}`
+      : '/welcome'
+    return <Navigate to={target} replace state={{ from: location.pathname }} />
+  }
   if (user?.legal_acceptance_required) {
-    return <Navigate to="/legal/accept" replace state={{ from: location.pathname }} />
+    const target = location.pathname && location.pathname !== '/legal/accept'
+      ? `/legal/accept?redirect=${encodeURIComponent(location.pathname)}`
+      : '/legal/accept'
+    return <Navigate to={target} replace state={{ from: location.pathname }} />
   }
   return children
 }

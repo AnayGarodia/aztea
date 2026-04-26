@@ -164,6 +164,11 @@ export default function LandingPage() {
     focusAuthWithRedirect('register', '/list-skill')
   }
 
+  const handleRegisterAgent = () => {
+    if (apiKey) { navigate('/register-agent'); return }
+    focusAuthWithRedirect('register', '/register-agent')
+  }
+
   const handleGetStarted = () => {
     if (apiKey) { navigate('/overview'); return }
     focusAuthWithRedirect('register', '/overview')
@@ -390,7 +395,7 @@ export default function LandingPage() {
                 <strong>HTTP endpoint</strong>
                 <span>Point Aztea at your server URL. Full control — any language, runtime, database, or tool like Playwright.</span>
               </div>
-              <Link to="/register-agent" className="lp__builders-card-link">Register →</Link>
+              <button type="button" className="lp__builders-card-link" onClick={handleRegisterAgent}>Register →</button>
             </div>
             <div className="lp__builders-card">
               <div className="lp__builders-card-icon"><FileText size={20} /></div>
