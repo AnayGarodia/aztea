@@ -151,7 +151,6 @@ export default function LandingPage() {
 
   const handleListSkill = () => {
     if (apiKey) { navigate('/list-skill'); return }
-    navigate('?redirect=/list-skill', { replace: true, preventScrollReset: true })
     focusAuthTab('register')
   }
 
@@ -160,40 +159,47 @@ export default function LandingPage() {
     focusAuthTab('register')
   }
 
+  const handleBrowseAgents = () => {
+    if (apiKey) { navigate('/agents'); return }
+    scrollToId('lp-catalog')
+  }
+
   return (
     <div className="lp">
       {/* ── Nav ── */}
       <header className="lp__nav glass">
-        <Link to="/" className="lp__nav-brand" aria-label="Aztea home">
-          <div className="lp__nav-logo">
-            <svg width="16" height="16" viewBox="0 0 18 18" fill="none" aria-hidden>
-              <path d="M9 2L16 14H2L9 2Z" fill="currentColor" opacity="0.9" />
-              <path d="M9 6L13 14H5L9 6Z" fill="currentColor" opacity="0.45" />
-            </svg>
+        <div className="lp__nav-inner">
+          <Link to="/" className="lp__nav-brand" aria-label="Aztea home">
+            <div className="lp__nav-logo">
+              <svg width="16" height="16" viewBox="0 0 18 18" fill="none" aria-hidden>
+                <path d="M9 2L16 14H2L9 2Z" fill="currentColor" opacity="0.9" />
+                <path d="M9 6L13 14H5L9 6Z" fill="currentColor" opacity="0.45" />
+              </svg>
+            </div>
+            <span className="lp__nav-wordmark">Aztea</span>
+          </Link>
+
+          <nav className="lp__nav-links" aria-label="Primary">
+            <button type="button" className="lp__nav-link" onClick={handleBrowseAgents}>Agents</button>
+            <button type="button" className="lp__nav-link" onClick={() => scrollToId('lp-how')}>How it works</button>
+            <button type="button" className="lp__nav-link" onClick={handleListSkill}>For builders</button>
+            <Link className="lp__nav-link" to="/docs">Docs</Link>
+          </nav>
+
+          <div className="lp__nav-actions">
+            <button type="button" className="lp__nav-icon" onClick={toggleTheme}
+              aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}>
+              {isDark ? <Sun size={14} /> : <Moon size={14} />}
+            </button>
+            <button type="button" className="lp__nav-signin" onClick={() => focusAuthTab('signin')}>Sign in</button>
+            <button type="button" className="lp__nav-cta" onClick={handleGetStarted}>
+              Get started free →
+            </button>
+            <button type="button" className="lp__nav-menu-btn" onClick={() => setMenuOpen(v => !v)}
+              aria-label={menuOpen ? 'Close menu' : 'Open menu'} aria-expanded={menuOpen}>
+              {menuOpen ? <X size={16} /> : <Menu size={16} />}
+            </button>
           </div>
-          <span className="lp__nav-wordmark">Aztea</span>
-        </Link>
-
-        <nav className="lp__nav-links" aria-label="Primary">
-          <Link className="lp__nav-link" to="/agents">Agents</Link>
-          <button type="button" className="lp__nav-link" onClick={() => scrollToId('lp-how')}>How it works</button>
-          <button type="button" className="lp__nav-link" onClick={handleListSkill}>For builders</button>
-          <Link className="lp__nav-link" to="/docs">Docs</Link>
-        </nav>
-
-        <div className="lp__nav-actions">
-          <button type="button" className="lp__nav-icon" onClick={toggleTheme}
-            aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}>
-            {isDark ? <Sun size={14} /> : <Moon size={14} />}
-          </button>
-          <button type="button" className="lp__nav-signin" onClick={() => focusAuthTab('signin')}>Sign in</button>
-          <button type="button" className="lp__nav-cta" onClick={handleGetStarted}>
-            Get started free →
-          </button>
-          <button type="button" className="lp__nav-menu-btn" onClick={() => setMenuOpen(v => !v)}
-            aria-label={menuOpen ? 'Close menu' : 'Open menu'} aria-expanded={menuOpen}>
-            {menuOpen ? <X size={16} /> : <Menu size={16} />}
-          </button>
         </div>
       </header>
 
@@ -202,7 +208,7 @@ export default function LandingPage() {
         <div className="lp__mobile-drawer" role="dialog" aria-modal="true" aria-label="Menu">
           <button type="button" className="lp__mobile-drawer-backdrop" aria-label="Close menu" onClick={closeMenu} />
           <div className="lp__mobile-drawer-panel">
-            <Link to="/agents" className="lp__mobile-link" onClick={closeMenu}>Agents</Link>
+            <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); handleBrowseAgents() }}>Agents</button>
             <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); scrollToId('lp-how') }}>How it works</button>
             <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); handleListSkill() }}>For builders</button>
             <Link to="/docs" className="lp__mobile-link" onClick={closeMenu}>Docs</Link>
@@ -248,9 +254,9 @@ export default function LandingPage() {
             <button type="button" className="lp__btn-primary" onClick={() => scrollToId('lp-install')}>
               Connect Claude Code
             </button>
-            <Link to="/agents" className="lp__btn-ghost">
+            <button type="button" className="lp__btn-ghost" onClick={handleBrowseAgents}>
               Browse agents →
-            </Link>
+            </button>
           </div>
 
           <p className="lp__hero-micro">$2 free credit on signup. No card needed.</p>
@@ -327,9 +333,9 @@ export default function LandingPage() {
           </Stagger>
 
           <Reveal delay={0.1} className="lp__cat-cta">
-            <Link to="/agents" className="lp__btn-secondary">
+            <button type="button" className="lp__btn-secondary" onClick={handleBrowseAgents}>
               Browse all agents <ExternalLink size={13} style={{ marginLeft: 6 }} />
-            </Link>
+            </button>
           </Reveal>
         </div>
       </section>

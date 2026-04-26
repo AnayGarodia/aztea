@@ -12,13 +12,19 @@
   position: sticky;
   top: 0;
   z-index: 100;
+  height: 60px;
+  border-bottom: 1px solid var(--border);
+}
+
+.lp__nav-inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 24px;
+  height: 100%;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 24px;
   gap: 12px;
-  height: 60px;
-  border-bottom: 1px solid var(--border);
 }
 
 .lp__nav-brand {
@@ -1468,7 +1474,7 @@
 }
 
 @media (max-width: 768px) {
-  .lp__nav { padding: 0 14px; gap: 8px; }
+  .lp__nav-inner { padding: 0 14px; gap: 8px; }
   .lp__nav-signin { display: none; }
   .lp__nav-menu-btn { display: inline-flex; }
   .lp__mobile-drawer { display: block; }
@@ -1497,7 +1503,7 @@
 }
 
 @media (max-width: 375px) {
-  .lp__nav { padding: 0 10px; }
+  .lp__nav-inner { padding: 0 10px; }
   .lp__nav-wordmark { font-size: 0.875rem; }
   .lp__pricing-card { padding: 20px; }
 }
@@ -1778,7 +1784,7 @@ details[open] .lp__manual-summary::before { transform: rotate(90deg); }
   border-bottom: 1px solid var(--border);
 }
 .lp__builders-inner {
-  max-width: 720px;
+  max-width: 1000px;
   margin: 0 auto;
 }
 .lp__builders-cards {
