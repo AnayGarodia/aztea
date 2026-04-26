@@ -217,7 +217,7 @@ export default function LandingPage() {
           <nav className="lp__nav-links" aria-label="Primary">
             <button type="button" className="lp__nav-link" onClick={handleBrowseAgents}>Agents</button>
             <button type="button" className="lp__nav-link" onClick={() => scrollToId('lp-how')}>How it works</button>
-            <button type="button" className="lp__nav-link" onClick={() => focusAuthTab('register', '/list-skill')}>For builders</button>
+            <button type="button" className="lp__nav-link" onClick={handleListSkill}>For builders</button>
             <Link className="lp__nav-link" to="/docs">Docs</Link>
           </nav>
 
@@ -226,8 +226,8 @@ export default function LandingPage() {
               aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}>
               {isDark ? <Sun size={14} /> : <Moon size={14} />}
             </button>
-            <button type="button" className="lp__nav-signin" onClick={() => focusAuthTab('signin')}>Sign in</button>
-            <button type="button" className="lp__nav-cta" onClick={() => focusAuthTab('register', '/overview')}>
+            <button type="button" className="lp__nav-signin" onClick={() => apiKey ? navigate('/overview') : focusAuthTab('signin')}>Sign in</button>
+            <button type="button" className="lp__nav-cta" onClick={handleGetStarted}>
               Get started free →
             </button>
             <button type="button" className="lp__nav-menu-btn" onClick={() => setMenuOpen(v => !v)}
@@ -245,11 +245,11 @@ export default function LandingPage() {
           <div className="lp__mobile-drawer-panel">
             <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); handleBrowseAgents() }}>Agents</button>
             <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); scrollToId('lp-how') }}>How it works</button>
-            <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); focusAuthTab('register', '/list-skill') }}>For builders</button>
+            <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); handleListSkill() }}>For builders</button>
             <Link to="/docs" className="lp__mobile-link" onClick={closeMenu}>Docs</Link>
             <div className="lp__mobile-sep" />
-            <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); focusAuthTab('signin') }}>Sign in</button>
-            <button type="button" className="lp__mobile-link lp__mobile-link--primary" onClick={() => { closeMenu(); focusAuthTab('register', '/overview') }}>
+            <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); apiKey ? navigate('/overview') : focusAuthTab('signin') }}>Sign in</button>
+            <button type="button" className="lp__mobile-link lp__mobile-link--primary" onClick={() => { closeMenu(); handleGetStarted() }}>
               Get started free
             </button>
             <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); toggleTheme() }}>
@@ -508,7 +508,7 @@ export default function LandingPage() {
         <Reveal className="lp__auth-content">
           <div className="lp__auth-inner">
             <div className="lp__auth-text">
-              <p className="t-micro lp__section-eyebrow">Get started</p>
+              <p className="t-micro lp__section-eyebrow">Free to start</p>
               <h2 className="t-h1">Get started</h2>
               <p className="lp__auth-sub">
                 Create an account, run <code style={{ fontSize: '0.85em' }}>npx aztea-cli init</code>, restart Claude Code. That's the whole setup.
