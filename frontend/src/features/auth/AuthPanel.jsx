@@ -522,7 +522,15 @@ export default function AuthPanel() {
               </div>
             )}
             {error && <p className="auth-panel__error">{error}</p>}
-            <Button type="submit" variant="primary" size="md" loading={loading} disabled={loading || !canSubmit} style={{ width: '100%' }}>
+            <Button
+              type="submit"
+              variant="primary"
+              size="md"
+              loading={loading}
+              disabled={loading}
+              aria-disabled={!canSubmit}
+              style={{ width: '100%' }}
+            >
               {tab === 'signin' ? 'Sign in' : 'Create account'}
             </Button>
             {tab === 'signin' && (
