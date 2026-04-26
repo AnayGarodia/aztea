@@ -11,11 +11,14 @@ const BASE_URL = process.env.AZTEA_BASE_URL || 'https://aztea.ai'
 
 // ── HTTP helpers ─────────────────────────────────────────────
 
+const REQUEST_TIMEOUT_MS = 30_000
+
 function post(url, body) {
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify(body)
     const parsed = new URL(url)
     const lib = parsed.protocol === 'https:' ? https : http
+    let timer
     const req = lib.request({
       hostname: parsed.hostname,
       port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
@@ -24,12 +27,13 @@ function post(url, body) {
       headers: {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(payload),
-        'User-Agent': 'aztea-cli/0.2.0',
+        'User-Agent': 'aztea-cli/0.3.0',
       },
     }, (res) => {
       let data = ''
       res.on('data', d => { data += d })
       res.on('end', () => {
+        clearTimeout(timer)
         try {
           resolve({ status: res.statusCode, body: JSON.parse(data) })
         } catch {
@@ -37,10 +41,45 @@ function post(url, body) {
         }
       })
     })
-    req.on('error', reject)
+    req.on('error', err => {
+      clearTimeout(timer)
+      reject(err)
+    })
+    timer = setTimeout(() => {
+      req.destroy(new Error(`Request timed out after ${REQUEST_TIMEOUT_MS / 1000}s. The server may be slow or unreachable.`))
+    }, REQUEST_TIMEOUT_MS)
     req.write(payload)
     req.end()
   })
+}
+
+// Animated spinner shown while a network request is in flight.
+function startSpinner(label) {
+  const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+  let i = 0
+  const isTty = process.stdout.isTTY
+  const render = () => {
+    if (!isTty) return
+    process.stdout.write(`\r${label} ${frames[i = (i + 1) % frames.length]} `)
+  }
+  render()
+  const id = isTty ? setInterval(render, 80) : null
+  return () => {
+    if (id) clearInterval(id)
+    if (isTty) {
+      process.stdout.clearLine(0)
+      process.stdout.cursorTo(0)
+    }
+  }
+}
+
+async function withSpinner(label, fn) {
+  const stop = startSpinner(label)
+  try {
+    return await fn()
+  } finally {
+    stop()
+  }
 }
 
 // ── Readline helpers ─────────────────────────────────────────
@@ -141,26 +180,36 @@ async function run() {
     rl.close()
     const password = await promptPassword('Password: ')
 
-    process.stdout.write('\nSigning in… ')
+    console.log()
     let res
     try {
-      res = await post(`${BASE_URL}/auth/login`, { email, password })
+      res = await withSpinner('Signing in', () => post(`${BASE_URL}/auth/login`, { email, password }))
     } catch (err) {
-      console.error(`\nFailed to connect to ${BASE_URL}: ${err.message}`)
+      console.error(`Failed to connect to ${BASE_URL}: ${err.message}`)
+      console.error('Check your internet connection, or try again — the server may be temporarily slow.')
       process.exit(1)
     }
 
     if (res.status === 401) {
-      console.error('\nInvalid email or password.')
+      console.error('Invalid email or password. Try again, or reset at https://aztea.ai.')
+      process.exit(1)
+    }
+    if (res.status === 403) {
+      const detail = typeof res.body === 'object' ? (res.body.detail || res.body.message) : res.body
+      console.error(`Sign-in blocked: ${detail}`)
+      process.exit(1)
+    }
+    if (res.status >= 500) {
+      console.error(`Server error (HTTP ${res.status}). Please try again in a moment.`)
       process.exit(1)
     }
     if (res.status !== 200) {
-      console.error(`\nLogin failed (HTTP ${res.status}): ${JSON.stringify(res.body)}`)
+      console.error(`Login failed (HTTP ${res.status}): ${JSON.stringify(res.body)}`)
       process.exit(1)
     }
     apiKey = res.body.raw_api_key ?? res.body.api_key
     if (!apiKey) {
-      console.error('\nServer did not return an API key. Please try again or visit aztea.ai.')
+      console.error('Server did not return an API key. Please try again or visit https://aztea.ai.')
       process.exit(1)
     }
     console.log('✓ Signed in')
@@ -174,27 +223,32 @@ async function run() {
     rl.close()
     const password = await promptPassword('Password: ')
 
-    process.stdout.write('\nCreating account… ')
+    console.log()
     let res
     try {
-      res = await post(`${BASE_URL}/auth/register`, { username, email, password, role: 'hirer' })
+      res = await withSpinner('Creating account', () => post(`${BASE_URL}/auth/register`, { username, email, password, role: 'hirer' }))
     } catch (err) {
-      console.error(`\nFailed to connect to ${BASE_URL}: ${err.message}`)
+      console.error(`Failed to connect to ${BASE_URL}: ${err.message}`)
+      console.error('Check your internet connection, or try again — the server may be temporarily slow.')
       process.exit(1)
     }
 
     if (res.status === 400) {
-      const detail = typeof res.body === 'object' ? res.body.detail : res.body
-      console.error(`\nRegistration failed: ${detail}`)
+      const detail = typeof res.body === 'object' ? (res.body.detail || res.body.message) : res.body
+      console.error(`Registration failed: ${detail}`)
+      process.exit(1)
+    }
+    if (res.status >= 500) {
+      console.error(`Server error (HTTP ${res.status}). Please try again in a moment.`)
       process.exit(1)
     }
     if (res.status !== 201) {
-      console.error(`\nRegistration failed (HTTP ${res.status}): ${JSON.stringify(res.body)}`)
+      console.error(`Registration failed (HTTP ${res.status}): ${JSON.stringify(res.body)}`)
       process.exit(1)
     }
-    apiKey = res.body.api_key
+    apiKey = res.body.raw_api_key ?? res.body.api_key
     if (!apiKey) {
-      console.error('\nServer did not return an API key. Please try again or visit aztea.ai.')
+      console.error('Server did not return an API key. Please try again or visit https://aztea.ai.')
       process.exit(1)
     }
     const credit = res.body.balance_cents != null
@@ -204,17 +258,16 @@ async function run() {
   }
 
   // ── Write config ──
-  process.stdout.write('Adding Aztea to Claude Code… ')
   try {
     injectMcpConfig(apiKey)
-    console.log(`✓ Written to ${CLAUDE_SETTINGS_PATH}`)
+    console.log(`✓ Added Aztea to Claude Code (${CLAUDE_SETTINGS_PATH})`)
   } catch (err) {
-    console.error(`\nCould not write to ${CLAUDE_SETTINGS_PATH}: ${err.message}`)
+    console.error(`Could not write to ${CLAUDE_SETTINGS_PATH}: ${err.message}`)
     console.log('\nAdd this manually to ~/.claude/settings.json:')
     console.log(JSON.stringify({
       mcpServers: {
         aztea: {
-          command: 'npx', args: ['-y', 'aztea', 'mcp'],
+          command: 'npx', args: ['-y', 'aztea-cli', 'mcp'],
           env: { AZTEA_API_KEY: apiKey, AZTEA_BASE_URL: BASE_URL },
         }
       }
