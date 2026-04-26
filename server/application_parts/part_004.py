@@ -55,6 +55,14 @@ def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict
         return agent_spec_writer.run(payload)
     if agent_id == _DEPENDENCY_AUDITOR_AGENT_ID:
         return agent_dependency_auditor.run(payload)
+    if agent_id == _MULTI_FILE_EXECUTOR_AGENT_ID:
+        return agent_multi_file_executor.run(payload)
+    if agent_id == _CHANGELOG_AGENT_ID:
+        return agent_changelog_agent.run(payload)
+    if agent_id == _PACKAGE_FINDER_AGENT_ID:
+        return agent_package_finder.run(payload)
+    if agent_id == _LINTER_AGENT_ID:
+        return agent_linter_agent.run(payload)
     raise ValueError(f"Unsupported built-in agent '{agent_id}'.")
 
 

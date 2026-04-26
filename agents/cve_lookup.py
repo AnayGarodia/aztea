@@ -158,7 +158,7 @@ def _fetch_cve(cve_id: str) -> dict:
         "cve_id": cve.get("id", cve_id),
         "cvss": cvss,
         "severity": severity,
-        "description": desc[:500],
+        "description": desc,
         "published": cve.get("published", "")[:10],
         "last_modified": cve.get("lastModified", "")[:10],
         "cwe_ids": cwe_ids,

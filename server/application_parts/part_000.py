@@ -82,6 +82,10 @@ from agents import pr_reviewer as agent_pr_reviewer
 from agents import test_generator as agent_test_generator
 from agents import spec_writer as agent_spec_writer
 from agents import dependency_auditor as agent_dependency_auditor
+from agents import multi_file_executor as agent_multi_file_executor
+from agents import changelog_agent as agent_changelog_agent
+from agents import package_finder as agent_package_finder
+from agents import linter_agent as agent_linter_agent
 from core import auth as _auth
 from core import embeddings
 from core import onboarding
@@ -262,6 +266,10 @@ _PR_REVIEWER_AGENT_ID      = "3e133b66-3bc6-5003-9b64-3284b28a60c6"
 _TEST_GENERATOR_AGENT_ID   = "f515323c-7df2-5742-ac06-bc38b59a40cb"
 _SPEC_WRITER_AGENT_ID      = "ce9504a3-74c8-51a5-913e-6ae55787abc8"
 _DEPENDENCY_AUDITOR_AGENT_ID = "11fab82a-426e-513e-abf3-528d99ef2b87"
+_MULTI_FILE_EXECUTOR_AGENT_ID = "ea95cdec-32c1-5a2b-a032-3e7061abf3a4"
+_CHANGELOG_AGENT_ID = "48c24ce5-d9cb-5f76-9e2f-fce1878f8c4c"
+_PACKAGE_FINDER_AGENT_ID = "d11ddab1-bcca-55de-8b00-c9efadc69c79"
+_LINTER_AGENT_ID = "7ec4c987-9a7e-5af8-984f-7b8ad0ad0536"
 
 def _normalize_endpoint_ref(value: str | None) -> str:
     return str(value or "").strip().rstrip("/")
@@ -285,6 +293,10 @@ _BUILTIN_INTERNAL_ENDPOINTS = {
     _TEST_GENERATOR_AGENT_ID:  "internal://test_generator",
     _SPEC_WRITER_AGENT_ID:     "internal://spec_writer",
     _DEPENDENCY_AUDITOR_AGENT_ID: "internal://dependency_auditor",
+    _MULTI_FILE_EXECUTOR_AGENT_ID: "internal://multi_file_executor",
+    _CHANGELOG_AGENT_ID: "internal://changelog_agent",
+    _PACKAGE_FINDER_AGENT_ID: "internal://package_finder",
+    _LINTER_AGENT_ID: "internal://linter_agent",
 }
 _BUILTIN_LEGACY_ROUTE_ENDPOINTS = {
     _FINANCIAL_AGENT_ID: f"{_SERVER_BASE_URL}/agents/financial",
@@ -312,23 +324,27 @@ _BUILTIN_AGENT_IDS = frozenset(_BUILTIN_INTERNAL_ENDPOINTS.keys())
 _CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
     {
         # Developer / Claude Code tools — live APIs, code execution, or structured output
-        _CODEREVIEW_AGENT_ID,          # structured code review
-        _PR_REVIEWER_AGENT_ID,         # GitHub PR diff review
-        _TEST_GENERATOR_AGENT_ID,      # test suite generation
-        _SPEC_WRITER_AGENT_ID,         # technical spec writer
-        _DEPENDENCY_AUDITOR_AGENT_ID,  # CVE + outdated dep audit
-        _PYTHON_EXECUTOR_AGENT_ID,     # subprocess sandbox
-        _WEB_RESEARCHER_AGENT_ID,      # HTTP fetch + parse
-        _GITHUB_FETCHER_AGENT_ID,      # GitHub API live fetch
-        _CVELOOKUP_AGENT_ID,           # NIST NVD API
-        _ARXIV_RESEARCH_AGENT_ID,      # arXiv API
-        _DNS_INSPECTOR_AGENT_ID,       # DNS/SSL live inspection
-        _FINANCIAL_AGENT_ID,           # SEC EDGAR API
+        _CODEREVIEW_AGENT_ID,           # structured code review
+        _PR_REVIEWER_AGENT_ID,          # GitHub PR diff review
+        _TEST_GENERATOR_AGENT_ID,       # test suite generation
+        _DEPENDENCY_AUDITOR_AGENT_ID,   # CVE + outdated dep audit
+        _PYTHON_EXECUTOR_AGENT_ID,      # subprocess sandbox
+        _MULTI_FILE_EXECUTOR_AGENT_ID,  # multi-file Python project runner
+        _LINTER_AGENT_ID,               # ruff + LLM linting
+        _WEB_RESEARCHER_AGENT_ID,       # HTTP fetch + parse
+        _GITHUB_FETCHER_AGENT_ID,       # GitHub API live fetch
+        _CVELOOKUP_AGENT_ID,            # NIST NVD API
+        _ARXIV_RESEARCH_AGENT_ID,       # arXiv API
+        _DNS_INSPECTOR_AGENT_ID,        # DNS/SSL live inspection
+        _CHANGELOG_AGENT_ID,            # PyPI/npm changelogs
+        _PACKAGE_FINDER_AGENT_ID,       # package search + stats
         # Benched (available via API/MCP but not shown in marketplace):
-        # _WIKI_AGENT_ID            — Claude can search Wikipedia natively
-        # _IMAGE_GENERATOR_AGENT_ID — creative tool, not a developer tool
+        # _FINANCIAL_AGENT_ID        — SEC EDGAR, narrow use case
+        # _SPEC_WRITER_AGENT_ID      — pure LLM, no external data
+        # _WIKI_AGENT_ID             — Claude can search Wikipedia natively
+        # _IMAGE_GENERATOR_AGENT_ID  — creative tool, not a developer tool
         # _VIDEO_STORYBOARD_AGENT_ID — creative tool, not a developer tool
-        # _HN_DIGEST_AGENT_ID       — nice-to-have, not Claude Code specific
+        # _HN_DIGEST_AGENT_ID        — nice-to-have, not Claude Code specific
     }
 )
 _CURATED_BUILTIN_AGENT_IDS = frozenset(set(_CURATED_PUBLIC_BUILTIN_AGENT_IDS) | {_QUALITY_JUDGE_AGENT_ID})

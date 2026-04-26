@@ -24,6 +24,7 @@ Output: {
 }
 """
 
+import os
 import posixpath
 
 import httpx
@@ -31,9 +32,32 @@ import httpx
 from core.llm import CompletionRequest, Message, run_with_fallback
 
 _RAW_BASE = "https://raw.githubusercontent.com"
+_API_BASE = "https://api.github.com"
 _TIMEOUT = 10
 _MAX_PATHS = 20
 _SUMMARY_TRUNCATE = 800
+
+
+def _github_headers() -> dict:
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    h = {"User-Agent": "aztea-github-fetcher/1.0", "Accept": "application/vnd.github+json"}
+    if token:
+        h["Authorization"] = f"Bearer {token}"
+    return h
+
+
+def _detect_default_branch(owner: str, repo_name: str) -> str:
+    try:
+        resp = httpx.get(
+            f"{_API_BASE}/repos/{owner}/{repo_name}",
+            headers=_github_headers(),
+            timeout=_TIMEOUT,
+        )
+        if resp.status_code == 200:
+            return resp.json().get("default_branch", "main")
+    except Exception:
+        pass
+    return "main"
 
 _SYSTEM = """\
 You are a senior software engineer reviewing source files from a GitHub repository.
@@ -65,7 +89,8 @@ def run(payload: dict) -> dict:
     if len(raw_paths) > _MAX_PATHS:
         return {"error": f"paths list exceeds maximum of {_MAX_PATHS} entries"}
 
-    branch = str(payload.get("branch", "main")).strip() or "main"
+    branch_raw = str(payload.get("branch", "")).strip()
+    branch = branch_raw if branch_raw else _detect_default_branch(owner, repo_name)
 
     # Validate branch contains no special characters
     if any(c in branch for c in ("?", "#", "..", "/")):
@@ -89,7 +114,7 @@ def run(payload: dict) -> dict:
     for path in paths:
         url = f"{_RAW_BASE}/{owner}/{repo_name}/{branch}/{path}"
         try:
-            resp = httpx.get(url, timeout=_TIMEOUT, follow_redirects=True)
+            resp = httpx.get(url, headers=_github_headers(), timeout=_TIMEOUT, follow_redirects=True)
             if resp.status_code == 200:
                 files.append({
                     "path": path,
@@ -149,6 +174,7 @@ def run(payload: dict) -> dict:
     return {
         "repo": f"{owner}/{repo_name}",
         "branch": branch,
+        "branch_auto_detected": not bool(branch_raw),
         "files": files,
         "summary": summary,
         "billing_units_actual": len(successful),

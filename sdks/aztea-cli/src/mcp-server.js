@@ -42,7 +42,7 @@ function request(method, path, body, timeoutMs) {
     const headers = {
       'Authorization': `Bearer ${API_KEY}`,
       'Content-Type': 'application/json',
-      'User-Agent': 'aztea-mcp/0.12.0',
+      'User-Agent': 'aztea-mcp/0.13.0',
     }
     if (payload) headers['Content-Length'] = Buffer.byteLength(payload)
 
@@ -168,9 +168,7 @@ async function callTool(name, args) {
       return { isError: true, content: [{ type: 'text', text: 'API key invalid. Run `npx aztea-cli init` to update.' }] }
     }
     const body = res.body
-    const text = typeof body === 'string'
-      ? body
-      : (body?.summary || body?.message || body?.answer || body?.result || body?.output || JSON.stringify(body, null, 2))
+    const text = typeof body === 'string' ? body : JSON.stringify(body, null, 2)
     const content = [{ type: 'text', text: String(text) }]
     // pass through image artifacts
     if (Array.isArray(body?.artifacts)) {
