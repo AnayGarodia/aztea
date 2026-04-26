@@ -56,7 +56,7 @@ function RequireLegalAcceptance({ children }) {
   if (booting) return <AppBoot />
   if (!apiKey) {
     const target = location.pathname && location.pathname !== '/welcome'
-      ? `/welcome?redirect=${encodeURIComponent(location.pathname)}`
+      ? `/welcome?tab=signin&redirect=${encodeURIComponent(location.pathname)}`
       : '/welcome'
     return <Navigate to={target} replace state={{ from: location.pathname }} />
   }

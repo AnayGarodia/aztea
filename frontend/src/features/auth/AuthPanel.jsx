@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { authLogin, authSignupStart, authSignupVerify, authSignupResend, authForgotPassword, authResetPassword } from '../../api'
 import { useAuth } from '../../context/AuthContext'
@@ -14,9 +14,23 @@ export default function AuthPanel() {
   const navigate = useNavigate()
   const location = useLocation()
   const [searchParams] = useSearchParams()
-  const redirectTo = searchParams.get('redirect')
-    ?? (location.state?.from && location.state.from !== '/welcome' ? location.state.from : '/')
-  const [tab, setTab] = useState('signin')
+  // Persist the redirect destination the first time it appears in the URL so
+  // it survives any subsequent URL mutations (e.g. setSearchParams with replace).
+  const redirectRef = useRef(
+    searchParams.get('redirect')
+    ?? (location.state?.from && location.state.from !== '/welcome' ? location.state.from : '/overview')
+  )
+  // Keep redirectRef updated whenever the URL supplies a new value.
+  const latestRedirect = searchParams.get('redirect')
+  if (latestRedirect && latestRedirect !== redirectRef.current) {
+    redirectRef.current = latestRedirect
+  }
+  const redirectTo = redirectRef.current
+
+  // Support tab=register|signin in URL so the correct tab opens when the user
+  // arrives via a "List an Agent" link that includes the query param.
+  const tabParam = searchParams.get('tab')
+  const [tab, setTab] = useState(() => tabParam === 'register' ? 'register' : 'signin')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -65,7 +79,7 @@ export default function AuthPanel() {
   const signinFormValid = emailValid && password.length > 0
   const canSubmit = registerMode ? registerFormValid : signinFormValid
 
-  const switchTab = (nextTab) => {
+  const switchTab = useCallback((nextTab) => {
     setTab(nextTab)
     setError('')
     setPassword('')
@@ -80,12 +94,19 @@ export default function AuthPanel() {
     }
     if (nextTab === 'forgot') {
       setForgotStep(1)
-      setForgotEmail(email) // pre-fill from signin email if present
+      setForgotEmail(email)
       setOtp('')
       setNewPassword('')
       setForgotSuccess(false)
     }
-  }
+  }, [email]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Sync tab from URL param (so "List an Agent" links that pass ?tab=register work).
+  useEffect(() => {
+    if (tabParam === 'register' || tabParam === 'signin') {
+      switchTab(tabParam)
+    }
+  }, [tabParam]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const handler = (event) => {
@@ -94,7 +115,7 @@ export default function AuthPanel() {
     }
     window.addEventListener('aztea:auth-tab', handler)
     return () => window.removeEventListener('aztea:auth-tab', handler)
-  }, [])
+  }, [switchTab])
 
   const handleSubmit = async (e) => {
     e.preventDefault()

@@ -128,11 +128,13 @@ export default function LandingPage() {
   const [searchParams, setSearchParams] = useSearchParams()
 
   const focusAuthWithRedirect = (tab, redirect) => {
-    if (redirect && searchParams.get('redirect') !== redirect) {
-      const next = new URLSearchParams(searchParams)
-      next.set('redirect', redirect)
-      setSearchParams(next, { replace: true })
-    }
+    // Encode both tab and redirect in the URL so AuthPanel can read them
+    // reliably — even if the event-based tab switch is missed.
+    const next = new URLSearchParams(searchParams)
+    if (redirect) next.set('redirect', redirect)
+    if (tab) next.set('tab', tab)
+    setSearchParams(next, { replace: true })
+    // Also dispatch the event for immediate tab-switch (no wait for re-render).
     focusAuthTab(tab)
   }
 
