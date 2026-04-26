@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { authLogin, authSignupStart, authSignupVerify, authSignupResend, authForgotPassword, authResetPassword } from '../../api'
 import { useAuth } from '../../context/AuthContext'
@@ -14,23 +14,13 @@ export default function AuthPanel() {
   const navigate = useNavigate()
   const location = useLocation()
   const [searchParams] = useSearchParams()
-  // Persist the redirect destination the first time it appears in the URL so
-  // it survives any subsequent URL mutations (e.g. setSearchParams with replace).
-  const redirectRef = useRef(
-    searchParams.get('redirect')
+  // Read redirect destination and initial tab directly from URL params.
+  // With the new flow, navigate('/list-skill') is called directly and
+  // RequireLegalAcceptance sets ?tab=register&redirect=/list-skill, so
+  // these params are present at mount time and never mutated mid-flow.
+  const redirectTo = searchParams.get('redirect')
     ?? (location.state?.from && location.state.from !== '/welcome' ? location.state.from : '/overview')
-  )
-  // Keep redirectRef updated whenever the URL supplies a new value.
-  const latestRedirect = searchParams.get('redirect')
-  if (latestRedirect && latestRedirect !== redirectRef.current) {
-    redirectRef.current = latestRedirect
-  }
-  const redirectTo = redirectRef.current
-
-  // Support tab=register|signin in URL so the correct tab opens when the user
-  // arrives via a "List an Agent" link that includes the query param.
-  const tabParam = searchParams.get('tab')
-  const [tab, setTab] = useState(() => tabParam === 'register' ? 'register' : 'signin')
+  const [tab, setTab] = useState(() => searchParams.get('tab') === 'register' ? 'register' : 'signin')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -79,7 +69,7 @@ export default function AuthPanel() {
   const signinFormValid = emailValid && password.length > 0
   const canSubmit = registerMode ? registerFormValid : signinFormValid
 
-  const switchTab = useCallback((nextTab) => {
+  const switchTab = (nextTab) => {
     setTab(nextTab)
     setError('')
     setPassword('')
@@ -99,21 +89,21 @@ export default function AuthPanel() {
       setNewPassword('')
       setForgotSuccess(false)
     }
-  }, [email]) // eslint-disable-line react-hooks/exhaustive-deps
+  }
 
-  // Tab is initialised from ?tab= on mount (see useState above).
-  // We intentionally do NOT sync it dynamically — other "List an Agent"
-  // buttons on the same page also update ?tab, and re-syncing mid-form
-  // would clear the user's typed credentials and switch the form on them.
+  // Use a ref so the event listener always calls the latest switchTab
+  // without needing to re-register on every render.
+  const switchTabRef = useRef(null)
+  switchTabRef.current = switchTab
 
   useEffect(() => {
     const handler = (event) => {
       const next = event?.detail?.tab
-      if (next === 'signin' || next === 'register') switchTab(next)
+      if (next === 'signin' || next === 'register') switchTabRef.current(next)
     }
     window.addEventListener('aztea:auth-tab', handler)
     return () => window.removeEventListener('aztea:auth-tab', handler)
-  }, [switchTab])
+  }, [])
 
   const handleSubmit = async (e) => {
     e.preventDefault()

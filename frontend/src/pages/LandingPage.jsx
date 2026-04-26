@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import {
   Moon, Sun, Menu, X, Copy, Check,
@@ -125,18 +125,6 @@ export default function LandingPage() {
   const { isDark, toggle: toggleTheme } = useTheme()
   const { apiKey } = useAuth()
   const navigate = useNavigate()
-  const [searchParams, setSearchParams] = useSearchParams()
-
-  const focusAuthWithRedirect = (tab, redirect) => {
-    // Encode both tab and redirect in the URL so AuthPanel can read them
-    // reliably — even if the event-based tab switch is missed.
-    const next = new URLSearchParams(searchParams)
-    if (redirect) next.set('redirect', redirect)
-    if (tab) next.set('tab', tab)
-    setSearchParams(next, { replace: true })
-    // Also dispatch the event for immediate tab-switch (no wait for re-render).
-    focusAuthTab(tab)
-  }
 
   const [authRef, authInView] = useInView()
 
@@ -161,20 +149,11 @@ export default function LandingPage() {
 
   const closeMenu = () => setMenuOpen(false)
 
-  const handleListSkill = () => {
-    if (apiKey) { navigate('/list-skill'); return }
-    focusAuthWithRedirect('register', '/list-skill')
-  }
-
-  const handleRegisterAgent = () => {
-    if (apiKey) { navigate('/register-agent'); return }
-    focusAuthWithRedirect('register', '/register-agent')
-  }
-
-  const handleGetStarted = () => {
-    if (apiKey) { navigate('/overview'); return }
-    focusAuthWithRedirect('register', '/overview')
-  }
+  // Always navigate directly — RequireLegalAcceptance handles the auth
+  // redirect cleanly with the correct ?tab= and ?redirect= params.
+  const handleListSkill = () => navigate('/list-skill')
+  const handleRegisterAgent = () => navigate('/register-agent')
+  const handleGetStarted = () => navigate('/overview')
 
   const handleBrowseAgents = () => {
     if (apiKey) { navigate('/agents'); return }

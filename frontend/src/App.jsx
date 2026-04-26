@@ -50,13 +50,17 @@ function RequireAdmin({ children }) {
   return children
 }
 
+const BUILDER_PATHS = ['/list-skill', '/register-agent']
+
 function RequireLegalAcceptance({ children }) {
   const { apiKey, booting, user } = useAuth()
   const location = useLocation()
   if (booting) return <AppBoot />
   if (!apiKey) {
+    const isBuilder = BUILDER_PATHS.some(p => location.pathname.startsWith(p))
+    const tab = isBuilder ? 'register' : 'signin'
     const target = location.pathname && location.pathname !== '/welcome'
-      ? `/welcome?tab=signin&redirect=${encodeURIComponent(location.pathname)}`
+      ? `/welcome?tab=${tab}&redirect=${encodeURIComponent(location.pathname)}`
       : '/welcome'
     return <Navigate to={target} replace state={{ from: location.pathname }} />
   }
