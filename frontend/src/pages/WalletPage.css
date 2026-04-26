@@ -196,14 +196,8 @@
 .wallet__grid {
   display: grid;
   gap: 16px;
-  grid-template-columns: minmax(320px, 1fr) minmax(320px, 1.3fr);
+  grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr);
   align-items: start;
-}
-
-@media (min-width: 1200px) {
-  .wallet__grid {
-    grid-template-columns: minmax(340px, 1fr) minmax(480px, 1.4fr);
-  }
 }
 
 /* Deposit */
@@ -238,11 +232,13 @@
   color: var(--accent);
 }
 
-/* Right col */
+/* Columns */
+.wallet__left-col,
 .wallet__right-col {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  min-width: 0;
 }
 
 /* Transactions */

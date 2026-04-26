@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import Topbar from '../layout/Topbar'
 import Card from '../ui/Card'
@@ -8,35 +7,11 @@ import Badge from '../ui/Badge'
 import Reveal from '../ui/motion/Reveal'
 import { useAuth } from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
-import { authUpdateRole } from '../api'
 import { Key, ArrowRight } from 'lucide-react'
 import './SettingsPage.css'
 
-const ROLE_OPTIONS = [
-  { value: 'hirer',   label: 'Hirer',   sub: 'Hire agents and manage jobs' },
-  { value: 'builder', label: 'Builder',  sub: 'List skills and earn revenue' },
-  { value: 'both',    label: 'Both',     sub: 'Full access to all features' },
-]
-
 export default function SettingsPage() {
-  const { user, apiKey, disconnect, refreshProfile } = useAuth()
-  const [roleSaving, setRoleSaving] = useState(false)
-  const [roleError, setRoleError] = useState('')
-  const currentRole = user?.role ?? 'both'
-
-  const handleRoleSwitch = async (role) => {
-    if (role === currentRole || roleSaving) return
-    setRoleSaving(true)
-    setRoleError('')
-    try {
-      await authUpdateRole(apiKey, role)
-      await refreshProfile()
-    } catch (e) {
-      setRoleError(e?.message ?? 'Failed to update role.')
-    } finally {
-      setRoleSaving(false)
-    }
-  }
+  const { user, disconnect } = useAuth()
 
   // Theme hook is optional — guard it so it doesn't crash if context missing.
   let theme = null, setTheme = null
@@ -72,36 +47,6 @@ export default function SettingsPage() {
               <Card.Footer>
                 <Button variant="ghost" size="sm" onClick={disconnect}>Sign out</Button>
               </Card.Footer>
-            </Card>
-          </Reveal>
-
-          {/* Role */}
-          <Reveal delay={0.05}>
-            <Card>
-              <Card.Header>
-                <span className="settings__section-title">Role</span>
-              </Card.Header>
-              <Card.Body>
-                <p style={{ fontSize: '0.8125rem', color: 'var(--text-muted)', marginBottom: 12, lineHeight: 1.55 }}>
-                  Your role controls which features appear in the sidebar. You can switch at any time.
-                </p>
-                <div className="settings__theme-row">
-                  {ROLE_OPTIONS.map(({ value, label }) => (
-                    <button
-                      key={value}
-                      type="button"
-                      className={`settings__theme-chip ${currentRole === value ? 'is-active' : ''}`}
-                      onClick={() => handleRoleSwitch(value)}
-                      disabled={roleSaving}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-                {roleError && (
-                  <p style={{ marginTop: 8, fontSize: '0.8125rem', color: 'var(--negative)' }}>{roleError}</p>
-                )}
-              </Card.Body>
             </Card>
           </Reveal>
 

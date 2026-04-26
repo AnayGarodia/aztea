@@ -438,6 +438,7 @@ export default function WalletPage() {
           </Reveal>
 
           <div className="wallet__grid">
+            <div className="wallet__left-col">
             <Reveal>
             <Card>
               <Card.Header>
@@ -511,60 +512,9 @@ export default function WalletPage() {
             </Card>
             </Reveal>
 
-            <div className="wallet__right-col">
-              {transactions.length > 0 && (
-                <Reveal delay={0.1}>
-                <Card>
-                  <Card.Header>
-                    <span className="wallet__section-title">14-day spend</span>
-                  </Card.Header>
-                  <Card.Body>
-                    <SpendChart transactions={transactions} />
-                  </Card.Body>
-                </Card>
-                </Reveal>
-              )}
-
-              {/* Agent earnings breakdown */}
-              <Reveal delay={0.15}>
-              <Card>
-                <Card.Header style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
-                  <TrendingUp size={14} color="var(--accent)" />
-                  <span className="wallet__section-title">
-                    Agent wallets
-                    {agentEarnings && agentEarnings.length > 0 && (
-                      <span style={{ marginLeft: 'var(--sp-2)', color: 'var(--ink-mute)', fontWeight: 400 }}>
-                        · {fmtUsd(agentEarnings.reduce((s, r) => s + (r.current_balance_cents ?? 0), 0))} held
-                        {' · '}
-                        {fmtUsd(agentEarnings.reduce((s, r) => s + (r.total_earned_cents ?? 0), 0))} earned
-                      </span>
-                    )}
-                  </span>
-                </Card.Header>
-                <Card.Body>
-                  {agentEarnings === null ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)', padding: 'var(--sp-2) 0' }}>
-                      {[1,2,3].map(i => <Skeleton key={i} variant="rect" height={44} />)}
-                    </div>
-                  ) : agentEarnings.length === 0 ? (
-                    <EmptyState
-                      title="No agent earnings yet"
-                      sub="When agents you've listed get called, your earnings appear here per agent."
-                    />
-                  ) : (
-                    <div>
-                      {agentEarnings.map((row, i) => (
-                        <AgentEarningsRow key={row.agent_id ?? i} row={row} />
-                      ))}
-                    </div>
-                  )}
-                </Card.Body>
-              </Card>
-              </Reveal>
-
               {/* Stripe Connect / Withdraw card */}
               {stripeEnabled && (
-                <Reveal delay={0.2}>
+                <Reveal delay={0.12}>
                 <Card>
                   <Card.Header style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
                     <Banknote size={14} color="var(--accent)" />
@@ -619,10 +569,9 @@ export default function WalletPage() {
                           <CheckCircle size={14} color="var(--positive)" />
                           <p style={{ fontSize: '0.8125rem', color: 'var(--positive)', fontWeight: 600 }}>Bank account connected</p>
                         </div>
-                        {/* Fee breakdown */}
                         {(() => {
                           const gross = Math.round((Number(withdrawAmount) || 0) * 100)
-                          const stripeFee = Math.round(gross * 0.0025) + 25 // ~0.25% + $0.25
+                          const stripeFee = Math.round(gross * 0.0025) + 25
                           const net = Math.max(0, gross - stripeFee)
                           return gross >= 100 ? (
                             <div style={{ background: 'var(--surface-alt, #f7f8fa)', borderRadius: 'var(--r-sm)', padding: 'var(--sp-3)', marginBottom: 'var(--sp-3)', fontSize: '0.8125rem' }}>
@@ -668,7 +617,7 @@ export default function WalletPage() {
               )}
 
               {stripeEnabled && (
-                <Reveal delay={0.23}>
+                <Reveal delay={0.15}>
                 <Card>
                   <Card.Header>
                     <span className="wallet__section-title">Withdrawal history</span>
@@ -694,6 +643,58 @@ export default function WalletPage() {
                 </Card>
                 </Reveal>
               )}
+            </div>
+
+            <div className="wallet__right-col">
+              {transactions.length > 0 && (
+                <Reveal delay={0.1}>
+                <Card>
+                  <Card.Header>
+                    <span className="wallet__section-title">14-day spend</span>
+                  </Card.Header>
+                  <Card.Body>
+                    <SpendChart transactions={transactions} />
+                  </Card.Body>
+                </Card>
+                </Reveal>
+              )}
+
+              {/* Agent earnings breakdown */}
+              <Reveal delay={0.15}>
+              <Card>
+                <Card.Header style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
+                  <TrendingUp size={14} color="var(--accent)" />
+                  <span className="wallet__section-title">
+                    Agent wallets
+                    {agentEarnings && agentEarnings.length > 0 && (
+                      <span style={{ marginLeft: 'var(--sp-2)', color: 'var(--ink-mute)', fontWeight: 400 }}>
+                        · {fmtUsd(agentEarnings.reduce((s, r) => s + (r.current_balance_cents ?? 0), 0))} held
+                        {' · '}
+                        {fmtUsd(agentEarnings.reduce((s, r) => s + (r.total_earned_cents ?? 0), 0))} earned
+                      </span>
+                    )}
+                  </span>
+                </Card.Header>
+                <Card.Body>
+                  {agentEarnings === null ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-2)', padding: 'var(--sp-2) 0' }}>
+                      {[1,2,3].map(i => <Skeleton key={i} variant="rect" height={44} />)}
+                    </div>
+                  ) : agentEarnings.length === 0 ? (
+                    <EmptyState
+                      title="No agent earnings yet"
+                      sub="When agents you've listed get called, your earnings appear here per agent."
+                    />
+                  ) : (
+                    <div>
+                      {agentEarnings.map((row, i) => (
+                        <AgentEarningsRow key={row.agent_id ?? i} row={row} />
+                      ))}
+                    </div>
+                  )}
+                </Card.Body>
+              </Card>
+              </Reveal>
 
               <Reveal delay={0.25}>
               <Card>
