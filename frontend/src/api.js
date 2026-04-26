@@ -5,6 +5,30 @@ const VERSION = '1.0'
 let _onSessionExpired = null
 export function setSessionExpiredHandler(fn) { _onSessionExpired = fn }
 
+// A 401 from a single data endpoint does NOT mean the session is dead — it
+// could be a transient backend issue, a scope edge-case, or a race right after
+// login. Before tearing down the session, verify with /auth/me. Only if that
+// also 401s do we actually expire. Network errors during verification are
+// ignored — keep the user signed in and let them retry.
+let _verifyInFlight = null
+async function verifyAndExpire(key) {
+  if (!key || _verifyInFlight) return _verifyInFlight
+  _verifyInFlight = (async () => {
+    try {
+      const probe = await fetch(`${BASE}/auth/me`, {
+        headers: requestHeaders(key),
+        signal: timeoutSignal(REQUEST_TIMEOUT_MS),
+      })
+      if (probe.status === 401 && _onSessionExpired) _onSessionExpired()
+    } catch {
+      // Network blip — do nothing. The session stays.
+    } finally {
+      _verifyInFlight = null
+    }
+  })()
+  return _verifyInFlight
+}
+
 function makeRequestId() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID()
   return `req_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 12)}`
@@ -198,7 +222,10 @@ async function request(path, {
   }
   const parsedBody = await parseResponseBody(response)
   if (!response.ok && throwOnError) {
-    if (response.status === 401 && _onSessionExpired && !path.startsWith('/auth/')) _onSessionExpired()
+    if (response.status === 401 && _onSessionExpired && !path.startsWith('/auth/')) {
+      // Verify with /auth/me before tearing down — see verifyAndExpire above.
+      verifyAndExpire(key)
+    }
     throw makeApiError(response, parsedBody)
   }
   return {
