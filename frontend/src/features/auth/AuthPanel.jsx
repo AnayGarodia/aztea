@@ -4,7 +4,7 @@ import { authLogin, authSignupStart, authSignupVerify, authSignupResend, authFor
 import { useAuth } from '../../context/AuthContext'
 import Button from '../../ui/Button'
 import Input from '../../ui/Input'
-import { Mail, Lock, User, Eye, EyeOff, KeyRound, ArrowLeft, Hammer, Zap } from 'lucide-react'
+import { Mail, Lock, User, Eye, EyeOff, KeyRound, ArrowLeft } from 'lucide-react'
 import './AuthPanel.css'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -30,9 +30,11 @@ export default function AuthPanel() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  // Role selector state (register flow only)
-  const [registerStep, setRegisterStep] = useState('role') // 'role' | 'form' | 'verify'
-  const [selectedRole, setSelectedRole] = useState(null) // 'builder' | 'hirer'
+  // Role is no longer chosen up front — every account starts as 'both' and
+  // users pick their focus later from Settings. This keeps signup to one
+  // short form with no extra "How will you use Aztea?" step.
+  const [registerStep, setRegisterStep] = useState('form') // 'form' | 'verify'
+  const selectedRole = 'both'
 
   // Signup OTP state
   const [signupOtp, setSignupOtp] = useState('')
@@ -77,8 +79,7 @@ export default function AuthPanel() {
     setShowPassword(false)
     setShowConfirmPassword(false)
     if (nextTab === 'register') {
-      setRegisterStep('role')
-      setSelectedRole(null)
+      setRegisterStep('form')
       setSignupOtp('')
       setResentNote('')
     }
@@ -135,7 +136,10 @@ export default function AuthPanel() {
         const result = await authLogin(normalizedEmail, password)
         const userInfo = buildUserInfo(result, normalizedEmail, selectedRole)
         connect(result.raw_api_key, userInfo)
-        navigate(redirectTo)
+        // `replace` so the user can't hit Back into /welcome after signing in
+        // — this also prevents RequireLegalAcceptance from re-bouncing them
+        // back to /welcome if it re-evaluates before apiKey propagates.
+        navigate(redirectTo, { replace: true })
       } else {
         // Register: kick off email-OTP signup. We do NOT create an account
         // until /auth/signup/verify succeeds.
@@ -432,41 +436,6 @@ export default function AuthPanel() {
               Use a different email
             </button>
           </form>
-        ) : registerMode && registerStep === 'role' ? (
-          <div className="auth-panel__role-step">
-            <p className="auth-panel__role-heading">How will you use Aztea?</p>
-            <div className="auth-panel__role-cards">
-              <button
-                type="button"
-                className={`auth-panel__role-card ${selectedRole === 'hirer' ? 'auth-panel__role-card--selected' : ''}`}
-                onClick={() => setSelectedRole('hirer')}
-              >
-                <span className="auth-panel__role-card-icon"><Zap size={22} /></span>
-                <strong>I hire agents</strong>
-                <span>Delegate tasks, get results. $2 free credit to start.</span>
-              </button>
-              <button
-                type="button"
-                className={`auth-panel__role-card ${selectedRole === 'builder' ? 'auth-panel__role-card--selected' : ''}`}
-                onClick={() => setSelectedRole('builder')}
-              >
-                <span className="auth-panel__role-card-icon"><Hammer size={22} /></span>
-                <strong>I build agents</strong>
-                <span>List your skills and earn revenue per task.</span>
-              </button>
-            </div>
-            <Button
-              type="button"
-              variant="primary"
-              size="md"
-              disabled={!selectedRole}
-              onClick={() => setRegisterStep('form')}
-              style={{ width: '100%' }}
-            >
-              Continue
-            </Button>
-            <p className="auth-panel__hint">Already have an account? Sign in above.</p>
-          </div>
         ) : (
         <form className="auth-panel__form" onSubmit={handleSubmit}>
           {tab === 'register' && (

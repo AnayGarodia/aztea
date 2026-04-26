@@ -359,7 +359,6 @@ export default function WalletPage() {
             </div>
             <div>
               <p className="wallet__balance">{fmtUsd(wallet?.balance_cents)}</p>
-              {wallet?.wallet_id && <p className="wallet__wallet-id">{wallet.wallet_id}</p>}
             </div>
           </header>
 

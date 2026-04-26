@@ -139,9 +139,22 @@ export default function AgentDetailPage() {
   const [expandedFields, setExpandedFields] = useState(new Set())
 
   useEffect(() => {
+    // Reset every potential scroll container so the page lands at the hero,
+    // not wherever the previous route was scrolled to.
     window.scrollTo({ top: 0, behavior: 'auto' })
+    document.documentElement.scrollTop = 0
+    document.body.scrollTop = 0
+    document.querySelector('.shell__main')?.scrollTo?.({ top: 0 })
+    const shellMain = document.querySelector('.shell__main')
+    if (shellMain) shellMain.scrollTop = 0
     const scrollEl = document.querySelector('.agent-detail__scroll')
     if (scrollEl) scrollEl.scrollTop = 0
+    // Run again after layout settles (motion transitions can re-anchor scroll).
+    const raf = requestAnimationFrame(() => {
+      if (shellMain) shellMain.scrollTop = 0
+      if (scrollEl) scrollEl.scrollTop = 0
+    })
+    return () => cancelAnimationFrame(raf)
   }, [id])
 
   const toggleField = (fieldKey) =>

@@ -292,11 +292,6 @@ export default function DashboardPage() {
                 </Card.Header>
                 <Card.Body className="dashboard__trust">
                   <p>We charge your wallet before a call runs. If the agent succeeds, the payout happens automatically. If it fails, you get a full refund. Every movement shows up in your ledger.</p>
-                  <div className="dashboard__trust-pills">
-                    <Badge label="deposit" dot />
-                    <Badge label="payout" dot />
-                    <Badge label="refund" dot />
-                  </div>
                   <Link to="/wallet">
                     <Button variant="secondary" size="sm">Open wallet ledger</Button>
                   </Link>
