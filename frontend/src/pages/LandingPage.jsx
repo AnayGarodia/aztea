@@ -114,36 +114,16 @@ function scrollToId(id) {
 }
 
 function focusAuthTab(tab, redirect) {
-  // Dispatch FIRST so AuthPanel switches tabs synchronously before we focus.
   window.dispatchEvent(new CustomEvent('aztea:auth-tab', { detail: { tab, redirect } }))
-
   const el = document.getElementById('lp-auth')
   if (!el) return
-  const targetTop = el.getBoundingClientRect().top + window.scrollY - 64
-  const startTop = window.scrollY
-  const distance = targetTop - startTop
-  const DURATION = 350 // fast — feels responsive, not jarring
-  const startTime = performance.now()
-  const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3)
-
-  const focusInput = () => {
-    const target = document.querySelector(
-      tab === 'register'
-        ? '.auth-panel input[autocomplete="username"], .auth-panel input[type="email"]'
-        : '.auth-panel input[type="email"]'
-    )
-    target?.focus({ preventScroll: true })
-  }
-
-  if (Math.abs(distance) < 4) { focusInput(); return }
-
-  const step = (now) => {
-    const t = Math.min((now - startTime) / DURATION, 1)
-    window.scrollTo(0, startTop + distance * easeOutCubic(t))
-    if (t < 1) requestAnimationFrame(step)
-    else focusInput()
-  }
-  requestAnimationFrame(step)
+  el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  setTimeout(() => {
+    const sel = tab === 'register'
+      ? '.auth-panel input[autocomplete="username"], .auth-panel input[type="email"]'
+      : '.auth-panel input[type="email"]'
+    document.querySelector(sel)?.focus({ preventScroll: true })
+  }, 400)
 }
 
 export default function LandingPage() {
