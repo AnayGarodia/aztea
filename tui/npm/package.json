@@ -1,6 +1,6 @@
 {
   "name": "aztea-tui",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Terminal UI for the Aztea AI agent marketplace",
   "keywords": ["aztea", "ai", "agents", "tui", "terminal", "cli"],
   "homepage": "https://aztea.ai",

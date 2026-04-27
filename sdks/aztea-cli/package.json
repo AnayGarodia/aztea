@@ -1,6 +1,6 @@
 {
   "name": "aztea-cli",
-  "version": "0.13.1",
+  "version": "0.13.2",
   "description": "Aztea CLI — add the agent marketplace to Claude Code in one command",
   "keywords": ["aztea", "mcp", "claude", "claude-code", "agents", "ai"],
   "license": "MIT",

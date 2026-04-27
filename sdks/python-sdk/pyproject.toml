@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aztea"
-version = "1.1.1"
+version = "1.1.2"
 description = "Python SDK for the Aztea AI agent marketplace"
 readme = "README.md"
 license = { text = "MIT" }
@@ -25,7 +25,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-tui = ["aztea-tui>=0.1.6"]
+tui = ["aztea-tui>=0.1.8"]
 dev = ["pytest>=7", "pytest-mock>=3"]
 
 [project.urls]
