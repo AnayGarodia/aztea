@@ -45,8 +45,17 @@ def disputes_admin_rule(
     if dispute_row is None:
         raise HTTPException(status_code=404, detail=f"Dispute '{dispute_id}' not found.")
 
+    if dispute_row["status"] == "final":
+        raise HTTPException(status_code=409, detail="This dispute is already finalized and cannot be re-ruled.")
+
     if dispute_row["status"] in {"resolved", "consensus"}:
         disputes.set_dispute_status(dispute_id, "appealed")
+        disputes.append_audit_event(
+            dispute_id,
+            event="status_change",
+            actor=caller["owner_id"],
+            extra={"from": dispute_row["status"], "to": "appealed"},
+        )
 
     admin_user_id = None
     if caller["type"] == "user":
@@ -59,6 +68,12 @@ def disputes_admin_rule(
             verdict=body.outcome,
             reasoning=body.reasoning,
             admin_user_id=admin_user_id,
+        )
+        disputes.append_audit_event(
+            dispute_id,
+            event="admin_rule",
+            actor=str(admin_user_id or caller["owner_id"]),
+            extra={"outcome": body.outcome, "reasoning": body.reasoning[:200]},
         )
         settlement = payments.post_dispute_settlement(
             dispute_id,

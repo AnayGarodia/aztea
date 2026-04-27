@@ -395,6 +395,40 @@ def record_judgment(
     return judgment
 
 
+def append_audit_event(dispute_id: str, event: str, actor: str | None = None, extra: dict | None = None) -> None:
+    """Append a structured entry to disputes.audit_log (JSON array).
+
+    Safe to call even if the column doesn't exist yet (migration guard).
+    Never raises — audit failures must not block the main transaction.
+    """
+    now = _now()
+    entry: dict = {"event": event, "at": now}
+    if actor:
+        entry["actor"] = actor
+    if extra:
+        entry.update(extra)
+    try:
+        with _conn() as conn:
+            row = conn.execute(
+                "SELECT audit_log FROM disputes WHERE dispute_id = ?",
+                (dispute_id,),
+            ).fetchone()
+            if row is None:
+                return
+            existing = row["audit_log"] if isinstance(row["audit_log"], str) else "[]"
+            try:
+                log: list = json.loads(existing) if existing else []
+            except (json.JSONDecodeError, TypeError):
+                log = []
+            log.append(entry)
+            conn.execute(
+                "UPDATE disputes SET audit_log = ? WHERE dispute_id = ?",
+                (json.dumps(log), dispute_id),
+            )
+    except Exception:  # noqa: BLE001 — audit must not break callers
+        pass
+
+
 def get_judgments(dispute_id: str) -> list[dict]:
     with _conn() as conn:
         rows = conn.execute(
