@@ -149,6 +149,7 @@ from core.models import (
     RotateKeyRequest,
     AgentKeyCreateRequest,
     AgentReviewDecisionRequest,
+    AgentSuspendRequest,
     AuthLegalAcceptRequest,
     GoogleAuthRequest,
     UserLoginRequest,
@@ -337,32 +338,45 @@ _BUILTIN_ENDPOINT_TO_AGENT_ID[_normalize_endpoint_ref(f"{_SERVER_BASE_URL}/analy
 _BUILTIN_AGENT_IDS = frozenset(_BUILTIN_INTERNAL_ENDPOINTS.keys())
 _CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
     {
-        # Developer / Claude Code tools — live APIs, code execution, or structured output
+        # Real-tool agents: perform live external work Claude cannot do in a chat session
         _CODEREVIEW_AGENT_ID,           # structured code review
-        _PR_REVIEWER_AGENT_ID,          # GitHub PR diff review
-        _TEST_GENERATOR_AGENT_ID,       # test suite generation
         _DEPENDENCY_AUDITOR_AGENT_ID,   # CVE + outdated dep audit
         _PYTHON_EXECUTOR_AGENT_ID,      # subprocess sandbox
         _MULTI_FILE_EXECUTOR_AGENT_ID,  # multi-file Python project runner
         _LINTER_AGENT_ID,               # ruff + LLM linting
         _WEB_RESEARCHER_AGENT_ID,       # HTTP fetch + parse
-        _GITHUB_FETCHER_AGENT_ID,       # GitHub API live fetch
         _CVELOOKUP_AGENT_ID,            # NIST NVD API
         _ARXIV_RESEARCH_AGENT_ID,       # arXiv API
         _DNS_INSPECTOR_AGENT_ID,        # DNS/SSL live inspection
-        _CHANGELOG_AGENT_ID,            # PyPI/npm changelogs
-        _PACKAGE_FINDER_AGENT_ID,       # package search + stats
         _SHELL_EXECUTOR_AGENT_ID,       # sandboxed shell execution
         _TYPE_CHECKER_AGENT_ID,         # mypy / tsc type checking
+        _IMAGE_GENERATOR_AGENT_ID,      # real image generation model
+        # LLM-only wrappers removed from public set (Phase 3 cleanup):
+        # _PR_REVIEWER_AGENT_ID         — LLM wrapper, no external data
+        # _TEST_GENERATOR_AGENT_ID      — LLM wrapper, no external data
+        # _CHANGELOG_AGENT_ID           — LLM wrapper, no external data
+        # _PACKAGE_FINDER_AGENT_ID      — LLM wrapper, no external data
+        # _GITHUB_FETCHER_AGENT_ID      — LLM wrapper, no external data
+        # _SPEC_WRITER_AGENT_ID         — LLM wrapper, no external data
         # Benched (available via API/MCP but not shown in marketplace):
         # _FINANCIAL_AGENT_ID        — SEC EDGAR, narrow use case
-        # _SPEC_WRITER_AGENT_ID      — pure LLM, no external data
         # _WIKI_AGENT_ID             — Claude can search Wikipedia natively
-        # _IMAGE_GENERATOR_AGENT_ID  — creative tool, not a developer tool
         # _VIDEO_STORYBOARD_AGENT_ID — creative tool, not a developer tool
         # _HN_DIGEST_AGENT_ID        — nice-to-have, not Claude Code specific
     }
 )
+# Deprecated LLM-only wrappers: still routable but return Deprecation headers
+_DEPRECATED_BUILTIN_AGENT_IDS = frozenset(
+    {
+        _GITHUB_FETCHER_AGENT_ID,
+        _PR_REVIEWER_AGENT_ID,
+        _TEST_GENERATOR_AGENT_ID,
+        _SPEC_WRITER_AGENT_ID,
+        _CHANGELOG_AGENT_ID,
+        _PACKAGE_FINDER_AGENT_ID,
+    }
+)
+_DEPRECATED_AGENTS_SUNSET_DATE = "2026-07-26"
 _CURATED_BUILTIN_AGENT_IDS = frozenset(set(_CURATED_PUBLIC_BUILTIN_AGENT_IDS) | {_QUALITY_JUDGE_AGENT_ID})
 _BUILTIN_WORKER_OWNER_ID = "system:builtin-worker"
 _SYSTEM_USERNAME = "system"

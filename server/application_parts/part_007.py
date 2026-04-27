@@ -938,6 +938,10 @@ def registry_list(
             _agents_list_cache = agents
             _agents_list_cache_at = now
     agents = _sorted_agents(agents, rank_by=rank_by)
+    # Hide deprecated LLM-only wrapper agents from public discovery.
+    # They remain callable via their IDs for backward compatibility.
+    if not (caller is not None and _caller_is_admin(caller)):
+        agents = [a for a in agents if str(a.get("agent_id")) not in _DEPRECATED_BUILTIN_AGENT_IDS]
     bulk_stats = _compute_bulk_agent_stats([a["agent_id"] for a in agents])
     return JSONResponse(content={"agents": [_agent_response(a, caller, bulk_stats.get(a["agent_id"])) for a in agents], "count": len(agents)})
 

@@ -83,25 +83,41 @@ for _agent_id, _endpoint in BUILTIN_INTERNAL_ENDPOINTS.items():
 BUILTIN_ENDPOINT_TO_AGENT_ID[normalize_endpoint_ref(f"{SERVER_BASE_URL}/analyze")] = FINANCIAL_AGENT_ID
 
 BUILTIN_AGENT_IDS = frozenset(BUILTIN_INTERNAL_ENDPOINTS.keys())
+
+# LLM-only wrappers that are kept for backward compatibility but hidden from the
+# public marketplace. Callers of these agents receive Deprecation + Sunset headers
+# so they can migrate to direct Claude prompts before the sunset date.
+DEPRECATED_BUILTIN_AGENT_IDS = frozenset(
+    {
+        GITHUB_FETCHER_AGENT_ID,
+        PR_REVIEWER_AGENT_ID,
+        TEST_GENERATOR_AGENT_ID,
+        SPEC_WRITER_AGENT_ID,
+        CHANGELOG_AGENT_ID,
+        PACKAGE_FINDER_AGENT_ID,
+    }
+)
+# Sunset date: 90 days after the Phase 3 cleanup commit (2026-04-27)
+DEPRECATED_AGENTS_SUNSET_DATE = "2026-07-26"
 CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
     {
+        # Real-tool agents: perform live external work Claude cannot do in a chat session
         CVELOOKUP_AGENT_ID,
         ARXIV_RESEARCH_AGENT_ID,
         PYTHON_EXECUTOR_AGENT_ID,
         WEB_RESEARCHER_AGENT_ID,
         IMAGE_GENERATOR_AGENT_ID,
         CODEREVIEW_AGENT_ID,
-        GITHUB_FETCHER_AGENT_ID,
         DNS_INSPECTOR_AGENT_ID,
-        PR_REVIEWER_AGENT_ID,
-        TEST_GENERATOR_AGENT_ID,
         DEPENDENCY_AUDITOR_AGENT_ID,
         MULTI_FILE_EXECUTOR_AGENT_ID,
-        CHANGELOG_AGENT_ID,
-        PACKAGE_FINDER_AGENT_ID,
         LINTER_AGENT_ID,
         SHELL_EXECUTOR_AGENT_ID,
         TYPE_CHECKER_AGENT_ID,
+        # LLM-only wrappers (github_fetcher, pr_reviewer, test_generator, spec_writer,
+        # changelog_agent, package_finder) intentionally excluded — they add no value
+        # over a direct Claude chat session and erode marketplace trust.
+        # They remain in BUILTIN_INTERNAL_ENDPOINTS for backward compatibility.
     }
 )
 CURATED_BUILTIN_AGENT_IDS = frozenset(set(CURATED_PUBLIC_BUILTIN_AGENT_IDS) | {QUALITY_JUDGE_AGENT_ID})
