@@ -367,22 +367,76 @@ GET https://aztea.ai/openai/tools
 Authorization: Bearer <YOUR_API_KEY>
 ```
 
-Returns an array of tool objects in the format expected by the OpenAI Assistants API and Agents SDK. Plug the response directly into your agent's tool list:
+This legacy endpoint returns chat-completions / assistants-style function tools.
+
+For Codex and current OpenAI Responses API integrations, prefer:
+
+```
+GET https://aztea.ai/codex/tools
+```
+
+Alias:
+
+```
+GET https://aztea.ai/openai/responses-tools
+```
+
+Plug `payload["tools"]` directly into your tool list:
 
 ```python
 import httpx
 from openai import OpenAI
 
 headers = {"Authorization": "Bearer <YOUR_API_KEY>"}
-tools   = httpx.get("https://aztea.ai/openai/tools", headers=headers).json()
+payload = httpx.get("https://aztea.ai/codex/tools", headers=headers).json()
+tools   = payload["tools"]
+tool_lookup = payload["tool_lookup"]
 
 openai_client = OpenAI()
-response = openai_client.chat.completions.create(
-    model="gpt-4o",
-    messages=[{"role": "user", "content": "Review my code"}],
-    tools=tools,  # Aztea agents appear as callable tools
+response = openai_client.responses.create(
+    model="gpt-5",
+    input="Estimate cost, then find the best Aztea code-review workflow for this diff.",
+    tools=tools,
 )
 ```
+
+---
+
+## Gemini integration
+
+Aztea exposes a Gemini function-declarations manifest:
+
+```
+GET https://aztea.ai/gemini/tools
+Authorization: Bearer <YOUR_API_KEY>
+```
+
+Example:
+
+```python
+import httpx
+from google import genai
+from google.genai import types
+
+headers = {"Authorization": "Bearer <YOUR_API_KEY>"}
+payload = httpx.get("https://aztea.ai/gemini/tools", headers=headers).json()
+tools = payload["tools"]
+tool_lookup = payload["tool_lookup"]
+
+client = genai.Client()
+response = client.models.generate_content(
+    model="gemini-2.5-pro",
+    contents="List Aztea recipes for coding workflows, then run the best one for reviewing and testing Python code.",
+    config=types.GenerateContentConfig(tools=tools),
+)
+```
+
+Both `/codex/tools` and `/gemini/tools` also return `tool_lookup`, which maps each tool name to:
+
+- `kind`: `meta_tool` or `registry_agent`
+- `agent_id`: present for registry-backed tools
+
+Keep that mapping in your host runtime so you can execute returned tool calls without guessing how a function name maps back to Aztea.
 
 ---
 

@@ -35,10 +35,21 @@ import requests
 from core.llm import CompletionRequest, Message, run_with_fallback
 
 _TIMEOUT = 10
-_PYPI_SEARCH = "https://pypi.org/search/"
 _NPM_SEARCH = "https://registry.npmjs.org/-/v1/search"
 _PYPI_PKG = "https://pypi.org/pypi/{name}/json"
 _NPM_DOWNLOADS = "https://api.npmjs.org/downloads/point/last-week/{name}"
+
+_SUGGEST_SYSTEM = """\
+You are a senior software engineer. Given a task description, list the best package names \
+from the specified ecosystem. Return ONLY a JSON array of package name strings — exact names \
+as they appear in the registry. No descriptions, no markdown, no explanation."""
+
+_SUGGEST_USER = """\
+Task: {task}
+Ecosystem: {ecosystem}
+
+List the {count} best package names for this task, best first.
+Return JSON array only, e.g.: ["httpx", "aiohttp", "tenacity"]"""
 
 _SYSTEM = """\
 You are a senior software engineer recommending libraries. Given a task description and a list \
@@ -68,63 +79,67 @@ Return JSON:
 }}"""
 
 
-def _fetch_pypi_search(query: str, count: int) -> list[dict]:
-    """Search PyPI via its HTML search page, extracting package hrefs."""
-    results = []
+def _llm_suggest_names(task: str, ecosystem: str, count: int) -> list[str]:
+    """Ask the LLM to suggest package names, then validate via registry API."""
     try:
-        resp = requests.get(
-            _PYPI_SEARCH,
-            params={"q": query, "o": "-zscore"},
-            timeout=_TIMEOUT,
-            headers={
-                "User-Agent": "aztea-package-finder/1.0",
-                "Accept": "text/html",
-            },
-        )
-        if resp.status_code != 200:
-            return results
-        # Extract package names from /project/{name}/ links — stable across HTML changes
-        names = re.findall(r'href="/project/([\w\-\.]+)/"', resp.text)
-        seen: set[str] = set()
-        unique_names = []
-        for n in names:
-            if n not in seen:
-                seen.add(n)
-                unique_names.append(n)
-        for name in unique_names[:count * 2]:
+        resp = run_with_fallback(CompletionRequest(
+            model="",
+            messages=[
+                Message("system", _SUGGEST_SYSTEM),
+                Message("user", _SUGGEST_USER.format(task=task, ecosystem=ecosystem, count=count * 2)),
+            ],
+            max_tokens=200,
+            json_mode=True,
+        ))
+        raw = resp.text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw)
+        names = json.loads(raw)
+        if isinstance(names, list):
+            return [str(n).strip() for n in names if str(n).strip()][:count * 2]
+    except Exception:
+        pass
+    return []
+
+
+def _fetch_pypi_search(query: str, count: int) -> list[dict]:
+    """Get PyPI packages: LLM suggests names, registry API validates and enriches."""
+    results = []
+    names = _llm_suggest_names(query, "pypi", count)
+    seen: set[str] = set()
+    for name in names:
+        if name in seen or len(results) >= count:
+            break
+        seen.add(name)
+        try:
+            pkg_resp = requests.get(
+                _PYPI_PKG.format(name=name),
+                timeout=_TIMEOUT,
+                headers={"User-Agent": "aztea-package-finder/1.0"},
+            )
+            if pkg_resp.status_code != 200:
+                continue
+            info = pkg_resp.json().get("info", {})
+            downloads = None
             try:
-                pkg_resp = requests.get(
-                    _PYPI_PKG.format(name=name),
+                dl_resp = requests.get(
+                    f"https://pypistats.org/api/packages/{name}/recent",
                     timeout=_TIMEOUT,
                     headers={"User-Agent": "aztea-package-finder/1.0"},
                 )
-                if pkg_resp.status_code != 200:
-                    continue
-                info = pkg_resp.json().get("info", {})
-                downloads = None
-                try:
-                    dl_resp = requests.get(
-                        f"https://pypistats.org/api/packages/{name.lower()}/recent",
-                        timeout=_TIMEOUT,
-                        headers={"User-Agent": "aztea-package-finder/1.0"},
-                    )
-                    if dl_resp.status_code == 200:
-                        downloads = dl_resp.json().get("data", {}).get("last_week")
-                except Exception:
-                    pass
-                results.append({
-                    "name": name,
-                    "description": (info.get("summary") or "")[:200],
-                    "version": info.get("version", ""),
-                    "weekly_downloads": downloads,
-                    "url": f"https://pypi.org/project/{name}/",
-                })
-                if len(results) >= count:
-                    break
+                if dl_resp.status_code == 200:
+                    downloads = dl_resp.json().get("data", {}).get("last_week")
             except Exception:
-                continue
-    except Exception:
-        pass
+                pass
+            results.append({
+                "name": name,
+                "description": (info.get("summary") or "")[:200],
+                "version": info.get("version", ""),
+                "weekly_downloads": downloads,
+                "url": f"https://pypi.org/project/{name}/",
+            })
+        except Exception:
+            continue
     return results
 
 

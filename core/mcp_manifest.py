@@ -116,6 +116,90 @@ def _tool_name(agent: dict[str, Any], used_names: set[str]) -> str:
     return candidate
 
 
+def _quality_line(agent: dict[str, Any]) -> str:
+    """Build a one-line quality + pricing summary from reputation fields."""
+    parts: list[str] = []
+
+    # Verification badge
+    verified = agent.get("verified")
+    if verified:
+        parts.append("verified")
+
+    # Reputation signals
+    trust = agent.get("trust_score")
+    if trust is not None:
+        parts.append(f"trust {int(trust)}/100")
+    success = agent.get("success_rate")
+    if success is not None:
+        parts.append(f"{int(round(float(success) * 100))}% success")
+    latency = agent.get("avg_latency_ms")
+    if latency is not None and float(latency) > 0:
+        ms = float(latency)
+        parts.append(f"~{ms/1000:.1f}s avg" if ms >= 1000 else f"~{int(ms)}ms avg")
+    calls = agent.get("total_calls")
+    if calls is not None and int(calls) > 0:
+        parts.append(f"{int(calls):,} calls")
+    by_client = agent.get("by_client")
+    if isinstance(by_client, dict) and by_client:
+        ranked = sorted(
+            (
+                (str(client_id), float(score))
+                for client_id, score in by_client.items()
+                if client_id and score is not None
+            ),
+            key=lambda item: item[1],
+            reverse=True,
+        )[:3]
+        if ranked:
+            labels = ", ".join(f"{client_id} {int(score)}" for client_id, score in ranked)
+            parts.append(f"client trust: {labels}")
+
+    # Pricing
+    price = agent.get("price_per_call_usd")
+    pricing_model = str(agent.get("pricing_model") or "fixed").lower()
+    if price is not None:
+        if pricing_model == "per_unit":
+            parts.append(f"${float(price):.3f}/unit (variable)")
+        elif pricing_model == "tiered":
+            parts.append(f"from ${float(price):.3f}/call (tiered)")
+        else:
+            parts.append(f"${float(price):.3f}/call")
+
+    return " | ".join(parts)
+
+
+def _privacy_line(agent: dict[str, Any]) -> str:
+    flags: list[str] = []
+    if agent.get("pii_safe"):
+        flags.append("pii-safe")
+    if agent.get("outputs_not_stored"):
+        flags.append("outputs not stored")
+    if agent.get("audit_logged"):
+        flags.append("audit logged")
+    region = str(agent.get("region_locked") or "").strip()
+    if region:
+        flags.append(f"region {region}")
+    return " | ".join(flags)
+
+
+def _example_snippet(agent: dict[str, Any]) -> str:
+    """Return a short inline work example from output_examples, if available."""
+    examples = agent.get("output_examples")
+    if not isinstance(examples, list) or not examples:
+        return ""
+    ex = examples[0]
+    if not isinstance(ex, dict):
+        return ""
+    # Try to surface the output summary, falling back to full repr
+    output = ex.get("output") or ex.get("result") or ex.get("summary")
+    if not output:
+        return ""
+    snippet = str(output)
+    if len(snippet) > 200:
+        snippet = snippet[:197] + "..."
+    return snippet
+
+
 def build_mcp_tool_entries(agents: list[dict[str, Any]]) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     used_names: set[str] = set()
@@ -126,6 +210,15 @@ def build_mcp_tool_entries(agents: list[dict[str, Any]]) -> list[dict[str, Any]]
         name = str(agent.get("name") or "").strip() or f"Agent {agent_id[:8]}"
         description = str(agent.get("description") or "").strip()
         tool_description = f"{name}: {description}" if description else name
+        quality = _quality_line(agent)
+        if quality:
+            tool_description = f"{tool_description}\n\nQuality: {quality}"
+        privacy = _privacy_line(agent)
+        if privacy:
+            tool_description = f"{tool_description}\nPrivacy: {privacy}"
+        example = _example_snippet(agent)
+        if example:
+            tool_description = f"{tool_description}\nExample output: {example}"
         tool_name = _tool_name(agent, used_names)
         input_schema = normalize_schema(agent.get("input_schema"))
         output_schema = normalize_schema(agent.get("output_schema"))
@@ -147,4 +240,3 @@ def build_mcp_manifest(agents: list[dict[str, Any]]) -> dict[str, Any]:
         "count": len(tools),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
-

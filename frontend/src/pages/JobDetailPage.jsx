@@ -137,7 +137,7 @@ export default function JobDetailPage() {
   const job = localJob ?? contextJob
   const agent = useMemo(() => agents.find(a => a.agent_id === job?.agent_id), [agents, job])
 
-  const billingUnitsActual = job?.output?.billing_units_actual
+  const billingUnitsActual = job?.output_payload?.billing_units_actual
   const vp = agent?.variable_pricing
   const actualChargeCents = computeActualCharge(vp, billingUnitsActual)
   const refundCents = actualChargeCents != null
@@ -327,12 +327,12 @@ export default function JobDetailPage() {
       await postJobMessage(apiKey, id, {
         type: 'clarification_response',
         payload: {
-          answer: clarificationAnswer.trim(),
+          answer,
           request_message_id: latestClarificationRequest.message_id,
         },
       })
       setClarificationAnswer('')
-      await loadMessages()
+      await Promise.all([loadMessages(), pollJob()])
       showToast?.('Clarification sent.', 'success')
     } catch (err) {
       showToast?.(err?.message || 'Could not send clarification response.', 'error')
@@ -362,7 +362,7 @@ export default function JobDetailPage() {
         showToast?.('Output rejected - dispute opened.', 'success')
         await loadDispute()
       }
-      await refreshJobs?.()
+      await Promise.all([refreshJobs?.(), pollJob(), loadMessages()])
     } catch (err) {
       showToast?.(err?.message || 'Verification action failed.', 'error')
     } finally {

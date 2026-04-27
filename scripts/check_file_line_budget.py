@@ -16,6 +16,9 @@ from pathlib import Path
 DEFAULT_EXCLUDES = [
     ".git/*",
     ".venv/*",
+    "venv/*",
+    ".release-venv/*",
+    "tui/.release-venv/*",
     "node_modules/*",
     "**/node_modules/*",
     "frontend/.venv/*",
@@ -35,7 +38,7 @@ def _matches_any(path_str: str, patterns: list[str]) -> bool:
 
 def _is_vendor_path(rel: str) -> bool:
     parts = rel.replace("\\", "/").split("/")
-    return "node_modules" in parts or ".venv" in parts
+    return any(p in parts for p in ("node_modules", ".venv", "venv", ".release-venv"))
 
 
 def main() -> int:

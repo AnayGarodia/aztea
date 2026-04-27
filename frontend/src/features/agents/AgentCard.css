@@ -114,6 +114,23 @@
   gap: 5px;
 }
 
+.ac__policy-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ac__policy-chip {
+  font-size: 0.625rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  padding: 2px 7px;
+  white-space: nowrap;
+}
+
 /* ── Footer ──────────────────────────────────────────────────── */
 .ac__foot {
   display: flex;

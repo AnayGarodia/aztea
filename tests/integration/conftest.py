@@ -10,9 +10,12 @@ import uuid
 from fastapi.testclient import TestClient
 
 from core import auth
+from core import cache as result_cache
+from core import compare
 from core import disputes
 from core import jobs
 from core import payments
+from core import pipelines
 from core import registry
 from core import reputation
 import server.application as server
@@ -23,7 +26,7 @@ from tests.integration.helpers import TEST_MASTER_KEY, _close_module_conn
 @pytest.fixture
 def isolated_db(monkeypatch):
     db_path = Path(__file__).resolve().parent / f"test-server-integration-{uuid.uuid4().hex}.db"
-    modules = (registry, payments, auth, jobs, reputation, disputes)
+    modules = (registry, payments, auth, jobs, reputation, disputes, result_cache, compare, pipelines)
 
     for module in modules:
         _close_module_conn(module)

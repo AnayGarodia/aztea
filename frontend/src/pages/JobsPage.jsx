@@ -11,11 +11,12 @@ import { useMarket } from '../context/MarketContext'
 import './JobsPage.css'
 
 const TABS = [
-  { id: 'all',      label: 'All' },
-  { id: 'running',  label: 'Running' },
-  { id: 'pending',  label: 'Pending' },
+  { id: 'all', label: 'All' },
+  { id: 'running', label: 'Running' },
+  { id: 'awaiting_clarification', label: 'Needs input' },
+  { id: 'pending', label: 'Pending' },
   { id: 'complete', label: 'Complete' },
-  { id: 'failed',   label: 'Failed' },
+  { id: 'failed', label: 'Failed' },
 ]
 
 function fmtUsd(cents) {
@@ -30,7 +31,6 @@ function fmtDate(str) {
 
 function JobRow({ job, agents }) {
   const agent = agents.find(a => a.agent_id === job.agent_id)
-  const isLive = job.status === 'running' || job.status === 'pending'
   return (
     <Link to={`/jobs/${job.job_id}`} className="jobs__row">
       <div className="jobs__row-main">
@@ -48,15 +48,20 @@ export default function JobsPage() {
   const { jobs, agents, loading } = useMarket()
   const [activeTab, setActiveTab] = useState('all')
 
+  function matchesTab(job, tabId) {
+    if (tabId === 'all') return true
+    return job.status === tabId
+  }
+
   const filtered = useMemo(() =>
-    activeTab === 'all' ? jobs : jobs.filter(j => j.status === activeTab),
+    jobs.filter(job => matchesTab(job, activeTab)),
     [jobs, activeTab]
   )
 
   const counts = useMemo(() => {
     const c = {}
     TABS.forEach(t => {
-      c[t.id] = t.id === 'all' ? jobs.length : jobs.filter(j => j.status === t.id).length
+      c[t.id] = jobs.filter(job => matchesTab(job, t.id)).length
     })
     return c
   }, [jobs])

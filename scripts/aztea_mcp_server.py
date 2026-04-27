@@ -21,12 +21,19 @@ if str(ROOT_DIR) not in sys.path:
 
 from core import mcp_manifest
 
+_SCRIPTS_DIR = str(Path(__file__).resolve().parent)
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+import aztea_mcp_meta_tools as meta_tools
+
 _LOG = logging.getLogger("aztea.mcp")
 _SERVER_NAME = "aztea-registry-mcp"
 _SERVER_VERSION = "0.1.0"
 _PROTOCOL_VERSION = "2024-11-05"
 _REQUEST_VERSION_HEADER = "X-Aztea-Version"
 _AZTEA_PROTOCOL_VERSION = "1.0"
+_CLIENT_ID_HEADER = "X-Aztea-Client"
+_DEFAULT_CLIENT_ID = (os.environ.get("AZTEA_CLIENT_ID", "claude-code") or "claude-code").strip()
 
 
 _AUTH_TOOL_NAME = "aztea_setup"
@@ -110,6 +117,7 @@ class RegistryBridge:
         self.timeout_seconds = max(1.0, float(timeout_seconds))
         self._session = requests.Session()
         self._lock = threading.Lock()
+        self._session_state: dict[str, Any] = {"budget_cents": None, "spent_cents": 0}
         self._entries: list[dict[str, Any]] = []
         self._manifest: dict[str, Any] = {
             "tools": [],
@@ -123,6 +131,7 @@ class RegistryBridge:
         return {
             "Authorization": f"Bearer {self.api_key}",
             _REQUEST_VERSION_HEADER: _AZTEA_PROTOCOL_VERSION,
+            _CLIENT_ID_HEADER: _DEFAULT_CLIENT_ID,
             "Content-Type": "application/json",
         }
 
@@ -132,7 +141,7 @@ class RegistryBridge:
         try:
             response = self._session.get(
                 f"{self.base_url}/registry/agents",
-                params={"include_reputation": "false"},
+                params={"include_reputation": "true"},
                 headers=self._headers(),
                 timeout=self.timeout_seconds,
             )
@@ -174,7 +183,8 @@ class RegistryBridge:
         with self._lock:
             if self._auth_required:
                 return [_AUTH_TOOL]
-            return [dict(entry["tool"]) for entry in self._entries]
+            registry_tools = [dict(entry["tool"]) for entry in self._entries]
+        return meta_tools.get_meta_tools() + registry_tools
 
     def _agent_id_for_tool(self, tool_name: str) -> str | None:
         with self._lock:
@@ -201,6 +211,18 @@ class RegistryBridge:
 
         if auth_required or tool_name == _AUTH_TOOL_NAME:
             return self._auth_required_response()
+
+        # Route platform meta-tools directly to Aztea API
+        if tool_name in meta_tools.META_TOOL_NAMES:
+            return meta_tools.call_meta_tool(
+                tool_name,
+                arguments,
+                base_url=self.base_url,
+                api_key=self.api_key,
+                timeout=self.timeout_seconds,
+                session=self._session,
+                session_state=self._session_state,
+            )
 
         agent_id = self._agent_id_for_tool(tool_name)
         if not agent_id:
@@ -235,11 +257,32 @@ class RegistryBridge:
             if isinstance(parsed_body, dict):
                 return True, parsed_body
             return True, {"result": parsed_body}
-        return False, {
+
+        # 1.8: Surface refund status and the charge message so callers know exactly
+        # what happened. FastAPI wraps HTTPException details as {"detail": {...}}.
+        error_payload: dict[str, Any] = {
             "error": "TOOL_CALL_FAILED",
             "status_code": response.status_code,
             "response": parsed_body,
         }
+        if isinstance(parsed_body, dict):
+            # Top-level keys (from direct JSON responses)
+            for key in ("refunded", "refund_amount_cents", "cost_usd", "wallet_balance_cents"):
+                if key in parsed_body:
+                    error_payload[key] = parsed_body[key]
+            # HTTPException: detail is {"detail": {"code": ..., "message": ..., "data": {...}}}
+            detail = parsed_body.get("detail")
+            if isinstance(detail, dict):
+                msg = detail.get("message") or ""
+                if msg:
+                    error_payload["charge_message"] = msg
+                inner_data = detail.get("data") or {}
+                for key in ("refunded", "refund_amount_cents", "cost_usd"):
+                    if key in inner_data:
+                        error_payload[key] = inner_data[key]
+            elif isinstance(detail, str) and detail:
+                error_payload["charge_message"] = detail
+        return False, error_payload
 
 
 class MCPStdioServer:
@@ -441,7 +484,12 @@ def main() -> None:
     bridge.refresh()
 
     if args.print_tools:
-        print(json.dumps(bridge.manifest(), indent=2))
+        manifest = bridge.manifest()
+        # Include platform meta-tools in the printed manifest when authenticated
+        if api_key:
+            manifest["meta_tools"] = meta_tools.get_meta_tools()
+            manifest["meta_tool_count"] = len(manifest["meta_tools"])
+        print(json.dumps(manifest, indent=2))
         return
 
     server = MCPStdioServer(bridge=bridge, refresh_seconds=args.refresh_seconds)

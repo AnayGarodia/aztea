@@ -719,6 +719,272 @@ def _resolved_under(parent: _SpaPath, candidate: _SpaPath) -> bool:
     return parent_resolved in candidate_resolved.parents or candidate_resolved == parent_resolved
 
 
+def _pipeline_visible_to_caller(caller: core_models.CallerContext, pipeline_row: dict) -> bool:
+    if caller.get("type") == "master":
+        return True
+    owner_id = str(pipeline_row.get("owner_id") or "").strip()
+    if owner_id and owner_id == caller.get("owner_id"):
+        return True
+    return bool(pipeline_row.get("is_public"))
+
+
+def _pipeline_response(pipeline_row: dict) -> dict:
+    return {
+        "pipeline_id": pipeline_row["pipeline_id"],
+        "owner_id": pipeline_row.get("owner_id"),
+        "name": pipeline_row.get("name"),
+        "description": pipeline_row.get("description"),
+        "definition": pipeline_row.get("definition") or {},
+        "is_public": bool(pipeline_row.get("is_public")),
+        "created_at": pipeline_row.get("created_at"),
+        "updated_at": pipeline_row.get("updated_at"),
+    }
+
+
+def _recipe_catalog_entry(pipeline_row: dict) -> dict:
+    recipe_meta = next(
+        (item for item in recipes.BUILTIN_RECIPES if item.get("recipe_id") == pipeline_row.get("pipeline_id")),
+        None,
+    )
+    payload = _pipeline_response(pipeline_row)
+    if recipe_meta is not None:
+        payload["default_input_schema"] = recipe_meta.get("default_input_schema") or {}
+    return payload
+
+
+@app.post(
+    "/pipelines",
+    status_code=201,
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(400, 401, 403, 422, 429, 500),
+    tags=["Pipelines"],
+    summary="Create a pipeline DAG definition.",
+)
+@limiter.limit("20/minute")
+def pipelines_create(
+    request: Request,
+    body: dict[str, Any] = Body(...),
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
+    _require_scope(caller, "caller")
+    name = str(body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required.")
+    definition = body.get("definition")
+    if not isinstance(definition, dict):
+        raise HTTPException(status_code=422, detail="definition must be an object.")
+    try:
+        validated = pipelines.validate_definition(definition)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    created = pipelines.create_pipeline(
+        caller["owner_id"],
+        name,
+        {"nodes": validated["nodes"]},
+        description=str(body.get("description") or "").strip(),
+        is_public=bool(body.get("is_public")),
+        pipeline_id=body.get("pipeline_id"),
+    )
+    return JSONResponse(content=_pipeline_response(created), status_code=201)
+
+
+@app.get(
+    "/pipelines",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(401, 403, 429, 500),
+    tags=["Pipelines"],
+    summary="List pipelines visible to the caller.",
+)
+@limiter.limit("60/minute")
+def pipelines_list(
+    request: Request,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
+    _require_scope(caller, "caller")
+    rows = pipelines.list_pipelines(caller["owner_id"], include_public=False)
+    visible = [_pipeline_response(row) for row in rows if row is not None and _pipeline_visible_to_caller(caller, row)]
+    return JSONResponse(content={"pipelines": visible, "count": len(visible)})
+
+
+@app.get(
+    "/pipelines/{pipeline_id}",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(401, 403, 404, 429, 500),
+    tags=["Pipelines"],
+    summary="Get a pipeline definition.",
+)
+@limiter.limit("60/minute")
+def pipelines_get(
+    request: Request,
+    pipeline_id: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
+    _require_scope(caller, "caller")
+    pipeline_row = pipelines.get_pipeline(pipeline_id)
+    if pipeline_row is None:
+        raise HTTPException(status_code=404, detail=f"Pipeline '{pipeline_id}' not found.")
+    if not _pipeline_visible_to_caller(caller, pipeline_row):
+        raise HTTPException(status_code=404, detail=f"Pipeline '{pipeline_id}' not found.")
+    return JSONResponse(content=_pipeline_response(pipeline_row))
+
+
+@app.post(
+    "/pipelines/{pipeline_id}/run",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(400, 401, 403, 404, 422, 429, 500),
+    tags=["Pipelines"],
+    summary="Execute a pipeline asynchronously.",
+)
+@limiter.limit(_JOBS_CREATE_RATE_LIMIT)
+def pipelines_run(
+    request: Request,
+    pipeline_id: str,
+    body: dict[str, Any] = Body(...),
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
+    _require_scope(caller, "caller")
+    pipeline_row = pipelines.get_pipeline(pipeline_id)
+    if pipeline_row is None:
+        raise HTTPException(status_code=404, detail=f"Pipeline '{pipeline_id}' not found.")
+    if not _pipeline_visible_to_caller(caller, pipeline_row):
+        raise HTTPException(status_code=404, detail=f"Pipeline '{pipeline_id}' not found.")
+    input_payload = body.get("input_payload") or {}
+    if not isinstance(input_payload, dict):
+        raise HTTPException(status_code=422, detail="input_payload must be an object.")
+    caller_wallet = payments.get_or_create_wallet(caller["owner_id"])
+    try:
+        run_id = pipelines.run_pipeline(
+            pipeline_id,
+            input_payload,
+            caller["owner_id"],
+            caller_wallet["wallet_id"],
+            client_id=_request_client_id(request, body.get("client_id")),
+            execute_builtin_agent=_execute_builtin_agent,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    run = pipelines.get_run(run_id)
+    return JSONResponse(
+        content={
+            "run_id": run_id,
+            "pipeline_id": pipeline_id,
+            "status": (run or {}).get("status", "running"),
+        }
+    )
+
+
+@app.get(
+    "/pipelines/{pipeline_id}/runs/{run_id}",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(401, 403, 404, 429, 500),
+    tags=["Pipelines"],
+    summary="Get pipeline run status and results.",
+)
+@limiter.limit("60/minute")
+def pipelines_run_get(
+    request: Request,
+    pipeline_id: str,
+    run_id: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
+    _require_scope(caller, "caller")
+    pipeline_row = pipelines.get_pipeline(pipeline_id)
+    if pipeline_row is None:
+        raise HTTPException(status_code=404, detail=f"Pipeline '{pipeline_id}' not found.")
+    if not _pipeline_visible_to_caller(caller, pipeline_row):
+        raise HTTPException(status_code=404, detail=f"Pipeline '{pipeline_id}' not found.")
+    run = pipelines.get_run(run_id)
+    if run is None or str(run.get("pipeline_id") or "") != pipeline_id:
+        raise HTTPException(status_code=404, detail=f"Pipeline run '{run_id}' not found.")
+    if caller.get("type") != "master" and caller["owner_id"] != run.get("caller_owner_id") and caller["owner_id"] != pipeline_row.get("owner_id"):
+        raise HTTPException(status_code=403, detail="Not authorized to view this pipeline run.")
+    return JSONResponse(
+        content={
+            "run_id": run["run_id"],
+            "pipeline_id": run.get("pipeline_id"),
+            "caller_owner_id": run.get("caller_owner_id"),
+            "status": run.get("status"),
+            "input_payload": run.get("input_payload") or {},
+            "output_payload": run.get("output_payload"),
+            "error_message": run.get("error_message"),
+            "step_results": run.get("step_results") or {},
+            "created_at": run.get("created_at"),
+            "updated_at": run.get("updated_at"),
+            "completed_at": run.get("completed_at"),
+        }
+    )
+
+
+@app.get(
+    "/recipes",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(401, 403, 429, 500),
+    tags=["Pipelines"],
+    summary="List built-in public pipeline recipes.",
+)
+@limiter.limit("60/minute")
+def recipes_list(
+    request: Request,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
+    _require_scope(caller, "caller")
+    rows = pipelines.list_pipelines(None, include_public=True)
+    recipe_rows = [
+        row for row in rows
+        if row is not None and str(row.get("owner_id") or "") == recipes.PLATFORM_RECIPES_OWNER_ID
+    ]
+    return JSONResponse(
+        content={
+            "recipes": [_recipe_catalog_entry(row) for row in recipe_rows],
+            "count": len(recipe_rows),
+        }
+    )
+
+
+@app.post(
+    "/recipes/{recipe_id}/run",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(400, 401, 403, 404, 422, 429, 500),
+    tags=["Pipelines"],
+    summary="Run a built-in public recipe.",
+)
+@limiter.limit(_JOBS_CREATE_RATE_LIMIT)
+def recipes_run(
+    request: Request,
+    recipe_id: str,
+    body: dict[str, Any] = Body(...),
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
+    _require_scope(caller, "caller")
+    pipeline_row = pipelines.get_pipeline(recipe_id)
+    if pipeline_row is None or str(pipeline_row.get("owner_id") or "") != recipes.PLATFORM_RECIPES_OWNER_ID:
+        raise HTTPException(status_code=404, detail=f"Recipe '{recipe_id}' not found.")
+    input_payload = body.get("input_payload") or {}
+    if not isinstance(input_payload, dict):
+        raise HTTPException(status_code=422, detail="input_payload must be an object.")
+    caller_wallet = payments.get_or_create_wallet(caller["owner_id"])
+    try:
+        run_id = pipelines.run_pipeline(
+            recipe_id,
+            input_payload,
+            caller["owner_id"],
+            caller_wallet["wallet_id"],
+            client_id=_request_client_id(request, body.get("client_id")),
+            execute_builtin_agent=_execute_builtin_agent,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    run = pipelines.get_run(run_id)
+    return JSONResponse(
+        content={
+            "run_id": run_id,
+            "pipeline_id": recipe_id,
+            "recipe_id": recipe_id,
+            "status": (run or {}).get("status", "running"),
+        }
+    )
+
+
 @app.get("/", include_in_schema=False)
 def spa_root() -> _SpaFileResponse:
     """Serve ``frontend/dist/index.html`` at the site root.

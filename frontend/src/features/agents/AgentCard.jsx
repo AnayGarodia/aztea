@@ -35,11 +35,22 @@ export default function AgentCard({ agent, index = 0, showTrust = false }) {
   const price    = `$${Number(agent.price_per_call_usd ?? 0).toFixed(2)}`
   const calls    = agent.total_calls ?? 0
   const trust    = typeof agent.trust_score === 'number'
-    ? Math.round(agent.trust_score * 100)
+    ? Math.round(agent.trust_score)
     : null
   const highDispute = typeof agent.dispute_rate === 'number' && agent.dispute_rate > 0.10
   const exampleCount = Array.isArray(agent.output_examples) ? agent.output_examples.length : 0
   const kindLabel = KIND_LABELS[agent.kind] ?? null
+  const privacyChips = [
+    agent.pii_safe ? 'PII-safe' : null,
+    agent.outputs_not_stored ? 'No output storage' : null,
+    agent.audit_logged ? 'Audit logged' : null,
+    agent.region_locked ? `Region ${String(agent.region_locked).toUpperCase()}` : null,
+  ].filter(Boolean)
+  const topClientTrust = agent.by_client && typeof agent.by_client === 'object'
+    ? Object.entries(agent.by_client)
+      .filter(([, score]) => typeof score === 'number')
+      .sort((a, b) => b[1] - a[1])[0]
+    : null
 
   const matchReasons = Array.isArray(agent.match_reasons)
     ? agent.match_reasons.filter(r => typeof r === 'string' && r.trim())
@@ -91,6 +102,14 @@ export default function AgentCard({ agent, index = 0, showTrust = false }) {
         </div>
       )}
 
+      {privacyChips.length > 0 && (
+        <div className="ac__policy-row">
+          {privacyChips.slice(0, 3).map(chip => (
+            <span key={chip} className="ac__policy-chip">{chip}</span>
+          ))}
+        </div>
+      )}
+
       {/* Reliability stats */}
       {(agent.jobs_last_30_days > 0 || agent.job_completion_rate != null || agent.median_latency_seconds != null) && (
         <div className="ac__reliability">
@@ -102,6 +121,11 @@ export default function AgentCard({ agent, index = 0, showTrust = false }) {
           )}
           {agent.median_latency_seconds != null && (
             <span className="ac__stat-chip">~{agent.median_latency_seconds}s</span>
+          )}
+          {topClientTrust && (
+            <span className="ac__stat-chip">
+              {topClientTrust[0]} {Math.round(topClientTrust[1])}
+            </span>
           )}
         </div>
       )}

@@ -494,6 +494,103 @@ def _load_dispute_rates_map(agent_ids: list[str]) -> dict[str, int]:
         return {}
 
 
+def _load_client_quality_summary_map(agent_ids: list[str]) -> dict[tuple[str, str], dict]:
+    if not agent_ids:
+        return {}
+    placeholders = ",".join("?" * len(agent_ids))
+    try:
+        with _conn() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT
+                    j.agent_id,
+                    j.client_id,
+                    COUNT(r.rating_id) AS rating_count,
+                    AVG(r.rating) AS average_quality_rating
+                FROM jobs j
+                LEFT JOIN job_quality_ratings r ON r.job_id = j.job_id
+                WHERE j.agent_id IN ({placeholders})
+                  AND j.client_id IS NOT NULL
+                  AND TRIM(j.client_id) != ''
+                GROUP BY j.agent_id, j.client_id
+                """,
+                agent_ids,
+            ).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    return {
+        (str(row["agent_id"]), str(row["client_id"])): {
+            "rating_count": int(row["rating_count"] or 0),
+            "average_quality_rating": float(row["average_quality_rating"])
+            if row["average_quality_rating"] is not None
+            else None,
+        }
+        for row in rows
+    }
+
+
+def _load_client_stats_map(agent_ids: list[str]) -> dict[tuple[str, str], tuple[int, int, float]]:
+    if not agent_ids:
+        return {}
+    placeholders = ",".join("?" * len(agent_ids))
+    try:
+        with _conn() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT
+                    agent_id,
+                    client_id,
+                    COUNT(*) AS total_calls,
+                    SUM(CASE WHEN status = 'complete' THEN 1 ELSE 0 END) AS successful_calls,
+                    AVG(
+                        CASE
+                            WHEN completed_at IS NOT NULL
+                            THEN (julianday(completed_at) - julianday(created_at)) * 86400000.0
+                            ELSE NULL
+                        END
+                    ) AS avg_latency_ms
+                FROM jobs
+                WHERE agent_id IN ({placeholders})
+                  AND client_id IS NOT NULL
+                  AND TRIM(client_id) != ''
+                GROUP BY agent_id, client_id
+                """,
+                agent_ids,
+            ).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    return {
+        (str(row["agent_id"]), str(row["client_id"])): _normalize_agent_stats(
+            row["total_calls"],
+            row["successful_calls"],
+            row["avg_latency_ms"],
+        )
+        for row in rows
+    }
+
+
+def _build_client_trust_map(agent_ids: list[str], decay_by_agent: dict[str, float]) -> dict[str, dict[str, float]]:
+    stats_map = _load_client_stats_map(agent_ids)
+    quality_map = _load_client_quality_summary_map(agent_ids)
+    result: dict[str, dict[str, float]] = {}
+    for (agent_id, client_id), stats in stats_map.items():
+        quality = quality_map.get(
+            (agent_id, client_id),
+            {"rating_count": 0, "average_quality_rating": None},
+        )
+        metrics = _build_trust_metrics(
+            agent_id=agent_id,
+            total_calls=stats[0],
+            successful_calls=stats[1],
+            avg_latency_ms=stats[2],
+            rating_count=int(quality["rating_count"] or 0),
+            average_quality_rating=quality["average_quality_rating"],
+            decay_multiplier=decay_by_agent.get(agent_id, 1.0),
+        )
+        result.setdefault(agent_id, {})[client_id] = metrics["trust_score"]
+    return result
+
+
 def enrich_agent_record(agent: dict) -> dict:
     """Attach trust/reputation fields to a single registry agent record."""
     if "agent_id" not in agent:
@@ -526,6 +623,10 @@ def enrich_agent_record(agent: dict) -> dict:
     )
 
     dispute_counts = _load_dispute_rates_map([agent_id])
+    client_trust_map = _build_client_trust_map(
+        [agent_id],
+        {agent_id: _normalize_decay_multiplier(agent.get("trust_decay_multiplier"))},
+    )
     dispute_count = dispute_counts.get(agent_id, 0)
     enriched = dict(agent)
     enriched["trust_score"] = metrics["trust_score"]
@@ -536,6 +637,7 @@ def enrich_agent_record(agent: dict) -> dict:
     enriched["dispute_rate"] = (
         round(dispute_count / total_calls, 4) if total_calls > 0 else None
     )
+    enriched["by_client"] = client_trust_map.get(agent_id, {})
     return enriched
 
 
@@ -549,6 +651,12 @@ def enrich_agent_records(agents: list[dict]) -> list[dict]:
     stats_map = _load_agent_stats_map(agent_ids)
 
     dispute_counts = _load_dispute_rates_map(agent_ids)
+    decay_by_agent = {
+        str(agent["agent_id"]): _normalize_decay_multiplier(agent.get("trust_decay_multiplier"))
+        for agent in agents
+        if "agent_id" in agent
+    }
+    client_trust_map = _build_client_trust_map(agent_ids, decay_by_agent)
     enriched_records = []
     for agent in agents:
         if "agent_id" not in agent:
@@ -586,6 +694,7 @@ def enrich_agent_records(agents: list[dict]) -> list[dict]:
         enriched["dispute_rate"] = (
             round(dc / total_calls, 4) if total_calls > 0 else None
         )
+        enriched["by_client"] = client_trust_map.get(str(agent["agent_id"]), {})
         enriched_records.append(enriched)
     return enriched_records
 

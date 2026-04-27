@@ -110,6 +110,10 @@ def registry_search(
             include_unapproved=include_unapproved,
             model_provider=body.model_provider,
             kind=body.kind,
+            pii_safe=body.pii_safe,
+            outputs_not_stored=body.outputs_not_stored,
+            audit_logged=body.audit_logged,
+            region_locked=body.region_locked,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -170,6 +174,108 @@ def registry_agent_work_history(
     examples: list = agent.get("output_examples") or []
     page = examples[capped_offset: capped_offset + capped_limit]
     return JSONResponse(content={"items": page, "total": len(examples), "limit": capped_limit, "offset": capped_offset})
+
+
+def _extract_sync_cache_controls(payload: dict[str, Any]) -> tuple[dict[str, Any], bool, int]:
+    raw = dict(payload or {})
+    use_cache_raw = raw.pop("use_cache", None)
+    cache_ttl_raw = raw.pop("cache_ttl_hours", None)
+    try:
+        use_cache = bool(_normalize_optional_bool(use_cache_raw, field_name="use_cache")) if use_cache_raw is not None else False
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=error_codes.make_error(error_codes.INVALID_INPUT, str(exc)),
+        )
+    if cache_ttl_raw is None:
+        cache_ttl_hours = 24
+    else:
+        try:
+            cache_ttl_hours = int(cache_ttl_raw)
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=422,
+                detail=error_codes.make_error(
+                    error_codes.INVALID_INPUT,
+                    "cache_ttl_hours must be an integer between 1 and 168.",
+                ),
+            )
+        if cache_ttl_hours < 1 or cache_ttl_hours > 168:
+            raise HTTPException(
+                status_code=422,
+                detail=error_codes.make_error(
+                    error_codes.INVALID_INPUT,
+                    "cache_ttl_hours must be an integer between 1 and 168.",
+                    {"cache_ttl_hours": cache_ttl_hours},
+                ),
+            )
+    return raw, use_cache, cache_ttl_hours
+
+
+def _cache_hit_response_payload(cached_output: Any) -> dict[str, Any]:
+    payload = dict(cached_output) if isinstance(cached_output, dict) else {"output": cached_output}
+    payload["cache_hit"] = True
+    payload["cost_usd"] = 0
+    return payload
+
+
+@app.post(
+    "/agents/{agent_id}/estimate",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(401, 403, 404, 422, 429, 500),
+)
+@limiter.limit("30/minute")
+def agent_cost_estimate(
+    request: Request,
+    agent_id: str,
+    body: core_models.RegistryCallRequest | None = Body(default=None),
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
+    _require_scope(caller, "caller")
+    agent = registry.get_agent_with_reputation(agent_id, include_unapproved=True)
+    if agent is None or agent.get("status") == "banned" or not _caller_can_access_agent(caller, agent):
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    _assert_agent_callable(agent_id, agent)
+    payload, _, _ = _extract_sync_cache_controls(dict(body.root) if body is not None else {})
+    try:
+        payload, _ = _normalize_input_protocol_from_payload(payload)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=error_codes.make_error(error_codes.INVALID_INPUT, str(exc), {"agent_id": agent_id}),
+        )
+    pricing_estimate = _estimate_variable_charge(
+        agent=agent,
+        payload=payload,
+        per_job_cap_cents=_caller_key_per_job_cap(caller),
+    )
+    price_cents = int(pricing_estimate["price_cents"])
+    success_distribution = payments.compute_success_distribution(
+        price_cents,
+        platform_fee_pct=int(payments.PLATFORM_FEE_PCT),
+        fee_bearer_policy="caller",
+    )
+    ring = registry.get_agent_call_ring(agent_id)
+    latency = registry.compute_latency_estimate(
+        ring,
+        fallback_latency_ms=float(agent.get("avg_latency_ms") or 0.0),
+    )
+    note = "Estimated from current pricing and recent call history."
+    if pricing_estimate.get("pricing_model") != "fixed":
+        note = "Estimated from variable pricing inputs and recent call history."
+    if pricing_estimate.get("cap_violated"):
+        note += " This estimate exceeds your API key's per-job cap."
+    return JSONResponse(
+        content={
+            "agent_id": agent_id,
+            "estimated_cost_cents": int(success_distribution["caller_charge_cents"]),
+            "p50_latency_ms": int(latency["p50_latency_ms"]),
+            "p95_latency_ms": int(latency["p95_latency_ms"]),
+            "confidence": str(latency["confidence"]),
+            "based_on_calls": len(ring),
+            "note": note,
+        }
+    )
 
 
 @app.get(
@@ -445,9 +551,10 @@ def registry_call(
             raise HTTPException(status_code=502, detail="Agent endpoint is misconfigured.")
 
     caller_owner_id = _caller_owner_id(request)
+    client_id = _request_client_id(request)
     fee_bearer_policy = "caller"
     platform_fee_pct_at_create = int(payments.PLATFORM_FEE_PCT)
-    payload = dict(body.root) if body is not None else {}
+    payload, use_cache, cache_ttl_hours = _extract_sync_cache_controls(dict(body.root) if body is not None else {})
     requested_output_formats: list[str] = []
     try:
         payload, requested_output_formats = _normalize_input_protocol_from_payload(payload)
@@ -495,6 +602,11 @@ def registry_call(
             ),
         )
     price_cents = int(pricing_estimate["price_cents"])
+    private_task = _is_private_task_payload(payload)
+    if use_cache and not private_task:
+        cached_output = _cache.get_cached(agent_id, payload)
+        if cached_output is not None:
+            return JSONResponse(content=_cache_hit_response_payload(cached_output))
     success_distribution = payments.compute_success_distribution(
         price_cents,
         platform_fee_pct=platform_fee_pct_at_create,
@@ -526,6 +638,7 @@ def registry_call(
                 caller_charge_cents=caller_charge_cents,
                 platform_fee_pct_at_create=platform_fee_pct_at_create,
                 fee_bearer_policy=fee_bearer_policy,
+                client_id=client_id,
                 charge_tx_id=charge_tx_id,
                 input_payload=payload,
                 agent_owner_id=agent.get("owner_id"),
@@ -592,6 +705,14 @@ def registry_call(
             )
             if idempotency_key:
                 _idempotency_store(caller_owner_id_early, agent_id, idempotency_key, output)
+            if not private_task:
+                _cache.set_cached(
+                    agent["agent_id"],
+                    payload,
+                    output,
+                    job["job_id"],
+                    ttl_hours=cache_ttl_hours,
+                )
             return JSONResponse(content=output)
         except ValidationError as exc:
             failed = jobs.update_job_status(
@@ -725,7 +846,7 @@ def registry_call(
         )
     except http.exceptions.Timeout:
         latency_ms = (time.monotonic() - start) * 1000
-        registry.update_call_stats(agent_id, latency_ms, False)
+        registry.update_call_stats(agent_id, latency_ms, False, price_cents=price_cents)
         payments.post_call_refund(
             caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent_id
         )
@@ -740,7 +861,7 @@ def registry_call(
         )
     except http.RequestException as e:
         latency_ms = (time.monotonic() - start) * 1000
-        registry.update_call_stats(agent_id, latency_ms, False)
+        registry.update_call_stats(agent_id, latency_ms, False, price_cents=price_cents)
         payments.post_call_refund(
             caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent_id
         )
@@ -757,7 +878,7 @@ def registry_call(
     latency_ms = (time.monotonic() - start) * 1000
     status_code = int(resp.status_code)
     success = 200 <= status_code < 300
-    registry.update_call_stats(agent_id, latency_ms, success)
+    registry.update_call_stats(agent_id, latency_ms, success, price_cents=price_cents)
 
     if not success:
         payments.post_call_refund(
@@ -829,8 +950,16 @@ def registry_call(
         platform_fee_pct=platform_fee_pct_at_create,
         fee_bearer_policy=fee_bearer_policy,
     )
-
-    return _proxy_response(resp)
+    result_payload = json.loads(raw_content)
+    if not private_task:
+        _cache.set_cached(
+            agent["agent_id"],
+            payload,
+            result_payload,
+            f"sync:{uuid.uuid4()}",
+            ttl_hours=cache_ttl_hours,
+        )
+    return JSONResponse(content=result_payload, status_code=resp.status_code)
 
 
 # ---------------------------------------------------------------------------
@@ -886,6 +1015,7 @@ def jobs_create(
             )
 
     caller_owner_id = _caller_owner_id(request)
+    client_id = _request_client_id(request, body.client_id)
     min_caller_trust = _extract_caller_trust_min(agent.get("input_schema"))
     if min_caller_trust is not None and caller["type"] != "master":
         caller_trust = _caller_trust_score(caller_owner_id)
@@ -1059,6 +1189,7 @@ def jobs_create(
             caller_charge_cents=caller_charge_cents,
             platform_fee_pct_at_create=platform_fee_pct_at_create,
             fee_bearer_policy=fee_bearer_policy,
+            client_id=client_id,
             charge_tx_id=charge_tx_id,
             input_payload=input_payload,
             agent_owner_id=agent.get("owner_id"),
@@ -1093,5 +1224,3 @@ def jobs_create(
         },
     )
     return JSONResponse(content=_job_response(job, caller), status_code=201)
-
-

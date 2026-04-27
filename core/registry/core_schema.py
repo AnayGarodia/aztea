@@ -81,6 +81,7 @@ _REQUIRED_COLUMNS = {
     "endpoint_url",
     "healthcheck_url",
     "price_per_call_usd",
+    "call_latency_ring",
     "avg_latency_ms",
     "total_calls",
     "successful_calls",
@@ -148,6 +149,7 @@ def _create_agents_table(conn: sqlite3.Connection, table_name: str = "agents") -
                 endpoint_url        TEXT NOT NULL,
                 healthcheck_url     TEXT,
                 price_per_call_usd  REAL NOT NULL CHECK(price_per_call_usd >= 0),
+                call_latency_ring   TEXT NOT NULL DEFAULT '[]',
                 avg_latency_ms      REAL NOT NULL DEFAULT 0.0,
                 total_calls         INTEGER NOT NULL DEFAULT 0,
                 successful_calls    INTEGER NOT NULL DEFAULT 0,
@@ -176,7 +178,11 @@ def _create_agents_table(conn: sqlite3.Connection, table_name: str = "agents") -
                 price_per_call_cents INTEGER,
                 pricing_model       TEXT NOT NULL DEFAULT 'fixed',
                 pricing_config      TEXT,
-                kind                TEXT NOT NULL DEFAULT 'self_hosted'
+                kind                TEXT NOT NULL DEFAULT 'self_hosted',
+                pii_safe            INTEGER NOT NULL DEFAULT 0,
+                outputs_not_stored  INTEGER NOT NULL DEFAULT 0,
+                audit_logged        INTEGER NOT NULL DEFAULT 0,
+                region_locked       TEXT
             )
         """)
 
@@ -534,6 +540,7 @@ def _normalize_legacy_agent_row(row: dict, used_agent_ids: set, used_names: set)
     healthcheck_url = str(row.get("healthcheck_url") or "").strip() or None
     price_per_call_usd = _to_non_negative_float(row.get("price_per_call_usd"), default=0.0)
     avg_latency_ms = _to_non_negative_float(row.get("avg_latency_ms"), default=0.0)
+    call_latency_ring = str(row.get("call_latency_ring") or "[]").strip() or "[]"
     total_calls = _to_non_negative_int(row.get("total_calls"), default=0)
     successful_calls = _to_non_negative_int(row.get("successful_calls"), default=0)
     if successful_calls > total_calls:
@@ -588,6 +595,7 @@ def _normalize_legacy_agent_row(row: dict, used_agent_ids: set, used_names: set)
         endpoint_url,
         healthcheck_url,
         price_per_call_usd,
+        call_latency_ring,
         avg_latency_ms,
         total_calls,
         successful_calls,
@@ -631,12 +639,12 @@ def _migrate_agents_table(conn: sqlite3.Connection) -> None:
             """
             INSERT INTO agents__canonical
                 (agent_id, owner_id, name, description, endpoint_url, healthcheck_url, price_per_call_usd,
-                 avg_latency_ms, total_calls, successful_calls, tags, input_schema,
+                 call_latency_ring, avg_latency_ms, total_calls, successful_calls, tags, input_schema,
                  output_schema, output_verifier_url, output_examples, verified,
                  endpoint_health_status, endpoint_consecutive_failures, endpoint_last_checked_at, endpoint_last_error,
                  internal_only, status, review_status, review_note, reviewed_at, reviewed_by,
                  trust_decay_multiplier, last_decay_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             normalized,
         )
@@ -683,6 +691,21 @@ def _ensure_kind_column(conn: sqlite3.Connection) -> None:
         pass
 
 
+def _ensure_privacy_tier_columns(conn: sqlite3.Connection) -> None:
+    extras = [
+        "ALTER TABLE agents ADD COLUMN pii_safe INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE agents ADD COLUMN outputs_not_stored INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE agents ADD COLUMN audit_logged INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE agents ADD COLUMN region_locked TEXT",
+    ]
+    for ddl in extras:
+        try:
+            conn.execute(ddl)
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" not in str(exc).lower():
+                raise
+
+
 def init_db() -> None:
     """Create or migrate the agents table to the canonical production schema."""
     with _conn() as conn:
@@ -694,6 +717,7 @@ def init_db() -> None:
         _ensure_agents_indexes(conn)
         _ensure_agent_identity_columns(conn)
         _ensure_kind_column(conn)
+        _ensure_privacy_tier_columns(conn)
 
 
 # ---------------------------------------------------------------------------
@@ -708,6 +732,11 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     except (json.JSONDecodeError, TypeError):
         d["tags"] = []
 
+    try:
+        parsed_call_ring = json.loads(d.get("call_latency_ring") or "[]")
+        d["call_latency_ring"] = parsed_call_ring if isinstance(parsed_call_ring, list) else []
+    except (json.JSONDecodeError, TypeError):
+        d["call_latency_ring"] = []
     try:
         parsed_schema = json.loads(d.get("input_schema") or "{}")
         d["input_schema"] = parsed_schema if isinstance(parsed_schema, dict) else {}
@@ -768,6 +797,10 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     valid_kinds = {"aztea_built", "community_skill", "self_hosted"}
     raw_kind = str(d.get("kind") or "self_hosted").strip().lower()
     d["kind"] = raw_kind if raw_kind in valid_kinds else "self_hosted"
+    d["pii_safe"] = bool(int(d.get("pii_safe") or 0))
+    d["outputs_not_stored"] = bool(int(d.get("outputs_not_stored") or 0))
+    d["audit_logged"] = bool(int(d.get("audit_logged") or 0))
+    d["region_locked"] = str(d.get("region_locked") or "").strip().lower() or None
 
     total = d["total_calls"]
     successful = d.pop("successful_calls")

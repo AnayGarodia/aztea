@@ -65,6 +65,7 @@ from .core_schema import (
     _to_non_negative_int,
     _upsert_agent_embedding_row,
 )
+from .call_history import append_call_ring_sample
 from .pricing import (
     VALID_PRICING_MODELS,
     VariablePricingError,
@@ -101,6 +102,10 @@ def register_agent(
     pricing_model: str | None = None,
     pricing_config: dict | None = None,
     kind: str = "self_hosted",
+    pii_safe: bool = False,
+    outputs_not_stored: bool = False,
+    audit_logged: bool = False,
+    region_locked: str | None = None,
 ) -> str:
     """
     Insert a new agent listing. Returns the agent_id.
@@ -137,6 +142,10 @@ def register_agent(
     else:
         normalized_examples = None
     normalized_verified = 1 if verified else 0
+    normalized_pii_safe = 1 if pii_safe else 0
+    normalized_outputs_not_stored = 1 if outputs_not_stored else 0
+    normalized_audit_logged = 1 if audit_logged else 0
+    normalized_region_locked = str(region_locked or "").strip().lower() or None
     normalized_health_status = str(endpoint_health_status or "unknown").strip().lower()
     if normalized_health_status not in {"unknown", "healthy", "degraded"}:
         raise ValueError("endpoint_health_status must be one of: unknown, healthy, degraded.")
@@ -211,8 +220,9 @@ def register_agent(
                  endpoint_last_checked_at, endpoint_last_error,
                  internal_only, status, review_status, review_note, reviewed_at, reviewed_by,
                  trust_decay_multiplier, last_decay_at, created_at,
-                 model_provider, model_id, pricing_model, pricing_config, kind)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 model_provider, model_id, pricing_model, pricing_config, kind,
+                 pii_safe, outputs_not_stored, audit_logged, region_locked)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 aid,
@@ -243,6 +253,10 @@ def register_agent(
                 normalized_pricing_model,
                 pricing_config_json,
                 normalized_kind,
+                normalized_pii_safe,
+                normalized_outputs_not_stored,
+                normalized_audit_logged,
+                normalized_region_locked,
             ),
         )
         if embed_listing and embedding_vector is not None:
@@ -347,7 +361,7 @@ def set_agent_pricing(
     return get_agent(agent_id, include_unapproved=True)
 
 
-def update_call_stats(agent_id: str, latency_ms: float, success: bool) -> None:
+def update_call_stats(agent_id: str, latency_ms: float, success: bool, *, price_cents: int | None = None) -> None:
     """
     Increment total_calls, update running avg_latency_ms, and conditionally
     increment successful_calls. Uses a single UPDATE with arithmetic to avoid
@@ -363,6 +377,30 @@ def update_call_stats(agent_id: str, latency_ms: float, success: bool) -> None:
             WHERE agent_id = ?
             """,
             (latency_ms, 1 if success else 0, agent_id),
+        )
+        row = conn.execute(
+            "SELECT price_per_call_cents, price_per_call_usd, call_latency_ring FROM agents WHERE agent_id = ?",
+            (agent_id,),
+        ).fetchone()
+        if row is None:
+            return
+        effective_price_cents = price_cents
+        if effective_price_cents is None:
+            effective_price_cents = (
+                _to_non_negative_int(row["price_per_call_cents"], default=0)
+                if row["price_per_call_cents"] is not None
+                else _price_usd_to_cents(row["price_per_call_usd"])
+            )
+        conn.execute(
+            "UPDATE agents SET call_latency_ring = ? WHERE agent_id = ?",
+            (
+                append_call_ring_sample(
+                    row["call_latency_ring"],
+                    latency_ms=latency_ms,
+                    price_cents=int(effective_price_cents),
+                ),
+                agent_id,
+            ),
         )
 
 
@@ -656,6 +694,10 @@ def update_agent(
     description: str | None = None,
     tags: list | None = None,
     price_per_call_usd: float | None = None,
+    pii_safe: bool | None = None,
+    outputs_not_stored: bool | None = None,
+    audit_logged: bool | None = None,
+    region_locked: str | None = None,
 ) -> dict | None:
     """
     Update mutable fields on an agent. Only the owner can call this.
@@ -688,6 +730,14 @@ def update_agent(
             if not math.isfinite(price) or price < 0:
                 raise ValueError("price_per_call_usd must be a non-negative finite number.")
             updates["price_per_call_usd"] = price
+        if pii_safe is not None:
+            updates["pii_safe"] = 1 if pii_safe else 0
+        if outputs_not_stored is not None:
+            updates["outputs_not_stored"] = 1 if outputs_not_stored else 0
+        if audit_logged is not None:
+            updates["audit_logged"] = 1 if audit_logged else 0
+        if region_locked is not None:
+            updates["region_locked"] = str(region_locked).strip().lower() or None
 
         if not updates:
             return agent
@@ -965,6 +1015,10 @@ def search_agents(
     include_unapproved: bool = True,
     model_provider: str | None = None,
     kind: str | None = None,
+    pii_safe: bool | None = None,
+    outputs_not_stored: bool | None = None,
+    audit_logged: bool | None = None,
+    region_locked: str | None = None,
 ) -> list[dict]:
     normalized_query = str(query or "").strip()
     if not normalized_query:
@@ -978,6 +1032,7 @@ def search_agents(
     normalized_kind = str(kind or "").strip().lower() or None
     if normalized_kind and normalized_kind not in valid_kinds:
         normalized_kind = None
+    normalized_region_locked = str(region_locked or "").strip().lower() or None
 
     trust_floor = _normalize_min_trust(min_trust)
     normalized_caller_trust = None
@@ -1006,6 +1061,14 @@ def search_agents(
             continue
 
         if normalized_kind and agent.get("kind") != normalized_kind:
+            continue
+        if pii_safe is not None and bool(agent.get("pii_safe")) != pii_safe:
+            continue
+        if outputs_not_stored is not None and bool(agent.get("outputs_not_stored")) != outputs_not_stored:
+            continue
+        if audit_logged is not None and bool(agent.get("audit_logged")) != audit_logged:
+            continue
+        if normalized_region_locked and str(agent.get("region_locked") or "").strip().lower() != normalized_region_locked:
             continue
 
         price_cents = _price_usd_to_cents(agent.get("price_per_call_usd"))

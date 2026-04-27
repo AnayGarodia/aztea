@@ -38,6 +38,12 @@ Given source code, produce a complete, runnable test suite that covers:
 3. Error conditions (invalid inputs, expected exceptions/errors)
 4. Any concurrency or state-mutation hazards visible in the code
 
+CRITICAL: Before writing each test, reason through what the code actually does for that input. \
+If a value falls outside a validated range and the code raises an exception, write a test that \
+uses pytest.raises (or equivalent), NOT a test that asserts a return value. Read the guard \
+conditions in the source carefully — a value at the boundary of a raise condition should test \
+the raise, not the happy path.
+
 Tests should be self-contained and runnable with standard tooling (no exotic setup required). \
 Use descriptive test names that document what behavior is being verified.
 
@@ -94,9 +100,48 @@ def run(payload: dict) -> dict:
     ))
     raw = _strip_fences(resp.text)
     try:
-        return json.loads(raw)
+        result = json.loads(raw)
     except json.JSONDecodeError as e:
         raise ValueError(f"LLM returned non-JSON: {e}\n\n{raw[:300]}") from e
+
+    # Syntax-check Python test output so callers don't get silently broken tests
+    test_code = result.get("test_code", "")
+    detected_lang = str(result.get("language", "")).lower()
+    if test_code and detected_lang == "python":
+        import ast as _ast
+        try:
+            _ast.parse(test_code)
+        except SyntaxError as e:
+            result["syntax_warning"] = (
+                f"Generated test code has a syntax error at line {e.lineno}: {e.msg}. "
+                "Review and fix before running."
+            )
+            return result
+
+        # Smoke-run: import the test module to catch top-level errors
+        # (wrong module names, NameErrors in class bodies, bad decorators, etc.)
+        # Test functions are defined but not invoked — we only check module-level validity.
+        # ImportError/ModuleNotFoundError for the code under test is expected and ignored.
+        try:
+            from agents import python_executor as _executor
+        except ImportError:
+            _executor = None  # type: ignore[assignment]
+        if _executor is not None:
+            smoke = _executor.run({
+                "code": test_code,
+                "timeout": 5,
+                "explain": False,
+            })
+            if smoke.get("exit_code", 0) != 0:
+                stderr = (smoke.get("stderr") or "").strip()
+                # Ignore expected ImportError for the module under test
+                if stderr and "ModuleNotFoundError" not in stderr and "ImportError" not in stderr:
+                    result.setdefault("syntax_warning", (
+                        f"Smoke-run found a top-level error in the generated test code: "
+                        f"{stderr[:300]}. Review before running."
+                    ))
+
+    return result
 
 
 def _strip_fences(text: str) -> str:

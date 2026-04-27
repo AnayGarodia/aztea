@@ -3,9 +3,9 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "aztea-sdk"
-version = "0.1.0"
-description = "Ergonomic Python SDK for the Aztea API."
+name = "aztea"
+version = "1.1.0"
+description = "Canonical Python SDK for the Aztea API, worker helpers, and coding-agent integrations."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

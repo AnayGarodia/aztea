@@ -197,9 +197,16 @@ def run(payload: dict) -> dict:
         latest_version = info.get("version", "")
         if not to_version:
             to_version = latest_version
-        # Try GitHub first
+        # Try GitHub first — check all URL fields including project_urls dict
+        candidate_urls: list[str] = []
         for key in ("home_page", "project_url", "package_url"):
             val = info.get(key) or ""
+            if val:
+                candidate_urls.append(val)
+        project_urls_dict = info.get("project_urls") or {}
+        if isinstance(project_urls_dict, dict):
+            candidate_urls.extend(str(v) for v in project_urls_dict.values() if v)
+        for val in candidate_urls:
             if "github.com" in val:
                 text = _fetch_github_changelog(val, from_version, to_version)
                 if text:

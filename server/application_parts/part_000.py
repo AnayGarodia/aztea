@@ -105,6 +105,7 @@ from core import judges
 from core import models as core_models
 from core import reputation
 from core import error_codes
+from core import compare
 from core.migrate import apply_migrations
 from core import logging_utils
 from core import email as _email
@@ -112,6 +113,11 @@ from core import url_security as _url_security
 from core import hosted_skills as _hosted_skills
 from core import skill_executor as _skill_executor
 from core import skill_parser as _skill_parser
+from core import cache as _cache
+from core import pipelines
+from core import recipes
+from core import mcp_manifest
+from core import tool_adapters
 from scripts.financial_cli import run as _run_financial
 from core.models import (
     AgentRegisterRequest,
@@ -392,6 +398,7 @@ MINIMUM_DEPOSIT_CENTS = int(os.getenv("MINIMUM_DEPOSIT_CENTS", "500"))
 _PROTOCOL_VERSION = "1.0"
 _PROTOCOL_VERSION_HEADER = "X-Aztea-Version"
 _LEGACY_PROTOCOL_VERSION_HEADER = "X-AgentMarket-Version"
+_CLIENT_ID_HEADER = "X-Aztea-Client"
 # $0.001 cannot be represented in integer cents; keep ledger integer-safe until millicent support exists.
 _DEFAULT_JUDGE_FEE_CENTS = 0
 _REPUTATION_DECAY_GRACE_DAYS = 30
@@ -871,5 +878,3 @@ def _compute_dispute_filing_deposit_cents(price_cents: int) -> int:
         return 0
     computed = (normalized_price * _DISPUTE_FILING_DEPOSIT_BPS) // 10_000
     return max(_DISPUTE_FILING_DEPOSIT_MIN_CENTS, computed)
-
-

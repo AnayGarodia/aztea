@@ -38,3 +38,10 @@ def test_read_message_rejects_invalid_content_length(monkeypatch):
     monkeypatch.setattr(_MODULE.sys, "stdin", _FakeStdin(b"Content-Length: abc\r\n\r\n{}"))
     with pytest.raises(ValueError, match="Invalid Content-Length"):
         server._read_message()
+
+
+def test_registry_bridge_headers_include_client_id():
+    bridge = _MODULE.RegistryBridge(base_url="https://aztea.test", api_key="az_test")
+    headers = bridge._headers()
+    assert headers["X-Aztea-Version"] == "1.0"
+    assert headers["X-Aztea-Client"] == "claude-code"

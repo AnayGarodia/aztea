@@ -3,6 +3,372 @@
 # output verification decision endpoint. Uses the lease primitives from
 # core.jobs and the settlement helpers from shard 5.
 
+_COMPARE_SELECTION_WINDOW_SECONDS = 7 * 24 * 3600
+
+
+def _compare_jobs_by_agent(compare_row: dict) -> tuple[list[dict], bool]:
+    subjobs: list[dict] = []
+    all_terminal = True
+    agent_ids = compare_row.get("agent_ids") or []
+    job_ids = compare_row.get("job_ids") or []
+    for agent_id, job_id in zip(agent_ids, job_ids):
+        job = jobs.get_job(job_id)
+        if job is None:
+            all_terminal = False
+            subjobs.append({"agent_id": agent_id, "job_id": job_id, "status": "missing"})
+            continue
+        status = str(job.get("status") or "").strip().lower()
+        if status not in {"complete", "failed"}:
+            all_terminal = False
+        subjobs.append(job)
+    return subjobs, all_terminal
+
+
+def _compare_response(compare_row: dict, caller: core_models.CallerContext) -> dict:
+    subjobs, all_terminal = _compare_jobs_by_agent(compare_row)
+    if all_terminal and str(compare_row.get("status") or "").strip().lower() == "running":
+        refreshed = compare.mark_complete(compare_row["compare_id"])
+        if refreshed is not None:
+            compare_row = refreshed
+    ordered_jobs: list[dict] = []
+    total_charged_cents = 0
+    for item in subjobs:
+        if "status" in item and item.get("status") == "missing":
+            ordered_jobs.append(item)
+            continue
+        total_charged_cents += int(item.get("caller_charge_cents") or item.get("price_cents") or 0)
+        ordered_jobs.append(_job_response(item, caller))
+    return {
+        "compare_id": compare_row["compare_id"],
+        "status": compare_row.get("status"),
+        "created_at": compare_row.get("created_at"),
+        "completed_at": compare_row.get("completed_at"),
+        "winner_agent_id": compare_row.get("winner_agent_id"),
+        "participation_fee_cents": 0,
+        "total_charged_cents": total_charged_cents,
+        "selection_required": compare_row.get("winner_agent_id") is None and all_terminal,
+        "jobs": ordered_jobs,
+        "job_ids": compare_row.get("job_ids") or [],
+        "agent_ids": compare_row.get("agent_ids") or [],
+    }
+
+
+@app.post(
+    "/jobs/compare",
+    status_code=201,
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(400, 401, 402, 403, 404, 422, 429, 500),
+    tags=["Jobs"],
+    summary="Create a compare session across 2-3 agents with one shared input payload.",
+)
+@limiter.limit(_JOBS_CREATE_RATE_LIMIT)
+def jobs_compare_create(
+    request: Request,
+    body: dict[str, Any] = Body(...),
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
+    _require_scope(caller, "caller")
+    raw_agent_ids = body.get("agent_ids")
+    if not isinstance(raw_agent_ids, list):
+        raise HTTPException(status_code=400, detail="agent_ids must be an array.")
+    agent_ids = [str(item or "").strip() for item in raw_agent_ids if str(item or "").strip()]
+    if len(agent_ids) < 2 or len(agent_ids) > 3:
+        raise HTTPException(status_code=400, detail="agent_ids must contain 2 or 3 agent IDs.")
+    if len(set(agent_ids)) != len(agent_ids):
+        raise HTTPException(status_code=400, detail="agent_ids must be unique.")
+    input_payload = body.get("input_payload") or {}
+    if not isinstance(input_payload, dict):
+        raise HTTPException(status_code=422, detail="input_payload must be an object.")
+    max_attempts = max(1, min(int(body.get("max_attempts") or 3), 10))
+    private_task = bool(body.get("private_task"))
+    caller_owner_id = _caller_owner_id(request)
+    client_id = _request_client_id(request, body.get("client_id"))
+    key_per_job_cap_cents = _caller_key_per_job_cap(caller)
+    merged_input_payload = _merge_protocol_input_envelope(
+        input_payload,
+        private_task=private_task,
+    )
+
+    resolved: list[dict[str, Any]] = []
+    total_charged_cents = 0
+    for agent_id in agent_ids:
+        agent = registry.get_agent(agent_id, include_unapproved=True)
+        if agent is None or not _caller_can_access_agent(caller, agent):
+            raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+        _assert_agent_callable(agent_id, agent)
+        pricing_estimate = _estimate_variable_charge(
+            agent=agent,
+            payload=merged_input_payload,
+            per_job_cap_cents=key_per_job_cap_cents,
+        )
+        if pricing_estimate.get("cap_violated"):
+            violation = pricing_estimate["cap_violated"]
+            raise HTTPException(
+                status_code=402,
+                detail=error_codes.make_error(
+                    error_codes.SPEND_LIMIT_EXCEEDED,
+                    "Variable-price estimate exceeds your API key's per-job cap.",
+                    {
+                        "scope": "api_key_per_job",
+                        "limit_cents": violation["limit_cents"],
+                        "attempted_cents": violation["price_cents"],
+                        "pricing_model": pricing_estimate["pricing_model"],
+                        "agent_id": agent_id,
+                    },
+                ),
+            )
+        price_cents = int(pricing_estimate["price_cents"])
+        distribution = payments.compute_success_distribution(
+            price_cents,
+            platform_fee_pct=int(payments.PLATFORM_FEE_PCT),
+            fee_bearer_policy="caller",
+        )
+        caller_charge_cents = int(distribution["caller_charge_cents"])
+        total_charged_cents += caller_charge_cents
+        resolved.append(
+            {
+                "agent": agent,
+                "price_cents": price_cents,
+                "caller_charge_cents": caller_charge_cents,
+            }
+        )
+
+    caller_wallet = payments.get_or_create_wallet(caller_owner_id)
+    if int(caller_wallet.get("balance_cents") or 0) < total_charged_cents:
+        raise HTTPException(
+            status_code=402,
+            detail=error_codes.make_error(
+                error_codes.INSUFFICIENT_FUNDS,
+                "Insufficient balance for compare session.",
+                {"balance_cents": caller_wallet["balance_cents"], "required_cents": total_charged_cents},
+            ),
+        )
+
+    created_jobs: list[dict] = []
+    charge_tx_ids: list[tuple[str, str, int, str]] = []
+    try:
+        for item in resolved:
+            agent = item["agent"]
+            price_cents = item["price_cents"]
+            caller_charge_cents = item["caller_charge_cents"]
+            agent_wallet = payments.get_or_create_wallet(f"agent:{agent['agent_id']}")
+            platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
+            charge_tx_id = _pre_call_charge_or_402(
+                caller=caller,
+                caller_wallet_id=caller_wallet["wallet_id"],
+                charge_cents=caller_charge_cents,
+                agent_id=agent["agent_id"],
+            )
+            charge_tx_ids.append((caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent["agent_id"]))
+            job = jobs.create_job(
+                agent_id=agent["agent_id"],
+                caller_owner_id=caller_owner_id,
+                caller_wallet_id=caller_wallet["wallet_id"],
+                agent_wallet_id=agent_wallet["wallet_id"],
+                platform_wallet_id=platform_wallet["wallet_id"],
+                price_cents=price_cents,
+                caller_charge_cents=caller_charge_cents,
+                platform_fee_pct_at_create=int(payments.PLATFORM_FEE_PCT),
+                fee_bearer_policy="caller",
+                client_id=client_id,
+                charge_tx_id=charge_tx_id,
+                input_payload=merged_input_payload,
+                agent_owner_id=agent.get("owner_id"),
+                max_attempts=max_attempts,
+                dispute_window_hours=_DEFAULT_JOB_DISPUTE_WINDOW_HOURS,
+                judge_agent_id=_extract_judge_agent_id(agent.get("input_schema")) or _QUALITY_JUDGE_AGENT_ID,
+                output_verification_window_seconds=_COMPARE_SELECTION_WINDOW_SECONDS,
+            )
+            _record_job_event(
+                job,
+                "job.created",
+                actor_owner_id=caller["owner_id"],
+                payload={"source": "jobs.compare", "max_attempts": max_attempts},
+            )
+            created_jobs.append(job)
+    except Exception:
+        for wallet_id, charge_tx_id, refund_cents, compare_agent_id in charge_tx_ids:
+            try:
+                payments.post_call_refund(wallet_id, charge_tx_id, refund_cents, compare_agent_id)
+            except Exception as exc:
+                _LOG.exception(
+                    "Compare-session refund failed after create error (wallet=%s charge_tx_id=%s agent=%s): %s",
+                    wallet_id,
+                    charge_tx_id,
+                    compare_agent_id,
+                    exc,
+                )
+        for created_job in created_jobs:
+            failed = jobs.update_job_status(
+                created_job["job_id"],
+                "failed",
+                error_message="Compare session creation failed before the session could be initialized.",
+                completed=True,
+            )
+            if failed is not None and not failed.get("settled_at"):
+                jobs.mark_settled(created_job["job_id"])
+        raise
+
+    try:
+        compare_row = compare.create_compare(
+            caller_owner_id,
+            agent_ids,
+            merged_input_payload,
+            job_ids=[job["job_id"] for job in created_jobs],
+        )
+    except Exception:
+        for wallet_id, charge_tx_id, refund_cents, compare_agent_id in charge_tx_ids:
+            try:
+                payments.post_call_refund(wallet_id, charge_tx_id, refund_cents, compare_agent_id)
+            except Exception as exc:
+                _LOG.exception(
+                    "Compare-session refund failed after compare-row create error (wallet=%s charge_tx_id=%s agent=%s): %s",
+                    wallet_id,
+                    charge_tx_id,
+                    compare_agent_id,
+                    exc,
+                )
+        for created_job in created_jobs:
+            failed = jobs.update_job_status(
+                created_job["job_id"],
+                "failed",
+                error_message="Compare session metadata creation failed.",
+                completed=True,
+            )
+            if failed is not None and not failed.get("settled_at"):
+                jobs.mark_settled(created_job["job_id"])
+        raise
+    response = _compare_response(compare_row, caller)
+    response["total_charged_cents"] = total_charged_cents
+    response["note"] = "All agent charges are held now. Select a winner later to release payment only for that job."
+    return JSONResponse(content=response, status_code=201)
+
+
+@app.get(
+    "/jobs/compare/{compare_id}",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(401, 403, 404, 429, 500),
+    tags=["Jobs"],
+    summary="Get compare-session status and sub-job results.",
+)
+@limiter.limit("60/minute")
+def jobs_compare_get(
+    request: Request,
+    compare_id: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
+    _require_scope(caller, "caller")
+    compare_row = compare.get_compare(compare_id)
+    if compare_row is None:
+        raise HTTPException(status_code=404, detail=f"Compare session '{compare_id}' not found.")
+    if caller["type"] != "master" and caller["owner_id"] != compare_row.get("caller_owner_id"):
+        raise HTTPException(status_code=403, detail="Not authorized to view this compare session.")
+    return JSONResponse(content=_compare_response(compare_row, caller))
+
+
+@app.post(
+    "/jobs/compare/{compare_id}/select",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(400, 401, 403, 404, 409, 429, 500),
+    tags=["Jobs"],
+    summary="Select the winner from a completed compare session and settle only that job.",
+)
+@limiter.limit("30/minute")
+def jobs_compare_select(
+    request: Request,
+    compare_id: str,
+    body: dict[str, Any] = Body(...),
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
+    _require_scope(caller, "caller")
+    compare_row = compare.get_compare(compare_id)
+    if compare_row is None:
+        raise HTTPException(status_code=404, detail=f"Compare session '{compare_id}' not found.")
+    if caller["type"] != "master" and caller["owner_id"] != compare_row.get("caller_owner_id"):
+        raise HTTPException(status_code=403, detail="Not authorized to manage this compare session.")
+    winner_agent_id = str(body.get("winner_agent_id") or "").strip()
+    if not winner_agent_id:
+        raise HTTPException(status_code=400, detail="winner_agent_id is required.")
+    if winner_agent_id not in set(compare_row.get("agent_ids") or []):
+        raise HTTPException(status_code=400, detail="winner_agent_id is not part of this compare session.")
+
+    subjobs, all_terminal = _compare_jobs_by_agent(compare_row)
+    if not all_terminal:
+        raise HTTPException(status_code=409, detail="Compare session is still running.")
+
+    jobs_by_agent = {str(job.get("agent_id") or ""): job for job in subjobs if isinstance(job, dict) and job.get("job_id")}
+    winner_job = jobs_by_agent.get(winner_agent_id)
+    if winner_job is None or str(winner_job.get("status") or "") != "complete":
+        raise HTTPException(status_code=409, detail="winner_agent_id must refer to a completed job.")
+
+    try:
+        selected = compare.select_winner(compare_id, winner_agent_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    if selected is None:
+        raise HTTPException(status_code=404, detail=f"Compare session '{compare_id}' not found.")
+
+    refunded_job_ids: list[str] = []
+    for agent_id in compare_row.get("agent_ids") or []:
+        job = jobs_by_agent.get(agent_id)
+        if job is None:
+            continue
+        if agent_id == winner_agent_id:
+            initialized = jobs.initialize_output_verification_state(job["job_id"]) or job
+            if not initialized.get("settled_at"):
+                if str(initialized.get("output_verification_status") or "") == "pending":
+                    initialized = jobs.set_output_verification_decision(
+                        job["job_id"],
+                        decision="accept",
+                        decision_owner_id=caller["owner_id"],
+                        reason=f"Compare winner for session {compare_id}.",
+                    ) or initialized
+                settled = _settle_successful_job(
+                    initialized,
+                    actor_owner_id=caller["owner_id"],
+                    require_dispute_window_expiry=False,
+                )
+                _record_job_event(
+                    settled,
+                    "job.compare_winner_selected",
+                    actor_owner_id=caller["owner_id"],
+                    payload={"compare_id": compare_id},
+                )
+            continue
+        if str(job.get("status") or "") != "complete":
+            continue
+        initialized = jobs.initialize_output_verification_state(job["job_id"]) or job
+        if initialized.get("settled_at"):
+            continue
+        if str(initialized.get("output_verification_status") or "") == "pending":
+            initialized = jobs.set_output_verification_decision(
+                job["job_id"],
+                decision="reject",
+                decision_owner_id=caller["owner_id"],
+                reason=f"Non-winning compare result for session {compare_id}.",
+            ) or initialized
+        payments.post_call_refund(
+            initialized["caller_wallet_id"],
+            initialized["charge_tx_id"],
+            int(initialized.get("caller_charge_cents") or initialized.get("price_cents") or 0),
+            initialized["agent_id"],
+        )
+        jobs.mark_settled(initialized["job_id"])
+        refreshed = jobs.get_job(initialized["job_id"]) or initialized
+        _record_job_event(
+            refreshed,
+            "job.compare_non_winner_refunded",
+            actor_owner_id=caller["owner_id"],
+            payload={"compare_id": compare_id},
+        )
+        refunded_job_ids.append(refreshed["job_id"])
+
+    response = _compare_response(selected, caller)
+    response["winner_agent_id"] = winner_agent_id
+    response["refunded_job_ids"] = refunded_job_ids
+    response["note"] = "Winner settled. Non-winning completed jobs were refunded in full to the caller."
+    return JSONResponse(content=response)
+
 
 @app.post(
     "/jobs/batch",
@@ -24,6 +390,7 @@ def jobs_batch_create(
         raise HTTPException(status_code=400, detail="Batch size limited to 50 jobs.")
 
     caller_owner_id = _caller_owner_id(request)
+    request_client_id = _request_client_id(request)
     batch_id = str(uuid.uuid4())
 
     resolved: list[dict] = []
@@ -127,6 +494,7 @@ def jobs_batch_create(
                 "caller_charge_cents": caller_charge_cents,
                 "platform_fee_pct_at_create": platform_fee_pct_at_create,
                 "fee_bearer_policy": fee_bearer_policy,
+                "client_id": _request_client_id(request, spec.client_id) or request_client_id,
                 "spec": spec,
                 "input_payload": normalized_spec_input_payload,
                 "parent_job_id": (parent_job or {}).get("job_id"),
@@ -154,6 +522,7 @@ def jobs_batch_create(
             caller_charge_cents = item["caller_charge_cents"]
             platform_fee_pct_at_create = item["platform_fee_pct_at_create"]
             fee_bearer_policy = item["fee_bearer_policy"]
+            client_id = item["client_id"]
             spec = item["spec"]
             input_payload = item["input_payload"]
             parent_job_id = item["parent_job_id"]
@@ -177,6 +546,7 @@ def jobs_batch_create(
                 caller_charge_cents=caller_charge_cents,
                 platform_fee_pct_at_create=platform_fee_pct_at_create,
                 fee_bearer_policy=fee_bearer_policy,
+                client_id=client_id,
                 charge_tx_id=charge_tx_id,
                 input_payload=input_payload,
                 agent_owner_id=agent.get("owner_id"),
@@ -915,5 +1285,3 @@ def jobs_output_verification_decide(
         payload=body.model_dump(),
         operation=_operation,
     )
-
-

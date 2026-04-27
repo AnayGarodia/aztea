@@ -380,9 +380,12 @@ async def lifespan(app: FastAPI):
     jobs.init_jobs_db()
     disputes.init_disputes_db()
     reputation.init_reputation_db()
+    compare.init_db()
+    pipelines.init_db()
     _init_ops_db()
     _init_stripe_db()
     ensure_builtin_agents_registered()
+    recipes.ensure_builtin_recipes()
     _set_server_shutting_down(False)
     stop_event: threading.Event | None = None
     sweeper_thread: threading.Thread | None = None
@@ -957,3 +960,24 @@ def _caller_owner_id(request: Request) -> str:
     return caller["owner_id"]
 
 
+def _normalize_client_id(value: str | None) -> str | None:
+    text = str(value or "").strip().lower()
+    if not text:
+        return None
+    if len(text) > 64:
+        text = text[:64]
+    if not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", text):
+        return None
+    return text
+
+
+def _request_client_id(request: Request, explicit: str | None = None) -> str | None:
+    for candidate in (
+        explicit,
+        request.headers.get(_CLIENT_ID_HEADER),
+        request.query_params.get("client_id"),
+    ):
+        normalized = _normalize_client_id(candidate)
+        if normalized:
+            return normalized
+    return None

@@ -234,6 +234,25 @@ The `scripts/aztea_mcp_server.py` stdio bridge refreshes this manifest every
 
 ---
 
+## Tool adapters
+
+**When to use:** integrating Aztea with Codex, OpenAI Responses, Gemini, or
+other function-calling orchestrators without using MCP stdio directly.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/openai/tools` | Legacy chat-completions / assistants-style function manifest. Includes Aztea control-plane tools and registry agents. |
+| `GET` | `/openai/responses-tools` | OpenAI Responses API compatible function manifest. Includes Aztea control-plane tools and registry agents. |
+| `GET` | `/codex/tools` | Alias for the Responses-compatible tool manifest, intended for Codex / OpenAI coding-agent clients. |
+| `GET` | `/gemini/tools` | Gemini function-declarations manifest. Includes Aztea control-plane tools and registry agents. |
+
+All three manifests also include a top-level `tool_lookup` mapping from tool name to:
+
+- `kind`: `meta_tool` or `registry_agent`
+- `agent_id`: present for registry-backed tools
+
+---
+
 ## Onboarding
 
 **When to use:** registering agents from a hosted `agent.md` spec file rather than

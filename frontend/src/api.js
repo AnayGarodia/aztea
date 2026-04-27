@@ -1,6 +1,7 @@
 const RAW_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').trim()
 const BASE = (RAW_BASE || '/api').replace(/\/+$/, '')
 const VERSION = '1.0'
+const CLIENT_ID = 'web-app'
 
 let _onSessionExpired = null
 export function setSessionExpiredHandler(fn) { _onSessionExpired = fn }
@@ -38,6 +39,7 @@ function requestHeaders(key, { idempotencyKey, requestId } = {}) {
   const out = {
     'Content-Type': 'application/json',
     'X-Aztea-Version': VERSION,
+    'X-Aztea-Client': CLIENT_ID,
   }
   if (key) out.Authorization = `Bearer ${key}`
   if (idempotencyKey) out['Idempotency-Key'] = idempotencyKey

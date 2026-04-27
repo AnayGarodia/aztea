@@ -141,6 +141,7 @@ def _run_quality_gate(job: dict, agent: dict, output_payload: dict) -> dict[str,
                 "output_payload": output_payload,
                 "agent_description": str(agent.get("description") or ""),
             },
+            client_id=job.get("client_id"),
             agent_owner_id=(judge_agent or {}).get("owner_id") or "master",
             max_attempts=1,
             parent_job_id=job["job_id"],
@@ -252,9 +253,14 @@ def _apply_dispute_effects(dispute: dict, outcome: str) -> None:
         jobs.mark_settled(dispute["job_id"])
         job = jobs.get_job(dispute["job_id"]) or job
     if normalized_outcome == "caller_wins" and previous_outcome != "caller_wins":
-        registry.update_call_stats(job["agent_id"], latency_ms=0.0, success=False)
+        registry.update_call_stats(job["agent_id"], latency_ms=0.0, success=False, price_cents=int(job.get("price_cents") or 0))
     elif normalized_outcome in {"agent_wins", "split", "void"} and not was_settled:
-        registry.update_call_stats(job["agent_id"], latency_ms=_job_latency_ms(job), success=True)
+        registry.update_call_stats(
+            job["agent_id"],
+            latency_ms=_job_latency_ms(job),
+            success=True,
+            price_cents=int(job.get("price_cents") or 0),
+        )
 
     filed_by = str(dispute.get("filed_by_owner_id") or "").strip()
     if filed_by.startswith("user:") and dispute.get("side") == "caller" and normalized_outcome == "agent_wins":
@@ -448,7 +454,12 @@ def _settle_successful_job(
         )
         newly_settled = jobs.mark_settled(job["job_id"])
         if newly_settled:
-            registry.update_call_stats(job["agent_id"], latency_ms=_job_latency_ms(job), success=True)
+            registry.update_call_stats(
+                job["agent_id"],
+                latency_ms=_job_latency_ms(job),
+                success=True,
+                price_cents=int(job.get("price_cents") or 0),
+            )
     settled = jobs.get_job(job["job_id"]) or job
     if newly_settled:
         _record_job_event(
@@ -517,7 +528,12 @@ def _settle_failed_job(
             )
         newly_settled = jobs.mark_settled(job["job_id"])
         if newly_settled:
-            registry.update_call_stats(job["agent_id"], latency_ms=_job_latency_ms(job), success=False)
+            registry.update_call_stats(
+                job["agent_id"],
+                latency_ms=_job_latency_ms(job),
+                success=False,
+                price_cents=int(job.get("price_cents") or 0),
+            )
     settled = jobs.get_job(job["job_id"]) or job
     if newly_settled:
         _record_job_event(
@@ -809,5 +825,3 @@ def _auto_suspend_low_performing_agents(actor_owner_id: str) -> dict[str, Any]:
         "auto_suspended_count": len(suspended_agent_ids),
         "auto_suspended_agent_ids": suspended_agent_ids,
     }
-
-

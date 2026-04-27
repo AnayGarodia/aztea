@@ -76,6 +76,10 @@ def registry_register(
             pricing_model=body.pricing_model,
             pricing_config=body.pricing_config,
             kind="self_hosted",
+            pii_safe=body.pii_safe,
+            outputs_not_stored=body.outputs_not_stored,
+            audit_logged=body.audit_logged,
+            region_locked=body.region_locked,
         )
         agent = registry.get_agent_with_reputation(agent_id, include_unapproved=True) or registry.get_agent(
             agent_id,
@@ -104,13 +108,11 @@ def registry_register(
     )
 
 
-def _mcp_tool_slug(name: str, fallback: str) -> str:
-    base = re.sub(r"[^a-z0-9]+", "_", str(name or "").strip().lower()).strip("_")
-    return base or f"agent_{fallback}"
-
-
 def _mcp_active_agents() -> list[dict[str, Any]]:
-    agents = registry.get_agents(include_internal=True, include_banned=True)
+    agents = [
+        reputation.enrich_agent_record(agent)
+        for agent in registry.get_agents(include_internal=True, include_banned=True)
+    ]
     return [
         agent
         for agent in agents
@@ -120,37 +122,12 @@ def _mcp_active_agents() -> list[dict[str, Any]]:
 
 
 def _mcp_tools_and_lookup() -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
-    tools: list[dict[str, Any]] = []
-    lookup: dict[str, dict[str, Any]] = {}
-    used_names: set[str] = set()
-    for agent in _mcp_active_agents():
-        agent_id = str(agent.get("agent_id") or "").strip()
-        if not agent_id:
-            continue
-        fallback = (agent_id.replace("-", "")[:8] or "agent").lower()
-        slug = _mcp_tool_slug(str(agent.get("name") or ""), fallback)
-        if slug in used_names:
-            slug = f"{slug}_{fallback}"
-        while slug in used_names:
-            slug = f"{slug}_x"
-        used_names.add(slug)
-
-        raw_input_schema = agent.get("input_schema")
-        if isinstance(raw_input_schema, dict) and raw_input_schema:
-            input_schema = raw_input_schema
-        else:
-            input_schema = {"type": "object", "properties": {}}
-        raw_output_schema = agent.get("output_schema")
-        output_schema = raw_output_schema if isinstance(raw_output_schema, dict) else {}
-        tool = {
-            "name": slug,
-            "description": str(agent.get("description") or ""),
-            "input_schema": input_schema,
-            "output_schema": output_schema,
-        }
-        tools.append(tool)
-        lookup[slug] = agent
-    return tools, lookup
+    agents = _mcp_active_agents()
+    entries = mcp_manifest.build_mcp_tool_entries(agents)
+    return [entry["tool"] for entry in entries], {
+        str(entry["tool_name"]): agent
+        for entry, agent in zip(entries, agents)
+    }
 
 
 def _caller_from_raw_api_key(raw_api_key: str) -> core_models.CallerContext | None:
@@ -462,6 +439,7 @@ def a2a_tasks_send(
     )
     caller_charge_cents = int(success_distribution["caller_charge_cents"])
     caller_owner_id = _caller_owner_id(request)
+    client_id = _request_client_id(request, body.client_id)
     caller_wallet = payments.get_or_create_wallet(caller_owner_id)
     agent_wallet = payments.get_or_create_wallet(f"agent:{agent['agent_id']}")
     platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
@@ -484,6 +462,7 @@ def a2a_tasks_send(
             caller_charge_cents=caller_charge_cents,
             platform_fee_pct_at_create=platform_fee_pct_at_create,
             fee_bearer_policy=fee_bearer_policy,
+            client_id=client_id,
             charge_tx_id=charge_tx_id,
             input_payload=body.input or {},
             agent_owner_id=agent.get("owner_id"),
@@ -570,7 +549,7 @@ def a2a_tasks_cancel(
 @app.get(
     "/openai/tools",
     tags=["Integrations"],
-    summary="OpenAI Agents SDK: tool definitions for all registered agents in function-calling format.",
+    summary="Legacy OpenAI chat-completions/assistants tool manifest for Aztea tools.",
     responses=_error_responses(401, 403, 429, 500),
 )
 @limiter.limit("30/minute")
@@ -578,37 +557,62 @@ def openai_tools(
     request: Request,
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> JSONResponse:
-    agents = registry.get_agents_with_reputation()
-    visible = [a for a in agents if not a.get("internal_only")]
-    tools = []
-    for agent in visible:
-        input_schema = agent.get("input_schema") or {}
-        props = input_schema.get("properties", {})
-        required = input_schema.get("required", [])
-        tools.append({
-            "type": "function",
-            "function": {
-                "name": f"hire_{agent['agent_id'].replace('-', '_')}",
-                "description": (
-                    f"{agent.get('description', '')} "
-                    f"[Aztea: {agent['agent_id']} | "
-                    f"${float(agent.get('price_per_call_usd', 0)):.4f}/call]"
-                ).strip(),
-                "parameters": {
-                    "type": "object",
-                    "properties": props if props else {"input": {"type": "string", "description": "Task input"}},
-                    "required": required if required else [],
-                },
-                "metadata": {
-                    "aztea_agent_id": agent["agent_id"],
-                    "price_per_call_usd": float(agent.get("price_per_call_usd", 0)),
-                    "trust_score": agent.get("trust_score"),
-                    "success_rate": agent.get("success_rate"),
-                    "hire_endpoint": f"{_SERVER_BASE_URL}/jobs",
-                },
-            },
-        })
-    return JSONResponse(content={"tools": tools, "count": len(tools), "hire_endpoint": f"{_SERVER_BASE_URL}/jobs"})
+    _require_scope(caller, "caller")
+    payload = tool_adapters.build_openai_chat_manifest(_mcp_active_agents())
+    payload["hire_endpoint"] = f"{_SERVER_BASE_URL}/jobs"
+    payload["status_endpoints"] = {
+        "jobs": f"{_SERVER_BASE_URL}/jobs/{{job_id}}",
+        "compare": f"{_SERVER_BASE_URL}/jobs/compare/{{compare_id}}",
+        "pipeline_runs": f"{_SERVER_BASE_URL}/pipelines/{{pipeline_id}}/runs/{{run_id}}",
+        "recipes": f"{_SERVER_BASE_URL}/recipes",
+    }
+    return JSONResponse(content=payload)
+
+
+@app.get(
+    "/openai/responses-tools",
+    tags=["Integrations"],
+    summary="OpenAI Responses API / Codex-compatible Aztea tool manifest.",
+    responses=_error_responses(401, 403, 429, 500),
+)
+@app.get(
+    "/codex/tools",
+    tags=["Integrations"],
+    summary="Codex/OpenAI Responses-compatible Aztea tool manifest.",
+    responses=_error_responses(401, 403, 429, 500),
+)
+@limiter.limit("30/minute")
+def openai_responses_tools(
+    request: Request,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    _require_scope(caller, "caller")
+    payload = tool_adapters.build_openai_responses_manifest(_mcp_active_agents())
+    payload["job_create_endpoint"] = f"{_SERVER_BASE_URL}/jobs"
+    payload["compare_create_endpoint"] = f"{_SERVER_BASE_URL}/jobs/compare"
+    payload["pipeline_list_endpoint"] = f"{_SERVER_BASE_URL}/pipelines"
+    payload["recipes_list_endpoint"] = f"{_SERVER_BASE_URL}/recipes"
+    return JSONResponse(content=payload)
+
+
+@app.get(
+    "/gemini/tools",
+    tags=["Integrations"],
+    summary="Gemini function-declarations manifest for Aztea tools.",
+    responses=_error_responses(401, 403, 429, 500),
+)
+@limiter.limit("30/minute")
+def gemini_tools(
+    request: Request,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    _require_scope(caller, "caller")
+    payload = tool_adapters.build_gemini_manifest(_mcp_active_agents())
+    payload["job_create_endpoint"] = f"{_SERVER_BASE_URL}/jobs"
+    payload["compare_create_endpoint"] = f"{_SERVER_BASE_URL}/jobs/compare"
+    payload["pipeline_list_endpoint"] = f"{_SERVER_BASE_URL}/pipelines"
+    payload["recipes_list_endpoint"] = f"{_SERVER_BASE_URL}/recipes"
+    return JSONResponse(content=payload)
 
 
 @app.get(
@@ -949,6 +953,10 @@ class AgentUpdateRequest(BaseModel):
     description: str | None = None
     tags: list[str] | None = None
     price_per_call_usd: float | None = None
+    pii_safe: bool | None = None
+    outputs_not_stored: bool | None = None
+    audit_logged: bool | None = None
+    region_locked: str | None = None
 
 
 @app.patch(
@@ -974,6 +982,10 @@ def registry_update_agent(
             description=body.description,
             tags=body.tags,
             price_per_call_usd=body.price_per_call_usd,
+            pii_safe=body.pii_safe,
+            outputs_not_stored=body.outputs_not_stored,
+            audit_logged=body.audit_logged,
+            region_locked=body.region_locked,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -1001,5 +1013,3 @@ def registry_delist_agent(
     if not ok:
         raise HTTPException(status_code=404, detail="Agent not found or you don't own it.")
     return JSONResponse(content={"delisted": True, "agent_id": agent_id})
-
-

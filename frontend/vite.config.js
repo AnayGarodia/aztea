@@ -24,7 +24,6 @@ export default defineConfig({
         manualChunks(id) {
           if (!id.includes('node_modules')) return undefined
           if (id.includes('recharts') || id.includes('d3-')) return 'vendor-charts'
-          if (id.includes('react-markdown') || id.includes('remark-') || id.includes('micromark') || id.includes('mdast-') || id.includes('hast-') || id.includes('unist-')) return 'vendor-markdown'
           if (id.includes('@paper-design') || id.includes('three') || id.includes('ogl')) return 'vendor-shaders'
           if (id.includes('lucide-react')) return 'vendor-icons'
           if (id.includes('motion')) return 'vendor-motion'

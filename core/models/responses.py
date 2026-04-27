@@ -2,7 +2,12 @@
 from __future__ import annotations
 
 import re
-from typing import Annotated, Literal, NotRequired, TypeAlias, TypedDict
+from typing import Annotated, Literal, TypeAlias, TypedDict
+
+try:
+    from typing import NotRequired
+except ImportError:  # Python 3.10
+    from typing_extensions import NotRequired
 
 try:
     import jsonschema as _jsonschema
@@ -236,6 +241,10 @@ class AgentResponse(BaseModel):
     review_note: str | None = None
     reviewed_at: str | None = None
     reviewed_by: str | None = None
+    pii_safe: bool = False
+    outputs_not_stored: bool = False
+    audit_logged: bool = False
+    region_locked: str | None = None
     caller_trust_min: float | None = None
     # Discovery signals for orchestrators
     trust_score: float | None = None
@@ -243,6 +252,7 @@ class AgentResponse(BaseModel):
     avg_latency_ms: float | None = None
     success_rate: float | None = None
     dispute_rate: float | None = None
+    by_client: dict[str, float] | None = None
 
 
 class RegistryRegisterResponse(BaseModel):
@@ -280,6 +290,7 @@ class JobResponse(BaseModel):
     caller_charge_cents: int | None = None
     platform_fee_pct_at_create: int | None = None
     fee_bearer_policy: str | None = None
+    client_id: str | None = None
     input_payload: JSONObject
     output_payload: JSONObject | None = None
     error_message: str | None = None
@@ -329,6 +340,10 @@ class A2ATaskSendRequest(BaseModel):
     skill_id: str = Field(description="The Aztea agent_id to hire (skill ID in A2A terms).")
     input: JSONObject = Field(default_factory=dict, description="Input payload for the agent.")
     callback_url: str | None = Field(default=None, description="Optional webhook URL for task completion push.")
+    client_id: str | None = Field(
+        default=None,
+        description="Optional calling-surface identifier for analytics and routing.",
+    )
     metadata: JSONObject = Field(default_factory=dict, description="Optional A2A passthrough metadata.")
 
 

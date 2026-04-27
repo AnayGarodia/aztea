@@ -132,6 +132,7 @@ _CANONICAL_JOB_COLUMNS = (
     "caller_charge_cents",
     "platform_fee_pct_at_create",
     "fee_bearer_policy",
+    "client_id",
     "charge_tx_id",
     "input_payload",
     "output_payload",
@@ -408,6 +409,7 @@ def _create_jobs_table(conn: sqlite3.Connection, table_name: str = "jobs") -> No
             caller_charge_cents INTEGER NOT NULL CHECK(caller_charge_cents >= 0),
             platform_fee_pct_at_create INTEGER NOT NULL DEFAULT 10 CHECK(platform_fee_pct_at_create >= 0 AND platform_fee_pct_at_create <= 100),
             fee_bearer_policy   TEXT NOT NULL DEFAULT 'caller',
+            client_id           TEXT,
             charge_tx_id        TEXT NOT NULL,
             input_payload       TEXT NOT NULL,
             output_payload      TEXT,
@@ -519,6 +521,9 @@ def _ensure_jobs_indexes(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_jobs_batch_created ON jobs(batch_id, created_at DESC)"
     )
     conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_jobs_client_created ON jobs(client_id, created_at DESC)"
+    )
+    conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_jobs_parent_created ON jobs(parent_job_id, created_at DESC)"
     )
     conn.execute(
@@ -594,6 +599,7 @@ def _normalize_legacy_job_row(row: dict, used_job_ids: set[str]) -> tuple:
     if platform_fee_pct_at_create > 100:
         platform_fee_pct_at_create = 100
     fee_bearer_policy = _normalize_fee_bearer_policy(row.get("fee_bearer_policy"))
+    client_id = _clean_optional_text(row.get("client_id"))
     charge_tx_id = _clean_optional_text(row.get("charge_tx_id")) or str(
         uuid.uuid5(uuid.NAMESPACE_URL, f"legacy-charge:{job_id}")
     )
@@ -692,6 +698,7 @@ def _normalize_legacy_job_row(row: dict, used_job_ids: set[str]) -> tuple:
         caller_charge_cents,
         platform_fee_pct_at_create,
         fee_bearer_policy,
+        client_id,
         charge_tx_id,
         input_payload,
         output_payload,

@@ -25,12 +25,28 @@ class UnauthorizedError(APIError):
     pass
 
 
+class AuthenticationError(UnauthorizedError):
+    pass
+
+
 class ForbiddenError(APIError):
+    pass
+
+
+class PermissionError(ForbiddenError):
     pass
 
 
 class NotFoundError(APIError):
     pass
+
+
+class AgentNotFoundError(NotFoundError):
+    def __init__(self, agent_id: str | None = None, message: str | None = None, detail: Any = None, body: Any = None) -> None:
+        if agent_id is not None and message is None:
+            message = f"Agent '{agent_id}' not found."
+        super().__init__(404, message or "Agent not found.", detail, body)
+        self.agent_id = agent_id
 
 
 class ConflictError(APIError):
@@ -67,8 +83,56 @@ class ClaimLostError(APIError):
     pass
 
 
+class RateLimitError(APIError):
+    @property
+    def retry_after(self) -> int:
+        if isinstance(self.detail, dict):
+            raw = self.detail.get("retry_after_seconds")
+            if isinstance(raw, int):
+                return raw
+        if isinstance(self.body, dict):
+            raw = self.body.get("retry_after_seconds")
+            if isinstance(raw, int):
+                return raw
+        return 60
+
+
 class JobTimeoutError(AzteaError):
     pass
+
+
+class JobFailedError(AzteaError):
+    def __init__(self, message: str, output: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.output = output or {}
+
+
+class ContractVerificationError(AzteaError):
+    def __init__(self, failures: list[str]) -> None:
+        super().__init__("Contract verification failed: " + "; ".join(failures))
+        self.failures = failures
+
+
+class ClarificationNeededError(AzteaError):
+    def __init__(self, question: str, job_id: str) -> None:
+        super().__init__(f"Agent needs clarification: {question}")
+        self.question = question
+        self.job_id = job_id
+
+
+class InputError(Exception):
+    def __init__(self, message: str, refund_fraction: float = 0.8) -> None:
+        super().__init__(message)
+        self.refund_fraction = max(0.0, min(1.0, float(refund_fraction)))
+
+
+class ClarificationNeeded(Exception):
+    def __init__(self, question: str) -> None:
+        super().__init__(question)
+        self.question = question
+
+
+InsufficientFundsError = InsufficientBalanceError
 
 
 def _extract_response_body(response: requests.Response) -> Any:
@@ -111,6 +175,8 @@ def raise_for_error_response(response: requests.Response) -> None:
         raise ForbiddenError(code, message, detail, body)
     if code == 404:
         raise NotFoundError(code, message, detail, body)
+    if code == 429:
+        raise RateLimitError(code, message, detail, body)
     if code == 409:
         if "claim" in message.lower():
             raise ClaimLostError(code, message, detail, body)

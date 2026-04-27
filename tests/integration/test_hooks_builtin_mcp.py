@@ -402,10 +402,13 @@ def test_mcp_tools_manifest_exposes_registered_agent_schema(client):
     assert manifest_resp.status_code == 200, manifest_resp.text
     body = manifest_resp.json()
     assert body["count"] == len(body["tools"])
-    tool = next((item for item in body["tools"] if item["description"] == agent_description), None)
+    tool = next((item for item in body["tools"] if item["name"] == agent_name.lower().replace(" ", "_")), None)
     assert tool is not None
-    assert tool["name"] == agent_name.lower().replace(" ", "_")
-    assert tool["input_schema"]["fields"][0]["name"] == "task"
+    assert tool["description"].startswith(f"{agent_name}: {agent_description}")
+    assert "Quality:" in tool["description"]
+    assert "Example output:" in tool["description"]
+    assert tool["input_schema"]["type"] == "object"
+    assert tool["input_schema"]["properties"]["task"]["type"] == "string"
     assert tool["output_schema"]["properties"]["result"]["type"] == "string"
 
 
@@ -448,7 +451,7 @@ def test_mcp_tools_defaults_input_schema_when_null(client, monkeypatch):
     assert response.status_code == 200, response.text
     tool = next((item for item in response.json()["tools"] if item["name"] == slug), None)
     assert tool is not None
-    assert tool["input_schema"] == {"type": "object", "properties": {}}
+    assert tool["input_schema"] == {"type": "object", "additionalProperties": True}
 
 
 def test_mcp_invoke_delegates_to_registry_call_path(client, monkeypatch):
@@ -743,3 +746,91 @@ def test_orchestrator_agent_can_hire_specialist_agent_programmatically(client):
     assert caller_view.json()["output_payload"]["delegate_job_id"] == child_job_id
 
 
+# ─── Phase 0.2: Refund-on-failure invariant ───────────────────────────────────
+
+def test_refund_on_agent_network_failure(client, monkeypatch):
+    """Calling an unreachable external agent must not charge the caller."""
+    import requests as _requests
+    import server.application as _srv
+
+    worker = _register_user()
+    caller = _register_user()
+    caller_wallet = _fund_user_wallet(caller, 500)
+    balance_before = payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"]
+
+    agent_id = _register_agent_via_api(
+        client,
+        worker["raw_api_key"],
+        name=f"Unreachable Agent {uuid.uuid4().hex[:6]}",
+        price=0.05,
+        tags=["refund-invariant-test"],
+    )
+
+    # Simulate network failure when the server tries to proxy to the agent.
+    def _fail(*args, **kwargs):
+        raise _requests.ConnectionError("simulated: agent offline")
+
+    monkeypatch.setattr(_srv.http, "post", _fail)
+
+    resp = client.post(
+        f"/registry/agents/{agent_id}/call",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={"task": "anything"},
+    )
+
+    # Expect a 502 (agent offline) — not a 200.
+    assert resp.status_code == 502, f"Expected 502, got {resp.status_code}: {resp.text}"
+
+    # Caller must not have been charged.
+    balance_after = payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"]
+    assert balance_after == balance_before, (
+        f"Refund-on-failure invariant violated: balance before={balance_before}, "
+        f"after={balance_after} (delta {balance_before - balance_after} cents charged on failure)"
+    )
+
+
+def test_refund_on_agent_500_error(client, monkeypatch):
+    """External agent returning 5xx must refund the caller."""
+    import requests as _requests
+    import server.application as _srv
+
+    worker = _register_user()
+    caller = _register_user()
+    caller_wallet = _fund_user_wallet(caller, 500)
+    balance_before = payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"]
+
+    agent_id = _register_agent_via_api(
+        client,
+        worker["raw_api_key"],
+        name=f"Failing Agent {uuid.uuid4().hex[:6]}",
+        price=0.05,
+        tags=["refund-invariant-test"],
+    )
+
+    # Simulate an agent returning HTTP 500.
+    def _fake_post(*args, **kwargs):
+        mock = SimpleNamespace()
+        mock.status_code = 500
+        mock.ok = False
+        mock.json = lambda: {"error": "internal server error"}
+        mock.text = '{"error": "internal server error"}'
+        mock.headers = {}
+        return mock
+
+    monkeypatch.setattr(_srv.http, "post", _fake_post)
+
+    resp = client.post(
+        f"/registry/agents/{agent_id}/call",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={"task": "anything"},
+    )
+
+    assert resp.status_code in (500, 502, 503), (
+        f"Expected 5xx from agent failure, got {resp.status_code}: {resp.text}"
+    )
+
+    balance_after = payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"]
+    assert balance_after == balance_before, (
+        f"Refund-on-failure invariant violated: balance before={balance_before}, "
+        f"after={balance_after} (delta {balance_before - balance_after} cents charged on failure)"
+    )

@@ -3,7 +3,12 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Annotated, Literal, NotRequired, TypeAlias, TypedDict
+from typing import Annotated, Literal, TypeAlias, TypedDict
+
+try:
+    from typing import NotRequired
+except ImportError:  # Python 3.10
+    from typing_extensions import NotRequired
 
 try:
     import jsonschema as _jsonschema
@@ -646,6 +651,8 @@ class RegistrySearchRequest(BaseModel):
                 "max_price_cents": 50,
                 "required_input_fields": ["ticker"],
                 "respect_caller_trust_min": True,
+                "pii_safe": True,
+                "region_locked": "us",
             }
         }
     )
@@ -658,6 +665,10 @@ class RegistrySearchRequest(BaseModel):
     respect_caller_trust_min: bool = False
     model_provider: str | None = None
     kind: str | None = None
+    pii_safe: bool | None = None
+    outputs_not_stored: bool | None = None
+    audit_logged: bool | None = None
+    region_locked: str | None = None
 
     @field_validator("query")
     @classmethod
@@ -692,4 +703,11 @@ class RegistrySearchRequest(BaseModel):
         normalized = re.sub(r"[^a-z0-9._-]+", "-", str(value).strip().lower()).strip("-")
         return normalized or None
 
+    @field_validator("region_locked")
+    @classmethod
+    def search_region_locked_valid(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = re.sub(r"[^a-z0-9-]+", "-", str(value).strip().lower()).strip("-")
+        return normalized or None
 

@@ -21,12 +21,13 @@ from __future__ import annotations
 from core import embeddings
 
 from . import agents_ops
+from . import call_history
 from . import core_schema
 from . import pricing
 
 _SKIP = frozenset({"embeddings"})
 
-for _mod in (core_schema, agents_ops, pricing):
+for _mod in (core_schema, agents_ops, pricing, call_history):
     for _name in dir(_mod):
         if _name.startswith("__"):
             continue

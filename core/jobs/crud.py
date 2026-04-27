@@ -46,6 +46,7 @@ def create_job(
     caller_charge_cents: int | None = None,
     platform_fee_pct_at_create: int = 10,
     fee_bearer_policy: str = "caller",
+    client_id: str | None = None,
     agent_owner_id: str | None = None,
     max_attempts: int = 3,
     parent_job_id: str | None = None,
@@ -113,11 +114,11 @@ def create_job(
             INSERT INTO jobs
               (job_id, agent_id, agent_owner_id, caller_owner_id, caller_wallet_id,
                agent_wallet_id, platform_wallet_id, status, price_cents, caller_charge_cents,
-               platform_fee_pct_at_create, fee_bearer_policy, charge_tx_id,
+               platform_fee_pct_at_create, fee_bearer_policy, client_id, charge_tx_id,
                input_payload, created_at, updated_at, max_attempts, parent_job_id, tree_depth, parent_cascade_policy,
                clarification_timeout_seconds, clarification_timeout_policy, dispute_window_hours, judge_agent_id,
                callback_url, callback_secret, output_verification_window_seconds, output_verification_status, batch_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job_id,
@@ -132,6 +133,7 @@ def create_job(
                 parsed_caller_charge_cents,
                 parsed_platform_fee_pct,
                 normalized_fee_bearer_policy,
+                _clean_optional_text(client_id),
                 charge_tx_id,
                 json.dumps(input_payload),
                 now,
@@ -306,4 +308,3 @@ def list_jobs_for_agent(
             tuple(params),
         ).fetchall()
     return [_row_to_dict(r) for r in rows]
-

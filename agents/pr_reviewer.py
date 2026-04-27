@@ -72,11 +72,19 @@ Return a JSON object:
   "verdict": "approve|request_changes|comment"
 }}"""
 
-_GH_PATCH_HEADERS = {
-    "Accept": "application/vnd.github.v3.diff",
-    "User-Agent": "aztea-pr-reviewer/1.0",
-}
 _MAX_DIFF_CHARS = 16_000
+
+
+def _github_headers() -> dict[str, str]:
+    import os
+    headers = {
+        "Accept": "application/vnd.github.v3.diff",
+        "User-Agent": "aztea-pr-reviewer/1.0",
+    }
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
 
 
 def _fetch_github_diff(pr_url: str) -> str:
@@ -87,11 +95,20 @@ def _fetch_github_diff(pr_url: str) -> str:
         raise ValueError(f"Not a valid GitHub PR URL: {pr_url}")
     owner, repo, number = m.group(1), m.group(2), m.group(3)
     api_url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{number}"
-    req = urllib.request.Request(api_url, headers=_GH_PATCH_HEADERS)
+    req = urllib.request.Request(api_url, headers=_github_headers())
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             return resp.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as e:
+        if e.code == 403:
+            raise RuntimeError(
+                f"GitHub API rate limit exceeded (403). Set GITHUB_TOKEN env var to increase limits. "
+                f"Alternatively, pass the diff text directly using the 'diff' parameter."
+            ) from e
+        if e.code == 404:
+            raise RuntimeError(
+                f"PR not found: {pr_url}. Check the URL is correct and the repo is public."
+            ) from e
         raise RuntimeError(f"GitHub API error {e.code}: {e.reason}") from e
     except Exception as e:
         raise RuntimeError(f"Failed to fetch PR diff: {e}") from e

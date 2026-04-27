@@ -2,7 +2,12 @@
 from __future__ import annotations
 
 import re
-from typing import Annotated, Literal, NotRequired, TypeAlias, TypedDict
+from typing import Annotated, Literal, TypeAlias, TypedDict
+
+try:
+    from typing import NotRequired
+except ImportError:  # Python 3.10
+    from typing_extensions import NotRequired
 
 try:
     import jsonschema as _jsonschema
@@ -161,6 +166,10 @@ class AgentRegisterRequest(BaseModel):
                 "healthcheck_url": "https://example.com/health",
                 "price_per_call_usd": 0.05,
                 "tags": ["financial-research", "sec"],
+                "pii_safe": True,
+                "outputs_not_stored": True,
+                "audit_logged": True,
+                "region_locked": "us",
                 "input_schema": {"type": "object", "properties": {"ticker": {"type": "string"}}},
                 "output_schema": {"type": "object", "properties": {"summary": {"type": "string"}}},
                 "output_verifier_url": "https://example.com/verify",
@@ -174,6 +183,10 @@ class AgentRegisterRequest(BaseModel):
     healthcheck_url: str | None = None
     price_per_call_usd: float
     tags: list[str] = Field(default_factory=list)
+    pii_safe: bool = False
+    outputs_not_stored: bool = False
+    audit_logged: bool = False
+    region_locked: str | None = Field(default=None, max_length=32)
 
     @field_validator("name")
     @classmethod
@@ -240,6 +253,18 @@ class AgentRegisterRequest(BaseModel):
             if len(t) > 32:
                 raise ValueError(f"Tag '{t[:20]}...' is too long — tags must be 32 characters or fewer.")
         return deduped
+
+    @field_validator("region_locked")
+    @classmethod
+    def region_locked_valid(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        normalized = re.sub(r"[^a-z0-9-]+", "-", str(v).strip().lower()).strip("-")
+        if not normalized:
+            return None
+        if len(normalized) > 32:
+            raise ValueError("region_locked must be 32 characters or fewer.")
+        return normalized
 
     @field_validator("input_schema", "output_schema")
     @classmethod
@@ -620,5 +645,4 @@ class AgentKeyCreateRequest(BaseModel):
     )
 
     name: str = "Agent worker key"
-
 

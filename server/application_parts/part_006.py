@@ -127,6 +127,7 @@ def _sweep_jobs(
     endpoint_health_summary = _monitor_agent_endpoints(limit=limit)
     suspension_summary = _auto_suspend_low_performing_agents(actor_owner_id)
     decay_summary = _apply_reputation_decay()
+    cache_evicted_count = _cache.evict_expired()
     return {
         "expired_leases_scanned": len(expired),
         "due_retry_count": len(due_retry),
@@ -147,6 +148,7 @@ def _sweep_jobs(
         "auto_suspended_count": int(suspension_summary["auto_suspended_count"]),
         "auto_suspended_agent_ids": suspension_summary["auto_suspended_agent_ids"],
         "reputation_decay": decay_summary,
+        "cache_evicted_count": cache_evicted_count,
     }
 
 
@@ -1109,4 +1111,3 @@ def analyze_alias(
 # ---------------------------------------------------------------------------
 # Registry routes
 # ---------------------------------------------------------------------------
-

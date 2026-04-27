@@ -2,7 +2,12 @@
 from __future__ import annotations
 
 import re
-from typing import Annotated, Literal, NotRequired, TypeAlias, TypedDict
+from typing import Annotated, Literal, TypeAlias, TypedDict
+
+try:
+    from typing import NotRequired
+except ImportError:  # Python 3.10
+    from typing_extensions import NotRequired
 
 try:
     import jsonschema as _jsonschema
@@ -62,6 +67,13 @@ class JobCreateRequest(BaseModel):
     communication_channel: str | None = Field(
         default=None,
         description="Optional logical channel name for multi-agent collaboration threads.",
+    )
+    client_id: str | None = Field(
+        default=None,
+        description=(
+            "Optional calling-surface identifier for analytics and routing "
+            "(for example: claude-code, codex, gemini-cli, cursor)."
+        ),
     )
     protocol_metadata: JSONObject = Field(
         default_factory=dict,
@@ -409,5 +421,4 @@ class AgentReviewDecisionRequest(BaseModel):
             return None
         text = value.strip()
         return text or None
-
 
