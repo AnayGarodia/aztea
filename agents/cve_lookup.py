@@ -42,6 +42,7 @@ import time
 import requests
 
 _NVD_API = "https://services.nvd.nist.gov/rest/json/cves/2.0"
+_OSV_API = "https://api.osv.dev/v1/query"
 _NVD_TIMEOUT = 10
 _NVD_RATE_DELAY = 0.7  # NVD public API allows ~5 req/s without key
 _CVE_ID_PATTERN = re.compile(r'^CVE-\d{4}-\d{4,}$', re.IGNORECASE)
@@ -70,42 +71,76 @@ def _extract_cvss(metrics: dict) -> float:
     return 0.0
 
 
-def _query_nvd(keyword: str) -> list[dict] | str:
-    """Returns a list of CVE dicts, or an error string on failure."""
-    try:
-        resp = requests.get(
-            _NVD_API,
-            params={"keywordSearch": keyword, "resultsPerPage": 20},
-            timeout=_NVD_TIMEOUT,
-            headers={"User-Agent": "aztea-cve-lookup/1.0"},
-        )
-        if resp.status_code == 429:
-            return "NVD API rate limit reached. Try again in a minute."
-        if resp.status_code != 200:
-            return f"NVD API returned status {resp.status_code}. Try again later."
-        data = resp.json()
-    except requests.exceptions.Timeout:
-        return "NVD API timed out. Try again in a moment."
-    except Exception as e:
-        return f"Could not reach NVD API: {type(e).__name__}."
+def _pkg_ecosystems(pkg_name: str) -> list[str]:
+    """Return OSV ecosystem candidates for a package name."""
+    if pkg_name.startswith("@") or "/" in pkg_name:
+        return ["npm"]
+    return ["PyPI", "npm"]
 
-    results = []
-    for item in data.get("vulnerabilities", []):
-        cve = item.get("cve", {})
-        cve_id = cve.get("id", "")
-        metrics = cve.get("metrics", {})
-        cvss = _extract_cvss(metrics)
-        severity = _cvss_to_severity(cvss)
-        descriptions = cve.get("descriptions", [])
-        desc = next((d["value"] for d in descriptions if d.get("lang") == "en"), "")
-        results.append({
-            "cve": cve_id,
-            "cvss": cvss,
-            "severity": severity,
-            "description": desc,
-            "published": cve.get("published", "")[:10],
-            "last_modified": cve.get("lastModified", "")[:10],
-        })
+
+def _query_osv(pkg_name: str, version: str) -> list[dict]:
+    """Query OSV.dev for CVEs affecting a specific package (+ optional version)."""
+    seen_ids: set[str] = set()
+    results: list[dict] = []
+
+    for ecosystem in _pkg_ecosystems(pkg_name):
+        try:
+            body: dict = {"package": {"name": pkg_name, "ecosystem": ecosystem}}
+            if version:
+                body["version"] = version
+            resp = requests.post(
+                _OSV_API,
+                json=body,
+                timeout=_NVD_TIMEOUT,
+                headers={"User-Agent": "aztea-cve-lookup/1.0"},
+            )
+            if resp.status_code != 200:
+                continue
+            data = resp.json()
+        except Exception:
+            continue
+
+        for vuln in data.get("vulns", []):
+            vuln_id = vuln.get("id", "")
+            aliases = vuln.get("aliases") or []
+            cve_id = next((a for a in aliases if a.startswith("CVE-")), vuln_id)
+            if cve_id in seen_ids:
+                continue
+            seen_ids.add(cve_id)
+
+            cvss = 0.0
+            for sev in vuln.get("severity") or []:
+                score_str = sev.get("score", "")
+                m = re.search(r"(\d+\.\d+)$", score_str)
+                if m:
+                    try:
+                        cvss = float(m.group(1))
+                        break
+                    except ValueError:
+                        pass
+
+            fixed_in = ""
+            for affected in vuln.get("affected") or []:
+                for r in affected.get("ranges") or []:
+                    for ev in r.get("events") or []:
+                        if "fixed" in ev:
+                            fixed_in = ev["fixed"]
+                            break
+                    if fixed_in:
+                        break
+                if fixed_in:
+                    break
+
+            summary = (vuln.get("summary") or vuln.get("details") or "")[:400]
+            results.append({
+                "cve": cve_id,
+                "cvss": cvss,
+                "severity": _cvss_to_severity(cvss),
+                "description": summary,
+                "published": (vuln.get("published") or "")[:10],
+                "last_modified": (vuln.get("modified") or "")[:10],
+                "fixed_in": fixed_in,
+            })
 
     return results
 
@@ -282,30 +317,19 @@ def run(payload: dict) -> dict:
 
     for raw_pkg in packages[:10]:  # cap at 10 packages per call
         pkg_name, pkg_version = _parse_package_version(str(raw_pkg))
-        nvd_result = _query_nvd(pkg_name)
-        time.sleep(_NVD_RATE_DELAY)
-        if isinstance(nvd_result, str):
-            return {"error": nvd_result}
-        nvd_cves = nvd_result
+        osv_cves = _query_osv(pkg_name, pkg_version)
 
-        for item in nvd_cves:
+        for item in osv_cves:
             if item["cve"] in seen_cves:
                 continue
             seen_cves.add(item["cve"])
 
-            # Use LLM to extract affected range / fixed version from description
-            affected_range = ""
-            fixed_in = ""
-            if pkg_version:
-                # Quick heuristic from description text
-                desc_lower = item["description"].lower()
-                range_m = re.search(r"before\s+([\d.]+)", desc_lower)
-                if range_m:
-                    fixed_in = range_m.group(1)
-                    affected_range = f"< {fixed_in}"
-                if not include_patched and affected_range:
-                    if not _version_in_range(pkg_version, affected_range):
-                        continue
+            fixed_in = item.get("fixed_in") or ""
+            affected_range = f"< {fixed_in}" if fixed_in else "see advisory"
+
+            if not include_patched and fixed_in and pkg_version:
+                if not _version_in_range(pkg_version, f"< {fixed_in}"):
+                    continue
 
             exploit_available = any(
                 kw in item["description"].lower()
@@ -318,10 +342,10 @@ def run(payload: dict) -> dict:
                 "cve": item["cve"],
                 "cvss": item["cvss"],
                 "severity": item["severity"],
-                "description": item["description"][:400],
+                "description": item["description"],
                 "published": item["published"],
                 "last_modified": item["last_modified"],
-                "affected_range": affected_range or "see description",
+                "affected_range": affected_range,
                 "fixed_in": fixed_in or "see advisory",
                 "exploit_available": exploit_available,
             })
@@ -350,6 +374,6 @@ def run(payload: dict) -> dict:
         "total_vulnerable": len(pkg_names_with_vulns),
         "total_packages_checked": len(packages),
         "summary": " ".join(summary_parts),
-        "source": "nvd",
+        "source": "osv",
         "billing_units_actual": len(all_results),
     }

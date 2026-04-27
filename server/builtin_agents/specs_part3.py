@@ -9,6 +9,8 @@ from server.builtin_agents.constants import (
     CHANGELOG_AGENT_ID as _CHANGELOG_AGENT_ID,
     PACKAGE_FINDER_AGENT_ID as _PACKAGE_FINDER_AGENT_ID,
     LINTER_AGENT_ID as _LINTER_AGENT_ID,
+    SHELL_EXECUTOR_AGENT_ID as _SHELL_EXECUTOR_AGENT_ID,
+    TYPE_CHECKER_AGENT_ID as _TYPE_CHECKER_AGENT_ID,
 )
 from server.builtin_agents.schemas import output_schema_object as _output_schema_object
 
@@ -355,6 +357,108 @@ def load_builtin_specs_part3() -> list[dict[str, Any]]:
                     "warning_count": 1,
                     "clean": False,
                     "summary": "ruff found 3 issues: 2 unused imports and 1 formatting issue.",
+                },
+            }
+        ],
+    },
+    {
+        "agent_id": _SHELL_EXECUTOR_AGENT_ID,
+        "name": "Shell Executor",
+        "description": "Run sandboxed shell commands (npm, node, python, pip, ruff, mypy, tsc, git log/diff/status, make, cargo, go, pytest) and get real stdout/stderr/exit code. Use for verifying builds, running tests, checking lint, inspecting git history — anything that needs an actual shell.",
+        "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_SHELL_EXECUTOR_AGENT_ID],
+        "price_per_call_usd": 0.03,
+        "tags": ["developer-tools", "shell", "execution", "ci"],
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "Shell command to run", "example": "npm test"},
+                "working_dir": {"type": "string", "default": "/tmp", "description": "Working directory (must exist on server)"},
+                "env": {"type": "object", "description": "Extra environment variables", "additionalProperties": {"type": "string"}},
+                "timeout": {"type": "integer", "default": 15, "minimum": 1, "maximum": 60, "description": "Timeout in seconds"},
+            },
+            "required": ["command"],
+        },
+        "output_schema": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string"},
+                "exit_code": {"type": "integer"},
+                "stdout": {"type": "string"},
+                "stderr": {"type": "string"},
+                "timed_out": {"type": "boolean"},
+                "elapsed_seconds": {"type": "number"},
+            },
+            "required": ["command", "exit_code", "stdout", "stderr", "timed_out", "elapsed_seconds"],
+        },
+        "output_examples": [
+            {
+                "input": {"command": "python3 --version"},
+                "output": {
+                    "command": "python3 --version",
+                    "exit_code": 0,
+                    "stdout": "Python 3.11.6\n",
+                    "stderr": "",
+                    "timed_out": False,
+                    "elapsed_seconds": 0.08,
+                },
+            }
+        ],
+    },
+    {
+        "agent_id": _TYPE_CHECKER_AGENT_ID,
+        "name": "Type Checker",
+        "description": "Run mypy (Python) or tsc (TypeScript) on submitted code and return structured type errors with file, line, column, error code, and message. Closes the gap between writing code and knowing it type-checks.",
+        "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_TYPE_CHECKER_AGENT_ID],
+        "price_per_call_usd": 0.02,
+        "tags": ["developer-tools", "type-checking", "python", "typescript"],
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "code": {"type": "string", "description": "Source code to type-check"},
+                "language": {"type": "string", "enum": ["python", "typescript"], "default": "python"},
+                "stubs": {
+                    "type": "object",
+                    "description": "Additional files needed for type resolution (filename → content)",
+                    "additionalProperties": {"type": "string"},
+                },
+                "strict": {"type": "boolean", "default": False, "description": "Enable strict mode (--strict for mypy / strict tsconfig)"},
+            },
+            "required": ["code"],
+        },
+        "output_schema": {
+            "type": "object",
+            "properties": {
+                "language": {"type": "string"},
+                "passed": {"type": "boolean"},
+                "error_count": {"type": "integer"},
+                "errors": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "file": {"type": "string"},
+                            "line": {"type": ["integer", "null"]},
+                            "col": {"type": ["integer", "null"]},
+                            "code": {"type": "string"},
+                            "message": {"type": "string"},
+                        },
+                    },
+                },
+                "raw_output": {"type": "string"},
+                "tool_version": {"type": "string"},
+            },
+            "required": ["language", "passed", "error_count", "errors", "raw_output", "tool_version"],
+        },
+        "output_examples": [
+            {
+                "input": {"code": "def greet(name: str) -> str:\n    return 42\n", "language": "python"},
+                "output": {
+                    "language": "python",
+                    "passed": False,
+                    "error_count": 1,
+                    "errors": [{"file": "main.py", "line": 2, "col": 12, "code": "return-value", "message": "Incompatible return value type (got \"int\", expected \"str\")"}],
+                    "raw_output": "main.py:2:12: error: Incompatible return value type (got \"int\", expected \"str\")  [return-value]\n",
+                    "tool_version": "mypy 1.8.0",
                 },
             }
         ],

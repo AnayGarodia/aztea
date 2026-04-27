@@ -32,6 +32,8 @@ MULTI_FILE_EXECUTOR_AGENT_ID = "ea95cdec-32c1-5a2b-a032-3e7061abf3a4"
 CHANGELOG_AGENT_ID = "48c24ce5-d9cb-5f76-9e2f-fce1878f8c4c"
 PACKAGE_FINDER_AGENT_ID = "d11ddab1-bcca-55de-8b00-c9efadc69c79"
 LINTER_AGENT_ID = "7ec4c987-9a7e-5af8-984f-7b8ad0ad0536"
+SHELL_EXECUTOR_AGENT_ID = "6bd98167-e010-5604-8c76-6ed1b92698f1"
+TYPE_CHECKER_AGENT_ID = "5b140628-52a8-565b-8599-b1c3e402b02d"
 
 BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
     FINANCIAL_AGENT_ID: "internal://financial",
@@ -55,6 +57,8 @@ BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
     CHANGELOG_AGENT_ID: "internal://changelog_agent",
     PACKAGE_FINDER_AGENT_ID: "internal://package_finder",
     LINTER_AGENT_ID: "internal://linter_agent",
+    SHELL_EXECUTOR_AGENT_ID: "internal://shell_executor",
+    TYPE_CHECKER_AGENT_ID: "internal://type_checker",
 }
 
 BUILTIN_LEGACY_ROUTE_ENDPOINTS: dict[str, str] = {
@@ -96,6 +100,8 @@ CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
         CHANGELOG_AGENT_ID,
         PACKAGE_FINDER_AGENT_ID,
         LINTER_AGENT_ID,
+        SHELL_EXECUTOR_AGENT_ID,
+        TYPE_CHECKER_AGENT_ID,
     }
 )
 CURATED_BUILTIN_AGENT_IDS = frozenset(set(CURATED_PUBLIC_BUILTIN_AGENT_IDS) | {QUALITY_JUDGE_AGENT_ID})

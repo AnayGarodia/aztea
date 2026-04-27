@@ -4,6 +4,34 @@
 # Variable-pricing helpers (_estimate_variable_charge,
 # _resolve_agent_pricing, _maybe_refund_pricing_diff) live in part_004.
 
+# --- Idempotency cache for sync calls ---
+# Key: (caller_owner_id, agent_id, idempotency_key), Value: (response_body, created_at)
+_IDEMPOTENCY_CACHE: dict[tuple, tuple] = {}
+_IDEMPOTENCY_TTL = 300  # 5 minutes
+
+
+def _idempotency_lookup(owner_id: str, agent_id: str, key: str) -> dict | None:
+    now = time.monotonic()
+    cache_key = (owner_id, agent_id, key)
+    entry = _IDEMPOTENCY_CACHE.get(cache_key)
+    if entry is None:
+        return None
+    body, created_at = entry
+    if now - created_at > _IDEMPOTENCY_TTL:
+        _IDEMPOTENCY_CACHE.pop(cache_key, None)
+        return None
+    return body
+
+
+def _idempotency_store(owner_id: str, agent_id: str, key: str, body: dict) -> None:
+    # Evict stale entries occasionally to prevent unbounded growth
+    if len(_IDEMPOTENCY_CACHE) > 10_000:
+        cutoff = time.monotonic() - _IDEMPOTENCY_TTL
+        stale = [k for k, (_, ts) in _IDEMPOTENCY_CACHE.items() if ts < cutoff]
+        for k in stale:
+            _IDEMPOTENCY_CACHE.pop(k, None)
+    _IDEMPOTENCY_CACHE[(owner_id, agent_id, key)] = (body, time.monotonic())
+
 
 def _coerce_payload_to_schema(payload: dict, schema: dict) -> dict:
     """
@@ -383,6 +411,12 @@ def registry_call(
       3b. Failure → full refund to caller.
     """
     _require_scope(caller, "caller")
+    idempotency_key = request.headers.get("X-Idempotency-Key", "").strip()
+    caller_owner_id_early = _caller_owner_id(request)
+    if idempotency_key:
+        cached = _idempotency_lookup(caller_owner_id_early, agent_id, idempotency_key)
+        if cached is not None:
+            return JSONResponse(content=cached, headers={"X-Idempotency-Replayed": "true"})
     agent = registry.get_agent(agent_id, include_unapproved=True)
     if agent is None:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
@@ -426,6 +460,19 @@ def registry_call(
                 {"agent_id": agent_id},
             ),
         )
+    if builtin_agent_id is not None:
+        try:
+            _validate_builtin_agent_payload(builtin_agent_id, payload)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=error_codes.make_error(
+                    error_codes.INVALID_INPUT,
+                    str(exc),
+                    {"agent_id": agent_id},
+                ),
+            )
+
     pricing_estimate = _estimate_variable_charge(
         agent=agent,
         payload=payload,
@@ -543,6 +590,8 @@ def registry_call(
                 job_id=job["job_id"],
                 latency_ms=_job_latency_ms(completed),
             )
+            if idempotency_key:
+                _idempotency_store(caller_owner_id_early, agent_id, idempotency_key, output)
             return JSONResponse(content=output)
         except ValidationError as exc:
             failed = jobs.update_job_status(

@@ -56,10 +56,18 @@ Return JSON:
 
 
 def _detect_ecosystem(package: str) -> str:
-    # npm packages use @scope/name or single-word names; PyPI uses underscore/hyphen convention
-    # Default to pypi; if caller specified npm-style scope, use npm
     if package.startswith("@"):
         return "npm"
+    try:
+        r = requests.head(
+            f"https://registry.npmjs.org/{package}",
+            timeout=5,
+            headers={"User-Agent": "aztea-changelog/1.0"},
+        )
+        if r.status_code == 200:
+            return "npm"
+    except Exception:
+        pass
     return "pypi"
 
 

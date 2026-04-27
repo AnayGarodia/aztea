@@ -330,7 +330,7 @@ def _compute_bulk_agent_stats(agent_ids: list[str]) -> dict:
     return stats
 
 
-def _agent_response(agent: dict, caller: core_models.CallerContext, stats: dict | None = None) -> dict:
+def _agent_response(agent: dict, caller: core_models.CallerContext | None, stats: dict | None = None) -> dict:
     min_caller_trust = _extract_caller_trust_min(agent.get("input_schema"))
     price_cents = _usd_to_cents(agent.get("price_per_call_usd") or 0.0)
     caller_charge_cents = payments.compute_success_distribution(
@@ -339,8 +339,9 @@ def _agent_response(agent: dict, caller: core_models.CallerContext, stats: dict 
         fee_bearer_policy="caller",
     )["caller_charge_cents"]
     is_internal = bool(agent.get("internal_only")) or str(agent.get("endpoint_url", "")).startswith("internal://")
-    out = dict(agent) if caller.get("type") == "master" else dict(agent)
-    if caller.get("type") != "master":
+    caller_type = (caller or {}).get("type")
+    out = dict(agent)
+    if caller_type != "master":
         out.pop("owner_id", None)
     out["caller_trust_min"] = min_caller_trust
     out["caller_charge_cents"] = caller_charge_cents

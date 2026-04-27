@@ -86,6 +86,8 @@ from agents import multi_file_executor as agent_multi_file_executor
 from agents import changelog_agent as agent_changelog_agent
 from agents import package_finder as agent_package_finder
 from agents import linter_agent as agent_linter_agent
+from agents import shell_executor as agent_shell_executor
+from agents import type_checker as agent_type_checker
 from core import auth as _auth
 from core import embeddings
 from core import onboarding
@@ -271,6 +273,8 @@ _MULTI_FILE_EXECUTOR_AGENT_ID = "ea95cdec-32c1-5a2b-a032-3e7061abf3a4"
 _CHANGELOG_AGENT_ID = "48c24ce5-d9cb-5f76-9e2f-fce1878f8c4c"
 _PACKAGE_FINDER_AGENT_ID = "d11ddab1-bcca-55de-8b00-c9efadc69c79"
 _LINTER_AGENT_ID = "7ec4c987-9a7e-5af8-984f-7b8ad0ad0536"
+_SHELL_EXECUTOR_AGENT_ID = "6bd98167-e010-5604-8c76-6ed1b92698f1"
+_TYPE_CHECKER_AGENT_ID = "5b140628-52a8-565b-8599-b1c3e402b02d"
 
 def _normalize_endpoint_ref(value: str | None) -> str:
     return str(value or "").strip().rstrip("/")
@@ -298,6 +302,8 @@ _BUILTIN_INTERNAL_ENDPOINTS = {
     _CHANGELOG_AGENT_ID: "internal://changelog_agent",
     _PACKAGE_FINDER_AGENT_ID: "internal://package_finder",
     _LINTER_AGENT_ID: "internal://linter_agent",
+    _SHELL_EXECUTOR_AGENT_ID: "internal://shell_executor",
+    _TYPE_CHECKER_AGENT_ID: "internal://type_checker",
 }
 _BUILTIN_LEGACY_ROUTE_ENDPOINTS = {
     _FINANCIAL_AGENT_ID: f"{_SERVER_BASE_URL}/agents/financial",
@@ -339,6 +345,8 @@ _CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
         _DNS_INSPECTOR_AGENT_ID,        # DNS/SSL live inspection
         _CHANGELOG_AGENT_ID,            # PyPI/npm changelogs
         _PACKAGE_FINDER_AGENT_ID,       # package search + stats
+        _SHELL_EXECUTOR_AGENT_ID,       # sandboxed shell execution
+        _TYPE_CHECKER_AGENT_ID,         # mypy / tsc type checking
         # Benched (available via API/MCP but not shown in marketplace):
         # _FINANCIAL_AGENT_ID        — SEC EDGAR, narrow use case
         # _SPEC_WRITER_AGENT_ID      — pure LLM, no external data

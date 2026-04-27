@@ -30,6 +30,8 @@ from server.builtin_agents.constants import (
     HN_DIGEST_AGENT_ID,
     IMAGE_GENERATOR_AGENT_ID,
     PYTHON_EXECUTOR_AGENT_ID,
+    SHELL_EXECUTOR_AGENT_ID,
+    TYPE_CHECKER_AGENT_ID,
     VIDEO_STORYBOARD_AGENT_ID,
     WEB_RESEARCHER_AGENT_ID,
 )
@@ -125,6 +127,27 @@ _OVERLAY: dict[str, dict[str, Any]] = {
             "min_cents": 5,
         },
     },
+    # Shell Executor: 3¢ flat per call (fixed, not variable).
+    # Stored here so display_min_price_usd() can report the correct floor.
+    SHELL_EXECUTOR_AGENT_ID: {
+        "pricing_model": "per_unit",
+        "pricing_config": {
+            "input_field": "timeout",
+            "unit": "second",
+            "rate_cents_per_unit": 0,
+            "min_cents": 3,
+        },
+    },
+    # Type Checker: 2¢ flat per call.
+    TYPE_CHECKER_AGENT_ID: {
+        "pricing_model": "per_unit",
+        "pricing_config": {
+            "input_field": "timeout",
+            "unit": "second",
+            "rate_cents_per_unit": 0,
+            "min_cents": 2,
+        },
+    },
     # DNS Inspector: tiered by domain count.
     DNS_INSPECTOR_AGENT_ID: {
         "pricing_model": "tiered",
@@ -145,3 +168,18 @@ _OVERLAY: dict[str, dict[str, Any]] = {
 def get_pricing_overlay() -> dict[str, dict[str, Any]]:
     """Return a shallow copy of the overlay for consumption by part_008."""
     return {k: dict(v) for k, v in _OVERLAY.items()}
+
+
+def display_min_price_usd(agent_id: str, platform_fee_pct: float = 10.0) -> float | None:
+    """Return the minimum caller-visible USD price for a variable-priced built-in.
+
+    Returns None for agents not in the overlay (they use a fixed spec price).
+    Includes the platform fee because callers pay price + fee.
+    """
+    entry = _OVERLAY.get(agent_id)
+    if entry is None:
+        return None
+    config = entry.get("pricing_config", {})
+    min_cents = config.get("min_cents", 0)
+    caller_min_cents = min_cents * (1 + platform_fee_pct / 100)
+    return round(caller_min_cents / 100, 4)

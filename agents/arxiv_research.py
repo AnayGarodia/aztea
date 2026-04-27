@@ -68,7 +68,7 @@ def _fetch_arxiv(query: str, max_results: int, sort_by: str, categories: list[st
     search_query = query
     if categories:
         cat_filter = " OR ".join(f"cat:{c}" for c in categories[:5])
-        search_query = f"({query}) AND ({cat_filter})"
+        search_query = f"{query} AND ({cat_filter})"
 
     sort_order_map = {
         "relevance": "relevance",
@@ -151,6 +151,9 @@ def _fetch_arxiv(query: str, max_results: int, sort_by: str, categories: list[st
             "pdf_url": pdf_url,
             "abstract_url": abs_url,
         })
+
+    if categories:
+        papers = [p for p in papers if any(c in categories for c in p.get("categories", []))]
 
     return papers
 

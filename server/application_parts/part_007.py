@@ -884,7 +884,7 @@ _AGENTS_LIST_TTL = 15.0  # seconds — agents don't change by the second
 @app.get(
     "/registry/agents",
     response_model=core_models.RegistryAgentsResponse,
-    responses=_error_responses(401, 403, 422, 429, 500),
+    responses=_error_responses(422, 429, 500),
 )
 @limiter.limit("60/minute")
 def registry_list(
@@ -893,12 +893,11 @@ def registry_list(
     rank_by: str | None = None,
     include_reputation: bool = True,
     model_provider: str | None = None,
-    caller: core_models.CallerContext = Depends(_require_api_key),
+    caller: core_models.CallerContext | None = Depends(_optional_api_key),
 ) -> core_models.RegistryAgentsResponse:
     global _agents_list_cache, _agents_list_cache_at
     import time as _time
-    _require_any_scope(caller, "caller", "worker")
-    include_unapproved = _caller_is_admin(caller)
+    include_unapproved = caller is not None and _caller_is_admin(caller)
     # Use cached agent+reputation rows for non-admin, no-filter requests
     use_cache = not include_unapproved and tag is None and model_provider is None and include_reputation
     now = _time.monotonic()

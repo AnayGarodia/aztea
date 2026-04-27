@@ -32,15 +32,13 @@ from __future__ import annotations
 
 import json
 import re
-import time
 
 import requests
 
-_NVD_API = "https://services.nvd.nist.gov/rest/json/cves/2.0"
+_OSV_API = "https://api.osv.dev/v1/query"
 _PYPI_API = "https://pypi.org/pypi/{name}/json"
 _NPM_API = "https://registry.npmjs.org/{name}"
 _TIMEOUT = 10
-_NVD_RATE_DELAY = 0.7
 _MAX_PACKAGES = 20
 _MAX_MANIFEST_CHARS = 10_000
 
@@ -102,11 +100,16 @@ def _extract_cvss(metrics: dict) -> float:
     return 0.0
 
 
-def _query_nvd(pkg_name: str) -> list[dict]:
+def _query_osv(pkg_name: str, version: str, ecosystem: str) -> list[dict]:
+    """Query OSV.dev for CVEs affecting a specific package + version."""
+    osv_ecosystem = "PyPI" if ecosystem == "pypi" else "npm"
     try:
-        resp = requests.get(
-            _NVD_API,
-            params={"keywordSearch": pkg_name, "resultsPerPage": 10},
+        body: dict = {"package": {"name": pkg_name, "ecosystem": osv_ecosystem}}
+        if version:
+            body["version"] = version
+        resp = requests.post(
+            _OSV_API,
+            json=body,
             timeout=_TIMEOUT,
             headers={"User-Agent": "aztea-dependency-auditor/1.0"},
         )
@@ -117,25 +120,44 @@ def _query_nvd(pkg_name: str) -> list[dict]:
         return []
 
     results = []
-    for item in data.get("vulnerabilities", []):
-        cve = item.get("cve", {})
-        cve_id = cve.get("id", "")
-        if not cve_id:
+    seen: set[str] = set()
+    for vuln in data.get("vulns", []):
+        vuln_id = vuln.get("id", "")
+        aliases = vuln.get("aliases") or []
+        cve_id = next((a for a in aliases if a.startswith("CVE-")), vuln_id)
+        if cve_id in seen:
             continue
-        metrics = cve.get("metrics", {})
-        cvss = _extract_cvss(metrics)
-        descriptions = cve.get("descriptions", [])
-        desc = next((d["value"] for d in descriptions if d.get("lang") == "en"), "")
-        # Extract fixed version hint from description
+        seen.add(cve_id)
+
+        cvss = 0.0
+        for sev in vuln.get("severity") or []:
+            score_str = sev.get("score", "")
+            m = re.search(r"(\d+\.\d+)$", score_str)
+            if m:
+                try:
+                    cvss = float(m.group(1))
+                    break
+                except ValueError:
+                    pass
+
         fixed_in = None
-        range_m = re.search(r"before\s+([\d]+\.[\d\.]+)", desc.lower())
-        if range_m:
-            fixed_in = range_m.group(1)
+        for affected in vuln.get("affected") or []:
+            for r in affected.get("ranges") or []:
+                for ev in r.get("events") or []:
+                    if "fixed" in ev:
+                        fixed_in = ev["fixed"]
+                        break
+                if fixed_in:
+                    break
+            if fixed_in:
+                break
+
+        summary = (vuln.get("summary") or vuln.get("details") or "")[:600]
         results.append({
             "id": cve_id,
             "cvss": cvss,
             "severity": _cvss_to_severity(cvss),
-            "description": desc[:600],
+            "description": summary,
             "fixed_in": fixed_in,
         })
     return results
@@ -226,10 +248,9 @@ def run(payload: dict) -> dict:
         elif ecosystem == "npm" and fetch_license:
             latest_version, license_str = _fetch_npm_latest(name)
 
-        # CVE lookup via live NVD
+        # CVE lookup via OSV.dev (package-specific, no false positives)
         if "cve" in checks:
-            cves = _query_nvd(name)
-            time.sleep(_NVD_RATE_DELAY)
+            cves = _query_osv(name, current_ver, ecosystem)
 
         is_outdated = False
         if "outdated" in checks and current_ver and latest_version:

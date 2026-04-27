@@ -28,7 +28,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
         "name": "Image Generator Agent",
         "description": "Use when the task requires generating an image. Runs a real model backend (OpenAI gpt-image-1 or Replicate) — not a description. Returns base64-encoded image artifacts, supports reference images for style guidance.",
         "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_IMAGE_GENERATOR_AGENT_ID],
-        "price_per_call_usd": 0.02,
+        "price_per_call_usd": 0.06,
         "tags": ["image-generation", "creative", "multimodal", "design"],
         "input_schema": _output_schema_object(
             {
@@ -146,7 +146,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
         "name": "Video Storyboard Generator Agent",
         "description": "Use when the task requires generating a short video from a creative brief. Produces a shot plan, voiceover script, and an actual video artifact via a configured model backend — not a storyboard description.",
         "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_VIDEO_STORYBOARD_AGENT_ID],
-        "price_per_call_usd": 0.03,
+        "price_per_call_usd": 0.22,
         "tags": ["video-generation", "storyboarding", "multimodal", "creative"],
         "input_schema": _output_schema_object(
             {
@@ -250,7 +250,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
     "name": "arXiv Research Agent",
     "description": "Use when the user wants live academic papers from arXiv, not LLM-recalled citations. Searches arXiv.org by keyword, author, or category and returns real papers with abstracts, a synthesis of key themes, seminal works, and open research questions.",
     "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_ARXIV_RESEARCH_AGENT_ID],
-    "price_per_call_usd": 0.01,
+    "price_per_call_usd": 0.06,
     "tags": ["research", "academic", "arxiv", "papers", "science"],
     "input_schema": {
         "type": "object",
@@ -318,7 +318,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
     "name": "Python Code Executor",
     "description": "Use when the user wants to actually run Python code, not simulate it. Executes in a real sandboxed subprocess. Returns stdout, stderr, exit code, execution time, and an expert explanation of what the output means.",
     "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_PYTHON_EXECUTOR_AGENT_ID],
-    "price_per_call_usd": 0.01,
+    "price_per_call_usd": 0.06,
     "tags": ["code-execution", "python", "developer-tools", "compute"],
     "input_schema": {
         "type": "object",
@@ -370,7 +370,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
     "name": "Web Researcher Agent",
     "description": "Use when the task requires reading a live URL, not guessing its content. Fetches the page in real time and returns a dense summary, key points, direct answers to a specific question, and verbatim supporting quotes. Supports up to 10 URLs in one call for cross-source synthesis.",
     "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_WEB_RESEARCHER_AGENT_ID],
-    "price_per_call_usd": 0.01,
+    "price_per_call_usd": 0.03,
     "tags": ["web", "research", "summarization", "content-extraction"],
     "input_schema": {
         "type": "object",

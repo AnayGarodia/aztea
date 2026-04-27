@@ -69,24 +69,29 @@ Return JSON:
 
 
 def _fetch_pypi_search(query: str, count: int) -> list[dict]:
-    """Search PyPI using the search endpoint (HTML scraping) + package JSON for stats."""
+    """Search PyPI via its HTML search page, extracting package hrefs."""
     results = []
     try:
         resp = requests.get(
             _PYPI_SEARCH,
             params={"q": query, "o": "-zscore"},
             timeout=_TIMEOUT,
-            headers={"User-Agent": "aztea-package-finder/1.0"},
+            headers={
+                "User-Agent": "aztea-package-finder/1.0",
+                "Accept": "text/html",
+            },
         )
         if resp.status_code != 200:
             return results
-        # Extract package names from PyPI search HTML
-        names = re.findall(r'class="package-snippet__name"[^>]*>\s*([\w\-\.]+)\s*<', resp.text)
+        # Extract package names from /project/{name}/ links — stable across HTML changes
+        names = re.findall(r'href="/project/([\w\-\.]+)/"', resp.text)
         seen: set[str] = set()
-        for name in names[:count * 2]:
-            if name in seen:
-                continue
-            seen.add(name)
+        unique_names = []
+        for n in names:
+            if n not in seen:
+                seen.add(n)
+                unique_names.append(n)
+        for name in unique_names[:count * 2]:
             try:
                 pkg_resp = requests.get(
                     _PYPI_PKG.format(name=name),
@@ -99,7 +104,7 @@ def _fetch_pypi_search(query: str, count: int) -> list[dict]:
                 downloads = None
                 try:
                     dl_resp = requests.get(
-                        f"https://pypistats.org/api/packages/{name}/recent",
+                        f"https://pypistats.org/api/packages/{name.lower()}/recent",
                         timeout=_TIMEOUT,
                         headers={"User-Agent": "aztea-package-finder/1.0"},
                     )

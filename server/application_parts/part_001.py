@@ -945,6 +945,11 @@ def _require_api_key(request: Request) -> core_models.CallerContext:
     return caller
 
 
+def _optional_api_key(request: Request) -> core_models.CallerContext | None:
+    """Like _require_api_key but returns None instead of raising 401/403."""
+    return _resolve_caller(request)
+
+
 def _caller_owner_id(request: Request) -> str:
     caller = _resolve_caller(request)
     if caller is None:

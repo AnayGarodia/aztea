@@ -12,6 +12,22 @@ from server.pricing_helpers import (  # noqa: E402
 )
 
 
+def _validate_builtin_agent_payload(agent_id: str, input_payload: dict[str, Any]) -> None:
+    """Validate payload for Pydantic-model-backed builtins BEFORE charging.
+
+    Raises ValueError (converted to 422) if invalid.
+    Agents that use their own run() validation are skipped here — they return
+    error dicts rather than raising, so they never cause a spurious charge.
+    """
+    payload = input_payload or {}
+    if agent_id == _FINANCIAL_AGENT_ID:
+        FinancialRequest.model_validate(payload)
+    elif agent_id == _CODEREVIEW_AGENT_ID:
+        CodeReviewRequest.model_validate(payload)
+    elif agent_id == _WIKI_AGENT_ID:
+        WikiRequest.model_validate(payload)
+
+
 def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict:
     payload = input_payload or {}
     if agent_id == _FINANCIAL_AGENT_ID:
@@ -63,6 +79,10 @@ def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict
         return agent_package_finder.run(payload)
     if agent_id == _LINTER_AGENT_ID:
         return agent_linter_agent.run(payload)
+    if agent_id == _SHELL_EXECUTOR_AGENT_ID:
+        return agent_shell_executor.run(payload)
+    if agent_id == _TYPE_CHECKER_AGENT_ID:
+        return agent_type_checker.run(payload)
     raise ValueError(f"Unsupported built-in agent '{agent_id}'.")
 
 

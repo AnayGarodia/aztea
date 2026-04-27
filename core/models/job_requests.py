@@ -11,6 +11,7 @@ except ImportError:  # pragma: no cover
     _JSONSCHEMA_AVAILABLE = False
 
 from pydantic import (
+    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
@@ -28,17 +29,21 @@ from .core_types import *  # noqa: F403
 
 class JobCreateRequest(BaseModel):
     model_config = ConfigDict(
+        populate_by_name=True,
         json_schema_extra={
             "example": {
                 "agent_id": "00000000-0000-0000-0000-000000000001",
                 "input_payload": {"ticker": "AAPL"},
                 "max_attempts": 3,
             }
-        }
+        },
     )
 
     agent_id: str
-    input_payload: JSONObject = Field(default_factory=dict)
+    input_payload: JSONObject = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("input_payload", "task"),
+    )
     input_artifacts: list[JSONObject] = Field(
         default_factory=list,
         description=(
