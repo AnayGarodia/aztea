@@ -11,7 +11,7 @@ import re
 import secrets
 import sqlite3
 
-from .schema import _conn, _hash_password, _now
+from .schema import _conn, _hash_password
 
 
 _PHONE_RE = re.compile(r"^\+?[0-9 ()\-]{6,32}$")

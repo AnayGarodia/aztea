@@ -102,8 +102,8 @@ def _fetch_github_diff(pr_url: str) -> str:
     except urllib.error.HTTPError as e:
         if e.code == 403:
             raise RuntimeError(
-                f"GitHub API rate limit exceeded (403). Set GITHUB_TOKEN env var to increase limits. "
-                f"Alternatively, pass the diff text directly using the 'diff' parameter."
+                "GitHub API rate limit exceeded (403). Set GITHUB_TOKEN env var to increase limits. "
+                "Alternatively, pass the diff text directly using the 'diff' parameter."
             ) from e
         if e.code == 404:
             raise RuntimeError(

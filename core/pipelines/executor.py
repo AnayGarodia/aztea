@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import threading
 import time
 from collections import deque
@@ -162,7 +161,7 @@ def _invoke_agent(
                 raise RuntimeError("Agent returned malformed JSON.") from exc
         if not isinstance(output, dict):
             output = {"output": output}
-        updated = jobs.update_job_status(job["job_id"], "complete", output_payload=output, completed=True)
+        jobs.update_job_status(job["job_id"], "complete", output_payload=output, completed=True)
         payments.post_call_payout(
             agent_wallet["wallet_id"],
             platform_wallet["wallet_id"],

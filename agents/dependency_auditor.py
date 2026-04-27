@@ -198,10 +198,10 @@ def _fetch_npm_latest(name: str) -> tuple[str | None, str | None]:
 def _license_risk(license_str: str | None) -> str:
     if not license_str:
         return "low"
-    l = license_str.lower()
-    if any(k in l for k in _COPYLEFT):
+    lic = license_str.lower()
+    if any(k in lic for k in _COPYLEFT):
         return "high"
-    if "unknown" in l or "proprietary" in l or "see license" in l:
+    if "unknown" in lic or "proprietary" in lic or "see license" in lic:
         return "medium"
     return "none"
 
