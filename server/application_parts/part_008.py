@@ -404,11 +404,12 @@ def registry_agent_caller_key_create(
 def admin_agent_suspend(
     request: Request,
     agent_id: str,
+    body: AgentSuspendRequest = AgentSuspendRequest(),
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.AgentResponse:
     _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
     _require_admin_ip_allowlist(request)
-    agent = registry.set_agent_status(agent_id, "suspended")
+    agent = registry.set_agent_status(agent_id, "suspended", reason=body.reason)
     if agent is None:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
     return JSONResponse(content=_agent_response(agent, caller))
@@ -721,13 +722,20 @@ def registry_call(
                 )
             # Always wrap in a consistent envelope so callers can reliably
             # read job_id, status, and output without sniffing the shape.
-            return JSONResponse(content={
-                "job_id": job["job_id"],
-                "status": "complete",
-                "output": output,
-                "latency_ms": _job_latency_ms(completed),
-                "cached": False,
-            })
+            headers = {}
+            if agent_id in _DEPRECATED_BUILTIN_AGENT_IDS:
+                headers["Deprecation"] = "true"
+                headers["Sunset"] = _DEPRECATED_AGENTS_SUNSET_DATE
+            return JSONResponse(
+                content={
+                    "job_id": job["job_id"],
+                    "status": "complete",
+                    "output": output,
+                    "latency_ms": _job_latency_ms(completed),
+                    "cached": False,
+                },
+                headers=headers if headers else None,
+            )
         except ValidationError as exc:
             failed = jobs.update_job_status(
                 job["job_id"],

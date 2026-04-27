@@ -452,15 +452,21 @@ def get_agents(
     return [_row_to_dict(r) for r in rows]
 
 
-def set_agent_status(agent_id: str, status: str) -> dict | None:
+def set_agent_status(agent_id: str, status: str, reason: str | None = None) -> dict | None:
     normalized_status = str(status or "").strip().lower()
     if normalized_status not in {"active", "suspended", "banned"}:
         raise ValueError("status must be one of: active, suspended, banned.")
     with _conn() as conn:
-        conn.execute(
-            "UPDATE agents SET status = ? WHERE agent_id = ?",
-            (normalized_status, agent_id),
-        )
+        if normalized_status == "suspended" and reason is not None:
+            conn.execute(
+                "UPDATE agents SET status = ?, suspension_reason = ? WHERE agent_id = ?",
+                (normalized_status, str(reason)[:500], agent_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE agents SET status = ? WHERE agent_id = ?",
+                (normalized_status, agent_id),
+            )
     return get_agent(agent_id, include_unapproved=True)
 
 
