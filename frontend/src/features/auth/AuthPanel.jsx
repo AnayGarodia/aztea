@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom'
-import { authLogin, authGoogle, authSignupStart, authSignupVerify, authSignupResend, authForgotPassword, authResetPassword } from '../../api'
+import { authLogin, authGoogle, authRegister, authSignupStart, authSignupVerify, authSignupResend, authForgotPassword, authResetPassword } from '../../api'
 import { useAuth } from '../../context/AuthContext'
 import Button from '../../ui/Button'
 import Input from '../../ui/Input'
@@ -213,12 +213,14 @@ export default function AuthPanel() {
         // back to /welcome if it re-evaluates before apiKey propagates.
         navigate(redirectTo, { replace: true })
       } else {
-        // Register: kick off email-OTP signup. We do NOT create an account
-        // until /auth/signup/verify succeeds.
-        await authSignupStart(normalizedUsername, normalizedEmail, password, selectedRole || 'both')
-        setSignupOtp('')
-        setResentNote('')
-        setRegisterStep('verify')
+        // Register directly — email verification is disabled for now.
+        const result = await authRegister(normalizedUsername, normalizedEmail, password, selectedRole || 'both')
+        const userInfo = buildUserInfo(result, normalizedEmail, selectedRole)
+        if (result?.user_id) {
+          localStorage.removeItem(`aztea_onboarding_done:${result.user_id}`)
+        }
+        connect(result.raw_api_key, userInfo)
+        navigate(redirectTo, { replace: true })
       }
     } catch (err) {
       setError(err.message ?? 'Authentication failed')
@@ -621,7 +623,7 @@ export default function AuthPanel() {
               aria-disabled={!canSubmit}
               style={{ width: '100%' }}
             >
-              {tab === 'signin' ? 'Sign in' : 'Send verification code'}
+              {tab === 'signin' ? 'Sign in' : 'Create account'}
             </Button>
             {tab === 'signin' && (
               <button
