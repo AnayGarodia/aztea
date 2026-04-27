@@ -11,7 +11,6 @@ import ErrorBoundary from './ui/ErrorBoundary'
 import LandingPage from './pages/LandingPage'
 
 const AppShell = lazy(() => import('./layout/AppShell'))
-const OnboardingWizard = lazy(() => import('./features/onboarding/OnboardingWizard'))
 const DocsPage = lazy(() => import('./pages/DocsPage'))
 const TermsPage = lazy(() => import('./pages/TermsPage'))
 const PrivacyPage = lazy(() => import('./pages/PrivacyPage'))
@@ -81,9 +80,6 @@ function AuthedApp() {
   const { apiKey } = useAuth()
   return (
     <MarketProvider apiKey={apiKey}>
-      <Suspense fallback={null}>
-        <OnboardingWizard />
-      </Suspense>
       <ErrorBoundary>
         {/* Use a near-empty fallback so route switches don't flash the
             full "connecting…" screen on every navigation. */}

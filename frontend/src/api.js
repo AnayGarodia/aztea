@@ -379,11 +379,14 @@ export async function fetchAuthKeys(key) {
   return body
 }
 
-export async function createAuthKey(key, name, scopes = ['caller', 'worker']) {
+export async function createAuthKey(key, name, scopes = ['caller', 'worker'], options = {}) {
+  const payload = { name, scopes }
+  if (options.per_job_cap_cents != null) payload.per_job_cap_cents = options.per_job_cap_cents
+  if (options.max_spend_cents != null) payload.max_spend_cents = options.max_spend_cents
   const { body } = await request('/auth/keys', {
     method: 'POST',
     key,
-    body: { name, scopes },
+    body: payload,
   })
   return body
 }

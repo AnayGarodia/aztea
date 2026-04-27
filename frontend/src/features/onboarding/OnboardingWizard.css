@@ -175,7 +175,7 @@
 }
 .ob-back:hover { color: var(--text-primary); background: var(--surface-2); }
 
-.ob-skip {
+.ob-cta-link {
   background: none;
   border: none;
   cursor: pointer;
@@ -184,11 +184,14 @@
   color: var(--text-muted);
   padding: 6px 10px;
   border-radius: var(--r-sm);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--border-bright);
   transition: color 0.15s;
 }
-.ob-skip:hover { color: var(--text-secondary); }
+.ob-cta-link:hover { color: var(--text-primary); }
 
-.ob-cta {
+.ob-next {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -202,8 +205,8 @@
   cursor: pointer;
   transition: filter 0.15s, transform 0.1s;
 }
-.ob-cta:hover { filter: brightness(1.08); }
-.ob-cta:active { transform: scale(0.97); }
+.ob-next:hover { filter: brightness(1.08); }
+.ob-next:active { transform: scale(0.97); }
 
 /* ── Visual widgets ───────────────────────────────────────────── */
 .ob-visual {

@@ -371,13 +371,8 @@ export default function OnboardingWizard() {
 
   const handleCta = () => {
     const current = STEPS[step]
-    if (step >= STEPS.length - 1) {
-      dismiss()
-      navigate(current.ctaPath)
-    } else {
-      navigate(current.ctaPath)
-      goTo(step + 1)
-    }
+    dismiss()
+    navigate(current.ctaPath)
   }
 
   const handleNext = () => {
@@ -494,15 +489,18 @@ export default function OnboardingWizard() {
                 )}
               </div>
               <div className="ob-footer-right">
-                <button className="ob-skip" onClick={handleNext}>
-                  {step === STEPS.length - 1 ? 'Done' : 'Next'}
-                </button>
                 <button
-                  className="ob-cta"
-                  style={{ background: current.accentColor }}
+                  className="ob-cta-link"
                   onClick={handleCta}
                 >
                   {current.cta}
+                </button>
+                <button
+                  className="ob-next"
+                  style={{ background: current.accentColor }}
+                  onClick={handleNext}
+                >
+                  {step === STEPS.length - 1 ? 'Done' : 'Next'}
                   <ArrowRight size={14} />
                 </button>
               </div>

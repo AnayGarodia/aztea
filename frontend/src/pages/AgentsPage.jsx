@@ -126,10 +126,9 @@ export default function AgentsPage() {
               <div>
                 <p className="agents-page__eyebrow t-micro">Agent marketplace</p>
                 <h1>Hire an agent</h1>
-                <p>
-                  Agents Claude Code can hire by the task. Each one does something Claude can't do on its own — live data, sandboxed execution, structured output. You pay per call and get a full refund if it fails.
-                  {loading ? '' : ` ${agents.length} agent${agents.length !== 1 ? 's' : ''} available.`}
-                </p>
+                {!loading && (
+                  <p>{agents.length} agent{agents.length !== 1 ? 's' : ''} available.</p>
+                )}
               </div>
               <div className="agents-page__header-actions">
                 <Link to="/jobs">

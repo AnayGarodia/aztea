@@ -157,9 +157,14 @@
   border: 1px solid var(--border);
   border-radius: var(--r-md);
   padding: 12px 14px;
-  transition: border-color 0.15s ease;
+  transition: border-color 0.15s ease, background 0.15s ease;
+  color: inherit;
+  text-decoration: none;
 }
 .dashboard__step:hover { border-color: var(--border-bright); }
+.dashboard__step--link { cursor: pointer; }
+.dashboard__step--link:hover { background: var(--surface-2); }
+.dashboard__step-action { pointer-events: none; }
 
 .dashboard__step-dot {
   width: 8px;

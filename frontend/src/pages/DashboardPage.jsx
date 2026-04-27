@@ -35,19 +35,23 @@ function JobRow({ job, agents }) {
 }
 
 function ActionStep({ done, title, copy, actionTo, actionLabel }) {
-  return (
-    <div className="dashboard__step">
+  const inner = (
+    <>
       <div>
         <p className="dashboard__step-title">{title}</p>
         <p className="dashboard__step-copy">{copy}</p>
       </div>
-      {actionTo && (
-        <Link to={actionTo}>
-          <Button size="sm" variant={done ? 'ghost' : 'primary'}>{actionLabel}</Button>
-        </Link>
+      {actionLabel && (
+        <span className={`btn btn--${done ? 'ghost' : 'primary'} btn--sm dashboard__step-action`} aria-hidden="true">
+          {actionLabel}
+        </span>
       )}
-    </div>
+    </>
   )
+  if (actionTo) {
+    return <Link to={actionTo} className="dashboard__step dashboard__step--link">{inner}</Link>
+  }
+  return <div className="dashboard__step">{inner}</div>
 }
 
 export default function DashboardPage() {
@@ -192,15 +196,15 @@ export default function DashboardPage() {
           {/* KPIs */}
           <Stagger className="dashboard__kpi-grid" staggerDelay={0.07}>
             {[
-              { label: role === 'builder' ? 'Earnings balance' : 'Wallet balance', value: balance, hint: role === 'builder' ? 'Withdraw via Stripe Connect' : 'Available for calls' },
-              { label: 'Agents available', value: loading ? '…' : agents.length, hint: role === 'builder' ? 'In the marketplace' : 'Available to hire' },
-              { label: 'Active jobs',  value: loading ? '…' : activeJobs, hint: 'Running or pending' },
-              { label: 'Success rate', value: loading ? '…' : `${successRate}%`, hint: jobs.length > 0 ? `${completedJobs}/${jobs.length} completed` : 'No jobs yet' },
+              { label: role === 'builder' ? 'Earnings balance' : 'Wallet balance', value: balance, hint: role === 'builder' ? 'Withdraw via Stripe Connect' : '' },
+              { label: 'Agents available', value: loading ? '…' : agents.length, hint: role === 'builder' ? 'In the marketplace' : '' },
+              { label: 'Active jobs',  value: loading ? '…' : activeJobs, hint: '' },
+              { label: 'Success rate', value: loading ? '…' : `${successRate}%`, hint: jobs.length > 0 ? '' : 'No jobs yet' },
             ].filter(Boolean).map(s => (
               <div key={s.label} className="dashboard__kpi">
                 <p className="dashboard__kpi-label">{s.label}</p>
                 <p className="dashboard__kpi-value">{s.value}</p>
-                <p className="dashboard__kpi-hint">{s.hint}</p>
+                {s.hint && <p className="dashboard__kpi-hint">{s.hint}</p>}
               </div>
             ))}
           </Stagger>
@@ -255,49 +259,33 @@ export default function DashboardPage() {
             </Card>
           </Reveal>
 
-          {/* Main grid */}
-          <div className="dashboard__main-grid">
-            <Reveal delay={0.15}>
-              <Card>
-                <Card.Header className="dashboard__panel-head">
-                  <span className="dashboard__section-title">Recent jobs</span>
-                  <Link to="/jobs"><Button variant="ghost" size="sm">View all</Button></Link>
-                </Card.Header>
-                <Card.Body>
-                  {loading ? (
-                    <div className="dashboard__loading-list">
-                      {[1,2,3,4].map(i => <Skeleton key={i} variant="rect" height={52} />)}
-                    </div>
-                  ) : recentJobs.length === 0 ? (
-                    <EmptyState
-                      agentId="empty-jobs"
-                      title="No jobs yet"
-                      sub="Hire an agent from the marketplace to get started."
-                      action={<Link to="/agents"><Button variant="primary">Browse agents</Button></Link>}
-                    />
-                  ) : (
-                    <div className="dashboard__jobs">
-                      {recentJobs.map(job => <JobRow key={job.job_id} job={job} agents={agents} />)}
-                    </div>
-                  )}
-                </Card.Body>
-              </Card>
-            </Reveal>
-
-            <Reveal delay={0.2}>
-              <Card>
-                <Card.Header>
-                  <span className="dashboard__section-title">How payment works</span>
-                </Card.Header>
-                <Card.Body className="dashboard__trust">
-                  <p>We charge your wallet before a call runs. If the agent succeeds, the payout happens automatically. If it fails, you get a full refund. Every movement shows up in your ledger.</p>
-                  <Link to="/wallet">
-                    <Button variant="secondary" size="sm">Open wallet ledger</Button>
-                  </Link>
-                </Card.Body>
-              </Card>
-            </Reveal>
-          </div>
+          {/* Recent jobs (full width) */}
+          <Reveal delay={0.15}>
+            <Card>
+              <Card.Header className="dashboard__panel-head">
+                <span className="dashboard__section-title">Recent jobs</span>
+                <Link to="/jobs"><Button variant="ghost" size="sm">View all</Button></Link>
+              </Card.Header>
+              <Card.Body>
+                {loading ? (
+                  <div className="dashboard__loading-list">
+                    {[1,2,3,4].map(i => <Skeleton key={i} variant="rect" height={52} />)}
+                  </div>
+                ) : recentJobs.length === 0 ? (
+                  <EmptyState
+                    agentId="empty-jobs"
+                    title="No jobs yet"
+                    sub="Hire an agent from the marketplace to get started."
+                    action={<Link to="/agents"><Button variant="primary">Browse agents</Button></Link>}
+                  />
+                ) : (
+                  <div className="dashboard__jobs">
+                    {recentJobs.map(job => <JobRow key={job.job_id} job={job} agents={agents} />)}
+                  </div>
+                )}
+              </Card.Body>
+            </Card>
+          </Reveal>
 
         </div>
       </div>

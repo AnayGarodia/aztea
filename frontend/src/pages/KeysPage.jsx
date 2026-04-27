@@ -67,6 +67,7 @@ export default function KeysPage() {
   const [keysError, setKeysError] = useState(null)
   const [keyName, setKeyName] = useState('')
   const [keyScopes, setKeyScopes] = useState(['caller', 'worker'])
+  const [perJobCapDollars, setPerJobCapDollars] = useState('1.00')
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState(null)
   const [newKey, setNewKey] = useState(null)
@@ -91,9 +92,18 @@ export default function KeysPage() {
     const name = keyName.trim()
     if (!name) return
     if (keyScopes.length === 0) { setCreateError('Select at least one scope.'); return }
+    const options = {}
+    if (keyScopes.includes('caller')) {
+      const dollars = Number(perJobCapDollars)
+      if (!Number.isFinite(dollars) || dollars <= 0) {
+        setCreateError('Enter a per-job spending cap (in USD) for caller-scoped keys.')
+        return
+      }
+      options.per_job_cap_cents = Math.round(dollars * 100)
+    }
     setCreating(true); setCreateError(null); setNewKey(null)
     try {
-      const created = await createAuthKey(apiKey, name, keyScopes)
+      const created = await createAuthKey(apiKey, name, keyScopes, options)
       setNewKey(created.raw_key ?? null)
       showToast?.(`Key "${name}" created.`, 'success')
       setKeyName('')
@@ -172,6 +182,20 @@ export default function KeysPage() {
                       required
                     />
                   </div>
+                  {keyScopes.includes('caller') && (
+                    <div className="settings__input-wrap">
+                      <Input
+                        label="Per-job spending cap (USD)"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={perJobCapDollars}
+                        onChange={e => { setPerJobCapDollars(e.target.value); setCreateError(null) }}
+                        placeholder="1.00"
+                        hint="Required for caller scope. Each job using this key cannot exceed this price."
+                      />
+                    </div>
+                  )}
                   <div className="settings__scope-wrap">
                     <p className="settings__scope-label">Scopes</p>
                     <div className="settings__scope-options">
