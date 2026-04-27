@@ -41,6 +41,7 @@ from typing import Any
 import numpy as np
 
 from core import embeddings
+from core import feature_flags as _feature_flags
 
 from .core_schema import (
     HEALTH_SUSPENSION_THRESHOLD,
@@ -1058,7 +1059,12 @@ def search_agents(
     if caller_trust is not None:
         normalized_caller_trust = _normalize_min_trust(caller_trust)
     required_fields = _required_input_fields_set(required_input_fields)
-    query_vector = np.asarray(embeddings.embed_text(normalized_query), dtype=np.float32)
+    # Skip embedding computation when disabled; the semantic weight is
+    # redistributed to trust and price in the blending step below.
+    _embeddings_enabled = not _feature_flags.DISABLE_EMBEDDINGS
+    query_vector: np.ndarray | None = None
+    if _embeddings_enabled:
+        query_vector = np.asarray(embeddings.embed_text(normalized_query), dtype=np.float32)
     agents = get_agents_with_reputation(include_unapproved=include_unapproved)
     vectors_by_agent = _load_embeddings_for_agents(
         {
@@ -1110,20 +1116,21 @@ def search_agents(
         if trust < trust_floor:
             continue
 
-        vector = vectors_by_agent.get(agent_id)
-        if vector is None:
-            source_text = _embedding_source_from_agent(agent)
-            vector_list = embeddings.embed_text(source_text)
-            vector = np.asarray(vector_list, dtype=np.float32)
-            vectors_by_agent[agent_id] = vector
-            missing_embeddings.append((agent_id, source_text, vector_list))
-
-        similarity = float(embeddings.cosine(query_vector, vector))
-        semantic_similarity = max(0.0, min(1.0, similarity))
+        semantic_similarity = 0.0
+        if _embeddings_enabled and query_vector is not None:
+            vector = vectors_by_agent.get(agent_id)
+            if vector is None:
+                source_text = _embedding_source_from_agent(agent)
+                vector_list = embeddings.embed_text(source_text)
+                vector = np.asarray(vector_list, dtype=np.float32)
+                vectors_by_agent[agent_id] = vector
+                missing_embeddings.append((agent_id, source_text, vector_list))
+            similarity = float(embeddings.cosine(query_vector, vector))
+            semantic_similarity = max(0.0, min(1.0, similarity))
         candidates.append(
             {
                 "agent": agent,
-                "similarity": semantic_similarity,
+                "similarity": semantic_similarity,  # 0.0 when embeddings disabled
                 "trust": trust,
                 "price_cents": price_cents,
                 "supported_fields": supported_fields,
@@ -1159,11 +1166,20 @@ def search_agents(
             normalized_price = (candidate["price_cents"] - min_price) / (max_price - min_price)
             inverse_price = 1.0 - normalized_price
 
-        blended_score = (
-            SEMANTIC_SIMILARITY_WEIGHT * candidate["similarity"]
-            + TRUST_SCORE_WEIGHT * candidate["trust"]
-            + INVERSE_PRICE_WEIGHT * inverse_price
-        )
+        if _embeddings_enabled:
+            blended_score = (
+                SEMANTIC_SIMILARITY_WEIGHT * candidate["similarity"]
+                + TRUST_SCORE_WEIGHT * candidate["trust"]
+                + INVERSE_PRICE_WEIGHT * inverse_price
+            )
+        else:
+            # Embeddings disabled: redistribute semantic weight to trust+price
+            # proportionally so scores still span the full [0, 1] range.
+            total_remaining = TRUST_SCORE_WEIGHT + INVERSE_PRICE_WEIGHT
+            blended_score = (
+                (TRUST_SCORE_WEIGHT / total_remaining) * candidate["trust"]
+                + (INVERSE_PRICE_WEIGHT / total_remaining) * inverse_price
+            )
         candidate["blended_score"] = blended_score
         candidate["match_reasons"] = _match_reasons(
             candidate["agent"],
