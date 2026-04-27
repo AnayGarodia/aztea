@@ -241,7 +241,9 @@ def _execute_run(
             final_output = {node_id: step_results.get(node_id) for node_id in terminal_nodes}
         db.complete_run(run_id, final_output)
     except Exception as exc:
-        db.fail_run(run_id, str(exc))
+        # Include the exception class so the error_message is self-explanatory
+        # in the run record (e.g. "ValueError: Pipeline node 'step1' ...").
+        db.fail_run(run_id, f"{type(exc).__name__}: {exc}")
 
 
 def run_pipeline(

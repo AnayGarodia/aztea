@@ -770,13 +770,27 @@ def pipelines_create(
     name = str(body.get("name") or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="name is required.")
+    # Accept both canonical {"definition": {"nodes": [...]}} and the shorthand
+    # form where nodes are at the body root: {"name": "...", "nodes": [...]}.
     definition = body.get("definition")
     if not isinstance(definition, dict):
-        raise HTTPException(status_code=422, detail="definition must be an object.")
+        if isinstance(body.get("nodes"), list):
+            definition = {"nodes": body["nodes"]}
+        else:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error_code": "pipeline.invalid_definition",
+                    "message": "definition must be an object with a nodes array.",
+                },
+            )
     try:
         validated = pipelines.validate_definition(definition)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise HTTPException(
+            status_code=422,
+            detail={"error_code": "pipeline.node_invalid", "message": str(exc)},
+        )
     created = pipelines.create_pipeline(
         caller["owner_id"],
         name,
@@ -862,7 +876,10 @@ def pipelines_run(
             execute_builtin_agent=_execute_builtin_agent,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise HTTPException(
+            status_code=422,
+            detail={"error_code": "pipeline.node_invalid", "message": str(exc)},
+        )
     run = pipelines.get_run(run_id)
     return JSONResponse(
         content={
