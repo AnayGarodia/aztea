@@ -178,9 +178,18 @@ def _mcp_payload_from_response(response: Response) -> Any:
         return None
     body_text = body_bytes.decode("utf-8", errors="replace")
     try:
-        return json.loads(body_text)
+        parsed = json.loads(body_text)
     except json.JSONDecodeError:
         return body_text
+    # Unwrap the standard sync call envelope so MCP structuredContent
+    # contains the agent's output dict, not the envelope itself.
+    if (
+        isinstance(parsed, dict)
+        and "output" in parsed
+        and parsed.get("status") == "complete"
+    ):
+        return parsed["output"]
+    return parsed
 
 
 def _parse_data_uri(value: str) -> tuple[str | None, str | None]:

@@ -213,10 +213,16 @@ def _extract_sync_cache_controls(payload: dict[str, Any]) -> tuple[dict[str, Any
 
 
 def _cache_hit_response_payload(cached_output: Any) -> dict[str, Any]:
-    payload = dict(cached_output) if isinstance(cached_output, dict) else {"output": cached_output}
-    payload["cache_hit"] = True
-    payload["cost_usd"] = 0
-    return payload
+    # Return the same envelope shape as a live call so clients need not
+    # branch on whether the response came from cache.
+    inner = dict(cached_output) if isinstance(cached_output, dict) else {"result": cached_output}
+    return {
+        "job_id": inner.pop("_cached_job_id", None),
+        "status": "complete",
+        "output": inner,
+        "latency_ms": 0,
+        "cached": True,
+    }
 
 
 @app.post(
@@ -713,7 +719,15 @@ def registry_call(
                     job["job_id"],
                     ttl_hours=cache_ttl_hours,
                 )
-            return JSONResponse(content=output)
+            # Always wrap in a consistent envelope so callers can reliably
+            # read job_id, status, and output without sniffing the shape.
+            return JSONResponse(content={
+                "job_id": job["job_id"],
+                "status": "complete",
+                "output": output,
+                "latency_ms": _job_latency_ms(completed),
+                "cached": False,
+            })
         except ValidationError as exc:
             failed = jobs.update_job_status(
                 job["job_id"],
@@ -959,7 +973,15 @@ def registry_call(
             f"sync:{uuid.uuid4()}",
             ttl_hours=cache_ttl_hours,
         )
-    return JSONResponse(content=result_payload, status_code=resp.status_code)
+    # Wrap in the standard sync envelope so clients have a consistent shape
+    # regardless of whether the call was live, cached, or via a builtin.
+    return JSONResponse(content={
+        "job_id": None,
+        "status": "complete",
+        "output": result_payload,
+        "latency_ms": round(latency_ms, 1),
+        "cached": False,
+    }, status_code=200)
 
 
 # ---------------------------------------------------------------------------
