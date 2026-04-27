@@ -114,6 +114,7 @@ from core import hosted_skills as _hosted_skills
 from core import skill_executor as _skill_executor
 from core import skill_parser as _skill_parser
 from core import cache as _cache
+from core import feature_flags as _feature_flags
 from core import pipelines
 from core import recipes
 from core import mcp_manifest
