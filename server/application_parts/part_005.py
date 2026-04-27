@@ -434,14 +434,21 @@ def _settle_successful_job(
     if disputes.has_dispute_for_job(job["job_id"]):
         return jobs.get_job(job["job_id"]) or job
     verification_status = _normalize_output_verification_status(job)
+    # Always respect explicit verification windows: if the job opted in
+    # (window_seconds > 0) and the caller hasn't decided yet, hold settlement.
     if verification_status == "pending":
         return jobs.get_job(job["job_id"]) or job
     if verification_status == "rejected":
         return jobs.get_job(job["job_id"]) or job
-    # Explicit caller acceptance should release funds immediately; only implicit acceptance
-    # paths remain gated by the dispute window timeout.
-    if require_dispute_window_expiry and _is_dispute_window_open(job):
-        return jobs.get_job(job["job_id"]) or job
+    # The 72-hour implicit dispute window previously blocked ALL settlement,
+    # including jobs where no verification was ever configured.  Default now:
+    # settle immediately and rely on the dispute path for clawback.
+    # Set AZTEA_REQUIRE_VERIFICATION=1 to restore the old gated behaviour.
+    if _feature_flags.REQUIRE_VERIFICATION:
+        # Explicit caller acceptance releases funds immediately; only implicit
+        # acceptance paths are gated by the dispute window timeout.
+        if require_dispute_window_expiry and _is_dispute_window_open(job):
+            return jobs.get_job(job["job_id"]) or job
     if not job["settled_at"]:
         payments.post_call_payout(
             job["agent_wallet_id"],
