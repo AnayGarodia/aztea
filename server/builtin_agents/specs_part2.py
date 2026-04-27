@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from server.builtin_agents import pricing_overlay as _pricing_overlay
 from server.builtin_agents.constants import (
     ARXIV_RESEARCH_AGENT_ID as _ARXIV_RESEARCH_AGENT_ID,
     BUILTIN_INTERNAL_ENDPOINTS as _BUILTIN_INTERNAL_ENDPOINTS,
@@ -878,3 +879,31 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
         ],
     },
     ]
+
+
+def _assert_prices_match_overlay(specs: list[dict[str, Any]]) -> None:
+    """Raise at import time if a spec's price_per_call_usd drifts below its overlay minimum.
+
+    The overlay is the canonical pricing source for variable-priced agents.
+    A spec price BELOW the overlay minimum means callers see an inaccurate
+    price in discovery — catch this at startup, not at runtime.
+    """
+    overlay = _pricing_overlay.get_pricing_overlay()
+    for spec in specs:
+        agent_id = spec.get("agent_id", "")
+        if agent_id not in overlay:
+            continue
+        config = overlay[agent_id].get("pricing_config", {})
+        min_cents = config.get("min_cents", 0)
+        min_usd = min_cents / 100
+        spec_price = float(spec.get("price_per_call_usd", 0))
+        if spec_price < min_usd - 0.0001:  # 0.1-cent tolerance for float arithmetic
+            raise RuntimeError(
+                f"Price drift detected for agent {agent_id!r}: "
+                f"spec price ${spec_price:.4f} < overlay minimum ${min_usd:.4f}. "
+                "Update pricing_overlay.py or the spec to match."
+            )
+
+
+# Eagerly validate on import so startup fails fast on price drift.
+_assert_prices_match_overlay(load_builtin_specs_part2())
