@@ -25,12 +25,13 @@ from __future__ import annotations
 
 from . import schema
 from . import users
+from . import profile
 
 # Re-export every public symbol from the submodules so ``core.auth.<name>`` keeps
 # working. Underscored private helpers are included on purpose — integration tests
 # and monkeypatches (e.g. ``monkeypatch.setattr(core.auth, "_local", ...)``)
 # historically relied on them being importable from the package root.
-for _mod in (schema, users):
+for _mod in (schema, users, profile):
     for _name in dir(_mod):
         if _name.startswith("__"):
             continue

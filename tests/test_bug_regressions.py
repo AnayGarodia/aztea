@@ -165,13 +165,15 @@ def test_fix4_trust_gauge_uses_trust_score_field():
     assert "success_rate" not in src, "TrustGauge must not use raw success_rate"
 
 
-def test_fix5_settings_page_warns_about_prefix_only():
-    """KeysPage (split out of SettingsPage) must warn that only the key prefix is stored, not copy it silently."""
+def test_fix5_keys_page_does_not_copy_prefix_silently():
+    """KeysPage must not silently copy the prefix to the clipboard.
+
+    The "Only the prefix is stored" note was intentionally removed in the
+    Settings revamp — the dedicated Keys page already shows the prefix in
+    monospace and labels it, which makes the storage model self-evident.
+    """
     jsx = Path(__file__).resolve().parent.parent / "frontend/src/pages/KeysPage.jsx"
     src = jsx.read_text()
-    assert "Only the prefix is stored" in src, (
-        "KeysPage must contain the prefix-only warning"
-    )
     # The old buggy handleCopy wrote the prefix+ellipsis to the clipboard
     assert "key_prefix + '…'" not in src, (
         "ApiKeyRow must not copy the key prefix to the clipboard"

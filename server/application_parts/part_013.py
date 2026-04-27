@@ -480,6 +480,189 @@ def wallet_get(
 
 
 # ---------------------------------------------------------------------------
+# Billing: top-up history + saved Stripe payment methods. Top-up history is
+# read directly from the existing ``stripe_sessions`` bookkeeping table. Saved
+# cards live on a per-user Stripe Customer that we create lazily on the first
+# SetupIntent and persist on ``users.stripe_customer_id``.
+# ---------------------------------------------------------------------------
+
+
+def _require_user_caller(caller: core_models.CallerContext) -> dict:
+    if caller["type"] != "user":
+        raise HTTPException(status_code=403, detail="Not available for master or agent-scoped keys.")
+    return caller["user"]
+
+
+def _ensure_stripe_customer(user: dict) -> str:
+    customer_id = _auth.get_stripe_customer_id(user["user_id"])
+    if customer_id:
+        return customer_id
+    _stripe_lib.api_key = _STRIPE_SECRET_KEY
+    try:
+        customer = _stripe_lib.Customer.create(
+            email=user.get("email"),
+            name=user.get("full_name") or user.get("username"),
+            metadata={"user_id": user["user_id"]},
+        )
+    except Exception as exc:
+        status_code, payload = _stripe_http_error("billing_customer_create", exc)
+        raise HTTPException(status_code=status_code, detail=payload)
+    customer_id = _stripe_obj_id(customer)
+    if not customer_id:
+        raise HTTPException(status_code=502, detail="Stripe did not return a customer id.")
+    _auth.set_stripe_customer_id(user["user_id"], customer_id)
+    return customer_id
+
+
+@app.get(
+    "/billing/topups",
+    tags=["billing"],
+    summary="List the authenticated user's Stripe wallet top-ups.",
+    responses=_error_responses(401, 403, 429, 500),
+)
+@limiter.limit("60/minute")
+def list_billing_topups(
+    request: Request,
+    limit: int = 25,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    user = _require_user_caller(caller)
+    _require_scope(caller, "caller")
+    wallet = payments.get_or_create_wallet(user["user_id"])
+    safe_limit = max(1, min(int(limit or 25), 100))
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT session_id, wallet_id, amount_cents, processed_at
+            FROM stripe_sessions
+            WHERE wallet_id = ?
+            ORDER BY processed_at DESC
+            LIMIT ?
+            """,
+            (wallet["wallet_id"], safe_limit),
+        ).fetchall()
+    return JSONResponse({
+        "wallet_id": wallet["wallet_id"],
+        "topups": [
+            {
+                "session_id": r["session_id"],
+                "wallet_id": r["wallet_id"],
+                "amount_cents": int(r["amount_cents"] or 0),
+                "processed_at": r["processed_at"],
+            }
+            for r in rows
+        ],
+    })
+
+
+@app.post(
+    "/billing/setup-session",
+    tags=["billing"],
+    summary="Create a Stripe Checkout setup session so the user can save a card on file.",
+    responses=_error_responses(401, 403, 429, 500, 503),
+)
+@limiter.limit("20/minute")
+def create_billing_setup_session(
+    request: Request,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    if not _STRIPE_AVAILABLE or not _STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=503, detail="Payment processing is not configured on this server.")
+    user = _require_user_caller(caller)
+    _require_scope(caller, "caller")
+    customer_id = _ensure_stripe_customer(user)
+    _stripe_lib.api_key = _STRIPE_SECRET_KEY
+    try:
+        session = _stripe_lib.checkout.Session.create(
+            mode="setup",
+            customer=customer_id,
+            payment_method_types=["card"],
+            success_url=f"{_FRONTEND_BASE_URL}/settings?card_added=1",
+            cancel_url=f"{_FRONTEND_BASE_URL}/settings?card_added=cancelled",
+        )
+    except Exception as exc:
+        status_code, payload = _stripe_http_error("billing_setup_session", exc)
+        raise HTTPException(status_code=status_code, detail=payload)
+    return JSONResponse({
+        "checkout_url": _stripe_obj_get(session, "url", None),
+        "session_id": _stripe_obj_id(session),
+    })
+
+
+@app.get(
+    "/billing/payment-methods",
+    tags=["billing"],
+    summary="List the user's saved Stripe payment methods.",
+    responses=_error_responses(401, 403, 429, 500, 503),
+)
+@limiter.limit("60/minute")
+def list_billing_payment_methods(
+    request: Request,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    if not _STRIPE_AVAILABLE or not _STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=503, detail="Payment processing is not configured on this server.")
+    user = _require_user_caller(caller)
+    _require_scope(caller, "caller")
+    customer_id = _auth.get_stripe_customer_id(user["user_id"])
+    if not customer_id:
+        return JSONResponse({"payment_methods": []})
+    _stripe_lib.api_key = _STRIPE_SECRET_KEY
+    try:
+        result = _stripe_lib.PaymentMethod.list(customer=customer_id, type="card")
+    except Exception as exc:
+        status_code, payload = _stripe_http_error("billing_payment_methods_list", exc)
+        raise HTTPException(status_code=status_code, detail=payload)
+    cards = []
+    for pm in _stripe_obj_get(result, "data", []) or []:
+        card = _stripe_obj_get(pm, "card", None)
+        cards.append({
+            "id": _stripe_obj_id(pm),
+            "brand": _stripe_obj_get(card, "brand", None) if card else None,
+            "last4": _stripe_obj_get(card, "last4", None) if card else None,
+            "exp_month": _stripe_obj_get(card, "exp_month", None) if card else None,
+            "exp_year": _stripe_obj_get(card, "exp_year", None) if card else None,
+        })
+    return JSONResponse({"payment_methods": cards})
+
+
+@app.delete(
+    "/billing/payment-methods/{payment_method_id}",
+    tags=["billing"],
+    summary="Detach a saved card from the user's Stripe customer.",
+    responses=_error_responses(401, 403, 404, 429, 500, 503),
+)
+@limiter.limit("30/minute")
+def delete_billing_payment_method(
+    request: Request,
+    payment_method_id: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    if not _STRIPE_AVAILABLE or not _STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=503, detail="Payment processing is not configured on this server.")
+    user = _require_user_caller(caller)
+    _require_scope(caller, "caller")
+    customer_id = _auth.get_stripe_customer_id(user["user_id"])
+    if not customer_id:
+        raise HTTPException(status_code=404, detail="No saved payment methods.")
+    _stripe_lib.api_key = _STRIPE_SECRET_KEY
+    try:
+        pm = _stripe_lib.PaymentMethod.retrieve(payment_method_id)
+    except Exception as exc:
+        status_code, payload = _stripe_http_error("billing_payment_method_retrieve", exc)
+        raise HTTPException(status_code=status_code, detail=payload)
+    pm_customer = _stripe_obj_get(pm, "customer", None)
+    if pm_customer != customer_id:
+        raise HTTPException(status_code=404, detail="Payment method not found.")
+    try:
+        _stripe_lib.PaymentMethod.detach(payment_method_id)
+    except Exception as exc:
+        status_code, payload = _stripe_http_error("billing_payment_method_detach", exc)
+        raise HTTPException(status_code=status_code, detail=payload)
+    return JSONResponse({"ok": True, "payment_method_id": payment_method_id})
+
+
+# ---------------------------------------------------------------------------
 # SPA fallback: serve the built React app for non-API routes.
 #
 # Keeps the site working even when an upstream proxy forwards "/" to FastAPI
@@ -497,6 +680,7 @@ _SPA_API_PREFIXES: tuple[str, ...] = (
     "auth/",
     "admin/",
     "agents/",
+    "billing/",
     "builtin/",
     "config/",
     "disputes/",

@@ -247,9 +247,8 @@ export default function DashboardPage() {
                 ) : (
                   <>
                     <ActionStep done={agents.length > 0} title="Browse agents to hire" copy="Each listing shows what the agent does, what it costs per call, and example outputs." actionTo="/agents" actionLabel={agents.length > 0 ? 'Browse agents' : 'Start here'} />
-                    <ActionStep done={jobs.length > 0} title="Hire your first agent" copy="Pick an agent, send it a task. Sync mode waits for the result. Async mode queues it and you poll later." actionTo="/agents" actionLabel={jobs.length > 0 ? 'Hire another' : 'Hire an agent'} />
                     <ActionStep done={jobs.length > 0} title="Check on your jobs" copy="See pending, running, and completed jobs in one list." actionTo="/jobs" actionLabel="Open jobs" />
-                    <ActionStep done={hasBalance} title="Keep your wallet funded" copy="Every charge, refund, and payout shows up in your wallet transactions." actionTo="/wallet" actionLabel={hasBalance ? 'View wallet' : 'Add funds'} />
+                    <ActionStep done={hasBalance} title="Top up your wallet" copy="Every charge, refund, and payout shows up in your wallet transactions." actionTo="/wallet" actionLabel={hasBalance ? 'View wallet' : 'Add funds'} />
                   </>
                 )}
               </Card.Body>

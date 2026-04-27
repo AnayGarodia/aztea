@@ -123,6 +123,9 @@ class AuthMeUserResponse(BaseModel):
     user_id: str
     username: str
     email: str
+    full_name: str | None = None
+    phone: str | None = None
+    role: str | None = None
     scopes: list[str]
     legal_acceptance_required: bool
     legal_accepted_at: str | None = None

@@ -279,6 +279,50 @@ export async function authUpdateRole(key, role) {
   return body
 }
 
+export async function authUpdateProfile(key, fields) {
+  const { body } = await request('/auth/me', {
+    method: 'PATCH',
+    key,
+    body: fields,
+  })
+  return body
+}
+
+export async function authChangePassword(key, current_password, new_password) {
+  const { body } = await request('/auth/change-password', {
+    method: 'POST',
+    key,
+    body: { current_password, new_password },
+  })
+  return body
+}
+
+export async function listBillingTopups(key, limit = 25) {
+  const { body } = await request(`/billing/topups?limit=${encodeURIComponent(limit)}`, { key })
+  return body
+}
+
+export async function createBillingSetupSession(key) {
+  const { body } = await request('/billing/setup-session', {
+    method: 'POST',
+    key,
+  })
+  return body
+}
+
+export async function listBillingPaymentMethods(key) {
+  const { body } = await request('/billing/payment-methods', { key })
+  return body
+}
+
+export async function deleteBillingPaymentMethod(key, paymentMethodId) {
+  const { body } = await request(`/billing/payment-methods/${encodeURIComponent(paymentMethodId)}`, {
+    method: 'DELETE',
+    key,
+  })
+  return body
+}
+
 export async function authLogin(email, password) {
   const { body } = await request('/auth/login', {
     method: 'POST',

@@ -50,7 +50,6 @@ function ApiKeyRow({ item, onRevoke, revoking }) {
           <span className="settings__key-last-used">Last used: {fmtDate(item.last_used_at)}</span>
           {(item.scopes ?? []).map(s => <Badge key={s} label={s} />)}
         </div>
-        <p className="settings__key-prefix-note">Only the prefix is stored — the full key was shown once at creation.</p>
       </div>
       <span className="settings__key-created">{fmtDate(item.created_at)}</span>
       <button onClick={() => setConfirming(true)} className="settings__revoke-btn" aria-label={`Revoke key ${item.name}`}>

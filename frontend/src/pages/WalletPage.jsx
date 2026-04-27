@@ -328,7 +328,7 @@ export default function WalletPage() {
               <p className="wallet__hero-label">Available balance</p>
               <p className="wallet__balance">{fmtUsd(wallet?.balance_cents)}</p>
               {lowBalance && (
-                <p className="wallet__low-warn">Low balance — add funds before your next call.</p>
+                <p className="wallet__low-warn">We recommend adding funds before your next call.</p>
               )}
               {hasEarnings && (
                 <p className="wallet__hero-earned">

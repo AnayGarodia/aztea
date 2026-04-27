@@ -726,6 +726,8 @@ def auth_me(request: Request, caller: core_models.CallerContext = Depends(_requi
         "user_id": user["user_id"],
         "username": user["username"],
         "email": user["email"],
+        "full_name": user.get("full_name"),
+        "phone": user.get("phone"),
         "role": user.get("role") or "both",
         "scopes": caller.get("scopes") or [],
         **_auth_legal_payload(user),
@@ -754,6 +756,70 @@ def auth_update_role(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"role": new_role}
+
+
+@app.patch(
+    "/auth/me",
+    responses=_error_responses(400, 401, 403, 429),
+)
+@limiter.limit("20/minute")
+def auth_update_profile(
+    request: Request,
+    body: dict = Body(...),
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> dict:
+    """Edit the authenticated user's profile (username, full name, phone, email)."""
+    if caller["type"] != "user":
+        raise HTTPException(status_code=403, detail="Not available for master or agent-scoped keys.")
+    payload = body or {}
+    fields = {}
+    for key in ("username", "full_name", "phone", "email"):
+        if key in payload:
+            fields[key] = payload[key]
+    if not fields:
+        raise HTTPException(status_code=400, detail="No editable fields supplied.")
+    user_id = caller["user"]["user_id"]
+    try:
+        updated = _auth.update_profile(user_id, **fields)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return JSONResponse(content={
+        "user_id": updated["user_id"],
+        "username": updated["username"],
+        "email": updated["email"],
+        "full_name": updated.get("full_name"),
+        "phone": updated.get("phone"),
+        "role": updated.get("role") or "both",
+        "scopes": caller.get("scopes") or [],
+        **_auth_legal_payload(updated),
+    })
+
+
+@app.post(
+    "/auth/change-password",
+    responses=_error_responses(400, 401, 403, 429),
+)
+@limiter.limit("10/minute")
+def auth_change_password(
+    request: Request,
+    body: dict = Body(...),
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> dict:
+    """Replace the user's password after verifying the current one.
+
+    Existing API keys are revoked so every active session must re-authenticate.
+    """
+    if caller["type"] != "user":
+        raise HTTPException(status_code=403, detail="Not available for master or agent-scoped keys.")
+    payload = body or {}
+    current = str(payload.get("current_password") or "")
+    new_password = str(payload.get("new_password") or "")
+    user_id = caller["user"]["user_id"]
+    try:
+        _auth.change_password(user_id, current, new_password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True}
 
 
 @app.post(
