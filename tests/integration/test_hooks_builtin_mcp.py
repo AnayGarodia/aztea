@@ -254,7 +254,7 @@ def test_registry_call_routes_internal_builtin_without_http_and_records_job(clie
         json={"packages": ["lodash@4.17.21"]},
     )
     assert call.status_code == 200, call.text
-    assert call.json()["summary"] == "internal::ok"
+    assert call.json()["output"]["summary"] == "internal::ok"
 
     caller_owner = f"user:{caller['user_id']}"
     jobs_for_caller = jobs.list_jobs_for_owner(caller_owner, limit=20)
@@ -315,8 +315,8 @@ def test_registry_call_normalizes_protocol_envelope_for_builtin_responses(client
     )
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["protocol"]["output_artifacts"][0]["mime"] == "application/json"
-    assert body["protocol"]["metadata"]["requested_output_formats"] == ["application/json"]
+    assert body["output"]["protocol"]["output_artifacts"][0]["mime"] == "application/json"
+    assert body["output"]["protocol"]["metadata"]["requested_output_formats"] == ["application/json"]
 
     sent_protocol = captured["payload"]["protocol"]
     assert sent_protocol["communication_channel"] == "analysis"
@@ -361,7 +361,7 @@ def test_image_generator_builtin_accepts_multimodal_input_and_returns_artifact(c
         },
     )
     assert response.status_code == 200, response.text
-    body = response.json()
+    body = response.json()["output"]
     assert body["input_images_used"] == 1
     assert isinstance(body.get("artifacts"), list) and body["artifacts"]
     artifact = body["artifacts"][0]
@@ -542,7 +542,7 @@ def test_python_executor_builtin_runs_code_and_returns_output(client, monkeypatc
         json={"code": "print(2**10)", "explain": True},
     )
     assert response.status_code == 200, response.text
-    body = response.json()
+    body = response.json()["output"]
     assert body["stdout"] == "1024\n"
     assert body["exit_code"] == 0
     assert "1024" in body["explanation"]

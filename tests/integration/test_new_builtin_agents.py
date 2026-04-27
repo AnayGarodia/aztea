@@ -26,7 +26,7 @@ def test_github_fetcher_basic(client):
         )
 
     assert resp.status_code == 200, resp.text
-    body = resp.json()
+    body = resp.json()["output"]
     assert "files" in body
     assert isinstance(body["billing_units_actual"], int)
     assert body["billing_units_actual"] == 1
@@ -81,7 +81,7 @@ def test_dns_inspector_basic(client):
         )
 
     assert resp.status_code == 200, resp.text
-    body = resp.json()
+    body = resp.json()["output"]
     assert "results" in body
     assert len(body["results"]) == 1
     assert body["results"][0]["domain"] == "example.com"

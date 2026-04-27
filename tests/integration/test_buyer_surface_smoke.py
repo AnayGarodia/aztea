@@ -137,7 +137,12 @@ def _execute_platform_tool(
         timeout=20,
     )
     body = response.json()
-    return response.ok, body if isinstance(body, dict) else {"result": body}
+    if not isinstance(body, dict):
+        return response.ok, {"result": body}
+    # Unwrap the standard sync call envelope so tests access agent output directly.
+    if body.get("status") == "complete" and "output" in body:
+        return response.ok, body["output"]
+    return response.ok, body
 
 def test_claude_stdio_mcp_smoke_lists_and_calls_control_plane_tool(buyer_surface_server):
     caller = _register_user_via_http(buyer_surface_server, prefix="claude-caller")

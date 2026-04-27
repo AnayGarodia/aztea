@@ -78,7 +78,8 @@ def test_registry_call_use_cache_returns_cached_output_without_second_charge(cli
         json={"task": "same input", "use_cache": True, "cache_ttl_hours": 24},
     )
     assert first.status_code == 200, first.text
-    assert first.json()["answer"] == "cached result"
+    assert first.json()["output"]["answer"] == "cached result"
+    assert first.json()["cached"] is False
     assert call_counter["count"] == 1
     first_balance = payments.get_wallet(wallet["wallet_id"])["balance_cents"]
     assert first_balance == 489
@@ -89,9 +90,8 @@ def test_registry_call_use_cache_returns_cached_output_without_second_charge(cli
         json={"task": "same input", "use_cache": True, "cache_ttl_hours": 24},
     )
     assert second.status_code == 200, second.text
-    assert second.json()["answer"] == "cached result"
-    assert second.json()["cache_hit"] is True
-    assert second.json()["cost_usd"] == 0
+    assert second.json()["output"]["answer"] == "cached result"
+    assert second.json()["cached"] is True
     assert call_counter["count"] == 1
     second_balance = payments.get_wallet(wallet["wallet_id"])["balance_cents"]
     assert second_balance == first_balance

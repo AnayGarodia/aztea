@@ -236,7 +236,7 @@ def test_sync_call_to_hosted_skill_routes_through_executor(client):
         )
 
     assert resp.status_code == 200, resp.text
-    payload = resp.json()
+    payload = resp.json()["output"]
     assert "result" in payload
     assert "Notion" in payload["result"]
     # Executor metadata is included

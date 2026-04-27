@@ -133,7 +133,7 @@ def test_proxy_call_does_not_forward_master_auth_to_external_endpoints(client, m
         headers=_auth_headers(user["raw_api_key"]),
     )
     assert resp.status_code == 200, resp.text
-    assert resp.json() == {"ok": True}
+    assert resp.json()["output"] == {"ok": True}
     assert captured["url"] == endpoint_url
     assert captured["headers"].get("Content-Type") == "application/json"
     assert "Authorization" not in captured["headers"]

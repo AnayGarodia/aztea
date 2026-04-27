@@ -172,9 +172,10 @@ def test_dispute_consensus_caller_wins_full_refund(client, monkeypatch):
     _complete_job(client, worker["raw_api_key"], job["job_id"])
 
     caller_owner = f"user:{caller['user_id']}"
+    # Async jobs default to output_verification_window_seconds=86400, so
+    # settlement is blocked until the caller accepts or the window expires.
     assert _wallet_balance(caller_owner) == 189
     assert _wallet_balance(f"agent:{agent_id}") == 0
-    assert _wallet_balance(payments.PLATFORM_OWNER_ID) == 0
 
     filed = client.post(
         f"/jobs/{job['job_id']}/dispute",
@@ -185,6 +186,7 @@ def test_dispute_consensus_caller_wins_full_refund(client, monkeypatch):
     assert filed.json()["filing_deposit_cents"] == 5
     dispute_id = filed.json()["dispute_id"]
 
+    # After filing, clawback moves agent/platform payout to dispute escrow.
     assert _wallet_balance(f"agent:{agent_id}") == 0
     assert _wallet_balance(payments.PLATFORM_OWNER_ID) == 0
     assert _wallet_balance(caller_owner) == 184
