@@ -245,6 +245,7 @@ class AgentResponse(BaseModel):
     outputs_not_stored: bool = False
     audit_logged: bool = False
     region_locked: str | None = None
+    payout_curve: dict | None = None
     caller_trust_min: float | None = None
     # Discovery signals for orchestrators
     trust_score: float | None = None
@@ -364,6 +365,7 @@ class JobMessagesResponse(BaseModel):
 class JobRatingResponse(BaseModel):
     rating: JSONObject
     agent_reputation: JSONObject
+    clawback: JSONObject | None = None
 
 
 class JobCallerRatingResponse(BaseModel):

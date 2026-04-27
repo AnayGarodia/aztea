@@ -1,158 +1,326 @@
-"""
-client.py — AzteaClient: high-level API for callers.
-
-Callers use this to discover agents, hire them (async or sync), and manage
-their wallet.  All methods raise typed exceptions from exceptions.py rather
-than returning raw error dicts.
-"""
-
 from __future__ import annotations
 
-import json
+from dataclasses import dataclass, fields, is_dataclass
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Iterable, cast
 
-import httpx
+import requests
 
-from .exceptions import (
-    AzteaError,
+from .errors import (
     AgentNotFoundError,
-    AuthenticationError,
+    AzteaError,
+    ClarificationNeededError,
     ContractVerificationError,
-    InsufficientFundsError,
     JobFailedError,
-    PermissionError,
-    RateLimitError,
+    raise_for_error_response,
 )
-from .models import Agent, Job, JobResult, Transaction, VerificationContract, Wallet
+from .jobs import JobsNamespace
+from .models import Agent, Job as JobRecord, JobResult, Transaction, VerificationContract, Wallet
+from .types import JSONObject, JSONValue
+from .workers import JobSource, build_worker_decorator
 
-_VERSION_HEADER = "1.0"
-_POLL_INTERVAL = 2.0  # seconds between /jobs/{id} polls
 
-
-def _parse_payload(value: Any) -> Dict[str, Any]:
-    """Coerce a server payload field (may arrive as string or dict) to dict."""
-    if value is None:
-        return {}
+def _ensure_object(value: Any, *, context: str) -> JSONObject:
     if isinstance(value, dict):
         return value
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-            return parsed if isinstance(parsed, dict) else {}
-        except json.JSONDecodeError:
-            return {}
-    return {}
+    raise AzteaError(f"{context} expected a JSON object response, got: {type(value).__name__}.")
 
 
-def _retry_after_seconds(headers: Any, default: int = 60) -> int:
-    raw_value = headers.get("Retry-After") if headers is not None else None
-    if raw_value is None:
-        return default
-    try:
-        parsed = int(str(raw_value).strip())
-    except (TypeError, ValueError):
-        return default
-    return parsed if parsed >= 0 else default
+def _coerce_payload(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
 
 
-def _require_job_id(payload: Any, *, context: str) -> str:
-    if not isinstance(payload, dict):
-        raise AzteaError(f"{context} expected a JSON object response.")
-    job_id = payload.get("job_id")
-    if not isinstance(job_id, str) or not job_id.strip():
-        raise AzteaError(f"{context} response is missing a valid job_id.")
-    return job_id
+def _coerce_model(model_type: Any, value: Any) -> Any:
+    if not isinstance(value, dict):
+        raise AzteaError(f"Expected object payload for {getattr(model_type, '__name__', 'model')}.")
+    if not is_dataclass(model_type):
+        return model_type(**value)
+    allowed = {item.name for item in fields(model_type)}
+    payload = {key: raw for key, raw in value.items() if key in allowed}
+    return model_type(**payload)
+
+
+def _verify_contract(output: dict[str, Any], contract: VerificationContract) -> None:
+    failures: list[str] = []
+    for key in contract.required_keys:
+        if key not in output:
+            failures.append(f"Missing required key: {key}")
+    for key, expected in contract.field_types.items():
+        if key not in output:
+            continue
+        value = output[key]
+        kind = str(expected).strip().lower()
+        if kind == "string" and not isinstance(value, str):
+            failures.append(f"{key} expected string, got {type(value).__name__}")
+        elif kind == "number" and not isinstance(value, (int, float)):
+            failures.append(f"{key} expected number, got {type(value).__name__}")
+        elif kind == "boolean" and not isinstance(value, bool):
+            failures.append(f"{key} expected boolean, got {type(value).__name__}")
+        elif kind == "array" and not isinstance(value, list):
+            failures.append(f"{key} expected array, got {type(value).__name__}")
+        elif kind == "object" and not isinstance(value, dict):
+            failures.append(f"{key} expected object, got {type(value).__name__}")
+    for key, bounds in contract.field_ranges.items():
+        if key not in output or not isinstance(output[key], (int, float)) or not isinstance(bounds, dict):
+            continue
+        if "min" in bounds and output[key] < bounds["min"]:
+            failures.append(f"{key} is below minimum {bounds['min']}")
+        if "max" in bounds and output[key] > bounds["max"]:
+            failures.append(f"{key} is above maximum {bounds['max']}")
+    if failures:
+        raise ContractVerificationError(failures)
+
+
+@dataclass
+class _NamespaceBase:
+    _client: "AzteaClient"
+
+
+class AuthNamespace(_NamespaceBase):
+    def register(self, username: str, email: str, password: str) -> JSONObject:
+        return self._client._request_json(
+            "POST",
+            "/auth/register",
+            json_body={"username": username, "email": email, "password": password},
+            require_api_key=False,
+        )
+
+    def login(self, email: str, password: str) -> JSONObject:
+        return self._client._request_json(
+            "POST",
+            "/auth/login",
+            json_body={"email": email, "password": password},
+            require_api_key=False,
+        )
+
+    def me(self) -> JSONObject:
+        return self._client._request_json("GET", "/auth/me")
+
+    def list_keys(self) -> JSONObject:
+        return self._client._request_json("GET", "/auth/keys")
+
+    def create_key(self, name: str = "New key", scopes: Iterable[str] | None = None) -> JSONObject:
+        payload: JSONObject = {"name": name}
+        if scopes is not None:
+            payload["scopes"] = list(scopes)
+        return self._client._request_json("POST", "/auth/keys", json_body=payload)
+
+    def rotate_key(
+        self,
+        key_id: str,
+        *,
+        name: str | None = None,
+        scopes: Iterable[str] | None = None,
+    ) -> JSONObject:
+        payload: JSONObject = {}
+        if name is not None:
+            payload["name"] = name
+        if scopes is not None:
+            payload["scopes"] = list(scopes)
+        return self._client._request_json("POST", f"/auth/keys/{key_id}/rotate", json_body=payload)
+
+    def revoke_key(self, key_id: str) -> JSONObject:
+        return self._client._request_json("DELETE", f"/auth/keys/{key_id}")
+
+
+class WalletsNamespace(_NamespaceBase):
+    def deposit(self, wallet_id: str, amount_cents: int, memo: str = "manual deposit") -> JSONObject:
+        return self._client._request_json(
+            "POST",
+            "/wallets/deposit",
+            json_body={"wallet_id": wallet_id, "amount_cents": amount_cents, "memo": memo},
+        )
+
+    def me(self) -> JSONObject:
+        return self._client._request_json("GET", "/wallets/me")
+
+    def get(self, wallet_id: str) -> JSONObject:
+        return self._client._request_json("GET", f"/wallets/{wallet_id}")
+
+
+class RegistryNamespace(_NamespaceBase):
+    def register(
+        self,
+        *,
+        name: str,
+        description: str,
+        endpoint_url: str,
+        price_per_call_usd: float,
+        tags: list[str] | None = None,
+        input_schema: JSONObject | None = None,
+        output_schema: JSONObject | None = None,
+        output_examples: list[JSONObject] | None = None,
+        output_verifier_url: str | None = None,
+    ) -> JSONObject:
+        payload: JSONObject = {
+            "name": name,
+            "description": description,
+            "endpoint_url": endpoint_url,
+            "price_per_call_usd": price_per_call_usd,
+            "tags": cast(JSONValue, [str(tag) for tag in (tags or [])]),
+            "input_schema": input_schema or {},
+            "output_schema": output_schema or {},
+            "output_examples": cast(JSONValue, output_examples or []),
+        }
+        if output_verifier_url is not None:
+            payload["output_verifier_url"] = output_verifier_url
+        return self._client._request_json("POST", "/registry/register", json_body=payload)
+
+    def list(
+        self,
+        *,
+        tag: str | None = None,
+        rank_by: str | None = None,
+        include_reputation: bool = True,
+    ) -> JSONObject:
+        params: dict[str, str] = {"include_reputation": "true" if include_reputation else "false"}
+        if tag:
+            params["tag"] = tag
+        if rank_by:
+            params["rank_by"] = rank_by
+        return self._client._request_json("GET", "/registry/agents", params=params)
+
+    def get(self, agent_id: str) -> JSONObject:
+        return self._client._request_json("GET", f"/registry/agents/{agent_id}")
+
+    def call(self, agent_id: str, payload: JSONObject) -> JSONObject:
+        return self._client._request_json("POST", f"/registry/agents/{agent_id}/call", json_body=payload)
+
+    def search(self, query: str) -> JSONObject:
+        return self._client._request_json("POST", "/registry/search", json_body={"query": query})
+
+
+class DisputesNamespace(_NamespaceBase):
+    def settlement_trace(self, job_id: str) -> JSONObject:
+        return self._client._request_json("GET", f"/ops/jobs/{job_id}/settlement-trace")
 
 
 class AzteaClient:
-    """
-    High-level client for the Aztea platform.
-
-    Parameters
-    ----------
-    api_key
-        Your Aztea API key (starts with ``az_``).
-    base_url
-        Base URL of the Aztea server.  Defaults to the hosted platform.
-        For local development use ``http://localhost:8000``.
-    timeout
-        Default HTTP timeout in seconds.
-    """
-
     def __init__(
         self,
-        api_key: str,
-        base_url: str = "https://api.aztea.dev",  # override for self-hosted
+        *,
+        base_url: str = "http://localhost:8000",
+        api_key: str | None = None,
+        client_id: str = "aztea-python-sdk",
         timeout: float = 30.0,
     ) -> None:
-        self._key = api_key
-        self._base = base_url.rstrip("/")
-        self._http = httpx.Client(
-            base_url=self._base,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "X-Aztea-Version": _VERSION_HEADER,
-                "Content-Type": "application/json",
-                "User-Agent": f"aztea-python/{__import__('aztea').__version__}",
-            },
-            timeout=timeout,
-        )
+        self.base_url = base_url.rstrip("/")
+        self.timeout = timeout
+        self._api_key = api_key
+        self._client_id = str(client_id or "aztea-python-sdk").strip() or "aztea-python-sdk"
+        self._session = requests.Session()
+
+        self.auth = AuthNamespace(self)
+        self.wallets = WalletsNamespace(self)
+        self.registry = RegistryNamespace(self)
+        self.jobs = JobsNamespace(self)
+        self.disputes = DisputesNamespace(self)
 
     def close(self) -> None:
-        """Close the underlying HTTP connection pool."""
-        self._http.close()
+        self._session.close()
 
     def __enter__(self) -> "AzteaClient":
         return self
 
-    def __exit__(self, *_: Any) -> None:
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         self.close()
 
-    # ── Internal helpers ──────────────────────────────────────────────────────
+    def set_api_key(self, api_key: str | None) -> None:
+        self._api_key = api_key
+
+    def worker(
+        self,
+        agent_id: str,
+        *,
+        concurrency: int = 1,
+        lease_seconds: int = 300,
+        poll_interval: float = 2.0,
+        job_source: JobSource | None = None,
+    ) -> Any:
+        return build_worker_decorator(
+            self,
+            agent_id=agent_id,
+            concurrency=concurrency,
+            lease_seconds=lease_seconds,
+            poll_interval=poll_interval,
+            job_source=job_source,
+        )
+
+    def _headers(self, *, require_api_key: bool = True) -> dict[str, str]:
+        headers = {
+            "Content-Type": "application/json",
+            "X-Aztea-Version": "1.0",
+            "X-Aztea-Client": self._client_id,
+        }
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        elif require_api_key:
+            raise AzteaError("This operation requires an API key.")
+        return headers
 
     def _request(
         self,
         method: str,
         path: str,
         *,
-        json: Any = None,
-        params: Dict[str, Any] | None = None,
-    ) -> Any:
-        try:
-            resp = self._http.request(method, path, json=json, params=params)
-        except httpx.TransportError as exc:
-            raise AzteaError(f"Network error: {exc}") from exc
+        params: dict[str, str] | None = None,
+        json_body: JSONObject | None = None,
+        require_api_key: bool = True,
+        timeout: float | None = None,
+        stream: bool = False,
+    ) -> requests.Response:
+        response = self._session.request(
+            method=method,
+            url=f"{self.base_url}{path}",
+            params=params,
+            json=json_body,
+            headers=self._headers(require_api_key=require_api_key),
+            timeout=self.timeout if timeout is None else timeout,
+            stream=stream,
+        )
+        raise_for_error_response(response)
+        return response
 
-        body: Any = None
-        if resp.content:
-            try:
-                body = resp.json()
-            except Exception:
-                body = resp.text
+    def _request_json(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, str] | None = None,
+        json_body: JSONObject | None = None,
+        require_api_key: bool = True,
+        timeout: float | None = None,
+    ) -> JSONObject:
+        response = self._request(
+            method,
+            path,
+            params=params,
+            json_body=json_body,
+            require_api_key=require_api_key,
+            timeout=timeout,
+        )
+        parsed = response.json()
+        return _ensure_object(parsed, context=f"{method} {path}")
 
-        if resp.status_code == 401:
-            detail = _extract_detail(body) or "Invalid or missing API key."
-            raise AuthenticationError(detail)
-        if resp.status_code == 402:
-            detail = _extract_detail(body) or "Insufficient funds."
-            raise InsufficientFundsError(detail)
-        if resp.status_code == 403:
-            detail = _extract_detail(body) or "Insufficient permissions."
-            raise PermissionError(detail)
-        if resp.status_code == 404:
-            detail = _extract_detail(body) or "Not found."
-            raise AgentNotFoundError(detail)
-        if resp.status_code == 429:
-            raise RateLimitError(_retry_after_seconds(resp.headers))
-        if not resp.is_success:
-            detail = _extract_detail(body) or f"HTTP {resp.status_code}"
-            raise AzteaError(detail, status_code=resp.status_code)
+    def _stream(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, str] | None = None,
+        require_api_key: bool = True,
+    ) -> requests.Response:
+        return self._request(
+            method,
+            path,
+            params=params,
+            require_api_key=require_api_key,
+            timeout=None,
+            stream=True,
+        )
 
-        return body
-
-    # ── Discovery ─────────────────────────────────────────────────────────────
+    # High-level compatibility surface
 
     def search_agents(
         self,
@@ -160,97 +328,89 @@ class AzteaClient:
         *,
         max_price_cents: int | None = None,
         min_trust: float | None = None,
-    ) -> List[Agent]:
-        """
-        Search the registry for agents matching *query*.
-
-        Optional filters are applied client-side after the server returns
-        ranked results.
-        """
-        data = self._request(
-            "POST",
-            "/registry/search",
-            json={"query": str(query).strip()},
-        )
-        # Server returns {results: [{agent: {...}, similarity, ...}, ...]}
-        raw_results = data.get("results") or [] if isinstance(data, dict) else []
-        agents = [Agent(**item["agent"]) for item in raw_results if isinstance(item.get("agent"), dict)]
-
+    ) -> list[Agent]:
+        data = self.registry.search(str(query).strip())
+        raw_results = data.get("results") or []
+        agents = [
+            _coerce_model(Agent, item["agent"])
+            for item in raw_results
+            if isinstance(item, dict) and isinstance(item.get("agent"), dict)
+        ]
         if max_price_cents is not None:
-            agents = [a for a in agents if a.price_cents <= max_price_cents]
+            agents = [agent for agent in agents if agent.price_cents <= max_price_cents]
         if min_trust is not None:
-            agents = [a for a in agents if a.trust_score >= min_trust]
-
+            agents = [agent for agent in agents if agent.trust_score >= min_trust]
         return agents
 
-    def list_agents(
-        self,
-        *,
-        tag: str | None = None,
-        rank_by: str = "trust",
-    ) -> List[Agent]:
-        """Return all visible agents, optionally filtered by tag and ranked."""
-        params: Dict[str, Any] = {"rank_by": rank_by}
-        if tag:
-            params["tag"] = tag
-        data = self._request("GET", "/registry/agents", params=params)
-        raw_agents = data.get("agents") or [] if isinstance(data, dict) else []
-        return [Agent(**a) for a in raw_agents]
+    def list_agents(self, *, tag: str | None = None, rank_by: str = "trust") -> list[Agent]:
+        data = self.registry.list(tag=tag, rank_by=rank_by)
+        raw_agents = data.get("agents") or []
+        return [_coerce_model(Agent, item) for item in raw_agents if isinstance(item, dict)]
 
     def get_agent(self, agent_id: str) -> Agent:
-        """Fetch a single agent by its ID."""
-        data = self._request("GET", f"/registry/agents/{agent_id}")
-        return Agent(**data)
+        raw = self.registry.get(agent_id)
+        try:
+            return _coerce_model(Agent, raw)
+        except TypeError as exc:
+            raise AgentNotFoundError(agent_id=agent_id, message=str(exc)) from exc
 
-    # ── Hiring ────────────────────────────────────────────────────────────────
+    def get_balance(self) -> int:
+        return int(self.wallets.me().get("balance_cents") or 0)
+
+    def get_wallet(self) -> Wallet:
+        return _coerce_model(Wallet, self.wallets.me())
+
+    def deposit(self, amount_cents: int, memo: str = "SDK deposit") -> Transaction:
+        wallet = self.wallets.me()
+        raw = self.wallets.deposit(str(wallet["wallet_id"]), amount_cents, memo=memo)
+        if "tx_id" in raw:
+            return Transaction(
+                tx_id=str(raw.get("tx_id") or ""),
+                wallet_id=str(raw.get("wallet_id") or wallet["wallet_id"]),
+                type=str(raw.get("type") or "deposit"),
+                amount_cents=int(raw.get("amount_cents") or amount_cents),
+                memo=str(raw.get("memo") or memo),
+                agent_id=raw.get("agent_id"),
+                created_at=str(raw.get("created_at") or ""),
+            )
+        return Transaction(
+            tx_id="",
+            wallet_id=str(wallet["wallet_id"]),
+            type="deposit",
+            amount_cents=amount_cents,
+            memo=memo,
+        )
+
+    def get_spend_summary(self, period: str = "7d") -> JSONObject:
+        return self._request_json("GET", "/wallets/spend-summary", params={"period": period})
+
+    def get_job(self, job_id: str) -> JobRecord:
+        return _coerce_model(JobRecord, self.jobs.get_raw(job_id))
 
     def hire(
         self,
         agent_id: str,
-        input_payload: Dict[str, Any],
+        input_payload: dict[str, Any],
         *,
-        verification_contract: Union[VerificationContract, Dict[str, Any], None] = None,
+        verification_contract: VerificationContract | dict[str, Any] | None = None,
         wait: bool = True,
         timeout_seconds: int = 60,
         max_attempts: int = 3,
-        budget_cents: Optional[int] = None,
-        callback_url: Optional[str] = None,
-        callback_secret: Optional[str] = None,
-        parent_job_id: Optional[str] = None,
+        budget_cents: int | None = None,
+        callback_url: str | None = None,
+        callback_secret: str | None = None,
+        parent_job_id: str | None = None,
         parent_cascade_policy: str = "detach",
-        clarification_timeout_seconds: Optional[int] = None,
+        clarification_timeout_seconds: int | None = None,
         clarification_timeout_policy: str = "fail",
-        output_verification_window_seconds: Optional[int] = None,
+        output_verification_window_seconds: int | None = None,
     ) -> JobResult:
-        """
-        Create a job and (by default) block until it completes.
-
-        Parameters
-        ----------
-        agent_id
-            The agent to hire.
-        input_payload
-            Input data for the agent.
-        budget_cents
-            Optional max price. Raises immediately if agent.price_cents > budget_cents.
-        callback_url
-            Optional HTTPS URL. Platform POSTs job result when complete — no polling needed.
-        callback_secret
-            Optional secret used to sign callback deliveries via
-            ``X-Aztea-Signature`` (HMAC-SHA256 over raw body).
-        verification_contract
-            Optional contract checked against the output.
-        wait
-            If ``True`` (default) poll until done. If ``False`` return immediately with job_id.
-        timeout_seconds
-            How long to wait for completion before raising ``TimeoutError``.
-        max_attempts
-            Max worker retry attempts for the job.
-        """
-        body: Dict[str, Any] = {
+        body: JSONObject = {
             "agent_id": agent_id,
-            "input_payload": input_payload,
+            "input_payload": cast(JSONValue, input_payload),
             "max_attempts": max_attempts,
+            "parent_cascade_policy": parent_cascade_policy,
+            "clarification_timeout_policy": clarification_timeout_policy,
         }
         if budget_cents is not None:
             body["budget_cents"] = budget_cents
@@ -260,136 +420,89 @@ class AzteaClient:
             body["callback_secret"] = callback_secret
         if parent_job_id is not None:
             body["parent_job_id"] = parent_job_id
-        body["parent_cascade_policy"] = parent_cascade_policy
         if clarification_timeout_seconds is not None:
             body["clarification_timeout_seconds"] = clarification_timeout_seconds
-        body["clarification_timeout_policy"] = clarification_timeout_policy
         if output_verification_window_seconds is not None:
             body["output_verification_window_seconds"] = output_verification_window_seconds
-
-        data = self._request("POST", "/jobs", json=body)
-        job_id = _require_job_id(data, context="POST /jobs")
-
+        created = self._request_json("POST", "/jobs", json_body=body)
+        raw_job_id = created.get("job_id")
+        if not isinstance(raw_job_id, str) or not raw_job_id.strip():
+            raise AzteaError("POST /jobs response is missing a valid job_id.")
         if not wait:
             return JobResult(
-                job_id=job_id,
+                job_id=raw_job_id,
                 output={},
-                cost_cents=data.get("price_cents", 0),
+                cost_cents=int(created.get("price_cents") or 0),
             )
-
         return self._poll_job_to_completion(
-            job_id,
+            raw_job_id,
             timeout_seconds=timeout_seconds,
             verification_contract=verification_contract,
         )
 
     def wait_for(self, job_id: str, timeout_seconds: int = 60) -> JobResult:
-        """
-        Block until a job reaches a terminal state and return the result.
-
-        Use this when you hired with ``wait=False`` (fire-and-forget) and later
-        want to collect the result::
-
-            job_id = client.hire("agt-abc123", payload, wait=False).job_id
-            # ... do other work ...
-            result = client.wait_for(job_id, timeout_seconds=300)
-
-        Raises ``TimeoutError`` if the job doesn't complete in time.
-        """
         return self._poll_job_to_completion(job_id, timeout_seconds=timeout_seconds)
 
     def hire_many(
         self,
-        specs: List[Dict[str, Any]],
+        specs: list[dict[str, Any]],
         *,
         wait: bool = False,
         timeout_seconds: int = 300,
-    ) -> List[JobResult]:
-        """
-        Create up to 50 jobs in a single request with one wallet debit.
-
-        Each spec is a dict with keys matching ``JobCreateRequest`` fields:
-        ``agent_id`` (required), ``input_payload``, ``max_attempts``,
-        ``budget_cents``, ``callback_url``.
-
-        Returns a list of :class:`JobResult` (with empty output if ``wait=False``).
-
-        Example::
-
-            results = client.hire_many([
-                {"agent_id": "agt-abc", "input_payload": {"task": "summarise"}},
-                {"agent_id": "agt-xyz", "input_payload": {"code": "..."}},
-            ], wait=False)
-            job_ids = [r.job_id for r in results]
-        """
-        data = self._request("POST", "/jobs/batch", json={"jobs": specs})
+    ) -> list[JobResult]:
+        data = self._request_json("POST", "/jobs/batch", json_body={"jobs": cast(JSONValue, specs)})
         raw_jobs = data.get("jobs") or []
-        results: List[JobResult] = []
+        results: list[JobResult] = []
         for index, entry in enumerate(raw_jobs):
-            context = f"POST /jobs/batch jobs[{index}]"
-            job_id = _require_job_id(entry, context=context)
-            output_payload = entry.get("output_payload") if isinstance(entry, dict) else None
-            price_cents = entry.get("price_cents", 0) if isinstance(entry, dict) else 0
+            if not isinstance(entry, dict):
+                raise AzteaError(f"POST /jobs/batch jobs[{index}] expected an object response.")
+            job_id = entry.get("job_id")
+            if not isinstance(job_id, str) or not job_id.strip():
+                raise AzteaError(f"POST /jobs/batch jobs[{index}] missing a valid job_id.")
             results.append(
                 JobResult(
                     job_id=job_id,
-                    output=_parse_payload(output_payload),
-                    cost_cents=price_cents,
+                    output=_coerce_payload(entry.get("output_payload")),
+                    cost_cents=int(entry.get("price_cents") or 0),
                 )
             )
-        if wait:
-            completed = []
-            for result in results:
-                try:
-                    completed.append(self._poll_job_to_completion(result.job_id, timeout_seconds=timeout_seconds))
-                except Exception as exc:
-                    completed.append(JobResult(job_id=result.job_id, output={}, cost_cents=result.cost_cents, error=str(exc)))
-            return completed
-        return results
-
-    def get_job(self, job_id: str) -> Job:
-        """Fetch the current state of a job."""
-        data = self._request("GET", f"/jobs/{job_id}")
-        return _job_from_raw(data)
+        if not wait:
+            return results
+        return [self._poll_job_to_completion(item.job_id, timeout_seconds=timeout_seconds) for item in results]
 
     def decide_output_verification(
         self,
         job_id: str,
         *,
         decision: str,
-        reason: Optional[str] = None,
-        evidence: Optional[str] = None,
-    ) -> Job:
-        payload: Dict[str, Any] = {"decision": decision}
+        reason: str | None = None,
+        evidence: str | None = None,
+    ) -> JobRecord:
+        body: JSONObject = {"decision": decision}
         if reason is not None:
-            payload["reason"] = reason
+            body["reason"] = reason
         if evidence is not None:
-            payload["evidence"] = evidence
-        data = self._request("POST", f"/jobs/{job_id}/verification", json=payload)
-        return _job_from_raw(data)
+            body["evidence"] = evidence
+        return _coerce_model(JobRecord, self._request_json("POST", f"/jobs/{job_id}/verification", json_body=body))
 
-    def clarify(self, job_id: str, answer: str) -> None:
-        """
-        Respond to an agent's clarification request.
-
-        Call this after catching ``ClarificationNeededError`` from ``hire()``::
-
-            try:
-                result = client.hire(agent_id, payload)
-            except ClarificationNeededError as e:
-                print("Agent asks:", e.question)
-                result = client.hire_with_clarification(
-                    e.job_id, input("Your answer: ")
-                )
-        """
-        self._request(
-            "POST",
-            f"/jobs/{job_id}/messages",
-            json={
-                "type": "clarification_response",
-                "content": answer,
-            },
-        )
+    def clarify(self, job_id: str, answer: str, *, request_message_id: int | None = None) -> JSONObject:
+        payload: JSONObject = {"answer": answer}
+        if request_message_id is None:
+            messages = self.jobs.list_messages(job_id).get("messages") or []
+            latest = next(
+                (
+                    msg for msg in reversed(messages)
+                    if isinstance(msg, dict)
+                    and msg.get("type") == "clarification_request"
+                    and isinstance(msg.get("message_id"), int)
+                ),
+                None,
+            )
+            if latest is not None:
+                request_message_id = latest["message_id"]
+        if request_message_id is not None:
+            payload["request_message_id"] = request_message_id
+        return self.jobs.post_message(job_id, "clarification_response", payload)
 
     def hire_with_clarification(
         self,
@@ -397,568 +510,93 @@ class AzteaClient:
         answer: str,
         *,
         timeout_seconds: int = 120,
-        verification_contract: Union[VerificationContract, Dict[str, Any], None] = None,
-    ) -> "JobResult":
-        """
-        Respond to a clarification request and wait for the job to finish.
-
-        Typically called right after catching ``ClarificationNeededError``::
-
-            try:
-                result = client.hire(agent_id, payload)
-            except ClarificationNeededError as e:
-                result = client.hire_with_clarification(e.job_id, answer="AAPL")
-        """
+        verification_contract: VerificationContract | dict[str, Any] | None = None,
+    ) -> JobResult:
         self.clarify(job_id, answer)
-        deadline = time.monotonic() + timeout_seconds
-        while True:
-            if time.monotonic() > deadline:
-                raise TimeoutError(f"Job {job_id} did not complete within {timeout_seconds}s after clarification.")
-            job_data = self._request("GET", f"/jobs/{job_id}")
-            status = job_data.get("status", "")
-            if status == "complete":
-                output = _parse_payload(job_data.get("output_payload"))
-                if verification_contract is not None:
-                    contract = (
-                        VerificationContract(**verification_contract)
-                        if isinstance(verification_contract, dict)
-                        else verification_contract
-                    )
-                    _verify_contract(output, contract)
-                return JobResult(
-                    job_id=job_id,
-                    output=output,
-                    quality_score=job_data.get("quality_score"),
-                    cost_cents=job_data.get("price_cents", 0),
-                )
-            if status == "failed":
-                error_msg = job_data.get("error_message") or "Job failed after clarification."
-                raise JobFailedError(error_msg, _parse_payload(job_data.get("output_payload")))
-            time.sleep(_POLL_INTERVAL)
+        return self._poll_job_to_completion(
+            job_id,
+            timeout_seconds=timeout_seconds,
+            verification_contract=verification_contract,
+        )
 
     def hire_async(
         self,
         agent_id: str,
-        input_payload: Dict[str, Any],
+        input_payload: dict[str, Any],
         *,
-        on_complete: Optional[Callable[["JobResult"], None]] = None,
-        on_error: Optional[Callable[[Exception], None]] = None,
+        on_complete: Any | None = None,
+        on_error: Any | None = None,
         timeout_seconds: int = 300,
-        max_attempts: int = 3,
-        budget_cents: Optional[int] = None,
-        callback_url: Optional[str] = None,
-        callback_secret: Optional[str] = None,
-        parent_job_id: Optional[str] = None,
-        parent_cascade_policy: str = "detach",
-        clarification_timeout_seconds: Optional[int] = None,
-        clarification_timeout_policy: str = "fail",
-        output_verification_window_seconds: Optional[int] = None,
-        verification_contract: Union["VerificationContract", Dict[str, Any], None] = None,
+        verification_contract: VerificationContract | dict[str, Any] | None = None,
+        **kwargs: Any,
     ) -> str:
-        """
-        Fire-and-forget hire.  Returns the ``job_id`` immediately.
-
-        If *on_complete* is provided it is called in a background daemon thread
-        once the job finishes (or *on_error* is called if it fails / times out).
-        This lets an agent hire a sub-agent and continue doing independent work
-        without blocking — the callback is the "poke" that resumes processing.
-
-        Example::
-
-            pending: dict = {}
-
-            def got_result(result: JobResult) -> None:
-                pending[result.job_id] = result.output
-
-            job_id = client.hire_async(
-                "agt-abc123",
-                {"code": "..."},
-                on_complete=got_result,
-            )
-            # ... do other work here ...
-            # got_result() fires in the background when the sub-job finishes
-
-        Parameters
-        ----------
-        on_complete
-            Called with a :class:`JobResult` when the job succeeds.
-        on_error
-            Called with the raised exception when the job fails or times out.
-            If not provided, exceptions are silently swallowed.
-        timeout_seconds
-            Max time to wait before giving up and calling *on_error*.
-        """
-        body: Dict[str, Any] = {
-            "agent_id": agent_id,
-            "input_payload": input_payload,
-            "max_attempts": max_attempts,
-        }
-        if budget_cents is not None:
-            body["budget_cents"] = budget_cents
-        if callback_url is not None:
-            body["callback_url"] = callback_url
-        if callback_secret is not None:
-            body["callback_secret"] = callback_secret
-        if parent_job_id is not None:
-            body["parent_job_id"] = parent_job_id
-        body["parent_cascade_policy"] = parent_cascade_policy
-        if clarification_timeout_seconds is not None:
-            body["clarification_timeout_seconds"] = clarification_timeout_seconds
-        body["clarification_timeout_policy"] = clarification_timeout_policy
-        if output_verification_window_seconds is not None:
-            body["output_verification_window_seconds"] = output_verification_window_seconds
-        data = self._request("POST", "/jobs", json=body)
-        job_id = _require_job_id(data, context="POST /jobs")
-
+        result = self.hire(agent_id, input_payload, wait=False, **kwargs)
         if on_complete is not None or on_error is not None:
             def _watch() -> None:
                 try:
-                    result = self._poll_job_to_completion(
-                        job_id,
+                    completed = self._poll_job_to_completion(
+                        result.job_id,
                         timeout_seconds=timeout_seconds,
                         verification_contract=verification_contract,
                     )
                     if on_complete is not None:
-                        on_complete(result)
+                        on_complete(completed)
                 except Exception as exc:
                     if on_error is not None:
                         on_error(exc)
 
-            t = threading.Thread(target=_watch, daemon=True, name=f"aztea-watch-{job_id[:8]}")
-            t.start()
+            threading.Thread(target=_watch, daemon=True, name=f"aztea-watch-{result.job_id[:8]}").start()
+        return result.job_id
 
-        return job_id
+    def register_hook(self, target_url: str, secret: str | None = None) -> JSONObject:
+        return self._request_json("POST", "/ops/jobs/hooks", json_body={"target_url": target_url, "secret": secret})
+
+    def list_hooks(self) -> list[dict[str, Any]]:
+        raw = self._request_json("GET", "/ops/jobs/hooks")
+        hooks = raw.get("hooks") or []
+        return [item for item in hooks if isinstance(item, dict)]
+
+    def delete_hook(self, hook_id: str) -> JSONObject:
+        return self._request_json("DELETE", f"/ops/jobs/hooks/{hook_id}")
 
     def _poll_job_to_completion(
         self,
         job_id: str,
         *,
         timeout_seconds: int,
-        verification_contract: Union["VerificationContract", Dict[str, Any], None] = None,
-    ) -> "JobResult":
-        """Internal: poll until job is terminal, then return JobResult."""
+        verification_contract: VerificationContract | dict[str, Any] | None = None,
+    ) -> JobResult:
         deadline = time.monotonic() + timeout_seconds
+        contract = (
+            VerificationContract(**verification_contract)
+            if isinstance(verification_contract, dict)
+            else verification_contract
+        )
         while True:
             if time.monotonic() > deadline:
-                raise TimeoutError(f"Job {job_id} did not complete within {timeout_seconds}s.")
-            job_data = self._request("GET", f"/jobs/{job_id}")
-            status = job_data.get("status", "")
+                raise AzteaError(f"Job {job_id} did not complete within {timeout_seconds}s.")
+            job = self.jobs.get_raw(job_id)
+            status = str(job.get("status") or "")
             if status == "complete":
-                output = _parse_payload(job_data.get("output_payload"))
-                if verification_contract is not None:
-                    from .models import VerificationContract as VC
-                    contract = (
-                        VC(**verification_contract)
-                        if isinstance(verification_contract, dict)
-                        else verification_contract
-                    )
+                output = _coerce_payload(job.get("output_payload"))
+                if contract is not None:
                     _verify_contract(output, contract)
                 return JobResult(
                     job_id=job_id,
                     output=output,
-                    quality_score=job_data.get("quality_score"),
-                    cost_cents=job_data.get("price_cents", 0),
+                    quality_score=job.get("quality_score"),
+                    cost_cents=int(job.get("price_cents") or 0),
                 )
             if status == "failed":
-                error_msg = job_data.get("error_message") or "Job failed."
-                output = _parse_payload(job_data.get("output_payload"))
-                from .exceptions import JobFailedError
-                raise JobFailedError(error_msg, output)
+                raise JobFailedError(str(job.get("error_message") or "Job failed."), _coerce_payload(job.get("output_payload")))
             if status == "awaiting_clarification":
-                question = self._get_clarification_question(job_id)
-                from .exceptions import ClarificationNeededError
+                messages = self.jobs.list_messages(job_id).get("messages") or []
+                question = "Agent needs clarification."
+                for item in reversed(messages):
+                    if isinstance(item, dict) and item.get("type") == "clarification_request":
+                        payload = item.get("payload")
+                        if isinstance(payload, dict) and isinstance(payload.get("question"), str):
+                            question = payload["question"]
+                            break
                 raise ClarificationNeededError(question, job_id)
-            time.sleep(_POLL_INTERVAL)
-
-    def register_hook(self, target_url: str, secret: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Register a webhook URL to receive ``job.completed`` / ``job.failed``
-        events for all your jobs.
-
-        The server will POST a signed JSON payload to *target_url* whenever a
-        job you own changes state.  Use *secret* to verify the
-        ``X-Aztea-Signature`` HMAC-SHA256 header.
-
-        Returns the created hook dict (``hook_id``, ``target_url``, etc.).
-        """
-        return self._request(
-            "POST",
-            "/ops/jobs/hooks",
-            json={"target_url": target_url, "secret": secret},
-        )
-
-    def list_hooks(self) -> List[Dict[str, Any]]:
-        """Return all active webhooks registered for your account."""
-        data = self._request("GET", "/ops/jobs/hooks")
-        return data.get("hooks") or []
-
-    def delete_hook(self, hook_id: str) -> None:
-        """Deactivate a webhook by its ID."""
-        self._request("DELETE", f"/ops/jobs/hooks/{hook_id}")
-
-    def _get_clarification_question(self, job_id: str) -> str:
-        """Fetch the most recent clarification_request message text for a job."""
-        try:
-            data = self._request("GET", f"/jobs/{job_id}/messages")
-            messages = data.get("messages") or []
-            for msg in reversed(messages):
-                if msg.get("type") in ("clarification_request", "clarification_needed"):
-                    content = msg.get("content")
-                    if isinstance(content, dict):
-                        return content.get("text") or str(content)
-                    return str(content) if content is not None else "Agent needs clarification."
-        except AzteaError:
-            pass
-        return "Agent needs clarification."
-
-    # ── Wallet ────────────────────────────────────────────────────────────────
-
-    def get_balance(self) -> int:
-        """Return current wallet balance in cents."""
-        data = self._request("GET", "/wallets/me")
-        return int(data.get("balance_cents", 0))
-
-    def get_wallet(self) -> Wallet:
-        """Return the full wallet object."""
-        data = self._request("GET", "/wallets/me")
-        return Wallet(**data)
-
-    def deposit(self, amount_cents: int, memo: str = "SDK deposit") -> Transaction:
-        """
-        Deposit *amount_cents* into the caller's wallet.
-
-        Returns the resulting Transaction record.
-        """
-        wallet_data = self._request("GET", "/wallets/me")
-        wallet_id = wallet_data["wallet_id"]
-        resp = self._request(
-            "POST",
-            "/wallets/deposit",
-            json={"wallet_id": wallet_id, "amount_cents": amount_cents, "memo": memo},
-        )
-        tx_data = {
-            "tx_id": resp.get("tx_id", ""),
-            "wallet_id": resp.get("wallet_id", wallet_id),
-            "type": "deposit",
-            "amount_cents": amount_cents,
-            "memo": memo,
-        }
-        return Transaction(**tx_data)
-
-    def get_spend_summary(self, period: str = "7d") -> Dict[str, Any]:
-        """
-        Return a rolling spend summary.
-
-        Parameters
-        ----------
-        period
-            One of ``"1d"``, ``"7d"``, ``"30d"``, ``"90d"``.
-
-        Returns a dict with ``total_cents``, ``total_jobs``, and ``by_agent``
-        (list of ``{agent_id, total_cents, job_count}`` sorted by spend).
-        """
-        return self._request("GET", "/wallets/spend-summary", params={"period": period})
-
-
-class AsyncAzteaClient:
-    """
-    Async variant of AzteaClient using ``httpx.AsyncClient``.
-
-    Designed for orchestrators built on LangGraph, AutoGen, CrewAI, or any
-    other async Python framework::
-
-        async with AsyncAzteaClient(api_key="az_...") as client:
-            # Fire off 3 specialists concurrently
-            results = await asyncio.gather(
-                client.hire("agt-abc", {"code": "..."}),
-                client.hire("agt-xyz", {"text": "..."}),
-                client.hire("agt-def", {"query": "..."}),
-            )
-    """
-
-    def __init__(
-        self,
-        api_key: str,
-        base_url: str = "https://api.aztea.dev",
-        timeout: float = 30.0,
-    ) -> None:
-        import httpx as _httpx
-        self._key = api_key
-        self._base = base_url.rstrip("/")
-        self._http = _httpx.AsyncClient(
-            base_url=self._base,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "X-Aztea-Version": _VERSION_HEADER,
-                "Content-Type": "application/json",
-                "User-Agent": f"aztea-python/{__import__('aztea').__version__}",
-            },
-            timeout=timeout,
-        )
-
-    async def close(self) -> None:
-        await self._http.aclose()
-
-    async def __aenter__(self) -> "AsyncAzteaClient":
-        return self
-
-    async def __aexit__(self, *_: Any) -> None:
-        await self.close()
-
-    async def _request(self, method: str, path: str, *, json: Any = None, params: Any = None) -> Any:
-        import httpx as _httpx
-        try:
-            resp = await self._http.request(method, path, json=json, params=params)
-        except _httpx.TransportError as exc:
-            raise AzteaError(f"Network error: {exc}") from exc
-
-        body: Any = None
-        if resp.content:
-            try:
-                body = resp.json()
-            except Exception:
-                body = resp.text
-
-        if resp.status_code == 401:
-            raise AuthenticationError(_extract_detail(body) or "Invalid or missing API key.")
-        if resp.status_code == 402:
-            raise InsufficientFundsError(_extract_detail(body) or "Insufficient funds.")
-        if resp.status_code == 403:
-            raise PermissionError(_extract_detail(body) or "Insufficient permissions.")
-        if resp.status_code == 404:
-            raise AgentNotFoundError(_extract_detail(body) or "Not found.")
-        if resp.status_code == 429:
-            raise RateLimitError(_retry_after_seconds(resp.headers))
-        if not resp.is_success:
-            raise AzteaError(_extract_detail(body) or f"HTTP {resp.status_code}", status_code=resp.status_code)
-        return body
-
-    async def hire(
-        self,
-        agent_id: str,
-        input_payload: Dict[str, Any],
-        *,
-        wait: bool = True,
-        timeout_seconds: int = 60,
-        max_attempts: int = 3,
-        budget_cents: Optional[int] = None,
-        callback_url: Optional[str] = None,
-        callback_secret: Optional[str] = None,
-        parent_job_id: Optional[str] = None,
-        parent_cascade_policy: str = "detach",
-        clarification_timeout_seconds: Optional[int] = None,
-        clarification_timeout_policy: str = "fail",
-        output_verification_window_seconds: Optional[int] = None,
-    ) -> JobResult:
-        """
-        Async hire. Returns immediately if ``wait=False``, otherwise polls until done.
-
-        Example::
-
-            async with AsyncAzteaClient(api_key="az_...") as client:
-                result = await client.hire("agt-abc123", {"task": "summarise this"})
-                print(result.output)
-        """
-        import asyncio
-        body: Dict[str, Any] = {
-            "agent_id": agent_id,
-            "input_payload": input_payload,
-            "max_attempts": max_attempts,
-        }
-        if budget_cents is not None:
-            body["budget_cents"] = budget_cents
-        if callback_url is not None:
-            body["callback_url"] = callback_url
-        if callback_secret is not None:
-            body["callback_secret"] = callback_secret
-        if parent_job_id is not None:
-            body["parent_job_id"] = parent_job_id
-        body["parent_cascade_policy"] = parent_cascade_policy
-        if clarification_timeout_seconds is not None:
-            body["clarification_timeout_seconds"] = clarification_timeout_seconds
-        body["clarification_timeout_policy"] = clarification_timeout_policy
-        if output_verification_window_seconds is not None:
-            body["output_verification_window_seconds"] = output_verification_window_seconds
-        data = await self._request("POST", "/jobs", json=body)
-        job_id = _require_job_id(data, context="POST /jobs")
-
-        if not wait:
-            return JobResult(job_id=job_id, output={}, cost_cents=data.get("price_cents", 0))
-
-        deadline = time.monotonic() + timeout_seconds
-        while True:
-            if time.monotonic() > deadline:
-                raise TimeoutError(f"Job {job_id} did not complete within {timeout_seconds}s.")
-            job_data = await self._request("GET", f"/jobs/{job_id}")
-            status = job_data.get("status", "")
-            if status == "complete":
-                return JobResult(
-                    job_id=job_id,
-                    output=_parse_payload(job_data.get("output_payload")),
-                    quality_score=job_data.get("quality_score"),
-                    cost_cents=job_data.get("price_cents", 0),
-                )
-            if status == "failed":
-                raise JobFailedError(job_data.get("error_message") or "Job failed.", _parse_payload(job_data.get("output_payload")))
-            await asyncio.sleep(_POLL_INTERVAL)
-
-    async def hire_many(
-        self,
-        specs: List[Dict[str, Any]],
-        *,
-        wait: bool = False,
-        timeout_seconds: int = 300,
-    ) -> List[JobResult]:
-        """
-        Async batch hire. Creates up to 50 jobs in one request.
-
-        Example::
-
-            async with AsyncAzteaClient(api_key="az_...") as client:
-                results = await client.hire_many([
-                    {"agent_id": "agt-abc", "input_payload": {"task": "..."}},
-                    {"agent_id": "agt-xyz", "input_payload": {"code": "..."}},
-                ], wait=True)
-        """
-        import asyncio
-        data = await self._request("POST", "/jobs/batch", json={"jobs": specs})
-        raw_jobs = data.get("jobs") or []
-        results: List[JobResult] = []
-        for index, entry in enumerate(raw_jobs):
-            context = f"POST /jobs/batch jobs[{index}]"
-            job_id = _require_job_id(entry, context=context)
-            output_payload = entry.get("output_payload") if isinstance(entry, dict) else None
-            price_cents = entry.get("price_cents", 0) if isinstance(entry, dict) else 0
-            results.append(
-                JobResult(
-                    job_id=job_id,
-                    output=_parse_payload(output_payload),
-                    cost_cents=price_cents,
-                )
-            )
-        if wait:
-            async def _wait(r: JobResult) -> JobResult:
-                deadline = time.monotonic() + timeout_seconds
-                while True:
-                    if time.monotonic() > deadline:
-                        return JobResult(job_id=r.job_id, output={}, cost_cents=r.cost_cents, error=f"Timed out after {timeout_seconds}s")
-                    job_data = await self._request("GET", f"/jobs/{r.job_id}")
-                    s = job_data.get("status", "")
-                    if s == "complete":
-                        return JobResult(job_id=r.job_id, output=_parse_payload(job_data.get("output_payload")), cost_cents=job_data.get("price_cents", 0))
-                    if s == "failed":
-                        return JobResult(job_id=r.job_id, output={}, cost_cents=r.cost_cents, error=job_data.get("error_message") or "failed")
-                    await asyncio.sleep(_POLL_INTERVAL)
-            return list(await asyncio.gather(*[_wait(r) for r in results]))
-        return results
-
-    async def get_balance(self) -> int:
-        """Return current wallet balance in cents."""
-        data = await self._request("GET", "/wallets/me")
-        return int(data.get("balance_cents", 0))
-
-    async def search_agents(self, query: str, *, max_price_cents: Optional[int] = None, min_trust: Optional[float] = None) -> List["Agent"]:
-        """Search the registry asynchronously."""
-        data = await self._request("POST", "/registry/search", json={"query": str(query).strip()})
-        raw_results = data.get("results") or []
-        agents = [Agent(**item["agent"]) for item in raw_results if isinstance(item.get("agent"), dict)]
-        if max_price_cents is not None:
-            agents = [a for a in agents if a.price_cents <= max_price_cents]
-        if min_trust is not None:
-            agents = [a for a in agents if a.trust_score >= min_trust]
-        return agents
-
-    async def get_spend_summary(self, period: str = "7d") -> Dict[str, Any]:
-        """Return rolling spend summary (1d/7d/30d/90d)."""
-        return await self._request("GET", "/wallets/spend-summary", params={"period": period})
-
-    async def decide_output_verification(
-        self,
-        job_id: str,
-        *,
-        decision: str,
-        reason: Optional[str] = None,
-        evidence: Optional[str] = None,
-    ) -> Job:
-        payload: Dict[str, Any] = {"decision": decision}
-        if reason is not None:
-            payload["reason"] = reason
-        if evidence is not None:
-            payload["evidence"] = evidence
-        data = await self._request("POST", f"/jobs/{job_id}/verification", json=payload)
-        return _job_from_raw(data)
-
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-
-def _extract_detail(body: Any) -> str | None:
-    if body is None:
-        return None
-    if isinstance(body, str):
-        return body.strip() or None
-    if isinstance(body, dict):
-        detail = body.get("detail") or body.get("message") or body.get("error")
-        if isinstance(detail, str):
-            return detail.strip() or None
-        if isinstance(detail, list) and detail:
-            first = detail[0]
-            if isinstance(first, dict):
-                return first.get("msg") or str(first)
-            return str(first)
-    return None
-
-
-def _job_from_raw(data: Dict[str, Any]) -> Job:
-    raw = dict(data)
-    for field in ("input_payload", "output_payload"):
-        raw[field] = _parse_payload(raw.get(field)) if raw.get(field) else (
-            {} if field == "input_payload" else None
-        )
-    return Job(**raw)
-
-
-def _verify_contract(output: Dict[str, Any], contract: VerificationContract) -> None:
-    """Run local verification of output against contract. Raises on failure."""
-    failures: List[str] = []
-
-    for key in contract.required_keys:
-        if key not in output:
-            failures.append(f"Missing required key: '{key}'")
-
-    _TYPE_MAP = {
-        "string": str,
-        "number": (int, float),
-        "boolean": bool,
-        "array": list,
-        "object": dict,
-    }
-    for field, expected_type in contract.field_types.items():
-        if field not in output:
-            continue
-        val = output[field]
-        py_type = _TYPE_MAP.get(expected_type)
-        if py_type and not isinstance(val, py_type):
-            actual = type(val).__name__
-            failures.append(
-                f"Field '{field}': expected {expected_type}, got {actual}"
-            )
-
-    for field, bounds in contract.field_ranges.items():
-        if field not in output:
-            continue
-        val = output[field]
-        if not isinstance(val, (int, float)):
-            failures.append(f"Field '{field}': cannot range-check non-numeric value")
-            continue
-        if "min" in bounds and val < bounds["min"]:
-            failures.append(
-                f"Field '{field}': {val} is below minimum {bounds['min']}"
-            )
-        if "max" in bounds and val > bounds["max"]:
-            failures.append(
-                f"Field '{field}': {val} is above maximum {bounds['max']}"
-            )
-
-    if failures:
-        raise ContractVerificationError(failures)
+            time.sleep(2.0)

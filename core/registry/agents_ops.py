@@ -106,6 +106,7 @@ def register_agent(
     outputs_not_stored: bool = False,
     audit_logged: bool = False,
     region_locked: str | None = None,
+    payout_curve: dict | None = None,
 ) -> str:
     """
     Insert a new agent listing. Returns the agent_id.
@@ -146,6 +147,12 @@ def register_agent(
     normalized_outputs_not_stored = 1 if outputs_not_stored else 0
     normalized_audit_logged = 1 if audit_logged else 0
     normalized_region_locked = str(region_locked or "").strip().lower() or None
+    from core import payout_curve as _pc
+    try:
+        parsed_curve = _pc.parse_curve(payout_curve)
+    except ValueError as exc:
+        raise ValueError(str(exc))
+    payout_curve_json = _pc.curve_to_json(parsed_curve)
     normalized_health_status = str(endpoint_health_status or "unknown").strip().lower()
     if normalized_health_status not in {"unknown", "healthy", "degraded"}:
         raise ValueError("endpoint_health_status must be one of: unknown, healthy, degraded.")
@@ -221,8 +228,8 @@ def register_agent(
                  internal_only, status, review_status, review_note, reviewed_at, reviewed_by,
                  trust_decay_multiplier, last_decay_at, created_at,
                  model_provider, model_id, pricing_model, pricing_config, kind,
-                 pii_safe, outputs_not_stored, audit_logged, region_locked)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 pii_safe, outputs_not_stored, audit_logged, region_locked, payout_curve)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 aid,
@@ -257,6 +264,7 @@ def register_agent(
                 normalized_outputs_not_stored,
                 normalized_audit_logged,
                 normalized_region_locked,
+                payout_curve_json,
             ),
         )
         if embed_listing and embedding_vector is not None:
@@ -698,6 +706,8 @@ def update_agent(
     outputs_not_stored: bool | None = None,
     audit_logged: bool | None = None,
     region_locked: str | None = None,
+    payout_curve: dict | str | None = None,
+    clear_payout_curve: bool = False,
 ) -> dict | None:
     """
     Update mutable fields on an agent. Only the owner can call this.
@@ -738,6 +748,15 @@ def update_agent(
             updates["audit_logged"] = 1 if audit_logged else 0
         if region_locked is not None:
             updates["region_locked"] = str(region_locked).strip().lower() or None
+        if clear_payout_curve:
+            updates["payout_curve"] = None
+        elif payout_curve is not None:
+            from core import payout_curve as _pc
+            try:
+                parsed_curve = _pc.parse_curve(payout_curve)
+            except ValueError as exc:
+                raise ValueError(str(exc))
+            updates["payout_curve"] = _pc.curve_to_json(parsed_curve)
 
         if not updates:
             return agent

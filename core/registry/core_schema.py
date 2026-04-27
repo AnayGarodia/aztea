@@ -706,6 +706,14 @@ def _ensure_privacy_tier_columns(conn: sqlite3.Connection) -> None:
                 raise
 
 
+def _ensure_payout_curve_column(conn: sqlite3.Connection) -> None:
+    try:
+        conn.execute("ALTER TABLE agents ADD COLUMN payout_curve TEXT")
+    except sqlite3.OperationalError as exc:
+        if "duplicate column name" not in str(exc).lower():
+            raise
+
+
 def init_db() -> None:
     """Create or migrate the agents table to the canonical production schema."""
     with _conn() as conn:
@@ -718,6 +726,7 @@ def init_db() -> None:
         _ensure_agent_identity_columns(conn)
         _ensure_kind_column(conn)
         _ensure_privacy_tier_columns(conn)
+        _ensure_payout_curve_column(conn)
 
 
 # ---------------------------------------------------------------------------
@@ -801,6 +810,15 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     d["outputs_not_stored"] = bool(int(d.get("outputs_not_stored") or 0))
     d["audit_logged"] = bool(int(d.get("audit_logged") or 0))
     d["region_locked"] = str(d.get("region_locked") or "").strip().lower() or None
+    raw_pc = d.get("payout_curve")
+    if raw_pc:
+        try:
+            import json as _json
+            d["payout_curve"] = _json.loads(raw_pc) if isinstance(raw_pc, str) else raw_pc
+        except Exception:
+            d["payout_curve"] = None
+    else:
+        d["payout_curve"] = None
 
     total = d["total_calls"]
     successful = d.pop("successful_calls")

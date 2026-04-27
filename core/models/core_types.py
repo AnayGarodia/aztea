@@ -187,6 +187,7 @@ class AgentRegisterRequest(BaseModel):
     outputs_not_stored: bool = False
     audit_logged: bool = False
     region_locked: str | None = Field(default=None, max_length=32)
+    payout_curve: dict | None = None
 
     @field_validator("name")
     @classmethod

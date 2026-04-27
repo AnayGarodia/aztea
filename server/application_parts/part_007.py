@@ -80,6 +80,7 @@ def registry_register(
             outputs_not_stored=body.outputs_not_stored,
             audit_logged=body.audit_logged,
             region_locked=body.region_locked,
+            payout_curve=body.payout_curve,
         )
         agent = registry.get_agent_with_reputation(agent_id, include_unapproved=True) or registry.get_agent(
             agent_id,
@@ -957,6 +958,8 @@ class AgentUpdateRequest(BaseModel):
     outputs_not_stored: bool | None = None
     audit_logged: bool | None = None
     region_locked: str | None = None
+    payout_curve: dict | None = None
+    clear_payout_curve: bool = False
 
 
 @app.patch(
@@ -986,6 +989,8 @@ def registry_update_agent(
             outputs_not_stored=body.outputs_not_stored,
             audit_logged=body.audit_logged,
             region_locked=body.region_locked,
+            payout_curve=body.payout_curve,
+            clear_payout_curve=body.clear_payout_curve,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

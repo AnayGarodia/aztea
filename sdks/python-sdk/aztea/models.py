@@ -1,30 +1,19 @@
-"""
-models.py — Pydantic v2 models matching Aztea API shapes.
-
-These are the types returned by AzteaClient methods and accepted by
-AgentServer. They are intentionally a stable subset of the server's internal
-models — extra fields are ignored so older SDK versions keep working as the
-API evolves.
-"""
-
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass, field
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict
 
-
-class Agent(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
+@dataclass(slots=True)
+class Agent:
     agent_id: str
     name: str
     description: str
     endpoint_url: str
     price_per_call_usd: float
-    tags: List[str] = []
-    input_schema: Dict[str, Any] = {}
-    output_schema: Dict[str, Any] = {}
+    tags: list[str] = field(default_factory=list)
+    input_schema: dict[str, Any] = field(default_factory=dict)
+    output_schema: dict[str, Any] = field(default_factory=dict)
     status: str = "active"
     trust_score: float = 50.0
     success_rate: float = 1.0
@@ -37,63 +26,56 @@ class Agent(BaseModel):
 
     @property
     def price_cents(self) -> int:
-        return round(self.price_per_call_usd * 100)
+        return round(float(self.price_per_call_usd) * 100)
 
 
-class Job(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
+@dataclass(slots=True)
+class Job:
     job_id: str
     agent_id: str
     status: str
     price_cents: int = 0
-    input_payload: Dict[str, Any] = {}
-    output_payload: Optional[Dict[str, Any]] = None
-    error_message: Optional[str] = None
-    quality_score: Optional[int] = None
-    claim_token: Optional[str] = None
-    parent_job_id: Optional[str] = None
-    parent_cascade_policy: Optional[str] = None
-    clarification_timeout_seconds: Optional[int] = None
-    clarification_timeout_policy: Optional[str] = None
-    clarification_requested_at: Optional[str] = None
-    clarification_deadline_at: Optional[str] = None
-    output_verification_window_seconds: Optional[int] = None
-    output_verification_status: Optional[str] = None
-    output_verification_deadline_at: Optional[str] = None
-    output_verification_decided_at: Optional[str] = None
-    output_verification_decision_owner_id: Optional[str] = None
-    output_verification_reason: Optional[str] = None
+    input_payload: dict[str, Any] = field(default_factory=dict)
+    output_payload: dict[str, Any] | None = None
+    error_message: str | None = None
+    quality_score: int | None = None
+    claim_token: str | None = None
+    parent_job_id: str | None = None
+    parent_cascade_policy: str | None = None
+    clarification_timeout_seconds: int | None = None
+    clarification_timeout_policy: str | None = None
+    clarification_requested_at: str | None = None
+    clarification_deadline_at: str | None = None
+    output_verification_window_seconds: int | None = None
+    output_verification_status: str | None = None
+    output_verification_deadline_at: str | None = None
     created_at: str = ""
     updated_at: str = ""
-    completed_at: Optional[str] = None
+    completed_at: str | None = None
 
 
-class JobResult(BaseModel):
-    """The result returned by AzteaClient.hire() on success."""
-
+@dataclass(slots=True)
+class JobResult:
     job_id: str
-    output: Dict[str, Any]
-    quality_score: Optional[float] = None
+    output: dict[str, Any]
     cost_cents: int
-    error: Optional[str] = None
+    quality_score: float | None = None
+    error: str | None = None
 
 
-class Transaction(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
+@dataclass(slots=True)
+class Transaction:
     tx_id: str
     wallet_id: str
     type: str
     amount_cents: int
     memo: str = ""
-    agent_id: Optional[str] = None
+    agent_id: str | None = None
     created_at: str = ""
 
 
-class Wallet(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
+@dataclass(slots=True)
+class Wallet:
     wallet_id: str
     owner_id: str
     balance_cents: int
@@ -101,21 +83,8 @@ class Wallet(BaseModel):
     created_at: str = ""
 
 
-class VerificationContract(BaseModel):
-    """
-    Lightweight output verification contract.
-
-    Fields
-    ------
-    required_keys
-        Keys that must be present in the job output dict.
-    field_types
-        Maps field name → expected type string: "string", "number",
-        "boolean", "array", "object".
-    field_ranges
-        Maps field name → {"min": float, "max": float} for numeric fields.
-    """
-
-    required_keys: List[str] = []
-    field_types: Dict[str, str] = {}
-    field_ranges: Dict[str, Dict[str, float]] = {}
+@dataclass(slots=True)
+class VerificationContract:
+    required_keys: list[str] = field(default_factory=list)
+    field_types: dict[str, str] = field(default_factory=dict)
+    field_ranges: dict[str, dict[str, float]] = field(default_factory=dict)

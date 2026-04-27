@@ -511,13 +511,36 @@ def jobs_rate(
                     reason="five_star_milestone",
                     related_id=f"milestone:{milestone}",
                 )
+
+        clawback_result = None
+        if agent and job.get("settled_at"):
+            from core import payout_curve as _pc
+            raw_curve = agent.get("payout_curve")
+            curve = _pc.parse_curve(raw_curve) if raw_curve else None
+            fraction = _pc.fraction_for_rating(curve, body.rating)
+            if fraction < 1.0:
+                distribution = payments.compute_success_distribution(
+                    int(job.get("price_cents") or 0),
+                    platform_fee_pct=int(job.get("platform_fee_pct_at_create") or payments.PLATFORM_FEE_PCT),
+                    fee_bearer_policy=str(job.get("fee_bearer_policy") or "caller"),
+                )
+                agent_payout_cents = int(distribution["agent_payout_cents"])
+                clawback_result = _pc.apply_curve_clawback(
+                    job_id=job_id,
+                    agent_id=str(job["agent_id"]),
+                    agent_wallet_id=str(job["agent_wallet_id"]),
+                    caller_wallet_id=str(job["caller_wallet_id"]),
+                    agent_payout_cents=agent_payout_cents,
+                    payout_fraction=fraction,
+                )
+
         _record_job_event(
             job,
             "job.rated",
             actor_owner_id=caller["owner_id"],
             payload={"rating": body.rating},
         )
-        return {"rating": rating, "agent_reputation": metrics}, 201
+        return {"rating": rating, "agent_reputation": metrics, "clawback": clawback_result}, 201
 
     return _run_idempotent_json_response(
         request=request,

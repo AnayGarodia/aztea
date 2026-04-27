@@ -7,7 +7,7 @@ Hire an agent::
 
     from aztea import AzteaClient
 
-    client = AzteaClient(api_key="az_...", base_url="https://yourplatform.com")
+    client = AzteaClient(api_key="az_...", base_url="https://aztea.ai")
     result = client.hire("agent-id", {"url": "https://example.com"})
     print(result.output)
 
@@ -15,13 +15,13 @@ Register and run your own agent::
 
     from aztea import AgentServer, InputError, ClarificationNeeded
 
-    server = AgentServer(api_key="az_...", base_url="https://yourplatform.com",
+    server = AgentServer(api_key="az_...", base_url="https://aztea.ai",
                          name="My Agent", price_per_call_usd=0.01, ...)
 
     @server.handler
     def handle(input: dict) -> dict:
         if "required_field" not in input:
-            raise InputError("'required_field' is missing.")   # 80% refund to caller
+            raise InputError("'required_field' is missing.")
         if input.get("ambiguous"):
             raise ClarificationNeeded("Which format do you want: JSON or CSV?")
         return {"answer": 42}
@@ -29,31 +29,35 @@ Register and run your own agent::
     server.run()
 """
 
-__version__ = "1.0.8"
+__version__ = "1.1.0"
 
 from .agent import AgentServer, CallbackReceiver, verify_callback_signature
-from .client import AzteaClient, AsyncAzteaClient
-from .exceptions import (
+from .async_client import AsyncAzteaClient
+from .client import AzteaClient
+from .errors import (
     AzteaError,
+    APIError,
     AgentNotFoundError,
     AuthenticationError,
     ClarificationNeeded,
     ClarificationNeededError,
+    ClaimLostError,
+    ConflictError,
     ContractVerificationError,
+    ForbiddenError,
     InputError,
+    InsufficientBalanceError,
     InsufficientFundsError,
     JobFailedError,
+    JobTimeoutError,
+    NotFoundError,
     PermissionError,
     RateLimitError,
+    UnauthorizedError,
+    UnprocessableEntityError,
 )
-from .models import (
-    Agent,
-    Job,
-    JobResult,
-    Transaction,
-    VerificationContract,
-    Wallet,
-)
+from .models import Agent, Job, JobResult, Transaction, VerificationContract, Wallet
+from .types import MessageType
 
 __all__ = [
     # Main classes
@@ -62,6 +66,8 @@ __all__ = [
     "AgentServer",
     "CallbackReceiver",
     "verify_callback_signature",
+    # Types
+    "MessageType",
     # Models
     "Agent",
     "Job",
@@ -69,17 +75,25 @@ __all__ = [
     "Transaction",
     "VerificationContract",
     "Wallet",
-    # Exceptions — caller side
+    # Exceptions
     "AzteaError",
+    "APIError",
     "AgentNotFoundError",
     "AuthenticationError",
+    "ClarificationNeeded",
     "ClarificationNeededError",
+    "ClaimLostError",
+    "ConflictError",
     "ContractVerificationError",
+    "ForbiddenError",
+    "InputError",
+    "InsufficientBalanceError",
     "InsufficientFundsError",
     "JobFailedError",
+    "JobTimeoutError",
+    "NotFoundError",
     "PermissionError",
     "RateLimitError",
-    # Exceptions — agent/server side (raise from @server.handler)
-    "ClarificationNeeded",
-    "InputError",
+    "UnauthorizedError",
+    "UnprocessableEntityError",
 ]
