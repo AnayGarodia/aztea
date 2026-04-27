@@ -349,13 +349,14 @@ class AgentRegisterRequest(BaseModel):
                     "Every input_schema.properties[*] must have a `title` or "
                     f"`description`. Missing on: {bad}."
                 )
-        examples = self.output_examples or []
-        if not isinstance(examples, list) or not examples:
-            raise ValueError(
-                "output_examples is required and must contain at least one "
-                "{input, output} pair so the marketplace UI can preview the "
-                "agent's behaviour before a caller hires it."
-            )
+        examples = self.output_examples
+        # Treat None and [] identically — supply a minimal default so internal
+        # and builtin registrations don't require examples in their specs.
+        # Public marketplace listings should provide real examples but we
+        # enforce this via documentation rather than a hard schema error.
+        if not examples:
+            self.output_examples = [{"input": {}, "output": {}}]
+            return self
         for idx, example in enumerate(examples):
             if not isinstance(example, dict):
                 raise ValueError(

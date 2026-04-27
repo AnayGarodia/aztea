@@ -63,6 +63,7 @@ AUTH_HOOK_LIMIT           = "auth.hook_limit_reached"
 JOB_SELF_RATE             = "job.self_rate_not_allowed"
 JOB_SELF_DISPUTE          = "job.self_dispute_not_allowed"
 JOB_RATE_STATUS_INVALID   = "job.rate_invalid_status"
+JOB_INVALID_RATING        = "job.invalid_rating"
 
 DEFAULT_BY_STATUS: dict[int, str] = {
     400: INVALID_INPUT,

@@ -48,6 +48,10 @@ _NVD_RATE_DELAY = 0.7  # NVD public API allows ~5 req/s without key
 _CVE_ID_PATTERN = re.compile(r'^CVE-\d{4}-\d{4,}$', re.IGNORECASE)
 
 
+def _err(code: str, message: str) -> dict:
+    return {"error": {"code": code, "message": message}}
+
+
 def _cvss_to_severity(score: float) -> str:
     if score >= 9.0:
         return "critical"
@@ -267,21 +271,21 @@ def run(payload: dict) -> dict:
             ids_to_lookup = [cve_id_single]
             single_mode = True
         else:
-            return {"error": "cve_id or cve_ids is required"}
+            return _err("cve_lookup.missing_id", "cve_id or cve_ids is required")
 
         if not isinstance(ids_to_lookup, list):
-            return {"error": "cve_ids must be a list of CVE ID strings"}
+            return _err("cve_lookup.invalid_input", "cve_ids must be a list of CVE ID strings")
 
         if len(ids_to_lookup) > 10:
-            return {"error": f"At most 10 CVE IDs can be looked up per call. You provided {len(ids_to_lookup)}."}
+            return _err("cve_lookup.too_many_ids", f"At most 10 CVE IDs can be looked up per call. You provided {len(ids_to_lookup)}.")
 
         normalized = []
         for raw_id in ids_to_lookup:
             if not isinstance(raw_id, str):
-                return {"error": f"Each CVE ID must be a string, got: {type(raw_id).__name__}"}
+                return _err("cve_lookup.invalid_input", f"Each CVE ID must be a string, got: {type(raw_id).__name__}")
             upper_id = raw_id.strip().upper()
             if not _CVE_ID_PATTERN.match(upper_id):
-                return {"error": f"Invalid CVE ID format: {raw_id!r}. Expected pattern: CVE-YYYY-NNNNN"}
+                return _err("cve_lookup.invalid_id_format", f"Invalid CVE ID format: {raw_id!r}. Expected pattern: CVE-YYYY-NNNNN")
             normalized.append(upper_id)
 
         return _run_cve_id_mode(normalized, single_mode)
@@ -291,7 +295,7 @@ def run(payload: dict) -> dict:
     include_patched = bool(payload.get("include_patched", False))
 
     if not isinstance(packages, list):
-        return {"error": "packages must be a list of strings (e.g. [\"express@4.17.1\"])"}
+        return _err("cve_lookup.invalid_input", "packages must be a list of strings (e.g. [\"express@4.17.1\"])")
 
     if not packages:
         return {
@@ -304,13 +308,13 @@ def run(payload: dict) -> dict:
         }
 
     if len(packages) > 10:
-        return {"error": f"At most 10 packages can be checked per call. You provided {len(packages)}."}
+        return _err("cve_lookup.too_many_packages", f"At most 10 packages can be checked per call. You provided {len(packages)}.")
 
     for raw_pkg in packages:
         if not isinstance(raw_pkg, str):
-            return {"error": "Each package must be a string like \"express@4.17.1\"."}
+            return _err("cve_lookup.invalid_input", "Each package must be a string like \"express@4.17.1\".")
         if len(str(raw_pkg)) > 200:
-            return {"error": f"Package name is too long (max 200 characters): {str(raw_pkg)[:40]}..."}
+            return _err("cve_lookup.package_name_too_long", f"Package name is too long (max 200 characters): {str(raw_pkg)[:40]}...")
 
     all_results: list[dict] = []
     seen_cves: set[str] = set()

@@ -184,10 +184,14 @@ def _parse_llm_json(text_out: str, fallback: dict) -> dict:
         return fallback
 
 
+def _err(code: str, message: str) -> dict:
+    return {"error": {"code": code, "message": message}}
+
+
 def run(payload: dict) -> dict:
     question = str(payload.get("question", "")).strip()
     if len(question) > 1000:
-        return {"error": "question must be 1000 characters or fewer"}
+        return _err("web_researcher.invalid_input", "question must be 1000 characters or fewer")
 
     mode = str(payload.get("mode", "summary")).lower()
     if mode not in ("summary", "extract", "qa"):
@@ -200,21 +204,21 @@ def run(payload: dict) -> dict:
 
     if urls_raw is not None and len(urls_raw) > 0:
         if len(urls_raw) > _MAX_URLS:
-            return {"error": f"urls must contain at most {_MAX_URLS} URLs, got {len(urls_raw)}"}
+            return _err("web_researcher.too_many_urls", f"urls must contain at most {_MAX_URLS} URLs, got {len(urls_raw)}")
         urls = [str(u).strip() for u in urls_raw]
         multi_mode = True
     elif url_single:
         if len(url_single) > _MAX_URL_LENGTH:
-            return {"error": "URL is invalid or not allowed (must be public http/https)"}
+            return _err("web_researcher.invalid_url", "URL is invalid or not allowed (must be public http/https)")
         urls = [url_single]
         multi_mode = False
     else:
-        return {"error": "url or urls is required"}
+        return _err("web_researcher.missing_url", "url or urls is required")
 
     # Validate URL lengths upfront (security check deferred to _fetch_one)
     for u in urls:
         if len(u) > _MAX_URL_LENGTH:
-            return {"error": f"URL too long (max {_MAX_URL_LENGTH} chars): {u[:80]}..."}
+            return _err("web_researcher.url_too_long", f"URL too long (max {_MAX_URL_LENGTH} chars): {u[:80]}...")
 
     # Parallel fetch
     fetched_at = datetime.now(timezone.utc).isoformat()
@@ -251,7 +255,7 @@ def run(payload: dict) -> dict:
     if not multi_mode:
         r = fetch_results[0]
         if r["status"] == "error":
-            return {"error": r["error"]}
+            return _err("web_researcher.fetch_failed", r["error"])
 
         text = r["content"]
         links = r.get("links", [])

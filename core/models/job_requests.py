@@ -422,3 +422,13 @@ class AgentReviewDecisionRequest(BaseModel):
         text = value.strip()
         return text or None
 
+
+class AgentSuspendRequest(BaseModel):
+    """Optional body for POST /admin/agents/{id}/suspend."""
+
+    reason: str | None = Field(
+        default=None,
+        max_length=500,
+        description="Human-readable reason for the suspension, stored on the agent row.",
+    )
+

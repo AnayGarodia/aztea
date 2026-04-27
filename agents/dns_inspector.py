@@ -146,16 +146,20 @@ def _http_check(domain: str) -> tuple[dict | None, str | None]:
     }, None
 
 
+def _err(code: str, message: str) -> dict:
+    return {"error": {"code": code, "message": message}}
+
+
 def run(payload: dict) -> dict:
     raw_domains = payload.get("domains")
     if not raw_domains or not isinstance(raw_domains, list):
-        raise ValueError("domains is required and must be a non-empty list of domain names")
+        return _err("dns_inspector.missing_domains", "domains is required and must be a non-empty list of domain names")
     if len(raw_domains) > _MAX_DOMAINS:
-        raise ValueError(f"domains may contain at most {_MAX_DOMAINS} entries; got {len(raw_domains)}")
+        return _err("dns_inspector.too_many_domains", f"domains may contain at most {_MAX_DOMAINS} entries; got {len(raw_domains)}")
 
     domains = [str(d).strip().lower() for d in raw_domains if str(d).strip()]
     if not domains:
-        raise ValueError("domains list contains no valid entries")
+        return _err("dns_inspector.invalid_domains", "domains list contains no valid entries")
 
     raw_checks = payload.get("checks", ["dns", "ssl", "http"])
     if not isinstance(raw_checks, list):

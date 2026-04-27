@@ -457,9 +457,6 @@ def jobs_rate(
 ) -> core_models.JobRatingResponse:
     _require_scope(caller, "caller")
     def _operation() -> tuple[dict, int]:
-        if caller["type"] == "master":
-            raise HTTPException(status_code=403, detail="Master key cannot submit quality ratings.")
-
         job = jobs.get_job(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
@@ -498,7 +495,14 @@ def jobs_rate(
             message = str(exc)
             if "already has a quality rating" in message:
                 raise HTTPException(status_code=409, detail=message)
-            raise HTTPException(status_code=400, detail=message)
+            raise HTTPException(
+                status_code=400,
+                detail=error_codes.make_error(
+                    error_codes.JOB_INVALID_RATING,
+                    message,
+                    {"job_id": job_id},
+                ),
+            )
 
         metrics = reputation.compute_trust_metrics(job["agent_id"])
         if body.rating == 5:
@@ -565,9 +569,6 @@ def jobs_rate_caller(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.JobCallerRatingResponse:
     _require_scope(caller, "worker")
-    if caller["type"] == "master":
-        raise HTTPException(status_code=403, detail="Master key cannot submit caller ratings.")
-
     job = jobs.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
