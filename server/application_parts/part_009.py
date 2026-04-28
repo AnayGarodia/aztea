@@ -720,11 +720,42 @@ def jobs_get(
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
     if not _caller_can_view_job(caller, job):
         raise HTTPException(status_code=403, detail="Not authorized to view this job.")
-    response = _job_response(job, caller)
+    output_mode = (
+        request.query_params.get("mode")
+        or request.headers.get("X-Aztea-Output-Mode")
+        or "summary"
+    )
+    response = _job_response(job, caller, output_mode=str(output_mode or "summary"))
     response["latest_message_id"] = jobs.get_latest_message_id(job_id)
     quality = reputation.get_job_quality_rating(job_id)
     response["caller_quality_rating"] = quality.get("rating") if quality else None
     return JSONResponse(content=response)
+
+
+@app.get(
+    "/jobs/{job_id}/full",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(401, 403, 404, 429, 500),
+)
+@limiter.limit("60/minute")
+def jobs_get_full_output(
+    request: Request,
+    job_id: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
+    _require_scope(caller, "caller")
+    job = jobs.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+    if not _caller_can_view_job(caller, job):
+        raise HTTPException(status_code=403, detail="Not authorized to view this job.")
+    return JSONResponse(
+        content={
+            "job_id": job_id,
+            "status": job.get("status"),
+            "output_payload": job.get("output_payload"),
+        }
+    )
 
 
 @app.get(

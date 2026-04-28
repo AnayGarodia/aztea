@@ -83,6 +83,20 @@ def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict
         return agent_shell_executor.run(payload)
     if agent_id == _TYPE_CHECKER_AGENT_ID:
         return agent_type_checker.run(payload)
+    if agent_id == _DB_SANDBOX_AGENT_ID:
+        return agent_db_sandbox.run(payload)
+    if agent_id == _VISUAL_REGRESSION_AGENT_ID:
+        return agent_visual_regression.run(payload)
+    if agent_id == _LIVE_ENDPOINT_TESTER_AGENT_ID:
+        return agent_live_endpoint_tester.run(payload)
+    if agent_id == _BROWSER_AGENT_ID:
+        return agent_browser_agent.run(payload)
+    if agent_id == _MULTI_LANGUAGE_EXECUTOR_AGENT_ID:
+        return agent_multi_language_executor.run(payload)
+    if agent_id == _SEMANTIC_CODEBASE_SEARCH_AGENT_ID:
+        return agent_semantic_codebase_search.run(payload)
+    if agent_id == _AI_RED_TEAMER_AGENT_ID:
+        return agent_ai_red_teamer.run(payload)
     raise ValueError(f"Unsupported built-in agent '{agent_id}'.")
 
 
@@ -938,5 +952,4 @@ def _list_hook_deliveries(
             tuple(params),
         ).fetchall()
     return [dict(row) for row in rows]
-
 

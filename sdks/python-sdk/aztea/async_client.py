@@ -55,8 +55,14 @@ class AsyncAzteaClient:
     async def get_spend_summary(self, *args: Any, **kwargs: Any) -> Any:
         return await asyncio.to_thread(self._client.get_spend_summary, *args, **kwargs)
 
+    async def create_topup_session(self, *args: Any, **kwargs: Any) -> Any:
+        return await asyncio.to_thread(self._client.create_topup_session, *args, **kwargs)
+
     async def get_job(self, *args: Any, **kwargs: Any) -> Any:
         return await asyncio.to_thread(self._client.get_job, *args, **kwargs)
+
+    async def get_job_full_output(self, *args: Any, **kwargs: Any) -> Any:
+        return await asyncio.to_thread(self._client.get_job_full_output, *args, **kwargs)
 
     async def hire(self, *args: Any, **kwargs: Any) -> Any:
         return await asyncio.to_thread(self._client.hire, *args, **kwargs)
@@ -66,6 +72,24 @@ class AsyncAzteaClient:
 
     async def hire_many(self, *args: Any, **kwargs: Any) -> Any:
         return await asyncio.to_thread(self._client.hire_many, *args, **kwargs)
+
+    async def list_pipelines(self, *args: Any, **kwargs: Any) -> Any:
+        return await asyncio.to_thread(self._client.list_pipelines, *args, **kwargs)
+
+    async def get_pipeline(self, *args: Any, **kwargs: Any) -> Any:
+        return await asyncio.to_thread(self._client.get_pipeline, *args, **kwargs)
+
+    async def run_pipeline(self, *args: Any, **kwargs: Any) -> Any:
+        return await asyncio.to_thread(self._client.run_pipeline, *args, **kwargs)
+
+    async def get_pipeline_run(self, *args: Any, **kwargs: Any) -> Any:
+        return await asyncio.to_thread(self._client.get_pipeline_run, *args, **kwargs)
+
+    async def list_recipes(self, *args: Any, **kwargs: Any) -> Any:
+        return await asyncio.to_thread(self._client.list_recipes, *args, **kwargs)
+
+    async def run_recipe(self, *args: Any, **kwargs: Any) -> Any:
+        return await asyncio.to_thread(self._client.run_recipe, *args, **kwargs)
 
     async def decide_output_verification(self, *args: Any, **kwargs: Any) -> Any:
         return await asyncio.to_thread(self._client.decide_output_verification, *args, **kwargs)

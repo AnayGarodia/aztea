@@ -1,64 +1,13 @@
-"""Python SDK for Aztea."""
+from __future__ import annotations
 
-from .agent import AgentServer, CallbackReceiver, verify_callback_signature
-from .async_client import AsyncAzteaClient
-from .client import AzteaClient
-from .errors import (
-    AgentNotFoundError,
-    AuthenticationError,
-    AzteaError,
-    APIError,
-    ClarificationNeeded,
-    ClarificationNeededError,
-    ClaimLostError,
-    ConflictError,
-    ContractVerificationError,
-    ForbiddenError,
-    InputError,
-    InsufficientBalanceError,
-    InsufficientFundsError,
-    JobFailedError,
-    JobTimeoutError,
-    NotFoundError,
-    PermissionError,
-    RateLimitError,
-    UnauthorizedError,
-    UnprocessableEntityError,
-)
-from .models import Agent, Job, JobResult, Transaction, VerificationContract, Wallet
-from .types import MessageType
+from ._shim import load_module, warn_once
 
-__all__ = [
-    "AzteaClient",
-    "AsyncAzteaClient",
-    "AgentServer",
-    "CallbackReceiver",
-    "verify_callback_signature",
-    "MessageType",
-    "Agent",
-    "Job",
-    "JobResult",
-    "Transaction",
-    "VerificationContract",
-    "Wallet",
-    "AzteaError",
-    "APIError",
-    "AuthenticationError",
-    "UnauthorizedError",
-    "PermissionError",
-    "ForbiddenError",
-    "AgentNotFoundError",
-    "NotFoundError",
-    "ConflictError",
-    "UnprocessableEntityError",
-    "InsufficientBalanceError",
-    "InsufficientFundsError",
-    "ClaimLostError",
-    "JobTimeoutError",
-    "JobFailedError",
-    "ContractVerificationError",
-    "RateLimitError",
-    "ClarificationNeededError",
-    "ClarificationNeeded",
-    "InputError",
-]
+warn_once()
+_mod = load_module("__init__")
+
+__all__ = getattr(_mod, "__all__", [])
+__version__ = getattr(_mod, "__version__", "0")
+
+for _name in __all__:
+    globals()[_name] = getattr(_mod, _name)
+

@@ -304,6 +304,7 @@ def ensure_builtin_agents_registered() -> None:
                 model_provider="groq",
                 model_id="llama-3.3-70b-versatile",
                 kind="aztea_built",
+                cacheable=spec.get("cacheable"),
             )
             continue
 
@@ -321,6 +322,7 @@ def ensure_builtin_agents_registered() -> None:
                     output_schema = ?,
                     output_examples = ?,
                     internal_only = ?,
+                    cacheable = ?,
                     status = 'active',
                     review_status = 'approved',
                     reviewed_by = ?,
@@ -341,6 +343,7 @@ def ensure_builtin_agents_registered() -> None:
                     json.dumps(spec.get("output_schema") or {}, sort_keys=True),
                     output_examples_json,
                     1 if bool(spec.get("internal_only", False)) else 0,
+                    None if spec.get("cacheable") is None else (1 if bool(spec.get("cacheable")) else 0),
                     _SYSTEM_USERNAME,
                     now,
                     "groq",

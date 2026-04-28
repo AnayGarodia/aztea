@@ -108,6 +108,7 @@ def register_agent(
     audit_logged: bool = False,
     region_locked: str | None = None,
     payout_curve: dict | None = None,
+    cacheable: bool | None = None,
 ) -> str:
     """
     Insert a new agent listing. Returns the agent_id.
@@ -148,6 +149,7 @@ def register_agent(
     normalized_outputs_not_stored = 1 if outputs_not_stored else 0
     normalized_audit_logged = 1 if audit_logged else 0
     normalized_region_locked = str(region_locked or "").strip().lower() or None
+    normalized_cacheable = None if cacheable is None else (1 if cacheable else 0)
     from core import payout_curve as _pc
     try:
         parsed_curve = _pc.parse_curve(payout_curve)
@@ -229,8 +231,8 @@ def register_agent(
                  internal_only, status, review_status, review_note, reviewed_at, reviewed_by,
                  trust_decay_multiplier, last_decay_at, created_at,
                  model_provider, model_id, pricing_model, pricing_config, kind,
-                 pii_safe, outputs_not_stored, audit_logged, region_locked, payout_curve)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 pii_safe, outputs_not_stored, audit_logged, region_locked, payout_curve, cacheable)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 aid,
@@ -266,6 +268,7 @@ def register_agent(
                 normalized_audit_logged,
                 normalized_region_locked,
                 payout_curve_json,
+                normalized_cacheable,
             ),
         )
         if embed_listing and embedding_vector is not None:
@@ -715,6 +718,7 @@ def update_agent(
     region_locked: str | None = None,
     payout_curve: dict | str | None = None,
     clear_payout_curve: bool = False,
+    cacheable: bool | None = None,
 ) -> dict | None:
     """
     Update mutable fields on an agent. Only the owner can call this.
@@ -755,6 +759,8 @@ def update_agent(
             updates["audit_logged"] = 1 if audit_logged else 0
         if region_locked is not None:
             updates["region_locked"] = str(region_locked).strip().lower() or None
+        if cacheable is not None:
+            updates["cacheable"] = 1 if cacheable else 0
         if clear_payout_curve:
             updates["payout_curve"] = None
         elif payout_curve is not None:

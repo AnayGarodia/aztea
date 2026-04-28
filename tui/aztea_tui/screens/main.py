@@ -8,6 +8,7 @@ from textual.widgets import ContentSwitcher, Footer, ListItem, ListView, Static
 
 from ..constants import NAV_ITEMS
 from ..widgets.header_bar import HeaderBar
+from ..widgets.recent_jobs import RecentJobsPane
 
 
 class MainScreen(Screen):
@@ -36,6 +37,7 @@ class MainScreen(Screen):
                     ],
                     id="nav-list",
                 )
+                yield RecentJobsPane()
             with ContentSwitcher(initial="agents", id="content-area"):
                 from ..views.agents import AgentBrowserView
                 from ..views.jobs import JobListView

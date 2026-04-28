@@ -61,6 +61,27 @@ Screen {
     border-left: tall #00d4aa;
     text-style: bold;
 }
+#recent-jobs-pane {
+    height: 1fr;
+    border-top: tall #2a2a40;
+    margin-top: 1;
+    padding: 1;
+}
+#recent-jobs-title {
+    color: #00d4aa;
+    text-style: bold;
+    margin-bottom: 1;
+}
+#recent-jobs-list {
+    color: #94a3b8;
+    margin-bottom: 1;
+}
+#recent-jobs-log {
+    height: 1fr;
+    background: #0f172a;
+    border: tall #2a2a40;
+    color: #cbd5e1;
+}
 
 /* ── Content ───────────────────────────────────────────────────── */
 #content-area {

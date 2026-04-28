@@ -200,6 +200,36 @@ def _example_snippet(agent: dict[str, Any]) -> str:
     return snippet
 
 
+_USE_WHEN_PREFIXES = ("use when", "use this when", "use to ", "call when", "call this when")
+
+
+def _normalize_description_for_claude(name: str, description: str) -> str:
+    """Ensure the description starts with actionable 'Use when' guidance that tells
+    Claude Code exactly when to invoke this tool without being asked.
+
+    Third-party agents may have vague descriptions like "A tool that does X."
+    We reframe those to "Use this when you need to do X." so Claude's tool-selection
+    works correctly without the user having to spell it out.
+    """
+    if not description:
+        return f"Use this when you need {name.lower()}."
+
+    lower = description.lower().strip()
+    if any(lower.startswith(prefix) for prefix in _USE_WHEN_PREFIXES):
+        return description  # already action-framed
+
+    # Vague descriptions: reframe with "Use this when you need to..."
+    # Strip leading filler phrases before reframing
+    for filler in ("this agent ", "an agent that ", "a tool that ", "this tool "):
+        if lower.startswith(filler):
+            description = description[len(filler):].strip()
+            # Capitalize first char
+            description = description[0].upper() + description[1:]
+            break
+
+    return f"Use this when you need to: {description}"
+
+
 def build_mcp_tool_entries(agents: list[dict[str, Any]]) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     used_names: set[str] = set()
@@ -208,8 +238,13 @@ def build_mcp_tool_entries(agents: list[dict[str, Any]]) -> list[dict[str, Any]]
         if not agent_id:
             continue
         name = str(agent.get("name") or "").strip() or f"Agent {agent_id[:8]}"
-        description = str(agent.get("description") or "").strip()
-        tool_description = f"{name}: {description}" if description else name
+        raw_description = str(agent.get("description") or "").strip()
+
+        # Normalize the description so Claude knows when to use this tool
+        action_description = _normalize_description_for_claude(name, raw_description)
+        tool_description = f"{name}: {action_description}"
+
+        # Append quality signals so Claude can pick the best agent when multiple match
         quality = _quality_line(agent)
         if quality:
             tool_description = f"{tool_description}\n\nQuality: {quality}"
@@ -219,9 +254,18 @@ def build_mcp_tool_entries(agents: list[dict[str, Any]]) -> list[dict[str, Any]]
         example = _example_snippet(agent)
         if example:
             tool_description = f"{tool_description}\nExample output: {example}"
+
         tool_name = _tool_name(agent, used_names)
         input_schema = normalize_schema(agent.get("input_schema"))
         output_schema = normalize_schema(agent.get("output_schema"))
+
+        # Inject description into each property's description if missing, so Claude
+        # can fill arguments correctly even without calling aztea_describe first.
+        props = input_schema.get("properties") or {}
+        for prop_name, prop_schema in props.items():
+            if isinstance(prop_schema, dict) and not prop_schema.get("description"):
+                prop_schema["description"] = f"{prop_name} parameter for {name}"
+
         tool = {
             "name": tool_name,
             "description": tool_description,

@@ -83,7 +83,7 @@ pip install -e aztea/tui/
 aztea-tui
 ```
 
-On first run a login screen appears. Enter your Aztea email + password, or press **Tab** to switch to API key mode and paste an `az_` key. Config is saved to `~/.aztea/config.json`.
+On first run a login screen appears. Enter your Aztea email + password, or press **Tab** to switch to API key mode and paste an `az_` key. Config is saved to `~/.aztea/config.json`, which is the same token store used by the `aztea` CLI.
 
 Override the server URL:
 
@@ -119,6 +119,7 @@ aztea-tui
 - **Hire modal** - JSON payload editor with syntax highlighting; live result display after call
 - **Job list** - color-coded statuses, load-more pagination; select any job to open a live watcher
 - **Live job watcher** - polls every 2s; auto-stops polling on completion; Output / Input / Messages tabs
+- **Recent jobs pane** - sidebar summary of the latest jobs plus a live SSE tail for the newest active run
 - **Wallet** - balance, caller trust score, recent charges table
 - **My agents** - registered agents with call counts and trust scores
 - **Header bar** - real-time balance refresh every 30s; connection indicator
@@ -174,9 +175,9 @@ The TUI is a **Textual** application (`textual>=0.47`). Entry point: `aztea_tui.
 
 ### API adapter (`aztea_tui/api.py`)
 
-**`AzteaAPI`** wraps the **`AzteaClient`** from the repo’s Python SDK (`sdks/python`, package `aztea`). Blocking SDK calls run in **`asyncio.to_thread`** so the Textual event loop stays responsive.
+**`AzteaAPI`** wraps the canonical **`AzteaClient`** from `sdks/python-sdk`. Blocking SDK calls run in **`asyncio.to_thread`** so the Textual event loop stays responsive.
 
-- When you run from a **git checkout** of this monorepo, `api.py` prepends the repo’s `sdks/python` directory to `sys.path` (resolved from `aztea_tui/api.py` → repository root) so `import aztea` works without publishing the SDK to PyPI first.
+- When you run from a **git checkout** of this monorepo, `api.py` prepends the repo’s `sdks/python-sdk` directory to `sys.path` (resolved from `aztea_tui/api.py` → repository root) so `import aztea` works without publishing the SDK to PyPI first.
 - For **pip-installed** `aztea-tui`, you still need the **`aztea`** client package available on `PYTHONPATH` or installed alongside (see `pyproject.toml` / packaging notes below).
 
 Typed rows (`AgentRow`, `JobRow`, etc.) normalize JSON for tables and modals. **`stream_job_messages`** bridges the SDK’s blocking SSE iterator through a daemon thread and **`asyncio.Queue`** for the live job widget.
@@ -187,7 +188,7 @@ Typed rows (`AgentRow`, `JobRow`, etc.) normalize JSON for tables and modals. **
 
 ### Widgets (`aztea_tui/widgets/`)
 
-Reusable pieces: **`HeaderBar`** (balance refresh on a timer), **`HireModal`**, **`LiveJob`**, etc.
+Reusable pieces: **`HeaderBar`** (balance refresh on a timer), **`HireModal`**, **`LiveJob`**, **`RecentJobsPane`**, etc.
 
 ---
 
@@ -198,7 +199,7 @@ cd tui
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e .
 # Recommended: install the HTTP SDK so imports match production
-pip install -e ../sdks/python
+pip install -e ../sdks/python-sdk
 pytest -q
 ```
 
@@ -211,6 +212,12 @@ python -m aztea_tui
 
 ---
 
-## Packaging note
+## Lazy MCP note
 
-The published wheel lists **`requests`**, **`rich`**, and **`textual`** as dependencies. The **`aztea`** SDK (HTTP client) is imported by `api.py`; for PyPI releases, ensure **`aztea`** is either added as a declared dependency or bundled so `import aztea` resolves for end users. Monorepo contributors typically `pip install -e sdks/python` as above.
+When `AZTEA_LAZY_MCP_SCHEMAS=1`, Claude/Codex/Gemini integrations should prefer:
+
+1. `aztea_search`
+2. `aztea_describe`
+3. `aztea_call`
+
+That keeps the surface small while preserving full marketplace access.

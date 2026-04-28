@@ -360,6 +360,9 @@ class AzteaClient:
     def get_wallet(self) -> Wallet:
         return _coerce_model(Wallet, self.wallets.me())
 
+    def get_job_full_output(self, job_id: str) -> JSONObject:
+        return self._request_json("GET", f"/jobs/{job_id}/full")
+
     def deposit(self, amount_cents: int, memo: str = "SDK deposit") -> Transaction:
         wallet = self.wallets.me()
         raw = self.wallets.deposit(str(wallet["wallet_id"]), amount_cents, memo=memo)
@@ -384,8 +387,37 @@ class AzteaClient:
     def get_spend_summary(self, period: str = "7d") -> JSONObject:
         return self._request_json("GET", "/wallets/spend-summary", params={"period": period})
 
+    def create_topup_session(self, amount_cents: int, wallet_id: str | None = None) -> JSONObject:
+        if wallet_id is None:
+            wallet = self.wallets.me()
+            wallet_id = str(wallet["wallet_id"])
+        return self._request_json(
+            "POST",
+            "/wallets/topup/session",
+            json_body={"wallet_id": wallet_id, "amount_cents": int(amount_cents)},
+        )
+
+    def list_pipelines(self) -> JSONObject:
+        return self._request_json("GET", "/pipelines")
+
+    def get_pipeline(self, pipeline_id: str) -> JSONObject:
+        return self._request_json("GET", f"/pipelines/{pipeline_id}")
+
+    def run_pipeline(self, pipeline_id: str, input_payload: JSONObject) -> JSONObject:
+        return self._request_json("POST", f"/pipelines/{pipeline_id}/run", json_body={"input_payload": input_payload})
+
+    def get_pipeline_run(self, pipeline_id: str, run_id: str) -> JSONObject:
+        return self._request_json("GET", f"/pipelines/{pipeline_id}/runs/{run_id}")
+
+    def list_recipes(self) -> JSONObject:
+        return self._request_json("GET", "/recipes")
+
+    def run_recipe(self, recipe_id: str, input_payload: JSONObject) -> JSONObject:
+        return self._request_json("POST", f"/recipes/{recipe_id}/run", json_body={"input_payload": input_payload})
+
     def get_job(self, job_id: str) -> JobRecord:
-        return _coerce_model(JobRecord, self.jobs.get_raw(job_id))
+        job = _coerce_model(JobRecord, self.jobs.get_raw(job_id))
+        return job.bind_client(self)
 
     def hire(
         self,
@@ -433,7 +465,7 @@ class AzteaClient:
                 job_id=raw_job_id,
                 output={},
                 cost_cents=int(created.get("price_cents") or 0),
-            )
+            ).bind_client(self)
         return self._poll_job_to_completion(
             raw_job_id,
             timeout_seconds=timeout_seconds,
@@ -464,7 +496,7 @@ class AzteaClient:
                     job_id=job_id,
                     output=_coerce_payload(entry.get("output_payload")),
                     cost_cents=int(entry.get("price_cents") or 0),
-                )
+                ).bind_client(self)
             )
         if not wait:
             return results
@@ -586,7 +618,7 @@ class AzteaClient:
                     output=output,
                     quality_score=job.get("quality_score"),
                     cost_cents=int(job.get("price_cents") or 0),
-                )
+                ).bind_client(self)
             if status == "failed":
                 raise JobFailedError(str(job.get("error_message") or "Job failed."), _coerce_payload(job.get("output_payload")))
             if status == "awaiting_clarification":

@@ -45,3 +45,48 @@ def test_registry_bridge_headers_include_client_id():
     headers = bridge._headers()
     assert headers["X-Aztea-Version"] == "1.0"
     assert headers["X-Aztea-Client"] == "claude-code"
+
+
+def test_registry_bridge_uses_lazy_tool_list_when_flag_enabled(monkeypatch):
+    monkeypatch.setattr(_MODULE._feature_flags, "LAZY_MCP_SCHEMAS", True)
+    bridge = _MODULE.RegistryBridge(base_url="https://aztea.test", api_key="az_test")
+    bridge._entries = [
+        {
+            "agent_id": "agent-1",
+            "tool_name": "python_code_executor",
+            "tool": {
+                "name": "python_code_executor",
+                "description": "Execute Python snippets.",
+                "input_schema": {"type": "object"},
+                "output_schema": {"type": "object"},
+            },
+        }
+    ]
+    tools = bridge.tools()
+    names = [tool["name"] for tool in tools]
+    assert names == ["aztea_search", "aztea_describe", "aztea_call"]
+
+
+def test_registry_bridge_lazy_search_and_describe(monkeypatch):
+    monkeypatch.setattr(_MODULE._feature_flags, "LAZY_MCP_SCHEMAS", True)
+    bridge = _MODULE.RegistryBridge(base_url="https://aztea.test", api_key="az_test")
+    bridge._entries = [
+        {
+            "agent_id": "agent-1",
+            "tool_name": "python_code_executor",
+            "tool": {
+                "name": "python_code_executor",
+                "description": "Execute Python snippets.",
+                "input_schema": {"type": "object", "properties": {"code": {"type": "string"}}},
+                "output_schema": {"type": "object"},
+            },
+        }
+    ]
+
+    ok, search = bridge.call_tool("aztea_search", {"query": "python snippets"})
+    assert ok is True
+    assert search["results"][0]["slug"] == "python_code_executor"
+
+    ok, described = bridge.call_tool("aztea_describe", {"slug": "python_code_executor"})
+    assert ok is True
+    assert described["input_schema"]["properties"]["code"]["type"] == "string"

@@ -170,6 +170,7 @@ class AgentRegisterRequest(BaseModel):
                 "outputs_not_stored": True,
                 "audit_logged": True,
                 "region_locked": "us",
+                "cacheable": True,
                 "input_schema": {"type": "object", "properties": {"ticker": {"type": "string"}}},
                 "output_schema": {"type": "object", "properties": {"summary": {"type": "string"}}},
                 "output_verifier_url": "https://example.com/verify",
@@ -188,6 +189,10 @@ class AgentRegisterRequest(BaseModel):
     audit_logged: bool = False
     region_locked: str | None = Field(default=None, max_length=32)
     payout_curve: dict | None = None
+    cacheable: bool | None = Field(
+        default=None,
+        description="Whether identical calls may be served from result cache. Null lets the platform decide.",
+    )
 
     @field_validator("name")
     @classmethod
@@ -647,4 +652,3 @@ class AgentKeyCreateRequest(BaseModel):
     )
 
     name: str = "Agent worker key"
-

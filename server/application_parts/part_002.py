@@ -355,7 +355,10 @@ def _agent_response(agent: dict, caller: core_models.CallerContext | None, stats
     return out
 
 
-def _job_response(job: dict, caller: core_models.CallerContext) -> dict:
+def _job_response(job: dict, caller: core_models.CallerContext, *, output_mode: str = "summary") -> dict:
+    from core import feature_flags as _feature_flags
+    from core import output_shaping as _output_shaping
+
     if caller.get("type") == "master":
         out = dict(job)
         if out.get("caller_charge_cents") is None:
@@ -381,6 +384,17 @@ def _job_response(job: dict, caller: core_models.CallerContext) -> dict:
         result.pop("output_verification_decision_owner_id", None)
     if owner_id != job.get("claim_owner_id"):
         result.pop("claim_token", None)
+    if _feature_flags.OUTPUT_TRUNCATION and "output_payload" in result:
+        shaped_output, truncated = _output_shaping.shape_output(
+            result.get("output_payload"),
+            output_mode,
+        )
+        result["output_payload"] = shaped_output
+        if truncated:
+            result["output_truncated"] = True
+            if job.get("job_id"):
+                result["full_output_available"] = True
+                result["full_output_path"] = f"/jobs/{job['job_id']}/full"
     return result
 
 
@@ -889,5 +903,4 @@ def _merge_protocol_output_envelope(
     if protocol:
         updated["protocol"] = protocol
     return updated
-
 

@@ -11,6 +11,14 @@ re-running paid work by accident.
 Aztea is installed as an MCP server. Treat it as a specialist agent marketplace with
 cost controls, async jobs, compare mode, and reusable workflows.
 
+If the MCP server is started with `AZTEA_LAZY_MCP_SCHEMAS=1`, prefer the slim flow:
+
+- `aztea_search` to find candidate tools
+- `aztea_describe` to inspect one tool's exact schema
+- `aztea_call` to invoke it
+
+This keeps the tool list small and reduces Claude's token burn on first contact.
+
 ### Default operating rules
 
 - Before expensive or unfamiliar work, call `aztea_estimate_cost`.

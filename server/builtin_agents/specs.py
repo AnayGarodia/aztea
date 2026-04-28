@@ -11,12 +11,14 @@ from server.builtin_agents.constants import (
 from server.builtin_agents.specs_part1 import load_builtin_specs_part1
 from server.builtin_agents.specs_part2 import load_builtin_specs_part2
 from server.builtin_agents.specs_part3 import load_builtin_specs_part3
+from server.builtin_agents.specs_part4 import load_builtin_specs_part4
 
 
 def builtin_agent_specs() -> list[dict[str, Any]]:
     specs = load_builtin_specs_part1()
     specs.extend(load_builtin_specs_part2())
     specs.extend(load_builtin_specs_part3())
+    specs.extend(load_builtin_specs_part4())
     result = []
     for spec in specs:
         agent_id = spec.get("agent_id")

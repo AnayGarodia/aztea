@@ -88,6 +88,13 @@ from agents import package_finder as agent_package_finder
 from agents import linter_agent as agent_linter_agent
 from agents import shell_executor as agent_shell_executor
 from agents import type_checker as agent_type_checker
+from agents import db_sandbox as agent_db_sandbox
+from agents import visual_regression as agent_visual_regression
+from agents import live_endpoint_tester as agent_live_endpoint_tester
+from agents import browser_agent as agent_browser_agent
+from agents import multi_language_executor as agent_multi_language_executor
+from agents import semantic_codebase_search as agent_semantic_codebase_search
+from agents import ai_red_teamer as agent_ai_red_teamer
 from core import auth as _auth
 from core import embeddings
 from core import onboarding
@@ -283,6 +290,13 @@ _PACKAGE_FINDER_AGENT_ID = "d11ddab1-bcca-55de-8b00-c9efadc69c79"
 _LINTER_AGENT_ID = "7ec4c987-9a7e-5af8-984f-7b8ad0ad0536"
 _SHELL_EXECUTOR_AGENT_ID = "6bd98167-e010-5604-8c76-6ed1b92698f1"
 _TYPE_CHECKER_AGENT_ID = "5b140628-52a8-565b-8599-b1c3e402b02d"
+_DB_SANDBOX_AGENT_ID = "be4d6c18-629d-5b1c-8c46-f82c00db4995"
+_VISUAL_REGRESSION_AGENT_ID = "20a74467-d633-5016-b210-adf769b2df9c"
+_LIVE_ENDPOINT_TESTER_AGENT_ID = "8af9fc34-ec0c-5732-b0e0-4e4efdff749c"
+_BROWSER_AGENT_ID = "c3a1b2d4-e5f6-5a7b-8c9d-0e1f2a3b4c5d"
+_MULTI_LANGUAGE_EXECUTOR_AGENT_ID = "d4b2c3e5-f6a7-5b8c-9d0e-1f2a3b4c5d6e"
+_SEMANTIC_CODEBASE_SEARCH_AGENT_ID = "e5c3d4f6-a7b8-5c9d-0e1f-2a3b4c5d6e7f"
+_AI_RED_TEAMER_AGENT_ID = "f6d4e5a7-b8c9-5d0e-1f2a-3b4c5d6e7f8a"
 
 def _normalize_endpoint_ref(value: str | None) -> str:
     return str(value or "").strip().rstrip("/")
@@ -312,6 +326,13 @@ _BUILTIN_INTERNAL_ENDPOINTS = {
     _LINTER_AGENT_ID: "internal://linter_agent",
     _SHELL_EXECUTOR_AGENT_ID: "internal://shell_executor",
     _TYPE_CHECKER_AGENT_ID: "internal://type_checker",
+    _DB_SANDBOX_AGENT_ID: "internal://db_sandbox",
+    _VISUAL_REGRESSION_AGENT_ID: "internal://visual_regression",
+    _LIVE_ENDPOINT_TESTER_AGENT_ID: "internal://live_endpoint_tester",
+    _BROWSER_AGENT_ID: "internal://browser_agent",
+    _MULTI_LANGUAGE_EXECUTOR_AGENT_ID: "internal://multi_language_executor",
+    _SEMANTIC_CODEBASE_SEARCH_AGENT_ID: "internal://semantic_codebase_search",
+    _AI_RED_TEAMER_AGENT_ID: "internal://ai_red_teamer",
 }
 _BUILTIN_LEGACY_ROUTE_ENDPOINTS = {
     _FINANCIAL_AGENT_ID: f"{_SERVER_BASE_URL}/agents/financial",
@@ -350,6 +371,13 @@ _CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
         _DNS_INSPECTOR_AGENT_ID,        # DNS/SSL live inspection
         _SHELL_EXECUTOR_AGENT_ID,       # sandboxed shell execution
         _TYPE_CHECKER_AGENT_ID,         # mypy / tsc type checking
+        _DB_SANDBOX_AGENT_ID,           # ephemeral sqlite sandbox
+        _VISUAL_REGRESSION_AGENT_ID,    # pixel diffs with annotated artifact
+        _LIVE_ENDPOINT_TESTER_AGENT_ID, # live latency/load probe
+        _BROWSER_AGENT_ID,              # headless Chromium via Playwright
+        _MULTI_LANGUAGE_EXECUTOR_AGENT_ID,  # node/deno/bun/go/rust executor
+        _SEMANTIC_CODEBASE_SEARCH_AGENT_ID, # embed + search a codebase
+        _AI_RED_TEAMER_AGENT_ID,        # adversarial prompt tester
         _IMAGE_GENERATOR_AGENT_ID,      # real image generation model
         # LLM-only wrappers removed from public set (Phase 3 cleanup):
         # _PR_REVIEWER_AGENT_ID         — LLM wrapper, no external data

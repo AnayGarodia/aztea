@@ -9,11 +9,10 @@ from typing import Any, Callable
 
 import requests
 
-from core import hosted_skills
+from core import fastpath
 from core import jobs
 from core import payments
 from core import registry
-from core import skill_executor
 from core import url_security
 from server import pricing_helpers
 
@@ -134,17 +133,15 @@ def _invoke_agent(
     )
     started_at = time.monotonic()
     try:
-        endpoint_url = str(agent.get("endpoint_url") or "").strip()
-        if hosted_skills.is_skill_endpoint(endpoint_url):
-            skill_row = hosted_skills.get_hosted_skill_by_agent_id(str(agent["agent_id"]))
-            if skill_row is None:
-                raise RuntimeError("Hosted skill record is missing.")
-            output = skill_executor.execute_hosted_skill(skill_row, payload)
-        elif endpoint_url.startswith("internal://"):
-            if execute_builtin_agent is None:
-                raise RuntimeError(f"Pipeline execution does not have a built-in executor for '{agent['agent_id']}'.")
-            output = execute_builtin_agent(str(agent["agent_id"]), payload)
+        matched_local, local_output = fastpath.run_local_agent(
+            agent,
+            payload,
+            execute_builtin_agent=execute_builtin_agent,
+        )
+        if matched_local:
+            output = local_output
         else:
+            endpoint_url = str(agent.get("endpoint_url") or "").strip()
             safe_url = url_security.validate_outbound_url(endpoint_url, "endpoint_url")
             response = requests.post(
                 safe_url,

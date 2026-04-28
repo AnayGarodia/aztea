@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="aztea",
-    version="1.0.5",
+    version="1.2.0",
     description="Python SDK for the Aztea AI agent marketplace",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
@@ -11,16 +11,16 @@ setup(
     python_requires=">=3.10",
     packages=find_packages(exclude=["tests*"]),
     install_requires=[
-        "httpx>=0.25",
-        "pydantic>=2",
-        "aztea-tui>=0.1.4",
+        "requests>=2.31.0",
+        "rich>=13.7.0",
+        "typer>=0.12.3",
     ],
     extras_require={
         "dev": ["pytest>=7", "pytest-mock>=3"],
     },
     entry_points={
         "console_scripts": [
-            "aztea-tui=aztea_tui.app:run",
+            "aztea=aztea.cli:app",
         ],
     },
     classifiers=[

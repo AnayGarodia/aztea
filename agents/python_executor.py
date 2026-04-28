@@ -19,14 +19,19 @@ Output: {
 """
 
 import json
+import multiprocessing as mp
+import os
 import re
 import subprocess
 import sys
 import tempfile
 import textwrap
 import time
+from multiprocessing.pool import Pool
 from pathlib import Path
+from typing import Any
 
+from core import feature_flags as _feature_flags
 from core.llm import CompletionRequest, Message, run_with_fallback
 
 _MAX_OUTPUT_CHARS = 8000
@@ -73,6 +78,56 @@ _BLOCKED_PATTERNS = [
     r"import\s+http\.client",
 ]
 
+_WARM_POOL_SIZE = max(1, min(int(os.environ.get("AZTEA_PYTHON_WARM_POOL_SIZE", "2") or "2"), 8))
+_WARM_POOL: Pool | None = None
+
+
+def _capture_variables(namespace: dict[str, Any]) -> dict[str, Any]:
+    captured: dict[str, Any] = {}
+    for key, value in list(namespace.items()):
+        if key.startswith("_"):
+            continue
+        try:
+            json.dumps(value)
+            captured[key] = value
+        except Exception:
+            captured[key] = repr(value)
+    return captured
+
+
+def _exec_in_pool(code: str, stdin_data: str) -> dict[str, Any]:
+    import contextlib
+    import io
+
+    namespace: dict[str, Any] = {"__name__": "__main__"}
+    stdout_buffer = io.StringIO()
+    stderr_buffer = io.StringIO()
+    fake_stdin = io.StringIO(stdin_data)
+    start = time.time()
+    old_stdin = sys.stdin
+    exit_code = 0
+    timed_out = False
+    try:
+        sys.stdin = fake_stdin
+        with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
+            exec(compile(code, "<aztea-python-executor>", "exec"), namespace, namespace)
+    except SystemExit as exc:
+        exit_code = int(exc.code) if isinstance(exc.code, int) else 1
+    except Exception as exc:
+        exit_code = 1
+        print(f"{type(exc).__name__}: {exc}", file=stderr_buffer)
+    finally:
+        sys.stdin = old_stdin
+    elapsed_ms = int((time.time() - start) * 1000)
+    return {
+        "stdout": stdout_buffer.getvalue(),
+        "stderr": stderr_buffer.getvalue(),
+        "exit_code": exit_code,
+        "timed_out": timed_out,
+        "execution_time_ms": elapsed_ms,
+        "variables_captured": _capture_variables(namespace) if exit_code == 0 else {},
+    }
+
 
 def _is_safe(code: str) -> bool:
     for pattern in _BLOCKED_PATTERNS:
@@ -81,36 +136,24 @@ def _is_safe(code: str) -> bool:
     return True
 
 
-def run(payload: dict) -> dict:
-    code = str(payload.get("code", "")).strip()
-    if not code:
-        return {"error": "code is required"}
+def _get_warm_pool() -> Pool:
+    global _WARM_POOL
+    if _WARM_POOL is None:
+        method = "fork" if "fork" in mp.get_all_start_methods() else "spawn"
+        ctx = mp.get_context(method)
+        _WARM_POOL = ctx.Pool(processes=_WARM_POOL_SIZE)
+    return _WARM_POOL
 
-    if len(code) > _MAX_CODE_CHARS:
-        return {"error": f"code too long (max {_MAX_CODE_CHARS} chars)"}
 
-    if not _is_safe(code):
-        return {
-            "stdout": "",
-            "stderr": "Blocked: code contains disallowed operations (network, file writes, shell execution).",
-            "exit_code": 1,
-            "timed_out": False,
-            "execution_time_ms": 0,
-            "explanation": "",
-            "variables_captured": {},
-        }
+def _reset_warm_pool() -> None:
+    global _WARM_POOL
+    if _WARM_POOL is not None:
+        _WARM_POOL.terminate()
+        _WARM_POOL.join()
+        _WARM_POOL = None
 
-    stdin_data = str(payload.get("stdin", "") or "")
-    if len(stdin_data) > 65536:
-        return {"error": "stdin must be 65536 characters or fewer"}
 
-    try:
-        timeout = max(1, min(int(payload.get("timeout", 10)), 30))
-    except (TypeError, ValueError):
-        return {"error": "timeout must be a number between 1 and 30"}
-
-    explain = bool(payload.get("explain", True))
-
+def _run_in_subprocess(code: str, stdin_data: str, timeout: int) -> dict[str, Any]:
     with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
         f.write(code)
         f.write("\n")
@@ -154,7 +197,81 @@ def run(payload: dict) -> dict:
                 pass
         else:
             stderr_lines.append(line)
-    stderr = "\n".join(stderr_lines)
+    return {
+        "stdout": stdout,
+        "stderr": "\n".join(stderr_lines),
+        "exit_code": exit_code,
+        "timed_out": timed_out,
+        "execution_time_ms": elapsed_ms,
+        "variables_captured": variables_captured,
+    }
+
+
+def run(payload: dict) -> dict:
+    code = str(payload.get("code", "")).strip()
+    if not code:
+        return {"error": "code is required"}
+
+    if len(code) > _MAX_CODE_CHARS:
+        return {"error": f"code too long (max {_MAX_CODE_CHARS} chars)"}
+
+    if not _is_safe(code):
+        return {
+            "stdout": "",
+            "stderr": "Blocked: code contains disallowed operations (network, file writes, shell execution).",
+            "exit_code": 1,
+            "timed_out": False,
+            "execution_time_ms": 0,
+            "explanation": "",
+            "variables_captured": {},
+        }
+
+    stdin_data = str(payload.get("stdin", "") or "")
+    if len(stdin_data) > 65536:
+        return {"error": "stdin must be 65536 characters or fewer"}
+
+    try:
+        timeout = max(1, min(int(payload.get("timeout", 10)), 30))
+    except (TypeError, ValueError):
+        return {"error": "timeout must be a number between 1 and 30"}
+
+    explain = bool(payload.get("explain", True))
+
+    if _feature_flags.PYTHON_WARM_POOL:
+        try:
+            pool = _get_warm_pool()
+            async_result = pool.apply_async(_exec_in_pool, (code, stdin_data))
+            pooled = async_result.get(timeout=timeout)
+            stdout = pooled["stdout"]
+            stderr = pooled["stderr"]
+            exit_code = pooled["exit_code"]
+            timed_out = pooled["timed_out"]
+            elapsed_ms = pooled["execution_time_ms"]
+            variables_captured = pooled["variables_captured"]
+        except mp.TimeoutError:
+            _reset_warm_pool()
+            stdout = ""
+            stderr = f"Execution timed out after {timeout} seconds."
+            exit_code = 124
+            timed_out = True
+            elapsed_ms = timeout * 1000
+            variables_captured = {}
+        except Exception as exc:
+            _reset_warm_pool()
+            stdout = ""
+            stderr = f"Execution error: {exc}"
+            exit_code = 1
+            timed_out = False
+            elapsed_ms = 0
+            variables_captured = {}
+    else:
+        raw_result = _run_in_subprocess(code, stdin_data, timeout)
+        stdout = raw_result["stdout"]
+        stderr = raw_result["stderr"]
+        exit_code = raw_result["exit_code"]
+        timed_out = raw_result["timed_out"]
+        elapsed_ms = raw_result["execution_time_ms"]
+        variables_captured = raw_result["variables_captured"]
 
     stdout = stdout[:_MAX_OUTPUT_CHARS]
     stderr = stderr[:2000]

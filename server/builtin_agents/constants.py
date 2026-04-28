@@ -34,6 +34,13 @@ PACKAGE_FINDER_AGENT_ID = "d11ddab1-bcca-55de-8b00-c9efadc69c79"
 LINTER_AGENT_ID = "7ec4c987-9a7e-5af8-984f-7b8ad0ad0536"
 SHELL_EXECUTOR_AGENT_ID = "6bd98167-e010-5604-8c76-6ed1b92698f1"
 TYPE_CHECKER_AGENT_ID = "5b140628-52a8-565b-8599-b1c3e402b02d"
+DB_SANDBOX_AGENT_ID = "be4d6c18-629d-5b1c-8c46-f82c00db4995"
+VISUAL_REGRESSION_AGENT_ID = "20a74467-d633-5016-b210-adf769b2df9c"
+LIVE_ENDPOINT_TESTER_AGENT_ID = "8af9fc34-ec0c-5732-b0e0-4e4efdff749c"
+BROWSER_AGENT_ID = "c3a1b2d4-e5f6-5a7b-8c9d-0e1f2a3b4c5d"
+MULTI_LANGUAGE_EXECUTOR_AGENT_ID = "d4b2c3e5-f6a7-5b8c-9d0e-1f2a3b4c5d6e"
+SEMANTIC_CODEBASE_SEARCH_AGENT_ID = "e5c3d4f6-a7b8-5c9d-0e1f-2a3b4c5d6e7f"
+AI_RED_TEAMER_AGENT_ID = "f6d4e5a7-b8c9-5d0e-1f2a-3b4c5d6e7f8a"
 
 BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
     FINANCIAL_AGENT_ID: "internal://financial",
@@ -59,6 +66,13 @@ BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
     LINTER_AGENT_ID: "internal://linter_agent",
     SHELL_EXECUTOR_AGENT_ID: "internal://shell_executor",
     TYPE_CHECKER_AGENT_ID: "internal://type_checker",
+    DB_SANDBOX_AGENT_ID: "internal://db_sandbox",
+    VISUAL_REGRESSION_AGENT_ID: "internal://visual_regression",
+    LIVE_ENDPOINT_TESTER_AGENT_ID: "internal://live_endpoint_tester",
+    BROWSER_AGENT_ID: "internal://browser_agent",
+    MULTI_LANGUAGE_EXECUTOR_AGENT_ID: "internal://multi_language_executor",
+    SEMANTIC_CODEBASE_SEARCH_AGENT_ID: "internal://semantic_codebase_search",
+    AI_RED_TEAMER_AGENT_ID: "internal://ai_red_teamer",
 }
 
 BUILTIN_LEGACY_ROUTE_ENDPOINTS: dict[str, str] = {
@@ -114,6 +128,13 @@ CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
         LINTER_AGENT_ID,
         SHELL_EXECUTOR_AGENT_ID,
         TYPE_CHECKER_AGENT_ID,
+        DB_SANDBOX_AGENT_ID,
+        VISUAL_REGRESSION_AGENT_ID,
+        LIVE_ENDPOINT_TESTER_AGENT_ID,
+        BROWSER_AGENT_ID,
+        MULTI_LANGUAGE_EXECUTOR_AGENT_ID,
+        SEMANTIC_CODEBASE_SEARCH_AGENT_ID,
+        AI_RED_TEAMER_AGENT_ID,
         # LLM-only wrappers (github_fetcher, pr_reviewer, test_generator, spec_writer,
         # changelog_agent, package_finder) intentionally excluded — they add no value
         # over a direct Claude chat session and erode marketplace trust.

@@ -184,6 +184,9 @@ def test_registry_lists_new_builtin_agents(client):
         "Web Researcher Agent",
         "CVE Lookup Agent",
         "Image Generator Agent",
+        "DB Sandbox",
+        "Visual Regression",
+        "Live Endpoint Tester",
     }.issubset(names)
 
 
@@ -404,7 +407,8 @@ def test_mcp_tools_manifest_exposes_registered_agent_schema(client):
     assert body["count"] == len(body["tools"])
     tool = next((item for item in body["tools"] if item["name"] == agent_name.lower().replace(" ", "_")), None)
     assert tool is not None
-    assert tool["description"].startswith(f"{agent_name}: {agent_description}")
+    # Description is normalized to action-framed "Use this when you need to: ..." for Claude Code
+    assert tool["description"].startswith(agent_name + ": ")
     assert "Quality:" in tool["description"]
     assert "Example output:" in tool["description"]
     assert tool["input_schema"]["type"] == "object"

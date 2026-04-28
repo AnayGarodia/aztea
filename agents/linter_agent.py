@@ -1,36 +1,10 @@
 """
-linter_agent.py — Lint Python/JS/TS code without a local toolchain
+linter_agent.py — Lint Python/JS/TS code without an LLM fallback.
 
-For Python: runs ruff (style + bugs) via subprocess.
-For JS/TS: uses LLM analysis (eslint not bundled server-side).
-
-Input:
-  {
-    "code": "source code",
-    "language": "python|javascript|typescript|auto",   # default: auto
-    "filename": "optional_hint.py",                    # used for extension-based detection
-    "checks": ["style", "bugs", "complexity"]          # default: all
-  }
-
-Output:
-  {
-    "language": str,
-    "tool": "ruff|llm",
-    "issues": [{
-      "rule": str,
-      "message": str,
-      "line": int | null,
-      "column": int | null,
-      "severity": "error|warning|info",
-      "fix_available": bool
-    }],
-    "total_issues": int,
-    "error_count": int,
-    "warning_count": int,
-    "clean": bool,
-    "summary": str
-  }
+Python uses ruff. JavaScript and TypeScript use eslint via npx when Node is
+available; otherwise the agent returns a structured tool_unavailable error.
 """
+
 from __future__ import annotations
 
 import json
@@ -40,54 +14,22 @@ import shutil
 import subprocess
 import tempfile
 
-from core.llm import CompletionRequest, Message, run_with_fallback
-
 _MAX_CODE_CHARS = 30_000
 
-_SYSTEM = """\
-You are an expert code reviewer acting as a linter. Analyze the provided code for:
-1. Style violations (naming, formatting, unused imports/variables)
-2. Potential bugs (undefined variables, type mismatches, missing error handling)
-3. Complexity issues (deep nesting, long functions, duplicated logic)
 
-Return ONLY valid JSON — no markdown fences, no prose outside the object."""
-
-_USER = """\
-Language: {language}
-Filename hint: {filename}
-Checks: {checks}
-
-Code:
-```
-{code}
-```
-
-Return JSON:
-{{
-  "issues": [
-    {{
-      "rule": "rule id or short label like 'unused-import'",
-      "message": "clear description of the issue",
-      "line": integer or null,
-      "column": integer or null,
-      "severity": "error|warning|info",
-      "fix_available": false
-    }}
-  ],
-  "summary": "1-2 sentence plain summary of code quality"
-}}"""
+def _err(code: str, message: str) -> dict:
+    return {"error": {"code": code, "message": message}}
 
 
 def _detect_language(code: str, filename: str) -> str:
     if filename:
         ext = os.path.splitext(filename)[1].lower()
-        if ext in (".py",):
+        if ext == ".py":
             return "python"
-        if ext in (".js", ".mjs", ".cjs"):
+        if ext in {".js", ".mjs", ".cjs"}:
             return "javascript"
-        if ext in (".ts", ".tsx"):
+        if ext in {".ts", ".tsx"}:
             return "typescript"
-    # Heuristic from code content
     if re.search(r"\bdef \w+\(|import \w+|from \w+ import", code):
         return "python"
     if re.search(r"const |let |var |function |=>|require\(|import ", code):
@@ -99,21 +41,23 @@ def _ruff_available() -> bool:
     return shutil.which("ruff") is not None
 
 
-def _run_ruff(code: str, checks: list[str]) -> list[dict]:
+def _npx_available() -> bool:
+    return shutil.which("npx") is not None and shutil.which("node") is not None
+
+
+def _run_ruff(code: str, checks: list[str]) -> tuple[list[dict], str]:
     with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False, encoding="utf-8") as f:
         f.write(code)
         tmppath = f.name
 
     try:
-        # Select rule sets based on requested checks
-        select_rules = []
+        select_rules: list[str] = []
         if "bugs" in checks:
-            select_rules.extend(["E", "F", "B"])  # pycodestyle + pyflakes + bugbear
+            select_rules.extend(["E", "F", "B"])
         if "style" in checks:
-            select_rules.extend(["I", "N", "W"])   # isort + pep8-naming + pycodestyle warnings
+            select_rules.extend(["I", "N", "W"])
         if "complexity" in checks:
-            select_rules.extend(["C", "PLR"])       # mccabe + pylint refactor
-
+            select_rules.extend(["C", "PLR"])
         select_arg = ",".join(select_rules) if select_rules else "ALL"
 
         result = subprocess.run(
@@ -123,28 +67,28 @@ def _run_ruff(code: str, checks: list[str]) -> list[dict]:
             timeout=15,
         )
         raw = result.stdout.strip()
-        if not raw:
-            return []
-        data = json.loads(raw)
-        issues = []
+        data = json.loads(raw or "[]")
+        issues: list[dict] = []
         for item in data:
             code_val = item.get("code") or ""
-            msg = item.get("message") or ""
             loc = item.get("location") or {}
-            fix = item.get("fix") is not None
-            # ruff severity: error if code starts with E/F/B, else warning
-            sev = "error" if code_val.startswith(("E", "F", "B")) else "warning"
-            issues.append({
-                "rule": code_val,
-                "message": msg,
-                "line": loc.get("row"),
-                "column": loc.get("column"),
-                "severity": sev,
-                "fix_available": fix,
-            })
-        return issues
-    except Exception:
-        return []
+            issues.append(
+                {
+                    "rule": code_val,
+                    "message": item.get("message") or "",
+                    "line": loc.get("row"),
+                    "column": loc.get("column"),
+                    "severity": "error" if code_val.startswith(("E", "F", "B")) else "warning",
+                    "fix_available": item.get("fix") is not None,
+                }
+            )
+        if issues:
+            errors = sum(1 for item in issues if item["severity"] == "error")
+            warnings = len(issues) - errors
+            summary = f"ruff found {len(issues)} issue(s): {errors} error(s), {warnings} warning(s)."
+        else:
+            summary = "No issues found by ruff."
+        return issues, summary
     finally:
         try:
             os.unlink(tmppath)
@@ -152,24 +96,84 @@ def _run_ruff(code: str, checks: list[str]) -> list[dict]:
             pass
 
 
-def _run_llm_lint(code: str, language: str, filename: str, checks: list[str]) -> tuple[list[dict], str]:
-    prompt = _USER.format(
-        language=language,
-        filename=filename or f"snippet.{language[:2]}",
-        checks=", ".join(checks),
-        code=code[:_MAX_CODE_CHARS],
+def _run_eslint(code: str, language: str, filename: str) -> tuple[list[dict], str]:
+    suffix = ".ts" if language == "typescript" else ".js"
+    lint_name = filename or f"snippet{suffix}"
+    base_cmd = [
+        "npx",
+        "--yes",
+        "eslint",
+        "--stdin",
+        "--stdin-filename",
+        lint_name,
+        "--format",
+        "json",
+        "--no-config-lookup",
+        "--rule",
+        "no-undef:error",
+        "--rule",
+        "no-unused-vars:warn",
+        "--rule",
+        "no-unreachable:error",
+    ]
+    if language == "typescript":
+        base_cmd = [
+            "npx",
+            "--yes",
+            "-p",
+            "eslint",
+            "-p",
+            "@typescript-eslint/parser",
+            "eslint",
+            "--stdin",
+            "--stdin-filename",
+            lint_name,
+            "--format",
+            "json",
+            "--no-config-lookup",
+            "--parser",
+            "@typescript-eslint/parser",
+            "--rule",
+            "no-unused-vars:warn",
+            "--rule",
+            "no-unreachable:error",
+        ]
+
+    result = subprocess.run(
+        base_cmd,
+        input=code,
+        capture_output=True,
+        text=True,
+        timeout=20,
     )
-    resp = run_with_fallback(CompletionRequest(
-        model="",
-        messages=[Message("system", _SYSTEM), Message("user", prompt)],
-        max_tokens=1500,
-        json_mode=True,
-    ))
-    raw = resp.text.strip()
-    raw = re.sub(r"^```(?:json)?\s*", "", raw)
-    raw = re.sub(r"\s*```$", "", raw)
+    if result.returncode not in {0, 1}:
+        stderr = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(stderr or "eslint failed")
+
+    raw = result.stdout.strip() or "[]"
     parsed = json.loads(raw)
-    return parsed.get("issues", []), parsed.get("summary", "")
+    files = parsed if isinstance(parsed, list) else []
+    messages = files[0].get("messages") if files else []
+    issues: list[dict] = []
+    for item in messages or []:
+        severity = "error" if int(item.get("severity") or 0) >= 2 else "warning"
+        issues.append(
+            {
+                "rule": item.get("ruleId") or "eslint",
+                "message": item.get("message") or "",
+                "line": item.get("line"),
+                "column": item.get("column"),
+                "severity": severity,
+                "fix_available": item.get("fix") is not None,
+            }
+        )
+    if issues:
+        errors = sum(1 for item in issues if item["severity"] == "error")
+        warnings = len(issues) - errors
+        summary = f"eslint found {len(issues)} issue(s): {errors} error(s), {warnings} warning(s)."
+    else:
+        summary = "No issues found by eslint."
+    return issues, summary
 
 
 def run(payload: dict) -> dict:
@@ -190,39 +194,27 @@ def run(payload: dict) -> dict:
     else:
         checks = ["style", "bugs", "complexity"]
 
-    tool = "llm"
-    summary = ""
-    issues: list[dict] = []
-
-    if language == "python" and _ruff_available():
+    if language == "python":
+        if not _ruff_available():
+            return _err("linter_agent.tool_unavailable", "ruff is not available on this executor.")
+        issues, summary = _run_ruff(code, checks)
         tool = "ruff"
-        issues = _run_ruff(code, checks)
-        # Compute summary via LLM if we have issues
-        if issues:
-            total = len(issues)
-            errors = sum(1 for i in issues if i["severity"] == "error")
-            warnings = total - errors
-            summary = f"ruff found {total} issue(s): {errors} error(s), {warnings} warning(s)."
-        else:
-            summary = "No issues found by ruff."
-    else:
+    elif language in {"javascript", "typescript"}:
+        if not _npx_available():
+            return _err(
+                "linter_agent.tool_unavailable",
+                f"{language} linting requires node+npx on this executor.",
+            )
         try:
-            issues, summary = _run_llm_lint(code, language, filename, checks)
+            issues, summary = _run_eslint(code, language, filename)
         except Exception as exc:
-            return {
-                "language": language,
-                "tool": "llm",
-                "issues": [],
-                "total_issues": 0,
-                "error_count": 0,
-                "warning_count": 0,
-                "clean": False,
-                "summary": f"LLM analysis failed: {exc}",
-            }
+            return _err("linter_agent.tool_unavailable", f"eslint unavailable: {exc}")
+        tool = "eslint"
+    else:
+        return _err("linter_agent.invalid_language", f"Unsupported language: {language}")
 
-    error_count = sum(1 for i in issues if i.get("severity") == "error")
-    warning_count = sum(1 for i in issues if i.get("severity") == "warning")
-
+    error_count = sum(1 for item in issues if item.get("severity") == "error")
+    warning_count = sum(1 for item in issues if item.get("severity") == "warning")
     return {
         "language": language,
         "tool": tool,

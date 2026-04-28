@@ -16,9 +16,16 @@ class APIError(AzteaError):
     message: str
     detail: Any
     body: Any
+    code: str | None = None
+    hint: str | None = None
 
     def __str__(self) -> str:
-        return f"{self.status_code}: {self.message}"
+        lines = [
+            f"[{self.status_code}] {self.code or 'api.error'}",
+            self.message or "Request failed.",
+            self.hint or "Inspect the server response details for context.",
+        ]
+        return "\n".join(lines)
 
 
 class UnauthorizedError(APIError):
@@ -155,36 +162,75 @@ def _extract_detail(body: Any) -> Any:
     return body
 
 
+def _extract_code(body: Any) -> str | None:
+    if isinstance(body, dict):
+        raw = body.get("error_code") or body.get("error")
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
+        detail = body.get("detail")
+        if isinstance(detail, dict):
+            nested = detail.get("error_code") or detail.get("error")
+            if isinstance(nested, str) and nested.strip():
+                return nested.strip()
+    return None
+
+
+def _extract_hint(body: Any, detail: Any, status_code: int) -> str | None:
+    if isinstance(body, dict):
+        raw = body.get("hint")
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
+    if status_code == 401:
+        return "Check your API key or run `aztea login` again."
+    if status_code == 402:
+        return "Top up your wallet or lower the job budget."
+    if status_code == 403:
+        return "Your key is valid but lacks the required scope."
+    if status_code == 404:
+        return "Confirm the agent, job, or pipeline id is correct."
+    if status_code == 422:
+        return "Review the request payload and try again."
+    if status_code == 429:
+        return "Wait briefly, then retry."
+    if status_code >= 500:
+        return "The server failed while handling the request. Retry shortly."
+    if isinstance(detail, str) and detail.strip():
+        return detail.strip()
+    return None
+
+
 def raise_for_error_response(response: requests.Response) -> None:
     if response.ok:
         return
 
     body = _extract_response_body(response)
     detail = _extract_detail(body)
+    code_name = _extract_code(body)
     if isinstance(body, dict) and "message" in body:
         message = str(body.get("message") or "")
     else:
         message = str(detail)
     code = response.status_code
+    hint = _extract_hint(body, detail, code)
 
     if code == 401:
-        raise UnauthorizedError(code, message, detail, body)
+        raise UnauthorizedError(code, message, detail, body, code=code_name, hint=hint)
     if code == 402:
-        raise InsufficientBalanceError(code, message, detail, body)
+        raise InsufficientBalanceError(code, message, detail, body, code=code_name, hint=hint)
     if code == 403:
-        raise ForbiddenError(code, message, detail, body)
+        raise ForbiddenError(code, message, detail, body, code=code_name, hint=hint)
     if code == 404:
-        raise NotFoundError(code, message, detail, body)
+        raise NotFoundError(code, message, detail, body, code=code_name, hint=hint)
     if code == 429:
-        raise RateLimitError(code, message, detail, body)
+        raise RateLimitError(code, message, detail, body, code=code_name, hint=hint)
     if code == 409:
         if "claim" in message.lower():
-            raise ClaimLostError(code, message, detail, body)
-        raise ConflictError(code, message, detail, body)
+            raise ClaimLostError(code, message, detail, body, code=code_name, hint=hint)
+        raise ConflictError(code, message, detail, body, code=code_name, hint=hint)
     if code == 410:
-        raise ClaimLostError(code, message, detail, body)
+        raise ClaimLostError(code, message, detail, body, code=code_name, hint=hint)
     if code == 422:
-        raise UnprocessableEntityError(code, message, detail, body)
+        raise UnprocessableEntityError(code, message, detail, body, code=code_name, hint=hint)
     if code in {502, 503}:
-        raise UpstreamError(code, message, detail, body)
-    raise APIError(code, message, detail, body)
+        raise UpstreamError(code, message, detail, body, code=code_name, hint=hint)
+    raise APIError(code, message, detail, body, code=code_name, hint=hint)

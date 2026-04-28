@@ -10,18 +10,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import AsyncIterator
 
-# Add SDK to path when not installed as a package (…/repo/tui/aztea_tui/api.py → repo root)
-_SDK_PATH = Path(__file__).resolve().parents[2] / "sdks" / "python"
+# Add canonical SDK to path when not installed as a package.
+_SDK_PATH = Path(__file__).resolve().parents[2] / "sdks" / "python-sdk"
 if str(_SDK_PATH) not in sys.path:
     sys.path.insert(0, str(_SDK_PATH))
 
 from aztea import AzteaClient  # noqa: E402
-try:  # noqa: E402
-    # sdks/python package layout
-    from aztea.errors import AzteaError
-except ModuleNotFoundError:  # noqa: E402
-    # sdks/python-sdk package layout
-    from aztea.exceptions import AzteaError
+from aztea.errors import AzteaError  # noqa: E402
 
 
 class AzteaAPIError(Exception):

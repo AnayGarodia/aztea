@@ -54,8 +54,8 @@ def flag(name: str, *, default: bool = False) -> bool:
 DISABLE_EMBEDDINGS: bool = flag("AZTEA_DISABLE_EMBEDDINGS", default=False)
 
 # Gate lazy MCP schema loading (5.3 in the roadmap).
-# Default: on once the feature ships.
-LAZY_MCP_SCHEMAS: bool = flag("AZTEA_LAZY_MCP_SCHEMAS", default=False)
+# Default: on now that the slim MCP surface is implemented.
+LAZY_MCP_SCHEMAS: bool = flag("AZTEA_LAZY_MCP_SCHEMAS", default=True)
 
 # Output truncation: summary mode replaces large blobs and lists with refs.
 # Default: on.

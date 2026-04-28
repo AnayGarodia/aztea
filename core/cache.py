@@ -14,6 +14,11 @@ from core import reputation
 
 DB_PATH = _db.DB_PATH
 _local = _db._local
+_NON_CACHEABLE_INTERNAL_ENDPOINTS = {
+    "internal://python-executor",
+    "internal://shell_executor",
+    "internal://multi_file_executor",
+}
 
 
 def _resolved_db_path() -> str:
@@ -55,18 +60,43 @@ def _canonical_json(payload: Any) -> str:
     return json.dumps(payload, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
 
 
-def cache_key(agent_id: str, input_payload: Any) -> str:
-    canonical = f"{str(agent_id).strip()}:{_canonical_json(input_payload)}"
+def cache_key(agent_id: str, input_payload: Any, version_token: str | None = None) -> str:
+    canonical = f"{str(agent_id).strip()}:{str(version_token or '').strip()}:{_canonical_json(input_payload)}"
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def agent_cacheable(agent: dict | None) -> bool:
+    if not isinstance(agent, dict):
+        return True
+    explicit = agent.get("cacheable")
+    if explicit is not None:
+        return bool(explicit)
+    endpoint = str(agent.get("endpoint_url") or "").strip().lower()
+    if endpoint in _NON_CACHEABLE_INTERNAL_ENDPOINTS:
+        return False
+    return True
+
+
+def cache_identity(agent: dict | None, agent_id: str | None = None) -> str:
+    if not isinstance(agent, dict):
+        return str(agent_id or "").strip()
+    normalized_agent_id = str(agent.get("agent_id") or agent_id or "").strip()
+    endpoint = str(agent.get("endpoint_url") or "").strip()
+    version_bits = [
+        endpoint,
+        str(agent.get("updated_at") or "").strip(),
+        str(agent.get("reviewed_at") or "").strip(),
+    ]
+    return f"{normalized_agent_id}:{'|'.join(version_bits)}"
 
 
 def _current_trust_score(agent_id: str) -> float:
     return float(reputation.compute_trust_metrics(agent_id).get("trust_score") or 0.0)
 
 
-def get_cached(agent_id: str, input_payload: Any) -> Any | None:
+def get_cached(agent_id: str, input_payload: Any, *, version_token: str | None = None) -> Any | None:
     init_cache_db()
-    key = cache_key(agent_id, input_payload)
+    key = cache_key(agent_id, input_payload, version_token)
     with _conn() as conn:
         row = conn.execute(
             """
@@ -95,15 +125,21 @@ def set_cached(
     output_payload: Any,
     job_id: str,
     ttl_hours: int = 24,
+    *,
+    version_token: str | None = None,
 ) -> bool:
     init_cache_db()
     if _current_trust_score(agent_id) < 80.0:
         return False
     ttl = max(1, min(int(ttl_hours or 24), 168))
-    key = cache_key(agent_id, input_payload)
+    key = cache_key(agent_id, input_payload, version_token)
     created_at = _now()
     expires_at = created_at + timedelta(hours=ttl)
-    output_json = json.dumps(output_payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    payload_to_store = output_payload
+    if isinstance(output_payload, dict):
+        payload_to_store = dict(output_payload)
+        payload_to_store["_cached_job_id"] = str(job_id).strip()
+    output_json = json.dumps(payload_to_store, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     with _conn() as conn:
         conn.execute(
             """

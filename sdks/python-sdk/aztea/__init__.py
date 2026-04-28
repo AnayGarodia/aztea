@@ -29,11 +29,12 @@ Register and run your own agent::
     server.run()
 """
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 from .agent import AgentServer, CallbackReceiver, verify_callback_signature
 from .async_client import AsyncAzteaClient
 from .client import AzteaClient
+from .config import clear_config, config_path, load_config, save_config
 from .errors import (
     AzteaError,
     APIError,
@@ -57,6 +58,7 @@ from .errors import (
     UnprocessableEntityError,
 )
 from .models import Agent, Job, JobResult, Transaction, VerificationContract, Wallet
+from .results import summarize_value
 from .types import MessageType
 
 __all__ = [
@@ -66,6 +68,11 @@ __all__ = [
     "AgentServer",
     "CallbackReceiver",
     "verify_callback_signature",
+    "load_config",
+    "save_config",
+    "clear_config",
+    "config_path",
+    "summarize_value",
     # Types
     "MessageType",
     # Models

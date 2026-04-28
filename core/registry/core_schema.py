@@ -90,6 +90,7 @@ _REQUIRED_COLUMNS = {
     "output_schema",
     "output_verifier_url",
     "internal_only",
+    "cacheable",
     "status",
     "review_status",
     "review_note",
@@ -164,6 +165,7 @@ def _create_agents_table(conn: sqlite3.Connection, table_name: str = "agents") -
                 endpoint_last_checked_at TEXT,
                 endpoint_last_error TEXT,
                 internal_only       INTEGER NOT NULL DEFAULT 0,
+                cacheable          INTEGER,
                 status              TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','suspended','banned')),
                 suspension_reason   TEXT,
                 review_status       TEXT NOT NULL DEFAULT 'approved',
@@ -572,6 +574,11 @@ def _normalize_legacy_agent_row(row: dict, used_agent_ids: set, used_names: set)
         internal_only = 1 if int(row.get("internal_only") or 0) else 0
     except (TypeError, ValueError):
         internal_only = 0
+    cacheable_raw = row.get("cacheable")
+    try:
+        cacheable = None if cacheable_raw is None else (1 if int(cacheable_raw) else 0)
+    except (TypeError, ValueError):
+        cacheable = None
     status = str(row.get("status") or "active").strip().lower()
     if status not in {"active", "suspended", "banned"}:
         status = "active"
@@ -610,6 +617,7 @@ def _normalize_legacy_agent_row(row: dict, used_agent_ids: set, used_names: set)
         endpoint_last_checked_at,
         endpoint_last_error,
         internal_only,
+        cacheable,
         status,
         review_status,
         review_note,
@@ -642,9 +650,9 @@ def _migrate_agents_table(conn: sqlite3.Connection) -> None:
                  call_latency_ring, avg_latency_ms, total_calls, successful_calls, tags, input_schema,
                  output_schema, output_verifier_url, output_examples, verified,
                  endpoint_health_status, endpoint_consecutive_failures, endpoint_last_checked_at, endpoint_last_error,
-                 internal_only, status, review_status, review_note, reviewed_at, reviewed_by,
+                 internal_only, cacheable, status, review_status, review_note, reviewed_at, reviewed_by,
                  trust_decay_multiplier, last_decay_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             normalized,
         )
@@ -714,6 +722,14 @@ def _ensure_payout_curve_column(conn: sqlite3.Connection) -> None:
             raise
 
 
+def _ensure_cacheable_column(conn: sqlite3.Connection) -> None:
+    try:
+        conn.execute("ALTER TABLE agents ADD COLUMN cacheable INTEGER")
+    except sqlite3.OperationalError as exc:
+        if "duplicate column name" not in str(exc).lower():
+            raise
+
+
 def init_db() -> None:
     """Create or migrate the agents table to the canonical production schema."""
     with _conn() as conn:
@@ -727,6 +743,7 @@ def init_db() -> None:
         _ensure_kind_column(conn)
         _ensure_privacy_tier_columns(conn)
         _ensure_payout_curve_column(conn)
+        _ensure_cacheable_column(conn)
 
 
 # ---------------------------------------------------------------------------
@@ -776,6 +793,14 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     d["endpoint_last_checked_at"] = str(d.get("endpoint_last_checked_at") or "").strip() or None
     d["endpoint_last_error"] = str(d.get("endpoint_last_error") or "").strip() or None
     d["internal_only"] = bool(int(d.get("internal_only") or 0))
+    cacheable_raw = d.get("cacheable")
+    if cacheable_raw is None:
+        d["cacheable"] = None
+    else:
+        try:
+            d["cacheable"] = bool(int(cacheable_raw))
+        except (TypeError, ValueError):
+            d["cacheable"] = None
     status = str(d.get("status") or "active").strip().lower()
     d["status"] = status if status in {"active", "suspended", "banned"} else "active"
     review_status = str(d.get("review_status") or "approved").strip().lower()

@@ -1,26 +1,13 @@
 """
-type_checker.py — Run mypy (Python) or tsc (TypeScript) on submitted code
+type_checker.py — Run mypy (Python) or tsc (TypeScript) on submitted code.
 
-Input:
-  {
-    "code": "def add(a, b): return a + b",
-    "language": "python | typescript",
-    "stubs": {"helper.py": "def helper() -> int: ..."},  # optional extra files
-    "strict": false                                        # default false
-  }
-
-Output:
-  {
-    "language": str,
-    "passed": bool,
-    "error_count": int,
-    "errors": [{"file": str, "line": int | null, "col": int | null, "code": str, "message": str}],
-    "raw_output": str,
-    "tool_version": str
-  }
+This agent is intentionally tool-first. It never falls back to an LLM summary
+because the value proposition is deterministic diagnostics from a real checker.
 """
+
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -31,18 +18,77 @@ _TIMEOUT = 30
 _CODE_MAX = 100_000
 
 
+def _normalize_diagnostic(item: dict, *, default_file: str) -> dict:
+    line = item.get("line")
+    column = item.get("column")
+    return {
+        "file": os.path.basename(str(item.get("file") or default_file)),
+        "line": int(line) if isinstance(line, int) or str(line).isdigit() else None,
+        "col": int(column) if isinstance(column, int) or str(column).isdigit() else None,
+        "code": str(item.get("code") or item.get("rule") or "error"),
+        "message": str(item.get("message") or item.get("text") or "").strip(),
+        "severity": str(item.get("severity") or "error").lower(),
+    }
+
+
+def _parse_mypy_text_diagnostics(raw: str) -> list[dict]:
+    diagnostics: list[dict] = []
+    for line in raw.splitlines():
+        match = re.match(r"^(.+?):(\d+):(\d+): error:\s+(.+?)\s+\[(.+?)\]$", line)
+        if match:
+            diagnostics.append(
+                {
+                    "file": os.path.basename(match.group(1)),
+                    "line": int(match.group(2)),
+                    "col": int(match.group(3)),
+                    "code": match.group(5),
+                    "message": match.group(4),
+                    "severity": "error",
+                }
+            )
+            continue
+        match = re.match(r"^(.+?):(\d+): error:\s+(.+)$", line)
+        if match:
+            diagnostics.append(
+                {
+                    "file": os.path.basename(match.group(1)),
+                    "line": int(match.group(2)),
+                    "col": None,
+                    "code": "error",
+                    "message": match.group(3),
+                    "severity": "error",
+                }
+            )
+    return diagnostics
+
+
 def _run_mypy(code: str, stubs: dict[str, str], strict: bool) -> dict:
     with tempfile.TemporaryDirectory() as tmpdir:
         main_path = os.path.join(tmpdir, "main.py")
-        with open(main_path, "w") as f:
+        with open(main_path, "w", encoding="utf-8") as f:
             f.write(code)
         for fname, content in (stubs or {}).items():
             safe = os.path.basename(fname)
             if safe and safe.endswith(".py"):
-                with open(os.path.join(tmpdir, safe), "w") as f:
+                with open(os.path.join(tmpdir, safe), "w", encoding="utf-8") as f:
                     f.write(content)
 
-        cmd = ["python3", "-m", "mypy", "--no-error-summary", "--show-column-numbers"]
+        config_path = os.path.join(tmpdir, "mypy.ini")
+        with open(config_path, "w", encoding="utf-8") as f:
+            f.write("[mypy]\n")
+            f.write("python_version = 3.11\n")
+            f.write("show_error_codes = True\n")
+
+        cmd = [
+            "python3",
+            "-m",
+            "mypy",
+            "--no-error-summary",
+            "--show-column-numbers",
+            "--output=json",
+            "--config-file",
+            config_path,
+        ]
         if strict:
             cmd.append("--strict")
         cmd.append(main_path)
@@ -61,61 +107,85 @@ def _run_mypy(code: str, stubs: dict[str, str], strict: bool) -> dict:
             raise RuntimeError("mypy is not installed on this executor. Install it with: pip install mypy")
 
         raw = result.stdout + result.stderr
-        version_m = re.search(r"mypy\s+([\d.]+)", raw)
-        tool_version = f"mypy {version_m.group(1)}" if version_m else "mypy"
+        diagnostics: list[dict] = []
+        try:
+            parsed = json.loads(result.stdout.strip() or "[]")
+            if isinstance(parsed, list):
+                diagnostics = [
+                    _normalize_diagnostic(item, default_file="main.py")
+                    for item in parsed
+                    if isinstance(item, dict)
+                ]
+        except json.JSONDecodeError:
+            diagnostics = _parse_mypy_text_diagnostics(raw)
 
-        errors = []
-        for line in result.stdout.splitlines():
-            m = re.match(r"^(.+?):(\d+):(\d+): error:\s+(.+?)\s+\[(.+?)\]$", line)
-            if m:
-                errors.append({
-                    "file": os.path.basename(m.group(1)),
-                    "line": int(m.group(2)),
-                    "col": int(m.group(3)),
-                    "code": m.group(5),
-                    "message": m.group(4),
-                })
-                continue
-            m2 = re.match(r"^(.+?):(\d+): error:\s+(.+)$", line)
-            if m2:
-                errors.append({
-                    "file": os.path.basename(m2.group(1)),
-                    "line": int(m2.group(2)),
-                    "col": None,
-                    "code": "error",
-                    "message": m2.group(3),
-                })
+        try:
+            version_result = subprocess.run(
+                ["python3", "-m", "mypy", "--version"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                cwd=tmpdir,
+            )
+            version_blob = f"{version_result.stdout} {version_result.stderr}".strip()
+        except Exception:
+            version_blob = raw
+        version_match = re.search(r"mypy\s+([\d.]+)", version_blob)
+        tool_version = f"mypy {version_match.group(1)}" if version_match else "mypy"
 
         return {
             "language": "python",
+            "ok": result.returncode == 0,
             "passed": result.returncode == 0,
-            "error_count": len(errors),
-            "errors": errors,
+            "error_count": len(diagnostics),
+            "diagnostics": diagnostics,
+            "errors": diagnostics,
             "raw_output": raw[:5000],
             "tool_version": tool_version,
         }
 
 
+def _parse_tsc_diagnostics(raw: str) -> list[dict]:
+    diagnostics: list[dict] = []
+    for line in raw.splitlines():
+        match = re.match(r"^(.+?)\((\d+),(\d+)\): error (TS\d+): (.+)$", line)
+        if match:
+            diagnostics.append(
+                {
+                    "file": os.path.basename(match.group(1)),
+                    "line": int(match.group(2)),
+                    "col": int(match.group(3)),
+                    "code": match.group(4),
+                    "message": match.group(5),
+                    "severity": "error",
+                }
+            )
+    return diagnostics
+
+
 def _run_tsc(code: str, stubs: dict[str, str], strict: bool) -> dict:
     with tempfile.TemporaryDirectory() as tmpdir:
         main_path = os.path.join(tmpdir, "main.ts")
-        with open(main_path, "w") as f:
+        with open(main_path, "w", encoding="utf-8") as f:
             f.write(code)
         for fname, content in (stubs or {}).items():
             safe = os.path.basename(fname)
             if safe and (safe.endswith(".ts") or safe.endswith(".d.ts")):
-                with open(os.path.join(tmpdir, safe), "w") as f:
+                with open(os.path.join(tmpdir, safe), "w", encoding="utf-8") as f:
                     f.write(content)
 
-        tsconfig = {
-            "strict": strict,
-            "noEmit": True,
-            "target": "ES2020",
-            "module": "commonjs",
-        }
-        import json
-        with open(os.path.join(tmpdir, "tsconfig.json"), "w") as f:
-            json.dump({"compilerOptions": tsconfig}, f)
+        with open(os.path.join(tmpdir, "tsconfig.json"), "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "compilerOptions": {
+                        "strict": strict,
+                        "noEmit": True,
+                        "target": "ES2020",
+                        "module": "commonjs",
+                    }
+                },
+                f,
+            )
 
         tsc_bin = shutil.which("tsc") or "tsc"
         cmd = [tsc_bin, "--noEmit", "--project", os.path.join(tmpdir, "tsconfig.json")]
@@ -135,27 +205,21 @@ def _run_tsc(code: str, stubs: dict[str, str], strict: bool) -> dict:
 
         raw = result.stdout + result.stderr
         version_result = subprocess.run(
-            [tsc_bin, "--version"], capture_output=True, text=True, timeout=5
+            [tsc_bin, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         tool_version = version_result.stdout.strip() or "tsc"
-
-        errors = []
-        for line in result.stdout.splitlines():
-            m = re.match(r"^(.+?)\((\d+),(\d+)\): error (TS\d+): (.+)$", line)
-            if m:
-                errors.append({
-                    "file": os.path.basename(m.group(1)),
-                    "line": int(m.group(2)),
-                    "col": int(m.group(3)),
-                    "code": m.group(4),
-                    "message": m.group(5),
-                })
+        diagnostics = _parse_tsc_diagnostics(raw)
 
         return {
             "language": "typescript",
+            "ok": result.returncode == 0,
             "passed": result.returncode == 0,
-            "error_count": len(errors),
-            "errors": errors,
+            "error_count": len(diagnostics),
+            "diagnostics": diagnostics,
+            "errors": diagnostics,
             "raw_output": raw[:5000],
             "tool_version": tool_version,
         }
@@ -169,7 +233,7 @@ def run(payload: dict) -> dict:
         raise ValueError(f"'code' must be <= {_CODE_MAX} characters.")
 
     language = str(payload.get("language") or "python").strip().lower()
-    if language not in ("python", "typescript"):
+    if language not in {"python", "typescript"}:
         raise ValueError("'language' must be 'python' or 'typescript'.")
 
     stubs = payload.get("stubs") or {}
@@ -177,7 +241,6 @@ def run(payload: dict) -> dict:
         stubs = {}
 
     strict = bool(payload.get("strict", False))
-
     if language == "python":
         return _run_mypy(code, stubs, strict)
     return _run_tsc(code, stubs, strict)

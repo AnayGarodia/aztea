@@ -216,13 +216,61 @@ def _cache_hit_response_payload(cached_output: Any) -> dict[str, Any]:
     # Return the same envelope shape as a live call so clients need not
     # branch on whether the response came from cache.
     inner = dict(cached_output) if isinstance(cached_output, dict) else {"result": cached_output}
+    original_job_id = inner.pop("_cached_job_id", None)
     return {
-        "job_id": inner.pop("_cached_job_id", None),
+        "job_id": original_job_id,
+        "original_job_id": original_job_id,
         "status": "complete",
         "output": inner,
         "latency_ms": 0,
         "cached": True,
     }
+
+
+def _sync_success_response_payload(
+    *,
+    job_id: str | None,
+    output: Any,
+    latency_ms: float,
+    cached: bool = False,
+) -> dict[str, Any]:
+    return {
+        "job_id": job_id,
+        "status": "complete",
+        "output": output,
+        "latency_ms": round(float(latency_ms), 1),
+        "cached": bool(cached),
+    }
+
+
+def _response_output_mode(request: Request) -> str:
+    mode = (
+        request.query_params.get("mode")
+        or request.headers.get("X-Aztea-Output-Mode")
+        or "summary"
+    )
+    normalized = str(mode).strip().lower()
+    return normalized if normalized in {"summary", "full"} else "summary"
+
+
+def _shape_sync_output_for_response(
+    request: Request,
+    *,
+    job_id: str | None,
+    payload: Any,
+) -> tuple[Any, dict[str, Any]]:
+    from core import feature_flags as _feature_flags
+    from core import output_shaping as _output_shaping
+
+    if not _feature_flags.OUTPUT_TRUNCATION:
+        return payload, {}
+    shaped, truncated = _output_shaping.shape_output(payload, _response_output_mode(request))
+    extra: dict[str, Any] = {}
+    if truncated and job_id:
+        extra["output_truncated"] = True
+        extra["full_output_available"] = True
+        extra["full_output_path"] = f"/jobs/{job_id}/full"
+    return shaped, extra
 
 
 @app.post(
@@ -610,10 +658,22 @@ def registry_call(
         )
     price_cents = int(pricing_estimate["price_cents"])
     private_task = _is_private_task_payload(payload)
-    if use_cache and not private_task:
-        cached_output = _cache.get_cached(agent_id, payload)
+    from core import feature_flags as _feature_flags
+
+    cache_version_token = _cache.cache_identity(agent, agent_id)
+    cache_enabled = _feature_flags.RESULT_CACHE_V2 and _cache.agent_cacheable(agent) and not private_task
+    if use_cache and cache_enabled:
+        cached_output = _cache.get_cached(agent_id, payload, version_token=cache_version_token)
         if cached_output is not None:
-            return JSONResponse(content=_cache_hit_response_payload(cached_output))
+            cache_response = _cache_hit_response_payload(cached_output)
+            shaped_output, extra = _shape_sync_output_for_response(
+                request,
+                job_id=cache_response.get("job_id"),
+                payload=cache_response.get("output"),
+            )
+            cache_response["output"] = shaped_output
+            cache_response.update(extra)
+            return JSONResponse(content=cache_response)
     success_distribution = payments.compute_success_distribution(
         price_cents,
         platform_fee_pct=platform_fee_pct_at_create,
@@ -710,15 +770,29 @@ def registry_call(
                 job_id=job["job_id"],
                 latency_ms=_job_latency_ms(completed),
             )
+            response_payload = _sync_success_response_payload(
+                job_id=job["job_id"],
+                output=output,
+                latency_ms=_job_latency_ms(completed),
+                cached=False,
+            )
+            shaped_output, extra = _shape_sync_output_for_response(
+                request,
+                job_id=job["job_id"],
+                payload=output,
+            )
+            response_payload["output"] = shaped_output
+            response_payload.update(extra)
             if idempotency_key:
-                _idempotency_store(caller_owner_id_early, agent_id, idempotency_key, output)
-            if not private_task:
+                _idempotency_store(caller_owner_id_early, agent_id, idempotency_key, response_payload)
+            if cache_enabled:
                 _cache.set_cached(
                     agent["agent_id"],
                     payload,
                     output,
                     job["job_id"],
                     ttl_hours=cache_ttl_hours,
+                    version_token=cache_version_token,
                 )
             # Always wrap in a consistent envelope so callers can reliably
             # read job_id, status, and output without sniffing the shape.
@@ -727,13 +801,7 @@ def registry_call(
                 headers["Deprecation"] = "true"
                 headers["Sunset"] = _DEPRECATED_AGENTS_SUNSET_DATE
             return JSONResponse(
-                content={
-                    "job_id": job["job_id"],
-                    "status": "complete",
-                    "output": output,
-                    "latency_ms": _job_latency_ms(completed),
-                    "cached": False,
-                },
+                content=response_payload,
                 headers=headers if headers else None,
             )
         except ValidationError as exc:
@@ -857,6 +925,38 @@ def registry_call(
             )
 
     try:
+        job = jobs.create_job(
+            agent_id=agent["agent_id"],
+            caller_owner_id=caller_owner_id,
+            caller_wallet_id=caller_wallet["wallet_id"],
+            agent_wallet_id=agent_wallet["wallet_id"],
+            platform_wallet_id=platform_wallet["wallet_id"],
+            price_cents=price_cents,
+            caller_charge_cents=caller_charge_cents,
+            platform_fee_pct_at_create=platform_fee_pct_at_create,
+            fee_bearer_policy=fee_bearer_policy,
+            client_id=client_id,
+            charge_tx_id=charge_tx_id,
+            input_payload=payload,
+            agent_owner_id=agent.get("owner_id"),
+            max_attempts=1,
+            dispute_window_hours=_DEFAULT_JOB_DISPUTE_WINDOW_HOURS,
+            judge_agent_id=_extract_judge_agent_id(agent.get("input_schema")) or _QUALITY_JUDGE_AGENT_ID,
+        )
+    except Exception:
+        payments.post_call_refund(
+            caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent["agent_id"]
+        )
+        _LOG.exception("Failed to create sync job for remote agent %s.", agent["agent_id"])
+        raise HTTPException(status_code=500, detail="Failed to create job.")
+    _record_job_event(
+        job,
+        "job.created",
+        actor_owner_id=caller["owner_id"],
+        payload={"source": "registry_call_sync_http", "max_attempts": 1},
+    )
+
+    try:
         proxy_agent = dict(agent)
         proxy_agent["endpoint_url"] = safe_endpoint_url
         resp = http.post(
@@ -868,10 +968,18 @@ def registry_call(
         )
     except http.exceptions.Timeout:
         latency_ms = (time.monotonic() - start) * 1000
-        registry.update_call_stats(agent_id, latency_ms, False, price_cents=price_cents)
-        payments.post_call_refund(
-            caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent_id
+        failed = jobs.update_job_status(
+            job["job_id"],
+            "failed",
+            error_message="Agent timed out.",
+            completed=True,
         )
+        if failed is not None:
+            _settle_failed_job(
+                failed,
+                actor_owner_id=caller["owner_id"],
+                event_type="job.failed_timeout",
+            )
         _LOG.warning("Agent call timed out for %s", agent_id)
         raise HTTPException(
             status_code=504,
@@ -883,10 +991,18 @@ def registry_call(
         )
     except http.RequestException as e:
         latency_ms = (time.monotonic() - start) * 1000
-        registry.update_call_stats(agent_id, latency_ms, False, price_cents=price_cents)
-        payments.post_call_refund(
-            caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent_id
+        failed = jobs.update_job_status(
+            job["job_id"],
+            "failed",
+            error_message=f"Agent endpoint unreachable ({type(e).__name__}).",
+            completed=True,
         )
+        if failed is not None:
+            _settle_failed_job(
+                failed,
+                actor_owner_id=caller["owner_id"],
+                event_type="job.failed_endpoint_offline",
+            )
         _LOG.warning("Upstream agent unreachable for %s: %s", agent_id, type(e).__name__)
         raise HTTPException(
             status_code=502,
@@ -897,15 +1013,22 @@ def registry_call(
             ),
         )
 
-    latency_ms = (time.monotonic() - start) * 1000
     status_code = int(resp.status_code)
     success = 200 <= status_code < 300
-    registry.update_call_stats(agent_id, latency_ms, success, price_cents=price_cents)
 
     if not success:
-        payments.post_call_refund(
-            caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent_id
+        failed = jobs.update_job_status(
+            job["job_id"],
+            "failed",
+            error_message=f"Agent returned HTTP {status_code}.",
+            completed=True,
         )
+        if failed is not None:
+            _settle_failed_job(
+                failed,
+                actor_owner_id=caller["owner_id"],
+                event_type="job.failed_rejected_request" if 400 <= status_code < 500 else "job.failed_internal_error",
+            )
         if 400 <= status_code < 500:
             # Surface agent's own error message (truncated) but never expose internals
             try:
@@ -936,9 +1059,18 @@ def registry_call(
     # --- Output size cap (1 MB) ---
     raw_content = resp.content
     if len(raw_content) > 1_048_576:
-        payments.post_call_refund(
-            caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent_id
+        failed = jobs.update_job_status(
+            job["job_id"],
+            "failed",
+            error_message="Agent returned a response larger than 1 MB.",
+            completed=True,
         )
+        if failed is not None:
+            _settle_failed_job(
+                failed,
+                actor_owner_id=caller["owner_id"],
+                event_type="job.failed_response_too_large",
+            )
         raise HTTPException(
             status_code=502,
             detail=error_codes.make_error(
@@ -954,9 +1086,18 @@ def registry_call(
         try:
             json.loads(raw_content)
         except Exception:
-            payments.post_call_refund(
-                caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent_id
+            failed = jobs.update_job_status(
+                job["job_id"],
+                "failed",
+                error_message="Agent returned malformed JSON.",
+                completed=True,
             )
+            if failed is not None:
+                _settle_failed_job(
+                    failed,
+                    actor_owner_id=caller["owner_id"],
+                    event_type="job.failed_invalid_response",
+                )
             raise HTTPException(
                 status_code=502,
                 detail=error_codes.make_error(
@@ -966,30 +1107,72 @@ def registry_call(
                 ),
             )
 
-    payments.post_call_payout(
-        agent_wallet["wallet_id"], platform_wallet["wallet_id"],
-        charge_tx_id, price_cents, agent_id,
+    result_payload = json.loads(raw_content)
+    result_payload = _normalize_output_protocol_for_response(
+        result_payload,
+        requested_output_formats=requested_output_formats,
+    )
+    completed = jobs.update_job_status(
+        job["job_id"],
+        "complete",
+        output_payload=result_payload,
+        completed=True,
+    )
+    if completed is None:
+        raise HTTPException(status_code=500, detail="Failed to mark sync job complete.")
+    _record_job_event(
+        completed,
+        "job.completed",
+        actor_owner_id=caller["owner_id"],
+        payload={"status": completed["status"], "source": "registry_call_sync_http"},
+    )
+    settled = _settle_successful_job(completed, actor_owner_id=caller["owner_id"])
+    _maybe_refund_pricing_diff(
+        agent=agent,
+        payload=payload,
+        output=result_payload,
+        caller_wallet_id=caller_wallet["wallet_id"],
+        agent_wallet_id=agent_wallet["wallet_id"],
+        platform_wallet_id=platform_wallet["wallet_id"],
+        charge_tx_id=charge_tx_id,
+        estimate=pricing_estimate,
+        caller_charge_cents=caller_charge_cents,
+        success_distribution=success_distribution,
         platform_fee_pct=platform_fee_pct_at_create,
         fee_bearer_policy=fee_bearer_policy,
     )
-    result_payload = json.loads(raw_content)
-    if not private_task:
+    _record_public_work_example(
+        agent,
+        payload,
+        result_payload,
+        job_id=job["job_id"],
+        latency_ms=_job_latency_ms(settled),
+    )
+    if cache_enabled:
         _cache.set_cached(
             agent["agent_id"],
             payload,
             result_payload,
-            f"sync:{uuid.uuid4()}",
+            job["job_id"],
             ttl_hours=cache_ttl_hours,
+            version_token=cache_version_token,
         )
-    # Wrap in the standard sync envelope so clients have a consistent shape
-    # regardless of whether the call was live, cached, or via a builtin.
-    return JSONResponse(content={
-        "job_id": None,
-        "status": "complete",
-        "output": result_payload,
-        "latency_ms": round(latency_ms, 1),
-        "cached": False,
-    }, status_code=200)
+    response_payload = _sync_success_response_payload(
+        job_id=job["job_id"],
+        output=result_payload,
+        latency_ms=_job_latency_ms(settled),
+        cached=False,
+    )
+    shaped_output, extra = _shape_sync_output_for_response(
+        request,
+        job_id=job["job_id"],
+        payload=result_payload,
+    )
+    response_payload["output"] = shaped_output
+    response_payload.update(extra)
+    if idempotency_key:
+        _idempotency_store(caller_owner_id_early, agent_id, idempotency_key, response_payload)
+    return JSONResponse(content=response_payload, status_code=200)
 
 
 # ---------------------------------------------------------------------------

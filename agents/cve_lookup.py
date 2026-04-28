@@ -36,6 +36,7 @@ Mode 2: Package-based CVE search (original)
   }
 """
 
+import os
 import re
 import time
 
@@ -149,6 +150,56 @@ def _query_osv(pkg_name: str, version: str) -> list[dict]:
     return results
 
 
+def _nvd_headers() -> dict:
+    """Build NVD request headers, including API key if configured via NVD_API_KEY env var."""
+    headers = {"User-Agent": "aztea-cve-lookup/1.0"}
+    nvd_key = os.environ.get("NVD_API_KEY")
+    if nvd_key:
+        headers["apiKey"] = nvd_key
+    return headers
+
+
+def _search_nvd_packages(pkg_name: str) -> tuple[list[dict], bool]:
+    """Search NVD for CVEs affecting a package by keyword.
+
+    Returns (results, reached_nvd). reached_nvd=False means caller should fall back to OSV.
+    """
+    try:
+        resp = requests.get(
+            _NVD_API,
+            params={"keywordSearch": pkg_name, "resultsPerPage": 20},
+            timeout=_NVD_TIMEOUT,
+            headers=_nvd_headers(),
+        )
+        # Treat 429/5xx as "NVD unreachable" so caller can fall back to OSV
+        if resp.status_code == 429 or resp.status_code >= 500:
+            return [], False
+        if resp.status_code != 200:
+            return [], False
+        data = resp.json()
+    except Exception:
+        return [], False
+
+    results = []
+    for vuln_item in data.get("vulnerabilities", []):
+        cve_obj = vuln_item.get("cve", {})
+        cve_id = cve_obj.get("id", "")
+        metrics = cve_obj.get("metrics", {})
+        cvss = _extract_cvss(metrics)
+        descriptions = cve_obj.get("descriptions", [])
+        desc = next((d["value"] for d in descriptions if d.get("lang") == "en"), "")[:400]
+        results.append({
+            "cve": cve_id,
+            "cvss": cvss,
+            "severity": _cvss_to_severity(cvss),
+            "description": desc,
+            "published": cve_obj.get("published", "")[:10],
+            "last_modified": cve_obj.get("lastModified", "")[:10],
+            "fixed_in": "",
+        })
+    return results, True
+
+
 def _fetch_cve(cve_id: str) -> dict:
     """Fetch a single CVE by its ID from the NIST NVD API.
 
@@ -159,7 +210,7 @@ def _fetch_cve(cve_id: str) -> dict:
             _NVD_API,
             params={"cveId": cve_id},
             timeout=_NVD_TIMEOUT,
-            headers={"User-Agent": "aztea-cve-lookup/1.0"},
+            headers=_nvd_headers(),
         )
         if resp.status_code == 404:
             return {"cve_id": cve_id, "error": "not found"}
@@ -206,6 +257,45 @@ def _fetch_cve(cve_id: str) -> dict:
     }
 
 
+def _fetch_cve_from_osv(cve_id: str) -> dict:
+    try:
+        resp = requests.get(
+            f"https://api.osv.dev/v1/vulns/{cve_id}",
+            timeout=_NVD_TIMEOUT,
+            headers={"User-Agent": "aztea-cve-lookup/1.0"},
+        )
+        if resp.status_code == 404:
+            return {"cve_id": cve_id, "error": "not found"}
+        if resp.status_code != 200:
+            return {"cve_id": cve_id, "error": f"OSV returned status {resp.status_code}"}
+        data = resp.json()
+    except Exception as exc:
+        return {"cve_id": cve_id, "error": f"Could not reach OSV API: {type(exc).__name__}"}
+
+    aliases = data.get("aliases") or []
+    severity_entries = data.get("severity") or []
+    cvss = 0.0
+    for sev in severity_entries:
+        match = re.search(r"(\d+\.\d+)$", str(sev.get("score") or ""))
+        if match:
+            try:
+                cvss = float(match.group(1))
+                break
+            except ValueError:
+                pass
+    return {
+        "cve_id": next((alias for alias in aliases if str(alias).startswith("CVE-")), cve_id),
+        "cvss": cvss,
+        "severity": _cvss_to_severity(cvss),
+        "description": (data.get("summary") or data.get("details") or "")[:1200],
+        "published": str(data.get("published") or "")[:10],
+        "last_modified": str(data.get("modified") or "")[:10],
+        "cwe_ids": [],
+        "references": [ref.get("url", "") for ref in (data.get("references") or [])[:5] if ref.get("url")],
+        "source": "osv",
+    }
+
+
 def _parse_package_version(pkg: str) -> tuple[str, str]:
     if "@" in pkg:
         parts = pkg.rsplit("@", 1)
@@ -236,6 +326,13 @@ def _run_cve_id_mode(cve_ids: list[str], single_mode: bool) -> dict:
     results = []
     for cve_id in cve_ids:
         result = _fetch_cve(cve_id)
+        if result.get("error") and any(
+            marker in str(result.get("error") or "").lower()
+            for marker in ("timed out", "could not reach", "rate limit", "returned status 5")
+        ):
+            fallback = _fetch_cve_from_osv(cve_id)
+            if "error" not in fallback:
+                result = fallback
         results.append(result)
         time.sleep(_NVD_RATE_DELAY)
 
@@ -303,7 +400,7 @@ def run(payload: dict) -> dict:
             "total_vulnerable": 0,
             "total_packages_checked": 0,
             "summary": "No packages provided. Pass a list like: [\"express@4.17.1\", \"lodash@4.17.20\"]",
-            "source": "nvd",
+            "source": "osv",
             "billing_units_actual": 0,
         }
 
@@ -318,12 +415,23 @@ def run(payload: dict) -> dict:
 
     all_results: list[dict] = []
     seen_cves: set[str] = set()
+    # Track which data source was actually used (NVD preferred; OSV if NVD unreachable)
+    used_source = "osv"
 
     for raw_pkg in packages[:10]:  # cap at 10 packages per call
         pkg_name, pkg_version = _parse_package_version(str(raw_pkg))
-        osv_cves = _query_osv(pkg_name, pkg_version)
 
-        for item in osv_cves:
+        # Prefer NVD; fall back to OSV when NVD is unreachable or returns nothing useful
+        nvd_cves, reached_nvd = _search_nvd_packages(pkg_name)
+        if reached_nvd and nvd_cves:
+            pkg_cves = nvd_cves
+            used_source = "nvd"
+        else:
+            pkg_cves = _query_osv(pkg_name, pkg_version)
+            if pkg_cves:
+                used_source = "osv"
+
+        for item in pkg_cves:
             if item["cve"] in seen_cves:
                 continue
             seen_cves.add(item["cve"])
@@ -378,6 +486,6 @@ def run(payload: dict) -> dict:
         "total_vulnerable": len(pkg_names_with_vulns),
         "total_packages_checked": len(packages),
         "summary": " ".join(summary_parts),
-        "source": "osv",
+        "source": used_source,
         "billing_units_actual": len(all_results),
     }

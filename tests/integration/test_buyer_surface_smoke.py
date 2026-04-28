@@ -167,21 +167,22 @@ def test_claude_stdio_mcp_smoke_lists_and_calls_control_plane_tool(buyer_surface
         assert listed is not None
         tools = listed["result"]["tools"]
         names = {tool["name"] for tool in tools}
-        assert {"aztea_estimate_cost", "aztea_list_recipes", "aztea_run_recipe"} <= names
+        # Phase 5.3 lazy MCP: 26+ per-agent tools collapsed to 3 surface tools
+        assert {"aztea_search", "aztea_describe", "aztea_call"} <= names
 
         called = server_obj._handle_request(
             {
                 "jsonrpc": "2.0",
                 "id": 3,
                 "method": "tools/call",
-                "params": {"name": "aztea_list_recipes", "arguments": {}},
+                "params": {"name": "aztea_search", "arguments": {"query": "code"}},
             }
         )
         assert called is not None
         result = called["result"]
         assert result.get("isError") is not True
         structured = result["structuredContent"]
-        assert structured["count"] >= 3
+        assert structured["count"] >= 1
     finally:
         module._DEFAULT_CLIENT_ID = old_client_id
 
