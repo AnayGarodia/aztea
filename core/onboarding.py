@@ -8,7 +8,7 @@ import json
 import math
 import re
 
-from core.url_security import validate_outbound_url
+from core.url_security import validate_agent_endpoint_url, validate_outbound_url
 
 
 class ManifestValidationError(ValueError):
@@ -129,7 +129,10 @@ def _require_non_empty_text(raw: dict, keys: tuple[str, ...], field_name: str) -
 
 def _normalize_endpoint_url(url: str) -> str:
     try:
-        return validate_outbound_url(url, "endpoint_url")
+        # Apply the strict agent-endpoint validator (adds the testing-stub host
+        # denylist on top of the standard SSRF check) so manifests submitted via
+        # ``/onboarding/ingest`` cannot land an agent at httpbin.org or similar.
+        return validate_agent_endpoint_url(url, "endpoint_url")
     except ValueError as exc:
         raise MetadataValidationError(str(exc)) from exc
 

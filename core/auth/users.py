@@ -110,16 +110,35 @@ class AccountSuspendedError(Exception):
     """Raised when a suspended or banned account attempts to log in."""
 
 
-def login_user(email: str, password: str) -> dict | None:
+def login_user(
+    email: str | None = None,
+    password: str = "",
+    *,
+    username: str | None = None,
+    rotate: bool = False,
+) -> dict | None:
     """
     Verify credentials. Returns user dict, or None if wrong credentials.
     Raises AccountSuspendedError if the account is suspended or banned.
-    Always mints a fresh API key so the caller always gets a usable key.
+
+    By default the caller's existing active "Session key" is reused so SDK
+    clients do not see their key change on every login (and so logins do not
+    leave a long trail of revoked keys behind them). Pass ``rotate=True`` to
+    force a fresh key — useful after a suspected credential leak. The
+    ``username`` parameter is accepted as an alternative identifier; either
+    ``email`` or ``username`` must be supplied.
     """
+    if not (email or username):
+        return None
     with _conn() as conn:
-        row = conn.execute(
-            "SELECT * FROM users WHERE email = ?", (email.lower().strip(),)
-        ).fetchone()
+        if email:
+            row = conn.execute(
+                "SELECT * FROM users WHERE email = ?", (email.lower().strip(),)
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM users WHERE username = ?", (str(username).strip(),)
+            ).fetchone()
     if row is None:
         return None
     user = dict(row)
@@ -130,22 +149,54 @@ def login_user(email: str, password: str) -> dict | None:
     if not secrets.compare_digest(user["password_hash"], expected):
         return None
 
-    # Revoke any existing session key so logins don't accumulate unbounded rows.
-    with _conn() as conn:
-        conn.execute(
-            "UPDATE api_keys SET is_active = 0 WHERE user_id = ? AND name = 'Session key' AND is_active = 1",
-            (user["user_id"],),
-        )
-    result = _create_key_for_user(user["user_id"], "Session key")
+    raw_key: str | None = None
+    key_id: str | None = None
+    key_prefix: str | None = None
+    if not rotate:
+        # Return the most recent active Session key when one exists. We can't
+        # return the *raw* key for an existing row (the raw value is never
+        # stored), so we mint a new one only when no active session key
+        # exists. This avoids the unbounded-key-rows complaint while still
+        # giving cold callers a usable credential.
+        with _conn() as conn:
+            existing = conn.execute(
+                """
+                SELECT key_id, key_prefix
+                FROM api_keys
+                WHERE user_id = ? AND name = 'Session key' AND is_active = 1
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (user["user_id"],),
+            ).fetchone()
+        if existing is not None:
+            key_id = existing["key_id"]
+            key_prefix = existing["key_prefix"]
+            # raw_key is intentionally None — caller already has it client-side.
+
+    if rotate or raw_key is None and key_id is None:
+        # Either explicit rotation or no existing key: revoke prior sessions and mint.
+        with _conn() as conn:
+            conn.execute(
+                "UPDATE api_keys SET is_active = 0 WHERE user_id = ? AND name = 'Session key' AND is_active = 1",
+                (user["user_id"],),
+            )
+        result = _create_key_for_user(user["user_id"], "Session key")
+        raw_key = result["raw_key"]
+        key_id = result["key_id"]
+        key_prefix = result["key_prefix"]
+
     return {
         "user_id": user["user_id"],
         "username": user["username"],
         "email": user["email"],
         "role": user.get("role") or "both",
         "created_at": user["created_at"],
-        "raw_api_key": result["raw_key"],
-        "key_id": result["key_id"],
-        "key_prefix": result["key_prefix"],
+        # raw_api_key may be None when an existing session key was reused —
+        # the SDK is expected to still have the cached value client-side.
+        "raw_api_key": raw_key,
+        "key_id": key_id,
+        "key_prefix": key_prefix,
         **_legal_state_from_row(user),
     }
 
@@ -234,6 +285,57 @@ def update_user_role(user_id: str, role: str) -> None:
         raise ValueError(f"Invalid role '{role}'. Must be one of: builder, hirer, both.")
     with _conn() as conn:
         conn.execute("UPDATE users SET role = ? WHERE user_id = ?", (role, user_id))
+
+
+def record_legal_acceptance(
+    user_id: str,
+    *,
+    terms_version: str | None = None,
+    privacy_version: str | None = None,
+) -> dict | None:
+    """Record that a user has accepted the current Terms of Service + Privacy Policy.
+
+    Stamps ``terms_version_accepted``, ``privacy_version_accepted``, and
+    ``legal_accepted_at`` on the user row. The platform-current versions live
+    in ``core.auth.schema`` (``LEGAL_TERMS_VERSION`` / ``LEGAL_PRIVACY_VERSION``);
+    callers may override per-version for explicit historical acceptance, but the
+    common path leaves them None and the current versions are recorded.
+
+    Returns the updated legal-state dict (the same shape ``/auth/me`` exposes),
+    or ``None`` when the user does not exist.
+    """
+    accepted_terms = (terms_version or LEGAL_TERMS_VERSION).strip()
+    accepted_privacy = (privacy_version or LEGAL_PRIVACY_VERSION).strip()
+    accepted_at = datetime.now(timezone.utc).isoformat()
+    with _conn() as conn:
+        existing = conn.execute(
+            "SELECT user_id FROM users WHERE user_id = ?", (str(user_id),)
+        ).fetchone()
+        if existing is None:
+            return None
+        conn.execute(
+            """
+            UPDATE users
+            SET terms_version_accepted = ?,
+                privacy_version_accepted = ?,
+                legal_accepted_at = ?
+            WHERE user_id = ?
+            """,
+            (accepted_terms, accepted_privacy, accepted_at, str(user_id)),
+        )
+        row = conn.execute(
+            """
+            SELECT terms_version_accepted, privacy_version_accepted, legal_accepted_at
+            FROM users WHERE user_id = ?
+            """,
+            (str(user_id),),
+        ).fetchone()
+    # Drop the in-memory api-key cache for this user so the *next* authenticated
+    # request reads the freshly-stamped legal columns. Without this the gate
+    # keeps firing for up to ``_KEY_CACHE_TTL`` seconds even though the user
+    # has accepted.
+    invalidate_key_cache_for_user(str(user_id))
+    return _legal_state_from_row(dict(row) if row else {})
 
 
 def _create_key_for_user(

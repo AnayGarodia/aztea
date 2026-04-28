@@ -548,10 +548,31 @@ class UserRegisterRequest(BaseModel):
 
 
 class UserLoginRequest(BaseModel):
-    model_config = ConfigDict(json_schema_extra={"example": {"email": "builder@example.com", "password": "password123"}})
+    # Accept either ``email`` or ``username`` as the identifier so callers using
+    # either field name don't get a confusing 422. Internally we always resolve
+    # to the email address — username lookups go through a quick pre-flight on
+    # the route. ``rotate=true`` opts the caller into the legacy behaviour of
+    # minting a fresh session key on every login; default behaviour now reuses
+    # the existing active session key when one exists.
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "email": "builder@example.com",
+                "password": "password123",
+            }
+        }
+    )
 
-    email: str
+    email: str | None = None
+    username: str | None = None
     password: str
+    rotate: bool = False
+
+    @model_validator(mode="after")
+    def require_identifier(self):
+        if not (self.email or self.username):
+            raise ValueError("Provide either 'email' or 'username'.")
+        return self
 
     @field_validator("password")
     @classmethod
@@ -587,7 +608,11 @@ class AuthLegalAcceptRequest(BaseModel):
 
 
 class CreateKeyRequest(BaseModel):
+    # extra="forbid" surfaces typos like {"scope": "worker"} (singular) instead of letting
+    # them silently fall through to the default scopes — which previously meant every key
+    # was minted as caller+worker regardless of intent.
     model_config = ConfigDict(
+        extra="forbid",
         json_schema_extra={
             "example": {
                 "name": "Worker key",
@@ -595,13 +620,30 @@ class CreateKeyRequest(BaseModel):
                 "max_spend_cents": 5000,
                 "per_job_cap_cents": 1000,
             }
-        }
+        },
     )
 
     name: str = Field(default="New key", max_length=64)
     scopes: list[str] = Field(default_factory=lambda: list(_auth.DEFAULT_KEY_SCOPES))
     max_spend_cents: int | None = Field(default=None, ge=0, le=1_000_000)
     per_job_cap_cents: int | None = Field(default=None, ge=0, le=1_000_000)
+
+    @model_validator(mode="before")
+    @classmethod
+    def coerce_singular_scope(cls, data):
+        # Friendly coercion: SDKs and ad-hoc curl users often send a singular ``scope``.
+        # Promote it into the canonical ``scopes`` list before field validation so the
+        # request is honored instead of silently using defaults.
+        if isinstance(data, dict) and "scope" in data and "scopes" not in data:
+            data = dict(data)
+            scope_value = data.pop("scope")
+            if isinstance(scope_value, str):
+                data["scopes"] = [scope_value]
+            elif isinstance(scope_value, list):
+                data["scopes"] = scope_value
+            else:
+                raise ValueError("'scope' must be a string or list of strings.")
+        return data
 
     @field_validator("scopes")
     @classmethod

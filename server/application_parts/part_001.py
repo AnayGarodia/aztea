@@ -957,6 +957,59 @@ def _find_public_doc(doc_slug: str) -> dict[str, str] | None:
     return None
 
 
+# Mutating methods that require legal acceptance before they may be invoked.
+# GET / HEAD / OPTIONS remain accessible so users can read their own data,
+# inspect their wallet, list agents, and reach the legal-acceptance endpoint
+# itself before they're cleared to spend money.
+_LEGAL_GATED_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+# Routes that must remain reachable for end users to *complete* onboarding even
+# while their account is still pre-acceptance. Anchored prefixes — anything
+# starting with one of these strings is allowed regardless of HTTP method.
+_LEGAL_GATE_EXEMPT_PREFIXES = (
+    "/auth/legal/accept",
+    "/auth/login",
+    "/auth/logout",
+    "/auth/register",
+    "/auth/google",
+    "/auth/role",
+    "/auth/forgot",
+    "/auth/reset",
+    "/health",
+    "/openapi.json",
+    "/docs",
+    "/redoc",
+)
+
+
+def _legal_acceptance_required(caller: core_models.CallerContext) -> bool:
+    """True when an authenticated end-user has not accepted the current legal docs."""
+    # Allow the test/CI pipeline (and self-hosters who explicitly opt out) to
+    # disable the gate. The default is False — production deployments enforce.
+    if str(os.environ.get("AZTEA_BYPASS_LEGAL_GATE", "")).strip().lower() in {"1", "true", "yes"}:
+        return False
+    if caller.get("type") != "user":
+        return False
+    user = caller.get("user") or {}
+    if not isinstance(user, dict):
+        return False
+    # Mirror ``core.auth.schema._legal_state_from_row`` — without re-reading the
+    # row, since the caller is already attached. Treat any missing/older
+    # acceptance as "not accepted".
+    try:
+        from core.auth.schema import LEGAL_TERMS_VERSION, LEGAL_PRIVACY_VERSION
+    except Exception:
+        return False
+    accepted_terms = str(user.get("terms_version_accepted") or "").strip()
+    accepted_privacy = str(user.get("privacy_version_accepted") or "").strip()
+    accepted_at = str(user.get("legal_accepted_at") or "").strip()
+    return not (
+        accepted_terms == LEGAL_TERMS_VERSION
+        and accepted_privacy == LEGAL_PRIVACY_VERSION
+        and accepted_at
+    )
+
+
 def _require_api_key(request: Request) -> core_models.CallerContext:
     caller = _resolve_caller(request)
     if caller is None:
@@ -980,6 +1033,24 @@ def _require_api_key(request: Request) -> core_models.CallerContext:
                 "docs_url": _DOCS_URL,
             },
         )
+    # Soft legal-acceptance gate: only block mutating requests, and only when
+    # the route is not on the onboarding-friendly exempt list. This prevents
+    # spending without accepted ToS while letting users complete onboarding.
+    method = (request.method or "").upper()
+    if method in _LEGAL_GATED_METHODS and _legal_acceptance_required(caller):
+        path = (request.url.path or "")
+        if not any(path.startswith(prefix) for prefix in _LEGAL_GATE_EXEMPT_PREFIXES):
+            raise HTTPException(
+                status_code=451,
+                detail={
+                    "error": "LEGAL_ACCEPTANCE_REQUIRED",
+                    "message": (
+                        "Accept the Terms of Service and Privacy Policy before performing "
+                        "this action. POST /auth/legal/accept to record acceptance."
+                    ),
+                    "accept_url": "/auth/legal/accept",
+                },
+            )
     return caller
 
 

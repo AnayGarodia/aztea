@@ -708,7 +708,11 @@ def _validate_agent_endpoint_url(request: Request, endpoint_url: str) -> str:
         if parsed.fragment:
             raise ValueError("endpoint_url must not include URL fragments.")
         return normalized
-    return _validate_outbound_url(normalized, "endpoint_url")
+    # Use the stricter agent-endpoint validator (adds the testing-stub denylist
+    # on top of the generic SSRF check). url_security.validate_agent_endpoint_url
+    # falls back to validate_outbound_url for the SSRF logic.
+    from core.url_security import validate_agent_endpoint_url as _strict_endpoint
+    return _strict_endpoint(normalized, "endpoint_url")
 
 
 def _probe_register_endpoint_or_400(url: str) -> None:

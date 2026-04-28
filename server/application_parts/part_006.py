@@ -603,10 +603,21 @@ def auth_register(request: Request, body: UserRegisterRequest) -> core_models.Au
 )
 @limiter.limit(_AUTH_RATE_LIMIT, key_func=get_remote_address)
 def auth_login(request: Request, body: UserLoginRequest) -> core_models.AuthLoginResponse:
-    """Verify credentials. Returns a fresh API key valid for this session."""
+    """Verify credentials and return the user's session API key.
+
+    By default the existing active session key is reused (raw value is None
+    when reused — the client should already have it). Pass ``rotate=true`` in
+    the body to force a fresh key.
+    """
+    login_kwargs = {
+        "email": body.email,
+        "password": body.password,
+        "username": body.username,
+        "rotate": body.rotate,
+    }
     try:
         _auth.init_auth_db()
-        result = _auth.login_user(body.email, body.password)
+        result = _auth.login_user(**login_kwargs)
     except _auth.AccountSuspendedError:
         raise HTTPException(
             status_code=403,
@@ -616,7 +627,7 @@ def auth_login(request: Request, body: UserLoginRequest) -> core_models.AuthLogi
         _LOG.exception("Auth login failed; retrying after auth schema init.")
         try:
             _auth.init_auth_db()
-            result = _auth.login_user(body.email, body.password)
+            result = _auth.login_user(**login_kwargs)
         except _auth.AccountSuspendedError:
             raise HTTPException(
                 status_code=403,
@@ -629,7 +640,7 @@ def auth_login(request: Request, body: UserLoginRequest) -> core_models.AuthLogi
                 detail="Authentication service is temporarily unavailable. Please try again.",
             )
     if result is None:
-        raise HTTPException(status_code=401, detail="Invalid email or password.")
+        raise HTTPException(status_code=401, detail="Invalid email/username or password.")
     return JSONResponse(content={**result, **_auth_legal_payload(result)})
 
 
@@ -734,6 +745,74 @@ def auth_me(request: Request, caller: core_models.CallerContext = Depends(_requi
         "scopes": caller.get("scopes") or [],
         **_auth_legal_payload(user),
     })
+
+
+@app.post(
+    "/auth/legal/accept",
+    status_code=200,
+    responses=_error_responses(401, 403, 422, 429, 500),
+    tags=["Auth"],
+    summary="Record acceptance of the platform Terms of Service and Privacy Policy.",
+)
+@limiter.limit("10/minute")
+def auth_legal_accept(
+    request: Request,
+    body: dict = Body(default_factory=dict),
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> dict:
+    """Mark the authenticated user as having accepted the current legal docs.
+
+    Body fields are optional — when omitted the platform-current versions
+    (`terms_version_current` / `privacy_version_current` from `/auth/me`) are
+    used. Callers may pass explicit versions to record historical acceptance.
+    """
+    if caller["type"] != "user":
+        raise HTTPException(
+            status_code=403,
+            detail="Legal acceptance is only available for end-user accounts.",
+        )
+    body = body or {}
+    terms_version = str(body.get("terms_version") or "").strip() or None
+    privacy_version = str(body.get("privacy_version") or "").strip() or None
+    # If a caller passes explicit versions they must match the platform's
+    # current versions — accepting an outdated version is the same as not
+    # accepting at all. Returning a typed error here lets the SDK redirect
+    # the user to re-read the latest legal docs.
+    if terms_version is not None and terms_version != _auth.LEGAL_TERMS_VERSION:
+        raise HTTPException(
+            status_code=400,
+            detail=error_codes.make_error(
+                "auth.legal_version_mismatch",
+                "terms_version does not match the current platform version.",
+                {
+                    "submitted": terms_version,
+                    "current": _auth.LEGAL_TERMS_VERSION,
+                    "field": "terms_version",
+                },
+            ),
+        )
+    if privacy_version is not None and privacy_version != _auth.LEGAL_PRIVACY_VERSION:
+        raise HTTPException(
+            status_code=400,
+            detail=error_codes.make_error(
+                "auth.legal_version_mismatch",
+                "privacy_version does not match the current platform version.",
+                {
+                    "submitted": privacy_version,
+                    "current": _auth.LEGAL_PRIVACY_VERSION,
+                    "field": "privacy_version",
+                },
+            ),
+        )
+    user_id = caller["user"]["user_id"]
+    legal_state = _auth.record_legal_acceptance(
+        user_id,
+        terms_version=terms_version,
+        privacy_version=privacy_version,
+    )
+    if legal_state is None:
+        raise HTTPException(status_code=404, detail="User not found.")
+    return JSONResponse(content={"ok": True, **legal_state})
 
 
 @app.patch(

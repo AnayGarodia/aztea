@@ -18,6 +18,38 @@ from urllib.parse import unquote, urlparse
 
 _ENV_ALLOW_PRIVATE_VALUES = {"1", "true", "yes"}
 
+# Hosts known to be HTTP request-echo / inspection services. Registering an
+# agent endpoint at one of these is almost always a forgotten test stub and
+# never legitimate marketplace traffic — and the marketplace has been bitten
+# by exactly that (a `qa_payout_curve_agent` pointing at httpbin.org made it
+# to production and charged real users $0.05/call to echo their input back).
+# Match by exact host *or* registrable domain suffix.
+_BLOCKED_AGENT_HOST_SUFFIXES: tuple[str, ...] = (
+    "httpbin.org",
+    "httpbingo.org",
+    "httpbingo.com",
+    "requestbin.com",
+    "requestbin.net",
+    "webhook.site",
+    "ngrok.io",
+    "ngrok.app",
+    "ngrok-free.app",
+    "ngrok-free.dev",
+    "loca.lt",
+    "trycloudflare.com",
+    "serveo.net",
+)
+
+
+def _is_blocked_agent_host(host: str) -> bool:
+    h = (host or "").strip().lower()
+    if not h:
+        return False
+    for suffix in _BLOCKED_AGENT_HOST_SUFFIXES:
+        if h == suffix or h.endswith("." + suffix):
+            return True
+    return False
+
 
 def _allow_private_default() -> bool:
     return os.environ.get("ALLOW_PRIVATE_OUTBOUND_URLS", "0").strip().lower() in _ENV_ALLOW_PRIVATE_VALUES
@@ -37,6 +69,30 @@ def _is_disallowed_ip(ip_value: ipaddress._BaseAddress) -> bool:
     if isinstance(ip_value, ipaddress.IPv6Address) and ip_value.ipv4_mapped is not None:
         return _is_disallowed_ip(ip_value.ipv4_mapped)
     return False
+
+
+def validate_agent_endpoint_url(
+    url: str,
+    field_name: str = "endpoint_url",
+    *,
+    allow_private: bool | None = None,
+) -> str:
+    """Stricter outbound-URL check used when *registering* an agent.
+
+    Performs the full SSRF check then additionally rejects hosts known to be
+    HTTP request-echo / inspection services. These hosts are almost always
+    test stubs, and one (``httpbin.org``) was caught in production charging
+    users for fake responses.
+    """
+    normalized = validate_outbound_url(url, field_name, allow_private=allow_private)
+    parsed = urlparse(normalized.strip())
+    host = (parsed.hostname or "").strip().lower()
+    if _is_blocked_agent_host(host):
+        raise ValueError(
+            f"{field_name} cannot target HTTP request-echo / inspection hosts "
+            f"({host}). Register a real agent endpoint."
+        )
+    return normalized
 
 
 def validate_outbound_url(
