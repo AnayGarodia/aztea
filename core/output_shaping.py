@@ -10,7 +10,7 @@ from typing import Any
 _MAX_STRING_CHARS = 2048
 _MAX_LIST_ITEMS = 50
 _MAX_DICT_ITEMS = 100
-_MAX_DEPTH = 4
+_MAX_DEPTH = 6
 
 
 def _truncate_string(value: str) -> tuple[str, bool]:

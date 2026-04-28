@@ -28,3 +28,26 @@ def test_shape_output_full_mode_returns_original_payload():
     shaped, truncated = shape_output(payload, "full")
     assert truncated is False
     assert shaped == payload
+
+
+def test_shape_output_keeps_small_nested_row_objects_readable():
+    payload = {
+        "engine": "sqlite",
+        "results": [
+            {
+                "rows": [{"ok": 1}],
+                "query_plan": [
+                    {
+                        "select_id": 1,
+                        "order": 0,
+                        "from": 0,
+                        "detail": "SCAN CONSTANT ROW",
+                    }
+                ],
+            }
+        ],
+    }
+    shaped, truncated = shape_output(payload, "summary")
+    assert shaped["results"][0]["rows"] == [{"ok": 1}]
+    assert shaped["results"][0]["query_plan"][0]["detail"] == "SCAN CONSTANT ROW"
+    assert truncated is False
