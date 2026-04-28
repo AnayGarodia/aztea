@@ -34,16 +34,7 @@ import {
   AlertCircle,
 } from 'lucide-react'
 import './WalletPage.css'
-
-function fmtUsd(cents) {
-  if (typeof cents !== 'number') return '--'
-  return '$' + (cents / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-}
-
-function fmtDate(str) {
-  if (!str) return ''
-  return new Date(str).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-}
+import { fmtDate, fmtUsd } from '../utils/format.js'
 
 const CREDIT_TYPES = new Set(['deposit', 'refund', 'payout'])
 const MIN_DEPOSIT_CENTS = 500

@@ -32,6 +32,7 @@ def _now() -> str:
 
 
 def init_db() -> None:
+    """Create pipelines and pipeline_runs tables if they don't exist. Idempotent."""
     with _conn() as conn:
         conn.execute(
             """
@@ -112,6 +113,7 @@ def create_pipeline(
     is_public: bool = False,
     pipeline_id: str | None = None,
 ) -> dict:
+    """Insert a new pipeline definition row and return it."""
     init_db()
     now = _now()
     generated_id = str(pipeline_id or uuid.uuid4()).strip() or str(uuid.uuid4())
@@ -156,6 +158,7 @@ def upsert_pipeline(
     is_public: bool = False,
     pipeline_id: str,
 ) -> dict:
+    """Insert or replace a pipeline row keyed on ``pipeline_id``."""
     init_db()
     now = _now()
     normalized_id = str(pipeline_id).strip()
@@ -209,6 +212,7 @@ def get_pipeline(pipeline_id: str) -> dict | None:
 
 
 def list_pipelines(owner_id: str | None = None, *, include_public: bool = False) -> list[dict]:
+    """Return pipelines for ``owner_id``, optionally including public ones."""
     init_db()
     clauses: list[str] = []
     params: list[object] = []
@@ -240,6 +244,7 @@ def create_run(
     caller_owner_id: str,
     input_payload: dict,
 ) -> dict:
+    """Start a new pipeline run record and return it in ``running`` status."""
     init_db()
     run_id = str(uuid.uuid4())
     now = _now()
@@ -284,6 +289,7 @@ def get_run(run_id: str) -> dict | None:
 
 
 def update_run_step(run_id: str, node_id: str, output_payload) -> dict | None:
+    """Record the output of a completed pipeline step and advance to the next node."""
     init_db()
     now = _now()
     normalized_run_id = str(run_id).strip()
@@ -316,6 +322,7 @@ def update_run_step(run_id: str, node_id: str, output_payload) -> dict | None:
 
 
 def complete_run(run_id: str, output_payload) -> dict | None:
+    """Mark a pipeline run as ``complete`` and store its final output."""
     init_db()
     now = _now()
     with _conn() as conn:
@@ -340,6 +347,7 @@ def complete_run(run_id: str, output_payload) -> dict | None:
 
 
 def fail_run(run_id: str, error_message: str) -> dict | None:
+    """Mark a pipeline run as ``failed`` and record the error message."""
     init_db()
     now = _now()
     with _conn() as conn:

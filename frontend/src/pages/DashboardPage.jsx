@@ -13,11 +13,7 @@ import { useAuth } from '../context/AuthContext'
 import { fetchReconciliationRuns } from '../api'
 import { Wallet, Hammer } from 'lucide-react'
 import './DashboardPage.css'
-
-function fmtDate(str) {
-  if (!str) return '--'
-  return new Date(str).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-}
+import { fmtDate } from '../utils/format.js'
 
 function JobRow({ job, agents }) {
   const agent = agents.find(a => a.agent_id === job.agent_id)

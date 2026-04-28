@@ -186,6 +186,10 @@ def _fetch_npm_search(query: str, count: int) -> list[dict]:
 
 
 def run(payload: dict) -> dict:
+    """Deprecated LLM-only wrapper. Searches PyPI/npm for packages matching a description.
+
+    Accepts ``task`` (required), ``ecosystem`` (pypi/npm/both), and ``count`` (max 10).
+    """
     task = str(payload.get("task") or "").strip()
     if not task:
         raise ValueError("'task' is required.")

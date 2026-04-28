@@ -134,6 +134,18 @@ def _fetch_full_text(title: str) -> tuple[str, str]:
 
 
 def run(topic: str, depth: str = "standard") -> dict:
+    """Fetch and return a Wikipedia article summary for ``topic``.
+
+    Args:
+        topic: Article title or search phrase (spaces converted to underscores).
+        depth: ``"brief"`` (summary only) | ``"standard"`` (summary + intro
+               sections) | ``"deep"`` (summary + full first 10 sections).
+
+    Returns ``{title, summary, url, sections, images}`` on success.
+    Falls back to Wikipedia search if the direct title lookup returns a
+    disambiguation page or 404.  Returns ``{error: {code, message}}`` if no
+    matching article is found.
+    """
     clean = topic.strip().replace(" ", "_")
     summary_url = _WIKI_SUMMARY_API.format(title=clean)
 

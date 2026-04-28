@@ -32,6 +32,7 @@ def _now() -> str:
 
 
 def init_db() -> None:
+    """Create compare_sessions and compare_results tables if they don't exist. Idempotent."""
     with _conn() as conn:
         conn.execute(
             """
@@ -79,6 +80,10 @@ def create_compare(
     *,
     job_ids: list[str],
 ) -> dict:
+    """Insert a new compare session for running the same task across N agents side-by-side.
+
+    Returns the newly created compare session dict.
+    """
     init_db()
     compare_id = str(uuid.uuid4())
     now = _now()
@@ -122,6 +127,7 @@ def get_compare(compare_id: str) -> dict | None:
 
 
 def mark_complete(compare_id: str) -> dict | None:
+    """Mark a compare session as complete once all participating jobs have finished."""
     init_db()
     now = _now()
     with _conn() as conn:
@@ -138,6 +144,7 @@ def mark_complete(compare_id: str) -> dict | None:
 
 
 def select_winner(compare_id: str, winner_agent_id: str) -> dict | None:
+    """Record the caller's chosen winner agent for a compare session. Idempotent if same winner."""
     init_db()
     normalized_compare_id = str(compare_id).strip()
     normalized_winner = str(winner_agent_id).strip()

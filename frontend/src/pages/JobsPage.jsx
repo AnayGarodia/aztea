@@ -9,6 +9,7 @@ import Badge from '../ui/Badge'
 import Reveal from '../ui/motion/Reveal'
 import { useMarket } from '../context/MarketContext'
 import './JobsPage.css'
+import { fmtDate, fmtUsd } from '../utils/format.js'
 
 const TABS = [
   { id: 'all', label: 'All' },
@@ -18,16 +19,6 @@ const TABS = [
   { id: 'complete', label: 'Complete' },
   { id: 'failed', label: 'Failed' },
 ]
-
-function fmtUsd(cents) {
-  if (typeof cents !== 'number') return '-'
-  return '$' + (cents / 100).toFixed(2)
-}
-
-function fmtDate(str) {
-  if (!str) return '--'
-  return new Date(str).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-}
 
 function JobRow({ job, agents }) {
   const agent = agents.find(a => a.agent_id === job.agent_id)

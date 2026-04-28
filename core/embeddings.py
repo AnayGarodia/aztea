@@ -62,6 +62,12 @@ def _random_embed(text: str) -> list[float]:
 
 
 def embed_text(text: str) -> list[float]:
+    """Encode ``text`` into a float embedding vector.
+
+    Uses the OpenAI embeddings API when ``OPENAI_API_KEY`` is set; otherwise
+    falls back to a local sentence-transformers model. Returns a list of
+    ``EMBEDDING_DIM`` floats. Raises ``ValueError`` for empty input.
+    """
     normalized = str(text or "").strip()
     if not normalized:
         raise ValueError("text must be a non-empty string.")
@@ -166,6 +172,11 @@ def embed_texts_batch(texts: list[str]) -> list[list[float]]:
 
 
 def cosine(a: list[float] | np.ndarray, b: list[float] | np.ndarray) -> float:
+    """Compute cosine similarity between two vectors; returns a float in [-1, 1].
+
+    Zero vectors return 0.0. Raises ``ValueError`` if inputs are empty or
+    have different dimensionality.
+    """
     arr_a = np.asarray(a, dtype=np.float32).reshape(-1)
     arr_b = np.asarray(b, dtype=np.float32).reshape(-1)
     if arr_a.size == 0 or arr_b.size == 0:

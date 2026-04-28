@@ -79,6 +79,11 @@ Describe the repository's purpose, architecture, and key patterns."""
 
 
 def run(payload: dict) -> dict:
+    """Deprecated LLM-only wrapper — sunset 2026-07-26.
+
+    Fetches GitHub repo metadata and file contents for the given ``repo`` (owner/repo)
+    and ``paths`` list, then returns an LLM-generated repo info dict.
+    """
     repo = str(payload.get("repo", "")).strip()
     if not repo:
         return _err("github_fetcher.missing_repo", "repo is required (format: owner/repo)")

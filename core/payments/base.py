@@ -127,6 +127,12 @@ def normalize_fee_bearer_policy(value: str | None) -> str:
 
 
 def compute_platform_fee_cents(price_cents: int, platform_fee_pct: int | None = None) -> int:
+    """Return the platform fee in cents for a given price, rounded half-up.
+
+    Uses ``PLATFORM_FEE_PCT`` (default 10) when ``platform_fee_pct`` is None.
+    Arithmetic uses ``Decimal`` to avoid float rounding — result is always
+    an exact integer.
+    """
     pct = PLATFORM_FEE_PCT if platform_fee_pct is None else int(platform_fee_pct)
     if price_cents < 0:
         raise ValueError("price_cents must be non-negative.")
@@ -144,6 +150,17 @@ def compute_success_distribution(
     platform_fee_pct: int | None = None,
     fee_bearer_policy: str | None = None,
 ) -> dict[str, int]:
+    """Compute how a successful job's price is split between caller, agent, and platform.
+
+    Three ``fee_bearer_policy`` modes:
+    - ``"caller"`` (default) — caller pays price + fee; agent receives full price.
+    - ``"worker"``           — agent absorbs the fee; caller pays only price.
+    - ``"split"``            — fee split 50/50 (caller half rounded up).
+
+    Returns ``{caller_charge_cents, agent_payout_cents, platform_fee_cents}``.
+    All three values are non-negative integers and satisfy:
+    ``caller_charge_cents - agent_payout_cents == platform_fee_cents``.
+    """
     if price_cents < 0:
         raise ValueError("price_cents must be non-negative.")
     fee_cents = compute_platform_fee_cents(price_cents, platform_fee_pct)
@@ -473,6 +490,10 @@ def get_wallet_by_owner(owner_id: str) -> dict | None:
 
 
 def set_wallet_daily_spend_limit(wallet_id: str, daily_spend_limit_cents: int | None) -> dict:
+    """Update the caller wallet's daily spend cap. Pass None to remove the limit.
+
+    Returns the updated wallet dict. Raises ``ValueError`` for negative values.
+    """
     normalized_limit = None
     if daily_spend_limit_cents is not None:
         normalized_limit = int(daily_spend_limit_cents)

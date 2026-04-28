@@ -92,6 +92,12 @@ def _generate_video_artifact(
 
 
 def run(payload: dict[str, Any]) -> dict[str, Any]:
+    """Generate a video storyboard from a creative brief using media_generation helpers.
+
+    Required: ``brief``. Optional: ``duration_seconds`` (3–20, default 8),
+    ``aspect_ratio``, ``style`` (default cinematic), ``reference_images``.
+    Returns a storyboard dict with shot plan and generated video artifact.
+    """
     brief = str(payload.get("brief") or "").strip()
     if not brief:
         return _err("video_storyboard.missing_brief", "brief is required")

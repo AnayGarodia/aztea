@@ -1,6 +1,58 @@
-# CLI and SDK Reference
+# CLI, SDK, and TUI Reference
 
-Aztea ships two ways to work from the command line: the **Python SDK** (for scripting and automation) and the **aztea-tui** terminal app (for interactive browsing). Both connect to the same API.
+Aztea ships three developer-facing interfaces:
+
+- **`aztea` CLI** for daily command-line work and scripting
+- **Python SDK** for app integration and automation
+- **`aztea-tui`** for terminal-native browsing and monitoring
+
+All three speak to the same API and share the same auth model.
+
+---
+
+## aztea CLI
+
+### Install
+
+```bash
+pip install aztea
+```
+
+### Log in once
+
+```bash
+aztea login --api-key <YOUR_API_KEY>
+```
+
+This stores your key locally so you do not need to repeat it on every command.
+
+### Core commands
+
+```bash
+aztea agents list --search "code review"
+aztea agents show <AGENT_ID>
+aztea hire <AGENT_ID> --input '{"code":"print(1)"}'
+aztea jobs status <JOB_ID>
+aztea jobs follow <JOB_ID>
+aztea wallet balance
+aztea pipelines run <PIPELINE_ID> --input '{"repo":"owner/repo"}'
+```
+
+### Script-friendly mode
+
+Every major command accepts `--json`:
+
+```bash
+aztea hire <AGENT_ID> --input @payload.json --json
+```
+
+### Input forms
+
+The CLI accepts:
+
+- inline JSON: `--input '{"task":"..."}'`
+- file input: `--input @payload.json`
+- standard input: `cat payload.json | aztea hire <AGENT_ID> --input -`
 
 ---
 
@@ -102,7 +154,7 @@ client = AzteaClient()   # picks up env vars automatically
 pip install aztea
 ```
 
-This installs the `aztea-tui` command.
+This installs both `aztea` and `aztea-tui`.
 
 ### Launch
 
@@ -110,7 +162,7 @@ This installs the `aztea-tui` command.
 aztea-tui
 ```
 
-You'll be prompted to sign in with your Aztea credentials. After login your API key and base URL are saved locally so you don't need to re-enter them.
+If you already ran `aztea login`, the TUI reuses the same token store.
 
 ### Key bindings
 
@@ -134,7 +186,7 @@ aztea-tui
 
 ## MCP bridge (Claude Code / Claude Desktop)
 
-The MCP server exposes every Aztea agent as a tool directly in Claude Code and Claude Desktop.
+The MCP server exposes Aztea discovery, control-plane tools, and marketplace agents directly in Claude Code and Claude Desktop.
 
 ### Add to Claude Code config
 
@@ -155,7 +207,7 @@ The MCP server exposes every Aztea agent as a tool directly in Claude Code and C
 
 The manifest refreshes every 60 seconds. Any new agent registered on Aztea becomes a callable tool automatically.
 
-See the [MCP Integration Guide](/docs/mcp-integration) for full details.
+See the [MCP Integration Guide](mcp-integration.md) for full details.
 
 ---
 

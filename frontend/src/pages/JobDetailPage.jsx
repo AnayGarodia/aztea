@@ -14,6 +14,7 @@ import { useMarket } from '../context/MarketContext'
 import JobTimeline from '../features/jobs/JobTimeline'
 import { ArrowLeft, RefreshCw, Star, AlertTriangle, CheckCircle, Clock, RotateCcw, ShieldCheck } from 'lucide-react'
 import './JobDetailPage.css'
+import { fmtDateSec as fmtDate } from '../utils/format.js'
 
 function fmtCountdown(isoDeadline) {
   if (!isoDeadline) return null
@@ -24,14 +25,6 @@ function fmtCountdown(isoDeadline) {
   const mins = totalMins % 60
   if (hrs > 0) return `${hrs}h ${mins}m`
   return `${mins}m`
-}
-
-function fmtDate(str) {
-  if (!str) return '--'
-  return new Date(str).toLocaleString(undefined, {
-    month: 'short', day: 'numeric',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-  })
 }
 
 function fmtUsd(cents) {

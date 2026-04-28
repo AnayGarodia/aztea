@@ -355,6 +355,19 @@ def _run_cve_id_mode(cve_ids: list[str], single_mode: bool) -> dict:
 
 
 def run(payload: dict) -> dict:
+    """Look up CVE details from the NIST NVD live API.
+
+    Three modes (mutually exclusive, checked in order):
+    - ``cve_id`` (str) or ``cve_ids`` (list[str]) — fetch specific CVE records
+      by ID (e.g. ``"CVE-2024-1234"``).
+    - ``keyword`` (str) — full-text NVD keyword search; returns up to
+      ``max_results`` (default 10, max 50) entries sorted by ``sort_by``
+      (``"published"`` | ``"modified"`` | ``"score"``).
+
+    Returns ``{cves: [...], total_results, query_type}``.  Each CVE entry
+    includes ``id``, ``description``, ``cvss_score``, ``severity``,
+    ``published``, ``references``, and ``affected_products``.
+    """
     # --- Direct CVE ID mode ---
     cve_id_single = payload.get("cve_id")
     cve_ids_list = payload.get("cve_ids")

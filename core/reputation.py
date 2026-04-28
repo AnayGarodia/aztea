@@ -1,8 +1,43 @@
-"""
-reputation.py — SQLite-backed reputation and trust-score primitives for aztea.
+"""SQLite-backed reputation and trust-score computation for Aztea agents.
 
-Stores one caller quality rating (1-5) per completed job and computes trust
-metrics from quality + success rate + latency + confidence(volume).
+This module is the SOLE owner of the ``caller_ratings`` table. No other module
+may declare or write to it. ``core.disputes`` reads caller-rating state via the
+public helpers here but does not touch the table directly.
+
+Trust score formula
+-------------------
+A trust score in [0, 100] is computed from three sub-scores and a confidence
+multiplier:
+
+    base_score = quality_score  * 0.45
+               + success_score  * 0.35
+               + latency_score  * 0.20
+
+    trust_raw  = NEUTRAL (0.5) * (1 - confidence) + base_score * confidence
+
+    trust_score = trust_raw * decay_multiplier   (clamped to ≥ baseline)
+
+Sub-score formulas:
+
+- **quality_score** — Bayesian average of 1–5 star ratings, shrunk toward the
+  prior (3.0 stars, weight 5.0) to avoid wild swings on very few ratings.
+  Normalised to [0, 1] via ``(bayesian_avg - 1) / 4``.
+
+- **success_score** — Laplace-smoothed success rate:
+  ``(successful_calls + 1) / (total_calls + 2)``.
+
+- **latency_score** — Logistic decay: ``1 / (1 + avg_ms / 2000)``.
+  Score = 0.5 at 2000 ms, approaches 1.0 for sub-50 ms, approaches 0 for
+  very slow agents.
+
+- **confidence_score** — Sigmoid over evidence volume:
+  ``evidence / (evidence + 10)`` where evidence = total_calls + 2 * rating_count.
+  New agents start at NEUTRAL (50) and converge toward their real score as
+  evidence accumulates.
+
+- **decay_multiplier** — Per-agent inactivity multiplier in [0, 1] (stored in
+  registry, defaults to 1.0). Applied after the confidence blend so it shrinks
+  the score toward NEUTRAL rather than toward zero.
 """
 
 import math
@@ -369,6 +404,7 @@ def _get_agent_quality_summary_map(agent_ids: list[str]) -> dict[str, dict]:
 
 
 def get_agent_quality_summary(agent_id: str) -> dict:
+    """Return ``{rating_count, average_quality_rating}`` for a single agent."""
     summary_map = _get_agent_quality_summary_map([agent_id])
     summary = summary_map.get(
         agent_id,
@@ -735,6 +771,10 @@ def compute_caller_trust_metrics(caller_owner_id: str) -> dict:
 
 
 def count_caller_given_ratings(caller_owner_id: str, *, rating: int | None = None) -> int:
+    """Count how many ratings a caller has submitted; optionally filter by a specific ``rating`` value.
+
+    Used for abuse detection (e.g. detecting a caller who exclusively gives 1-star ratings).
+    """
     normalized_owner_id = str(caller_owner_id or "").strip()
     if not normalized_owner_id:
         return 0

@@ -1,6 +1,7 @@
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts'
+import { fmtUsd } from '../../utils/format.js'
 
 function buildDailySpend(transactions = []) {
   // Group transactions by date, sum charges
@@ -28,11 +29,6 @@ function buildDailySpend(transactions = []) {
   })
 
   return Object.values(map)
-}
-
-function fmtUsd(v) {
-  if (v == null || isNaN(v)) return '--'
-  return '$' + (v / 100).toFixed(2)
 }
 
 function CustomTooltip({ active, payload, label }) {

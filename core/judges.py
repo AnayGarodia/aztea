@@ -153,6 +153,19 @@ def _judge_once(model_chain: list[str], context: dict) -> dict:
 
 
 def run_judgment(dispute_id: str) -> dict:
+    """Run LLM-based adjudication for a dispute and record the judgment vote.
+
+    Requires ``AZTEA_ENABLE_LIVE_DISPUTE_JUDGES=1`` in env; returns a
+    ``skipped`` result without calling the LLM if the flag is unset.
+
+    A dispute needs two agreeing judge votes before it can be auto-resolved.
+    This function contributes one vote; consensus is checked by
+    ``disputes.set_dispute_consensus`` after the vote is stored.
+
+    Returns a dict with ``status``, ``outcome``, ``vote``, and ``reasoning``.
+    Raises ``ValueError`` if the dispute is not found or already in a terminal
+    state (``"resolved"`` or ``"final"``).
+    """
     context = disputes.get_dispute_context(dispute_id)
     if context is None:
         raise ValueError(f"Dispute '{dispute_id}' not found.")
@@ -273,6 +286,18 @@ def run_quality_judgment(
     output_payload: dict,
     agent_description: str,
 ) -> dict:
+    """Score a completed job output for quality using an LLM judge.
+
+    Requires ``AZTEA_ENABLE_LIVE_QUALITY_JUDGE=1``; returns a local heuristic
+    fallback score (based on output length / structure) if the flag is unset.
+
+    The judgment score (0–5) is used by ``core.payout_curve`` to compute any
+    quality-based clawback. The LLM is given the original input payload, the
+    agent's output, and a description of what the agent is supposed to do.
+
+    Returns ``{score, reasoning, method}`` where ``method`` is either
+    ``"llm"`` or ``"heuristic"``.
+    """
     if not _env_enabled_any("AZTEA_ENABLE_LIVE_QUALITY_JUDGE", "AGENTMARKET_ENABLE_LIVE_QUALITY_JUDGE"):
         return _local_quality_fallback(
             input_payload=input_payload,

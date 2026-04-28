@@ -40,6 +40,7 @@ class _RequestContextFilter(logging.Filter):
 
 class JSONFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
+        """Serialise a log record to a single-line JSON string with timestamp, level, and data."""
         payload: dict[str, Any] = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "level": record.levelname.lower(),
@@ -56,6 +57,7 @@ class JSONFormatter(logging.Formatter):
 
 
 def configure_json_logging(level: int = logging.INFO) -> None:
+    """Set up structured JSON logging on the root logger (idempotent)."""
     root = logging.getLogger()
     if getattr(root, "_aztea_json_configured", False):
         return

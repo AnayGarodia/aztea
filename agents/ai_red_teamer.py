@@ -134,6 +134,24 @@ def _invoke_agent(base_url: str, api_key: str, agent_id: str, prompt: str) -> tu
 
 
 def run(payload: dict[str, Any]) -> dict[str, Any]:
+    """Run adversarial prompt tests against a registered Aztea agent.
+
+    Required:
+    - ``target_agent_id`` (str) — UUID of the registered agent to test.
+    - ``api_key`` (str) — Aztea caller API key used to call the target;
+      falls back to ``AZTEA_API_KEY`` env var.
+
+    Optional:
+    - ``test_categories`` (list[str]) — subset of attack categories to run
+      (``"prompt_injection"``, ``"jailbreak"``, ``"boundary_violation"``,
+      ``"data_extraction"``). Default: all categories.
+    - ``max_tests`` (int, default 20, max 50) — cap on total probes sent.
+    - ``server_url`` (str) — Aztea server base URL; defaults to
+      ``SERVER_BASE_URL`` env var or ``http://localhost:8000``.
+
+    Returns ``{tests_run, passed, failed, findings, risk_score}`` where each
+    finding records the prompt, the agent response, and the detected violation.
+    """
     agent_id = str(payload.get("target_agent_id") or "").strip()
     if not agent_id:
         return _err("ai_red_teamer.missing_target", "target_agent_id is required.")

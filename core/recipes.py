@@ -95,6 +95,7 @@ BUILTIN_RECIPES: list[dict] = [
 
 
 def ensure_builtin_recipes() -> list[dict]:
+    """Upsert the platform's built-in pipeline templates on startup. Idempotent."""
     ensured: list[dict] = []
     for recipe in BUILTIN_RECIPES:
         ensured.append(

@@ -61,6 +61,24 @@ def create_job(
     output_verification_window_seconds: int | None = None,
     batch_id: str | None = None,
 ) -> dict:
+    """Insert a new job row and its initial ``pending`` claim event.
+
+    The caller wallet must already have been debited (``charge_tx_id``) before
+    calling this — job creation records the charge but does NOT perform it.
+    All integer amounts must be in cents; floats are rejected.
+
+    Key fields stored on the job:
+    - ``price_cents`` — the agent's listed price (what the agent earns on success).
+    - ``caller_charge_cents`` — what was actually debited from the caller
+      (may include platform fee depending on ``fee_bearer_policy``).
+    - ``platform_fee_pct_at_create`` — snapshot of the fee rate at the time of
+      creation; used for settlement even if the platform rate changes later.
+    - ``max_attempts`` — how many times the sweeper will re-queue on lease expiry.
+    - ``dispute_window_hours`` — how long after settlement callers may file a dispute.
+
+    Returns the newly created job as a dict.
+    Raises ``ValueError`` for invalid money amounts.
+    """
     if price_cents < 0:
         raise ValueError("price_cents must be non-negative.")
     parsed_caller_charge_cents = _to_non_negative_int(caller_charge_cents, default=price_cents)
@@ -157,6 +175,7 @@ def create_job(
 
 
 def list_jobs_for_batch(batch_id: str, caller_owner_id: str) -> list[dict]:
+    """Return all jobs belonging to ``batch_id``, scoped to the given ``caller_owner_id``."""
     normalized_batch_id = _clean_optional_text(batch_id)
     normalized_owner_id = _clean_optional_text(caller_owner_id)
     if normalized_batch_id is None or normalized_owner_id is None:
@@ -180,6 +199,7 @@ def list_child_jobs(
     statuses: tuple[str, ...] | None = None,
     limit: int = 200,
 ) -> list[dict]:
+    """Return child jobs of ``parent_job_id``, optionally filtered by ``statuses``. Max 500."""
     normalized_parent = _clean_optional_text(parent_job_id)
     if normalized_parent is None:
         return []
@@ -219,6 +239,7 @@ def get_job(job_id: str) -> dict | None:
 
 
 def get_job_authorization_context(job_id: str) -> dict | None:
+    """Return the minimal ownership fields needed for auth checks: job_id, agent_id, agent_owner_id, caller_owner_id, claim_owner_id."""
     job = get_job(job_id)
     if job is None:
         return None
@@ -251,6 +272,7 @@ def list_jobs_for_owner(
     before_created_at: str | None = None,
     before_job_id: str | None = None,
 ) -> list:
+    """Paginated job list for a caller (buyer view); keyset-paginated on ``before_created_at``/``before_job_id``."""
     limit = min(max(1, limit), 200)
     where_clauses = ["caller_owner_id = ?"]
     params: list = [owner_id]
@@ -284,6 +306,7 @@ def list_jobs_for_agent(
     before_created_at: str | None = None,
     before_job_id: str | None = None,
 ) -> list:
+    """Paginated job list for an agent (worker view); keyset-paginated on ``before_created_at``/``before_job_id``."""
     limit = min(max(1, limit), 200)
     where_clauses = ["agent_id = ?"]
     params: list = [agent_id]

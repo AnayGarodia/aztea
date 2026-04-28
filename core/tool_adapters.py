@@ -1,4 +1,32 @@
-"""Shared tool-manifest builders for MCP-adjacent client adapters."""
+"""Tool-manifest builders for the three supported LLM tool-call formats.
+
+This module converts the Aztea agent registry into the tool-definition shapes
+expected by different LLM APIs. All three builders start from the same internal
+catalog (``_catalog_entries``) and produce a format-specific structure.
+
+Formats supported
+-----------------
+``build_openai_chat_manifest``
+    OpenAI Chat Completions ``tools`` array  (``type: "function"`` wrappers).
+    Includes full Aztea metadata (price, trust score, privacy flags) in the
+    ``function.metadata`` field.
+
+``build_openai_responses_manifest``
+    OpenAI Responses API  ``tools`` array  (``type: "function"`` flat objects,
+    ``strict: False``).  Lighter metadata — only trust_score_by_client included.
+
+``build_gemini_manifest``
+    Gemini ``functionDeclarations`` format, wrapped in a single
+    ``{"tools": [{"functionDeclarations": [...]}]}`` envelope.
+
+All three builders embed both registry agents and meta-tools (from
+``scripts/aztea_mcp_meta_tools.py``) in the catalog. Meta-tools are platform
+utilities (e.g. wallet check, job status) that aren't backed by a registry entry.
+
+Each returned dict also includes a ``tool_lookup`` mapping ``name → metadata``
+so callers can resolve a tool-call name back to ``agent_id`` and privacy flags
+without rescanning the tool list.
+"""
 
 from __future__ import annotations
 
@@ -46,6 +74,14 @@ def _catalog_entries(agents: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def build_openai_chat_manifest(agents: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build an OpenAI Chat Completions ``tools`` array from the agent registry.
+
+    Each tool is a ``{type: "function", function: {name, description, parameters,
+    metadata}}`` object. The ``metadata`` field carries Aztea-specific data
+    (price, trust score, privacy flags) that OpenAI passes through opaquely.
+
+    Returns ``{tools, count, tool_format, meta_tools_included, tool_lookup}``.
+    """
     tools: list[dict[str, Any]] = []
     tool_lookup: dict[str, dict[str, Any]] = {}
     for item in _catalog_entries(agents):
@@ -95,6 +131,12 @@ def build_openai_chat_manifest(agents: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def build_openai_responses_manifest(agents: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build an OpenAI Responses API ``tools`` array (flat function objects).
+
+    Uses the ``{type: "function", name, description, parameters, strict: False}``
+    shape required by the Responses API (different from Chat Completions).
+    Returns ``{tools, count, tool_format, meta_tools_included, tool_lookup}``.
+    """
     tools: list[dict[str, Any]] = []
     tool_lookup: dict[str, dict[str, Any]] = {}
     for item in _catalog_entries(agents):
@@ -122,6 +164,14 @@ def build_openai_responses_manifest(agents: list[dict[str, Any]]) -> dict[str, A
 
 
 def build_gemini_manifest(agents: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build a Gemini ``functionDeclarations`` tool list.
+
+    Returns the canonical Gemini shape:
+    ``{tools: [{functionDeclarations: [...]}], function_declarations,
+    count, tool_format, meta_tools_included, tool_lookup}``.
+    The top-level ``function_declarations`` key is a convenience copy for
+    callers that need the flat list without unwrapping the outer envelope.
+    """
     declarations: list[dict[str, Any]] = []
     tool_lookup: dict[str, dict[str, Any]] = {}
     for item in _catalog_entries(agents):

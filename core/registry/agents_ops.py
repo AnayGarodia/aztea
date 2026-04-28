@@ -456,6 +456,7 @@ def get_agents(
 
 
 def set_agent_status(agent_id: str, status: str, reason: str | None = None) -> dict | None:
+    """Update an agent's status to ``active``, ``suspended``, or ``banned``."""
     normalized_status = str(status or "").strip().lower()
     if normalized_status not in {"active", "suspended", "banned"}:
         raise ValueError("status must be one of: active, suspended, banned.")
@@ -474,6 +475,7 @@ def set_agent_status(agent_id: str, status: str, reason: str | None = None) -> d
 
 
 def list_pending_review_agents(limit: int = 200) -> list[dict]:
+    """Return agents in ``pending_review`` status awaiting admin moderation."""
     capped = min(max(1, int(limit)), 1000)
     with _conn() as conn:
         rows = conn.execute(
@@ -497,6 +499,11 @@ def set_agent_review_decision(
     note: str | None = None,
     reviewed_at: str | None = None,
 ) -> dict | None:
+    """Record an admin approve/reject decision for an agent under review.
+
+    ``decision`` must be ``"approve"`` or ``"reject"``. Approved agents move
+    to ``active``; rejected agents move to ``suspended``.
+    """
     normalized_decision = str(decision or "").strip().lower()
     if normalized_decision not in {"approve", "reject"}:
         raise ValueError("decision must be one of: approve, reject.")
@@ -546,6 +553,11 @@ def set_agent_endpoint_health(
     endpoint_last_checked_at: str,
     endpoint_last_error: str | None,
 ) -> dict | None:
+    """Record the result of an endpoint health probe on an agent.
+
+    ``endpoint_health_status`` must be ``"unknown"``, ``"healthy"``, or
+    ``"degraded"``. Called by the background sweeper after each probe cycle.
+    """
     normalized_status = str(endpoint_health_status or "").strip().lower()
     if normalized_status not in {"unknown", "healthy", "degraded"}:
         raise ValueError("endpoint_health_status must be one of: unknown, healthy, degraded.")
@@ -605,6 +617,7 @@ def set_agent_endpoint_health(
 
 
 def set_agent_output_examples(agent_id: str, output_examples: list[dict] | None) -> dict | None:
+    """Replace the full set of work examples for an agent. Pass None to clear."""
     normalized_examples: str | None
     if output_examples is None:
         normalized_examples = None
@@ -623,6 +636,7 @@ def set_agent_output_examples(agent_id: str, output_examples: list[dict] | None)
 
 
 def append_agent_output_example(agent_id: str, example: dict, *, max_examples: int = 20) -> dict | None:
+    """Append one work example to an agent's ring buffer, trimming to ``max_examples``."""
     if not isinstance(example, dict):
         raise ValueError("example must be an object.")
     capped = min(max(1, int(max_examples)), 100)
@@ -1052,6 +1066,12 @@ def search_agents(
     audit_logged: bool | None = None,
     region_locked: str | None = None,
 ) -> list[dict]:
+    """Search the agent registry by keyword + embedding similarity with optional filters.
+
+    Falls back to keyword-only search when no embedding model is available.
+    Filters: ``min_trust``, ``max_price_cents``, ``pii_safe``, ``kind``, etc.
+    Returns up to ``limit`` agents ranked by combined keyword + semantic score.
+    """
     normalized_query = str(query or "").strip()
     if not normalized_query:
         raise ValueError("query must be a non-empty string.")

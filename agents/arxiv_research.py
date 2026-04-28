@@ -225,6 +225,17 @@ def _fetch_full_abstract_data(arxiv_id: str) -> dict:
 
 
 def run(payload: dict) -> dict:
+    """Search arXiv for papers matching ``query`` and return an LLM synthesis.
+
+    Required: ``query`` (str, ≤500 chars).
+    Optional: ``max_results`` (int, default 5, max 20), ``sort_by`` (str,
+    default "relevance"), ``categories`` (list[str]).
+
+    Returns a dict with ``papers`` (list of metadata), ``synthesis`` (LLM
+    summary), ``query``, and ``total_results``. If LLM synthesis fails (no
+    provider configured), ``synthesis`` is omitted and raw paper data is
+    returned — callers must handle both shapes.
+    """
     query = str(payload.get("query", "")).strip()
     if not query:
         return _err("arxiv_research.missing_query", "query is required")

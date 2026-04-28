@@ -25,11 +25,10 @@ import {
   Wallet, ArrowUpFromLine, Settings, KeyRound,
 } from 'lucide-react'
 import './MyAgentsPage.css'
+import { fmtUsd as fmtCentsUsd } from '../utils/format.js'
 
-function fmtCents(cents) {
-  if (typeof cents !== 'number') return '$0.00'
-  return '$' + (cents / 100).toFixed(2)
-}
+// fmtCents wraps canonical fmtUsd; fmtUsdPrecise shows up to 4 decimal places for small per-call prices
+const fmtCents = (cents) => (typeof cents !== 'number' ? '$0.00' : fmtCentsUsd(cents))
 
 const STATUS_VARIANT = {
   active: 'success',
@@ -38,6 +37,7 @@ const STATUS_VARIANT = {
 }
 
 function fmtUsd(val) {
+  // 4-decimal compact format for per-call prices that may be < $0.01
   if (typeof val !== 'number') return '-'
   return '$' + val.toFixed(4).replace(/\.?0+$/, '')
 }

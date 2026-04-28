@@ -58,6 +58,18 @@ def _is_allowed(command: str) -> bool:
 
 
 def run(payload: dict) -> dict:
+    """Execute a bounded shell command and return stdout/stderr/exit code.
+
+    Required: ``command`` (str, ≤1000 chars).
+    Optional: ``timeout_seconds`` (float, default 10.0, max 60.0),
+              ``stdin`` (str), ``env`` (dict[str, str]).
+
+    The command must begin with an allowlisted binary (see ``_ALLOWED_PREFIXES``
+    in the module). Commands not on the allowlist are rejected immediately with
+    a structured error — no subprocess is spawned.
+
+    Returns ``{stdout, stderr, exit_code, execution_time_ms, timed_out}``.
+    """
     command = str(payload.get("command") or "").strip()
     if not command:
         raise ValueError("'command' is required.")

@@ -39,6 +39,7 @@ class BedrockProvider:
         return self._available
 
     def complete(self, req: CompletionRequest) -> LLMResponse:
+        """Send a chat completion request to AWS Bedrock (Converse API) and return a normalised LLMResponse."""
         if not self._available:
             raise LLMBadResponseError(self.name, req.model, "Bedrock provider not available.", None)
 

@@ -174,6 +174,11 @@ def _filter_changelog_by_versions(text: str, from_v: str | None, to_v: str | Non
 
 
 def run(payload: dict) -> dict:
+    """Deprecated LLM-only wrapper — sunset 2026-07-26.
+
+    Fetches the changelog for a PyPI/npm package and returns an LLM-generated summary.
+    Accepts ``package``, ``ecosystem`` (pypi/npm/auto), ``from_version``, ``to_version``.
+    """
     package = str(payload.get("package") or "").strip()
     if not package:
         raise ValueError("'package' is required.")

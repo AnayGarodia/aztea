@@ -189,6 +189,19 @@ def _err(code: str, message: str) -> dict:
 
 
 def run(payload: dict) -> dict:
+    """Fetch a URL, strip HTML, and return an LLM-analysed summary or extract.
+
+    Required: ``url`` (str) — the page to fetch (public HTTPS only).
+    Optional:
+    - ``question`` (str, ≤1000 chars) — focus question for the LLM analysis.
+    - ``mode`` (str, default ``"summary"``) — one of ``"summary"``,
+      ``"extract"``, ``"qa"``.  ``"extract"`` returns structured facts;
+      ``"qa"`` answers ``question`` directly from the page content.
+
+    Returns ``{url, title, content_preview, analysis, mode}`` on success.
+    If LLM synthesis fails, ``analysis`` is omitted and raw stripped text is
+    returned under ``content``.
+    """
     question = str(payload.get("question", "")).strip()
     if len(question) > 1000:
         return _err("web_researcher.invalid_input", "question must be 1000 characters or fewer")

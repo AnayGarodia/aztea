@@ -42,6 +42,7 @@ class OpenAICompatibleProvider:
         return self._available
 
     def complete(self, req: CompletionRequest) -> LLMResponse:
+        """Send a chat completion request to an OpenAI-compatible endpoint and return a normalised LLMResponse."""
         kwargs: dict[str, Any] = {
             "model": req.model,
             "temperature": req.temperature,

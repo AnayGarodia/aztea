@@ -60,6 +60,7 @@ def send(to: str, subject: str, html: str, text: str) -> None:
 
 
 def send_welcome(to: str, username: str, role: str = "both") -> None:
+    """Send a welcome email to a newly registered user. No-ops if SMTP_HOST is unset."""
     safe_username = _esc(username)
     if role == "builder":
         html_body = (
@@ -109,6 +110,7 @@ def send_skill_live(
     price_usd: float,
     endpoint_url: str,
 ) -> None:
+    """Notify the agent owner that their skill is live on the marketplace. No-ops if SMTP_HOST is unset."""
     safe_name = _esc(skill_name)
     safe_endpoint = _esc(endpoint_url)
     safe_username = _esc(username)
@@ -144,6 +146,7 @@ def send_payout_received(
     job_id: str,
     skill_name: str,
 ) -> None:
+    """Email the agent owner their payout amount after a successful job. No-ops if SMTP_HOST is unset."""
     safe_name = _esc(skill_name)
     safe_job_id = _esc(job_id)
     safe_username = _esc(username)
@@ -163,6 +166,7 @@ def send_payout_received(
 
 
 def send_job_complete(to: str, job_id: str, agent_name: str, price_cents: int) -> None:
+    """Email the caller that their job finished successfully. No-ops if SMTP_HOST is unset."""
     price_fmt = f"${price_cents / 100:.2f}"
     safe_agent_name = _esc(agent_name)
     safe_job_id = _esc(job_id)
@@ -176,6 +180,7 @@ def send_job_complete(to: str, job_id: str, agent_name: str, price_cents: int) -
 
 
 def send_job_failed(to: str, job_id: str, agent_name: str, error: str) -> None:
+    """Email the caller that their job failed and they've been refunded. No-ops if SMTP_HOST is unset."""
     safe_agent_name = _esc(agent_name)
     safe_job_id = _esc(job_id)
     safe_error = _esc(error)
@@ -199,6 +204,7 @@ def send_deposit_confirmed(to: str, amount_cents: int) -> None:
 
 
 def send_dispute_opened(to: str, job_id: str, dispute_id: str) -> None:
+    """Notify both parties that a dispute has been filed. No-ops if SMTP_HOST is unset."""
     safe_job_id = _esc(job_id)
     safe_dispute_id = _esc(dispute_id)
     send(
@@ -211,6 +217,7 @@ def send_dispute_opened(to: str, job_id: str, dispute_id: str) -> None:
 
 
 def send_dispute_resolved(to: str, job_id: str, dispute_id: str, outcome: str) -> None:
+    """Notify the relevant party of the dispute outcome. No-ops if SMTP_HOST is unset."""
     safe_job_id = _esc(job_id)
     safe_dispute_id = _esc(dispute_id)
     safe_outcome = _esc(outcome)
@@ -224,6 +231,7 @@ def send_dispute_resolved(to: str, job_id: str, dispute_id: str, outcome: str) -
 
 
 def send_signup_verification_otp(to: str, otp: str) -> None:
+    """Send a 6-digit OTP for new account email verification (expires in 15 min). No-ops if SMTP_HOST is unset."""
     safe_otp = _esc(otp)
     send(
         to,
@@ -236,6 +244,7 @@ def send_signup_verification_otp(to: str, otp: str) -> None:
 
 
 def send_password_reset_otp(to: str, otp: str) -> None:
+    """Send a password-reset OTP (expires in 15 min). No-ops if SMTP_HOST is unset."""
     safe_otp = _esc(otp)
     send(
         to,
@@ -248,6 +257,7 @@ def send_password_reset_otp(to: str, otp: str) -> None:
 
 
 def send_withdrawal_processed(to: str, amount_cents: int) -> None:
+    """Send a confirmation email when a withdrawal has been submitted to Stripe. No-ops if SMTP_HOST is unset."""
     amount_fmt = f"${amount_cents / 100:.2f}"
     send(
         to,

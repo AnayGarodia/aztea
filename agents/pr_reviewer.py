@@ -115,6 +115,10 @@ def _fetch_github_diff(pr_url: str) -> str:
 
 
 def run(payload: dict) -> dict:
+    """Deprecated LLM-only wrapper — sunset 2026-07-26.
+
+    Accepts a GitHub ``pr_url`` or raw ``diff`` text and returns an LLM-generated code review.
+    """
     pr_url = str(payload.get("pr_url") or "").strip()
     diff = str(payload.get("diff") or "").strip()
     context = str(payload.get("context") or "Not provided.")[:600]

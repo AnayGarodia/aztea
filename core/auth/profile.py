@@ -158,6 +158,7 @@ def set_stripe_customer_id(user_id: str, customer_id: str) -> None:
 
 
 def get_stripe_customer_id(user_id: str) -> str | None:
+    """Return the Stripe customer ID for a user, or None if not yet created."""
     with _conn() as conn:
         row = conn.execute(
             "SELECT stripe_customer_id FROM users WHERE user_id = ?",

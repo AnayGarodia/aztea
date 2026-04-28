@@ -27,6 +27,7 @@ class CohereProvider:
         return self._available
 
     def complete(self, req: CompletionRequest) -> LLMResponse:
+        """Send a chat completion request to Cohere and return a normalised LLMResponse."""
         if not self._available:
             raise LLMBadResponseError(self.name, req.model, "Cohere provider not available.", None)
         import cohere

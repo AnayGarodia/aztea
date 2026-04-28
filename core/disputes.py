@@ -1,5 +1,27 @@
-"""
-disputes.py — dispute lifecycle and bilateral caller ratings persistence.
+"""Dispute lifecycle, judgment recording, and bilateral caller-rating persistence.
+
+This module owns all state transitions and DB writes for the dispute system.
+It does NOT own money movements — those are handled by the caller in the server
+shard via ``core.payments.trust_disputes`` which must wrap ``create_dispute``
+inside the same SQLite transaction as the escrow clawback.
+
+Key invariants:
+- ``create_dispute`` enforces that only a party to the job (caller or agent
+  owner) may file. The server layer must verify this too, but the check here
+  is the authoritative one.
+- Dispute insert + escrow clawback MUST happen in one transaction. The caller
+  passes an open ``conn`` to ``create_dispute`` to ensure atomicity. If the
+  caller does not pass a conn, a new transaction is opened internally (safe for
+  cases where no money movement is needed).
+- There can be at most one dispute per job (enforced by a UNIQUE index on
+  ``disputes.job_id``).
+- ``caller_ratings`` is declared and owned by ``core.reputation``. This module
+  must not re-declare it or write to it directly.
+
+Status machine:
+  pending → judging → consensus (2 LLM judges agree) → final
+                    → tied (judges disagree) → final (after admin tie-break)
+  Any status → appealed → final
 """
 
 from __future__ import annotations
@@ -37,6 +59,7 @@ def _now() -> str:
 
 
 def init_disputes_db() -> None:
+    """Create dispute-related tables (disputes, dispute_judgments) if they do not exist. Idempotent."""
     with _conn() as conn:
         conn.execute(
             """
@@ -143,6 +166,17 @@ def create_dispute(
     filing_deposit_cents: int = 0,
     conn: sqlite3.Connection | None = None,
 ) -> dict:
+    """Insert a new dispute row for a completed job.
+
+    If ``conn`` is provided the INSERT is executed on that connection so the
+    caller can wrap it with the escrow clawback in a single atomic transaction.
+    If ``conn`` is None a new connection + transaction is used (safe for
+    dispute creation without a money movement, e.g. in tests).
+
+    Raises ``ValueError`` if the job does not exist, if reason is blank, or
+    if ``filed_by_owner_id`` is not a party to the job.
+    Raises ``PermissionError`` if the filer is not the caller or agent owner.
+    """
     normalized_reason = str(reason or "").strip()
     if not normalized_reason:
         raise ValueError("reason must be a non-empty string.")
@@ -224,6 +258,7 @@ def has_dispute_for_job(job_id: str) -> bool:
 
 
 def list_disputes(*, status: str | None = None, limit: int = 100) -> list[dict]:
+    """Return a paginated list of disputes, optionally filtered by ``status``. Max 500 rows."""
     capped = min(max(1, int(limit)), 500)
     with _conn() as conn:
         if status:
@@ -249,6 +284,7 @@ def list_disputes(*, status: str | None = None, limit: int = 100) -> list[dict]:
 
 
 def set_dispute_status(dispute_id: str, status: str) -> dict | None:
+    """Update the ``status`` field of a dispute. Returns the updated dispute or None if not found."""
     normalized_status = _validate_status(status)
     with _conn() as conn:
         conn.execute(
@@ -298,6 +334,7 @@ def get_stale_tied_disputes(older_than_hours: int = 48, limit: int = 100) -> lis
 
 
 def set_dispute_consensus(dispute_id: str, outcome: str) -> dict | None:
+    """Record that two judge votes agree on ``outcome``; transitions status to 'consensus'."""
     normalized_outcome = _validate_outcome(outcome)
     with _conn() as conn:
         conn.execute(
@@ -319,6 +356,11 @@ def finalize_dispute(
     split_caller_cents: int | None = None,
     split_agent_cents: int | None = None,
 ) -> dict | None:
+    """Mark a dispute as final after admin ruling or consensus; records outcome and resolved_at timestamp.
+
+    For 'split' outcomes, ``split_caller_cents`` and ``split_agent_cents`` are required.
+    Returns the updated dispute dict or None if not found.
+    """
     normalized_status = _validate_status(status)
     normalized_outcome = _validate_outcome(outcome)
     caller_split, agent_split = _validate_split(normalized_outcome, split_caller_cents, split_agent_cents)
@@ -355,6 +397,7 @@ def record_judgment(
     model: str | None = None,
     admin_user_id: str | None = None,
 ) -> dict:
+    """Persist a single LLM or admin judge vote for a dispute and return the inserted judgment dict."""
     normalized_kind = str(judge_kind or "").strip().lower()
     if normalized_kind not in JUDGE_KINDS:
         raise ValueError("invalid judge_kind")
@@ -430,6 +473,7 @@ def append_audit_event(dispute_id: str, event: str, actor: str | None = None, ex
 
 
 def get_judgments(dispute_id: str) -> list[dict]:
+    """Fetch all judge votes for a dispute, ordered oldest-first."""
     with _conn() as conn:
         rows = conn.execute(
             """
@@ -443,6 +487,10 @@ def get_judgments(dispute_id: str) -> list[dict]:
 
 
 def get_dispute_context(dispute_id: str) -> dict | None:
+    """Fetch the full context needed to judge a dispute: job details, messages, ratings, and prior judgments.
+
+    Returns None if the dispute or its linked job does not exist.
+    """
     with _conn() as conn:
         row = conn.execute(
             """

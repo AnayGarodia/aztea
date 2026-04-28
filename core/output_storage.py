@@ -1,3 +1,22 @@
+"""Output storage abstraction: local filesystem and S3-compatible blob backends.
+
+``OutputStorage`` is a ``Protocol`` that every backend must satisfy. The two
+concrete implementations are:
+
+``LocalOutputStorage``
+    Stores blobs as files under a configurable base directory. Default is
+    ``./output_storage`` (configurable via ``LOCAL_OUTPUT_STORAGE_PATH`` env
+    var). Used in dev and on single-host deployments without S3 access.
+
+``S3OutputStorage``
+    Stores blobs in an S3 (or S3-compatible) bucket. Configured via standard
+    AWS environment variables plus ``S3_BUCKET_NAME`` / ``S3_ENDPOINT_URL``
+    for non-AWS endpoints (MinIO, R2, etc.).
+
+The active backend is selected and returned by ``get_output_storage()`` at
+module level. Callers should obtain the storage instance from there rather
+than instantiating a backend directly.
+"""
 from __future__ import annotations
 
 import os
@@ -98,6 +117,9 @@ class S3CompatibleOutputStorage:
         return self._to_uri(key)
 
     def finalize_temp_to_blob(self, temp_location: str, blob_id: str) -> str:
+        """Copy a temp upload key to the permanent blobs prefix and delete the source.
+        Falls back to local filesystem if ``temp_location`` is not an s3:// URI.
+        """
         if not self._is_s3_uri(temp_location):
             return self.local_fallback.finalize_temp_to_blob(temp_location, blob_id)
         src_bucket, src_key = self._parse_uri(temp_location)
@@ -125,6 +147,7 @@ class S3CompatibleOutputStorage:
         return obj["Body"].read()
 
     def exists(self, location: str) -> bool:
+        """Return True if the object at ``location`` exists in the configured backend."""
         if not self._is_s3_uri(location):
             return self.local_fallback.exists(location)
         bucket, key = self._parse_uri(location)
@@ -143,6 +166,12 @@ class S3CompatibleOutputStorage:
 
 
 def create_output_storage_from_env(*, local_root: str) -> OutputStorage:
+    """Build and return the active ``OutputStorage`` backend from environment variables.
+
+    ``OUTPUT_BLOB_STORAGE_BACKEND`` selects the backend: ``local`` (default), ``s3``, ``r2``, or ``minio``.
+    S3-compatible backends additionally require ``OUTPUT_BLOB_S3_BUCKET``; credentials and endpoint
+    follow standard AWS env-var conventions plus ``OUTPUT_BLOB_S3_*`` overrides.
+    """
     backend = str(os.environ.get("OUTPUT_BLOB_STORAGE_BACKEND", "local")).strip().lower() or "local"
     local_backend = LocalOutputStorage(root_dir=os.path.abspath(local_root))
     if backend in {"local", "filesystem", "fs"}:

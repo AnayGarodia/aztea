@@ -1,3 +1,31 @@
+"""Pixel-level visual regression checker: compare two images and highlight diffs.
+
+Accepts two image locators (``before`` and ``after``) as URLs or base64
+data-URLs. Fetches/decodes them, converts both to RGBA, then uses Pillow's
+``ImageChops.difference`` to produce a per-pixel delta image. The difference
+image is thresholded to isolate meaningful changes.
+
+Returns a structured report containing:
+- ``changed`` (bool) — whether any pixels exceeded the diff threshold
+- ``diff_pixel_count`` / ``diff_pixel_pct`` — how many pixels changed
+- ``diff_image_b64`` — base64-encoded PNG of the highlighted diff
+- ``dimensions`` — width × height of the compared images
+
+Runtime requirement: **Pillow** must be installed (``pip install Pillow``).
+If absent, the agent returns a structured ``tool_unavailable`` error.
+All URLs go through ``core.url_security.validate_outbound_url``; private IPs
+and loopback addresses are blocked.
+
+Payload schema
+--------------
+Required:
+  ``before`` (str) — URL or ``data:image/...;base64,...`` locator for baseline image
+  ``after``  (str) — URL or ``data:image/...;base64,...`` locator for candidate image
+
+Optional:
+  ``threshold``  (int, 0–255, default 10) — per-channel delta below which pixels are ignored
+  ``highlight_color`` (str, default "#ff0000") — hex color for diff overlay
+"""
 from __future__ import annotations
 
 import base64
@@ -61,6 +89,24 @@ def _image_source(payload: dict[str, Any], prefix: str) -> str:
 
 
 def run(payload: dict[str, Any]) -> dict[str, Any]:
+    """Compare two images pixel-by-pixel and return a diff report.
+
+    Accepts images via URL (``left_url`` / ``right_url``) or base64 data-URL
+    (``left_artifact`` / ``right_artifact``). At least one source pair is required.
+
+    Optional:
+    - ``threshold`` (int, 0–255, default 10) — per-channel delta below which
+      a pixel is treated as unchanged.
+    - ``highlight_color`` (str, default ``"#ff0000"``) — hex color for the
+      diff overlay in the output image.
+    - ``output_format`` (str, default ``"png"``) — ``"png"`` | ``"jpeg"``.
+
+    Runtime requirement: **Pillow** must be installed. Returns
+    ``tool_unavailable`` if absent.
+
+    Returns ``{changed, diff_pixel_count, diff_pixel_pct, diff_image_b64,
+    dimensions, execution_time_ms}``.
+    """
     left_source = _image_source(payload, "left")
     right_source = _image_source(payload, "right")
     if not left_source or not right_source:

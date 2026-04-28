@@ -872,6 +872,24 @@ _PUBLIC_DOCS_PRIORITY = {
     "privacy-policy.md": 91,
 }
 
+_PUBLIC_DOCS_CATEGORY = {
+    "quickstart.md": "Get Started",
+    "mcp-integration.md": "Get Started",
+    "cli.md": "Interfaces",
+    "aztea-tui.md": "Interfaces",
+    "api-reference.md": "Reference",
+    "errors.md": "Reference",
+    "skill-md-reference.md": "Reference",
+    "verification-contracts.md": "Reference",
+    "agent-builder.md": "Builders",
+    "auth-onboarding.md": "Builders",
+    "orchestrator-guide.md": "Builders",
+    "reputation.md": "Marketplace",
+    "stripe-setup.md": "Marketplace",
+    "terms-of-service.md": "Legal",
+    "privacy-policy.md": "Legal",
+}
+
 
 def _public_docs_entries() -> list[dict[str, str]]:
     if not os.path.isdir(_PUBLIC_DOCS_DIR):
@@ -891,23 +909,37 @@ def _public_docs_entries() -> list[dict[str, str]]:
         if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", slug):
             continue
         title = slug.replace("-", " ").title()
+        summary = ""
         full_path = os.path.join(_PUBLIC_DOCS_DIR, filename)
         try:
             with open(full_path, encoding="utf-8") as handle:
+                body_lines: list[str] = []
                 for line in handle:
                     stripped = line.strip()
                     if stripped.startswith("# "):
                         heading = stripped[2:].strip()
                         if heading:
                             title = heading
+                        continue
+                    if not stripped or stripped.startswith("---") or stripped.startswith("```"):
+                        continue
+                    if stripped.startswith("## "):
+                        if body_lines:
+                            break
+                        continue
+                    body_lines.append(stripped)
+                    if len(" ".join(body_lines)) >= 220:
                         break
-                    if stripped:
-                        break
+                summary = " ".join(body_lines).strip()
+                if len(summary) > 220:
+                    summary = summary[:217].rstrip() + "..."
         except OSError:
             continue
         entries.append({
             "slug": slug,
             "title": title,
+            "summary": summary,
+            "category": _PUBLIC_DOCS_CATEGORY.get(filename, "Reference"),
             "filename": filename,
             "full_path": full_path,
         })

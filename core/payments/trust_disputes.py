@@ -77,6 +77,12 @@ def get_caller_trust(owner_id: str) -> float:
 
 
 def adjust_caller_trust(owner_id: str, *, delta: float, reason: str, related_id: str | None = None) -> dict:
+    """Insert a caller_trust adjustment row and update the running total.
+
+    ``delta`` is a signed float (positive = improve trust, negative = reduce).
+    Returns the updated trust record. Not idempotent — use ``adjust_caller_trust_once``
+    when the same event should only be applied once.
+    """
     normalized_owner_id = str(owner_id or "").strip()
     if not normalized_owner_id:
         raise ValueError("owner_id must be a non-empty string.")
@@ -127,6 +133,11 @@ def adjust_caller_trust_once(
     reason: str,
     related_id: str,
 ) -> dict:
+    """Idempotent version of ``adjust_caller_trust``.
+
+    Uses ``(owner_id, related_id)`` as a uniqueness key — if the same event
+    has already been recorded, returns the existing record without inserting.
+    """
     with _conn() as conn:
         row = conn.execute(
             """
@@ -151,6 +162,10 @@ def record_judge_fee(
     agent_id: str,
     fee_cents: int,
 ) -> None:
+    """Transfer the dispute judge fee from the platform wallet to the judge's wallet.
+
+    No-ops if ``fee_cents <= 0``. Runs atomically in a single transaction.
+    """
     if fee_cents <= 0:
         return
     with _conn() as conn:
@@ -459,6 +474,11 @@ def collect_dispute_filing_deposit(
     amount_cents: int,
     conn: sqlite3.Connection | None = None,
 ) -> dict:
+    """Debit the dispute filing deposit from the caller's wallet.
+
+    Pass an open ``conn`` to run within an existing transaction (required for
+    atomicity with the dispute insert). Returns the transaction record.
+    """
     if conn is not None:
         return _collect_dispute_filing_deposit_conn(
             conn,
@@ -829,6 +849,24 @@ def get_settlement_transactions(charge_tx_id: str) -> list:
 
 
 def compute_ledger_invariants(max_mismatches: int = 100) -> dict:
+    """Verify the two key ledger invariants and return a reconciliation report.
+
+    Invariant 1 — Global balance sum:
+        ``SUM(wallets.balance_cents)`` must equal ``SUM(transactions.amount_cents)``.
+        ``wallets.balance_cents`` is a denormalised cache; divergence means a
+        wallet UPDATE happened without a corresponding ledger INSERT, or vice versa.
+
+    Invariant 2 — Per-wallet balance cache:
+        For each wallet, ``balance_cents`` must equal the sum of its transaction
+        amounts. Up to ``max_mismatches`` (capped at 1000) drifted wallets are
+        returned with the cached vs. computed values.
+
+    Returns ``{wallet_total, ledger_total, global_drift, mismatch_count,
+    mismatches: [{wallet_id, owner_id, cached, computed, drift}]}``.
+
+    Called by ``POST /ops/payments/reconcile``; results are also persisted via
+    ``record_reconciliation_run`` for audit history.
+    """
     capped = min(max(1, max_mismatches), 1000)
     with _conn() as conn:
         wallet_total = conn.execute(
@@ -876,6 +914,11 @@ def compute_ledger_invariants(max_mismatches: int = 100) -> dict:
 
 
 def record_reconciliation_run(max_mismatches: int = 100) -> dict:
+    """Run reconciliation and persist the result snapshot to the audit log.
+
+    Calls ``compute_ledger_invariants``, inserts a run record, and returns
+    the summary dict including any mismatches found.
+    """
     summary = compute_ledger_invariants(max_mismatches=max_mismatches)
     run_id = str(uuid.uuid4())
     created_at = _now()
@@ -903,6 +946,7 @@ def record_reconciliation_run(max_mismatches: int = 100) -> dict:
 
 
 def list_reconciliation_runs(limit: int = 20) -> list:
+    """Return the most recent reconciliation run records, newest first (capped at 200)."""
     capped = min(max(1, limit), 200)
     with _conn() as conn:
         rows = conn.execute(

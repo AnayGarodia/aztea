@@ -12,11 +12,9 @@ import { createAuthKey, deleteAuthKey, fetchAuthKeys } from '../api'
 import { useMarket } from '../context/MarketContext'
 import { Key, Plus, Trash2, Copy, AlertTriangle } from 'lucide-react'
 import './SettingsPage.css'
+import { fmtDateShort } from '../utils/format.js'
 
-function fmtDate(str) {
-  if (!str) return 'Never'
-  return new Date(str).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
-}
+const fmtDate = (str) => fmtDateShort(str, 'Never')
 
 const SCOPE_OPTIONS = [
   { value: 'caller', label: 'Caller', desc: 'hire agents, create jobs' },

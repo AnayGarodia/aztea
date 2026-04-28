@@ -76,6 +76,17 @@ def claim_job(
     lease_seconds: int = DEFAULT_LEASE_SECONDS,
     require_authorized_owner: bool = True,
 ) -> dict | None:
+    """Atomically move a ``pending`` job to ``running`` and issue a claim token.
+
+    The claim token is a UUID4 embedded in the updated job row. The worker
+    must present it on every subsequent heartbeat/complete/fail to prove it
+    still holds the lease — preventing split-brain when a lease has been
+    reclaimed by the sweeper before the original worker's network call arrives.
+
+    Returns the updated job dict on success, or ``None`` if the job is not in
+    ``pending`` state (already claimed or does not exist).
+    Raises ``ValueError`` for invalid arguments.
+    """
     owner_id = (claim_owner_id or "").strip()
     if not owner_id:
         raise ValueError("claim_owner_id must be a non-empty string.")
@@ -176,6 +187,15 @@ def heartbeat_job_lease(
     claim_token: str | None = None,
     require_authorized_owner: bool = True,
 ) -> dict | None:
+    """Extend the active lease deadline by ``lease_seconds`` from now.
+
+    The ``claim_token``, when provided, is validated against the stored token
+    to prevent a stale worker from extending a lease that has already been
+    reclaimed. If the tokens don't match the call is a no-op (returns ``None``).
+
+    Returns the updated job dict on success, or ``None`` if the job is not
+    in ``running`` state or the owner/token check fails.
+    """
     owner_id = (claim_owner_id or "").strip()
     if not owner_id:
         raise ValueError("claim_owner_id must be a non-empty string.")
@@ -264,6 +284,15 @@ def release_job_claim(
     claim_token: str | None = None,
     require_authorized_owner: bool = True,
 ) -> dict | None:
+    """Explicitly release a running job back to ``pending`` before the lease expires.
+
+    Workers call this when they determine they cannot complete the job (e.g.
+    they lack the required capabilities). This allows the job to be re-claimed
+    immediately without waiting for the sweeper's lease-expiry cycle.
+
+    Returns the updated job dict on success, or ``None`` if the ownership or
+    token check fails.
+    """
     owner_id = (claim_owner_id or "").strip()
     if not owner_id:
         raise ValueError("claim_owner_id must be a non-empty string.")
@@ -326,6 +355,10 @@ def schedule_job_retry(
     claim_token: str | None = None,
     require_authorized_owner: bool = True,
 ) -> dict | None:
+    """Re-queue a job as pending after lease expiry, incrementing retry_count up to max_attempts.
+
+    Returns the updated job dict, or None if the job is already settled or at max attempts.
+    """
     if retry_delay_seconds < 0:
         raise ValueError("retry_delay_seconds must be >= 0.")
 
@@ -405,6 +438,11 @@ def mark_job_timeout(
     error_message: str = "Job lease expired before completion.",
     allow_retry: bool = True,
 ) -> dict | None:
+    """Mark a job failed due to lease timeout; used by the sweeper.
+
+    If ``allow_retry`` is True and attempts remain, schedules a retry instead of failing.
+    Returns the updated job dict, or None if the job is not in an active lease status.
+    """
     if retry_delay_seconds < 0:
         raise ValueError("retry_delay_seconds must be >= 0.")
 
@@ -494,6 +532,7 @@ def mark_job_timeout(
 
 
 def list_jobs_due_for_retry(limit: int = 100, now: str | None = None) -> list:
+    """Sweeper query: return pending jobs past their ``next_retry_at`` deadline with attempts remaining."""
     limit = min(max(1, limit), 200)
     now_iso = now or _now()
     with _conn() as conn:
@@ -545,6 +584,7 @@ def mark_retry_ready(job_id: str, now: str | None = None) -> dict | None:
 
 
 def list_jobs_with_expired_leases(limit: int = 100, now: str | None = None) -> list:
+    """Sweeper query: return running or awaiting_clarification jobs past their ``lease_expires_at``."""
     limit = min(max(1, limit), 200)
     now_iso = now or _now()
     with _conn() as conn:
@@ -565,6 +605,7 @@ def list_jobs_with_expired_leases(limit: int = 100, now: str | None = None) -> l
 
 
 def list_jobs_with_expired_clarification_deadline(limit: int = 100, now: str | None = None) -> list:
+    """Sweeper query: return awaiting_clarification jobs past their ``clarification_deadline_at``."""
     limit = min(max(1, limit), 200)
     now_iso = now or _now()
     with _conn() as conn:
@@ -585,6 +626,7 @@ def list_jobs_with_expired_clarification_deadline(limit: int = 100, now: str | N
 
 
 def list_jobs_past_sla(sla_seconds: int, limit: int = 100, now: str | None = None) -> list:
+    """Sweeper query: return pending/running/awaiting_clarification jobs older than ``sla_seconds``."""
     if sla_seconds <= 0:
         raise ValueError("sla_seconds must be > 0.")
     limit = min(max(1, limit), 200)
@@ -607,6 +649,7 @@ def list_jobs_past_sla(sla_seconds: int, limit: int = 100, now: str | None = Non
 
 
 def list_jobs_with_expired_output_verification(limit: int = 100, now: str | None = None) -> list:
+    """Sweeper query: return complete jobs whose output-verification window has elapsed without a decision."""
     limit = min(max(1, limit), 200)
     now_iso = now or _now()
     with _conn() as conn:
@@ -628,6 +671,7 @@ def list_jobs_with_expired_output_verification(limit: int = 100, now: str | None
 
 
 def list_completed_jobs_pending_settlement(limit: int = 100) -> list:
+    """Return complete jobs that have not yet been settled (settled_at IS NULL)."""
     limit = min(max(1, limit), 500)
     with _conn() as conn:
         rows = conn.execute(
@@ -656,6 +700,11 @@ def update_job_status(
     output_signed_by_did: str | None = None,
     output_signed_at: str | None = None,
 ) -> dict | None:
+    """Low-level status transition; clears claim/lease fields on completion.
+
+    Validates ``status`` against VALID_STATUSES. When ``completed=True``, stamps
+    ``completed_at`` and clears lease/claim columns. Returns the updated job or None.
+    """
     if status not in VALID_STATUSES:
         raise ValueError(f"Invalid status: {status}")
 
@@ -717,6 +766,7 @@ def update_job_status(
 
 
 def mark_settled(job_id: str) -> bool:
+    """Set ``settled_at`` timestamp on a completed job. Returns True if the row was updated."""
     now = _now()
     with _conn() as conn:
         result = conn.execute(
@@ -731,6 +781,11 @@ def mark_settled(job_id: str) -> bool:
 
 
 def initialize_output_verification_state(job_id: str) -> dict | None:
+    """Set up the output-verification window on job completion.
+
+    Only activates if the job has a non-zero ``output_verification_window_seconds`` and is complete.
+    Sets ``output_verification_status`` to 'pending' and records the deadline.
+    """
     now = _now()
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -805,6 +860,11 @@ def set_output_verification_decision(
     decision_owner_id: str,
     reason: str | None = None,
 ) -> dict | None:
+    """Record the caller's accept/reject decision during the output-verification window.
+
+    ``decision`` must be 'accept' or 'reject'. Returns None if the job is not in 'pending'
+    verification state or if the job does not exist.
+    """
     normalized_decision = str(decision or "").strip().lower()
     if normalized_decision not in {"accept", "reject"}:
         raise ValueError("decision must be 'accept' or 'reject'.")
@@ -844,6 +904,11 @@ def set_output_verification_decision(
 
 
 def mark_output_verification_expired(job_id: str, *, decision_owner_id: str = "system:verification-expiry") -> dict | None:
+    """Called by the sweeper when the output-verification window expires without a caller decision.
+
+    Sets ``output_verification_status`` to 'expired'. Returns None if the window has not expired
+    or verification is not in 'pending' state.
+    """
     now = _now()
     with _conn() as conn:
         result = conn.execute(
@@ -909,6 +974,7 @@ def message_correlation_exists(
     correlation_id: str,
     msg_type: str | None = None,
 ) -> bool:
+    """Idempotency guard: return True if a message with this ``correlation_id`` already exists for the job."""
     with _conn() as conn:
         return _message_correlation_exists_conn(
             conn,

@@ -36,6 +36,7 @@ class AnthropicProvider:
         return self._available
 
     def complete(self, req: CompletionRequest) -> LLMResponse:
+        """Send a chat completion request to the Anthropic Messages API and return a normalised LLMResponse."""
         system_parts: list[str] = []
         user_messages: list[dict[str, str]] = []
 

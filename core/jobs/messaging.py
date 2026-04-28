@@ -65,6 +65,11 @@ def add_message(
     lease_seconds: int = DEFAULT_LEASE_SECONDS,
     correlation_id: str | None = None,
 ) -> dict:
+    """Insert a typed job message and apply any lease side-effects for the message type.
+
+    Side-effects: 'progress' extends the lease; 'clarification_request' transitions to
+    awaiting_clarification; 'clarification_response' resumes running. Returns the inserted message dict.
+    """
     if lease_seconds <= 0:
         raise ValueError("lease_seconds must be > 0.")
 
@@ -222,6 +227,7 @@ def add_claim_event(
     actor_id: str | None = None,
     metadata: dict | None = None,
 ) -> dict | None:
+    """Record a claim or heartbeat event in the job message log. Returns None if the job does not exist."""
     now = _now()
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -254,6 +260,7 @@ def claim_token_was_recently_active(
     claim_token: str,
     within_seconds: int = DEFAULT_LEASE_SECONDS,
 ) -> bool:
+    """Return True if the given claim token sent a heartbeat event within ``within_seconds``."""
     owner_id = _clean_optional_text(claim_owner_id)
     token_hash = _claim_token_sha256(claim_token)
     if owner_id is None or token_hash is None or within_seconds <= 0:
@@ -292,6 +299,7 @@ def claim_token_was_recently_active(
 
 
 def get_message(job_id: str, message_id: int) -> dict | None:
+    """Fetch a single job message by ``job_id`` and ``message_id``. Returns None if not found."""
     with _conn() as conn:
         row = conn.execute(
             """
@@ -312,6 +320,11 @@ def get_messages(
     channel: str | None = None,
     to_id: str | None = None,
 ) -> list:
+    """Return a paginated, ascending list of messages for a job, with optional filters.
+
+    Filters: ``since_id`` (cursor), ``msg_type``, ``from_id``, ``channel``, ``to_id``.
+    Max 200 results per call.
+    """
     limit = min(max(1, limit), 200)
     filters: list[str] = ["job_id = ?"]
     params: list[object] = [job_id]
@@ -388,6 +401,7 @@ def count_open_clarification_requests(job_id: str) -> int:
 
 
 def get_latest_message_id(job_id: str) -> int | None:
+    """Return the highest ``message_id`` for a job, or None if the job has no messages."""
     with _conn() as conn:
         row = conn.execute(
             """
@@ -404,6 +418,7 @@ def get_latest_message_id(job_id: str) -> int | None:
 
 
 def set_job_quality_result(job_id: str, *, judge_verdict: str, quality_score: int | None, judge_agent_id: str | None) -> dict | None:
+    """Persist the quality judge verdict and score on the job row. Returns updated job or None."""
     now = _now()
     with _conn() as conn:
         conn.execute(
@@ -424,6 +439,7 @@ def set_job_quality_result(job_id: str, *, judge_verdict: str, quality_score: in
 
 
 def set_job_dispute_outcome(job_id: str, outcome: str | None) -> dict | None:
+    """Persist the dispute outcome on the job row. Returns the updated job or None."""
     now = _now()
     with _conn() as conn:
         conn.execute(

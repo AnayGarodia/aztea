@@ -15,6 +15,12 @@ def run_local_agent(
     execute_builtin_agent: Callable[[str, dict[str, Any]], dict] | None = None,
     heartbeat_cb: Callable[[], None] | None = None,
 ) -> tuple[bool, dict[str, Any] | None]:
+    """Try to execute an agent in-process without an HTTP round-trip.
+
+    Handles two local endpoint types: ``skill://`` (hosted SKILL.md) and
+    ``internal://`` (built-in agents). Returns ``(True, result)`` if handled
+    in-process, or ``(False, None)`` if the agent needs an outbound HTTP call.
+    """
     endpoint_url = str(agent.get("endpoint_url") or "").strip()
     if hosted_skills.is_skill_endpoint(endpoint_url):
         skill_row = hosted_skills.get_hosted_skill_by_agent_id(str(agent.get("agent_id") or ""))

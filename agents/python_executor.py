@@ -212,6 +212,20 @@ def _run_in_subprocess(code: str, stdin_data: str, timeout: int) -> dict[str, An
 
 
 def run(payload: dict) -> dict:
+    """Execute Python code in an isolated subprocess and return stdout/stderr.
+
+    Required: ``code`` (str, ≤ ``_MAX_CODE_CHARS``).
+    Optional:
+    - ``stdin`` (str) — data piped to the subprocess stdin.
+    - ``timeout_seconds`` (float, default 10.0, max 30.0).
+    - ``packages`` (list[str]) — pip packages to install before execution;
+      each name is allowlisted to prevent arbitrary package injection.
+
+    Returns ``{stdout, stderr, exit_code, execution_time_ms, timed_out}``.
+    The subprocess runs with a restricted environment (no network, limited
+    file-system write access) using a tempdir. The tempdir is deleted after
+    each call regardless of outcome.
+    """
     code = str(payload.get("code", "")).strip()
     if not code:
         return _err("python_executor.missing_code", "code is required")

@@ -55,6 +55,20 @@ def _generate_image_artifact(
 
 
 def run(payload: dict[str, Any]) -> dict[str, Any]:
+    """Generate an image from a text prompt via OpenAI DALL-E or Replicate.
+
+    Required: ``prompt`` (str).
+    Optional:
+    - ``style`` (str) — style modifier appended to the prompt.
+    - ``width`` / ``height`` (int, 256–2048, default 1024) — output dimensions.
+    - ``model`` (str) — override the default model (``"dall-e-3"`` or a
+      Replicate model ID).
+    - ``n`` (int, default 1, max 4) — number of images to generate.
+
+    Returns ``{images: [{url, b64_json?}], model, prompt, width, height}``.
+    Tries OpenAI first, then Replicate, following the standard LLM provider
+    fallback pattern. Returns ``{error: {code, message}}`` if both fail.
+    """
     prompt = str(payload.get("prompt") or "").strip()
     if not prompt:
         return _err("image_generator.missing_prompt", "prompt is required")

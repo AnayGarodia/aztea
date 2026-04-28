@@ -438,6 +438,7 @@ def _ensure_agent_keys_schema(conn: sqlite3.Connection) -> None:
 
 
 def init_auth_db() -> None:
+    """Create auth tables (users, api_keys, agent_keys, legal_terms) if they don't exist. Idempotent."""
     with _conn() as conn:
         _ensure_users_schema(conn)
         _ensure_api_keys_schema(conn)

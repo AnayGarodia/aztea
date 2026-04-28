@@ -30,6 +30,7 @@ const KIND_LABELS = {
   self_hosted: 'Self-hosted',
 }
 
+// Marketplace listing card: renders agent name, description, price, trust signals, and privacy chips.
 export default function AgentCard({ agent, index = 0, showTrust = false }) {
   const navigate = useNavigate()
   const price    = `$${Number(agent.price_per_call_usd ?? 0).toFixed(2)}`

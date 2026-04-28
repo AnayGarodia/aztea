@@ -21,6 +21,12 @@ from .resolver import resolve_input_map
 
 
 def validate_definition(definition: dict) -> dict:
+    """Validate a pipeline definition dict and return the normalised form.
+
+    Checks that ``nodes`` is a non-empty list, each node has a unique ``id``
+    and a valid ``agent_id``, and that edges reference known node IDs.
+    Raises ``ValueError`` with a descriptive message on any violation.
+    """
     normalized = dict(definition or {})
     raw_nodes = normalized.get("nodes")
     if not isinstance(raw_nodes, list) or not raw_nodes:
@@ -252,6 +258,13 @@ def run_pipeline(
     client_id: str | None = None,
     execute_builtin_agent: Callable[[str, dict[str, Any]], dict] | None = None,
 ) -> str:
+    """Execute a pipeline step-by-step and return the run_id.
+
+    Validates the pipeline definition, creates a run record, then calls each
+    node's agent in DAG order, passing outputs forward as inputs to dependents.
+    Returns the ``run_id`` of the created run record. Raises ``ValueError`` if
+    the pipeline is not found or the definition fails validation.
+    """
     pipeline = db.get_pipeline(pipeline_id)
     if pipeline is None:
         raise ValueError(f"Pipeline '{pipeline_id}' not found.")

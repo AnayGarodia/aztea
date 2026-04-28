@@ -12,6 +12,7 @@ _CALL_RING_LIMIT = 200
 
 
 def normalize_call_ring(raw_ring: Any) -> list[dict[str, int]]:
+    """Parse and validate a call-history ring buffer (stored as JSON string in DB)."""
     if isinstance(raw_ring, str):
         try:
             raw_ring = json.loads(raw_ring)
@@ -39,6 +40,11 @@ def append_call_ring_sample(
     price_cents: int,
     limit: int = _CALL_RING_LIMIT,
 ) -> str:
+    """Append a new latency sample to the ring and return the serialised JSON string.
+
+    Trims to ``limit`` entries (default ``_CALL_RING_LIMIT``) to keep the
+    stored JSON bounded.
+    """
     ring = normalize_call_ring(raw_ring)
     ring.append(
         {
@@ -52,6 +58,7 @@ def append_call_ring_sample(
 
 
 def get_agent_call_ring(agent_id: str) -> list[dict[str, int]]:
+    """Return the latency ring buffer for an agent. Raises ValueError if the agent is not found."""
     with _conn() as conn:
         row = conn.execute(
             "SELECT call_latency_ring FROM agents WHERE agent_id = ?",
@@ -82,6 +89,11 @@ def compute_latency_estimate(
     *,
     fallback_latency_ms: float = 0.0,
 ) -> dict[str, int | str]:
+    """Compute p50/p95 latency from the call-history ring buffer.
+
+    Returns ``{p50_ms, p95_ms, sample_count}`` or the fallback value when the
+    ring is empty.
+    """
     fallback = _to_non_negative_int(round(_to_non_negative_float(fallback_latency_ms, default=0.0)), default=0)
     latencies = sorted(
         _to_non_negative_int(item.get("latency_ms"), default=-1)

@@ -207,6 +207,22 @@ def _license_risk(license_str: str | None) -> str:
 
 
 def run(payload: dict) -> dict:
+    """Audit a dependency manifest for known CVEs and license issues.
+
+    Required: ``manifest`` (str) — raw contents of ``package.json``,
+    ``requirements.txt``, or ``pyproject.toml``.
+
+    Optional:
+    - ``ecosystem`` (str, default ``"auto"``) — ``"python"`` | ``"node"`` |
+      ``"auto"`` (detect from manifest format).
+    - ``severity_threshold`` (str, default ``"medium"``) — minimum CVE severity
+      to include in results: ``"low"`` | ``"medium"`` | ``"high"`` | ``"critical"``.
+    - ``include_license_check`` (bool, default True) — flag packages with
+      restrictive licenses (GPL, AGPL, etc.).
+
+    Returns ``{packages_scanned, vulnerabilities, license_issues, summary}``.
+    CVE data is fetched live from the NIST NVD API.
+    """
     manifest = str(payload.get("manifest") or "").strip()
     if not manifest:
         raise ValueError("'manifest' is required (contents of package.json or requirements.txt).")

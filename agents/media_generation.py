@@ -225,6 +225,11 @@ def generate_image(
     height: int,
     input_images: list[dict[str, str]],
 ) -> dict[str, Any]:
+    """Generate an image via OpenAI DALL-E (preferred) or Replicate.
+
+    Returns a dict with ``provider``, ``model``, ``artifact`` (name/mime/url_or_base64),
+    ``warnings``, and ``generation_prompt``. Raises ``ValueError`` if no provider is configured.
+    """
     if str(os.environ.get("OPENAI_API_KEY", "")).strip():
         return _openai_image_generation(
             prompt=prompt,
@@ -272,6 +277,12 @@ def generate_video(
     aspect_ratio: str,
     reference_images: list[dict[str, str]],
 ) -> dict[str, Any]:
+    """Generate a video via Replicate from a text brief.
+
+    Requires ``REPLICATE_VIDEO_MODEL`` and ``REPLICATE_API_TOKEN`` env vars.
+    Returns a dict with ``provider``, ``model``, ``artifact`` (video URL), and ``warnings``.
+    Raises ``ValueError`` if the model is not configured.
+    """
     model = str(os.environ.get("REPLICATE_VIDEO_MODEL", "")).strip()
     if not model:
         raise ValueError("REPLICATE_VIDEO_MODEL is required for video generation.")

@@ -85,6 +85,19 @@ _MAX_CODE_CHARS = 14_000
 
 
 def run(code: str, language: str = "auto", focus: str = "all", context: str = "") -> dict:
+    """Run LLM-based structured code review and return findings by category.
+
+    Args:
+        code: Source code to review (truncated to ``_MAX_CODE_CHARS``).
+        language: Language hint; ``"auto"`` lets the LLM detect it.
+        focus: Review focus — ``"all"`` | ``"security"`` | ``"performance"``
+               | ``"style"`` | ``"bugs"``.
+        context: Optional free-text context (e.g. PR description, truncated
+                 to 500 chars).
+
+    Returns a dict with ``findings`` (list), ``summary``, ``language``, and
+    ``severity_counts``.  Raises ``LLMError`` if no provider is available.
+    """
     user_content = _USER.format(
         language=language if language != "auto" else "auto-detect",
         focus=focus,

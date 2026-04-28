@@ -4,6 +4,11 @@ import react from '@vitejs/plugin-react'
 // Vendor chunking keeps the initial landing bundle small: React + router +
 // lucide ship as `vendor-core`, everything else is lazy-loaded per-route.
 export default defineConfig({
+  test: {
+    environment: 'happy-dom',
+    globals: true,
+    setupFiles: ['./src/test/setup.js'],
+  },
   plugins: [react()],
   server: {
     port: 5173,

@@ -217,6 +217,7 @@ def login_or_register_via_google(email: str, name: str = "") -> tuple[dict, bool
 
 
 def get_user_by_id(user_id: str) -> dict | None:
+    """Fetch a user record by ID. Returns None if not found. Password hash is stripped from the result."""
     with _conn() as conn:
         row = conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
     if not row:
@@ -432,6 +433,11 @@ def accept_legal_terms(
     accepted_ip: str | None = None,
     accepted_user_agent: str | None = None,
 ) -> dict:
+    """Record that a user has accepted the current platform ToS and privacy policy.
+
+    Raises ``ValueError`` if ``terms_version`` or ``privacy_version`` do not match the
+    current canonical versions. Returns the updated user dict.
+    """
     normalized_user_id = str(user_id or "").strip()
     if not normalized_user_id:
         raise ValueError("user_id is required.")
@@ -585,6 +591,7 @@ def verify_agent_api_key(raw_key: str) -> dict | None:
 
 
 def list_api_keys(user_id: str) -> list:
+    """Return all non-revoked API keys for a user, ordered newest-first. Never returns raw key values."""
     with _conn() as conn:
         rows = conn.execute(
             "SELECT key_id, key_prefix, name, scopes, max_spend_cents, per_job_cap_cents, created_at, last_used_at, is_active"
@@ -610,6 +617,7 @@ def list_api_keys(user_id: str) -> list:
 
 
 def list_agent_api_keys(agent_id: str) -> list[dict]:
+    """Return agent-scoped worker keys for a given ``agent_id``, ordered newest-first."""
     normalized_agent_id = str(agent_id or "").strip()
     if not normalized_agent_id:
         raise ValueError("agent_id must be a non-empty string.")
@@ -651,6 +659,11 @@ def rotate_api_key(
     max_spend_cents_provided: bool = False,
     per_job_cap_cents_provided: bool = False,
 ) -> dict | None:
+    """Revoke an existing API key and issue a replacement with the same (or new) scope/limits.
+
+    Returns the new key dict (including the raw secret, only time it is returned), or None
+    if the old key was not found or already revoked.
+    """
     normalized_scopes = (
         _normalize_scopes(scopes)
         if scopes is not None

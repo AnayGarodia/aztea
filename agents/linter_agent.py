@@ -177,6 +177,23 @@ def _run_eslint(code: str, language: str, filename: str) -> tuple[list[dict], st
 
 
 def run(payload: dict) -> dict:
+    """Lint source code using ruff (Python) or eslint (JS/TS) without an LLM.
+
+    Required: ``code`` (str).
+    Optional:
+    - ``language`` (str, default ``"auto"``) — ``"python"`` | ``"javascript"``
+      | ``"typescript"`` | ``"auto"`` (detect from content).
+    - ``config`` (str) — raw ruff.toml or .eslintrc content to apply.
+    - ``fix`` (bool, default False) — return auto-fixed code alongside findings.
+
+    Runtime requirements:
+    - Python: ``ruff`` must be on PATH.
+    - JS/TS: Node.js + npx must be on PATH; ``eslint`` is installed ad-hoc via
+      ``npx`` if missing. Returns ``tool_unavailable`` if Node is absent.
+
+    Returns ``{findings: [{file, line, col, rule, message, severity}],
+    total, fixed_code?}``.  No LLM is involved; output is deterministic.
+    """
     code = str(payload.get("code") or "").strip()
     if not code:
         raise ValueError("'code' is required.")

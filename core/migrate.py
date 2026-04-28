@@ -127,6 +127,11 @@ def apply_migrations(db_path: str | None = None) -> list[int]:
 
 
 def main() -> int:
+    """CLI entry point: apply all pending migrations to the configured database.
+
+    Reads ``--db-path`` or falls back to the ``DB_PATH`` env var. Prints the
+    names of applied migrations (or "No pending migrations." if already current).
+    """
     parser = argparse.ArgumentParser(description="Apply pending SQLite migrations.")
     parser.add_argument(
         "--db-path",

@@ -75,6 +75,11 @@ _MAX_CODE_CHARS = 12_000
 
 
 def run(payload: dict) -> dict:
+    """Deprecated LLM-only wrapper — sunset 2026-07-26.
+
+    Generates test cases from ``code`` (required). Optional: ``language``, ``framework``,
+    ``style`` (unit/integration/both), ``context``.
+    """
     code = str(payload.get("code") or "").strip()
     if not code:
         raise ValueError("'code' is required.")

@@ -425,6 +425,12 @@ def normalize_job_message_body(
     correlation_id: str | None = None,
     allow_legacy: bool = True,
 ) -> dict:
+    """Validate and normalise the body for an outgoing job message.
+
+    Resolves legacy msg_type aliases, ensures the payload matches the expected
+    shape for the given ``msg_type``, and injects defaults. Raises ``ValueError``
+    for unknown types or structurally invalid payloads.
+    """
     normalized_type = _normalize_message_type(msg_type)
     normalized_payload = payload if payload is not None else {}
     if not isinstance(normalized_payload, dict):
@@ -562,6 +568,7 @@ class RegistryCallRequest(RootModel[JSONObject]):
 
     @model_validator(mode="after")
     def guard_payload_shape(self):
+        """Raise ValueError if the invoke payload exceeds 64 KB or violates structural constraints."""
         payload = self.root
         encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         if len(encoded) > 64 * 1024:
@@ -681,6 +688,7 @@ class RegistrySearchRequest(BaseModel):
     @field_validator("required_input_fields")
     @classmethod
     def required_fields_non_empty(cls, value: list[str] | None) -> list[str] | None:
+        """Deduplicate and validate required_fields list; None is allowed (means no required fields)."""
         if value is None:
             return None
         normalized: list[str] = []

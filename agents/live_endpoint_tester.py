@@ -1,3 +1,35 @@
+"""Live HTTP endpoint load-tester: fires N concurrent requests and returns latency stats.
+
+``run()`` sends ``requests`` HTTP calls to the target URL with the given
+``concurrency`` using a ``ThreadPoolExecutor``, then aggregates the results into
+percentile latencies, a latency histogram, per-status-code counts, and a sample
+of any error messages.
+
+All outbound URLs are validated by ``core.url_security.validate_outbound_url``
+before any network I/O — private IPs, loopback, and URL-encoded variants are
+blocked.
+
+Payload schema
+--------------
+Required:
+  ``url`` (str)                 — target URL (public HTTPS only in prod)
+
+Optional:
+  ``method`` (str, default GET) — HTTP method; one of GET POST PUT PATCH DELETE HEAD OPTIONS
+  ``headers`` (dict)            — extra request headers
+  ``body`` (dict|list|str)      — request body; dicts/lists sent as JSON, strings/bytes raw
+  ``requests`` (int, default 50, max 200)    — total request count
+  ``concurrency`` (int, default 5)           — parallel workers (capped at ``requests``)
+  ``timeout_seconds`` (float, default 5.0, max 10.0) — per-request timeout
+
+Response shape
+--------------
+On success: ``{url, method, requests, concurrency, success_count, failure_count,
+status_counts, p50_latency_ms, p95_latency_ms, p99_latency_ms, avg_latency_ms,
+histogram, sample_errors, execution_time_ms, billing_units_actual}``
+
+On error: ``{error: {code, message}}``
+"""
 from __future__ import annotations
 
 import math
@@ -41,6 +73,13 @@ def _histogram(samples: list[float]) -> list[dict[str, Any]]:
 
 
 def run(payload: dict[str, Any]) -> dict[str, Any]:
+    """Fire repeated HTTP requests to a URL and return latency statistics.
+
+    Required: ``url``. Optional: ``method`` (default GET), ``headers``, ``body``,
+    ``requests`` (default 50), ``concurrency`` (default 5), ``timeout_seconds``.
+    Returns ``{url, method, requests, concurrency, success_count, failure_count,
+    status_counts, p50/p95/p99_latency_ms, histogram, sample_errors}``.
+    """
     raw_url = str(payload.get("url") or "").strip()
     if not raw_url:
         return _err("live_endpoint_tester.missing_url", "url is required.")

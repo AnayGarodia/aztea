@@ -1,3 +1,32 @@
+"""Ephemeral SQLite sandbox for safe, isolated SQL execution.
+
+Each ``run()`` call creates a fresh SQLite database in a temporary directory,
+executes the requested SQL, and returns results — all within a single call
+lifetime. The database is deleted when the call returns, so there is no state
+between invocations.
+
+Safety limits
+-------------
+- ``_MAX_QUERY_CHARS`` (40 000) — maximum total characters per SQL statement.
+- ``_MAX_STATEMENTS`` (25)     — maximum statements per single call.
+- ``_MAX_ROWS`` (500)          — rows returned per statement; excess are truncated.
+- ``_TIMEOUT_SECONDS`` (5)     — wall-clock execution budget enforced via
+  SQLite's progress handler; interrupted queries return ``db_sandbox.timeout``.
+- ``_MAX_DB_BYTES`` (50 MB)    — storage cap via SQLite ``max_page_count`` PRAGMA.
+
+Payload schema
+--------------
+Either:
+  ``sql`` (str) + optional ``params`` (list)   — single statement
+  ``queries`` (list of {sql, params?})          — multiple statements
+
+Optional fields:
+  ``schema_sql`` (str)   — DDL run before queries (CREATE TABLE, INSERT seeds, etc.)
+  ``explain`` (bool)     — include EXPLAIN QUERY PLAN output per statement (default True)
+
+All write operations are committed after each non-SELECT statement; PRAGMA
+``foreign_keys=ON`` is set so FK constraints are honoured in the sandbox.
+"""
 from __future__ import annotations
 
 import sqlite3
@@ -57,6 +86,12 @@ def _query_plan(cur: sqlite3.Cursor, sql: str, params: list[Any]) -> list[dict[s
 
 
 def run(payload: dict[str, Any]) -> dict[str, Any]:
+    """Execute SQL against an ephemeral SQLite sandbox and return results.
+
+    Accepts ``sql``/``params`` or a ``queries`` list; optional ``schema_sql`` for DDL setup.
+    Returns ``{engine, results, statements_executed, db_size_bytes, execution_time_ms}``
+    or an error envelope on validation/execution failure.
+    """
     schema_sql = str(payload.get("schema_sql") or "").strip()
     if len(schema_sql) > _MAX_QUERY_CHARS:
         return _err("db_sandbox.schema_too_large", f"schema_sql exceeds {_MAX_QUERY_CHARS} characters.")

@@ -84,6 +84,10 @@ def _parse_topics(text: str) -> list[str]:
 
 
 def run(payload: dict) -> dict:
+    """Deprecated agent. Fetches top Hacker News stories and returns an LLM-generated digest.
+
+    Accepts ``count`` (default 10), ``topic_filter``, and ``mode`` (digest/trends/hot).
+    """
     try:
         count = max(1, min(int(payload.get("count", 10)), 20))
     except (TypeError, ValueError):

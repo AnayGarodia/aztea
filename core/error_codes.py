@@ -89,6 +89,12 @@ def make_error(
     *,
     data: Mapping[str, Any] | Any | None = None,
 ) -> dict[str, Any]:
+    """Build a structured error response dict ``{error, message, details}``.
+
+    ``error`` should be a dot-namespaced code from the taxonomy in
+    ``core/error_codes.py`` (e.g. ``"request.invalid_input"``). ``details``
+    (or the alias ``data``) carries any additional structured context.
+    """
     normalized_details = details if details is not None else data
     payload: dict[str, Any] = {
         "error": str(error).strip() or "request.invalid_input",

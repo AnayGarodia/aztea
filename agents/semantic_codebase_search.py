@@ -182,6 +182,24 @@ def _clone_git_repo(git_url: str, extensions: set[str], max_file_bytes: int) -> 
 
 
 def run(payload: dict[str, Any]) -> dict[str, Any]:
+    """Embed a codebase and search it by natural-language query.
+
+    Required:
+    - ``query`` (str, ≤500 chars) — the natural-language search query.
+    - One of:
+      - ``repo_url`` (str) — public Git repo URL to clone and index.
+      - ``archive_url`` (str) — URL of a ``.tar.gz`` or ``.zip`` archive.
+      - ``files`` (list[{path, content}]) — inline file list.
+
+    Optional:
+    - ``top_k`` (int, default 5, max 20) — number of results to return.
+    - ``file_extensions`` (list[str]) — filter to specific extensions, e.g.
+      ``[".py", ".ts"]``.
+
+    Embedding is done via ``core.embeddings`` (sentence-transformers). Each
+    call re-embeds the supplied codebase from scratch — there is no cross-call
+    index persistence. Returns ``{results: [{path, snippet, score}], query}``.
+    """
     query = str(payload.get("query") or "").strip()
     if not query:
         return _err("semantic_codebase_search.missing_query", "query is required.")

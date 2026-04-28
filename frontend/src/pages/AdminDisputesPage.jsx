@@ -9,6 +9,7 @@ import { fetchAdminDisputes, fetchAdminDispute, ruleDispute } from '../api'
 import { useAuth } from '../context/AuthContext'
 import { ChevronDown, ChevronUp, Scale } from 'lucide-react'
 import './AdminDisputesPage.css'
+import { fmtUsd } from '../utils/format.js'
 
 function relativeAge(isoString) {
   if (!isoString) return '-'
@@ -19,11 +20,6 @@ function relativeAge(isoString) {
   if (hrs < 24) return `${hrs}h`
   const days = Math.floor(hrs / 24)
   return `${days}d`
-}
-
-function fmtUsd(cents) {
-  if (typeof cents !== 'number') return '-'
-  return '$' + (cents / 100).toFixed(2)
 }
 
 function shortId(id) {

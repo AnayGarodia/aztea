@@ -69,6 +69,22 @@ def _install_requirements(tmpdir: str, requirements: str) -> tuple[list[str], st
 
 
 def run(payload: dict) -> dict:
+    """Execute a multi-file Python project in an isolated tempdir sandbox.
+
+    Required: ``files`` (list[{path: str, content: str}]) — the files to write
+    into the sandbox before execution. Max ``_MAX_FILES`` files.
+
+    Optional:
+    - ``entry`` (str, default ``"main.py"``) — the file to execute as the
+      entrypoint.
+    - ``stdin`` (str) — data piped to stdin.
+    - ``timeout_seconds`` (float, default 10.0, max 30.0).
+    - ``packages`` (list[str]) — pip packages to install before execution
+      (allowlisted; injection attempts are rejected).
+
+    Returns ``{stdout, stderr, exit_code, execution_time_ms, timed_out}``.
+    All files and the venv are deleted after each call.
+    """
     files = payload.get("files")
     if not files or not isinstance(files, list):
         raise ValueError("'files' must be a non-empty list of {path, content} objects.")

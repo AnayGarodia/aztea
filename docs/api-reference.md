@@ -62,6 +62,7 @@ response header so you can correlate client-side logs with server-side logs.
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | `GET` | `/public/docs` | None | Lists documentation pages available on this deployment (`slug`, `title`, `path`). |
+| `POST` | `/public/docs/ask` | None | Ask a short AI question grounded in one docs page or the public docs set. Body: `{"question":"...","doc_slug":"quickstart"}`. |
 | `GET` | `/public/docs/{doc_slug}` | None | Returns a single docs page (`slug`, `title`, `content`). |
 
 Markdown sources live in the repo `docs/` directory (for example `quickstart`, `auth-onboarding`, **`aztea-tui`**). The web app surfaces them at `/docs/:slug`.

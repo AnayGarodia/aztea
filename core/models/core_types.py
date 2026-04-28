@@ -197,6 +197,7 @@ class AgentRegisterRequest(BaseModel):
     @field_validator("name")
     @classmethod
     def name_valid(cls, v: str) -> str:
+        """Validate agent name: required, 3–100 chars, alphanumeric + limited punctuation."""
         s = v.strip()
         if not s:
             raise ValueError("Agent name is required.")
@@ -214,6 +215,7 @@ class AgentRegisterRequest(BaseModel):
     @field_validator("description")
     @classmethod
     def description_valid(cls, v: str) -> str:
+        """Validate that description is 10–2000 characters after stripping whitespace."""
         s = v.strip()
         if not s:
             raise ValueError("Description is required.")
@@ -246,6 +248,7 @@ class AgentRegisterRequest(BaseModel):
     @field_validator("tags")
     @classmethod
     def tags_valid(cls, v: list[str]) -> list[str]:
+        """Normalise tags: lowercase, strip whitespace, deduplicate, max 20."""
         cleaned = [t.strip().lower() for t in v if t.strip()]
         seen: set[str] = set()
         deduped = []
@@ -263,6 +266,7 @@ class AgentRegisterRequest(BaseModel):
     @field_validator("region_locked")
     @classmethod
     def region_locked_valid(cls, v: str | None) -> str | None:
+        """Normalise region_locked to a lowercase slug (max 32 chars). Returns None for empty input."""
         if v is None:
             return None
         normalized = re.sub(r"[^a-z0-9-]+", "-", str(v).strip().lower()).strip("-")
@@ -275,6 +279,7 @@ class AgentRegisterRequest(BaseModel):
     @field_validator("input_schema", "output_schema")
     @classmethod
     def schema_valid(cls, v: dict) -> dict:
+        """Validate an input/output schema dict against JSON Schema Draft 2020-12 (when jsonschema is available)."""
         if not v:
             return v
         if _JSONSCHEMA_AVAILABLE:
@@ -390,6 +395,7 @@ class AgentRegisterRequest(BaseModel):
     @field_validator("model_provider")
     @classmethod
     def model_provider_valid(cls, value: str | None) -> str | None:
+        """Normalise model_provider to a lowercase slug (max 64 chars). Returns None for empty input."""
         if value is None:
             return None
         normalized = re.sub(r"[^a-z0-9._-]+", "-", str(value).strip().lower()).strip("-")
@@ -506,6 +512,7 @@ class UserRegisterRequest(BaseModel):
     @field_validator("username")
     @classmethod
     def username_not_empty(cls, v):
+        """Validate username: required, 3–50 chars, no spaces."""
         s = v.strip()
         if not s:
             raise ValueError("Username is required.")
@@ -528,6 +535,7 @@ class UserRegisterRequest(BaseModel):
     @field_validator("password")
     @classmethod
     def password_length(cls, v):
+        """Validate password is at least 8 characters."""
         if len(v) < 8:
             raise ValueError("Password must be at least 8 characters.")
         if len(v) > 1024:
@@ -598,6 +606,7 @@ class CreateKeyRequest(BaseModel):
     @field_validator("scopes")
     @classmethod
     def scopes_valid(cls, scopes):
+        """Validate API key scopes against the platform's allowed scope list."""
         valid = _auth.VALID_KEY_SCOPES
         normalized: list[str] = []
         for scope in scopes:
@@ -631,6 +640,7 @@ class RotateKeyRequest(BaseModel):
     @field_validator("scopes")
     @classmethod
     def rotate_scopes_valid(cls, scopes):
+        """Validate scopes for a key rotation request; None means inherit existing scopes."""
         if scopes is None:
             return None
         valid = _auth.VALID_KEY_SCOPES

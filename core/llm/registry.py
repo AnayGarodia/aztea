@@ -1,3 +1,44 @@
+"""LLM provider registry: registration, resolution, and the default fallback chain.
+
+This module is the single source of truth for which LLM providers are available
+and how a "spec" string is resolved to a (provider, model) pair.
+
+Key concepts
+------------
+``_PROVIDERS``
+    In-memory dict mapping provider name → LLMProvider instance. Populated at
+    import time by ``_bootstrap()`` and by ``register_provider()`` for any
+    dynamically created OpenAI-compatible providers.
+
+``DEFAULT_CHAIN``
+    Ordered list of "provider:model" spec strings used by ``run_with_fallback``
+    when no explicit chain is given. Built from the ``AZTEA_LLM_DEFAULT_CHAIN``
+    env var (comma-separated); falls back to the hard-coded ``_DEFAULT_CHAIN``
+    constant if the env var is absent or empty.
+
+``resolve(spec)``
+    Parses a spec string into ``(provider, model)``. Spec format:
+    - ``"provider:model"``  — explicit provider + model, e.g. ``"groq:llama-3.3-70b-versatile"``
+    - ``"model"``           — bare model name; defaults to the ``groq`` provider
+    - Aliases: ``"claude"`` → ``"anthropic"``, ``"gpt"`` → ``"openai"``, etc.
+    If the named provider is not in ``_PROVIDERS``, ``resolve`` attempts to
+    auto-register it as an OpenAI-compatible provider using the env vars
+    ``{PREFIX}_API_KEY`` and ``{PREFIX}_BASE_URL`` (or the generic
+    ``OPENAI_COMPAT_*`` fallback). Raises ``ValueError`` if no configuration
+    is found.
+
+Adding a new native provider
+-----------------------------
+1. Create ``core/llm/providers/{name}_provider.py`` implementing ``LLMProvider``.
+2. Import and ``register_provider(YourProvider())`` inside ``_bootstrap()`` below.
+3. Add its env-var name to CLAUDE.md under "LLM provider system".
+
+Adding a new OpenAI-compatible provider
+-----------------------------------------
+Add a row to ``_COMPAT_PROVIDERS`` inside ``_bootstrap()``:
+``(name, "NAME_API_KEY", "NAME_BASE_URL", "https://api.example.com/v1")``.
+No other code changes needed.
+"""
 from __future__ import annotations
 
 import os
@@ -15,6 +56,7 @@ _DEFAULT_CHAIN = [
     "anthropic:claude-sonnet-4-6",
 ]
 
+# Short aliases so callers can write e.g. "claude:..." instead of "anthropic:..."
 _PROVIDER_ALIASES = {
     "xai": "grok",
     "moonshot": "kimi",
@@ -25,6 +67,7 @@ _PROVIDER_ALIASES = {
     "aws": "bedrock",
     "amazon": "bedrock",
     "claude": "anthropic",
+    "gpt": "openai",
     "openrouter-ai": "openrouter",
     "together-ai": "together",
     "fireworks-ai": "fireworks",
@@ -32,10 +75,12 @@ _PROVIDER_ALIASES = {
     "hf": "huggingface",
     "nvidianim": "nvidia",
     "nim": "nvidia",
+    "llama": "groq",
 }
 
 
 def _build_default_chain() -> list[str]:
+    """Build DEFAULT_CHAIN from env var, falling back to the hard-coded list."""
     raw = os.environ.get("AZTEA_LLM_DEFAULT_CHAIN", "").strip()
     if not raw:
         raw = os.environ.get("AGENTMARKET_LLM_DEFAULT_CHAIN", "").strip()
@@ -50,10 +95,16 @@ DEFAULT_CHAIN: list[str] = _build_default_chain()
 
 
 def register_provider(provider: "LLMProvider") -> None:
+    """Register a provider instance under its ``provider.name`` key.
+
+    Calling this with an already-registered name silently replaces the old
+    instance — useful in tests or when re-bootstrapping with different config.
+    """
     _PROVIDERS[provider.name] = provider
 
 
 def get_provider(name: str) -> "LLMProvider":
+    """Return the registered provider for ``name``, or raise ``KeyError``."""
     try:
         return _PROVIDERS[name]
     except KeyError:
@@ -61,11 +112,21 @@ def get_provider(name: str) -> "LLMProvider":
 
 
 def _provider_env_prefix(provider_name: str) -> str:
+    """Convert a provider name to its uppercase env-var prefix.
+
+    Examples: ``"openai"`` → ``"OPENAI"``, ``"lm-studio"`` → ``"LM_STUDIO"``.
+    """
     slug = re.sub(r"[^a-z0-9]+", "_", provider_name.strip().lower()).strip("_")
     return slug.upper()
 
 
 def _register_dynamic_openai_compatible_provider(provider_name: str) -> "LLMProvider" | None:
+    """Attempt to auto-register an unknown provider as an OpenAI-compatible endpoint.
+
+    Checks for ``{PREFIX}_API_KEY`` + ``{PREFIX}_BASE_URL`` env vars first, then
+    falls back to the generic ``OPENAI_COMPAT_API_KEY`` / ``OPENAI_COMPAT_BASE_URL``
+    pair. Returns ``None`` if neither set of vars is present.
+    """
     normalized = provider_name.strip().lower()
     if not normalized:
         return None
@@ -104,6 +165,21 @@ def _register_dynamic_openai_compatible_provider(provider_name: str) -> "LLMProv
 
 
 def resolve(spec: str) -> tuple["LLMProvider", str]:
+    """Parse a spec string and return ``(provider, model)``.
+
+    Spec format:
+    - ``"provider:model"`` — e.g. ``"groq:llama-3.3-70b-versatile"``
+    - ``"model"``          — bare model name; assumed to be on the ``groq`` provider
+
+    Alias expansion happens before lookup, so ``"claude:claude-3-5-sonnet-20241022"``
+    resolves to the ``anthropic`` provider.
+
+    If the provider is not already registered, attempts dynamic registration as an
+    OpenAI-compatible endpoint via ``_register_dynamic_openai_compatible_provider``.
+
+    Raises ``ValueError`` if the spec has no model part, or if the provider cannot
+    be resolved (not registered and no matching env vars found).
+    """
     if ":" in spec:
         provider_name, model = spec.split(":", 1)
     else:
@@ -140,6 +216,12 @@ def list_providers() -> list[dict]:
 
 
 def _bootstrap() -> None:
+    """Register all built-in providers at import time.
+
+    Native providers (groq, openai, anthropic, cohere, bedrock) use their own
+    provider classes. Everything else goes through ``OpenAICompatibleProvider``
+    with provider-specific env-var names and default base URLs.
+    """
     from .providers.groq_provider import GroqProvider
     from .providers.openai_provider import OpenAIProvider
     from .providers.anthropic_provider import AnthropicProvider

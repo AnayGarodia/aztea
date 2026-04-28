@@ -79,6 +79,11 @@ def _fields_to_json_schema(fields: list[Any]) -> dict[str, Any]:
 
 
 def normalize_schema(raw_schema: Any) -> dict[str, Any]:
+    """Sanitise a JSON schema dict for safe use in MCP tool manifests.
+
+    Removes ``$ref``, ``definitions``, and other constructs that MCP clients
+    may not handle. Returns ``_DEFAULT_SCHEMA`` for empty or non-dict inputs.
+    """
     if not isinstance(raw_schema, dict) or not raw_schema:
         return dict(_DEFAULT_SCHEMA)
 
@@ -231,6 +236,12 @@ def _normalize_description_for_claude(name: str, description: str) -> str:
 
 
 def build_mcp_tool_entries(agents: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Convert agent registry listings to MCP tool entry format.
+
+    Returns a list of ``{agent_id, tool: {name, description, input_schema}}``
+    dicts. Names are deduplicated by appending a counter suffix when collisions
+    occur. Agents without a valid ``agent_id`` are skipped.
+    """
     entries: list[dict[str, Any]] = []
     used_names: set[str] = set()
     for agent in agents:

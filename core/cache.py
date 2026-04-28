@@ -39,6 +39,7 @@ def _now() -> datetime:
 
 
 def init_cache_db() -> None:
+    """Create the ``agent_result_cache`` table and indexes if they do not exist. Idempotent."""
     with _conn() as conn:
         conn.execute(
             """
@@ -66,6 +67,12 @@ def cache_key(agent_id: str, input_payload: Any, version_token: str | None = Non
 
 
 def agent_cacheable(agent: dict | None) -> bool:
+    """Return True if the agent listing has result caching enabled.
+
+    Caching is opt-out: all agents are cacheable by default unless the agent
+    row explicitly sets ``cacheable=False`` or the endpoint is in the internal
+    non-cacheable list (e.g. agents that have side-effects).
+    """
     if not isinstance(agent, dict):
         return True
     explicit = agent.get("cacheable")
@@ -78,6 +85,11 @@ def agent_cacheable(agent: dict | None) -> bool:
 
 
 def cache_identity(agent: dict | None, agent_id: str | None = None) -> str:
+    """Return a stable string that captures the agent's current version for cache keying.
+
+    Encodes agent_id + endpoint_url + updated_at + reviewed_at so that any
+    change to the agent listing automatically invalidates cached results.
+    """
     if not isinstance(agent, dict):
         return str(agent_id or "").strip()
     normalized_agent_id = str(agent.get("agent_id") or agent_id or "").strip()
@@ -95,6 +107,11 @@ def _current_trust_score(agent_id: str) -> float:
 
 
 def get_cached(agent_id: str, input_payload: Any, *, version_token: str | None = None) -> Any | None:
+    """Look up a cached result for (agent_id, input_payload); returns None on miss or TTL expiry.
+
+    Expired entries are deleted on read (lazy eviction). Returns the decoded
+    output dict, or None if not found.
+    """
     init_cache_db()
     key = cache_key(agent_id, input_payload, version_token)
     with _conn() as conn:
@@ -128,6 +145,12 @@ def set_cached(
     *,
     version_token: str | None = None,
 ) -> bool:
+    """Store an agent result in the cache with a TTL (default 24 h, max 168 h).
+
+    Only caches if the agent's trust score is ≥ 80 — low-trust agents are
+    excluded to prevent serving stale results from unreliable agents.
+    Returns True if the entry was stored, False if skipped.
+    """
     init_cache_db()
     if _current_trust_score(agent_id) < 80.0:
         return False

@@ -169,6 +169,7 @@ class JobCreateRequest(BaseModel):
     @field_validator("preferred_input_formats", "preferred_output_formats")
     @classmethod
     def format_preferences_valid(cls, value: list[str]) -> list[str]:
+        """Deduplicate and lowercase preferred format strings; silently drops empty entries."""
         normalized: list[str] = []
         for item in value or []:
             text = str(item).strip().lower()
@@ -181,6 +182,7 @@ class JobCreateRequest(BaseModel):
     @field_validator("communication_channel")
     @classmethod
     def communication_channel_valid(cls, value: str | None) -> str | None:
+        """Trim and cap communication_channel at 128 chars. Returns None for blank input."""
         if value is None:
             return None
         text = str(value).strip()

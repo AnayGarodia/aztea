@@ -74,6 +74,11 @@ _MAX_REQ_CHARS = 8_000
 
 
 def run(payload: dict) -> dict:
+    """Deprecated LLM-only wrapper — sunset 2026-07-26.
+
+    Generates a spec document from ``requirements`` (required). Optional: ``format``,
+    ``stack``, ``audience``, ``context``.
+    """
     requirements = str(payload.get("requirements") or "").strip()
     if not requirements:
         raise ValueError("'requirements' is required.")

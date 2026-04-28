@@ -829,6 +829,8 @@ def public_docs_index() -> JSONResponse:
         {
             "slug": item["slug"],
             "title": item["title"],
+            "summary": item.get("summary") or "",
+            "category": item.get("category") or "Reference",
             "path": f"/public/docs/{item['slug']}",
         }
         for item in entries
@@ -914,6 +916,8 @@ def public_doc_content(doc_slug: str) -> JSONResponse:
     return JSONResponse({
         "slug": doc["slug"],
         "title": doc["title"],
+        "summary": doc.get("summary") or "",
+        "category": doc.get("category") or "Reference",
         "content": content,
     })
 
@@ -1220,5 +1224,4 @@ def admin_platform_withdraw(
         "credit_tx_id": result["credit_tx_id"],
         "admin_wallet_id": dest_wallet["wallet_id"],
     })
-
 

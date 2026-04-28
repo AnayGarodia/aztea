@@ -39,6 +39,22 @@ def _err(code: str, message: str) -> dict[str, Any]:
 
 
 def run(payload: dict[str, Any]) -> dict[str, Any]:
+    """Navigate a URL with headless Chromium and return page content + screenshot.
+
+    Required: ``url`` (str) — the page to load (public HTTPS only).
+    Optional:
+    - ``action`` (str) — one of ``"screenshot"``, ``"scrape"``, ``"pdf"``,
+      ``"interact"`` (default ``"scrape"``).
+    - ``wait_for`` (str) — CSS selector or ``"networkidle"`` to wait for before
+      capturing.
+    - ``viewport`` (dict ``{width, height}``) — default 1280×800.
+    - ``script`` (str) — JavaScript to execute after page load.
+
+    Runtime requirement: Playwright + Chromium must be installed
+    (``playwright install chromium``). Returns ``tool_unavailable`` if absent.
+
+    Returns ``{url, title, content, screenshot_b64?, pdf_b64?, status_code}``.
+    """
     url = str(payload.get("url") or "").strip()
     if not url:
         return _err("browser_agent.missing_url", "url is required.")

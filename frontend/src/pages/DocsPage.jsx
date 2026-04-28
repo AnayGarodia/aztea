@@ -110,6 +110,16 @@ export default function DocsPage() {
     })
   }, [docs, query])
 
+  const groupedDocs = useMemo(() => {
+    const groups = new Map()
+    for (const doc of filteredDocs) {
+      const category = String(doc.category || 'Reference')
+      if (!groups.has(category)) groups.set(category, [])
+      groups.get(category).push(doc)
+    }
+    return Array.from(groups.entries())
+  }, [filteredDocs])
+
   const handleAsk = async (e) => {
     e?.preventDefault?.()
     const q = askInput.trim()
@@ -149,19 +159,29 @@ export default function DocsPage() {
     return found?.title ?? ''
   }, [docs, selectedSlug])
 
+  const docIndex = useMemo(() => docs.findIndex((item) => item.slug === selectedSlug), [docs, selectedSlug])
+  const prevDoc = docIndex > 0 ? docs[docIndex - 1] : null
+  const nextDoc = docIndex >= 0 && docIndex < docs.length - 1 ? docs[docIndex + 1] : null
+
   const renderNavLinks = (onSelect) => (
     <nav className="docs-nav" aria-label="Documentation list">
       {filteredDocs.length === 0 ? (
         <p className="docs-nav__empty">No docs match "{query}".</p>
-      ) : filteredDocs.map((doc) => (
-        <Link
-          key={doc.slug}
-          to={`/docs/${doc.slug}`}
-          onClick={onSelect}
-          className={`docs-nav__link${doc.slug === selectedSlug ? ' docs-nav__link--active' : ''}`}
-        >
-          {doc.title}
-        </Link>
+      ) : groupedDocs.map(([category, items]) => (
+        <div key={category} className="docs-nav__group">
+          <p className="docs-nav__group-title">{category}</p>
+          {items.map((doc) => (
+            <Link
+              key={doc.slug}
+              to={`/docs/${doc.slug}`}
+              onClick={onSelect}
+              className={`docs-nav__link${doc.slug === selectedSlug ? ' docs-nav__link--active' : ''}`}
+            >
+              <span className="docs-nav__link-title">{doc.title}</span>
+              {doc.summary ? <span className="docs-nav__link-summary">{doc.summary}</span> : null}
+            </Link>
+          ))}
+        </div>
       ))}
     </nav>
   )
@@ -271,7 +291,35 @@ export default function DocsPage() {
           )}
           {!loadingDoc && !error && activeDoc?.content && (
             <article className="docs-page__article">
+              <header className="docs-page__article-head">
+                <div className="docs-page__article-kicker">
+                  <span className="docs-page__article-category">{activeDoc.category || 'Reference'}</span>
+                  <span className="docs-page__article-slug">/{activeDoc.slug}</span>
+                </div>
+                <h1 className="docs-page__article-title">{activeDoc.title}</h1>
+                {activeDoc.summary ? <p className="docs-page__article-summary">{activeDoc.summary}</p> : null}
+                <div className="docs-page__article-links">
+                  <a href={SWAGGER_URL} target="_blank" rel="noreferrer">Open API Explorer</a>
+                  <a href={REDOC_URL} target="_blank" rel="noreferrer">Open ReDoc</a>
+                </div>
+              </header>
               <MarkdownDoc content={activeDoc.content} className="docs-page__markdown" />
+              {(prevDoc || nextDoc) && (
+                <nav className="docs-page__pager" aria-label="Documentation pagination">
+                  {prevDoc ? (
+                    <Link className="docs-page__pager-link" to={`/docs/${prevDoc.slug}`}>
+                      <span className="docs-page__pager-label">Previous</span>
+                      <span className="docs-page__pager-title">{prevDoc.title}</span>
+                    </Link>
+                  ) : <span />}
+                  {nextDoc ? (
+                    <Link className="docs-page__pager-link docs-page__pager-link--next" to={`/docs/${nextDoc.slug}`}>
+                      <span className="docs-page__pager-label">Next</span>
+                      <span className="docs-page__pager-title">{nextDoc.title}</span>
+                    </Link>
+                  ) : <span />}
+                </nav>
+              )}
             </article>
           )}
         </section>
@@ -325,6 +373,13 @@ export default function DocsPage() {
                     {msg.role === 'assistant'
                       ? <ReactMarkdown remarkPlugins={[remarkGfm]} className="docs-ask__md">{msg.content}</ReactMarkdown>
                       : msg.content}
+                    {Array.isArray(msg.citations) && msg.citations.length > 0 ? (
+                      <div className="docs-ask__citations">
+                        {msg.citations.map((citation, idx) => (
+                          <span key={`${citation}-${idx}`} className="docs-ask__citation">{citation}</span>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               ))}

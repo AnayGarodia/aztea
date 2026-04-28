@@ -226,6 +226,25 @@ def _run_tsc(code: str, stubs: dict[str, str], strict: bool) -> dict:
 
 
 def run(payload: dict) -> dict:
+    """Run static type checking via mypy (Python) or tsc (TypeScript).
+
+    Required: ``code`` (str, ≤ ``_CODE_MAX`` chars).
+    Optional:
+    - ``language`` (str, default ``"auto"``) — ``"python"`` | ``"typescript"``
+      | ``"auto"`` (detect from content).
+    - ``strict`` (bool, default False) — enable strict mode (``--strict`` for
+      both mypy and tsc).
+    - ``config`` (str) — raw mypy.ini or tsconfig.json content to use instead
+      of defaults.
+
+    Runtime requirements:
+    - Python: ``mypy`` must be on PATH.
+    - TypeScript: ``tsc`` (from ``typescript`` npm package) must be on PATH.
+      Returns ``tool_unavailable`` if absent.
+
+    Returns ``{errors: [{file, line, col, message, severity}], total, passed}``.
+    No LLM involved — output is deterministic.
+    """
     code = str(payload.get("code") or "").strip()
     if not code:
         raise ValueError("'code' is required.")

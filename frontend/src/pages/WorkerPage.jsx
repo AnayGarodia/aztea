@@ -19,19 +19,9 @@ import {
 } from '../api'
 import { useMarket } from '../context/MarketContext'
 import './WorkerPage.css'
+import { fmtDateSec as fmtDate } from '../utils/format.js'
 
 const OPEN_STATUSES = new Set(['pending', 'running', 'awaiting_clarification'])
-
-function fmtDate(str) {
-  if (!str) return '--'
-  return new Date(str).toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  })
-}
 
 function fmtLeaseRemaining(leaseExpiresAt, nowMs) {
   if (!leaseExpiresAt) return '--'

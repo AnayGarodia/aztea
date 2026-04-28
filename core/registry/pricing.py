@@ -61,6 +61,7 @@ class VariablePricingError(ValueError):
 
 
 def normalize_pricing_model(value: Any) -> str:
+    """Normalise a pricing model string to lowercase. Defaults to 'fixed' for blank input. Raises VariablePricingError for unknown models."""
     text = str(value or "").strip().lower()
     if not text:
         return "fixed"
@@ -377,6 +378,10 @@ def estimate_price_cents(
 
 
 def price_usd_to_cents(value: Any) -> int:
+    """Convert a USD price (float, str, or Decimal) to integer cents, rounded half-up.
+
+    Returns 0 for invalid, negative, or non-finite inputs rather than raising.
+    """
     try:
         amount = Decimal(str(value))
     except Exception:

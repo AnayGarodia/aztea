@@ -151,6 +151,22 @@ def _err(code: str, message: str) -> dict:
 
 
 def run(payload: dict) -> dict:
+    """Perform live DNS record lookups and SSL certificate inspection.
+
+    Required: ``domains`` (list[str]) — one or more domain names
+    (max ``_MAX_DOMAINS``). Plain hostnames without scheme; the agent adds
+    ``https://`` internally for SSL checks.
+
+    Optional:
+    - ``record_types`` (list[str], default all) — DNS record types to query:
+      any subset of ``["A", "AAAA", "MX", "NS", "TXT", "CNAME", "SOA"]``.
+    - ``include_ssl`` (bool, default True) — fetch SSL certificate metadata
+      (issuer, expiry, SANs) for each domain.
+    - ``include_http_meta`` (bool, default True) — fetch HTTP headers and
+      detect redirects.
+
+    Returns ``{domains: [{hostname, records, ssl, http_meta, error?}]}``.
+    """
     raw_domains = payload.get("domains")
     if not raw_domains or not isinstance(raw_domains, list):
         return _err("dns_inspector.missing_domains", "domains is required and must be a non-empty list of domain names")

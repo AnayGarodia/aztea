@@ -180,6 +180,23 @@ _RUNNERS = {
 
 
 def run(payload: dict[str, Any]) -> dict[str, Any]:
+    """Execute code in a sandboxed subprocess for the specified language.
+
+    Required:
+    - ``language`` (str) — one of the supported runtimes (see ``_SUPPORTED``):
+      ``node``, ``deno``, ``bun``, ``go``, ``rust``.
+    - ``code`` (str) — source code to execute.
+
+    Optional:
+    - ``stdin`` (str) — data piped to stdin.
+    - ``timeout_seconds`` (float, default 10.0, max 30.0).
+
+    Runtime requirement: the selected language binary must be installed and
+    on PATH. Returns ``tool_unavailable`` with a descriptive message if absent
+    (e.g. ``"node not found"``).
+
+    Returns ``{stdout, stderr, exit_code, execution_time_ms, timed_out, language}``.
+    """
     language = str(payload.get("language") or "").strip().lower()
     if not language:
         return _err("multi_language_executor.missing_language", f"language is required. Supported: {', '.join(_SUPPORTED)}")

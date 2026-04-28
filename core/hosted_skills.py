@@ -64,6 +64,12 @@ def create_hosted_skill(
     temperature: float = _DEFAULT_TEMPERATURE,
     max_output_tokens: int = _DEFAULT_MAX_OUTPUT_TOKENS,
 ) -> dict[str, Any]:
+    """Persist a hosted SKILL.md and return the created skill row.
+
+    The backing agent must already be registered before calling this.
+    ``raw_md`` is the original SKILL.md text; ``system_prompt`` is the
+    extracted prompt that will be used at inference time.
+    """
     if not agent_id:
         raise ValueError("agent_id is required.")
     if not owner_id:
@@ -147,6 +153,7 @@ def get_hosted_skill_by_agent_id(agent_id: str) -> dict[str, Any] | None:
 
 
 def list_hosted_skills_for_owner(owner_id: str, limit: int = 100) -> list[dict[str, Any]]:
+    """Return all hosted skills owned by ``owner_id``, newest first, capped at 500."""
     capped = max(1, min(int(limit), 500))
     with _conn() as conn:
         rows = conn.execute(

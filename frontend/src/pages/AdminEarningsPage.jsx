@@ -9,21 +9,12 @@ import { fetchAdminPlatformEarnings, adminPlatformWithdraw } from '../api'
 import { useMarket } from '../context/MarketContext'
 import { Coins, ArrowDownToLine } from 'lucide-react'
 import './AdminEarningsPage.css'
+import { fmtDate, fmtUsd } from '../utils/format.js'
 
 const POOLS = [
   { key: 'platform', label: 'Platform fees (10%)', hint: 'Accumulated from every agent call on the platform.' },
   { key: 'system_agents', label: 'Built-in agents payouts (90%)', hint: 'Earnings from built-in agents owned by the system account.' },
 ]
-
-function fmtUsd(cents) {
-  const n = Number(cents || 0) / 100
-  return n.toLocaleString(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2 })
-}
-
-function fmtDate(str) {
-  if (!str) return '—'
-  return new Date(str).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-}
 
 export default function AdminEarningsPage() {
   const { apiKey, showToast } = useMarket()

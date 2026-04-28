@@ -19,16 +19,7 @@ import {
 } from '../api'
 import { Trash2, CreditCard, ExternalLink } from 'lucide-react'
 import './SettingsPage.css'
-
-function fmtUsd(cents) {
-  const n = Number(cents || 0) / 100
-  return `$${n.toFixed(2)}`
-}
-
-function fmtDate(iso) {
-  if (!iso) return '—'
-  try { return new Date(iso).toLocaleString() } catch { return '—' }
-}
+import { fmtDate, fmtUsd } from '../utils/format.js'
 
 function AccountForm({ user, apiKey, refreshProfile, showToast }) {
   const [fullName, setFullName] = useState(user?.full_name ?? '')
