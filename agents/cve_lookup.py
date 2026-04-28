@@ -76,19 +76,36 @@ def _extract_cvss(metrics: dict) -> float:
     return 0.0
 
 
-def _pkg_ecosystems(pkg_name: str) -> list[str]:
-    """Return OSV ecosystem candidates for a package name."""
+def _pkg_ecosystems(pkg_name: str, hint: str | None = None) -> list[str]:
+    """Return OSV ecosystem candidates for a package name.
+
+    ``hint`` may be ``"npm"`` / ``"pypi"`` / ``None`` (or ``"auto"``). When the
+    caller is explicit we honour it and skip the multi-ecosystem fan-out;
+    otherwise we use the package-name shape to guess (scoped or path-style
+    names are npm-only) and fall back to trying both ecosystems.
+    """
+    h = (hint or "").strip().lower()
+    if h == "npm":
+        return ["npm"]
+    if h in {"pypi", "python", "pip"}:
+        return ["PyPI"]
     if pkg_name.startswith("@") or "/" in pkg_name:
         return ["npm"]
     return ["PyPI", "npm"]
 
 
-def _query_osv(pkg_name: str, version: str) -> list[dict]:
-    """Query OSV.dev for CVEs affecting a specific package (+ optional version)."""
+def _query_osv(pkg_name: str, version: str, ecosystem_hint: str | None = None) -> list[dict]:
+    """Query OSV.dev for CVEs affecting a specific package (+ optional version).
+
+    Pass ``ecosystem_hint`` (``"npm"`` / ``"pypi"``) to narrow the lookup to a
+    single ecosystem. Without a hint the function tries both PyPI and npm in
+    sequence and de-duplicates by CVE ID — that's the right default when the
+    caller hasn't expressed a preference.
+    """
     seen_ids: set[str] = set()
     results: list[dict] = []
 
-    for ecosystem in _pkg_ecosystems(pkg_name):
+    for ecosystem in _pkg_ecosystems(pkg_name, ecosystem_hint):
         try:
             body: dict = {"package": {"name": pkg_name, "ecosystem": ecosystem}}
             if version:
@@ -403,6 +420,11 @@ def run(payload: dict) -> dict:
     # --- Package-based mode (original) ---
     packages = payload.get("packages") or []
     include_patched = bool(payload.get("include_patched", False))
+    ecosystem_hint = str(payload.get("ecosystem") or "auto").strip().lower() or "auto"
+    if ecosystem_hint in {"", "auto"}:
+        ecosystem_hint_for_query = None
+    else:
+        ecosystem_hint_for_query = ecosystem_hint
 
     if not isinstance(packages, list):
         return _err("cve_lookup.invalid_input", "packages must be a list of strings (e.g. [\"express@4.17.1\"])")
@@ -434,15 +456,17 @@ def run(payload: dict) -> dict:
     for raw_pkg in packages[:10]:  # cap at 10 packages per call
         pkg_name, pkg_version = _parse_package_version(str(raw_pkg))
 
-        # Prefer NVD; fall back to OSV when NVD is unreachable or returns nothing useful
-        nvd_cves, reached_nvd = _search_nvd_packages(pkg_name)
-        if reached_nvd and nvd_cves:
-            pkg_cves = nvd_cves
-            used_source = "nvd"
-        else:
-            pkg_cves = _query_osv(pkg_name, pkg_version)
-            if pkg_cves:
-                used_source = "osv"
+        # Always prefer OSV.dev for package lookups: it is ecosystem-aware
+        # (npm vs PyPI), version-aware, and returns precise package matches
+        # without false positives. The NVD ``keywordSearch`` endpoint matches
+        # the package *string* against every CVE description, which catches
+        # unrelated products — e.g. a query for ``express`` returns Microsoft
+        # Outlook Express, Intel Express switches, and Disney Go Express.
+        # NVD remains the source of truth for direct ``cve_id`` lookups (which
+        # bypass this branch entirely via ``_run_cve_id_mode``).
+        pkg_cves = _query_osv(pkg_name, pkg_version, ecosystem_hint_for_query)
+        if pkg_cves:
+            used_source = "osv"
 
         for item in pkg_cves:
             if item["cve"] in seen_cves:

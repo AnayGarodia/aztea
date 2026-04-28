@@ -86,13 +86,21 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     model = ""
     warnings: list[str] = []
     for _ in range(image_count):
-        generated = _generate_image_artifact(
-            prompt=prompt,
-            style=style,
-            width=width,
-            height=height,
-            input_images=input_images,
-        )
+        try:
+            generated = _generate_image_artifact(
+                prompt=prompt,
+                style=style,
+                width=width,
+                height=height,
+                input_images=input_images,
+            )
+        except ValueError as exc:
+            # Configuration / dependency failure (no API key, no Replicate
+            # model). Returning the structured envelope here lets the call
+            # route detect a "no charge" failure and refund the caller via
+            # the same path used by the other builtin agents that surface
+            # tool_unavailable. Previously this raised → 400 → caller charged.
+            return _err("image_generator.not_configured", str(exc))
         warnings.extend(list(generated.get("warnings") or []))
         artifacts.append(generated["artifact"])
         provider = str(generated.get("provider") or provider)

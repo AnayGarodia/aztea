@@ -233,7 +233,7 @@ def load_builtin_specs_part1() -> list[dict[str, Any]]:
 {
     "agent_id": _CVELOOKUP_AGENT_ID,
     "name": "CVE Lookup Agent",
-    "description": "Use when the user wants live CVE data for a package or specific CVE ID. Queries NIST NVD in real time — not LLM memory. Returns CVSS score, exploit availability, affected version range, and recommended fix for each CVE.",
+    "description": "Use when the user wants live CVE data for a package or specific CVE ID. Queries OSV.dev for ecosystem-aware package lookups (npm, PyPI) and NIST NVD for direct CVE-ID lookups — not LLM memory. Returns CVSS score, exploit availability, affected version range, and recommended fix for each CVE.",
     "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_CVELOOKUP_AGENT_ID],
     "price_per_call_usd": 0.06,
     "tags": ["security", "cve", "vulnerability-intel", "nvd", "packages"],
@@ -243,6 +243,12 @@ def load_builtin_specs_part1() -> list[dict[str, Any]]:
             "cve_id": {"type": "string", "description": "A single CVE ID to look up directly (e.g. CVE-2021-44228)"},
             "cve_ids": {"type": "array", "items": {"type": "string"}, "description": "Multiple CVE IDs to look up (max 10)"},
             "packages": {"type": "array", "items": {"type": "string"}, "description": "Array of package@version strings", "example": ["express@4.17.1", "lodash@4.17.20"]},
+            "ecosystem": {
+                "type": "string",
+                "enum": ["auto", "npm", "pypi"],
+                "default": "auto",
+                "description": "Ecosystem to query for package lookups. 'auto' (default) tries npm and PyPI based on the package name shape; pass 'npm' or 'pypi' to disambiguate when the same name exists in both registries (e.g. 'requests').",
+            },
             "include_patched": {"type": "boolean", "default": False},
         },
     },

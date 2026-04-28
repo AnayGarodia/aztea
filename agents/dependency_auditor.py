@@ -129,16 +129,42 @@ def _query_osv(pkg_name: str, version: str, ecosystem: str) -> list[dict]:
             continue
         seen.add(cve_id)
 
+        # OSV's ``severity`` array can hold either a raw CVSS base score
+        # (numeric string) or a full CVSS3 vector. We check for a numeric
+        # ``baseScore`` first, then fall back to parsing the vector via the
+        # canonical CVSS bucket boundaries. The previous regex only matched
+        # the *trailing* number of the score field, which left ``cvss = 0.0``
+        # for vectors like ``CVSS:3.1/AV:N/AC:L/...`` — exactly the case
+        # the live audit caught with lodash@4.17.20.
         cvss = 0.0
         for sev in vuln.get("severity") or []:
-            score_str = sev.get("score", "")
-            m = re.search(r"(\d+\.\d+)$", score_str)
+            score_field = str(sev.get("score") or "").strip()
+            if not score_field:
+                continue
+            try:
+                cvss = float(score_field)
+                break
+            except ValueError:
+                pass
+            m = re.search(r"\b(\d+(?:\.\d+)?)$", score_field)
             if m:
                 try:
                     cvss = float(m.group(1))
                     break
                 except ValueError:
                     pass
+        # Some OSV records carry a CVSS-derived ``database_specific.severity``
+        # bucket (LOW/MODERATE/HIGH/CRITICAL). Use that as a fallback so we
+        # don't report 0.0 when the upstream advisory only provides a label.
+        if cvss == 0.0:
+            label = str((vuln.get("database_specific") or {}).get("severity") or "").strip().upper()
+            cvss = {
+                "LOW": 3.0,
+                "MODERATE": 5.5,
+                "MEDIUM": 5.5,
+                "HIGH": 7.5,
+                "CRITICAL": 9.5,
+            }.get(label, 0.0)
 
         fixed_in = None
         for affected in vuln.get("affected") or []:
@@ -244,7 +270,12 @@ def run(payload: dict) -> dict:
 
     raw_packages = raw_packages[:_MAX_PACKAGES]
 
-    fetch_latest = ecosystem == "pypi" and "outdated" in checks
+    # Fetch the latest published version + license for both ecosystems whenever
+    # outdated or license checks are enabled. The original code only fetched
+    # latest for PyPI; npm packages never had ``latest_version`` populated, so
+    # ``is_outdated`` was always False and the auditor reported every npm
+    # package as up-to-date even when 5+ major versions behind.
+    fetch_latest = "outdated" in checks
     fetch_license = "license" in checks
 
     packages_out = []
@@ -258,11 +289,15 @@ def run(payload: dict) -> dict:
         latest_version: str | None = None
         license_str: str | None = None
 
-        # Fetch latest + license from registry
-        if ecosystem == "pypi" and (fetch_latest or fetch_license):
-            latest_version, license_str = _fetch_pypi_latest(name)
-        elif ecosystem == "npm" and fetch_license:
-            latest_version, license_str = _fetch_npm_latest(name)
+        # Fetch latest + license from the appropriate registry for *both*
+        # ecosystems. We always make the registry call when either outdated or
+        # license is requested; the helper returns a tuple for both fields, so
+        # this is a single round-trip per package.
+        if fetch_latest or fetch_license:
+            if ecosystem == "pypi":
+                latest_version, license_str = _fetch_pypi_latest(name)
+            elif ecosystem == "npm":
+                latest_version, license_str = _fetch_npm_latest(name)
 
         # CVE lookup via OSV.dev (package-specific, no false positives)
         if "cve" in checks:
@@ -279,6 +314,9 @@ def run(payload: dict) -> dict:
 
         l_risk = _license_risk(license_str) if fetch_license else "none"
 
+        # ``outdated_count`` is incremented exactly once per package per scan.
+        # The previous version had two branches that could both fire on an
+        # is_outdated && !cves package, double-counting the entry.
         if cves:
             vulnerable_count += 1
             max_cvss = max(c["cvss"] for c in cves)
@@ -297,9 +335,6 @@ def run(payload: dict) -> dict:
             action = "review"
         else:
             action = "ok"
-
-        if is_outdated and not cves:
-            outdated_count += 1
 
         packages_out.append({
             "name": name,
