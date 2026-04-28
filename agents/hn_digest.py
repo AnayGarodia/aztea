@@ -23,6 +23,10 @@ from core.llm import CompletionRequest, Message, run_with_fallback
 _HN_ALGOLIA = "https://hn.algolia.com/api/v1/search"
 _TIMEOUT = 10
 
+
+def _err(code: str, message: str) -> dict:
+    return {"error": {"code": code, "message": message}}
+
 _SYSTEM = """\
 You are a sharp technology analyst who reads Hacker News daily.
 Given a list of front-page stories (title, score, comment count), produce
@@ -100,11 +104,11 @@ def run(payload: dict) -> dict:
         resp.raise_for_status()
         data = resp.json()
     except httpx.TimeoutException:
-        return {"error": "HN Algolia API timed out. Try again in a moment."}
+        return _err("hn_digest.timeout", "HN Algolia API timed out. Try again in a moment.")
     except httpx.HTTPStatusError as exc:
-        return {"error": f"HN Algolia API returned HTTP {exc.response.status_code}"}
+        return _err("hn_digest.http_error", f"HN Algolia API returned HTTP {exc.response.status_code}")
     except Exception as exc:
-        return {"error": f"Could not reach HN Algolia API: {type(exc).__name__}"}
+        return _err("hn_digest.upstream_unreachable", f"Could not reach HN Algolia API: {type(exc).__name__}")
 
     hits = data.get("hits", [])
 
@@ -147,8 +151,14 @@ def run(payload: dict) -> dict:
         temperature=0.3,
         max_tokens=600,
     )
-    raw = run_with_fallback(req)
-    synthesis_full = raw.text.strip()
+    try:
+        raw = run_with_fallback(req)
+        synthesis_full = raw.text.strip()
+    except Exception:
+        synthesis_full = (
+            f"Retrieved {len(stories)} Hacker News front-page stories, but synthesis is unavailable "
+            "because no LLM provider is configured."
+        )
 
     trending_topics = _parse_topics(synthesis_full)
 

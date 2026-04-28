@@ -41,6 +41,10 @@ _ARXIV_API = "https://export.arxiv.org/api/query"
 _TIMEOUT = 15
 _NS = "http://www.w3.org/2005/Atom"
 
+
+def _err(code: str, message: str) -> dict:
+    return {"error": {"code": code, "message": message}}
+
 _SYNTHESIS_SYSTEM = """\
 You are a research scientist who reads arXiv papers daily. Given a set of paper titles and abstracts,
 produce a dense synthesis of the literature: key themes, what's converging, what's contested, seminal
@@ -223,14 +227,14 @@ def _fetch_full_abstract_data(arxiv_id: str) -> dict:
 def run(payload: dict) -> dict:
     query = str(payload.get("query", "")).strip()
     if not query:
-        return {"error": "query is required"}
+        return _err("arxiv_research.missing_query", "query is required")
     if len(query) > 500:
-        return {"error": "query must be 500 characters or fewer"}
+        return _err("arxiv_research.query_too_long", "query must be 500 characters or fewer")
 
     try:
         max_results = max(1, min(int(payload.get("max_results", 8)), 20))
     except (TypeError, ValueError):
-        return {"error": "max_results must be a number between 1 and 20"}
+        return _err("arxiv_research.invalid_max_results", "max_results must be a number between 1 and 20")
 
     sort_by = str(payload.get("sort_by", "relevance"))
     if sort_by not in _VALID_SORT_BY:
@@ -238,7 +242,10 @@ def run(payload: dict) -> dict:
 
     raw_categories = payload.get("categories") or []
     if not isinstance(raw_categories, list):
-        return {"error": "categories must be a list of arXiv category strings (e.g. [\"cs.AI\"])"}
+        return _err(
+            "arxiv_research.invalid_categories",
+            "categories must be a list of arXiv category strings (e.g. [\"cs.AI\"])",
+        )
     categories = [str(c).strip() for c in raw_categories if str(c).strip()][:10]
 
     full_abstract = bool(payload.get("full_abstract", False))
@@ -246,7 +253,7 @@ def run(payload: dict) -> dict:
     try:
         papers = _fetch_arxiv(query, max_results, sort_by, categories)
     except RuntimeError as exc:
-        return {"error": str(exc)}
+        return _err("arxiv_research.upstream_error", str(exc))
 
     if not papers:
         return {
@@ -287,16 +294,15 @@ def run(payload: dict) -> dict:
         temperature=0.2,
         max_tokens=800,
     )
-    raw = run_with_fallback(req)
-    text = raw.text.strip()
-    text = re.sub(r"^```(?:json)?\s*", "", text)
-    text = re.sub(r"\s*```$", "", text)
-
     try:
+        raw = run_with_fallback(req)
+        text = raw.text.strip()
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
         synthesis_data = json.loads(text)
     except Exception:
         synthesis_data = {
-            "synthesis": text[:400],
+            "synthesis": "Retrieved matching papers, but synthesis is unavailable because no LLM provider is configured.",
             "key_themes": [],
             "seminal_papers": [],
             "open_questions": [],

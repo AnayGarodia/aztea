@@ -22,11 +22,9 @@ from __future__ import annotations
 
 import json
 import logging
-import uuid
+import sqlite3
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
-
-from core import db as _db
 
 _LOG = logging.getLogger(__name__)
 
@@ -77,6 +75,85 @@ def curve_to_json(curve: dict[str, float] | None) -> str | None:
     return json.dumps({k: float(v) for k, v in curve.items()}, sort_keys=True)
 
 
+def _wallet_balance_conn(conn: sqlite3.Connection, wallet_id: str) -> int | None:
+    row = conn.execute(
+        "SELECT balance_cents FROM wallets WHERE wallet_id = ?",
+        (wallet_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return int(row["balance_cents"])
+
+
+def _debit_wallet_conn(
+    conn: sqlite3.Connection,
+    wallet_id: str,
+    amount_cents: int,
+    *,
+    agent_id: str,
+    related_tx_id: str,
+    memo: str,
+) -> None:
+    """Debit a wallet using the same guarded pattern as the main payments flow.
+
+    The payout-curve adjustment is a compensating ledger entry. We therefore use
+    the standard `charge`/`refund` transaction types and only insert the ledger
+    row after the cached wallet balance update succeeds.
+    """
+    from core.payments import base as _payments_base
+
+    updated = conn.execute(
+        """
+        UPDATE wallets
+        SET balance_cents = balance_cents - ?
+        WHERE wallet_id = ? AND balance_cents >= ?
+        """,
+        (amount_cents, wallet_id, amount_cents),
+    ).rowcount
+    if updated == 0:
+        balance_cents = _wallet_balance_conn(conn, wallet_id)
+        if balance_cents is None:
+            raise LookupError(f"Wallet '{wallet_id}' not found.")
+        raise _payments_base.InsufficientBalanceError(balance_cents, amount_cents)
+    _payments_base._insert_tx_only(
+        conn,
+        wallet_id,
+        "charge",
+        -amount_cents,
+        agent_id,
+        related_tx_id,
+        memo,
+    )
+
+
+def _credit_wallet_conn(
+    conn: sqlite3.Connection,
+    wallet_id: str,
+    amount_cents: int,
+    *,
+    agent_id: str,
+    related_tx_id: str,
+    memo: str,
+) -> None:
+    from core.payments import base as _payments_base
+
+    updated = conn.execute(
+        "UPDATE wallets SET balance_cents = balance_cents + ? WHERE wallet_id = ?",
+        (amount_cents, wallet_id),
+    ).rowcount
+    if updated == 0:
+        raise LookupError(f"Wallet '{wallet_id}' not found.")
+    _payments_base._insert_tx_only(
+        conn,
+        wallet_id,
+        "refund",
+        amount_cents,
+        agent_id,
+        related_tx_id,
+        memo,
+    )
+
+
 def apply_curve_clawback(
     *,
     job_id: str,
@@ -102,14 +179,9 @@ def apply_curve_clawback(
         return {"clawback_cents": 0, "payout_fraction": payout_fraction, "applied": False}
 
     idempotency_key = f"payout_curve:{job_id}"
-    db_path = _db.DB_PATH
-    pkg = __import__("sys").modules.get("core.payments")
-    if pkg is not None:
-        candidate = getattr(pkg, "DB_PATH", None)
-        if isinstance(candidate, str) and candidate:
-            db_path = candidate
+    from core.payments import base as _payments_base
 
-    with _db.get_raw_connection(db_path) as conn:
+    with _payments_base._conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
         existing = conn.execute(
             "SELECT 1 FROM transactions WHERE memo = ? LIMIT 1",
@@ -117,36 +189,40 @@ def apply_curve_clawback(
         ).fetchone()
         if existing is not None:
             return {"clawback_cents": clawback_cents, "payout_fraction": payout_fraction, "applied": False, "reason": "already_applied"}
-
-        now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
-        clawback_tx_id = str(uuid.uuid4())
-
-        # Debit agent wallet
-        conn.execute(
-            """
-            INSERT INTO transactions (tx_id, wallet_id, type, amount_cents, agent_id, memo, created_at)
-            VALUES (?, ?, 'payout_curve_clawback', ?, ?, ?, ?)
-            """,
-            (clawback_tx_id, agent_wallet_id, -clawback_cents, agent_id, idempotency_key, now),
-        )
-        conn.execute(
-            "UPDATE wallets SET balance_cents = balance_cents - ? WHERE wallet_id = ?",
-            (clawback_cents, agent_wallet_id),
-        )
-
-        # Credit caller wallet
-        refund_tx_id = str(uuid.uuid4())
-        conn.execute(
-            """
-            INSERT INTO transactions (tx_id, wallet_id, type, amount_cents, agent_id, related_tx_id, memo, created_at)
-            VALUES (?, ?, 'payout_curve_refund', ?, ?, ?, ?, ?)
-            """,
-            (refund_tx_id, caller_wallet_id, clawback_cents, agent_id, clawback_tx_id, idempotency_key, now),
-        )
-        conn.execute(
-            "UPDATE wallets SET balance_cents = balance_cents + ? WHERE wallet_id = ?",
-            (clawback_cents, caller_wallet_id),
-        )
+        try:
+            _debit_wallet_conn(
+                conn,
+                agent_wallet_id,
+                clawback_cents,
+                agent_id=agent_id,
+                related_tx_id=job_id,
+                memo=idempotency_key,
+            )
+            _credit_wallet_conn(
+                conn,
+                caller_wallet_id,
+                clawback_cents,
+                agent_id=agent_id,
+                related_tx_id=job_id,
+                memo=idempotency_key,
+            )
+        except (_payments_base.InsufficientBalanceError, LookupError) as exc:
+            conn.rollback()
+            reason = "wallet_missing" if isinstance(exc, LookupError) else "insufficient_balance"
+            _LOG.warning(
+                "payout_curve.clawback_skipped job=%s agent=%s reason=%s error=%s",
+                job_id,
+                agent_id,
+                reason,
+                exc,
+            )
+            return {
+                "clawback_cents": clawback_cents,
+                "payout_fraction": payout_fraction,
+                "applied": False,
+                "reason": reason,
+                "error": str(exc),
+            }
 
     _LOG.info(
         "payout_curve.clawback job=%s agent=%s fraction=%.2f clawback_cents=%d",

@@ -56,10 +56,10 @@ def ok(status, res, label):
 
 
 def main():
+    global BASE
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", default=BASE)
     args = parser.parse_args()
-    global BASE
     BASE = args.base_url.rstrip("/")
 
     print("=== aztea demo seed ===\n")

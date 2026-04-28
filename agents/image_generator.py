@@ -9,6 +9,10 @@ from typing import Any
 from agents import media_generation
 
 
+def _err(code: str, message: str) -> dict[str, Any]:
+    return {"error": {"code": code, "message": message}}
+
+
 def _clamp_int(value: Any, default: int, low: int, high: int) -> int:
     try:
         parsed = int(value)
@@ -53,7 +57,7 @@ def _generate_image_artifact(
 def run(payload: dict[str, Any]) -> dict[str, Any]:
     prompt = str(payload.get("prompt") or "").strip()
     if not prompt:
-        return {"error": "prompt is required"}
+        return _err("image_generator.missing_prompt", "prompt is required")
 
     style = str(payload.get("style") or "").strip()
     width = _clamp_int(payload.get("width"), 1024, 256, 2048)

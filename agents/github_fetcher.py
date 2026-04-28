@@ -38,6 +38,10 @@ _MAX_PATHS = 20
 _SUMMARY_TRUNCATE = 800
 
 
+def _err(code: str, message: str) -> dict:
+    return {"error": {"code": code, "message": message}}
+
+
 def _github_headers() -> dict:
     token = os.environ.get("GITHUB_TOKEN", "").strip()
     h = {"User-Agent": "aztea-github-fetcher/1.0", "Accept": "application/vnd.github+json"}
@@ -77,36 +81,36 @@ Describe the repository's purpose, architecture, and key patterns."""
 def run(payload: dict) -> dict:
     repo = str(payload.get("repo", "")).strip()
     if not repo:
-        return {"error": "repo is required (format: owner/repo)"}
+        return _err("github_fetcher.missing_repo", "repo is required (format: owner/repo)")
     parts = repo.split("/")
     if len(parts) != 2 or not parts[0] or not parts[1]:
-        return {"error": "repo must be in 'owner/repo' format"}
+        return _err("github_fetcher.invalid_repo", "repo must be in 'owner/repo' format")
     owner, repo_name = parts[0], parts[1]
 
     raw_paths = payload.get("paths")
     if not raw_paths or not isinstance(raw_paths, list):
-        return {"error": "paths must be a non-empty list of file path strings"}
+        return _err("github_fetcher.invalid_paths", "paths must be a non-empty list of file path strings")
     if len(raw_paths) > _MAX_PATHS:
-        return {"error": f"paths list exceeds maximum of {_MAX_PATHS} entries"}
+        return _err("github_fetcher.too_many_paths", f"paths list exceeds maximum of {_MAX_PATHS} entries")
 
     branch_raw = str(payload.get("branch", "")).strip()
     branch = branch_raw if branch_raw else _detect_default_branch(owner, repo_name)
 
     # Validate branch contains no special characters
     if any(c in branch for c in ("?", "#", "..", "/")):
-        return {"error": "branch name contains invalid characters"}
+        return _err("github_fetcher.invalid_branch", "branch name contains invalid characters")
 
     # Sanitize each path: normalize to prevent traversal
     sanitized_paths = []
     for p in raw_paths:
         normalized = posixpath.normpath("/" + str(p).strip()).lstrip("/")
         if not normalized or normalized == ".":
-            return {"error": f"invalid path: {p!r}"}
+            return _err("github_fetcher.invalid_path", f"invalid path: {p!r}")
         sanitized_paths.append(normalized)
     paths = sanitized_paths
 
     if not paths:
-        return {"error": "paths list contains no valid entries"}
+        return _err("github_fetcher.no_valid_paths", "paths list contains no valid entries")
 
     summarize = bool(payload.get("summarize", False))
 
@@ -168,8 +172,11 @@ def run(payload: dict) -> dict:
             temperature=0.15,
             max_tokens=600,
         )
-        raw = run_with_fallback(req)
-        summary = raw.text.strip()
+        try:
+            raw = run_with_fallback(req)
+            summary = raw.text.strip()
+        except Exception:
+            summary = None
 
     return {
         "repo": f"{owner}/{repo_name}",

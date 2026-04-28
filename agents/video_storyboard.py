@@ -9,6 +9,10 @@ from typing import Any
 from agents import media_generation
 
 
+def _err(code: str, message: str) -> dict[str, Any]:
+    return {"error": {"code": code, "message": message}}
+
+
 def _to_int(value: Any, default: int, low: int, high: int) -> int:
     try:
         parsed = int(value)
@@ -90,7 +94,7 @@ def _generate_video_artifact(
 def run(payload: dict[str, Any]) -> dict[str, Any]:
     brief = str(payload.get("brief") or "").strip()
     if not brief:
-        return {"error": "brief is required"}
+        return _err("video_storyboard.missing_brief", "brief is required")
 
     duration_seconds = _to_int(payload.get("duration_seconds"), 8, 3, 20)
     aspect_ratio = _normalize_ratio(payload.get("aspect_ratio"))

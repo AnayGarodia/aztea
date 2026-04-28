@@ -465,3 +465,130 @@ def _total_wallet_balance(payments_mod) -> int:
             "SELECT COALESCE(SUM(balance_cents), 0) AS total FROM wallets"
         ).fetchone()
     return int(row[0] or 0)
+
+
+@pytest.fixture()
+def payments_db(tmp_path, monkeypatch):
+    from core import payments
+
+    db_path = str(tmp_path / "payments-regressions.db")
+
+    conn = getattr(getattr(payments, "_local", None), "conn", None)
+    if conn is not None:
+        conn.close()
+        try:
+            delattr(payments._local, "conn")
+        except AttributeError:
+            pass
+
+    monkeypatch.setattr(payments, "DB_PATH", db_path)
+    payments.init_payments_db()
+    yield payments
+
+    conn = getattr(getattr(payments, "_local", None), "conn", None)
+    if conn is not None:
+        conn.close()
+        try:
+            delattr(payments._local, "conn")
+        except AttributeError:
+            pass
+
+
+def test_fix10_payout_curve_clawback_uses_supported_types_and_stays_zero_sum(payments_db):
+    from core import payout_curve
+
+    payments = payments_db
+    caller_wallet = payments.get_or_create_wallet("user:caller")
+    agent_wallet = payments.get_or_create_wallet("agent:test-agent")
+    platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
+
+    payments.deposit(caller_wallet["wallet_id"], 500, memo="test bootstrap")
+    distribution = payments.compute_success_distribution(
+        100, platform_fee_pct=10, fee_bearer_policy="caller"
+    )
+    caller_charge_cents = int(distribution["caller_charge_cents"])
+    charge_tx_id = _direct_charge(
+        payments, caller_wallet["wallet_id"], caller_charge_cents, "test-agent"
+    )
+    payments.post_call_payout(
+        agent_wallet["wallet_id"],
+        platform_wallet["wallet_id"],
+        charge_tx_id,
+        100,
+        "test-agent",
+        platform_fee_pct=10,
+        fee_bearer_policy="caller",
+    )
+
+    result = payout_curve.apply_curve_clawback(
+        job_id="job-payout-curve-1",
+        agent_id="test-agent",
+        agent_wallet_id=agent_wallet["wallet_id"],
+        caller_wallet_id=caller_wallet["wallet_id"],
+        agent_payout_cents=100,
+        payout_fraction=0.5,
+    )
+    assert result["applied"] is True
+    assert result["clawback_cents"] == 50
+
+    assert _wallet_balance(payments, caller_wallet["wallet_id"]) == 500 - 110 + 50
+    assert _wallet_balance(payments, agent_wallet["wallet_id"]) == 100 - 50
+    assert _wallet_balance(payments, platform_wallet["wallet_id"]) == 10
+    assert _total_wallet_balance(payments) == 500
+
+    import sqlite3
+    with sqlite3.connect(payments._resolved_db_path()) as conn:
+        rows = conn.execute(
+            """
+            SELECT wallet_id, type, amount_cents
+            FROM transactions
+            WHERE memo = ?
+            ORDER BY wallet_id, amount_cents
+            """,
+            ("payout_curve:job-payout-curve-1",),
+        ).fetchall()
+    assert rows == [
+        (agent_wallet["wallet_id"], "charge", -50),
+        (caller_wallet["wallet_id"], "refund", 50),
+    ]
+
+    second = payout_curve.apply_curve_clawback(
+        job_id="job-payout-curve-1",
+        agent_id="test-agent",
+        agent_wallet_id=agent_wallet["wallet_id"],
+        caller_wallet_id=caller_wallet["wallet_id"],
+        agent_payout_cents=100,
+        payout_fraction=0.5,
+    )
+    assert second["applied"] is False
+    assert second["reason"] == "already_applied"
+    assert _total_wallet_balance(payments) == 500
+
+
+def test_fix10_payout_curve_clawback_skips_cleanly_on_insufficient_balance(payments_db):
+    from core import payout_curve
+
+    payments = payments_db
+    caller_wallet = payments.get_or_create_wallet("user:caller")
+    agent_wallet = payments.get_or_create_wallet("agent:test-agent")
+
+    result = payout_curve.apply_curve_clawback(
+        job_id="job-payout-curve-2",
+        agent_id="test-agent",
+        agent_wallet_id=agent_wallet["wallet_id"],
+        caller_wallet_id=caller_wallet["wallet_id"],
+        agent_payout_cents=100,
+        payout_fraction=0.5,
+    )
+    assert result["applied"] is False
+    assert result["reason"] == "insufficient_balance"
+    assert _wallet_balance(payments, caller_wallet["wallet_id"]) == 0
+    assert _wallet_balance(payments, agent_wallet["wallet_id"]) == 0
+
+    import sqlite3
+    with sqlite3.connect(payments._resolved_db_path()) as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM transactions WHERE memo = ?",
+            ("payout_curve:job-payout-curve-2",),
+        ).fetchone()[0]
+    assert count == 0

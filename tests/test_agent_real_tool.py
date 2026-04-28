@@ -8,11 +8,17 @@ import pytest
 from agents import browser_agent
 from agents import cve_lookup
 from agents import db_sandbox
+from agents import github_fetcher
+from agents import hn_digest
 from agents import linter_agent
 from agents import live_endpoint_tester
+from agents import python_executor
 from agents import semantic_codebase_search
 from agents import type_checker
 from agents import visual_regression
+from agents import arxiv_research
+from agents import web_researcher
+from agents import wiki
 
 
 class _FakeResponse:
@@ -237,6 +243,156 @@ def test_browser_agent_rejects_invalid_url_via_ssrf_guard():
     result = browser_agent.run({"url": "ftp://example.com"})
     assert result["error"]["code"] == "browser_agent.url_blocked"
     assert "absolute http(s) URL" in result["error"]["message"]
+
+
+def test_github_fetcher_returns_structured_error_for_invalid_repo():
+    result = github_fetcher.run({"repo": "invalid", "paths": ["README.md"]})
+    assert result["error"]["code"] == "github_fetcher.invalid_repo"
+
+
+def test_hn_digest_returns_structured_error_on_timeout(monkeypatch):
+    def fake_get(*args, **kwargs):
+        del args, kwargs
+        raise hn_digest.httpx.TimeoutException("boom")
+
+    monkeypatch.setattr(hn_digest.httpx, "get", fake_get)
+    result = hn_digest.run({})
+    assert result["error"]["code"] == "hn_digest.timeout"
+
+
+def test_hn_digest_degrades_gracefully_without_llm(monkeypatch):
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "hits": [
+                    {
+                        "title": "New compiler release",
+                        "url": "https://example.com/compiler",
+                        "points": 123,
+                        "num_comments": 45,
+                        "author": "alice",
+                        "created_at": "2026-04-28T00:00:00Z",
+                    }
+                ]
+            }
+
+    monkeypatch.setattr(hn_digest.httpx, "get", lambda *args, **kwargs: _FakeResponse())
+    monkeypatch.setattr(hn_digest, "run_with_fallback", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("no llm")))
+    result = hn_digest.run({"count": 1})
+    assert result["stories"][0]["title"] == "New compiler release"
+    assert "no LLM provider" in result["synthesis"]
+
+
+def test_python_executor_returns_structured_error_for_missing_code():
+    result = python_executor.run({})
+    assert result["error"]["code"] == "python_executor.missing_code"
+
+
+def test_arxiv_research_returns_structured_error_for_missing_query():
+    result = arxiv_research.run({})
+    assert result["error"]["code"] == "arxiv_research.missing_query"
+
+
+def test_arxiv_research_degrades_gracefully_without_llm(monkeypatch):
+    monkeypatch.setattr(
+        arxiv_research,
+        "_fetch_arxiv",
+        lambda *args, **kwargs: [
+            {
+                "arxiv_id": "2404.12345",
+                "title": "Transformer Systems",
+                "authors": ["Alice", "Bob"],
+                "abstract": "A paper about transformers.",
+                "categories": ["cs.AI"],
+                "published": "2024-04-01",
+                "updated": "2024-04-02",
+                "pdf_url": "https://arxiv.org/pdf/2404.12345",
+                "abstract_url": "https://arxiv.org/abs/2404.12345",
+            }
+        ],
+    )
+    monkeypatch.setattr(arxiv_research, "run_with_fallback", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("no llm")))
+    result = arxiv_research.run({"query": "transformers", "max_results": 1})
+    assert result["total_found"] == 1
+    assert "no LLM provider" in result["synthesis"]
+
+
+def test_github_fetcher_summary_falls_back_cleanly_without_llm(monkeypatch):
+    class _FakeResponse:
+        def __init__(self, text: str):
+            self.status_code = 200
+            self.text = text
+            self.content = text.encode("utf-8")
+
+    monkeypatch.setattr(github_fetcher.httpx, "get", lambda *args, **kwargs: _FakeResponse("# Hello"))
+    monkeypatch.setattr(github_fetcher, "run_with_fallback", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("no llm")))
+    result = github_fetcher.run(
+        {
+            "repo": "octocat/Hello-World",
+            "paths": ["README.md"],
+            "branch": "main",
+            "summarize": True,
+        }
+    )
+    assert result["billing_units_actual"] == 1
+    assert result["summary"] is None
+
+
+def test_web_researcher_degrades_gracefully_without_llm(monkeypatch):
+    monkeypatch.setattr(
+        web_researcher,
+        "_fetch_one",
+        lambda url: {
+            "url": url,
+            "content": "Example article body with useful details.",
+            "status": "ok",
+            "links": [],
+            "html_title": "Example",
+            "word_count": 6,
+        },
+    )
+    monkeypatch.setattr(web_researcher, "run_with_fallback", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("no llm")))
+    result = web_researcher.run({"url": "https://example.com/article"})
+    assert result["title"] == "Example"
+    assert result["summary"]
+    assert result["billing_units_actual"] == 1
+
+
+def test_web_researcher_returns_structured_error_when_all_fetches_fail(monkeypatch):
+    monkeypatch.setattr(
+        web_researcher,
+        "_fetch_one",
+        lambda url: {
+            "url": url,
+            "content": None,
+            "status": "error",
+            "error": "fetch failed",
+        },
+    )
+    result = web_researcher.run({"urls": ["https://example.com/one", "https://example.com/two"]})
+    assert result["error"]["code"] == "web_researcher.all_fetches_failed"
+
+
+def test_wiki_degrades_gracefully_without_llm(monkeypatch):
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "title": "Example Topic",
+                "extract": "Example Topic is a notable thing with a history worth reading.",
+                "content_urls": {"desktop": {"page": "https://en.wikipedia.org/wiki/Example_Topic"}},
+            }
+
+    monkeypatch.setattr(wiki.requests, "get", lambda *args, **kwargs: _FakeResponse())
+    monkeypatch.setattr(wiki, "run_with_fallback", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("no llm")))
+    result = wiki.run("Example Topic")
+    assert result["title"] == "Example Topic"
+    assert "Example Topic is a notable thing" in result["summary"]
 
 
 def test_semantic_codebase_search_rejects_invalid_git_url_via_ssrf_guard():

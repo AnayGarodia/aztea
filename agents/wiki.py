@@ -93,6 +93,24 @@ Return EXACTLY this JSON:
 _MAX_CONTENT_CHARS = 10_000
 
 
+def _fallback_brief(*, page_title: str, page_url: str, content: str) -> dict:
+    summary = content.strip()[:600]
+    return {
+        "title": page_title,
+        "url": page_url,
+        "content_type": "other",
+        "summary": summary or "Wikipedia content fetched, but synthesis is unavailable.",
+        "key_facts": [],
+        "timeline": [],
+        "notable_figures": [],
+        "statistics": [],
+        "controversies_and_debates": [],
+        "related_topics": [],
+        "primary_sources": [],
+        "knowledge_gaps": [],
+    }
+
+
 def _fetch_full_text(title: str) -> tuple[str, str]:
     """Fetch article text via MediaWiki API (richer than REST summary)."""
     params = {
@@ -144,20 +162,23 @@ def run(topic: str, depth: str = "standard") -> dict:
     if not content.strip():
         raise ValueError(f"No content available for topic: {topic!r}")
 
-    resp = run_with_fallback(CompletionRequest(
-        model="",
-        messages=[
-            Message("system", _SYSTEM),
-            Message("user", _USER.format(url=page_url, content=content[:_MAX_CONTENT_CHARS])),
-        ],
-        max_tokens=1400,
-        json_mode=True,
-    ))
-    raw = _strip_fences(resp.text)
+    try:
+        resp = run_with_fallback(CompletionRequest(
+            model="",
+            messages=[
+                Message("system", _SYSTEM),
+                Message("user", _USER.format(url=page_url, content=content[:_MAX_CONTENT_CHARS])),
+            ],
+            max_tokens=1400,
+            json_mode=True,
+        ))
+        raw = _strip_fences(resp.text)
+    except Exception:
+        return _fallback_brief(page_title=page_title, page_url=page_url, content=content)
     try:
         return json.loads(raw)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"LLM returned non-JSON: {e}\n\n{raw[:300]}") from e
+    except json.JSONDecodeError:
+        return _fallback_brief(page_title=page_title, page_url=page_url, content=content)
 
 
 def _strip_fences(text: str) -> str:

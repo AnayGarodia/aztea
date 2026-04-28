@@ -82,6 +82,10 @@ _WARM_POOL_SIZE = max(1, min(int(os.environ.get("AZTEA_PYTHON_WARM_POOL_SIZE", "
 _WARM_POOL: Pool | None = None
 
 
+def _err(code: str, message: str) -> dict[str, Any]:
+    return {"error": {"code": code, "message": message}}
+
+
 def _capture_variables(namespace: dict[str, Any]) -> dict[str, Any]:
     captured: dict[str, Any] = {}
     for key, value in list(namespace.items()):
@@ -210,10 +214,10 @@ def _run_in_subprocess(code: str, stdin_data: str, timeout: int) -> dict[str, An
 def run(payload: dict) -> dict:
     code = str(payload.get("code", "")).strip()
     if not code:
-        return {"error": "code is required"}
+        return _err("python_executor.missing_code", "code is required")
 
     if len(code) > _MAX_CODE_CHARS:
-        return {"error": f"code too long (max {_MAX_CODE_CHARS} chars)"}
+        return _err("python_executor.code_too_long", f"code too long (max {_MAX_CODE_CHARS} chars)")
 
     if not _is_safe(code):
         return {
@@ -228,12 +232,12 @@ def run(payload: dict) -> dict:
 
     stdin_data = str(payload.get("stdin", "") or "")
     if len(stdin_data) > 65536:
-        return {"error": "stdin must be 65536 characters or fewer"}
+        return _err("python_executor.stdin_too_long", "stdin must be 65536 characters or fewer")
 
     try:
         timeout = max(1, min(int(payload.get("timeout", 10)), 30))
     except (TypeError, ValueError):
-        return {"error": "timeout must be a number between 1 and 30"}
+        return _err("python_executor.invalid_timeout", "timeout must be a number between 1 and 30")
 
     explain = bool(payload.get("explain", True))
 

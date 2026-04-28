@@ -277,10 +277,18 @@ def run(payload: dict) -> dict:
             temperature=0.15,
             max_tokens=900,
         )
-        raw = run_with_fallback(req)
-        llm_data = _parse_llm_json(raw.text, {
+        try:
+            raw = run_with_fallback(req)
+            raw_text = raw.text
+        except Exception:
+            raw_text = truncated[:400]
+        llm_data = _parse_llm_json(raw_text, {
             "title": html_title,
-            "summary": raw.text[:400],
+            "summary": (
+                raw_text[:400]
+                if raw_text
+                else "Fetched the page successfully, but LLM synthesis is unavailable."
+            ),
             "key_points": [],
             "answer": "",
             "quotes": [],
@@ -315,7 +323,10 @@ def run(payload: dict) -> dict:
             "synthesis": "",
             "cross_source_consensus": None,
             "billing_units_actual": 0,
-            "error": "All URLs failed to fetch",
+            "error": {
+                "code": "web_researcher.all_fetches_failed",
+                "message": "All URLs failed to fetch",
+            },
         }
 
     # Build combined content for LLM
@@ -339,9 +350,17 @@ def run(payload: dict) -> dict:
         temperature=0.15,
         max_tokens=1200,
     )
-    raw = run_with_fallback(req)
-    llm_data = _parse_llm_json(raw.text, {
-        "synthesis": raw.text[:600],
+    try:
+        raw = run_with_fallback(req)
+        raw_text = raw.text
+    except Exception:
+        raw_text = ""
+    llm_data = _parse_llm_json(raw_text, {
+        "synthesis": (
+            raw_text[:600]
+            if raw_text
+            else "Fetched the requested sources successfully, but cross-source synthesis is unavailable."
+        ),
         "key_points": [],
         "answer": "",
         "cross_source_consensus": "",
