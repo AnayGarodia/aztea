@@ -108,15 +108,28 @@ def _run_mypy(code: str, stubs: dict[str, str], strict: bool) -> dict:
 
         raw = result.stdout + result.stderr
         diagnostics: list[dict] = []
-        try:
-            parsed = json.loads(result.stdout.strip() or "[]")
-            if isinstance(parsed, list):
-                diagnostics = [
-                    _normalize_diagnostic(item, default_file="main.py")
-                    for item in parsed
-                    if isinstance(item, dict)
-                ]
-        except json.JSONDecodeError:
+        # mypy --output=json emits JSON Lines (one diagnostic dict per line),
+        # not a JSON array. The previous version's ``json.loads`` call on the
+        # whole stdout therefore returned a single dict — failed the
+        # ``isinstance(..., list)`` check — and silently dropped every
+        # diagnostic. Parse line-by-line first; fall back to the legacy
+        # full-document and text parsers so older mypy outputs still work.
+        stdout = result.stdout.strip() or "[]"
+        for line in stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict):
+                diagnostics.append(_normalize_diagnostic(obj, default_file="main.py"))
+            elif isinstance(obj, list):
+                for item in obj:
+                    if isinstance(item, dict):
+                        diagnostics.append(_normalize_diagnostic(item, default_file="main.py"))
+        if not diagnostics and result.returncode != 0:
             diagnostics = _parse_mypy_text_diagnostics(raw)
 
         try:
