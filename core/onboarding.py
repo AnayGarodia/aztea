@@ -8,7 +8,7 @@ import json
 import math
 import re
 
-from core.url_security import validate_agent_endpoint_url, validate_outbound_url
+from core.url_security import validate_agent_endpoint_url
 
 
 class ManifestValidationError(ValueError):
