@@ -900,6 +900,13 @@ def registry_call(
                     event_type="job.failed_rate_limit",
                 )
             raise HTTPException(status_code=503, detail=f"All LLM models rate-limited. ({exc})")
+        except HTTPException:
+            # Already a structured HTTP error (e.g. our tool_unavailable 502
+            # with a refund). Pass it through untouched — the broad Exception
+            # handler below would otherwise downgrade it to a 500 with no
+            # structured detail and re-bill the caller via _settle_failed_job
+            # even though we already refunded.
+            raise
         except Exception:
             _LOG.exception("Built-in agent execution failed for %s.", builtin_agent_id)
             failed = jobs.update_job_status(
