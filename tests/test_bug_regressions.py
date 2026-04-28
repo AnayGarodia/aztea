@@ -543,14 +543,15 @@ def test_fix10_payout_curve_clawback_uses_supported_types_and_stays_zero_sum(pay
             SELECT wallet_id, type, amount_cents
             FROM transactions
             WHERE memo = ?
-            ORDER BY wallet_id, amount_cents
             """,
             ("payout_curve:job-payout-curve-1",),
         ).fetchall()
-    assert rows == [
+    # ``wallet_id`` is a random UUID so any ORDER BY wallet_id is non-deterministic.
+    # Compare as sets so the test does not depend on UUID lexical ordering.
+    assert set(rows) == {
         (agent_wallet["wallet_id"], "charge", -50),
         (caller_wallet["wallet_id"], "refund", 50),
-    ]
+    }
 
     second = payout_curve.apply_curve_clawback(
         job_id="job-payout-curve-1",
