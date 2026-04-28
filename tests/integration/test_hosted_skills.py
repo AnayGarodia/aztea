@@ -239,8 +239,11 @@ def test_sync_call_to_hosted_skill_routes_through_executor(client):
     payload = resp.json()["output"]
     assert "result" in payload
     assert "Notion" in payload["result"]
-    # Executor metadata is included
-    assert payload["_meta"]["provider"] == "stub"
+    # Executor metadata is included, but provider/model are no longer leaked.
+    assert "execution_id" in payload["_meta"]
+    assert "parse_path" in payload["_meta"]
+    assert "provider" not in payload["_meta"]
+    assert "model" not in payload["_meta"]
 
 
 def test_sync_call_to_hosted_skill_charges_caller(client):

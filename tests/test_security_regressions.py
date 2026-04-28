@@ -456,7 +456,19 @@ def test_auth_init_db_migrates_legacy_api_keys_schema(isolated_db):
 
     login = auth.login_user(f"fresh-{suffix}@example.com", "password123")
     assert login is not None
-    assert login["raw_api_key"].startswith("az_")
+    # Default login behaviour reuses the existing session key (the SDK already
+    # has the raw value from registration), so raw_api_key is None on reuse.
+    # The key_id/prefix still come back so the caller can prove the session.
+    assert login["key_id"]
+    assert login["key_prefix"].startswith("az_")
+    # Forced rotation mints a fresh key — make sure that still works.
+    rotated = auth.login_user(
+        f"fresh-{suffix}@example.com",
+        "password123",
+        rotate=True,
+    )
+    assert rotated is not None
+    assert rotated["raw_api_key"].startswith("az_")
 
 
 def test_register_user_is_atomic_when_api_key_insert_fails(isolated_db):

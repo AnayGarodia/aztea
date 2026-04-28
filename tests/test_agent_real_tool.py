@@ -31,44 +31,51 @@ class _FakeResponse:
         return dict(self._payload)
 
 
-def test_cve_lookup_prefers_nvd_for_package_search(monkeypatch):
-    def fake_get(url, params=None, timeout=None, headers=None):
+def test_cve_lookup_prefers_osv_for_package_search(monkeypatch):
+    """OSV.dev is the canonical source for package@version lookups.
+
+    The NVD ``keywordSearch`` endpoint matches the package string against every
+    CVE description and returns false positives (e.g. "express" → Outlook
+    Express, Intel Express switches). The 2026-04-28 audit caught exactly that
+    leak in production, so the agent now queries OSV first and never falls
+    back to NVD keyword search for package mode.
+    """
+    osv_calls: list[dict] = []
+
+    def fake_post(url, json=None, timeout=None, headers=None):
         del timeout, headers
-        assert url == cve_lookup._NVD_API
-        assert params == {"keywordSearch": "lodash", "resultsPerPage": 20}
+        assert url == cve_lookup._OSV_API
+        osv_calls.append(json)
         return _FakeResponse(
             200,
             {
-                "vulnerabilities": [
+                "vulns": [
                     {
-                        "cve": {
-                            "id": "CVE-2024-12345",
-                            "published": "2024-01-02T00:00:00.000",
-                            "lastModified": "2024-01-03T00:00:00.000",
-                            "metrics": {
-                                "cvssMetricV31": [
-                                    {"cvssData": {"baseScore": 8.8}},
-                                ]
-                            },
-                            "descriptions": [
-                                {"lang": "en", "value": "Prototype pollution issue"},
-                            ],
-                        }
+                        "id": "GHSA-xxxx",
+                        "aliases": ["CVE-2024-12345"],
+                        "summary": "Prototype pollution issue",
+                        "published": "2024-01-02T00:00:00.000",
+                        "modified": "2024-01-03T00:00:00.000",
+                        "severity": [{"score": "8.8"}],
+                        "affected": [{"ranges": [{"events": [{"fixed": "4.17.21"}]}]}],
                     }
                 ]
             },
         )
 
-    def fail_post(*args, **kwargs):
-        raise AssertionError("OSV fallback should not run when NVD succeeds")
+    def fail_get(*args, **kwargs):
+        raise AssertionError("NVD keyword search must not run for package mode")
 
-    monkeypatch.setattr(cve_lookup.requests, "get", fake_get)
-    monkeypatch.setattr(cve_lookup.requests, "post", fail_post)
+    monkeypatch.setattr(cve_lookup.requests, "post", fake_post)
+    monkeypatch.setattr(cve_lookup.requests, "get", fail_get)
 
     result = cve_lookup.run({"packages": ["lodash@4.17.20"]})
-    assert result["source"] == "nvd"
+    assert result["source"] == "osv"
     assert result["results"][0]["cve"] == "CVE-2024-12345"
     assert result["results"][0]["severity"] == "high"
+    # And OSV was queried for the right package + version + ecosystem.
+    assert osv_calls and osv_calls[0]["package"]["name"] == "lodash"
+    assert osv_calls[0]["version"] == "4.17.20"
 
 
 def test_cve_lookup_falls_back_to_osv_for_direct_cve_id(monkeypatch):

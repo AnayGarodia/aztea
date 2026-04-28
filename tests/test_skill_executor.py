@@ -52,7 +52,12 @@ class TestHappyPath:
             out = skill_executor.execute_hosted_skill(skill, {"task": "Capital of France?"})
         assert out["result"] == "Paris is the capital of France."
         assert out["_meta"]["parse_path"] == "json_object"
-        assert out["_meta"]["provider"] == "stub"
+        # The platform stopped exposing the underlying LLM provider/model in
+        # ``_meta`` to avoid leaking infrastructure details to skill callers
+        # (see core/skill_executor.py). An opaque execution_id replaces them.
+        assert "execution_id" in out["_meta"]
+        assert "provider" not in out["_meta"]
+        assert "model" not in out["_meta"]
 
     def test_messages_use_natural_language_format_for_simple_task(self):
         skill = _make_skill()
