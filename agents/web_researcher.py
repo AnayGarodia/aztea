@@ -40,6 +40,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
+from agents._contracts import annotate_success
 from core.llm import CompletionRequest, Message, run_with_fallback
 from core.url_security import validate_outbound_url
 
@@ -300,8 +301,12 @@ def run(payload: dict) -> dict:
         try:
             raw = run_with_fallback(req)
             raw_text = raw.text
+            llm_used = True
+            degraded_mode = False
         except Exception:
             raw_text = truncated[:400]
+            llm_used = False
+            degraded_mode = True
         llm_data = _parse_llm_json(raw_text, {
             "title": html_title,
             "summary": (
@@ -317,7 +322,7 @@ def run(payload: dict) -> dict:
 
         synthesis = llm_data.get("summary", "")
 
-        return {
+        return annotate_success({
             "url": url_single,
             "title": llm_data.get("title") or html_title,
             "word_count": word_count,
@@ -333,7 +338,7 @@ def run(payload: dict) -> dict:
             "synthesis": synthesis,
             "cross_source_consensus": None,
             "billing_units_actual": billing_units_actual,
-        }
+        }, llm_used=llm_used, degraded_mode=degraded_mode)
 
     # --- Multi URL mode ---
     if not successful:
@@ -373,8 +378,12 @@ def run(payload: dict) -> dict:
     try:
         raw = run_with_fallback(req)
         raw_text = raw.text
+        llm_used = True
+        degraded_mode = False
     except Exception:
         raw_text = ""
+        llm_used = False
+        degraded_mode = True
     llm_data = _parse_llm_json(raw_text, {
         "synthesis": (
             raw_text[:600]
@@ -388,7 +397,7 @@ def run(payload: dict) -> dict:
 
     cross_source_consensus = llm_data.get("cross_source_consensus") if len(successful) > 1 else None
 
-    return {
+    return annotate_success({
         "urls": urls,
         "per_url_findings": per_url_findings,
         "synthesis": llm_data.get("synthesis", ""),
@@ -397,4 +406,4 @@ def run(payload: dict) -> dict:
         "cross_source_consensus": cross_source_consensus,
         "billing_units_actual": billing_units_actual,
         "fetched_at": fetched_at,
-    }
+    }, llm_used=llm_used, degraded_mode=degraded_mode)

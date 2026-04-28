@@ -37,6 +37,8 @@ def test_changelog_agent_degrades_cleanly_without_llm(monkeypatch):
     monkeypatch.setattr(changelog_agent, "run_with_fallback", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("no llm")))
     result = changelog_agent.run({"package": "requests", "ecosystem": "pypi"})
     assert result["billing_units_actual"] == 1
+    assert result["llm_used"] is False
+    assert result["degraded_mode"] is True
     assert "LLM synthesis is unavailable" in result["summary"]
 
 

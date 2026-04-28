@@ -29,6 +29,7 @@ import posixpath
 
 import httpx
 
+from agents._contracts import annotate_success
 from core.llm import CompletionRequest, Message, run_with_fallback
 
 _RAW_BASE = "https://raw.githubusercontent.com"
@@ -156,6 +157,8 @@ def run(payload: dict) -> dict:
     successful = [f for f in files if f.get("content") is not None]
 
     summary: str | None = None
+    degraded_mode = False
+    llm_used = False
     if summarize and successful:
         files_block = "\n\n".join(
             f"--- {f['path']} ---\n{f['content'][:_SUMMARY_TRUNCATE]}"
@@ -180,14 +183,16 @@ def run(payload: dict) -> dict:
         try:
             raw = run_with_fallback(req)
             summary = raw.text.strip()
+            llm_used = True
         except Exception:
             summary = None
+            degraded_mode = True
 
-    return {
+    return annotate_success({
         "repo": f"{owner}/{repo_name}",
         "branch": branch,
         "branch_auto_detected": not bool(branch_raw),
         "files": files,
         "summary": summary,
         "billing_units_actual": len(successful),
-    }
+    }, llm_used=llm_used, degraded_mode=degraded_mode)

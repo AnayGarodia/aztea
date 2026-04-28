@@ -29,74 +29,91 @@ def _validate_builtin_agent_payload(agent_id: str, input_payload: dict[str, Any]
 
 
 def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict:
+    def _finalize(output: Any) -> dict:
+        if isinstance(output, dict) and isinstance(output.get("error"), dict):
+            return output
+        if not isinstance(output, dict):
+            output = {"result": output}
+        result = dict(output)
+        result.setdefault("billing_units_actual", 1)
+        result.setdefault("degraded_mode", False)
+        if "llm_used" not in result:
+            meta = _builtin_specs.builtin_catalog_metadata(agent_id) or {}
+            runtime_requirements = [str(item).lower() for item in meta.get("runtime_requirements") or []]
+            result["llm_used"] = (
+                False if result.get("degraded_mode") else any("llm provider" in item for item in runtime_requirements)
+            )
+        result.setdefault("agent_contract_version", "builtin-v2")
+        return result
+
     payload = input_payload or {}
     if agent_id == _FINANCIAL_AGENT_ID:
         body = FinancialRequest.model_validate(payload)
-        return _invoke_financial_agent(body)
+        return _finalize(_invoke_financial_agent(body))
     if agent_id == _CODEREVIEW_AGENT_ID:
         body = CodeReviewRequest.model_validate(payload)
-        return _invoke_code_review_agent(body)
+        return _finalize(_invoke_code_review_agent(body))
     if agent_id == _WIKI_AGENT_ID:
         body = WikiRequest.model_validate(payload)
-        return _invoke_wiki_agent(body)
+        return _finalize(_invoke_wiki_agent(body))
     if agent_id == _QUALITY_JUDGE_AGENT_ID:
-        return judges.run_quality_judgment(
+        return _finalize(judges.run_quality_judgment(
             input_payload=payload.get("input_payload") if isinstance(payload, dict) else {},
             output_payload=payload.get("output_payload") if isinstance(payload, dict) else {},
             agent_description=str(payload.get("agent_description") or "") if isinstance(payload, dict) else "",
-        )
+        ))
     if agent_id == _CVELOOKUP_AGENT_ID:
-        return agent_cve_lookup.run(payload)
+        return _finalize(agent_cve_lookup.run(payload))
     if agent_id == _IMAGE_GENERATOR_AGENT_ID:
-        return agent_image_generator.run(payload)
+        return _finalize(agent_image_generator.run(payload))
     if agent_id == _VIDEO_STORYBOARD_AGENT_ID:
-        return agent_video_storyboard.run(payload)
+        return _finalize(agent_video_storyboard.run(payload))
     if agent_id == _ARXIV_RESEARCH_AGENT_ID:
-        return agent_arxiv_research.run(payload)
+        return _finalize(agent_arxiv_research.run(payload))
     if agent_id == _PYTHON_EXECUTOR_AGENT_ID:
-        return agent_python_executor.run(payload)
+        return _finalize(agent_python_executor.run(payload))
     if agent_id == _WEB_RESEARCHER_AGENT_ID:
-        return agent_web_researcher.run(payload)
+        return _finalize(agent_web_researcher.run(payload))
     if agent_id == _GITHUB_FETCHER_AGENT_ID:
-        return agent_github_fetcher.run(payload)
+        return _finalize(agent_github_fetcher.run(payload))
     if agent_id == _HN_DIGEST_AGENT_ID:
-        return agent_hn_digest.run(payload)
+        return _finalize(agent_hn_digest.run(payload))
     if agent_id == _DNS_INSPECTOR_AGENT_ID:
-        return agent_dns_inspector.run(payload)
+        return _finalize(agent_dns_inspector.run(payload))
     if agent_id == _PR_REVIEWER_AGENT_ID:
-        return agent_pr_reviewer.run(payload)
+        return _finalize(agent_pr_reviewer.run(payload))
     if agent_id == _TEST_GENERATOR_AGENT_ID:
-        return agent_test_generator.run(payload)
+        return _finalize(agent_test_generator.run(payload))
     if agent_id == _SPEC_WRITER_AGENT_ID:
-        return agent_spec_writer.run(payload)
+        return _finalize(agent_spec_writer.run(payload))
     if agent_id == _DEPENDENCY_AUDITOR_AGENT_ID:
-        return agent_dependency_auditor.run(payload)
+        return _finalize(agent_dependency_auditor.run(payload))
     if agent_id == _MULTI_FILE_EXECUTOR_AGENT_ID:
-        return agent_multi_file_executor.run(payload)
+        return _finalize(agent_multi_file_executor.run(payload))
     if agent_id == _CHANGELOG_AGENT_ID:
-        return agent_changelog_agent.run(payload)
+        return _finalize(agent_changelog_agent.run(payload))
     if agent_id == _PACKAGE_FINDER_AGENT_ID:
-        return agent_package_finder.run(payload)
+        return _finalize(agent_package_finder.run(payload))
     if agent_id == _LINTER_AGENT_ID:
-        return agent_linter_agent.run(payload)
+        return _finalize(agent_linter_agent.run(payload))
     if agent_id == _SHELL_EXECUTOR_AGENT_ID:
-        return agent_shell_executor.run(payload)
+        return _finalize(agent_shell_executor.run(payload))
     if agent_id == _TYPE_CHECKER_AGENT_ID:
-        return agent_type_checker.run(payload)
+        return _finalize(agent_type_checker.run(payload))
     if agent_id == _DB_SANDBOX_AGENT_ID:
-        return agent_db_sandbox.run(payload)
+        return _finalize(agent_db_sandbox.run(payload))
     if agent_id == _VISUAL_REGRESSION_AGENT_ID:
-        return agent_visual_regression.run(payload)
+        return _finalize(agent_visual_regression.run(payload))
     if agent_id == _LIVE_ENDPOINT_TESTER_AGENT_ID:
-        return agent_live_endpoint_tester.run(payload)
+        return _finalize(agent_live_endpoint_tester.run(payload))
     if agent_id == _BROWSER_AGENT_ID:
-        return agent_browser_agent.run(payload)
+        return _finalize(agent_browser_agent.run(payload))
     if agent_id == _MULTI_LANGUAGE_EXECUTOR_AGENT_ID:
-        return agent_multi_language_executor.run(payload)
+        return _finalize(agent_multi_language_executor.run(payload))
     if agent_id == _SEMANTIC_CODEBASE_SEARCH_AGENT_ID:
-        return agent_semantic_codebase_search.run(payload)
+        return _finalize(agent_semantic_codebase_search.run(payload))
     if agent_id == _AI_RED_TEAMER_AGENT_ID:
-        return agent_ai_red_teamer.run(payload)
+        return _finalize(agent_ai_red_teamer.run(payload))
     raise ValueError(f"Unsupported built-in agent '{agent_id}'.")
 
 
@@ -952,4 +969,3 @@ def _list_hook_deliveries(
             tuple(params),
         ).fetchall()
     return [dict(row) for row in rows]
-

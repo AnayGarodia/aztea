@@ -19,6 +19,7 @@ Output: {
 import httpx
 
 from core.llm import CompletionRequest, Message, run_with_fallback
+from agents._contracts import annotate_success
 
 _HN_ALGOLIA = "https://hn.algolia.com/api/v1/search"
 _TIMEOUT = 10
@@ -158,11 +159,15 @@ def run(payload: dict) -> dict:
     try:
         raw = run_with_fallback(req)
         synthesis_full = raw.text.strip()
+        llm_used = True
+        degraded_mode = False
     except Exception:
         synthesis_full = (
             f"Retrieved {len(stories)} Hacker News front-page stories, but synthesis is unavailable "
             "because no LLM provider is configured."
         )
+        llm_used = False
+        degraded_mode = True
 
     trending_topics = _parse_topics(synthesis_full)
 
@@ -177,10 +182,10 @@ def run(payload: dict) -> dict:
         s["title"] for s in stories if s["comments"] > 100
     ][:3]
 
-    return {
+    return annotate_success({
         "stories": stories,
         "synthesis": synthesis,
         "trending_topics": trending_topics,
         "notable_discussions": notable_discussions,
         "billing_units_actual": len(stories),
-    }
+    }, llm_used=llm_used, degraded_mode=degraded_mode)

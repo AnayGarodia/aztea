@@ -35,6 +35,7 @@ import xml.etree.ElementTree as ET
 
 import requests
 
+from agents._contracts import annotate_success
 from core.llm import CompletionRequest, Message, run_with_fallback
 
 _ARXIV_API = "https://export.arxiv.org/api/query"
@@ -311,6 +312,8 @@ def run(payload: dict) -> dict:
         text = re.sub(r"^```(?:json)?\s*", "", text)
         text = re.sub(r"\s*```$", "", text)
         synthesis_data = json.loads(text)
+        llm_used = True
+        degraded_mode = False
     except Exception:
         synthesis_data = {
             "synthesis": "Retrieved matching papers, but synthesis is unavailable because no LLM provider is configured.",
@@ -319,11 +322,13 @@ def run(payload: dict) -> dict:
             "open_questions": [],
             "suggested_follow_ups": [],
         }
+        llm_used = False
+        degraded_mode = True
 
-    return {
+    return annotate_success({
         "query": query,
         "total_found": len(papers),
         "papers": papers,
         **synthesis_data,
         "billing_units_actual": len(papers),
-    }
+    }, llm_used=llm_used, degraded_mode=degraded_mode)

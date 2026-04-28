@@ -21,6 +21,7 @@ import re
 
 import requests
 
+from agents._contracts import annotate_success
 from core.llm import CompletionRequest, Message, run_with_fallback
 
 _WIKI_HEADERS = {"User-Agent": "aztea/1.0 (research-agent@aztea.dev)"}
@@ -95,7 +96,7 @@ _MAX_CONTENT_CHARS = 10_000
 
 def _fallback_brief(*, page_title: str, page_url: str, content: str) -> dict:
     summary = content.strip()[:600]
-    return {
+    return annotate_success({
         "title": page_title,
         "url": page_url,
         "content_type": "other",
@@ -108,7 +109,7 @@ def _fallback_brief(*, page_title: str, page_url: str, content: str) -> dict:
         "related_topics": [],
         "primary_sources": [],
         "knowledge_gaps": [],
-    }
+    }, billing_units_actual=1, llm_used=False, degraded_mode=True)
 
 
 def _fetch_full_text(title: str) -> tuple[str, str]:
@@ -188,7 +189,7 @@ def run(topic: str, depth: str = "standard") -> dict:
     except Exception:
         return _fallback_brief(page_title=page_title, page_url=page_url, content=content)
     try:
-        return json.loads(raw)
+        return annotate_success(json.loads(raw), billing_units_actual=1, llm_used=True, degraded_mode=False)
     except json.JSONDecodeError:
         return _fallback_brief(page_title=page_title, page_url=page_url, content=content)
 

@@ -31,7 +31,7 @@ import json
 
 import requests
 
-from agents._contracts import agent_error, parse_json_payload
+from agents._contracts import agent_error, annotate_success, parse_json_payload
 from core.llm import CompletionRequest, Message, run_with_fallback
 
 _TIMEOUT = 10
@@ -222,6 +222,8 @@ def run(payload: dict) -> dict:
         }
 
     # LLM ranking + explanation
+    degraded_mode = False
+    llm_used = False
     try:
         packages_json = json.dumps([
             {"name": c["name"], "description": c["description"], "weekly_downloads": c.get("weekly_downloads")}
@@ -240,10 +242,12 @@ def run(payload: dict) -> dict:
         ranked = {r["name"]: r for r in parsed.get("ranked", [])}
         recommendation = parsed.get("recommendation", "")
         summary = parsed.get("summary", "")
+        llm_used = True
     except Exception:
         ranked = {}
         recommendation = candidates[0]["name"] if candidates else ""
         summary = f"Found {len(candidates)} packages matching '{task}' in {ecosystem}."
+        degraded_mode = True
 
     results = []
     for c in candidates:
@@ -261,11 +265,11 @@ def run(payload: dict) -> dict:
     # Sort by LLM score descending
     results.sort(key=lambda x: x["score"], reverse=True)
 
-    return {
+    return annotate_success({
         "task": task,
         "ecosystem": ecosystem,
         "results": results,
         "recommendation": recommendation,
         "summary": summary,
         "billing_units_actual": len(results),
-    }
+    }, llm_used=llm_used, degraded_mode=degraded_mode)

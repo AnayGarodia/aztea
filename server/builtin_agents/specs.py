@@ -23,6 +23,7 @@ from server.builtin_agents.constants import (
     LIVE_ENDPOINT_TESTER_AGENT_ID,
     MULTI_FILE_EXECUTOR_AGENT_ID,
     PACKAGE_FINDER_AGENT_ID,
+    PR_REVIEWER_AGENT_ID,
     PYTHON_EXECUTOR_AGENT_ID,
     QUALITY_JUDGE_AGENT_ID,
     SHELL_EXECUTOR_AGENT_ID,
@@ -52,6 +53,7 @@ _DEFAULT_CATEGORY_BY_AGENT_ID = {
     GITHUB_FETCHER_AGENT_ID: "Code",
     HN_DIGEST_AGENT_ID: "Research",
     DNS_INSPECTOR_AGENT_ID: "Security",
+    PR_REVIEWER_AGENT_ID: "Code",
     TEST_GENERATOR_AGENT_ID: "Code",
     SPEC_WRITER_AGENT_ID: "Code",
     CHANGELOG_AGENT_ID: "Data",
@@ -78,6 +80,7 @@ _DEFAULT_CACHEABLE_BY_AGENT_ID = {
     GITHUB_FETCHER_AGENT_ID: True,
     HN_DIGEST_AGENT_ID: True,
     DNS_INSPECTOR_AGENT_ID: False,
+    PR_REVIEWER_AGENT_ID: True,
     LINTER_AGENT_ID: False,
     TEST_GENERATOR_AGENT_ID: True,
     SPEC_WRITER_AGENT_ID: True,
@@ -98,6 +101,7 @@ _DEFAULT_RUNTIME_REQUIREMENTS_BY_AGENT_ID = {
     GITHUB_FETCHER_AGENT_ID: ["httpx", "llm provider optional for synthesis"],
     HN_DIGEST_AGENT_ID: ["httpx", "llm provider optional for synthesis"],
     DNS_INSPECTOR_AGENT_ID: ["socket", "ssl"],
+    PR_REVIEWER_AGENT_ID: ["github api access", "llm provider"],
     LINTER_AGENT_ID: ["ruff", "node/eslint optional for js/ts"],
     TEST_GENERATOR_AGENT_ID: ["llm provider", "python3"],
     SPEC_WRITER_AGENT_ID: ["llm provider"],
@@ -122,7 +126,7 @@ def _normalize_builtin_spec(spec: dict[str, Any]) -> dict[str, Any]:
     output_examples = spec.get("output_examples")
     if not isinstance(output_examples, list) or not output_examples:
         raise ValueError(f"Built-in spec {agent_id} must include at least one output example.")
-    if agent_id in CURATED_BUILTIN_AGENT_IDS and agent_id not in DEPRECATED_BUILTIN_AGENT_IDS:
+    if agent_id in CURATED_BUILTIN_AGENT_IDS or agent_id in DEPRECATED_BUILTIN_AGENT_IDS:
         category = str(spec.get("category") or _DEFAULT_CATEGORY_BY_AGENT_ID.get(agent_id) or "").strip()
         if not category:
             raise ValueError(f"Built-in spec {agent_id} is missing category metadata.")

@@ -29,7 +29,7 @@ import re
 
 import requests
 
-from agents._contracts import agent_error, parse_json_payload
+from agents._contracts import agent_error, annotate_success, parse_json_payload
 from core.llm import CompletionRequest, Message, run_with_fallback
 
 _TIMEOUT = 10
@@ -288,6 +288,8 @@ def run(payload: dict) -> dict:
     breaking_changes: list[str] = []
     highlights: list[str] = []
     summary = ""
+    llm_used = False
+    degraded_mode = False
 
     if changelog_text:
         try:
@@ -308,13 +310,15 @@ def run(payload: dict) -> dict:
             breaking_changes = parsed.get("breaking_changes", [])
             highlights = parsed.get("highlights", [])
             summary = parsed.get("summary", "")
+            llm_used = True
         except Exception:
             version_window = f"{from_version or 'earliest'} -> {to_version or latest_version}"
             summary = f"Fetched changelog material for {package} ({ecosystem}, {version_window}), but LLM synthesis is unavailable."
+            degraded_mode = True
     else:
         summary = f"No changelog text found for {package} {ecosystem}."
 
-    return {
+    return annotate_success({
         "package": package,
         "ecosystem": ecosystem,
         "from_version": from_version,
@@ -326,4 +330,4 @@ def run(payload: dict) -> dict:
         "highlights": highlights,
         "summary": summary,
         "billing_units_actual": 1 if changelog_text else 0,
-    }
+    }, llm_used=llm_used, degraded_mode=degraded_mode)
