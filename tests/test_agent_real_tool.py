@@ -223,8 +223,12 @@ def test_visual_regression_returns_annotated_artifact(monkeypatch):
     image.save(right, format="PNG")
 
     class _FakeResponse:
-        def __init__(self, content: bytes):
+        # status_code is required — the agent's redirect/error guard reads it
+        # before processing the body. Without it the agent short-circuits with
+        # ``visual_regression.decode_failed`` and never reaches the diff code.
+        def __init__(self, content: bytes, status_code: int = 200):
             self.content = content
+            self.status_code = status_code
 
         def raise_for_status(self) -> None:
             return None
@@ -423,15 +427,24 @@ def test_semantic_codebase_search_rejects_ambiguous_source_inputs():
 
 
 def test_semantic_codebase_search_rejects_zip_traversal_artifact():
+    # Build a valid ZIP with a path-traversal entry (``../evil.txt``) at runtime
+    # rather than hardcoding base64 — the previously inlined string had broken
+    # padding and decoded as garbage, causing the agent to fail at the decode
+    # step before the traversal guard could fire.
+    import base64
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
+        zf.writestr("../evil.txt", "hello")
+    encoded = base64.b64encode(buf.getvalue()).decode("ascii")
+
     payload = {
         "query": "pdf extraction",
         "artifact": {
             "name": "repo.zip",
-            "url_or_base64": (
-                "data:application/zip;base64,"
-                "UEsDBBQAAAAAABy6fFtN2YFXBQAAAAUAAAAJAAAALi4vZXZpbC50eHRoZWxsb1BLAQIUAxQAAAAAABy6fFtN2YFXBQAAAAUAAAAJAAAAAAAAAAAAAACAAQAAAAB"
-                "Li4vZXZpbC50eHRQSwUGAAAAAAEAAQA3AAAALAAAAAAA"
-            ),
+            "url_or_base64": f"data:application/zip;base64,{encoded}",
         },
     }
     result = semantic_codebase_search.run(payload)
