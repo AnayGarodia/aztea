@@ -59,7 +59,8 @@ def _compare_response(compare_row: dict, caller: core_models.CallerContext) -> d
     response_model=core_models.DynamicObjectResponse,
     responses=_error_responses(400, 401, 402, 403, 404, 422, 429, 500),
     tags=["Jobs"],
-    summary="Create a compare session across 2-3 agents with one shared input payload.",
+    summary="Create a compare session across 2-3 agents with one shared input payload "
+    "(field 'input_payload', or aliases 'task' / 'input').",
 )
 @limiter.limit(_JOBS_CREATE_RATE_LIMIT)
 def jobs_compare_create(
@@ -76,9 +77,29 @@ def jobs_compare_create(
         raise HTTPException(status_code=400, detail="agent_ids must contain 2 or 3 agent IDs.")
     if len(set(agent_ids)) != len(agent_ids):
         raise HTTPException(status_code=400, detail="agent_ids must be unique.")
-    input_payload = body.get("input_payload") or {}
-    if not isinstance(input_payload, dict):
-        raise HTTPException(status_code=422, detail="input_payload must be an object.")
+    # Accept the canonical field name and the two natural aliases. Resolve to the first
+    # dict-typed value present so a caller passing `task` (the SDK/CLI shorthand) is not
+    # silently dropped — historical bug: child jobs received an empty payload and failed.
+    input_payload: dict[str, Any] | None = None
+    for candidate_field in ("input_payload", "task", "input"):
+        candidate = body.get(candidate_field)
+        if candidate is None:
+            continue
+        if not isinstance(candidate, dict):
+            raise HTTPException(
+                status_code=422,
+                detail=f"'{candidate_field}' must be an object.",
+            )
+        if input_payload is None:
+            input_payload = candidate
+            continue
+        # Merge subsequent aliases on top so the most specific (input_payload) wins,
+        # but a caller who sent only `task` still gets full propagation.
+        merged = dict(candidate)
+        merged.update(input_payload)
+        input_payload = merged
+    if input_payload is None:
+        input_payload = {}
     max_attempts = max(1, min(int(body.get("max_attempts") or 3), 10))
     private_task = bool(body.get("private_task"))
     caller_owner_id = _caller_owner_id(request)

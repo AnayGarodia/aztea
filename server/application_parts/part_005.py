@@ -421,6 +421,63 @@ def _is_dispute_window_open(job: dict, *, now_dt: datetime | None = None) -> boo
     return current <= deadline
 
 
+# Error codes from a builtin agent's run() that should NEVER bill the caller.
+# Each builtin returns a structured envelope ``{"error": {"code": "...", ...}}``
+# when its runtime dependency is missing or its config is incomplete. Treating
+# these as successes was the highest-impact bug from the 2026-04-28 audit:
+# Browser/Visual-Regression/Linter/Type-Checker/Image-Generator each charged
+# the caller despite producing no useful output.
+_AGENT_FAILURE_ERROR_CODE_SUFFIXES: tuple[str, ...] = (
+    ".tool_unavailable",
+    ".not_configured",
+    ".missing_dependency",
+    ".dependency_missing",
+)
+_AGENT_FAILURE_ERROR_CODE_EXACT: frozenset[str] = frozenset({
+    "request.invalid_input",
+    "agent.tool_unavailable",
+    "agent.not_configured",
+})
+
+
+def _is_agent_failure_envelope(output: object) -> tuple[bool, str | None, str | None]:
+    """Return ``(is_failure, error_code, message)`` for a builtin agent response.
+
+    Built-in agents wrap dependency / configuration failures in a structured
+    envelope of the form::
+
+        {"error": {"code": "<agent>.tool_unavailable", "message": "..."}}
+
+    or an inner ``{"output": {"error": {...}}}`` wrapper. We accept both, plus
+    a top-level ``"error"`` string code, so the failure-on-error refund path
+    works regardless of how an agent serialises its envelope.
+    """
+    if not isinstance(output, dict):
+        return False, None, None
+    candidate: object = output.get("error")
+    # Some agents nest the result under "output" (matches the hosted-skill
+    # contract); peek through one level when "error" is absent at the top.
+    if candidate is None:
+        inner = output.get("output")
+        if isinstance(inner, dict) and isinstance(inner.get("error"), (dict, str)):
+            candidate = inner.get("error")
+    if isinstance(candidate, dict):
+        code = str(candidate.get("code") or "").strip().lower()
+        message = str(candidate.get("message") or "").strip()
+    elif isinstance(candidate, str) and candidate.strip():
+        code = candidate.strip().lower()
+        message = ""
+    else:
+        return False, None, None
+    if not code:
+        return False, None, message or None
+    if code in _AGENT_FAILURE_ERROR_CODE_EXACT:
+        return True, code, message or None
+    if any(code.endswith(suffix) for suffix in _AGENT_FAILURE_ERROR_CODE_SUFFIXES):
+        return True, code, message or None
+    return False, None, None
+
+
 def _settle_successful_job(
     job: dict,
     actor_owner_id: str,

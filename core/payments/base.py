@@ -514,6 +514,42 @@ def set_wallet_daily_spend_limit(wallet_id: str, daily_spend_limit_cents: int | 
     return dict(row)
 
 
+def update_wallet_caller_trust(owner_id: str, trust_score: float) -> dict | None:
+    """Persist a freshly computed caller trust score to the owner's wallet.
+
+    The score lives on ``wallets.caller_trust`` (default 0.5). It is recomputed by
+    ``core.reputation.compute_caller_trust_metrics`` whenever an agent rates the caller
+    and must be flushed back here so downstream payout-curve logic can read a fresh
+    value. The wallet row is created lazily if missing.
+    Returns the updated wallet dict or ``None`` when no wallet exists for the owner
+    (the caller has never transacted; nothing to update).
+    """
+    if trust_score is None:
+        return None
+    try:
+        normalized = float(trust_score)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("trust_score must be a number.") from exc
+    # Trust scores are normalized into [0, 1]; reject obvious garbage but allow
+    # callers to pass anything in that range without further validation.
+    if normalized < 0 or normalized > 1:
+        raise ValueError("trust_score must be in [0, 1].")
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT wallet_id FROM wallets WHERE owner_id = ?", (str(owner_id),)
+        ).fetchone()
+        if row is None:
+            return None
+        conn.execute(
+            "UPDATE wallets SET caller_trust = ? WHERE owner_id = ?",
+            (normalized, str(owner_id)),
+        )
+        updated = conn.execute(
+            "SELECT * FROM wallets WHERE owner_id = ?", (str(owner_id),)
+        ).fetchone()
+    return dict(updated) if updated is not None else None
+
+
 def charge(wallet_id: str, amount_cents: int, memo: str = "") -> str:
     """Deduct amount_cents from wallet (e.g. for withdrawal). Returns tx_id.
     Raises InsufficientBalanceError if balance is too low."""

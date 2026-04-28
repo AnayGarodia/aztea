@@ -733,6 +733,42 @@ def registry_call(
                 output,
                 requested_output_formats=requested_output_formats,
             )
+            # If the agent reported a structured *.tool_unavailable / .not_configured
+            # error, treat the job as a failure: refund the caller, mark the job
+            # failed, and surface a 502 so the SDK can react. This closes the
+            # charge-on-broken-tool gap reported in the 2026-04-28 audit (Browser,
+            # Visual Regression, Linter, Type Checker, Image Generator all billed
+            # users despite producing no usable output).
+            agent_failed, failure_code, failure_message = _is_agent_failure_envelope(output)
+            if agent_failed:
+                failed = jobs.update_job_status(
+                    job["job_id"],
+                    "failed",
+                    output_payload=output,
+                    error_message=(
+                        failure_message
+                        or f"Agent reported {failure_code}; no charge."
+                    ),
+                    completed=True,
+                )
+                if failed is not None:
+                    _settle_failed_job(
+                        failed,
+                        actor_owner_id=caller["owner_id"],
+                        event_type="job.failed_dependency",
+                    )
+                raise HTTPException(
+                    status_code=502,
+                    detail=error_codes.make_error(
+                        error_codes.AGENT_INTERNAL_ERROR,
+                        failure_message or f"Agent unavailable ({failure_code}). You were not charged.",
+                        {
+                            "agent_id": agent_id,
+                            "error_code": failure_code,
+                            "refunded_cents": int(job.get("caller_charge_cents") or 0),
+                        },
+                    ),
+                )
             completed = jobs.update_job_status(
                 job["job_id"],
                 "complete",

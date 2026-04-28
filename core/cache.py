@@ -136,6 +136,39 @@ def get_cached(agent_id: str, input_payload: Any, *, version_token: str | None =
             return None
 
 
+_BUILTIN_CACHE_BYPASS_THRESHOLD: set[str] | None = None
+
+
+def _is_builtin_agent(agent_id: str) -> bool:
+    """Return True for agent IDs maintained by the platform itself.
+
+    Builtin agents skip the trust-score gate because we control their behaviour
+    directly; gating them by reputation just means caches stay empty until users
+    rate them, which never happens organically. Imported lazily because cache.py
+    is imported very early in app startup.
+    """
+    global _BUILTIN_CACHE_BYPASS_THRESHOLD
+    if _BUILTIN_CACHE_BYPASS_THRESHOLD is None:
+        try:
+            from server.builtin_agents.constants import (
+                CURATED_PUBLIC_BUILTIN_AGENT_IDS,
+                _BUILTIN_AGENT_IDS,
+            )
+            _BUILTIN_CACHE_BYPASS_THRESHOLD = set(CURATED_PUBLIC_BUILTIN_AGENT_IDS) | set(_BUILTIN_AGENT_IDS)
+        except Exception:
+            _BUILTIN_CACHE_BYPASS_THRESHOLD = set()
+    return str(agent_id).strip() in _BUILTIN_CACHE_BYPASS_THRESHOLD
+
+
+# Trust threshold used to gate caching for *external* agents. The original 80.0
+# value was so high that no real-world agent ever crossed it on a young
+# marketplace, and the cache was effectively dead. ``compute_trust_metrics``
+# returns trust_score on a 0–100 scale (see core/reputation.py); 60.0 lets
+# agents with at least a handful of positive ratings start benefiting from
+# result caching while still excluding fresh / low-trust agents.
+_EXTERNAL_AGENT_CACHE_TRUST_THRESHOLD = 60.0
+
+
 def set_cached(
     agent_id: str,
     input_payload: Any,
@@ -147,13 +180,14 @@ def set_cached(
 ) -> bool:
     """Store an agent result in the cache with a TTL (default 24 h, max 168 h).
 
-    Only caches if the agent's trust score is ≥ 80 — low-trust agents are
-    excluded to prevent serving stale results from unreliable agents.
-    Returns True if the entry was stored, False if skipped.
+    Builtin agents are always cached (we control them). External agents are
+    cached only when their trust score is at or above
+    ``_EXTERNAL_AGENT_CACHE_TRUST_THRESHOLD``. Returns True if stored.
     """
     init_cache_db()
-    if _current_trust_score(agent_id) < 80.0:
-        return False
+    if not _is_builtin_agent(agent_id):
+        if _current_trust_score(agent_id) < _EXTERNAL_AGENT_CACHE_TRUST_THRESHOLD:
+            return False
     ttl = max(1, min(int(ttl_hours or 24), 168))
     key = cache_key(agent_id, input_payload, version_token)
     created_at = _now()

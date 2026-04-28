@@ -602,6 +602,16 @@ def jobs_rate_caller(
         raise HTTPException(status_code=400, detail=message)
 
     caller_reputation = reputation.compute_caller_trust_metrics(job["caller_owner_id"])
+    # Persist the recomputed trust score back onto the caller's wallet so the
+    # payout-curve clawback path (and any callers reading wallet.caller_trust)
+    # see the fresh value. Without this, caller_trust stayed pinned at the 0.5
+    # default forever — confirmed by the live audit on 2026-04-28.
+    try:
+        new_trust = caller_reputation.get("trust_score")
+        if new_trust is not None:
+            payments.update_wallet_caller_trust(job["caller_owner_id"], float(new_trust))
+    except (TypeError, ValueError):
+        pass
     _record_job_event(
         job,
         "job.caller_rated",
