@@ -16,6 +16,14 @@ const POOLS = [
   { key: 'system_agents', label: 'Built-in agents payouts (90%)', hint: 'Earnings from built-in agents owned by the system account.' },
 ]
 
+function txTypeLabel(tx) {
+  const memo = String(tx?.memo || '')
+  if (memo.startsWith('[admin-transfer] ')) {
+    return Number(tx?.amount_cents) >= 0 ? 'admin_deposit' : 'admin_withdraw'
+  }
+  return String(tx?.type || 'unknown')
+}
+
 export default function AdminEarningsPage() {
   const { apiKey, showToast } = useMarket()
   const [data, setData] = useState(null)
@@ -146,7 +154,7 @@ export default function AdminEarningsPage() {
                             {txs.slice(0, 8).map(tx => (
                               <div key={tx.tx_id} className="admin-earnings__tx">
                                 <div>
-                                  <span className={`admin-earnings__tx-type admin-earnings__tx-type--${tx.type}`}>{tx.type}</span>
+                                  <span className={`admin-earnings__tx-type admin-earnings__tx-type--${txTypeLabel(tx)}`}>{txTypeLabel(tx)}</span>
                                   <span className="admin-earnings__tx-memo">{tx.memo || '—'}</span>
                                 </div>
                                 <div className="admin-earnings__tx-right">

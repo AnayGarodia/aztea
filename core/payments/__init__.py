@@ -27,8 +27,9 @@ from . import base
 from . import trust_disputes
 from . import variable_pricing
 from . import subwallets
+from . import audit
 
-for _mod in (base, trust_disputes, variable_pricing, subwallets):
+for _mod in (base, trust_disputes, variable_pricing, subwallets, audit):
     for _n in dir(_mod):
         if _n.startswith("__"):
             continue

@@ -613,9 +613,12 @@ def admin_transfer(
 ) -> dict:
     """Atomic transfer between wallets for admin withdrawals of platform/system earnings.
 
-    Writes two ledger rows (a negative ``admin_withdraw`` on the source and a
-    positive ``admin_deposit`` on the destination) in one SQLite transaction,
-    linked via ``related_tx_id``. Balance cache is updated for both wallets.
+    Writes two ledger rows in one SQLite transaction, linked via
+    ``related_tx_id``. We intentionally reuse the supported ``charge`` /
+    ``deposit`` transaction types here instead of inventing new ledger enums:
+    changing the table CHECK constraint in-place would be fragile on existing
+    SQLite databases, while the memo preserves the admin-transfer semantics for
+    audit consumers.
     """
     if amount_cents <= 0:
         raise ValueError("amount_cents must be positive.")
@@ -640,14 +643,26 @@ def admin_transfer(
         if updated == 0:
             raise InsufficientBalanceError(int(src["balance_cents"]), int(amount_cents))
         debit_id = _insert_tx_only(
-            conn, from_wallet_id, "admin_withdraw", -int(amount_cents), None, None, memo
+            conn,
+            from_wallet_id,
+            "charge",
+            -int(amount_cents),
+            None,
+            None,
+            f"[admin-transfer] {memo}",
         )
         conn.execute(
             "UPDATE wallets SET balance_cents = balance_cents + ? WHERE wallet_id = ?",
             (int(amount_cents), to_wallet_id),
         )
         credit_id = _insert_tx_only(
-            conn, to_wallet_id, "admin_deposit", int(amount_cents), None, debit_id, memo
+            conn,
+            to_wallet_id,
+            "deposit",
+            int(amount_cents),
+            None,
+            debit_id,
+            f"[admin-transfer] {memo}",
         )
     return {"debit_tx_id": debit_id, "credit_tx_id": credit_id, "amount_cents": int(amount_cents)}
 
@@ -1080,5 +1095,4 @@ def post_call_partial_settle(
             "applied": applied,
         },
     )
-
 
