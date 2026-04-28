@@ -29,6 +29,7 @@ import re
 
 import requests
 
+from agents._contracts import agent_error, parse_json_payload
 from core.llm import CompletionRequest, Message, run_with_fallback
 
 _TIMEOUT = 10
@@ -181,13 +182,13 @@ def run(payload: dict) -> dict:
     """
     package = str(payload.get("package") or "").strip()
     if not package:
-        raise ValueError("'package' is required.")
+        return agent_error("changelog_agent.missing_package", "package is required.")
 
     ecosystem = str(payload.get("ecosystem") or "auto").strip().lower()
     if ecosystem == "auto":
         ecosystem = _detect_ecosystem(package)
     if ecosystem not in ("pypi", "npm"):
-        raise ValueError("ecosystem must be 'pypi', 'npm', or 'auto'.")
+        return agent_error("changelog_agent.invalid_ecosystem", "ecosystem must be 'pypi', 'npm', or 'auto'.")
 
     from_version = str(payload.get("from_version") or "").strip() or None
     to_version = str(payload.get("to_version") or "").strip() or None
@@ -197,7 +198,12 @@ def run(payload: dict) -> dict:
     latest_version = ""
 
     if ecosystem == "pypi":
-        data = _fetch_pypi_info(package)
+        try:
+            data = _fetch_pypi_info(package)
+        except ValueError as exc:
+            return agent_error("changelog_agent.not_found", str(exc))
+        except Exception as exc:
+            return agent_error("changelog_agent.fetch_failed", str(exc))
         info = data.get("info", {})
         latest_version = info.get("version", "")
         if not to_version:
@@ -239,7 +245,12 @@ def run(payload: dict) -> dict:
                 changelog_url = f"https://pypi.org/project/{package}/"
 
     elif ecosystem == "npm":
-        data = _fetch_npm_info(package)
+        try:
+            data = _fetch_npm_info(package)
+        except ValueError as exc:
+            return agent_error("changelog_agent.not_found", str(exc))
+        except Exception as exc:
+            return agent_error("changelog_agent.fetch_failed", str(exc))
         dist_tags = data.get("dist-tags", {})
         latest_version = dist_tags.get("latest", "")
         if not to_version:
@@ -280,7 +291,6 @@ def run(payload: dict) -> dict:
 
     if changelog_text:
         try:
-            import json
             prompt = _USER.format(
                 package=package,
                 ecosystem=ecosystem,
@@ -294,15 +304,13 @@ def run(payload: dict) -> dict:
                 max_tokens=600,
                 json_mode=True,
             ))
-            raw = resp.text.strip()
-            raw = re.sub(r"^```(?:json)?\s*", "", raw)
-            raw = re.sub(r"\s*```$", "", raw)
-            parsed = json.loads(raw)
+            parsed = parse_json_payload(resp.text)
             breaking_changes = parsed.get("breaking_changes", [])
             highlights = parsed.get("highlights", [])
             summary = parsed.get("summary", "")
         except Exception:
-            summary = f"Changelog for {package} {from_version or ''} → {to_version or latest_version}."
+            version_window = f"{from_version or 'earliest'} -> {to_version or latest_version}"
+            summary = f"Fetched changelog material for {package} ({ecosystem}, {version_window}), but LLM synthesis is unavailable."
     else:
         summary = f"No changelog text found for {package} {ecosystem}."
 
@@ -317,4 +325,5 @@ def run(payload: dict) -> dict:
         "breaking_changes": breaking_changes,
         "highlights": highlights,
         "summary": summary,
+        "billing_units_actual": 1 if changelog_text else 0,
     }

@@ -23,9 +23,7 @@ Output:
 """
 from __future__ import annotations
 
-import json
-import re
-
+from agents._contracts import agent_error, parse_json_payload
 from core.llm import CompletionRequest, Message, run_with_fallback
 
 _SYSTEM = """\
@@ -82,7 +80,7 @@ def run(payload: dict) -> dict:
     """
     code = str(payload.get("code") or "").strip()
     if not code:
-        raise ValueError("'code' is required.")
+        return agent_error("test_generator.missing_code", "code is required.")
 
     language = str(payload.get("language") or "auto")
     framework = str(payload.get("framework") or "auto")
@@ -97,17 +95,16 @@ def run(payload: dict) -> dict:
         code=code[:_MAX_CODE_CHARS],
     )
 
-    resp = run_with_fallback(CompletionRequest(
-        model="",
-        messages=[Message("system", _SYSTEM), Message("user", prompt)],
-        max_tokens=3000,
-        json_mode=True,
-    ))
-    raw = _strip_fences(resp.text)
     try:
-        result = json.loads(raw)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"LLM returned non-JSON: {e}\n\n{raw[:300]}") from e
+        resp = run_with_fallback(CompletionRequest(
+            model="",
+            messages=[Message("system", _SYSTEM), Message("user", prompt)],
+            max_tokens=3000,
+            json_mode=True,
+        ))
+        result = parse_json_payload(resp.text)
+    except Exception as exc:
+        return agent_error("test_generator.tool_unavailable", f"Test generation requires an available LLM provider: {exc}")
 
     # Syntax-check Python test output so callers don't get silently broken tests
     test_code = result.get("test_code", "")
@@ -121,6 +118,7 @@ def run(payload: dict) -> dict:
                 f"Generated test code has a syntax error at line {e.lineno}: {e.msg}. "
                 "Review and fix before running."
             )
+            result.setdefault("billing_units_actual", 1)
             return result
 
         # Smoke-run: import the test module to catch top-level errors
@@ -146,10 +144,5 @@ def run(payload: dict) -> dict:
                         f"{stderr[:300]}. Review before running."
                     ))
 
+    result.setdefault("billing_units_actual", 1)
     return result
-
-
-def _strip_fences(text: str) -> str:
-    text = text.strip()
-    m = re.match(r"^```(?:json)?\s*([\s\S]*?)\s*```$", text)
-    return m.group(1).strip() if m else text

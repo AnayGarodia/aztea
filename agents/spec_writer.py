@@ -23,9 +23,7 @@ Output:
 """
 from __future__ import annotations
 
-import json
-import re
-
+from agents._contracts import agent_error, parse_json_payload
 from core.llm import CompletionRequest, Message, run_with_fallback
 
 _SYSTEM = """\
@@ -81,7 +79,7 @@ def run(payload: dict) -> dict:
     """
     requirements = str(payload.get("requirements") or "").strip()
     if not requirements:
-        raise ValueError("'requirements' is required.")
+        return agent_error("spec_writer.missing_requirements", "requirements is required.")
 
     fmt = str(payload.get("format") or "auto")
     stack = str(payload.get("stack") or "Not specified.")[:300]
@@ -96,20 +94,16 @@ def run(payload: dict) -> dict:
         requirements=requirements[:_MAX_REQ_CHARS],
     )
 
-    resp = run_with_fallback(CompletionRequest(
-        model="",
-        messages=[Message("system", _SYSTEM), Message("user", prompt)],
-        max_tokens=3500,
-        json_mode=True,
-    ))
-    raw = _strip_fences(resp.text)
     try:
-        return json.loads(raw)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"LLM returned non-JSON: {e}\n\n{raw[:300]}") from e
-
-
-def _strip_fences(text: str) -> str:
-    text = text.strip()
-    m = re.match(r"^```(?:json)?\s*([\s\S]*?)\s*```$", text)
-    return m.group(1).strip() if m else text
+        resp = run_with_fallback(CompletionRequest(
+            model="",
+            messages=[Message("system", _SYSTEM), Message("user", prompt)],
+            max_tokens=3500,
+            json_mode=True,
+        ))
+        result = parse_json_payload(resp.text)
+    except Exception as exc:
+        return agent_error("spec_writer.tool_unavailable", f"Spec writing requires an available LLM provider: {exc}")
+    if isinstance(result, dict):
+        result.setdefault("billing_units_actual", 1)
+    return result

@@ -28,10 +28,10 @@ Output:
 from __future__ import annotations
 
 import json
-import re
 
 import requests
 
+from agents._contracts import agent_error, parse_json_payload
 from core.llm import CompletionRequest, Message, run_with_fallback
 
 _TIMEOUT = 10
@@ -91,10 +91,7 @@ def _llm_suggest_names(task: str, ecosystem: str, count: int) -> list[str]:
             max_tokens=200,
             json_mode=True,
         ))
-        raw = resp.text.strip()
-        raw = re.sub(r"^```(?:json)?\s*", "", raw)
-        raw = re.sub(r"\s*```$", "", raw)
-        names = json.loads(raw)
+        names = parse_json_payload(resp.text)
         if isinstance(names, list):
             return [str(n).strip() for n in names if str(n).strip()][:count * 2]
     except Exception:
@@ -192,7 +189,7 @@ def run(payload: dict) -> dict:
     """
     task = str(payload.get("task") or "").strip()
     if not task:
-        raise ValueError("'task' is required.")
+        return agent_error("package_finder.missing_task", "task is required.")
     if len(task) > 500:
         task = task[:500]
 
@@ -200,7 +197,12 @@ def run(payload: dict) -> dict:
     if ecosystem not in ("pypi", "npm", "both"):
         ecosystem = "pypi"
 
-    count = min(int(payload.get("count") or 5), 10)
+    try:
+        count = min(int(payload.get("count") or 5), 10)
+    except (TypeError, ValueError):
+        return agent_error("package_finder.invalid_count", "count must be an integer between 1 and 10.")
+    if count < 1:
+        return agent_error("package_finder.invalid_count", "count must be an integer between 1 and 10.")
 
     candidates: list[dict] = []
 
@@ -216,6 +218,7 @@ def run(payload: dict) -> dict:
             "results": [],
             "recommendation": "",
             "summary": f"No packages found for '{task}' in {ecosystem}.",
+            "billing_units_actual": 0,
         }
 
     # LLM ranking + explanation
@@ -233,10 +236,7 @@ def run(payload: dict) -> dict:
             max_tokens=800,
             json_mode=True,
         ))
-        raw = resp.text.strip()
-        raw = re.sub(r"^```(?:json)?\s*", "", raw)
-        raw = re.sub(r"\s*```$", "", raw)
-        parsed = json.loads(raw)
+        parsed = parse_json_payload(resp.text)
         ranked = {r["name"]: r for r in parsed.get("ranked", [])}
         recommendation = parsed.get("recommendation", "")
         summary = parsed.get("summary", "")
@@ -267,4 +267,5 @@ def run(payload: dict) -> dict:
         "results": results,
         "recommendation": recommendation,
         "summary": summary,
+        "billing_units_actual": len(results),
     }

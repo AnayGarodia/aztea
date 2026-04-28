@@ -27,11 +27,11 @@ Output:
 """
 from __future__ import annotations
 
-import json
 import re
 import urllib.request
 import urllib.error
 
+from agents._contracts import agent_error, parse_json_payload
 from core.llm import CompletionRequest, Message, run_with_fallback
 
 _SYSTEM = """\
@@ -123,36 +123,37 @@ def run(payload: dict) -> dict:
     diff = str(payload.get("diff") or "").strip()
     context = str(payload.get("context") or "Not provided.")[:600]
 
-    if not diff and pr_url:
-        diff = _fetch_github_diff(pr_url)
-
     if not diff:
-        raise ValueError("Provide either 'pr_url' (a GitHub PR URL) or 'diff' (raw unified diff text).")
+        if not pr_url:
+            return agent_error(
+                "pr_reviewer.missing_input",
+                "Provide either 'pr_url' (a GitHub PR URL) or 'diff' (raw unified diff text).",
+            )
+        try:
+            diff = _fetch_github_diff(pr_url)
+        except ValueError as exc:
+            return agent_error("pr_reviewer.invalid_pr_url", str(exc))
+        except RuntimeError as exc:
+            return agent_error("pr_reviewer.fetch_failed", str(exc))
 
     diff = diff[:_MAX_DIFF_CHARS]
     prompt = _USER.format(context=context, diff=diff)
 
-    resp = run_with_fallback(CompletionRequest(
-        model="",
-        messages=[Message("system", _SYSTEM), Message("user", prompt)],
-        max_tokens=2500,
-        json_mode=True,
-    ))
-    raw = _strip_fences(resp.text)
     try:
-        result = json.loads(raw)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"LLM returned non-JSON: {e}\n\n{raw[:300]}") from e
+        resp = run_with_fallback(CompletionRequest(
+            model="",
+            messages=[Message("system", _SYSTEM), Message("user", prompt)],
+            max_tokens=2500,
+            json_mode=True,
+        ))
+        result = parse_json_payload(resp.text)
+    except Exception as exc:
+        return agent_error("pr_reviewer.tool_unavailable", f"PR review requires an available LLM provider: {exc}")
 
     if pr_url and not result.get("pr_title"):
         m = re.search(r"github\.com/[^/]+/[^/]+/pull/(\d+)", pr_url)
         if m:
             result["pr_title"] = f"PR #{m.group(1)}"
+    result.setdefault("billing_units_actual", 1)
 
     return result
-
-
-def _strip_fences(text: str) -> str:
-    text = text.strip()
-    m = re.match(r"^```(?:json)?\s*([\s\S]*?)\s*```$", text)
-    return m.group(1).strip() if m else text
