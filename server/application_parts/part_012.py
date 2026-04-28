@@ -250,6 +250,42 @@ def skills_get(
     return _skill_response(row, include_raw_md=True)
 
 
+@app.post(
+    "/skills/{skill_id}/run",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(400, 401, 402, 403, 404, 429, 500, 502, 503),
+)
+@limiter.limit("10/minute")
+def skills_run(
+    request: Request,
+    skill_id: str,
+    body: core_models.RegistryCallRequest | None = Body(default=None),
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> Response:
+    """Invoke a hosted skill by its skill_id.
+
+    Thin alias over ``POST /registry/agents/{agent_id}/call``: looks up the
+    skill's underlying agent and forwards the call so SDK callers don't need
+    to know that hosted skills are implemented as auto-registered agents.
+    """
+    row = _hosted_skills.get_hosted_skill(skill_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_id}' not found.")
+    agent_id = str(row.get("agent_id") or "").strip()
+    if not agent_id:
+        raise HTTPException(
+            status_code=502,
+            detail=error_codes.make_error(
+                error_codes.AGENT_INTERNAL_ERROR,
+                "Hosted skill is missing its agent_id; contact support.",
+                {"skill_id": skill_id},
+            ),
+        )
+    # registry_call lives in part_008 but shares the same compiled module
+    # namespace, so we can hand off directly without an HTTP redirect.
+    return registry_call(request=request, agent_id=agent_id, body=body, caller=caller)
+
+
 @app.delete("/skills/{skill_id}", responses=_error_responses(401, 403, 404))
 def skills_delete(
     request: Request,

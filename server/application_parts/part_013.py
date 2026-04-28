@@ -937,7 +937,7 @@ def pipelines_run_get(
     response_model=core_models.DynamicObjectResponse,
     responses=_error_responses(401, 403, 429, 500),
     tags=["Pipelines"],
-    summary="List built-in public pipeline recipes.",
+    summary="List built-in public pipeline recipes plus the caller's own recipes.",
 )
 @limiter.limit("60/minute")
 def recipes_list(
@@ -945,10 +945,13 @@ def recipes_list(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.DynamicObjectResponse:
     _require_scope(caller, "caller")
-    rows = pipelines.list_pipelines(None, include_public=True)
+    rows = pipelines.list_pipelines(caller["owner_id"], include_public=True)
     recipe_rows = [
         row for row in rows
-        if row is not None and str(row.get("owner_id") or "") == recipes.PLATFORM_RECIPES_OWNER_ID
+        if row is not None and (
+            str(row.get("owner_id") or "") == recipes.PLATFORM_RECIPES_OWNER_ID
+            or str(row.get("owner_id") or "") == caller["owner_id"]
+        )
     ]
     return JSONResponse(
         content={
@@ -956,6 +959,57 @@ def recipes_list(
             "count": len(recipe_rows),
         }
     )
+
+
+@app.post(
+    "/recipes",
+    status_code=201,
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(400, 401, 403, 422, 429, 500),
+    tags=["Pipelines"],
+    summary="Create a user-owned pipeline recipe.",
+)
+@limiter.limit("20/minute")
+def recipes_create(
+    request: Request,
+    body: dict[str, Any] = Body(...),
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
+    """Create a recipe owned by the authenticated user.
+
+    Body:
+      - ``name`` (required) — slug-style name unique to the caller
+      - ``description`` (optional)
+      - ``definition`` (required) — pipeline definition with a ``nodes`` array
+
+    Returns the newly created recipe row. Recipes are stored in the same
+    ``pipelines`` table as platform recipes; ownership is tracked on
+    ``owner_id``. To run, POST to ``/recipes/{recipe_id}/run``.
+    """
+    _require_scope(caller, "caller")
+    name = str((body or {}).get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="'name' is required.")
+    if len(name) > 80:
+        raise HTTPException(status_code=400, detail="'name' must be at most 80 characters.")
+    definition = (body or {}).get("definition")
+    if not isinstance(definition, dict):
+        raise HTTPException(
+            status_code=422,
+            detail="'definition' must be an object with a 'nodes' array.",
+        )
+    description = str((body or {}).get("description") or "").strip()
+    try:
+        row = pipelines.create_pipeline(
+            owner_id=caller["owner_id"],
+            name=name,
+            definition=definition,
+            description=description or None,
+            is_public=False,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return JSONResponse(content={"recipe": _recipe_catalog_entry(row)}, status_code=201)
 
 
 @app.post(
@@ -974,7 +1028,12 @@ def recipes_run(
 ) -> core_models.DynamicObjectResponse:
     _require_scope(caller, "caller")
     pipeline_row = pipelines.get_pipeline(recipe_id)
-    if pipeline_row is None or str(pipeline_row.get("owner_id") or "") != recipes.PLATFORM_RECIPES_OWNER_ID:
+    if pipeline_row is None:
+        raise HTTPException(status_code=404, detail=f"Recipe '{recipe_id}' not found.")
+    owner_id = str(pipeline_row.get("owner_id") or "")
+    is_platform = owner_id == recipes.PLATFORM_RECIPES_OWNER_ID
+    is_owner = owner_id == caller["owner_id"]
+    if not (is_platform or is_owner):
         raise HTTPException(status_code=404, detail=f"Recipe '{recipe_id}' not found.")
     input_payload = body.get("input_payload") or {}
     if not isinstance(input_payload, dict):

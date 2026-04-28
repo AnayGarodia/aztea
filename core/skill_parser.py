@@ -327,7 +327,15 @@ _PARAGRAPH_RE = re.compile(r"(?m)^(?!#)(.{20,})")
 
 
 def _parse_no_frontmatter(body: str, *, source: str) -> ParsedSkill:
-    """Infer name and description from Markdown when frontmatter is absent."""
+    """Infer name and description from Markdown when frontmatter is absent.
+
+    A canvas-style SKILL.md without a YAML frontmatter block must still describe
+    a real skill: it needs an H1 (the name), a non-trivial description paragraph,
+    *and* a Description / Input / Steps / Output section structure that the
+    runner can follow. Earlier versions accepted any markdown containing a single
+    "# bad" heading as valid; that allowed garbage skills to register and silently
+    fail at execution time. The checks below enforce a minimum useful shape.
+    """
     warnings = [
         "No YAML frontmatter found. Name and description were inferred from the Markdown body. "
         "Add a frontmatter block for reliable parsing."
@@ -341,7 +349,30 @@ def _parse_no_frontmatter(body: str, *, source: str) -> ParsedSkill:
     # First substantive paragraph after the H1
     search_from = h1.end() if h1 else 0
     para = _PARAGRAPH_RE.search(body, search_from)
-    description = para.group(1).strip() if para else name
+    description = para.group(1).strip() if para else ""
+
+    if not description or len(description) < 10:
+        raise SkillParseError(
+            f"{source}: SKILL.md needs a description paragraph (at least 10 chars) "
+            f"under the title, OR a YAML frontmatter block with a 'description' field."
+        )
+    if description == name:
+        raise SkillParseError(
+            f"{source}: description must be a real sentence, not just the skill title."
+        )
+
+    # Require at least one ``##`` (level-2) section heading after the H1.
+    # Without any structural section the body is just an unstructured note,
+    # not an executable skill. We deliberately don't enforce a specific name
+    # (canvas/SKILL.md uses ``## Overview``, others use ``## Steps``,
+    # ``## Description``, etc.) — any subsection demonstrates the author has
+    # given the runner some structure to follow.
+    has_section = bool(re.search(r"^##\s+\S", body, re.MULTILINE))
+    if not has_section:
+        raise SkillParseError(
+            f"{source}: SKILL.md must contain at least one '## Section' heading "
+            "after the H1 (e.g. ## Description, ## Steps, ## Overview, ## Input)."
+        )
 
     skill = ParsedSkill(
         name=_display_name_to_slug(name),

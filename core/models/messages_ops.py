@@ -577,7 +577,13 @@ class RegistryCallRequest(RootModel[JSONObject]):
         max_depth = 8
         max_keys = 120
         max_array_items = 200
-        max_string_len = 4000
+        # The per-string cap used to be 4000 chars, but legitimate uses (the
+        # multi-file Python executor and shell/multi-language executors) ship
+        # source code that easily exceeds 4 KB. The total payload cap above
+        # (64 KB) still bounds the request as a whole; this cap exists to
+        # prevent a single oversize text field from skewing storage. Lift to
+        # 50 000 so 50 KB-per-file source bundles work as documented.
+        max_string_len = 50_000
 
         state = {"keys": 0}
 

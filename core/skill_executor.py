@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import re
+import uuid
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -207,9 +208,13 @@ def execute_hosted_skill(
         raise SkillExecutionError(f"All LLM providers failed: {exc}") from exc
 
     parsed = _parse_llm_output(resp.text)
+    # Don't leak underlying LLM provider/model names to skill callers — those are
+    # platform infrastructure details that may change without notice. We keep an
+    # opaque execution_id for support traceability and the parse_path so the SDK
+    # can tell whether the response was JSON or coerced from raw text.
+    execution_id = uuid.uuid4().hex
     parsed["_meta"] = {
-        "model": resp.model,
-        "provider": resp.provider,
+        "execution_id": execution_id,
         "parse_path": parsed.pop("__parse_path", "raw_text_fallback"),
     }
     return parsed
