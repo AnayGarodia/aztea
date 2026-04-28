@@ -74,6 +74,11 @@ from .pricing import (
     validate_pricing_config,
 )
 
+LEXICAL_SCORE_WEIGHT = 0.35
+SEMANTIC_SCORE_WEIGHT = 0.30
+TRUST_SCORE_WEIGHT_HYBRID = 0.25
+INVERSE_PRICE_WEIGHT_HYBRID = 0.10
+
 
 def register_agent(
     name: str,
@@ -998,6 +1003,71 @@ def _query_terms(query: str) -> list[str]:
     return [term for term in terms if term not in _QUERY_STOP_WORDS]
 
 
+def _example_search_text(output_examples: Any) -> str:
+    if not isinstance(output_examples, list):
+        return ""
+    parts: list[str] = []
+    for example in output_examples[:3]:
+        if not isinstance(example, dict):
+            continue
+        for key in ("input", "output"):
+            value = example.get(key)
+            if value is None:
+                continue
+            parts.append(json.dumps(value, sort_keys=True, ensure_ascii=True)[:800])
+    return " ".join(parts)
+
+
+def _lexical_overlap_score(query_terms: list[str], haystack: str) -> float:
+    if not query_terms:
+        return 0.0
+    lowered = haystack.lower()
+    hit_count = sum(1 for term in query_terms if term in lowered)
+    return hit_count / len(query_terms)
+
+
+def _lexical_match_score(query: str, agent: dict, supported_fields: set[str]) -> float:
+    query_terms = _query_terms(query)
+    if not query_terms:
+        return 0.0
+
+    name_text = str(agent.get("name") or "")
+    desc_text = str(agent.get("description") or "")
+    tag_text = " ".join(_parse_tags(agent.get("tags")))
+    field_text = " ".join(sorted(supported_fields))
+    example_text = _example_search_text(agent.get("output_examples"))
+
+    name_score = _lexical_overlap_score(query_terms, name_text)
+    desc_score = _lexical_overlap_score(query_terms, desc_text)
+    tag_score = _lexical_overlap_score(query_terms, tag_text)
+    field_score = _lexical_overlap_score(query_terms, field_text)
+    example_score = _lexical_overlap_score(query_terms, example_text)
+
+    lowered_query = query.lower()
+    phrase_bonus = 0.0
+    if lowered_query in name_text.lower():
+        phrase_bonus += 0.25
+    elif lowered_query in desc_text.lower():
+        phrase_bonus += 0.18
+    elif lowered_query in example_text.lower():
+        phrase_bonus += 0.12
+
+    if query_terms and all(term in name_text.lower() for term in query_terms):
+        phrase_bonus += 0.12
+    if query_terms and any(term in tag_text.lower() for term in query_terms):
+        phrase_bonus += 0.08
+
+    score = (
+        0.38 * name_score
+        + 0.26 * desc_score
+        + 0.18 * tag_score
+        + 0.08 * field_score
+        + 0.10 * example_score
+        + phrase_bonus
+    )
+    return max(0.0, min(1.0, score))
+
+
 def _matched_phrase(query: str, haystack: str) -> str | None:
     terms = _query_terms(query)
     if not terms:
@@ -1038,6 +1108,9 @@ def _match_reasons(
     phrase = _matched_phrase(query, haystack)
     if phrase:
         reasons.append(f"matched '{phrase}' in description")
+    example_phrase = _matched_phrase(query, _example_search_text(agent.get("output_examples")))
+    if example_phrase and example_phrase != phrase:
+        reasons.append(f"matched '{example_phrase}' in work examples")
     if required_fields:
         if len(required_fields) == 1:
             field = sorted(required_fields)[0]
@@ -1159,10 +1232,16 @@ def search_agents(
                 missing_embeddings.append((agent_id, source_text, vector_list))
             similarity = float(embeddings.cosine(query_vector, vector))
             semantic_similarity = max(0.0, min(1.0, similarity))
+        lexical_score = _lexical_match_score(
+            normalized_query,
+            agent,
+            supported_fields,
+        )
         candidates.append(
             {
                 "agent": agent,
                 "similarity": semantic_similarity,  # 0.0 when embeddings disabled
+                "lexical_score": lexical_score,
                 "trust": trust,
                 "price_cents": price_cents,
                 "supported_fields": supported_fields,
@@ -1200,17 +1279,20 @@ def search_agents(
 
         if _embeddings_enabled:
             blended_score = (
-                SEMANTIC_SIMILARITY_WEIGHT * candidate["similarity"]
-                + TRUST_SCORE_WEIGHT * candidate["trust"]
-                + INVERSE_PRICE_WEIGHT * inverse_price
+                LEXICAL_SCORE_WEIGHT * candidate["lexical_score"]
+                + SEMANTIC_SCORE_WEIGHT * candidate["similarity"]
+                + TRUST_SCORE_WEIGHT_HYBRID * candidate["trust"]
+                + INVERSE_PRICE_WEIGHT_HYBRID * inverse_price
             )
         else:
-            # Embeddings disabled: redistribute semantic weight to trust+price
-            # proportionally so scores still span the full [0, 1] range.
-            total_remaining = TRUST_SCORE_WEIGHT + INVERSE_PRICE_WEIGHT
+            # Embeddings disabled: lexical matching becomes the primary routing
+            # signal instead of letting trust/price dominate weak text search.
+            remaining_weight = 1.0 - LEXICAL_SCORE_WEIGHT
+            total_remaining = TRUST_SCORE_WEIGHT_HYBRID + INVERSE_PRICE_WEIGHT_HYBRID
             blended_score = (
-                (TRUST_SCORE_WEIGHT / total_remaining) * candidate["trust"]
-                + (INVERSE_PRICE_WEIGHT / total_remaining) * inverse_price
+                LEXICAL_SCORE_WEIGHT * candidate["lexical_score"]
+                + (remaining_weight * (TRUST_SCORE_WEIGHT_HYBRID / total_remaining)) * candidate["trust"]
+                + (remaining_weight * (INVERSE_PRICE_WEIGHT_HYBRID / total_remaining)) * inverse_price
             )
         candidate["blended_score"] = blended_score
         candidate["match_reasons"] = _match_reasons(
@@ -1238,6 +1320,7 @@ def search_agents(
         {
             "agent": item["agent"],
             "similarity": round(item["similarity"], 6),
+            "lexical_score": round(item["lexical_score"], 6),
             "trust": round(item["trust"], 6),
             "blended_score": round(item["blended_score"], 6),
             "match_reasons": item["match_reasons"],

@@ -212,9 +212,10 @@ def test_semantic_search_applies_filters_and_weighting(isolated_db):
         else:
             inverse_price = 1.0 - ((price_cents - min_price) / (max_price - min_price))
         expected = (
-            registry.SEMANTIC_SIMILARITY_WEIGHT * item["similarity"]
-            + registry.TRUST_SCORE_WEIGHT * item["trust"]
-            + registry.INVERSE_PRICE_WEIGHT * inverse_price
+            registry.LEXICAL_SCORE_WEIGHT * item["lexical_score"]
+            + registry.SEMANTIC_SCORE_WEIGHT * item["similarity"]
+            + registry.TRUST_SCORE_WEIGHT_HYBRID * item["trust"]
+            + registry.INVERSE_PRICE_WEIGHT_HYBRID * inverse_price
         )
         assert item["blended_score"] == pytest.approx(round(expected, 6), abs=1e-5)
 
@@ -234,6 +235,43 @@ def test_semantic_search_applies_filters_and_weighting(isolated_db):
 
     strict_trust = registry.search_agents("analyze a quarterly SEC report", limit=3, min_trust=0.7)
     assert all(item["trust"] >= 0.7 for item in strict_trust)
+
+
+def test_search_falls_back_to_lexical_scoring_when_embeddings_disabled(isolated_db, monkeypatch):
+    ids = _seed_synthetic_agents(isolated_db)
+    monkeypatch.setattr(registry._feature_flags, "DISABLE_EMBEDDINGS", True)
+
+    results = registry.search_agents("quarterly sec filing ticker", limit=3)
+
+    assert results[0]["agent"]["agent_id"] == ids["filing"]
+    assert results[0]["similarity"] == 0.0
+    assert results[0]["lexical_score"] > 0.5
+
+
+def test_search_uses_output_examples_as_lexical_signal(isolated_db):
+    registry.init_db()
+    reputation.init_reputation_db()
+    agent_id = registry.register_agent(
+        name="Testing Workflow Advisor",
+        description="Helps design and review testing workflows.",
+        endpoint_url="https://agents.example.com/testing-workflow",
+        price_per_call_usd=0.04,
+        tags=["testing", "qa"],
+        input_schema={"type": "object", "properties": {"task": {"type": "string"}}},
+        output_examples=[
+            {
+                "input": {"task": "generate pytest coverage plan"},
+                "output": {"summary": "Create a pytest suite and coverage thresholds for the module."},
+            }
+        ],
+    )
+    _set_agent_stats(isolated_db, agent_id, total_calls=8, successful_calls=8, avg_latency_ms=300)
+
+    results = registry.search_agents("pytest coverage plan", limit=5)
+    top = results[0]
+    assert top["agent"]["agent_id"] == agent_id
+    assert top["lexical_score"] > 0.3
+    assert any("work examples" in reason for reason in top["match_reasons"])
 
 
 def test_registry_search_endpoint_returns_ranked_results(isolated_db):

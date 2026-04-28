@@ -345,6 +345,9 @@ def _agent_response(agent: dict, caller: core_models.CallerContext | None, stats
         out.pop("owner_id", None)
     out["caller_trust_min"] = min_caller_trust
     out["caller_charge_cents"] = caller_charge_cents
+    builtin_meta = _builtin_specs.builtin_catalog_metadata(str(agent.get("agent_id") or ""))
+    if builtin_meta:
+        out.update({key: value for key, value in builtin_meta.items() if value is not None})
     if is_internal:
         out["last_health_status"] = "healthy"
         out["last_health_check_at"] = _utc_now_iso()
@@ -903,4 +906,3 @@ def _merge_protocol_output_envelope(
     if protocol:
         updated["protocol"] = protocol
     return updated
-
