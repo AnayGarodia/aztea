@@ -37,7 +37,7 @@ import zipfile
 from typing import Any
 
 from core import url_security
-from core.embeddings import cosine, embed_text
+from core.embeddings import cosine, embed_texts_batch
 from core.feature_flags import DISABLE_EMBEDDINGS
 
 _DEFAULT_TOP_K = 5
@@ -140,7 +140,7 @@ def _extract_artifact(artifact: dict[str, Any], extensions: set[str], max_file_b
 
 def _clone_git_repo(git_url: str, extensions: set[str], max_file_bytes: int) -> dict[str, str] | dict:
     try:
-        url_security.validate_url(git_url)
+        git_url = url_security.validate_outbound_url(git_url, "git_url")
     except Exception as exc:
         return _err("semantic_codebase_search.url_blocked", str(exc))
 
@@ -202,6 +202,11 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
 
     if not artifact and not git_url:
         return _err("semantic_codebase_search.missing_source", "Provide artifact (zip/tarball) or git_url.")
+    if artifact and git_url:
+        return _err(
+            "semantic_codebase_search.ambiguous_source",
+            "Provide either artifact or git_url, not both.",
+        )
 
     source = "artifact" if artifact else "git"
     if artifact:
@@ -226,15 +231,15 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
             if hits > 0:
                 scored.append((float(hits) / len(q_terms), path, text))
     else:
-        query_vec = embed_text(query)
+        paths = list(files.keys())
+        doc_texts = [f"{path}\n{files[path][:1000]}" for path in paths]
+        all_vecs = embed_texts_batch([query] + doc_texts)
+        query_vec = all_vecs[0]
         scored = []
-        for path, text in files.items():
-            # Embed a representative chunk: filename + first 1000 chars of content
-            doc_text = f"{path}\n{text[:1000]}"
-            doc_vec = embed_text(doc_text)
-            score = cosine(query_vec, doc_vec)
+        for i, path in enumerate(paths):
+            score = cosine(query_vec, all_vecs[i + 1])
             if score > 0.1:
-                scored.append((score, path, text))
+                scored.append((score, path, files[path]))
 
     scored.sort(key=lambda x: x[0], reverse=True)
     results = []

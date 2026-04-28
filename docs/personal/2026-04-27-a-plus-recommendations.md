@@ -6,6 +6,103 @@ Date: 2026-04-27
 
 I do **not** fully agree with Claude's Phase 2 prompt as written.
 
+## Post-Phase Audit Update
+
+I did a code-level audit after the claim that Claude had finished all phases.
+
+### Concrete bugs found and fixed
+
+- **Phase 7 URL-validation bug in `browser_agent`**
+  - [agents/browser_agent.py](/Users/aakritigarodia/Desktop/agentmarket/agents/browser_agent.py)
+  - The agent was calling `core.url_security.validate_url(...)`, which does not exist.
+  - Real browser requests would fail before Playwright even started.
+  - Fixed to use `validate_outbound_url(url, "url")`.
+
+- **Phase 7 URL-validation bug in `semantic_codebase_search`**
+  - [agents/semantic_codebase_search.py](/Users/aakritigarodia/Desktop/agentmarket/agents/semantic_codebase_search.py)
+  - The git-clone path was also calling nonexistent `validate_url(...)`.
+  - That means the `git_url` path was broken despite the module importing cleanly.
+  - Fixed to use `validate_outbound_url(git_url, "git_url")`.
+
+- **Ambiguous input bug in `semantic_codebase_search`**
+  - [agents/semantic_codebase_search.py](/Users/aakritigarodia/Desktop/agentmarket/agents/semantic_codebase_search.py)
+  - The spec says `artifact` and `git_url` are mutually exclusive, but the implementation silently preferred `artifact`.
+  - Fixed to return `semantic_codebase_search.ambiguous_source`.
+
+- **Shared-schema mutation risk in MCP manifest building**
+  - [core/mcp_manifest.py](/Users/aakritigarodia/Desktop/agentmarket/core/mcp_manifest.py)
+  - The tool builder was mutating property descriptions in-place, which can leak across shared spec objects and create hard-to-trace drift.
+  - I verified the fix already present in the working tree and added regression coverage.
+
+### Regression coverage added
+
+- [tests/test_agent_real_tool.py](/Users/aakritigarodia/Desktop/agentmarket/tests/test_agent_real_tool.py)
+  - browser-agent invalid URL path
+  - semantic-codebase-search invalid `git_url`
+  - semantic-codebase-search ambiguous source rejection
+- [tests/test_mcp_manifest.py](/Users/aakritigarodia/Desktop/agentmarket/tests/test_mcp_manifest.py)
+  - no mutation of original input schema when building MCP tool entries
+
+### Verification I trust
+
+- `python -m py_compile` on the touched agent/test files passed
+- direct runtime harnesses for:
+  - `browser_agent` invalid URL path
+  - `semantic_codebase_search` invalid `git_url`
+  - `semantic_codebase_search` ambiguous source handling
+  - MCP manifest schema-copy behavior
+  - all passed
+
+### Verification I still do **not** trust yet
+
+- direct `pytest` output from this shell remains unusable
+- the repo still has large-file drift and local uncommitted edits in some late Phase 7 files
+- “all phases are done” is still too generous as an engineering claim unless there is a clean CI run and real buyer-surface smoke evidence
+
+## Next Five Things To Implement
+
+These are the next five things I would implement from the repo's **current** state.
+
+1. **End-to-end buyer-surface smoke suite**
+   - One automated sweep that covers:
+     - stdio MCP / Claude-facing flow
+     - `/codex/tools`
+     - `/gemini/tools`
+     - CLI `aztea hire`, `aztea jobs follow`, wallet calls
+     - one web happy-path flow
+   - Reason: the current risk is not “feature missing”; it is “surface exists but is subtly broken for the first customer.”
+
+2. **Runtime readiness for the remaining Phase 7 agents**
+   - Especially:
+     - `browser_agent` Playwright provisioning
+     - `multi_language_executor` toolchain availability and fallback behavior
+     - `semantic_codebase_search` git-path smoke test
+     - `ai_red_teamer` real invocation/error semantics
+   - Reason: these agents are now part of the product promise, so environment drift is a real failure mode.
+
+3. **Builtin-agent registry/dispatch refactor**
+   - Remove duplicated IDs and endpoint maps between:
+     - [server/builtin_agents/constants.py](/Users/aakritigarodia/Desktop/agentmarket/server/builtin_agents/constants.py)
+     - [server/application_parts/part_000.py](/Users/aakritigarodia/Desktop/agentmarket/server/application_parts/part_000.py)
+     - [server/application_parts/part_004.py](/Users/aakritigarodia/Desktop/agentmarket/server/application_parts/part_004.py)
+   - Reason: late Phase 7 added more drift risk. This is now one of the easiest places to ship mismatch bugs.
+
+4. **Observability and benchmark closure for Phase 5**
+   - Finish the practical rollout loop:
+     - `tool_invocation_metrics`
+     - `scripts/bench_call.py`
+     - cache-hit / truncation / latency measurement
+     - surface the metrics in an internal ops view or CLI report
+   - Reason: Phase 5 added performance features, but without measurement you cannot tell whether the cheat-code story is actually true.
+
+5. **UI and DX cleanup pass on the shipped surfaces**
+   - Specifically:
+     - verify shaped-output/full-output UX in web and CLI
+     - pipeline/recipe/run status clarity
+     - recent-jobs TUI pane behavior
+     - make error blocks and job envelopes consistent across SDK/CLI/web
+   - Reason: you are now beyond “backend capability.” The next quality bar is whether a coding agent operator can use the system without friction or confusion.
+
 ## Verification Update: Phase 0 / Phase 1
 
 ## Implementation Update: Phase 5 performance work

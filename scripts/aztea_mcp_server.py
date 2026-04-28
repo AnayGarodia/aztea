@@ -179,6 +179,7 @@ class RegistryBridge:
         self._lock = threading.Lock()
         self._session_state: dict[str, Any] = {"budget_cents": None, "spent_cents": 0}
         self._entries: list[dict[str, Any]] = []
+        self._catalog_cache: list[dict[str, Any]] | None = None
         self._manifest: dict[str, Any] = {
             "tools": [],
             "count": 0,
@@ -232,6 +233,7 @@ class RegistryBridge:
         with self._lock:
             self._entries = entries
             self._manifest = manifest
+            self._catalog_cache = None  # invalidate on every refresh
             self._auth_required = False
         return manifest
 
@@ -249,6 +251,10 @@ class RegistryBridge:
         return meta_tools.get_meta_tools() + registry_tools
 
     def _catalog_entries(self) -> list[dict[str, Any]]:
+        with self._lock:
+            if self._catalog_cache is not None:
+                return self._catalog_cache
+
         entries: list[dict[str, Any]] = []
         for tool in meta_tools.get_meta_tools():
             entries.append(
@@ -278,7 +284,10 @@ class RegistryBridge:
                     "agent_id": entry.get("agent_id"),
                 }
             )
-        return [entry for entry in entries if entry.get("slug")]
+        result = [entry for entry in entries if entry.get("slug")]
+        with self._lock:
+            self._catalog_cache = result
+        return result
 
     def _catalog_entry(self, slug: str) -> dict[str, Any] | None:
         normalized = str(slug or "").strip()
@@ -321,7 +330,7 @@ class RegistryBridge:
             )
         next_step = (
             f"Call aztea_describe(slug='{result_items[0]['slug']}') to get the full schema, "
-            "then aztea_call(slug=..., arguments={{...}}) to run it."
+            "then aztea_call(slug=..., arguments={...}) to run it."
             if result_items else
             "No matches found. Try a broader query."
         )

@@ -259,12 +259,17 @@ def build_mcp_tool_entries(agents: list[dict[str, Any]]) -> list[dict[str, Any]]
         input_schema = normalize_schema(agent.get("input_schema"))
         output_schema = normalize_schema(agent.get("output_schema"))
 
-        # Inject description into each property's description if missing, so Claude
-        # can fill arguments correctly even without calling aztea_describe first.
+        # Inject description into each property that lacks one, so Claude can fill
+        # arguments correctly without calling aztea_describe first. Shallow-copy each
+        # modified property dict to avoid mutating the shared spec objects.
         props = input_schema.get("properties") or {}
-        for prop_name, prop_schema in props.items():
-            if isinstance(prop_schema, dict) and not prop_schema.get("description"):
-                prop_schema["description"] = f"{prop_name} parameter for {name}"
+        if props:
+            new_props: dict[str, Any] = {}
+            for prop_name, prop_schema in props.items():
+                if isinstance(prop_schema, dict) and not prop_schema.get("description"):
+                    prop_schema = {**prop_schema, "description": f"{prop_name} parameter for {name}"}
+                new_props[prop_name] = prop_schema
+            input_schema = {**input_schema, "properties": new_props}
 
         tool = {
             "name": tool_name,

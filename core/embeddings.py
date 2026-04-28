@@ -110,6 +110,61 @@ def embed_text(text: str) -> list[float]:
     return [0.0] * EMBEDDING_DIM
 
 
+def embed_texts_batch(texts: list[str]) -> list[list[float]]:
+    """Embed multiple texts in one batch call where the backend supports it.
+
+    Significantly faster than calling embed_text() in a loop when using
+    sentence-transformers (single model.encode pass) or OpenAI (one HTTP request).
+    """
+    if not texts:
+        return []
+    normalized = [str(t or "").strip() for t in texts]
+    if not all(normalized):
+        raise ValueError("All texts in batch must be non-empty strings.")
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if api_key:
+        import openai
+        client = openai.OpenAI(api_key=api_key)
+        response = client.embeddings.create(
+            model=_OAI_MODEL_NAME,
+            input=normalized,
+            dimensions=EMBEDDING_DIM,
+        )
+        sorted_data = sorted(response.data, key=lambda x: x.index)
+        result = []
+        for item in sorted_data:
+            arr = np.asarray(item.embedding, dtype=np.float32).reshape(-1)
+            if arr.size != EMBEDDING_DIM:
+                raise RuntimeError(f"Expected embedding dimension {EMBEDDING_DIM}, got {arr.size}")
+            result.append(arr.tolist())
+        return result
+
+    from core.feature_flags import DISABLE_EMBEDDINGS
+    if DISABLE_EMBEDDINGS:
+        return [_random_embed(t) for t in normalized]
+
+    model = _local_model()
+    if model is not None:
+        vecs = model.encode(normalized, normalize_embeddings=True, batch_size=64)
+        result = []
+        for vec in vecs:
+            arr = np.asarray(vec, dtype=np.float32).reshape(-1)
+            if arr.size != EMBEDDING_DIM:
+                padded = np.zeros(EMBEDDING_DIM, dtype=np.float32)
+                copy_len = min(arr.size, EMBEDDING_DIM)
+                padded[:copy_len] = arr[:copy_len]
+                arr = padded
+                norm = float(np.linalg.norm(arr))
+                if norm > 0:
+                    arr /= norm
+            result.append(arr.tolist())
+        return result
+
+    logger.warning("embeddings: all backends unavailable; returning zero vectors")
+    return [[0.0] * EMBEDDING_DIM for _ in normalized]
+
+
 def cosine(a: list[float] | np.ndarray, b: list[float] | np.ndarray) -> float:
     arr_a = np.asarray(a, dtype=np.float32).reshape(-1)
     arr_b = np.asarray(b, dtype=np.float32).reshape(-1)

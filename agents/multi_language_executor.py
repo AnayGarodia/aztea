@@ -95,14 +95,17 @@ def _run_typescript(code: str, stdin: str, timeout: float) -> dict[str, Any]:
         ("bun", ["bun", "run", "--smol"], "ts"),
         ("deno", ["deno", "run", "--allow-read", "--allow-env"], "ts"),
     ]:
-        if _which(runtime_name) is None:
+        bin_path = _which(runtime_name)
+        if bin_path is None:
             continue
         with tempfile.TemporaryDirectory() as tmpdir:
             fpath = os.path.join(tmpdir, f"main.{ext}")
             with open(fpath, "w") as f:
                 f.write(code)
             result = _run_subprocess(cmd_template + [fpath], tmpdir, stdin, timeout)
-        return {**result, "runtime": runtime_name}
+        version_proc = subprocess.run([bin_path, "--version"], capture_output=True, text=True, timeout=5)
+        runtime_ver = f"{runtime_name} {version_proc.stdout.strip()[:30]}"
+        return {**result, "runtime": runtime_ver}
 
     # ts-node fallback
     tsnode = _which("ts-node") or _which("npx")

@@ -45,7 +45,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
 
     # SSRF guard — all outbound URLs must pass the platform security check
     try:
-        url_security.validate_url(url)
+        url = url_security.validate_outbound_url(url, "url")
     except Exception as exc:
         return _err("browser_agent.url_blocked", str(exc))
 

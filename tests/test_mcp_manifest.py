@@ -81,3 +81,26 @@ def test_build_mcp_tool_entries_surfaces_quality_and_example_metadata():
     assert "47 calls" in description
     assert "$0.110/call" in description
     assert "Example output:" in description
+
+
+def test_build_mcp_tool_entries_does_not_mutate_original_input_schema():
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string"},
+            "limit": {"type": "integer", "description": "Explicit description"},
+        },
+    }
+    entries = mcp_manifest.build_mcp_tool_entries([
+        {
+            "agent_id": "55555555-5555-5555-5555-555555555555",
+            "name": "Schema Agent",
+            "description": "Searches things.",
+            "input_schema": input_schema,
+            "output_schema": {},
+        }
+    ])
+    built_props = entries[0]["tool"]["input_schema"]["properties"]
+    assert built_props["query"]["description"] == "query parameter for Schema Agent"
+    assert built_props["limit"]["description"] == "Explicit description"
+    assert "description" not in input_schema["properties"]["query"]

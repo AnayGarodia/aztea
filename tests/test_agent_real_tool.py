@@ -5,10 +5,12 @@ from types import SimpleNamespace
 
 import pytest
 
+from agents import browser_agent
 from agents import cve_lookup
 from agents import db_sandbox
 from agents import linter_agent
 from agents import live_endpoint_tester
+from agents import semantic_codebase_search
 from agents import type_checker
 from agents import visual_regression
 
@@ -194,7 +196,7 @@ def test_live_endpoint_tester_uses_mocked_upstream(monkeypatch):
 
 
 def test_visual_regression_returns_annotated_artifact(monkeypatch):
-    PIL = pytest.importorskip("PIL")
+    pytest.importorskip("PIL")
     from PIL import Image
     import io
 
@@ -229,3 +231,26 @@ def test_visual_regression_returns_annotated_artifact(monkeypatch):
     assert result["changed_pixels"] > 0
     assert result["artifacts"][0]["mime"] == "image/png"
     assert str(result["artifacts"][0]["url_or_base64"]).startswith("data:image/png;base64,")
+
+
+def test_browser_agent_rejects_invalid_url_via_ssrf_guard():
+    result = browser_agent.run({"url": "ftp://example.com"})
+    assert result["error"]["code"] == "browser_agent.url_blocked"
+    assert "absolute http(s) URL" in result["error"]["message"]
+
+
+def test_semantic_codebase_search_rejects_invalid_git_url_via_ssrf_guard():
+    result = semantic_codebase_search.run({"query": "pdf extraction", "git_url": "ftp://example.com/repo"})
+    assert result["error"]["code"] == "semantic_codebase_search.url_blocked"
+    assert "absolute http(s) URL" in result["error"]["message"]
+
+
+def test_semantic_codebase_search_rejects_ambiguous_source_inputs():
+    result = semantic_codebase_search.run(
+        {
+            "query": "pdf extraction",
+            "git_url": "https://github.com/example/repo",
+            "artifact": {"url_or_base64": "Zm9v", "name": "repo.zip"},
+        }
+    )
+    assert result["error"]["code"] == "semantic_codebase_search.ambiguous_source"
