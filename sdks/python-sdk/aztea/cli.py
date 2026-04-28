@@ -9,14 +9,54 @@ from pathlib import Path
 from typing import Any, Optional
 
 import typer
-from rich.console import Console
-from rich.panel import Panel
-from rich.pretty import Pretty
-from rich.table import Table
+try:
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.pretty import Pretty
+    from rich.table import Table
+except ImportError:  # pragma: no cover - exercised indirectly in CI
+    class Console:  # type: ignore[no-redef]
+        def __init__(self, stderr: bool = False) -> None:
+            self._stream = sys.stderr if stderr else sys.stdout
+
+        def print(self, value: Any) -> None:
+            print(value, file=self._stream)
+
+        def print_json(self, value: str) -> None:
+            print(value, file=self._stream)
+
+    class Panel(str):  # type: ignore[no-redef]
+        def __new__(cls, renderable: Any, border_style: str | None = None, title: str | None = None):
+            del border_style, title
+            return str.__new__(cls, str(renderable))
+
+    class Pretty:  # type: ignore[no-redef]
+        def __init__(self, value: Any, expand_all: bool | None = None) -> None:
+            del expand_all
+            self.value = value
+
+        def __str__(self) -> str:
+            return json.dumps(self.value, ensure_ascii=True, default=str, indent=2)
+
+    class Table:  # type: ignore[no-redef]
+        def __init__(self, title: str | None = None) -> None:
+            self.title = title
+            self.rows: list[tuple[Any, ...]] = []
+
+        def add_column(self, *args: Any, **kwargs: Any) -> None:
+            del args, kwargs
+
+        def add_row(self, *values: Any) -> None:
+            self.rows.append(values)
+
+        def __str__(self) -> str:
+            lines = [self.title] if self.title else []
+            lines.extend(" | ".join(str(v) for v in row) for row in self.rows)
+            return "\n".join(lines)
 
 from .client import AzteaClient
 from .config import clear_config, load_config, save_config
-from .errors import APIError, AzteaError
+from .errors import AzteaError
 
 app = typer.Typer(help="Aztea CLI")
 agents_app = typer.Typer(help="Browse and inspect agents")

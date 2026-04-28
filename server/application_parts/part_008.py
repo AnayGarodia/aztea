@@ -692,7 +692,6 @@ def registry_call(
         charge_cents=caller_charge_cents,
         agent_id=agent_id,
     )
-    start = time.monotonic()
     if builtin_agent_id is not None or hosted_skill_row is not None:
         try:
             job = jobs.create_job(
@@ -967,7 +966,6 @@ def registry_call(
             allow_redirects=False,
         )
     except http.exceptions.Timeout:
-        latency_ms = (time.monotonic() - start) * 1000
         failed = jobs.update_job_status(
             job["job_id"],
             "failed",
@@ -990,7 +988,6 @@ def registry_call(
             ),
         )
     except http.RequestException as e:
-        latency_ms = (time.monotonic() - start) * 1000
         failed = jobs.update_job_status(
             job["job_id"],
             "failed",

@@ -4,11 +4,16 @@ import json
 from dataclasses import fields, is_dataclass
 from typing import Any
 
-from rich.console import Group
-from rich.panel import Panel
-from rich.pretty import Pretty
-from rich.table import Table
-from rich.text import Text
+try:
+    from rich.console import Group
+    from rich.panel import Panel
+    from rich.pretty import Pretty
+    from rich.table import Table
+    from rich.text import Text
+    _RICH_AVAILABLE = True
+except ImportError:  # pragma: no cover - exercised indirectly in CI
+    Group = Panel = Pretty = Table = Text = None  # type: ignore[assignment]
+    _RICH_AVAILABLE = False
 
 
 def _to_plain(value: Any) -> Any:
@@ -46,7 +51,12 @@ def summarize_value(value: Any, *, max_chars: int = 240, max_items: int = 8) -> 
     return rendered
 
 
-def record_table(title: str, rows: list[tuple[str, Any]]) -> Panel:
+def record_table(title: str, rows: list[tuple[str, Any]]) -> Any:
+    if not _RICH_AVAILABLE:
+        return {
+            "title": title,
+            "rows": [(label, summarize_value(value)) for label, value in rows],
+        }
     table = Table.grid(padding=(0, 1))
     table.add_column(style="cyan", no_wrap=True)
     table.add_column(style="white")
@@ -55,16 +65,22 @@ def record_table(title: str, rows: list[tuple[str, Any]]) -> Panel:
     return Panel(table, title=title, border_style="cyan")
 
 
-def job_payload_panel(title: str, payload: Any) -> Pretty:
+def job_payload_panel(title: str, payload: Any) -> Any:
+    if not _RICH_AVAILABLE:
+        return {"title": title, "payload": _to_plain(payload)}
     return Pretty(_to_plain(payload), expand_all=True)
 
 
-def stack_renderables(*items: Any) -> Group:
+def stack_renderables(*items: Any) -> Any:
+    if not _RICH_AVAILABLE:
+        return list(items)
     return Group(*items)
 
 
-def render_status(status: str) -> Text:
+def render_status(status: str) -> Any:
     normalized = str(status or "unknown").replace("_", " ")
+    if not _RICH_AVAILABLE:
+        return normalized.upper()
     styles = {
         "complete": "green",
         "failed": "red",
