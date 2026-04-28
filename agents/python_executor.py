@@ -28,9 +28,9 @@ import tempfile
 import textwrap
 import time
 from multiprocessing.pool import Pool
-from pathlib import Path
 from typing import Any
 
+from core.executor_sandbox import build_subprocess_env
 from core import feature_flags as _feature_flags
 from core.llm import CompletionRequest, Message, run_with_fallback
 
@@ -145,7 +145,7 @@ def _get_warm_pool() -> Pool:
     if _WARM_POOL is None:
         method = "fork" if "fork" in mp.get_all_start_methods() else "spawn"
         ctx = mp.get_context(method)
-        _WARM_POOL = ctx.Pool(processes=_WARM_POOL_SIZE)
+        _WARM_POOL = ctx.Pool(processes=_WARM_POOL_SIZE, initializer=_init_pool_worker)
     return _WARM_POOL
 
 
@@ -157,39 +157,48 @@ def _reset_warm_pool() -> None:
         _WARM_POOL = None
 
 
+def _init_pool_worker() -> None:
+    # Worker processes execute untrusted user code via ``exec``. Strip the
+    # parent environment down to the small sandbox baseline before any job runs.
+    sandbox_env = build_subprocess_env()
+    os.environ.clear()
+    os.environ.update(sandbox_env)
+
+
 def _run_in_subprocess(code: str, stdin_data: str, timeout: int) -> dict[str, Any]:
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
-        f.write(code)
-        f.write("\n")
-        f.write(textwrap.dedent(_CAPTURE_SUFFIX))
-        tmp_path = f.name
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = os.path.join(tmpdir, "main.py")
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(code)
+            f.write("\n")
+            f.write(textwrap.dedent(_CAPTURE_SUFFIX))
 
-    start = time.time()
-    timed_out = False
-    try:
-        proc = subprocess.run(  # noqa: S603
-            [sys.executable, "-I", tmp_path],
-            input=stdin_data,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        stdout = proc.stdout
-        stderr_raw = proc.stderr
-        exit_code = proc.returncode
-    except subprocess.TimeoutExpired:
-        stdout = ""
-        stderr_raw = f"Execution timed out after {timeout} seconds."
-        exit_code = 124
-        timed_out = True
-    except Exception as exc:
-        stdout = ""
-        stderr_raw = f"Execution error: {exc}"
-        exit_code = 1
-    finally:
-        Path(tmp_path).unlink(missing_ok=True)
+        start = time.time()
+        timed_out = False
+        try:
+            proc = subprocess.run(  # noqa: S603
+                [sys.executable, "-I", tmp_path],
+                input=stdin_data,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                cwd=tmpdir,
+                env=build_subprocess_env(),
+            )
+            stdout = proc.stdout
+            stderr_raw = proc.stderr
+            exit_code = proc.returncode
+        except subprocess.TimeoutExpired:
+            stdout = ""
+            stderr_raw = f"Execution timed out after {timeout} seconds."
+            exit_code = 124
+            timed_out = True
+        except Exception as exc:
+            stdout = ""
+            stderr_raw = f"Execution error: {exc}"
+            exit_code = 1
 
-    elapsed_ms = int((time.time() - start) * 1000)
+        elapsed_ms = int((time.time() - start) * 1000)
 
     variables_captured = {}
     stderr_lines = []

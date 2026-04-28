@@ -114,7 +114,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
                 json=body if isinstance(body, (dict, list)) else None,
                 data=body if isinstance(body, (str, bytes)) else None,
                 timeout=timeout_seconds,
-                allow_redirects=True,
+                allow_redirects=False,
             )
             elapsed_ms = (time.monotonic() - started) * 1000
             return {

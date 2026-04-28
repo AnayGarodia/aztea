@@ -26,6 +26,8 @@ import shlex
 import subprocess
 import time
 
+from core.executor_sandbox import build_subprocess_env
+
 _TIMEOUT_MIN = 1
 _TIMEOUT_MAX = 60
 _TIMEOUT_DEFAULT = 15
@@ -93,7 +95,7 @@ def run(payload: dict) -> dict:
     extra_env = payload.get("env") or {}
     if not isinstance(extra_env, dict):
         extra_env = {}
-    env = {**os.environ, **{str(k): str(v) for k, v in extra_env.items()}}
+    env = build_subprocess_env({str(k): str(v) for k, v in extra_env.items()})
 
     timed_out = False
     start = time.monotonic()

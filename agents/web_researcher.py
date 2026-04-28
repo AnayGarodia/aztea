@@ -131,9 +131,16 @@ def _fetch_one(url: str) -> dict:
                 "User-Agent": "Mozilla/5.0 (compatible; aztea-web-researcher/1.0)",
                 "Accept": "text/html,application/xhtml+xml",
             },
-            allow_redirects=True,
+            allow_redirects=False,
             stream=True,
         )
+        if 300 <= resp.status_code < 400:
+            return {
+                "url": url,
+                "content": None,
+                "status": "error",
+                "error": "redirect_blocked — redirects are not followed for security reasons",
+            }
         resp.raise_for_status()
         chunks = []
         total = 0

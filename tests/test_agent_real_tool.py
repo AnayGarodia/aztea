@@ -13,6 +13,7 @@ from agents import hn_digest
 from agents import linter_agent
 from agents import live_endpoint_tester
 from agents import python_executor
+from agents import shell_executor
 from agents import semantic_codebase_search
 from agents import type_checker
 from agents import visual_regression
@@ -185,10 +186,11 @@ def test_live_endpoint_tester_uses_mocked_upstream(monkeypatch):
             self.calls = 0
 
         def request(self, method, url, headers=None, json=None, data=None, timeout=None, allow_redirects=None):
-            del headers, json, data, timeout, allow_redirects
+            del headers, json, data, timeout
             self.calls += 1
             assert method == "GET"
             assert url == "https://example.com/health"
+            assert allow_redirects is False
             return _FakeResponse()
 
         def close(self):
@@ -222,9 +224,10 @@ def test_visual_regression_returns_annotated_artifact(monkeypatch):
 
     payloads = [left.getvalue(), right.getvalue()]
 
-    def fake_get(url, timeout=None, headers=None):
+    def fake_get(url, timeout=None, headers=None, allow_redirects=None):
         del timeout, headers
         assert url.startswith("https://example.com/")
+        assert allow_redirects is False
         return _FakeResponse(payloads.pop(0))
 
     monkeypatch.setattr(visual_regression.requests, "get", fake_get)
@@ -410,3 +413,83 @@ def test_semantic_codebase_search_rejects_ambiguous_source_inputs():
         }
     )
     assert result["error"]["code"] == "semantic_codebase_search.ambiguous_source"
+
+
+def test_semantic_codebase_search_rejects_zip_traversal_artifact():
+    payload = {
+        "query": "pdf extraction",
+        "artifact": {
+            "name": "repo.zip",
+            "url_or_base64": (
+                "data:application/zip;base64,"
+                "UEsDBBQAAAAAABy6fFtN2YFXBQAAAAUAAAAJAAAALi4vZXZpbC50eHRoZWxsb1BLAQIUAxQAAAAAABy6fFtN2YFXBQAAAAUAAAAJAAAAAAAAAAAAAACAAQAAAAB"
+                "Li4vZXZpbC50eHRQSwUGAAAAAAEAAQA3AAAALAAAAAAA"
+            ),
+        },
+    }
+    result = semantic_codebase_search.run(payload)
+    assert result["error"]["code"] == "semantic_codebase_search.unsafe_artifact"
+    assert "unsafe traversal" in result["error"]["message"]
+
+
+def test_web_researcher_blocks_redirects(monkeypatch):
+    class _FakeResponse:
+        status_code = 302
+        headers = {"Location": "https://redirect.example"}
+
+        def raise_for_status(self) -> None:
+            return None
+
+    def fake_get(url, timeout=None, headers=None, allow_redirects=None, stream=None):
+        del timeout, headers, stream
+        assert url == "https://example.com/article"
+        assert allow_redirects is False
+        return _FakeResponse()
+
+    monkeypatch.setattr(web_researcher.requests, "get", fake_get)
+    result = web_researcher.run({"url": "https://example.com/article"})
+    assert result["error"]["code"] == "web_researcher.fetch_failed"
+    assert "redirect_blocked" in result["error"]["message"]
+
+
+def test_browser_agent_request_guard_aborts_private_subrequests():
+    events: list[str] = []
+
+    class _FakeRoute:
+        def __init__(self, url: str):
+            self.request = SimpleNamespace(url=url)
+
+        def abort(self) -> None:
+            events.append("abort")
+
+        def continue_(self) -> None:
+            events.append("continue")
+
+    class _FakeContext:
+        def __init__(self) -> None:
+            self.handler = None
+
+        def route(self, pattern: str, handler) -> None:
+            assert pattern == "**/*"
+            self.handler = handler
+
+    context = _FakeContext()
+    browser_agent._install_request_guard(context)
+    context.handler(_FakeRoute("http://127.0.0.1/private"))
+    context.handler(_FakeRoute("https://example.com/public"))
+    assert events == ["abort", "continue"]
+
+
+def test_shell_executor_does_not_forward_host_secrets(monkeypatch):
+    monkeypatch.setenv("AZTEA_API_KEY", "super-secret")
+    captured: dict[str, str] = {}
+
+    def fake_run(cmd, capture_output=None, text=None, timeout=None, cwd=None, env=None):
+        del cmd, capture_output, text, timeout, cwd
+        captured.update(env or {})
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(shell_executor.subprocess, "run", fake_run)
+    result = shell_executor.run({"command": "python -V"})
+    assert result["exit_code"] == 0
+    assert "AZTEA_API_KEY" not in captured

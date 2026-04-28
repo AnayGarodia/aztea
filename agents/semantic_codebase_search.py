@@ -34,9 +34,11 @@ import subprocess
 import tarfile
 import tempfile
 import zipfile
+from pathlib import PurePosixPath
 from typing import Any
 
 from core import url_security
+from core.executor_sandbox import build_subprocess_env
 from core.embeddings import cosine, embed_texts_batch
 from core.feature_flags import DISABLE_EMBEDDINGS
 
@@ -45,6 +47,11 @@ _MAX_TOP_K = 20
 _DEFAULT_MAX_FILE_BYTES = 100_000
 _SNIPPET_CHARS = 400
 _DEFAULT_EXTENSIONS = {".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".rb", ".java", ".cpp", ".c", ".h", ".md", ".txt", ".yaml", ".yml", ".json", ".toml"}
+_MAX_ARCHIVE_BYTES = 12 * 1024 * 1024
+_MAX_ARCHIVE_MEMBERS = 500
+_MAX_TOTAL_EXTRACTED_BYTES = 20 * 1024 * 1024
+_MAX_MEMBER_BYTES = 2 * 1024 * 1024
+_MAX_GIT_FILES = 2000
 
 
 def _err(code: str, message: str) -> dict[str, Any]:
@@ -60,53 +67,78 @@ def _file_text(data: bytes, max_bytes: int) -> str:
         return ""
 
 
+def _normalize_archive_path(path: str) -> str:
+    normalized = path.replace("\\", "/").strip()
+    rel = PurePosixPath(normalized)
+    if rel.is_absolute():
+        raise ValueError("archive contains absolute paths")
+    if any(part in {"", ".", ".."} for part in rel.parts):
+        raise ValueError("archive contains unsafe traversal paths")
+    return str(rel)
+
+
 def _extract_files_from_zip(data: bytes, extensions: set[str], max_file_bytes: int) -> dict[str, str]:
     files: dict[str, str] = {}
-    try:
-        with zipfile.ZipFile(io.BytesIO(data)) as zf:
-            for info in zf.infolist():
-                if info.is_dir():
-                    continue
-                _, ext = os.path.splitext(info.filename.lower())
-                if extensions and ext not in extensions:
-                    continue
-                try:
-                    content = zf.read(info.filename)
-                    text = _file_text(content, max_file_bytes)
-                    if text.strip():
-                        # Strip leading archive-root prefix so paths are relative
-                        path = re.sub(r"^[^/]+/", "", info.filename)
-                        files[path or info.filename] = text
-                except Exception:
-                    continue
-    except zipfile.BadZipFile:
-        pass
+    total_bytes = 0
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        members = zf.infolist()
+        if len(members) > _MAX_ARCHIVE_MEMBERS:
+            raise ValueError(f"archive contains too many files (max {_MAX_ARCHIVE_MEMBERS})")
+        for info in members:
+            if info.is_dir():
+                continue
+            if info.file_size > _MAX_MEMBER_BYTES:
+                raise ValueError(f"archive member exceeds {_MAX_MEMBER_BYTES} bytes")
+            total_bytes += info.file_size
+            if total_bytes > _MAX_TOTAL_EXTRACTED_BYTES:
+                raise ValueError(f"archive exceeds {_MAX_TOTAL_EXTRACTED_BYTES} extracted bytes")
+            normalized_path = _normalize_archive_path(info.filename)
+            _, ext = os.path.splitext(normalized_path.lower())
+            if extensions and ext not in extensions:
+                continue
+            try:
+                content = zf.read(info.filename)
+                text = _file_text(content, max_file_bytes)
+                if text.strip():
+                    path = re.sub(r"^[^/]+/", "", normalized_path)
+                    files[path or normalized_path] = text
+            except Exception:
+                continue
     return files
 
 
 def _extract_files_from_tarball(data: bytes, extensions: set[str], max_file_bytes: int) -> dict[str, str]:
     files: dict[str, str] = {}
-    try:
-        with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as tf:
-            for member in tf.getmembers():
-                if not member.isfile():
+    total_bytes = 0
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as tf:
+        members = tf.getmembers()
+        if len(members) > _MAX_ARCHIVE_MEMBERS:
+            raise ValueError(f"archive contains too many files (max {_MAX_ARCHIVE_MEMBERS})")
+        for member in members:
+            if member.issym() or member.islnk():
+                raise ValueError("archive contains links, which are not allowed")
+            if not member.isfile():
+                continue
+            if member.size > _MAX_MEMBER_BYTES:
+                raise ValueError(f"archive member exceeds {_MAX_MEMBER_BYTES} bytes")
+            total_bytes += member.size
+            if total_bytes > _MAX_TOTAL_EXTRACTED_BYTES:
+                raise ValueError(f"archive exceeds {_MAX_TOTAL_EXTRACTED_BYTES} extracted bytes")
+            normalized_path = _normalize_archive_path(member.name)
+            _, ext = os.path.splitext(normalized_path.lower())
+            if extensions and ext not in extensions:
+                continue
+            try:
+                fobj = tf.extractfile(member)
+                if fobj is None:
                     continue
-                _, ext = os.path.splitext(member.name.lower())
-                if extensions and ext not in extensions:
-                    continue
-                try:
-                    fobj = tf.extractfile(member)
-                    if fobj is None:
-                        continue
-                    content = fobj.read()
-                    text = _file_text(content, max_file_bytes)
-                    if text.strip():
-                        path = re.sub(r"^[^/]+/", "", member.name)
-                        files[path or member.name] = text
-                except Exception:
-                    continue
-    except tarfile.TarError:
-        pass
+                content = fobj.read()
+                text = _file_text(content, max_file_bytes)
+                if text.strip():
+                    path = re.sub(r"^[^/]+/", "", normalized_path)
+                    files[path or normalized_path] = text
+            except Exception:
+                continue
     return files
 
 
@@ -118,24 +150,41 @@ def _extract_artifact(artifact: dict[str, Any], extensions: set[str], max_file_b
     if raw.startswith("data:"):
         m = re.match(r"^data:[^;,]+;base64,([A-Za-z0-9+/=]+)$", raw, re.IGNORECASE)
         if not m:
-            return None
+            raise ValueError("artifact must be a base64 data URL")
         data = base64.b64decode(m.group(1))
     else:
         try:
             data = base64.b64decode(raw)
         except Exception:
-            return None
+            raise ValueError("artifact must be raw base64 or a base64 data URL")
+    if len(data) > _MAX_ARCHIVE_BYTES:
+        raise ValueError(f"artifact exceeds {_MAX_ARCHIVE_BYTES} bytes")
 
     # Attempt zip first, then tarball
     if name.endswith(".zip") or raw.startswith("data:application/zip") or raw.startswith("data:application/x-zip"):
-        files = _extract_files_from_zip(data, extensions, max_file_bytes)
+        try:
+            files = _extract_files_from_zip(data, extensions, max_file_bytes)
+            if files:
+                return files
+        except ValueError:
+            raise
+        except zipfile.BadZipFile:
+            pass
+    try:
+        files = _extract_files_from_tarball(data, extensions, max_file_bytes)
         if files:
             return files
-    files = _extract_files_from_tarball(data, extensions, max_file_bytes)
-    if files:
-        return files
-    # Last attempt: try zip anyway
-    return _extract_files_from_zip(data, extensions, max_file_bytes) or None
+    except ValueError:
+        raise
+    except tarfile.TarError:
+        pass
+    try:
+        return _extract_files_from_zip(data, extensions, max_file_bytes) or None
+    except ValueError:
+        raise
+    except zipfile.BadZipFile:
+        pass
+    return None
 
 
 def _clone_git_repo(git_url: str, extensions: set[str], max_file_bytes: int) -> dict[str, str] | dict:
@@ -154,6 +203,7 @@ def _clone_git_repo(git_url: str, extensions: set[str], max_file_bytes: int) -> 
                 capture_output=True,
                 timeout=60,
                 check=True,
+                env=build_subprocess_env(),
             )
         except subprocess.CalledProcessError as exc:
             return _err("semantic_codebase_search.clone_failed", f"git clone failed: {exc.stderr[:200] if exc.stderr else ''}")
@@ -176,6 +226,8 @@ def _clone_git_repo(git_url: str, extensions: set[str], max_file_bytes: int) -> 
                     text = _file_text(content, max_file_bytes)
                     if text.strip():
                         files[rel_path] = text
+                    if len(files) >= _MAX_GIT_FILES:
+                        return files
                 except Exception:
                     continue
         return files
@@ -228,7 +280,10 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
 
     source = "artifact" if artifact else "git"
     if artifact:
-        files = _extract_artifact(artifact, extensions, max_file_bytes)
+        try:
+            files = _extract_artifact(artifact, extensions, max_file_bytes)
+        except ValueError as exc:
+            return _err("semantic_codebase_search.unsafe_artifact", str(exc))
         if files is None:
             return _err("semantic_codebase_search.extraction_failed", "Could not extract files from the provided artifact. Ensure it is a valid zip or tarball.")
     else:

@@ -38,6 +38,21 @@ def _err(code: str, message: str) -> dict[str, Any]:
     return {"error": {"code": code, "message": message}}
 
 
+def _install_request_guard(context: Any) -> None:  # noqa: ANN401
+    """Abort browser requests that pivot to blocked/private targets."""
+
+    def _guard(route: Any) -> None:  # noqa: ANN401
+        request = route.request
+        try:
+            url_security.validate_outbound_url(request.url, "url")
+        except Exception:
+            route.abort()
+            return
+        route.continue_()
+
+    context.route("**/*", _guard)
+
+
 def run(payload: dict[str, Any]) -> dict[str, Any]:
     """Navigate a URL with headless Chromium and return page content + screenshot.
 
@@ -89,6 +104,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
                 viewport={"width": vp_width, "height": vp_height},
                 user_agent="Aztea-Browser-Agent/1.0 (headless; for authorized auditing)",
             )
+            _install_request_guard(context)
             page = context.new_page()
 
             if capture_network:

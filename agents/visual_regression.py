@@ -71,7 +71,10 @@ def _load_image_bytes(source: str, field_name: str) -> bytes:
         safe_url,
         timeout=10,
         headers={"User-Agent": "aztea-visual-regression/1.0"},
+        allow_redirects=False,
     )
+    if 300 <= response.status_code < 400:
+        raise ValueError(f"{field_name} redirects are not allowed.")
     response.raise_for_status()
     if len(response.content) > _MAX_IMAGE_BYTES:
         raise ValueError(f"{field_name} exceeds {_MAX_IMAGE_BYTES} bytes.")

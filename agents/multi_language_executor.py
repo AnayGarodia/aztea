@@ -30,6 +30,8 @@ import tempfile
 import time
 from typing import Any
 
+from core.executor_sandbox import build_subprocess_env
+
 _TIMEOUT_MAX = 30
 _OUTPUT_TRUNCATE = 20_000
 
@@ -59,6 +61,7 @@ def _run_subprocess(
             text=True,
             timeout=timeout,
             cwd=cwd,
+            env=build_subprocess_env(),
         )
     except subprocess.TimeoutExpired:
         return {"stdout": "", "stderr": f"Timed out after {timeout}s.", "exit_code": 124, "timed_out": True}
@@ -72,7 +75,7 @@ def _run_javascript(code: str, stdin: str, timeout: float) -> dict[str, Any]:
     # Prefer bun > deno > node for JS
     for runtime_name, cmd_template in [
         ("bun", ["bun", "run", "--smol"]),
-        ("deno", ["deno", "run", "--allow-read", "--allow-env"]),
+        ("deno", ["deno", "run", "--allow-read"]),
         ("node", ["node"]),
     ]:
         bin_path = _which(runtime_name)
@@ -93,7 +96,7 @@ def _run_typescript(code: str, stdin: str, timeout: float) -> dict[str, Any]:
     # Prefer bun (native TS) > deno (native TS) > ts-node
     for runtime_name, cmd_template, ext in [
         ("bun", ["bun", "run", "--smol"], "ts"),
-        ("deno", ["deno", "run", "--allow-read", "--allow-env"], "ts"),
+        ("deno", ["deno", "run", "--allow-read"], "ts"),
     ]:
         bin_path = _which(runtime_name)
         if bin_path is None:
@@ -156,7 +159,12 @@ def _run_rust(code: str, stdin: str, timeout: float) -> dict[str, Any]:
             f.write(code)
         # Compile
         compile_result = subprocess.run(
-            [rustc, src, "-o", out], capture_output=True, text=True, timeout=60, cwd=tmpdir
+            [rustc, src, "-o", out],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            cwd=tmpdir,
+            env=build_subprocess_env(),
         )
         if compile_result.returncode != 0:
             return {
