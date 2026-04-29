@@ -50,6 +50,12 @@ _AUTH_TOOL: dict[str, Any] = {
         "properties": {},
         "required": [],
     },
+    "annotations": {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "openWorldHint": True,
+        "idempotentHint": True,
+    },
 }
 
 _LAZY_SEARCH_TOOL: dict[str, Any] = {
@@ -72,6 +78,12 @@ _LAZY_SEARCH_TOOL: dict[str, Any] = {
         },
         "required": ["query"],
     },
+    "annotations": {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "openWorldHint": True,
+        "idempotentHint": True,
+    },
 }
 
 _LAZY_DESCRIBE_TOOL: dict[str, Any] = {
@@ -87,6 +99,12 @@ _LAZY_DESCRIBE_TOOL: dict[str, Any] = {
             "slug": {"type": "string", "description": "Tool slug exactly as returned by aztea_search (e.g. 'python_code_executor', 'web_researcher_agent')."},
         },
         "required": ["slug"],
+    },
+    "annotations": {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "openWorldHint": True,
+        "idempotentHint": True,
     },
 }
 
@@ -113,6 +131,12 @@ _LAZY_CALL_TOOL: dict[str, Any] = {
         },
         "required": ["slug", "arguments"],
     },
+    "annotations": {
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "openWorldHint": True,
+        "idempotentHint": False,
+    },
 }
 
 
@@ -127,6 +151,85 @@ def _parse_data_uri(value: str) -> tuple[str | None, str | None]:
 
 
 def _mcp_text_from_payload(payload: Any) -> str:
+    if isinstance(payload, dict):
+        if "results" in payload and isinstance(payload.get("results"), list) and "query" in payload:
+            lines = [f"Aztea matches for: {payload.get('query')}"]
+            for idx, item in enumerate(payload["results"][:8], start=1):
+                if not isinstance(item, dict):
+                    continue
+                slug = str(item.get("slug") or "").strip()
+                name = str(item.get("name") or slug).strip()
+                category = str(item.get("category") or "").strip()
+                price = item.get("price_per_call_usd")
+                trust = item.get("trust_score")
+                success = item.get("success_rate")
+                quality_summary = str(item.get("quality_summary") or "").strip()
+                header_parts = [f"{idx}. {name} ({slug})"]
+                if category:
+                    header_parts.append(category)
+                if price is not None:
+                    try:
+                        header_parts.append(f"${float(price):.2f}/call")
+                    except (TypeError, ValueError):
+                        pass
+                if trust is not None:
+                    header_parts.append(f"trust {int(float(trust))}")
+                if success is not None:
+                    header_parts.append(f"{int(round(float(success) * 100))}% success")
+                lines.append(" | ".join(header_parts))
+                if quality_summary:
+                    lines.append(f"   {quality_summary}")
+                best_for = item.get("best_for")
+                if isinstance(best_for, list) and best_for:
+                    lines.append(f"   Best for: {', '.join(str(x) for x in best_for[:3])}")
+            workflow_hints = payload.get("workflow_hints")
+            if isinstance(workflow_hints, list) and workflow_hints:
+                lines.append("Workflow hints:")
+                for hint in workflow_hints[:4]:
+                    lines.append(f"- {hint}")
+            next_step = str(payload.get("next_step") or "").strip()
+            if next_step:
+                lines.append(f"Next: {next_step}")
+            return "\n".join(lines)
+        if "slug" in payload and "input_schema" in payload and "output_schema" in payload:
+            slug = str(payload.get("slug") or "").strip()
+            name = str(payload.get("name") or slug).strip()
+            lines = [f"{name} ({slug})"]
+            description = str(payload.get("description") or "").strip()
+            if description:
+                lines.append(description)
+            best_for = payload.get("best_for")
+            if isinstance(best_for, list) and best_for:
+                lines.append(f"Best for: {', '.join(str(x) for x in best_for[:4])}")
+            required = payload.get("required_fields")
+            if isinstance(required, list):
+                lines.append(f"Required fields: {', '.join(str(x) for x in required) if required else 'none'}")
+            optional = payload.get("optional_fields")
+            if isinstance(optional, list) and optional:
+                lines.append(f"Optional fields: {', '.join(str(x) for x in optional[:8])}")
+            next_step = str(payload.get("next_step") or "").strip()
+            if next_step:
+                lines.append(f"Next: {next_step}")
+            return "\n".join(lines)
+        if "job_id" in payload and "status" in payload:
+            lines = [f"Aztea job {payload.get('job_id')} | status: {payload.get('status')}"]
+            if payload.get("latency_ms") is not None:
+                lines.append(f"Latency: {_compact_latency(payload.get('latency_ms')) or payload.get('latency_ms')}")
+            if payload.get("cost_usd") is not None:
+                try:
+                    lines.append(f"Cost: ${float(payload.get('cost_usd')):.2f}")
+                except (TypeError, ValueError):
+                    pass
+            if payload.get("cached") is True:
+                lines.append("Cached result")
+            output = payload.get("output")
+            if isinstance(output, dict):
+                for key in ("summary", "message", "answer", "title"):
+                    value = output.get(key)
+                    if isinstance(value, str) and value.strip():
+                        lines.append(value.strip())
+                        break
+            return "\n".join(lines)
     if isinstance(payload, dict):
         for key in ("summary", "message", "answer", "title", "one_line_summary", "signal_reasoning"):
             value = payload.get(key)

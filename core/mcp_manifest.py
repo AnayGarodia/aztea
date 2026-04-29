@@ -213,6 +213,29 @@ def _use_cases_line(agent: dict[str, Any]) -> str:
     return ", ".join(cleaned[:4])
 
 
+def _tool_annotations(agent: dict[str, Any]) -> dict[str, Any]:
+    tooling_kind = str(agent.get("tooling_kind") or "").strip().lower()
+    read_only_kinds = {
+        "live_api",
+        "live_api_plus_llm",
+        "live_fetch_plus_llm",
+        "live_network_checks",
+        "tool_execution",
+        "llm_structured_analysis",
+        "hybrid_search",
+        "browser_automation",
+    }
+    read_only = tooling_kind in read_only_kinds
+    if str(agent.get("name") or "").strip().lower() in {"shell executor", "python code executor", "multi-file python executor", "multi-language executor"}:
+        read_only = False
+    return {
+        "readOnlyHint": read_only,
+        "destructiveHint": False,
+        "openWorldHint": True,
+        "idempotentHint": bool(read_only and agent.get("cacheable")),
+    }
+
+
 def _example_snippet(agent: dict[str, Any]) -> str:
     """Return a short inline work example from output_examples, if available."""
     examples = agent.get("output_examples")
@@ -319,6 +342,7 @@ def build_mcp_tool_entries(agents: list[dict[str, Any]]) -> list[dict[str, Any]]
             "description": tool_description,
             "input_schema": input_schema,
             "output_schema": output_schema,
+            "annotations": _tool_annotations(agent),
         }
         entries.append(
             {

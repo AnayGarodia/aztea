@@ -18,6 +18,15 @@ _CLIENT_ID_HEADER = "X-Aztea-Client"
 _AZTEA_PROTOCOL_VERSION = "1.0"
 _DEFAULT_CLIENT_ID = (os.environ.get("AZTEA_CLIENT_ID", "claude-code") or "claude-code").strip()
 
+
+def _annotations(*, read_only: bool, destructive: bool = False, open_world: bool = True, idempotent: bool = False) -> dict[str, Any]:
+    return {
+        "readOnlyHint": read_only,
+        "destructiveHint": destructive,
+        "openWorldHint": open_world,
+        "idempotentHint": idempotent,
+    }
+
 # ─── Tool schemas ────────────────────────────────────────────────────────────
 
 _TOOLS: list[dict[str, Any]] = [
@@ -637,9 +646,41 @@ _TOOLS: list[dict[str, Any]] = [
 
 META_TOOL_NAMES: frozenset[str] = frozenset(t["name"] for t in _TOOLS)
 
+_META_TOOL_ANNOTATIONS: dict[str, dict[str, Any]] = {
+    "aztea_wallet_balance": _annotations(read_only=True, idempotent=True),
+    "aztea_spend_summary": _annotations(read_only=True, idempotent=True),
+    "aztea_set_daily_limit": _annotations(read_only=False, idempotent=True),
+    "aztea_topup_url": _annotations(read_only=False, idempotent=False),
+    "aztea_session_summary": _annotations(read_only=True, idempotent=False),
+    "aztea_set_session_budget": _annotations(read_only=False, idempotent=True, open_world=False),
+    "aztea_estimate_cost": _annotations(read_only=True, idempotent=False),
+    "aztea_list_recipes": _annotations(read_only=True, idempotent=True),
+    "aztea_list_pipelines": _annotations(read_only=True, idempotent=True),
+    "aztea_hire_async": _annotations(read_only=False, idempotent=False),
+    "aztea_job_status": _annotations(read_only=True, idempotent=False),
+    "aztea_clarify": _annotations(read_only=False, idempotent=False),
+    "aztea_rate_job": _annotations(read_only=False, idempotent=False),
+    "aztea_dispute_job": _annotations(read_only=False, idempotent=False),
+    "aztea_verify_output": _annotations(read_only=False, idempotent=False),
+    "aztea_discover": _annotations(read_only=True, idempotent=True),
+    "aztea_get_examples": _annotations(read_only=True, idempotent=True),
+    "aztea_hire_batch": _annotations(read_only=False, idempotent=False),
+    "aztea_compare_agents": _annotations(read_only=False, idempotent=False),
+    "aztea_compare_status": _annotations(read_only=True, idempotent=False),
+    "aztea_select_compare_winner": _annotations(read_only=False, idempotent=False),
+    "aztea_run_pipeline": _annotations(read_only=False, idempotent=False),
+    "aztea_pipeline_status": _annotations(read_only=True, idempotent=False),
+    "aztea_run_recipe": _annotations(read_only=False, idempotent=False),
+}
+
 
 def get_meta_tools() -> list[dict[str, Any]]:
-    return list(_TOOLS)
+    enriched: list[dict[str, Any]] = []
+    for tool in _TOOLS:
+        item = dict(tool)
+        item["annotations"] = dict(_META_TOOL_ANNOTATIONS.get(item["name"], _annotations(read_only=False)))
+        enriched.append(item)
+    return enriched
 
 
 # ─── Dispatcher ──────────────────────────────────────────────────────────────

@@ -65,6 +65,8 @@ def test_registry_bridge_uses_lazy_tool_list_when_flag_enabled(monkeypatch):
     tools = bridge.tools()
     names = [tool["name"] for tool in tools]
     assert names == ["aztea_search", "aztea_describe", "aztea_call"]
+    assert tools[0]["annotations"]["readOnlyHint"] is True
+    assert tools[2]["annotations"]["readOnlyHint"] is False
 
 
 def test_registry_bridge_lazy_search_and_describe(monkeypatch):
@@ -123,3 +125,28 @@ def test_registry_bridge_lazy_search_returns_workflow_hints_for_parallel_tasks(m
     hints = result.get("workflow_hints") or []
     assert any("aztea_hire_batch" in hint for hint in hints)
     assert any("aztea_set_session_budget" in hint for hint in hints)
+
+
+def test_mcp_text_formatter_makes_search_results_readable():
+    text = _MODULE._mcp_text_from_payload(
+        {
+            "query": "review many files",
+            "results": [
+                {
+                    "slug": "aztea_hire_batch",
+                    "name": "aztea_hire_batch",
+                    "category": "Platform",
+                    "price_per_call_usd": None,
+                    "trust_score": None,
+                    "success_rate": None,
+                    "quality_summary": "Claude-ready | stable",
+                    "best_for": ["parallel subtasks"],
+                }
+            ],
+            "workflow_hints": ["This task looks parallelizable. Consider aztea_hire_batch for many independent subtasks."],
+            "next_step": "Best match: aztea_hire_batch.",
+        }
+    )
+    assert "Aztea matches for: review many files" in text
+    assert "parallel subtasks" in text
+    assert "Workflow hints:" in text

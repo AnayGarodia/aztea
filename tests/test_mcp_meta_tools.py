@@ -57,6 +57,12 @@ def test_meta_tool_catalog_exposes_claude_control_plane():
     } <= tool_names
 
 
+def test_meta_tools_include_annotations_for_permission_and_parallel_hints():
+    by_name = {tool["name"]: tool for tool in meta_tools.get_meta_tools()}
+    assert by_name["aztea_job_status"]["annotations"]["readOnlyHint"] is True
+    assert by_name["aztea_hire_async"]["annotations"]["readOnlyHint"] is False
+
+
 def test_verify_output_uses_jobs_verification_route(monkeypatch):
     captured: dict[str, object] = {}
 
