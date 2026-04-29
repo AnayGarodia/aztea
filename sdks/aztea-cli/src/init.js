@@ -28,7 +28,7 @@ function post(url, body) {
       headers: {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(payload),
-        'User-Agent': 'aztea-cli/0.14.0',
+        'User-Agent': 'aztea-cli/0.14.1',
       },
     }, (res) => {
       let data = ''
