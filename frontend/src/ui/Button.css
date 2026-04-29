@@ -39,32 +39,38 @@
 .btn--md { padding: 9px 18px; }
 .btn--lg { padding: 12px 24px; font-size: 15px; border-radius: var(--r-lg); }
 
-/* Primary */
+/* Primary — Deep Teal w/ copper edge highlight on hover */
 .btn--primary {
   background: var(--accent);
   color: var(--accent-ink);
   font-weight: 600;
+  border-color: var(--accent-press);
   box-shadow: inset 0 1px 0 rgba(255,255,255,.12), 0 1px 2px rgba(0,0,0,.12);
 }
 .btn--primary:hover:not(:disabled) {
   background: var(--accent-hover);
-  box-shadow: var(--shadow-accent);
+  border-color: var(--copper);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--copper) 35%, transparent),
+    0 6px 18px color-mix(in srgb, var(--accent) 24%, transparent);
 }
 .btn--primary:active:not(:disabled) { background: var(--accent-press); }
 .btn--primary:hover:not(:disabled) .btn__icon--right { transform: translateX(3px); }
 
-/* Secondary */
+/* Secondary — Card White w/ stone border, terracotta on hover */
 .btn--secondary {
-  background: color-mix(in srgb, var(--surface) 88%, var(--parchment));
+  background: var(--surface);
   color: var(--text-primary);
   border-color: var(--border);
   box-shadow: var(--shadow-xs);
 }
 .btn--secondary:hover:not(:disabled) {
-  background: var(--surface);
-  border-color: var(--copper);
-  box-shadow: 0 8px 18px rgba(92, 69, 43, 0.08);
+  background: var(--canvas-warm);
+  border-color: var(--terracotta);
+  color: var(--text-primary);
+  box-shadow: 0 6px 16px rgba(92, 69, 43, 0.08);
 }
+.btn--secondary:hover:not(:disabled) .btn__icon--right { transform: translateX(2px); color: var(--terracotta); }
 
 /* Ghost */
 .btn--ghost {

@@ -2,10 +2,24 @@
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
+  position: relative;
+}
+
+/* Subtle terracotta corner mark — marks the card as a marketplace object */
+.card--marked::after {
+  content: '';
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 8px;
+  height: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--terracotta) 50%, transparent);
+  border-right: 1px solid color-mix(in srgb, var(--terracotta) 50%, transparent);
+  pointer-events: none;
 }
 
 .card--elevated {
-  background: var(--surface-2);
+  background: var(--surface);
   box-shadow: var(--shadow-md);
 }
 
@@ -23,14 +37,16 @@
 .card--interactive {
   cursor: pointer;
   transition:
-    border-color 0.2s ease,
-    background 0.2s ease,
-    box-shadow 0.2s ease;
+    border-color 0.2s var(--ease),
+    background 0.2s var(--ease),
+    box-shadow 0.2s var(--ease),
+    transform 0.2s var(--ease);
 }
 .card--interactive:hover {
-  border-color: var(--border-bright);
-  background: var(--surface-2);
+  border-color: color-mix(in srgb, var(--terracotta) 50%, var(--border));
+  background: color-mix(in srgb, var(--canvas-warm) 60%, var(--surface));
   box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
 }
 
 .card__header {
@@ -41,6 +57,6 @@
 .card__footer {
   padding: 12px 20px;
   border-top: 1px solid var(--border);
-  background: var(--surface-2);
+  background: var(--canvas-warm);
   border-radius: 0 0 var(--r-lg) var(--r-lg);
 }

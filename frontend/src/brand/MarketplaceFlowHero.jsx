@@ -1,48 +1,55 @@
-import { ArrowRight, CheckCircle2, FileCode2, ShieldCheck, TerminalSquare } from 'lucide-react'
-import AgentSigil from './AgentSigil'
+import { useState } from 'react'
+import {
+  ArrowRight, CheckCircle2, FileCode2, ShieldCheck, TerminalSquare, Code2, ShieldAlert, Package,
+} from 'lucide-react'
+import RangoliHalo from './RangoliHalo'
 import './MarketplaceFlowHero.css'
 
-function Specialist({ id, name, price, label }) {
-  return (
-    <div className="mfh__specialist">
-      <div className="mfh__specialist-head">
-        <AgentSigil agentId={id} size="sm" />
-        <span className="mfh__specialist-label">{label}</span>
-      </div>
-      <strong>{name}</strong>
-      <span className="mfh__specialist-price">{price}/call</span>
-    </div>
-  )
-}
+const SPECIALISTS = [
+  { id: 'code-reviewer',       name: 'Code Reviewer',      label: 'Structured review',    price: '$0.05', icon: Code2 },
+  { id: 'dependency-auditor',  name: 'Dependency Auditor', label: 'Live CVE data',        price: '$0.04', icon: Package },
+  { id: 'python-executor',     name: 'Python Executor',    label: 'Sandboxed execution',  price: '$0.03', icon: TerminalSquare },
+]
 
+// Hero diagram: Caller → AZTEA (in rangoli halo) → 3 specialist agents,
+// with a sage return route carrying logs/artifacts back to the caller.
+// Hovering a specialist activates the route from caller → AZTEA → that card.
 export default function MarketplaceFlowHero() {
+  const [active, setActive] = useState(null)
+
   return (
     <div className="mfh">
-      <div className="mfh__halo" />
-      <div className="mfh__grid">
-        <div className="mfh__node mfh__node--caller">
-          <div className="mfh__node-icon">
-            <TerminalSquare size={18} />
-          </div>
-          <div>
-            <p className="mfh__node-kicker">Caller Agent</p>
-            <strong>Claude Code</strong>
-          </div>
+      {/* ── Caller node ── */}
+      <div className={`mfh__node mfh__node--caller ${active != null ? 'is-active' : ''}`}>
+        <div className="mfh__node-icon">
+          <TerminalSquare size={16} strokeWidth={1.6} />
         </div>
-
-        <div className="mfh__route mfh__route--in">
-          <span />
-          <ArrowRight size={16} />
-          <span />
+        <div className="mfh__node-text">
+          <p className="mfh__node-kicker">Caller agent</p>
+          <strong>Claude Code</strong>
         </div>
+      </div>
 
-        <div className="mfh__node mfh__node--market">
+      {/* ── Routing line: caller → AZTEA ── */}
+      <svg className="mfh__route mfh__route--in" viewBox="0 0 100 12" preserveAspectRatio="none" aria-hidden>
+        <line x1="0" y1="6" x2="100" y2="6"
+          stroke={active != null ? 'var(--terracotta)' : 'currentColor'}
+          strokeWidth="1.4"
+          strokeDasharray="3 3"
+          opacity="0.65"
+        />
+      </svg>
+
+      {/* ── AZTEA marketplace node — sits in rangoli halo ── */}
+      <div className={`mfh__node mfh__node--market ${active != null ? 'is-active' : ''}`}>
+        <RangoliHalo size={260} className="mfh__halo" />
+        <div className="mfh__market-inner">
           <div className="mfh__node-icon mfh__node-icon--market">
-            <ShieldCheck size={18} />
+            <ShieldCheck size={18} strokeWidth={1.6} />
           </div>
-          <div>
-            <p className="mfh__node-kicker">AZTEA Marketplace</p>
-            <strong>Routing, payment, delivery</strong>
+          <div className="mfh__node-text">
+            <p className="mfh__node-kicker">Aztea marketplace</p>
+            <strong>Routing · escrow · delivery</strong>
           </div>
           <div className="mfh__market-tags">
             <span>Escrow</span>
@@ -50,25 +57,68 @@ export default function MarketplaceFlowHero() {
             <span>Refund on failure</span>
           </div>
         </div>
-
-        <div className="mfh__specialists">
-          <Specialist id="8cea848f-a165-5d6c-b1a0-7d14fff77d14" name="Code Reviewer" label="Structured review" price="$0.05" />
-          <Specialist id="11fab82a-426e-513e-abf3-528d99ef2b87" name="Dependency Auditor" label="Live CVE data" price="$0.04" />
-          <Specialist id="040dc3f5-afe7-5db7-b253-4936090cc7af" name="Python Executor" label="Sandboxed execution" price="$0.03" />
-        </div>
       </div>
 
+      {/* ── Specialists ── */}
+      <div className="mfh__specialists">
+        {SPECIALISTS.map((s) => {
+          const Icon = s.icon
+          const isHot = active === s.id
+          return (
+            <div
+              key={s.id}
+              className={`mfh__specialist ${isHot ? 'is-active' : ''}`}
+              onMouseEnter={() => setActive(s.id)}
+              onMouseLeave={() => setActive(null)}
+            >
+              <svg
+                className="mfh__route mfh__route--branch"
+                viewBox="0 0 60 12"
+                preserveAspectRatio="none"
+                aria-hidden
+              >
+                <line
+                  x1="0" y1="6" x2="60" y2="6"
+                  stroke={isHot ? 'var(--terracotta)' : 'currentColor'}
+                  strokeWidth="1.2"
+                  strokeDasharray="3 3"
+                  opacity={isHot ? 0.85 : 0.45}
+                />
+              </svg>
+              <div className="mfh__specialist-card">
+                <div className="mfh__specialist-icon"><Icon size={14} strokeWidth={1.6} /></div>
+                <div className="mfh__specialist-body">
+                  <p className="mfh__specialist-label">{s.label}</p>
+                  <strong>{s.name}</strong>
+                </div>
+                <span className="mfh__specialist-price">{s.price}</span>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      {/* ── Return route: artifacts come back through AZTEA ── */}
       <div className="mfh__return">
-        <div className="mfh__return-line" />
-        <div className="mfh__artifact-card">
-          <div className="mfh__artifact-head">
-            <FileCode2 size={16} />
-            <span>Results · logs · artifacts</span>
+        <svg className="mfh__return-line" viewBox="0 0 600 40" preserveAspectRatio="none" aria-hidden>
+          <path
+            d="M 580 0 Q 580 32, 540 32 L 60 32 Q 20 32, 20 0"
+            stroke="var(--sage)"
+            strokeWidth="1.2"
+            fill="none"
+            strokeDasharray="4 4"
+            opacity="0.55"
+          />
+        </svg>
+        <div className="mfh__return-card">
+          <div className="mfh__return-card-icon"><FileCode2 size={14} strokeWidth={1.7} /></div>
+          <div className="mfh__return-card-body">
+            <span className="mfh__return-card-kicker">Return delivery</span>
+            <strong>Results · logs · artifacts</strong>
           </div>
-          <div className="mfh__artifact-meta">
-            <span><CheckCircle2 size={14} /> Verified delivery</span>
-            <span>Traceable job output</span>
-          </div>
+          <span className="mfh__return-card-trust">
+            <CheckCircle2 size={12} strokeWidth={2} /> Verified
+          </span>
         </div>
       </div>
     </div>

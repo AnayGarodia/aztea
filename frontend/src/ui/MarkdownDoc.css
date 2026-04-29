@@ -85,15 +85,32 @@
 }
 
 .markdown-doc pre {
-  background: #123231;
-  color: #f4ede0;
-  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
-  border-radius: 18px;
-  padding: 1rem 1.2rem;
+  background: #102B2F;
+  color: #FBF7EF;
+  border: 1px solid #1F4549;
+  border-radius: 14px;
+  padding: 1.05rem 1.25rem;
   overflow-x: auto;
-  line-height: 1.6;
+  line-height: 1.62;
   box-shadow: var(--shadow-sm);
+  position: relative;
+  font-family: var(--font-mono);
 }
+.markdown-doc pre::before {
+  content: '$';
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--copper);
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  font-weight: 700;
+  opacity: 0;
+  pointer-events: none;
+}
+.markdown-doc pre[data-prompt]::before { opacity: 0.7; }
+.markdown-doc pre[data-prompt] { padding-left: 32px; }
 
 .markdown-doc pre code {
   border: none;

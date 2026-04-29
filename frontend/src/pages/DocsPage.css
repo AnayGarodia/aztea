@@ -208,11 +208,12 @@
   background: color-mix(in srgb, var(--surface) 74%, var(--parchment));
 }
 .docs-nav__link--active {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent-bg) 82%, var(--surface));
-  border-color: color-mix(in srgb, var(--copper) 40%, var(--accent-border));
-  box-shadow: inset 3px 0 0 var(--copper);
+  color: var(--text-primary);
+  background: var(--canvas-warm);
+  border-color: color-mix(in srgb, var(--terracotta) 40%, var(--border));
+  box-shadow: inset 3px 0 0 var(--terracotta);
 }
+.docs-nav__link--active .docs-nav__link-title { color: var(--text-primary); }
 
 .docs-nav__link-title { color: inherit; }
 

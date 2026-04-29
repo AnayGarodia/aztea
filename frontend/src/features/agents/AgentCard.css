@@ -1,24 +1,27 @@
-/* ── Shell ───────────────────────────────────────────────────── */
+/* ── Marketplace listing card ─────────────────────────────────
+   Each card is one hireable specialist. Card White background,
+   warm stone border, terracotta corner mark + price, sage trust.
+─────────────────────────────────────────────────────────────── */
 .ac {
   display: flex;
   flex-direction: column;
-  gap: 11px;
-  background: color-mix(in srgb, var(--surface) 88%, var(--parchment));
+  gap: 12px;
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 18px;
   cursor: pointer;
   height: 100%;
-  padding: 20px 20px 16px;
+  padding: 22px 22px 18px;
   will-change: transform;
   transition:
-    border-color 0.2s ease,
-    box-shadow   0.2s ease,
-    transform    0.22s ease;
+    border-color 0.2s var(--ease),
+    box-shadow   0.2s var(--ease),
+    transform    0.22s var(--ease);
   position: relative;
   overflow: hidden;
 }
 
-/* Subtle corner bracket — marks the card as a hireable listing */
+/* Terracotta corner bracket — marks the card as a marketplace listing */
 .ac::after {
   content: '';
   position: absolute;
@@ -26,41 +29,30 @@
   right: 14px;
   width: 22px;
   height: 22px;
-  border-top: 1.5px solid color-mix(in srgb, var(--copper) 38%, transparent);
-  border-right: 1.5px solid color-mix(in srgb, var(--copper) 38%, transparent);
-  border-radius: 0 10px 0 0;
+  border-top: 1.5px solid color-mix(in srgb, var(--terracotta) 38%, transparent);
+  border-right: 1.5px solid color-mix(in srgb, var(--terracotta) 38%, transparent);
+  border-radius: 0 8px 0 0;
   pointer-events: none;
-  transition: opacity 0.2s ease;
-}
-
-/* Warm inner glow on hover — feels like the card is waking up */
-.ac::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: 18px;
-  background: radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--copper-bg) 60%, transparent), transparent 65%);
-  opacity: 0;
-  transition: opacity 0.3s ease;
-  pointer-events: none;
+  transition: opacity 0.2s ease, border-color 0.2s ease;
 }
 
 .ac:hover {
-  border-color: color-mix(in srgb, var(--copper) 65%, var(--border));
+  border-color: var(--terracotta);
   box-shadow:
     var(--shadow-md),
-    0 0 0 1px color-mix(in srgb, var(--copper) 20%, transparent) inset;
+    inset 0 0 0 1px color-mix(in srgb, var(--terracotta) 14%, transparent);
   transform: translateY(-3px);
 }
 
-.ac:hover::before { opacity: 1; }
-.ac:hover::after { opacity: 0.7; }
-
-.ac--featured {
-  background: color-mix(in srgb, var(--surface) 80%, var(--parchment));
-  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+.ac:hover::after {
+  border-top-color: var(--terracotta);
+  border-right-color: var(--terracotta);
 }
 
+.ac--featured {
+  background: var(--surface);
+  border-color: color-mix(in srgb, var(--accent) 26%, var(--border));
+}
 .ac--featured::after {
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
@@ -70,7 +62,7 @@
   box-shadow: var(--focus-ring);
 }
 
-/* ── Header ──────────────────────────────────────────────────── */
+/* ── Header ──────────────────────────────────────────────── */
 .ac__head {
   display: flex;
   align-items: flex-start;
@@ -93,20 +85,21 @@
   border-radius: 999px;
   font-size: 0.625rem;
   font-weight: 700;
-  letter-spacing: 0.07em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
+  font-family: var(--font-sans);
 }
 
 .ac__category-pill {
-  background: var(--accent-bg);
-  border: 1px solid var(--accent-border);
-  color: var(--accent);
+  background: var(--sage-bg);
+  border: 1px solid var(--sage-border);
+  color: var(--sage-strong);
 }
 
 .ac__trust-pill {
   background: var(--sage-bg);
   border: 1px solid var(--sage-border);
-  color: var(--sage);
+  color: var(--sage-strong);
 }
 
 .ac__sigil {
@@ -123,7 +116,7 @@
   padding-top: 1px;
 }
 
-/* ── Price block — ledger-style, top-right of header ─────────── */
+/* ── Price block — top-right ──────────────────────────────── */
 .ac__price-block {
   display: flex;
   flex-direction: column;
@@ -135,16 +128,17 @@
 
 .ac__price {
   font-family: var(--font-mono);
-  font-size: 0.9375rem;
-  color: var(--accent);
+  font-size: 1rem;
+  color: var(--terracotta);
   font-weight: 700;
   font-feature-settings: 'tnum';
   white-space: nowrap;
-  line-height: 1.1;
+  line-height: 1.05;
 }
 
 .ac__price-label {
-  font-size: 0.5625rem;
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -153,20 +147,21 @@
 }
 
 .ac__name {
-  font-size: 0.9375rem;
-  font-weight: 700;
+  font-family: var(--font-sans);
+  font-size: 0.98rem;
+  font-weight: 600;
   color: var(--text-primary);
   line-height: 1.25;
-  letter-spacing: -0.015em;
+  letter-spacing: -0.012em;
   margin: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* ── Body ────────────────────────────────────────────────────── */
+/* ── Body ────────────────────────────────────────────────── */
 .ac__desc {
-  font-size: 0.84rem;
+  font-size: 0.86rem;
   color: var(--text-secondary);
   line-height: 1.6;
   margin: 0;
@@ -178,69 +173,69 @@
 }
 
 .ac__match {
-  font-size: 0.6875rem;
-  color: var(--accent);
+  font-size: 0.7rem;
+  color: var(--terracotta);
   font-style: italic;
   margin: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-family: var(--font-display);
 }
 
 .ac__warn {
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 0.6875rem;
+  font-size: 0.7rem;
   font-weight: 600;
-  color: var(--warn, #d97706);
+  color: var(--negative);
   margin: 0;
 }
 
-/* ── Footer ──────────────────────────────────────────────────── */
+/* ── Footer ──────────────────────────────────────────────── */
 .ac__foot {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   margin-top: auto;
-  padding-top: 12px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+  padding-top: 14px;
+  border-top: 1px dashed color-mix(in srgb, var(--border) 70%, transparent);
 }
 
 .ac__calls {
   flex: 1;
-  font-size: 0.71875rem;
+  font-size: 0.72rem;
   color: var(--text-muted);
   font-family: var(--font-mono);
 }
 
 .ac__trust {
   font-family: var(--font-mono);
-  font-size: 0.71875rem;
-  color: var(--sage);
-  font-weight: 600;
+  font-size: 0.72rem;
+  color: var(--sage-strong);
+  font-weight: 700;
   letter-spacing: 0.02em;
 }
 
-/* "Hire →" — copper on hover, nudges right */
+/* "Hire →" — terracotta on hover, nudges right */
 .ac__cta {
   display: flex;
   align-items: center;
-  gap: 3px;
-  font-size: 0.75rem;
+  gap: 4px;
+  font-size: 0.76rem;
   font-weight: 700;
   color: var(--text-muted);
   white-space: nowrap;
-  transition: color 0.15s ease, gap 0.15s ease, background 0.15s ease, padding 0.15s ease;
+  transition: color 0.15s ease, gap 0.15s ease;
   flex-shrink: 0;
-  border-radius: 999px;
-  padding: 3px 0;
   letter-spacing: 0.01em;
+  font-family: var(--font-sans);
 }
 
 .ac:hover .ac__cta {
-  color: var(--copper);
-  gap: 5px;
+  color: var(--terracotta);
+  gap: 6px;
 }
 
 /* Health dot */
@@ -260,9 +255,7 @@
   animation: health-pulse 2.5s ease-in-out infinite;
 }
 
-.ac__health-dot--warn {
-  background: var(--warn);
-}
+.ac__health-dot--warn { background: var(--warn); }
 
 @keyframes health-pulse {
   0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--positive) 40%, transparent); }
@@ -277,10 +270,10 @@
 }
 
 .ac__stat-chip {
-  font-size: 0.625rem;
+  font-size: 0.62rem;
   font-weight: 600;
-  color: var(--text-muted);
-  background: color-mix(in srgb, var(--surface-2) 70%, var(--parchment));
+  color: var(--text-secondary);
+  background: var(--canvas-warm);
   border: 1px solid var(--border);
   border-radius: var(--r-pill);
   padding: 2px 7px;
@@ -290,26 +283,27 @@
 
 /* Kind chip */
 .ac__kind-chip {
-  font-size: 0.5625rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
   padding: 2px 7px;
   border-radius: var(--r-pill);
   white-space: nowrap;
   align-self: flex-start;
+  font-family: var(--font-sans);
 }
 .ac__kind-chip--aztea_built {
   background: var(--accent);
   color: var(--accent-ink);
 }
 .ac__kind-chip--community_skill {
-  background: var(--accent-wash);
-  color: var(--accent);
-  border: 1px solid var(--accent-line);
+  background: var(--terracotta-bg);
+  color: var(--terracotta);
+  border: 1px solid var(--terracotta-border);
 }
 .ac__kind-chip--self_hosted {
-  background: var(--surface-2);
-  color: var(--ink-soft);
+  background: var(--canvas-warm);
+  color: var(--text-secondary);
   border: 1px solid var(--border);
 }

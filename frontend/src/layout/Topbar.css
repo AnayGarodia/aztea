@@ -39,7 +39,7 @@
   white-space: nowrap;
 }
 .topbar__crumb-link:hover {
-  color: var(--copper);
+  color: var(--terracotta);
 }
 
 .topbar__crumb-current {
@@ -69,9 +69,9 @@
   transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
 }
 .topbar__themetoggle:hover {
-  color: var(--accent);
-  border-color: var(--accent-border);
-  background: var(--accent-bg);
+  color: var(--terracotta);
+  border-color: var(--terracotta);
+  background: var(--terracotta-bg);
 }
 
 .topbar__balance {

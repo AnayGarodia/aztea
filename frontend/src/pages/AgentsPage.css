@@ -11,8 +11,8 @@
   overflow-y: auto;
   padding: 28px;
   background:
-    radial-gradient(circle at top right, color-mix(in srgb, var(--copper-bg) 58%, transparent), transparent 18%),
-    linear-gradient(180deg, var(--canvas), color-mix(in srgb, var(--surface) 60%, var(--canvas)));
+    radial-gradient(circle at top right, color-mix(in srgb, var(--terracotta-bg) 50%, transparent), transparent 22%),
+    var(--canvas);
 }
 
 .agents-page__content {
@@ -34,10 +34,11 @@
 }
 
 .agents-page__eyebrow {
-  font-size: 0.625rem;
-  letter-spacing: 0.08em;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: var(--accent);
+  color: var(--terracotta);
   font-weight: 600;
   margin-bottom: 6px;
 }
@@ -74,7 +75,8 @@
   padding: 16px 18px;
   border: 1px solid var(--border);
   border-radius: 18px;
-  background: color-mix(in srgb, var(--surface) 86%, var(--parchment));
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
 }
 
 .agents-page__filter-row {
@@ -123,15 +125,15 @@
 }
 
 .agents-page__category-chip:hover {
-  background: var(--surface);
-  border-color: var(--accent-line, var(--accent));
+  background: var(--canvas-warm);
+  border-color: var(--terracotta);
   color: var(--text-primary);
 }
 
 .agents-page__category-chip--active {
-  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
-  border-color: var(--accent);
-  color: var(--accent);
+  background: var(--terracotta-bg);
+  border-color: var(--terracotta);
+  color: var(--terracotta);
 }
 
 /* Search suggestions */
@@ -162,10 +164,10 @@
 }
 
 .agents-page__suggestion-pill:hover {
-  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
-  border-color: var(--accent);
+  background: var(--terracotta-bg);
+  border-color: var(--terracotta);
   border-style: solid;
-  color: var(--accent);
+  color: var(--terracotta);
 }
 
 /* Results meta row */
@@ -187,12 +189,13 @@
   gap: 4px;
   padding: 2px 8px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
-  border: 1px solid var(--accent-line, color-mix(in srgb, var(--accent) 30%, transparent));
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-border);
   color: var(--accent);
-  font-size: 0.6875rem;
+  font-size: 0.68rem;
   font-weight: 600;
   letter-spacing: 0.03em;
+  font-family: var(--font-mono);
 }
 
 /* Featured section */

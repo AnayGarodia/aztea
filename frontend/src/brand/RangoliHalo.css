@@ -1,0 +1,15 @@
+.rangoli-halo {
+  position: absolute;
+  pointer-events: none;
+  color: var(--terracotta);
+  opacity: 0.55;
+  filter: drop-shadow(0 2px 8px color-mix(in srgb, var(--terracotta) 12%, transparent));
+}
+
+@keyframes rangoli-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rangoli-halo g { animation: none !important; }
+}

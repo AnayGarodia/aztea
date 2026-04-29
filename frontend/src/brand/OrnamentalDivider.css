@@ -1,0 +1,35 @@
+.orn-div {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--terracotta);
+  opacity: 0.7;
+  height: 10px;
+}
+
+.orn-div__line {
+  width: 28px;
+  height: 1px;
+  background: currentColor;
+  opacity: 0.55;
+}
+
+.orn-div__diamond {
+  width: 4px;
+  height: 4px;
+  background: currentColor;
+  transform: rotate(45deg);
+  opacity: 0.85;
+}
+
+.orn-div__dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.85;
+}
+
+.orn-div--center {
+  justify-content: center;
+}
