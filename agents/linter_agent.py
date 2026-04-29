@@ -196,7 +196,7 @@ def run(payload: dict) -> dict:
     """
     code = str(payload.get("code") or "").strip()
     if not code:
-        raise ValueError("'code' is required.")
+        return _err("linter_agent.missing_code", "'code' is required.")
     if len(code) > _MAX_CODE_CHARS:
         code = code[:_MAX_CODE_CHARS]
 

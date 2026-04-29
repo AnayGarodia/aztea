@@ -11,6 +11,7 @@ from agents import db_sandbox
 from agents import hn_digest
 from agents import linter_agent
 from agents import live_endpoint_tester
+from agents import multi_file_executor
 from agents import python_executor
 from agents import shell_executor
 from agents import semantic_codebase_search
@@ -154,6 +155,11 @@ def test_type_checker_parses_mypy_json(monkeypatch):
     assert result["diagnostics"][0]["code"] == "arg-type"
 
 
+def test_type_checker_returns_structured_error_for_missing_code():
+    result = type_checker.run({"language": "python"})
+    assert result["error"]["code"] == "type_checker.missing_code"
+
+
 def test_linter_agent_returns_tool_unavailable_for_js_without_node(monkeypatch):
     monkeypatch.setattr(linter_agent.shutil, "which", lambda name: None)
     result = linter_agent.run({"language": "javascript", "code": "const x = y;"})
@@ -186,6 +192,11 @@ def test_linter_agent_uses_ruff_for_python(monkeypatch):
     assert result["tool"] == "ruff"
     assert result["error_count"] == 1
     assert result["issues"][0]["rule"] == "F401"
+
+
+def test_linter_agent_returns_structured_error_for_missing_code():
+    result = linter_agent.run({"language": "python"})
+    assert result["error"]["code"] == "linter_agent.missing_code"
 
 
 def test_db_sandbox_executes_sql_and_returns_plan():
@@ -443,6 +454,32 @@ def test_semantic_codebase_search_rejects_zip_traversal_artifact():
     result = semantic_codebase_search.run(payload)
     assert result["error"]["code"] == "semantic_codebase_search.unsafe_artifact"
     assert "unsafe traversal" in result["error"]["message"]
+
+
+def test_semantic_codebase_search_lexical_fallback_returns_relevant_file(monkeypatch):
+    monkeypatch.setattr(
+        semantic_codebase_search,
+        "_extract_artifact",
+        lambda artifact, extensions, max_file_bytes: {
+            "src/pillow_fix.py": "def fix_cve_2023_50447():\n    return 'patched'\n",
+            "README.md": "general project overview",
+        },
+    )
+    monkeypatch.setattr(semantic_codebase_search, "DISABLE_EMBEDDINGS", True)
+    result = semantic_codebase_search.run(
+        {
+            "query": "CVE-2023-50447 pillow fix",
+            "artifact": {"name": "repo.zip", "url_or_base64": "Zm9v"},
+        }
+    )
+    assert result["results"]
+    assert result["results"][0]["path"] == "src/pillow_fix.py"
+    assert "cve_2023_50447" in result["results"][0]["snippet"].lower()
+
+
+def test_multi_file_executor_returns_structured_error_for_invalid_files():
+    result = multi_file_executor.run({"files": {"main.py": "print('hi')"}})
+    assert result["error"]["code"] == "multi_file_executor.invalid_input"
 
 
 def test_web_researcher_blocks_redirects(monkeypatch):

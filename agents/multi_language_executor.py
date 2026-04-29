@@ -46,6 +46,56 @@ def _which(name: str) -> str | None:
     return shutil.which(name)
 
 
+def _version_string(bin_path: str, *args: str, fallback: str) -> str:
+    try:
+        proc = subprocess.run(
+            [bin_path, *args],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env=build_subprocess_env(),
+        )
+        text = " ".join(part.strip() for part in (proc.stdout, proc.stderr) if part and part.strip()).strip()
+        return text[:50] or fallback
+    except Exception:
+        return fallback
+
+
+def _available_runtimes() -> dict[str, list[str]]:
+    runtimes: dict[str, list[str]] = {}
+
+    js_runtimes = [name for name in ("bun", "deno", "node") if _which(name)]
+    if js_runtimes:
+        runtimes["javascript"] = js_runtimes
+
+    ts_runtimes: list[str] = []
+    if _which("bun"):
+        ts_runtimes.append("bun")
+    if _which("deno"):
+        ts_runtimes.append("deno")
+    if _which("tsx"):
+        ts_runtimes.append("tsx")
+    if _which("node") and _which("tsc"):
+        ts_runtimes.append("tsc+node")
+    if _which("ts-node"):
+        ts_runtimes.append("ts-node")
+    if ts_runtimes:
+        runtimes["typescript"] = ts_runtimes
+
+    if _which("go"):
+        runtimes["go"] = ["go"]
+
+    rust_runtimes = [name for name in ("rust-script", "cargo-script", "rustc") if _which(name)]
+    if rust_runtimes:
+        runtimes["rust"] = rust_runtimes
+
+    return runtimes
+
+
+def available_languages() -> list[str]:
+    return sorted(_available_runtimes().keys())
+
+
 def _run_subprocess(
     cmd: list[str],
     cwd: str,
@@ -86,41 +136,86 @@ def _run_javascript(code: str, stdin: str, timeout: float) -> dict[str, Any]:
             with open(fpath, "w") as f:
                 f.write(code)
             result = _run_subprocess(cmd_template + [fpath], tmpdir, stdin, timeout)
-        version_proc = subprocess.run([bin_path, "--version"], capture_output=True, text=True, timeout=5)
-        runtime_ver = f"{runtime_name} {version_proc.stdout.strip()[:30]}"
+        runtime_ver = f"{runtime_name} {_version_string(bin_path, '--version', fallback=runtime_name)[:30]}"
         return {**result, "runtime": runtime_ver}
     return _err("multi_language_executor.tool_unavailable", "No JavaScript runtime found (tried bun, deno, node).")
 
 
 def _run_typescript(code: str, stdin: str, timeout: float) -> dict[str, Any]:
-    # Prefer bun (native TS) > deno (native TS) > ts-node
+    # Prefer bun/deno/tsx, then compile with tsc+node, then ts-node as a last resort.
     for runtime_name, cmd_template, ext in [
         ("bun", ["bun", "run", "--smol"], "ts"),
         ("deno", ["deno", "run", "--allow-read"], "ts"),
+        ("tsx", ["tsx"], "ts"),
     ]:
         bin_path = _which(runtime_name)
         if bin_path is None:
             continue
         with tempfile.TemporaryDirectory() as tmpdir:
             fpath = os.path.join(tmpdir, f"main.{ext}")
-            with open(fpath, "w") as f:
+            with open(fpath, "w", encoding="utf-8") as f:
                 f.write(code)
             result = _run_subprocess(cmd_template + [fpath], tmpdir, stdin, timeout)
-        version_proc = subprocess.run([bin_path, "--version"], capture_output=True, text=True, timeout=5)
-        runtime_ver = f"{runtime_name} {version_proc.stdout.strip()[:30]}"
+        runtime_ver = f"{runtime_name} {_version_string(bin_path, '--version', fallback=runtime_name)[:30]}"
         return {**result, "runtime": runtime_ver}
 
-    # ts-node fallback
-    tsnode = _which("ts-node") or _which("npx")
+    tsc_bin = _which("tsc")
+    node_bin = _which("node")
+    if tsc_bin and node_bin:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fpath = os.path.join(tmpdir, "main.ts")
+            outdir = os.path.join(tmpdir, "dist")
+            with open(fpath, "w", encoding="utf-8") as f:
+                f.write(code)
+            with open(os.path.join(tmpdir, "tsconfig.json"), "w", encoding="utf-8") as f:
+                f.write(
+                    '{'
+                    '"compilerOptions":{'
+                    '"target":"ES2020",'
+                    '"module":"commonjs",'
+                    '"moduleResolution":"node",'
+                    '"strict":false,'
+                    '"skipLibCheck":true,'
+                    '"esModuleInterop":true,'
+                    f'"outDir":"{outdir}"'
+                    '},'
+                    '"include":["main.ts"]'
+                    '}'
+                )
+            compile = subprocess.run(
+                [tsc_bin, "--project", os.path.join(tmpdir, "tsconfig.json")],
+                capture_output=True,
+                text=True,
+                timeout=max(timeout, 30),
+                cwd=tmpdir,
+                env=build_subprocess_env(),
+            )
+            if compile.returncode != 0:
+                return {
+                    "stdout": "",
+                    "stderr": compile.stderr[:_OUTPUT_TRUNCATE] or compile.stdout[:_OUTPUT_TRUNCATE],
+                    "exit_code": compile.returncode,
+                    "elapsed_ms": 0,
+                    "runtime": f"tsc {_version_string(tsc_bin, '--version', fallback='tsc')}",
+                }
+            result = _run_subprocess([node_bin, os.path.join(outdir, "main.js")], tmpdir, stdin, timeout)
+        return {**result, "runtime": f"tsc+node {_version_string(tsc_bin, '--version', fallback='tsc')[:20]}"}
+
+    tsnode = _which("ts-node")
     if tsnode:
         with tempfile.TemporaryDirectory() as tmpdir:
             fpath = os.path.join(tmpdir, "main.ts")
-            with open(fpath, "w") as f:
+            with open(fpath, "w", encoding="utf-8") as f:
                 f.write(code)
-            cmd = [tsnode, "--yes", "ts-node", fpath] if "npx" in tsnode else [tsnode, fpath]
+            cmd = [
+                tsnode,
+                "--compiler-options",
+                '{"module":"commonjs","moduleResolution":"node"}',
+                fpath,
+            ]
             result = _run_subprocess(cmd, tmpdir, stdin, timeout)
-        return {**result, "runtime": "ts-node"}
-    return _err("multi_language_executor.tool_unavailable", "No TypeScript runtime found (tried bun, deno, ts-node).")
+        return {**result, "runtime": f"ts-node {_version_string(tsnode, '--version', fallback='ts-node')[:20]}"}
+    return _err("multi_language_executor.tool_unavailable", "No TypeScript runtime found (tried bun, deno, tsx, tsc+node, ts-node).")
 
 
 def _run_go(code: str, stdin: str, timeout: float) -> dict[str, Any]:
@@ -132,8 +227,7 @@ def _run_go(code: str, stdin: str, timeout: float) -> dict[str, Any]:
         with open(fpath, "w") as f:
             f.write(code)
         result = _run_subprocess([go_bin, "run", fpath], tmpdir, stdin, timeout)
-    version_proc = subprocess.run([go_bin, "version"], capture_output=True, text=True, timeout=5)
-    runtime_ver = version_proc.stdout.strip()[:50] or "go"
+    runtime_ver = _version_string(go_bin, "version", fallback="go")
     return {**result, "runtime": runtime_ver}
 
 
@@ -175,8 +269,7 @@ def _run_rust(code: str, stdin: str, timeout: float) -> dict[str, Any]:
                 "runtime": "rustc",
             }
         result = _run_subprocess([out], tmpdir, stdin, timeout)
-    version_proc = subprocess.run([rustc, "--version"], capture_output=True, text=True, timeout=5)
-    return {**result, "runtime": version_proc.stdout.strip()[:50] or "rustc"}
+    return {**result, "runtime": _version_string(rustc, "--version", fallback="rustc")}
 
 
 _RUNNERS = {
@@ -210,6 +303,12 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         return _err("multi_language_executor.missing_language", f"language is required. Supported: {', '.join(_SUPPORTED)}")
     if language not in _RUNNERS:
         return _err("multi_language_executor.unsupported_language", f"Unsupported language '{language}'. Supported: {', '.join(_SUPPORTED)}")
+    available = _available_runtimes()
+    if language not in available:
+        return _err(
+            "multi_language_executor.tool_unavailable",
+            f"{language} is not available on this executor. Available languages: {', '.join(available_languages()) or 'none'}",
+        )
 
     code = str(payload.get("code") or "").strip()
     if not code:

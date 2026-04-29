@@ -58,6 +58,54 @@ def _err(code: str, message: str) -> dict[str, Any]:
     return {"error": {"code": code, "message": message}}
 
 
+def _query_terms(query: str) -> list[str]:
+    parts = [term.lower() for term in re.findall(r"[a-zA-Z0-9_.:/#-]{2,}", str(query or ""))]
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for part in parts:
+        if part not in seen:
+            seen.add(part)
+            ordered.append(part)
+    return ordered
+
+
+def _lexical_score(query: str, path: str, text: str) -> float:
+    terms = _query_terms(query)
+    if not terms:
+        return 0.0
+    lowered_path = path.lower()
+    lowered_text = text.lower()
+    score = 0.0
+    matched = 0
+    for term in terms:
+        term_score = 0.0
+        if term in lowered_path:
+            term_score += 1.5
+        if term in lowered_text:
+            term_score += 1.0
+        if re.search(rf"\b{re.escape(term)}\b", lowered_text):
+            term_score += 0.5
+        if term_score > 0:
+            matched += 1
+            score += term_score
+    if matched == 0:
+        return 0.0
+    return score / max(1, len(terms))
+
+
+def _make_snippet(text: str, query: str) -> str:
+    clean = re.sub(r"\s+", " ", text).strip()
+    if not clean:
+        return ""
+    for term in _query_terms(query):
+        idx = clean.lower().find(term)
+        if idx >= 0:
+            start = max(0, idx - (_SNIPPET_CHARS // 2))
+            end = min(len(clean), start + _SNIPPET_CHARS)
+            return clean[start:end].strip()
+    return clean[:_SNIPPET_CHARS].strip()
+
+
 def _file_text(data: bytes, max_bytes: int) -> str:
     if len(data) > max_bytes:
         data = data[:max_bytes]
@@ -294,15 +342,18 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     if not files:
         return _err("semantic_codebase_search.no_files", "No text files found in the provided source.")
 
+    lexical_scores = {
+        path: _lexical_score(query, path, text)
+        for path, text in files.items()
+    }
+
     # Embed the query
     if DISABLE_EMBEDDINGS:
-        # Lexical fallback when embeddings are disabled
-        q_terms = set(query.lower().split())
         scored: list[tuple[float, str, str]] = []
         for path, text in files.items():
-            hits = sum(1 for term in q_terms if term in text.lower() or term in path.lower())
-            if hits > 0:
-                scored.append((float(hits) / len(q_terms), path, text))
+            score = lexical_scores.get(path, 0.0)
+            if score > 0:
+                scored.append((score, path, text))
     else:
         paths = list(files.keys())
         doc_texts = [f"{path}\n{files[path][:1000]}" for path in paths]
@@ -310,14 +361,16 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         query_vec = all_vecs[0]
         scored = []
         for i, path in enumerate(paths):
-            score = cosine(query_vec, all_vecs[i + 1])
-            if score > 0.1:
-                scored.append((score, path, files[path]))
+            semantic = cosine(query_vec, all_vecs[i + 1])
+            lexical = lexical_scores.get(path, 0.0)
+            hybrid = (semantic * 0.7) + (min(lexical, 3.0) / 3.0 * 0.3)
+            if hybrid > 0.05 or lexical > 0:
+                scored.append((hybrid, path, files[path]))
 
     scored.sort(key=lambda x: x[0], reverse=True)
     results = []
     for score, path, text in scored[:top_k]:
-        snippet = text[:_SNIPPET_CHARS].replace("\n", " ").strip()
+        snippet = _make_snippet(text, query)
         results.append({
             "path": path,
             "score": round(float(score), 4),

@@ -1,6 +1,7 @@
 """Fourth chunk of built-in agent specs — Phase 7 real capability agents."""
 from __future__ import annotations
 
+import shutil
 from typing import Any
 
 from server.builtin_agents.constants import (
@@ -16,7 +17,27 @@ from server.builtin_agents.constants import (
 from server.builtin_agents.schemas import output_schema_object as _output_schema_object
 
 
+def _available_multi_language_options() -> list[str]:
+    available: list[str] = []
+    if any(shutil.which(name) for name in ("bun", "deno", "node")):
+        available.append("javascript")
+    if any(shutil.which(name) for name in ("bun", "deno", "tsx", "ts-node")) or (
+        shutil.which("node") and shutil.which("tsc")
+    ):
+        available.append("typescript")
+    if shutil.which("go"):
+        available.append("go")
+    if any(shutil.which(name) for name in ("rust-script", "cargo-script", "rustc")):
+        available.append("rust")
+    return available
+
+
 def load_builtin_specs_part4() -> list[dict[str, Any]]:
+    multi_language_options = _available_multi_language_options()
+    multi_language_desc = (
+        "Use when you need to run sandboxed code in one of the runtimes actually installed on this executor. "
+        f"Currently available languages: {', '.join(multi_language_options) if multi_language_options else 'none'}."
+    )
     return [
         {
             "agent_id": _DB_SANDBOX_AGENT_ID,
@@ -275,7 +296,7 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
         {
             "agent_id": _MULTI_LANGUAGE_EXECUTOR_AGENT_ID,
             "name": "Multi-Language Executor",
-            "description": "Use when you need to run JavaScript, TypeScript, Go, or Rust code in a sandboxed subprocess. Selects the best available runtime (bun > deno > node for JS/TS; rustc/rust-script for Rust; go run for Go), executes the code with a configurable timeout, and returns stdout, stderr, exit code, and the exact runtime version used.",
+            "description": multi_language_desc,
             "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_MULTI_LANGUAGE_EXECUTOR_AGENT_ID],
             "price_per_call_usd": 0.04,
             "tags": ["javascript", "typescript", "go", "rust", "code-execution", "sandbox"],
@@ -285,7 +306,7 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
             "cacheable": True,
             "input_schema": _output_schema_object(
                 {
-                    "language": {"type": "string", "title": "Language", "enum": ["javascript", "typescript", "go", "rust"]},
+                    "language": {"type": "string", "title": "Language", "enum": multi_language_options or ["javascript"]},
                     "code": {"type": "string", "title": "Source code", "description": "Source code to execute (max 100 000 chars)."},
                     "stdin": {"type": "string", "title": "Standard input", "description": "Optional stdin for the process."},
                     "timeout_seconds": {"type": "number", "title": "Timeout (seconds)", "default": 15, "minimum": 1, "maximum": 30},

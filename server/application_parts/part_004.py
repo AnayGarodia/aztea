@@ -162,6 +162,25 @@ def _process_pending_builtin_job(job: dict) -> bool:
                 str(claimed["agent_id"]),
                 claimed.get("input_payload") or {},
             )
+        agent_failed, failure_code, failure_message = _is_agent_failure_envelope(output)
+        if agent_failed:
+            updated = jobs.update_job_status(
+                claimed["job_id"],
+                "failed",
+                output_payload=output,
+                error_message=(
+                    failure_message
+                    or f"Agent reported {failure_code}; no charge."
+                ),
+                completed=True,
+            )
+            if updated is not None:
+                _settle_failed_job(
+                    updated,
+                    actor_owner_id=_BUILTIN_WORKER_OWNER_ID,
+                    event_type="job.failed_dependency",
+                )
+            return True
     except _groq.RateLimitError as exc:
         retried = jobs.schedule_job_retry(
             claimed["job_id"],

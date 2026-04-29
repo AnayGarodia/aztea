@@ -44,6 +44,10 @@ You are a Python expert. The user ran a multi-file Python project and got this o
 Briefly explain what the output means and any errors in 2-4 sentences."""
 
 
+def _err(code: str, message: str) -> dict:
+    return {"error": {"code": code, "message": message}}
+
+
 def _install_requirements(tmpdir: str, requirements: str) -> tuple[list[str], str | None]:
     req_path = os.path.join(tmpdir, "_requirements.txt")
     with open(req_path, "w") as f:
@@ -87,9 +91,9 @@ def run(payload: dict) -> dict:
     """
     files = payload.get("files")
     if not files or not isinstance(files, list):
-        raise ValueError("'files' must be a non-empty list of {path, content} objects.")
+        return _err("multi_file_executor.invalid_input", "'files' must be a non-empty list of {path, content} objects.")
     if len(files) > _MAX_FILES:
-        raise ValueError(f"At most {_MAX_FILES} files allowed per call.")
+        return _err("multi_file_executor.invalid_input", f"At most {_MAX_FILES} files allowed per call.")
 
     requirements = str(payload.get("requirements") or "").strip()[:_MAX_REQ_CHARS]
     entry_point = str(payload.get("entry_point") or "main.py").strip()
@@ -117,7 +121,7 @@ def run(payload: dict) -> dict:
             files_written += 1
 
         if files_written == 0:
-            raise ValueError("No valid files were written.")
+            return _err("multi_file_executor.invalid_input", "No valid files were written.")
 
         packages_installed: list[str] = []
         install_error: str | None = None
@@ -126,9 +130,9 @@ def run(payload: dict) -> dict:
 
         entry_full = os.path.realpath(os.path.join(tmpdir, entry_point))
         if not entry_full.startswith(os.path.realpath(tmpdir)):
-            raise ValueError("entry_point must be inside the project directory.")
+            return _err("multi_file_executor.invalid_input", "entry_point must be inside the project directory.")
         if not os.path.exists(entry_full):
-            raise ValueError(f"entry_point '{entry_point}' not found in provided files.")
+            return _err("multi_file_executor.invalid_input", f"entry_point '{entry_point}' not found in provided files.")
 
         start = time.monotonic()
         timed_out = False

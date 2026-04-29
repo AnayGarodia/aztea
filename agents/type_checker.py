@@ -18,6 +18,10 @@ _TIMEOUT = 30
 _CODE_MAX = 100_000
 
 
+def _err(code: str, message: str) -> dict:
+    return {"error": {"code": code, "message": message}}
+
+
 def _normalize_diagnostic(item: dict, *, default_file: str) -> dict:
     line = item.get("line")
     column = item.get("column")
@@ -102,9 +106,12 @@ def _run_mypy(code: str, stubs: dict[str, str], strict: bool) -> dict:
                 cwd=tmpdir,
             )
         except subprocess.TimeoutExpired:
-            raise RuntimeError("mypy timed out after 30 seconds.")
+            return _err("type_checker.timeout", "mypy timed out after 30 seconds.")
         except FileNotFoundError:
-            raise RuntimeError("mypy is not installed on this executor. Install it with: pip install mypy")
+            return _err(
+                "type_checker.tool_unavailable",
+                "mypy is not installed on this executor. Install it with: pip install mypy",
+            )
 
         raw = result.stdout + result.stderr
         diagnostics: list[dict] = []
@@ -212,9 +219,12 @@ def _run_tsc(code: str, stubs: dict[str, str], strict: bool) -> dict:
                 cwd=tmpdir,
             )
         except subprocess.TimeoutExpired:
-            raise RuntimeError("tsc timed out after 30 seconds.")
+            return _err("type_checker.timeout", "tsc timed out after 30 seconds.")
         except FileNotFoundError:
-            raise RuntimeError("tsc is not installed. Install TypeScript globally: npm install -g typescript")
+            return _err(
+                "type_checker.tool_unavailable",
+                "tsc is not installed. Install TypeScript globally: npm install -g typescript",
+            )
 
         raw = result.stdout + result.stderr
         version_result = subprocess.run(
@@ -260,13 +270,13 @@ def run(payload: dict) -> dict:
     """
     code = str(payload.get("code") or "").strip()
     if not code:
-        raise ValueError("'code' is required.")
+        return _err("type_checker.missing_code", "'code' is required.")
     if len(code) > _CODE_MAX:
-        raise ValueError(f"'code' must be <= {_CODE_MAX} characters.")
+        return _err("type_checker.code_too_long", f"'code' must be <= {_CODE_MAX} characters.")
 
     language = str(payload.get("language") or "python").strip().lower()
     if language not in {"python", "typescript"}:
-        raise ValueError("'language' must be 'python' or 'typescript'.")
+        return _err("type_checker.invalid_language", "'language' must be 'python' or 'typescript'.")
 
     stubs = payload.get("stubs") or {}
     if not isinstance(stubs, dict):

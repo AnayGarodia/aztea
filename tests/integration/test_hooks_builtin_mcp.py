@@ -1,5 +1,7 @@
 """Server integration tests (auto-split fragment 4/6)."""
 
+import pytest
+
 from tests.integration.support import *  # noqa: F403
 
 def test_hook_delete_cancels_pending_deliveries(client):
@@ -171,6 +173,112 @@ def test_quality_gate_accepts_consistent_type_checker_output_without_live_judge(
     assert "internally consistent" in result["reason"]
 
 
+@pytest.mark.parametrize(
+    ("agent_id", "output_payload", "output_schema"),
+    [
+        (
+            server._CVELOOKUP_AGENT_ID,
+            {
+                "results": [
+                    {
+                        "cve": "CVE-2024-12345",
+                        "cvss": 9.1,
+                        "severity": "critical",
+                        "description": "Prototype pollution issue",
+                    }
+                ],
+                "billing_units_actual": 1,
+                "summary": "Found 1 CVE.",
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "results": {"type": "array"},
+                    "billing_units_actual": {"type": "integer"},
+                    "summary": {"type": "string"},
+                },
+                "required": ["results"],
+            },
+        ),
+        (
+            server._WEB_RESEARCHER_AGENT_ID,
+            {
+                "url": "https://example.com/docs",
+                "per_url_findings": [
+                    {"url": "https://example.com/docs", "status": "ok", "content_length": 128}
+                ],
+                "billing_units_actual": 1,
+                "summary": "Found docs.",
+                "synthesis": "Found docs.",
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "per_url_findings": {"type": "array"},
+                    "billing_units_actual": {"type": "integer"},
+                },
+                "required": ["per_url_findings", "billing_units_actual"],
+            },
+        ),
+        (
+            server._SEMANTIC_CODEBASE_SEARCH_AGENT_ID,
+            {
+                "query": "CVE-2023-50447 pillow fix",
+                "total_files_indexed": 2,
+                "results": [
+                    {
+                        "path": "src/pillow_fix.py",
+                        "score": 0.88,
+                        "snippet": "def fix_cve_2023_50447():",
+                        "size_bytes": 64,
+                    }
+                ],
+                "source": "artifact",
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "total_files_indexed": {"type": "integer"},
+                    "results": {"type": "array"},
+                    "source": {"type": "string"},
+                },
+                "required": ["query", "total_files_indexed", "results", "source"],
+            },
+        ),
+    ],
+)
+def test_quality_gate_accepts_consistent_tool_outputs_without_live_judge(
+    monkeypatch,
+    agent_id: str,
+    output_payload: dict,
+    output_schema: dict,
+):
+    monkeypatch.setenv("AZTEA_ENABLE_LIVE_QUALITY_JUDGE", "1")
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+
+    def should_not_run_judge(**kwargs):
+        raise AssertionError("Deterministic tool outputs should bypass the live quality judge.")
+
+    monkeypatch.setattr(server.judges, "run_quality_judgment", should_not_run_judge)
+
+    result = server._run_quality_gate(
+        {"job_id": f"job-{agent_id[:8]}", "agent_id": agent_id, "input_payload": {"task": "x"}},
+        {
+            "agent_id": agent_id,
+            "name": "Deterministic Tool",
+            "description": "Returns structured tool output.",
+            "output_schema": output_schema,
+            "output_verifier_url": None,
+        },
+        output_payload,
+    )
+    assert result["judge_verdict"] == "pass"
+    assert result["quality_score"] >= 8
+    assert result["passed"] is True
+    assert "internally consistent" in result["reason"]
+
+
 def test_builtin_worker_auto_completes_async_jobs(client, monkeypatch):
     monkeypatch.setattr(
         server.agent_python_executor,
@@ -214,6 +322,179 @@ def test_builtin_worker_auto_completes_async_jobs(client, monkeypatch):
     assert terminal is not None
     assert terminal["status"] == "complete"
     assert terminal["output_payload"]["explanation"] == "processed by test builtin worker"
+
+
+def _wait_for_job_terminal(client, api_key: str, job_id: str, *, attempts: int = 24) -> dict:
+    terminal = None
+    for _ in range(attempts):
+        state = client.get(f"/jobs/{job_id}", headers=_auth_headers(api_key))
+        assert state.status_code == 200, state.text
+        payload = state.json()
+        if payload["status"] in {"complete", "failed"}:
+            terminal = payload
+            break
+        time.sleep(0.25)
+    assert terminal is not None
+    return terminal
+
+
+@pytest.mark.parametrize(
+    ("agent_id_attr", "runner_attr", "payload", "stub_output"),
+    [
+        (
+            "_WEB_RESEARCHER_AGENT_ID",
+            "agent_web_researcher",
+            {"url": "https://example.com/docs"},
+            {
+                "url": "https://example.com/docs",
+                "title": "Docs",
+                "summary": "Found docs.",
+                "key_points": ["one"],
+                "answer": "",
+                "quotes": [],
+                "links": [],
+                "content_type": "documentation",
+                "per_url_findings": [{"url": "https://example.com/docs", "status": "ok", "content_length": 128}],
+                "synthesis": "Found docs.",
+                "cross_source_consensus": None,
+                "billing_units_actual": 1,
+            },
+        ),
+        (
+            "_PYTHON_EXECUTOR_AGENT_ID",
+            "agent_python_executor",
+            {"code": "print(1)"},
+            {
+                "stdout": "1\n",
+                "stderr": "",
+                "exit_code": 0,
+                "timed_out": False,
+                "execution_time_ms": 4,
+                "explanation": "prints one",
+                "variables_captured": {},
+            },
+        ),
+        (
+            "_MULTI_FILE_EXECUTOR_AGENT_ID",
+            "agent_multi_file_executor",
+            {"files": [{"path": "main.py", "content": "print('ok')"}]},
+            {
+                "stdout": "ok\n",
+                "stderr": "",
+                "exit_code": 0,
+                "timed_out": False,
+                "execution_time_ms": 7,
+                "files_written": 1,
+                "packages_installed": [],
+                "install_error": None,
+                "explanation": "prints ok",
+            },
+        ),
+        (
+            "_LINTER_AGENT_ID",
+            "agent_linter_agent",
+            {"language": "python", "code": "print(1)\n"},
+            {
+                "language": "python",
+                "tool": "ruff",
+                "issues": [],
+                "total_issues": 0,
+                "error_count": 0,
+                "warning_count": 0,
+                "clean": True,
+                "summary": "No issues found by ruff.",
+            },
+        ),
+        (
+            "_TYPE_CHECKER_AGENT_ID",
+            "agent_type_checker",
+            {"language": "python", "code": "def f() -> int:\n    return 1\n"},
+            {
+                "language": "python",
+                "ok": True,
+                "passed": True,
+                "error_count": 0,
+                "diagnostics": [],
+                "errors": [],
+                "raw_output": "",
+                "tool_version": "mypy 1.20.2",
+            },
+        ),
+    ],
+)
+def test_builtin_sync_and_async_paths_return_identical_payloads(
+    client,
+    monkeypatch,
+    agent_id_attr: str,
+    runner_attr: str,
+    payload: dict,
+    stub_output: dict,
+):
+    caller = _register_user()
+    _fund_user_wallet(caller, 500)
+    agent_id = getattr(server, agent_id_attr)
+    monkeypatch.setattr(getattr(server, runner_attr), "run", lambda input_payload: dict(stub_output))
+
+    sync_call = client.post(
+        f"/registry/agents/{agent_id}/call",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json=payload,
+    )
+    assert sync_call.status_code == 200, sync_call.text
+    sync_output = sync_call.json()["output"]
+
+    created = client.post(
+        "/jobs",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={"agent_id": agent_id, "input_payload": payload, "max_attempts": 1},
+    )
+    assert created.status_code == 201, created.text
+    terminal = _wait_for_job_terminal(client, caller["raw_api_key"], created.json()["job_id"])
+    assert terminal["status"] == "complete"
+    assert terminal["output_payload"] == sync_output
+
+
+def test_builtin_structured_error_refunds_sync_and_async_equally(client, monkeypatch):
+    caller = _register_user()
+    wallet = _fund_user_wallet(caller, 500)
+    balance_before = payments.get_wallet(wallet["wallet_id"])["balance_cents"]
+
+    monkeypatch.setattr(
+        server.agent_linter_agent,
+        "run",
+        lambda payload: {
+            "error": {
+                "code": "linter_agent.tool_unavailable",
+                "message": "ruff is not available on this executor.",
+            }
+        },
+    )
+
+    sync_call = client.post(
+        f"/registry/agents/{server._LINTER_AGENT_ID}/call",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={"language": "python", "code": "print(1)\n"},
+    )
+    assert sync_call.status_code == 502, sync_call.text
+    balance_after_sync = payments.get_wallet(wallet["wallet_id"])["balance_cents"]
+    assert balance_after_sync == balance_before
+
+    created = client.post(
+        "/jobs",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={
+            "agent_id": server._LINTER_AGENT_ID,
+            "input_payload": {"language": "python", "code": "print(1)\n"},
+            "max_attempts": 1,
+        },
+    )
+    assert created.status_code == 201, created.text
+    terminal = _wait_for_job_terminal(client, caller["raw_api_key"], created.json()["job_id"])
+    assert terminal["status"] == "failed"
+    assert terminal["output_payload"]["error"]["code"] == "linter_agent.tool_unavailable"
+    assert "ruff is not available" in terminal["error_message"]
+    balance_after_async = payments.get_wallet(wallet["wallet_id"])["balance_cents"]
+    assert balance_after_async == balance_before
 
 
 def test_registry_lists_new_builtin_agents(client):

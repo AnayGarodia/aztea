@@ -198,6 +198,122 @@ def _deterministic_quality_result(agent: dict, output_payload: dict) -> dict[str
             "reason": "Structured linter output is internally consistent.",
         }
 
+    if agent_id == _PYTHON_EXECUTOR_AGENT_ID:
+        if not isinstance(payload.get("stdout"), str) or not isinstance(payload.get("stderr"), str):
+            return {"verdict": "fail", "score": 2, "reason": "Python executor output must include stdout/stderr strings."}
+        if not isinstance(payload.get("timed_out"), bool):
+            return {"verdict": "fail", "score": 2, "reason": "Python executor output must include a boolean timed_out field."}
+        if not isinstance(payload.get("variables_captured"), dict):
+            return {"verdict": "fail", "score": 2, "reason": "Python executor output must include variables_captured."}
+        try:
+            int(payload.get("exit_code"))
+            int(payload.get("execution_time_ms"))
+        except (TypeError, ValueError):
+            return {"verdict": "fail", "score": 2, "reason": "Python executor output must include numeric exit_code and execution_time_ms."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured Python executor output is internally consistent."}
+
+    if agent_id == _MULTI_FILE_EXECUTOR_AGENT_ID:
+        if not isinstance(payload.get("stdout"), str) or not isinstance(payload.get("stderr"), str):
+            return {"verdict": "fail", "score": 2, "reason": "Multi-file executor output must include stdout/stderr strings."}
+        if not isinstance(payload.get("timed_out"), bool):
+            return {"verdict": "fail", "score": 2, "reason": "Multi-file executor output must include a boolean timed_out field."}
+        try:
+            int(payload.get("exit_code"))
+            int(payload.get("execution_time_ms"))
+            int(payload.get("files_written"))
+        except (TypeError, ValueError):
+            return {"verdict": "fail", "score": 2, "reason": "Multi-file executor output must include numeric exit_code, execution_time_ms, and files_written."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured multi-file executor output is internally consistent."}
+
+    if agent_id == _MULTI_LANGUAGE_EXECUTOR_AGENT_ID:
+        if not isinstance(payload.get("stdout"), str) or not isinstance(payload.get("stderr"), str):
+            return {"verdict": "fail", "score": 2, "reason": "Multi-language executor output must include stdout/stderr strings."}
+        if not isinstance(payload.get("runtime"), str) or not str(payload.get("runtime")).strip():
+            return {"verdict": "fail", "score": 2, "reason": "Multi-language executor output must include a runtime string."}
+        passed = payload.get("passed")
+        if not isinstance(passed, bool):
+            return {"verdict": "fail", "score": 2, "reason": "Multi-language executor output must include a boolean passed field."}
+        try:
+            exit_code = int(payload.get("exit_code"))
+            int(payload.get("execution_time_ms"))
+        except (TypeError, ValueError):
+            return {"verdict": "fail", "score": 2, "reason": "Multi-language executor output must include numeric exit_code and execution_time_ms."}
+        if passed != (exit_code == 0):
+            return {"verdict": "fail", "score": 2, "reason": "Multi-language executor output is internally inconsistent: passed does not match exit_code."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured multi-language executor output is internally consistent."}
+
+    if agent_id == _CVELOOKUP_AGENT_ID:
+        results = payload.get("results")
+        if not isinstance(results, list):
+            return {"verdict": "fail", "score": 2, "reason": "CVE lookup output must include a results list."}
+        for item in results:
+            if not isinstance(item, dict):
+                return {"verdict": "fail", "score": 2, "reason": "Each CVE lookup result must be an object."}
+            if not str(item.get("cve") or "").strip():
+                return {"verdict": "fail", "score": 2, "reason": "Each CVE lookup result must include a CVE identifier."}
+            try:
+                float(item.get("cvss", 0.0))
+            except (TypeError, ValueError):
+                return {"verdict": "fail", "score": 2, "reason": "Each CVE lookup result must include a numeric CVSS score."}
+            if not isinstance(item.get("severity"), str):
+                return {"verdict": "fail", "score": 2, "reason": "Each CVE lookup result must include a severity string."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured CVE lookup output is internally consistent."}
+
+    if agent_id == _WEB_RESEARCHER_AGENT_ID:
+        findings = payload.get("per_url_findings")
+        if not isinstance(findings, list):
+            return {"verdict": "fail", "score": 2, "reason": "Web researcher output must include per_url_findings."}
+        try:
+            billing_units_actual = int(payload.get("billing_units_actual"))
+        except (TypeError, ValueError):
+            return {"verdict": "fail", "score": 2, "reason": "Web researcher output must include a numeric billing_units_actual."}
+        ok_count = 0
+        for finding in findings:
+            if not isinstance(finding, dict):
+                return {"verdict": "fail", "score": 2, "reason": "Each per_url_findings item must be an object."}
+            if not str(finding.get("url") or "").strip():
+                return {"verdict": "fail", "score": 2, "reason": "Each web researcher finding must include a URL."}
+            status = str(finding.get("status") or "").strip()
+            if status not in {"ok", "error"}:
+                return {"verdict": "fail", "score": 2, "reason": "Each web researcher finding must have status 'ok' or 'error'."}
+            if status == "ok":
+                ok_count += 1
+            try:
+                int(finding.get("content_length", 0))
+            except (TypeError, ValueError):
+                return {"verdict": "fail", "score": 2, "reason": "Each web researcher finding must include numeric content_length."}
+        if billing_units_actual != ok_count:
+            return {"verdict": "fail", "score": 2, "reason": "Web researcher output is internally inconsistent: billing_units_actual does not match successful fetches."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured web researcher output is internally consistent."}
+
+    if agent_id == _SEMANTIC_CODEBASE_SEARCH_AGENT_ID:
+        if not isinstance(payload.get("query"), str) or not str(payload.get("query")).strip():
+            return {"verdict": "fail", "score": 2, "reason": "Semantic code search output must include the original query string."}
+        try:
+            total_files_indexed = int(payload.get("total_files_indexed"))
+        except (TypeError, ValueError):
+            return {"verdict": "fail", "score": 2, "reason": "Semantic code search output must include numeric total_files_indexed."}
+        if total_files_indexed < 0:
+            return {"verdict": "fail", "score": 2, "reason": "Semantic code search output cannot report a negative total_files_indexed."}
+        if str(payload.get("source") or "").strip() not in {"artifact", "git"}:
+            return {"verdict": "fail", "score": 2, "reason": "Semantic code search output must include source=artifact|git."}
+        results = payload.get("results")
+        if not isinstance(results, list):
+            return {"verdict": "fail", "score": 2, "reason": "Semantic code search output must include a results list."}
+        for item in results:
+            if not isinstance(item, dict):
+                return {"verdict": "fail", "score": 2, "reason": "Each semantic code search result must be an object."}
+            if not str(item.get("path") or "").strip():
+                return {"verdict": "fail", "score": 2, "reason": "Each semantic code search result must include a path."}
+            if not isinstance(item.get("snippet"), str):
+                return {"verdict": "fail", "score": 2, "reason": "Each semantic code search result must include a snippet string."}
+            try:
+                float(item.get("score"))
+                int(item.get("size_bytes"))
+            except (TypeError, ValueError):
+                return {"verdict": "fail", "score": 2, "reason": "Each semantic code search result must include numeric score and size_bytes."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured semantic code search output is internally consistent."}
+
     return None
 
 
@@ -548,6 +664,26 @@ _AGENT_FAILURE_ERROR_CODE_SUFFIXES: tuple[str, ...] = (
     ".not_configured",
     ".missing_dependency",
     ".dependency_missing",
+    ".invalid_input",
+    ".missing_input",
+    ".missing_code",
+    ".missing_url",
+    ".missing_language",
+    ".invalid_language",
+    ".unsupported_language",
+    ".query_too_long",
+    ".code_too_long",
+    ".stdin_too_long",
+    ".url_too_long",
+    ".too_many_urls",
+    ".url_blocked",
+    ".unsafe_artifact",
+    ".ambiguous_source",
+    ".extraction_failed",
+    ".clone_failed",
+    ".all_fetches_failed",
+    ".fetch_failed",
+    ".timeout",
 )
 _AGENT_FAILURE_ERROR_CODE_EXACT: frozenset[str] = frozenset({
     "request.invalid_input",
@@ -591,7 +727,9 @@ def _is_agent_failure_envelope(output: object) -> tuple[bool, str | None, str | 
         return True, code, message or None
     if any(code.endswith(suffix) for suffix in _AGENT_FAILURE_ERROR_CODE_SUFFIXES):
         return True, code, message or None
-    return False, None, None
+    # Any top-level structured error envelope from a built-in agent indicates
+    # no usable output. Treat it as a failure even if the exact code is new.
+    return True, code, message or None
 
 
 def _settle_successful_job(
