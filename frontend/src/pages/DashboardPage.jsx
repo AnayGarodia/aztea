@@ -13,7 +13,7 @@ import { useAuth } from '../context/AuthContext'
 import { fetchReconciliationRuns } from '../api'
 import { Wallet, Hammer } from 'lucide-react'
 import './DashboardPage.css'
-import { fmtDate } from '../utils/format.js'
+import { fmtDate, fmtUsd } from '../utils/format.js'
 
 function JobRow({ job, agents }) {
   const agent = agents.find(a => a.agent_id === job.agent_id)
@@ -62,7 +62,7 @@ export default function DashboardPage() {
   const recentJobs = jobs.slice(0, 8)
   const hasBalance = (wallet?.balance_cents ?? 0) > 0
   const isNewUser = !loading && jobs.length === 0 && !hasBalance
-  const balance = loading ? '…' : `$${((wallet?.balance_cents ?? 0) / 100).toFixed(2)}`
+  const balance = loading ? '…' : fmtUsd(wallet?.balance_cents ?? 0)
   const isAdmin = (user?.scopes ?? []).includes('admin')
   const creditLabel = role === 'hirer' ? '$2.00' : '$1.00'
   const creditSubtext = role === 'hirer'

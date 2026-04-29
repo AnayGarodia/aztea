@@ -26,7 +26,6 @@ from typing import Any
 from server.builtin_agents.constants import (
     ARXIV_RESEARCH_AGENT_ID,
     DNS_INSPECTOR_AGENT_ID,
-    GITHUB_FETCHER_AGENT_ID,
     HN_DIGEST_AGENT_ID,
     IMAGE_GENERATOR_AGENT_ID,
     PYTHON_EXECUTOR_AGENT_ID,
@@ -100,20 +99,6 @@ _OVERLAY: dict[str, dict[str, Any]] = {
                 {"up_to_units": 3, "cents": 5},
                 {"up_to_units": 6, "cents": 9},
                 {"up_to_units": 10, "cents": 15},
-            ],
-        },
-    },
-    # GitHub Fetcher: tiered by file count.
-    GITHUB_FETCHER_AGENT_ID: {
-        "pricing_model": "tiered",
-        "pricing_config": {
-            "input_field": "paths",
-            "unit": "file",
-            "min_cents": 3,
-            "tiers": [
-                {"up_to_units": 1, "cents": 3},
-                {"up_to_units": 5, "cents": 8},
-                {"up_to_units": 20, "cents": 18},
             ],
         },
     },

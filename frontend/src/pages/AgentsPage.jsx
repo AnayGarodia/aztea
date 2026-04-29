@@ -9,8 +9,23 @@ import Skeleton from '../ui/Skeleton'
 import Reveal from '../ui/motion/Reveal'
 import { searchAgents } from '../api'
 import { useMarket } from '../context/MarketContext'
-import { Search } from 'lucide-react'
+import { Search, Zap } from 'lucide-react'
 import './AgentsPage.css'
+
+const SEARCH_SUGGESTIONS = [
+  'run Python code', 'audit npm dependencies', 'check SSL certificate',
+  'review pull request', 'scan for CVEs', 'browse a webpage',
+  'search arXiv papers', 'lint JavaScript', 'execute shell command',
+]
+
+const CATEGORIES = [
+  { label: 'All', value: '' },
+  { label: 'Code', value: 'code' },
+  { label: 'Security', value: 'security' },
+  { label: 'Web', value: 'web' },
+  { label: 'Research', value: 'research' },
+  { label: 'Execution', value: 'execution' },
+]
 
 const SORT_OPTIONS = [
   { value: 'trust', label: 'Trust score' },
@@ -36,9 +51,11 @@ export default function AgentsPage() {
   const [search, setSearch] = useState('')
   const [sortBy, setSortBy] = useState('trust')
   const [maxPriceCents, setMaxPriceCents] = useState('')
+  const [category, setCategory] = useState('')
   const [searchResults, setSearchResults] = useState([])
   const [searchLoading, setSearchLoading] = useState(false)
   const [searchError, setSearchError] = useState('')
+  const [isSemanticResult, setIsSemanticResult] = useState(false)
 
   // Instant local text filter - runs synchronously so search feels immediate
   const localMatched = useMemo(() => {
@@ -62,6 +79,7 @@ export default function AgentsPage() {
     }
 
     setSearchLoading(true)
+    setIsSemanticResult(false)
     let cancelled = false
     const timer = setTimeout(async () => {
       try {
@@ -74,6 +92,7 @@ export default function AgentsPage() {
           return { ...(item?.agent ?? {}), match_reasons: matchReasons, _from_search: true }
         })
         setSearchResults(normalized)
+        setIsSemanticResult(normalized.length > 0)
       } catch (err) {
         if (cancelled) return
         setSearchResults([])
@@ -94,26 +113,27 @@ export default function AgentsPage() {
     const maxCents = maxPriceCents ? parseFloat(maxPriceCents) * 100 : null
     let list = source.filter(a => {
       if (maxCents != null && (a.price_per_call_usd ?? 0) * 100 > maxCents) return false
+      if (category && !(a.tags ?? []).some(t => t.toLowerCase() === category)) return false
       return true
     })
     if (!search.trim()) list = sortAgents(list, sortBy)
     return list
-  }, [agents, search, searchResults, localMatched, sortBy, maxPriceCents])
+  }, [agents, search, searchResults, localMatched, sortBy, maxPriceCents, category])
 
   // Featured = Aztea-built agents sorted by trust, shown before others when no filter active
   const featured = useMemo(() => {
-    if (search.trim() || maxPriceCents) return []
+    if (search.trim() || maxPriceCents || category) return []
     return agents
       .filter(a => a.kind === 'aztea_built')
       .sort((a, b) => (b.trust_score ?? 0) - (a.trust_score ?? 0))
       .slice(0, 3)
-  }, [agents, search, maxPriceCents])
+  }, [agents, search, maxPriceCents, category])
 
-  const isFiltered = Boolean(search || maxPriceCents)
+  const isFiltered = Boolean(search || maxPriceCents || category)
   const listLoading = loading
   const isSemanticSearching = search.trim() && searchLoading
 
-  const clearFilters = () => { setSearch(''); setMaxPriceCents('') }
+  const clearFilters = () => { setSearch(''); setMaxPriceCents(''); setCategory('') }
 
   return (
     <main className="agents-page">
@@ -158,7 +178,7 @@ export default function AgentsPage() {
                   step="0.001"
                   value={maxPriceCents}
                   onChange={e => setMaxPriceCents(e.target.value)}
-                  style={{ width: 140, flexShrink: 0 }}
+                  className="agents-page__price-input"
                 />
                 <select
                   className="agents-page__sort-select"
@@ -169,8 +189,30 @@ export default function AgentsPage() {
                   {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
               </div>
+              <div className="agents-page__categories" role="group" aria-label="Filter by category">
+                {CATEGORIES.map(cat => (
+                  <button
+                    key={cat.value}
+                    className={`agents-page__category-chip${category === cat.value ? ' agents-page__category-chip--active' : ''}`}
+                    onClick={() => setCategory(cat.value)}
+                  >
+                    {cat.label}
+                  </button>
+                ))}
+              </div>
             </section>
           </Reveal>
+
+          {!search && !maxPriceCents && !category && !listLoading && (
+            <div className="agents-page__suggestions">
+              <span className="agents-page__suggestions-label">Try:</span>
+              {SEARCH_SUGGESTIONS.map(s => (
+                <button key={s} className="agents-page__suggestion-pill" onClick={() => setSearch(s)}>
+                  {s}
+                </button>
+              ))}
+            </div>
+          )}
 
           {listLoading ? (
             <div className="agents-page__grid">
@@ -194,7 +236,17 @@ export default function AgentsPage() {
                 : filtered
               return (
                 <>
-                  {isFiltered && <p className="agents-page__results-count t-micro">{filtered.length} result{filtered.length !== 1 ? 's' : ''}</p>}
+                  {isFiltered && (
+                    <div className="agents-page__results-meta">
+                      <span className="agents-page__results-count t-micro">{filtered.length} result{filtered.length !== 1 ? 's' : ''}</span>
+                      {isSemanticResult && search.trim() && (
+                        <span className="agents-page__semantic-badge">
+                          <Zap size={10} />
+                          Semantic match
+                        </span>
+                      )}
+                    </div>
+                  )}
                   <div className="agents-page__grid">
                     {merged.map((agent, index) => (
                       <AgentCard

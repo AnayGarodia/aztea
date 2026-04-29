@@ -720,7 +720,7 @@ export async function rateJob(key, jobId, rating, { idempotencyKey } = {}) {
 
 export async function getJobDispute(key, jobId) {
   // Returns the dispute for this job, or null if none exists
-  const { body, status } = await request(`/jobs/${jobId}/dispute`, { key })
+  const { body, status } = await request(`/jobs/${jobId}/dispute`, { key, throwOnError: false })
   if (status === 404) return null
   return body
 }

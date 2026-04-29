@@ -831,14 +831,7 @@ def registry_call(
                 )
             # Always wrap in a consistent envelope so callers can reliably
             # read job_id, status, and output without sniffing the shape.
-            headers = {}
-            if agent_id in _DEPRECATED_BUILTIN_AGENT_IDS:
-                headers["Deprecation"] = "true"
-                headers["Sunset"] = _DEPRECATED_AGENTS_SUNSET_DATE
-            return JSONResponse(
-                content=response_payload,
-                headers=headers if headers else None,
-            )
+            return JSONResponse(content=response_payload)
         except ValidationError as exc:
             failed = jobs.update_job_status(
                 job["job_id"],

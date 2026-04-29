@@ -6,7 +6,6 @@ from server.builtin_agents.constants import (
     CODEREVIEW_AGENT_ID,
     DEPENDENCY_AUDITOR_AGENT_ID,
     LINTER_AGENT_ID,
-    TEST_GENERATOR_AGENT_ID,
     TYPE_CHECKER_AGENT_ID,
 )
 
@@ -67,9 +66,9 @@ BUILTIN_RECIPES: list[dict] = [
         },
     },
     {
-        "recipe_id": "review-and-test",
-        "name": "review-and-test",
-        "description": "Review code and then generate tests for the same change.",
+        "recipe_id": "review-and-lint",
+        "name": "review-and-lint",
+        "description": "Review code for issues, then lint for style and correctness.",
         "default_input_schema": {
             "type": "object",
             "properties": {"code": {"type": "string"}},
@@ -83,8 +82,8 @@ BUILTIN_RECIPES: list[dict] = [
                     "input_map": {"code": "$input.code"},
                 },
                 {
-                    "id": "tests",
-                    "agent_id": TEST_GENERATOR_AGENT_ID,
+                    "id": "lint",
+                    "agent_id": LINTER_AGENT_ID,
                     "depends_on": ["review"],
                     "input_map": {"code": "$input.code"},
                 },

@@ -321,7 +321,8 @@ def release_job_claim(
         conn.execute(
             """
             UPDATE jobs
-            SET claim_owner_id = NULL,
+            SET status = 'pending',
+                claim_owner_id = NULL,
                 claim_token = NULL,
                 claimed_at = NULL,
                 lease_expires_at = NULL,

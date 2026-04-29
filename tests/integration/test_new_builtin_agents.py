@@ -1,37 +1,11 @@
-"""Integration tests for github_fetcher, hn_digest, and dns_inspector built-in agents."""
+"""Integration tests for hn_digest and dns_inspector built-in agents."""
 
 from unittest.mock import patch, MagicMock
 
 from tests.integration.support import *  # noqa: F403
 
-GITHUB_FETCHER_AGENT_ID = server._GITHUB_FETCHER_AGENT_ID
 HN_DIGEST_AGENT_ID = server._HN_DIGEST_AGENT_ID
 DNS_INSPECTOR_AGENT_ID = server._DNS_INSPECTOR_AGENT_ID
-
-
-def test_github_fetcher_basic(client):
-    caller = _register_user()
-    _fund_user_wallet(caller, 200)
-
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.text = "# Hello World\nThis is a README."
-    mock_resp.content = b"# Hello World\nThis is a README."
-
-    with patch("agents.github_fetcher.httpx.get", return_value=mock_resp):
-        resp = client.post(
-            f"/registry/agents/{GITHUB_FETCHER_AGENT_ID}/call",
-            json={"repo": "octocat/Hello-World", "paths": ["README.md"], "branch": "main"},
-            headers=_auth_headers(caller["raw_api_key"]),
-        )
-
-    assert resp.status_code == 200, resp.text
-    body = resp.json()["output"]
-    assert "files" in body
-    assert isinstance(body["billing_units_actual"], int)
-    assert body["billing_units_actual"] == 1
-    assert body["files"][0]["path"] == "README.md"
-    assert body["files"][0]["content"] == "# Hello World\nThis is a README."
 
 
 def test_hn_digest_not_in_public_catalog(client):

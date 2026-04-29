@@ -8,7 +8,6 @@ import pytest
 from agents import browser_agent
 from agents import cve_lookup
 from agents import db_sandbox
-from agents import github_fetcher
 from agents import hn_digest
 from agents import linter_agent
 from agents import live_endpoint_tester
@@ -279,11 +278,6 @@ def test_browser_agent_rejects_invalid_url_via_ssrf_guard():
     assert "absolute http(s) URL" in result["error"]["message"]
 
 
-def test_github_fetcher_returns_structured_error_for_invalid_repo():
-    result = github_fetcher.run({"repo": "invalid", "paths": ["README.md"]})
-    assert result["error"]["code"] == "github_fetcher.invalid_repo"
-
-
 def test_hn_digest_returns_structured_error_on_timeout(monkeypatch):
     def fake_get(*args, **kwargs):
         del args, kwargs
@@ -352,27 +346,6 @@ def test_arxiv_research_degrades_gracefully_without_llm(monkeypatch):
     result = arxiv_research.run({"query": "transformers", "max_results": 1})
     assert result["total_found"] == 1
     assert "no LLM provider" in result["synthesis"]
-
-
-def test_github_fetcher_summary_falls_back_cleanly_without_llm(monkeypatch):
-    class _FakeResponse:
-        def __init__(self, text: str):
-            self.status_code = 200
-            self.text = text
-            self.content = text.encode("utf-8")
-
-    monkeypatch.setattr(github_fetcher.httpx, "get", lambda *args, **kwargs: _FakeResponse("# Hello"))
-    monkeypatch.setattr(github_fetcher, "run_with_fallback", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("no llm")))
-    result = github_fetcher.run(
-        {
-            "repo": "octocat/Hello-World",
-            "paths": ["README.md"],
-            "branch": "main",
-            "summarize": True,
-        }
-    )
-    assert result["billing_units_actual"] == 1
-    assert result["summary"] is None
 
 
 def test_web_researcher_degrades_gracefully_without_llm(monkeypatch):

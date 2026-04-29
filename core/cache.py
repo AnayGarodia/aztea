@@ -152,9 +152,9 @@ def _is_builtin_agent(agent_id: str) -> bool:
         try:
             from server.builtin_agents.constants import (
                 CURATED_PUBLIC_BUILTIN_AGENT_IDS,
-                _BUILTIN_AGENT_IDS,
+                BUILTIN_AGENT_IDS,
             )
-            _BUILTIN_CACHE_BYPASS_THRESHOLD = set(CURATED_PUBLIC_BUILTIN_AGENT_IDS) | set(_BUILTIN_AGENT_IDS)
+            _BUILTIN_CACHE_BYPASS_THRESHOLD = set(CURATED_PUBLIC_BUILTIN_AGENT_IDS) | set(BUILTIN_AGENT_IDS)
         except Exception:
             _BUILTIN_CACHE_BYPASS_THRESHOLD = set()
     return str(agent_id).strip() in _BUILTIN_CACHE_BYPASS_THRESHOLD

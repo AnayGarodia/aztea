@@ -21,11 +21,11 @@ def test_builtin_dispatch_adds_default_success_contract(monkeypatch):
 def test_builtin_dispatch_infers_llm_usage_for_llm_backed_builtin(monkeypatch):
     _refresh_builtin_spec_cache()
     monkeypatch.setattr(
-        server.agent_spec_writer,
+        server.agent_web_researcher,
         "run",
-        lambda payload: {"title": "Spec", "format": "rfc", "sections": [], "open_questions": [], "out_of_scope": [], "estimated_complexity": "M", "full_text": "Spec"},
+        lambda payload: {"summary": "Found content.", "results": [], "billing_units_actual": 1, "llm_used": True},
     )
-    result = server._execute_builtin_agent(server._SPEC_WRITER_AGENT_ID, {})
+    result = server._execute_builtin_agent(server._WEB_RESEARCHER_AGENT_ID, {"urls": ["https://example.com"]})
     assert result["billing_units_actual"] == 1
     assert result["degraded_mode"] is False
     assert result["llm_used"] is True
@@ -53,9 +53,9 @@ def test_builtin_dispatch_preserves_explicit_degraded_metadata(monkeypatch):
 def test_builtin_dispatch_leaves_structured_errors_untouched(monkeypatch):
     _refresh_builtin_spec_cache()
     monkeypatch.setattr(
-        server.agent_package_finder,
+        server.agent_cve_lookup,
         "run",
-        lambda payload: {"error": {"code": "package_finder.missing_task", "message": "task is required."}},
+        lambda payload: {"error": {"code": "cve_lookup.missing_cve_id", "message": "cve_id is required."}},
     )
-    result = server._execute_builtin_agent(server._PACKAGE_FINDER_AGENT_ID, {})
-    assert result == {"error": {"code": "package_finder.missing_task", "message": "task is required."}}
+    result = server._execute_builtin_agent(server._CVELOOKUP_AGENT_ID, {})
+    assert result == {"error": {"code": "cve_lookup.missing_cve_id", "message": "cve_id is required."}}

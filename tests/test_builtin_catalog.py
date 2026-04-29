@@ -25,8 +25,7 @@ def test_builtin_specs_have_catalog_contract_fields():
         assert isinstance(metadata["runtime_requirements"], list)
 
 
-def test_builtin_catalog_metadata_marks_deprecated_wrappers():
-    deprecated_github_fetcher = "5896576f-bbe6-59e4-83c1-5106002e7d10"
-    metadata = builtin_catalog_metadata(deprecated_github_fetcher)
-    assert metadata is not None
-    assert metadata["deprecated"] is True
+def test_builtin_catalog_metadata_returns_none_for_removed_agents():
+    removed_github_fetcher = "5896576f-bbe6-59e4-83c1-5106002e7d10"
+    metadata = builtin_catalog_metadata(removed_github_fetcher)
+    assert metadata is None

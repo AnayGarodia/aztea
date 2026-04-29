@@ -75,16 +75,10 @@ from agents import wiki as agent_wiki
 from agents import arxiv_research as agent_arxiv_research
 from agents import python_executor as agent_python_executor
 from agents import web_researcher as agent_web_researcher
-from agents import github_fetcher as agent_github_fetcher
 from agents import hn_digest as agent_hn_digest
 from agents import dns_inspector as agent_dns_inspector
-from agents import pr_reviewer as agent_pr_reviewer
-from agents import test_generator as agent_test_generator
-from agents import spec_writer as agent_spec_writer
 from agents import dependency_auditor as agent_dependency_auditor
 from agents import multi_file_executor as agent_multi_file_executor
-from agents import changelog_agent as agent_changelog_agent
-from agents import package_finder as agent_package_finder
 from agents import linter_agent as agent_linter_agent
 from agents import shell_executor as agent_shell_executor
 from agents import type_checker as agent_type_checker
@@ -277,16 +271,10 @@ _VIDEO_STORYBOARD_AGENT_ID = "c12994de-cde9-514a-9c07-a3833b25bb1f"
 _ARXIV_RESEARCH_AGENT_ID   = "9e673f6e-9115-516f-b41b-5af8bcbf15bd"
 _PYTHON_EXECUTOR_AGENT_ID  = "040dc3f5-afe7-5db7-b253-4936090cc7af"
 _WEB_RESEARCHER_AGENT_ID   = "32cd7b5c-44d0-5259-bb02-1bbc612e92d7"
-_GITHUB_FETCHER_AGENT_ID   = "5896576f-bbe6-59e4-83c1-5106002e7d10"
 _HN_DIGEST_AGENT_ID        = "31cc3a99-eca6-5202-96d4-8366f426ae1d"
 _DNS_INSPECTOR_AGENT_ID    = "3d677381-791c-5e83-8e66-5b77d0e43e2e"
-_PR_REVIEWER_AGENT_ID      = "3e133b66-3bc6-5003-9b64-3284b28a60c6"
-_TEST_GENERATOR_AGENT_ID   = "f515323c-7df2-5742-ac06-bc38b59a40cb"
-_SPEC_WRITER_AGENT_ID      = "ce9504a3-74c8-51a5-913e-6ae55787abc8"
 _DEPENDENCY_AUDITOR_AGENT_ID = "11fab82a-426e-513e-abf3-528d99ef2b87"
 _MULTI_FILE_EXECUTOR_AGENT_ID = "ea95cdec-32c1-5a2b-a032-3e7061abf3a4"
-_CHANGELOG_AGENT_ID = "48c24ce5-d9cb-5f76-9e2f-fce1878f8c4c"
-_PACKAGE_FINDER_AGENT_ID = "d11ddab1-bcca-55de-8b00-c9efadc69c79"
 _LINTER_AGENT_ID = "7ec4c987-9a7e-5af8-984f-7b8ad0ad0536"
 _SHELL_EXECUTOR_AGENT_ID = "6bd98167-e010-5604-8c76-6ed1b92698f1"
 _TYPE_CHECKER_AGENT_ID = "5b140628-52a8-565b-8599-b1c3e402b02d"
@@ -313,16 +301,10 @@ _BUILTIN_INTERNAL_ENDPOINTS = {
     _ARXIV_RESEARCH_AGENT_ID:  "internal://arxiv-research",
     _PYTHON_EXECUTOR_AGENT_ID: "internal://python-executor",
     _WEB_RESEARCHER_AGENT_ID:  "internal://web-researcher",
-    _GITHUB_FETCHER_AGENT_ID:  "internal://github_fetcher",
     _HN_DIGEST_AGENT_ID:       "internal://hn_digest",
     _DNS_INSPECTOR_AGENT_ID:   "internal://dns_inspector",
-    _PR_REVIEWER_AGENT_ID:     "internal://pr_reviewer",
-    _TEST_GENERATOR_AGENT_ID:  "internal://test_generator",
-    _SPEC_WRITER_AGENT_ID:     "internal://spec_writer",
     _DEPENDENCY_AUDITOR_AGENT_ID: "internal://dependency_auditor",
     _MULTI_FILE_EXECUTOR_AGENT_ID: "internal://multi_file_executor",
-    _CHANGELOG_AGENT_ID: "internal://changelog_agent",
-    _PACKAGE_FINDER_AGENT_ID: "internal://package_finder",
     _LINTER_AGENT_ID: "internal://linter_agent",
     _SHELL_EXECUTOR_AGENT_ID: "internal://shell_executor",
     _TYPE_CHECKER_AGENT_ID: "internal://type_checker",
@@ -345,7 +327,6 @@ _BUILTIN_LEGACY_ROUTE_ENDPOINTS = {
     _ARXIV_RESEARCH_AGENT_ID:  f"{_SERVER_BASE_URL}/agents/arxiv-research",
     _PYTHON_EXECUTOR_AGENT_ID: f"{_SERVER_BASE_URL}/agents/python-executor",
     _WEB_RESEARCHER_AGENT_ID:  f"{_SERVER_BASE_URL}/agents/web-researcher",
-    _GITHUB_FETCHER_AGENT_ID:  f"{_SERVER_BASE_URL}/agents/github-fetcher",
     _HN_DIGEST_AGENT_ID:       f"{_SERVER_BASE_URL}/agents/hn-digest",
     _DNS_INSPECTOR_AGENT_ID:   f"{_SERVER_BASE_URL}/agents/dns-inspector",
 }
@@ -379,13 +360,6 @@ _CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
         _SEMANTIC_CODEBASE_SEARCH_AGENT_ID, # embed + search a codebase
         _AI_RED_TEAMER_AGENT_ID,        # adversarial prompt tester
         _IMAGE_GENERATOR_AGENT_ID,      # real image generation model
-        # LLM-only wrappers removed from public set (Phase 3 cleanup):
-        # _PR_REVIEWER_AGENT_ID         — LLM wrapper, no external data
-        # _TEST_GENERATOR_AGENT_ID      — LLM wrapper, no external data
-        # _CHANGELOG_AGENT_ID           — LLM wrapper, no external data
-        # _PACKAGE_FINDER_AGENT_ID      — LLM wrapper, no external data
-        # _GITHUB_FETCHER_AGENT_ID      — LLM wrapper, no external data
-        # _SPEC_WRITER_AGENT_ID         — LLM wrapper, no external data
         # Benched (available via API/MCP but not shown in marketplace):
         # _FINANCIAL_AGENT_ID        — SEC EDGAR, narrow use case
         # _WIKI_AGENT_ID             — Claude can search Wikipedia natively
@@ -393,18 +367,6 @@ _CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
         # _HN_DIGEST_AGENT_ID        — nice-to-have, not Claude Code specific
     }
 )
-# Deprecated LLM-only wrappers: still routable but return Deprecation headers
-_DEPRECATED_BUILTIN_AGENT_IDS = frozenset(
-    {
-        _GITHUB_FETCHER_AGENT_ID,
-        _PR_REVIEWER_AGENT_ID,
-        _TEST_GENERATOR_AGENT_ID,
-        _SPEC_WRITER_AGENT_ID,
-        _CHANGELOG_AGENT_ID,
-        _PACKAGE_FINDER_AGENT_ID,
-    }
-)
-_DEPRECATED_AGENTS_SUNSET_DATE = "2026-07-26"
 _CURATED_BUILTIN_AGENT_IDS = frozenset(set(_CURATED_PUBLIC_BUILTIN_AGENT_IDS) | {_QUALITY_JUDGE_AGENT_ID})
 _BUILTIN_WORKER_OWNER_ID = "system:builtin-worker"
 _SYSTEM_USERNAME = "system"

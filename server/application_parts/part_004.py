@@ -74,26 +74,14 @@ def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict
         return _finalize(agent_python_executor.run(payload))
     if agent_id == _WEB_RESEARCHER_AGENT_ID:
         return _finalize(agent_web_researcher.run(payload))
-    if agent_id == _GITHUB_FETCHER_AGENT_ID:
-        return _finalize(agent_github_fetcher.run(payload))
     if agent_id == _HN_DIGEST_AGENT_ID:
         return _finalize(agent_hn_digest.run(payload))
     if agent_id == _DNS_INSPECTOR_AGENT_ID:
         return _finalize(agent_dns_inspector.run(payload))
-    if agent_id == _PR_REVIEWER_AGENT_ID:
-        return _finalize(agent_pr_reviewer.run(payload))
-    if agent_id == _TEST_GENERATOR_AGENT_ID:
-        return _finalize(agent_test_generator.run(payload))
-    if agent_id == _SPEC_WRITER_AGENT_ID:
-        return _finalize(agent_spec_writer.run(payload))
     if agent_id == _DEPENDENCY_AUDITOR_AGENT_ID:
         return _finalize(agent_dependency_auditor.run(payload))
     if agent_id == _MULTI_FILE_EXECUTOR_AGENT_ID:
         return _finalize(agent_multi_file_executor.run(payload))
-    if agent_id == _CHANGELOG_AGENT_ID:
-        return _finalize(agent_changelog_agent.run(payload))
-    if agent_id == _PACKAGE_FINDER_AGENT_ID:
-        return _finalize(agent_package_finder.run(payload))
     if agent_id == _LINTER_AGENT_ID:
         return _finalize(agent_linter_agent.run(payload))
     if agent_id == _SHELL_EXECUTOR_AGENT_ID:

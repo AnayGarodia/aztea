@@ -8,27 +8,20 @@ from typing import Any
 from server.builtin_agents.constants import (
     ARXIV_RESEARCH_AGENT_ID,
     BROWSER_AGENT_ID,
-    CHANGELOG_AGENT_ID,
     CODEREVIEW_AGENT_ID,
     CVELOOKUP_AGENT_ID,
     CURATED_BUILTIN_AGENT_IDS,
-    DEPRECATED_BUILTIN_AGENT_IDS,
     DEPENDENCY_AUDITOR_AGENT_ID,
     DNS_INSPECTOR_AGENT_ID,
     FINANCIAL_AGENT_ID,
-    GITHUB_FETCHER_AGENT_ID,
     HN_DIGEST_AGENT_ID,
     IMAGE_GENERATOR_AGENT_ID,
     LINTER_AGENT_ID,
     LIVE_ENDPOINT_TESTER_AGENT_ID,
     MULTI_FILE_EXECUTOR_AGENT_ID,
-    PACKAGE_FINDER_AGENT_ID,
-    PR_REVIEWER_AGENT_ID,
     PYTHON_EXECUTOR_AGENT_ID,
     QUALITY_JUDGE_AGENT_ID,
     SHELL_EXECUTOR_AGENT_ID,
-    SPEC_WRITER_AGENT_ID,
-    TEST_GENERATOR_AGENT_ID,
     TYPE_CHECKER_AGENT_ID,
     VIDEO_STORYBOARD_AGENT_ID,
     WEB_RESEARCHER_AGENT_ID,
@@ -50,14 +43,8 @@ _DEFAULT_CATEGORY_BY_AGENT_ID = {
     ARXIV_RESEARCH_AGENT_ID: "Research",
     PYTHON_EXECUTOR_AGENT_ID: "Code Execution",
     WEB_RESEARCHER_AGENT_ID: "Web",
-    GITHUB_FETCHER_AGENT_ID: "Code",
     HN_DIGEST_AGENT_ID: "Research",
     DNS_INSPECTOR_AGENT_ID: "Security",
-    PR_REVIEWER_AGENT_ID: "Code",
-    TEST_GENERATOR_AGENT_ID: "Code",
-    SPEC_WRITER_AGENT_ID: "Code",
-    CHANGELOG_AGENT_ID: "Data",
-    PACKAGE_FINDER_AGENT_ID: "Data",
     DEPENDENCY_AUDITOR_AGENT_ID: "Code",
     MULTI_FILE_EXECUTOR_AGENT_ID: "Code Execution",
     SHELL_EXECUTOR_AGENT_ID: "Code Execution",
@@ -77,15 +64,9 @@ _DEFAULT_CACHEABLE_BY_AGENT_ID = {
     ARXIV_RESEARCH_AGENT_ID: True,
     PYTHON_EXECUTOR_AGENT_ID: False,
     WEB_RESEARCHER_AGENT_ID: True,
-    GITHUB_FETCHER_AGENT_ID: True,
     HN_DIGEST_AGENT_ID: True,
     DNS_INSPECTOR_AGENT_ID: False,
-    PR_REVIEWER_AGENT_ID: True,
     LINTER_AGENT_ID: False,
-    TEST_GENERATOR_AGENT_ID: True,
-    SPEC_WRITER_AGENT_ID: True,
-    CHANGELOG_AGENT_ID: True,
-    PACKAGE_FINDER_AGENT_ID: True,
     DEPENDENCY_AUDITOR_AGENT_ID: True,
     MULTI_FILE_EXECUTOR_AGENT_ID: False,
     SHELL_EXECUTOR_AGENT_ID: False,
@@ -98,15 +79,9 @@ _DEFAULT_RUNTIME_REQUIREMENTS_BY_AGENT_ID = {
     VIDEO_STORYBOARD_AGENT_ID: ["configured media backend"],
     PYTHON_EXECUTOR_AGENT_ID: ["python3"],
     WEB_RESEARCHER_AGENT_ID: ["requests", "llm provider optional for synthesis"],
-    GITHUB_FETCHER_AGENT_ID: ["httpx", "llm provider optional for synthesis"],
     HN_DIGEST_AGENT_ID: ["httpx", "llm provider optional for synthesis"],
     DNS_INSPECTOR_AGENT_ID: ["socket", "ssl"],
-    PR_REVIEWER_AGENT_ID: ["github api access", "llm provider"],
     LINTER_AGENT_ID: ["ruff", "node/eslint optional for js/ts"],
-    TEST_GENERATOR_AGENT_ID: ["llm provider", "python3"],
-    SPEC_WRITER_AGENT_ID: ["llm provider"],
-    CHANGELOG_AGENT_ID: ["requests", "llm provider optional for synthesis"],
-    PACKAGE_FINDER_AGENT_ID: ["requests", "llm provider"],
     DEPENDENCY_AUDITOR_AGENT_ID: ["requests"],
     MULTI_FILE_EXECUTOR_AGENT_ID: ["python3", "pip"],
     SHELL_EXECUTOR_AGENT_ID: ["allowlisted local binaries"],
@@ -126,7 +101,7 @@ def _normalize_builtin_spec(spec: dict[str, Any]) -> dict[str, Any]:
     output_examples = spec.get("output_examples")
     if not isinstance(output_examples, list) or not output_examples:
         raise ValueError(f"Built-in spec {agent_id} must include at least one output example.")
-    if agent_id in CURATED_BUILTIN_AGENT_IDS or agent_id in DEPRECATED_BUILTIN_AGENT_IDS:
+    if agent_id in CURATED_BUILTIN_AGENT_IDS:
         category = str(spec.get("category") or _DEFAULT_CATEGORY_BY_AGENT_ID.get(agent_id) or "").strip()
         if not category:
             raise ValueError(f"Built-in spec {agent_id} is missing category metadata.")
@@ -142,7 +117,7 @@ def _normalize_builtin_spec(spec: dict[str, Any]) -> dict[str, Any]:
             **spec,
             "category": category,
             "cacheable": bool(cacheable),
-            "is_featured": bool(spec.get("is_featured", agent_id not in DEPRECATED_BUILTIN_AGENT_IDS)),
+            "is_featured": bool(spec.get("is_featured", True)),
             "runtime_requirements": list(runtime_requirements),
         }
     return dict(spec)
@@ -170,18 +145,7 @@ def _all_builtin_specs() -> tuple[dict[str, Any], ...]:
 
 
 def builtin_agent_specs() -> list[dict[str, Any]]:
-    specs = list(_all_builtin_specs())
-    result = []
-    for spec in specs:
-        agent_id = spec.get("agent_id")
-        if agent_id in CURATED_BUILTIN_AGENT_IDS:
-            result.append(spec)
-        elif agent_id in DEPRECATED_BUILTIN_AGENT_IDS:
-            # Register deprecated agents normally so existing callers can still
-            # invoke them, but mark them deprecated so the registry list can
-            # filter them from public discovery.
-            result.append({**spec, "deprecated": True})
-    return result
+    return [spec for spec in _all_builtin_specs() if spec.get("agent_id") in CURATED_BUILTIN_AGENT_IDS]
 
 
 @lru_cache(maxsize=1)
@@ -201,5 +165,5 @@ def builtin_catalog_metadata(agent_id: str) -> dict[str, Any] | None:
         "is_featured": bool(spec.get("is_featured", False)),
         "cacheable": spec.get("cacheable"),
         "runtime_requirements": list(spec.get("runtime_requirements") or []),
-        "deprecated": bool(spec.get("deprecated", False)),
+        "deprecated": False,
     }

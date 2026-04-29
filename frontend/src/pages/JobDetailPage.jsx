@@ -14,7 +14,7 @@ import { useMarket } from '../context/MarketContext'
 import JobTimeline from '../features/jobs/JobTimeline'
 import { ArrowLeft, RefreshCw, Star, AlertTriangle, CheckCircle, Clock, RotateCcw, ShieldCheck } from 'lucide-react'
 import './JobDetailPage.css'
-import { fmtDateSec as fmtDate } from '../utils/format.js'
+import { fmtDateSec as fmtDate, fmtUsd } from '../utils/format.js'
 
 function fmtCountdown(isoDeadline) {
   if (!isoDeadline) return null
@@ -27,10 +27,6 @@ function fmtCountdown(isoDeadline) {
   return `${mins}m`
 }
 
-function fmtUsd(cents) {
-  if (typeof cents !== 'number') return null
-  return '$' + (cents / 100).toFixed(2)
-}
 
 function computeActualCharge(variablePricing, billingUnitsActual) {
   if (!variablePricing || billingUnitsActual == null) return null
@@ -83,6 +79,8 @@ function MessageBubble({ msg }) {
     </div>
   )
 }
+
+const TERMINAL = new Set(['complete', 'failed', 'cancelled'])
 
 const OUTCOME_LABELS = {
   caller_wins: 'Caller wins',
@@ -137,31 +135,28 @@ export default function JobDetailPage() {
     ? Math.max(0, (job?.price_cents ?? 0) - actualChargeCents)
     : 0
 
-  const loadMessages = async () => {
+  const loadMessages = useCallback(async () => {
     if (!id || !apiKey) return
     setLoadingMsgs(true)
     try {
       const res = await getJobMessages(apiKey, id)
       setMessages(Array.isArray(res?.messages) ? res.messages : [])
-    } catch (err) {
-      // Non-fatal: keep whatever messages we had; only clear on first load
-      if (messages.length === 0) setMessages([])
+    } catch {
+      setMessages(prev => prev.length === 0 ? [] : prev)
     } finally {
       setLoadingMsgs(false)
     }
-  }
+  }, [id, apiKey]) // eslint-disable-line
 
-  const loadDispute = async () => {
+  const loadDispute = useCallback(async () => {
     if (!id || !apiKey) return
     try {
       const d = await getJobDispute(apiKey, id)
       setDispute(d ?? null)
     } catch {
-      if (dispute === undefined) setDispute(null)
+      setDispute(prev => prev === undefined ? null : prev)
     }
-  }
-
-  const TERMINAL = useMemo(() => new Set(['complete', 'failed', 'cancelled']), [])
+  }, [id, apiKey]) // eslint-disable-line
 
   const pollJob = useCallback(async () => {
     if (!id || !apiKey) return
@@ -234,10 +229,11 @@ export default function JobDetailPage() {
     es.onerror = () => {
       // Reconnect automatically via browser; do a manual poll on error too
       pollJob()
+      loadMessages()
     }
 
     return () => { es.close(); sseRef.current = null }
-  }, [id, apiKey, job?.status, TERMINAL]) // eslint-disable-line
+  }, [id, apiKey, job?.status, loadMessages, pollJob]) // eslint-disable-line
 
   // Fallback poll every 5s for non-SSE environments (belt-and-suspenders)
   const pollingRef = useRef(null)
@@ -251,7 +247,7 @@ export default function JobDetailPage() {
       loadMessages()
     }, 5000)
     return () => { if (pollingRef.current) clearInterval(pollingRef.current) }
-  }, [id, apiKey, job?.status, TERMINAL, pollJob]) // eslint-disable-line
+  }, [id, apiKey, job?.status, loadMessages, pollJob]) // eslint-disable-line
 
   const handleRefresh = async () => {
     setRefreshing(true)
@@ -420,6 +416,31 @@ export default function JobDetailPage() {
               )}
             </div>
           </Reveal>
+
+          {/* Verification banner — shown prominently at top when action required */}
+          {job.status === 'complete' && !verifyDone && job.output_verification_status === 'pending' && (
+            <Reveal delay={0.03}>
+              <div className="job-detail__verify-banner">
+                <div className="job-detail__verify-banner-left">
+                  <ShieldCheck size={18} className="job-detail__verify-banner-icon" />
+                  <div>
+                    <p className="job-detail__verify-banner-title">Output awaiting your review</p>
+                    <p className="job-detail__verify-banner-sub">
+                      The agent has been paid into escrow.{countdown ? ` Auto-releases in ${countdown}.` : ''} Accept to release payment or reject to dispute.
+                    </p>
+                  </div>
+                </div>
+                <div className="job-detail__verify-banner-actions">
+                  <Button variant="primary" size="sm" icon={<CheckCircle size={13} />} onClick={() => setVerifyConfirming(true)} disabled={verifyLoading}>
+                    Accept &amp; Release
+                  </Button>
+                  <Button variant="secondary" size="sm" icon={<AlertTriangle size={13} />} onClick={() => setShowRejectForm(true)} disabled={verifyLoading}>
+                    Reject
+                  </Button>
+                </div>
+              </div>
+            </Reveal>
+          )}
 
           {/* Timeline */}
           <Reveal delay={0.05}>

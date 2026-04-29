@@ -253,6 +253,49 @@
   resize: vertical;
 }
 
+.job-detail__verify-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+  padding: var(--sp-4) var(--sp-5);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  border: 1.5px solid var(--accent-line);
+  border-radius: var(--r-lg);
+}
+
+.job-detail__verify-banner-left {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+}
+
+.job-detail__verify-banner-icon {
+  color: var(--accent);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.job-detail__verify-banner-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--ink);
+  margin: 0 0 2px;
+}
+
+.job-detail__verify-banner-sub {
+  font-size: 0.8125rem;
+  color: var(--ink-soft);
+  margin: 0;
+}
+
+.job-detail__verify-banner-actions {
+  display: flex;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+}
+
 .job-detail__verify-card .card__header {
   display: flex;
   align-items: center;
