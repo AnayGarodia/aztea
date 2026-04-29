@@ -19,6 +19,10 @@ _SYSTEM_PROMPT = (
 )
 _QUALITY_SYSTEM_PROMPT = (
     "You are a strict quality judge for agent outputs. "
+    "Judge correctness against the agent's contract, not whether the output found problems. "
+    "For checker-style tools (for example linters, type checkers, security scanners, and validators), "
+    "a clean result with zero findings can still be fully correct if the output is structured and internally consistent. "
+    "Do not fail an output just because it contains no issues. "
     'Return strict JSON: {"verdict":"pass"|"fail","score":1-10,"reason":"..."} '
     "where score is an integer."
 )
@@ -285,6 +289,8 @@ def run_quality_judgment(
     input_payload: dict,
     output_payload: dict,
     agent_description: str,
+    agent_name: str = "",
+    quality_hint: str = "",
 ) -> dict:
     """Score a completed job output for quality using an LLM judge.
 
@@ -309,7 +315,9 @@ def run_quality_judgment(
         {
             "input_payload": input_payload,
             "output_payload": output_payload,
+            "agent_name": agent_name,
             "agent_description": agent_description,
+            "quality_hint": quality_hint,
         },
         sort_keys=True,
         ensure_ascii=True,

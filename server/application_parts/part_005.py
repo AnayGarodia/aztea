@@ -111,6 +111,111 @@ def _run_registration_verifier(
     return False, str(body.get("reason") or "registration verifier returned verified=false")
 
 
+def _deterministic_quality_result(agent: dict, output_payload: dict) -> dict[str, Any] | None:
+    agent_id = str(agent.get("agent_id") or "").strip()
+    payload = output_payload if isinstance(output_payload, dict) else {}
+
+    if agent_id == _TYPE_CHECKER_AGENT_ID:
+        errors = payload.get("errors")
+        diagnostics = payload.get("diagnostics")
+        if not isinstance(errors, list) or not isinstance(diagnostics, list):
+            return {
+                "verdict": "fail",
+                "score": 2,
+                "reason": "Type checker output must include list-shaped errors and diagnostics.",
+            }
+        try:
+            error_count = int(payload.get("error_count"))
+        except (TypeError, ValueError):
+            return {
+                "verdict": "fail",
+                "score": 2,
+                "reason": "Type checker output must include a valid error_count.",
+            }
+        passed = payload.get("passed")
+        if not isinstance(passed, bool):
+            return {
+                "verdict": "fail",
+                "score": 2,
+                "reason": "Type checker output must include a boolean passed field.",
+            }
+        if error_count != len(errors) or error_count != len(diagnostics):
+            return {
+                "verdict": "fail",
+                "score": 2,
+                "reason": "Type checker output is internally inconsistent: error_count does not match diagnostics.",
+            }
+        if passed != (error_count == 0):
+            return {
+                "verdict": "fail",
+                "score": 2,
+                "reason": "Type checker output is internally inconsistent: passed does not match error_count.",
+            }
+        return {
+            "verdict": "pass",
+            "score": 8 if error_count == 0 else 9,
+            "reason": "Structured type-checker output is internally consistent.",
+        }
+
+    if agent_id == _LINTER_AGENT_ID:
+        issues = payload.get("issues")
+        if not isinstance(issues, list):
+            return {
+                "verdict": "fail",
+                "score": 2,
+                "reason": "Linter output must include an issues list.",
+            }
+        try:
+            total_issues = int(payload.get("total_issues"))
+        except (TypeError, ValueError):
+            return {
+                "verdict": "fail",
+                "score": 2,
+                "reason": "Linter output must include a valid total_issues count.",
+            }
+        clean = payload.get("clean")
+        if not isinstance(clean, bool):
+            return {
+                "verdict": "fail",
+                "score": 2,
+                "reason": "Linter output must include a boolean clean field.",
+            }
+        if total_issues != len(issues):
+            return {
+                "verdict": "fail",
+                "score": 2,
+                "reason": "Linter output is internally inconsistent: total_issues does not match issues.",
+            }
+        if clean != (total_issues == 0):
+            return {
+                "verdict": "fail",
+                "score": 2,
+                "reason": "Linter output is internally inconsistent: clean does not match total_issues.",
+            }
+        return {
+            "verdict": "pass",
+            "score": 8 if total_issues == 0 else 9,
+            "reason": "Structured linter output is internally consistent.",
+        }
+
+    return None
+
+
+def _quality_hint_for_agent(agent: dict) -> str:
+    agent_id = str(agent.get("agent_id") or "").strip()
+    if agent_id == _TYPE_CHECKER_AGENT_ID:
+        return (
+            "This is a deterministic type-checker. A result with passed=true, error_count=0, "
+            "and empty errors/diagnostics is a valid successful outcome, not a failure to find issues."
+        )
+    if agent_id == _LINTER_AGENT_ID:
+        return (
+            "This is a deterministic linter. A result with clean=true, total_issues=0, "
+            "and an empty issues list is a valid successful outcome."
+        )
+    return ""
+
+
 def _timeout_error_payload(job_payload: dict) -> dict:
     return error_codes.make_error(
         error_codes.AGENT_TIMEOUT,
@@ -191,12 +296,23 @@ def _run_quality_gate(job: dict, agent: dict, output_payload: dict) -> dict[str,
         else:
             reason = "Output matched declared schema and structural checks."
 
-    if verdict == "pass" and live_quality_enabled:
+    used_deterministic_quality = False
+    if verdict == "pass":
+        deterministic = _deterministic_quality_result(agent, output_payload)
+        if deterministic is not None:
+            verdict = str(deterministic["verdict"])
+            score = int(deterministic["score"])
+            reason = str(deterministic["reason"])
+            used_deterministic_quality = True
+
+    if verdict == "pass" and live_quality_enabled and not used_deterministic_quality:
         try:
             judge_result = judges.run_quality_judgment(
                 input_payload=job.get("input_payload") or {},
                 output_payload=output_payload,
+                agent_name=str(agent.get("name") or ""),
                 agent_description=str(agent.get("description") or ""),
+                quality_hint=_quality_hint_for_agent(agent),
             )
             judge_verdict = str(judge_result.get("verdict") or "").strip().lower()
             if judge_verdict in {"pass", "fail"}:

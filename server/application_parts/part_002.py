@@ -471,9 +471,15 @@ def _caller_can_access_agent(caller: core_models.CallerContext, agent: dict) -> 
 
 
 def _assert_agent_callable(agent_id: str, agent: dict) -> None:
+    endpoint = str(agent.get("endpoint_url") or "").strip()
+    is_internal_builtin = str(agent_id).strip() in _BUILTIN_AGENT_IDS and endpoint.startswith("internal://")
     if agent.get("status") == "banned":
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
     if agent.get("status") == "suspended":
+        if is_internal_builtin:
+            registry.set_agent_status(agent_id, "active")
+            agent["status"] = "active"
+            return
         raise HTTPException(
             status_code=503,
             detail=error_codes.make_error(

@@ -129,6 +129,48 @@ def test_quality_gate_honest_fallback_without_contract_or_judge(monkeypatch):
     assert result["reason"] == "No output contract defined. Structural check passed."
 
 
+def test_quality_gate_accepts_consistent_type_checker_output_without_live_judge(monkeypatch):
+    monkeypatch.setenv("AZTEA_ENABLE_LIVE_QUALITY_JUDGE", "1")
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+
+    def should_not_run_judge(**kwargs):
+        raise AssertionError("Deterministic checker outputs should bypass the live quality judge.")
+
+    monkeypatch.setattr(server.judges, "run_quality_judgment", should_not_run_judge)
+
+    result = server._run_quality_gate(
+        {"job_id": "job-type-check", "agent_id": server._TYPE_CHECKER_AGENT_ID, "input_payload": {"code": "def f():\n    return 1\n"}},
+        {
+            "agent_id": server._TYPE_CHECKER_AGENT_ID,
+            "name": "Type Checker",
+            "description": "Run mypy and return structured type errors.",
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "passed": {"type": "boolean"},
+                    "error_count": {"type": "integer"},
+                    "errors": {"type": "array"},
+                    "diagnostics": {"type": "array"},
+                },
+                "required": ["passed", "error_count", "errors", "diagnostics"],
+            },
+            "output_verifier_url": None,
+        },
+        {
+            "language": "python",
+            "passed": True,
+            "error_count": 0,
+            "errors": [],
+            "diagnostics": [],
+            "tool_version": "mypy 1.20.2",
+        },
+    )
+    assert result["judge_verdict"] == "pass"
+    assert result["quality_score"] >= 8
+    assert result["passed"] is True
+    assert "internally consistent" in result["reason"]
+
+
 def test_builtin_worker_auto_completes_async_jobs(client, monkeypatch):
     monkeypatch.setattr(
         server.agent_python_executor,
@@ -183,11 +225,11 @@ def test_registry_lists_new_builtin_agents(client):
         "Python Code Executor",
         "Web Researcher Agent",
         "CVE Lookup Agent",
-        "Image Generator Agent",
         "DB Sandbox",
         "Visual Regression",
         "Live Endpoint Tester",
     }.issubset(names)
+    assert "Image Generator Agent" not in names
 
 
 def test_registry_hides_deprecated_builtin_agents(client):
@@ -218,7 +260,17 @@ def test_builtin_agents_registered_to_system_owner_with_internal_endpoints(clien
     assert str(system_row["status"]).lower() == "suspended"
     system_owner = f"user:{system_row['user_id']}"
 
-    for builtin_id in server._CURATED_BUILTIN_AGENT_IDS:
+    for builtin_id in (
+        server._CODEREVIEW_AGENT_ID,
+        server._CVELOOKUP_AGENT_ID,
+        server._PYTHON_EXECUTOR_AGENT_ID,
+        server._WEB_RESEARCHER_AGENT_ID,
+        server._DEPENDENCY_AUDITOR_AGENT_ID,
+        server._MULTI_FILE_EXECUTOR_AGENT_ID,
+        server._LINTER_AGENT_ID,
+        server._SHELL_EXECUTOR_AGENT_ID,
+        server._TYPE_CHECKER_AGENT_ID,
+    ):
         agent = registry.get_agent(builtin_id, include_unapproved=True)
         assert agent is not None
         assert agent["owner_id"] == system_owner
@@ -234,6 +286,20 @@ def test_builtin_agents_registered_to_system_owner_with_internal_endpoints(clien
         agent = registry.get_agent(non_curated_id, include_unapproved=True)
         if agent is not None:
             assert str(agent["endpoint_url"]).startswith("internal://")
+
+
+def test_suspended_internal_builtin_is_reactivated_at_call_gate(client):
+    _ = client
+    registry.set_agent_status(server._CODEREVIEW_AGENT_ID, "suspended")
+    builtin = registry.get_agent(server._CODEREVIEW_AGENT_ID, include_unapproved=True)
+    assert builtin is not None
+    assert builtin["status"] == "suspended"
+
+    server._assert_agent_callable(server._CODEREVIEW_AGENT_ID, builtin)
+
+    refreshed = registry.get_agent(server._CODEREVIEW_AGENT_ID, include_unapproved=True)
+    assert refreshed is not None
+    assert refreshed["status"] == "active"
 
 
 def test_registry_call_routes_internal_builtin_without_http_and_records_job(client, monkeypatch):
@@ -327,7 +393,7 @@ def test_registry_call_normalizes_protocol_envelope_for_builtin_responses(client
     assert sent_protocol["preferred_output_formats"] == ["application/json"]
 
 
-def test_image_generator_builtin_accepts_multimodal_input_and_returns_artifact(client, monkeypatch):
+def test_image_generator_builtin_is_hidden_from_public_registry_calls(client, monkeypatch):
     caller = _register_user()
     _fund_user_wallet(caller, 200)
     monkeypatch.setattr(
@@ -363,13 +429,7 @@ def test_image_generator_builtin_accepts_multimodal_input_and_returns_artifact(c
             ],
         },
     )
-    assert response.status_code == 200, response.text
-    body = response.json()["output"]
-    assert body["input_images_used"] == 1
-    assert isinstance(body.get("artifacts"), list) and body["artifacts"]
-    artifact = body["artifacts"][0]
-    assert artifact["mime"] == "image/png"
-    assert str(artifact["url_or_base64"]).startswith("data:image/png;base64,")
+    assert response.status_code == 404, response.text
 
 
 def test_mcp_tools_manifest_exposes_registered_agent_schema(client):
@@ -490,7 +550,7 @@ def test_mcp_invoke_delegates_to_registry_call_path(client, monkeypatch):
     assert payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"] == 94
 
 
-def test_mcp_invoke_emits_image_content_for_artifact_outputs(client, monkeypatch):
+def test_mcp_invoke_does_not_expose_hidden_image_generator_tool(client, monkeypatch):
     caller = _register_user()
     _fund_user_wallet(caller, 100)
     monkeypatch.setattr(
@@ -517,11 +577,7 @@ def test_mcp_invoke_emits_image_content_for_artifact_outputs(client, monkeypatch
             "api_key": caller["raw_api_key"],
         },
     )
-    assert response.status_code == 200, response.text
-    body = response.json()
-    content = body.get("content") or []
-    assert any(item.get("type") == "image" for item in content)
-    assert body["structuredContent"]["artifacts"][0]["mime"] == "image/png"
+    assert response.status_code == 404, response.text
 
 
 def test_python_executor_builtin_runs_code_and_returns_output(client, monkeypatch):
