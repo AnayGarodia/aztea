@@ -187,6 +187,32 @@ def _privacy_line(agent: dict[str, Any]) -> str:
     return " | ".join(flags)
 
 
+def _catalog_line(agent: dict[str, Any]) -> str:
+    parts: list[str] = []
+    category = str(agent.get("category") or "").strip()
+    if category:
+        parts.append(category)
+    tooling_kind = str(agent.get("tooling_kind") or "").strip().replace("_", " ")
+    if tooling_kind:
+        parts.append(tooling_kind)
+    stability_tier = str(agent.get("stability_tier") or "").strip()
+    if stability_tier:
+        parts.append(stability_tier)
+    if agent.get("codex_recommended"):
+        parts.append("Claude-ready")
+    return " | ".join(parts)
+
+
+def _use_cases_line(agent: dict[str, Any]) -> str:
+    cases = agent.get("short_use_cases")
+    if not isinstance(cases, list):
+        return ""
+    cleaned = [str(item).strip() for item in cases if str(item).strip()]
+    if not cleaned:
+        return ""
+    return ", ".join(cleaned[:4])
+
+
 def _example_snippet(agent: dict[str, Any]) -> str:
     """Return a short inline work example from output_examples, if available."""
     examples = agent.get("output_examples")
@@ -256,12 +282,18 @@ def build_mcp_tool_entries(agents: list[dict[str, Any]]) -> list[dict[str, Any]]
         tool_description = f"{name}: {action_description}"
 
         # Append quality signals so Claude can pick the best agent when multiple match
+        catalog = _catalog_line(agent)
+        if catalog:
+            tool_description = f"{tool_description}\nCatalog: {catalog}"
         quality = _quality_line(agent)
         if quality:
             tool_description = f"{tool_description}\n\nQuality: {quality}"
         privacy = _privacy_line(agent)
         if privacy:
             tool_description = f"{tool_description}\nPrivacy: {privacy}"
+        use_cases = _use_cases_line(agent)
+        if use_cases:
+            tool_description = f"{tool_description}\nBest for: {use_cases}"
         example = _example_snippet(agent)
         if example:
             tool_description = f"{tool_description}\nExample output: {example}"
@@ -288,7 +320,30 @@ def build_mcp_tool_entries(agents: list[dict[str, Any]]) -> list[dict[str, Any]]
             "input_schema": input_schema,
             "output_schema": output_schema,
         }
-        entries.append({"agent_id": agent_id, "tool_name": tool_name, "tool": tool})
+        entries.append(
+            {
+                "agent_id": agent_id,
+                "tool_name": tool_name,
+                "tool": tool,
+                "catalog_metadata": {
+                    "name": name,
+                    "category": agent.get("category"),
+                    "tags": list(agent.get("tags") or []),
+                    "is_featured": bool(agent.get("is_featured", False)),
+                    "cacheable": bool(agent.get("cacheable", False)),
+                    "runtime_requirements": list(agent.get("runtime_requirements") or []),
+                    "tooling_kind": agent.get("tooling_kind"),
+                    "stability_tier": agent.get("stability_tier"),
+                    "codex_recommended": bool(agent.get("codex_recommended", False)),
+                    "short_use_cases": list(agent.get("short_use_cases") or []),
+                    "trust_score": agent.get("trust_score"),
+                    "success_rate": agent.get("success_rate"),
+                    "avg_latency_ms": agent.get("avg_latency_ms"),
+                    "price_per_call_usd": agent.get("price_per_call_usd"),
+                    "verified": bool(agent.get("verified", False)),
+                },
+            }
+        )
     return entries
 
 

@@ -23,6 +23,10 @@ def test_builtin_specs_have_catalog_contract_fields():
         assert isinstance(metadata["cacheable"], bool)
         assert isinstance(metadata["is_featured"], bool)
         assert isinstance(metadata["runtime_requirements"], list)
+        assert isinstance(metadata["tooling_kind"], str) and metadata["tooling_kind"].strip()
+        assert isinstance(metadata["stability_tier"], str) and metadata["stability_tier"].strip()
+        assert isinstance(metadata["codex_recommended"], bool)
+        assert isinstance(metadata["short_use_cases"], list)
 
 
 def test_builtin_catalog_metadata_returns_none_for_removed_agents():

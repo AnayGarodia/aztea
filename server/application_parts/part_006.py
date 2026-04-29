@@ -1161,7 +1161,14 @@ def _invoke_financial_agent(body: FinancialRequest) -> dict:
 
 
 def _invoke_code_review_agent(body: CodeReviewRequest) -> dict:
-    return agent_codereview.run(body.code, body.language, body.focus, getattr(body, "context", ""))
+    return agent_codereview.run(
+        code=body.code,
+        language=body.language,
+        focus=body.focus,
+        context=getattr(body, "context", ""),
+        diff=getattr(body, "diff", "") or "",
+        filename=getattr(body, "filename", "") or "",
+    )
 
 
 def _invoke_wiki_agent(body: WikiRequest) -> dict:

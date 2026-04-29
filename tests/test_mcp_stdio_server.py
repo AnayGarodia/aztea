@@ -80,13 +80,28 @@ def test_registry_bridge_lazy_search_and_describe(monkeypatch):
                 "input_schema": {"type": "object", "properties": {"code": {"type": "string"}}},
                 "output_schema": {"type": "object"},
             },
+            "catalog_metadata": {
+                "category": "Code Execution",
+                "tooling_kind": "sandbox_execution",
+                "stability_tier": "stable",
+                "codex_recommended": True,
+                "short_use_cases": ["run a snippet"],
+                "price_per_call_usd": 0.06,
+                "success_rate": 0.97,
+                "trust_score": 91,
+                "avg_latency_ms": 800,
+            },
         }
     ]
 
     ok, search = bridge.call_tool("aztea_search", {"query": "python snippets"})
     assert ok is True
     assert search["results"][0]["slug"] == "python_code_executor"
+    assert search["results"][0]["category"] == "Code Execution"
+    assert search["results"][0]["codex_recommended"] is True
 
     ok, described = bridge.call_tool("aztea_describe", {"slug": "python_code_executor"})
     assert ok is True
     assert described["input_schema"]["properties"]["code"]["type"] == "string"
+    assert described["category"] == "Code Execution"
+    assert described["codex_recommended"] is True

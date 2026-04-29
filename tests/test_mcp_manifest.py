@@ -62,6 +62,11 @@ def test_build_mcp_tool_entries_surfaces_quality_and_example_metadata():
             "description": "Checks code quality.",
             "input_schema": {},
             "output_schema": {},
+            "category": "Code",
+            "tooling_kind": "tool_execution",
+            "stability_tier": "stable",
+            "codex_recommended": True,
+            "short_use_cases": ["lint Python", "lint TypeScript"],
             "verified": True,
             "trust_score": 91,
             "success_rate": 0.975,
@@ -73,6 +78,8 @@ def test_build_mcp_tool_entries_surfaces_quality_and_example_metadata():
         }
     ])
     description = entries[0]["tool"]["description"]
+    assert "Catalog:" in description
+    assert "Claude-ready" in description
     assert "Quality:" in description
     assert "verified" in description
     assert "trust 91/100" in description
@@ -80,7 +87,9 @@ def test_build_mcp_tool_entries_surfaces_quality_and_example_metadata():
     assert "~1.2s avg" in description
     assert "47 calls" in description
     assert "$0.110/call" in description
+    assert "Best for:" in description
     assert "Example output:" in description
+    assert entries[0]["catalog_metadata"]["category"] == "Code"
 
 
 def test_build_mcp_tool_entries_does_not_mutate_original_input_schema():

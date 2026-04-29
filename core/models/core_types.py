@@ -105,13 +105,17 @@ class CodeReviewRequest(BaseModel):
         json_schema_extra={
             "example": {
                 "code": "def add(a, b):\n    return a + b\n",
+                "filename": "utils.py",
                 "language": "python",
                 "focus": "bugs",
+                "context": "Utility function used in request parsing.",
             }
         }
     )
 
-    code: str
+    code: str = ""
+    diff: str | None = None
+    filename: str | None = None
     language: str = "auto"
     focus: str = "all"
     context: str = ""
@@ -119,14 +123,18 @@ class CodeReviewRequest(BaseModel):
     @field_validator("code")
     @classmethod
     def code_not_empty(cls, v):
-        if not v.strip():
-            raise ValueError("code must not be empty")
         return v
+
+    @model_validator(mode="after")
+    def require_code_or_diff(self):
+        if not str(self.code or "").strip() and not str(self.diff or "").strip():
+            raise ValueError("either code or diff must be provided")
+        return self
 
     @field_validator("focus")
     @classmethod
     def focus_valid(cls, v):
-        valid = {"all", "security", "performance", "bugs", "style"}
+        valid = {"all", "security", "performance", "bugs", "style", "correctness", "maintainability"}
         if v not in valid:
             raise ValueError(f"focus must be one of: {', '.join(sorted(valid))}")
         return v

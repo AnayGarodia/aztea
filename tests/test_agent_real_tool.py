@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from agents import browser_agent
+from agents import codereview
 from agents import cve_lookup
 from agents import db_sandbox
 from agents import hn_digest
@@ -153,6 +154,46 @@ def test_type_checker_parses_mypy_json(monkeypatch):
     assert result["tool_version"] == "mypy 1.11.2"
     assert result["error_count"] == 1
     assert result["diagnostics"][0]["code"] == "arg-type"
+
+
+def test_code_review_accepts_diff_and_normalizes_output(monkeypatch):
+    monkeypatch.setattr(
+        codereview,
+        "run_with_fallback",
+        lambda req: SimpleNamespace(
+            text=json.dumps(
+                {
+                    "language_detected": "python",
+                    "score": 7,
+                    "security_critical": False,
+                    "complexity_score": 3,
+                    "issues": [
+                        {
+                            "line_hint": "@@ ... return a / b",
+                            "severity": "medium",
+                            "category": "correctness",
+                            "description": "Missing zero guard",
+                            "fix": "Handle b == 0 before division.",
+                        }
+                    ],
+                    "positive_aspects": ["Small focused change."],
+                    "test_recommendations": ["Cover b == 0."],
+                    "summary": "One correctness issue found.",
+                }
+            )
+        ),
+    )
+    result = codereview.run(diff="@@ -1 +1 @@\n-return a / b\n+return a / b\n", language="python", filename="math_utils.py")
+    assert result["review_target"] == "diff"
+    assert result["filename"] == "math_utils.py"
+    assert result["issue_count"] == 1
+    assert result["severity_counts"]["medium"] == 1
+    assert result["issues"][0]["category"] == "correctness"
+
+
+def test_code_review_requires_code_or_diff():
+    result = codereview.run()
+    assert result["error"]["code"] == "code_review_agent.missing_input"
 
 
 def test_type_checker_returns_structured_error_for_missing_code():

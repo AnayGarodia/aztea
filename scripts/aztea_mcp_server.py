@@ -170,6 +170,29 @@ def _mcp_content_from_payload(payload: Any) -> list[dict[str, Any]]:
     return content
 
 
+def _compact_latency(value: Any) -> str | None:
+    try:
+        ms = float(value)
+    except (TypeError, ValueError):
+        return None
+    if ms <= 0:
+        return None
+    if ms >= 1000:
+        return f"~{ms/1000:.1f}s"
+    return f"~{int(ms)}ms"
+
+
+def _query_terms(query: str) -> list[str]:
+    terms = [term.lower() for term in re.findall(r"[a-zA-Z0-9_.:/#-]{2,}", str(query or ""))]
+    seen: set[str] = set()
+    result: list[str] = []
+    for term in terms:
+        if term not in seen:
+            seen.add(term)
+            result.append(term)
+    return result
+
+
 class RegistryBridge:
     def __init__(self, *, base_url: str, api_key: str, timeout_seconds: float = 10.0) -> None:
         self.base_url = base_url.rstrip("/")
@@ -266,12 +289,27 @@ class RegistryBridge:
                     "input_schema": tool.get("input_schema") or {"type": "object", "additionalProperties": True},
                     "output_schema": tool.get("output_schema") or {},
                     "tool": tool,
+                    "category": "Platform",
+                    "tags": [],
+                    "is_featured": True,
+                    "cacheable": False,
+                    "runtime_requirements": [],
+                    "tooling_kind": "platform_control_plane",
+                    "stability_tier": "stable",
+                    "codex_recommended": True,
+                    "short_use_cases": [],
+                    "trust_score": None,
+                    "success_rate": None,
+                    "avg_latency_ms": None,
+                    "price_per_call_usd": None,
+                    "verified": True,
                 }
             )
         with self._lock:
             registry_entries = list(self._entries)
         for entry in registry_entries:
             tool = dict(entry.get("tool") or {})
+            meta = dict(entry.get("catalog_metadata") or {})
             entries.append(
                 {
                     "slug": str(entry.get("tool_name") or tool.get("name") or "").strip(),
@@ -282,6 +320,20 @@ class RegistryBridge:
                     "output_schema": tool.get("output_schema") or {},
                     "tool": tool,
                     "agent_id": entry.get("agent_id"),
+                    "category": meta.get("category"),
+                    "tags": list(meta.get("tags") or []),
+                    "is_featured": bool(meta.get("is_featured", False)),
+                    "cacheable": bool(meta.get("cacheable", False)),
+                    "runtime_requirements": list(meta.get("runtime_requirements") or []),
+                    "tooling_kind": meta.get("tooling_kind"),
+                    "stability_tier": meta.get("stability_tier"),
+                    "codex_recommended": bool(meta.get("codex_recommended", False)),
+                    "short_use_cases": list(meta.get("short_use_cases") or []),
+                    "trust_score": meta.get("trust_score"),
+                    "success_rate": meta.get("success_rate"),
+                    "avg_latency_ms": meta.get("avg_latency_ms"),
+                    "price_per_call_usd": meta.get("price_per_call_usd"),
+                    "verified": bool(meta.get("verified", False)),
                 }
             )
         result = [entry for entry in entries if entry.get("slug")]
@@ -301,35 +353,100 @@ class RegistryBridge:
     def _search_catalog(self, query: str, limit: int = 8) -> dict[str, Any]:
         normalized = str(query or "").strip().lower()
         capped_limit = max(1, min(int(limit or 8), 20))
+        terms = _query_terms(normalized)
         matches: list[tuple[int, dict[str, Any]]] = []
         for entry in self._catalog_entries():
-            haystack = f"{entry.get('name', '')}\n{entry.get('description', '')}".lower()
-            score = 0
+            haystack = "\n".join(
+                [
+                    str(entry.get("name") or ""),
+                    str(entry.get("description") or ""),
+                    str(entry.get("category") or ""),
+                    " ".join(str(tag) for tag in entry.get("tags") or []),
+                    " ".join(str(item) for item in entry.get("short_use_cases") or []),
+                    str(entry.get("tooling_kind") or ""),
+                ]
+            ).lower()
+            score = 0.0
+            reasons: list[str] = []
             if entry["slug"].lower() == normalized:
                 score += 100
+                reasons.append("exact slug match")
             if normalized and normalized in entry["slug"].lower():
                 score += 25
+                reasons.append("slug match")
             if normalized and normalized in haystack:
                 score += 20
-            query_terms = [term for term in normalized.split() if term]
-            score += sum(3 for term in query_terms if term in haystack)
+            if normalized and normalized in str(entry.get("description") or "").lower():
+                reasons.append("description match")
+            score += sum(3 for term in terms if term in haystack)
+            if entry.get("codex_recommended"):
+                score += 8
+            if entry.get("is_featured"):
+                score += 5
+            if entry.get("verified"):
+                score += 2
+            if entry.get("kind") == "registry_agent":
+                try:
+                    score += float(entry.get("success_rate") or 0.0) * 10.0
+                except (TypeError, ValueError):
+                    pass
+                try:
+                    score += float(entry.get("trust_score") or 0.0) / 20.0
+                except (TypeError, ValueError):
+                    pass
+                if str(entry.get("stability_tier") or "").strip().lower() == "stable":
+                    score += 4
+                elif str(entry.get("stability_tier") or "").strip().lower() == "beta":
+                    score += 1
             if score <= 0:
                 continue
-            matches.append((score, entry))
-        matches.sort(key=lambda item: (item[0], item[1]["kind"] == "registry_agent"), reverse=True)
+            enriched = dict(entry)
+            enriched["_why"] = reasons
+            matches.append((score, enriched))
+        matches.sort(
+            key=lambda item: (
+                item[0],
+                bool(item[1].get("codex_recommended")),
+                bool(item[1].get("is_featured")),
+                item[1]["kind"] == "registry_agent",
+            ),
+            reverse=True,
+        )
         result_items = []
         for score, entry in matches[:capped_limit]:
+            quality_parts: list[str] = []
+            if entry.get("codex_recommended"):
+                quality_parts.append("Claude-ready")
+            if entry.get("stability_tier"):
+                quality_parts.append(str(entry["stability_tier"]))
+            if entry.get("tooling_kind"):
+                quality_parts.append(str(entry["tooling_kind"]).replace("_", " "))
+            latency = _compact_latency(entry.get("avg_latency_ms"))
+            if latency:
+                quality_parts.append(latency)
             result_items.append(
                 {
                     "slug": entry["slug"],
                     "kind": entry["kind"],
+                    "name": entry["name"],
                     "agent_id": entry.get("agent_id"),
+                    "category": entry.get("category"),
                     "description": entry["description"][:400],
-                    "score": score,
+                    "score": round(score, 2),
+                    "price_per_call_usd": entry.get("price_per_call_usd"),
+                    "trust_score": entry.get("trust_score"),
+                    "success_rate": entry.get("success_rate"),
+                    "avg_latency_ms": entry.get("avg_latency_ms"),
+                    "tooling_kind": entry.get("tooling_kind"),
+                    "stability_tier": entry.get("stability_tier"),
+                    "codex_recommended": bool(entry.get("codex_recommended", False)),
+                    "best_for": list(entry.get("short_use_cases") or [])[:4],
+                    "quality_summary": " | ".join(quality_parts),
+                    "why": entry.get("_why") or [],
                 }
             )
         next_step = (
-            f"Call aztea_describe(slug='{result_items[0]['slug']}') to get the full schema, "
+            f"Best match: {result_items[0]['slug']}. Call aztea_describe(slug='{result_items[0]['slug']}') for the full schema, "
             "then aztea_call(slug=..., arguments={...}) to run it."
             if result_items else
             "No matches found. Try a broader query."
@@ -343,11 +460,34 @@ class RegistryBridge:
         result: dict[str, Any] = {
             "slug": entry["slug"],
             "kind": entry["kind"],
+            "name": entry["name"],
             "agent_id": entry.get("agent_id"),
+            "category": entry.get("category"),
             "description": entry["description"],
             "input_schema": entry["input_schema"],
             "output_schema": entry["output_schema"],
-            "next_step": f"Call aztea_call(slug='{slug}', arguments={{...}}) with fields from input_schema above.",
+            "tooling_kind": entry.get("tooling_kind"),
+            "stability_tier": entry.get("stability_tier"),
+            "codex_recommended": bool(entry.get("codex_recommended", False)),
+            "runtime_requirements": list(entry.get("runtime_requirements") or []),
+            "quality": {
+                "trust_score": entry.get("trust_score"),
+                "success_rate": entry.get("success_rate"),
+                "avg_latency_ms": entry.get("avg_latency_ms"),
+                "price_per_call_usd": entry.get("price_per_call_usd"),
+                "is_featured": bool(entry.get("is_featured", False)),
+                "cacheable": bool(entry.get("cacheable", False)),
+            },
+            "best_for": list(entry.get("short_use_cases") or [])[:6],
+            "required_fields": list((entry["input_schema"].get("required") or [])) if isinstance(entry["input_schema"], dict) else [],
+            "optional_fields": sorted(
+                [
+                    key
+                    for key in (entry["input_schema"].get("properties") or {}).keys()
+                    if key not in set(entry["input_schema"].get("required") or [])
+                ]
+            ) if isinstance(entry["input_schema"], dict) else [],
+            "next_step": f"Call aztea_call(slug='{slug}', arguments={{...}}) using the required_fields above.",
         }
         # Surface a worked example from the spec if available so Claude can copy it
         tool = entry.get("tool") or {}
@@ -356,6 +496,8 @@ class RegistryBridge:
             ex = examples[0]
             if "input" in ex:
                 result["example_call"] = {"slug": slug, "arguments": ex["input"]}
+            if "output" in ex:
+                result["example_output"] = ex["output"]
         return result
 
     def _agent_id_for_tool(self, tool_name: str) -> str | None:
