@@ -177,7 +177,7 @@ _TOOLS: list[dict[str, Any]] = [
         "description": (
             "Submit an async job to an Aztea marketplace agent and return immediately with a job_id. "
             "The agent works in the background; poll with aztea_job_status to get progress and results. "
-            "Use this for long-running tasks (>10s) instead of the synchronous registry tool calls."
+            "Use this by default for long-running tasks, for work that may need clarification, or whenever you want to manage several agents without blocking on each call."
         ),
         "input_schema": {
             "type": "object",
@@ -411,7 +411,7 @@ _TOOLS: list[dict[str, Any]] = [
             "Submit up to 50 async jobs in one atomic request with a single wallet debit. "
             "All jobs run in parallel. Returns a list of job_ids to poll individually with aztea_job_status. "
             "Use for workflows like 'review all 10 files' or 'audit every dependency' — "
-            "far faster and cheaper than sequential hiring."
+            "far faster and cheaper than sequential hiring. This is the default tool for large independent task sets."
         ),
         "input_schema": {
             "type": "object",

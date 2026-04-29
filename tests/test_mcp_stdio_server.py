@@ -105,3 +105,21 @@ def test_registry_bridge_lazy_search_and_describe(monkeypatch):
     assert described["input_schema"]["properties"]["code"]["type"] == "string"
     assert described["category"] == "Code Execution"
     assert described["codex_recommended"] is True
+
+
+def test_initialize_instructions_encourage_proactive_orchestration():
+    server = _MODULE.MCPStdioServer(bridge=_DummyBridge(), refresh_seconds=60)
+    instructions = server._initialize_result()["instructions"]
+    assert "Do not wait for the user to explicitly tell you to use Aztea" in instructions
+    assert "aztea_hire_batch" in instructions
+    assert "aztea_hire_async + aztea_job_status" in instructions
+
+
+def test_registry_bridge_lazy_search_returns_workflow_hints_for_parallel_tasks(monkeypatch):
+    monkeypatch.setattr(_MODULE._feature_flags, "LAZY_MCP_SCHEMAS", True)
+    bridge = _MODULE.RegistryBridge(base_url="https://aztea.test", api_key="az_test")
+    ok, result = bridge.call_tool("aztea_search", {"query": "review many files in parallel with a budget", "limit": 5})
+    assert ok is True
+    hints = result.get("workflow_hints") or []
+    assert any("aztea_hire_batch" in hint for hint in hints)
+    assert any("aztea_set_session_budget" in hint for hint in hints)
