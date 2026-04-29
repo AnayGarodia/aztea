@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import {
   Moon, Sun, Menu, X, Copy, Check,
-  ArrowRight, ExternalLink, Globe, FileText, CheckCircle2, BadgeCheck,
+  ArrowRight, Globe, FileText, CheckCircle2, BadgeCheck,
 } from 'lucide-react'
 import { useTheme } from '../context/ThemeContext'
 import { fetchAgents } from '../api'
@@ -25,19 +25,6 @@ const CATALOG = [
 ]
 
 const INIT_CMD = 'npx -y aztea-cli@latest init'
-
-const MCP_JSON = `{
-  "mcpServers": {
-    "aztea": {
-      "command": "npx",
-      "args": ["-y", "aztea-cli@latest", "mcp"],
-      "env": {
-        "AZTEA_API_KEY": "az_your_key_here",
-        "AZTEA_BASE_URL": "https://aztea.ai"
-      }
-    }
-  }
-}`
 
 const FLOW_STEPS = [
   {
@@ -74,27 +61,6 @@ const BUILDER_OPTIONS = [
     body: 'Upload instructions for a hosted agent. No server required.',
     icon: FileText,
     action: 'Upload',
-  },
-]
-
-const CONTRACT_CARDS = [
-  {
-    label: 'For callers',
-    value: '$2',
-    note: 'free credit on signup',
-    items: ['No card required', 'Per-call pricing only', 'Failed calls refunded'],
-  },
-  {
-    label: 'For builders',
-    value: '90%',
-    note: 'of every successful call',
-    items: ['You set the price', 'Wallet credit on settlement', 'Callable via MCP, SDK, REST'],
-  },
-  {
-    label: 'Platform fee',
-    value: '10%',
-    note: 'on success only',
-    items: ['No fee on failed calls', 'Escrow and dispute support', 'Ledger-backed delivery flow'],
   },
 ]
 
@@ -295,59 +261,16 @@ export default function LandingPage() {
           </div>
           <MarketplaceFlowHero />
         </div>
-        <EdgePattern side="bottom" className="lp__hero-edge" />
-      </section>
-
-      {/* ── MCP Install ── */}
-      <section className="lp__install" id="lp-install">
-        <div className="lp__install-inner">
-          <Reveal className="lp__install-text">
-            <p className="t-micro lp__section-eyebrow">How to connect</p>
-            <h2 className="lp__section-title t-h1">Connect Claude Code in three steps</h2>
-            <p className="lp__section-sub">
-              One command sets up the MCP connection. Then Claude can discover specialists, hire them, and get back results with logs and pricing attached.
-            </p>
-            <div className="lp__install-steps">
-              <div className="lp__install-step">
-                <span className="lp__install-num">1</span>
-                <span>Run <code className="lp__inline-code">npx -y aztea-cli@latest init</code> to create an account, add free credit, and write Claude’s MCP config.</span>
-              </div>
-              <div className="lp__install-step">
-                <span className="lp__install-num">2</span>
-                <span>Restart Claude Code so the Aztea tools appear in the session.</span>
-              </div>
-              <div className="lp__install-step">
-                <span className="lp__install-num">3</span>
-                <span>Ask Claude to use Aztea for review, dependency audits, sandboxed execution, or live research.</span>
-              </div>
-            </div>
-          </Reveal>
-
-          <Reveal delay={0.08} className="lp__install-snippet-wrap">
-            <div className="lp__snippet lp__snippet--cmd">
-              <div className="lp__snippet-bar">
-                <span className="lp__snippet-filename">Terminal</span>
-                <CopyButton text={INIT_CMD} />
-              </div>
-              <pre className="lp__snippet-code lp__snippet-code--cmd">$ npx -y aztea-cli@latest init</pre>
-            </div>
-            <details className="lp__manual-toggle">
-              <summary className="lp__manual-summary">Prefer manual setup? Add JSON to ~/.claude.json</summary>
-              <div className="lp__snippet lp__snippet--json" style={{ marginTop: '0.75rem' }}>
-                <div className="lp__snippet-bar">
-                  <span className="lp__snippet-filename">~/.claude.json</span>
-                  <CopyButton text={MCP_JSON} />
-                </div>
-                <pre className="lp__snippet-code">{MCP_JSON}</pre>
-              </div>
-            </details>
-            <p className="lp__install-docs-link">
-              <Link to="/docs/mcp-integration" className="lp__text-link">
-                Full MCP setup guide <ArrowRight size={12} style={{ display: 'inline', verticalAlign: 'middle' }} />
-              </Link>
-            </p>
-          </Reveal>
-        </div>
+        <Reveal className="lp__install-rail" id="lp-install">
+          <div className="lp__install-rail-copy">
+            <span className="lp__install-rail-label">Connect Claude Code</span>
+            <code className="lp__install-rail-code">$ {INIT_CMD}</code>
+          </div>
+          <div className="lp__install-rail-actions">
+            <CopyButton text={INIT_CMD} />
+            <Link to="/docs/mcp-integration" className="lp__text-link">Setup guide</Link>
+          </div>
+        </Reveal>
       </section>
 
       {/* ── Catalog ── */}
@@ -355,7 +278,7 @@ export default function LandingPage() {
         <div className="lp__cat-inner">
           <Reveal className="lp__cat-header">
             <p className="t-micro lp__section-eyebrow">Marketplace</p>
-            <h2 className="lp__section-title t-h1">A few good specialists, not a wall of cards.</h2>
+            <h2 className="lp__section-title t-h1">Start with the core specialists.</h2>
             <p className="lp__section-sub">
               Start with the core tools that already earn their keep: structured review, linting, dependency audits, and sandboxed execution.
             </p>
@@ -366,12 +289,6 @@ export default function LandingPage() {
               <CatalogCard key={entry.id} entry={entry} liveAgent={liveAgents[entry.id]} />
             ))}
           </Stagger>
-
-          <Reveal delay={0.1} className="lp__cat-cta">
-            <button type="button" className="lp__btn-secondary" onClick={handleBrowseAgents}>
-              Browse all agents <ExternalLink size={13} style={{ marginLeft: 6 }} />
-            </button>
-          </Reveal>
         </div>
       </section>
 
@@ -398,89 +315,75 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* ── For builders ── */}
+      {/* ── Builders + Auth ── */}
       <section className="lp__builders" id="lp-builders">
         <div className="lp__builders-inner">
-          <Reveal className="lp__builders-header">
-            <p className="t-micro lp__section-eyebrow">List an agent</p>
-            <h2 className="lp__section-title t-h1">Anyone can list an agent.</h2>
-            <p className="lp__section-sub">
-              Register an HTTP endpoint or upload a SKILL.md. AZTEA handles billing, escrow, routing, and delivery.
-            </p>
-          </Reveal>
+          <div className="lp__builders-layout" id="lp-auth">
+            <Reveal className="lp__builders-copy">
+              <p className="t-micro lp__section-eyebrow">List an agent</p>
+              <h2 className="lp__section-title t-h1">Anyone can list an agent.</h2>
+              <p className="lp__section-sub">
+                Register an HTTP endpoint or upload a SKILL.md. AZTEA handles billing, escrow, routing, and delivery.
+              </p>
 
-          <Stagger className="lp__builders-cards" staggerDelay={0.06}>
-            {BUILDER_OPTIONS.map(({ title, body, icon: Icon, action }) => (
-              <div key={title} className="lp__builders-card">
-                <div className="lp__builders-card-icon"><Icon size={20} /></div>
-                <div className="lp__builders-card-body">
-                  <strong>{title}</strong>
-                  <span>{body}</span>
-                </div>
-                <button
-                  type="button"
-                  className="lp__builders-card-link"
-                  onClick={title === 'HTTP Endpoint' ? handleRegisterAgent : handleListSkill}
-                >
-                  {action} <ArrowRight size={14} />
-                </button>
+              <Stagger className="lp__builders-cards" staggerDelay={0.06}>
+                {BUILDER_OPTIONS.map(({ title, body, icon: Icon, action }) => (
+                  <div key={title} className="lp__builders-card">
+                    <div className="lp__builders-card-icon"><Icon size={18} /></div>
+                    <div className="lp__builders-card-body">
+                      <strong>{title}</strong>
+                      <span>{body}</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="lp__builders-card-link"
+                      onClick={title === 'HTTP Endpoint' ? handleRegisterAgent : handleListSkill}
+                    >
+                      {action} <ArrowRight size={14} />
+                    </button>
+                  </div>
+                ))}
+              </Stagger>
+
+              <div className="lp__builders-perks">
+                {['90% of every successful call', 'Automatic billing + escrow', 'Callable via MCP, SDK, REST', 'Failed calls refunded'].map(perk => (
+                  <span key={perk} className="lp__builders-perk">
+                    <CheckCircle2 size={13} /> {perk}
+                  </span>
+                ))}
               </div>
-            ))}
-          </Stagger>
 
-          <Reveal delay={0.15}>
-            <div className="lp__builders-perks">
-              {['90% of every successful call', 'Automatic billing + escrow', 'Callable via MCP, SDK, REST', 'Live immediately after listing'].map(perk => (
-                <span key={perk} className="lp__builders-perk">
-                  <CheckCircle2 size={13} /> {perk}
-                </span>
-              ))}
-            </div>
-            <div className="lp__builders-contract">
-              {CONTRACT_CARDS.map(({ label, value, note }) => (
-                <div key={label} className="lp__builders-contract-card">
-                  <p className="lp__pricing-label">{label}</p>
-                  <div className="lp__pricing-rate">
-                    <span className="lp__pricing-num">{value}</span>
-                    <span className="lp__pricing-denom">{note}</span>
+              <div className="lp__builders-actions">
+                <button type="button" className="lp__btn-primary" onClick={handleListSkill}>
+                  List an agent
+                </button>
+                <Link to="/docs/agent-builder" className="lp__btn-ghost">
+                  Builder guide
+                </Link>
+              </div>
+            </Reveal>
+
+            <Reveal className="lp__auth-content">
+              <div className="lp__auth-inner">
+                <div className="lp__auth-text">
+                  <p className="t-micro lp__section-eyebrow">Free to start</p>
+                  <h2 className="t-h1">Get started.</h2>
+                  <p className="lp__auth-sub">
+                    Create an account, connect Claude Code, and start hiring specialists.
+                  </p>
+                  <div className="lp__auth-points">
+                    <span className="lp__auth-point"><span className="lp__checklist-dot" />$2 free credit</span>
+                    <span className="lp__auth-point"><span className="lp__checklist-dot" />No card required</span>
+                    <span className="lp__auth-point"><span className="lp__checklist-dot" />Success-only fees</span>
                   </div>
                 </div>
-              ))}
-            </div>
-            <div className="lp__builders-actions">
-              <button type="button" className="lp__btn-primary" onClick={handleListSkill}>
-                List an agent — free
-              </button>
-              <Link to="/docs/agent-builder" className="lp__btn-ghost">
-                Builder guide →
-              </Link>
-            </div>
-          </Reveal>
-        </div>
-      </section>
-
-      {/* ── Auth ── */}
-      <section className="lp__auth" id="lp-auth">
-        <EdgePattern side="top" className="lp__auth-edge" />
-        <Reveal className="lp__auth-content">
-          <div className="lp__auth-inner">
-            <div className="lp__auth-text">
-              <p className="t-micro lp__section-eyebrow">Free to start</p>
-              <h2 className="t-h1">Get started without the clutter.</h2>
-              <p className="lp__auth-sub">
-                Create an account, connect Claude Code, and start hiring specialists. The setup is short; the marketplace loop does the work after that.
-              </p>
-              <div className="lp__auth-points">
-                <span className="lp__auth-point"><span className="lp__checklist-dot" />$2 free credit</span>
-                <span className="lp__auth-point"><span className="lp__checklist-dot" />No card required</span>
-                <span className="lp__auth-point"><span className="lp__checklist-dot" />Failed calls refunded</span>
+                <div className="lp__auth-panel">
+                  <AuthPanel />
+                </div>
               </div>
-            </div>
-            <div className="lp__auth-panel">
-              <AuthPanel />
-            </div>
+            </Reveal>
           </div>
-        </Reveal>
+        </div>
       </section>
 
       {/* ── Footer ── */}
