@@ -401,7 +401,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
             "cross_source_consensus": {"type": ["string", "null"], "description": "Single sentence on what all sources agree on (null for single-URL calls)"},
             "billing_units_actual": {"type": "integer", "description": "Number of URLs successfully fetched; used for variable-pricing refunds."},
         },
-        required=["synthesis", "per_url_findings", "billing_units_actual"],
+        required=["per_url_findings", "billing_units_actual"],
     ),
     "variable_pricing": {
         "model": "tiered",

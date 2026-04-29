@@ -239,10 +239,10 @@ def run(payload: dict) -> dict:
             if parts:
                 changelog_text = "\n\n".join(parts)[:_MAX_CHANGELOG_CHARS]
         if not changelog_text:
-            changelog_text = info.get("description") or ""
-            if changelog_text:
-                changelog_text = changelog_text[:_MAX_CHANGELOG_CHARS]
-                changelog_url = f"https://pypi.org/project/{package}/"
+            return agent_error(
+                "changelog_agent.changelog_unavailable",
+                f"Could not find release notes or a changelog for '{package}'.",
+            )
 
     elif ecosystem == "npm":
         try:
@@ -277,8 +277,10 @@ def run(payload: dict) -> dict:
             if parts:
                 changelog_text = "\n\n".join(parts)[:_MAX_CHANGELOG_CHARS]
         if not changelog_text:
-            changelog_text = data.get("description") or ""
-            changelog_url = f"https://www.npmjs.com/package/{package}"
+            return agent_error(
+                "changelog_agent.changelog_unavailable",
+                f"Could not find release notes or a changelog for '{package}'.",
+            )
 
     # Filter to version range if we have full changelog
     if from_version and changelog_text:

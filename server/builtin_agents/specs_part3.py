@@ -278,7 +278,7 @@ def load_builtin_specs_part3() -> list[dict[str, Any]]:
     {
         "agent_id": _LINTER_AGENT_ID,
         "name": "Linter Agent",
-        "description": "Use when you want to lint Python, JavaScript, or TypeScript code without a local toolchain. For Python, runs ruff (style, bugs, complexity). For JS/TS, uses LLM analysis. Returns structured issues with rule IDs, line numbers, severity, and whether a fix is available. Faster and cheaper than a full code review.",
+        "description": "Use when you want to lint Python, JavaScript, or TypeScript code without a local toolchain. For Python, runs ruff (style, bugs, complexity). For JS/TS, runs ESLint with a minimal built-in ruleset. Returns structured issues with rule IDs, line numbers, severity, and whether a fix is available. Faster and cheaper than a full code review.",
         "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_LINTER_AGENT_ID],
         "price_per_call_usd": 0.01,
         "tags": ["linting", "ruff", "python", "javascript", "developer-tools", "code-quality"],

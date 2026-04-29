@@ -26,13 +26,13 @@ def test_changelog_agent_degrades_cleanly_without_llm(monkeypatch):
     monkeypatch.setattr(changelog_agent, "_fetch_pypi_info", lambda package: {
         "info": {
             "version": "2.0.0",
-            "description": "Long changelog body for release history",
+            "description": "",
             "home_page": "",
             "project_url": "",
             "package_url": "",
             "project_urls": {},
         },
-        "releases": {},
+        "releases": {"2.0.0": [{"comment_text": "Security fixes and API cleanup"}]},
     })
     monkeypatch.setattr(changelog_agent, "run_with_fallback", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("no llm")))
     result = changelog_agent.run({"package": "requests", "ecosystem": "pypi"})
@@ -40,6 +40,22 @@ def test_changelog_agent_degrades_cleanly_without_llm(monkeypatch):
     assert result["llm_used"] is False
     assert result["degraded_mode"] is True
     assert "LLM synthesis is unavailable" in result["summary"]
+
+
+def test_changelog_agent_returns_error_when_no_real_changelog_found(monkeypatch):
+    monkeypatch.setattr(changelog_agent, "_fetch_pypi_info", lambda package: {
+        "info": {
+            "version": "2.0.0",
+            "description": "README body that should not be treated as a changelog",
+            "home_page": "",
+            "project_url": "",
+            "package_url": "",
+            "project_urls": {},
+        },
+        "releases": {},
+    })
+    result = changelog_agent.run({"package": "requests", "ecosystem": "pypi"})
+    assert result["error"]["code"] == "changelog_agent.changelog_unavailable"
 
 
 def test_test_generator_returns_structured_error_without_llm(monkeypatch):

@@ -6,8 +6,8 @@ from server.builtin_agents.constants import (
     CODEREVIEW_AGENT_ID,
     DEPENDENCY_AUDITOR_AGENT_ID,
     LINTER_AGENT_ID,
-    PACKAGE_FINDER_AGENT_ID,
     TEST_GENERATOR_AGENT_ID,
+    TYPE_CHECKER_AGENT_ID,
 )
 
 from core import pipelines
@@ -19,7 +19,7 @@ BUILTIN_RECIPES: list[dict] = [
     {
         "recipe_id": "modernize-python",
         "name": "modernize-python",
-        "description": "Run type-aware modernization checks, lint fixes, and a final review over Python code.",
+        "description": "Run linting, type checking, and a final review over Python code.",
         "default_input_schema": {
             "type": "object",
             "properties": {"code": {"type": "string"}},
@@ -33,9 +33,15 @@ BUILTIN_RECIPES: list[dict] = [
                     "input_map": {"code": "$input.code"},
                 },
                 {
+                    "id": "types",
+                    "agent_id": TYPE_CHECKER_AGENT_ID,
+                    "depends_on": ["lint"],
+                    "input_map": {"code": "$input.code"},
+                },
+                {
                     "id": "review",
                     "agent_id": CODEREVIEW_AGENT_ID,
-                    "depends_on": ["lint"],
+                    "depends_on": ["lint", "types"],
                     "input_map": {"code": "$input.code"},
                 },
             ]
@@ -44,7 +50,7 @@ BUILTIN_RECIPES: list[dict] = [
     {
         "recipe_id": "audit-deps",
         "name": "audit-deps",
-        "description": "Audit a dependency set for issues, then suggest replacement packages or upgrades.",
+        "description": "Audit a dependency set for known vulnerabilities and summarize the highest-priority issues.",
         "default_input_schema": {
             "type": "object",
             "properties": {"dependencies": {"type": "string"}},
@@ -56,12 +62,6 @@ BUILTIN_RECIPES: list[dict] = [
                     "id": "audit",
                     "agent_id": DEPENDENCY_AUDITOR_AGENT_ID,
                     "input_map": {"dependencies": "$input.dependencies"},
-                },
-                {
-                    "id": "suggest",
-                    "agent_id": PACKAGE_FINDER_AGENT_ID,
-                    "depends_on": ["audit"],
-                    "input_map": {"query": "$audit.output.summary"},
                 },
             ]
         },

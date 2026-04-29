@@ -167,6 +167,24 @@ def _query_osv(pkg_name: str, version: str, ecosystem_hint: str | None = None) -
     return results
 
 
+def _hydrate_cve_details(cve_id: str, fallback: dict) -> dict:
+    """Hydrate package-mode matches from NVD so severity is canonical across modes."""
+    detailed = _fetch_cve(cve_id)
+    if "error" in detailed:
+        return dict(fallback)
+    cvss = float(detailed.get("cvss") or 0.0)
+    return {
+        "cve": str(detailed.get("cve_id") or cve_id),
+        "cvss": cvss,
+        "severity": str(detailed.get("severity") or _cvss_to_severity(cvss)),
+        "description": str(detailed.get("description") or fallback.get("description") or "")[:400],
+        "published": str(detailed.get("published") or fallback.get("published") or "")[:10],
+        "last_modified": str(detailed.get("last_modified") or fallback.get("last_modified") or "")[:10],
+        "fixed_in": str(fallback.get("fixed_in") or ""),
+        "source": "osv+nvd",
+    }
+
+
 def _nvd_headers() -> dict:
     """Build NVD request headers, including API key if configured via NVD_API_KEY env var."""
     headers = {"User-Agent": "aztea-cve-lookup/1.0"}
@@ -466,14 +484,16 @@ def run(payload: dict) -> dict:
         # bypass this branch entirely via ``_run_cve_id_mode``).
         pkg_cves = _query_osv(pkg_name, pkg_version, ecosystem_hint_for_query)
         if pkg_cves:
-            used_source = "osv"
+            used_source = "osv+nvd"
 
         for item in pkg_cves:
             if item["cve"] in seen_cves:
                 continue
             seen_cves.add(item["cve"])
+            hydrated = _hydrate_cve_details(item["cve"], item)
+            time.sleep(_NVD_RATE_DELAY)
 
-            fixed_in = item.get("fixed_in") or ""
+            fixed_in = hydrated.get("fixed_in") or item.get("fixed_in") or ""
             affected_range = f"< {fixed_in}" if fixed_in else "see advisory"
 
             if not include_patched and fixed_in and pkg_version:
@@ -481,19 +501,19 @@ def run(payload: dict) -> dict:
                     continue
 
             exploit_available = any(
-                kw in item["description"].lower()
+                kw in str(hydrated.get("description") or "").lower()
                 for kw in ("exploit", "poc", "proof-of-concept", "metasploit", "actively exploited")
             )
 
             all_results.append({
                 "package": pkg_name,
                 "version": pkg_version or "unknown",
-                "cve": item["cve"],
-                "cvss": item["cvss"],
-                "severity": item["severity"],
-                "description": item["description"],
-                "published": item["published"],
-                "last_modified": item["last_modified"],
+                "cve": hydrated["cve"],
+                "cvss": hydrated["cvss"],
+                "severity": hydrated["severity"],
+                "description": hydrated["description"],
+                "published": hydrated["published"],
+                "last_modified": hydrated["last_modified"],
                 "affected_range": affected_range,
                 "fixed_in": fixed_in or "see advisory",
                 "exploit_available": exploit_available,

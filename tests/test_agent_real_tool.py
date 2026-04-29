@@ -63,16 +63,36 @@ def test_cve_lookup_prefers_osv_for_package_search(monkeypatch):
             },
         )
 
-    def fail_get(*args, **kwargs):
-        raise AssertionError("NVD keyword search must not run for package mode")
+    def fake_get(url, params=None, timeout=None, headers=None):
+        del timeout, headers
+        assert url == cve_lookup._NVD_API
+        assert params == {"cveId": "CVE-2024-12345"}
+        return _FakeResponse(
+            200,
+            {
+                "vulnerabilities": [
+                    {
+                        "cve": {
+                            "id": "CVE-2024-12345",
+                            "published": "2024-01-02T00:00:00.000",
+                            "lastModified": "2024-01-03T00:00:00.000",
+                            "descriptions": [{"lang": "en", "value": "Prototype pollution issue"}],
+                            "metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": 9.1}}]},
+                            "references": [],
+                        }
+                    }
+                ]
+            },
+        )
 
     monkeypatch.setattr(cve_lookup.requests, "post", fake_post)
-    monkeypatch.setattr(cve_lookup.requests, "get", fail_get)
+    monkeypatch.setattr(cve_lookup.requests, "get", fake_get)
 
     result = cve_lookup.run({"packages": ["lodash@4.17.20"]})
-    assert result["source"] == "osv"
+    assert result["source"] == "osv+nvd"
     assert result["results"][0]["cve"] == "CVE-2024-12345"
-    assert result["results"][0]["severity"] == "high"
+    assert result["results"][0]["severity"] == "critical"
+    assert result["results"][0]["cvss"] == 9.1
     # And OSV was queried for the right package + version + ecosystem.
     assert osv_calls and osv_calls[0]["package"]["name"] == "lodash"
     assert osv_calls[0]["version"] == "4.17.20"
