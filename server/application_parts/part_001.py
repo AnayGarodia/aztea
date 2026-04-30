@@ -1020,17 +1020,21 @@ def _require_api_key(request: Request) -> core_models.CallerContext:
                 detail={
                     "error": "AUTHENTICATION_REQUIRED",
                     "message": "No API key provided. Sign up to get one; it includes $1 free credit.",
-                    "signup_url": _SIGNUP_URL,
-                    "docs_url": _DOCS_URL,
+                    "details": {
+                        "signup_url": _SIGNUP_URL,
+                        "docs_url": _DOCS_URL,
+                    },
                 },
             )
         raise HTTPException(
-            status_code=403,
+            status_code=401,
             detail={
                 "error": "INVALID_API_KEY",
                 "message": "API key is invalid or expired.",
-                "signup_url": _SIGNUP_URL,
-                "docs_url": _DOCS_URL,
+                "details": {
+                    "signup_url": _SIGNUP_URL,
+                    "docs_url": _DOCS_URL,
+                },
             },
         )
     # Soft legal-acceptance gate: only block mutating requests, and only when
@@ -1062,7 +1066,17 @@ def _optional_api_key(request: Request) -> core_models.CallerContext | None:
 def _caller_owner_id(request: Request) -> str:
     caller = _resolve_caller(request)
     if caller is None:
-        raise HTTPException(status_code=403, detail="Invalid API key.")
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "INVALID_API_KEY",
+                "message": "API key is invalid or expired.",
+                "details": {
+                    "signup_url": _SIGNUP_URL,
+                    "docs_url": _DOCS_URL,
+                },
+            },
+        )
     return caller["owner_id"]
 
 

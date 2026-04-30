@@ -135,7 +135,8 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
             "tags": ["visual-testing", "screenshots", "diff", "qa", "artifacts"],
             "kind": "aztea_built",
             "category": "QA",
-            "is_featured": True,
+            "is_featured": False,
+            "internal_only": True,
             "cacheable": False,
             "input_schema": _output_schema_object(
                 {
@@ -252,7 +253,8 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
             "tags": ["browser", "screenshot", "scraping", "playwright", "headless", "html"],
             "kind": "aztea_built",
             "category": "Web",
-            "is_featured": True,
+            "is_featured": False,
+            "internal_only": True,
             "cacheable": False,
             "input_schema": _output_schema_object(
                 {
@@ -302,7 +304,8 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
             "tags": ["javascript", "typescript", "go", "rust", "code-execution", "sandbox"],
             "kind": "aztea_built",
             "category": "Code Execution",
-            "is_featured": True,
+            "is_featured": False,
+            "internal_only": True,
             "cacheable": True,
             "input_schema": _output_schema_object(
                 {
@@ -341,7 +344,8 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
             "tags": ["search", "embeddings", "codebase", "semantic", "git", "developer-tools"],
             "kind": "aztea_built",
             "category": "Developer Tools",
-            "is_featured": True,
+            "is_featured": False,
+            "internal_only": True,
             "cacheable": True,
             "input_schema": _output_schema_object(
                 {
@@ -398,7 +402,8 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
             "tags": ["security", "red-team", "adversarial", "jailbreak", "prompt-injection", "testing"],
             "kind": "aztea_built",
             "category": "Security",
-            "is_featured": True,
+            "is_featured": False,
+            "internal_only": True,
             "cacheable": False,
             "input_schema": _output_schema_object(
                 {

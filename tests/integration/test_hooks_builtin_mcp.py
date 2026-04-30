@@ -507,7 +507,6 @@ def test_registry_lists_new_builtin_agents(client):
         "Web Researcher Agent",
         "CVE Lookup Agent",
         "DB Sandbox",
-        "Visual Regression",
         "Live Endpoint Tester",
     }.issubset(names)
     assert "Image Generator Agent" not in names
@@ -529,6 +528,11 @@ def test_registry_hides_deprecated_builtin_agents(client):
     assert "Healthcare Expert Agent" not in names
     assert "System Design Reviewer Agent" not in names
     assert "Incident Response Commander Agent" not in names
+    assert "Browser Agent" not in names
+    assert "Multi-Language Executor" not in names
+    assert "Semantic Codebase Search" not in names
+    assert "AI Red Teamer" not in names
+    assert "Visual Regression" not in names
 
 
 def test_builtin_agents_registered_to_system_owner_with_internal_endpoints(client):
