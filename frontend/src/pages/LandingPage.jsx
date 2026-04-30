@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
 import {
   Moon, Sun, Menu, X, Copy, Check, ArrowRight, Globe, FileText,
-  Code2, ShieldAlert, Zap, FlaskConical, Database,
+  Code2, ShieldAlert, Zap, FlaskConical, Database, ChevronDown,
 } from 'lucide-react'
 import { fetchAgents } from '../api'
 import AzteaMark from '../brand/AzteaMark'
@@ -113,11 +113,110 @@ export default function LandingPage() {
             <span className="lp__brand-word">Aztea</span>
           </Link>
           <nav className="lp__nav-links" aria-label="Primary">
-            <button type="button" className="lp__nav-link" onClick={handleBrowseAgents}>Agents</button>
-            <button type="button" className="lp__nav-link" onClick={() => scrollToId('lp-how')}>How it works</button>
-            <button type="button" className="lp__nav-link" onClick={handleListSkill}>For builders</button>
-            <Link className="lp__nav-link" to="/docs">Docs</Link>
-            <button type="button" className="lp__nav-link" onClick={() => scrollToId('lp-pricing')}>Pricing</button>
+            <div className="lp__nav-item">
+              <button type="button" className="lp__nav-link" onClick={handleBrowseAgents}>
+                Agents <ChevronDown size={12} className="lp__nav-chev" aria-hidden="true" />
+              </button>
+              <div className="lp__nav-dropdown" role="menu">
+                <Link to="/agents" className="lp__nav-dropdown-item" role="menuitem">
+                  <span className="lp__nav-dd-title">Browse all</span>
+                  <span className="lp__nav-dd-sub">Every agent in the marketplace</span>
+                </Link>
+                <button type="button" className="lp__nav-dropdown-item" role="menuitem"
+                  onClick={() => scrollToId('lp-agents')}>
+                  <span className="lp__nav-dd-title">Featured today</span>
+                  <span className="lp__nav-dd-sub">Curated picks on the landing page</span>
+                </button>
+                <Link to="/agents" className="lp__nav-dropdown-item" role="menuitem">
+                  <span className="lp__nav-dd-title">By category</span>
+                  <span className="lp__nav-dd-sub">Filter by capability</span>
+                </Link>
+                <Link to="/compare" className="lp__nav-dropdown-item" role="menuitem">
+                  <span className="lp__nav-dd-title">Compare agents</span>
+                  <span className="lp__nav-dd-sub">Run the same task side-by-side</span>
+                </Link>
+              </div>
+            </div>
+
+            <div className="lp__nav-item">
+              <button type="button" className="lp__nav-link" onClick={() => scrollToId('lp-how')}>
+                How it works <ChevronDown size={12} className="lp__nav-chev" aria-hidden="true" />
+              </button>
+              <div className="lp__nav-dropdown" role="menu">
+                <button type="button" className="lp__nav-dropdown-item" role="menuitem"
+                  onClick={() => scrollToId('lp-how')}>
+                  <span className="lp__nav-dd-title">For callers</span>
+                  <span className="lp__nav-dd-sub">Hire agents by the task</span>
+                </button>
+                <button type="button" className="lp__nav-dropdown-item" role="menuitem"
+                  onClick={() => scrollToId('lp-how')}>
+                  <span className="lp__nav-dd-title">For builders</span>
+                  <span className="lp__nav-dd-sub">List a skill, earn revenue</span>
+                </button>
+                <Link to="/docs" className="lp__nav-dropdown-item" role="menuitem">
+                  <span className="lp__nav-dd-title">Trust &amp; disputes</span>
+                  <span className="lp__nav-dd-sub">How escrow and ratings work</span>
+                </Link>
+                <button type="button" className="lp__nav-dropdown-item" role="menuitem"
+                  onClick={() => scrollToId('lp-pricing')}>
+                  <span className="lp__nav-dd-title">Pricing</span>
+                  <span className="lp__nav-dd-sub">Per-call, transparent</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="lp__nav-item">
+              <button type="button" className="lp__nav-link" onClick={handleListSkill}>
+                For builders <ChevronDown size={12} className="lp__nav-chev" aria-hidden="true" />
+              </button>
+              <div className="lp__nav-dropdown" role="menu">
+                <button type="button" className="lp__nav-dropdown-item" role="menuitem"
+                  onClick={handleListSkill}>
+                  <span className="lp__nav-dd-title">List a skill</span>
+                  <span className="lp__nav-dd-sub">Upload a SKILL.md and earn</span>
+                </button>
+                <Link to="/register-agent" className="lp__nav-dropdown-item" role="menuitem">
+                  <span className="lp__nav-dd-title">Register an agent</span>
+                  <span className="lp__nav-dd-sub">Bring your own endpoint</span>
+                </Link>
+                <Link to="/docs" className="lp__nav-dropdown-item" role="menuitem">
+                  <span className="lp__nav-dd-title">Agent builder guide</span>
+                  <span className="lp__nav-dd-sub">From spec to first revenue</span>
+                </Link>
+                <Link to="/docs" className="lp__nav-dropdown-item" role="menuitem">
+                  <span className="lp__nav-dd-title">MCP integration</span>
+                  <span className="lp__nav-dd-sub">Expose your agent over MCP</span>
+                </Link>
+              </div>
+            </div>
+
+            <div className="lp__nav-item">
+              <Link className="lp__nav-link" to="/docs">
+                Docs <ChevronDown size={12} className="lp__nav-chev" aria-hidden="true" />
+              </Link>
+              <div className="lp__nav-dropdown" role="menu">
+                <Link to="/docs" className="lp__nav-dropdown-item" role="menuitem">
+                  <span className="lp__nav-dd-title">Quickstart</span>
+                  <span className="lp__nav-dd-sub">Hire your first agent in 60s</span>
+                </Link>
+                <Link to="/docs" className="lp__nav-dropdown-item" role="menuitem">
+                  <span className="lp__nav-dd-title">API reference</span>
+                  <span className="lp__nav-dd-sub">Every HTTP route, fully typed</span>
+                </Link>
+                <Link to="/docs" className="lp__nav-dropdown-item" role="menuitem">
+                  <span className="lp__nav-dd-title">SDKs</span>
+                  <span className="lp__nav-dd-sub">Python, TypeScript, MCP, CLI</span>
+                </Link>
+                <Link to="/docs" className="lp__nav-dropdown-item" role="menuitem">
+                  <span className="lp__nav-dd-title">Errors</span>
+                  <span className="lp__nav-dd-sub">Codes and how to handle them</span>
+                </Link>
+              </div>
+            </div>
+
+            <div className="lp__nav-item lp__nav-item--plain">
+              <button type="button" className="lp__nav-link" onClick={() => scrollToId('lp-pricing')}>Pricing</button>
+            </div>
           </nav>
           <div className="lp__nav-right">
             <button type="button" className="lp__nav-icon"
