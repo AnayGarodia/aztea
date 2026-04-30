@@ -246,6 +246,135 @@ def test_quality_gate_accepts_consistent_type_checker_output_without_live_judge(
                 "required": ["query", "total_files_indexed", "results", "source"],
             },
         ),
+        (
+            server._SECRET_SCANNER_AGENT_ID,
+            {
+                "filename": ".env",
+                "total_findings": 1,
+                "findings_by_severity": {"critical": 1, "high": 0, "medium": 0, "low": 0},
+                "findings": [
+                    {
+                        "rule_id": "aws-access-key-id",
+                        "severity": "critical",
+                        "redacted_preview": "AKIA…[20 chars]…MPLE",
+                    }
+                ],
+                "summary": "Found 1 potential leak(s): 1 critical.",
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "total_findings": {"type": "integer"},
+                    "findings_by_severity": {"type": "object"},
+                    "findings": {"type": "array"},
+                    "summary": {"type": "string"},
+                },
+                "required": ["total_findings", "findings_by_severity", "findings", "summary"],
+            },
+        ),
+        (
+            server._JSON_SCHEMA_VALIDATOR_AGENT_ID,
+            {
+                "valid": False,
+                "draft": "2020-12",
+                "error_count": 1,
+                "errors": [
+                    {
+                        "path": "/age",
+                        "json_path": "$.age",
+                        "message": "'thirty' is not of type 'integer'",
+                        "validator": "type",
+                        "validator_value": "integer",
+                        "schema_path": "/properties/age/type",
+                    }
+                ],
+                "truncated": False,
+                "summary": "1 validation error: 'thirty' is not of type 'integer'",
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "valid": {"type": "boolean"},
+                    "draft": {"type": "string"},
+                    "error_count": {"type": "integer"},
+                    "errors": {"type": "array"},
+                    "truncated": {"type": "boolean"},
+                    "summary": {"type": "string"},
+                },
+                "required": ["valid", "draft", "error_count", "errors", "truncated", "summary"],
+            },
+        ),
+        (
+            server._SQL_EXPLAINER_AGENT_ID,
+            {
+                "queries": [
+                    {
+                        "sql": "SELECT * FROM users WHERE email = ?",
+                        "plan": [{"id": 2, "parent": 0, "detail": "SCAN users"}],
+                        "issues": ["Full scan on `users`"],
+                        "suggestions": ["Consider an index on the WHERE/JOIN columns used against `users`."],
+                        "elapsed_ms": 0.3,
+                    }
+                ],
+                "total_issues": 1,
+                "summary": "Found 1 potential plan issue(s) across 1 query/queries.",
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "queries": {"type": "array"},
+                    "total_issues": {"type": "integer"},
+                    "summary": {"type": "string"},
+                },
+                "required": ["queries", "total_issues", "summary"],
+            },
+        ),
+        (
+            server._GIT_DIFF_ANALYZER_AGENT_ID,
+            {
+                "file_count": 1,
+                "hunk_count": 1,
+                "added_lines": 2,
+                "removed_lines": 1,
+                "binary_files": 0,
+                "files": [
+                    {
+                        "path": "auth/login.py",
+                        "added": 2,
+                        "removed": 1,
+                        "hunks": 1,
+                        "is_binary": False,
+                    }
+                ],
+                "risk_summary": {
+                    "auth_changes": 1,
+                    "money_changes": 0,
+                    "migration_changes": 0,
+                    "public_api_changes": 0,
+                    "test_files": 0,
+                    "tests_removed": False,
+                    "error_handling_removed": False,
+                    "secret_pattern_added": False,
+                    "todos_added": 1,
+                    "custom_risk_path_matches": 0,
+                },
+                "summary": "1 file(s), 1 hunk(s), +2/-1 lines.",
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "file_count": {"type": "integer"},
+                    "hunk_count": {"type": "integer"},
+                    "added_lines": {"type": "integer"},
+                    "removed_lines": {"type": "integer"},
+                    "binary_files": {"type": "integer"},
+                    "files": {"type": "array"},
+                    "risk_summary": {"type": "object"},
+                    "summary": {"type": "string"},
+                },
+                "required": ["file_count", "hunk_count", "added_lines", "removed_lines", "binary_files", "files", "risk_summary", "summary"],
+            },
+        ),
     ],
 )
 def test_quality_gate_accepts_consistent_tool_outputs_without_live_judge(
@@ -881,10 +1010,10 @@ def test_mcp_invoke_delegates_to_registry_call_path(client, monkeypatch):
     assert body["structuredContent"]["explanation"] == "mcp::ok"
 
     caller_wallet = payments.get_or_create_wallet(f"user:{caller['user_id']}")
-    # python_executor now has variable pricing: 2¢/s of timeout, min 5¢.
-    # No timeout in the payload → 0 seconds → min_cents = 5 price; caller
-    # pays 5 + 10% platform fee (1¢) = 6¢ total → balance = 94.
-    assert payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"] == 94
+    # python_executor now has variable pricing: 2¢/s of timeout, min 4¢.
+    # No timeout in the payload → 0 seconds → min_cents = 4 price; caller
+    # pays 4 + 10% platform fee (0¢ after rounding) = 4¢ total → balance = 96.
+    assert payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"] == 96
 
 
 def test_mcp_invoke_does_not_expose_hidden_image_generator_tool(client, monkeypatch):

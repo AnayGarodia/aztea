@@ -53,6 +53,25 @@ _MAX_QUERY_CHARS = 4096
 
 _DML_RE = re.compile(r"^\s*(INSERT|UPDATE|DELETE|REPLACE|DROP|ALTER)\b", re.IGNORECASE)
 _SELECT_RE = re.compile(r"^\s*(SELECT|WITH)\b", re.IGNORECASE)
+_FORBIDDEN_SCHEMA_SQL_RE = re.compile(
+    r"(?ix)\b("
+    r"attach|detach|vacuum|pragma|load_extension|"
+    r"create\s+virtual\s+table|alter\s+table|drop\s+table|drop\s+index|drop\s+view|drop\s+trigger"
+    r")\b"
+)
+_MAX_WALL_CLOCK_SECONDS = 5.0
+
+_DENIED_ACTION_CODES = {
+    getattr(sqlite3, "SQLITE_ATTACH", -1),
+    getattr(sqlite3, "SQLITE_DETACH", -1),
+    getattr(sqlite3, "SQLITE_ALTER_TABLE", -1),
+    getattr(sqlite3, "SQLITE_DROP_TABLE", -1),
+    getattr(sqlite3, "SQLITE_DROP_INDEX", -1),
+    getattr(sqlite3, "SQLITE_DROP_VIEW", -1),
+    getattr(sqlite3, "SQLITE_DROP_TRIGGER", -1),
+    getattr(sqlite3, "SQLITE_DROP_VTABLE", -1),
+    getattr(sqlite3, "SQLITE_CREATE_VTABLE", -1),
+}
 
 
 def _err(code: str, message: str, **details: Any) -> dict[str, Any]:
@@ -65,6 +84,8 @@ def _analyze_plan(plan_rows: list[tuple[int, int, int, str]]) -> tuple[list[str]
     suggestions: list[str] = []
     for _id, _parent, _notused, detail in plan_rows:
         upper = detail.upper()
+        if "SCAN CONSTANT ROW" in upper:
+            continue
         if "SCAN" in upper and "USING" not in upper:
             tbl_match = re.search(r"SCAN\s+(?:TABLE\s+)?(\w+)", detail, re.IGNORECASE)
             if tbl_match:
@@ -93,6 +114,16 @@ def _analyze_plan(plan_rows: list[tuple[int, int, int, str]]) -> tuple[list[str]
     return issues, suggestions
 
 
+def _authorizer(action_code: int, param1: str | None, param2: str | None, db_name: str | None, source: str | None) -> int:
+    if action_code in _DENIED_ACTION_CODES:
+        return sqlite3.SQLITE_DENY
+    if action_code == getattr(sqlite3, "SQLITE_FUNCTION", -1):
+        function_name = str(param2 or param1 or "").lower()
+        if function_name in {"load_extension", "writefile", "readfile"}:
+            return sqlite3.SQLITE_DENY
+    return sqlite3.SQLITE_OK
+
+
 def run(payload: dict) -> dict:
     if not isinstance(payload, dict):
         return _err("sql_explainer.invalid_payload", "payload must be an object")
@@ -102,6 +133,12 @@ def run(payload: dict) -> dict:
         return _err("sql_explainer.missing_schema", "'schema_sql' is required and must contain DDL/seed SQL")
     if len(schema_sql) > _MAX_SCHEMA_CHARS:
         return _err("sql_explainer.schema_too_large", f"schema_sql exceeds {_MAX_SCHEMA_CHARS} chars")
+    forbidden = _FORBIDDEN_SCHEMA_SQL_RE.search(schema_sql)
+    if forbidden:
+        return _err(
+            "sql_explainer.unsafe_schema_sql",
+            f"schema_sql contains forbidden statement or pragma: {forbidden.group(0)!r}",
+        )
 
     queries = payload.get("queries")
     if not isinstance(queries, list) or not queries:
@@ -133,12 +170,27 @@ def run(payload: dict) -> dict:
             f"params length ({len(params_input)}) must match queries length ({len(queries)}) when provided",
         )
 
+    started = time.monotonic()
+    deadline = started + _MAX_WALL_CLOCK_SECONDS
     conn = sqlite3.connect(":memory:")
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA query_only = OFF")
     try:
         try:
+            conn.enable_load_extension(False)
+        except Exception:
+            pass
+        conn.set_authorizer(_authorizer)
+        conn.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 1_000)
+        try:
             conn.executescript(schema_sql)
+        except sqlite3.OperationalError as exc:
+            if "interrupted" in str(exc).lower():
+                return _err("sql_explainer.timeout", f"schema_sql exceeded {_MAX_WALL_CLOCK_SECONDS:.0f}s execution limit")
+            return _err(
+                "sql_explainer.schema_failed",
+                f"schema_sql failed to execute: {exc}",
+            )
         except sqlite3.Error as exc:
             return _err(
                 "sql_explainer.schema_failed",
@@ -164,6 +216,30 @@ def run(payload: dict) -> dict:
             try:
                 cursor = conn.execute(f"EXPLAIN QUERY PLAN {query}", params)
                 rows = cursor.fetchall()
+            except sqlite3.OperationalError as exc:
+                if "interrupted" in str(exc).lower():
+                    results.append(
+                        {
+                            "sql": query,
+                            "plan": [],
+                            "issues": [f"EXPLAIN timed out after {_MAX_WALL_CLOCK_SECONDS:.0f}s wall-clock budget."],
+                            "suggestions": [],
+                            "elapsed_ms": round((time.monotonic() - start) * 1000.0, 2),
+                            "error": str(exc),
+                        }
+                    )
+                    continue
+                results.append(
+                    {
+                        "sql": query,
+                        "plan": [],
+                        "issues": [f"EXPLAIN failed: {exc}"],
+                        "suggestions": [],
+                        "elapsed_ms": round((time.monotonic() - start) * 1000.0, 2),
+                        "error": str(exc),
+                    }
+                )
+                continue
             except sqlite3.Error as exc:
                 results.append(
                     {

@@ -108,6 +108,17 @@ def test_json_schema_validator_invalid_schema_returns_error_envelope() -> None:
     assert out["error"]["code"] == "json_schema_validator.invalid_schema"
 
 
+def test_json_schema_validator_rejects_remote_ref() -> None:
+    out = json_schema_validator.run(
+        {
+            "document": {"x": 1},
+            "schema": {"$ref": "https://example.com/schema.json"},
+        }
+    )
+    assert "error" in out
+    assert out["error"]["code"] == "json_schema_validator.remote_ref_not_supported"
+
+
 # ---------- regex_tester -------------------------------------------------
 
 def test_regex_tester_findall() -> None:
@@ -167,6 +178,28 @@ def test_sql_explainer_rejects_dml() -> None:
     assert out["error"]["code"] == "sql_explainer.dml_not_supported"
 
 
+def test_sql_explainer_rejects_attach_database() -> None:
+    out = sql_explainer.run(
+        {
+            "schema_sql": "ATTACH DATABASE '/tmp/aztea-test.db' AS x; CREATE TABLE x.t(id INT);",
+            "queries": ["SELECT 1"],
+        }
+    )
+    assert "error" in out
+    assert out["error"]["code"] == "sql_explainer.unsafe_schema_sql"
+
+
+def test_sql_explainer_does_not_flag_constant_row_scan() -> None:
+    out = sql_explainer.run(
+        {
+            "schema_sql": "CREATE TABLE u(id INTEGER PRIMARY KEY);",
+            "queries": ["SELECT 1"],
+        }
+    )
+    assert out["total_issues"] == 0
+    assert out["queries"][0]["issues"] == []
+
+
 def test_sql_explainer_index_avoids_full_scan() -> None:
     out = sql_explainer.run(
         {
@@ -224,3 +257,14 @@ def test_git_diff_analyzer_rejects_non_diff() -> None:
     out = git_diff_analyzer.run({"diff": "not a diff"})
     assert "error" in out
     assert out["error"]["code"] == "git_diff_analyzer.invalid_format"
+
+
+def test_git_diff_analyzer_honors_extra_risk_paths() -> None:
+    diff = (
+        "diff --git a/payments/ledger.py b/payments/ledger.py\n"
+        "--- a/payments/ledger.py\n+++ b/payments/ledger.py\n"
+        "@@ -1 +1,2 @@\n-x=1\n+y=2\n+# TODO\n"
+    )
+    out = git_diff_analyzer.run({"diff": diff, "extra_risk_paths": ["payments/*"]})
+    assert "custom_path_risk" in out["files"][0]["risk_tags"]
+    assert out["risk_summary"]["custom_risk_path_matches"] == 1

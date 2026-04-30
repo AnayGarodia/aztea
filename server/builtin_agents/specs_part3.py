@@ -20,7 +20,7 @@ def load_builtin_specs_part3() -> list[dict[str, Any]]:
         "name": "Multi-File Python Executor",
         "description": "Use when running a multi-file Python project with dependencies. Writes all files to a sandbox tempdir, optionally installs requirements.txt packages via pip, then runs the entry point and returns stdout, stderr, exit code, and an expert explanation. Single-file use cases should use Python Code Executor instead.",
         "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_MULTI_FILE_EXECUTOR_AGENT_ID],
-        "price_per_call_usd": 0.03,
+        "price_per_call_usd": 0.02,
         "tags": ["code-execution", "python", "developer-tools", "compute"],
         "kind": "aztea_built",
         "category": "Code Execution",
@@ -202,7 +202,7 @@ def load_builtin_specs_part3() -> list[dict[str, Any]]:
         "name": "Shell Executor",
         "description": "Run sandboxed shell commands (npm, node, python, pip, ruff, mypy, tsc, git log/diff/status, make, cargo, go, pytest) and get real stdout/stderr/exit code. Use for verifying builds, running tests, checking lint, inspecting git history — anything that needs an actual shell.",
         "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_SHELL_EXECUTOR_AGENT_ID],
-        "price_per_call_usd": 0.03,
+        "price_per_call_usd": 0.02,
         "tags": ["developer-tools", "shell", "execution", "ci"],
         "input_schema": {
             "type": "object",
@@ -245,7 +245,7 @@ def load_builtin_specs_part3() -> list[dict[str, Any]]:
         "name": "Type Checker",
         "description": "Run mypy (Python) or tsc (TypeScript) on submitted code and return structured type errors with file, line, column, error code, and message. Closes the gap between writing code and knowing it type-checks.",
         "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_TYPE_CHECKER_AGENT_ID],
-        "price_per_call_usd": 0.02,
+        "price_per_call_usd": 0.01,
         "tags": ["developer-tools", "type-checking", "python", "typescript"],
         "input_schema": {
             "type": "object",

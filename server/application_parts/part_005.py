@@ -314,6 +314,161 @@ def _deterministic_quality_result(agent: dict, output_payload: dict) -> dict[str
                 return {"verdict": "fail", "score": 2, "reason": "Each semantic code search result must include numeric score and size_bytes."}
         return {"verdict": "pass", "score": 8, "reason": "Structured semantic code search output is internally consistent."}
 
+    if agent_id == _SECRET_SCANNER_AGENT_ID:
+        findings = payload.get("findings")
+        counts = payload.get("findings_by_severity")
+        if not isinstance(findings, list) or not isinstance(counts, dict):
+            return {"verdict": "fail", "score": 2, "reason": "Secret scanner output must include findings and findings_by_severity."}
+        try:
+            total_findings = int(payload.get("total_findings"))
+        except (TypeError, ValueError):
+            return {"verdict": "fail", "score": 2, "reason": "Secret scanner output must include a numeric total_findings."}
+        if total_findings != len(findings):
+            return {"verdict": "fail", "score": 2, "reason": "Secret scanner output is internally inconsistent: total_findings does not match findings."}
+        severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+        for item in findings:
+            if not isinstance(item, dict):
+                return {"verdict": "fail", "score": 2, "reason": "Each secret scanner finding must be an object."}
+            severity = str(item.get("severity") or "").strip().lower()
+            if severity not in severity_counts:
+                return {"verdict": "fail", "score": 2, "reason": "Each secret scanner finding must include a valid severity."}
+            severity_counts[severity] += 1
+            if not isinstance(item.get("redacted_preview"), str):
+                return {"verdict": "fail", "score": 2, "reason": "Each secret scanner finding must include a redacted_preview string."}
+        if any(int(counts.get(key, 0)) != value for key, value in severity_counts.items()):
+            return {"verdict": "fail", "score": 2, "reason": "Secret scanner output is internally inconsistent: findings_by_severity does not match findings."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured secret scanner output is internally consistent."}
+
+    if agent_id == _JSON_SCHEMA_VALIDATOR_AGENT_ID:
+        errors = payload.get("errors")
+        if not isinstance(errors, list):
+            return {"verdict": "fail", "score": 2, "reason": "JSON schema validator output must include an errors list."}
+        valid = payload.get("valid")
+        truncated = payload.get("truncated")
+        if not isinstance(valid, bool) or not isinstance(truncated, bool):
+            return {"verdict": "fail", "score": 2, "reason": "JSON schema validator output must include boolean valid and truncated fields."}
+        try:
+            error_count = int(payload.get("error_count"))
+        except (TypeError, ValueError):
+            return {"verdict": "fail", "score": 2, "reason": "JSON schema validator output must include a numeric error_count."}
+        if error_count != len(errors) and not (truncated and error_count >= len(errors)):
+            return {"verdict": "fail", "score": 2, "reason": "JSON schema validator output is internally inconsistent: error_count does not match errors."}
+        if valid != (error_count == 0):
+            return {"verdict": "fail", "score": 2, "reason": "JSON schema validator output is internally inconsistent: valid does not match error_count."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured JSON schema validator output is internally consistent."}
+
+    if agent_id == _REGEX_TESTER_AGENT_ID:
+        results = payload.get("results")
+        if not isinstance(results, list):
+            return {"verdict": "fail", "score": 2, "reason": "Regex tester output must include a results list."}
+        compiled = payload.get("compiled")
+        catastrophic_risk = payload.get("catastrophic_risk")
+        if not isinstance(compiled, bool) or not isinstance(catastrophic_risk, bool):
+            return {"verdict": "fail", "score": 2, "reason": "Regex tester output must include boolean compiled and catastrophic_risk fields."}
+        if not compiled and results:
+            return {"verdict": "fail", "score": 2, "reason": "Regex tester output is internally inconsistent: compile failure cannot have results."}
+        timed_out = False
+        for item in results:
+            if not isinstance(item, dict):
+                return {"verdict": "fail", "score": 2, "reason": "Each regex tester result must be an object."}
+            if not isinstance(item.get("timed_out"), bool):
+                return {"verdict": "fail", "score": 2, "reason": "Each regex tester result must include boolean timed_out."}
+            timed_out = timed_out or bool(item.get("timed_out"))
+            try:
+                int(item.get("match_count", 0))
+                float(item.get("elapsed_ms", 0))
+            except (TypeError, ValueError):
+                return {"verdict": "fail", "score": 2, "reason": "Each regex tester result must include numeric match_count and elapsed_ms."}
+        if catastrophic_risk != timed_out:
+            return {"verdict": "fail", "score": 2, "reason": "Regex tester output is internally inconsistent: catastrophic_risk does not match timed_out results."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured regex tester output is internally consistent."}
+
+    if agent_id == _SQL_EXPLAINER_AGENT_ID:
+        queries = payload.get("queries")
+        if not isinstance(queries, list):
+            return {"verdict": "fail", "score": 2, "reason": "SQL explainer output must include a queries list."}
+        try:
+            total_issues = int(payload.get("total_issues"))
+        except (TypeError, ValueError):
+            return {"verdict": "fail", "score": 2, "reason": "SQL explainer output must include a numeric total_issues."}
+        counted_issues = 0
+        for item in queries:
+            if not isinstance(item, dict):
+                return {"verdict": "fail", "score": 2, "reason": "Each SQL explainer query result must be an object."}
+            issues = item.get("issues")
+            suggestions = item.get("suggestions")
+            if not isinstance(issues, list) or not isinstance(suggestions, list):
+                return {"verdict": "fail", "score": 2, "reason": "Each SQL explainer query result must include issues and suggestions lists."}
+            counted_issues += len(issues)
+        if total_issues != counted_issues:
+            return {"verdict": "fail", "score": 2, "reason": "SQL explainer output is internally inconsistent: total_issues does not match query issues."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured SQL explainer output is internally consistent."}
+
+    if agent_id == _GIT_DIFF_ANALYZER_AGENT_ID:
+        files = payload.get("files")
+        risk_summary = payload.get("risk_summary")
+        if not isinstance(files, list) or not isinstance(risk_summary, dict):
+            return {"verdict": "fail", "score": 2, "reason": "Git diff analyzer output must include files and risk_summary."}
+        try:
+            file_count = int(payload.get("file_count"))
+            hunk_count = int(payload.get("hunk_count"))
+            added_lines = int(payload.get("added_lines"))
+            removed_lines = int(payload.get("removed_lines"))
+            binary_files = int(payload.get("binary_files"))
+        except (TypeError, ValueError):
+            return {"verdict": "fail", "score": 2, "reason": "Git diff analyzer output must include numeric file/hunk/line counts."}
+        if file_count != len(files):
+            return {"verdict": "fail", "score": 2, "reason": "Git diff analyzer output is internally inconsistent: file_count does not match files."}
+        if hunk_count != sum(int(item.get("hunks", 0)) for item in files if isinstance(item, dict)):
+            return {"verdict": "fail", "score": 2, "reason": "Git diff analyzer output is internally inconsistent: hunk_count does not match files."}
+        if added_lines != sum(int(item.get("added", 0)) for item in files if isinstance(item, dict)):
+            return {"verdict": "fail", "score": 2, "reason": "Git diff analyzer output is internally inconsistent: added_lines does not match files."}
+        if removed_lines != sum(int(item.get("removed", 0)) for item in files if isinstance(item, dict)):
+            return {"verdict": "fail", "score": 2, "reason": "Git diff analyzer output is internally inconsistent: removed_lines does not match files."}
+        if binary_files != sum(1 for item in files if isinstance(item, dict) and item.get("is_binary")):
+            return {"verdict": "fail", "score": 2, "reason": "Git diff analyzer output is internally inconsistent: binary_files does not match files."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured git diff analyzer output is internally consistent."}
+
+    if agent_id == _DB_SANDBOX_AGENT_ID:
+        results = payload.get("results")
+        if not isinstance(results, list):
+            return {"verdict": "fail", "score": 2, "reason": "DB sandbox output must include a results list."}
+        try:
+            statements_executed = int(payload.get("statements_executed"))
+            int(payload.get("db_size_bytes"))
+            int(payload.get("execution_time_ms"))
+        except (TypeError, ValueError):
+            return {"verdict": "fail", "score": 2, "reason": "DB sandbox output must include numeric statements_executed, db_size_bytes, and execution_time_ms."}
+        if statements_executed != len(results):
+            return {"verdict": "fail", "score": 2, "reason": "DB sandbox output is internally inconsistent: statements_executed does not match results."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured DB sandbox output is internally consistent."}
+
+    if agent_id == _DNS_INSPECTOR_AGENT_ID:
+        results = payload.get("results")
+        if not isinstance(results, list):
+            return {"verdict": "fail", "score": 2, "reason": "DNS inspector output must include a results list."}
+        try:
+            billing_units_actual = int(payload.get("billing_units_actual"))
+        except (TypeError, ValueError):
+            return {"verdict": "fail", "score": 2, "reason": "DNS inspector output must include numeric billing_units_actual."}
+        if billing_units_actual != len(results):
+            return {"verdict": "fail", "score": 2, "reason": "DNS inspector output is internally inconsistent: billing_units_actual does not match results."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured DNS inspector output is internally consistent."}
+
+    if agent_id == _LIVE_ENDPOINT_TESTER_AGENT_ID:
+        try:
+            requests_count = int(payload.get("requests"))
+            success_count = int(payload.get("success_count"))
+            failure_count = int(payload.get("failure_count"))
+            billing_units_actual = int(payload.get("billing_units_actual"))
+        except (TypeError, ValueError):
+            return {"verdict": "fail", "score": 2, "reason": "Live endpoint tester output must include numeric request counts."}
+        if requests_count != success_count + failure_count:
+            return {"verdict": "fail", "score": 2, "reason": "Live endpoint tester output is internally inconsistent: requests does not match success_count + failure_count."}
+        if billing_units_actual != requests_count:
+            return {"verdict": "fail", "score": 2, "reason": "Live endpoint tester output is internally inconsistent: billing_units_actual does not match requests."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured live endpoint tester output is internally consistent."}
+
     return None
 
 

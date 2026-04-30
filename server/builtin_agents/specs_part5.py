@@ -117,8 +117,9 @@ def load_builtin_specs_part5() -> list[dict[str, Any]]:
                 "Use to validate a JSON document against a JSON Schema (draft 2020-12, 2019-09, "
                 "or 7) using the real ``jsonschema`` Python library. Returns structured per-path "
                 "errors with JSON Pointer and JSONPath locations, the violating keyword, and the "
-                "schema rule. Useful for verifying API request/response shapes, config files, or "
-                "tool-call payloads. No LLM."
+                "schema rule. Remote ``$ref`` URLs are blocked; use embedded ``$defs`` or local "
+                "fragment refs only. Useful for verifying API request/response shapes, config "
+                "files, or tool-call payloads. No LLM."
             ),
             "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_JSON_SCHEMA_VALIDATOR_AGENT_ID],
             "price_per_call_usd": 0.01,
@@ -284,13 +285,14 @@ def load_builtin_specs_part5() -> list[dict[str, Any]]:
             "name": "SQL Explainer",
             "description": (
                 "Use to run EXPLAIN QUERY PLAN against a real SQLite database populated from your "
-                "schema. Spins an in-memory SQLite per call, executes your DDL/seed SQL, then runs "
-                "EXPLAIN for one or more SELECT/WITH statements. Surfaces full scans, temp B-trees, "
-                "correlated subqueries, and provides index suggestions. Read-only after schema "
-                "setup. SQLite-only, but plan shapes generalize to other relational engines. No LLM."
+                "schema. Spins an in-memory SQLite per call, executes restricted DDL/seed SQL "
+                "(no ATTACH, VACUUM, pragmas, or virtual tables), then runs EXPLAIN for one or "
+                "more SELECT/WITH statements. Surfaces full scans, temp B-trees, correlated "
+                "subqueries, and provides index suggestions. Read-only after schema setup. "
+                "SQLite-only, but plan shapes generalize to other relational engines. No LLM."
             ),
             "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_SQL_EXPLAINER_AGENT_ID],
-            "price_per_call_usd": 0.02,
+            "price_per_call_usd": 0.01,
             "tags": ["sql", "sqlite", "performance", "developer-tools", "database"],
             "kind": "aztea_built",
             "category": "Developer Tools",

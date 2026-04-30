@@ -27,7 +27,7 @@ def load_builtin_specs_part1() -> list[dict[str, Any]]:
     "name": "Financial Research Agent",
     "description": "Use when looking up financial data for a public company. Fetches the latest 10-K or 10-Q directly from SEC EDGAR — not stale LLM memory. Returns a structured brief: business summary, financial highlights, key risks, and a buy/hold/sell signal with reasoning.",
     "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_FINANCIAL_AGENT_ID],
-    "price_per_call_usd": 0.01,
+    "price_per_call_usd": 0.02,
     "tags": ["financial-research", "sec-filings", "equity-analysis"],
     "input_schema": FinancialRequest.model_json_schema(),
     "output_schema": _output_schema_object(
@@ -83,7 +83,7 @@ def load_builtin_specs_part1() -> list[dict[str, Any]]:
     "name": "Code Review Agent",
     "description": "Use when you want a dedicated production-style review of a code snippet or git-style diff. Prioritizes correctness, security, performance, and maintainability over style trivia, and returns concrete findings with severity, CWE/OWASP tags where applicable, test recommendations, and code-level fixes.",
     "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_CODEREVIEW_AGENT_ID],
-    "price_per_call_usd": 0.01,
+    "price_per_call_usd": 0.02,
     "tags": ["code-review", "security", "developer-tools"],
     "input_schema": CodeReviewRequest.model_json_schema(),
     "output_schema": _output_schema_object(
@@ -269,7 +269,7 @@ def load_builtin_specs_part1() -> list[dict[str, Any]]:
     "name": "CVE Lookup Agent",
     "description": "Use when the user wants live CVE data for a package or specific CVE ID. Queries OSV.dev for ecosystem-aware package lookups (npm, PyPI) and NIST NVD for direct CVE-ID lookups — not LLM memory. Returns CVSS score, exploit availability, affected version range, and recommended fix for each CVE.",
     "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_CVELOOKUP_AGENT_ID],
-    "price_per_call_usd": 0.06,
+    "price_per_call_usd": 0.04,
     "tags": ["security", "cve", "vulnerability-intel", "nvd", "packages"],
     "input_schema": {
         "type": "object",

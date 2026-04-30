@@ -25,7 +25,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
         "name": "Image Generator Agent",
         "description": "Use when the task requires generating an image. Runs a real model backend (OpenAI gpt-image-1 or Replicate) — not a description. Returns base64-encoded image artifacts, supports reference images for style guidance.",
         "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_IMAGE_GENERATOR_AGENT_ID],
-        "price_per_call_usd": 0.06,
+        "price_per_call_usd": 0.05,
         "tags": ["image-generation", "creative", "multimodal", "design"],
         "input_schema": _output_schema_object(
             {
@@ -247,7 +247,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
     "name": "arXiv Research Agent",
     "description": "Use when the user wants live academic papers from arXiv, not LLM-recalled citations. Searches arXiv.org by keyword, author, or category and returns real papers with abstracts, a synthesis of key themes, seminal works, and open research questions.",
     "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_ARXIV_RESEARCH_AGENT_ID],
-    "price_per_call_usd": 0.06,
+    "price_per_call_usd": 0.05,
     "tags": ["research", "academic", "arxiv", "papers", "science"],
     "input_schema": {
         "type": "object",
@@ -315,7 +315,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
     "name": "Python Code Executor",
     "description": "Use when the user wants to actually run Python code, not simulate it. Executes in a real sandboxed subprocess. Returns stdout, stderr, exit code, execution time, and an expert explanation of what the output means.",
     "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_PYTHON_EXECUTOR_AGENT_ID],
-    "price_per_call_usd": 0.06,
+    "price_per_call_usd": 0.04,
     "tags": ["code-execution", "python", "developer-tools", "compute"],
     "input_schema": {
         "type": "object",
@@ -438,7 +438,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
     "name": "DNS & SSL Inspector",
     "description": "Use when the task requires checking domain health: DNS records, SSL certificate expiry, or HTTP security headers. Runs live checks against up to 10 domains and returns structured findings with actionable issues.",
     "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_DNS_INSPECTOR_AGENT_ID],
-    "price_per_call_usd": 0.09,
+    "price_per_call_usd": 0.02,
     "tags": ["dns", "ssl", "security", "infrastructure"],
     "kind": "aztea_built",
     "category": "Security",
@@ -492,7 +492,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
         "name": "Dependency Auditor",
         "description": "Use this when the user wants to audit their dependencies for security vulnerabilities, outdated packages, or license issues. Accepts the text of a package.json or requirements.txt and returns a structured report: CVEs per package, license risks, and prioritized upgrade recommendations.",
         "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_DEPENDENCY_AUDITOR_AGENT_ID],
-        "price_per_call_usd": 0.04,
+        "price_per_call_usd": 0.03,
         "tags": ["security", "cve", "dependencies", "npm", "pypi", "developer-tools"],
         "kind": "aztea_built",
         "category": "Data",

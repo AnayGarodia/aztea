@@ -77,14 +77,14 @@ _OVERLAY: dict[str, dict[str, Any]] = {
             "min_cents": 5,
         },
     },
-    # Python Executor: 2¢ per second of timeout requested, floor 5¢.
+    # Python Executor: 2¢ per second of timeout requested, floor 4¢.
     PYTHON_EXECUTOR_AGENT_ID: {
         "pricing_model": "per_unit",
         "pricing_config": {
             "input_field": "timeout",
             "unit": "second",
             "rate_cents_per_unit": 2,
-            "min_cents": 5,
+            "min_cents": 4,
         },
     },
     # Web Researcher: tiered by URL count.
@@ -112,19 +112,9 @@ _OVERLAY: dict[str, dict[str, Any]] = {
             "min_cents": 5,
         },
     },
-    # Shell Executor: 3¢ flat per call (fixed, not variable).
+    # Shell Executor: 2¢ flat per call (fixed, not variable).
     # Stored here so display_min_price_usd() can report the correct floor.
     SHELL_EXECUTOR_AGENT_ID: {
-        "pricing_model": "per_unit",
-        "pricing_config": {
-            "input_field": "timeout",
-            "unit": "second",
-            "rate_cents_per_unit": 0,
-            "min_cents": 3,
-        },
-    },
-    # Type Checker: 2¢ flat per call.
-    TYPE_CHECKER_AGENT_ID: {
         "pricing_model": "per_unit",
         "pricing_config": {
             "input_field": "timeout",
@@ -133,17 +123,27 @@ _OVERLAY: dict[str, dict[str, Any]] = {
             "min_cents": 2,
         },
     },
+    # Type Checker: 1¢ flat per call.
+    TYPE_CHECKER_AGENT_ID: {
+        "pricing_model": "per_unit",
+        "pricing_config": {
+            "input_field": "timeout",
+            "unit": "second",
+            "rate_cents_per_unit": 0,
+            "min_cents": 1,
+        },
+    },
     # DNS Inspector: tiered by domain count.
     DNS_INSPECTOR_AGENT_ID: {
         "pricing_model": "tiered",
         "pricing_config": {
             "input_field": "domains",
             "unit": "domain",
-            "min_cents": 4,
+            "min_cents": 2,
             "tiers": [
-                {"up_to_units": 1, "cents": 4},
-                {"up_to_units": 3, "cents": 9},
-                {"up_to_units": 10, "cents": 16},
+                {"up_to_units": 1, "cents": 2},
+                {"up_to_units": 3, "cents": 5},
+                {"up_to_units": 10, "cents": 12},
             ],
         },
     },

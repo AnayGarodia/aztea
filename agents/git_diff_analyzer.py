@@ -59,6 +59,7 @@ Output:
 """
 from __future__ import annotations
 
+import fnmatch
 import re
 from typing import Any
 
@@ -148,7 +149,7 @@ def _split_files(diff: str) -> list[list[str]]:
     return files
 
 
-def _classify_file(file_lines: list[str]) -> dict[str, Any]:
+def _classify_file(file_lines: list[str], extra_risk_paths: list[str] | None = None) -> dict[str, Any]:
     header = file_lines[0] if file_lines else ""
     m = _DIFF_FILE_HEADER_RE.match(header)
     old_path = new_path = None
@@ -208,6 +209,13 @@ def _classify_file(file_lines: list[str]) -> dict[str, Any]:
         risk_tags.append("test")
     if language == "dockerfile":
         risk_tags.append("dockerfile")
+    matched_custom_globs = [
+        pattern
+        for pattern in (extra_risk_paths or [])
+        if fnmatch.fnmatch(path, pattern) or (old_path and fnmatch.fnmatch(old_path, pattern))
+    ]
+    if matched_custom_globs:
+        risk_tags.append("custom_path_risk")
 
     warnings: list[str] = []
     added_text = "\n".join(added_blob)
@@ -229,6 +237,11 @@ def _classify_file(file_lines: list[str]) -> dict[str, Any]:
     todos_added = len(_TODO_RE.findall(added_text))
     if todos_added:
         warnings.append(f"{todos_added} new TODO/FIXME/XXX/HACK comment(s) added.")
+    if matched_custom_globs:
+        warnings.append(
+            "Matched caller-defined risk path pattern(s): "
+            + ", ".join(sorted(dict.fromkeys(matched_custom_globs)))
+        )
 
     return {
         "path": path,
@@ -244,6 +257,7 @@ def _classify_file(file_lines: list[str]) -> dict[str, Any]:
         "_added_text": added_text,
         "_removed_text": removed_text,
         "_todos_added": todos_added,
+        "_custom_glob_matches": matched_custom_globs,
     }
 
 
@@ -264,6 +278,17 @@ def run(payload: dict) -> dict:
             "git_diff_analyzer.invalid_format",
             "diff does not appear to be in unified `git diff` format (must start with 'diff --git ...')",
         )
+    extra_risk_paths = payload.get("extra_risk_paths") or []
+    if not isinstance(extra_risk_paths, list):
+        return _err("git_diff_analyzer.invalid_extra_risk_paths", "extra_risk_paths must be a list of glob strings")
+    normalized_risk_paths: list[str] = []
+    for index, pattern in enumerate(extra_risk_paths):
+        if not isinstance(pattern, str) or not pattern.strip():
+            return _err(
+                "git_diff_analyzer.invalid_extra_risk_paths",
+                f"extra_risk_paths[{index}] must be a non-empty string",
+            )
+        normalized_risk_paths.append(pattern.strip())
 
     file_blocks = _split_files(diff)
     files_out: list[dict[str, Any]] = []
@@ -278,10 +303,11 @@ def run(payload: dict) -> dict:
         "error_handling_removed": False,
         "secret_pattern_added": False,
         "todos_added": 0,
+        "custom_risk_path_matches": 0,
     }
 
     for block in file_blocks:
-        info = _classify_file(block)
+        info = _classify_file(block, normalized_risk_paths)
         total_added += info["added"]
         total_removed += info["removed"]
         total_hunks += info["hunks"]
@@ -307,6 +333,7 @@ def run(payload: dict) -> dict:
             risk_summary["secret_pattern_added"] = True
 
         risk_summary["todos_added"] += int(info.pop("_todos_added", 0))
+        risk_summary["custom_risk_path_matches"] += len(info.pop("_custom_glob_matches", []))
         info.pop("_added_text", None)
         info.pop("_removed_text", None)
 
