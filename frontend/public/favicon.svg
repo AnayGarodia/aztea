@@ -1,10 +1,28 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
-  <rect width="32" height="32" rx="8" fill="#5C50E8"/>
-  <circle cx="16" cy="13" r="5" fill="white" fill-opacity="0.95"/>
-  <circle cx="9" cy="22" r="3" fill="white" fill-opacity="0.7"/>
-  <circle cx="16" cy="25" r="3" fill="white" fill-opacity="0.7"/>
-  <circle cx="23" cy="22" r="3" fill="white" fill-opacity="0.7"/>
-  <line x1="16" y1="18" x2="9" y2="22" stroke="white" stroke-opacity="0.5" stroke-width="1.5"/>
-  <line x1="16" y1="18" x2="16" y2="22" stroke="white" stroke-opacity="0.5" stroke-width="1.5"/>
-  <line x1="16" y1="18" x2="23" y2="22" stroke="white" stroke-opacity="0.5" stroke-width="1.5"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
+  <style>
+    .ring  { stroke: #063F43; stroke-width: 1.1; fill: none; opacity: 0.5; }
+    .ring2 { stroke: #063F43; stroke-width: 1.1; fill: none; opacity: 0.65; }
+    .sq    { stroke: #063F43; stroke-width: 2; fill: none; }
+    .dia   { fill: #C65F3F; }
+    @media (prefers-color-scheme: dark) {
+      .ring, .ring2, .sq { stroke: #7EB9B0; }
+      .dia { fill: #E07A57; }
+    }
+    @keyframes spinCW  { from { transform: rotate(0deg); }  to { transform: rotate(360deg); } }
+    @keyframes spinCCW { from { transform: rotate(0deg); }  to { transform: rotate(-360deg); } }
+    @keyframes pulse   { 0%, 100% { transform: rotate(45deg) scale(1); opacity: 1; }
+                          50%      { transform: rotate(45deg) scale(0.78); opacity: 0.78; } }
+    .sqA, .sqB, .diaWrap { transform-origin: 24px 24px; transform-box: fill-box; }
+    .sqA     { animation: spinCW 60s linear infinite; }
+    .sqB     { animation: spinCCW 40s linear infinite; }
+    .diaWrap { animation: pulse 4.5s ease-in-out infinite; }
+    @media (prefers-reduced-motion: reduce) {
+      .sqA, .sqB, .diaWrap { animation: none; }
+    }
+  </style>
+  <circle class="ring" cx="24" cy="24" r="22" />
+  <g class="sqA"><rect class="sq" x="8" y="8" width="32" height="32" /></g>
+  <g class="sqB"><rect class="sq" x="8" y="8" width="32" height="32" transform="rotate(45 24 24)" /></g>
+  <circle class="ring2" cx="24" cy="24" r="6" />
+  <g class="diaWrap"><rect class="dia" x="20.5" y="20.5" width="7" height="7" transform="rotate(45 24 24)" /></g>
 </svg>

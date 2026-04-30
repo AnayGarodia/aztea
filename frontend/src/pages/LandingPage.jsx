@@ -8,7 +8,10 @@ import { useTheme } from '../context/ThemeContext'
 import { fetchAgents } from '../api'
 import AuthPanel from '../features/auth/AuthPanel'
 import AzteaMark from '../brand/AzteaMark'
-import { DotGrid, JaaliBand, CornerRangoli, StepwellLines } from '../brand/MinimalPattern'
+import {
+  DotGrid, JaaliBand, CornerRangoli, StepwellLines,
+  ChakraWheel, HexLattice, OctagramTile, CrossHairCorner,
+} from '../brand/MinimalPattern'
 import './LandingPage.css'
 
 const CATALOG = [
@@ -178,7 +181,9 @@ export default function LandingPage() {
       <section className="lp__hero">
         <div className="lp__hero-bg" aria-hidden>
           <DotGrid className="lp__hero-dots" spacing={32} dot={1.1} />
-          <CornerRangoli corner="tr" size={420} className="lp__hero-rangoli" />
+          <ChakraWheel size={520} className="lp__hero-chakra" />
+          <CornerRangoli corner="tr" size={380} className="lp__hero-rangoli" />
+          <CrossHairCorner size={200} className="lp__hero-cross" />
         </div>
         <div className="lp__hero-inner">
           {agentCount > 0 && (
@@ -216,7 +221,8 @@ export default function LandingPage() {
       </div>
 
       {/* ── Catalog ── */}
-      <section className="lp__sec" id="lp-catalog">
+      <section className="lp__sec lp__sec--catalog" id="lp-catalog">
+        <OctagramTile className="lp__cat-tile" spacing={72} />
         <div className="lp__sec-inner">
           <header className="lp__sec-head">
             <span className="lp__eyebrow">Marketplace</span>
@@ -261,7 +267,8 @@ export default function LandingPage() {
       </section>
 
       {/* ── For builders + Auth ── */}
-      <section className="lp__sec" id="lp-builders">
+      <section className="lp__sec lp__sec--builders" id="lp-builders">
+        <HexLattice className="lp__build-hex" size={32} />
         <div className="lp__sec-inner lp__split">
           <div className="lp__split-copy">
             <span className="lp__eyebrow">For builders</span>

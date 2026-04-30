@@ -1,0 +1,41 @@
+.aztea-mark {
+  display: inline-block;
+  vertical-align: middle;
+}
+
+@keyframes aztea-spin-cw {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+@keyframes aztea-spin-ccw {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(-360deg); }
+}
+@keyframes aztea-diamond-pulse {
+  0%, 100% { transform: rotate(45deg) scale(1); opacity: 1; }
+  50%      { transform: rotate(45deg) scale(0.78); opacity: 0.78; }
+}
+
+.aztea-mark--anim .aztea-mark__sq--a {
+  transform-origin: 24px 24px;
+  transform-box: fill-box;
+  animation: aztea-spin-cw 60s linear infinite;
+}
+.aztea-mark--anim .aztea-mark__sq--b {
+  transform-origin: 24px 24px;
+  transform-box: fill-box;
+  animation: aztea-spin-ccw 40s linear infinite;
+}
+.aztea-mark--anim .aztea-mark__diamond {
+  transform-origin: 24px 24px;
+  transform-box: fill-box;
+  animation: aztea-diamond-pulse 4.5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aztea-mark--anim .aztea-mark__sq--a,
+  .aztea-mark--anim .aztea-mark__sq--b,
+  .aztea-mark--anim .aztea-mark__diamond {
+    animation: none;
+  }
+}
