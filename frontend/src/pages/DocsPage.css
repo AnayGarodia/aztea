@@ -2,8 +2,6 @@
    and a scrollable reading column. Mobile turns the sidebar into a
    drawer that slides in from the top. */
 .docs-page {
-  min-height: 100vh;
-  min-height: 100dvh;
   display: flex;
   flex-direction: column;
   background:
@@ -535,6 +533,22 @@
   margin-right: 6px;
 }
 .docs-page__ask-btn:hover { background: var(--accent); color: white; }
+
+.docs-page__integrations-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  text-decoration: none;
+  padding: 6px 10px;
+  border-radius: var(--r-sm);
+  transition: background var(--dur-sm) var(--ease), color var(--dur-sm) var(--ease);
+}
+.docs-page__integrations-link:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--text-primary);
+}
 
 /* Ask-AI panel */
 .docs-ask {

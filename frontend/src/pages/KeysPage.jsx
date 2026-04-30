@@ -190,7 +190,6 @@ export default function KeysPage() {
                         value={perJobCapDollars}
                         onChange={e => { setPerJobCapDollars(e.target.value); setCreateError(null) }}
                         placeholder="1.00"
-                        hint="Required for caller scope. Each job using this key cannot exceed this price."
                       />
                     </div>
                   )}

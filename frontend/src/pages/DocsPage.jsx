@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useState, useRef } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { Moon, Sun, Menu, X, ArrowLeft, Search, Sparkles, Send } from 'lucide-react'
+import { Menu, X, Search, Sparkles, Send, Puzzle } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { useTheme } from '../context/ThemeContext'
 import { fetchPublicDoc, fetchPublicDocsIndex } from '../api'
 import MarkdownDoc from '../ui/MarkdownDoc'
 import Button from '../ui/Button'
 import Skeleton from '../ui/Skeleton'
 import EmptyState from '../ui/EmptyState'
+import Topbar from '../layout/Topbar'
 import './DocsPage.css'
 
 const RAW_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').trim().replace(/\/+$/, '')
@@ -18,7 +18,6 @@ const REDOC_URL = RAW_BASE ? `${RAW_BASE}/redoc` : '/api/redoc'
 export default function DocsPage() {
   const navigate = useNavigate()
   const { docSlug } = useParams()
-  const { isDark, toggle: toggleTheme } = useTheme()
   const [docs, setDocs] = useState([])
   const [activeDoc, setActiveDoc] = useState(null)
   const [loadingList, setLoadingList] = useState(true)
@@ -187,44 +186,33 @@ export default function DocsPage() {
 
   return (
     <main className="docs-page">
-      <header className="docs-page__topbar">
-        <div className="docs-page__topbar-left">
-          <button
-            type="button"
-            className="docs-page__menu-btn"
-            onClick={() => setDrawerOpen(true)}
-            aria-label="Open documentation index"
-          >
-            <Menu size={16} />
-          </button>
-          <Link to="/" className="docs-page__home">
-            <ArrowLeft size={14} aria-hidden />
-            <span className="docs-page__home-label">Home</span>
-          </Link>
-          <span className="docs-page__topbar-sep" aria-hidden>·</span>
-          <span className="docs-page__topbar-title">Docs{activeDocTitle ? <span className="docs-page__topbar-sub"> / {activeDocTitle}</span> : null}</span>
-        </div>
-        <div className="docs-page__topbar-right">
-          <button
-            type="button"
-            className="docs-page__ask-btn"
-            onClick={() => setAskOpen(true)}
-            aria-label="Ask AI about the docs"
-          >
-            <Sparkles size={13} />
-            <span>Ask AI</span>
-          </button>
-          <button
-            type="button"
-            className="docs-page__icon-btn"
-            onClick={toggleTheme}
-            aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
-            title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
-          >
-            {isDark ? <Sun size={14} /> : <Moon size={14} />}
-          </button>
-        </div>
-      </header>
+      <Topbar
+        crumbs={[
+          { label: 'Docs', to: '/docs' },
+          ...(activeDocTitle ? [{ label: activeDocTitle }] : []),
+        ]}
+        extras={
+          <>
+            <button
+              type="button"
+              className="docs-page__menu-btn"
+              onClick={() => setDrawerOpen(true)}
+              aria-label="Open documentation index"
+            >
+              <Menu size={16} />
+            </button>
+            <button
+              type="button"
+              className="docs-page__ask-btn"
+              onClick={() => setAskOpen(true)}
+              aria-label="Ask AI about the docs"
+            >
+              <Sparkles size={13} />
+              <span>Ask AI</span>
+            </button>
+          </>
+        }
+      />
 
       <div className="docs-page__layout">
         <aside className="docs-page__sidebar" aria-label="Documentation navigation">
@@ -263,6 +251,10 @@ export default function DocsPage() {
           )}
           {!loadingList && !indexError && renderNavLinks()}
           <div className="docs-page__api-links">
+            <Link to="/integrations" className="docs-page__integrations-link">
+              <Puzzle size={13} aria-hidden />
+              <span>Integrations</span>
+            </Link>
             <a href={SWAGGER_URL} target="_blank" rel="noreferrer">Swagger / OpenAPI</a>
             <a href={REDOC_URL} target="_blank" rel="noreferrer">ReDoc</a>
           </div>

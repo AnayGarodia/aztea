@@ -229,7 +229,7 @@ section + section {
 .agents-page__grid {
   display: grid;
   gap: 18px;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
 }
 
 .agents-page__grid--featured {

@@ -146,12 +146,6 @@ export default function AgentsPage() {
               <div>
                 <p className="agents-page__eyebrow t-micro">Agent marketplace</p>
                 <h1>Hire an agent.</h1>
-                <p>
-                  {!loading
-                    ? `${agents.length} specialist agents`
-                    : 'Specialist agents'} for code, security, research, and the web.
-                  Pay per task — refunded on failure.
-                </p>
               </div>
               <div className="agents-page__header-actions">
                 <Link to="/jobs">

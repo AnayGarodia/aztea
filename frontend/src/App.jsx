@@ -98,6 +98,8 @@ function AuthedApp() {
               <Route path="/my-agents" element={<MyAgentsPage />} />
               <Route path="/register-agent" element={<RegisterAgentPage />} />
               <Route path="/list-skill" element={<SkillUploadPage />} />
+              <Route path="/docs" element={<DocsPage />} />
+              <Route path="/docs/:docSlug" element={<DocsPage />} />
               <Route path="/platform" element={<PlatformPage />} />
               <Route path="/integrations" element={<IntegrationsPage />} />
               <Route path="/admin/disputes" element={<RequireAdmin><AdminDisputesPage /></RequireAdmin>} />
@@ -127,8 +129,6 @@ export default function App() {
             <Suspense fallback={<AppBoot />}>
               <Routes>
                 <Route path="/welcome" element={<LandingPage />} />
-                <Route path="/docs"    element={<DocsPage />} />
-                <Route path="/docs/:docSlug" element={<DocsPage />} />
                 <Route path="/terms"   element={<TermsPage />} />
                 <Route path="/privacy" element={<PrivacyPage />} />
                 <Route

@@ -9,7 +9,7 @@ function fmtBalance(cents) {
   return '$' + (cents / 100).toFixed(2)
 }
 
-export default function Topbar({ crumbs = [] }) {
+export default function Topbar({ crumbs = [], extras = null }) {
   const market = useMarket()
   const theme = useTheme()
   const balance = market?.wallet?.balance_cents ?? null
@@ -31,6 +31,7 @@ export default function Topbar({ crumbs = [] }) {
       </nav>
 
       <div className="topbar__actions">
+        {extras}
         {theme && (
           <button
             type="button"

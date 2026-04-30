@@ -181,13 +181,6 @@ export default function LandingPage() {
                 Browse agents
               </button>
             </div>
-            <p className="lp__trust">
-              <span>$2 free credit</span>
-              <span className="lp__trust-dot" />
-              <span>no card required</span>
-              <span className="lp__trust-dot" />
-              <span>failed calls refunded</span>
-            </p>
           </div>
 
           <div className="lp__hero-panel">

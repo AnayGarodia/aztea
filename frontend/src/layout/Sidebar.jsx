@@ -1,7 +1,7 @@
 import { NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { motion } from 'motion/react'
 import {
-  LayoutDashboard, Wrench, Briefcase, Hammer, Wallet, Settings, LogOut, Shield, ListChecks, BookOpen, KeyRound, Coins, Puzzle, FilePlus
+  LayoutDashboard, Wrench, Briefcase, Hammer, Wallet, Settings, LogOut, Shield, ListChecks, BookOpen, KeyRound, Coins, FilePlus
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import Avatar from '../ui/Avatar'
@@ -16,7 +16,6 @@ const HIRER_NAV = [
   { to: '/wallet',       icon: Wallet,          label: 'Wallet' },
   { to: '/keys',         icon: KeyRound,        label: 'API Keys' },
   { to: '/docs',         icon: BookOpen,        label: 'Docs' },
-  { to: '/integrations', icon: Puzzle,          label: 'Integrations' },
   { to: '/settings',     icon: Settings,        label: 'Settings' },
 ]
 
@@ -27,7 +26,6 @@ const BUILDER_NAV = [
   { to: '/wallet',     icon: Wallet,          label: 'Earnings' },
   { to: '/keys',       icon: KeyRound,        label: 'API Keys' },
   { to: '/docs',       icon: BookOpen,        label: 'Docs' },
-  { to: '/integrations', icon: Puzzle,        label: 'Integrations' },
   { to: '/settings',   icon: Settings,        label: 'Settings' },
 ]
 
@@ -40,7 +38,6 @@ const BOTH_NAV = [
   { to: '/wallet',         icon: Wallet,          label: 'Wallet' },
   { to: '/keys',           icon: KeyRound,        label: 'API Keys' },
   { to: '/docs',           icon: BookOpen,        label: 'Docs' },
-  { to: '/integrations',   icon: Puzzle,          label: 'Integrations' },
   { to: '/settings',       icon: Settings,        label: 'Settings' },
 ]
 

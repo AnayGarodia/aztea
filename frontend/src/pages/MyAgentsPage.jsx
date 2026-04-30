@@ -616,7 +616,7 @@ export default function MyAgentsPage() {
                 icon={<Plus size={14} />}
                 onClick={() => navigate('/list-skill')}
               >
-                List a skill
+                List your first agent
               </Button>
             </div>
           </Reveal>
@@ -656,7 +656,7 @@ export default function MyAgentsPage() {
                   <div className="myagents__error">{error}</div>
                 ) : agents.length === 0 ? (
                   <EmptyState
-                    title="No skills listed yet"
+                    title="List your first agent"
                     sub="Upload a SKILL.md, set a price per call, and Aztea handles execution and billing for you."
                     action={
                       <Button
@@ -665,7 +665,7 @@ export default function MyAgentsPage() {
                         icon={<Plus size={14} />}
                         onClick={() => navigate('/list-skill')}
                       >
-                        List your first skill
+                        List your first agent
                       </Button>
                     }
                   />

@@ -68,7 +68,6 @@ export default function JobsPage() {
               <div>
                 <p className="jobs__eyebrow t-micro">Your work</p>
                 <h1>Jobs</h1>
-                <p>Every async job you've created, from queued to complete.</p>
               </div>
               <Link to="/agents">
                 <Button variant="primary" size="sm">New job</Button>

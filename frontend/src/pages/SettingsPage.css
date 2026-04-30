@@ -256,7 +256,7 @@
 .settings__key-create {
   display: flex;
   gap: 12px;
-  align-items: flex-end;
+  align-items: flex-start;
   flex-wrap: wrap;
   margin-bottom: 20px;
 }
