@@ -37,34 +37,33 @@ from server.builtin_agents.constants import (
 
 
 _OVERLAY: dict[str, dict[str, Any]] = {
-    # Video Storyboard: $0.03/s of finished video, floor $0.20,
-    # ceiling $5.00 so no caller accidentally spends more than $5 on
-    # one storyboard.
+    # Video Storyboard: model-backed video rendering is materially more
+    # expensive than local deterministic tools, so keep a higher floor.
     VIDEO_STORYBOARD_AGENT_ID: {
         "pricing_model": "per_unit",
         "pricing_config": {
             "input_field": "duration_seconds",
             "unit": "second",
-            "rate_cents_per_unit": 3,
-            "min_cents": 20,
-            "max_cents": 500,
+            "rate_cents_per_unit": 4,
+            "min_cents": 30,
+            "max_cents": 800,
         },
     },
-    # Image Generator: tiered by image_count, with a 2x multiplier when
-    # ``high_res`` is truthy.
+    # Image Generator: model-backed image generation is priced above local
+    # deterministic tools and scales with image count.
     IMAGE_GENERATOR_AGENT_ID: {
         "pricing_model": "tiered",
         "pricing_config": {
             "input_field": "image_count",
             "unit": "image",
-            "min_cents": 5,
+            "min_cents": 10,
             "max_cents": 600,
             "tiers": [
-                {"up_to_units": 1, "cents": 5},
-                {"up_to_units": 3, "cents": 12},
-                {"up_to_units": 6, "cents": 24},
+                {"up_to_units": 1, "cents": 10},
+                {"up_to_units": 3, "cents": 25},
+                {"up_to_units": 6, "cents": 45},
             ],
-            "multipliers": {"high_res": 2.0},
+            "multipliers": {"high_res": 1.5},
         },
     },
     # arXiv Research: 3¢ per paper returned, floor 5¢.

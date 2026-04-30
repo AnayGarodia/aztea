@@ -52,6 +52,9 @@ _MAX_ARCHIVE_MEMBERS = 500
 _MAX_TOTAL_EXTRACTED_BYTES = 20 * 1024 * 1024
 _MAX_MEMBER_BYTES = 2 * 1024 * 1024
 _MAX_GIT_FILES = 2000
+_CHUNK_TARGET_CHARS = 1400
+_CHUNK_OVERLAP_LINES = 6
+_MAX_CHUNKS = 2500
 
 
 def _err(code: str, message: str) -> dict[str, Any]:
@@ -104,6 +107,36 @@ def _make_snippet(text: str, query: str) -> str:
             end = min(len(clean), start + _SNIPPET_CHARS)
             return clean[start:end].strip()
     return clean[:_SNIPPET_CHARS].strip()
+
+
+def _chunk_file(path: str, text: str) -> list[dict[str, Any]]:
+    lines = text.splitlines()
+    if not lines:
+        return []
+    chunks: list[dict[str, Any]] = []
+    start = 0
+    while start < len(lines):
+        end = start
+        char_count = 0
+        while end < len(lines) and char_count < _CHUNK_TARGET_CHARS:
+            char_count += len(lines[end]) + 1
+            end += 1
+        chunk_text = "\n".join(lines[start:end]).strip()
+        if chunk_text:
+            chunks.append(
+                {
+                    "path": path,
+                    "text": chunk_text,
+                    "line_start": start + 1,
+                    "line_end": end,
+                }
+            )
+        if end >= len(lines):
+            break
+        start = max(start + 1, end - _CHUNK_OVERLAP_LINES)
+        if len(chunks) >= 8:
+            break
+    return chunks
 
 
 def _file_text(data: bytes, max_bytes: int) -> str:
@@ -342,45 +375,61 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     if not files:
         return _err("semantic_codebase_search.no_files", "No text files found in the provided source.")
 
-    lexical_scores = {
-        path: _lexical_score(query, path, text)
-        for path, text in files.items()
-    }
+    chunks: list[dict[str, Any]] = []
+    for path, text in files.items():
+        chunks.extend(_chunk_file(path, text))
+        if len(chunks) >= _MAX_CHUNKS:
+            break
+    if not chunks:
+        return _err("semantic_codebase_search.no_files", "No indexable text chunks were found in the provided source.")
 
-    # Embed the query
     if DISABLE_EMBEDDINGS:
-        scored: list[tuple[float, str, str]] = []
-        for path, text in files.items():
-            score = lexical_scores.get(path, 0.0)
+        scored: list[tuple[float, dict[str, Any]]] = []
+        for chunk in chunks:
+            score = _lexical_score(query, chunk["path"], chunk["text"])
             if score > 0:
-                scored.append((score, path, text))
+                scored.append((score, chunk))
     else:
-        paths = list(files.keys())
-        doc_texts = [f"{path}\n{files[path][:1000]}" for path in paths]
+        doc_texts = [
+            f"{chunk['path']}\nlines {chunk['line_start']}-{chunk['line_end']}\n{chunk['text'][:1200]}"
+            for chunk in chunks
+        ]
         all_vecs = embed_texts_batch([query] + doc_texts)
         query_vec = all_vecs[0]
         scored = []
-        for i, path in enumerate(paths):
+        for i, chunk in enumerate(chunks):
             semantic = cosine(query_vec, all_vecs[i + 1])
-            lexical = lexical_scores.get(path, 0.0)
+            lexical = _lexical_score(query, chunk["path"], chunk["text"])
             hybrid = (semantic * 0.7) + (min(lexical, 3.0) / 3.0 * 0.3)
             if hybrid > 0.05 or lexical > 0:
-                scored.append((hybrid, path, files[path]))
+                scored.append((hybrid, chunk))
 
     scored.sort(key=lambda x: x[0], reverse=True)
+    best_by_path: dict[str, dict[str, Any]] = {}
+    for score, chunk in scored:
+        path = str(chunk["path"])
+        existing = best_by_path.get(path)
+        candidate = dict(chunk)
+        candidate["score"] = round(float(score), 4)
+        if existing is None or candidate["score"] > existing["score"]:
+            best_by_path[path] = candidate
+
     results = []
-    for score, path, text in scored[:top_k]:
-        snippet = _make_snippet(text, query)
+    for item in sorted(best_by_path.values(), key=lambda row: row["score"], reverse=True)[:top_k]:
+        snippet = _make_snippet(str(item["text"]), query)
         results.append({
-            "path": path,
-            "score": round(float(score), 4),
+            "path": item["path"],
+            "score": item["score"],
             "snippet": snippet,
-            "size_bytes": len(text.encode("utf-8", errors="replace")),
+            "size_bytes": len(files[str(item["path"])].encode("utf-8", errors="replace")),
+            "line_start": item["line_start"],
+            "line_end": item["line_end"],
         })
 
     return {
         "query": query,
         "total_files_indexed": len(files),
+        "chunks_indexed": len(chunks),
         "results": results,
         "source": source,
     }

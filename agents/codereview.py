@@ -94,6 +94,14 @@ _VALID_SEVERITY = {"critical", "high", "medium", "low", "info"}
 _VALID_CATEGORY = {"security", "performance", "bug", "style", "maintainability", "correctness"}
 _DIVIDE_BY_ZERO_RE = re.compile(r"\b(divide|division|denominator|divide-by-zero|division by zero|zero guard)\b", re.IGNORECASE)
 _SECURITY_EXPLOIT_RE = re.compile(r"\b(attacker|exploit|remote|dos|denial of service|privilege|bypass|arbitrary)\b", re.IGNORECASE)
+_DIFF_HUNK_RE = re.compile(r"^@@ .+ @@")
+_ADDED_LINE_PREFIX_RE = re.compile(r"^\+(?!\+\+)")
+_SECRET_LOG_RE = re.compile(r"(console\.log|print|logger\.\w+|logging\.\w+)\s*\(?.*\b(token|secret|api[_-]?key|authorization|password|passwd|bearer)\b", re.IGNORECASE)
+_EVAL_RE = re.compile(r"\b(eval|exec)\s*\(", re.IGNORECASE)
+_VERIFY_FALSE_RE = re.compile(r"\bverify\s*=\s*False\b", re.IGNORECASE)
+_SUBPROCESS_SHELL_RE = re.compile(r"\bsubprocess\.\w+\([^)]*shell\s*=\s*True", re.IGNORECASE)
+_SQL_INTERP_RE = re.compile(r"\b(SELECT|INSERT|UPDATE|DELETE)\b.*(\+|%s|f[\"'])", re.IGNORECASE)
+_BARE_EXCEPT_RE = re.compile(r"^\s*except\s*:\s*$")
 
 
 def _err(code: str, message: str) -> dict[str, Any]:
@@ -179,6 +187,191 @@ def _severity_counts(issues: list[dict[str, Any]]) -> dict[str, int]:
     return counts
 
 
+def _issue_key(issue: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(issue.get("line_hint") or "").strip().lower(),
+        str(issue.get("category") or "").strip().lower(),
+        str(issue.get("description") or "").strip().lower(),
+    )
+
+
+def _extract_candidate_lines(code_text: str, diff_text: str) -> list[tuple[str, str]]:
+    lines: list[tuple[str, str]] = []
+    if diff_text:
+        current_hunk = ""
+        for raw_line in diff_text.splitlines():
+            if _DIFF_HUNK_RE.match(raw_line):
+                current_hunk = raw_line.strip()
+                continue
+            if _ADDED_LINE_PREFIX_RE.match(raw_line):
+                lines.append((current_hunk or "diff", raw_line[1:]))
+    if not lines and code_text:
+        for index, raw_line in enumerate(code_text.splitlines(), start=1):
+            lines.append((f"line {index}", raw_line))
+    return lines
+
+
+def _score_from_issues(issues: list[dict[str, Any]]) -> int:
+    if not issues:
+        return 9
+    penalty = 0
+    for issue in issues:
+        severity = str(issue.get("severity") or "medium")
+        penalty += {
+            "critical": 4,
+            "high": 3,
+            "medium": 2,
+            "low": 1,
+            "info": 0,
+        }.get(severity, 2)
+    return max(1, 10 - penalty)
+
+
+def _heuristic_issue(
+    *,
+    line_hint: str,
+    severity: str,
+    category: str,
+    description: str,
+    fix: str,
+    cwe_id: str | None = None,
+    owasp_category: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "line_hint": line_hint,
+        "severity": severity,
+        "category": category,
+        "cwe_id": cwe_id,
+        "owasp_category": owasp_category,
+        "description": description,
+        "fix": fix,
+    }
+
+
+def _heuristic_review(
+    *,
+    code_text: str,
+    diff_text: str,
+    filename: str,
+    focus: str,
+    review_target: str,
+) -> dict[str, Any]:
+    issues: list[dict[str, Any]] = []
+    positive_aspects: list[str] = []
+    tests: list[str] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    for line_hint, raw_line in _extract_candidate_lines(code_text, diff_text):
+        line = raw_line.strip()
+        if not line:
+            continue
+        candidates: list[dict[str, Any]] = []
+        if _SECRET_LOG_RE.search(line):
+            candidates.append(_heuristic_issue(
+                line_hint=f"{line_hint}: {line[:120]}",
+                severity="high",
+                category="security",
+                cwe_id="CWE-532",
+                owasp_category="A09:2021-Security Logging and Monitoring Failures",
+                description="The code appears to log a secret-bearing value. Authorization tokens and API keys routinely leak through log drains and support tooling.",
+                fix="Remove the sensitive value from logs entirely or replace it with a fixed redacted marker.",
+            ))
+            tests.append("Add a logging test that asserts tokens, passwords, and API keys are redacted before emission.")
+        if _EVAL_RE.search(line):
+            candidates.append(_heuristic_issue(
+                line_hint=f"{line_hint}: {line[:120]}",
+                severity="high",
+                category="security",
+                cwe_id="CWE-95",
+                owasp_category="A03:2021-Injection",
+                description="The code executes dynamic code via eval/exec. That is dangerous unless the input is tightly controlled and fully trusted.",
+                fix="Replace dynamic execution with a structured parser, allowlist, or direct function dispatch.",
+            ))
+            tests.append("Add a test that proves untrusted input cannot change executed code paths.")
+        if _VERIFY_FALSE_RE.search(line):
+            candidates.append(_heuristic_issue(
+                line_hint=f"{line_hint}: {line[:120]}",
+                severity="high",
+                category="security",
+                cwe_id="CWE-295",
+                owasp_category="A02:2021-Cryptographic Failures",
+                description="TLS certificate verification is disabled. That allows man-in-the-middle interception of supposedly secure traffic.",
+                fix="Keep certificate verification enabled and trust a specific CA bundle if custom trust is required.",
+            ))
+            tests.append("Add an integration test that keeps certificate verification enabled for outbound HTTPS requests.")
+        if _SUBPROCESS_SHELL_RE.search(line):
+            candidates.append(_heuristic_issue(
+                line_hint=f"{line_hint}: {line[:120]}",
+                severity="medium",
+                category="security",
+                cwe_id="CWE-78",
+                owasp_category="A03:2021-Injection",
+                description="The code invokes subprocess with shell=True. If any untrusted input reaches that command string, it becomes a command-injection risk.",
+                fix="Pass argv as a list and keep shell=False unless a shell is strictly necessary and all inputs are constant.",
+            ))
+            tests.append("Add a test proving untrusted input cannot alter the executed command.")
+        if _SQL_INTERP_RE.search(line):
+            candidates.append(_heuristic_issue(
+                line_hint=f"{line_hint}: {line[:120]}",
+                severity="high",
+                category="security",
+                cwe_id="CWE-89",
+                owasp_category="A03:2021-Injection",
+                description="The code appears to build SQL with string interpolation or concatenation. That is a common injection path.",
+                fix="Use parameterized queries or a query builder that binds user input separately from SQL text.",
+            ))
+            tests.append("Add a test with attacker-controlled input and assert the query is parameterized rather than interpolated.")
+        if _BARE_EXCEPT_RE.match(raw_line):
+            candidates.append(_heuristic_issue(
+                line_hint=f"{line_hint}: {line[:120]}",
+                severity="low",
+                category="maintainability",
+                description="Bare except catches every exception class, including interrupts and unrelated runtime failures. That makes debugging and recovery harder.",
+                fix="Catch the specific exception types you expect and preserve unexpected failures.",
+            ))
+            tests.append("Add a failure-path test that distinguishes expected exceptions from unexpected runtime bugs.")
+
+        for candidate in candidates:
+            key = _issue_key(candidate)
+            if key not in seen:
+                seen.add(key)
+                issues.append(candidate)
+
+    if not issues:
+        if review_target == "diff":
+            positive_aspects.append("The change appears mechanically small and no high-signal deterministic issues were detected in added lines.")
+        else:
+            positive_aspects.append("No high-signal deterministic issues were detected by the rule-based review pass.")
+    elif review_target == "diff":
+        positive_aspects.append("The review stayed focused on the changed lines rather than speculating about untouched code.")
+
+    unique_tests = []
+    for item in tests:
+        if item not in unique_tests:
+            unique_tests.append(item)
+
+    summary = (
+        "Rule-based review detected concrete issues that should be addressed before shipping."
+        if issues
+        else "The fallback deterministic review did not find any high-signal issues."
+    )
+    return {
+        "language_detected": "diff" if review_target == "diff" else "auto",
+        "review_target": review_target,
+        "filename": filename,
+        "focus": focus,
+        "score": _score_from_issues(issues),
+        "security_critical": any(item["category"] == "security" and item["severity"] in {"critical", "high"} for item in issues),
+        "complexity_score": 4,
+        "issue_count": len(issues),
+        "severity_counts": _severity_counts(issues),
+        "issues": issues,
+        "positive_aspects": positive_aspects,
+        "test_recommendations": unique_tests[:8],
+        "summary": summary,
+    }
+
+
 def _normalize_review_output(
     raw: dict[str, Any] | None,
     *,
@@ -246,6 +439,83 @@ def _normalize_review_output(
     }
 
 
+def _merge_review_results(
+    primary: dict[str, Any],
+    supplemental: dict[str, Any],
+    *,
+    language_value: str,
+) -> dict[str, Any]:
+    merged_issues: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for source in (primary.get("issues") or [], supplemental.get("issues") or []):
+        if not isinstance(source, list):
+            continue
+        for issue in source:
+            if not isinstance(issue, dict):
+                continue
+            normalized = _normalize_issue(issue)
+            if normalized is None:
+                continue
+            key = _issue_key(normalized)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged_issues.append(normalized)
+
+    positive_aspects: list[str] = []
+    for source in (primary.get("positive_aspects") or [], supplemental.get("positive_aspects") or []):
+        for item in source if isinstance(source, list) else []:
+            text = str(item).strip()
+            if text and text not in positive_aspects:
+                positive_aspects.append(text)
+
+    test_recommendations: list[str] = []
+    for source in (primary.get("test_recommendations") or [], supplemental.get("test_recommendations") or []):
+        for item in source if isinstance(source, list) else []:
+            text = str(item).strip()
+            if text and text not in test_recommendations:
+                test_recommendations.append(text)
+
+    counts = _severity_counts(merged_issues)
+    score_candidates = [
+        int(value)
+        for value in (primary.get("score"), supplemental.get("score"), _score_from_issues(merged_issues))
+        if isinstance(value, int) or (isinstance(value, str) and value.isdigit())
+    ]
+    score = max(1, min(10, min(score_candidates) if score_candidates else _score_from_issues(merged_issues)))
+
+    complexity_candidates = [
+        int(value)
+        for value in (primary.get("complexity_score"), supplemental.get("complexity_score"))
+        if isinstance(value, int) or (isinstance(value, str) and value.isdigit())
+    ]
+    complexity_score = max(1, min(10, max(complexity_candidates) if complexity_candidates else 4))
+
+    summary = str(primary.get("summary") or "").strip() or str(supplemental.get("summary") or "").strip()
+    if not summary:
+        summary = (
+            f"Found {len(merged_issues)} review issue(s) that should be addressed before relying on this code in production."
+            if merged_issues
+            else "No material issues were identified in this review pass."
+        )
+
+    return {
+        "language_detected": str(primary.get("language_detected") or supplemental.get("language_detected") or language_value or "auto"),
+        "review_target": str(primary.get("review_target") or supplemental.get("review_target") or "code"),
+        "filename": str(primary.get("filename") or supplemental.get("filename") or "").strip(),
+        "focus": str(primary.get("focus") or supplemental.get("focus") or "all"),
+        "score": score,
+        "security_critical": any(item["category"] == "security" and item["severity"] in {"critical", "high"} for item in merged_issues),
+        "complexity_score": complexity_score,
+        "issue_count": len(merged_issues),
+        "severity_counts": counts,
+        "issues": merged_issues,
+        "positive_aspects": positive_aspects[:8],
+        "test_recommendations": test_recommendations[:10],
+        "summary": summary[:1000],
+    }
+
+
 def run(
     code: str = "",
     language: str = "auto",
@@ -278,6 +548,13 @@ def run(
         review_parts.append(f"[DIFF]\n{diff_text[:_MAX_DIFF_CHARS]}")
         review_target = "code_and_diff" if code_text else "diff"
     review_input = "\n\n".join(review_parts)
+    heuristic_result = _heuristic_review(
+        code_text=code_text,
+        diff_text=diff_text,
+        filename=filename_value,
+        focus=focus_value,
+        review_target=review_target,
+    )
 
     req = CompletionRequest(
         model="",
@@ -301,27 +578,34 @@ def run(
 
     try:
         resp = run_with_fallback(req)
-    except Exception as exc:
-        return _err("code_review_agent.llm_unavailable", f"Code review model unavailable: {type(exc).__name__}")
+    except Exception:
+        fallback = _merge_review_results(heuristic_result, {}, language_value=language_value)
+        fallback["llm_used"] = False
+        fallback["degraded_mode"] = True
+        if not fallback["summary"]:
+            fallback["summary"] = "The review model was unavailable, so this result was generated from deterministic rule checks only."
+        return fallback
 
     raw_text = _strip_fences(resp.text)
     try:
         parsed = json.loads(raw_text)
     except json.JSONDecodeError:
-        parsed = {
-            "summary": raw_text[:800] or "The reviewer returned an unreadable response.",
-            "issues": [],
-            "positive_aspects": [],
-            "test_recommendations": [],
-        }
+        parsed = {}
 
-    result = _normalize_review_output(
+    llm_result = _normalize_review_output(
         parsed,
         language=language_value,
         filename=filename_value,
         focus=focus_value,
         review_target=review_target,
     )
+    result = _merge_review_results(llm_result, heuristic_result, language_value=language_value)
+    if not parsed:
+        result["summary"] = (
+            "The review model returned an unreadable response, so the result was recovered from deterministic rule checks."
+            if result["issues"]
+            else "The review model returned an unreadable response and no deterministic issues were detected."
+        )
     result["llm_used"] = True
     result["degraded_mode"] = False
     return result

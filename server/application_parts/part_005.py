@@ -259,6 +259,62 @@ def _deterministic_quality_result(agent: dict, output_payload: dict) -> dict[str
                 return {"verdict": "fail", "score": 2, "reason": "Each CVE lookup result must include a severity string."}
         return {"verdict": "pass", "score": 8, "reason": "Structured CVE lookup output is internally consistent."}
 
+    if agent_id == _FINANCIAL_AGENT_ID:
+        highlights = payload.get("recent_financial_highlights")
+        risks = payload.get("key_risks")
+        signal = str(payload.get("signal") or "").strip().lower()
+        if not isinstance(payload.get("ticker"), str) or not str(payload.get("ticker")).strip():
+            return {"verdict": "fail", "score": 2, "reason": "Financial research output must include a ticker."}
+        if not isinstance(highlights, list) or not isinstance(risks, list):
+            return {"verdict": "fail", "score": 2, "reason": "Financial research output must include recent_financial_highlights and key_risks lists."}
+        if signal not in {"positive", "neutral", "negative"}:
+            return {"verdict": "fail", "score": 2, "reason": "Financial research output must include signal=positive|neutral|negative."}
+        if not isinstance(payload.get("business_summary"), str) or not isinstance(payload.get("signal_reasoning"), str):
+            return {"verdict": "fail", "score": 2, "reason": "Financial research output must include business_summary and signal_reasoning strings."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured financial research output is internally consistent."}
+
+    if agent_id == _CODEREVIEW_AGENT_ID:
+        issues = payload.get("issues")
+        counts = payload.get("severity_counts")
+        if not isinstance(issues, list) or not isinstance(counts, dict):
+            return {"verdict": "fail", "score": 2, "reason": "Code review output must include issues and severity_counts."}
+        try:
+            issue_count = int(payload.get("issue_count"))
+        except (TypeError, ValueError):
+            return {"verdict": "fail", "score": 2, "reason": "Code review output must include a numeric issue_count."}
+        if issue_count != len(issues):
+            return {"verdict": "fail", "score": 2, "reason": "Code review output is internally inconsistent: issue_count does not match issues."}
+        severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+        has_security_critical = False
+        for issue in issues:
+            if not isinstance(issue, dict):
+                return {"verdict": "fail", "score": 2, "reason": "Each code review issue must be an object."}
+            severity = str(issue.get("severity") or "").strip().lower()
+            if severity not in severity_counts:
+                return {"verdict": "fail", "score": 2, "reason": "Each code review issue must have a valid severity."}
+            severity_counts[severity] += 1
+            if not isinstance(issue.get("description"), str) or not isinstance(issue.get("fix"), str):
+                return {"verdict": "fail", "score": 2, "reason": "Each code review issue must include description and fix strings."}
+            if str(issue.get("category") or "").strip().lower() == "security" and severity in {"critical", "high"}:
+                has_security_critical = True
+        if any(int(counts.get(key, 0)) != value for key, value in severity_counts.items()):
+            return {"verdict": "fail", "score": 2, "reason": "Code review output is internally inconsistent: severity_counts does not match issues."}
+        if bool(payload.get("security_critical")) != has_security_critical:
+            return {"verdict": "fail", "score": 2, "reason": "Code review output is internally inconsistent: security_critical does not match issues."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured code review output is internally consistent."}
+
+    if agent_id == _WIKI_AGENT_ID:
+        if not isinstance(payload.get("title"), str) or not str(payload.get("title")).strip():
+            return {"verdict": "fail", "score": 2, "reason": "Wikipedia research output must include a title."}
+        if not isinstance(payload.get("url"), str) or not str(payload.get("url")).strip():
+            return {"verdict": "fail", "score": 2, "reason": "Wikipedia research output must include a URL."}
+        if not isinstance(payload.get("summary"), str):
+            return {"verdict": "fail", "score": 2, "reason": "Wikipedia research output must include a summary string."}
+        for key in ("key_facts", "timeline", "notable_figures", "statistics", "related_topics"):
+            if not isinstance(payload.get(key), list):
+                return {"verdict": "fail", "score": 2, "reason": f"Wikipedia research output must include a {key} list."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured Wikipedia research output is internally consistent."}
+
     if agent_id == _WEB_RESEARCHER_AGENT_ID:
         findings = payload.get("per_url_findings")
         if not isinstance(findings, list):
@@ -468,6 +524,31 @@ def _deterministic_quality_result(agent: dict, output_payload: dict) -> dict[str
         if billing_units_actual != requests_count:
             return {"verdict": "fail", "score": 2, "reason": "Live endpoint tester output is internally inconsistent: billing_units_actual does not match requests."}
         return {"verdict": "pass", "score": 8, "reason": "Structured live endpoint tester output is internally consistent."}
+
+    if agent_id == _BROWSER_AGENT_ID:
+        if not isinstance(payload.get("url"), str) or not str(payload.get("url")).strip():
+            return {"verdict": "fail", "score": 2, "reason": "Browser agent output must include a final URL."}
+        if not isinstance(payload.get("html"), str) or not isinstance(payload.get("title"), str):
+            return {"verdict": "fail", "score": 2, "reason": "Browser agent output must include html and title strings."}
+        artifact = payload.get("screenshot_artifact")
+        if not isinstance(artifact, dict) or not str(artifact.get("url_or_base64") or "").strip():
+            return {"verdict": "fail", "score": 2, "reason": "Browser agent output must include a screenshot artifact."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured browser output is internally consistent."}
+
+    if agent_id == _IMAGE_GENERATOR_AGENT_ID:
+        artifacts = payload.get("artifacts")
+        if not isinstance(artifacts, list) or not artifacts:
+            return {"verdict": "fail", "score": 2, "reason": "Image generator output must include artifacts."}
+        if not isinstance(payload.get("provider"), str) or not isinstance(payload.get("model"), str):
+            return {"verdict": "fail", "score": 2, "reason": "Image generator output must include provider and model strings."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured image generation output is internally consistent."}
+
+    if agent_id == _VIDEO_STORYBOARD_AGENT_ID:
+        if not isinstance(payload.get("shot_plan"), list) or not payload.get("shot_plan"):
+            return {"verdict": "fail", "score": 2, "reason": "Video storyboard output must include a non-empty shot_plan."}
+        if not isinstance(payload.get("artifacts"), list) or not payload.get("artifacts"):
+            return {"verdict": "fail", "score": 2, "reason": "Video storyboard output must include artifacts."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured video storyboard output is internally consistent."}
 
     return None
 

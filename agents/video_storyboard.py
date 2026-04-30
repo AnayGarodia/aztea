@@ -81,6 +81,7 @@ def _generate_video_artifact(
     duration_seconds: int,
     aspect_ratio: str,
     reference_images: list[dict[str, str]],
+    model_override: str,
 ) -> dict[str, Any]:
     return media_generation.generate_video(
         brief=brief,
@@ -88,6 +89,7 @@ def _generate_video_artifact(
         duration_seconds=duration_seconds,
         aspect_ratio=aspect_ratio,
         reference_images=reference_images,
+        model_override=model_override,
     )
 
 
@@ -105,15 +107,20 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     duration_seconds = _to_int(payload.get("duration_seconds"), 8, 3, 20)
     aspect_ratio = _normalize_ratio(payload.get("aspect_ratio"))
     style = str(payload.get("style") or "cinematic").strip()[:120]
+    model_override = str(payload.get("model") or "").strip()
     references = _normalize_refs(payload.get("reference_images"))
     shot_plan = _build_shot_plan(brief, duration_seconds)
-    generated = _generate_video_artifact(
-        brief=brief,
-        style=style,
-        duration_seconds=duration_seconds,
-        aspect_ratio=aspect_ratio,
-        reference_images=references,
-    )
+    try:
+        generated = _generate_video_artifact(
+            brief=brief,
+            style=style,
+            duration_seconds=duration_seconds,
+            aspect_ratio=aspect_ratio,
+            reference_images=references,
+            model_override=model_override,
+        )
+    except ValueError as exc:
+        return _err("video_storyboard.not_configured", str(exc))
 
     return {
         "title": f"Storyboard: {brief[:72]}",
@@ -133,6 +140,9 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
             "prediction_id": str(generated.get("prediction_id") or ""),
         },
         "artifacts": [generated["artifact"]],
+        "provider": str(generated.get("provider") or ""),
+        "model": str(generated.get("model") or ""),
+        "generation_prompt": str(generated.get("generation_prompt") or ""),
         # Report the actual seconds rendered so the registry can refund
         # callers who pre-charged for a longer duration than we produced.
         "billing_units_actual": duration_seconds,

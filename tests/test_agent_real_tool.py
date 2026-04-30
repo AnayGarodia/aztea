@@ -17,10 +17,12 @@ from agents import python_executor
 from agents import shell_executor
 from agents import semantic_codebase_search
 from agents import type_checker
+from agents import video_storyboard
 from agents import visual_regression
 from agents import arxiv_research
 from agents import web_researcher
 from agents import wiki
+from agents.financial import synthesizer as financial_synthesizer
 
 
 class _FakeResponse:
@@ -229,6 +231,20 @@ def test_code_review_downgrades_plain_divide_by_zero_from_security(monkeypatch):
     assert issue["cwe_id"] is None
     assert issue["owasp_category"] is None
     assert result["security_critical"] is False
+
+
+def test_code_review_falls_back_to_rule_based_review_when_llm_unavailable(monkeypatch):
+    monkeypatch.setattr(codereview, "run_with_fallback", lambda req: (_ for _ in ()).throw(RuntimeError("no llm")))
+    result = codereview.run(
+        diff="@@ -1 +1 @@\n- console.log('[redacted]')\n+ console.log(token)\n",
+        language="javascript",
+        filename="auth.js",
+        focus="security",
+    )
+    assert result["llm_used"] is False
+    assert result["degraded_mode"] is True
+    assert result["issue_count"] >= 1
+    assert result["issues"][0]["cwe_id"] == "CWE-532"
 
 
 def test_type_checker_returns_structured_error_for_missing_code():
@@ -487,6 +503,37 @@ def test_wiki_degrades_gracefully_without_llm(monkeypatch):
     result = wiki.run("Example Topic")
     assert result["title"] == "Example Topic"
     assert "Example Topic is a notable thing" in result["summary"]
+    assert result["key_facts"]
+    assert result["llm_used"] is False
+
+
+def test_financial_synthesizer_returns_grounded_fallback_without_llm(monkeypatch):
+    monkeypatch.setattr(
+        financial_synthesizer,
+        "run_with_fallback",
+        lambda req: (_ for _ in ()).throw(RuntimeError("no llm")),
+    )
+    result = financial_synthesizer.synthesize_brief(
+        {
+            "ticker": "TEST",
+            "company_name": "Test Corp",
+            "filing_type": "10-Q",
+            "filing_date": "2026-01-31",
+            "document_url": "https://sec.example/test",
+            "text": (
+                "Test Corp develops enterprise software and support services. "
+                "Revenue increased to $10.2 billion during the quarter. "
+                "Operating cash flow was $2.1 billion. "
+                "The company warned that competition and supply chain risk could pressure margins."
+            ),
+        }
+    )
+    assert result["llm_used"] is False
+    assert result["degraded_mode"] is True
+    assert result["recent_financial_highlights"]
+    assert result["key_risks"]
+    assert result["signal"] in {"positive", "neutral", "negative"}
+    assert result["source_evidence"]["financial_highlights"]
 
 
 def test_semantic_codebase_search_rejects_invalid_git_url_via_ssrf_guard():
@@ -551,6 +598,13 @@ def test_semantic_codebase_search_lexical_fallback_returns_relevant_file(monkeyp
     assert result["results"]
     assert result["results"][0]["path"] == "src/pillow_fix.py"
     assert "cve_2023_50447" in result["results"][0]["snippet"].lower()
+    assert result["results"][0]["line_start"] >= 1
+    assert result["results"][0]["line_end"] >= result["results"][0]["line_start"]
+
+
+def test_browser_agent_rejects_invalid_action():
+    result = browser_agent.run({"url": "https://example.com", "action": "interact"})
+    assert result["error"]["code"] == "browser_agent.invalid_action"
 
 
 def test_multi_file_executor_returns_structured_error_for_invalid_files():
@@ -604,6 +658,16 @@ def test_browser_agent_request_guard_aborts_private_subrequests():
     context.handler(_FakeRoute("http://127.0.0.1/private"))
     context.handler(_FakeRoute("https://example.com/public"))
     assert events == ["abort", "continue"]
+
+
+def test_video_storyboard_returns_structured_error_when_backend_is_unavailable(monkeypatch):
+    monkeypatch.setattr(
+        video_storyboard,
+        "_generate_video_artifact",
+        lambda **kwargs: (_ for _ in ()).throw(ValueError("REPLICATE_VIDEO_MODEL is required for video generation.")),
+    )
+    result = video_storyboard.run({"brief": "A launch teaser for an AI product."})
+    assert result["error"]["code"] == "video_storyboard.not_configured"
 
 
 def test_shell_executor_does_not_forward_host_secrets(monkeypatch):

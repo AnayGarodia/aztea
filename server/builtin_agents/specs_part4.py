@@ -247,9 +247,9 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
         {
             "agent_id": _BROWSER_AGENT_ID,
             "name": "Browser Agent",
-            "description": "Use when you need to fetch a live web page and capture its rendered HTML and a screenshot. Launches a headless Chromium browser, navigates to the URL, waits for the page to settle, then returns the full HTML source and a PNG screenshot artifact. Useful for scraping SPAs, verifying rendered output, or visual QA of any public URL.",
+            "description": "Use when you need to fetch a live web page with a real browser. Launches headless Chromium, supports screenshot/scrape/pdf actions, returns rendered HTML, visible text, links, a screenshot artifact, and optional network logs. Useful for scraping SPAs, verifying rendered output, or browser-level QA of public URLs.",
             "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_BROWSER_AGENT_ID],
-            "price_per_call_usd": 0.04,
+            "price_per_call_usd": 0.03,
             "tags": ["browser", "screenshot", "scraping", "playwright", "headless", "html"],
             "kind": "aztea_built",
             "category": "Web",
@@ -259,8 +259,11 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
             "input_schema": _output_schema_object(
                 {
                     "url": {"type": "string", "title": "URL", "description": "Public https:// URL to navigate to. SSRF-blocked."},
+                    "action": {"type": "string", "title": "Capture mode", "enum": ["scrape", "screenshot", "pdf"], "default": "scrape"},
+                    "wait_for": {"type": "string", "title": "Wait condition", "description": "CSS selector or networkidle."},
                     "wait_ms": {"type": "integer", "title": "Extra wait (ms)", "description": "Additional wait after page settles (max 10000 ms).", "default": 1500},
                     "capture_network": {"type": "boolean", "title": "Capture network log", "description": "Include a log of all HTTP requests made by the page.", "default": False},
+                    "script": {"type": "string", "title": "Post-load script", "description": "Optional JavaScript to execute after the page loads."},
                     "viewport": {
                         "type": "object",
                         "title": "Viewport size",
@@ -272,11 +275,19 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
             "output_schema": _output_schema_object(
                 {
                     "url": {"type": "string"},
+                    "requested_url": {"type": "string"},
                     "title": {"type": "string"},
                     "html": {"type": "string"},
                     "html_chars": {"type": "integer"},
+                    "visible_text": {"type": "string"},
+                    "links": {"type": "array", "items": {"type": "object"}},
+                    "action": {"type": "string"},
+                    "wait_for": {"type": "string"},
+                    "status_code": {"type": ["integer", "null"]},
                     "screenshot_artifact": {"type": "object"},
+                    "pdf_artifact": {"type": "object"},
                     "network_log": {"type": "array", "items": {"type": "object"}},
+                    "console_messages": {"type": "array", "items": {"type": "string"}},
                     "execution_time_ms": {"type": "integer"},
                 },
                 required=["url", "title", "html", "screenshot_artifact"],
@@ -338,9 +349,9 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
         {
             "agent_id": _SEMANTIC_CODEBASE_SEARCH_AGENT_ID,
             "name": "Semantic Codebase Search",
-            "description": "Use when you need to find the most relevant files in a codebase for a natural-language query. Accepts a zip/tarball artifact or a public git URL, embeds each file's content using sentence-transformers, and returns the top-k semantically matching files with similarity scores and code snippets. Ideal for answering 'where is X implemented?' across an unfamiliar codebase.",
+            "description": "Use when you need to find the most relevant files in a codebase for a natural-language query. Accepts a zip/tarball artifact or a public git URL, ranks code at chunk level using hybrid semantic plus lexical search, and returns the strongest file hits with line ranges and snippets. Ideal for answering 'where is X implemented?' across an unfamiliar codebase.",
             "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_SEMANTIC_CODEBASE_SEARCH_AGENT_ID],
-            "price_per_call_usd": 0.05,
+            "price_per_call_usd": 0.03,
             "tags": ["search", "embeddings", "codebase", "semantic", "git", "developer-tools"],
             "kind": "aztea_built",
             "category": "Developer Tools",
@@ -362,6 +373,7 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
                 {
                     "query": {"type": "string"},
                     "total_files_indexed": {"type": "integer"},
+                    "chunks_indexed": {"type": "integer"},
                     "results": {
                         "type": "array",
                         "items": {
@@ -371,6 +383,8 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
                                 "score": {"type": "number"},
                                 "snippet": {"type": "string"},
                                 "size_bytes": {"type": "integer"},
+                                "line_start": {"type": "integer"},
+                                "line_end": {"type": "integer"},
                             },
                         },
                     },

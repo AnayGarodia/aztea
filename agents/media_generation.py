@@ -72,12 +72,14 @@ def _openai_image_generation(
     width: int,
     height: int,
     input_images: list[dict[str, str]],
+    model_override: str = "",
+    quality_override: str = "",
 ) -> dict[str, Any]:
     api_key = str(os.environ.get("OPENAI_API_KEY", "")).strip()
     if not api_key:
         raise ValueError("OPENAI_API_KEY is required for model-backed image generation.")
-    model = str(os.environ.get("OPENAI_IMAGE_MODEL", "gpt-image-1")).strip() or "gpt-image-1"
-    quality = str(os.environ.get("OPENAI_IMAGE_QUALITY", "high")).strip() or "high"
+    model = str(model_override or os.environ.get("OPENAI_IMAGE_MODEL", "gpt-image-1")).strip() or "gpt-image-1"
+    quality = str(quality_override or os.environ.get("OPENAI_IMAGE_QUALITY", "high")).strip() or "high"
     timeout_seconds = _to_float_env("OPENAI_IMAGE_TIMEOUT_SECONDS", 120)
     final_prompt, warnings = _build_image_prompt(prompt, style, input_images)
     payload = {
@@ -224,6 +226,8 @@ def generate_image(
     width: int,
     height: int,
     input_images: list[dict[str, str]],
+    model_override: str = "",
+    quality_override: str = "",
 ) -> dict[str, Any]:
     """Generate an image via OpenAI DALL-E (preferred) or Replicate.
 
@@ -237,9 +241,11 @@ def generate_image(
             width=width,
             height=height,
             input_images=input_images,
+            model_override=model_override,
+            quality_override=quality_override,
         )
 
-    replicate_model = str(os.environ.get("REPLICATE_IMAGE_MODEL", "")).strip()
+    replicate_model = str(model_override or os.environ.get("REPLICATE_IMAGE_MODEL", "")).strip()
     if replicate_model:
         timeout_seconds = _to_float_env("REPLICATE_TIMEOUT_SECONDS", 300)
         final_prompt, warnings = _build_image_prompt(prompt, style, input_images)
@@ -276,6 +282,7 @@ def generate_video(
     duration_seconds: int,
     aspect_ratio: str,
     reference_images: list[dict[str, str]],
+    model_override: str = "",
 ) -> dict[str, Any]:
     """Generate a video via Replicate from a text brief.
 
@@ -283,7 +290,7 @@ def generate_video(
     Returns a dict with ``provider``, ``model``, ``artifact`` (video URL), and ``warnings``.
     Raises ``ValueError`` if the model is not configured.
     """
-    model = str(os.environ.get("REPLICATE_VIDEO_MODEL", "")).strip()
+    model = str(model_override or os.environ.get("REPLICATE_VIDEO_MODEL", "")).strip()
     if not model:
         raise ValueError("REPLICATE_VIDEO_MODEL is required for video generation.")
     timeout_seconds = _to_float_env("REPLICATE_TIMEOUT_SECONDS", 300)

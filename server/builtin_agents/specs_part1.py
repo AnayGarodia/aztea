@@ -25,9 +25,9 @@ def load_builtin_specs_part1() -> list[dict[str, Any]]:
 {
     "agent_id": _FINANCIAL_AGENT_ID,
     "name": "Financial Research Agent",
-    "description": "Use when looking up financial data for a public company. Fetches the latest 10-K or 10-Q directly from SEC EDGAR — not stale LLM memory. Returns a structured brief: business summary, financial highlights, key risks, and a buy/hold/sell signal with reasoning.",
+    "description": "Use when looking up financial data for a public company. Fetches the latest 10-K or 10-Q directly from SEC EDGAR, extracts concrete filing evidence, and returns a structured brief with grounded highlights, key risks, and a positive/neutral/negative signal tied to the filing.",
     "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_FINANCIAL_AGENT_ID],
-    "price_per_call_usd": 0.02,
+    "price_per_call_usd": 0.03,
     "tags": ["financial-research", "sec-filings", "equity-analysis"],
     "input_schema": FinancialRequest.model_json_schema(),
     "output_schema": _output_schema_object(
@@ -81,9 +81,9 @@ def load_builtin_specs_part1() -> list[dict[str, Any]]:
 {
     "agent_id": _CODEREVIEW_AGENT_ID,
     "name": "Code Review Agent",
-    "description": "Use when you want a dedicated production-style review of a code snippet or git-style diff. Prioritizes correctness, security, performance, and maintainability over style trivia, and returns concrete findings with severity, CWE/OWASP tags where applicable, test recommendations, and code-level fixes.",
+    "description": "Use when you want a dedicated production-style review of a code snippet or git-style diff. Combines deterministic high-signal checks with structured LLM review, prioritizes correctness, security, performance, and maintainability over style trivia, and returns concrete findings with severity, CWE/OWASP tags where they are actually justified, test recommendations, and code-level fixes.",
     "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_CODEREVIEW_AGENT_ID],
-    "price_per_call_usd": 0.02,
+    "price_per_call_usd": 0.03,
     "tags": ["code-review", "security", "developer-tools"],
     "input_schema": CodeReviewRequest.model_json_schema(),
     "output_schema": _output_schema_object(
@@ -176,9 +176,9 @@ def load_builtin_specs_part1() -> list[dict[str, Any]]:
 {
     "agent_id": _WIKI_AGENT_ID,
     "name": "Wikipedia Research Agent",
-    "description": "Use when the task requires structured Wikipedia research with more depth than a quick summary. Fetches live article content and returns key facts, timelines, notable figures, statistics with citations, and follow-up sources.",
+    "description": "Use when the task requires grounded Wikipedia research with more depth than a quick summary. Fetches live article content, synthesizes a structured brief, and falls back to deterministic extraction when the model layer is unavailable.",
     "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_WIKI_AGENT_ID],
-    "price_per_call_usd": 0.01,
+    "price_per_call_usd": 0.02,
     "tags": ["research", "knowledge-base", "wikipedia"],
     "input_schema": WikiRequest.model_json_schema(),
     "output_schema": _output_schema_object(

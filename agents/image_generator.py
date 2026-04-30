@@ -44,6 +44,8 @@ def _generate_image_artifact(
     width: int,
     height: int,
     input_images: list[dict[str, str]],
+    model_override: str,
+    quality_override: str,
 ) -> dict[str, Any]:
     return media_generation.generate_image(
         prompt=prompt,
@@ -51,6 +53,8 @@ def _generate_image_artifact(
         width=width,
         height=height,
         input_images=input_images,
+        model_override=model_override,
+        quality_override=quality_override,
     )
 
 
@@ -79,6 +83,8 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     image_count = _clamp_int(payload.get("image_count"), 1, 1, 6)
     high_res = bool(payload.get("high_res"))
     requested_format = str(payload.get("output_format") or "png").strip().lower()
+    requested_model = str(payload.get("model") or "").strip()
+    requested_quality = "high" if high_res else str(payload.get("quality") or "").strip().lower()
     input_images = _normalize_media_refs(payload.get("input_images"))
 
     artifacts: list[dict[str, Any]] = []
@@ -93,6 +99,8 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
                 width=width,
                 height=height,
                 input_images=input_images,
+                model_override=requested_model,
+                quality_override=requested_quality,
             )
         except ValueError as exc:
             # Configuration / dependency failure (no API key, no Replicate
@@ -116,6 +124,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         "artifacts": artifacts,
         "input_images_used": len(input_images),
         "high_res": high_res,
+        "quality": requested_quality or ("high" if high_res else "standard"),
         "warnings": warnings,
         "provider": provider,
         "model": model,

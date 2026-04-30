@@ -23,9 +23,9 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
     {
         "agent_id": _IMAGE_GENERATOR_AGENT_ID,
         "name": "Image Generator Agent",
-        "description": "Use when the task requires generating an image. Runs a real model backend (OpenAI gpt-image-1 or Replicate) — not a description. Returns base64-encoded image artifacts, supports reference images for style guidance.",
+        "description": "Use when the task requires generating an actual image artifact. Runs a configured model backend (OpenAI gpt-image-1 or Replicate), returns the rendered image plus provider/model metadata, and supports reference images for style guidance.",
         "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_IMAGE_GENERATOR_AGENT_ID],
-        "price_per_call_usd": 0.05,
+        "price_per_call_usd": 0.10,
         "tags": ["image-generation", "creative", "multimodal", "design"],
         "input_schema": _output_schema_object(
             {
@@ -65,6 +65,11 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
                     "default": 1,
                     "minimum": 1,
                     "maximum": 6,
+                },
+                "model": {
+                    "type": "string",
+                    "title": "Model override",
+                    "description": "Optional backend model override, e.g. gpt-image-1 or a Replicate model slug.",
                 },
                 "high_res": {
                     "type": "boolean",
@@ -106,7 +111,10 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
                 "generation_prompt": {"type": "string"},
                 "artifacts": {"type": "array", "items": {"type": "object"}},
                 "input_images_used": {"type": "integer"},
+                "quality": {"type": "string"},
                 "warnings": {"type": "array", "items": {"type": "string"}},
+                "provider": {"type": "string"},
+                "model": {"type": "string"},
                 "billing_units_actual": {"type": "integer", "description": "Actual number of images produced; used for variable-pricing refunds."},
             },
             required=["summary", "artifacts"],
@@ -141,9 +149,9 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
     {
         "agent_id": _VIDEO_STORYBOARD_AGENT_ID,
         "name": "Video Storyboard Generator Agent",
-        "description": "Use when the task requires generating a short video from a creative brief. Produces a shot plan, voiceover script, and an actual video artifact via a configured model backend — not a storyboard description.",
+        "description": "Use when the task requires generating a short video from a creative brief. Produces a shot plan, voiceover script, and an actual video artifact via a configured model backend, while surfacing provider/model metadata and structured render failures.",
         "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_VIDEO_STORYBOARD_AGENT_ID],
-        "price_per_call_usd": 0.22,
+        "price_per_call_usd": 0.30,
         "tags": ["video-generation", "storyboarding", "multimodal", "creative"],
         "input_schema": _output_schema_object(
             {
@@ -176,6 +184,11 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
                     "description": "Free-form style keyword (e.g. cinematic, documentary, anime).",
                     "examples": ["clean cinematic", "documentary", "vintage 8mm"],
                 },
+                "model": {
+                    "type": "string",
+                    "title": "Model override",
+                    "description": "Optional Replicate model override.",
+                },
                 "reference_images": {
                     "type": "array",
                     "title": "Reference images",
@@ -203,6 +216,9 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
                 "voiceover_script": {"type": "string"},
                 "render_recipe": {"type": "object"},
                 "artifacts": {"type": "array", "items": {"type": "object"}},
+                "provider": {"type": "string"},
+                "model": {"type": "string"},
+                "generation_prompt": {"type": "string"},
                 "billing_units_actual": {"type": "integer", "description": "Actual seconds of video rendered; used for variable-pricing refunds."},
             },
             required=["title", "shot_plan", "voiceover_script", "artifacts"],

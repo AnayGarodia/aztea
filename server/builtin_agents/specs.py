@@ -95,6 +95,9 @@ _DEFAULT_CACHEABLE_BY_AGENT_ID = {
 }
 
 _DEFAULT_RUNTIME_REQUIREMENTS_BY_AGENT_ID = {
+    FINANCIAL_AGENT_ID: ["requests", "llm provider optional for synthesis"],
+    CODEREVIEW_AGENT_ID: ["llm provider optional for synthesis"],
+    WIKI_AGENT_ID: ["requests", "llm provider optional for synthesis"],
     CVELOOKUP_AGENT_ID: ["requests"],
     IMAGE_GENERATOR_AGENT_ID: ["configured media backend"],
     VIDEO_STORYBOARD_AGENT_ID: ["configured media backend"],
@@ -167,7 +170,7 @@ _DEFAULT_STABILITY_TIER_BY_AGENT_ID = {
     LIVE_ENDPOINT_TESTER_AGENT_ID: "stable",
     BROWSER_AGENT_ID: "beta",
     MULTI_LANGUAGE_EXECUTOR_AGENT_ID: "experimental",
-    SEMANTIC_CODEBASE_SEARCH_AGENT_ID: "experimental",
+    SEMANTIC_CODEBASE_SEARCH_AGENT_ID: "beta",
     AI_RED_TEAMER_AGENT_ID: "beta",
     SECRET_SCANNER_AGENT_ID: "stable",
     JSON_SCHEMA_VALIDATOR_AGENT_ID: "stable",

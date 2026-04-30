@@ -32,10 +32,48 @@ from core import url_security
 _MAX_WAIT_MS = 10_000
 _DEFAULT_WAIT_MS = 1_500
 _HTML_TRUNCATE = 200_000
+_TEXT_TRUNCATE = 60_000
+_VALID_ACTIONS = {"scrape", "screenshot", "pdf"}
 
 
 def _err(code: str, message: str) -> dict[str, Any]:
     return {"error": {"code": code, "message": message}}
+
+
+def _normalize_action(value: Any) -> str:
+    action = str(value or "scrape").strip().lower()
+    if action not in _VALID_ACTIONS:
+        raise ValueError(f"action must be one of: {', '.join(sorted(_VALID_ACTIONS))}")
+    return action
+
+
+def _normalize_wait_for(value: Any) -> str:
+    wait_for = str(value or "networkidle").strip()
+    return wait_for or "networkidle"
+
+
+def _extract_links(page: Any) -> list[dict[str, str]]:  # noqa: ANN401
+    try:
+        raw_links = page.eval_on_selector_all(
+            "a[href]",
+            """
+            nodes => nodes.slice(0, 50).map(node => ({
+              text: (node.textContent || '').trim().slice(0, 120),
+              href: node.href || ''
+            }))
+            """,
+        )
+    except Exception:
+        return []
+    links: list[dict[str, str]] = []
+    for item in raw_links or []:
+        if not isinstance(item, dict):
+            continue
+        href = str(item.get("href") or "").strip()
+        text = str(item.get("text") or "").strip()
+        if href:
+            links.append({"text": text, "href": href})
+    return links
 
 
 def _install_request_guard(context: Any) -> None:  # noqa: ANN401
@@ -80,8 +118,14 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         return _err("browser_agent.url_blocked", str(exc))
 
+    try:
+        action = _normalize_action(payload.get("action"))
+    except ValueError as exc:
+        return _err("browser_agent.invalid_action", str(exc))
+    wait_for = _normalize_wait_for(payload.get("wait_for"))
     wait_ms = min(int(payload.get("wait_ms") or _DEFAULT_WAIT_MS), _MAX_WAIT_MS)
     capture_network = bool(payload.get("capture_network", False))
+    script = str(payload.get("script") or "").strip()
     vp = payload.get("viewport") or {}
     vp_width = max(320, min(int(vp.get("width") or 1280), 3840))
     vp_height = max(240, min(int(vp.get("height") or 720), 2160))
@@ -96,6 +140,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
 
     t_start = time.monotonic()
     network_log: list[dict[str, Any]] = []
+    console_messages: list[str] = []
 
     try:
         with sync_playwright() as pw:
@@ -115,17 +160,36 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
                         "status": response.status,
                     })
                 page.on("response", _on_response)
+            page.on(
+                "console",
+                lambda message: console_messages.append(f"{message.type}: {message.text}") if len(console_messages) < 20 else None,
+            )
 
-            page.goto(url, wait_until="networkidle", timeout=15_000)
+            response = page.goto(url, wait_until="domcontentloaded", timeout=15_000)
+            if wait_for == "networkidle":
+                page.wait_for_load_state("networkidle", timeout=15_000)
+            else:
+                page.wait_for_selector(wait_for, timeout=15_000)
             if wait_ms > 0:
                 page.wait_for_timeout(wait_ms)
+            if script:
+                page.evaluate(script)
 
             title = page.title() or ""
             html = page.content()
             if len(html) > _HTML_TRUNCATE:
                 html = html[:_HTML_TRUNCATE] + f"\n<!-- [truncated {len(html) - _HTML_TRUNCATE} chars] -->"
+            try:
+                visible_text = page.locator("body").inner_text(timeout=5_000)
+            except Exception:
+                visible_text = ""
+            if len(visible_text) > _TEXT_TRUNCATE:
+                visible_text = visible_text[:_TEXT_TRUNCATE] + f"\n[truncated {len(visible_text) - _TEXT_TRUNCATE} chars]"
+            links = _extract_links(page)
 
-            screenshot_bytes = page.screenshot(full_page=False, type="png")
+            screenshot_bytes = page.screenshot(full_page=(action != "screenshot"), type="png")
+            pdf_bytes = page.pdf(print_background=True) if action == "pdf" else None
+            final_url = page.url
             context.close()
             browser.close()
     except Exception as exc:
@@ -136,10 +200,16 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     data_uri = f"data:image/png;base64,{b64_screenshot}"
 
     result: dict[str, Any] = {
-        "url": url,
+        "url": final_url,
+        "requested_url": url,
         "title": title,
         "html": html,
         "html_chars": len(html),
+        "visible_text": visible_text,
+        "links": links,
+        "action": action,
+        "wait_for": wait_for,
+        "status_code": int(response.status) if response is not None else None,
         "screenshot_artifact": {
             "name": "screenshot.png",
             "mime": "image/png",
@@ -147,7 +217,16 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
             "size_bytes": len(screenshot_bytes),
         },
         "execution_time_ms": elapsed_ms,
+        "console_messages": console_messages,
     }
     if capture_network:
         result["network_log"] = network_log[:200]
+    if pdf_bytes is not None:
+        pdf_b64 = base64.b64encode(pdf_bytes).decode("ascii")
+        result["pdf_artifact"] = {
+            "name": "page.pdf",
+            "mime": "application/pdf",
+            "url_or_base64": f"data:application/pdf;base64,{pdf_b64}",
+            "size_bytes": len(pdf_bytes),
+        }
     return result
