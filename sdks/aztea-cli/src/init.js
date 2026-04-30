@@ -28,7 +28,7 @@ function post(url, body) {
       headers: {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(payload),
-        'User-Agent': 'aztea-cli/0.14.3',
+        'User-Agent': 'aztea-cli/0.14.4',
       },
     }, (res) => {
       let data = ''
@@ -97,59 +97,45 @@ function promptPassword(question) {
       return
     }
 
-    const mutable = { prompt: question, value: '' }
-    const maskedOutput = {
-      write(chunk) {
-        const text = String(chunk)
-        if (text.startsWith(mutable.prompt)) {
-          process.stdout.write(mutable.prompt)
-          return
-        }
-        if (text.includes('\u0015')) {
-          mutable.value = ''
-        }
-        process.stdout.write('*'.repeat(mutable.value.length))
-      },
-    }
-
     const rl2 = readline.createInterface({
       input: process.stdin,
-      output: maskedOutput,
+      output: process.stdout,
       terminal: true,
     })
 
+    let currentValue = ''
+    rl2.stdoutMuted = true
+    rl2._writeToOutput = function _writeToOutput(stringToWrite) {
+      if (!rl2.stdoutMuted) {
+        rl2.output.write(stringToWrite)
+        return
+      }
+      if (stringToWrite === '\n' || stringToWrite === '\r\n') {
+        rl2.output.write(stringToWrite)
+        return
+      }
+      rl2.output.write(`\r${question}${'*'.repeat(currentValue.length)}`)
+    }
+
     rl2.question(question, (value) => {
-      mutable.value = ''
+      currentValue = ''
       rl2.close()
-      process.stdout.write('\n')
       resolve(value)
     })
-
-    rl2.input.on('keypress', (_char, key) => {
-      if (key && key.ctrl && key.name === 'c') {
-        rl2.close()
-        process.stdout.write('\n')
-        process.exit(1)
-      }
-    })
-
-    rl2._writeToOutput = function _writeToOutput() {
-      process.stdout.write(`\r${mutable.prompt}${'*'.repeat(mutable.value.length)}`)
-    }
 
     rl2.input.on('data', (chunk) => {
       const text = chunk.toString('utf8')
       if (text === '\r' || text === '\n') return
       if (text === '\u0003') return
       if (text === '\u007f') {
-        mutable.value = mutable.value.slice(0, -1)
+        currentValue = currentValue.slice(0, -1)
         return
       }
       if (text === '\u0015') {
-        mutable.value = ''
+        currentValue = ''
         return
       }
-      mutable.value += text
+      currentValue += text
     })
   })
 }
