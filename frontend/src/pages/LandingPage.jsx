@@ -7,6 +7,8 @@ import {
 import { useTheme } from '../context/ThemeContext'
 import { fetchAgents } from '../api'
 import AuthPanel from '../features/auth/AuthPanel'
+import AzteaMark from '../brand/AzteaMark'
+import { DotGrid, JaaliBand, CornerRangoli, StepwellLines } from '../brand/MinimalPattern'
 import './LandingPage.css'
 
 const CATALOG = [
@@ -124,12 +126,7 @@ export default function LandingPage() {
       <header className="lp__nav">
         <div className="lp__nav-inner">
           <Link to="/" className="lp__nav-brand" aria-label="Aztea home">
-            <div className="lp__nav-logo">
-              <svg width="13" height="13" viewBox="0 0 18 18" fill="none" aria-hidden>
-                <path d="M9 2L16 14H2L9 2Z" fill="currentColor" opacity="0.92" />
-                <path d="M9 6L13 14H5L9 6Z" fill="currentColor" opacity="0.5" />
-              </svg>
-            </div>
+            <span className="lp__nav-mark"><AzteaMark size={26} /></span>
             <span className="lp__nav-wordmark">Aztea</span>
           </Link>
 
@@ -179,6 +176,10 @@ export default function LandingPage() {
 
       {/* ── Hero ── */}
       <section className="lp__hero">
+        <div className="lp__hero-bg" aria-hidden>
+          <DotGrid className="lp__hero-dots" spacing={32} dot={1.1} />
+          <CornerRangoli corner="tr" size={420} className="lp__hero-rangoli" />
+        </div>
         <div className="lp__hero-inner">
           {agentCount > 0 && (
             <div className="lp__hero-live">
@@ -234,8 +235,14 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* ── Jaali divider band ── */}
+      <div className="lp__divider" aria-hidden>
+        <JaaliBand className="lp__divider-band" />
+      </div>
+
       {/* ── How it works ── */}
       <section className="lp__sec lp__sec--alt" id="lp-how">
+        <StepwellLines className="lp__how-stepwell" size={280} />
         <div className="lp__sec-inner">
           <header className="lp__sec-head">
             <span className="lp__eyebrow">How it works</span>
@@ -287,7 +294,7 @@ export default function LandingPage() {
       <footer className="lp__footer">
         <div className="lp__footer-inner">
           <span className="lp__footer-mark">
-            <span className="lp__footer-tri" />
+            <AzteaMark size={20} />
             Aztea
           </span>
           <div className="lp__footer-links">

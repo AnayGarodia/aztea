@@ -5,6 +5,7 @@ import {
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import Avatar from '../ui/Avatar'
+import AzteaMark from '../brand/AzteaMark'
 import './Sidebar.css'
 
 const HIRER_NAV = [
@@ -59,6 +60,7 @@ export default function Sidebar() {
     <aside className="sidebar">
       {/* Brand */}
       <NavLink to="/overview" className="sidebar__brand">
+        <span className="sidebar__brand-mark"><AzteaMark size={22} /></span>
         <span className="sidebar__wordmark">Aztea</span>
       </NavLink>
 

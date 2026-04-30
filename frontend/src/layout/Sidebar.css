@@ -23,6 +23,10 @@
   transition: opacity 0.15s ease;
   position: relative;
 }
+.sidebar__brand-mark {
+  display: inline-flex;
+  color: var(--accent);
+}
 .sidebar__brand:hover { opacity: 0.8; }
 
 .sidebar__brand::after {
