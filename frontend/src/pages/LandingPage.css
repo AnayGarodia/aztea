@@ -941,7 +941,7 @@
   font-size: 24px;
   font-weight: 500;
   color: var(--accent-ink);
-  margin: 8px 0 0;
+  margin: 0;
 }
 
 .lp__cmd-band {

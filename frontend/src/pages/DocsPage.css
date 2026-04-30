@@ -104,10 +104,9 @@
 
 /* ── Layout ────────────────────────────────────────────── */
 .docs-page__layout {
-  flex: 1;
-  min-height: 0;
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
+  align-items: start;
 }
 
 .docs-page__sidebar {
@@ -115,14 +114,14 @@
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--surface) 90%, var(--parchment)), var(--surface));
   padding: 24px 16px;
-  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 16px;
   position: sticky;
-  top: 52px;
-  height: calc(100vh - 52px);
-  height: calc(100dvh - 52px);
+  top: 0;
+  align-self: start;
+  max-height: 100dvh;
+  overflow-y: auto;
 }
 
 .docs-page__sidebar::before {
@@ -242,7 +241,6 @@
 /* ── Content ────────────────────────────────────────────── */
 .docs-page__content {
   padding: clamp(24px, 4vw, 56px) clamp(20px, 4vw, 64px) 96px;
-  overflow-y: auto;
   min-width: 0;
 }
 

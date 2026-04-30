@@ -100,7 +100,7 @@ export default function LandingPage() {
   const handleListSkill    = () => apiKey ? navigate('/list-skill') : openAuth('register', '/list-skill')
   const handleGetStarted   = () => apiKey ? navigate('/overview')   : openAuth('register', '/overview')
   const handleSignIn       = () => apiKey ? navigate('/overview')   : openAuth('signin')
-  const handleBrowseAgents = () => apiKey ? navigate('/agents')     : scrollToId('lp-agents')
+  const handleBrowseAgents = () => apiKey ? navigate('/agents')     : openAuth('register', '/agents')
 
   return (
     <div className="lp">
@@ -196,7 +196,6 @@ export default function LandingPage() {
         <div className="lp__sec-inner">
           <div className="lp__cmd">
             <div className="lp__cmd-copy">
-              <span className="lp__eyebrow lp__eyebrow--ivory">Quickstart</span>
               <h3 className="lp__cmd-title">Connect Claude Code in one command.</h3>
             </div>
             <div className="lp__cmd-band">
