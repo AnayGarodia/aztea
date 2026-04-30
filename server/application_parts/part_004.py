@@ -333,10 +333,18 @@ def _process_pending_builtin_jobs(limit_per_agent: int = _BUILTIN_JOB_WORKER_BAT
 
 
 def _builtin_worker_loop(stop_event: threading.Event) -> None:
+    worker_db_path = jobs.DB_PATH
     _set_builtin_worker_state(running=True, started_at=_utc_now_iso())
     while not stop_event.wait(_BUILTIN_JOB_WORKER_INTERVAL_SECONDS):
         started = _utc_now_iso()
         try:
+            if jobs.DB_PATH != worker_db_path:
+                _set_builtin_worker_state(
+                    last_run_at=started,
+                    last_summary={"scanned": 0, "processed": 0},
+                    last_error=None,
+                )
+                continue
             summary = _process_pending_builtin_jobs(limit_per_agent=_BUILTIN_JOB_WORKER_BATCH_SIZE)
             _set_builtin_worker_state(
                 last_run_at=started,

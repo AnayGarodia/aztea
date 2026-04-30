@@ -8,6 +8,7 @@ these are always present when authenticated and talk directly to the Aztea platf
 from __future__ import annotations
 
 import os
+import re
 import time
 from typing import Any
 
@@ -17,6 +18,21 @@ _REQUEST_VERSION_HEADER = "X-Aztea-Version"
 _CLIENT_ID_HEADER = "X-Aztea-Client"
 _AZTEA_PROTOCOL_VERSION = "1.0"
 _DEFAULT_CLIENT_ID = (os.environ.get("AZTEA_CLIENT_ID", "claude-code") or "claude-code").strip()
+_PYDANTIC_HELP_URL_RE = re.compile(r"\s*For further information visit https://errors\.pydantic\.dev/[^\s]+", re.IGNORECASE)
+_PUBLIC_DISCOVERY_EXCLUDED = {
+    "reverse_string",
+    "reverse string",
+    "echo_skill",
+    "echo skill",
+    "json_validator",
+    "json validator",
+}
+_DISCOVERY_INTENTS: dict[str, set[str]] = {
+    "image": {"image", "generator", "generate", "picture", "png", "jpeg", "jpg", "visual", "art"},
+    "browser": {"browser", "playwright", "screenshot", "crawl", "page", "dom", "headless"},
+    "dns": {"dns", "ssl", "tls", "certificate", "domain", "http", "hsts"},
+    "code_search": {"semantic", "codebase", "repo", "repository", "symbols"},
+}
 
 
 def _annotations(*, read_only: bool, destructive: bool = False, open_world: bool = True, idempotent: bool = False) -> dict[str, Any]:
@@ -250,6 +266,31 @@ _TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "aztea_batch_status",
+        "description": (
+            "Poll several async jobs from aztea_hire_batch in one call. "
+            "Returns compact status for each job plus aggregate counts, avoiding one MCP permission prompt per job."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "job_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 1,
+                    "maxItems": 50,
+                    "description": "Job IDs returned by aztea_hire_batch.",
+                },
+                "since_message_id": {
+                    "type": "integer",
+                    "description": "Return only messages with id > this value for each job.",
+                    "minimum": 0,
+                },
+            },
+            "required": ["job_ids"],
+        },
+    },
+    {
         "name": "aztea_clarify",
         "description": (
             "Send a clarification response to an agent whose job is awaiting_clarification. "
@@ -361,10 +402,10 @@ _TOOLS: list[dict[str, Any]] = [
     {
         "name": "aztea_discover",
         "description": (
-            "Semantic search for Aztea agents by task description. "
-            "Returns ranked candidates with trust scores, pricing, and match explanations. "
-            "Use this before hiring to find the best agent for an unfamiliar task, "
-            "or to filter by trust threshold or price cap."
+            "Filtered registry discovery for Aztea agents by task description. "
+            "Returns ranked candidates with trust scores, pricing, and match explanations, "
+            "and suppresses low-relevance demo/toy agents. Prefer aztea_search for Claude routing; "
+            "use this when you need trust or price filters."
         ),
         "input_schema": {
             "type": "object",
@@ -418,7 +459,7 @@ _TOOLS: list[dict[str, Any]] = [
         "name": "aztea_hire_batch",
         "description": (
             "Submit up to 50 async jobs in one atomic request with a single wallet debit. "
-            "All jobs run in parallel. Returns a list of job_ids to poll individually with aztea_job_status. "
+            "All jobs run in parallel. Returns job_ids; poll them together with aztea_batch_status. "
             "Use for workflows like 'review all 10 files' or 'audit every dependency' — "
             "far faster and cheaper than sequential hiring. This is the default tool for large independent task sets."
         ),
@@ -658,6 +699,7 @@ _META_TOOL_ANNOTATIONS: dict[str, dict[str, Any]] = {
     "aztea_list_pipelines": _annotations(read_only=True, idempotent=True),
     "aztea_hire_async": _annotations(read_only=False, idempotent=False),
     "aztea_job_status": _annotations(read_only=True, idempotent=False),
+    "aztea_batch_status": _annotations(read_only=True, idempotent=False),
     "aztea_clarify": _annotations(read_only=False, idempotent=False),
     "aztea_rate_job": _annotations(read_only=False, idempotent=False),
     "aztea_dispute_job": _annotations(read_only=False, idempotent=False),
@@ -713,6 +755,13 @@ def call_meta_tool(
 
     # aztea_set_session_budget: pure client-side state change, no API call needed
     if tool_name == "aztea_set_session_budget":
+        unknown = sorted(set(arguments) - {"budget_cents"})
+        if unknown:
+            return False, {
+                "error": "INVALID_INPUT",
+                "message": f"Unknown field(s): {', '.join(unknown)}. Use budget_cents; pass 0 explicitly to clear.",
+                "allowed_fields": ["budget_cents"],
+            }
         if "budget_cents" not in arguments:
             return False, {
                 "error": "INVALID_INPUT",
@@ -751,7 +800,8 @@ def call_meta_tool(
 
     try:
         if tool_name == "aztea_wallet_balance":
-            return _wallet_balance(session, base, hdrs, timeout)
+            ok, result = _wallet_balance(session, base, hdrs, timeout)
+            return ok, _compact_wallet(result) if ok else result
         if tool_name == "aztea_spend_summary":
             return _spend_summary(session, base, hdrs, timeout, arguments)
         if tool_name == "aztea_set_daily_limit":
@@ -769,10 +819,13 @@ def call_meta_tool(
         if tool_name == "aztea_hire_async":
             ok, result = _hire_async(session, base, hdrs, timeout, arguments)
             if ok:
-                _accrue(session_state, result.get("caller_charge_cents", result.get("price_cents")))
+                _accrue_from_result(session_state, result)
+                result = _compact_job_submission(result)
             return ok, result
         if tool_name == "aztea_job_status":
             return _job_status(session, base, hdrs, timeout, arguments)
+        if tool_name == "aztea_batch_status":
+            return _batch_status(session, base, hdrs, timeout, arguments)
         if tool_name == "aztea_clarify":
             return _clarify(session, base, hdrs, timeout, arguments)
         if tool_name == "aztea_rate_job":
@@ -788,26 +841,34 @@ def call_meta_tool(
         if tool_name == "aztea_hire_batch":
             ok, result = _hire_batch(session, base, hdrs, timeout, arguments)
             if ok:
-                _accrue(session_state, result.get("total_price_cents"))
+                _accrue_from_result(session_state, result)
             return ok, result
         if tool_name == "aztea_compare_agents":
             ok, result = _compare_agents(session, base, hdrs, timeout, arguments)
             if ok:
-                _accrue(session_state, result.get("total_charged_cents"))
+                _accrue_from_result(session_state, result)
             return ok, result
         if tool_name == "aztea_compare_status":
             return _compare_status(session, base, hdrs, timeout, arguments)
         if tool_name == "aztea_select_compare_winner":
             ok, result = _select_compare_winner(session, base, hdrs, timeout, arguments)
             if ok:
-                _refund(session_state, result.get("refund_amount_cents"))
+                _refund_from_result(session_state, result)
             return ok, result
         if tool_name == "aztea_run_pipeline":
-            return _run_pipeline(session, base, hdrs, timeout, arguments)
+            ok, result = _run_pipeline(session, base, hdrs, timeout, arguments)
+            if ok:
+                _accrue_from_result(session_state, result)
+                result = _compact_recipe_or_pipeline(result)
+            return ok, result
         if tool_name == "aztea_pipeline_status":
             return _pipeline_status(session, base, hdrs, timeout, arguments)
         if tool_name == "aztea_run_recipe":
-            return _run_recipe(session, base, hdrs, timeout, arguments)
+            ok, result = _run_recipe(session, base, hdrs, timeout, arguments)
+            if ok:
+                _accrue_from_result(session_state, result)
+                result = _compact_recipe_or_pipeline(result)
+            return ok, result
     except requests.RequestException as exc:
         return False, {"error": "NETWORK_ERROR", "message": str(exc)}
     except Exception as exc:
@@ -830,6 +891,129 @@ def _refund(session_state: dict[str, Any], amount_cents: Any) -> None:
     )
 
 
+def _as_int(value: Any) -> int | None:
+    if value is None or value is False:
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _charge_from_result(result: Any) -> int | None:
+    if not isinstance(result, dict):
+        return None
+    for key in ("caller_charge_cents", "total_charged_cents", "total_price_cents", "price_cents"):
+        amount = _as_int(result.get(key))
+        if amount is not None:
+            return amount
+    jobs = result.get("jobs")
+    if isinstance(jobs, list):
+        total = 0
+        for job in jobs:
+            amount = _charge_from_result(job)
+            if amount is not None:
+                total += amount
+        if total:
+            return total
+    step_results = result.get("step_results")
+    if isinstance(step_results, dict):
+        total = 0
+        for step in step_results.values():
+            amount = _charge_from_result(step)
+            if amount is not None:
+                total += amount
+        if total:
+            return total
+    return None
+
+
+def _refund_from_payload(result: Any) -> int | None:
+    if not isinstance(result, dict):
+        return None
+    amount = _as_int(result.get("refund_amount_cents") or result.get("refunded_cents"))
+    if amount is not None:
+        return amount
+    if result.get("refunded") is True:
+        return _as_int(result.get("price_cents") or result.get("caller_charge_cents"))
+    jobs = result.get("jobs")
+    if isinstance(jobs, list):
+        total = 0
+        for job in jobs:
+            amount = _refund_from_payload(job)
+            if amount is not None:
+                total += amount
+        if total:
+            return total
+    return None
+
+
+def _accrue_from_result(session_state: dict[str, Any], result: Any) -> None:
+    _accrue(session_state, _charge_from_result(result))
+
+
+def _refund_from_result(session_state: dict[str, Any], result: Any) -> None:
+    _refund(session_state, _refund_from_payload(result))
+
+
+def _clean_text(value: Any) -> Any:
+    if isinstance(value, str):
+        return _PYDANTIC_HELP_URL_RE.sub("", value).strip()
+    if isinstance(value, list):
+        return [_clean_text(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _clean_text(item) for key, item in value.items()}
+    return value
+
+
+def _compact_wallet(result: dict[str, Any], *, limit: int = 5) -> dict[str, Any]:
+    compact = dict(result)
+    for key in ("transactions", "transaction_history"):
+        txs = compact.get(key)
+        if isinstance(txs, list):
+            compact["recent_transactions"] = txs[:limit]
+            compact["transaction_count"] = len(txs)
+            compact["transactions_omitted"] = max(0, len(txs) - limit)
+            compact.pop(key, None)
+            compact.setdefault("note", f"Showing {min(limit, len(txs))} most recent transactions; use aztea_spend_summary for audits.")
+            break
+    return compact
+
+
+def _compact_job_submission(result: dict[str, Any]) -> dict[str, Any]:
+    keep = {
+        "job_id",
+        "agent_id",
+        "status",
+        "price_cents",
+        "caller_charge_cents",
+        "created_at",
+        "updated_at",
+        "note",
+        "messages",
+        "batch_id",
+    }
+    compact = {key: value for key, value in result.items() if key in keep and value is not None}
+    omitted = sorted(key for key, value in result.items() if key not in compact and value is not None)
+    if omitted:
+        compact["omitted_fields"] = omitted[:20]
+        compact.setdefault("full_status_available_via", "aztea_job_status")
+    return compact or result
+
+
+def _compact_recipe_or_pipeline(result: dict[str, Any]) -> dict[str, Any]:
+    compact = dict(result)
+    step_results = compact.get("step_results")
+    output_payload = compact.get("output_payload")
+    if isinstance(step_results, dict) and len(step_results) == 1 and output_payload is not None:
+        only_step = next(iter(step_results.values()))
+        if only_step == output_payload:
+            compact.pop("output_payload", None)
+            compact["output_payload_omitted_reason"] = "Same as the single step result; see step_results."
+    return compact
+
+
 # ─── Handlers ────────────────────────────────────────────────────────────────
 
 def _get(session: requests.Session, url: str, hdrs: dict, timeout: float, **kwargs: Any) -> tuple[bool, dict]:
@@ -847,6 +1031,7 @@ def _parse(r: requests.Response) -> tuple[bool, dict]:
         body = r.json()
     except Exception:
         body = {"raw_body": r.text}
+    body = _clean_text(body)
     if r.ok:
         return True, body if isinstance(body, dict) else {"result": body}
     detail = body if isinstance(body, dict) else {"detail": body}
@@ -1020,6 +1205,44 @@ def _job_status(session: requests.Session, base: str, hdrs: dict, timeout: float
     return True, result
 
 
+def _batch_status(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
+    raw_job_ids = args.get("job_ids")
+    if not isinstance(raw_job_ids, list) or not raw_job_ids:
+        return False, {"error": "INVALID_INPUT", "message": "job_ids must be a non-empty array."}
+    job_ids = [str(job_id or "").strip() for job_id in raw_job_ids if str(job_id or "").strip()]
+    if not job_ids:
+        return False, {"error": "INVALID_INPUT", "message": "job_ids must include at least one non-empty job_id."}
+    if len(job_ids) > 50:
+        return False, {"error": "INVALID_INPUT", "message": "Batch status is limited to 50 jobs."}
+
+    jobs: list[dict[str, Any]] = []
+    counts = {"complete": 0, "failed": 0, "running": 0, "pending": 0, "other": 0}
+    since = args.get("since_message_id")
+    for job_id in job_ids:
+        ok, status = _job_status(
+            session,
+            base,
+            hdrs,
+            timeout,
+            {"job_id": job_id, **({"since_message_id": since} if since is not None else {})},
+        )
+        if not ok:
+            status = {"job_id": job_id, "status": "failed", "error": status.get("error"), "message": status.get("message")}
+        normalized = str(status.get("status") or "other").strip().lower()
+        counts[normalized if normalized in counts else "other"] += 1
+        jobs.append(status)
+    return True, {
+        "job_count": len(jobs),
+        "complete_count": counts["complete"],
+        "failed_count": counts["failed"],
+        "running_count": counts["running"],
+        "pending_count": counts["pending"],
+        "other_count": counts["other"],
+        "jobs": jobs,
+        "note": "All requested job statuses returned in one MCP call.",
+    }
+
+
 def _clarify(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
     job_id = str(args.get("job_id") or "").strip()
     message = str(args.get("message") or "").strip()
@@ -1098,6 +1321,51 @@ def _verify_output(session: requests.Session, base: str, hdrs: dict, timeout: fl
     return _post(session, f"{base}/jobs/{job_id}/verification", hdrs, timeout, body)
 
 
+def _intent_for_query(query: str) -> tuple[str | None, set[str]]:
+    terms = set(re.findall(r"[a-z0-9_+-]+", query.lower()))
+    for intent, required_terms in _DISCOVERY_INTENTS.items():
+        if terms & required_terms:
+            return intent, required_terms
+    return None, set()
+
+
+def _is_demo_agent(agent: dict[str, Any]) -> bool:
+    fields = {
+        str(agent.get("slug") or "").strip().lower(),
+        str(agent.get("name") or "").strip().lower(),
+        str(agent.get("agent_slug") or "").strip().lower(),
+    }
+    return bool(fields & _PUBLIC_DISCOVERY_EXCLUDED)
+
+
+def _agent_text(agent: dict[str, Any]) -> str:
+    tags = agent.get("tags") or []
+    return " ".join(
+        [
+            str(agent.get("slug") or ""),
+            str(agent.get("name") or ""),
+            str(agent.get("description") or ""),
+            str(agent.get("category") or ""),
+            " ".join(str(tag) for tag in tags if isinstance(tag, str)),
+        ]
+    ).lower()
+
+
+def _intent_matches(agent: dict[str, Any], intent: str | None, intent_terms: set[str]) -> bool:
+    if intent is None:
+        return True
+    text = _agent_text(agent)
+    if intent == "image":
+        return "image" in text or "visual" in text or "generator" in text
+    if intent == "browser":
+        return "browser" in text or "playwright" in text or "screenshot" in text
+    if intent == "dns":
+        return "dns" in text or "ssl" in text or "certificate" in text or "domain" in text
+    if intent == "code_search":
+        return ("semantic" in text and "code" in text) or "codebase" in text or "repository" in text
+    return bool(intent_terms & set(re.findall(r"[a-z0-9_+-]+", text)))
+
+
 def _discover(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
     query = str(args.get("query") or "").strip()
     if not query:
@@ -1116,21 +1384,33 @@ def _discover(session: requests.Session, base: str, hdrs: dict, timeout: float, 
         body["max_price_cents"] = int(max_price)
     ok, result = _post(session, f"{base}/registry/search", hdrs, timeout, body)
     if ok and isinstance(result.get("results"), list):
-        # Surface a concise summary per result
+        intent, intent_terms = _intent_for_query(query)
         compact = []
         for item in result["results"]:
             agent = item.get("agent") or {}
+            if _is_demo_agent(agent) or not _intent_matches(agent, intent, intent_terms):
+                continue
             compact.append({
                 "agent_id": agent.get("agent_id"),
+                "slug": agent.get("slug") or agent.get("agent_slug"),
                 "name": agent.get("name"),
                 "description": (agent.get("description") or "")[:200],
+                "category": agent.get("category"),
                 "price_per_call_usd": agent.get("price_per_call_usd"),
+                "price_cents": agent.get("price_cents"),
                 "trust_score": agent.get("trust_score"),
                 "success_rate": agent.get("success_rate"),
+                "avg_latency_ms": agent.get("avg_latency_ms"),
                 "blended_score": item.get("blended_score"),
                 "match_reasons": item.get("match_reasons"),
             })
         result["results"] = compact
+        result["count"] = len(compact)
+        if intent and not compact:
+            result["note"] = (
+                f"No high-confidence {intent.replace('_', ' ')} agent was returned by discovery. "
+                "Use aztea_search with a direct slug query or try a narrower task description; no low-relevance toy matches were returned."
+            )
     return ok, result
 
 
@@ -1141,12 +1421,22 @@ def _get_examples(session: requests.Session, base: str, hdrs: dict, timeout: flo
     ok, agent = _get(session, f"{base}/registry/agents/{agent_id}", hdrs, timeout)
     if not ok:
         return False, agent
-    examples = agent.get("output_examples") or []
+    examples = []
+    for raw in (agent.get("output_examples") or [])[:10]:
+        if isinstance(raw, dict):
+            examples.append({
+                "job_id": raw.get("job_id"),
+                "latency_ms": raw.get("latency_ms"),
+                "model_provider": raw.get("model_provider"),
+                "model_id": raw.get("model_id"),
+                "input": raw.get("input"),
+                "output": raw.get("output"),
+            })
     return True, {
         "agent_id": agent_id,
         "name": agent.get("name"),
-        "example_count": len(examples),
-        "examples": examples[:10],
+        "example_count": len(agent.get("output_examples") or []),
+        "examples": examples,
         "note": (
             "These are real inputs and outputs from past jobs. "
             "Review them to verify the agent's quality before hiring."
@@ -1178,7 +1468,7 @@ def _hire_batch(session: requests.Session, base: str, hdrs: dict, timeout: float
         job_ids = [j.get("job_id") for j in (result.get("jobs") or []) if isinstance(j, dict)]
         result.setdefault("note", (
             f"Batch of {len(jobs_body)} jobs submitted. "
-            "Poll each job_id with aztea_job_status to track progress."
+            "Poll the job_ids together with aztea_batch_status to track progress."
         ))
         result.setdefault("job_ids", job_ids)
     return ok, result

@@ -20,7 +20,7 @@ def load_builtin_specs_part3() -> list[dict[str, Any]]:
         "name": "Multi-File Python Executor",
         "description": "Use when running a multi-file Python project with dependencies. Writes all files to a sandbox tempdir, optionally installs requirements.txt packages via pip, then runs the entry point and returns stdout, stderr, exit code, and an expert explanation. Single-file use cases should use Python Code Executor instead.",
         "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_MULTI_FILE_EXECUTOR_AGENT_ID],
-        "price_per_call_usd": 0.02,
+        "price_per_call_usd": 0.01,
         "tags": ["code-execution", "python", "developer-tools", "compute"],
         "kind": "aztea_built",
         "category": "Code Execution",
@@ -200,9 +200,9 @@ def load_builtin_specs_part3() -> list[dict[str, Any]]:
     {
         "agent_id": _SHELL_EXECUTOR_AGENT_ID,
         "name": "Shell Executor",
-        "description": "Run sandboxed shell commands (npm, node, python, pip, ruff, mypy, tsc, git log/diff/status, make, cargo, go, pytest) and get real stdout/stderr/exit code. Use for verifying builds, running tests, checking lint, inspecting git history — anything that needs an actual shell.",
+        "description": "Run one sandboxed allowlisted developer command (npm, node, python, pip, ruff, mypy, tsc, git log/diff/status/show, make, cargo, go, pytest, uv) and get real stdout/stderr/exit code. Shell chaining, pipes, redirects, command substitution, and destructive commands are blocked; quoted interpreter code such as python3 -c is allowed.",
         "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_SHELL_EXECUTOR_AGENT_ID],
-        "price_per_call_usd": 0.02,
+        "price_per_call_usd": 0.01,
         "tags": ["developer-tools", "shell", "execution", "ci"],
         "input_schema": {
             "type": "object",

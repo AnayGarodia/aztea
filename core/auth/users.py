@@ -527,6 +527,19 @@ def verify_api_key(raw_key: str) -> dict | None:
     return dict(result)
 
 
+def api_key_is_revoked(raw_key: str) -> bool:
+    """Return True when a syntactically valid user API key exists but is inactive."""
+    if not raw_key.startswith(KEY_PREFIX):
+        return False
+    key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT is_active FROM api_keys WHERE key_hash = ?",
+            (key_hash,),
+        ).fetchone()
+    return row is not None and int(row["is_active"] or 0) == 0
+
+
 def accept_legal_terms(
     user_id: str,
     *,

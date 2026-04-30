@@ -41,6 +41,12 @@ def test_shell_executor_rejects_semicolons_and_pipes() -> None:
         raise AssertionError(f"shell_executor must reject {bad!r}")
 
 
+def test_shell_executor_allows_python_dash_c_with_quoted_semicolon() -> None:
+    out = shell_executor.run({"command": "python3 -c 'import sys; print(sys.version_info[0])'"})
+    assert out["exit_code"] == 0
+    assert out["stdout"].strip() == "3"
+
+
 # ---------- secret_scanner ----------------------------------------------
 
 def test_secret_scanner_finds_aws_key() -> None:

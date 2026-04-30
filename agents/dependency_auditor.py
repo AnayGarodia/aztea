@@ -32,6 +32,8 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Any
+from urllib.parse import quote
 
 import requests
 
@@ -43,6 +45,7 @@ _MAX_PACKAGES = 20
 _MAX_MANIFEST_CHARS = 10_000
 
 _COPYLEFT = {"gpl", "agpl", "lgpl", "eupl", "cddl", "mpl", "osl", "eupl"}
+_SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 
 
 def _detect_ecosystem(manifest: str) -> str:
@@ -202,19 +205,36 @@ def _fetch_pypi_latest(name: str) -> tuple[str | None, str | None]:
     return None, None
 
 
+def _best_npm_version(versions: dict[str, Any]) -> str | None:
+    """Pick the highest stable semver published in the npm metadata."""
+    parsed: list[tuple[tuple[int, int, int], str]] = []
+    for version in versions:
+        if not _SEMVER_RE.match(str(version)):
+            continue
+        base = str(version).split("-", 1)[0].split("+", 1)[0]
+        major, minor, patch = (int(part) for part in base.split("."))
+        parsed.append(((major, minor, patch), str(version)))
+    if not parsed:
+        return None
+    return max(parsed, key=lambda item: item[0])[1]
+
+
 def _fetch_npm_latest(name: str) -> tuple[str | None, str | None]:
     """Returns (latest_version, license)."""
     try:
-        encoded = name.replace("/", "%2F")
+        encoded = quote(name, safe="")
         resp = requests.get(_NPM_API.format(name=encoded), timeout=_TIMEOUT,
                             headers={"User-Agent": "aztea-dependency-auditor/1.0",
                                      "Accept": "application/json"})
         if resp.status_code == 200:
             data = resp.json()
+            versions = data.get("versions") or {}
             latest = (data.get("dist-tags") or {}).get("latest")
+            if latest not in versions:
+                latest = _best_npm_version(versions)
             license_ = None
-            if latest and latest in (data.get("versions") or {}):
-                license_ = data["versions"][latest].get("license")
+            if latest and latest in versions:
+                license_ = versions[latest].get("license")
             return latest, license_
     except Exception:
         pass

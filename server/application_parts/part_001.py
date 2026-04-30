@@ -1030,6 +1030,15 @@ def _require_api_key(request: Request) -> core_models.CallerContext:
                     },
                 },
             )
+        raw = auth[7:]
+        if _auth.api_key_is_revoked(raw):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "API_KEY_REVOKED",
+                    "message": "API key has been revoked. Use the replacement key or create a new one.",
+                },
+            )
         raise HTTPException(
             status_code=401,
             detail={

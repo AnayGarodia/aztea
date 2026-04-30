@@ -44,20 +44,39 @@ _BLOCKLIST_PATTERNS = (
     "rm ", "rm\t", "rmdir", "curl ", "wget ", "chmod ", "chown ",
     "sudo ", "su ", "bash ", "sh ", "zsh ", "eval ", "exec ",
     "dd ", "mkfs", "mount ", "umount", "iptables", "nc ", "ncat",
-    ">", ">>", "|",
-    # Shell control operators — without these, `cmd1 && cmd2` is silently
-    # truncated by shlex.split (the `&&` becomes a literal arg to cmd1 and
-    # cmd2 is never executed). Reject the whole input instead of producing
-    # misleading "exit_code 0 with no stderr" output.
-    "&&", "||", ";", "&",
     # Command substitution and process substitution.
     "$(", "`", "<(", ">(",
 )
 
 
+def _has_unquoted_shell_operator(command: str) -> bool:
+    """Return True when the command uses shell syntax outside quoted args."""
+    quote: str | None = None
+    escaped = False
+    for char in command:
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if quote:
+            if char == quote:
+                quote = None
+            continue
+        if char in ("'", '"'):
+            quote = char
+            continue
+        if char in {";", "|", ">", "&"}:
+            return True
+    return False
+
+
 def _is_allowed(command: str) -> bool:
     stripped = command.strip()
     # Block patterns take priority
+    if _has_unquoted_shell_operator(stripped):
+        return False
     for pat in _BLOCKLIST_PATTERNS:
         if pat in stripped:
             return False

@@ -41,12 +41,29 @@ def test_parse_surfaces_nested_refund_metadata():
     assert result["wallet_balance_cents"] == 95
 
 
+def test_parse_strips_pydantic_help_urls():
+    ok, result = meta_tools._parse(
+        _FakeResponse(
+            ok=False,
+            status_code=422,
+            payload={
+                "detail": {
+                    "message": "Input should be a valid string\nFor further information visit https://errors.pydantic.dev/2.13/v/string_type",
+                }
+            },
+        )
+    )
+    assert ok is False
+    assert "errors.pydantic.dev" not in result["message"]
+
+
 def test_meta_tool_catalog_exposes_claude_control_plane():
     tool_names = {tool["name"] for tool in meta_tools.get_meta_tools()}
     assert {
         "aztea_estimate_cost",
         "aztea_hire_async",
         "aztea_job_status",
+        "aztea_batch_status",
         "aztea_compare_agents",
         "aztea_compare_status",
         "aztea_list_recipes",
@@ -76,6 +93,21 @@ def test_set_session_budget_requires_explicit_budget_cents():
     assert ok is False
     assert result["error"] == "INVALID_INPUT"
     assert "budget_cents is required" in result["message"]
+
+
+def test_set_session_budget_rejects_unknown_keys():
+    ok, result = meta_tools.call_meta_tool(
+        session=None,
+        base_url="https://aztea.test",
+        api_key="az_test",
+        tool_name="aztea_set_session_budget",
+        arguments={"limit_cents": 200},
+        session_state={"spent_cents": 0, "budget_cents": 500},
+        timeout=5,
+    )
+    assert ok is False
+    assert result["error"] == "INVALID_INPUT"
+    assert result["allowed_fields"] == ["budget_cents"]
 
 
 def test_verify_output_uses_jobs_verification_route(monkeypatch):
@@ -231,6 +263,29 @@ def test_call_meta_tool_sends_client_header(monkeypatch):
     assert result["balance_cents"] == 100
     assert captured["headers"]["X-Aztea-Version"] == "1.0"
     assert captured["headers"]["X-Aztea-Client"] == "claude-code"
+
+
+def test_wallet_balance_compacts_transaction_history(monkeypatch):
+    txs = [{"tx_id": f"tx_{idx}"} for idx in range(8)]
+
+    def _fake_wallet_balance(_session, _base, _hdrs, _timeout):
+        return True, {"balance_cents": 1000, "transactions": txs}
+
+    monkeypatch.setattr(meta_tools, "_wallet_balance", _fake_wallet_balance)
+    ok, result = meta_tools.call_meta_tool(
+        session=None,
+        base_url="https://aztea.test",
+        api_key="az_test",
+        tool_name="aztea_wallet_balance",
+        arguments={},
+        session_state={"spent_cents": 0, "budget_cents": None},
+        timeout=5,
+    )
+    assert ok is True
+    assert "transactions" not in result
+    assert len(result["recent_transactions"]) == 5
+    assert result["transaction_count"] == 8
+    assert result["transactions_omitted"] == 3
 
 
 def test_compare_agents_polls_until_complete(monkeypatch):
@@ -401,3 +456,68 @@ def test_run_recipe_uses_recipe_route_and_polls(monkeypatch):
     assert result["recipe_id"] == "review-and-test"
     assert result["status"] == "complete"
     assert result["output_payload"] == {"tests": "generated"}
+
+
+def test_run_recipe_accrues_pipeline_step_charges(monkeypatch):
+    session_state = {"spent_cents": 0, "budget_cents": None}
+
+    def _fake_run_recipe(_session, _base, _hdrs, _timeout, _arguments):
+        return True, {
+            "recipe_id": "audit-deps",
+            "status": "complete",
+            "step_results": {"audit": {"caller_charge_cents": 4, "summary": "done"}},
+        }
+
+    monkeypatch.setattr(meta_tools, "_run_recipe", _fake_run_recipe)
+    ok, result = meta_tools.call_meta_tool(
+        session=None,
+        base_url="https://aztea.test",
+        api_key="az_test",
+        tool_name="aztea_run_recipe",
+        arguments={"recipe_id": "audit-deps", "input_payload": {"manifest": "{}"}},
+        session_state=session_state,
+        timeout=5,
+    )
+    assert ok is True
+    assert result["status"] == "complete"
+    assert session_state["spent_cents"] == 4
+
+
+def test_batch_status_polls_many_jobs(monkeypatch):
+    def _fake_job_status(_session, _base, _hdrs, _timeout, args):
+        return True, {"job_id": args["job_id"], "status": "complete", "messages": []}
+
+    monkeypatch.setattr(meta_tools, "_job_status", _fake_job_status)
+    ok, result = meta_tools._batch_status(
+        session=None,
+        base="https://aztea.test",
+        hdrs={},
+        timeout=5,
+        args={"job_ids": ["job_1", "job_2"]},
+    )
+    assert ok is True
+    assert result["complete_count"] == 2
+    assert [job["job_id"] for job in result["jobs"]] == ["job_1", "job_2"]
+
+
+def test_discover_filters_toy_and_low_relevance_intent_matches(monkeypatch):
+    def _fake_post(_session, _url, _hdrs, _timeout, _body):
+        return True, {
+            "results": [
+                {"agent": {"agent_id": "toy", "slug": "reverse_string", "name": "Reverse String", "description": "Reverse text"}},
+                {"agent": {"agent_id": "lint", "slug": "linter_agent", "name": "Linter Agent", "description": "Lint code"}},
+                {"agent": {"agent_id": "img", "slug": "image_generator", "name": "Image Generator", "description": "Generate images"}},
+            ]
+        }
+
+    monkeypatch.setattr(meta_tools, "_post", _fake_post)
+    ok, result = meta_tools._discover(
+        session=None,
+        base="https://aztea.test",
+        hdrs={},
+        timeout=5,
+        args={"query": "generate an image", "limit": 5},
+    )
+    assert ok is True
+    assert result["count"] == 1
+    assert result["results"][0]["slug"] == "image_generator"

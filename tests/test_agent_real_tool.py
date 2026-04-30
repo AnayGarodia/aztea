@@ -8,6 +8,7 @@ import pytest
 from agents import browser_agent
 from agents import codereview
 from agents import cve_lookup
+from agents import dependency_auditor
 from agents import db_sandbox
 from agents import hn_digest
 from agents import linter_agent
@@ -127,6 +128,28 @@ def test_cve_lookup_falls_back_to_osv_for_direct_cve_id(monkeypatch):
     assert result["source"] == "osv"
     assert result["cve_id"] == "CVE-2024-55555"
     assert result["severity"] == "critical"
+
+
+def test_dependency_auditor_ignores_invalid_npm_latest_dist_tag(monkeypatch):
+    def fake_get(url, timeout=None, headers=None):
+        del timeout, headers
+        assert url.endswith("/lodash")
+        return _FakeResponse(
+            200,
+            {
+                "dist-tags": {"latest": "4.18.1"},
+                "versions": {
+                    "4.17.20": {"license": "MIT"},
+                    "4.17.21": {"license": "MIT"},
+                },
+            },
+        )
+
+    monkeypatch.setattr(dependency_auditor.requests, "get", fake_get)
+
+    latest, license_ = dependency_auditor._fetch_npm_latest("lodash")
+    assert latest == "4.17.21"
+    assert license_ == "MIT"
 
 
 def test_type_checker_parses_mypy_json(monkeypatch):

@@ -35,6 +35,21 @@ _REQUEST_VERSION_HEADER = "X-Aztea-Version"
 _AZTEA_PROTOCOL_VERSION = "1.0"
 _CLIENT_ID_HEADER = "X-Aztea-Client"
 _DEFAULT_CLIENT_ID = (os.environ.get("AZTEA_CLIENT_ID", "claude-code") or "claude-code").strip()
+_PUBLIC_SEARCH_EXCLUDED = {
+    "reverse_string",
+    "reverse string",
+    "echo_skill",
+    "echo skill",
+    "json_validator",
+    "json validator",
+}
+_SEARCH_INTENTS: dict[str, set[str]] = {
+    "image": {"image", "generate", "generator", "picture", "png", "jpg", "jpeg", "visual", "art"},
+    "browser": {"browser", "playwright", "screenshot", "crawl", "headless", "dom"},
+    "dns": {"dns", "ssl", "tls", "certificate", "domain", "hsts"},
+    "code_search": {"semantic", "codebase", "repository", "repo", "symbols"},
+}
+_PYDANTIC_HELP_URL_RE = re.compile(r"\s*For further information visit https://errors\.pydantic\.dev/[^\s]+", re.IGNORECASE)
 
 
 _AUTH_TOOL_NAME = "aztea_setup"
@@ -241,6 +256,16 @@ def _mcp_text_from_payload(payload: Any) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
+def _clean_error_text(value: Any) -> Any:
+    if isinstance(value, str):
+        return _PYDANTIC_HELP_URL_RE.sub("", value).strip()
+    if isinstance(value, list):
+        return [_clean_error_text(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _clean_error_text(item) for key, item in value.items()}
+    return value
+
+
 def _mcp_media_content_from_artifacts(artifacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     content: list[dict[str, Any]] = []
     for artifact in artifacts[:6]:
@@ -298,6 +323,52 @@ def _query_terms(query: str) -> list[str]:
             seen.add(term)
             result.append(term)
     return result
+
+
+def _search_intent(terms: list[str]) -> tuple[str | None, set[str]]:
+    term_set = set(terms)
+    for intent, markers in _SEARCH_INTENTS.items():
+        if term_set & markers:
+            return intent, markers
+    return None, set()
+
+
+def _public_search_excluded(entry: dict[str, Any]) -> bool:
+    fields = {
+        str(entry.get("slug") or "").strip().lower(),
+        str(entry.get("name") or "").strip().lower(),
+    }
+    fields.update(str(alias).strip().lower() for alias in entry.get("aliases") or [])
+    return bool(fields & _PUBLIC_SEARCH_EXCLUDED)
+
+
+def _entry_search_text(entry: dict[str, Any]) -> str:
+    return " ".join(
+        [
+            str(entry.get("slug") or ""),
+            str(entry.get("name") or ""),
+            str(entry.get("description") or ""),
+            str(entry.get("category") or ""),
+            " ".join(str(tag) for tag in entry.get("tags") or []),
+            " ".join(str(item) for item in entry.get("short_use_cases") or []),
+            " ".join(str(alias) for alias in entry.get("aliases") or []),
+        ]
+    ).lower()
+
+
+def _entry_matches_intent(entry: dict[str, Any], intent: str | None) -> bool:
+    if intent is None:
+        return True
+    text = _entry_search_text(entry)
+    if intent == "image":
+        return "image" in text or "visual" in text or "generator" in text
+    if intent == "browser":
+        return "browser" in text or "playwright" in text or "screenshot" in text
+    if intent == "dns":
+        return "dns" in text or "ssl" in text or "certificate" in text or "domain" in text
+    if intent == "code_search":
+        return ("semantic" in text and "code" in text) or "codebase" in text or "repository" in text
+    return True
 
 
 def _entry_aliases(slug: str, name: str, agent_id: str | None = None) -> list[str]:
@@ -523,8 +594,13 @@ class RegistryBridge:
         normalized = str(query or "").strip().lower()
         capped_limit = max(1, min(int(limit or 8), 20))
         terms = _query_terms(normalized)
+        intent, _intent_markers = _search_intent(terms)
         matches: list[tuple[int, dict[str, Any]]] = []
         for entry in self._catalog_entries():
+            if _public_search_excluded(entry):
+                continue
+            if intent is not None and not _entry_matches_intent(entry, intent):
+                continue
             alias_text = " ".join(str(alias) for alias in entry.get("aliases") or [])
             haystack = "\n".join(
                 [
@@ -556,6 +632,9 @@ class RegistryBridge:
                     score += 12
                 if "package_finder" in entry["slug"] or "changelog" in entry["slug"]:
                     score -= 8
+            if intent is not None:
+                score += 30
+                reasons.append(f"{intent.replace('_', ' ')} intent match")
             if {"review", "diff", "bugs", "correctness"} & set(terms):
                 if "code_review" in alias_text or "code review" in haystack:
                     score += 10
@@ -770,6 +849,20 @@ class RegistryBridge:
         if not agent_id:
             return False, {"error": "TOOL_NOT_FOUND", "message": f"Unknown tool '{tool_name}'."}
 
+        budget_cents = self._session_state.get("budget_cents")
+        if budget_cents is not None:
+            spent = int(self._session_state.get("spent_cents") or 0)
+            if spent >= int(budget_cents):
+                return False, {
+                    "error": "SESSION_BUDGET_EXCEEDED",
+                    "message": (
+                        f"Session budget of ${int(budget_cents) / 100:.2f} reached "
+                        f"(spent ${spent / 100:.2f}). Raise it with aztea_set_session_budget."
+                    ),
+                    "budget_cents": int(budget_cents),
+                    "spent_cents": spent,
+                }
+
         try:
             response = self._session.post(
                 f"{self.base_url}/registry/agents/{agent_id}/call",
@@ -794,6 +887,7 @@ class RegistryBridge:
                 parsed_body = {"raw_body": response.text}
         else:
             parsed_body = {"raw_body": response.text}
+        parsed_body = _clean_error_text(parsed_body)
 
         if response.ok:
             if isinstance(parsed_body, dict):

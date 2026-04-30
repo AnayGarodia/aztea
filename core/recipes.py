@@ -90,6 +90,31 @@ BUILTIN_RECIPES: list[dict] = [
             ]
         },
     },
+    {
+        "recipe_id": "review-and-test",
+        "name": "review-and-test",
+        "description": "Review code, then run deterministic lint checks. This replaces the deprecated test-generator-backed recipe.",
+        "default_input_schema": {
+            "type": "object",
+            "properties": {"code": {"type": "string"}},
+            "required": ["code"],
+        },
+        "pipeline_definition": {
+            "nodes": [
+                {
+                    "id": "review",
+                    "agent_id": CODEREVIEW_AGENT_ID,
+                    "input_map": {"code": "$input.code"},
+                },
+                {
+                    "id": "lint",
+                    "agent_id": LINTER_AGENT_ID,
+                    "depends_on": ["review"],
+                    "input_map": {"code": "$input.code"},
+                },
+            ]
+        },
+    },
 ]
 
 

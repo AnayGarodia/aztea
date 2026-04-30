@@ -1010,10 +1010,8 @@ def test_mcp_invoke_delegates_to_registry_call_path(client, monkeypatch):
     assert body["structuredContent"]["explanation"] == "mcp::ok"
 
     caller_wallet = payments.get_or_create_wallet(f"user:{caller['user_id']}")
-    # python_executor now has variable pricing: 2¢/s of timeout, min 4¢.
-    # No timeout in the payload → 0 seconds → min_cents = 4 price; caller
-    # pays 4 + 10% platform fee (0¢ after rounding) = 4¢ total → balance = 96.
-    assert payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"] == 96
+    # python_executor is a deterministic sandbox, so it stays at the 1¢ floor.
+    assert payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"] == 99
 
 
 def test_mcp_invoke_does_not_expose_hidden_image_generator_tool(client, monkeypatch):

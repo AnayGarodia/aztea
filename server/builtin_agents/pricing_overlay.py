@@ -76,14 +76,14 @@ _OVERLAY: dict[str, dict[str, Any]] = {
             "min_cents": 5,
         },
     },
-    # Python Executor: 2¢ per second of timeout requested, floor 4¢.
+    # Python Executor: deterministic local sandboxing; keep it at the 1¢ floor.
     PYTHON_EXECUTOR_AGENT_ID: {
         "pricing_model": "per_unit",
         "pricing_config": {
             "input_field": "timeout",
             "unit": "second",
-            "rate_cents_per_unit": 2,
-            "min_cents": 4,
+            "rate_cents_per_unit": 0,
+            "min_cents": 1,
         },
     },
     # Web Researcher: tiered by URL count.
@@ -111,7 +111,7 @@ _OVERLAY: dict[str, dict[str, Any]] = {
             "min_cents": 5,
         },
     },
-    # Shell Executor: 2¢ flat per call (fixed, not variable).
+    # Shell Executor: 1¢ flat per call (fixed, not variable).
     # Stored here so display_min_price_usd() can report the correct floor.
     SHELL_EXECUTOR_AGENT_ID: {
         "pricing_model": "per_unit",
@@ -119,7 +119,7 @@ _OVERLAY: dict[str, dict[str, Any]] = {
             "input_field": "timeout",
             "unit": "second",
             "rate_cents_per_unit": 0,
-            "min_cents": 2,
+            "min_cents": 1,
         },
     },
     # Type Checker: 1¢ flat per call.
@@ -138,11 +138,11 @@ _OVERLAY: dict[str, dict[str, Any]] = {
         "pricing_config": {
             "input_field": "domains",
             "unit": "domain",
-            "min_cents": 2,
+            "min_cents": 1,
             "tiers": [
-                {"up_to_units": 1, "cents": 2},
-                {"up_to_units": 3, "cents": 5},
-                {"up_to_units": 10, "cents": 12},
+                {"up_to_units": 1, "cents": 1},
+                {"up_to_units": 3, "cents": 3},
+                {"up_to_units": 10, "cents": 8},
             ],
         },
     },

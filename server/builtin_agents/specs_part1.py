@@ -269,7 +269,7 @@ def load_builtin_specs_part1() -> list[dict[str, Any]]:
     "name": "CVE Lookup Agent",
     "description": "Use when the user wants live CVE data for a package or specific CVE ID. Queries OSV.dev for ecosystem-aware package lookups (npm, PyPI) and NIST NVD for direct CVE-ID lookups — not LLM memory. Returns CVSS score, exploit availability, affected version range, and recommended fix for each CVE.",
     "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_CVELOOKUP_AGENT_ID],
-    "price_per_call_usd": 0.04,
+    "price_per_call_usd": 0.01,
     "tags": ["security", "cve", "vulnerability-intel", "nvd", "packages"],
     "input_schema": {
         "type": "object",

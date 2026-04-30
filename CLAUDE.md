@@ -634,16 +634,16 @@ Curated public set — agents that perform real external work:
 | DB Sandbox                  | `be4d6c18-629d-5b1c-8c46-f82c00db4995` |
 | Visual Regression           | `20a74467-d633-5016-b210-adf769b2df9c` |
 | Live Endpoint Tester        | `8af9fc34-ec0c-5732-b0e0-4e4efdff749c` |
-| Browser Agent               | `c3a1b2d4-e5f6-5a7b-8c9d-0e1f2a3b4c5d` |
-| Multi-Language Executor     | `d4b2c3e5-f6a7-5b8c-9d0e-1f2a3b4c5d6e` |
-| Semantic Codebase Search    | `e5c3d4f6-a7b8-5c9d-0e1f-2a3b4c5d6e7f` |
-| AI Red Teamer               | `f6d4e5a7-b8c9-5d0e-1f2a-3b4c5d6e7f8a` |
 
 Internal / special purpose:
 
 | Agent                       | ID                                     |
 | --------------------------- | -------------------------------------- |
 | Quality Judge (internal)    | `9cf0d9d0-4a10-58c9-b97a-6b5f81b1cf33` |
+| Browser Agent (beta)        | `c3a1b2d4-e5f6-5a7b-8c9d-0e1f2a3b4c5d` |
+| Multi-Language Executor (beta) | `d4b2c3e5-f6a7-5b8c-9d0e-1f2a3b4c5d6e` |
+| Semantic Codebase Search (beta) | `e5c3d4f6-a7b8-5c9d-0e1f-2a3b4c5d6e7f` |
+| AI Red Teamer (builder-only) | `f6d4e5a7-b8c9-5d0e-1f2a-3b4c5d6e7f8a` |
 | Financial Research (legacy) | `b7741251-d7ac-5423-b57d-8e12cd80885f` |
 | Wikipedia Research (legacy) | `9a175aa2-8ffd-52f7-aae0-5a33fc88db83` |
 

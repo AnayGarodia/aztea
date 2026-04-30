@@ -9,7 +9,6 @@ from server.builtin_agents.constants import (
     BUILTIN_INTERNAL_ENDPOINTS as _BUILTIN_INTERNAL_ENDPOINTS,
     DEPENDENCY_AUDITOR_AGENT_ID as _DEPENDENCY_AUDITOR_AGENT_ID,
     DNS_INSPECTOR_AGENT_ID as _DNS_INSPECTOR_AGENT_ID,
-    HN_DIGEST_AGENT_ID as _HN_DIGEST_AGENT_ID,
     IMAGE_GENERATOR_AGENT_ID as _IMAGE_GENERATOR_AGENT_ID,
     PYTHON_EXECUTOR_AGENT_ID as _PYTHON_EXECUTOR_AGENT_ID,
     VIDEO_STORYBOARD_AGENT_ID as _VIDEO_STORYBOARD_AGENT_ID,
@@ -331,7 +330,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
     "name": "Python Code Executor",
     "description": "Use when the user wants to actually run Python code, not simulate it. Executes in a real sandboxed subprocess. Returns stdout, stderr, exit code, execution time, and an expert explanation of what the output means.",
     "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_PYTHON_EXECUTOR_AGENT_ID],
-    "price_per_call_usd": 0.04,
+    "price_per_call_usd": 0.01,
     "tags": ["code-execution", "python", "developer-tools", "compute"],
     "input_schema": {
         "type": "object",
@@ -360,8 +359,8 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
         "field": "timeout",
         "field_type": "scalar",
         "unit_label": "second",
-        "rate_usd": 0.02,
-        "min_usd": 0.05,
+        "rate_usd": 0.00,
+        "min_usd": 0.01,
     },
     "output_examples": [
         {
@@ -454,7 +453,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
     "name": "DNS & SSL Inspector",
     "description": "Use when the task requires checking domain health: DNS records, SSL certificate expiry, or HTTP security headers. Runs live checks against up to 10 domains and returns structured findings with actionable issues.",
     "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_DNS_INSPECTOR_AGENT_ID],
-    "price_per_call_usd": 0.02,
+    "price_per_call_usd": 0.01,
     "tags": ["dns", "ssl", "security", "infrastructure"],
     "kind": "aztea_built",
     "category": "Security",
@@ -480,9 +479,9 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
         "field_type": "array",
         "unit_label": "domain",
         "tiers": [
-            {"max_units": 1,  "price_usd": 0.04},
-            {"max_units": 3,  "price_usd": 0.09},
-            {"max_units": 10, "price_usd": 0.16},
+            {"max_units": 1,  "price_usd": 0.01},
+            {"max_units": 3,  "price_usd": 0.03},
+            {"max_units": 10, "price_usd": 0.08},
         ],
     },
     "output_examples": [
@@ -508,7 +507,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
         "name": "Dependency Auditor",
         "description": "Use this when the user wants to audit their dependencies for security vulnerabilities, outdated packages, or license issues. Accepts the text of a package.json or requirements.txt and returns a structured report: CVEs per package, license risks, and prioritized upgrade recommendations.",
         "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_DEPENDENCY_AUDITOR_AGENT_ID],
-        "price_per_call_usd": 0.03,
+        "price_per_call_usd": 0.01,
         "tags": ["security", "cve", "dependencies", "npm", "pypi", "developer-tools"],
         "kind": "aztea_built",
         "category": "Data",
