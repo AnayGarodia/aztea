@@ -81,13 +81,22 @@ export default function AuthPanel() {
   // landing-page CTAs (which dispatch aztea:auth-tab events with a redirect
   // payload) without forcing a re-mount or mutating the URL — URL mutation
   // mid-form is what caused the previous "List an Agent" reset bug.
+  // Never let the redirect target be /welcome itself — that produced a silent
+  // "sign in just reloads /welcome" bug when the URL accidentally carried
+  // ?redirect=/welcome through a back-button or stale link.
+  const safeRedirect = (val) => {
+    if (!val) return null
+    if (val === '/welcome' || val.startsWith('/welcome?') || val.startsWith('/welcome#')) return null
+    return val
+  }
   const redirectRef = useRef(
-    searchParams.get('redirect')
-    ?? (location.state?.from && location.state.from !== '/welcome' ? location.state.from : '/overview')
+    safeRedirect(searchParams.get('redirect'))
+    ?? safeRedirect(location.state?.from)
+    ?? '/overview'
   )
   // Keep ref in sync if the URL itself supplies a fresher redirect value
   // (e.g. RequireLegalAcceptance bouncing the user from a protected route).
-  const urlRedirect = searchParams.get('redirect')
+  const urlRedirect = safeRedirect(searchParams.get('redirect'))
   if (urlRedirect && urlRedirect !== redirectRef.current) redirectRef.current = urlRedirect
   const redirectTo = redirectRef.current
   const [tab, setTab] = useState(() => searchParams.get('tab') === 'register' ? 'register' : 'signin')
@@ -170,7 +179,7 @@ export default function AuthPanel() {
   useEffect(() => {
     const handler = (event) => {
       const next = event?.detail?.tab
-      const nextRedirect = event?.detail?.redirect
+      const nextRedirect = safeRedirect(event?.detail?.redirect)
       if (nextRedirect) redirectRef.current = nextRedirect
       if (next === 'signin' || next === 'register') switchTabRef.current(next)
     }
