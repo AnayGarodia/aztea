@@ -293,7 +293,7 @@ async function run() {
     console.log()
     let res
     try {
-      res = await withSpinner('Signing in', () => post(`${BASE_URL}/auth/login`, { email, password }))
+      res = await withSpinner('Signing in', () => post(`${BASE_URL}/auth/login`, { email, password, rotate: true }))
     } catch (err) {
       console.error(`Failed to connect to ${BASE_URL}: ${err.message}`)
       console.error('Check your internet connection, or try again — the server may be temporarily slow.')
