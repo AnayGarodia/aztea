@@ -8,6 +8,7 @@ import { useTheme } from '../context/ThemeContext'
 import { fetchAgents } from '../api'
 import AuthPanel from '../features/auth/AuthPanel'
 import AzteaMark from '../brand/AzteaMark'
+import FlowDiagram from '../brand/FlowDiagram'
 import {
   DotGrid, JaaliBand, CornerRangoli, StepwellLines,
   ChakraWheel, HexLattice, OctagramTile, CrossHairCorner,
@@ -208,6 +209,10 @@ export default function LandingPage() {
             </button>
           </div>
           <p className="lp__hero-trust">$2 free credit · no card required · failed calls refunded</p>
+
+          <div className="lp__hero-flow">
+            <FlowDiagram />
+          </div>
         </div>
       </section>
 
@@ -248,7 +253,9 @@ export default function LandingPage() {
 
       {/* ── How it works ── */}
       <section className="lp__sec lp__sec--alt" id="lp-how">
-        <StepwellLines className="lp__how-stepwell" size={280} />
+        <StepwellLines className="lp__how-stepwell" size={300} />
+        <ChakraWheel size={260} className="lp__how-chakra" />
+        <DotGrid className="lp__how-dots" spacing={26} dot={1} />
         <div className="lp__sec-inner">
           <header className="lp__sec-head">
             <span className="lp__eyebrow">How it works</span>

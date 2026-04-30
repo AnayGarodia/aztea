@@ -1,0 +1,11 @@
+.flow {
+  width: 100%;
+  height: auto;
+  max-width: 720px;
+  color: var(--accent-border);
+  overflow: visible;
+}
+
+@media (max-width: 720px) {
+  .flow { max-height: 220px; }
+}

@@ -1,28 +1,54 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-32 -32 64 64" width="64" height="64">
   <style>
-    .ring  { stroke: #063F43; stroke-width: 1.1; fill: none; opacity: 0.5; }
-    .ring2 { stroke: #063F43; stroke-width: 1.1; fill: none; opacity: 0.65; }
-    .sq    { stroke: #063F43; stroke-width: 2; fill: none; }
-    .dia   { fill: #C65F3F; }
+    .stroke { stroke: #063F43; fill: none; }
+    .fill   { fill: #063F43; }
+    .accent { fill: #C65F3F; }
     @media (prefers-color-scheme: dark) {
-      .ring, .ring2, .sq { stroke: #7EB9B0; }
-      .dia { fill: #E07A57; }
-    }
-    @keyframes spinCW  { from { transform: rotate(0deg); }  to { transform: rotate(360deg); } }
-    @keyframes spinCCW { from { transform: rotate(0deg); }  to { transform: rotate(-360deg); } }
-    @keyframes pulse   { 0%, 100% { transform: rotate(45deg) scale(1); opacity: 1; }
-                          50%      { transform: rotate(45deg) scale(0.78); opacity: 0.78; } }
-    .sqA, .sqB, .diaWrap { transform-origin: 24px 24px; transform-box: fill-box; }
-    .sqA     { animation: spinCW 60s linear infinite; }
-    .sqB     { animation: spinCCW 40s linear infinite; }
-    .diaWrap { animation: pulse 4.5s ease-in-out infinite; }
-    @media (prefers-reduced-motion: reduce) {
-      .sqA, .sqB, .diaWrap { animation: none; }
+      .stroke { stroke: #7EB9B0; }
+      .fill   { fill: #7EB9B0; }
+      .accent { fill: #E07A57; }
     }
   </style>
-  <circle class="ring" cx="24" cy="24" r="22" />
-  <g class="sqA"><rect class="sq" x="8" y="8" width="32" height="32" /></g>
-  <g class="sqB"><rect class="sq" x="8" y="8" width="32" height="32" transform="rotate(45 24 24)" /></g>
-  <circle class="ring2" cx="24" cy="24" r="6" />
-  <g class="diaWrap"><rect class="dia" x="20.5" y="20.5" width="7" height="7" transform="rotate(45 24 24)" /></g>
+
+  <!-- Outer ring + 12 diamond ticks (rotates clockwise) -->
+  <g>
+    <circle class="stroke" cx="0" cy="0" r="28" stroke-width="1.2" opacity="0.5" />
+    <g>
+      <g><rect class="fill" x="-1.8" y="-30.2" width="3.6" height="3.6" opacity="0.78" transform="rotate(45 0 -28.4)" /></g>
+      <g transform="rotate(30)"><rect class="fill" x="-1.8" y="-30.2" width="3.6" height="3.6" opacity="0.78" transform="rotate(45 0 -28.4)" /></g>
+      <g transform="rotate(60)"><rect class="fill" x="-1.8" y="-30.2" width="3.6" height="3.6" opacity="0.78" transform="rotate(45 0 -28.4)" /></g>
+      <g transform="rotate(90)"><rect class="fill" x="-1.8" y="-30.2" width="3.6" height="3.6" opacity="0.78" transform="rotate(45 0 -28.4)" /></g>
+      <g transform="rotate(120)"><rect class="fill" x="-1.8" y="-30.2" width="3.6" height="3.6" opacity="0.78" transform="rotate(45 0 -28.4)" /></g>
+      <g transform="rotate(150)"><rect class="fill" x="-1.8" y="-30.2" width="3.6" height="3.6" opacity="0.78" transform="rotate(45 0 -28.4)" /></g>
+      <g transform="rotate(180)"><rect class="fill" x="-1.8" y="-30.2" width="3.6" height="3.6" opacity="0.78" transform="rotate(45 0 -28.4)" /></g>
+      <g transform="rotate(210)"><rect class="fill" x="-1.8" y="-30.2" width="3.6" height="3.6" opacity="0.78" transform="rotate(45 0 -28.4)" /></g>
+      <g transform="rotate(240)"><rect class="fill" x="-1.8" y="-30.2" width="3.6" height="3.6" opacity="0.78" transform="rotate(45 0 -28.4)" /></g>
+      <g transform="rotate(270)"><rect class="fill" x="-1.8" y="-30.2" width="3.6" height="3.6" opacity="0.78" transform="rotate(45 0 -28.4)" /></g>
+      <g transform="rotate(300)"><rect class="fill" x="-1.8" y="-30.2" width="3.6" height="3.6" opacity="0.78" transform="rotate(45 0 -28.4)" /></g>
+      <g transform="rotate(330)"><rect class="fill" x="-1.8" y="-30.2" width="3.6" height="3.6" opacity="0.78" transform="rotate(45 0 -28.4)" /></g>
+      <animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="50s" repeatCount="indefinite" />
+    </g>
+  </g>
+
+  <!-- 8-petal lotus star (rotates counter-clockwise) -->
+  <g>
+    <path class="stroke" d="M 0 -22 Q 5 -12 0 -4 Q -5 -12 0 -22 Z" stroke-width="1.4" opacity="0.85" />
+    <path class="stroke" d="M 0 -22 Q 5 -12 0 -4 Q -5 -12 0 -22 Z" stroke-width="1.4" opacity="0.85" transform="rotate(45)" />
+    <path class="stroke" d="M 0 -22 Q 5 -12 0 -4 Q -5 -12 0 -22 Z" stroke-width="1.4" opacity="0.85" transform="rotate(90)" />
+    <path class="stroke" d="M 0 -22 Q 5 -12 0 -4 Q -5 -12 0 -22 Z" stroke-width="1.4" opacity="0.85" transform="rotate(135)" />
+    <path class="stroke" d="M 0 -22 Q 5 -12 0 -4 Q -5 -12 0 -22 Z" stroke-width="1.4" opacity="0.85" transform="rotate(180)" />
+    <path class="stroke" d="M 0 -22 Q 5 -12 0 -4 Q -5 -12 0 -22 Z" stroke-width="1.4" opacity="0.85" transform="rotate(225)" />
+    <path class="stroke" d="M 0 -22 Q 5 -12 0 -4 Q -5 -12 0 -22 Z" stroke-width="1.4" opacity="0.85" transform="rotate(270)" />
+    <path class="stroke" d="M 0 -22 Q 5 -12 0 -4 Q -5 -12 0 -22 Z" stroke-width="1.4" opacity="0.85" transform="rotate(315)" />
+    <animateTransform attributeName="transform" type="rotate" from="360" to="0" dur="36s" repeatCount="indefinite" />
+  </g>
+
+  <!-- Inner ring -->
+  <circle class="stroke" cx="0" cy="0" r="8" stroke-width="1.1" opacity="0.6" />
+
+  <!-- Central bindu — pulsing diamond -->
+  <g>
+    <rect class="accent" x="-3.5" y="-3.5" width="7" height="7" transform="rotate(45)" />
+    <animateTransform attributeName="transform" type="scale" values="1;0.78;1" dur="4.5s" repeatCount="indefinite" />
+  </g>
 </svg>
