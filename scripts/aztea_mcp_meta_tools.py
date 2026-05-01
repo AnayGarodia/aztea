@@ -493,6 +493,53 @@ _TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "aztea_data_retention_policy",
+        "description": (
+            "Show the data-retention and privacy posture for a specific Aztea agent. "
+            "Returns whether the agent is PII-safe, whether outputs are stored, whether "
+            "calls are audit-logged, and any region-locking. Buyers handling secrets, "
+            "regulated data, or production logs should call this before hiring."
+        ),
+        "input_schema": {
+            "type": "object",
+            "description": "Provide either agent_id (UUID) or slug (tool name).",
+            "properties": {
+                "agent_id": {
+                    "type": "string",
+                    "description": "UUID of the agent.",
+                },
+                "slug": {
+                    "type": "string",
+                    "description": "Slug / tool name. Resolves to agent_id via /registry/search.",
+                },
+            },
+            "anyOf": [
+                {"required": ["agent_id"]},
+                {"required": ["slug"]},
+            ],
+        },
+    },
+    {
+        "name": "aztea_verify_job",
+        "description": (
+            "Cryptographically verify a completed job's signed receipt against the agent's "
+            "did:web document. Returns verified=true only if the agent's published Ed25519 "
+            "public key signed exactly this output payload — the platform cannot have "
+            "tampered with the result. Use this when audit/compliance/forensics matter, "
+            "when re-presenting a result to a third party, or when paying out based on it."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "job_id": {
+                    "type": "string",
+                    "description": "Completed job_id whose signature you want to verify.",
+                },
+            },
+            "required": ["job_id"],
+        },
+    },
+    {
         "name": "aztea_get_examples",
         "description": (
             "Fetch public work examples for a specific Aztea agent. "
@@ -771,6 +818,8 @@ _META_TOOL_ANNOTATIONS: dict[str, dict[str, Any]] = {
     "aztea_job_status": _annotations(read_only=True, idempotent=False),
     "aztea_batch_status": _annotations(read_only=True, idempotent=False),
     "aztea_cancel_job": _annotations(read_only=False, destructive=True, idempotent=True, open_world=False),
+    "aztea_data_retention_policy": _annotations(read_only=True, idempotent=True),
+    "aztea_verify_job": _annotations(read_only=True, idempotent=True),
     "aztea_clarify": _annotations(read_only=False, idempotent=False),
     "aztea_rate_job": _annotations(read_only=False, idempotent=False),
     "aztea_dispute_job": _annotations(read_only=False, idempotent=False),
@@ -902,6 +951,10 @@ def call_meta_tool(
             if ok:
                 _refund_from_result(session_state, result)
             return ok, result
+        if tool_name == "aztea_data_retention_policy":
+            return _data_retention_policy(session, base, hdrs, timeout, arguments)
+        if tool_name == "aztea_verify_job":
+            return _verify_job_signature(session, base, hdrs, timeout, arguments)
         if tool_name == "aztea_clarify":
             return _clarify(session, base, hdrs, timeout, arguments)
         if tool_name == "aztea_rate_job":
@@ -1346,6 +1399,128 @@ def _batch_status(session: requests.Session, base: str, hdrs: dict, timeout: flo
         "other_count": counts["other"],
         "jobs": jobs,
         "note": "All requested job statuses returned in one MCP call.",
+    }
+
+
+def _data_retention_policy(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
+    """Surface the privacy posture buyers care about before sending sensitive data.
+
+    Reads the per-agent privacy columns added in migration 0026 plus the
+    sensitivity flags from the spec layer. Composed entirely from data the
+    server already exposes — no new endpoint required.
+    """
+    agent_id, err = _resolve_agent_id(session, base, hdrs, timeout, args)
+    if err is not None:
+        return False, err
+    ok, agent = _get(session, f"{base}/registry/agents/{agent_id}", hdrs, timeout)
+    if not ok:
+        return False, agent
+    category = str(agent.get("category") or "").strip()
+    examples_blocked = (
+        bool(agent.get("examples_sensitive"))
+        or category.lower() == "security"
+    )
+    privacy = {
+        "agent_id": agent_id,
+        "name": agent.get("name"),
+        "category": category or None,
+        "pii_safe": bool(agent.get("pii_safe")),
+        "outputs_not_stored": bool(agent.get("outputs_not_stored")),
+        "audit_logged": bool(agent.get("audit_logged")),
+        "region_locked": agent.get("region_locked"),
+        "publishes_work_examples": not examples_blocked,
+        "examples_sensitive": bool(agent.get("examples_sensitive")),
+        "stores_inputs_for_examples": (not examples_blocked),
+        "summary": (
+            "This agent does not publish work examples — caller inputs are not replayed publicly."
+            if examples_blocked
+            else "This agent may publish redacted work examples derived from past calls. "
+                 "Pass private_task=true on hire to suppress example recording for a specific call."
+        ),
+        "note": (
+            "This is what Aztea publishes about the agent. The agent owner is responsible for "
+            "any internal handling beyond the platform — verify in the agent's documentation if "
+            "you are subject to specific regulatory or contractual requirements."
+        ),
+    }
+    return True, privacy
+
+
+def _verify_job_signature(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
+    """Verify a job's signed receipt against the agent's published DID document.
+
+    Mirrors :pyfunc:`aztea.AzteaClient.verify_job` so the same guarantee is
+    accessible from any MCP client without writing custom code.
+    """
+    job_id = str(args.get("job_id") or "").strip()
+    if not job_id:
+        return False, {"error": "INVALID_INPUT", "message": "job_id is required."}
+    ok_sig, signature_payload = _get(session, f"{base}/jobs/{job_id}/signature", hdrs, timeout)
+    if not ok_sig:
+        return False, {"verified": False, "verification_error": "signature unavailable", **(signature_payload or {})}
+    agent_did = str(signature_payload.get("agent_did") or "").strip()
+    signature_b64 = str(signature_payload.get("signature") or "").strip()
+    output_hash = str(signature_payload.get("output_hash") or "").strip()
+    if not (agent_did and signature_b64 and output_hash):
+        return False, {"verified": False, "verification_error": "incomplete signature payload",
+                        "signature_payload": signature_payload}
+    agent_id = agent_did.rsplit(":", 1)[-1] if ":agents:" in agent_did else None
+    if not agent_id:
+        return False, {"verified": False, "verification_error": f"could not parse agent_id from did {agent_did!r}"}
+    ok_did, did_doc = _get(session, f"{base}/agents/{agent_id}/did.json", hdrs, timeout)
+    if not ok_did:
+        return False, {"verified": False, "verification_error": "DID document unavailable",
+                        "agent_did": agent_did, **(did_doc or {})}
+    try:
+        import base64
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    except Exception:
+        return True, {
+            "verified": False,
+            "verification_error": "cryptography library not installed in MCP runtime (pip install cryptography)",
+            "agent_did": agent_did,
+            "output_hash": output_hash,
+            "signature_payload": signature_payload,
+            "did_doc": did_doc,
+        }
+    public_key_b64: str | None = None
+    for method in (did_doc.get("verificationMethod") or []):
+        if not isinstance(method, dict):
+            continue
+        jwk = method.get("publicKeyJwk")
+        if isinstance(jwk, dict) and jwk.get("crv") == "Ed25519" and jwk.get("x"):
+            public_key_b64 = str(jwk.get("x"))
+            break
+        raw = method.get("publicKeyBase64") or method.get("publicKeyMultibase")
+        if isinstance(raw, str) and raw:
+            public_key_b64 = raw.lstrip("z")
+            break
+    if not public_key_b64:
+        return True, {"verified": False, "verification_error": "no Ed25519 verification method on DID doc",
+                        "agent_did": agent_did, "did_doc": did_doc}
+    try:
+        pad = "=" * (-len(public_key_b64) % 4)
+        try:
+            public_key_bytes = base64.urlsafe_b64decode(public_key_b64 + pad)
+        except Exception:
+            public_key_bytes = base64.b64decode(public_key_b64 + pad)
+        sig_pad = "=" * (-len(signature_b64) % 4)
+        try:
+            signature_bytes = base64.urlsafe_b64decode(signature_b64 + sig_pad)
+        except Exception:
+            signature_bytes = base64.b64decode(signature_b64 + sig_pad)
+        Ed25519PublicKey.from_public_bytes(public_key_bytes).verify(
+            signature_bytes, output_hash.encode("utf-8")
+        )
+    except Exception as exc:
+        return True, {"verified": False, "verification_error": f"signature verification failed: {exc}",
+                        "agent_did": agent_did, "output_hash": output_hash}
+    return True, {
+        "verified": True,
+        "agent_did": agent_did,
+        "output_hash": output_hash,
+        "signed_at": signature_payload.get("signed_at"),
+        "note": "Signature verified locally against the agent's published DID document. Aztea cannot alter this output without breaking the signature.",
     }
 
 

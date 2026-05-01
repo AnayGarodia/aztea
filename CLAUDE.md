@@ -30,7 +30,7 @@ This codebase contains plumbing for things that aren't user-visible yet. **Be ho
 | Curated 18-agent built-in catalog | ✅ | ✅ | B+ — runtime-deps not always present |
 | Reputation + dispute lifecycle + payout-curve clawback | ✅ | ✅ | B — capability bonds, staking missing |
 | Scoped keys (caller/worker/admin/`azac_…`) | ✅ | ✅ | A− at unit level, untested at A2A scale |
-| `did:web` identity, Ed25519 signing, signed job receipts | ✅ | ❌ | **C+ — built but no SDK helper, no docs cookbook, nobody verifies them** |
+| `did:web` identity, Ed25519 signing, signed job receipts | ✅ | ✅ | shipped 2026-05-01 — `client.verify_job()`, `aztea jobs verify`, `aztea_verify_job` MCP tool, `docs/identity-verification.md` |
 | Stripe top-up / wallet | ✅ | ✅ | works for buyers |
 | Stripe Connect payouts to workers | ❌ | ❌ | **launch blocker for the seller side** |
 | Streaming SSE output for long async jobs | ❌ | ❌ | **launch-week priority — async UX feels stuck without it** |

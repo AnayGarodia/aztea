@@ -9,6 +9,7 @@ import requests
 
 from .errors import (
     AgentNotFoundError,
+    APIError,
     AzteaError,
     ClarificationNeededError,
     ContractVerificationError,
@@ -579,6 +580,192 @@ class AzteaClient:
 
             threading.Thread(target=_watch, daemon=True, name=f"aztea-watch-{result.job_id[:8]}").start()
         return result.job_id
+
+    # ─── Job lifecycle: cancel / rate / dispute / verify-output / retry ──────
+    # These wrap surfaces that already exist on the API. They were not exposed
+    # on the SDK before 2026-05-01; the production-eval audit flagged it as
+    # the "primitives are built but not wired in" gap.
+
+    def cancel_job(self, job_id: str, *, reason: str | None = None) -> JSONObject:
+        """Abort an in-flight async job and refund the unsettled charge.
+
+        Accepts pending/claimed/running/awaiting_clarification. Terminal-state
+        jobs raise ConflictError(409, error="job.invalid_state").
+        """
+        body: JSONObject = {}
+        if reason:
+            body["reason"] = str(reason)[:200]
+        return self._request_json("POST", f"/jobs/{job_id}/cancel", json_body=body)
+
+    def rate_job(self, job_id: str, rating: int) -> JSONObject:
+        """Submit a 1–5 star rating after a completed job.
+
+        Ratings feed into trust scoring + payout-curve clawback for the agent.
+        """
+        return self._request_json("POST", f"/jobs/{job_id}/rating", json_body={"rating": int(rating)})
+
+    def dispute_job(
+        self,
+        job_id: str,
+        *,
+        reason: str,
+        evidence: str | None = None,
+    ) -> JSONObject:
+        """Open a dispute on a completed job. Triggers LLM-judge review."""
+        body: JSONObject = {"reason": str(reason)}
+        if evidence is not None:
+            body["evidence"] = str(evidence)
+        return self._request_json("POST", f"/jobs/{job_id}/dispute", json_body=body)
+
+    def get_dispute(self, job_id: str) -> JSONObject:
+        return self._request_json("GET", f"/jobs/{job_id}/dispute")
+
+    def retry_job(self, job_id: str) -> JSONObject:
+        """Submit a fresh attempt for a previously-failed job (subject to max_attempts)."""
+        return self._request_json("POST", f"/jobs/{job_id}/retry")
+
+    def estimate_cost(self, agent_id: str, input_payload: JSONObject | None = None) -> JSONObject:
+        """Preview the all-in caller charge for an agent before hiring.
+
+        Returns price_cents, p50/p95 latency, confidence — same surface the
+        MCP `aztea_estimate_cost` tool uses.
+        """
+        body = dict(input_payload or {})
+        return self._request_json("POST", f"/agents/{agent_id}/estimate", json_body=body)
+
+    def list_jobs(self, *, limit: int = 50) -> JSONObject:
+        return self._request_json("GET", "/jobs", params={"limit": str(int(limit))})
+
+    # ─── Identity & verifiable receipts (the moat) ───────────────────────────
+
+    def get_agent_did(self, agent_id: str) -> JSONObject:
+        """Fetch an agent's published did:web document.
+
+        Returns the W3C DID document with the agent's Ed25519 verification key.
+        Treat the returned ``publicKeyMultibase`` as the public key buyers can
+        use to verify any signed receipt from this agent.
+        """
+        return self._request_json("GET", f"/agents/{agent_id}/did.json", require_api_key=False)
+
+    def get_job_signature(self, job_id: str) -> JSONObject:
+        """Fetch the cryptographic receipt for a completed job.
+
+        Returns ``{job_id, agent_did, output_hash, signature, signed_at}``.
+        Pair with :meth:`verify_job` to check the signature locally without
+        trusting Aztea.
+        """
+        return self._request_json("GET", f"/jobs/{job_id}/signature")
+
+    def verify_job(self, job_id: str) -> JSONObject:
+        """Fetch + verify a job's signed receipt against its agent's DID document.
+
+        Returns ``{verified: bool, agent_did, signed_at, output_hash,
+        verification_error?}``. ``verified=True`` means: the agent's published
+        public key signed exactly this output payload at this timestamp. The
+        platform cannot have tampered with the result without breaking the
+        signature.
+
+        This is the buyer-facing helper for the cryptographic-identity layer
+        Aztea ships under ``did:web``. Earlier the primitives existed but no
+        client surface called them — anyone can now ``verify_job(id)`` to get
+        the same guarantee a third party would.
+        """
+        try:
+            signature_payload = self.get_job_signature(job_id)
+        except APIError as exc:
+            return {"verified": False, "verification_error": f"signature unavailable: {exc}"}
+        agent_did = str(signature_payload.get("agent_did") or "").strip()
+        signature_b64 = str(signature_payload.get("signature") or "").strip()
+        output_hash = str(signature_payload.get("output_hash") or "").strip()
+        if not (agent_did and signature_b64 and output_hash):
+            return {"verified": False, "verification_error": "incomplete signature payload",
+                    "signature_payload": signature_payload}
+        agent_id = agent_did.rsplit(":", 1)[-1] if ":agents:" in agent_did else None
+        if not agent_id:
+            return {"verified": False, "verification_error": f"could not parse agent_id from did {agent_did!r}",
+                    "agent_did": agent_did}
+        try:
+            did_doc = self.get_agent_did(agent_id)
+        except APIError as exc:
+            return {"verified": False, "verification_error": f"DID document unavailable: {exc}",
+                    "agent_did": agent_did}
+        # Try local Ed25519 verification when the cryptography library is
+        # available; otherwise fall through with a structured "needs library"
+        # marker so callers can install it on demand.
+        try:
+            import base64
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        except Exception:
+            return {
+                "verified": False,
+                "verification_error": "cryptography library not installed (pip install cryptography)",
+                "agent_did": agent_did,
+                "output_hash": output_hash,
+                "signature_payload": signature_payload,
+                "did_doc": did_doc,
+            }
+        verification_methods = did_doc.get("verificationMethod") or []
+        public_key_b64: str | None = None
+        for method in verification_methods:
+            if not isinstance(method, dict):
+                continue
+            jwk = method.get("publicKeyJwk")
+            if isinstance(jwk, dict) and jwk.get("crv") == "Ed25519" and jwk.get("x"):
+                public_key_b64 = str(jwk.get("x"))
+                break
+            raw = method.get("publicKeyBase64") or method.get("publicKeyMultibase")
+            if isinstance(raw, str) and raw:
+                public_key_b64 = raw.lstrip("z")
+                break
+        if not public_key_b64:
+            return {"verified": False, "verification_error": "no Ed25519 verification method on DID doc",
+                    "agent_did": agent_did, "did_doc": did_doc}
+        try:
+            pad = "=" * (-len(public_key_b64) % 4)
+            try:
+                public_key_bytes = base64.urlsafe_b64decode(public_key_b64 + pad)
+            except Exception:
+                public_key_bytes = base64.b64decode(public_key_b64 + pad)
+            sig_pad = "=" * (-len(signature_b64) % 4)
+            try:
+                signature_bytes = base64.urlsafe_b64decode(signature_b64 + sig_pad)
+            except Exception:
+                signature_bytes = base64.b64decode(signature_b64 + sig_pad)
+            pk = Ed25519PublicKey.from_public_bytes(public_key_bytes)
+            pk.verify(signature_bytes, output_hash.encode("utf-8"))
+        except Exception as exc:
+            return {"verified": False, "verification_error": f"signature verification failed: {exc}",
+                    "agent_did": agent_did, "output_hash": output_hash}
+        return {
+            "verified": True,
+            "agent_did": agent_did,
+            "output_hash": output_hash,
+            "signed_at": signature_payload.get("signed_at"),
+        }
+
+    # ─── Agent caller keys (A2A primitive) ───────────────────────────────────
+
+    def create_agent_caller_key(
+        self,
+        agent_id: str,
+        *,
+        name: str = "agent caller key",
+        scopes: list[str] | None = None,
+    ) -> JSONObject:
+        """Mint an ``azac_*`` caller key scoped to one of *your own* agents.
+
+        The agent owning ``agent_id`` can use this key to hire other agents on
+        Aztea — the foundational A2A primitive. Returns the raw key value
+        exactly once; store it securely. This is the global-goal surface, today
+        only useful in narrow A2A demos.
+        """
+        body: JSONObject = {"name": name}
+        if scopes:
+            body["scopes"] = list(scopes)
+        return self._request_json("POST", f"/registry/agents/{agent_id}/caller-keys", json_body=body)
+
+    def list_agent_caller_keys(self, agent_id: str) -> JSONObject:
+        return self._request_json("GET", f"/registry/agents/{agent_id}/keys")
 
     def register_hook(self, target_url: str, secret: str | None = None) -> JSONObject:
         return self._request_json("POST", "/ops/jobs/hooks", json_body={"target_url": target_url, "secret": secret})

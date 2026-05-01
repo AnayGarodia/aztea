@@ -630,6 +630,53 @@ def test_get_examples_accepts_slug(monkeypatch):
     assert result["agent_id"] == "agent-uuid"
 
 
+def test_data_retention_policy_returns_privacy_summary(monkeypatch):
+    def _fake_post(_session, url, _hdrs, _timeout, body):
+        # _resolve_agent_id will hit /registry/search when only slug is given; we
+        # bypass that by passing agent_id directly so this fixture is never called.
+        raise AssertionError(f"unexpected POST {url} {body}")
+
+    def _fake_get(_session, url, _hdrs, _timeout):
+        assert url.endswith("/registry/agents/agent-uuid")
+        return True, {
+            "agent_id": "agent-uuid",
+            "name": "Secret Scanner",
+            "category": "Security",
+            "examples_sensitive": True,
+            "pii_safe": True,
+            "outputs_not_stored": False,
+            "audit_logged": True,
+            "region_locked": None,
+        }
+
+    monkeypatch.setattr(meta_tools, "_post", _fake_post)
+    monkeypatch.setattr(meta_tools, "_get", _fake_get)
+    ok, result = meta_tools._data_retention_policy(
+        session=None, base="https://aztea.test", hdrs={}, timeout=5,
+        args={"agent_id": "agent-uuid"},
+    )
+    assert ok is True
+    assert result["publishes_work_examples"] is False
+    assert result["pii_safe"] is True
+    assert result["category"] == "Security"
+    assert "does not publish work examples" in result["summary"]
+
+
+def test_verify_job_signature_returns_unverified_on_missing_signature(monkeypatch):
+    def _fake_get(_session, url, _hdrs, _timeout):
+        # Pretend the signature endpoint 404s
+        return False, {"error": "JOB_NOT_FOUND", "message": "no such job"}
+
+    monkeypatch.setattr(meta_tools, "_get", _fake_get)
+    ok, result = meta_tools._verify_job_signature(
+        session=None, base="https://aztea.test", hdrs={}, timeout=5,
+        args={"job_id": "job-x"},
+    )
+    assert ok is False
+    assert result["verified"] is False
+    assert "signature unavailable" in result["verification_error"]
+
+
 def test_cancel_job_is_in_meta_tool_names_and_schema():
     assert "aztea_cancel_job" in meta_tools.META_TOOL_NAMES
     tools = {t["name"]: t for t in meta_tools.get_meta_tools()}

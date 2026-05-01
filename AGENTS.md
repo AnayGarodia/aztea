@@ -32,30 +32,31 @@ Don't pretend either number is higher. See the table in `CLAUDE.md` ("Where we a
 
 Ordered by impact / effort. Tick them off in this file when shipped — same PR.
 
-1. ⏳ Streaming SSE output for long async jobs (`/jobs/{id}/stream`)
-2. ⏳ `aztea_data_retention_policy` meta-tool + per-agent privacy field on the registry
-3. ⏳ `client.verify_job(job_id)` Python SDK helper + `docs/identity-verification.md` cookbook
-4. ⏳ Stripe Connect payouts so agents can cash out
-5. ⏳ Eval-gate before community SKILL.md goes public (close the demo-skill pollution loop)
-6. ⏳ Per-agent reputation dashboard (p50/p99 latency, success rate, refund rate, dispute rate)
-7. ⏳ `git_diff_review` recipe — diff in, markdown review out (the killer demo)
-8. ⏳ Output-shape templates (`as: "markdown" | "github_pr_comment" | "slack_blocks"`)
-9. ⏳ Public status page + signed monetary-policy statement at `/policy/credits`
-10. ⏳ Frontend consistency pass: shared `src/utils/format.js`, kill inline-style blocks, inline error states everywhere
-11. ⏳ Cold-install QA on Mac / Linux / Windows for `npx aztea-cli@latest init`
-12. ⏳ Honest `ROADMAP.md` listing every global-goal item with a timeline
+1. ⏳ Streaming SSE output for long async jobs (`/jobs/{id}/stream` exists — wire it through SDK + CLI + MCP)
+2. ⏳ Stripe Connect payouts so agents can cash out
+3. ⏳ Eval-gate before community SKILL.md goes public (close the demo-skill pollution loop)
+4. ⏳ Per-agent reputation dashboard (p50/p99 latency, success rate, refund rate, dispute rate)
+5. ⏳ `git_diff_review` recipe — diff in, markdown review out (the killer demo)
+6. ⏳ Output-shape templates (`as: "markdown" | "github_pr_comment" | "slack_blocks"`)
+7. ⏳ Public status page + signed monetary-policy statement at `/policy/credits`
+8. ⏳ Frontend consistency pass: shared `src/utils/format.js`, kill inline-style blocks, inline error states everywhere
+9. ⏳ Cold-install QA on Mac / Linux / Windows for `npx aztea-cli@latest init`
+10. ⏳ Honest `ROADMAP.md` listing every global-goal item with a timeline
+11. ⏳ A2A end-to-end demo using `azac_*` keys — one Aztea agent hires another in production
 
 Recently shipped (don't redo):
 
-- ✅ `aztea_cancel_job` meta-tool + `POST /jobs/{id}/cancel` route (commit `dc5ea9a`, 2026-05-01)
-- ✅ Privacy gate against `aztea_get_examples` leak — three-layer guard in `_record_public_work_example` (commit `dc5ea9a`)
-- ✅ Demo-skill blocklist on `/registry/agents` (commit `6419fa6`)
-- ✅ Word-boundary truncation in MCP search render (commit `dc5ea9a`)
-- ✅ Search-ranker verb rules (sql_explainer vs db_sandbox by intent) (commit `dc5ea9a`)
-- ✅ `slug` accepted as alias to `agent_id` on `aztea_estimate_cost` and `aztea_get_examples` (commit `dc5ea9a`)
-- ✅ Required-field schemas on `cve_lookup` and `code_review` (commit `dc5ea9a`)
-- ✅ Output-schema fields surfaced by `aztea_describe` (commit `dc5ea9a`)
-- ✅ `recipe_id` canonical, `recipe_name` deprecated alias (commit `dc5ea9a`)
+- ✅ Wiring pass: `client.cancel_job/rate_job/dispute_job/get_dispute/retry_job/estimate_cost/list_jobs/get_agent_did/get_job_signature/verify_job/create_agent_caller_key/list_agent_caller_keys`; CLI `aztea jobs cancel/rate/dispute/verify/estimate`; MCP `aztea_data_retention_policy`, `aztea_verify_job`. Closes the "primitives built but not exposed" gap.
+- ✅ `docs/identity-verification.md` cookbook published (the moat is now usable).
+- ✅ `aztea_cancel_job` meta-tool + `POST /jobs/{id}/cancel` route (commit `dc5ea9a`, 2026-05-01).
+- ✅ Privacy gate against `aztea_get_examples` leak — three-layer guard in `_record_public_work_example` (commit `dc5ea9a`).
+- ✅ Demo-skill blocklist on `/registry/agents` (commit `6419fa6`).
+- ✅ Word-boundary truncation in MCP search render (commit `dc5ea9a`).
+- ✅ Search-ranker verb rules (sql_explainer vs db_sandbox by intent) (commit `dc5ea9a`).
+- ✅ `slug` accepted as alias to `agent_id` on `aztea_estimate_cost` and `aztea_get_examples` (commit `dc5ea9a`).
+- ✅ Required-field schemas on `cve_lookup` and `code_review` (commit `dc5ea9a`).
+- ✅ Output-schema fields surfaced by `aztea_describe` (commit `dc5ea9a`).
+- ✅ `recipe_id` canonical, `recipe_name` deprecated alias (commit `dc5ea9a`).
 
 ---
 

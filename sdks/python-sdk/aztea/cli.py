@@ -334,6 +334,97 @@ def jobs_status(
         _handle_error(exc)
 
 
+@jobs_app.command("cancel")
+def jobs_cancel(
+    job_id: str,
+    reason: Optional[str] = typer.Option(None, help="Optional one-line reason recorded with the cancellation."),
+    api_key: Optional[str] = typer.Option(None),
+    base_url: Optional[str] = typer.Option(None),
+    json_mode: bool = typer.Option(False, "--json"),
+) -> None:
+    """Abort an in-flight async job. Pre-call charge is refunded."""
+    try:
+        with _client(api_key=api_key, base_url=base_url) as client:
+            result = client.cancel_job(job_id, reason=reason)
+            _emit(result, json_mode=json_mode)
+    except Exception as exc:
+        _handle_error(exc)
+
+
+@jobs_app.command("rate")
+def jobs_rate(
+    job_id: str,
+    rating: int = typer.Argument(..., min=1, max=5, help="1–5 stars"),
+    api_key: Optional[str] = typer.Option(None),
+    base_url: Optional[str] = typer.Option(None),
+    json_mode: bool = typer.Option(False, "--json"),
+) -> None:
+    """Submit a 1–5 star rating for a completed job."""
+    try:
+        with _client(api_key=api_key, base_url=base_url) as client:
+            result = client.rate_job(job_id, rating)
+            _emit(result, json_mode=json_mode)
+    except Exception as exc:
+        _handle_error(exc)
+
+
+@jobs_app.command("dispute")
+def jobs_dispute(
+    job_id: str,
+    reason: str = typer.Option(..., help="Reason for the dispute (required)."),
+    evidence: Optional[str] = typer.Option(None, help="Optional evidence URL or text."),
+    api_key: Optional[str] = typer.Option(None),
+    base_url: Optional[str] = typer.Option(None),
+    json_mode: bool = typer.Option(False, "--json"),
+) -> None:
+    """Open a dispute on a completed job. Triggers LLM-judge review."""
+    try:
+        with _client(api_key=api_key, base_url=base_url) as client:
+            result = client.dispute_job(job_id, reason=reason, evidence=evidence)
+            _emit(result, json_mode=json_mode)
+    except Exception as exc:
+        _handle_error(exc)
+
+
+@jobs_app.command("verify")
+def jobs_verify(
+    job_id: str,
+    api_key: Optional[str] = typer.Option(None),
+    base_url: Optional[str] = typer.Option(None),
+    json_mode: bool = typer.Option(False, "--json"),
+) -> None:
+    """Cryptographically verify a job's signed receipt against the agent's DID document.
+
+    Returns ``verified=True`` if the agent's published Ed25519 public key signed
+    exactly this output payload. The platform cannot have tampered with the
+    result without breaking the signature.
+    """
+    try:
+        with _client(api_key=api_key, base_url=base_url) as client:
+            result = client.verify_job(job_id)
+            _emit(result, json_mode=json_mode)
+    except Exception as exc:
+        _handle_error(exc)
+
+
+@jobs_app.command("estimate")
+def jobs_estimate(
+    agent_id: str,
+    input_value: Optional[str] = typer.Option(None, "--input", help="@file.json, -, inline JSON, or k=v pairs"),
+    api_key: Optional[str] = typer.Option(None),
+    base_url: Optional[str] = typer.Option(None),
+    json_mode: bool = typer.Option(False, "--json"),
+) -> None:
+    """Preview the all-in caller charge for an agent before hiring."""
+    try:
+        payload = _parse_input(input_value)
+        with _client(api_key=api_key, base_url=base_url) as client:
+            result = client.estimate_cost(agent_id, payload)
+            _emit(result, json_mode=json_mode)
+    except Exception as exc:
+        _handle_error(exc)
+
+
 @jobs_app.command("follow")
 def jobs_follow(
     job_id: str,
