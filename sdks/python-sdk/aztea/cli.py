@@ -477,6 +477,64 @@ def wallet_topup(
         _handle_error(exc)
 
 
+@wallet_app.command("connect")
+def wallet_connect(
+    api_key: Optional[str] = typer.Option(None),
+    base_url: Optional[str] = typer.Option(None),
+    return_url: Optional[str] = typer.Option(None, help="URL Stripe redirects to after onboarding."),
+    open_browser: bool = typer.Option(True, help="Open the onboarding URL in your browser."),
+    json_mode: bool = typer.Option(False, "--json"),
+) -> None:
+    """Start (or resume) Stripe Connect onboarding so the wallet can pay out to a bank account."""
+    try:
+        with _client(api_key=api_key, base_url=base_url) as client:
+            status = client.get_connect_status()
+            if status.get("charges_enabled"):
+                _emit({"already_connected": True, **status}, json_mode=json_mode)
+                return
+            session = client.start_connect_onboarding(return_url=return_url)
+            url = str(session.get("onboarding_url") or "")
+            if open_browser and url:
+                webbrowser.open(url)
+            _emit(session, json_mode=json_mode)
+    except Exception as exc:
+        _handle_error(exc)
+
+
+@wallet_app.command("withdraw")
+def wallet_withdraw(
+    amount: float = typer.Argument(..., help="Amount in dollars (minimum $1.00, max $10,000.00)"),
+    memo: Optional[str] = typer.Option(None, help="Optional memo recorded on the transfer."),
+    api_key: Optional[str] = typer.Option(None),
+    base_url: Optional[str] = typer.Option(None),
+    json_mode: bool = typer.Option(False, "--json"),
+) -> None:
+    """Transfer funds from the wallet balance to your connected Stripe account."""
+    try:
+        amount_cents = round(amount * 100)
+        with _client(api_key=api_key, base_url=base_url) as client:
+            result = client.withdraw(amount_cents, memo=memo)
+            _emit(result, json_mode=json_mode)
+    except Exception as exc:
+        _handle_error(exc)
+
+
+@wallet_app.command("withdrawals")
+def wallet_withdrawals(
+    limit: int = typer.Option(25, min=1, max=200),
+    api_key: Optional[str] = typer.Option(None),
+    base_url: Optional[str] = typer.Option(None),
+    json_mode: bool = typer.Option(False, "--json"),
+) -> None:
+    """List recent withdrawals to the connected Stripe account."""
+    try:
+        with _client(api_key=api_key, base_url=base_url) as client:
+            result = client.list_withdrawals(limit=limit)
+            _emit(result, json_mode=json_mode)
+    except Exception as exc:
+        _handle_error(exc)
+
+
 @pipelines_app.command("run")
 def pipelines_run(
     pipeline_id: str,

@@ -1,0 +1,127 @@
+/* JobReceipt panel — kept on Aztea token system, no inline styles. */
+
+.job-receipt__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  width: 100%;
+}
+
+.job-receipt__body {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: flex-start;
+}
+
+.job-receipt__icon-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md, 8px);
+  background: var(--surface-soft, rgba(0, 0, 0, 0.04));
+  flex-shrink: 0;
+  color: var(--ink-soft);
+}
+
+.job-receipt__copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.job-receipt__copy p {
+  margin: 0 0 var(--sp-3);
+  font-size: 0.875rem;
+  color: var(--ink-mid, var(--ink-soft));
+  line-height: 1.5;
+}
+
+.job-receipt__copy code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.78rem;
+}
+
+.job-receipt__details {
+  display: grid;
+  grid-template-columns: minmax(110px, max-content) 1fr;
+  column-gap: var(--sp-3);
+  row-gap: var(--sp-2);
+  margin: 0 0 var(--sp-3);
+  padding: var(--sp-3);
+  background: var(--surface-soft, rgba(0, 0, 0, 0.03));
+  border-radius: var(--radius-md, 6px);
+  font-size: 0.8125rem;
+}
+
+.job-receipt__details > div {
+  display: contents;
+}
+
+.job-receipt__details dt {
+  margin: 0;
+  color: var(--ink-soft);
+  font-weight: 500;
+}
+
+.job-receipt__details dd {
+  margin: 0;
+  word-break: break-all;
+  color: var(--ink, var(--ink-mid));
+}
+
+.job-receipt__mono {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+.job-receipt__copy-btn {
+  background: none;
+  border: 1px solid var(--line-mid);
+  border-radius: var(--radius-sm, 4px);
+  padding: 2px 4px;
+  cursor: pointer;
+  color: var(--ink-soft);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.job-receipt__copy-btn:hover {
+  color: var(--ink);
+  border-color: var(--ink-soft);
+}
+
+.job-receipt__actions {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.job-receipt__learn {
+  font-size: 0.8125rem;
+  color: var(--ink-soft);
+  text-decoration: underline;
+  text-decoration-color: var(--line-mid);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.job-receipt__learn:hover {
+  color: var(--ink);
+  text-decoration-color: currentColor;
+}
+
+.job-receipt__spinner {
+  animation: job-receipt-spin 0.9s linear infinite;
+}
+
+@keyframes job-receipt-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}

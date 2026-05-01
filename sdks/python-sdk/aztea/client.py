@@ -743,6 +743,70 @@ class AzteaClient:
             "signed_at": signature_payload.get("signed_at"),
         }
 
+    # ─── Stripe Connect: agent payouts to a real bank account ───────────────
+
+    def get_connect_status(self) -> JSONObject:
+        """Stripe Connect onboarding status for the authenticated user.
+
+        Returns ``{connected, charges_enabled, account_id}``. Frontend uses
+        this to decide whether to show "Connect bank account" or "Withdraw."
+        """
+        return self._request_json("GET", "/wallets/connect/status")
+
+    def start_connect_onboarding(
+        self,
+        *,
+        return_url: str | None = None,
+        refresh_url: str | None = None,
+    ) -> JSONObject:
+        """Begin or resume Stripe Connect onboarding.
+
+        Returns ``{onboarding_url, account_id}``. Open ``onboarding_url`` in a
+        browser to finish KYC; Stripe redirects back to ``return_url`` (or the
+        Aztea wallet page when omitted).
+        """
+        body: JSONObject = {}
+        if return_url is not None:
+            body["return_url"] = return_url
+        if refresh_url is not None:
+            body["refresh_url"] = refresh_url
+        return self._request_json("POST", "/wallets/connect/onboard", json_body=body)
+
+    def withdraw(self, amount_cents: int, *, memo: str | None = None) -> JSONObject:
+        """Move ``amount_cents`` from the wallet balance to the connected Stripe account.
+
+        Minimum $1.00 ($100 cents), maximum $10,000.00 ($1,000,000 cents).
+        Requires a Connect account with charges_enabled=True.
+        """
+        body: JSONObject = {"amount_cents": int(amount_cents)}
+        if memo is not None:
+            body["memo"] = str(memo)
+        return self._request_json("POST", "/wallets/withdraw", json_body=body)
+
+    def list_withdrawals(self, *, limit: int = 25) -> JSONObject:
+        return self._request_json(
+            "GET", "/wallets/withdrawals", params={"limit": str(int(limit))}
+        )
+
+    # ─── Job event streaming (SSE) ───────────────────────────────────────────
+
+    def stream_job(self, job_id: str, *, since: int | None = None) -> Iterable[JSONObject]:
+        """Iterate over job events as they happen (Server-Sent Events).
+
+        Thin convenience wrapper around ``client.jobs.stream_messages`` so the
+        canonical SDK surface exposes streaming without dropping into the
+        namespaced object. ``since`` is the last seen ``message_id``; pass
+        ``None`` to receive all messages from the start of the job.
+
+        Example:
+            >>> for event in client.stream_job(job_id):
+            ...     print(event["type"], event.get("payload"))
+        """
+        params: dict[str, str] = {}
+        if since is not None:
+            params["since"] = str(int(since))
+        return self.jobs.stream_messages(job_id, since=since)
+
     # ─── Agent caller keys (A2A primitive) ───────────────────────────────────
 
     def create_agent_caller_key(

@@ -12,6 +12,8 @@ import ResultRenderer from '../features/agents/results/ResultRenderer'
 import { getJob, getJobMessages, postJobMessage, rateJob, getJobDispute, fileDispute, verifyJob } from '../api'
 import { useMarket } from '../context/MarketContext'
 import JobTimeline from '../features/jobs/JobTimeline'
+import JobReceipt from '../features/jobs/JobReceipt'
+import '../features/jobs/JobReceipt.css'
 import { ArrowLeft, RefreshCw, Star, AlertTriangle, CheckCircle, Clock, RotateCcw, ShieldCheck } from 'lucide-react'
 import './JobDetailPage.css'
 import { fmtDateSec as fmtDate, fmtUsd } from '../utils/format.js'
@@ -740,6 +742,13 @@ export default function JobDetailPage() {
               </Card.Body>
             </Card>
           </Reveal>
+
+          {/* Cryptographic receipt — visible whenever the job is complete. */}
+          {job.status === 'complete' && (
+            <Reveal delay={0.28}>
+              <JobReceipt jobId={id} agentId={agent?.agent_id || job.agent_id} />
+            </Reveal>
+          )}
 
           {/* Rating + Dispute - only for completed jobs */}
           {job.status === 'complete' && (

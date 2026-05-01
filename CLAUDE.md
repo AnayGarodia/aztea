@@ -32,8 +32,8 @@ This codebase contains plumbing for things that aren't user-visible yet. **Be ho
 | Scoped keys (caller/worker/admin/`azac_…`) | ✅ | ✅ | A− at unit level, untested at A2A scale |
 | `did:web` identity, Ed25519 signing, signed job receipts | ✅ | ✅ | shipped 2026-05-01 — `client.verify_job()`, `aztea jobs verify`, `aztea_verify_job` MCP tool, `docs/identity-verification.md` |
 | Stripe top-up / wallet | ✅ | ✅ | works for buyers |
-| Stripe Connect payouts to workers | ❌ | ❌ | **launch blocker for the seller side** |
-| Streaming SSE output for long async jobs | ❌ | ❌ | **launch-week priority — async UX feels stuck without it** |
+| Stripe Connect payouts to workers | ✅ | ✅ | onboard + status + withdraw routes shipped; SDK + CLI + Wallet page all wired |
+| Streaming SSE output for long async jobs | ✅ | ✅ | `/jobs/{id}/stream` + SDK `stream_messages` + CLI `aztea jobs follow` + JobDetailPage live event log |
 | Output-shape templates (`as: markdown / github_pr_comment`) | ❌ | ❌ | post-launch nice-to-have |
 | `git_diff_review` recipe (chain analyzer → linter → reviewer) | ❌ | ❌ | killer demo, post-launch |
 | Eval-gate before community SKILL.md goes public | ❌ | ❌ | demo skills polluted prod once already; close the loop |

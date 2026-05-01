@@ -32,20 +32,21 @@ Don't pretend either number is higher. See the table in `CLAUDE.md` ("Where we a
 
 Ordered by impact / effort. Tick them off in this file when shipped — same PR.
 
-1. ⏳ Streaming SSE output for long async jobs (`/jobs/{id}/stream` exists — wire it through SDK + CLI + MCP)
-2. ⏳ Stripe Connect payouts so agents can cash out
-3. ⏳ Eval-gate before community SKILL.md goes public (close the demo-skill pollution loop)
-4. ⏳ Per-agent reputation dashboard (p50/p99 latency, success rate, refund rate, dispute rate)
-5. ⏳ `git_diff_review` recipe — diff in, markdown review out (the killer demo)
-6. ⏳ Output-shape templates (`as: "markdown" | "github_pr_comment" | "slack_blocks"`)
-7. ⏳ Public status page + signed monetary-policy statement at `/policy/credits`
-8. ⏳ Frontend consistency pass: shared `src/utils/format.js`, kill inline-style blocks, inline error states everywhere
-9. ⏳ Cold-install QA on Mac / Linux / Windows for `npx aztea-cli@latest init`
-10. ⏳ Honest `ROADMAP.md` listing every global-goal item with a timeline
-11. ⏳ A2A end-to-end demo using `azac_*` keys — one Aztea agent hires another in production
+1. ⏳ Eval-gate before community SKILL.md goes public (close the demo-skill pollution loop)
+2. ⏳ Per-agent reputation dashboard (p50/p99 latency, success rate, refund rate, dispute rate) — backend has the data, page is bare today
+3. ⏳ `git_diff_review` recipe — diff in, markdown review out (the killer demo)
+4. ⏳ Output-shape templates (`as: "markdown" | "github_pr_comment" | "slack_blocks"`)
+5. ⏳ Public status page + signed monetary-policy statement at `/policy/credits`
+6. ⏳ Cold-install QA on Mac / Linux / Windows for `npx aztea-cli@latest init`
+7. ⏳ Honest `ROADMAP.md` listing every global-goal item with a timeline
+8. ⏳ A2A end-to-end demo using `azac_*` keys — one Aztea agent hires another in production
+9. ⏳ Frontend tech-debt sweep: kill remaining inline-style blocks across DashboardPage / JobDetailPage / SettingsPage
 
 Recently shipped (don't redo):
 
+- ✅ Stripe Connect SDK + CLI: `client.get_connect_status / start_connect_onboarding / withdraw / list_withdrawals`; `aztea wallet connect / withdraw / withdrawals`. Backend + frontend already had the routes — sellers can now cash out through every surface.
+- ✅ JobReceipt panel on JobDetailPage: in-browser Ed25519 verification of the signed job receipt via WebCrypto. The platform cannot forge a passing verification — the page does the cryptography. Frontend consumers of the moat now exist.
+- ✅ `client.stream_job(job_id)` SDK helper — convenience wrapper around the existing `/jobs/{id}/stream` SSE endpoint.
 - ✅ Wiring pass: `client.cancel_job/rate_job/dispute_job/get_dispute/retry_job/estimate_cost/list_jobs/get_agent_did/get_job_signature/verify_job/create_agent_caller_key/list_agent_caller_keys`; CLI `aztea jobs cancel/rate/dispute/verify/estimate`; MCP `aztea_data_retention_policy`, `aztea_verify_job`. Closes the "primitives built but not exposed" gap.
 - ✅ `docs/identity-verification.md` cookbook published (the moat is now usable).
 - ✅ `aztea_cancel_job` meta-tool + `POST /jobs/{id}/cancel` route (commit `dc5ea9a`, 2026-05-01).
