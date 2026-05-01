@@ -35,6 +35,28 @@ _DISCOVERY_INTENTS: dict[str, set[str]] = {
 }
 
 
+def _word_truncate(text: str, max_len: int, suffix: str = "…") -> str:
+    """Trim ``text`` to at most ``max_len`` chars, breaking on a word boundary.
+
+    Avoids the mid-word ellipsis ("…code-level f", "…claude-code ") that the
+    2026-05-01 audit flagged. Returns the input unchanged if it is already short
+    enough.
+    """
+    s = str(text or "")
+    if len(s) <= max_len:
+        return s
+    if max_len <= 1:
+        return s[:max_len]
+    cutoff = max(0, max_len - len(suffix))
+    head = s[:cutoff]
+    last_space = head.rfind(" ")
+    if last_space >= max(1, cutoff - 40):
+        head = head[:last_space].rstrip(" ,;:.-—–")
+    else:
+        head = head.rstrip(" ,;:.-—–")
+    return head + suffix
+
+
 def _annotations(*, read_only: bool, destructive: bool = False, open_world: bool = True, idempotent: bool = False) -> dict[str, Any]:
     return {
         "readOnlyHint": read_only,
@@ -132,11 +154,12 @@ _TOOLS: list[dict[str, Any]] = [
     {
         "name": "aztea_set_session_budget",
         "description": (
-            "Set a soft spend cap (in cents) for the current MCP session. "
+            "Set a soft spend ceiling (in cents) for the current MCP session. "
             "Once cumulative spending since session start reaches this cap, further "
-            "tool calls that cost money are blocked with a warning. "
-            "Pass 0 to clear the limit. Use this before starting expensive workflows "
-            "to prevent runaway spend. Check current session spend with aztea_session_summary."
+            "tool calls that cost money are blocked with a clear warning. "
+            "Pass 0 to clear the cap. Use before starting expensive workflows to prevent "
+            "runaway spend. Check current session spend with aztea_session_summary. "
+            "The argument name is `budget_cents` — not `limit_cents`."
         ),
         "input_schema": {
             "type": "object",
@@ -158,10 +181,15 @@ _TOOLS: list[dict[str, Any]] = [
         ),
         "input_schema": {
             "type": "object",
+            "description": "Provide either agent_id (UUID) or slug (tool name like 'linter_agent').",
             "properties": {
                 "agent_id": {
                     "type": "string",
                     "description": "UUID of the agent to estimate.",
+                },
+                "slug": {
+                    "type": "string",
+                    "description": "Slug / tool name (e.g. 'linter_agent'). Use this when you only have the slug from aztea_search.",
                 },
                 "input_payload": {
                     "type": "object",
@@ -169,7 +197,10 @@ _TOOLS: list[dict[str, Any]] = [
                     "additionalProperties": True,
                 },
             },
-            "required": ["agent_id"],
+            "anyOf": [
+                {"required": ["agent_id"]},
+                {"required": ["slug"]},
+            ],
         },
     },
     {
@@ -288,6 +319,31 @@ _TOOLS: list[dict[str, Any]] = [
                 },
             },
             "required": ["job_ids"],
+        },
+    },
+    {
+        "name": "aztea_cancel_job",
+        "description": (
+            "Abort an in-flight Aztea async job and refund any unsettled charge. "
+            "Works for jobs in pending, running, or awaiting_clarification status. "
+            "Use this when a long-running compare/arxiv/research run is no longer needed, "
+            "or after a misconfigured job submission. Already-complete or already-failed jobs "
+            "return a clear 409 instead of being silently re-cancelled."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "job_id": {
+                    "type": "string",
+                    "description": "Job ID returned by aztea_hire_async or aztea_hire_batch.",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Optional one-line reason recorded with the cancellation.",
+                    "maxLength": 200,
+                },
+            },
+            "required": ["job_id"],
         },
     },
     {
@@ -441,17 +497,27 @@ _TOOLS: list[dict[str, Any]] = [
         "description": (
             "Fetch public work examples for a specific Aztea agent. "
             "Examples show real inputs and outputs from past jobs, letting you verify "
-            "an agent produces the quality and format you expect before hiring."
+            "an agent produces the quality and format you expect before hiring. "
+            "Security-category agents (e.g. secret_scanner) never publish work examples to "
+            "protect caller-submitted credentials."
         ),
         "input_schema": {
             "type": "object",
+            "description": "Provide either agent_id (UUID) or slug (tool name).",
             "properties": {
                 "agent_id": {
                     "type": "string",
                     "description": "UUID of the agent whose examples to fetch.",
                 },
+                "slug": {
+                    "type": "string",
+                    "description": "Slug / tool name (e.g. 'linter_agent'). Use when you only have the slug from aztea_search.",
+                },
             },
-            "required": ["agent_id"],
+            "anyOf": [
+                {"required": ["agent_id"]},
+                {"required": ["slug"]},
+            ],
         },
     },
     # 1.6 Batch hiring
@@ -649,18 +715,22 @@ _TOOLS: list[dict[str, Any]] = [
         "description": (
             "Run one of Aztea's curated public recipes and wait for the run to finish. "
             "Recipes are built-in pipeline templates for common coding workflows. "
-            "Call aztea_list_recipes first if you do not already know the recipe ID."
+            "Call aztea_list_recipes first if you do not already know the recipe id. "
+            "Pass the recipe identifier as `recipe_id` (preferred) — `recipe_name` is accepted "
+            "as a deprecated alias for backward compatibility."
         ),
         "input_schema": {
             "type": "object",
+            "description": "Provide `recipe_id` (the canonical identifier from /recipes). `recipe_name` is accepted as a legacy alias.",
             "properties": {
                 "recipe_id": {
                     "type": "string",
-                    "description": "Recipe ID from GET /recipes, such as 'review-and-lint' or 'modernize-python'.",
+                    "description": "Recipe identifier from GET /recipes, e.g. 'review-and-lint', 'modernize-python', 'audit-deps'. Same string accepted as recipe_name historically.",
                 },
                 "recipe_name": {
                     "type": "string",
-                    "description": "Optional recipe name alias. If recipe_id is omitted, Aztea uses this value.",
+                    "description": "Deprecated alias for recipe_id. Prefer recipe_id; both accept the same kebab-case identifiers.",
+                    "deprecated": True,
                 },
                 "input_payload": {
                     "type": "object",
@@ -700,6 +770,7 @@ _META_TOOL_ANNOTATIONS: dict[str, dict[str, Any]] = {
     "aztea_hire_async": _annotations(read_only=False, idempotent=False),
     "aztea_job_status": _annotations(read_only=True, idempotent=False),
     "aztea_batch_status": _annotations(read_only=True, idempotent=False),
+    "aztea_cancel_job": _annotations(read_only=False, destructive=True, idempotent=True, open_world=False),
     "aztea_clarify": _annotations(read_only=False, idempotent=False),
     "aztea_rate_job": _annotations(read_only=False, idempotent=False),
     "aztea_dispute_job": _annotations(read_only=False, idempotent=False),
@@ -826,6 +897,11 @@ def call_meta_tool(
             return _job_status(session, base, hdrs, timeout, arguments)
         if tool_name == "aztea_batch_status":
             return _batch_status(session, base, hdrs, timeout, arguments)
+        if tool_name == "aztea_cancel_job":
+            ok, result = _cancel_job(session, base, hdrs, timeout, arguments)
+            if ok:
+                _refund_from_result(session_state, result)
+            return ok, result
         if tool_name == "aztea_clarify":
             return _clarify(session, base, hdrs, timeout, arguments)
         if tool_name == "aztea_rate_job":
@@ -1108,10 +1184,40 @@ def _session_summary(
     return True, result
 
 
-def _estimate_cost(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
+def _resolve_agent_id(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[str, dict | None]:
+    """Accept either ``agent_id`` (UUID) or ``slug`` (tool name) for buyer ergonomics.
+
+    Returns (agent_id, error_payload). On success error_payload is None; on
+    failure agent_id is empty and the error dict is suitable for direct return.
+    """
     agent_id = str(args.get("agent_id") or "").strip()
-    if not agent_id:
-        return False, {"error": "INVALID_INPUT", "message": "agent_id is required."}
+    if agent_id:
+        return agent_id, None
+    slug = str(args.get("slug") or "").strip()
+    if not slug:
+        return "", {
+            "error": "INVALID_INPUT",
+            "message": "Provide agent_id (UUID) or slug (tool name).",
+        }
+    ok, payload = _post(session, f"{base}/registry/search", hdrs, timeout, {"query": slug, "limit": 5})
+    if not ok:
+        return "", {"error": "AGENT_LOOKUP_FAILED", "message": "Could not resolve slug to agent_id.", **payload}
+    for item in payload.get("results") or []:
+        agent = item.get("agent") or {}
+        if str(agent.get("slug") or "").strip().lower() == slug.lower() or str(agent.get("agent_slug") or "").strip().lower() == slug.lower():
+            resolved = str(agent.get("agent_id") or "").strip()
+            if resolved:
+                return resolved, None
+    return "", {
+        "error": "AGENT_NOT_FOUND",
+        "message": f"No agent matched slug {slug!r}. Use aztea_search to find the right slug.",
+    }
+
+
+def _estimate_cost(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
+    agent_id, err = _resolve_agent_id(session, base, hdrs, timeout, args)
+    if err is not None:
+        return False, err
     body = args.get("input_payload") or {}
     if not isinstance(body, dict):
         return False, {"error": "INVALID_INPUT", "message": "input_payload must be an object when provided."}
@@ -1241,6 +1347,20 @@ def _batch_status(session: requests.Session, base: str, hdrs: dict, timeout: flo
         "jobs": jobs,
         "note": "All requested job statuses returned in one MCP call.",
     }
+
+
+def _cancel_job(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
+    job_id = str(args.get("job_id") or "").strip()
+    if not job_id:
+        return False, {"error": "INVALID_INPUT", "message": "job_id is required."}
+    body: dict[str, Any] = {}
+    reason = str(args.get("reason") or "").strip()
+    if reason:
+        body["reason"] = reason[:200]
+    ok, result = _post(session, f"{base}/jobs/{job_id}/cancel", hdrs, timeout, body)
+    if ok:
+        result.setdefault("note", "Job cancelled. Any pre-call charge has been refunded.")
+    return ok, result
 
 
 def _clarify(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
@@ -1394,7 +1514,7 @@ def _discover(session: requests.Session, base: str, hdrs: dict, timeout: float, 
                 "agent_id": agent.get("agent_id"),
                 "slug": agent.get("slug") or agent.get("agent_slug"),
                 "name": agent.get("name"),
-                "description": (agent.get("description") or "")[:200],
+                "description": _word_truncate(agent.get("description") or "", 240),
                 "category": agent.get("category"),
                 "price_per_call_usd": agent.get("price_per_call_usd"),
                 "price_cents": agent.get("price_cents"),
@@ -1415,9 +1535,9 @@ def _discover(session: requests.Session, base: str, hdrs: dict, timeout: float, 
 
 
 def _get_examples(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
-    agent_id = str(args.get("agent_id") or "").strip()
-    if not agent_id:
-        return False, {"error": "INVALID_INPUT", "message": "agent_id is required."}
+    agent_id, err = _resolve_agent_id(session, base, hdrs, timeout, args)
+    if err is not None:
+        return False, err
     ok, agent = _get(session, f"{base}/registry/agents/{agent_id}", hdrs, timeout)
     if not ok:
         return False, agent

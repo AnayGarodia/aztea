@@ -295,6 +295,21 @@ class JobReleaseRequest(BaseModel):
     claim_token: str | None = Field(default=None, max_length=128)
 
 
+class JobCancelRequest(BaseModel):
+    """Buyer-side cancel request for an in-flight async job.
+
+    Owners may abort jobs in pending/claimed/awaiting_clarification status. The
+    server returns a structured 409 for terminal states (complete/failed) so the
+    client never has to guess whether the cancel succeeded.
+    """
+
+    model_config = ConfigDict(
+        json_schema_extra={"example": {"reason": "No longer needed — duplicate submission."}}
+    )
+
+    reason: str | None = Field(default=None, max_length=200)
+
+
 class JobRatingRequest(BaseModel):
     model_config = ConfigDict(json_schema_extra={"example": {"rating": 5}})
 

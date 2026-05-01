@@ -273,10 +273,14 @@ def load_builtin_specs_part1() -> list[dict[str, Any]]:
     "tags": ["security", "cve", "vulnerability-intel", "nvd", "packages"],
     "input_schema": {
         "type": "object",
+        "description": (
+            "Provide exactly one of cve_id, cve_ids, or packages. The agent will reject calls "
+            "that supply none of them or more than one."
+        ),
         "properties": {
-            "cve_id": {"type": "string", "description": "A single CVE ID to look up directly (e.g. CVE-2021-44228)"},
-            "cve_ids": {"type": "array", "items": {"type": "string"}, "description": "Multiple CVE IDs to look up (max 10)"},
-            "packages": {"type": "array", "items": {"type": "string"}, "description": "Array of package@version strings", "example": ["express@4.17.1", "lodash@4.17.20"]},
+            "cve_id": {"type": "string", "description": "A single CVE ID to look up directly (e.g. CVE-2021-44228). Use this for one-off lookups."},
+            "cve_ids": {"type": "array", "items": {"type": "string"}, "description": "Multiple CVE IDs to look up (max 10). Use this for batch CVE-ID lookups."},
+            "packages": {"type": "array", "items": {"type": "string"}, "description": "Array of package@version strings. Use this for ecosystem-aware vulnerability scanning.", "example": ["express@4.17.1", "lodash@4.17.20"]},
             "ecosystem": {
                 "type": "string",
                 "enum": ["auto", "npm", "pypi"],
@@ -285,6 +289,11 @@ def load_builtin_specs_part1() -> list[dict[str, Any]]:
             },
             "include_patched": {"type": "boolean", "default": False},
         },
+        "oneOf": [
+            {"required": ["cve_id"]},
+            {"required": ["cve_ids"]},
+            {"required": ["packages"]},
+        ],
     },
     "output_schema": {
         "type": "object",

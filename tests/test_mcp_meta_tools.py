@@ -521,3 +521,119 @@ def test_discover_filters_toy_and_low_relevance_intent_matches(monkeypatch):
     assert ok is True
     assert result["count"] == 1
     assert result["results"][0]["slug"] == "image_generator"
+
+
+def test_word_truncate_breaks_on_word_boundary():
+    # Regression for the 2026-05-01 audit: "…code-level f", "…claude-code "
+    text = "Use when the user wants live CVE data for a package"
+    out = meta_tools._word_truncate(text, 30)
+    assert out.endswith("…")
+    # Should never end mid-word
+    assert not out.rstrip("…").endswith(" ")
+    head = out.rstrip("…").rstrip()
+    assert " " in text[: len(head) + 1]
+    # Short input passes through unchanged
+    assert meta_tools._word_truncate("short", 50) == "short"
+
+
+def test_resolve_agent_id_prefers_explicit_uuid():
+    agent_id, err = meta_tools._resolve_agent_id(
+        session=None, base="https://aztea.test", hdrs={}, timeout=5,
+        args={"agent_id": "11111111-2222-3333-4444-555555555555", "slug": "ignored"},
+    )
+    assert err is None
+    assert agent_id == "11111111-2222-3333-4444-555555555555"
+
+
+def test_resolve_agent_id_falls_back_to_slug(monkeypatch):
+    def _fake_post(_session, url, _hdrs, _timeout, body):
+        assert url.endswith("/registry/search")
+        assert body == {"query": "linter_agent", "limit": 5}
+        return True, {
+            "results": [
+                {"agent": {"agent_id": "aaa", "slug": "code_review_agent"}},
+                {"agent": {"agent_id": "bbb", "slug": "linter_agent"}},
+            ]
+        }
+
+    monkeypatch.setattr(meta_tools, "_post", _fake_post)
+    agent_id, err = meta_tools._resolve_agent_id(
+        session=None, base="https://aztea.test", hdrs={}, timeout=5,
+        args={"slug": "linter_agent"},
+    )
+    assert err is None
+    assert agent_id == "bbb"
+
+
+def test_resolve_agent_id_returns_error_when_neither_provided():
+    agent_id, err = meta_tools._resolve_agent_id(
+        session=None, base="https://aztea.test", hdrs={}, timeout=5, args={},
+    )
+    assert agent_id == ""
+    assert err is not None
+    assert err["error"] == "INVALID_INPUT"
+
+
+def test_cancel_job_posts_to_cancel_route(monkeypatch):
+    captured = {}
+
+    def _fake_post(_session, url, _hdrs, _timeout, body):
+        captured["url"] = url
+        captured["body"] = body
+        return True, {"job_id": "job_1", "status": "failed", "refund_amount_cents": 5}
+
+    monkeypatch.setattr(meta_tools, "_post", _fake_post)
+    ok, result = meta_tools._cancel_job(
+        session=None,
+        base="https://aztea.test",
+        hdrs={},
+        timeout=5,
+        args={"job_id": "job_1", "reason": "duplicate submission"},
+    )
+    assert ok is True
+    assert captured["url"] == "https://aztea.test/jobs/job_1/cancel"
+    assert captured["body"]["reason"] == "duplicate submission"
+    assert "note" in result
+
+
+def test_cancel_job_rejects_missing_job_id():
+    ok, result = meta_tools._cancel_job(
+        session=None, base="https://aztea.test", hdrs={}, timeout=5, args={},
+    )
+    assert ok is False
+    assert result["error"] == "INVALID_INPUT"
+
+
+def test_get_examples_accepts_slug(monkeypatch):
+    posted: dict = {}
+    fetched: dict = {}
+
+    def _fake_post(_session, url, _hdrs, _timeout, body):
+        posted["url"] = url
+        posted["body"] = body
+        return True, {"results": [{"agent": {"agent_id": "agent-uuid", "slug": "linter_agent"}}]}
+
+    def _fake_get(_session, url, _hdrs, _timeout):
+        fetched["url"] = url
+        return True, {"name": "Linter", "output_examples": []}
+
+    monkeypatch.setattr(meta_tools, "_post", _fake_post)
+    monkeypatch.setattr(meta_tools, "_get", _fake_get)
+
+    ok, result = meta_tools._get_examples(
+        session=None, base="https://aztea.test", hdrs={}, timeout=5,
+        args={"slug": "linter_agent"},
+    )
+    assert ok is True
+    assert posted["url"].endswith("/registry/search")
+    assert fetched["url"].endswith("/registry/agents/agent-uuid")
+    assert result["agent_id"] == "agent-uuid"
+
+
+def test_cancel_job_is_in_meta_tool_names_and_schema():
+    assert "aztea_cancel_job" in meta_tools.META_TOOL_NAMES
+    tools = {t["name"]: t for t in meta_tools.get_meta_tools()}
+    assert "aztea_cancel_job" in tools
+    schema = tools["aztea_cancel_job"]["input_schema"]
+    assert "job_id" in schema["properties"]
+    assert schema["required"] == ["job_id"]

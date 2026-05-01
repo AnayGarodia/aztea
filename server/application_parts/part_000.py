@@ -133,6 +133,7 @@ from core.models import (
     DepositRequest,
     FinancialRequest,
     HookDeliveryProcessRequest,
+    JobCancelRequest,
     JobClaimRequest,
     JobCompleteRequest,
     JobCreateRequest,

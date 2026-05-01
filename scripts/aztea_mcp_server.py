@@ -49,6 +49,28 @@ _SEARCH_INTENTS: dict[str, set[str]] = {
     "dns": {"dns", "ssl", "tls", "certificate", "domain", "hsts"},
     "code_search": {"semantic", "codebase", "repository", "repo", "symbols"},
 }
+# Verb-only signals that nudge ranking *within* an otherwise-relevant set.
+# Each rule fires when the query contains BOTH a topic term and a verb term;
+# matching slugs gain +score, non-matching slugs in the same topic lose -score.
+# Use this for "explain SQL" → sql_explainer over db_sandbox-style ambiguities.
+_SEARCH_VERB_RULES: list[dict[str, Any]] = [
+    {
+        "name": "sql_explain",
+        "topic_terms": {"sql", "query", "schema"},
+        "verb_terms": {"explain", "analyze", "analyse", "plan", "explainer", "understand"},
+        "promote_slugs": {"sql_explainer"},
+        "demote_slugs": {"db_sandbox"},
+        "weight": 25,
+    },
+    {
+        "name": "sql_execute",
+        "topic_terms": {"sql", "query"},
+        "verb_terms": {"run", "execute", "exec", "sandbox"},
+        "promote_slugs": {"db_sandbox"},
+        "demote_slugs": set(),
+        "weight": 18,
+    },
+]
 _PYDANTIC_HELP_URL_RE = re.compile(r"\s*For further information visit https://errors\.pydantic\.dev/[^\s]+", re.IGNORECASE)
 
 
@@ -331,6 +353,52 @@ def _search_intent(terms: list[str]) -> tuple[str | None, set[str]]:
         if term_set & markers:
             return intent, markers
     return None, set()
+
+
+def _verb_rule_score(slug: str, terms: list[str]) -> int:
+    """Apply rules in _SEARCH_VERB_RULES to compute a slug-specific boost.
+
+    Returns 0 when no rule applies, +weight when a rule promotes this slug for
+    the query, -weight when a rule demotes this slug. Rules require BOTH a topic
+    and a verb term to trigger so generic "sql" doesn't accidentally fire.
+    """
+    if not slug or not terms:
+        return 0
+    term_set = set(terms)
+    slug_lc = slug.lower()
+    score = 0
+    for rule in _SEARCH_VERB_RULES:
+        topic_hit = bool(rule["topic_terms"] & term_set)
+        verb_hit = bool(rule["verb_terms"] & term_set)
+        if not (topic_hit and verb_hit):
+            continue
+        weight = int(rule.get("weight") or 10)
+        if slug_lc in rule.get("promote_slugs") or set():
+            score += weight
+        elif slug_lc in rule.get("demote_slugs") or set():
+            score -= weight
+    return score
+
+
+def _word_truncate(text: str, max_len: int, suffix: str = "…") -> str:
+    """Trim ``text`` to <= ``max_len`` chars, breaking on a word boundary.
+
+    Avoids the "…code-level f", "…claude-code " mid-word truncations the
+    2026-05-01 audit flagged. Returns the input unchanged if it already fits.
+    """
+    s = str(text or "")
+    if len(s) <= max_len:
+        return s
+    if max_len <= 1:
+        return s[:max_len]
+    cutoff = max(0, max_len - len(suffix))
+    head = s[:cutoff]
+    last_space = head.rfind(" ")
+    if last_space >= max(1, cutoff - 40):
+        head = head[:last_space].rstrip(" ,;:.-—–")
+    else:
+        head = head.rstrip(" ,;:.-—–")
+    return head + suffix
 
 
 def _public_search_excluded(entry: dict[str, Any]) -> bool:
@@ -627,6 +695,12 @@ class RegistryBridge:
             if normalized and normalized in str(entry.get("description") or "").lower():
                 reasons.append("description match")
             score += sum(3 for term in terms if term in haystack)
+            # Verb/topic disambiguation (e.g. "explain SQL" → sql_explainer over db_sandbox)
+            verb_boost = _verb_rule_score(entry["slug"], terms)
+            if verb_boost:
+                score += verb_boost
+                if verb_boost > 0:
+                    reasons.append("verb-intent match")
             if {"security", "vulnerability", "vulnerabilities", "cve", "npm", "dependency", "dependencies", "audit"} & set(terms):
                 if any(token in haystack for token in ("cve", "nvd", "osv", "dependency", "dependencies", "audit")):
                     score += 12
@@ -701,7 +775,7 @@ class RegistryBridge:
                     "name": entry["name"],
                     "agent_id": entry.get("agent_id"),
                     "category": entry.get("category"),
-                    "description": entry["description"][:400],
+                    "description": _word_truncate(entry["description"], 400),
                     "score": round(score, 2),
                     "price_per_call_usd": entry.get("price_per_call_usd"),
                     "trust_score": entry.get("trust_score"),
@@ -731,6 +805,12 @@ class RegistryBridge:
         entry = self._catalog_entry(slug)
         if entry is None:
             return {"error": "TOOL_NOT_FOUND", "message": f"Unknown tool '{slug}'.", "hint": "Use aztea_search to find the correct slug."}
+        output_schema = entry.get("output_schema") or {}
+        # Surface output_schema details so buyers can integrate without relying on the
+        # truncated example_output. Pre-2026-05-01 the schema was returned but never
+        # called out — and many buyers missed it entirely. Add explicit fields.
+        output_props = output_schema.get("properties") if isinstance(output_schema, dict) else None
+        output_required = output_schema.get("required") if isinstance(output_schema, dict) else None
         result: dict[str, Any] = {
             "slug": entry["slug"],
             "kind": entry["kind"],
@@ -739,7 +819,9 @@ class RegistryBridge:
             "category": entry.get("category"),
             "description": entry["description"],
             "input_schema": entry["input_schema"],
-            "output_schema": entry["output_schema"],
+            "output_schema": output_schema,
+            "output_fields": sorted(list((output_props or {}).keys())) if isinstance(output_props, dict) else [],
+            "output_required_fields": list(output_required or []) if isinstance(output_required, (list, tuple)) else [],
             "tooling_kind": entry.get("tooling_kind"),
             "stability_tier": entry.get("stability_tier"),
             "codex_recommended": bool(entry.get("codex_recommended", False)),

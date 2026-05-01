@@ -103,22 +103,52 @@ class FinancialRequest(BaseModel):
 class CodeReviewRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
+            "description": (
+                "Provide either `code` (a full source snippet) or `diff` (a unified-diff patch). "
+                "Calls with neither are rejected. The other field can be omitted."
+            ),
             "example": {
                 "code": "def add(a, b):\n    return a + b\n",
                 "filename": "utils.py",
                 "language": "python",
                 "focus": "bugs",
                 "context": "Utility function used in request parsing.",
-            }
+            },
         }
     )
 
-    code: str = ""
-    diff: str | None = None
-    filename: str | None = None
-    language: str = "auto"
-    focus: str = "all"
-    context: str = ""
+    code: str = Field(
+        default="",
+        description=(
+            "Full source code to review. Pass this OR `diff` (one of the two is required). "
+            "Empty string is treated as 'not provided' and falls through to `diff`."
+        ),
+    )
+    diff: str | None = Field(
+        default=None,
+        description=(
+            "Unified-diff patch to review. Pass this OR `code` (one of the two is required). "
+            "Use this when reviewing a change rather than a full file."
+        ),
+    )
+    filename: str | None = Field(
+        default=None,
+        description="Optional filename hint to help language detection and contextual review.",
+    )
+    language: str = Field(
+        default="auto",
+        description="Source language hint. 'auto' detects from filename or content. Examples: 'python', 'javascript', 'go'.",
+    )
+    focus: Literal[
+        "all", "security", "performance", "bugs", "style", "correctness", "maintainability"
+    ] = Field(
+        default="all",
+        description="Review emphasis. Default 'all' covers every category; narrower values prioritize one axis.",
+    )
+    context: str = Field(
+        default="",
+        description="Optional free-form context (e.g. 'utility used in hot path', 'auth middleware') to improve review relevance.",
+    )
 
     @field_validator("code")
     @classmethod
@@ -130,14 +160,6 @@ class CodeReviewRequest(BaseModel):
         if not str(self.code or "").strip() and not str(self.diff or "").strip():
             raise ValueError("either code or diff must be provided")
         return self
-
-    @field_validator("focus")
-    @classmethod
-    def focus_valid(cls, v):
-        valid = {"all", "security", "performance", "bugs", "style", "correctness", "maintainability"}
-        if v not in valid:
-            raise ValueError(f"focus must be one of: {', '.join(sorted(valid))}")
-        return v
 
 
 class WikiRequest(BaseModel):

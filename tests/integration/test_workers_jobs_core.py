@@ -99,6 +99,88 @@ def test_worker_complete_after_expired_lease_returns_410_with_timeout_state(clie
     assert job_data["claim_owner_id"] is None
 
 
+def test_caller_cancel_pending_job_refunds_charge(client):
+    """Buyer-side cancel of a pending job: route returns 200 + status flipped to failed,
+    pre-call charge is refunded to the caller's wallet (audit P0 #3, 2026-05-01).
+    """
+    worker = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 200)
+
+    agent_id = _register_agent_via_api(
+        client,
+        worker["raw_api_key"],
+        name=f"Cancel Flow Agent {uuid.uuid4().hex[:6]}",
+        price=0.10,
+        tags=["cancel-flow"],
+    )
+    job = _create_job_via_api(client, caller["raw_api_key"], agent_id=agent_id, max_attempts=2)
+    job_id = job["job_id"]
+
+    caller_wallet = payments.get_or_create_wallet(f"user:{caller['user_id']}")
+    pre_cancel_balance = payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"]
+
+    cancel = client.post(
+        f"/jobs/{job_id}/cancel",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={"reason": "duplicate submission"},
+    )
+    assert cancel.status_code == 200, cancel.text
+    body = cancel.json()
+    assert body["status"] == "failed"
+    assert "Cancelled by caller" in (body.get("error_message") or "")
+
+    # Post-cancel: full refund — caller wallet returns to its pre-job state.
+    post_cancel_balance = payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"]
+    assert post_cancel_balance > pre_cancel_balance
+
+
+def test_caller_cancel_completed_job_returns_409(client):
+    """Cancelling a job already in a terminal state must return a structured 409
+    (job.invalid_state) rather than silently re-cancelling.
+    """
+    worker = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 200)
+
+    agent_id = _register_agent_via_api(
+        client,
+        worker["raw_api_key"],
+        name=f"Cancel Terminal Agent {uuid.uuid4().hex[:6]}",
+        price=0.10,
+        tags=["cancel-terminal"],
+    )
+    job = _create_job_via_api(client, caller["raw_api_key"], agent_id=agent_id, max_attempts=2)
+    job_id = job["job_id"]
+
+    claim = client.post(
+        f"/jobs/{job_id}/claim",
+        headers=_auth_headers(worker["raw_api_key"]),
+        json={"lease_seconds": 120},
+    )
+    assert claim.status_code == 200, claim.text
+    claim_token = claim.json()["claim_token"]
+    completed = client.post(
+        f"/jobs/{job_id}/complete",
+        headers=_auth_headers(worker["raw_api_key"]),
+        json={"output_payload": {"ok": True}, "claim_token": claim_token},
+    )
+    assert completed.status_code == 200
+
+    cancel = client.post(
+        f"/jobs/{job_id}/cancel",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={},
+    )
+    assert cancel.status_code == 409, cancel.text
+    payload = cancel.json()
+    detail = payload.get("detail")
+    if isinstance(detail, dict):
+        assert detail.get("error") == "job.invalid_state"
+    else:
+        assert payload.get("error") == "job.invalid_state"
+
+
 def test_complete_called_twice_returns_same_state_without_idempotency_key(client):
     worker = _register_user()
     caller = _register_user()

@@ -54,6 +54,7 @@ JOB_NOT_CLAIMABLE         = "job.not_claimable"
 JOB_HEARTBEAT_FAILED      = "job.heartbeat_failed"
 JOB_COMPLETE_FAILED       = "job.complete_failed"
 JOB_FAIL_FAILED           = "job.fail_failed"
+JOB_INVALID_STATE         = "job.invalid_state"
 
 # Auth / account limits
 AUTH_KEY_LIMIT            = "auth.key_limit_reached"

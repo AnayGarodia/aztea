@@ -134,6 +134,13 @@ def _extract_protocol_output_artifacts(payload: dict[str, Any]) -> list[dict[str
     )
 
 
+_SENSITIVE_EXAMPLE_AGENT_IDS: frozenset[str] = frozenset({
+    # Secret Scanner — inputs are credentials/source code by definition.
+    # Recording any example would replay caller-submitted secrets to other buyers.
+    "1021c65c-d2bf-54ff-823a-897f9deb1029",
+})
+
+
 def _record_public_work_example(
     agent: dict,
     input_payload: Any,
@@ -152,6 +159,16 @@ def _record_public_work_example(
         return
     agent_id = str(agent.get("agent_id") or "").strip()
     if not agent_id:
+        return
+    # Privacy gate — three layers, any one of which suppresses recording:
+    #   1. agent_id is on the hardcoded sensitive list (defense against spec drift)
+    #   2. the spec sets examples_sensitive: True
+    #   3. the agent is in the Security category (catches future scanner agents)
+    if agent_id in _SENSITIVE_EXAMPLE_AGENT_IDS:
+        return
+    if bool(agent.get("examples_sensitive")):
+        return
+    if str(agent.get("category") or "").strip().lower() == "security":
         return
     artifacts = _extract_protocol_output_artifacts(output_payload)
     example: dict[str, Any] = {

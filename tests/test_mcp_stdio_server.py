@@ -160,6 +160,59 @@ def test_registry_bridge_lazy_search_returns_workflow_hints_for_parallel_tasks(m
     assert any("aztea_set_session_budget" in hint for hint in hints)
 
 
+def test_word_truncate_breaks_on_word_boundary():
+    # Regression for the 2026-05-01 prod audit: "…code-level f", "…claude-code "
+    long = "Use when the user wants live CVE data for a package and wants more"
+    out = _MODULE._word_truncate(long, 30)
+    assert out.endswith("…")
+    head = out.rstrip("…").rstrip()
+    # Last visible character must be the end of a complete word
+    assert " " in long[: len(head) + 1]
+    # No-op for short inputs
+    assert _MODULE._word_truncate("short", 50) == "short"
+
+
+def test_verb_rule_promotes_sql_explainer_for_explain_query():
+    # Regression: db_sandbox previously outranked sql_explainer for "explain SQL".
+    promoted = _MODULE._verb_rule_score("sql_explainer", ["explain", "sql", "query"])
+    demoted = _MODULE._verb_rule_score("db_sandbox", ["explain", "sql", "query"])
+    assert promoted > 0
+    assert demoted < 0
+    # Sandbox stays on top for "run SQL"
+    run_promoted = _MODULE._verb_rule_score("db_sandbox", ["run", "sql", "query"])
+    assert run_promoted > 0
+    # Topic-only query (no verb) leaves both at zero
+    assert _MODULE._verb_rule_score("db_sandbox", ["sql"]) == 0
+    assert _MODULE._verb_rule_score("sql_explainer", ["sql"]) == 0
+
+
+def test_describe_surfaces_output_schema_fields(monkeypatch):
+    monkeypatch.setattr(_MODULE._feature_flags, "LAZY_MCP_SCHEMAS", True)
+    bridge = _MODULE.RegistryBridge(base_url="https://aztea.test", api_key="az_test")
+    bridge._entries = [
+        {
+            "agent_id": "lint",
+            "tool_name": "linter_agent",
+            "tool": {
+                "name": "linter_agent",
+                "description": "Lint Python.",
+                "input_schema": {"type": "object", "properties": {"code": {"type": "string"}}, "required": ["code"]},
+                "output_schema": {
+                    "type": "object",
+                    "properties": {"issues": {"type": "array"}, "clean": {"type": "boolean"}},
+                    "required": ["issues", "clean"],
+                },
+            },
+            "catalog_metadata": {"category": "Code Quality"},
+        }
+    ]
+    ok, described = bridge.call_tool("aztea_describe", {"slug": "linter_agent"})
+    assert ok is True
+    # Pre-2026-05-01 audit: output_schema returned but never highlighted.
+    assert set(described["output_fields"]) == {"issues", "clean"}
+    assert described["output_required_fields"] == ["issues", "clean"]
+
+
 def test_mcp_text_formatter_makes_search_results_readable():
     text = _MODULE._mcp_text_from_payload(
         {

@@ -42,6 +42,7 @@ def load_builtin_specs_part5() -> list[dict[str, Any]]:
             "category": "Security",
             "is_featured": True,
             "cacheable": True,
+            "examples_sensitive": True,
             "input_schema": _output_schema_object(
                 {
                     "content": {

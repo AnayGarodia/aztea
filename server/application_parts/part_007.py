@@ -557,6 +557,70 @@ def a2a_tasks_cancel(
     return JSONResponse(content={"id": task_id, "status": "cancelled"})
 
 
+# Buyer-facing cancel — broader status acceptance than the A2A surface so
+# Claude Code / SDK callers can abort a long-running compare or arxiv research
+# session. Refunds the pre-call charge via _settle_failed_job. See the
+# 2026-05-01 production-eval audit for context (no async cancel was the #3 P0).
+_CANCELLABLE_JOB_STATUSES: frozenset[str] = frozenset({
+    "pending", "claimed", "running", "awaiting_clarification",
+})
+
+
+@app.post(
+    "/jobs/{job_id}/cancel",
+    response_model=core_models.JobResponse,
+    tags=["Jobs"],
+    summary="Cancel an in-flight async job and refund any unsettled charge.",
+    responses=_error_responses(401, 403, 404, 409, 422, 429, 500),
+)
+@limiter.limit("30/minute")
+def jobs_cancel(
+    request: Request,
+    job_id: str,
+    body: JobCancelRequest,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.JobResponse:
+    job = jobs.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+    if not _caller_can_view_job(caller, job):
+        raise HTTPException(status_code=403, detail="Not authorized to cancel this job.")
+    current_status = str(job.get("status") or "").strip().lower()
+    if current_status not in _CANCELLABLE_JOB_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail=error_codes.make_error(
+                error_codes.JOB_INVALID_STATE,
+                (
+                    f"Cannot cancel a job in status '{current_status}'. "
+                    "Already-complete jobs return their original output; "
+                    "already-failed jobs were refunded automatically."
+                ),
+            ),
+        )
+    reason = (body.reason or "").strip() or "Cancelled by caller."
+    error_message = f"Cancelled by caller: {reason[:160]}"
+    cancelled = jobs.update_job_status(
+        job_id,
+        "failed",
+        error_message=error_message,
+        completed=True,
+    )
+    if cancelled is None:
+        # Race: another worker already moved the job. Re-fetch and report.
+        latest = jobs.get_job(job_id) or job
+        raise HTTPException(
+            status_code=409,
+            detail=error_codes.make_error(
+                error_codes.JOB_INVALID_STATE,
+                f"Job moved to '{latest.get('status')}' before cancel completed.",
+            ),
+        )
+    settled = _settle_failed_job(cancelled, actor_owner_id=caller["owner_id"])
+    final_job = settled or cancelled
+    return JSONResponse(content=_job_response(final_job, caller))
+
+
 @app.get(
     "/openai/tools",
     tags=["Integrations"],
