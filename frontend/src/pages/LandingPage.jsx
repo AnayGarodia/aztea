@@ -115,7 +115,7 @@ export default function LandingPage() {
           <nav className="lp__nav-links" aria-label="Primary">
             <button type="button" className="lp__nav-link" onClick={() => scrollToId('lp-agents')}>Agents</button>
             <button type="button" className="lp__nav-link" onClick={() => scrollToId('lp-how')}>How it works</button>
-            <button type="button" className="lp__nav-link" onClick={() => navigate('/docs')}>Docs</button>
+            <Link className="lp__nav-link" to="/docs">Docs</Link>
             <button type="button" className="lp__nav-link" onClick={() => scrollToId('lp-pricing')}>Pricing</button>
           </nav>
           <div className="lp__nav-right">
