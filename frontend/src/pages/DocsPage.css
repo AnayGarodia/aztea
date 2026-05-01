@@ -532,6 +532,27 @@
 }
 .docs-page__ask-btn:hover { background: var(--accent); color: white; }
 
+.docs-page__back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 10px;
+  border-radius: var(--r-sm);
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary, var(--text));
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  margin-right: 6px;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.docs-page__back-btn:hover {
+  background: var(--surface-2, var(--surface));
+  color: var(--text);
+  border-color: var(--text-secondary, var(--border));
+}
+
 .docs-page__integrations-link {
   display: inline-flex;
   align-items: center;

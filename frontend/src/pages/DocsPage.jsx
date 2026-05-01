@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useRef } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { Menu, X, Search, Sparkles, Send, Puzzle } from 'lucide-react'
+import { ArrowLeft, Menu, X, Search, Sparkles, Send, Puzzle } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { fetchPublicDoc, fetchPublicDocsIndex } from '../api'
@@ -193,6 +193,18 @@ export default function DocsPage() {
         ]}
         extras={
           <>
+            <button
+              type="button"
+              className="docs-page__back-btn"
+              onClick={() => {
+                if (window.history.length > 1) navigate(-1)
+                else navigate('/')
+              }}
+              aria-label="Go back"
+            >
+              <ArrowLeft size={14} />
+              <span>Back</span>
+            </button>
             <button
               type="button"
               className="docs-page__menu-btn"
