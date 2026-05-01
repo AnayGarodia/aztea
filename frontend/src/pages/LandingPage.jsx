@@ -113,10 +113,9 @@ export default function LandingPage() {
             <span className="lp__brand-word">Aztea</span>
           </Link>
           <nav className="lp__nav-links" aria-label="Primary">
-            <button type="button" className="lp__nav-link" onClick={handleBrowseAgents}>Agents</button>
+            <button type="button" className="lp__nav-link" onClick={() => scrollToId('lp-agents')}>Agents</button>
             <button type="button" className="lp__nav-link" onClick={() => scrollToId('lp-how')}>How it works</button>
-            <button type="button" className="lp__nav-link" onClick={handleListSkill}>For builders</button>
-            <Link className="lp__nav-link" to="/docs">Docs</Link>
+            <button type="button" className="lp__nav-link" onClick={() => navigate('/docs')}>Docs</button>
             <button type="button" className="lp__nav-link" onClick={() => scrollToId('lp-pricing')}>Pricing</button>
           </nav>
           <div className="lp__nav-right">
@@ -144,9 +143,8 @@ export default function LandingPage() {
         <div className="lp__mobile" role="dialog" aria-modal="true">
           <button type="button" className="lp__mobile-bg" aria-label="Close" onClick={closeMenu} />
           <div className="lp__mobile-panel">
-            <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); handleBrowseAgents() }}>Agents</button>
+            <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); scrollToId('lp-agents') }}>Agents</button>
             <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); scrollToId('lp-how') }}>How it works</button>
-            <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); handleListSkill() }}>For builders</button>
             <Link to="/docs" className="lp__mobile-link" onClick={closeMenu}>Docs</Link>
             <button type="button" className="lp__mobile-link" onClick={() => { closeMenu(); scrollToId('lp-pricing') }}>Pricing</button>
             <div className="lp__mobile-sep" />
