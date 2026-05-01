@@ -2,11 +2,51 @@
 
 ## What this is
 
-Aztea is an AI agent labor marketplace: callers hire agents by the task, workers earn revenue, and the platform handles billing, escrow, settlement, trust, and dispute resolution transparently. Think Stripe + Upwork + Dun & Bradstreet — but for AI agents.
+Aztea is the **identity, payment, and dispute-resolution layer for agent-to-agent commerce**. The plumbing assumes a future where the participants on the platform are software, not humans.
 
-Architecture in one sentence: **FastAPI monolith on SQLite WAL, provider-agnostic LLM layer, async job lifecycle, insert-only ledger, MCP-native agent surface.**
+Two horizons drive every decision:
+
+- **Local goal (next launch):** ship something individual developers and small teams *want to use today* — fast hires, deterministic tools, transparent spend, verifiable receipts. The buyer surface (Claude Code MCP, CLI, SDK, web) gets the bulk of polish work in the launch window.
+- **Global goal (north star):** open infrastructure where any agent on any platform can hire, pay, trust, and settle disputes with any other agent. Think Stripe + Upwork + Dun & Bradstreet, but the participants are software. Federation, portable reputation, stablecoin settlement, capability bonds.
+
+Each architectural decision is graded against both. The DID layer, scoped agent-caller keys (`azac_…`), signed job receipts, payout-curve clawbacks, and insert-only ledger are scaffolding for the global goal — they only make sense if you believe agents will be economic actors.
+
+Architecture in one sentence: **FastAPI monolith on SQLite WAL, provider-agnostic LLM layer, async job lifecycle, insert-only ledger, MCP-native agent surface, did:web identity per agent.**
 
 Live at **[https://aztea.ai](https://aztea.ai)**
+
+---
+
+## Where we are vs. where we're going
+
+This codebase contains plumbing for things that aren't user-visible yet. **Be honest about the gap when shipping new features and when writing docs.** Hiding the gap loses more trust than admitting it.
+
+| System | Built | User-visible | Notes |
+|---|---|---|---|
+| Insert-only ledger + reconcile | ✅ | ✅ | A− grade — solid |
+| Async job lifecycle (claim/heartbeat/release/complete/fail) | ✅ | ✅ | A− |
+| MCP lazy 3-tool surface + 24+ meta-tools | ✅ | ✅ | B+ — needs `aztea_status`, `aztea_data_retention_policy` |
+| Job cancel route + `aztea_cancel_job` meta-tool | ✅ | ✅ | shipped 2026-05-01 |
+| Curated 18-agent built-in catalog | ✅ | ✅ | B+ — runtime-deps not always present |
+| Reputation + dispute lifecycle + payout-curve clawback | ✅ | ✅ | B — capability bonds, staking missing |
+| Scoped keys (caller/worker/admin/`azac_…`) | ✅ | ✅ | A− at unit level, untested at A2A scale |
+| `did:web` identity, Ed25519 signing, signed job receipts | ✅ | ❌ | **C+ — built but no SDK helper, no docs cookbook, nobody verifies them** |
+| Stripe top-up / wallet | ✅ | ✅ | works for buyers |
+| Stripe Connect payouts to workers | ❌ | ❌ | **launch blocker for the seller side** |
+| Streaming SSE output for long async jobs | ❌ | ❌ | **launch-week priority — async UX feels stuck without it** |
+| Output-shape templates (`as: markdown / github_pr_comment`) | ❌ | ❌ | post-launch nice-to-have |
+| `git_diff_review` recipe (chain analyzer → linter → reviewer) | ❌ | ❌ | killer demo, post-launch |
+| Eval-gate before community SKILL.md goes public | ❌ | ❌ | demo skills polluted prod once already; close the loop |
+| Per-agent reputation dashboard (p50/p99, refund rate, dispute rate) | ⏳ data exists | ❌ | trust signal moat |
+| A2A end-to-end demo (one Aztea agent hires another) | ❌ | ❌ | **0 production A2A jobs run to date** — narrative gap |
+| Self-enforcing contracts (schema validators gate payment release) | ❌ | ❌ | reduces dispute volume |
+| Capability bonds / staking | ❌ | ❌ | global-goal feature |
+| Verifiable Credentials for portable reputation | ❌ | ❌ | global-goal feature |
+| Stablecoin settlement layer (USDC / Base / Solana) | ❌ | ❌ | required for federation |
+| Public status page + signed monetary-policy statement | ❌ | ❌ | trust polish |
+| Frontend consistency (shared `format.js`, no inline-style blocks, inline error states) | ⏳ partial | ⏳ | tech debt, ship in next pass |
+
+**When you ship a row to the right column, update this table in the same PR.**
 
 ---
 
@@ -358,6 +398,11 @@ Required events: `checkout.session.completed`, `payment_intent.succeeded`.
 - **API key values are never logged.** Log only the prefix (`az_xxx...`). Automatic redaction is in `logging_utils.py`.
 - **All outbound URLs go through `url_security.py`** (agent endpoints, verifiers, webhooks, onboarding URLs, git clone paths). Private IPs, loopback, IPv6, and URL-encoded bypass chars are blocked. Dev override: `ALLOW_PRIVATE_OUTBOUND_URLS=1`.
 
+### Privacy / work-example recording
+
+- **Sensitive agents must never replay caller inputs.** `_record_public_work_example()` in `server/application_parts/part_003.py` drops on three independent gates: (a) hardcoded `_SENSITIVE_EXAMPLE_AGENT_IDS`, (b) the `examples_sensitive: True` flag on the spec, (c) the `Security` category. New scanner / credential / PII-handling agents must set both (b) and the Security category.
+- **Demo-only skills are blocklisted** server-side from `/registry/agents` and from MCP search via `_PUBLIC_SEARCH_EXCLUDED` / `_PUBLIC_MARKETPLACE_BLOCKLIST` (slugs `reverse_string`, `echo_skill`, `json_validator`). New demo names go in both lists.
+
 ### LLM layer
 
 - **`LLMResponse.text` — not `.content`.** Every agent module must use `raw.text`. Using `.content` silently returns `None` at runtime.
@@ -402,6 +447,9 @@ POST /jobs/{id}/heartbeat  → extends lease
 POST /jobs/{id}/release    → pending (explicit release)
 POST /jobs/{id}/complete   → complete + settle
 POST /jobs/{id}/fail       → failed + refund
+POST /jobs/{id}/cancel     → buyer-side abort, refunds pre-call charge.
+                             Accepts pending/claimed/running/awaiting_clarification.
+                             Terminal states return structured 409 (job.invalid_state).
 ```
 
 Sweeper handles expired leases, timeouts, and auto-retries. Built-in worker polls pending jobs every 2s.
