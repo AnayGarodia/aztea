@@ -338,7 +338,7 @@ export default function WalletPage() {
           <Reveal>
           <section className="wallet__hero">
             <div className="wallet__hero-balance">
-              <p className="wallet__hero-label">Available balance</p>
+              <p className="wallet__hero-label">Available balance · integer cents</p>
               <p className="wallet__balance">{fmtUsd(wallet?.balance_cents)}</p>
               {lowBalance && (
                 <p className="wallet__low-warn">We recommend adding funds before your next call.</p>
@@ -499,7 +499,7 @@ export default function WalletPage() {
                   <Skeleton variant="rect" height={32} />
                 </div>
               ) : !spendSummary || spendSummary.total_cents === 0 ? (
-                <EmptyState title="No spend in this period" sub="Charges for agent calls will appear here." />
+                <EmptyState title="No spend in this period" sub="Charges from agent hires post here in cents — refunds reverse them." />
               ) : (
                 <>
                   <div className="wallet__spend-totals">
@@ -576,7 +576,7 @@ export default function WalletPage() {
             </Card.Header>
             <Card.Body>
               {activity.length === 0 ? (
-                <EmptyState title="No activity yet" sub="Deposits, charges, payouts, and withdrawals appear here." />
+                <EmptyState title="No ledger activity yet" sub="Deposits, charges, payouts, refunds, and withdrawals — every cent shows up here, append-only." />
               ) : (
                 <>
                   <div>

@@ -180,11 +180,11 @@ export default function DashboardPage() {
               <div>
                 <p className="dashboard__welcome-eyebrow t-micro">Overview</p>
                 <h1>Welcome{user?.username ? `, ${user.username}` : ''}</h1>
-                <p>Hire agents, track jobs, and see every charge and payout in one place.</p>
+                <p>Hire specialists, track jobs, and read every charge, refund, and payout from one ledger.</p>
               </div>
               <div className="dashboard__welcome-actions">
-                <Link to="/agents"><Button variant="primary">Browse agents</Button></Link>
-                <Link to="/jobs"><Button variant="secondary">View jobs</Button></Link>
+                <Link to="/agents"><Button variant="primary">Browse the catalog</Button></Link>
+                <Link to="/jobs"><Button variant="secondary">My jobs</Button></Link>
               </div>
             </div>
           </Reveal>
@@ -192,10 +192,10 @@ export default function DashboardPage() {
           {/* KPIs */}
           <Stagger className="dashboard__kpi-grid" staggerDelay={0.07}>
             {[
-              { label: role === 'builder' ? 'Earnings balance' : 'Wallet balance', value: balance, hint: role === 'builder' ? 'Withdraw via Stripe Connect' : '', icon: Wallet, accent: 'var(--accent)' },
-              { label: 'Agents available', value: loading ? '…' : agents.length, hint: role === 'builder' ? 'In the marketplace' : '', icon: Bot, accent: 'var(--sage-strong)' },
-              { label: 'Active jobs',  value: loading ? '…' : activeJobs, hint: '', icon: Briefcase, accent: 'var(--copper)' },
-              { label: 'Success rate', value: loading ? '…' : `${successRate}%`, hint: jobs.length > 0 ? '' : 'No jobs yet', icon: CheckCircle2, accent: 'var(--positive)' },
+              { label: role === 'builder' ? 'Earnings balance' : 'Wallet balance', value: balance, hint: role === 'builder' ? 'Withdraw via Stripe Connect' : 'Spend in cents · refunds on failure', icon: Wallet, accent: 'var(--accent)' },
+              { label: 'Specialists online', value: loading ? '…' : agents.length, hint: role === 'builder' ? 'In the catalog' : 'Across every category', icon: Bot, accent: 'var(--sage-strong)' },
+              { label: 'Active jobs',  value: loading ? '…' : activeJobs, hint: 'In flight or claimed', icon: Briefcase, accent: 'var(--copper)' },
+              { label: 'Success rate', value: loading ? '…' : `${successRate}%`, hint: jobs.length > 0 ? 'Across all your hires' : 'No jobs yet', icon: CheckCircle2, accent: 'var(--positive)' },
             ].filter(Boolean).map(s => (
               <div key={s.label} className="dashboard__kpi" style={{ '--kpi-accent': s.accent }}>
                 <div className="dashboard__kpi-icon" style={{ color: s.accent }}>
@@ -249,9 +249,9 @@ export default function DashboardPage() {
                   </>
                 ) : (
                   <>
-                    <ActionStep done={agents.length > 0} title="Browse agents to hire" copy="Each listing shows what the agent does, what it costs per call, and example outputs." actionTo="/agents" actionLabel={agents.length > 0 ? 'Browse agents' : 'Start here'} />
-                    <ActionStep done={jobs.length > 0} title="Check on your jobs" copy="See pending, running, and completed jobs in one list." actionTo="/jobs" actionLabel="Open jobs" />
-                    <ActionStep done={hasBalance} title="Top up your wallet" copy="Every charge, refund, and payout shows up in your wallet transactions." actionTo="/wallet" actionLabel={hasBalance ? 'View wallet' : 'Add funds'} />
+                    <ActionStep done={agents.length > 0} title="Browse the catalog" copy="Each listing shows what the specialist does, what it costs per call, and example outputs." actionTo="/agents" actionLabel={agents.length > 0 ? 'Open catalog' : 'Start here'} />
+                    <ActionStep done={jobs.length > 0} title="Track your hires" copy="Pending, running, and settled jobs in one timeline — with signed receipts." actionTo="/jobs" actionLabel="Open jobs" />
+                    <ActionStep done={hasBalance} title="Fund the wallet" copy="Charges debit at hire time, refund automatically on failure. Every cent is journalled." actionTo="/wallet" actionLabel={hasBalance ? 'View wallet' : 'Add funds'} />
                   </>
                 )}
               </Card.Body>

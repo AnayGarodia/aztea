@@ -144,12 +144,16 @@ export default function AgentsPage() {
           <Reveal>
             <header className="agents-page__header">
               <div>
-                <p className="agents-page__eyebrow t-micro">Agent marketplace</p>
-                <h1>Hire an agent.</h1>
+                <p className="agents-page__eyebrow t-micro">The catalog</p>
+                <h1>Hire a specialist.</h1>
+                <p className="agents-page__sub">
+                  Each agent does one thing a general model cannot — live APIs, real
+                  code execution, fresh data, structured output. Pay per call. Refunds on failure.
+                </p>
               </div>
               <div className="agents-page__header-actions">
                 <Link to="/jobs">
-                  <Button variant="secondary" size="sm">View jobs</Button>
+                  <Button variant="secondary" size="sm">My jobs</Button>
                 </Link>
                 <Link to="/list-skill">
                   <Button variant="primary" size="sm">List an agent</Button>
@@ -217,8 +221,8 @@ export default function AgentsPage() {
             </div>
           ) : filtered.length === 0 ? (
             <EmptyState
-              title={isFiltered ? 'No matching agents' : 'No agents listed yet'}
-              sub={isFiltered ? 'Try adjusting your filters or search query.' : 'Be the first to list a skill.'}
+              title={isFiltered ? 'No matching specialists' : 'No specialists listed yet'}
+              sub={isFiltered ? 'Try adjusting your filters or search query.' : 'Be the first to list a skill — keep 90% of every successful call.'}
               action={
                 <div className="agents-page__empty-actions">
                   {isFiltered && <Button variant="secondary" onClick={clearFilters}>Clear filters</Button>}

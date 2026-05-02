@@ -227,6 +227,7 @@
   /* fade edges so it doesn't fight with hero copy */
   -webkit-mask-image: radial-gradient(ellipse 70% 70% at 50% 45%, transparent 0%, black 70%);
           mask-image: radial-gradient(ellipse 70% 70% at 50% 45%, transparent 0%, black 70%);
+  will-change: transform;
 }
 .lp__hero-radial {
   position: absolute;
@@ -311,10 +312,17 @@
 }
 
 /* ── SECTION SHELL ─────────────────────────────────────────── */
+/* content-visibility skips offscreen sections in style/layout/paint,
+   which is the highest-leverage perf win for long landing pages.
+   contain-intrinsic-size reserves the slot so the scrollbar doesn't jump. */
 .lp__sec {
   padding: 110px 0;
   position: relative;
+  content-visibility: auto;
+  contain-intrinsic-size: 1px 720px;
 }
+/* Quickstart is short — give it a tighter slot guess. */
+.lp__sec--quickstart { contain-intrinsic-size: 1px 240px; }
 .lp__sec-inner {
   max-width: 1240px;
   margin: 0 auto;

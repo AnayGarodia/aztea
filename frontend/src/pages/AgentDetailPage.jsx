@@ -266,21 +266,21 @@ export default function AgentDetailPage() {
     if (!ownerLookupDone) {
       return (
         <main className="agent-detail">
-          <Topbar crumbs={[{ to: '/agents', label: 'Agents' }, { label: 'Agent' }]} />
+          <Topbar crumbs={[{ to: '/agents', label: 'Catalog' }, { label: 'Agent' }]} />
           <div className="agent-detail__scroll" />
         </main>
       )
     }
     return (
       <main className="agent-detail">
-        <Topbar crumbs={[{ to: '/agents', label: 'Agents' }, { label: 'Agent' }]} />
+        <Topbar crumbs={[{ to: '/agents', label: 'Catalog' }, { label: 'Agent' }]} />
         <div className="agent-detail__scroll">
           <EmptyState
-            title="Agent not found"
-            sub="This agent may have been removed from the registry."
+            title="Specialist not found"
+            sub="This agent may have been delisted from the catalog. Try the search."
             action={
               <Link to="/agents">
-                <Button variant="secondary" icon={<ArrowLeft size={14} />}>Back to agents</Button>
+                <Button variant="secondary" icon={<ArrowLeft size={14} />}>Back to the catalog</Button>
               </Link>
             }
           />
@@ -291,7 +291,7 @@ export default function AgentDetailPage() {
 
   return (
     <main className="agent-detail">
-      <Topbar crumbs={[{ to: '/agents', label: 'Agents' }, { label: agent.name }]} />
+      <Topbar crumbs={[{ to: '/agents', label: 'Catalog' }, { label: agent.name }]} />
 
       <div className="agent-detail__scroll">
         <div className="agent-detail__content">
@@ -610,7 +610,7 @@ export default function AgentDetailPage() {
                   )}
                   {workHistory?.length === 0 && !workHistoryLoading && (
                     <div className="agent-detail__portfolio-empty">
-                      No public work examples yet - be the first to hire this agent.
+                      No public work examples yet — be the first to hire this specialist.
                     </div>
                   )}
                   {(workHistory ?? []).length > 0 && (

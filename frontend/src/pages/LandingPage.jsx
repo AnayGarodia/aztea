@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
@@ -10,10 +10,12 @@ import {
 import { fetchAgents } from '../api'
 import AzteaMark from '../brand/AzteaMark'
 import {
-  JaaliColumn, JaaliLattice, JaaliDiamondField,
+  JaaliColumn, JaaliLattice,
   JaaliArchRow, JaaliRosette, JaaliWeave,
 } from '../brand/JaaliPattern'
-import HeroShapes from '../brand/HeroShapes'
+// HeroShapes lazy-loaded so the canvas script doesn't block the
+// initial paint of headline + CTAs (which are LCP candidates).
+const HeroShapes = lazy(() => import('../brand/HeroShapes'))
 import AuthDialog from '../features/auth/AuthDialog'
 import './LandingPage.css'
 
@@ -31,13 +33,13 @@ const INIT_CMD = 'npx -y aztea-cli@latest init'
 const USE_CASES = [
   { tag: 'AUDIT',    title: 'Audit a requirements.txt for CVEs',
     body: 'Hand a manifest to the dependency auditor. It queries NIST NVD live and returns a structured list of vulnerabilities with severity, fix versions, and license risk — not an LLM guessing.',
-    agent: 'agt-dep-audit', price: '$0.04' },
+    agent: 'agt-dep-audit', agentId: '11fab82a-426e-513e-abf3-528d99ef2b87', price: '$0.04' },
   { tag: 'EXECUTE',  title: 'Run a snippet in a real Python sandbox',
     body: 'Send code to the Python executor. You get back stdout, stderr, exit code, and runtime from a bounded subprocess. Real interpreter, not a hallucinated trace.',
-    agent: 'agt-py-exec', price: '$0.03' },
+    agent: 'agt-py-exec', agentId: '040dc3f5-afe7-5db7-b253-4936090cc7af', price: '$0.03' },
   { tag: 'RESEARCH', title: 'Pull and synthesise live URLs',
     body: 'Hand a topic and a list of URLs. The web researcher fetches them, strips the HTML, and returns a structured summary with the citations preserved.',
-    agent: 'agt-web-research', price: '$0.03' },
+    agent: 'agt-web-research', agentId: '32cd7b5c-44d0-5259-bb02-1bbc612e92d7', price: '$0.03' },
 ]
 
 const STAGES = [
@@ -78,11 +80,23 @@ function CopyButton({ text }) {
   )
 }
 
-function CatalogCard({ entry, liveAgent }) {
+function CatalogCard({ entry, liveAgent, onOpen }) {
   const Icon = entry.icon
   const price = liveAgent ? `$${Number(liveAgent.price_per_call_usd ?? 0).toFixed(2)}` : entry.price
+  const handleKey = (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      onOpen?.()
+    }
+  }
   return (
-    <article className="lp__cat" tabIndex={0}>
+    <article
+      className="lp__cat"
+      tabIndex={0}
+      role="button"
+      onClick={onOpen}
+      onKeyDown={handleKey}
+    >
       <div className="lp__cat-head">
         <div className="lp__cat-icon"><Icon size={18} strokeWidth={1.6} /></div>
         <span className="lp__cat-cat">{entry.category}</span>
@@ -133,12 +147,19 @@ export default function LandingPage() {
   const closeAuth = () => setAuth(a => ({ ...a, open: false }))
 
   useEffect(() => {
-    fetchAgents(null).then(r => {
-      if (!r?.agents?.length) return
-      const map = {}
-      for (const a of r.agents) map[a.agent_id] = a
-      setLiveAgents(map)
-    }).catch(() => {})
+    // Defer the registry fetch until the browser is idle so it never
+    // competes with the hero canvas / paint on first load.
+    const idle = window.requestIdleCallback || ((cb) => setTimeout(cb, 600))
+    const cancel = window.cancelIdleCallback || clearTimeout
+    const handle = idle(() => {
+      fetchAgents(null).then(r => {
+        if (!r?.agents?.length) return
+        const map = {}
+        for (const a of r.agents) map[a.agent_id] = a
+        setLiveAgents(map)
+      }).catch(() => {})
+    }, { timeout: 2000 })
+    return () => cancel(handle)
   }, [])
 
   useEffect(() => {
@@ -153,6 +174,10 @@ export default function LandingPage() {
   const handleGetStarted   = () => apiKey ? navigate('/overview')   : openAuth('register', '/overview')
   const handleSignIn       = () => apiKey ? navigate('/overview')   : openAuth('signin')
   const handleBrowseAgents = () => apiKey ? navigate('/agents')     : openAuth('register', '/agents')
+  const handleOpenAgent    = (id) => {
+    const target = `/agents/${id}`
+    apiKey ? navigate(target) : openAuth('register', target)
+  }
 
   return (
     <div className="lp">
@@ -212,9 +237,8 @@ export default function LandingPage() {
           HERO — diamond field background + jaali columns.
          ───────────────────────────────────────────────────── */}
       <section className="lp__hero">
-        <JaaliDiamondField className="lp__hero-field" size={72} opacity={0.07} color="var(--terracotta)" />
         <div className="lp__hero-radial" aria-hidden />
-        <HeroShapes />
+        <Suspense fallback={null}><HeroShapes /></Suspense>
         <JaaliColumn className="lp__edge lp__edge--left" rows={9} />
         <JaaliColumn className="lp__edge lp__edge--right" rows={9} />
 
@@ -271,7 +295,19 @@ export default function LandingPage() {
           </header>
           <ol className="lp__cases">
             {USE_CASES.map((c, i) => (
-              <li key={c.tag} className="lp__case">
+              <li
+                key={c.tag}
+                className="lp__case"
+                tabIndex={0}
+                role="button"
+                onClick={() => handleOpenAgent(c.agentId)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    handleOpenAgent(c.agentId)
+                  }
+                }}
+              >
                 <span className="lp__case-num">{String(i + 1).padStart(2, '0')}</span>
                 <div className="lp__case-body">
                   <div className="lp__case-meta">
@@ -332,7 +368,11 @@ export default function LandingPage() {
           <div className="lp__bento">
             {CATALOG.map((entry, i) => (
               <div key={entry.id} className={`lp__bento-cell lp__bento-cell--${i}`}>
-                <CatalogCard entry={entry} liveAgent={liveAgents[entry.id]} />
+                <CatalogCard
+                  entry={entry}
+                  liveAgent={liveAgents[entry.id]}
+                  onOpen={() => handleOpenAgent(entry.id)}
+                />
               </div>
             ))}
           </div>
@@ -514,26 +554,30 @@ text field from the input.`}</code></pre>
           <div className="lp__footer-cols">
             <div className="lp__footer-col">
               <span className="lp__footer-h">Product</span>
-              <Link to="/agents">Agents</Link>
+              <button type="button" onClick={handleBrowseAgents}>Catalog</button>
               <button type="button" onClick={() => scrollToId('lp-how')}>How it works</button>
               <button type="button" onClick={() => scrollToId('lp-pricing')}>Pricing</button>
+              <button type="button" onClick={() => scrollToId('lp-faq')}>FAQ</button>
             </div>
             <div className="lp__footer-col">
               <span className="lp__footer-h">Developers</span>
               <Link to="/docs">Docs</Link>
-              <Link to="/docs#api">API Reference</Link>
-              <Link to="/docs#sdks">SDKs</Link>
+              <Link to="/docs/quickstart">Quickstart</Link>
+              <Link to="/docs/api-reference">API reference</Link>
+              <Link to="/docs/mcp-integration">MCP integration</Link>
             </div>
             <div className="lp__footer-col">
-              <span className="lp__footer-h">Company</span>
-              <Link to="/about">About</Link>
-              <Link to="/careers">Careers</Link>
-              <Link to="/blog">Blog</Link>
+              <span className="lp__footer-h">Build</span>
+              <button type="button" onClick={handleListSkill}>List an agent</button>
+              <Link to="/docs/agent-builder">Builder guide</Link>
+              <Link to="/docs/reputation">Reputation</Link>
+              <a href="https://github.com/AnayGarodia/aztea" target="_blank" rel="noreferrer">GitHub</a>
             </div>
             <div className="lp__footer-col">
               <span className="lp__footer-h">Legal</span>
               <Link to="/terms">Terms</Link>
               <Link to="/privacy">Privacy</Link>
+              <a href="mailto:security@aztea.dev">Security</a>
             </div>
           </div>
         </div>

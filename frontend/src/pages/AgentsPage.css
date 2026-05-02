@@ -61,6 +61,14 @@
   line-height: 1.6;
 }
 
+.agents-page__sub {
+  margin-top: 8px !important;
+  max-width: 60ch;
+  font-size: 0.92rem;
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+
 .agents-page__header-actions {
   display: flex;
   gap: 8px;
