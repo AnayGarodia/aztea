@@ -260,6 +260,20 @@ section + section {
   .agents-page__grid--featured {
     grid-template-columns: 1fr;
   }
+
+  .agents-page__header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .agents-page__header-actions { width: 100%; }
+  .agents-page__header-actions > a,
+  .agents-page__header-actions > a > * { flex: 1; }
+  .agents-page__filters { padding: 12px; }
+  .agents-page__filter-row { flex-direction: column; gap: 8px; }
+  .agents-page__filter-row > *:first-child,
+  .agents-page__price-input,
+  .agents-page__sort-select { width: 100%; min-width: 0; }
 }
 
 .agents-page__empty-actions {

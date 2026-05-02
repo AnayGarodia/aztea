@@ -197,8 +197,8 @@ export default function DashboardPage() {
               { label: 'Active jobs',  value: loading ? '…' : activeJobs, hint: 'In flight or claimed', icon: Briefcase, accent: 'var(--copper)' },
               { label: 'Success rate', value: loading ? '…' : `${successRate}%`, hint: jobs.length > 0 ? 'Across all your hires' : 'No jobs yet', icon: CheckCircle2, accent: 'var(--positive)' },
             ].filter(Boolean).map(s => (
-              <div key={s.label} className="dashboard__kpi" style={{ '--kpi-accent': s.accent }}>
-                <div className="dashboard__kpi-icon" style={{ color: s.accent }}>
+              <div key={s.label} className="dashboard__kpi">
+                <div className="dashboard__kpi-icon">
                   <s.icon size={16} />
                 </div>
                 <p className="dashboard__kpi-value">{s.value}</p>

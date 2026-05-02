@@ -1128,8 +1128,6 @@
   line-height: 1.65;
   color: var(--text-secondary);
   margin: 0;
-  padding-left: 16px;
-  border-left: 2px solid var(--terracotta);
 }
 .lp__eq-prose strong {
   color: var(--text-primary);

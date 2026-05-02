@@ -132,3 +132,15 @@
   0%, 100% { opacity: 1; }
   50%       { opacity: 0.35; }
 }
+
+/* Mobile: tighter padding, smaller controls, hide low-priority crumbs */
+@media (max-width: 768px) {
+  .topbar { padding: 0 14px; gap: 10px; }
+  .topbar__balance { padding: 5px 10px; gap: 6px; }
+  .topbar__balance-label { display: none; }
+  .topbar__crumb-link { font-size: 0.75rem; }
+  .topbar__crumb-current { font-size: 0.8125rem; }
+  /* When breadcrumb has 3+ items, hide all but the last on phone */
+  .topbar__crumb-wrap:not(:last-child):nth-last-child(n+3) { display: none; }
+  .topbar__crumb-wrap:not(:last-child):nth-last-child(n+3) + .topbar__crumb-sep { display: none; }
+}
