@@ -9,6 +9,7 @@ import ErrorBoundary from './ui/ErrorBoundary'
 // when the user is unauthenticated. Everything else lazy-loads per route so
 // the initial JS payload stays small.
 import LandingPage from './pages/LandingPage'
+import AzteaBoot from './ui/AzteaBoot'
 
 const AppShell = lazy(() => import('./layout/AppShell'))
 const DocsPage = lazy(() => import('./pages/DocsPage'))
@@ -73,7 +74,7 @@ function RequireLegalAcceptance({ children }) {
 }
 
 function AppBoot() {
-  return <div className="app-boot">connecting…</div>
+  return <AzteaBoot label="connecting" />
 }
 
 function AuthedApp() {
