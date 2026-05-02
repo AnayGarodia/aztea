@@ -88,6 +88,7 @@
 }
 .ob-step-pip.active {
   width: 32px;
+  background: var(--accent);
 }
 .ob-step-pip.done {
   background: var(--border-bright);
@@ -108,6 +109,8 @@
   align-items: center;
   justify-content: center;
   margin-bottom: 4px;
+  background: var(--accent-bg);
+  color: var(--accent);
 }
 
 .ob-eyebrow {
@@ -116,6 +119,7 @@
   font-weight: 600;
   letter-spacing: 0.06em;
   margin: 0;
+  color: var(--accent);
 }
 
 .ob-title {
@@ -195,7 +199,8 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  color: #fff;
+  background: var(--accent);
+  color: var(--accent-ink);
   border: none;
   border-radius: var(--r-md);
   padding: 9px 18px;

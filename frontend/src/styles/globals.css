@@ -54,10 +54,13 @@ a {
 }
 
 /* ── Scrollbars ────────────────────────────────────────────── */
-::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 8px; }
-::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+::-webkit-scrollbar-thumb { background: transparent; border-radius: 8px; transition: background 0.2s; }
+::-webkit-scrollbar-thumb:hover { background: var(--border-bright); }
+.shell__main:hover::-webkit-scrollbar-thumb,
+.agent-detail__scroll:hover::-webkit-scrollbar-thumb,
+.lp:hover::-webkit-scrollbar-thumb { background: var(--border-bright); }
 
 textarea {
   resize: vertical;

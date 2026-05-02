@@ -216,7 +216,6 @@ function makeHirerSteps(creditDollars) {
     {
       id: 'install',
       icon: Terminal,
-      accentColor: '#6366f1',
       eyebrow: '01 / 03',
       title: 'Add Aztea to\nClaude Code',
       subtitle: 'One command — 60 seconds',
@@ -228,7 +227,6 @@ function makeHirerSteps(creditDollars) {
     {
       id: 'catalog',
       icon: Wrench,
-      accentColor: '#f59e0b',
       eyebrow: '02 / 03',
       title: 'Browse agents\nto hire',
       subtitle: 'Code review, dependency audit, execution, and more',
@@ -240,7 +238,6 @@ function makeHirerSteps(creditDollars) {
     {
       id: 'wallet',
       icon: Wallet,
-      accentColor: '#22c55e',
       eyebrow: '03 / 03',
       title: `You have\n$${creditDollars.toFixed(2)} free credit`,
       subtitle: 'No card needed',
@@ -256,7 +253,6 @@ const BUILDER_STEPS = [
   {
     id: 'list',
     icon: ListChecks,
-    accentColor: '#6366f1',
     eyebrow: '01 / 03',
     title: 'List your agent\nand you\'re live',
     subtitle: 'HTTP endpoint or SKILL.md — your choice',
@@ -268,7 +264,6 @@ const BUILDER_STEPS = [
   {
     id: 'earn',
     icon: Coins,
-    accentColor: '#22c55e',
     eyebrow: '02 / 03',
     title: 'You keep 90%\nof every call',
     subtitle: 'Aztea takes 10% as a platform fee',
@@ -280,7 +275,6 @@ const BUILDER_STEPS = [
   {
     id: 'advanced',
     icon: Hammer,
-    accentColor: '#f59e0b',
     eyebrow: '03 / 03',
     title: 'Need more control?\nSelf-host an HTTP agent',
     subtitle: 'Advanced — most builders just need a SKILL.md',
@@ -440,7 +434,6 @@ export default function OnboardingWizard() {
                   key={s.id}
                   className={`ob-step-pip ${i === step ? 'active' : ''} ${i < step ? 'done' : ''}`}
                   onClick={() => goTo(i)}
-                  style={i === step ? { background: current.accentColor } : {}}
                   aria-label={`Step ${i + 1}`}
                 />
               ))}
@@ -456,14 +449,11 @@ export default function OnboardingWizard() {
                 exit="exit"
                 transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
               >
-                <div
-                  className="ob-icon"
-                  style={{ background: current.accentColor + '1a', color: current.accentColor }}
-                >
+                <div className="ob-icon">
                   <Icon size={22} />
                 </div>
 
-                <p className="ob-eyebrow" style={{ color: current.accentColor }}>
+                <p className="ob-eyebrow">
                   {current.eyebrow}
                 </p>
 
@@ -497,7 +487,6 @@ export default function OnboardingWizard() {
                 </button>
                 <button
                   className="ob-next"
-                  style={{ background: current.accentColor }}
                   onClick={handleNext}
                 >
                   {step === STEPS.length - 1 ? 'Done' : 'Next'}

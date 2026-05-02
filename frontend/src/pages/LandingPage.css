@@ -434,7 +434,7 @@
   margin: 0 auto;
   padding: 0 64px;
   display: grid;
-  grid-template-columns: 1fr 2fr;
+  grid-template-columns: 1fr 1.4fr;
   gap: 56px;
   align-items: center;
   position: relative;
@@ -499,6 +499,8 @@
   border-radius: 16px;
   display: block;
   background: var(--surface, #000);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-lg);
 }
 
 /* ── SECTION SHELL ───────────────────────────────────────── */
@@ -580,95 +582,64 @@
 .lp__steps {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 32px;
-  position: relative;
-}
-/* Architectural connecting line through the step circles */
-.lp__steps::before {
-  content: '';
-  position: absolute;
-  top: 40px;
-  left: 12.5%;
-  right: 12.5%;
-  height: 1px;
-  background: linear-gradient(
-    to right,
-    transparent 0%,
-    var(--copper) 8%,
-    var(--copper) 92%,
-    transparent 100%
-  );
-  opacity: 0.35;
-  z-index: 0;
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  overflow: hidden;
 }
 
 .lp__step {
-  position: relative;
-  text-align: center;
-  padding: 0 12px;
-  z-index: 1;
-}
-
-.lp__step-circle {
-  width: 80px;
-  height: 80px;
-  margin: 0 auto 28px;
-  border: 1px solid var(--border-bright);
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
   background: var(--surface);
-  font-family: var(--font-display);
-  font-size: 28px;
-  color: var(--text-primary);
+  padding: 32px 28px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
   position: relative;
-  box-shadow: var(--shadow-xs);
+  overflow: hidden;
+  transition: background 0.15s ease;
 }
-.lp__step-circle::before {
-  content: '';
+.lp__step:hover { background: var(--canvas-warm); }
+
+/* Ghost watermark number — purely decorative, behind content */
+.lp__step-num {
   position: absolute;
-  inset: -8px;
-  border: 1px dashed var(--copper);
-  border-radius: 50%;
-  opacity: 0.35;
+  top: -12px;
+  right: 16px;
+  font-family: var(--font-display);
+  font-size: 100px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: -0.04em;
+  color: var(--border);
+  user-select: none;
+  pointer-events: none;
+  z-index: 0;
 }
-.lp__step-circle::after {
-  content: '';
-  position: absolute;
-  inset: 8px;
-  border: 1px solid var(--border-soft);
-  border-radius: 50%;
-}
+.lp__step--first .lp__step-num { color: color-mix(in srgb, var(--terracotta) 20%, transparent); }
 
 .lp__step-title {
   font-family: var(--font-sans);
-  font-size: 17px;
+  font-size: 0.9375rem;
   font-weight: 600;
   color: var(--text-primary);
-  margin: 0 0 10px;
-  letter-spacing: -0.005em;
+  margin: 0;
+  letter-spacing: -0.01em;
+  position: relative;
+  z-index: 1;
+  margin-top: auto;
 }
+
+.lp__step--first .lp__step-title { color: var(--terracotta); }
 
 .lp__step-body {
   font-family: var(--font-sans);
-  font-size: 14px;
-  line-height: 1.6;
+  font-size: 0.8125rem;
+  line-height: 1.65;
   color: var(--text-secondary);
   margin: 0;
-  max-width: 220px;
-  margin-left: auto;
-  margin-right: auto;
-}
-
-.lp__step-arrow {
-  position: absolute;
-  top: 32px;
-  right: -8px;
-  color: var(--terracotta);
-  opacity: 0.7;
-  z-index: 2;
-  background: var(--canvas-warm);
-  padding: 0 4px;
+  position: relative;
+  z-index: 1;
 }
 
 .lp__how-band {
@@ -882,6 +853,27 @@
   pointer-events: none;
 }
 
+.lp__price--featured {
+  border-color: var(--border-bright);
+  box-shadow: var(--shadow-md);
+}
+.lp__price--featured::before {
+  content: 'Most popular';
+  position: absolute;
+  top: -12px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--terracotta);
+  color: var(--canvas);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 3px 10px;
+  border-radius: var(--r-pill);
+  white-space: nowrap;
+}
+
 .lp__price-label {
   font-family: var(--font-sans);
   font-size: 12px;
@@ -1085,9 +1077,7 @@
 /* ── RESPONSIVE ──────────────────────────────────────────── */
 @media (max-width: 1080px) {
   .lp__hero-inner { grid-template-columns: 1fr; gap: 60px; padding: 0 64px; }
-  .lp__steps { grid-template-columns: repeat(2, 1fr); gap: 48px 24px; }
-  .lp__steps::before { display: none; }
-  .lp__step-arrow { display: none; }
+  .lp__steps { grid-template-columns: repeat(2, 1fr); gap: 16px; }
   .lp__listings { grid-template-columns: repeat(2, 1fr); }
   .lp__price-grid { grid-template-columns: 1fr; }
   .lp__footer-inner { grid-template-columns: 1fr; gap: 40px; }

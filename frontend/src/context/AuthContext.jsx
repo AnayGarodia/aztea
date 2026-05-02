@@ -1,3 +1,15 @@
+// OWNS: API key state, session user object, 401 lifecycle (auto-clear on expiry)
+// NOT OWNS: global data polling (MarketContext), route-level auth guards (AppShell)
+//
+// INVARIANTS:
+// - api key is stored in localStorage under 'aztea_key' — don't rename this key
+// - on 401, setSessionExpiredHandler fires clearSession() which nulls the key and user
+//   this is the ONLY place that clears auth state; don't call clearSession elsewhere
+//
+// DECISIONS:
+// - user object is JSON-serialized to localStorage so the page survives a reload;
+//   stale user data is acceptable — authMe re-fetches on mount to validate
+
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
 import { authMe, setSessionExpiredHandler } from '../api'
 

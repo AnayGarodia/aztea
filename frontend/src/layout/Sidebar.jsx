@@ -111,12 +111,6 @@ export default function Sidebar() {
 
       {/* Footer */}
       <div className="sidebar__footer">
-        <div className="sidebar__legal-links">
-          <NavLink to="/terms" className="sidebar__legal-link">Terms</NavLink>
-          <span className="sidebar__legal-sep">·</span>
-          <NavLink to="/privacy" className="sidebar__legal-link">Privacy</NavLink>
-        </div>
-
         <div
           className="sidebar__user"
           onClick={() => navigate('/settings')}

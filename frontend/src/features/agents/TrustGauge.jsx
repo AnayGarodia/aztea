@@ -1,4 +1,5 @@
 import { motion } from 'motion/react'
+import NumberMorph from '../../ui/motion/NumberMorph'
 import './TrustGauge.css'
 
 // SVG arc gauge - draws from 7 o'clock to 5 o'clock (270° arc matching design system)
@@ -42,29 +43,6 @@ function TrustArc({ pct }) {
           transition={{ duration: 0.8, ease: [0.2, 0.8, 0.2, 1] }}
         />
       )}
-      {/* Center score */}
-      <text
-        x={CX} y={CY - 2}
-        textAnchor="middle"
-        fontSize="22"
-        fontWeight="500"
-        fontFamily="'Fraunces', Georgia, serif"
-        fill="var(--text-primary)"
-        letterSpacing="-0.02em"
-      >
-        {pct != null ? Math.round(pct * 100) : '-'}
-      </text>
-      <text
-        x={CX} y={CY + 16}
-        textAnchor="middle"
-        fontSize="8"
-        fontFamily="'Plus Jakarta Sans', system-ui, sans-serif"
-        fill="var(--text-muted)"
-        fontWeight="700"
-        letterSpacing="0.08em"
-      >
-        TRUST
-      </text>
     </svg>
   )
 }
@@ -97,7 +75,18 @@ export default function TrustGauge({ agent }) {
     <div className="tg">
       {/* Arc gauge */}
       <div className="tg__gauge">
-        <TrustArc pct={trustPct ?? 0} />
+        <div className="tg__gauge-wrap">
+          <TrustArc pct={trustPct ?? 0} />
+          <div className="tg__gauge-center">
+            <NumberMorph
+              value={trustPct != null ? Math.round(trustPct * 100) : null}
+              className="tg__gauge-score"
+              placeholder="-"
+              duration={0.9}
+            />
+            <span className="tg__gauge-unit">trust</span>
+          </div>
+        </div>
         <p className="tg__gauge-label">Trust score</p>
       </div>
 

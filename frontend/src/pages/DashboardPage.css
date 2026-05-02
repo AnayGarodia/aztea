@@ -101,14 +101,24 @@
 .dashboard__kpi {
   background: var(--surface);
   border: 1px solid var(--border);
+  border-left: 3px solid var(--kpi-accent, var(--border));
   border-radius: var(--r-lg);
   padding: 20px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  transition: border-color 0.15s ease;
+  gap: 4px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
-.dashboard__kpi:hover { border-color: var(--border-bright); }
+.dashboard__kpi:hover {
+  border-color: var(--border-bright);
+  border-left-color: var(--kpi-accent, var(--border-bright));
+  box-shadow: var(--shadow-sm);
+}
+
+.dashboard__kpi-icon {
+  margin-bottom: 6px;
+  opacity: 0.85;
+}
 
 .dashboard__kpi-label {
   font-size: 0.625rem;
@@ -119,7 +129,7 @@
 }
 
 .dashboard__kpi-value {
-  font-size: 1.75rem;
+  font-size: 1.9rem;
   font-weight: 700;
   color: var(--text-primary);
   font-family: var(--font-display);

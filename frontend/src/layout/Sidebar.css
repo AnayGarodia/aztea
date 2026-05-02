@@ -40,19 +40,6 @@
     linear-gradient(90deg, transparent, color-mix(in srgb, var(--terracotta) 35%, var(--border)), transparent);
 }
 
-.sidebar__brand::before {
-  content: '';
-  position: absolute;
-  left: 50%;
-  bottom: 5px;
-  width: 5px;
-  height: 5px;
-  background: var(--terracotta);
-  transform: translateX(-50%) rotate(45deg);
-  opacity: 0.7;
-  z-index: 1;
-}
-
 
 .sidebar__wordmark {
   font-size: 1.2rem;
@@ -101,17 +88,6 @@
   border-left: 2.5px solid var(--terracotta);
 }
 
-.sidebar__link-bg::after {
-  content: '';
-  position: absolute;
-  right: 10px;
-  top: 50%;
-  width: 5px;
-  height: 5px;
-  background: var(--terracotta);
-  transform: translateY(-50%) rotate(45deg);
-  opacity: 0.85;
-}
 
 .sidebar__link:hover { color: var(--text-primary); }
 .sidebar__link--active { color: var(--text-primary); }

@@ -110,7 +110,10 @@ export default function AgentCard({ agent, index = 0, featured = false, showTrus
           {calls > 0 ? `${calls.toLocaleString()} calls` : 'New'}
         </span>
         {showTrust && trust != null && (
-          <span className="ac__trust" title="Trust score (0–100)">★ {trust}</span>
+          <span className="ac__trust" title="Trust score (0–100)">
+            <span className="ac__trust-val">{trust}</span>
+            <span className="ac__trust-lbl">trust</span>
+          </span>
         )}
         <span className="ac__cta">
           Hire <ArrowRight size={11} strokeWidth={2.5} />

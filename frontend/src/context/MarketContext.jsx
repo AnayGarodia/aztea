@@ -1,3 +1,18 @@
+// OWNS: global polling state — agents list, wallet balance, jobs, runs (20s refresh)
+// NOT OWNS: auth/session state (AuthContext), individual job detail (fetched per-page)
+//
+// INVARIANTS:
+// - polling interval is 20s — don't lower without checking server rate limits
+// - wallet balance here is for display only; always re-fetch before charging
+//
+// DECISIONS:
+// - jobs + runs fetched on the same 20s tick to keep sidebar badges in sync;
+//   splitting to different intervals caused visible count inconsistency
+// - useRef for interval id (not useState) to avoid re-renders on every tick
+//
+// KNOWN DEBT:
+// - no granular invalidation — every poll refetches all agents even if unchanged
+
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
 import { fetchAgents, fetchWalletMe, fetchRuns, fetchJobs } from '../api'
 

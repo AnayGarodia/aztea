@@ -121,22 +121,8 @@ export default function AgentDetailPage() {
   const [expandedFields, setExpandedFields] = useState(new Set())
 
   useEffect(() => {
-    // Reset every potential scroll container so the page lands at the hero,
-    // not wherever the previous route was scrolled to.
-    window.scrollTo({ top: 0, behavior: 'auto' })
-    document.documentElement.scrollTop = 0
-    document.body.scrollTop = 0
-    document.querySelector('.shell__main')?.scrollTo?.({ top: 0 })
-    const shellMain = document.querySelector('.shell__main')
-    if (shellMain) shellMain.scrollTop = 0
     const scrollEl = document.querySelector('.agent-detail__scroll')
     if (scrollEl) scrollEl.scrollTop = 0
-    // Run again after layout settles (motion transitions can re-anchor scroll).
-    const raf = requestAnimationFrame(() => {
-      if (shellMain) shellMain.scrollTop = 0
-      if (scrollEl) scrollEl.scrollTop = 0
-    })
-    return () => cancelAnimationFrame(raf)
   }, [id])
 
   const toggleField = (fieldKey) =>
@@ -396,18 +382,22 @@ export default function AgentDetailPage() {
             <Reveal delay={0.06}>
               <div className="ad__sparkline-card">
                 <p className="ad__sparkline-title">Job volume · last 30 days</p>
-                <ResponsiveContainer width="100%" height={48}>
-                  <BarChart data={sparklineData} margin={{ top: 2, right: 0, left: 0, bottom: 0 }}>
-                    <Bar dataKey="jobs" fill="var(--accent)" radius={[2, 2, 0, 0]} isAnimationActive={false} />
-                    <RechartTooltip
-                      cursor={false}
-                      contentStyle={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11 }}
-                      itemStyle={{ color: 'var(--text)' }}
-                      formatter={(v, _, p) => [v, p.payload.day]}
-                      labelFormatter={() => ''}
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
+                {sparklineData.some(b => b.jobs > 0) ? (
+                  <ResponsiveContainer width="100%" height={48}>
+                    <BarChart data={sparklineData} margin={{ top: 2, right: 0, left: 0, bottom: 0 }}>
+                      <Bar dataKey="jobs" fill="var(--accent)" radius={[2, 2, 0, 0]} isAnimationActive={false} />
+                      <RechartTooltip
+                        cursor={false}
+                        contentStyle={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11 }}
+                        itemStyle={{ color: 'var(--text)' }}
+                        formatter={(v, _, p) => [v, p.payload.day]}
+                        labelFormatter={() => ''}
+                      />
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <EmptyState title="No volume yet" sub="Job data appears after the first call." />
+                )}
               </div>
             </Reveal>
           )}

@@ -341,7 +341,7 @@ export default function AgentSigil({ agentId, size = 'md', className, style }) {
         </clipPath>
       </defs>
       <g clipPath={`url(#${clipId})`}>
-        <rect width={px} height={px} fill={surface} />
+        <rect width={px} height={px} style={{ fill: 'var(--surface-2, ' + surface + ')' }} />
         {children}
       </g>
       <rect x="0" y="0" width={px} height={px} rx={rx}

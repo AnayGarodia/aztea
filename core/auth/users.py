@@ -1,23 +1,16 @@
-"""User registration, login, and API key lifecycle.
-
-Paired with ``core.auth.schema`` (which owns the DB schema, password / key
-hashing, and shared constants). This module implements the mutating
-operations that the HTTP layer hits on every auth route:
-
-- ``register_user`` / ``login_user`` — account creation and authentication
-  with hashed passwords, legal acceptance tracking, and the "$1.00 free
-  credit" wallet bootstrap.
-- ``create_api_key`` / ``verify_api_key`` / ``rotate_api_key`` / ``delete_api_key``
-  — scoped API key lifecycle. Keys are stored as salted SHA-256 digests; the
-  raw key is only ever returned on creation and never logged (see the
-  redaction filter in ``server.application_parts.part_000``).
-- ``create_agent_api_key`` / ``verify_agent_api_key`` — agent-scoped worker
-  keys (`azk_...`) that are pinned to a specific agent and cannot be used
-  for caller-side operations.
-
-Legal acceptance state (``terms_version_accepted``, ``privacy_version_accepted``)
-flows through every auth response so the frontend can prompt for re-acceptance
-whenever the server-side version constant is bumped.
+# OWNS: user registration/login, API key lifecycle (create/verify/rotate/delete)
+# NOT OWNS: DB schema + hashing (auth/schema.py), agent registration (registry/)
+#
+# INVARIANTS:
+# - raw API key values are NEVER logged — only the prefix (redaction filter in part_000.py)
+# - keys are stored as salted SHA-256 digests; the raw value is only returned on creation
+# - agent-scoped worker keys (azac_...) cannot be used for caller-side operations — enforced by scope check
+# - register_user bootstraps a $1.00 free credit wallet in the same transaction as user creation
+#
+# DECISIONS:
+# - legal acceptance state (terms_version, privacy_version) is returned on every auth response
+#   so the frontend can prompt re-acceptance when server constants bump — don't move it to a
+#   separate endpoint or the frontend will miss the prompt
 """
 
 from __future__ import annotations

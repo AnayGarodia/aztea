@@ -1,3 +1,21 @@
+// OWNS: full job detail view — status, messages, SSE stream, JobReceipt verification, actions
+// NOT OWNS: job list / sidebar state (MarketContext), agent detail (AgentDetailPage)
+//
+// INVARIANTS:
+// - errors must be displayed inline — never use a toast for an error state here
+// - JobReceipt verification uses WebCrypto in-browser — do NOT send the signature to the server
+//   the whole point is the platform cannot forge a passing verification
+//
+// DECISIONS:
+// - SSE stream (EventSource) is opened per-render and closed on unmount.
+//   Reconnect on auth expiry is not handled — the stream just stops silently.
+// - inline style={{}} blocks exist on animated timeline entries because values are
+//   runtime data (timestamps, durations), not layout — don't replace with CSS classes
+//
+// KNOWN DEBT:
+// - SSE reconnect doesn't handle 401 — stream silently stops if session expires mid-page
+// - many inline style={{}} layout blocks should migrate to CSS classes + tokens.css variables
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import Topbar from '../layout/Topbar'

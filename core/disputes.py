@@ -1,28 +1,21 @@
-"""Dispute lifecycle, judgment recording, and bilateral caller-rating persistence.
-
-This module owns all state transitions and DB writes for the dispute system.
-It does NOT own money movements — those are handled by the caller in the server
-shard via ``core.payments.trust_disputes`` which must wrap ``create_dispute``
-inside the same SQLite transaction as the escrow clawback.
-
-Key invariants:
-- ``create_dispute`` enforces that only a party to the job (caller or agent
-  owner) may file. The server layer must verify this too, but the check here
-  is the authoritative one.
-- Dispute insert + escrow clawback MUST happen in one transaction. The caller
-  passes an open ``conn`` to ``create_dispute`` to ensure atomicity. If the
-  caller does not pass a conn, a new transaction is opened internally (safe for
-  cases where no money movement is needed).
-- There can be at most one dispute per job (enforced by a UNIQUE index on
-  ``disputes.job_id``).
-- ``caller_ratings`` is declared and owned by ``core.reputation``. This module
-  must not re-declare it or write to it directly.
-
-Status machine:
-  pending → judging → consensus (2 LLM judges agree) → final
-                    → tied (judges disagree) → final (after admin tie-break)
-  Any status → appealed → final
-"""
+# OWNS: dispute state transitions, judgment recording, bilateral caller-rating reads
+# NOT OWNS: money movements (trust_disputes.py wraps these), caller_ratings table (reputation.py)
+#
+# INVARIANTS:
+# - dispute insert + escrow clawback MUST happen in ONE transaction — pass an open conn to create_dispute
+# - at most one dispute per job — enforced by UNIQUE index on disputes.job_id
+# - only a party to the job (caller or agent owner) may file — this check is authoritative
+# - never declare or write caller_ratings directly; use reputation.py helpers
+#
+# DECISIONS:
+# - create_dispute accepts an optional conn so the server shard can wrap it with escrow clawback
+#   in one transaction. If no conn is passed, a new transaction opens internally (safe when
+#   no money movement is needed — e.g. test disputes). This two-mode design was intentional.
+# - status machine is append-only via judgment rows, not in-place status updates, to preserve audit trail
+#
+# Status machine: pending → judging → consensus (2 LLM judges agree) → final
+#                                   → tied → final (admin tie-break)
+#                 any status → appealed → final
 
 from __future__ import annotations
 

@@ -1,15 +1,7 @@
-# Aztea — contributor guide
+# Aztea — deep contributor reference
 
-## What this is
-
-Aztea is the **identity, payment, and dispute-resolution layer for agent-to-agent commerce**. The plumbing assumes a future where the participants on the platform are software, not humans.
-
-Two horizons drive every decision:
-
-- **Local goal (next launch):** ship something individual developers and small teams *want to use today* — fast hires, deterministic tools, transparent spend, verifiable receipts. The buyer surface (Claude Code MCP, CLI, SDK, web) gets the bulk of polish work in the launch window.
-- **Global goal (north star):** open infrastructure where any agent on any platform can hire, pay, trust, and settle disputes with any other agent. Think Stripe + Upwork + Dun & Bradstreet, but the participants are software. Federation, portable reputation, stablecoin settlement, capability bonds.
-
-Each architectural decision is graded against both. The DID layer, scoped agent-caller keys (`azac_…`), signed job receipts, payout-curve clawbacks, and insert-only ledger are scaffolding for the global goal — they only make sense if you believe agents will be economic actors.
+> **Start with `AGENTS.md`** for the quick brief. This file is the deep reference — read it before touching money flows, auth, migrations, or the MCP surface.
+> Current priorities and roadmap live in `.agents/TODO.md` and `.agents/ROADMAP.md`.
 
 Architecture in one sentence: **FastAPI monolith on SQLite WAL, provider-agnostic LLM layer, async job lifecycle, insert-only ledger, MCP-native agent surface, did:web identity per agent.**
 
@@ -17,36 +9,11 @@ Live at **[https://aztea.ai](https://aztea.ai)**
 
 ---
 
-## Where we are vs. where we're going
+## Honest status
 
-This codebase contains plumbing for things that aren't user-visible yet. **Be honest about the gap when shipping new features and when writing docs.** Hiding the gap loses more trust than admitting it.
+Full status table lives in `.agents/ROADMAP.md`. Keep it updated — when you ship something, update both this sentence and that file in the same PR.
 
-| System | Built | User-visible | Notes |
-|---|---|---|---|
-| Insert-only ledger + reconcile | ✅ | ✅ | A− grade — solid |
-| Async job lifecycle (claim/heartbeat/release/complete/fail) | ✅ | ✅ | A− |
-| MCP lazy 3-tool surface + 24+ meta-tools | ✅ | ✅ | B+ — needs `aztea_status`, `aztea_data_retention_policy` |
-| Job cancel route + `aztea_cancel_job` meta-tool | ✅ | ✅ | shipped 2026-05-01 |
-| Curated 18-agent built-in catalog | ✅ | ✅ | B+ — runtime-deps not always present |
-| Reputation + dispute lifecycle + payout-curve clawback | ✅ | ✅ | B — capability bonds, staking missing |
-| Scoped keys (caller/worker/admin/`azac_…`) | ✅ | ✅ | A− at unit level, untested at A2A scale |
-| `did:web` identity, Ed25519 signing, signed job receipts | ✅ | ✅ | shipped 2026-05-01 — `client.verify_job()`, `aztea jobs verify`, `aztea_verify_job` MCP tool, `docs/identity-verification.md` |
-| Stripe top-up / wallet | ✅ | ✅ | works for buyers |
-| Stripe Connect payouts to workers | ✅ | ✅ | onboard + status + withdraw routes shipped; SDK + CLI + Wallet page all wired |
-| Streaming SSE output for long async jobs | ✅ | ✅ | `/jobs/{id}/stream` + SDK `stream_messages` + CLI `aztea jobs follow` + JobDetailPage live event log |
-| Output-shape templates (`as: markdown / github_pr_comment`) | ❌ | ❌ | post-launch nice-to-have |
-| `git_diff_review` recipe (chain analyzer → linter → reviewer) | ❌ | ❌ | killer demo, post-launch |
-| Eval-gate before community SKILL.md goes public | ❌ | ❌ | demo skills polluted prod once already; close the loop |
-| Per-agent reputation dashboard (p50/p99, refund rate, dispute rate) | ⏳ data exists | ❌ | trust signal moat |
-| A2A end-to-end demo (one Aztea agent hires another) | ❌ | ❌ | **0 production A2A jobs run to date** — narrative gap |
-| Self-enforcing contracts (schema validators gate payment release) | ❌ | ❌ | reduces dispute volume |
-| Capability bonds / staking | ❌ | ❌ | global-goal feature |
-| Verifiable Credentials for portable reputation | ❌ | ❌ | global-goal feature |
-| Stablecoin settlement layer (USDC / Base / Solana) | ❌ | ❌ | required for federation |
-| Public status page + signed monetary-policy statement | ❌ | ❌ | trust polish |
-| Frontend consistency (shared `format.js`, no inline-style blocks, inline error states) | ⏳ partial | ⏳ | tech debt, ship in next pass |
-
-**When you ship a row to the right column, update this table in the same PR.**
+**Be honest about the gap when shipping.** Hiding the gap loses more trust than admitting it.
 
 ---
 
@@ -59,7 +26,17 @@ These apply to every change, no exceptions:
 - **Never open raw `sqlite3.connect()`.** Use `core/db.py` exclusively.
 - **Never store floats in the ledger.** Integer cents only.
 - **Frontend errors must be inline.** Toasts for success only; inline error state for failures.
-- **Comment and document every non-trivial module.** Every Python module that contains business logic must have a module-level docstring explaining what it owns, what it does not own, and the key invariants a contributor must not violate. Functions with non-obvious behaviour, complex math, or safety-critical paths must have a docstring. "I can read the code" is not a substitute. Undocumented invariants rot — they become the bugs in the next session. The same rule applies to new React components: a one-line comment above the component explaining what it renders and any non-obvious state is mandatory.
+- **Document every non-trivial module in agent-optimized format.** Every Python module with business logic and every non-trivial React component must have a structured block at the top — no narrative prose. Use exactly these four fields (omit any that would be empty):
+
+  ```python
+  # OWNS: what this module is responsible for
+  # NOT OWNS: what it explicitly does NOT own (prevents scope creep)
+  # INVARIANTS: hard rules — an agent must never violate these
+  # DECISIONS: non-obvious choices that CAN be changed if the reason no longer holds
+  # KNOWN DEBT: broken or suboptimal things — fix when you touch this
+  ```
+
+  `INVARIANTS` = never touch. `DECISIONS` = understand before changing, but you're allowed. `KNOWN DEBT` = actively encouraged to fix. This distinction matters: an agent must not freeze on broken code because a comment made it look intentional.
 - **Keep operational runbooks current.** When you add a feature that touches money, runtime dependencies, or a buyer surface, update the relevant runbook in `docs/runbooks/` in the same commit.
 
 ---

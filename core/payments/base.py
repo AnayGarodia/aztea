@@ -1,35 +1,21 @@
-"""Core payment ledger: wallets, insert-only transactions, and settlement math.
-
-This is the base half of the ``core.payments`` package. ``core.payments.trust_disputes``
-layers dispute-specific helpers on top of what is defined here.
-
-Schema (lives alongside the agent registry in the same SQLite database):
-
-- ``wallets`` — ``wallet_id`` (uuid), ``owner_id`` (caller identity,
-  ``"agent:<id>"``, or the shared ``"platform"`` owner),
-  ``balance_cents`` (integer cache of the ledger-derived total),
-  ``created_at``.
-- ``transactions`` — ``tx_id`` (uuid), ``wallet_id``,
-  ``type`` (``deposit | charge | fee | refund | payout``),
-  ``amount_cents`` (positive = credit, negative = debit), ``related_tx_id``,
-  ``agent_id``, ``memo``, ``created_at``.
-
-Non-negotiable invariants enforced everywhere in this package:
-
-- All amounts are integer cents. No floats are stored or exchanged; float
-  values in listing schemas are display-only.
-- Transactions are insert-only. No ``UPDATE`` / ``DELETE`` against the
-  ``transactions`` table — corrections are compensating entries.
-- ``wallets.balance_cents`` is a cache that must be updated in the same SQL
-  transaction as the ledger row that changes it. The cache is validated
-  against the ledger in reconciliation runs (``ops/payments/reconcile``).
-- Network I/O to downstream agents happens *between* short DB transactions
-  so that writes never hold a lock during HTTP calls.
-- WAL mode is enabled; connections are thread-local.
-
-See also ``core.payments.trust_disputes`` for dispute-deposit escrow, payout
-splits on dispute resolution, and reconciliation helpers.
-"""
+# OWNS: wallet balance updates, ledger inserts, settlement math (pre-charge / payout / refund)
+# NOT OWNS: dispute escrow (trust_disputes.py), caller_ratings (reputation.py)
+#
+# INVARIANTS:
+# - Integer cents only — no floats stored or exchanged; price_per_call_usd is display-only
+# - transactions table is INSERT-only — corrections are compensating entries, never UPDATE/DELETE
+# - ledger insert + wallets.balance_cents update MUST happen in ONE sql transaction
+# - network I/O to downstream agents goes BETWEEN transactions — never hold a write lock during HTTP
+# - every settlement path needs its OWN rowcount race guard on wallet UPDATE — do not share across paths
+#
+# DECISIONS:
+# - balance_cents is a cache of the ledger sum, not source of truth; reconcile validates it.
+#   Chosen for read performance; WAL prevents torn writes, reconcile catches drift.
+# - _resolved_db_path() indirection lets isolated tests monkeypatch DB_PATH on the package
+#   without affecting the module constant — don't remove it.
+#
+# KNOWN DEBT:
+# - reconciliation only runs on manual trigger (POST /ops/payments/reconcile) — should be on cron
 
 import json
 import logging

@@ -1,23 +1,16 @@
-"""Job leases, claims, retries, and verification state transitions.
-
-A lease is the window during which exactly one worker "owns" a job and may
-heartbeat / complete / fail it. This module owns every transition that
-changes the active lease:
-
-- ``claim_job`` — atomically move ``pending`` → ``running`` and issue a
-  cryptographically unique ``claim_token``.
-- ``heartbeat_job_lease`` — extend the active lease when the worker is making
-  progress.
-- ``release_job_claim`` — explicit early release (e.g. worker decides it can't
-  complete the job).
-- ``list_jobs_with_expired_leases`` / ``_lease_is_active`` / ``_lease_is_expired``
-  — scan helpers used by the background sweeper to reclaim stuck leases.
-- Retry and verification-window helpers drive automatic re-queueing on lease
-  expiry and the optional caller-accept / reject window before settlement.
-
-Correlation-id bookkeeping for tool calls and streamed messages also lives
-here because it shares the lease-state machine (a correlation is only valid
-while the originating worker still holds the lease).
+# OWNS: lease acquisition/extension/release, claim tokens, retry scheduling, verification window
+# NOT OWNS: job creation (crud.py), typed messages (messaging.py), money (payments/)
+#
+# INVARIANTS:
+# - claim_job is atomic: pending → running with a unique claim_token in one UPDATE
+#   if two workers race, only one gets rowcount=1; the other must back off
+# - a correlation-id is only valid while the originating worker still holds the lease
+# - the background sweeper calls list_jobs_with_expired_leases — do not change the
+#   expiry logic without updating the sweeper's retry/refund cascade
+#
+# DECISIONS:
+# - correlation-id bookkeeping lives here (not messaging.py) because correlations
+#   are scoped to the lease window — they expire when the lease expires
 """
 from __future__ import annotations
 

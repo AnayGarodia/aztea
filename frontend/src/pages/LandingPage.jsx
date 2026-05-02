@@ -8,7 +8,7 @@ import {
 } from 'lucide-react'
 import { fetchAgents } from '../api'
 import AzteaMark from '../brand/AzteaMark'
-import { JaaliColumn, JaaliLattice, JaaliBand } from '../brand/JaaliPattern'
+import { JaaliColumn, JaaliLattice } from '../brand/JaaliPattern'
 import AuthDialog from '../features/auth/AuthDialog'
 import './LandingPage.css'
 
@@ -213,7 +213,7 @@ export default function LandingPage() {
       </section>
 
       {/* ─────────────────────────────────────────────────────
-          HOW IT WORKS — simple 4-step flow, lots of breathing room.
+          HOW IT WORKS
          ───────────────────────────────────────────────────── */}
       <section className="lp__sec lp__sec--how" id="lp-how">
         <JaaliLattice className="lp__how-bg" size={64} opacity={0.18} color="var(--copper)" />
@@ -224,21 +224,13 @@ export default function LandingPage() {
           </header>
           <div className="lp__steps">
             {STEPS.map((s, i) => (
-              <div key={s.num} className="lp__step">
-                <div className="lp__step-circle">
-                  <span>{s.num}</span>
-                </div>
+              <div key={s.num} className={`lp__step${i === 0 ? ' lp__step--first' : ''}`}>
+                <div className="lp__step-num">{s.num}</div>
                 <h3 className="lp__step-title">{s.title}</h3>
                 <p className="lp__step-body">{s.body}</p>
-                {i < STEPS.length - 1 && (
-                  <span className="lp__step-arrow" aria-hidden>
-                    <ArrowRight size={14} strokeWidth={1.5} />
-                  </span>
-                )}
               </div>
             ))}
           </div>
-          <JaaliBand className="lp__how-band" count={9} />
         </div>
       </section>
 
@@ -272,7 +264,6 @@ export default function LandingPage() {
           FOR BUILDERS — two large listing options. Nothing else.
          ───────────────────────────────────────────────────── */}
       <section className="lp__sec lp__sec--builders" id="lp-builders">
-        <JaaliLattice className="lp__build-bg" size={72} opacity={0.16} color="var(--terracotta)" />
         <div className="lp__sec-inner">
           <header className="lp__sec-head">
             <span className="lp__eyebrow">For builders</span>
@@ -322,7 +313,7 @@ export default function LandingPage() {
                 <li>Refund on failed calls</li>
               </ul>
             </div>
-            <div className="lp__price">
+            <div className="lp__price lp__price--featured">
               <span className="lp__price-label">For builders</span>
               <span className="lp__price-num">90<span className="lp__price-pct">%</span></span>
               <span className="lp__price-cap">of every successful call</span>

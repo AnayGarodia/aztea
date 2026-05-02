@@ -11,7 +11,7 @@ import Stagger from '../ui/motion/Stagger'
 import { useMarket } from '../context/MarketContext'
 import { useAuth } from '../context/AuthContext'
 import { fetchReconciliationRuns } from '../api'
-import { Wallet, Hammer } from 'lucide-react'
+import { Wallet, Hammer, Bot, Briefcase, CheckCircle2 } from 'lucide-react'
 import './DashboardPage.css'
 import { fmtDate, fmtUsd } from '../utils/format.js'
 
@@ -192,14 +192,17 @@ export default function DashboardPage() {
           {/* KPIs */}
           <Stagger className="dashboard__kpi-grid" staggerDelay={0.07}>
             {[
-              { label: role === 'builder' ? 'Earnings balance' : 'Wallet balance', value: balance, hint: role === 'builder' ? 'Withdraw via Stripe Connect' : '' },
-              { label: 'Agents available', value: loading ? '…' : agents.length, hint: role === 'builder' ? 'In the marketplace' : '' },
-              { label: 'Active jobs',  value: loading ? '…' : activeJobs, hint: '' },
-              { label: 'Success rate', value: loading ? '…' : `${successRate}%`, hint: jobs.length > 0 ? '' : 'No jobs yet' },
+              { label: role === 'builder' ? 'Earnings balance' : 'Wallet balance', value: balance, hint: role === 'builder' ? 'Withdraw via Stripe Connect' : '', icon: Wallet, accent: 'var(--accent)' },
+              { label: 'Agents available', value: loading ? '…' : agents.length, hint: role === 'builder' ? 'In the marketplace' : '', icon: Bot, accent: 'var(--sage-strong)' },
+              { label: 'Active jobs',  value: loading ? '…' : activeJobs, hint: '', icon: Briefcase, accent: 'var(--copper)' },
+              { label: 'Success rate', value: loading ? '…' : `${successRate}%`, hint: jobs.length > 0 ? '' : 'No jobs yet', icon: CheckCircle2, accent: 'var(--positive)' },
             ].filter(Boolean).map(s => (
-              <div key={s.label} className="dashboard__kpi">
-                <p className="dashboard__kpi-label">{s.label}</p>
+              <div key={s.label} className="dashboard__kpi" style={{ '--kpi-accent': s.accent }}>
+                <div className="dashboard__kpi-icon" style={{ color: s.accent }}>
+                  <s.icon size={16} />
+                </div>
                 <p className="dashboard__kpi-value">{s.value}</p>
+                <p className="dashboard__kpi-label">{s.label}</p>
                 {s.hint && <p className="dashboard__kpi-hint">{s.hint}</p>}
               </div>
             ))}

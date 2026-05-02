@@ -10,6 +10,9 @@ export default defineConfig({
     setupFiles: ['./src/test/setup.js'],
   },
   plugins: [react()],
+  resolve: {
+    dedupe: ['react', 'react-dom'],
+  },
   server: {
     port: 5173,
     proxy: {

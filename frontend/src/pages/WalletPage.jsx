@@ -1,3 +1,17 @@
+// OWNS: wallet balance display, transaction history, Stripe top-up flow, Connect onboarding/withdraw
+// NOT OWNS: per-agent sub-wallet settings (MyAgentsPage), spending caps (set via agent settings modal)
+//
+// INVARIANTS:
+// - Stripe top-up redirects to Stripe Checkout — never handle card data directly here
+// - Connect onboarding/withdraw status comes from /wallets/connect/status — always re-fetch before showing
+//
+// DECISIONS:
+// - tab state is driven by ?tab= query param so users can deep-link to the withdrawals tab
+//
+// KNOWN DEBT:
+// - Connect onboarding is surfaced here but should also appear prominently in builder onboarding flow
+// - transaction list has no pagination — will be slow for high-volume wallets
+
 import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import Topbar from '../layout/Topbar'

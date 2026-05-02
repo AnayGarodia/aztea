@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { Outlet, useLocation } from 'react-router-dom'
 import { AnimatePresence, motion } from 'motion/react'
 import Sidebar from './Sidebar'
@@ -10,6 +11,12 @@ import './AppShell.css'
 export default function AppShell() {
   const { toast } = useMarket()
   const location = useLocation()
+
+  // Reset the main scroll container on every route change so pages always
+  // open at the top, regardless of where the previous route was scrolled to.
+  useEffect(() => {
+    document.querySelector('.shell__main')?.scrollTo({ top: 0, behavior: 'instant' })
+  }, [location.pathname])
 
   return (
     <div className="shell">
