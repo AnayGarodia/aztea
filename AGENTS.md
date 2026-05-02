@@ -32,12 +32,15 @@ Don't pretend either number is higher. See the table in `CLAUDE.md` ("Where we a
 
 Ordered by impact / effort. Tick them off in this file when shipped — same PR.
 
-1. ⏳ Eval-gate before community SKILL.md goes public (close the demo-skill pollution loop)
-2. ⏳ Per-agent reputation dashboard (p50/p99 latency, success rate, refund rate, dispute rate) — backend has the data, page is bare today
-3. ⏳ `git_diff_review` recipe — diff in, markdown review out (the killer demo)
-4. ⏳ Output-shape templates (`as: "markdown" | "github_pr_comment" | "slack_blocks"`)
-5. ⏳ Public status page + signed monetary-policy statement at `/policy/credits`
-6. ⏳ Cold-install QA on Mac / Linux / Windows for `npx aztea-cli@latest init`
+1. ⏳ **CLI overhaul (npm `aztea-cli` + PyPI `aztea`).** Today the npm CLI only ships `init` and `mcp`; there's no `login --api-key` for re-auth on a new machine, no `aztea jobs ...`, no `aztea wallet ...` parity with the Python CLI. Two tracks:
+   - **npm `aztea-cli`:** add `login --api-key …` (so audits / CI work), `whoami`, `mcp doctor` (validate the existing config), `mcp uninstall`. Make it a thin wrapper around the Python CLI for everything else, OR port the surface to JS.
+   - **PyPI `aztea` CLI design pass:** consistent verb-noun naming, helpful `--help` examples on every command, color/spinner/structured output, `aztea search "lint python"` shortcut for the most common buyer flow. Print receipt verification status alongside `aztea jobs status` by default.
+   - **Cold-install QA across Mac / Linux / Windows** is part of this — without it the new flags don't matter.
+2. ⏳ Eval-gate before community SKILL.md goes public (close the demo-skill pollution loop)
+3. ⏳ Per-agent reputation dashboard (p50/p99 latency, success rate, refund rate, dispute rate) — backend has the data, page is bare today
+4. ⏳ `git_diff_review` recipe — diff in, markdown review out (the killer demo)
+5. ⏳ Output-shape templates (`as: "markdown" | "github_pr_comment" | "slack_blocks"`)
+6. ⏳ Public status page + signed monetary-policy statement at `/policy/credits`
 7. ⏳ Honest `ROADMAP.md` listing every global-goal item with a timeline
 8. ⏳ A2A end-to-end demo using `azac_*` keys — one Aztea agent hires another in production
 9. ⏳ Frontend tech-debt sweep: kill remaining inline-style blocks across DashboardPage / JobDetailPage / SettingsPage
