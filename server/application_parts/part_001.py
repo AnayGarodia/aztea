@@ -241,6 +241,26 @@ def _builtin_agent_specs() -> list[dict[str, Any]]:
     return _builtin_specs.builtin_agent_specs()
 
 
+def _name_owned_by_other_user(name: str, system_owner_id: str) -> bool:
+    """True iff an agent with this name exists owned by a non-system user.
+
+    Used to gate builtin auto-registration: we want the builtin to land in
+    the DB whenever no NON-system user has claimed the name. A stale
+    system-owned row with the same name doesn't matter — we'd simply have
+    re-registered it on a previous deploy. Without this scoping, a single
+    duplicate row anywhere in the DB silently blocks every future deploy
+    from registering newly curated builtins (the eval on 2026-05-03 found
+    DNS, browser, multi-language, semantic-search, AI red teamer, and
+    visual regression all missing from the prod catalog because of this).
+    """
+    with registry._conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM agents WHERE name = ? AND owner_id != ? LIMIT 1",
+            (name, system_owner_id),
+        ).fetchone()
+    return row is not None
+
+
 
 def _ensure_system_user() -> str:
     with _auth._conn() as conn:
@@ -284,7 +304,14 @@ def ensure_builtin_agents_registered() -> None:
         if isinstance(output_examples, list):
             output_examples_json = json.dumps([item for item in output_examples if isinstance(item, dict)]) or None
         if existing is None:
-            if registry.agent_exists_by_name(spec["name"]):
+            # Historical guard: skip registration if another agent already
+            # uses this name. We keep it scoped to non-system owners so a
+            # stale user-registered agent doesn't block a curated builtin
+            # from being added on a later deploy. Builtins use deterministic
+            # UUID v5 IDs so the agent_id collision check above is the
+            # authoritative one — name uniqueness is enforced per-owner via
+            # DB constraints, not as a blanket gate here.
+            if _name_owned_by_other_user(spec["name"], system_owner_id):
                 continue
             registry.register_agent(
                 agent_id=spec["agent_id"],

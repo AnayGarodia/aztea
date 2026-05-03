@@ -155,7 +155,7 @@ def decide(
         )
 
     ranked = sorted(
-        (_score_candidate(c, intent_text) for c in candidates),
+        (_score_candidate(c, intent_text, explicit_input) for c in candidates),
         key=lambda r: r.score,
         reverse=True,
     )
@@ -273,7 +273,11 @@ def decide(
 # ── Ranking ────────────────────────────────────────────────────────────────
 
 
-def _score_candidate(c: CandidateAgent, intent: str) -> Ranked:
+def _score_candidate(
+    c: CandidateAgent,
+    intent: str,
+    explicit_input: dict[str, Any] | None = None,
+) -> Ranked:
     """Lean confidence-oriented scorer.
 
     Signals (additive):
@@ -284,6 +288,16 @@ def _score_candidate(c: CandidateAgent, intent: str) -> Ranked:
       - tag/category match                  +6 per match (cap 18)
       - quality (success * 10 + trust/20)   up to ~14
       - codex_recommended flag              +5
+      - schema-shape match (explicit input  +35
+        keys cover ALL required fields)
+      - schema-shape partial match          +15
+        (≥1 required field present)
+
+    The schema-shape signal exists because intent-string-only routing
+    cannot disambiguate "lint this Python" → linter_agent vs
+    python_code_executor. When the caller passes input={"code":"..."},
+    only agents whose required fields fit that shape get the +35 bump,
+    so the decision becomes deterministic.
     """
     intent_lower = intent.lower()
     tokens = set(_tokenize(intent_lower))
@@ -332,6 +346,20 @@ def _score_candidate(c: CandidateAgent, intent: str) -> Ranked:
     if c.raw.get("codex_recommended"):
         score += 5
         reasons.append("recommended")
+
+    # Schema-shape match — the strongest disambiguator when the caller
+    # provides an explicit input payload. We don't validate types
+    # rigorously; presence of every required key is enough signal.
+    if isinstance(explicit_input, dict) and c.input_schema:
+        required = list((c.input_schema.get("required") or []))
+        if required:
+            present = [f for f in required if f in explicit_input]
+            if len(present) == len(required):
+                score += 35
+                reasons.append("schema-shape match (all required)")
+            elif present:
+                score += 15
+                reasons.append(f"schema-shape partial ({len(present)}/{len(required)})")
 
     return Ranked(candidate=c, score=round(score, 3), reasons=reasons)
 

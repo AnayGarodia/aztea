@@ -35,6 +35,7 @@ Output (multi URL): {
 import re
 import html
 import json
+import urllib.parse
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -124,24 +125,42 @@ def _fetch_one(url: str) -> dict:
     except ValueError:
         return {"url": url, "content": None, "status": "error", "error": "URL is invalid or not allowed (must be public http/https)"}
 
+    # Manual redirect loop. Each hop is re-validated through the SSRF
+    # gate so an attacker can't 301 us into 169.254.169.254 or localhost.
+    # Cap at 5 hops — that's enough for legitimate www→apex, apex→/news
+    # type chains; anything deeper is a redirect loop or tracker bounce.
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; aztea-web-researcher/1.0)",
+        "Accept": "text/html,application/xhtml+xml",
+    }
+    current_url = safe_url
     try:
-        resp = requests.get(
-            safe_url,
-            timeout=_FETCH_TIMEOUT,
-            headers={
-                "User-Agent": "Mozilla/5.0 (compatible; aztea-web-researcher/1.0)",
-                "Accept": "text/html,application/xhtml+xml",
-            },
-            allow_redirects=False,
-            stream=True,
-        )
-        if 300 <= resp.status_code < 400:
-            return {
-                "url": url,
-                "content": None,
-                "status": "error",
-                "error": "redirect_blocked — redirects are not followed for security reasons",
-            }
+        for _hop in range(6):
+            resp = requests.get(
+                current_url,
+                timeout=_FETCH_TIMEOUT,
+                headers=headers,
+                allow_redirects=False,
+                stream=True,
+            )
+            if 300 <= resp.status_code < 400:
+                location = resp.headers.get("Location") or resp.headers.get("location")
+                if not location:
+                    return {"url": url, "content": None, "status": "error", "error": "redirect_no_location"}
+                next_url = urllib.parse.urljoin(current_url, location)
+                try:
+                    current_url = validate_outbound_url(next_url, "url")
+                except ValueError:
+                    return {
+                        "url": url,
+                        "content": None,
+                        "status": "error",
+                        "error": f"redirect_blocked — target {next_url!r} is not a public http/https URL",
+                    }
+                continue
+            break
+        else:
+            return {"url": url, "content": None, "status": "error", "error": "too_many_redirects"}
         resp.raise_for_status()
         chunks = []
         total = 0

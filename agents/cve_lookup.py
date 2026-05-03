@@ -65,6 +65,106 @@ def _cvss_to_severity(score: float) -> str:
     return "none"
 
 
+# CVSS v3 base score lookup tables — derived from the official CVSS 3.1
+# specification (https://www.first.org/cvss/specification-document). Used to
+# compute a numeric base score from a CVSS vector when OSV ships only the
+# vector string and no separate numeric score field. Picks the worst of
+# any v3 metrics present, falling back to v2 (multiplied to v3-ish range
+# is too lossy, so we keep v2 raw).
+_CVSS3_AV = {"N": 0.85, "A": 0.62, "L": 0.55, "P": 0.20}
+_CVSS3_AC = {"L": 0.77, "H": 0.44}
+_CVSS3_UI = {"N": 0.85, "R": 0.62}
+_CVSS3_PR_U = {"N": 0.85, "L": 0.62, "H": 0.27}
+_CVSS3_PR_C = {"N": 0.85, "L": 0.68, "H": 0.50}
+_CVSS3_CIA = {"N": 0.0, "L": 0.22, "H": 0.56}
+
+
+def _cvss3_from_vector(vector: str) -> float:
+    """Compute CVSS 3.1 base score from a vector string. Returns 0.0 on parse error."""
+    try:
+        parts = dict(p.split(":", 1) for p in vector.split("/") if ":" in p)
+        if not (parts.get("AV") and parts.get("AC") and parts.get("PR") and parts.get("UI")):
+            return 0.0
+        scope = parts.get("S", "U")
+        av = _CVSS3_AV.get(parts["AV"], 0)
+        ac = _CVSS3_AC.get(parts["AC"], 0)
+        ui = _CVSS3_UI.get(parts["UI"], 0)
+        pr_table = _CVSS3_PR_C if scope == "C" else _CVSS3_PR_U
+        pr = pr_table.get(parts["PR"], 0)
+        c = _CVSS3_CIA.get(parts.get("C", "N"), 0)
+        i = _CVSS3_CIA.get(parts.get("I", "N"), 0)
+        a = _CVSS3_CIA.get(parts.get("A", "N"), 0)
+        impact_iss = 1 - (1 - c) * (1 - i) * (1 - a)
+        if scope == "C":
+            impact = 7.52 * (impact_iss - 0.029) - 3.25 * (impact_iss - 0.02) ** 15
+        else:
+            impact = 6.42 * impact_iss
+        if impact <= 0:
+            return 0.0
+        exploit = 8.22 * av * ac * pr * ui
+        if scope == "C":
+            base = min(1.08 * (impact + exploit), 10.0)
+        else:
+            base = min(impact + exploit, 10.0)
+        # Round up to one decimal per CVSS spec.
+        import math
+        return math.ceil(base * 10) / 10.0
+    except (ValueError, KeyError, TypeError):
+        return 0.0
+
+
+def _parse_osv_cvss(severity_entries: list) -> float:
+    """Extract a numeric CVSS base score from an OSV `severity` array.
+
+    OSV entries come in two shapes per the schema:
+      1. {type: "CVSS_V3", score: "9.8"}                    — numeric
+      2. {type: "CVSS_V3", score: "CVSS:3.1/AV:N/.../A:H"}  — vector string
+
+    The previous implementation only handled shape (1) via an end-of-string
+    regex. Shape (2) silently fell through to 0.0, which is why
+    cve_lookup_agent reported CVSS=0 for CVEs that dependency_auditor
+    reported correctly (it parses the vector). Now we handle both, and
+    prefer V3 over V2 when multiple entries exist.
+    """
+    best_v3 = 0.0
+    best_v2 = 0.0
+    for sev in severity_entries or []:
+        if not isinstance(sev, dict):
+            continue
+        score_raw = str(sev.get("score") or "").strip()
+        if not score_raw:
+            continue
+        sev_type = str(sev.get("type") or "").upper()
+        # Shape 1: pure number.
+        try:
+            numeric = float(score_raw)
+            if 0.0 <= numeric <= 10.0:
+                if "V2" in sev_type:
+                    best_v2 = max(best_v2, numeric)
+                else:
+                    best_v3 = max(best_v3, numeric)
+                continue
+        except ValueError:
+            pass
+        # Shape 2: vector. Compute from the vector if v3, skip if v2 (rare).
+        if score_raw.upper().startswith(("CVSS:3.0", "CVSS:3.1")):
+            best_v3 = max(best_v3, _cvss3_from_vector(score_raw))
+        # Trailing-decimal fallback for unusual shapes like "AV:N/...:9.8".
+        else:
+            m = re.search(r"(?:^|[^\d.])(\d+\.\d+)$", score_raw)
+            if m:
+                try:
+                    val = float(m.group(1))
+                    if 0.0 <= val <= 10.0:
+                        if "V2" in sev_type:
+                            best_v2 = max(best_v2, val)
+                        else:
+                            best_v3 = max(best_v3, val)
+                except ValueError:
+                    pass
+    return best_v3 if best_v3 > 0 else best_v2
+
+
 def _extract_cvss(metrics: dict) -> float:
     for key in ("cvssMetricV31", "cvssMetricV30", "cvssMetricV2"):
         entries = metrics.get(key, [])
@@ -130,16 +230,7 @@ def _query_osv(pkg_name: str, version: str, ecosystem_hint: str | None = None) -
                 continue
             seen_ids.add(cve_id)
 
-            cvss = 0.0
-            for sev in vuln.get("severity") or []:
-                score_str = sev.get("score", "")
-                m = re.search(r"(\d+\.\d+)$", score_str)
-                if m:
-                    try:
-                        cvss = float(m.group(1))
-                        break
-                    except ValueError:
-                        pass
+            cvss = _parse_osv_cvss(vuln.get("severity") or [])
 
             fixed_in = ""
             for affected in vuln.get("affected") or []:
@@ -308,16 +399,7 @@ def _fetch_cve_from_osv(cve_id: str) -> dict:
         return {"cve_id": cve_id, "error": f"Could not reach OSV API: {type(exc).__name__}"}
 
     aliases = data.get("aliases") or []
-    severity_entries = data.get("severity") or []
-    cvss = 0.0
-    for sev in severity_entries:
-        match = re.search(r"(\d+\.\d+)$", str(sev.get("score") or ""))
-        if match:
-            try:
-                cvss = float(match.group(1))
-                break
-            except ValueError:
-                pass
+    cvss = _parse_osv_cvss(data.get("severity") or [])
     return {
         "cve_id": next((alias for alias in aliases if str(alias).startswith("CVE-")), cve_id),
         "cvss": cvss,

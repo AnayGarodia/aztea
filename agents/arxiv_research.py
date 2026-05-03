@@ -82,13 +82,22 @@ def _fetch_arxiv(query: str, max_results: int, sort_by: str, categories: list[st
     }
     sort_order = sort_order_map.get(sort_by, "relevance")
 
+    # When the caller asks for a small max_results with a date-sorted
+    # search, arXiv's native relevance is bypassed and you get whatever
+    # was uploaded most recently — frequently unrelated to the query.
+    # Over-fetch and re-rank by token overlap with title+abstract so the
+    # final top-N is actually relevant. The eval (2026-05-03) hit this
+    # exactly: "large language model agent tool use 2025" with
+    # submittedDate sort + max_results=3 returned papers on driving
+    # world models, astrophysics, and human-robot platforms.
+    fetch_n = min(20, max(max_results * 4, 12))
     try:
         resp = requests.get(
             _ARXIV_API,
             params={
                 "search_query": f"all:{search_query}",
                 "start": 0,
-                "max_results": min(max_results, 20),
+                "max_results": fetch_n,
                 "sortBy": sort_order,
                 "sortOrder": "descending",
             },
@@ -160,7 +169,26 @@ def _fetch_arxiv(query: str, max_results: int, sort_by: str, categories: list[st
     if categories:
         papers = [p for p in papers if any(c in categories for c in p.get("categories", []))]
 
-    return papers
+    # Re-rank by query-token overlap with title+abstract. We always do this
+    # post-filter (even when sort_by="relevance") because arXiv's relevance
+    # is keyword-IDF over the full corpus and on small result sets the
+    # top hits frequently include topical neighbors with no overlap.
+    query_tokens = {t for t in re.findall(r"[a-z0-9]+", query.lower()) if len(t) > 2}
+    if query_tokens:
+        def _overlap_score(paper: dict) -> tuple[int, int]:
+            haystack = (paper.get("title", "") + " " + paper.get("abstract", "")).lower()
+            haystack_tokens = set(re.findall(r"[a-z0-9]+", haystack))
+            overlap = len(query_tokens & haystack_tokens)
+            # Tie-break by date for stable ordering.
+            date_rank = int(re.sub(r"[^0-9]", "", paper.get("published") or "0")[:8] or 0)
+            return (overlap, date_rank)
+        papers.sort(key=_overlap_score, reverse=True)
+        # Drop papers with zero overlap when we have enough alternatives.
+        papers_with_overlap = [p for p in papers if _overlap_score(p)[0] > 0]
+        if len(papers_with_overlap) >= max_results:
+            papers = papers_with_overlap
+
+    return papers[:max_results]
 
 
 _VALID_SORT_BY = {"relevance", "lastUpdatedDate", "submittedDate"}

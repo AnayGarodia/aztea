@@ -53,12 +53,20 @@ def _run_ruff(code: str, checks: list[str]) -> tuple[list[dict], str]:
     try:
         select_rules: list[str] = []
         if "bugs" in checks:
-            select_rules.extend(["E", "F", "B"])
+            # E/F/B = pycodestyle errors, pyflakes, flake8-bugbear.
+            # S = flake8-bandit (dynamic-execution builtins, hardcoded
+            # passwords, unsafe deserialization, weak crypto). External
+            # eval (2026-05-03) found we did not flag dangerous dynamic
+            # execution builtins; adding S to the bug-check default
+            # closes that gap.
+            select_rules.extend(["E", "F", "B", "S"])
         if "style" in checks:
             select_rules.extend(["I", "N", "W"])
         if "complexity" in checks:
             select_rules.extend(["C", "PLR"])
-        select_arg = ",".join(select_rules) if select_rules else "ALL"
+        if "security" in checks:
+            select_rules.extend(["S"])
+        select_arg = ",".join(sorted(set(select_rules))) if select_rules else "ALL"
 
         result = subprocess.run(
             ["ruff", "check", "--output-format=json", f"--select={select_arg}", tmppath],
@@ -78,7 +86,7 @@ def _run_ruff(code: str, checks: list[str]) -> tuple[list[dict], str]:
                     "message": item.get("message") or "",
                     "line": loc.get("row"),
                     "column": loc.get("column"),
-                    "severity": "error" if code_val.startswith(("E", "F", "B")) else "warning",
+                    "severity": "error" if code_val.startswith(("E", "F", "B", "S")) else "warning",
                     "fix_available": item.get("fix") is not None,
                 }
             )

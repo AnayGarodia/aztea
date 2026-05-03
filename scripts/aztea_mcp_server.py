@@ -35,6 +35,110 @@ _REQUEST_VERSION_HEADER = "X-Aztea-Version"
 _AZTEA_PROTOCOL_VERSION = "1.0"
 _CLIENT_ID_HEADER = "X-Aztea-Client"
 _DEFAULT_CLIENT_ID = (os.environ.get("AZTEA_CLIENT_ID", "claude-code") or "claude-code").strip()
+# Discovery metadata for platform meta-tools — populated into the catalog
+# so `aztea_search("wallet balance")` and similar surface them reliably.
+# Keep keys aligned with `aztea_mcp_meta_tools.META_TOOL_NAMES`. (tags,
+# short_use_cases) per slug.
+_META_TOOL_DISCOVERY: dict[str, tuple[list[str], list[str]]] = {
+    "aztea_wallet_balance": (
+        ["wallet", "balance", "money", "credits", "spend"],
+        ["check current balance", "see recent transactions"],
+    ),
+    "aztea_set_daily_limit": (
+        ["wallet", "limit", "cap", "budget", "spend"],
+        ["set daily spend cap"],
+    ),
+    "aztea_topup_wallet": (
+        ["wallet", "topup", "fund", "stripe", "checkout"],
+        ["add credits via Stripe"],
+    ),
+    "aztea_spend_summary": (
+        ["wallet", "spend", "summary", "usage", "billing"],
+        ["see today's spend", "weekly cost breakdown"],
+    ),
+    "aztea_estimate_cost": (
+        ["estimate", "cost", "price", "preflight", "budget"],
+        ["preview cost before calling", "preflight a hire"],
+    ),
+    "aztea_set_session_budget": (
+        ["budget", "limit", "session", "cap", "spend"],
+        ["cap this session's total spend"],
+    ),
+    "aztea_session_summary": (
+        ["session", "summary", "usage", "spend"],
+        ["session spend so far"],
+    ),
+    "aztea_hire_async": (
+        ["async", "background", "fire-and-forget", "job", "hire"],
+        ["start a long job", "fire-and-forget hire"],
+    ),
+    "aztea_hire_batch": (
+        ["batch", "parallel", "many", "multi", "fan-out"],
+        ["hire several agents at once"],
+    ),
+    "aztea_job_status": (
+        ["job", "status", "poll", "progress", "async"],
+        ["poll job progress"],
+    ),
+    "aztea_cancel_job": (
+        ["cancel", "abort", "kill", "stop", "job"],
+        ["cancel a running job", "abort + refund"],
+    ),
+    "aztea_clarify": (
+        ["clarify", "clarification", "answer", "follow-up", "job"],
+        ["respond to an agent's clarification request"],
+    ),
+    "aztea_compare_agents": (
+        ["compare", "vs", "versus", "winner", "side-by-side"],
+        ["compare agents on the same task"],
+    ),
+    "aztea_compare_status": (
+        ["compare", "status", "poll", "winner"],
+        ["check compare progress"],
+    ),
+    "aztea_select_compare_winner": (
+        ["compare", "winner", "select", "pick", "best"],
+        ["pick the winning agent + refund losers"],
+    ),
+    "aztea_verify_job": (
+        ["verify", "receipt", "signature", "audit", "trust"],
+        ["verify cryptographic receipt of a completed job"],
+    ),
+    "aztea_dispute_job": (
+        ["dispute", "complain", "refund", "challenge", "rating"],
+        ["dispute a bad job result"],
+    ),
+    "aztea_rate_job": (
+        ["rate", "rating", "stars", "feedback", "trust"],
+        ["rate a completed job 1-5"],
+    ),
+    "aztea_data_retention_policy": (
+        ["data", "retention", "privacy", "ttl", "policy"],
+        ["see how long data is retained"],
+    ),
+    "aztea_list_recipes": (
+        ["recipe", "recipes", "pipeline", "workflow", "chain"],
+        ["browse pre-built workflows"],
+    ),
+    "aztea_run_recipe": (
+        ["recipe", "run", "execute", "pipeline", "workflow"],
+        ["execute a saved recipe"],
+    ),
+    "aztea_list_pipelines": (
+        ["pipeline", "pipelines", "workflow", "chain", "dag"],
+        ["list available pipelines"],
+    ),
+    "aztea_run_pipeline": (
+        ["pipeline", "run", "execute", "workflow", "dag"],
+        ["execute a pipeline by id"],
+    ),
+    "aztea_pipeline_status": (
+        ["pipeline", "status", "poll", "progress"],
+        ["poll pipeline run progress"],
+    ),
+}
+
+
 # Platform recipe entries surfaced into the MCP catalog so they're
 # discoverable via `aztea_search` and resolvable via `aztea_describe`.
 # Slugs match the recipe_ids in `core/recipes.py::BUILTIN_RECIPES`.
@@ -728,25 +832,27 @@ class RegistryBridge:
 
         entries: list[dict[str, Any]] = []
         for tool in meta_tools.get_meta_tools():
+            slug = str(tool.get("name") or "").strip()
+            tags, use_cases = _META_TOOL_DISCOVERY.get(slug, ([], []))
             entries.append(
                 {
-                    "slug": str(tool.get("name") or "").strip(),
-                    "aliases": [str(tool.get("name") or "").strip()],
+                    "slug": slug,
+                    "aliases": [slug],
                     "kind": "meta_tool",
-                    "name": str(tool.get("name") or "").strip(),
+                    "name": slug,
                     "description": str(tool.get("description") or "").strip(),
                     "input_schema": tool.get("input_schema") or {"type": "object", "additionalProperties": True},
                     "output_schema": tool.get("output_schema") or {},
                     "tool": tool,
                     "category": "Platform",
-                    "tags": [],
+                    "tags": tags,
                     "is_featured": True,
                     "cacheable": False,
                     "runtime_requirements": [],
                     "tooling_kind": "platform_control_plane",
                     "stability_tier": "stable",
                     "codex_recommended": True,
-                    "short_use_cases": [],
+                    "short_use_cases": use_cases,
                     "trust_score": None,
                     "success_rate": None,
                     "avg_latency_ms": None,

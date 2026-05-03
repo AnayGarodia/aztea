@@ -635,19 +635,24 @@ def test_multi_file_executor_returns_structured_error_for_invalid_files():
     assert result["error"]["code"] == "multi_file_executor.invalid_input"
 
 
-def test_web_researcher_blocks_redirects(monkeypatch):
-    class _FakeResponse:
+def test_web_researcher_blocks_redirects_to_private_targets(monkeypatch):
+    """Redirects to public URLs are followed; redirects to private/internal
+    targets are blocked at the SSRF gate. Pre-2026-05-03 we blocked all
+    redirects, which broke fetches against major sites that 301 to www.
+    Now we follow safe hops and only refuse when the redirect target is
+    itself unsafe (localhost, RFC1918, link-local, etc.)."""
+
+    class _FakeRedirect:
         status_code = 302
-        headers = {"Location": "https://redirect.example"}
+        headers = {"Location": "http://127.0.0.1/internal"}
 
         def raise_for_status(self) -> None:
             return None
 
     def fake_get(url, timeout=None, headers=None, allow_redirects=None, stream=None):
         del timeout, headers, stream
-        assert url == "https://example.com/article"
         assert allow_redirects is False
-        return _FakeResponse()
+        return _FakeRedirect()
 
     monkeypatch.setattr(web_researcher.requests, "get", fake_get)
     result = web_researcher.run({"url": "https://example.com/article"})

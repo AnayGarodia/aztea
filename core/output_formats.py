@@ -131,7 +131,11 @@ def _md_code_review(output: dict[str, Any]) -> str:
     counts = output.get("severity_counts") or {}
     lines: list[str] = ["## Code Review"]
     if isinstance(score, (int, float)):
-        lines.append(f"**Score:** {score}/100")
+        # code_review_agent scores 1-10; some external review agents
+        # score 1-100. Disambiguate by magnitude — anything ≤ 10 is the
+        # 1-10 scale and gets a /10 denominator.
+        denom = 10 if 0 <= score <= 10 else 100
+        lines.append(f"**Score:** {score}/{denom}")
     if summary:
         lines.append(f"\n{summary}")
     if counts:
@@ -331,8 +335,10 @@ def _pr_verdict(output: Any) -> dict[str, str]:
     if high:
         return {"kind": "high", "headline": f"⚠ {high} high-severity issue{'s' if high != 1 else ''} — review before merge"}
     score = output.get("score")
-    if isinstance(score, (int, float)) and score >= 90:
-        return {"kind": "ok", "headline": "✅ Looks good — no blocking issues"}
+    if isinstance(score, (int, float)):
+        normalized = score * 10 if 0 <= score <= 10 else score
+        if normalized >= 90:
+            return {"kind": "ok", "headline": "✅ Looks good — no blocking issues"}
     return {"kind": "info", "headline": "Aztea review"}
 
 
@@ -397,7 +403,8 @@ def _slack_code_review_blocks(output: dict[str, Any]) -> list[dict]:
     )
     head_bits = []
     if isinstance(score, (int, float)):
-        head_bits.append(f"*Score:* {score}/100")
+        denom = 10 if 0 <= score <= 10 else 100
+        head_bits.append(f"*Score:* {score}/{denom}")
     if chips:
         head_bits.append(chips)
     if head_bits:
