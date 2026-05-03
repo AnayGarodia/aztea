@@ -544,7 +544,15 @@ def _key_from_request(request: Request) -> str:
 
 
 limiter = Limiter(key_func=_key_from_request, default_limits=[_DEFAULT_RATE_LIMIT])
-app = FastAPI(title="aztea v1", lifespan=lifespan)
+app = FastAPI(
+    title="aztea v1",
+    lifespan=lifespan,
+    # The SPA owns /docs (it's the user-facing documentation page).
+    # Move FastAPI's swagger UI under /api/docs so it doesn't shadow the SPA.
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+    openapi_url="/api/openapi.json",
+)
 app.state.limiter = limiter
 
 register_exception_handlers(app, logger=_LOG)
