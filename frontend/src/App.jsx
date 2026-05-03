@@ -112,6 +112,23 @@ function AuthedApp() {
   )
 }
 
+// /docs is public for unauth visitors and lives inside AppShell for authed
+// users so the sidebar + topbar stay visible. We render AppShell directly
+// with DocsPage as a child (no nested Routes) — this avoids the remount
+// races we hit when wrapping it in a fresh AuthedApp.
+function DocsGate() {
+  const { apiKey, booting } = useAuth()
+  if (booting) return <AppBoot />
+  if (!apiKey) return <DocsPage />
+  return (
+    <MarketProvider apiKey={apiKey}>
+      <AppShell>
+        <DocsPage />
+      </AppShell>
+    </MarketProvider>
+  )
+}
+
 function RootRedirect() {
   const { apiKey, booting, user } = useAuth()
   if (booting) return <AppBoot />
@@ -130,8 +147,8 @@ export default function App() {
                 <Route path="/welcome" element={<LandingPage />} />
                 <Route path="/terms"   element={<TermsPage />} />
                 <Route path="/privacy" element={<PrivacyPage />} />
-                <Route path="/docs" element={<DocsPage />} />
-                <Route path="/docs/:docSlug" element={<DocsPage />} />
+                <Route path="/docs" element={<DocsGate />} />
+                <Route path="/docs/:docSlug" element={<DocsGate />} />
                 <Route
                   path="/legal/accept"
                   element={

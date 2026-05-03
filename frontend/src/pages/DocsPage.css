@@ -9,6 +9,16 @@
   color: var(--text-primary);
 }
 
+/* When the page renders inside AppShell, the shell already supplies
+   sidebar + topbar — hide the docs-page own topbar so we don't stack
+   two navigation rows. The .shell__page ancestor is added by AppShell. */
+.shell__page .docs-page {
+  background: transparent;
+}
+.shell__page .docs-page > .topbar {
+  display: none;
+}
+
 /* When the docs page is rendered inside AppShell (signed-in users),
    the shell already supplies the topbar + sidebar + scroll container,
    so we let the docs page flow normally without its own viewport chrome. */

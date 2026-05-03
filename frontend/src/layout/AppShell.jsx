@@ -8,8 +8,9 @@ import OnboardingWizard from '../features/onboarding/OnboardingWizard'
 import { useMarket } from '../context/MarketContext'
 import './AppShell.css'
 
-export default function AppShell() {
-  const { toast } = useMarket()
+export default function AppShell({ children }) {
+  const market = useMarket()
+  const toast = market?.toast
   const location = useLocation()
 
   // Reset the main scroll container on every route change so pages always
@@ -31,13 +32,13 @@ export default function AppShell() {
             transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
             className="shell__page"
           >
-            <Outlet />
+            {children ?? <Outlet />}
           </motion.div>
         </AnimatePresence>
       </div>
       <MobileNav />
       <Toast toast={toast} />
-      <OnboardingWizard />
+      {market && <OnboardingWizard />}
     </div>
   )
 }
