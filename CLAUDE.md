@@ -407,6 +407,7 @@ Required events: `checkout.session.completed`, `payment_intent.succeeded`.
 - All manifest keys use `snake_case` (`input_schema`, `output_schema`, `price_per_call_usd`).
 - `/mcp/invoke` authenticates via `auth.verify_agent_api_key` or a caller-scoped user key.
 - `scripts/aztea_mcp_server.py` refreshes tools every 60s via the HTTP registry.
+- **Lazy tool surface is four tools**: `aztea_search`, `aztea_describe`, `aztea_call`, **`aztea_do`**. `aztea_do` is the auto-invoke fast path — picks the best agent for an intent and runs it under hard cost/confidence/quality gates. All gates live in the backend at `POST /registry/agents/auto-hire` (`server/application_parts/part_012.py`); both MCP server frontends (`scripts/aztea_mcp_server.py`, `sdks/aztea-cli/src/mcp-server.js`) are thin proxies. Decision logic and gate constants live in `core/registry/auto_hire.py`; thresholds are env-tunable via `AZTEA_AUTO_INVOKE_*` flags read at call time.
 
 ---
 

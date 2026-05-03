@@ -61,7 +61,7 @@ if _SENTRY_DSN:
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
@@ -105,6 +105,7 @@ from server.builtin_agents import specs as _builtin_specs
 from server.error_handlers import register_exception_handlers
 from server.routes import system as _system_routes
 from core import registry
+from core.registry import auto_hire as _auto_hire
 from core import jobs
 from core import disputes
 from core import judges

@@ -325,3 +325,156 @@ def _skill_response(row: dict, include_raw_md: bool = False) -> dict:
         out["raw_md"] = row.get("raw_md")
         out["system_prompt"] = row.get("system_prompt")
     return out
+
+
+# ── Auto-hire (aztea_do) ──────────────────────────────────────────────────
+# Resolves a natural-language intent to a single agent and invokes it in one
+# round-trip — when (and only when) every gate in core.registry.auto_hire
+# passes. Otherwise returns a structured "candidates + reason" payload with
+# no charge. Both MCP frontends (mcp-server.js, scripts/aztea_mcp_server.py)
+# proxy their `aztea_do` tool here.
+
+class _AutoHireRequestBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    intent: str = Field(min_length=1, max_length=2000)
+    input: dict[str, Any] | None = None
+    max_cost_usd: float = Field(default=0.10, ge=0.0, le=100.0)
+    dry_run: bool = False
+
+
+@app.post(
+    "/registry/agents/auto-hire",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(400, 401, 402, 403, 404, 429, 500, 502),
+    tags=["Registry"],
+    summary="One-shot pick-best-agent-and-hire-it (with hard gates).",
+)
+@limiter.limit("20/minute")
+def registry_auto_hire(
+    request: Request,
+    body: _AutoHireRequestBody,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    """Resolve `intent` to a single agent and invoke it, gated by:
+
+    - feature flag         (AZTEA_AUTO_INVOKE_ENABLED)
+    - confidence floor     (AZTEA_AUTO_INVOKE_CONFIDENCE, default 0.55)
+    - stability tier       (no auto-invoke for beta agents)
+    - trust score          (AZTEA_AUTO_INVOKE_TRUST_FLOOR, default 70)
+    - success rate         (AZTEA_AUTO_INVOKE_SUCCESS_FLOOR, default 0.90)
+    - per-call price       (min(caller.max_cost_usd, AZTEA_AUTO_INVOKE_SERVER_CAP_USD))
+    - required-input fields present in caller-supplied `input` or extractable
+
+    On any gate failure, returns auto_invoked=False with a `reason` and
+    enough context for the caller (typically an LLM) to decide what to do
+    next. No wallet activity occurs in the gated path.
+
+    On success, delegates to the existing `registry_call` so settlement,
+    receipts, and refund-on-failure stay identical to the manual path.
+    """
+    _require_scope(caller, "caller")
+
+    # 1. Build candidate set from the live, public agent registry.
+    raw_agents = _mcp_active_agents()
+    candidates = [
+        _auto_hire.CandidateAgent.from_agent_record(record)
+        for record in raw_agents
+        if _caller_can_access_agent(caller, record)
+    ]
+
+    # 2. Pure decision.
+    decision = _auto_hire.decide(
+        intent=body.intent,
+        explicit_input=body.input,
+        max_cost_usd=float(body.max_cost_usd),
+        candidates=candidates,
+    )
+
+    # 3. Gated path: short-circuit, no charge.
+    if not decision.auto_invoked:
+        return JSONResponse(
+            content={
+                "auto_invoked": False,
+                "reason": decision.reason,
+                "confidence": decision.confidence,
+                "candidates": decision.candidates,
+                "missing_fields": decision.missing_fields,
+                "next_step": decision.next_step,
+            }
+        )
+
+    chosen = decision.chosen
+    payload = decision.payload or {}
+    assert chosen is not None  # for type checkers
+
+    # 4. Dry-run: report what *would* happen, no invocation.
+    if body.dry_run:
+        return JSONResponse(
+            content={
+                "auto_invoked": False,
+                "reason": "dry_run",
+                "would_invoke": True,
+                "agent": chosen.public_dict(),
+                "payload": payload,
+                "confidence": decision.confidence,
+                "estimated_cost_usd": chosen.price_per_call_usd,
+                "next_step": "Re-call with dry_run=false to execute.",
+            }
+        )
+
+    # 5. Real invocation. Delegate in-process to the existing call route so
+    #    the money path stays canonical (single source of truth for
+    #    pre_call_charge → dispatch → settle/refund).
+    try:
+        delegated = registry_call(
+            request=request,
+            agent_id=chosen.agent_id,
+            body=core_models.RegistryCallRequest(root=payload),
+            caller=caller,
+        )
+    except HTTPException as exc:
+        # registry_call already refunds on failure paths it owns. Surface a
+        # structured response so the LLM can recover gracefully without
+        # confusing "auto_invoked=true but no output" semantics.
+        detail = exc.detail if hasattr(exc, "detail") else str(exc)
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={
+                "auto_invoked": True,
+                "agent": chosen.public_dict(),
+                "confidence": decision.confidence,
+                "error": detail,
+                "next_step": (
+                    "The agent failed. Charges were refunded automatically "
+                    "if the platform initiated them."
+                ),
+            },
+        )
+
+    # 6. Unwrap the delegated response and decorate with auto-hire metadata.
+    inner: dict[str, Any]
+    if isinstance(delegated, JSONResponse):
+        inner = json.loads(delegated.body.decode("utf-8")) if delegated.body else {}
+    elif isinstance(delegated, dict):
+        inner = dict(delegated)
+    else:
+        # Belt-and-suspenders: registry_call always returns JSONResponse today.
+        inner = {}
+
+    return JSONResponse(
+        content={
+            "auto_invoked": True,
+            "agent": chosen.public_dict(),
+            "confidence": decision.confidence,
+            "cost_usd": (
+                int(inner.get("cost_cents") or 0) / 100
+                if inner.get("cost_cents") is not None
+                else chosen.price_per_call_usd
+            ),
+            "job_id": inner.get("job_id"),
+            "output": inner.get("output"),
+            "latency_ms": inner.get("latency_ms"),
+            "cached": bool(inner.get("cached", False)),
+        }
+    )

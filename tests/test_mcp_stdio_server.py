@@ -64,7 +64,7 @@ def test_registry_bridge_uses_lazy_tool_list_when_flag_enabled(monkeypatch):
     ]
     tools = bridge.tools()
     names = [tool["name"] for tool in tools]
-    assert names == ["aztea_search", "aztea_describe", "aztea_call"]
+    assert names == ["aztea_search", "aztea_describe", "aztea_call", "aztea_do"]
     assert tools[0]["annotations"]["readOnlyHint"] is True
     assert tools[2]["annotations"]["readOnlyHint"] is False
 
@@ -211,6 +211,18 @@ def test_describe_surfaces_output_schema_fields(monkeypatch):
     # Pre-2026-05-01 audit: output_schema returned but never highlighted.
     assert set(described["output_fields"]) == {"issues", "clean"}
     assert described["output_required_fields"] == ["issues", "clean"]
+
+
+def test_aztea_do_tool_is_registered_in_lazy_surface():
+    """The fast-path auto-invoke tool must be exposed alongside the legacy
+    search/describe/call lazy trio. Catches accidental removal during
+    refactors of the lazy tool registration."""
+    assert _MODULE._LAZY_DO_TOOL["name"] == "aztea_do"
+    schema = _MODULE._LAZY_DO_TOOL["input_schema"]
+    assert "intent" in schema["properties"]
+    assert "max_cost_usd" in schema["properties"]
+    assert "dry_run" in schema["properties"]
+    assert schema["required"] == ["intent"]
 
 
 def test_mcp_text_formatter_makes_search_results_readable():

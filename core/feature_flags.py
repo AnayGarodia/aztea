@@ -44,6 +44,21 @@ def flag(name: str, *, default: bool = False) -> bool:
     return default
 
 
+def flag_float(name: str, *, default: float) -> float:
+    """Return an env-driven float flag, defaulted on missing/invalid values.
+
+    Used for thresholds (confidence floors, price caps) that should be
+    runtime-tunable without redeploying.
+    """
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
 # ---------------------------------------------------------------------------
 # Named flags (add new ones here; keep alphabetical)
 # ---------------------------------------------------------------------------
@@ -72,3 +87,43 @@ RESULT_CACHE_V2: bool = flag("AZTEA_RESULT_CACHE_V2", default=True)
 # Require an external verifier to approve output before settling payment.
 # Off by default: settle immediately and allow clawback via disputes.
 REQUIRE_VERIFICATION: bool = flag("AZTEA_REQUIRE_VERIFICATION", default=False)
+
+
+# ---------------------------------------------------------------------------
+# Auto-invoke (aztea_do) — read at call time so thresholds can be tuned
+# without restarting the server. Defaults are conservative.
+# ---------------------------------------------------------------------------
+
+def auto_invoke_enabled() -> bool:
+    """Master switch for the aztea_do auto-invoke meta-tool. Default on."""
+    return flag("AZTEA_AUTO_INVOKE_ENABLED", default=True)
+
+
+def auto_invoke_confidence_floor() -> float:
+    """Minimum normalised confidence score (0.0–1.0) to auto-fire a hire.
+
+    Below this floor the endpoint returns a search-style response with
+    candidates, no charge. Default 0.55 — requires both raw signal strength
+    and clear dominance over the runner-up.
+    """
+    return flag_float("AZTEA_AUTO_INVOKE_CONFIDENCE", default=0.55)
+
+
+def auto_invoke_server_cap_usd() -> float:
+    """Hard server-side ceiling on auto-invoke per-call price.
+
+    Even if the caller asks for a higher max_cost_usd, this cap wins. Stops
+    a misconfigured caller from accidentally hiring expensive agents in a
+    loop. Default $0.50.
+    """
+    return flag_float("AZTEA_AUTO_INVOKE_SERVER_CAP_USD", default=0.50)
+
+
+def auto_invoke_trust_floor() -> float:
+    """Minimum trust score (0–100) to be eligible for auto-invoke."""
+    return flag_float("AZTEA_AUTO_INVOKE_TRUST_FLOOR", default=70.0)
+
+
+def auto_invoke_success_floor() -> float:
+    """Minimum success rate (0.0–1.0) to be eligible for auto-invoke."""
+    return flag_float("AZTEA_AUTO_INVOKE_SUCCESS_FLOOR", default=0.90)

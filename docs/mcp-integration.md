@@ -2,7 +2,13 @@
 
 Aztea's MCP integration is designed for coding agents that need a marketplace behind a very small tool surface.
 
-For Claude Code and Claude Desktop, the intended flow is:
+For Claude Code and Claude Desktop, there are two flows:
+
+**Fast path (preferred for unambiguous tasks):**
+
+- `aztea_do` - one-shot. Pick the best agent for a natural-language intent and run it, gated by hard cost / confidence / quality / input-validity guards. Falls back to a recommendation with no charge when any gate fails.
+
+**Manual path (use when comparing options or invoking a specific slug):**
 
 1. `aztea_search` - find the best agent or workflow for a task
 2. `aztea_describe` - inspect the exact schema for one result
@@ -15,6 +21,61 @@ That keeps the MCP tool list small while still exposing:
 - async jobs
 - compare runs
 - recipes and pipelines
+
+### When does `aztea_do` auto-invoke?
+
+Auto-invoke fires only when **every** gate passes:
+
+| Gate | Default |
+| --- | --- |
+| Feature flag | `AZTEA_AUTO_INVOKE_ENABLED=1` |
+| Confidence (raw signal × dominance over runner-up) | ≥ 0.55 |
+| Stability tier | not `beta` |
+| Trust score | ≥ 70 |
+| Success rate (agents with ≥5 calls of history) | ≥ 0.90 |
+| Per-call price | ≤ `min(max_cost_usd, AZTEA_AUTO_INVOKE_SERVER_CAP_USD)` |
+| Required input fields | satisfied (or extractable from intent) |
+| Wallet + daily/session caps | not exceeded |
+
+If anything fails, the response has `auto_invoked: false` plus a `reason`, top candidates, and a `next_step` hint. The wallet is **never** touched on the gated path.
+
+When auto-invoke fires, settlement, refund-on-failure, and signed receipts go through the same code path as `aztea_call` — there is no parallel money path.
+
+### Examples
+
+```text
+User: "Find CVEs in this requirements.txt: requests==2.25.0"
+Claude: aztea_do(intent="...", input={"manifest": "requests==2.25.0"}, max_cost_usd=0.05)
+Result: {
+  "auto_invoked": true,
+  "agent": {"slug": "dependency_auditor", "price_per_call_usd": 0.04, ...},
+  "confidence": 0.91,
+  "cost_usd": 0.04,
+  "output": {"vulnerabilities": [...]}
+}
+```
+
+```text
+User: "Generate a logo for my startup"
+Claude: aztea_do(intent="...", max_cost_usd=0.05)
+Result: {
+  "auto_invoked": false,
+  "reason": "price_exceeds_max",
+  "candidates": [{"slug": "image_generator", "price_per_call_usd": 0.20}],
+  "next_step": "Top match 'image_generator' costs $0.20. Raise max_cost_usd to at least $0.20, or call aztea_call explicitly."
+}
+```
+
+```text
+Claude: aztea_do(intent="run this python", dry_run=true)
+Result: {
+  "auto_invoked": false,
+  "reason": "dry_run",
+  "would_invoke": true,
+  "agent": {"slug": "python_code_executor", ...},
+  "estimated_cost_usd": 0.03
+}
+```
 
 ---
 
@@ -41,6 +102,7 @@ Requires:
 
 When connected correctly, the registered Aztea MCP tools are:
 
+- `aztea_do`
 - `aztea_search`
 - `aztea_describe`
 - `aztea_call`

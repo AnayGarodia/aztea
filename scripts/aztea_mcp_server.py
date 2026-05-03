@@ -145,6 +145,39 @@ _LAZY_DESCRIBE_TOOL: dict[str, Any] = {
     },
 }
 
+_LAZY_DO_TOOL: dict[str, Any] = {
+    "name": "aztea_do",
+    "description": (
+        "One-shot. Pick the best Aztea agent for a natural-language task and run it, "
+        "within a hard cost ceiling. Falls back to a recommendation when confidence "
+        "is low, the price exceeds max_cost_usd, or required inputs are missing — "
+        "NO charge in those cases. Use this for unambiguous tasks like "
+        "'audit this requirements.txt for CVEs' or 'run this python snippet'. "
+        "Use aztea_search instead when you need to compare agents."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "intent": {"type": "string", "description": "Natural-language description of what you want to do."},
+            "input": {
+                "type": "object",
+                "description": "Optional structured payload that matches the chosen agent's input schema. When omitted, the server attempts simple field extraction from `intent`.",
+                "additionalProperties": True,
+            },
+            "max_cost_usd": {"type": "number", "default": 0.10, "minimum": 0, "description": "Hard ceiling on the per-call charge."},
+            "dry_run": {"type": "boolean", "default": False, "description": "When true, decide which agent would be invoked and report it without running anything."},
+        },
+        "required": ["intent"],
+    },
+    "annotations": {
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "openWorldHint": True,
+        "idempotentHint": False,
+    },
+}
+
+
 _LAZY_CALL_TOOL: dict[str, Any] = {
     "name": "aztea_call",
     "description": (
@@ -572,7 +605,7 @@ class RegistryBridge:
                 return [_AUTH_TOOL]
             registry_tools = [dict(entry["tool"]) for entry in self._entries]
         if _feature_flags.LAZY_MCP_SCHEMAS:
-            return [_LAZY_SEARCH_TOOL, _LAZY_DESCRIBE_TOOL, _LAZY_CALL_TOOL]
+            return [_LAZY_SEARCH_TOOL, _LAZY_DESCRIBE_TOOL, _LAZY_CALL_TOOL, _LAZY_DO_TOOL]
         return meta_tools.get_meta_tools() + registry_tools
 
     def _catalog_entries(self) -> list[dict[str, Any]]:
@@ -895,6 +928,60 @@ class RegistryBridge:
             described = self._describe_catalog_entry(slug)
             return ("error" not in described), described
 
+        if tool_name == _LAZY_DO_TOOL["name"]:
+            intent = str(arguments.get("intent") or "").strip()
+            if not intent:
+                return False, {"error": "INVALID_INPUT", "message": "intent is required."}
+            body: dict[str, Any] = {
+                "intent": intent,
+                "max_cost_usd": float(arguments.get("max_cost_usd") or 0.10),
+                "dry_run": bool(arguments.get("dry_run") or False),
+            }
+            explicit_input = arguments.get("input")
+            if isinstance(explicit_input, dict):
+                body["input"] = explicit_input
+            # Pre-flight session-budget check (mirrors aztea_call gate).
+            budget_cents = self._session_state.get("budget_cents")
+            if budget_cents is not None:
+                spent = int(self._session_state.get("spent_cents") or 0)
+                if spent >= int(budget_cents):
+                    return False, {
+                        "error": "SESSION_BUDGET_EXCEEDED",
+                        "message": (
+                            f"Session budget of ${int(budget_cents) / 100:.2f} reached "
+                            f"(spent ${spent / 100:.2f}). Raise it with aztea_set_session_budget."
+                        ),
+                        "budget_cents": int(budget_cents),
+                        "spent_cents": spent,
+                    }
+            try:
+                response = self._session.post(
+                    f"{self.base_url}/registry/agents/auto-hire",
+                    headers=self._headers(),
+                    json=body,
+                    timeout=self.timeout_seconds,
+                )
+            except requests.RequestException as exc:
+                return False, {"error": "UPSTREAM_UNREACHABLE", "message": str(exc)}
+            if response.status_code in (401, 403):
+                with self._lock:
+                    self._auth_required = True
+                return self._auth_required_response()
+            try:
+                payload = response.json()
+            except ValueError:
+                return False, {"error": "BAD_RESPONSE", "message": response.text[:500]}
+            ok = 200 <= response.status_code < 300
+            # Accrue spend on real auto-invokes so the session-budget gate stays honest.
+            if ok and isinstance(payload, dict) and payload.get("auto_invoked"):
+                cost_usd = payload.get("cost_usd")
+                if isinstance(cost_usd, (int, float)) and cost_usd > 0:
+                    self._session_state["spent_cents"] = (
+                        int(self._session_state.get("spent_cents") or 0)
+                        + int(round(float(cost_usd) * 100))
+                    )
+            return ok, payload
+
         if tool_name == _LAZY_CALL_TOOL["name"]:
             slug = str(arguments.get("slug") or "").strip()
             if not slug:
@@ -903,6 +990,7 @@ class RegistryBridge:
                 _LAZY_SEARCH_TOOL["name"],
                 _LAZY_DESCRIBE_TOOL["name"],
                 _LAZY_CALL_TOOL["name"],
+                _LAZY_DO_TOOL["name"],
             }:
                 return False, {"error": "INVALID_INPUT", "message": "Use the lazy MCP tools directly, not via aztea_call."}
             tool_arguments = arguments.get("arguments")

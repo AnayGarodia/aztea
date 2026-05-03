@@ -71,16 +71,42 @@ const LAZY_CALL_TOOL = {
   },
 }
 
-const LAZY_TOOL_NAMES = new Set([LAZY_SEARCH_TOOL.name, LAZY_DESCRIBE_TOOL.name, LAZY_CALL_TOOL.name])
+const LAZY_DO_TOOL = {
+  name: 'aztea_do',
+  description: (
+    'One-shot. Pick the best Aztea agent for a natural-language task and run it, '
+    + 'within a hard cost ceiling. Falls back to a recommendation when confidence '
+    + 'is low, the price exceeds max_cost_usd, or required inputs are missing — '
+    + 'NO charge in those cases. Use this for unambiguous tasks like '
+    + '"audit this requirements.txt for CVEs" or "run this python snippet". '
+    + 'Use aztea_search instead when you need to compare agents.'
+  ),
+  inputSchema: {
+    type: 'object',
+    properties: {
+      intent:       { type: 'string',  description: 'Natural-language description of what you want to do.' },
+      input:        { type: 'object',  description: 'Optional structured payload that matches the chosen agent\'s input schema. When omitted, the server attempts simple field extraction from `intent`.' },
+      max_cost_usd: { type: 'number',  default: 0.10, minimum: 0, description: 'Hard ceiling on the per-call charge. Auto-invoke is suppressed if the best agent costs more.' },
+      dry_run:      { type: 'boolean', default: false, description: 'When true, decide which agent would be invoked and report it without running anything.' },
+    },
+    required: ['intent'],
+  },
+}
+
+const LAZY_TOOL_NAMES = new Set([LAZY_SEARCH_TOOL.name, LAZY_DESCRIBE_TOOL.name, LAZY_CALL_TOOL.name, LAZY_DO_TOOL.name])
 
 const SERVER_INSTRUCTIONS = [
   'You have access to the Aztea AI agent marketplace.',
   'Use it when a task needs live external data, real code execution, or specialized workflows you cannot do from chat alone.',
   '',
-  'Workflow:',
-  "1. aztea_search('what you want to do')",
-  '2. aztea_describe(slug)',
-  '3. aztea_call(slug, {arguments})',
+  'Pick a path:',
+  '  Fast path (preferred when intent is unambiguous):',
+  "    aztea_do(intent, max_cost_usd) — picks the best agent and runs it in one shot,",
+  "    or returns candidates with no charge if confidence/price/inputs gate it.",
+  '  Manual path (when you want to compare options or call a specific slug):',
+  "    1. aztea_search('what you want to do')",
+  "    2. aztea_describe(slug)",
+  "    3. aztea_call(slug, {arguments})",
 ].join('\n')
 
 const SESSION_STATE = {
@@ -241,7 +267,7 @@ function budgetGuard() {
 
 function getTools() {
   if (_authRequired || !API_KEY) return [AUTH_TOOL]
-  return [LAZY_SEARCH_TOOL, LAZY_DESCRIBE_TOOL, LAZY_CALL_TOOL]
+  return [LAZY_SEARCH_TOOL, LAZY_DESCRIBE_TOOL, LAZY_CALL_TOOL, LAZY_DO_TOOL]
 }
 
 function authRequiredResponse() {
@@ -932,6 +958,27 @@ async function callTool(name, args) {
     if (!slug) return { ok: false, payload: { error: 'INVALID_INPUT', message: 'slug is required.' } }
     if (!_catalog.length) await refreshCatalog()
     return describeCatalog(slug)
+  }
+  if (name === LAZY_DO_TOOL.name) {
+    const intent = String(args.intent || '').trim()
+    if (!intent) return { ok: false, payload: { error: 'INVALID_INPUT', message: 'intent is required.' } }
+    const body = {
+      intent,
+      max_cost_usd: typeof args.max_cost_usd === 'number' ? args.max_cost_usd : 0.10,
+      dry_run: !!args.dry_run,
+    }
+    if (args.input != null && typeof args.input === 'object' && !Array.isArray(args.input)) {
+      body.input = args.input
+    }
+    // Pre-flight budget guard so an auto-invoke can't bypass session caps.
+    const blocked = budgetGuard()
+    if (blocked) return { ok: false, payload: blocked }
+    const res = await request('POST', '/registry/agents/auto-hire', body, TIMEOUT_MS)
+    const ok = res.status >= 200 && res.status < 300
+    if (ok && res.body && res.body.auto_invoked && typeof res.body.cost_usd === 'number') {
+      accumulate(Math.round(res.body.cost_usd * 100))
+    }
+    return { ok, payload: res.body }
   }
   if (name === LAZY_CALL_TOOL.name) {
     const slug = String(args.slug || '').trim()
