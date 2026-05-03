@@ -15,7 +15,6 @@ _LOGO = r"""
 def render_splash() -> None:
     if _HAS_RICH:
         from rich.text import Text
-        from rich.panel import Panel
         from rich.align import Align
 
         title = Text(_LOGO.strip("\n"), style="terracotta")

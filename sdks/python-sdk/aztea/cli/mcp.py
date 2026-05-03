@@ -198,14 +198,12 @@ def doctor(
     checks.append(("API key present", has_key,
                    "" if has_key else "re-run `aztea mcp install`"))
 
-    key_ok = False
     profile_user = ""
     if has_key:
         try:
             with spinner("Verifying server reachability", json_mode=json_mode):
                 with build_client(api_key=api_key, base_url=base_url) as client_obj:
                     profile = client_obj.auth.me()
-            key_ok = True
             profile_user = str(profile.get("username") or "")
         except Exception as exc:
             checks.append(("server reachable + key valid", False, str(exc) or "auth failed"))

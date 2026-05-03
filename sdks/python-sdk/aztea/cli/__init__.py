@@ -15,8 +15,6 @@ or AZTEA_API_KEY / AZTEA_BASE_URL env vars).
 """
 from __future__ import annotations
 
-from typing import Optional
-
 import typer
 
 from .. import __version__

@@ -9,7 +9,6 @@ from .common import (
     ApiKeyOpt,
     BaseUrlOpt,
     JsonOpt,
-    build_client,
     find_agent_id,
     handle_error,
     slugify,
