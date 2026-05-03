@@ -9,7 +9,6 @@ import Button from '../ui/Button'
 import Skeleton from '../ui/Skeleton'
 import EmptyState from '../ui/EmptyState'
 import Topbar from '../layout/Topbar'
-import { useAuth } from '../context/AuthContext'
 import './DocsPage.css'
 
 const RAW_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').trim().replace(/\/+$/, '')
@@ -19,11 +18,6 @@ const REDOC_URL = RAW_BASE ? `${RAW_BASE}/redoc` : '/api/redoc'
 export default function DocsPage() {
   const navigate = useNavigate()
   const { docSlug } = useParams()
-  // When the user is signed in, this page renders inside AppShell which
-  // already provides Sidebar + Topbar. Skip the standalone topbar so we
-  // don't double-stack chrome.
-  const { apiKey } = useAuth()
-  const inShell = Boolean(apiKey)
   const [docs, setDocs] = useState([])
   const [activeDoc, setActiveDoc] = useState(null)
   const [loadingList, setLoadingList] = useState(true)
@@ -191,28 +185,26 @@ export default function DocsPage() {
   )
 
   return (
-    <main className={`docs-page${inShell ? ' docs-page--in-shell' : ''}`}>
-      {!inShell && <Topbar
+    <main className="docs-page">
+      <Topbar
         crumbs={[
           { label: 'Docs', to: '/docs' },
           ...(activeDocTitle ? [{ label: activeDocTitle }] : []),
         ]}
         extras={
           <>
-            {!inShell && (
-              <button
-                type="button"
-                className="docs-page__back-btn"
-                onClick={() => {
-                  if (window.history.length > 1) navigate(-1)
-                  else navigate('/')
-                }}
-                aria-label="Go back"
-              >
-                <ArrowLeft size={14} />
-                <span>Back</span>
-              </button>
-            )}
+            <button
+              type="button"
+              className="docs-page__back-btn"
+              onClick={() => {
+                if (window.history.length > 1) navigate(-1)
+                else navigate('/')
+              }}
+              aria-label="Go back"
+            >
+              <ArrowLeft size={14} />
+              <span>Back</span>
+            </button>
             <button
               type="button"
               className="docs-page__menu-btn"
@@ -232,29 +224,7 @@ export default function DocsPage() {
             </button>
           </>
         }
-      />}
-
-      {inShell && (
-        <div className="docs-page__shell-actions">
-          <button
-            type="button"
-            className="docs-page__menu-btn"
-            onClick={() => setDrawerOpen(true)}
-            aria-label="Open documentation index"
-          >
-            <Menu size={16} />
-          </button>
-          <button
-            type="button"
-            className="docs-page__ask-btn"
-            onClick={() => setAskOpen(true)}
-            aria-label="Ask AI about the docs"
-          >
-            <Sparkles size={13} />
-            <span>Ask AI</span>
-          </button>
-        </div>
-      )}
+      />
 
       <div className="docs-page__layout">
         <aside className="docs-page__sidebar" aria-label="Documentation navigation">

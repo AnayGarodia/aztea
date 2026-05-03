@@ -101,42 +101,9 @@ function AuthedApp() {
               <Route path="/list-skill" element={<SkillUploadPage />} />
               <Route path="/platform" element={<PlatformPage />} />
               <Route path="/integrations" element={<IntegrationsPage />} />
-              <Route path="/docs" element={<DocsPage />} />
-              <Route path="/docs/:docSlug" element={<DocsPage />} />
               <Route path="/admin/disputes" element={<RequireAdmin><AdminDisputesPage /></RequireAdmin>} />
               <Route path="/admin/earnings" element={<RequireAdmin><AdminEarningsPage /></RequireAdmin>} />
               <Route path="*"         element={<Navigate to="/overview" replace />} />
-            </Route>
-          </Routes>
-        </Suspense>
-      </ErrorBoundary>
-    </MarketProvider>
-  )
-}
-
-// Docs is a special-case route. For signed-out visitors we render the
-// standalone DocsPage so they can read the docs without an account; for
-// signed-in users we render the same page but wrapped by AppShell so
-// the sidebar + topbar stay visible — exactly like every other authed
-// page. We mount AppShell directly here (instead of bouncing through
-// AuthedApp) to avoid an extra remount + redirect loop.
-function DocsRoute() {
-  const { apiKey, booting, user } = useAuth()
-  const location = useLocation()
-  if (booting) return <AppBoot />
-  if (!apiKey) return <DocsPage />
-  if (user?.legal_acceptance_required) {
-    const target = `/legal/accept?redirect=${encodeURIComponent(location.pathname)}`
-    return <Navigate to={target} replace />
-  }
-  return (
-    <MarketProvider apiKey={apiKey}>
-      <ErrorBoundary>
-        <Suspense fallback={<AppBoot />}>
-          <Routes>
-            <Route element={<AppShell />}>
-              <Route path="/docs" element={<DocsPage />} />
-              <Route path="/docs/:docSlug" element={<DocsPage />} />
             </Route>
           </Routes>
         </Suspense>
@@ -163,8 +130,8 @@ export default function App() {
                 <Route path="/welcome" element={<LandingPage />} />
                 <Route path="/terms"   element={<TermsPage />} />
                 <Route path="/privacy" element={<PrivacyPage />} />
-                <Route path="/docs" element={<DocsRoute />} />
-                <Route path="/docs/:docSlug" element={<DocsRoute />} />
+                <Route path="/docs" element={<DocsPage />} />
+                <Route path="/docs/:docSlug" element={<DocsPage />} />
                 <Route
                   path="/legal/accept"
                   element={
