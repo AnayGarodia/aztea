@@ -604,6 +604,84 @@ _TRUSTED_PROXY_NETWORKS = _parse_ip_allowlist(
 # Middleware — security headers + request size cap
 # ---------------------------------------------------------------------------
 
+# Paths the React Router owns whose first segment ALSO matches a real API
+# route (`/jobs/{id}`, `/agents/{id}`, `/wallets/me`, etc.). On a browser
+# hard-reload the request lands on the API route first and returns a raw
+# JSON 401 to the user. This middleware short-circuits those navigations
+# (Accept: text/html, GET, no Authorization header) by serving index.html
+# so the SPA can render the page and fetch its own data with the saved key.
+_SPA_OWNED_PATHS: tuple[str, ...] = (
+    "/agents",
+    "/jobs",
+    "/wallet",
+    "/wallets",
+    "/worker",
+    "/overview",
+    "/settings",
+    "/keys",
+    "/my-agents",
+    "/register-agent",
+    "/list-skill",
+    "/platform",
+    "/integrations",
+    "/admin/disputes",
+    "/admin/earnings",
+    "/docs",
+    "/welcome",
+    "/terms",
+    "/privacy",
+    "/legal/accept",
+)
+
+
+def _is_browser_navigation(request: Request) -> bool:
+    """Heuristic: GET request from a browser navigation, not an XHR/fetch.
+
+    Browsers send Accept: text/html on top-level navigations. XHR/fetch
+    callers either omit Accept or send application/json. The Authorization
+    header is also a strong negative signal — SDK callers always include it
+    and would never want HTML back. Sec-Fetch-Mode=navigate is the modern
+    canonical signal but isn't sent by every browser, so we OR it with the
+    Accept check.
+    """
+    if request.method != "GET":
+        return False
+    if request.headers.get("Authorization"):
+        return False
+    if request.headers.get("X-Requested-With"):  # legacy XHR signal
+        return False
+    sec_fetch_mode = (request.headers.get("Sec-Fetch-Mode") or "").lower()
+    if sec_fetch_mode == "navigate":
+        return True
+    accept = (request.headers.get("Accept") or "").lower()
+    return "text/html" in accept
+
+
+def _path_is_spa_owned(path: str) -> bool:
+    if not path or path == "/":
+        return False
+    for prefix in _SPA_OWNED_PATHS:
+        if path == prefix or path.startswith(prefix + "/"):
+            return True
+    return False
+
+
+@app.middleware("http")
+async def spa_navigation_passthrough(request: Request, call_next):
+    """Serve index.html for SPA-owned paths on hard reload.
+
+    Without this, hard-reloading e.g. ``/jobs/abc-123`` lands on the real
+    ``GET /jobs/{job_id}`` API endpoint, which 401s and renders raw JSON in
+    the browser tab.
+    """
+    path = request.scope.get("path") or ""
+    if _is_browser_navigation(request) and _path_is_spa_owned(path):
+        index_file = _FRONTEND_DIST_DIR / "index.html"
+        if index_file.is_file():
+            return _SpaFileResponse(index_file, status_code=200, media_type="text/html")
+    return await call_next(request)
+
+
 @app.middleware("http")
 async def api_prefix_compat(request: Request, call_next):
     """Transparently strip a leading ``/api`` from incoming requests.

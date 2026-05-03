@@ -54,14 +54,24 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
-      - name: Run pytest
+      - name: Run pytest (unit + non-integration)
         # Mirror the documented test command (CLAUDE.md): the SDK contract
         # suite has been segfaulting on the GH runner under Python 3.11 and
-        # is run separately. Excluding it here keeps CI honest about the
-        # main suite while still surfacing real regressions.
-        run: pytest -q tests/ --ignore=tests/test_sdk_contract.py
+        # is run separately. Integration tests boot a uvicorn lifespan
+        # per-test and segfault on the GH runner when their teardown thread
+        # races the next standalone test's DB init — so they run in their
+        # own pytest invocation below.
+        run: pytest -q tests/ --ignore=tests/test_sdk_contract.py --ignore=tests/integration
         env:
           API_KEY: test-master-key
+
+      - name: Run pytest (integration)
+        # Separate invocation: process boundary kills any leftover lifespan
+        # threads before the next test starts, sidestepping the segfault.
+        run: pytest -q tests/integration
+        env:
+          API_KEY: test-master-key
+
 
   frontend-build:
     name: Frontend build
