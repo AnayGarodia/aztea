@@ -176,7 +176,10 @@ class DbConnection:
                 cursor = self._conn.cursor()
                 return _CursorWrapper(cursor, self._is_postgres)
 
-        if params is None:
+        if self._is_postgres:
+            cursor = self._conn.cursor()
+            cursor.execute(effective_sql, params)
+        elif params is None:
             cursor = self._conn.execute(effective_sql)
         else:
             cursor = self._conn.execute(effective_sql, params)
@@ -186,7 +189,11 @@ class DbConnection:
         self, sql: str, params_list: Iterable[tuple | list]
     ) -> _CursorWrapper:
         effective_sql = sql if self._is_postgres else _to_sqlite_sql(sql)
-        cursor = self._conn.executemany(effective_sql, params_list)
+        if self._is_postgres:
+            cursor = self._conn.cursor()
+            cursor.executemany(effective_sql, params_list)
+        else:
+            cursor = self._conn.executemany(effective_sql, params_list)
         return _CursorWrapper(cursor, self._is_postgres)
 
     # ------------------------------------------------------------------
