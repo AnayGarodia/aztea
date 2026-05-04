@@ -380,7 +380,7 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
 {
     "agent_id": _WEB_RESEARCHER_AGENT_ID,
     "name": "Web Researcher Agent",
-    "description": "Use when the task requires reading a live URL, not guessing its content. Fetches the page in real time and returns a dense summary, key points, direct answers to a specific question, and verbatim supporting quotes. Supports up to 10 URLs in one call for cross-source synthesis.",
+    "description": "Use when the task requires reading a live URL, not guessing its content. Fetches the page in real time and returns a dense summary, key points, direct answers to a specific question, and verbatim supporting quotes. Supports up to 10 URLs in one call for cross-source synthesis. REQUIRED INPUT: provide url (single URL string) or urls (array of up to 10 URLs) — calling without either returns an error.",
     "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_WEB_RESEARCHER_AGENT_ID],
     "price_per_call_usd": 0.03,
     "tags": ["web", "research", "summarization", "content-extraction"],
@@ -393,6 +393,10 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
             "mode": {"type": "string", "enum": ["summary", "extract", "qa"], "default": "summary", "description": "Analysis mode"},
         },
         "required": [],
+        "oneOf": [
+            {"required": ["url"]},
+            {"required": ["urls"]},
+        ],
     },
     "output_schema": _output_schema_object(
         {
