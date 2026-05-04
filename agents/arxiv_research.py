@@ -353,10 +353,23 @@ def run(payload: dict) -> dict:
         llm_used = False
         degraded_mode = True
 
+    # Flag when no returned paper has any meaningful token overlap with the query.
+    _query_tokens = {t for t in re.findall(r"[a-z0-9]+", query.lower()) if len(t) > 3}
+    _STOPWORDS = {"that", "this", "with", "from", "have", "been", "they", "their", "will"}
+    _query_tokens -= _STOPWORDS
+
+    def _paper_overlaps(p: dict) -> bool:
+        text = " ".join([p.get("title") or "", p.get("abstract") or "",
+                         " ".join(p.get("categories") or [])]).lower()
+        return any(tok in text for tok in _query_tokens)
+
+    low_confidence = bool(papers) and not any(_paper_overlaps(p) for p in papers)
+
     return annotate_success({
         "query": query,
         "total_found": len(papers),
         "papers": papers,
         **synthesis_data,
+        "low_confidence_results": low_confidence,
         "billing_units_actual": len(papers),
     }, llm_used=llm_used, degraded_mode=degraded_mode)

@@ -487,6 +487,34 @@ def test_arxiv_research_degrades_gracefully_without_llm(monkeypatch):
     assert "no LLM provider" in result["synthesis"]
 
 
+def test_arxiv_research_flags_low_confidence_for_nonsense_query(monkeypatch):
+    import agents.arxiv_research as arxiv
+
+    fake_papers = [{
+        "arxiv_id": "1234.5678",
+        "title": "Quantum entanglement in photonic circuits",
+        "authors": ["A. Researcher"],
+        "abstract": "We study quantum entanglement.",
+        "categories": ["quant-ph"],
+        "published": "2024-01-01",
+        "updated": "2024-01-01",
+        "pdf_url": "https://arxiv.org/pdf/1234.5678",
+        "abstract_url": "https://arxiv.org/abs/1234.5678",
+    }]
+    monkeypatch.setattr(arxiv, "_fetch_arxiv", lambda *a, **kw: fake_papers)
+
+    class FakeLLMResp:
+        text = '{"key_themes":[],"seminal_papers":[],"open_questions":[],"suggested_follow_ups":[]}'
+
+    monkeypatch.setattr(arxiv, "run_with_fallback", lambda req: FakeLLMResp())
+
+    result = arxiv.run({"query": "xyzzyplughqwerty123nonsense"})
+    assert "error" not in result
+    assert result.get("low_confidence_results") is True, (
+        "Should set low_confidence_results=True when papers don't match query tokens"
+    )
+
+
 def test_web_researcher_degrades_gracefully_without_llm(monkeypatch):
     monkeypatch.setattr(
         web_researcher,
