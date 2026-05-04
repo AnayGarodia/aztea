@@ -690,9 +690,8 @@
 .docs-ask__msg-bubble {
   max-width: 85%;
   min-width: 0;
-  overflow: hidden;
-  word-break: break-word;
   overflow-wrap: break-word;
+  word-break: break-word;
   padding: 10px 12px;
   border-radius: var(--r-md);
   font-size: 0.8125rem;
@@ -739,6 +738,8 @@
   padding: 0.1em 0.35em;
   font-size: 0.85em;
   font-family: var(--font-mono);
+  word-break: break-all;
+  overflow-wrap: break-word;
 }
 .docs-ask__md pre {
   background: rgba(0,0,0,0.18);
