@@ -731,6 +731,7 @@ def test_type_checker_falls_back_to_npx_when_tsc_missing(monkeypatch):
     import agents.type_checker as tc
     importlib.reload(tc)
     tc._run_tsc("const x: number = 1;", {}, False)
-    assert captured.get("cmd", [None])[0] == "npx", "should fall back to npx"
+    assert "cmd" in captured, "subprocess.run was never called — patch may be broken"
+    assert captured["cmd"][0] == "npx", "should fall back to npx"
     assert "--package" in captured["cmd"], "must specify --package typescript"
     assert "tsc" in captured["cmd"]

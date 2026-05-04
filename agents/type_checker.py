@@ -18,6 +18,14 @@ _TIMEOUT = 30
 _CODE_MAX = 100_000
 
 
+def _tsc_cache_root() -> str:
+    """Per-process npm cache root — isolates concurrent npx tsc invocations."""
+    base = os.environ.get("AZTEA_TSC_NPM_CACHE")
+    if base:
+        return base
+    return os.path.join(tempfile.gettempdir(), f"aztea-tsc-cache-{os.getpid()}")
+
+
 def _err(code: str, message: str) -> dict:
     return {"error": {"code": code, "message": message}}
 
@@ -223,6 +231,12 @@ def _run_tsc(code: str, stubs: dict[str, str], strict: bool) -> dict:
                 "--noEmit", "--project", os.path.join(tmpdir, "tsconfig.json"),
             ]
 
+        npx_env = None
+        if not tsc_bin:
+            cache_dir = _tsc_cache_root()
+            os.makedirs(cache_dir, exist_ok=True)
+            npx_env = {**os.environ, "npm_config_cache": cache_dir, "NPM_CONFIG_CACHE": cache_dir}
+
         try:
             result = subprocess.run(
                 cmd,
@@ -230,6 +244,7 @@ def _run_tsc(code: str, stubs: dict[str, str], strict: bool) -> dict:
                 text=True,
                 timeout=_TIMEOUT,
                 cwd=tmpdir,
+                env=npx_env if npx_env is not None else None,
             )
         except subprocess.TimeoutExpired:
             return _err("type_checker.timeout", "tsc timed out after 30 seconds.")
@@ -248,6 +263,7 @@ def _run_tsc(code: str, stubs: dict[str, str], strict: bool) -> dict:
                 v = subprocess.run(
                     ["npx", "--yes", "--package", "typescript", "tsc", "--version"],
                     capture_output=True, text=True, timeout=15,
+                    env=npx_env,
                 )
             version_str = (v.stdout + v.stderr).strip()
         except Exception:
