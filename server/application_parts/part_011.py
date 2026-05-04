@@ -885,7 +885,10 @@ def public_docs_ask(request: Request, body: dict) -> JSONResponse:
     system_prompt = (
         "You are a helpful assistant for the Aztea platform. "
         "Answer questions accurately and concisely using only the documentation provided. "
-        "If the answer is not in the docs, say so. Keep answers under 300 words."
+        "If the answer is not in the docs, say so. Keep answers under 300 words. "
+        "Format your response as Markdown. Always wrap any code, commands, or identifiers "
+        "in fenced code blocks using triple backticks (e.g. ```python\\n...\\n```) — "
+        "never use inline backticks for multi-line code. Use plain paragraphs for prose."
     )
     user_msg = f"Documentation:\n{context_text}\n\nQuestion: {question}"
     try:
