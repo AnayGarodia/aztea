@@ -99,7 +99,7 @@ export default function AgentInputForm({ agent, onSubmit, loading, mode, onModeC
 
   // Auto-focus current field
   useEffect(() => {
-    const timer = setTimeout(() => inputRef.current?.focus(), 60)
+    const timer = setTimeout(() => inputRef.current?.focus({ preventScroll: true }), 60)
     return () => clearTimeout(timer)
   }, [step])
 
