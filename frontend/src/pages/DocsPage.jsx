@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useState, useRef } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Menu, X, Search, Sparkles, Send, Puzzle } from 'lucide-react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import { ArrowLeft, Menu, X, Search, Sparkles, Send, Puzzle, BookOpen } from 'lucide-react'
 import { fetchPublicDoc, fetchPublicDocsIndex } from '../api'
 import MarkdownDoc from '../ui/MarkdownDoc'
 import Button from '../ui/Button'
@@ -377,13 +375,27 @@ export default function DocsPage() {
                 <div key={i} className={`docs-ask__msg docs-ask__msg--${msg.role}`}>
                   <div className="docs-ask__msg-bubble">
                     {msg.role === 'assistant'
-                      ? <ReactMarkdown remarkPlugins={[remarkGfm]} className="docs-ask__md">{msg.content}</ReactMarkdown>
+                      ? <MarkdownDoc content={msg.content} className="docs-ask__md" />
                       : msg.content}
                     {Array.isArray(msg.citations) && msg.citations.length > 0 ? (
-                      <div className="docs-ask__citations">
-                        {msg.citations.map((citation, idx) => (
-                          <span key={`${citation}-${idx}`} className="docs-ask__citation">{citation}</span>
-                        ))}
+                      <div className="docs-ask__refs">
+                        <p className="docs-ask__refs-label">References</p>
+                        {msg.citations.map((citation, idx) => {
+                          const slug = typeof citation === 'string' ? citation : citation?.slug
+                          const title = typeof citation === 'string' ? citation : (citation?.title || citation?.slug)
+                          if (!slug) return null
+                          return (
+                            <Link
+                              key={`${slug}-${idx}`}
+                              to={`/docs/${slug}`}
+                              className="docs-ask__ref"
+                              onClick={() => setAskOpen(false)}
+                            >
+                              <BookOpen size={12} aria-hidden />
+                              <span>{title}</span>
+                            </Link>
+                          )
+                        })}
                       </div>
                     ) : null}
                   </div>

@@ -861,34 +861,71 @@ def public_docs_ask(request: Request, body: dict) -> JSONResponse:
         raise HTTPException(status_code=400, detail="question must be 1000 characters or fewer.")
 
     doc_slug = str(body.get("doc_slug") or "").strip()
-    context_text = ""
-    if doc_slug:
-        doc = _find_public_doc(doc_slug)
-        if doc:
-            try:
-                with open(doc["full_path"], encoding="utf-8") as fh:
-                    context_text = fh.read()[:12000]
-            except OSError:
-                pass
-    if not context_text:
-        # Fallback: concatenate all docs (truncated)
-        all_entries = _public_docs_entries()
-        parts = []
-        for entry in all_entries:
+    citations: list[dict] = []
+    context_parts: list[str] = []
+
+    primary_doc = _find_public_doc(doc_slug) if doc_slug else None
+    if primary_doc:
+        try:
+            with open(primary_doc["full_path"], encoding="utf-8") as fh:
+                context_parts.append(
+                    f"# {primary_doc.get('title') or primary_doc['slug']} ({primary_doc['slug']})\n"
+                    + fh.read()[:8000]
+                )
+            citations.append({"slug": primary_doc["slug"], "title": primary_doc.get("title") or primary_doc["slug"]})
+        except OSError:
+            primary_doc = None
+
+    # Always include 1-2 additional likely-relevant docs scored by token overlap with question.
+    all_entries = _public_docs_entries()
+    q_tokens = {t for t in question.lower().split() if len(t) > 2}
+    scored = []
+    for entry in all_entries:
+        if primary_doc and entry["slug"] == primary_doc["slug"]:
+            continue
+        title = (entry.get("title") or "").lower()
+        summary = (entry.get("summary") or "").lower()
+        slug = entry["slug"].lower()
+        score = sum(1 for t in q_tokens if t in title or t in summary or t in slug)
+        if score:
+            scored.append((score, entry))
+    scored.sort(key=lambda x: -x[0])
+    for _, entry in scored[:2]:
+        try:
+            with open(entry["full_path"], encoding="utf-8") as fh:
+                context_parts.append(
+                    f"# {entry.get('title') or entry['slug']} ({entry['slug']})\n"
+                    + fh.read()[:4000]
+                )
+            citations.append({"slug": entry["slug"], "title": entry.get("title") or entry["slug"]})
+        except OSError:
+            pass
+
+    if not context_parts:
+        for entry in all_entries[:6]:
             try:
                 with open(entry["full_path"], encoding="utf-8") as fh:
-                    parts.append(fh.read()[:3000])
+                    context_parts.append(
+                        f"# {entry.get('title') or entry['slug']} ({entry['slug']})\n"
+                        + fh.read()[:2500]
+                    )
+                citations.append({"slug": entry["slug"], "title": entry.get("title") or entry["slug"]})
             except OSError:
                 pass
-        context_text = "\n\n---\n\n".join(parts)[:12000]
+
+    context_text = "\n\n---\n\n".join(context_parts)[:14000]
 
     system_prompt = (
-        "You are a helpful assistant for the Aztea platform. "
-        "Answer questions accurately and concisely using only the documentation provided. "
-        "If the answer is not in the docs, say so. Keep answers under 300 words. "
-        "Format your response as Markdown. Always wrap any code, commands, or identifiers "
-        "in fenced code blocks using triple backticks (e.g. ```python\\n...\\n```) — "
-        "never use inline backticks for multi-line code. Use plain paragraphs for prose."
+        "You are the documentation assistant for the Aztea platform. Answer using ONLY the "
+        "documentation provided. If the answer is not in the docs, say so plainly.\n\n"
+        "Formatting rules (strict):\n"
+        "- Output GitHub-flavored Markdown.\n"
+        "- For ANY shell command, code snippet, file path, or multi-token identifier, use a "
+        "fenced code block with a language tag, e.g. ```bash, ```python, ```json. "
+        "NEVER place commands or code on a bare line without a fence.\n"
+        "- Use single backticks ONLY for short inline tokens (a function name, env var, or flag).\n"
+        "- Use `##` headings (not bold) to separate sections like `## Using the Aztea CLI`.\n"
+        "- Keep prose tight: under 250 words total. Prefer code over prose when illustrating usage."
     )
     user_msg = f"Documentation:\n{context_text}\n\nQuestion: {question}"
     try:
@@ -901,14 +938,14 @@ def public_docs_ask(request: Request, body: dict) -> JSONResponse:
                     _Msg(role="user", content=user_msg),
                 ],
                 temperature=0.2,
-                max_tokens=600,
+                max_tokens=700,
             )
         )
         answer = raw.text.strip()
     except Exception as exc:
         _LOG.warning("docs/ask LLM failure: %s", exc)
         raise HTTPException(status_code=503, detail="AI service temporarily unavailable.") from None
-    return JSONResponse({"answer": answer})
+    return JSONResponse({"answer": answer, "citations": citations})
 
 
 @app.get(
