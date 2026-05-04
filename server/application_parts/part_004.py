@@ -485,10 +485,16 @@ def _run_agent_health_checks() -> dict:
         if not url:
             continue
         try:
-            validated_url = _validate_outbound_url(url, "healthcheck_url")
+            current = _validate_outbound_url(url, "healthcheck_url")
             import httpx as _httpx
-            resp = _httpx.get(validated_url, timeout=10, follow_redirects=True)
-            status = "healthy" if 200 <= resp.status_code < 300 else "unhealthy"
+            status = "unhealthy"
+            for _ in range(4):
+                resp = _httpx.get(current, timeout=10, follow_redirects=False)
+                if 300 <= resp.status_code < 400 and resp.headers.get("location"):
+                    current = _validate_outbound_url(resp.headers["location"], "healthcheck_url")
+                    continue
+                status = "healthy" if 200 <= resp.status_code < 300 else "unhealthy"
+                break
         except Exception:
             status = "unhealthy"
         registry.update_agent_health(agent["agent_id"], status, _utc_now_iso())

@@ -271,6 +271,8 @@ def load_builtin_specs_part1() -> list[dict[str, Any]]:
     "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_CVELOOKUP_AGENT_ID],
     "price_per_call_usd": 0.01,
     "tags": ["security", "cve", "vulnerability-intel", "nvd", "packages"],
+    "category": "Security",
+    "examples_sensitive": True,
     "input_schema": {
         "type": "object",
         "description": (

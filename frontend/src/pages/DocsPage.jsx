@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useRef } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, Menu, X, Search, Sparkles, Send, Puzzle, BookOpen, Plus, Minus, ArrowRight, RotateCcw } from 'lucide-react'
-import { fetchPublicDoc, fetchPublicDocsIndex } from '../api'
+import { fetchPublicDoc, fetchPublicDocsIndex, askPublicDocs } from '../api'
 import MarkdownDoc from '../ui/MarkdownDoc'
 import Button from '../ui/Button'
 import Skeleton from '../ui/Skeleton'
@@ -156,14 +156,7 @@ export default function DocsPage() {
     setHubInput('')
     setHubLoading(true)
     try {
-      const url = `${RAW_BASE}/public/docs/ask`
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ question: q, doc_slug: null }),
-      })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const body = await res.json()
+      const body = await askPublicDocs(q, null)
       const answer = String(body?.answer || 'No answer available.')
       setHubChat([...history, { role: 'assistant', content: answer, citations: body?.citations }])
     } catch (err) {
@@ -187,15 +180,7 @@ export default function DocsPage() {
     setAskInput('')
     setAskLoading(true)
     try {
-      // Uses the same backend request helper — kept inline to avoid circular imports.
-      const url = `${RAW_BASE}/public/docs/ask`
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ question: q, doc_slug: selectedSlug || null }),
-      })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const body = await res.json()
+      const body = await askPublicDocs(q, selectedSlug || null)
       const answer = String(body?.answer || 'No answer available.')
       setAskChat([...history, { role: 'assistant', content: answer, citations: body?.citations }])
     } catch (err) {

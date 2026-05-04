@@ -267,148 +267,58 @@ except ImportError:
     _stripe_lib = None
     _STRIPE_AVAILABLE = False
 
-# Deterministic UUIDs for built-in agents
-_FINANCIAL_AGENT_ID        = "b7741251-d7ac-5423-b57d-8e12cd80885f"
-_CODEREVIEW_AGENT_ID       = "8cea848f-a165-5d6c-b1a0-7d14fff77d14"
-_WIKI_AGENT_ID             = "9a175aa2-8ffd-52f7-aae0-5a33fc88db83"
-_CVELOOKUP_AGENT_ID        = "a3e239dd-ea92-556b-9c95-0a213a3daf59"
-_QUALITY_JUDGE_AGENT_ID    = "9cf0d9d0-4a10-58c9-b97a-6b5f81b1cf33"
-_IMAGE_GENERATOR_AGENT_ID  = "4fb167bd-b474-5ea5-bd5c-8976dfe799ae"
-_VIDEO_STORYBOARD_AGENT_ID = "c12994de-cde9-514a-9c07-a3833b25bb1f"
-_ARXIV_RESEARCH_AGENT_ID   = "9e673f6e-9115-516f-b41b-5af8bcbf15bd"
-_PYTHON_EXECUTOR_AGENT_ID  = "040dc3f5-afe7-5db7-b253-4936090cc7af"
-_WEB_RESEARCHER_AGENT_ID   = "32cd7b5c-44d0-5259-bb02-1bbc612e92d7"
-_HN_DIGEST_AGENT_ID        = "31cc3a99-eca6-5202-96d4-8366f426ae1d"
-_DNS_INSPECTOR_AGENT_ID    = "3d677381-791c-5e83-8e66-5b77d0e43e2e"
-_DEPENDENCY_AUDITOR_AGENT_ID = "11fab82a-426e-513e-abf3-528d99ef2b87"
-_MULTI_FILE_EXECUTOR_AGENT_ID = "ea95cdec-32c1-5a2b-a032-3e7061abf3a4"
-_LINTER_AGENT_ID = "7ec4c987-9a7e-5af8-984f-7b8ad0ad0536"
-_SHELL_EXECUTOR_AGENT_ID = "6bd98167-e010-5604-8c76-6ed1b92698f1"
-_TYPE_CHECKER_AGENT_ID = "5b140628-52a8-565b-8599-b1c3e402b02d"
-_DB_SANDBOX_AGENT_ID = "be4d6c18-629d-5b1c-8c46-f82c00db4995"
-_VISUAL_REGRESSION_AGENT_ID = "20a74467-d633-5016-b210-adf769b2df9c"
-_LIVE_ENDPOINT_TESTER_AGENT_ID = "8af9fc34-ec0c-5732-b0e0-4e4efdff749c"
-_BROWSER_AGENT_ID = "c3a1b2d4-e5f6-5a7b-8c9d-0e1f2a3b4c5d"
-_MULTI_LANGUAGE_EXECUTOR_AGENT_ID = "d4b2c3e5-f6a7-5b8c-9d0e-1f2a3b4c5d6e"
-_SEMANTIC_CODEBASE_SEARCH_AGENT_ID = "e5c3d4f6-a7b8-5c9d-0e1f-2a3b4c5d6e7f"
-_AI_RED_TEAMER_AGENT_ID = "f6d4e5a7-b8c9-5d0e-1f2a-3b4c5d6e7f8a"
-_SECRET_SCANNER_AGENT_ID = "1021c65c-d2bf-54ff-823a-897f9deb1029"
-_JSON_SCHEMA_VALIDATOR_AGENT_ID = "1b0b5820-b796-53cc-8d31-5e336d86d875"
-_REGEX_TESTER_AGENT_ID = "36ae44b0-895b-5ef7-bc1f-1ecf08fce3ee"
-_SQL_EXPLAINER_AGENT_ID = "91258740-dd32-51b6-be91-a7638fae190f"
-_GIT_DIFF_ANALYZER_AGENT_ID = "8ac84144-4fd1-5883-bfad-e7b64d729b8f"
-_GITHUB_FETCHER_AGENT_ID = "5896576f-bbe6-59e4-83c1-5106002e7d10"
-_PR_REVIEWER_AGENT_ID = "3e133b66-3bc6-5003-9b64-3284b28a60c6"
-_TEST_GENERATOR_AGENT_ID = "f515323c-7df2-5742-ac06-bc38b59a40cb"
-_SPEC_WRITER_AGENT_ID = "ce9504a3-74c8-51a5-913e-6ae55787abc8"
-_CHANGELOG_AGENT_ID = "48c24ce5-d9cb-5f76-9e2f-fce1878f8c4c"
-_PACKAGE_FINDER_AGENT_ID = "d11ddab1-bcca-55de-8b00-c9efadc69c79"
-_SUNSET_DEPRECATED_AGENT_IDS = frozenset(
-    {
-        _GITHUB_FETCHER_AGENT_ID,
-        _PR_REVIEWER_AGENT_ID,
-        _TEST_GENERATOR_AGENT_ID,
-        _SPEC_WRITER_AGENT_ID,
-        _CHANGELOG_AGENT_ID,
-        _PACKAGE_FINDER_AGENT_ID,
-    }
-)
+# Built-in agent constants. Sole source of truth lives in
+# server/builtin_agents/constants.py — re-exported here under the legacy `_`
+# prefix so the rest of the shards continue to compile unchanged.
+from server.builtin_agents import constants as _builtin_constants
 
-def _normalize_endpoint_ref(value: str | None) -> str:
-    return str(value or "").strip().rstrip("/")
+_FINANCIAL_AGENT_ID                 = _builtin_constants.FINANCIAL_AGENT_ID
+_CODEREVIEW_AGENT_ID                = _builtin_constants.CODEREVIEW_AGENT_ID
+_WIKI_AGENT_ID                      = _builtin_constants.WIKI_AGENT_ID
+_CVELOOKUP_AGENT_ID                 = _builtin_constants.CVELOOKUP_AGENT_ID
+_QUALITY_JUDGE_AGENT_ID             = _builtin_constants.QUALITY_JUDGE_AGENT_ID
+_IMAGE_GENERATOR_AGENT_ID           = _builtin_constants.IMAGE_GENERATOR_AGENT_ID
+_VIDEO_STORYBOARD_AGENT_ID          = _builtin_constants.VIDEO_STORYBOARD_AGENT_ID
+_ARXIV_RESEARCH_AGENT_ID            = _builtin_constants.ARXIV_RESEARCH_AGENT_ID
+_PYTHON_EXECUTOR_AGENT_ID           = _builtin_constants.PYTHON_EXECUTOR_AGENT_ID
+_WEB_RESEARCHER_AGENT_ID            = _builtin_constants.WEB_RESEARCHER_AGENT_ID
+_HN_DIGEST_AGENT_ID                 = _builtin_constants.HN_DIGEST_AGENT_ID
+_DNS_INSPECTOR_AGENT_ID             = _builtin_constants.DNS_INSPECTOR_AGENT_ID
+_DEPENDENCY_AUDITOR_AGENT_ID        = _builtin_constants.DEPENDENCY_AUDITOR_AGENT_ID
+_MULTI_FILE_EXECUTOR_AGENT_ID       = _builtin_constants.MULTI_FILE_EXECUTOR_AGENT_ID
+_LINTER_AGENT_ID                    = _builtin_constants.LINTER_AGENT_ID
+_SHELL_EXECUTOR_AGENT_ID            = _builtin_constants.SHELL_EXECUTOR_AGENT_ID
+_TYPE_CHECKER_AGENT_ID              = _builtin_constants.TYPE_CHECKER_AGENT_ID
+_DB_SANDBOX_AGENT_ID                = _builtin_constants.DB_SANDBOX_AGENT_ID
+_VISUAL_REGRESSION_AGENT_ID         = _builtin_constants.VISUAL_REGRESSION_AGENT_ID
+_LIVE_ENDPOINT_TESTER_AGENT_ID      = _builtin_constants.LIVE_ENDPOINT_TESTER_AGENT_ID
+_BROWSER_AGENT_ID                   = _builtin_constants.BROWSER_AGENT_ID
+_MULTI_LANGUAGE_EXECUTOR_AGENT_ID   = _builtin_constants.MULTI_LANGUAGE_EXECUTOR_AGENT_ID
+_SEMANTIC_CODEBASE_SEARCH_AGENT_ID  = _builtin_constants.SEMANTIC_CODEBASE_SEARCH_AGENT_ID
+_AI_RED_TEAMER_AGENT_ID             = _builtin_constants.AI_RED_TEAMER_AGENT_ID
+_SECRET_SCANNER_AGENT_ID            = _builtin_constants.SECRET_SCANNER_AGENT_ID
+_JSON_SCHEMA_VALIDATOR_AGENT_ID     = _builtin_constants.JSON_SCHEMA_VALIDATOR_AGENT_ID
+_REGEX_TESTER_AGENT_ID              = _builtin_constants.REGEX_TESTER_AGENT_ID
+_SQL_EXPLAINER_AGENT_ID             = _builtin_constants.SQL_EXPLAINER_AGENT_ID
+_GIT_DIFF_ANALYZER_AGENT_ID         = _builtin_constants.GIT_DIFF_ANALYZER_AGENT_ID
+_GITHUB_FETCHER_AGENT_ID            = _builtin_constants.GITHUB_FETCHER_AGENT_ID
+_PR_REVIEWER_AGENT_ID               = _builtin_constants.PR_REVIEWER_AGENT_ID
+_TEST_GENERATOR_AGENT_ID            = _builtin_constants.TEST_GENERATOR_AGENT_ID
+_SPEC_WRITER_AGENT_ID               = _builtin_constants.SPEC_WRITER_AGENT_ID
+_CHANGELOG_AGENT_ID                 = _builtin_constants.CHANGELOG_AGENT_ID
+_PACKAGE_FINDER_AGENT_ID            = _builtin_constants.PACKAGE_FINDER_AGENT_ID
 
-
-_BUILTIN_INTERNAL_ENDPOINTS = {
-    _FINANCIAL_AGENT_ID: "internal://financial",
-    _CODEREVIEW_AGENT_ID: "internal://code-review",
-    _WIKI_AGENT_ID: "internal://wiki",
-    _QUALITY_JUDGE_AGENT_ID: "internal://quality-judge",
-    _CVELOOKUP_AGENT_ID: "internal://cve-lookup",
-    _IMAGE_GENERATOR_AGENT_ID: "internal://image-generator",
-    _VIDEO_STORYBOARD_AGENT_ID: "internal://video-storyboard-generator",
-    _ARXIV_RESEARCH_AGENT_ID:  "internal://arxiv-research",
-    _PYTHON_EXECUTOR_AGENT_ID: "internal://python-executor",
-    _WEB_RESEARCHER_AGENT_ID:  "internal://web-researcher",
-    _HN_DIGEST_AGENT_ID:       "internal://hn_digest",
-    _DNS_INSPECTOR_AGENT_ID:   "internal://dns_inspector",
-    _DEPENDENCY_AUDITOR_AGENT_ID: "internal://dependency_auditor",
-    _MULTI_FILE_EXECUTOR_AGENT_ID: "internal://multi_file_executor",
-    _LINTER_AGENT_ID: "internal://linter_agent",
-    _SHELL_EXECUTOR_AGENT_ID: "internal://shell_executor",
-    _TYPE_CHECKER_AGENT_ID: "internal://type_checker",
-    _DB_SANDBOX_AGENT_ID: "internal://db_sandbox",
-    _VISUAL_REGRESSION_AGENT_ID: "internal://visual_regression",
-    _LIVE_ENDPOINT_TESTER_AGENT_ID: "internal://live_endpoint_tester",
-    _BROWSER_AGENT_ID: "internal://browser_agent",
-    _MULTI_LANGUAGE_EXECUTOR_AGENT_ID: "internal://multi_language_executor",
-    _SEMANTIC_CODEBASE_SEARCH_AGENT_ID: "internal://semantic_codebase_search",
-    _AI_RED_TEAMER_AGENT_ID: "internal://ai_red_teamer",
-    _SECRET_SCANNER_AGENT_ID: "internal://secret_scanner",
-    _JSON_SCHEMA_VALIDATOR_AGENT_ID: "internal://json_schema_validator",
-    _REGEX_TESTER_AGENT_ID: "internal://regex_tester",
-    _SQL_EXPLAINER_AGENT_ID: "internal://sql_explainer",
-    _GIT_DIFF_ANALYZER_AGENT_ID: "internal://git_diff_analyzer",
-}
-_BUILTIN_LEGACY_ROUTE_ENDPOINTS = {
-    _FINANCIAL_AGENT_ID: f"{_SERVER_BASE_URL}/agents/financial",
-    _CODEREVIEW_AGENT_ID: f"{_SERVER_BASE_URL}/agents/code-review",
-    _WIKI_AGENT_ID: f"{_SERVER_BASE_URL}/agents/wiki",
-    _QUALITY_JUDGE_AGENT_ID: f"{_SERVER_BASE_URL}/agents/quality-judge",
-    _CVELOOKUP_AGENT_ID: f"{_SERVER_BASE_URL}/agents/cve-lookup",
-    _IMAGE_GENERATOR_AGENT_ID: f"{_SERVER_BASE_URL}/agents/image-generator",
-    _VIDEO_STORYBOARD_AGENT_ID: f"{_SERVER_BASE_URL}/agents/video-storyboard-generator",
-    _ARXIV_RESEARCH_AGENT_ID:  f"{_SERVER_BASE_URL}/agents/arxiv-research",
-    _PYTHON_EXECUTOR_AGENT_ID: f"{_SERVER_BASE_URL}/agents/python-executor",
-    _WEB_RESEARCHER_AGENT_ID:  f"{_SERVER_BASE_URL}/agents/web-researcher",
-    _HN_DIGEST_AGENT_ID:       f"{_SERVER_BASE_URL}/agents/hn-digest",
-    _DNS_INSPECTOR_AGENT_ID:   f"{_SERVER_BASE_URL}/agents/dns-inspector",
-}
-_BUILTIN_ENDPOINT_TO_AGENT_ID: dict[str, str] = {}
-for _agent_id, _endpoint in _BUILTIN_INTERNAL_ENDPOINTS.items():
-    _BUILTIN_ENDPOINT_TO_AGENT_ID[_normalize_endpoint_ref(_endpoint)] = _agent_id
-    _legacy = _BUILTIN_LEGACY_ROUTE_ENDPOINTS.get(_agent_id)
-    if _legacy:
-        _BUILTIN_ENDPOINT_TO_AGENT_ID[_normalize_endpoint_ref(_legacy)] = _agent_id
-_BUILTIN_ENDPOINT_TO_AGENT_ID[_normalize_endpoint_ref(f"{_SERVER_BASE_URL}/analyze")] = _FINANCIAL_AGENT_ID
-_BUILTIN_AGENT_IDS = frozenset(_BUILTIN_INTERNAL_ENDPOINTS.keys())
-_CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
-    {
-        # Real-tool agents: perform live external work Claude cannot do in a chat session
-        _CODEREVIEW_AGENT_ID,           # structured code review
-        _DEPENDENCY_AUDITOR_AGENT_ID,   # CVE + outdated dep audit
-        _PYTHON_EXECUTOR_AGENT_ID,      # subprocess sandbox
-        _MULTI_FILE_EXECUTOR_AGENT_ID,  # multi-file Python project runner
-        _LINTER_AGENT_ID,               # ruff + LLM linting
-        _WEB_RESEARCHER_AGENT_ID,       # HTTP fetch + parse
-        _CVELOOKUP_AGENT_ID,            # NIST NVD API
-        _ARXIV_RESEARCH_AGENT_ID,       # arXiv API
-        _DNS_INSPECTOR_AGENT_ID,        # DNS/SSL live inspection
-        _SHELL_EXECUTOR_AGENT_ID,       # sandboxed shell execution
-        _TYPE_CHECKER_AGENT_ID,         # mypy / tsc type checking
-        _DB_SANDBOX_AGENT_ID,           # ephemeral sqlite sandbox
-        _VISUAL_REGRESSION_AGENT_ID,    # pixel diffs with annotated artifact
-        _LIVE_ENDPOINT_TESTER_AGENT_ID, # live latency/load probe
-        _BROWSER_AGENT_ID,              # headless Chromium via Playwright
-        _MULTI_LANGUAGE_EXECUTOR_AGENT_ID,  # node/deno/bun/go/rust executor
-        _SEMANTIC_CODEBASE_SEARCH_AGENT_ID, # embed + search a codebase
-        _AI_RED_TEAMER_AGENT_ID,        # adversarial prompt tester
-        _IMAGE_GENERATOR_AGENT_ID,      # real image generation model
-        _SECRET_SCANNER_AGENT_ID,           # entropy + regex credential scan
-        _JSON_SCHEMA_VALIDATOR_AGENT_ID,    # real jsonschema validation
-        _REGEX_TESTER_AGENT_ID,             # regex with backtracking timeout
-        _SQL_EXPLAINER_AGENT_ID,            # SQLite EXPLAIN QUERY PLAN
-        _GIT_DIFF_ANALYZER_AGENT_ID,        # diff parsing + risk classification
-        # Benched (available via API/MCP but not shown in marketplace):
-        # _FINANCIAL_AGENT_ID        — SEC EDGAR, narrow use case
-        # _WIKI_AGENT_ID             — Claude can search Wikipedia natively
-        # _VIDEO_STORYBOARD_AGENT_ID — creative tool, not a developer tool
-        # _HN_DIGEST_AGENT_ID        — nice-to-have, not Claude Code specific
-    }
-)
-_CURATED_BUILTIN_AGENT_IDS = frozenset(set(_CURATED_PUBLIC_BUILTIN_AGENT_IDS) | {_QUALITY_JUDGE_AGENT_ID})
-_BUILTIN_WORKER_OWNER_ID = "system:builtin-worker"
-_SYSTEM_USERNAME = "system"
-_SYSTEM_USER_EMAIL = "system@aztea.internal"
+_SUNSET_DEPRECATED_AGENT_IDS        = _builtin_constants.SUNSET_DEPRECATED_AGENT_IDS
+_normalize_endpoint_ref             = _builtin_constants.normalize_endpoint_ref
+_BUILTIN_INTERNAL_ENDPOINTS         = _builtin_constants.BUILTIN_INTERNAL_ENDPOINTS
+_BUILTIN_LEGACY_ROUTE_ENDPOINTS     = _builtin_constants.BUILTIN_LEGACY_ROUTE_ENDPOINTS
+_BUILTIN_ENDPOINT_TO_AGENT_ID       = _builtin_constants.BUILTIN_ENDPOINT_TO_AGENT_ID
+_BUILTIN_AGENT_IDS                  = _builtin_constants.BUILTIN_AGENT_IDS
+_CURATED_PUBLIC_BUILTIN_AGENT_IDS   = _builtin_constants.CURATED_PUBLIC_BUILTIN_AGENT_IDS
+_CURATED_BUILTIN_AGENT_IDS          = _builtin_constants.CURATED_BUILTIN_AGENT_IDS
+_BUILTIN_WORKER_OWNER_ID            = _builtin_constants.BUILTIN_WORKER_OWNER_ID
+_SYSTEM_USERNAME                    = _builtin_constants.SYSTEM_USERNAME
+_SYSTEM_USER_EMAIL                  = _builtin_constants.SYSTEM_USER_EMAIL
 
 _CALLER_CACHE_MISSING = object()
 _IDEMPOTENCY_KEY_HEADER = "Idempotency-Key"

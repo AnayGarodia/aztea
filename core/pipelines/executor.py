@@ -149,19 +149,35 @@ def _invoke_agent(
         else:
             endpoint_url = str(agent.get("endpoint_url") or "").strip()
             safe_url = url_security.validate_outbound_url(endpoint_url, "endpoint_url")
-            response = requests.post(
+            # Stream with a hard byte cap so a misbehaving downstream agent
+            # cannot OOM the pipeline. 8 MiB is well above legitimate JSON
+            # payloads we've seen in production.
+            _MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+            with requests.post(
                 safe_url,
                 json=payload,
                 headers={"Content-Type": "application/json"},
                 timeout=120,
                 allow_redirects=False,
-            )
-            if not response.ok:
-                raise RuntimeError(f"Agent endpoint returned HTTP {response.status_code}.")
-            try:
-                output = response.json()
-            except ValueError as exc:
-                raise RuntimeError("Agent returned malformed JSON.") from exc
+                stream=True,
+            ) as response:
+                if not response.ok:
+                    raise RuntimeError(f"Agent endpoint returned HTTP {response.status_code}.")
+                declared = response.headers.get("Content-Length")
+                if declared and declared.isdigit() and int(declared) > _MAX_RESPONSE_BYTES:
+                    raise RuntimeError("Agent response exceeds size limit.")
+                buf = bytearray()
+                for chunk in response.iter_content(chunk_size=64 * 1024):
+                    if not chunk:
+                        continue
+                    buf.extend(chunk)
+                    if len(buf) > _MAX_RESPONSE_BYTES:
+                        raise RuntimeError("Agent response exceeds size limit.")
+                try:
+                    import json as _json
+                    output = _json.loads(buf.decode("utf-8"))
+                except (ValueError, UnicodeDecodeError) as exc:
+                    raise RuntimeError("Agent returned malformed JSON.") from exc
         if not isinstance(output, dict):
             output = {"output": output}
         jobs.update_job_status(job["job_id"], "complete", output_payload=output, completed=True)

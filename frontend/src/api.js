@@ -446,6 +446,14 @@ export async function fetchPublicDoc(slug) {
   return body
 }
 
+export async function askPublicDocs(question, docSlug = null) {
+  const { body } = await request('/public/docs/ask', {
+    method: 'POST',
+    body: { question: String(question ?? ''), doc_slug: docSlug || null },
+  })
+  return body
+}
+
 // ── Hosted skills ─────────────────────────────────────────────────────────────
 
 export async function validateSkillMd(key, skillMd) {

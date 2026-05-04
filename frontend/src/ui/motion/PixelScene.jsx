@@ -6,14 +6,16 @@ const W = 192
 const H = 108
 
 // ── Color constants per theme ────────────────────────────────────
+// Two-agent palette: emerald (primary) + amber (counterpart). Purple/violet
+// is banned by the design system.
 const C_DARK = {
   bg:           '#08090C',
   grid:         'rgba(28,32,48,0.28)',
   ground:       'rgba(28,32,48,0.55)',
   emerald:      '#5EF3A3',
   emeraldDk:    '#22C88B',
-  violet:       '#A78BFA',
-  violetDk:     '#7C3AED',
+  accent:       '#FBBF24',
+  accentDk:     '#D97706',
   white:        '#E8ECF4',
   edge:         'rgba(8,9,12,0.5)',
   edgeRgb:      '8,9,12',
@@ -25,8 +27,8 @@ const C_LIGHT = {
   ground:       'rgba(140,120,90,0.28)',
   emerald:      '#16A34A',
   emeraldDk:    '#14532D',
-  violet:       '#7C3AED',
-  violetDk:     '#5B21B6',
+  accent:       '#D97706',
+  accentDk:     '#92400E',
   white:        '#1C1917',
   edge:         'rgba(245,242,235,0.5)',
   edgeRgb:      '245,242,235',
@@ -60,7 +62,7 @@ const SPRITE_MIR = SPRITE.map(row => [...row].reverse())
 
 // ── Sprite palette sets ───────────────────────────────────────
 const PAL_A = { 1: C.emerald, 2: C.emeraldDk, 3: C.white }
-const PAL_B = { 1: C.violet,  2: C.violetDk,  3: C.white }
+const PAL_B = { 1: C.accent,  2: C.accentDk,  3: C.white }
 
 // ── Agent & packet positions ──────────────────────────────────
 const AX = 28   // Agent A top-left x
@@ -176,7 +178,7 @@ function makeAmbientParticles() {
       x:       Math.random() * W,
       y:       Math.random() * H,
       vy:      -(0.04 + Math.random() * 0.08),
-      violet:  i >= 7,
+      accent:  i >= 7,
       alpha:   0.06 + Math.random() * 0.07,
     })
   }
@@ -192,8 +194,8 @@ function tickAmbient(pts) {
 
 function drawAmbient(ctx, pts) {
   for (const p of pts) {
-    ctx.fillStyle = p.violet
-      ? `rgba(167,139,250,${p.alpha})`
+    ctx.fillStyle = p.accent
+      ? `rgba(251,191,36,${p.alpha})`
       : `rgba(94,243,163,${p.alpha})`
     ctx.fillRect(Math.floor(p.x), Math.floor(p.y), 1, 1)
   }
@@ -221,7 +223,7 @@ function tickBurst(pts) {
 
 function drawBurst(ctx, pts) {
   for (const p of pts) {
-    ctx.fillStyle = `rgba(167,139,250,${p.life * 0.85})`
+    ctx.fillStyle = `rgba(251,191,36,${p.life * 0.85})`
     ctx.fillRect(Math.floor(p.x), Math.floor(p.y), 1, 1)
   }
 }
@@ -317,11 +319,11 @@ export default function PixelScene({ className = '' }) {
         const eased = easeInOut(p)
         const px = lerp(PKT_AX, PKT_BX, eased)
 
-        // Colour shifts emerald → violet
-        const color = lerpHex(C.emerald, C.violet, eased)
-        const gr = Math.round(lerp(94, 167, eased))
-        const gg = Math.round(lerp(243, 139, eased))
-        const gb = Math.round(lerp(163, 250, eased))
+        // Colour shifts emerald → amber accent
+        const color = lerpHex(C.emerald, C.accent, eased)
+        const gr = Math.round(lerp(94, 251, eased))
+        const gg = Math.round(lerp(243, 191, eased))
+        const gb = Math.round(lerp(163, 36, eased))
         const pulse = 0.12 + 0.08 * Math.sin(elapsed / 100)
 
         // Trail
@@ -353,13 +355,13 @@ export default function PixelScene({ className = '' }) {
         // Shrinking packet
         if (p < 0.15) {
           const size = Math.max(1, Math.round(3 * (1 - p / 0.15)))
-          ctx.fillStyle = C.violet
+          ctx.fillStyle = C.accent
           ctx.fillRect(PKT_BX - 1, PKT_Y - 1, size, size)
         }
 
         // Violet glow behind Agent B fades in then out
         const glowA = Math.max(0, Math.sin(p * Math.PI) * 0.3)
-        ctx.fillStyle = `rgba(167,139,250,${glowA})`
+        ctx.fillStyle = `rgba(251,191,36,${glowA})`
         ctx.fillRect(BX - 2, BY - 2, 11, 15)
 
         // Burst
@@ -381,7 +383,7 @@ export default function PixelScene({ className = '' }) {
             ctx.fillRect(AX + Math.floor(Math.random() * 9), AY - 2 + Math.floor(Math.random() * 5), 1, 1)
           }
           if (Math.random() > 0.55) {
-            ctx.fillStyle = `rgba(167,139,250,${0.3 + Math.random() * 0.5})`
+            ctx.fillStyle = `rgba(251,191,36,${0.3 + Math.random() * 0.5})`
             ctx.fillRect(BX + Math.floor(Math.random() * 9), BY - 2 + Math.floor(Math.random() * 5), 1, 1)
           }
         }

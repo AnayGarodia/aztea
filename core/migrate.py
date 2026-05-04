@@ -86,6 +86,8 @@ def apply_migrations(db_path: str | None = None) -> list[int]:
     from core.db import DB_PATH as _DEFAULT_DB_PATH
 
     resolved_path = db_path or _DEFAULT_DB_PATH
+    # Justified raw connection: bootstrap path for the migration runner. The
+    # core/db.py pool depends on the schema this function is about to apply.
     conn = sqlite3.connect(resolved_path, check_same_thread=False, timeout=10)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")

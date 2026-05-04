@@ -514,7 +514,8 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
         "price_per_call_usd": 0.01,
         "tags": ["security", "cve", "dependencies", "npm", "pypi", "developer-tools"],
         "kind": "aztea_built",
-        "category": "Data",
+        "category": "Security",
+        "examples_sensitive": True,
         "is_featured": True,
         "input_schema": _output_schema_object(
             {

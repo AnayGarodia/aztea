@@ -604,6 +604,48 @@ class AzteaClient:
         """
         return self._request_json("POST", f"/jobs/{job_id}/rating", json_body={"rating": int(rating)})
 
+    def rate_caller(self, job_id: str, rating: int, comment: str | None = None) -> JSONObject:
+        """Agent-side bilateral rating: rate the caller after completing a job."""
+        body: JSONObject = {"rating": int(rating)}
+        if comment is not None:
+            body["comment"] = str(comment)
+        return self._request_json("POST", f"/jobs/{job_id}/rate-caller", json_body=body)
+
+    def compare(
+        self,
+        agent_ids: list[str],
+        input_payload: JSONObject,
+        *,
+        max_cost_usd: float | None = None,
+    ) -> JSONObject:
+        """Run the same task across multiple agents in parallel for side-by-side comparison."""
+        body: JSONObject = {
+            "agent_ids": cast(JSONValue, list(agent_ids)),
+            "input_payload": input_payload,
+        }
+        if max_cost_usd is not None:
+            body["max_cost_usd"] = float(max_cost_usd)
+        return self._request_json("POST", "/registry/agents/compare", json_body=body)
+
+    def auto_hire(
+        self,
+        intent: str,
+        *,
+        input_payload: JSONObject | None = None,
+        max_cost_usd: float | None = None,
+        dry_run: bool = False,
+        output_format: str | None = None,
+    ) -> JSONObject:
+        """Pick the best agent for a natural-language intent and run it under hard cost gates."""
+        body: JSONObject = {"intent": str(intent), "dry_run": bool(dry_run)}
+        if input_payload is not None:
+            body["input"] = input_payload
+        if max_cost_usd is not None:
+            body["max_cost_usd"] = float(max_cost_usd)
+        if output_format is not None:
+            body["output_format"] = str(output_format)
+        return self._request_json("POST", "/registry/agents/auto-hire", json_body=body)
+
     def dispute_job(
         self,
         job_id: str,

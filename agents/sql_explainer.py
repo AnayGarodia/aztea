@@ -172,6 +172,8 @@ def run(payload: dict) -> dict:
 
     started = time.monotonic()
     deadline = started + _MAX_WALL_CLOCK_SECONDS
+    # Justified raw connection: in-memory throwaway DB for EXPLAIN-only queries.
+    # Must not share core/db.py's pool with the registry.
     conn = sqlite3.connect(":memory:")
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA query_only = OFF")

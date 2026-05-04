@@ -208,8 +208,19 @@ def _fetch_full_abstract_data(arxiv_id: str) -> dict:
     affiliations: list[str] = []
     related_links: list[str] = []
     try:
-        resp = requests.get(url, timeout=10, allow_redirects=True)
-        resp.raise_for_status()
+        # Manual redirect loop; each hop re-validated through the SSRF gate so
+        # an attacker controlling a redirect target can't reach private IPs.
+        from core.url_security import validate_outbound_url as _validate
+        current = _validate(url, "arxiv_url")
+        for _ in range(4):
+            resp = requests.get(current, timeout=10, allow_redirects=False)
+            if 300 <= resp.status_code < 400 and resp.headers.get("Location"):
+                current = _validate(resp.headers["Location"], "arxiv_url")
+                continue
+            resp.raise_for_status()
+            break
+        else:
+            return {"affiliations": [], "related_links": []}
         html = resp.text
 
         # Extract author affiliations from <meta name="citation_author_institution" ...>

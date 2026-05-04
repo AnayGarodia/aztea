@@ -134,6 +134,8 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     start = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="aztea-db-sandbox-") as tmpdir:
         db_path = Path(tmpdir) / "sandbox.sqlite3"
+        # Justified raw connection: ephemeral tempfile DB used to execute caller
+        # SQL in isolation. Must not share core/db.py's pool with the registry.
         conn = sqlite3.connect(str(db_path), timeout=1, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         try:

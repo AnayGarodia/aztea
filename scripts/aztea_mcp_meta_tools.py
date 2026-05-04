@@ -19,14 +19,6 @@ _CLIENT_ID_HEADER = "X-Aztea-Client"
 _AZTEA_PROTOCOL_VERSION = "1.0"
 _DEFAULT_CLIENT_ID = (os.environ.get("AZTEA_CLIENT_ID", "claude-code") or "claude-code").strip()
 _PYDANTIC_HELP_URL_RE = re.compile(r"\s*For further information visit https://errors\.pydantic\.dev/[^\s]+", re.IGNORECASE)
-_PUBLIC_DISCOVERY_EXCLUDED = {
-    "reverse_string",
-    "reverse string",
-    "echo_skill",
-    "echo skill",
-    "json_validator",
-    "json validator",
-}
 _DISCOVERY_INTENTS: dict[str, set[str]] = {
     "image": {"image", "generator", "generate", "picture", "png", "jpeg", "jpg", "visual", "art"},
     "browser": {"browser", "playwright", "screenshot", "crawl", "page", "dom", "headless"},
@@ -1680,15 +1672,6 @@ def _intent_for_query(query: str) -> tuple[str | None, set[str]]:
     return None, set()
 
 
-def _is_demo_agent(agent: dict[str, Any]) -> bool:
-    fields = {
-        str(agent.get("slug") or "").strip().lower(),
-        str(agent.get("name") or "").strip().lower(),
-        str(agent.get("agent_slug") or "").strip().lower(),
-    }
-    return bool(fields & _PUBLIC_DISCOVERY_EXCLUDED)
-
-
 def _agent_text(agent: dict[str, Any]) -> str:
     tags = agent.get("tags") or []
     return " ".join(
@@ -1739,7 +1722,7 @@ def _discover(session: requests.Session, base: str, hdrs: dict, timeout: float, 
         compact = []
         for item in result["results"]:
             agent = item.get("agent") or {}
-            if _is_demo_agent(agent) or not _intent_matches(agent, intent, intent_terms):
+            if not _intent_matches(agent, intent, intent_terms):
                 continue
             compact.append({
                 "agent_id": agent.get("agent_id"),

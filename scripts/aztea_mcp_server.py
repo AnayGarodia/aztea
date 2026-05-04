@@ -247,14 +247,6 @@ _BUILTIN_RECIPE_CATALOG_ENTRIES: list[dict[str, Any]] = [
     },
 ]
 
-_PUBLIC_SEARCH_EXCLUDED = {
-    "reverse_string",
-    "reverse string",
-    "echo_skill",
-    "echo skill",
-    "json_validator",
-    "json validator",
-}
 _SEARCH_INTENTS: dict[str, set[str]] = {
     "image": {"image", "generate", "generator", "picture", "png", "jpg", "jpeg", "visual", "art"},
     "browser": {"browser", "playwright", "screenshot", "crawl", "headless", "dom"},
@@ -414,6 +406,11 @@ _LAZY_CALL_TOOL: dict[str, Any] = {
                 "type": "object",
                 "description": "Input payload matching the tool's input schema (from aztea_describe). Omit for tools with no required fields.",
                 "additionalProperties": True,
+            },
+            "output_format": {
+                "type": "string",
+                "enum": ["json", "markdown", "github_pr_comment", "slack_blocks", "text"],
+                "description": "Optional. Render the result in a specific shape. The canonical JSON `output` stays intact; the rendered string is added as `rendered_output`.",
             },
         },
         "required": ["slug", "arguments"],
@@ -649,15 +646,6 @@ def _word_truncate(text: str, max_len: int, suffix: str = "…") -> str:
     else:
         head = head.rstrip(" ,;:.-—–")
     return head + suffix
-
-
-def _public_search_excluded(entry: dict[str, Any]) -> bool:
-    fields = {
-        str(entry.get("slug") or "").strip().lower(),
-        str(entry.get("name") or "").strip().lower(),
-    }
-    fields.update(str(alias).strip().lower() for alias in entry.get("aliases") or [])
-    return bool(fields & _PUBLIC_SEARCH_EXCLUDED)
 
 
 def _entry_search_text(entry: dict[str, Any]) -> str:
@@ -924,8 +912,6 @@ class RegistryBridge:
         intent, _intent_markers = _search_intent(terms)
         matches: list[tuple[int, dict[str, Any]]] = []
         for entry in self._catalog_entries():
-            if _public_search_excluded(entry):
-                continue
             if intent is not None and not _entry_matches_intent(entry, intent):
                 continue
             alias_text = " ".join(str(alias) for alias in entry.get("aliases") or [])

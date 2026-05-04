@@ -956,29 +956,6 @@ _agents_list_cache: dict | None = None
 _agents_list_cache_at: float = 0.0
 _AGENTS_LIST_TTL = 15.0  # seconds — agents don't change by the second
 
-# Demo / smoke-test skills that exist as real registry rows but should never
-# appear in the public marketplace UI or in MCP search. Mirror of the slug list
-# in scripts/aztea_mcp_server.py::_PUBLIC_SEARCH_EXCLUDED. Match is case-insensitive
-# against name + tool_name + slug fields.
-_PUBLIC_MARKETPLACE_BLOCKLIST: frozenset[str] = frozenset({
-    "reverse_string",
-    "reverse string",
-    "echo_skill",
-    "echo skill",
-    "json_validator",
-    "json validator",
-})
-
-
-def _is_blocklisted_demo_agent(agent: dict) -> bool:
-    fields: set[str] = set()
-    for key in ("slug", "name", "tool_name", "agent_slug"):
-        value = str(agent.get(key) or "").strip().lower()
-        if value:
-            fields.add(value)
-    return bool(fields & _PUBLIC_MARKETPLACE_BLOCKLIST)
-
-
 @app.get(
     "/registry/agents",
     response_model=core_models.RegistryAgentsResponse,
@@ -1022,10 +999,6 @@ def registry_list(
             _agents_list_cache = agents
             _agents_list_cache_at = now
     agents = _sorted_agents(agents, rank_by=rank_by)
-    # Hide demo/smoke skills from the public marketplace. Admins still see them
-    # so they can clean up. The exclusion list mirrors the MCP search filter.
-    if not include_unapproved:
-        agents = [a for a in agents if not _is_blocklisted_demo_agent(a)]
     bulk_stats = _compute_bulk_agent_stats([a["agent_id"] for a in agents])
     return JSONResponse(content={"agents": [_agent_response(a, caller, bulk_stats.get(a["agent_id"])) for a in agents], "count": len(agents)})
 

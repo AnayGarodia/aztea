@@ -66,6 +66,7 @@ const LAZY_CALL_TOOL = {
     properties: {
       slug: { type: 'string', description: 'Tool slug returned by aztea_search.' },
       arguments: { type: 'object', description: 'Arguments matching the schema from aztea_describe.' },
+      output_format: { type: 'string', enum: ['json', 'markdown', 'github_pr_comment', 'slack_blocks', 'text'], description: 'Optional. Render the result in a specific shape. The canonical JSON `output` stays intact; the rendered string is added as `rendered_output`.' },
     },
     required: ['slug', 'arguments'],
   },

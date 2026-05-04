@@ -132,7 +132,7 @@ core/
 
 migrations/
   0001_initial.sql               Canonical schema — all CREATE TABLE / INDEX
-  0002–0029_*.sql                Incremental additions (applied once on startup via schema_migrations table)
+  0002–0031_*.sql                Incremental additions (applied once on startup via schema_migrations table)
 
 sdks/
   python-sdk/                    AzteaClient (hire), AgentServer (@handler + polling loop)
@@ -380,8 +380,6 @@ Required events: `checkout.session.completed`, `payment_intent.succeeded`.
 ### Privacy / work-example recording
 
 - **Sensitive agents must never replay caller inputs.** `_record_public_work_example()` in `server/application_parts/part_003.py` drops on three independent gates: (a) hardcoded `_SENSITIVE_EXAMPLE_AGENT_IDS`, (b) the `examples_sensitive: True` flag on the spec, (c) the `Security` category. New scanner / credential / PII-handling agents must set both (b) and the Security category.
-- **Demo-only skills are blocklisted** server-side from `/registry/agents` and from MCP search via `_PUBLIC_SEARCH_EXCLUDED` / `_PUBLIC_MARKETPLACE_BLOCKLIST` (slugs `reverse_string`, `echo_skill`, `json_validator`). New demo names go in both lists.
-
 ### Routing
 
 - **FastAPI swagger lives under `/api/docs`**, not `/docs`. The SPA owns `/docs`. `app = FastAPI(docs_url="/api/docs", redoc_url="/api/redoc", openapi_url="/api/openapi.json")` is enforced in `part_001.py`. Any new public-facing path must not collide with FastAPI's defaults.
@@ -502,7 +500,7 @@ text = raw.text.strip()  # always .text, never .content
 - **`ResultRenderer`** in `src/features/agents/results/` — handles rich output display
 - **Error handling pattern:** every user action must show inline errors (not just toasts); toasts are for success only
 - **Aesthetic rule:** never use Inter/Roboto/Arial; never use purple gradients; commit to a cohesive theme with distinctive typography, dominant colours with sharp accents, and intentional motion at load time
-- **Known tech debt:** `fmtDate`, `fmtUsd`, `fmtMs`, and `relativeTime` are copy-pasted into 10+ page files. A shared `src/utils/format.js` should be the canonical location — consolidate on next touch
+- **Formatters live in `src/utils/format.js`** — `fmtDate`, `fmtDateSec`, `fmtUsd`, `fmtMs`, `fmtDateShort`, `relativeTime`. Pages must import from there, not redefine.
 - **Inline styles:** many pages (esp. `JobDetailPage`, `DashboardPage`) use `style={{}}` objects instead of CSS classes. Prefer CSS classes with token variables on every new or edited component
 - **Don't wrap a route element in a fresh `<Routes>` tree under another `<Routes>`** — it causes a blank-mount race on prod that doesn't repro in `vite dev` or `vite preview`. To render a page inside `AppShell` from outside `AuthedApp`, use the `children` prop pattern: `<AppShell><Page /></AppShell>`. `AppShell` falls back to `<Outlet />` when no children are passed.
 - **`AppShell`, `Topbar`, `OnboardingWizard` assume `MarketProvider` exists.** When mounting them outside the authed tree, wrap with `<MarketProvider apiKey={apiKey}>` and `useMarket()` must be treated as nullable on these components.
@@ -657,7 +655,7 @@ SMTP_HOST=                      # leave blank locally; email silently no-ops
 
 ## Public agent IDs (current)
 
-Curated public set — agents that perform real external work:
+Source of truth: `server/builtin_agents/constants.py`. Curated public set — agents that perform real external work:
 
 | Agent                       | ID                                     |
 | --------------------------- | -------------------------------------- |
@@ -665,7 +663,6 @@ Curated public set — agents that perform real external work:
 | arXiv Research              | `9e673f6e-9115-516f-b41b-5af8bcbf15bd` |
 | Python Code Executor        | `040dc3f5-afe7-5db7-b253-4936090cc7af` |
 | Web Researcher              | `32cd7b5c-44d0-5259-bb02-1bbc612e92d7` |
-| Image Generator             | `4fb167bd-b474-5ea5-bd5c-8976dfe799ae` |
 | Code Review                 | `8cea848f-a165-5d6c-b1a0-7d14fff77d14` |
 | DNS Inspector               | `3d677381-791c-5e83-8e66-5b77d0e43e2e` |
 | Dependency Auditor          | `11fab82a-426e-513e-abf3-528d99ef2b87` |
@@ -676,25 +673,32 @@ Curated public set — agents that perform real external work:
 | DB Sandbox                  | `be4d6c18-629d-5b1c-8c46-f82c00db4995` |
 | Visual Regression           | `20a74467-d633-5016-b210-adf769b2df9c` |
 | Live Endpoint Tester        | `8af9fc34-ec0c-5732-b0e0-4e4efdff749c` |
+| Browser Agent               | `c3a1b2d4-e5f6-5a7b-8c9d-0e1f2a3b4c5d` |
+| Multi-Language Executor     | `d4b2c3e5-f6a7-5b8c-9d0e-1f2a3b4c5d6e` |
+| Semantic Codebase Search    | `e5c3d4f6-a7b8-5c9d-0e1f-2a3b4c5d6e7f` |
+| AI Red Teamer               | `f6d4e5a7-b8c9-5d0e-1f2a-3b4c5d6e7f8a` |
+| Secret Scanner              | `1021c65c-d2bf-54ff-823a-897f9deb1029` |
+| JSON Schema Validator       | `1b0b5820-b796-53cc-8d31-5e336d86d875` |
+| Regex Tester                | `36ae44b0-895b-5ef7-bc1f-1ecf08fce3ee` |
+| SQL Explainer               | `91258740-dd32-51b6-be91-a7638fae190f` |
+| Git Diff Analyzer           | `8ac84144-4fd1-5883-bfad-e7b64d729b8f` |
 
-Internal / special purpose:
+Internal / hidden (not in public marketplace):
 
 | Agent                       | ID                                     |
 | --------------------------- | -------------------------------------- |
 | Quality Judge (internal)    | `9cf0d9d0-4a10-58c9-b97a-6b5f81b1cf33` |
-| Browser Agent (beta)        | `c3a1b2d4-e5f6-5a7b-8c9d-0e1f2a3b4c5d` |
-| Multi-Language Executor (beta) | `d4b2c3e5-f6a7-5b8c-9d0e-1f2a3b4c5d6e` |
-| Semantic Codebase Search (beta) | `e5c3d4f6-a7b8-5c9d-0e1f-2a3b4c5d6e7f` |
-| AI Red Teamer (builder-only) | `f6d4e5a7-b8c9-5d0e-1f2a-3b4c5d6e7f8a` |
+| Image Generator (gated)     | `4fb167bd-b474-5ea5-bd5c-8976dfe799ae` |
+| Video Storyboard (gated)    | `c12994de-cde9-514a-9c07-a3833b25bb1f` |
+| HN Digest (legacy)          | `31cc3a99-eca6-5202-96d4-8366f426ae1d` |
 | Financial Research (legacy) | `b7741251-d7ac-5423-b57d-8e12cd80885f` |
 | Wikipedia Research (legacy) | `9a175aa2-8ffd-52f7-aae0-5a33fc88db83` |
 
-Deprecated — sunset 2026-07-26 (kept for backward compat, excluded from marketplace):
+Deprecated — sunset 2026-07-26 (kept for backward compat, excluded from marketplace via `SUNSET_DEPRECATED_AGENT_IDS`):
 
 | Agent             | ID                                     |
 | ----------------- | -------------------------------------- |
 | GitHub Fetcher    | `5896576f-bbe6-59e4-83c1-5106002e7d10` |
-| HN Digest         | `31cc3a99-eca6-5202-96d4-8366f426ae1d` |
 | PR Reviewer       | `3e133b66-3bc6-5003-9b64-3284b28a60c6` |
 | Test Generator    | `f515323c-7df2-5742-ac06-bc38b59a40cb` |
 | Spec Writer       | `ce9504a3-74c8-51a5-913e-6ae55787abc8` |

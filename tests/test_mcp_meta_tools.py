@@ -504,7 +504,7 @@ def test_discover_filters_toy_and_low_relevance_intent_matches(monkeypatch):
     def _fake_post(_session, _url, _hdrs, _timeout, _body):
         return True, {
             "results": [
-                {"agent": {"agent_id": "toy", "slug": "reverse_string", "name": "Reverse String", "description": "Reverse text"}},
+                {"agent": {"agent_id": "wiki", "slug": "wiki_research", "name": "Wikipedia Research", "description": "Look up wiki articles"}},
                 {"agent": {"agent_id": "lint", "slug": "linter_agent", "name": "Linter Agent", "description": "Lint code"}},
                 {"agent": {"agent_id": "img", "slug": "image_generator", "name": "Image Generator", "description": "Generate images"}},
             ]

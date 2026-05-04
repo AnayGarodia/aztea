@@ -67,18 +67,30 @@ def _load_image_bytes(source: str, field_name: str) -> bytes:
             raise ValueError(f"{field_name} exceeds {_MAX_IMAGE_BYTES} bytes.")
         return data
     safe_url = validate_outbound_url(source, field_name)
-    response = requests.get(
+    with requests.get(
         safe_url,
         timeout=10,
         headers={"User-Agent": "aztea-visual-regression/1.0"},
         allow_redirects=False,
-    )
-    if 300 <= response.status_code < 400:
-        raise ValueError(f"{field_name} redirects are not allowed.")
-    response.raise_for_status()
-    if len(response.content) > _MAX_IMAGE_BYTES:
-        raise ValueError(f"{field_name} exceeds {_MAX_IMAGE_BYTES} bytes.")
-    return response.content
+        stream=True,
+    ) as response:
+        if 300 <= response.status_code < 400:
+            raise ValueError(f"{field_name} redirects are not allowed.")
+        response.raise_for_status()
+        # Reject by Content-Length up front when present.
+        declared = response.headers.get("Content-Length")
+        if declared and declared.isdigit() and int(declared) > _MAX_IMAGE_BYTES:
+            raise ValueError(f"{field_name} exceeds {_MAX_IMAGE_BYTES} bytes.")
+        # Stream with a running cap so a server lying about Content-Length
+        # cannot OOM us by sending more bytes than we asked for.
+        buf = bytearray()
+        for chunk in response.iter_content(chunk_size=64 * 1024):
+            if not chunk:
+                continue
+            buf.extend(chunk)
+            if len(buf) > _MAX_IMAGE_BYTES:
+                raise ValueError(f"{field_name} exceeds {_MAX_IMAGE_BYTES} bytes.")
+        return bytes(buf)
 
 
 def _image_source(payload: dict[str, Any], prefix: str) -> str:

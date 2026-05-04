@@ -250,6 +250,24 @@ class JobsNamespace extends Namespace {
     return this.client.request<JobResponse>(`/jobs/${jobId}/fail`, { method: "POST", body });
   }
 
+  cancel(jobId: string, reason?: string): Promise<JsonObject> {
+    const body: JsonObject = {};
+    if (reason) body.reason = reason;
+    return this.client.request<JsonObject>(`/jobs/${jobId}/cancel`, { method: "POST", body });
+  }
+
+  rate(jobId: string, rating: number, comment?: string): Promise<JsonObject> {
+    const body: JsonObject = { rating: Math.trunc(rating) };
+    if (comment) body.comment = comment;
+    return this.client.request<JsonObject>(`/jobs/${jobId}/rating`, { method: "POST", body });
+  }
+
+  rateCaller(jobId: string, rating: number, comment?: string): Promise<JsonObject> {
+    const body: JsonObject = { rating: Math.trunc(rating) };
+    if (comment) body.comment = comment;
+    return this.client.request<JsonObject>(`/jobs/${jobId}/rate-caller`, { method: "POST", body });
+  }
+
   postMessage(jobId: string, type: string, payload: JsonObject): Promise<JobMessageResponse> {
     return this.client.request<JobMessageResponse>(`/jobs/${jobId}/messages`, {
       method: "POST",
@@ -337,6 +355,50 @@ class DisputesNamespace extends Namespace {
   settlementTrace(jobId: string): Promise<JsonObject> {
     return this.client.request(`/ops/jobs/${jobId}/settlement-trace`);
   }
+
+  open(jobId: string, reason: string, evidence?: string): Promise<JsonObject> {
+    const body: JsonObject = { reason };
+    if (evidence) body.evidence = evidence;
+    return this.client.request(`/jobs/${jobId}/dispute`, { method: "POST", body });
+  }
+
+  get(jobId: string): Promise<JsonObject> {
+    return this.client.request(`/jobs/${jobId}/dispute`);
+  }
+}
+
+class RecipesNamespace extends Namespace {
+  list(): Promise<JsonObject> {
+    return this.client.request("/recipes");
+  }
+
+  run(recipeId: string, inputPayload: JsonObject): Promise<JsonObject> {
+    return this.client.request(`/recipes/${recipeId}/run`, {
+      method: "POST",
+      body: { input_payload: inputPayload },
+    });
+  }
+}
+
+class PipelinesNamespace extends Namespace {
+  list(): Promise<JsonObject> {
+    return this.client.request("/pipelines");
+  }
+
+  get(pipelineId: string): Promise<JsonObject> {
+    return this.client.request(`/pipelines/${pipelineId}`);
+  }
+
+  run(pipelineId: string, inputPayload: JsonObject): Promise<JsonObject> {
+    return this.client.request(`/pipelines/${pipelineId}/run`, {
+      method: "POST",
+      body: { input_payload: inputPayload },
+    });
+  }
+
+  getRun(pipelineId: string, runId: string): Promise<JsonObject> {
+    return this.client.request(`/pipelines/${pipelineId}/runs/${runId}`);
+  }
 }
 
 export class AgentmarketClient {
@@ -351,6 +413,8 @@ export class AgentmarketClient {
   public readonly registry: RegistryNamespace;
   public readonly jobs: JobsNamespace;
   public readonly disputes: DisputesNamespace;
+  public readonly recipes: RecipesNamespace;
+  public readonly pipelines: PipelinesNamespace;
 
   constructor(options: ClientOptions = {}) {
     this.baseUrl = (options.baseUrl ?? "http://localhost:8000").replace(/\/+$/, "");
@@ -363,6 +427,26 @@ export class AgentmarketClient {
     this.registry = new RegistryNamespace(this);
     this.jobs = new JobsNamespace(this);
     this.disputes = new DisputesNamespace(this);
+    this.recipes = new RecipesNamespace(this);
+    this.pipelines = new PipelinesNamespace(this);
+  }
+
+  async autoHire(intent: string, options: { input?: JsonObject; maxCostUsd?: number; dryRun?: boolean; outputFormat?: string } = {}): Promise<JsonObject> {
+    const body: JsonObject = { intent };
+    if (options.input !== undefined) body.input = options.input;
+    if (options.maxCostUsd !== undefined) body.max_cost_usd = options.maxCostUsd;
+    if (options.dryRun !== undefined) body.dry_run = options.dryRun;
+    if (options.outputFormat !== undefined) body.output_format = options.outputFormat;
+    return this.request<JsonObject>("/registry/agents/auto-hire", { method: "POST", body });
+  }
+
+  async compare(agentIds: string[], inputPayload: JsonObject, options: { maxCostUsd?: number } = {}): Promise<JsonObject> {
+    const body: JsonObject = {
+      agent_ids: agentIds as unknown as JsonValue[],
+      input_payload: inputPayload,
+    };
+    if (options.maxCostUsd !== undefined) body.max_cost_usd = options.maxCostUsd;
+    return this.request<JsonObject>("/registry/agents/compare", { method: "POST", body });
   }
 
   async hire(
