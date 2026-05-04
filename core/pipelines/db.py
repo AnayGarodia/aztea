@@ -33,6 +33,8 @@ def _now() -> str:
 
 def init_db() -> None:
     """Create pipelines and pipeline_runs tables if they don't exist. Idempotent."""
+    if _db.IS_POSTGRES:
+        return
     with _conn() as conn:
         conn.execute(
             """

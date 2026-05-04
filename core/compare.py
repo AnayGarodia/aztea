@@ -32,6 +32,8 @@ def _now() -> str:
 
 def init_db() -> None:
     """Create compare_sessions and compare_results tables if they don't exist. Idempotent."""
+    if _db.IS_POSTGRES:
+        return
     with _conn() as conn:
         conn.execute(
             """

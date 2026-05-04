@@ -871,6 +871,8 @@ def _ensure_job_signature_columns(conn: _db.DbConnection) -> None:
 
 def init_jobs_db() -> None:
     """Create or migrate jobs tables and indexes."""
+    if _db.IS_POSTGRES:
+        return
     with _conn() as conn:
         if not _jobs_table_exists(conn):
             _create_jobs_table(conn)

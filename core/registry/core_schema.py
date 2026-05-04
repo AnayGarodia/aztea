@@ -784,7 +784,13 @@ def _ensure_cacheable_column(conn: _db.DbConnection) -> None:
 
 
 def init_db() -> None:
-    """Create or migrate the agents table to the canonical production schema."""
+    """Create or migrate the agents table to the canonical production schema.
+
+    In PostgreSQL mode the schema comes entirely from migrations; all inline
+    ALTER TABLE guards are SQLite-only and must not run against Postgres.
+    """
+    if _db.IS_POSTGRES:
+        return
     with _conn() as conn:
         if not _agents_table_exists(conn):
             _create_agents_table(conn)
