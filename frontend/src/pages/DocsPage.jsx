@@ -304,7 +304,6 @@ export default function DocsPage() {
                   <span className="docs-page__article-slug">/{activeDoc.slug}</span>
                 </div>
                 <h1 className="docs-page__article-title">{activeDoc.title}</h1>
-                {activeDoc.summary ? <p className="docs-page__article-summary">{activeDoc.summary}</p> : null}
                 <div className="docs-page__article-links">
                   <a href={SWAGGER_URL} target="_blank" rel="noreferrer">Open API Explorer</a>
                   <a href={REDOC_URL} target="_blank" rel="noreferrer">Open ReDoc</a>
