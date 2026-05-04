@@ -614,6 +614,8 @@
   right: 0;
   height: 100%;
   width: min(420px, 100%);
+  max-width: 100vw;
+  overflow: hidden;
   background: var(--surface);
   border-left: 1px solid var(--border);
   display: flex;
@@ -647,10 +649,12 @@
 .docs-ask__body {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 16px;
   display: flex;
   flex-direction: column;
   gap: 16px;
+  min-width: 0;
 }
 .docs-ask__hint {
   text-align: center;
@@ -683,7 +687,7 @@
   color: var(--accent);
 }
 /* User messages: right-aligned bubble */
-.docs-ask__msg { display: flex; }
+.docs-ask__msg { display: flex; min-width: 0; width: 100%; }
 .docs-ask__msg--user { justify-content: flex-end; margin-bottom: 4px; }
 .docs-ask__msg--assistant { justify-content: flex-start; }
 
@@ -704,6 +708,8 @@
 /* Assistant messages: no bubble, full-width flowing text */
 .docs-ask__msg--assistant .docs-ask__msg-bubble {
   width: 100%;
+  min-width: 0;
+  overflow: hidden;
   padding: 0;
   background: none;
   border: none;
@@ -737,6 +743,9 @@
   font-size: 0.8125rem;
   line-height: 1.6;
   color: var(--text-primary);
+  min-width: 0;
+  width: 100%;
+  overflow: hidden;
 }
 .docs-ask__md p { margin: 0 0 0.6em; }
 .docs-ask__md p:last-child { margin-bottom: 0; }
@@ -765,6 +774,10 @@
   padding: 12px 14px;
   margin: 0.7em 0;
   overflow-x: auto;
+  max-width: 100%;
+  width: 100%;
+  box-sizing: border-box;
+  display: block;
   font-size: 0.78rem;
   line-height: 1.5;
 }
