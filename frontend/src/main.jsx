@@ -7,6 +7,9 @@ import './theme/tokens.css'
 import './styles/globals.css'
 import './styles/responsive.css'
 
+// Prevent browser scroll-restoration from scrolling custom overflow containers.
+if ('scrollRestoration' in window.history) window.history.scrollRestoration = 'manual'
+
 // Sentry loads async so it never blocks the initial paint. If the DSN is
 // missing (dev, self-host) the library is never fetched in the first place.
 const SENTRY_DSN = import.meta.env.VITE_SENTRY_DSN

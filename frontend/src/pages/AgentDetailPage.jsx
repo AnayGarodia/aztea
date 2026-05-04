@@ -121,6 +121,7 @@ export default function AgentDetailPage() {
   const [expandedFields, setExpandedFields] = useState(new Set())
 
   useLayoutEffect(() => {
+    document.querySelector('.shell__main')?.scrollTo({ top: 0, behavior: 'instant' })
     document.querySelector('.agent-detail__scroll')?.scrollTo({ top: 0, behavior: 'instant' })
   }, [id])
 

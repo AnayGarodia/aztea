@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useLayoutEffect } from 'react'
 import { Outlet, useLocation } from 'react-router-dom'
 import { AnimatePresence, motion } from 'motion/react'
 import Sidebar from './Sidebar'
@@ -15,7 +15,8 @@ export default function AppShell({ children }) {
 
   // Reset the main scroll container on every route change so pages always
   // open at the top, regardless of where the previous route was scrolled to.
-  useEffect(() => {
+  // useLayoutEffect fires before paint so the user never sees a mid-page state.
+  useLayoutEffect(() => {
     document.querySelector('.shell__main')?.scrollTo({ top: 0, behavior: 'instant' })
   }, [location.pathname])
 
