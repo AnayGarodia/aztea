@@ -53,7 +53,7 @@ function EarningsCalculator({ price, callsPerMonth }) {
             <div key={label} className="sup__calc-row">
               <span className="sup__calc-label">{label}</span>
               <div className="sup__calc-bar-wrap">
-                <div className="sup__calc-bar" style={{ width: `${pct}%` }} />
+                <div className="sup__calc-bar" style={{ transform: `scaleX(${pct / 100})` }} />
               </div>
               <span className="sup__calc-earn">${earn >= 1000 ? `${(earn / 1000).toFixed(1)}k` : earn.toFixed(0)}</span>
             </div>

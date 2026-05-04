@@ -102,9 +102,9 @@
   background: none;
   border: none;
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
-  letter-spacing: 1px;
+  letter-spacing: 0.5px;
   text-transform: uppercase;
   color: var(--text-primary);
   cursor: pointer;
@@ -152,27 +152,25 @@
   content: '';
   position: absolute; inset: 0;
   border-radius: inherit;
-  background: linear-gradient(90deg, #A5BBFC 0%, #D5E2FF 50%, #FFA133 100%);
+  background: linear-gradient(135deg, var(--terracotta-bg), var(--copper-bg));
   opacity: 0;
   z-index: -1;
   transition: opacity 700ms var(--ease);
-  box-shadow: inset 0 0 12px 2px rgba(255, 255, 255, 1);
 }
 .lp__nav-signin:hover::before { opacity: 1; }
 .lp__nav-cta {
   color: #fff;
-  background: #131313;
-  box-shadow: inset 0 0 12px rgba(255, 255, 255, 1), 0 0 2px rgba(0, 0, 0, 0.1);
+  background: var(--accent);
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.1);
 }
 .lp__nav-cta::before {
   content: '';
   position: absolute; inset: 0;
   border-radius: inherit;
-  background: linear-gradient(90deg, #131313 0%, #0A2156 33%, #BED2FF 66%, #FF8717 100%);
+  background: linear-gradient(135deg, var(--accent), var(--terracotta));
   opacity: 0;
   z-index: -1;
   transition: opacity 700ms var(--ease);
-  box-shadow: inset 0 0 12px 2px rgba(255, 255, 255, 0.5);
 }
 .lp__nav-cta:hover::before { opacity: 1; }
 .lp__nav-cta > *,
@@ -326,7 +324,7 @@
   contain-intrinsic-size: 1px 720px;
 }
 /* Quickstart is short — give it a tighter slot guess. */
-.lp__sec--quickstart { contain-intrinsic-size: 1px 240px; }
+.lp__sec--quickstart { contain-intrinsic-size: 1px 480px; }
 .lp__sec-inner {
   max-width: 1240px;
   margin: 0 auto;

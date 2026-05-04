@@ -134,7 +134,7 @@ function scrollToId(id) {
 export default function LandingPage() {
   const [liveAgents, setLiveAgents] = useState({})
   const [menuOpen, setMenuOpen] = useState(false)
-  const [openFaq, setOpenFaq] = useState(0)
+  const [openFaq, setOpenFaq] = useState(-1)
   const [auth, setAuth] = useState({ open: false, tab: 'signin', redirect: null })
   const { isDark, toggle: toggleTheme } = useTheme()
   const { apiKey } = useAuth()
@@ -173,7 +173,12 @@ export default function LandingPage() {
   const handleBrowseAgents = () => apiKey ? navigate('/agents')     : openAuth('register', '/agents')
   const handleOpenAgent    = (id) => {
     const target = `/agents/${id}`
-    apiKey ? navigate(target) : openAuth('register', target)
+    if (apiKey) {
+      navigate(target)
+    } else {
+      try { sessionStorage.setItem('aztea_post_auth_agent', id) } catch {}
+      openAuth('register', target)
+    }
   }
 
   return (
@@ -325,7 +330,7 @@ export default function LandingPage() {
           HOW IT WORKS — three horizontal stages with arch divider.
          ───────────────────────────────────────────────────── */}
       <section className="lp__sec lp__sec--how" id="lp-how">
-        <JaaliArchRow className="lp__how-arches" count={20} height={44} color="var(--terracotta)" />
+        <JaaliArchRow className="lp__how-arches" count={12} height={44} color="var(--terracotta)" />
         <JaaliWeave className="lp__how-bg" size={36} opacity={0.05} color="var(--copper)" />
         <div className="lp__sec-inner">
           <header className="lp__sec-head lp__sec-head--center">

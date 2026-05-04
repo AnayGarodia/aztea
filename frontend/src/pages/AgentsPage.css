@@ -96,6 +96,34 @@
 
 .agents-page__filter-row > *:first-child { flex: 1; min-width: 200px; }
 
+.agents-page__filter-toggle {
+  height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--surface-2) 80%, var(--parchment));
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color 0.15s, background 0.15s;
+}
+.agents-page__filter-toggle:hover { border-color: var(--border-bright); }
+.agents-page__filter-toggle--active {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+.agents-page__filter-expanded {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  padding-top: 8px;
+}
+
 .agents-page__sort-select {
   height: 36px;
   padding: 0 10px;
@@ -375,7 +403,7 @@ section + section {
   height: 36px;
   padding: 0 10px;
   border: 1px solid var(--accent-border);
-  border-radius: 6px;
+  border-radius: var(--r-sm);
   background: var(--bg-surface);
   color: var(--text-primary);
   font-size: 13px;

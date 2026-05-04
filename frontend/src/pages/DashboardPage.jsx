@@ -50,6 +50,24 @@ function ActionStep({ done, title, copy, actionTo, actionLabel }) {
   return <div className="dashboard__step">{inner}</div>
 }
 
+function NewUserBanner({ icon, title, sub, primaryTo, primaryLabel, secondaryTo, secondaryLabel }) {
+  return (
+    <div className="dashboard__new-user-banner">
+      <div className="dashboard__new-user-banner__body">
+        <div className="dashboard__new-user-banner__icon">{icon}</div>
+        <div>
+          <p className="dashboard__new-user-banner__title">{title}</p>
+          <p className="dashboard__new-user-banner__sub">{sub}</p>
+        </div>
+      </div>
+      <div className="dashboard__new-user-banner__actions">
+        <Link to={primaryTo}><Button variant="primary" size="sm">{primaryLabel}</Button></Link>
+        <Link to={secondaryTo}><Button variant="secondary" size="sm">{secondaryLabel}</Button></Link>
+      </div>
+    </div>
+  )
+}
+
 export default function DashboardPage() {
   const { agents, jobs, wallet, loading, apiKey } = useMarket()
   const { user } = useAuth()
@@ -62,6 +80,10 @@ export default function DashboardPage() {
   const recentJobs = jobs.slice(0, 8)
   const hasBalance = (wallet?.balance_cents ?? 0) > 0
   const isNewUser = !loading && jobs.length === 0 && !hasBalance
+
+  // Surface the agent the user was looking at before auth
+  const postAuthAgentId = (() => { try { return sessionStorage.getItem('aztea_post_auth_agent') } catch { return null } })()
+  const postAuthAgent = postAuthAgentId ? agents.find(a => a.agent_id === postAuthAgentId) : null
   const balance = loading ? '…' : fmtUsd(wallet?.balance_cents ?? 0)
   const isAdmin = (user?.scopes ?? []).includes('admin')
   const creditLabel = role === 'hirer' ? '$2.00' : '$1.00'
@@ -94,83 +116,26 @@ export default function DashboardPage() {
       <div className="dashboard__scroll">
         <div className="dashboard__content">
 
-          {/* Builder welcome banner */}
-          {role === 'builder' && isNewUser && (
+          {/* New-user welcome banner */}
+          {isNewUser && (
             <Reveal>
-              <div style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                gap: 'var(--sp-5)', flexWrap: 'wrap',
-                padding: 'var(--sp-5)',
-                background: 'var(--accent-wash)',
-                border: '1px solid var(--accent-line)',
-                borderRadius: 'var(--r-lg)',
-                marginBottom: 'var(--sp-5)',
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-4)' }}>
-                  <div style={{
-                    width: 40, height: 40, borderRadius: 'var(--r-md)',
-                    background: 'var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-                  }}>
-                    <Hammer size={20} color="#fff" />
-                  </div>
-                  <div>
-                    <p style={{ fontWeight: 700, fontSize: '0.9375rem', color: 'var(--ink)', marginBottom: 2 }}>
-                      Welcome{user?.username ? `, ${user.username}` : ''} — list your first skill and start earning.
-                    </p>
-                    <p style={{ fontSize: '0.8125rem', color: 'var(--ink-soft)' }}>
-                      Upload a SKILL.md, set a price, and Aztea handles billing and execution for you.
-                    </p>
-                  </div>
-                </div>
-                <div style={{ display: 'flex', gap: 'var(--sp-3)', flexShrink: 0 }}>
-                  <Link to="/list-skill">
-                    <Button variant="primary" size="sm">List a skill</Button>
-                  </Link>
-                  <Link to="/wallet">
-                    <Button variant="secondary" size="sm">View earnings</Button>
-                  </Link>
-                </div>
-              </div>
-            </Reveal>
-          )}
-
-          {/* Hirer / both starter credit nudge */}
-          {role !== 'builder' && isNewUser && (
-            <Reveal>
-              <div style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                gap: 'var(--sp-5)', flexWrap: 'wrap',
-                padding: 'var(--sp-5)',
-                background: 'var(--accent-wash)',
-                border: '1px solid var(--accent-line)',
-                borderRadius: 'var(--r-lg)',
-                marginBottom: 'var(--sp-5)',
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-4)' }}>
-                  <div style={{
-                    width: 40, height: 40, borderRadius: 'var(--r-md)',
-                    background: 'var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-                  }}>
-                    <Wallet size={20} color="#fff" />
-                  </div>
-                  <div>
-                    <p style={{ fontWeight: 700, fontSize: '0.9375rem', color: 'var(--ink)', marginBottom: 2 }}>
-                      Welcome{user?.username ? `, ${user.username}` : ''} — you have {creditLabel} of free credit.
-                    </p>
-                    <p style={{ fontSize: '0.8125rem', color: 'var(--ink-soft)' }}>
-                      {creditSubtext}
-                    </p>
-                  </div>
-                </div>
-                <div style={{ display: 'flex', gap: 'var(--sp-3)', flexShrink: 0 }}>
-                  <Link to="/agents">
-                    <Button variant="primary" size="sm">Browse agents</Button>
-                  </Link>
-                  <Link to="/wallet">
-                    <Button variant="secondary" size="sm">View wallet</Button>
-                  </Link>
-                </div>
-              </div>
+              {role === 'builder' ? (
+                <NewUserBanner
+                  icon={<Hammer size={20} color="#fff" />}
+                  title={`Welcome${user?.username ? `, ${user.username}` : ''} — list your first skill and start earning.`}
+                  sub="Upload a SKILL.md, set a price, and Aztea handles billing and execution for you."
+                  primaryTo="/list-skill" primaryLabel="List a skill"
+                  secondaryTo="/wallet" secondaryLabel="View earnings"
+                />
+              ) : (
+                <NewUserBanner
+                  icon={<Wallet size={20} color="#fff" />}
+                  title={`Welcome${user?.username ? `, ${user.username}` : ''} — you have ${creditLabel} of free credit.`}
+                  sub={creditSubtext}
+                  primaryTo="/agents" primaryLabel="Browse agents"
+                  secondaryTo="/wallet" secondaryLabel="View wallet"
+                />
+              )}
             </Reveal>
           )}
 
@@ -183,7 +148,13 @@ export default function DashboardPage() {
                 <p>Hire specialists, track jobs, and read every charge, refund, and payout from one ledger.</p>
               </div>
               <div className="dashboard__welcome-actions">
-                <Link to="/agents"><Button variant="primary">Browse the catalog</Button></Link>
+                {postAuthAgent ? (
+                  <Link to={`/agents/${postAuthAgent.agent_id}`} onClick={() => { try { sessionStorage.removeItem('aztea_post_auth_agent') } catch {} }}>
+                    <Button variant="primary">Continue to {postAuthAgent.name}</Button>
+                  </Link>
+                ) : (
+                  <Link to="/agents"><Button variant="primary">Browse the catalog</Button></Link>
+                )}
                 <Link to="/jobs"><Button variant="secondary">My jobs</Button></Link>
               </div>
             </div>
@@ -196,8 +167,8 @@ export default function DashboardPage() {
               { label: 'Specialists online', value: loading ? '…' : agents.length, hint: role === 'builder' ? 'In the catalog' : 'Across every category', icon: Bot, accent: 'var(--sage-strong)' },
               { label: 'Active jobs',  value: loading ? '…' : activeJobs, hint: 'In flight or claimed', icon: Briefcase, accent: 'var(--copper)' },
               { label: 'Success rate', value: loading ? '…' : `${successRate}%`, hint: jobs.length > 0 ? 'Across all your hires' : 'No jobs yet', icon: CheckCircle2, accent: 'var(--positive)' },
-            ].filter(Boolean).map(s => (
-              <div key={s.label} className="dashboard__kpi">
+            ].filter(Boolean).map((s, i) => (
+              <div key={s.label} className={`dashboard__kpi${i === 0 ? ' dashboard__kpi--primary' : ''}`}>
                 <div className="dashboard__kpi-icon">
                   <s.icon size={16} />
                 </div>

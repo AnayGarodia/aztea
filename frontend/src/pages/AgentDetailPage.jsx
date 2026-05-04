@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useCallback } from 'react'
+import { useMemo, useState, useEffect, useLayoutEffect, useCallback } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { motion, AnimatePresence } from 'motion/react'
 import Topbar from '../layout/Topbar'
@@ -37,7 +37,7 @@ function PricingInfo({ agent }) {
     return (
       <div>
         <span>${min.toFixed(2)}–${max.toFixed(2)} per call</span>
-        <div style={{ marginTop: 6, fontSize: '0.8em', opacity: 0.75 }}>
+        <div className="ad__pricing-tiers">
           {vp.tiers.map((t, i) => {
             const prevMax = i === 0 ? 0 : vp.tiers[i - 1].max_units
             const rangeLabel = i === 0
@@ -56,7 +56,7 @@ function PricingInfo({ agent }) {
     return (
       <div>
         <span>${(vp.min_usd ?? 0).toFixed(2)} min</span>
-        <div style={{ marginTop: 6, fontSize: '0.8em', opacity: 0.75 }}>
+        <div className="ad__pricing-tiers">
           ${(vp.rate_usd ?? 0).toFixed(2)} per {vp.unit_label}
         </div>
       </div>
@@ -120,9 +120,8 @@ export default function AgentDetailPage() {
   const [expandedExample, setExpandedExample] = useState(null)
   const [expandedFields, setExpandedFields] = useState(new Set())
 
-  useEffect(() => {
-    const scrollEl = document.querySelector('.agent-detail__scroll')
-    if (scrollEl) scrollEl.scrollTop = 0
+  useLayoutEffect(() => {
+    document.querySelector('.agent-detail__scroll')?.scrollTo({ top: 0, behavior: 'instant' })
   }, [id])
 
   const toggleField = (fieldKey) =>

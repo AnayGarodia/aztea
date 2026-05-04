@@ -384,10 +384,11 @@
 
 .sup__calc-bar {
   height: 100%;
+  width: 100%;
   background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 60%, #22c55e));
   border-radius: 999px;
-  transition: width 0.4s ease;
-  min-width: 4px;
+  transform-origin: left;
+  transition: transform 0.4s ease;
 }
 
 .sup__calc-earn {

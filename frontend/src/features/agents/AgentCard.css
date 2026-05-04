@@ -97,9 +97,9 @@
 }
 
 .ac__trust-pill {
-  background: var(--sage-bg);
-  border: 1px solid var(--sage-border);
-  color: var(--sage-strong);
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-border);
+  color: var(--accent);
 }
 
 .ac__sigil {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import Topbar from '../layout/Topbar'
 import AgentCard from '../features/agents/AgentCard'
 import EmptyState from '../ui/EmptyState'
@@ -49,13 +49,23 @@ function sortAgents(list, sortBy) {
 
 export default function AgentsPage() {
   const { agents, loading, apiKey, refresh } = useMarket()
-  const [search, setSearch] = useState('')
-  const [sortBy, setSortBy] = useState('trust')
-  const [maxPriceCents, setMaxPriceCents] = useState('')
-  const [category, setCategory] = useState('')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [filtersOpen, setFiltersOpen] = useState(false)
+
+  const search       = searchParams.get('q') ?? ''
+  const sortBy       = searchParams.get('sort') ?? 'trust'
+  const maxPriceCents = searchParams.get('max_price') ?? ''
+  const category     = searchParams.get('cat') ?? ''
+
+  const setSearch        = (v) => setSearchParams(p => { const n = new URLSearchParams(p); v ? n.set('q', v) : n.delete('q'); return n }, { replace: true })
+  const setSortBy        = (v) => setSearchParams(p => { const n = new URLSearchParams(p); v !== 'trust' ? n.set('sort', v) : n.delete('sort'); return n }, { replace: true })
+  const setMaxPriceCents = (v) => setSearchParams(p => { const n = new URLSearchParams(p); v ? n.set('max_price', v) : n.delete('max_price'); return n }, { replace: true })
+  const setCategory      = (v) => setSearchParams(p => { const n = new URLSearchParams(p); v ? n.set('cat', v) : n.delete('cat'); return n }, { replace: true })
+
   const [searchResults, setSearchResults] = useState([])
   const [searchLoading, setSearchLoading] = useState(false)
   const [searchError, setSearchError] = useState('')
+  const [isNetworkError, setIsNetworkError] = useState(false)
   const [isSemanticResult, setIsSemanticResult] = useState(false)
 
   // Instant local text filter
@@ -73,6 +83,7 @@ export default function AgentsPage() {
   useEffect(() => {
     const query = search.trim()
     setSearchError('')
+    setIsNetworkError(false)
     if (!query) {
       setSearchResults([])
       setSearchLoading(false)
@@ -97,6 +108,7 @@ export default function AgentsPage() {
       } catch (err) {
         if (cancelled) return
         setSearchResults([])
+        setIsNetworkError(true)
         setSearchError(err?.message ?? 'Search failed.')
       } finally {
         if (!cancelled) setSearchLoading(false)
@@ -133,7 +145,7 @@ export default function AgentsPage() {
   const listLoading = loading
   const isSemanticSearching = search.trim() && searchLoading
 
-  const clearFilters = () => { setSearch(''); setMaxPriceCents(''); setCategory('') }
+  const clearFilters = () => setSearchParams({}, { replace: true })
 
   return (
     <main className="agents-page">
@@ -172,24 +184,37 @@ export default function AgentsPage() {
                   iconLeft={<Search size={14} />}
                   hint={searchError || (isSemanticSearching ? 'Refining with semantic search…' : undefined)}
                 />
-                <Input
-                  placeholder="Max price (USD)"
-                  type="number"
-                  min="0"
-                  step="0.001"
-                  value={maxPriceCents}
-                  onChange={e => setMaxPriceCents(e.target.value)}
-                  className="agents-page__price-input"
-                />
-                <select
-                  className="agents-page__sort-select"
-                  value={sortBy}
-                  onChange={e => setSortBy(e.target.value)}
-                  aria-label="Sort agents"
+                <button
+                  type="button"
+                  className={`agents-page__filter-toggle${filtersOpen || maxPriceCents || sortBy !== 'trust' ? ' agents-page__filter-toggle--active' : ''}`}
+                  onClick={() => setFiltersOpen(v => !v)}
+                  aria-expanded={filtersOpen}
                 >
-                  {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                </select>
+                  Filters{(maxPriceCents || sortBy !== 'trust') ? ' •' : ''}
+                </button>
               </div>
+              {filtersOpen && (
+                <div className="agents-page__filter-expanded">
+                  <Input
+                    placeholder="Max price (USD)"
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.001"
+                    value={maxPriceCents}
+                    onChange={e => setMaxPriceCents(e.target.value)}
+                    className="agents-page__price-input"
+                  />
+                  <select
+                    className="agents-page__sort-select"
+                    value={sortBy}
+                    onChange={e => setSortBy(e.target.value)}
+                    aria-label="Sort agents"
+                  >
+                    {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                </div>
+              )}
               <div className="agents-page__categories" role="group" aria-label="Filter by category">
                 {CATEGORIES.map(cat => (
                   <button
@@ -221,12 +246,13 @@ export default function AgentsPage() {
             </div>
           ) : filtered.length === 0 ? (
             <EmptyState
-              title={isFiltered ? 'No matching specialists' : 'No specialists listed yet'}
-              sub={isFiltered ? 'Try adjusting your filters or search query.' : 'Be the first to list a skill — keep 90% of every successful call.'}
+              title={isNetworkError ? 'Search unavailable' : isFiltered ? 'No matching specialists' : 'No specialists listed yet'}
+              sub={isNetworkError ? 'Could not reach the search service. Try again or browse the full catalog below.' : isFiltered ? 'Try adjusting your filters or search query.' : 'Be the first to list a skill — keep 90% of every successful call.'}
               action={
                 <div className="agents-page__empty-actions">
-                  {isFiltered && <Button variant="secondary" onClick={clearFilters}>Clear filters</Button>}
-                  <Link to="/list-skill"><Button variant="primary">List an agent</Button></Link>
+                  {isNetworkError && <Button variant="primary" onClick={() => { setSearch(''); setIsNetworkError(false) }}>Browse all agents</Button>}
+                  {!isNetworkError && isFiltered && <Button variant="secondary" onClick={clearFilters}>Clear filters</Button>}
+                  {!isNetworkError && <Link to="/list-skill"><Button variant="primary">List an agent</Button></Link>}
                 </div>
               }
             />

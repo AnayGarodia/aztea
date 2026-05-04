@@ -45,15 +45,6 @@
   pointer-events: none;
 }
 
-.dashboard__welcome::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--accent-border), transparent);
-}
 
 .dashboard__welcome-eyebrow {
   font-size: 0.625rem;
@@ -301,4 +292,70 @@
   .dashboard__kpi-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
   .dashboard__kpi { padding: 14px; }
   .dashboard__kpi-value { font-size: 1.4rem; }
+}
+
+/* New-user welcome banner (extracted component) */
+.dashboard__new-user-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-5);
+  flex-wrap: wrap;
+  padding: var(--sp-5);
+  background: var(--accent-wash);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-lg);
+  margin-bottom: var(--sp-5);
+}
+
+.dashboard__new-user-banner__body {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+}
+
+.dashboard__new-user-banner__icon {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--r-md);
+  background: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.dashboard__new-user-banner__title {
+  font-weight: 700;
+  font-size: 0.9375rem;
+  color: var(--text-primary);
+  margin: 0 0 2px;
+}
+
+.dashboard__new-user-banner__sub {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.dashboard__new-user-banner__actions {
+  display: flex;
+  gap: var(--sp-3);
+  flex-shrink: 0;
+}
+
+/* Primary KPI card (balance) */
+.dashboard__kpi--primary {
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+  grid-row: span 1;
+}
+
+.dashboard__kpi--primary .dashboard__kpi-value {
+  font-size: 2.25rem;
+  color: var(--accent);
+}
+
+.dashboard__kpi--primary .dashboard__kpi-icon {
+  color: var(--accent);
 }
