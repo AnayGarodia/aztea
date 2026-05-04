@@ -179,6 +179,9 @@ _SANDBOX_PRELUDE = (
     "del _sandbox_audit\n"
 )
 
+# +1 for the blank "\n" separator written between prelude and user code in _run_in_subprocess
+_PRELUDE_LINE_COUNT: int = _SANDBOX_PRELUDE.count("\n") + 1
+
 # Appended to user code to capture local variables as JSON on stderr
 _CAPTURE_SUFFIX = """
 import json as _json, sys as _sys
@@ -196,6 +199,24 @@ except Exception:
     pass
 print('__VARS__:' + _json.dumps(_captured), file=_sys.stderr)
 """
+
+
+def _adjust_traceback_line_numbers(stderr: str) -> str:
+    """Subtract sandbox prelude line count from traceback line references.
+
+    The prelude is _PRELUDE_LINE_COUNT lines before user code. Python's traceback
+    references lines in the combined file; we undo the shift so callers see their
+    own line numbers.
+    """
+    lines = []
+    for line in stderr.splitlines():
+        if 'File "' in line and ("main.py" in line or "aztea" in line.lower()):
+            def _fix(m: re.Match) -> str:
+                return f"line {max(1, int(m.group(1)) - _PRELUDE_LINE_COUNT)}"
+            line = re.sub(r"\bline (\d+)\b", _fix, line)
+        lines.append(line)
+    return "\n".join(lines)
+
 
 # Defense-in-depth pre-filter. The audit hook in `_SANDBOX_PRELUDE` is the
 # real enforcement layer — these regexes just shave off the most obvious
@@ -380,7 +401,7 @@ def _run_in_subprocess(code: str, stdin_data: str, timeout: int) -> dict[str, An
             stderr_lines.append(line)
     return {
         "stdout": stdout,
-        "stderr": "\n".join(stderr_lines),
+        "stderr": _adjust_traceback_line_numbers("\n".join(stderr_lines)),
         "exit_code": exit_code,
         "timed_out": timed_out,
         "execution_time_ms": elapsed_ms,

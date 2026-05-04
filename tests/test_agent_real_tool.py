@@ -445,6 +445,19 @@ def test_python_executor_returns_structured_error_for_missing_code():
     assert result["error"]["code"] == "python_executor.missing_code"
 
 
+def test_python_executor_traceback_line_numbers_match_user_code():
+    result = python_executor.run({"code": "raise ValueError('oops')"})
+    assert result["exit_code"] != 0
+    stderr = result.get("stderr", "")
+    import re
+    # All "line N" in the traceback for single-line user code should be ~1
+    line_nums = [int(m) for m in re.findall(r"\bline (\d+)\b", stderr)]
+    high_lines = [n for n in line_nums if n > 5]
+    assert not high_lines, (
+        f"Traceback reports line(s) {high_lines} — expected ~line 1 for single-line code"
+    )
+
+
 def test_arxiv_research_returns_structured_error_for_missing_query():
     result = arxiv_research.run({})
     assert result["error"]["code"] == "arxiv_research.missing_query"
