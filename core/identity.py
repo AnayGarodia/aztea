@@ -15,7 +15,6 @@ from __future__ import annotations
 import os
 from urllib.parse import urlparse
 
-
 _DEFAULT_HOST = "aztea.ai"
 
 
@@ -44,7 +43,11 @@ def build_agent_did(agent_id: str, server_base_url: str | None = None) -> str:
     DID is frozen on the agent row at registration time so it survives
     later hostname changes.
     """
-    base = server_base_url if server_base_url is not None else os.environ.get("SERVER_BASE_URL")
+    base = (
+        server_base_url
+        if server_base_url is not None
+        else os.environ.get("SERVER_BASE_URL")
+    )
     host = _did_host_from_base_url(base)
     return f"did:web:{host}:agents:{agent_id}"
 
@@ -55,6 +58,10 @@ def did_document_url(agent_id: str, server_base_url: str | None = None) -> str:
     External verifiers fetch this URL when they want to validate a
     signature: it returns the agent's public key in JWK form.
     """
-    base = server_base_url if server_base_url is not None else os.environ.get("SERVER_BASE_URL")
+    base = (
+        server_base_url
+        if server_base_url is not None
+        else os.environ.get("SERVER_BASE_URL")
+    )
     base = (base or f"https://{_DEFAULT_HOST}").rstrip("/")
     return f"{base}/agents/{agent_id}/did.json"

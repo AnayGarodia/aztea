@@ -23,18 +23,18 @@
 #   - No table-rendering library — we hand-format markdown tables. Fine
 #     for now; revisit if formatters get more complex.
 """Render structured agent output into PR-comment / Slack / markdown / text."""
+
 from __future__ import annotations
 
 import json
 from typing import Any
 
-
 SUPPORTED_FORMATS: tuple[str, ...] = (
-    "json",                # canonical, no transformation
-    "markdown",            # GitHub-flavored markdown
-    "github_pr_comment",   # markdown formatted for github PR review API
-    "slack_blocks",        # Slack Block Kit JSON (string-encoded)
-    "text",                # flat plaintext, no markdown
+    "json",  # canonical, no transformation
+    "markdown",  # GitHub-flavored markdown
+    "github_pr_comment",  # markdown formatted for github PR review API
+    "slack_blocks",  # Slack Block Kit JSON (string-encoded)
+    "text",  # flat plaintext, no markdown
 )
 
 
@@ -55,7 +55,9 @@ def normalize_format(value: Any) -> str | None:
     return s if s in SUPPORTED_FORMATS else None
 
 
-def render(output: Any, *, format: str, agent_meta: dict[str, Any] | None = None) -> str | dict:
+def render(
+    output: Any, *, format: str, agent_meta: dict[str, Any] | None = None
+) -> str | dict:
     """Render `output` into the given format.
 
     Returns a string for human-readable formats (markdown, github_pr_comment,
@@ -115,7 +117,9 @@ def _render_markdown(output: Any, meta: dict[str, Any]) -> str:
         rendered = True
 
     # Recipe / pipeline: {steps | step_results: {<id>: {output: {...}}}}
-    if isinstance(output.get("steps"), list) or isinstance(output.get("step_results"), dict):
+    if isinstance(output.get("steps"), list) or isinstance(
+        output.get("step_results"), dict
+    ):
         sections.append(_md_pipeline(output))
         rendered = True
 
@@ -189,7 +193,9 @@ def _md_code_review(output: dict[str, Any]) -> str:
 
 def _md_linter(output: dict[str, Any]) -> str:
     findings = output.get("findings") or []
-    total = output.get("total") if isinstance(output.get("total"), int) else len(findings)
+    total = (
+        output.get("total") if isinstance(output.get("total"), int) else len(findings)
+    )
     summary = str(output.get("summary") or "").strip()
     lines: list[str] = ["## Linter"]
     if summary:
@@ -241,7 +247,9 @@ def _md_dep_audit(output: dict[str, Any]) -> str:
     elif not vulns:
         lines.append("✓ No known vulnerabilities.")
     else:
-        lines.append(f"{len(vulns)} vulnerabilit{'ies' if len(vulns) != 1 else 'y'} found.")
+        lines.append(
+            f"{len(vulns)} vulnerabilit{'ies' if len(vulns) != 1 else 'y'} found."
+        )
     if vulns:
         lines.append("\n| Severity | Package | CVE | Fix |")
         lines.append("| --- | --- | --- | --- |")
@@ -275,8 +283,8 @@ def _md_git_diff(output: dict[str, Any]) -> str:
         for f in files[:30]:
             tags = ", ".join(f.get("risk_tags") or []) or "—"
             lines.append(
-                f"| `{f.get('path','')}` | {f.get('change_type','')} | "
-                f"+{f.get('added',0)}/-{f.get('removed',0)} | {tags} |"
+                f"| `{f.get('path', '')}` | {f.get('change_type', '')} | "
+                f"+{f.get('added', 0)}/-{f.get('removed', 0)} | {tags} |"
             )
     return "\n".join(lines)
 
@@ -293,11 +301,23 @@ def _md_pipeline(output: dict[str, Any]) -> str:
     if isinstance(steps, list):
         for step in steps:
             if isinstance(step, dict):
-                items.append((str(step.get("id") or step.get("node_id") or ""), step.get("output")))
+                items.append(
+                    (
+                        str(step.get("id") or step.get("node_id") or ""),
+                        step.get("output"),
+                    )
+                )
     elif isinstance(step_results, dict):
-        items = [(str(k), v.get("output") if isinstance(v, dict) else v) for k, v in step_results.items()]
+        items = [
+            (str(k), v.get("output") if isinstance(v, dict) else v)
+            for k, v in step_results.items()
+        ]
     for step_id, step_out in items:
-        rendered = _render_markdown(step_out, {}) if isinstance(step_out, dict) else _generic_md(step_out)
+        rendered = (
+            _render_markdown(step_out, {})
+            if isinstance(step_out, dict)
+            else _generic_md(step_out)
+        )
         sections.append(f"### Stage `{step_id}`\n{rendered}")
     return "\n\n".join(sections)
 
@@ -331,9 +351,15 @@ def _pr_verdict(output: Any) -> dict[str, str]:
     crit = int(counts.get("critical") or 0)
     high = int(counts.get("high") or 0)
     if crit:
-        return {"kind": "critical", "headline": f"❌ {crit} critical issue{'s' if crit != 1 else ''} — block merge"}
+        return {
+            "kind": "critical",
+            "headline": f"❌ {crit} critical issue{'s' if crit != 1 else ''} — block merge",
+        }
     if high:
-        return {"kind": "high", "headline": f"⚠ {high} high-severity issue{'s' if high != 1 else ''} — review before merge"}
+        return {
+            "kind": "high",
+            "headline": f"⚠ {high} high-severity issue{'s' if high != 1 else ''} — review before merge",
+        }
     score = output.get("score")
     if isinstance(score, (int, float)):
         normalized = score * 10 if 0 <= score <= 10 else score
@@ -364,9 +390,7 @@ def _render_slack(output: Any, meta: dict[str, Any]) -> dict:
     chunked-mrkdwn for unknown shapes.
     """
     if isinstance(output, dict):
-        if "issues" in output and (
-            "severity_counts" in output or "summary" in output
-        ):
+        if "issues" in output and ("severity_counts" in output or "summary" in output):
             return {"blocks": _slack_code_review_blocks(output)}
         if isinstance(output.get("findings"), list):
             return {"blocks": _slack_linter_blocks(output)}
@@ -377,12 +401,17 @@ def _render_slack(output: Any, meta: dict[str, Any]) -> dict:
     for chunk in _split_for_slack(md):
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": chunk}})
     if not blocks:
-        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "_(no output)_"}})
+        blocks.append(
+            {"type": "section", "text": {"type": "mrkdwn", "text": "_(no output)_"}}
+        )
     return {"blocks": blocks}
 
 
 def _slack_header(text: str) -> dict:
-    return {"type": "header", "text": {"type": "plain_text", "text": text[:150], "emoji": True}}
+    return {
+        "type": "header",
+        "text": {"type": "plain_text", "text": text[:150], "emoji": True},
+    }
 
 
 def _slack_section(md: str) -> dict:
@@ -442,11 +471,17 @@ def _slack_code_review_blocks(output: dict[str, Any]) -> list[dict]:
 
 def _slack_linter_blocks(output: dict[str, Any]) -> list[dict]:
     findings = output.get("findings") or []
-    total = output.get("total") if isinstance(output.get("total"), int) else len(findings)
+    total = (
+        output.get("total") if isinstance(output.get("total"), int) else len(findings)
+    )
     blocks: list[dict] = [_slack_header("Linter")]
-    blocks.append(_slack_context(
-        "✓ No issues found." if not total else f"{total} issue{'s' if total != 1 else ''} found."
-    ))
+    blocks.append(
+        _slack_context(
+            "✓ No issues found."
+            if not total
+            else f"{total} issue{'s' if total != 1 else ''} found."
+        )
+    )
     if findings:
         rows = []
         for f in findings[:25]:
@@ -470,9 +505,11 @@ def _slack_dep_audit_blocks(output: dict[str, Any]) -> list[dict]:
     elif not vulns:
         blocks.append(_slack_context("✓ No known vulnerabilities."))
     else:
-        blocks.append(_slack_context(
-            f"{len(vulns)} vulnerabilit{'ies' if len(vulns) != 1 else 'y'} found."
-        ))
+        blocks.append(
+            _slack_context(
+                f"{len(vulns)} vulnerabilit{'ies' if len(vulns) != 1 else 'y'} found."
+            )
+        )
     if vulns:
         blocks.append({"type": "divider"})
         for v in vulns[:30]:
@@ -510,10 +547,10 @@ def _split_for_slack(text: str, *, limit: int = 2900) -> list[str]:
 def _count_emoji(severity: str) -> str:
     return {
         "critical": "🔴",
-        "high":     "🟠",
-        "medium":   "🟡",
-        "low":      "🟢",
-        "info":     "🔵",
-        "warning":  "🟡",
-        "error":    "🔴",
+        "high": "🟠",
+        "medium": "🟡",
+        "low": "🟢",
+        "info": "🔵",
+        "warning": "🟡",
+        "error": "🔴",
     }.get(severity.lower(), "•")

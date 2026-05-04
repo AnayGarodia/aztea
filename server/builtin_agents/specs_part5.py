@@ -8,16 +8,27 @@ do from a chat session alone:
   - sql_explainer: SQLite EXPLAIN QUERY PLAN over a real schema.
   - git_diff_analyzer: structural parse + risk classification of unified diffs.
 """
+
 from __future__ import annotations
 
 from typing import Any
 
 from server.builtin_agents.constants import (
     BUILTIN_INTERNAL_ENDPOINTS as _BUILTIN_INTERNAL_ENDPOINTS,
+)
+from server.builtin_agents.constants import (
     GIT_DIFF_ANALYZER_AGENT_ID as _GIT_DIFF_ANALYZER_AGENT_ID,
+)
+from server.builtin_agents.constants import (
     JSON_SCHEMA_VALIDATOR_AGENT_ID as _JSON_SCHEMA_VALIDATOR_AGENT_ID,
+)
+from server.builtin_agents.constants import (
     REGEX_TESTER_AGENT_ID as _REGEX_TESTER_AGENT_ID,
+)
+from server.builtin_agents.constants import (
     SECRET_SCANNER_AGENT_ID as _SECRET_SCANNER_AGENT_ID,
+)
+from server.builtin_agents.constants import (
     SQL_EXPLAINER_AGENT_ID as _SQL_EXPLAINER_AGENT_ID,
 )
 from server.builtin_agents.schemas import output_schema_object as _output_schema_object
@@ -37,7 +48,13 @@ def load_builtin_specs_part5() -> list[dict[str, Any]]:
             ),
             "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_SECRET_SCANNER_AGENT_ID],
             "price_per_call_usd": 0.01,
-            "tags": ["security", "secrets", "credentials", "developer-tools", "compliance"],
+            "tags": [
+                "security",
+                "secrets",
+                "credentials",
+                "developer-tools",
+                "compliance",
+            ],
             "kind": "aztea_built",
             "category": "Security",
             "is_featured": True,
@@ -84,7 +101,12 @@ def load_builtin_specs_part5() -> list[dict[str, Any]]:
                     "findings": {"type": "array", "items": {"type": "object"}},
                     "summary": {"type": "string"},
                 },
-                required=["total_findings", "findings", "findings_by_severity", "summary"],
+                required=[
+                    "total_findings",
+                    "findings",
+                    "findings_by_severity",
+                    "summary",
+                ],
             ),
             "output_examples": [
                 {
@@ -95,7 +117,12 @@ def load_builtin_specs_part5() -> list[dict[str, Any]]:
                     "output": {
                         "filename": ".env",
                         "total_findings": 2,
-                        "findings_by_severity": {"critical": 2, "high": 0, "medium": 0, "low": 0},
+                        "findings_by_severity": {
+                            "critical": 2,
+                            "high": 0,
+                            "medium": 0,
+                            "low": 0,
+                        },
                         "findings": [
                             {
                                 "rule_id": "aws-access-key-id",
@@ -125,7 +152,9 @@ def load_builtin_specs_part5() -> list[dict[str, Any]]:
                 "fragment refs only. Useful for verifying API request/response shapes, config "
                 "files, or tool-call payloads. No LLM."
             ),
-            "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_JSON_SCHEMA_VALIDATOR_AGENT_ID],
+            "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[
+                _JSON_SCHEMA_VALIDATOR_AGENT_ID
+            ],
             "price_per_call_usd": 0.01,
             "tags": ["json", "schema", "validation", "developer-tools", "api"],
             "kind": "aztea_built",
@@ -171,7 +200,10 @@ def load_builtin_specs_part5() -> list[dict[str, Any]]:
                         "schema": {
                             "type": "object",
                             "required": ["name", "age"],
-                            "properties": {"name": {"type": "string"}, "age": {"type": "integer"}},
+                            "properties": {
+                                "name": {"type": "string"},
+                                "age": {"type": "integer"},
+                            },
                         },
                     },
                     "output": {
@@ -238,7 +270,16 @@ def load_builtin_specs_part5() -> list[dict[str, Any]]:
                     },
                     "flags": {
                         "type": "array",
-                        "items": {"type": "string", "enum": ["IGNORECASE", "MULTILINE", "DOTALL", "VERBOSE", "ASCII"]},
+                        "items": {
+                            "type": "string",
+                            "enum": [
+                                "IGNORECASE",
+                                "MULTILINE",
+                                "DOTALL",
+                                "VERBOSE",
+                                "ASCII",
+                            ],
+                        },
                         "default": [],
                     },
                     "timeout_ms_per_sample": {
@@ -260,7 +301,14 @@ def load_builtin_specs_part5() -> list[dict[str, Any]]:
                     "catastrophic_risk": {"type": "boolean"},
                     "summary": {"type": "string"},
                 },
-                required=["pattern", "compiled", "operation", "results", "catastrophic_risk", "summary"],
+                required=[
+                    "pattern",
+                    "compiled",
+                    "operation",
+                    "results",
+                    "catastrophic_risk",
+                    "summary",
+                ],
             ),
             "output_examples": [
                 {
@@ -275,8 +323,28 @@ def load_builtin_specs_part5() -> list[dict[str, Any]]:
                         "compile_error": None,
                         "operation": "findall",
                         "results": [
-                            {"sample_index": 0, "match_count": 1, "matches": [{"start": 5, "end": 13, "match": "555-1234", "groups": [], "named_groups": {}}], "elapsed_ms": 1.2, "timed_out": False},
-                            {"sample_index": 1, "match_count": 0, "matches": [], "elapsed_ms": 0.8, "timed_out": False},
+                            {
+                                "sample_index": 0,
+                                "match_count": 1,
+                                "matches": [
+                                    {
+                                        "start": 5,
+                                        "end": 13,
+                                        "match": "555-1234",
+                                        "groups": [],
+                                        "named_groups": {},
+                                    }
+                                ],
+                                "elapsed_ms": 1.2,
+                                "timed_out": False,
+                            },
+                            {
+                                "sample_index": 1,
+                                "match_count": 0,
+                                "matches": [],
+                                "elapsed_ms": 0.8,
+                                "timed_out": False,
+                            },
                         ],
                         "catastrophic_risk": False,
                         "summary": "Pattern matched 1 occurrence(s) across 2 sample(s).",
@@ -344,9 +412,13 @@ def load_builtin_specs_part5() -> list[dict[str, Any]]:
                         "queries": [
                             {
                                 "sql": "SELECT * FROM users WHERE email = 'a@x'",
-                                "plan": [{"id": 2, "parent": 0, "detail": "SCAN users"}],
+                                "plan": [
+                                    {"id": 2, "parent": 0, "detail": "SCAN users"}
+                                ],
                                 "issues": ["Full scan on `users`"],
-                                "suggestions": ["Consider an index on the WHERE/JOIN columns used against `users`."],
+                                "suggestions": [
+                                    "Consider an index on the WHERE/JOIN columns used against `users`."
+                                ],
                                 "elapsed_ms": 0.3,
                             }
                         ],
@@ -400,7 +472,14 @@ def load_builtin_specs_part5() -> list[dict[str, Any]]:
                     "risk_summary": {"type": "object"},
                     "summary": {"type": "string"},
                 },
-                required=["file_count", "added_lines", "removed_lines", "files", "risk_summary", "summary"],
+                required=[
+                    "file_count",
+                    "added_lines",
+                    "removed_lines",
+                    "files",
+                    "risk_summary",
+                    "summary",
+                ],
             ),
             "output_examples": [
                 {
@@ -424,7 +503,9 @@ def load_builtin_specs_part5() -> list[dict[str, Any]]:
                                 "hunks": 1,
                                 "is_binary": False,
                                 "risk_tags": ["auth"],
-                                "warnings": ["1 new TODO/FIXME/XXX/HACK comment(s) added."],
+                                "warnings": [
+                                    "1 new TODO/FIXME/XXX/HACK comment(s) added."
+                                ],
                             }
                         ],
                         "risk_summary": {

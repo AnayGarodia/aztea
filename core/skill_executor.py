@@ -31,13 +31,15 @@ Design notes:
 from __future__ import annotations
 
 import json
+import logging
 import re
 import uuid
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from core.llm import CompletionRequest, Message, run_with_fallback
+_LOG = logging.getLogger(__name__)
 
+from core.llm import CompletionRequest, Message, run_with_fallback
 
 # ---------------------------------------------------------------------------
 # Hardened prompt scaffolding
@@ -83,7 +85,7 @@ _FENCE_RE = re.compile(r"^```(?:json)?\s*([\s\S]*?)\s*```$", re.MULTILINE)
 # ---------------------------------------------------------------------------
 
 MAX_INPUT_PAYLOAD_BYTES = 64 * 1024  # 64 KB
-RESULT_TRUNCATION_CHARS = 32_000     # final string clamp before returning
+RESULT_TRUNCATION_CHARS = 32_000  # final string clamp before returning
 
 
 class SkillInputTooLargeError(ValueError):
@@ -97,6 +99,7 @@ class SkillExecutionError(RuntimeError):
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class SkillExecutionResult:
@@ -126,13 +129,12 @@ def _format_user_message(payload: dict[str, Any]) -> str:
         # Common case: the natural-language input schema we attach to skills
         return f"User request:\n{payload['task']}"
     try:
-        encoded = json.dumps(payload, separators=(",", ": "), sort_keys=True, default=str)
+        encoded = json.dumps(
+            payload, separators=(",", ": "), sort_keys=True, default=str
+        )
     except (TypeError, ValueError):
         encoded = str(payload)
-    return (
-        "User request payload (JSON):\n"
-        f"{encoded}"
-    )
+    return f"User request payload (JSON):\n{encoded}"
 
 
 def _check_payload_size(payload: dict[str, Any]) -> None:
@@ -177,7 +179,9 @@ def execute_hosted_skill(
     if not body:
         raise SkillExecutionError("Hosted skill has no system_prompt.")
 
-    temperature = float(skill.get("temperature") if skill.get("temperature") is not None else 0.2)
+    temperature = float(
+        skill.get("temperature") if skill.get("temperature") is not None else 0.2
+    )
     max_tokens = int(skill.get("max_output_tokens") or 1500)
     chain = skill.get("model_chain") or None
     if chain is not None and not isinstance(chain, list):
@@ -200,7 +204,7 @@ def execute_hosted_skill(
         except Exception:
             # Heartbeat failures must never abort skill execution. The lease
             # may still be valid; if not the supervisor will recover.
-            pass
+            _LOG.warning("Heartbeat callback failed during skill execution", exc_info=True)
 
     try:
         resp = run_with_fallback(req, model_chain=chain)
@@ -223,6 +227,7 @@ def execute_hosted_skill(
 # ---------------------------------------------------------------------------
 # Output normalisation
 # ---------------------------------------------------------------------------
+
 
 def _strip_fences(text: str) -> str:
     text = (text or "").strip()

@@ -44,6 +44,7 @@ Output:
     "summary": str
   }
 """
+
 from __future__ import annotations
 
 import json
@@ -165,10 +166,20 @@ def _run_one_sample(
         )
     except subprocess.TimeoutExpired:
         elapsed_ms = (time.monotonic() - start) * 1000.0
-        return {"timed_out": True, "elapsed_ms": round(elapsed_ms, 2), "matches": [], "error": "timeout"}
+        return {
+            "timed_out": True,
+            "elapsed_ms": round(elapsed_ms, 2),
+            "matches": [],
+            "error": "timeout",
+        }
     except Exception as exc:  # pragma: no cover
         elapsed_ms = (time.monotonic() - start) * 1000.0
-        return {"timed_out": False, "elapsed_ms": round(elapsed_ms, 2), "matches": [], "error": f"subprocess error: {exc}"}
+        return {
+            "timed_out": False,
+            "elapsed_ms": round(elapsed_ms, 2),
+            "matches": [],
+            "error": f"subprocess error: {exc}",
+        }
 
     elapsed_ms = (time.monotonic() - start) * 1000.0
 
@@ -199,30 +210,51 @@ def run(payload: dict) -> dict:
 
     pattern = payload.get("pattern")
     if not isinstance(pattern, str) or not pattern:
-        return _err("regex_tester.missing_pattern", "'pattern' is required and must be a non-empty string")
+        return _err(
+            "regex_tester.missing_pattern",
+            "'pattern' is required and must be a non-empty string",
+        )
     if len(pattern) > _MAX_PATTERN_CHARS:
-        return _err("regex_tester.pattern_too_large", f"pattern exceeds {_MAX_PATTERN_CHARS} chars")
+        return _err(
+            "regex_tester.pattern_too_large",
+            f"pattern exceeds {_MAX_PATTERN_CHARS} chars",
+        )
 
     samples = payload.get("samples")
     if not isinstance(samples, list) or not samples:
-        return _err("regex_tester.missing_samples", "'samples' is required and must be a non-empty list of strings")
+        return _err(
+            "regex_tester.missing_samples",
+            "'samples' is required and must be a non-empty list of strings",
+        )
     if len(samples) > _MAX_SAMPLES:
-        return _err("regex_tester.too_many_samples", f"samples may contain at most {_MAX_SAMPLES} entries")
+        return _err(
+            "regex_tester.too_many_samples",
+            f"samples may contain at most {_MAX_SAMPLES} entries",
+        )
     for i, s in enumerate(samples):
         if not isinstance(s, str):
             return _err("regex_tester.invalid_sample", f"samples[{i}] must be a string")
         if len(s) > _MAX_SAMPLE_CHARS:
-            return _err("regex_tester.sample_too_large", f"samples[{i}] exceeds {_MAX_SAMPLE_CHARS} chars")
+            return _err(
+                "regex_tester.sample_too_large",
+                f"samples[{i}] exceeds {_MAX_SAMPLE_CHARS} chars",
+            )
 
     operation = str(payload.get("operation") or "findall").strip().lower()
     if operation not in _VALID_OPS:
-        return _err("regex_tester.invalid_operation", f"operation must be one of {sorted(_VALID_OPS)}")
+        return _err(
+            "regex_tester.invalid_operation",
+            f"operation must be one of {sorted(_VALID_OPS)}",
+        )
 
     replacement = ""
     if operation == "sub":
         replacement = payload.get("replacement", "")
         if not isinstance(replacement, str):
-            return _err("regex_tester.invalid_replacement", "replacement must be a string when operation='sub'")
+            return _err(
+                "regex_tester.invalid_replacement",
+                "replacement must be a string when operation='sub'",
+            )
 
     flag_input = payload.get("flags") or []
     if not isinstance(flag_input, list):
@@ -237,9 +269,14 @@ def run(payload: dict) -> dict:
     try:
         timeout_ms = int(payload.get("timeout_ms_per_sample", _DEFAULT_TIMEOUT_MS))
     except (TypeError, ValueError):
-        return _err("regex_tester.invalid_timeout", "timeout_ms_per_sample must be an integer")
+        return _err(
+            "regex_tester.invalid_timeout", "timeout_ms_per_sample must be an integer"
+        )
     if timeout_ms <= 0 or timeout_ms > _MAX_TIMEOUT_MS:
-        return _err("regex_tester.invalid_timeout", f"timeout_ms_per_sample must be in (0, {_MAX_TIMEOUT_MS}]")
+        return _err(
+            "regex_tester.invalid_timeout",
+            f"timeout_ms_per_sample must be in (0, {_MAX_TIMEOUT_MS}]",
+        )
 
     # Try compiling once up front so we report compile errors clearly without
     # spinning a subprocess.
@@ -261,7 +298,9 @@ def run(payload: dict) -> dict:
     results: list[dict[str, Any]] = []
     catastrophic = False
     for idx, sample in enumerate(samples):
-        outcome = _run_one_sample(pattern, flags, sample, operation, replacement, timeout_ms)
+        outcome = _run_one_sample(
+            pattern, flags, sample, operation, replacement, timeout_ms
+        )
         if outcome.get("timed_out"):
             catastrophic = True
         match_count = outcome.get("match_count_override")

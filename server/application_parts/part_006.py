@@ -38,14 +38,23 @@ def _sweep_jobs(
                 },
             )
         else:
-            settled = _settle_failed_job(updated, actor_owner_id=actor_owner_id, event_type="job.timeout_terminal")
+            settled = _settle_failed_job(
+                updated,
+                actor_owner_id=actor_owner_id,
+                event_type="job.timeout_terminal",
+            )
             timeout_failed_job_ids.append(settled["job_id"])
 
     clarification_timeout_failed_job_ids: list[str] = []
     clarification_timeout_proceeded_job_ids: list[str] = []
-    expired_clarification = jobs.list_jobs_with_expired_clarification_deadline(limit=limit)
+    expired_clarification = jobs.list_jobs_with_expired_clarification_deadline(
+        limit=limit
+    )
     for item in expired_clarification:
-        timeout_policy = str(item.get("clarification_timeout_policy") or "").strip().lower() or "fail"
+        timeout_policy = (
+            str(item.get("clarification_timeout_policy") or "").strip().lower()
+            or "fail"
+        )
         if timeout_policy == "proceed":
             resumed = jobs.update_job_status(item["job_id"], "running", completed=False)
             if resumed is None:
@@ -55,7 +64,9 @@ def _sweep_jobs(
                 resumed,
                 "job.clarification_timeout_proceeded",
                 actor_owner_id=actor_owner_id,
-                payload={"clarification_deadline_at": item.get("clarification_deadline_at")},
+                payload={
+                    "clarification_deadline_at": item.get("clarification_deadline_at")
+                },
             )
             continue
 
@@ -85,7 +96,9 @@ def _sweep_jobs(
         )
         if updated is None:
             continue
-        settled = _settle_failed_job(updated, actor_owner_id=actor_owner_id, event_type="job.sla_expired")
+        settled = _settle_failed_job(
+            updated, actor_owner_id=actor_owner_id, event_type="job.sla_expired"
+        )
         sla_failed_job_ids.append(settled["job_id"])
 
     due_retry = jobs.list_jobs_due_for_retry(limit=limit)
@@ -113,12 +126,18 @@ def _sweep_jobs(
             expired,
             "job.output_verification_expired",
             actor_owner_id=actor_owner_id,
-            payload={"output_verification_deadline_at": item.get("output_verification_deadline_at")},
+            payload={
+                "output_verification_deadline_at": item.get(
+                    "output_verification_deadline_at"
+                )
+            },
         )
         auto_settled = _settle_successful_job(expired, actor_owner_id=actor_owner_id)
         if auto_settled.get("settled_at"):
             output_verification_auto_settled_job_ids.append(auto_settled["job_id"])
-    completed_pending_settlement = jobs.list_completed_jobs_pending_settlement(limit=limit)
+    completed_pending_settlement = jobs.list_completed_jobs_pending_settlement(
+        limit=limit
+    )
     settled_successful_job_ids: list[str] = []
     for item in completed_pending_settlement:
         settled = _settle_successful_job(item, actor_owner_id=actor_owner_id)
@@ -175,7 +194,9 @@ def _jobs_sweeper_loop(stop_event: threading.Event) -> None:
             )
             active = {k: v for k, v in summary.items() if isinstance(v, int) and v > 0}
             if active:
-                logging_utils.log_event(_LOG, logging.INFO, "sweeper.pass_completed", active)
+                logging_utils.log_event(
+                    _LOG, logging.INFO, "sweeper.pass_completed", active
+                )
         except Exception as exc:
             _LOG.exception("Jobs sweeper loop failed.")
             _set_sweeper_state(
@@ -254,16 +275,22 @@ def _jobs_metrics(sla_seconds: int = _DEFAULT_SLA_SECONDS) -> dict:
 
         claimed_at = _parse_iso_datetime(row["claimed_at"])
         if claimed_at is not None and claimed_at >= created_at:
-            claim_latencies_ms.append((claimed_at - created_at).total_seconds() * 1000.0)
+            claim_latencies_ms.append(
+                (claimed_at - created_at).total_seconds() * 1000.0
+            )
 
         settled_at = _parse_iso_datetime(row["settled_at"])
         if settled_at is not None and settled_at >= created_at:
-            settlement_latencies_ms.append((settled_at - created_at).total_seconds() * 1000.0)
+            settlement_latencies_ms.append(
+                (settled_at - created_at).total_seconds() * 1000.0
+            )
 
         if int(row["timeout_count"] or 0) > 0:
             timeout_jobs_24h += 1
 
-    claim_p95_ms = round(_p95(claim_latencies_ms) or 0.0, 3) if claim_latencies_ms else None
+    claim_p95_ms = (
+        round(_p95(claim_latencies_ms) or 0.0, 3) if claim_latencies_ms else None
+    )
     settlement_p95_ms = (
         round(_p95(settlement_latencies_ms) or 0.0, 3)
         if settlement_latencies_ms
@@ -302,7 +329,10 @@ def _jobs_metrics(sla_seconds: int = _DEFAULT_SLA_SECONDS) -> dict:
         alerts.append(
             f"Claim latency p95 {claim_p95_ms}ms exceeds SLO target {_SLO_CLAIM_P95_TARGET_MS}ms."
         )
-    if settlement_p95_ms is not None and settlement_p95_ms > _SLO_SETTLEMENT_P95_TARGET_MS:
+    if (
+        settlement_p95_ms is not None
+        and settlement_p95_ms > _SLO_SETTLEMENT_P95_TARGET_MS
+    ):
         alerts.append(
             "Settlement latency p95 "
             f"{settlement_p95_ms}ms exceeds SLO target {_SLO_SETTLEMENT_P95_TARGET_MS}ms."
@@ -326,7 +356,9 @@ def _jobs_metrics(sla_seconds: int = _DEFAULT_SLA_SECONDS) -> dict:
     if not isinstance(sweeper_last_summary, dict):
         sweeper_last_summary = {}
     retry_ready_last_sweep = int(sweeper_last_summary.get("retry_ready_count") or 0)
-    auto_suspended_last_sweep = int(sweeper_last_summary.get("auto_suspended_count") or 0)
+    auto_suspended_last_sweep = int(
+        sweeper_last_summary.get("auto_suspended_count") or 0
+    )
     with _HOOK_WORKER_STATE_LOCK:
         hook_worker_state = dict(_HOOK_WORKER_STATE)
     with _BUILTIN_WORKER_STATE_LOCK:
@@ -362,7 +394,9 @@ def _jobs_metrics(sla_seconds: int = _DEFAULT_SLA_SECONDS) -> dict:
     }
 
 
-def _load_manifest_content(manifest_content: str | None, manifest_url: str | None) -> tuple[str, str]:
+def _load_manifest_content(
+    manifest_content: str | None, manifest_url: str | None
+) -> tuple[str, str]:
     content = (manifest_content or "").strip()
     url = (manifest_url or "").strip()
     if bool(content) == bool(url):
@@ -380,7 +414,9 @@ def _load_manifest_content(manifest_content: str | None, manifest_url: str | Non
     try:
         resp = http.get(safe_url, timeout=15, allow_redirects=False)
         if 300 <= int(resp.status_code) < 400:
-            raise HTTPException(status_code=502, detail="manifest_url redirects are not allowed.")
+            raise HTTPException(
+                status_code=502, detail="manifest_url redirects are not allowed."
+            )
         resp.raise_for_status()
     except http.RequestException as exc:
         _LOG.warning("Failed to fetch manifest_url %s: %s", safe_url, exc)
@@ -415,7 +451,10 @@ def _sorted_agents(agents: list[dict], rank_by: str | None = None) -> list[dict]
         return sorted(agents, key=lambda a: float(a.get("avg_latency_ms") or 0.0))
     if mode == "price":
         return sorted(agents, key=lambda a: float(a.get("price_per_call_usd") or 0.0))
-    raise HTTPException(status_code=422, detail="rank_by must be one of: trust, latency, price.")
+    raise HTTPException(
+        status_code=422, detail="rank_by must be one of: trust, latency, price."
+    )
+
 
 @app.get(
     "/agent.md",
@@ -457,9 +496,13 @@ def onboarding_validate(
     body: OnboardingValidateRequest,
     _: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.ManifestValidationResponse:
-    manifest_content, source = _load_manifest_content(body.manifest_content, body.manifest_url)
+    manifest_content, source = _load_manifest_content(
+        body.manifest_content, body.manifest_url
+    )
     try:
-        validated = onboarding.validate_manifest_content(manifest_content, source=source)
+        validated = onboarding.validate_manifest_content(
+            manifest_content, source=source
+        )
     except onboarding.ManifestValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     return JSONResponse(content=validated)
@@ -491,16 +534,26 @@ def onboarding_ingest(
                     {"current": current_count, "max": _MAX_AGENTS_PER_OWNER},
                 ),
             )
-    manifest_content, source = _load_manifest_content(body.manifest_content, body.manifest_url)
+    manifest_content, source = _load_manifest_content(
+        body.manifest_content, body.manifest_url
+    )
     try:
-        payload = onboarding.build_registration_payload_from_manifest(manifest_content, source=source)
-        safe_endpoint_url = _validate_agent_endpoint_url(request, payload["endpoint_url"])
+        payload = onboarding.build_registration_payload_from_manifest(
+            manifest_content, source=source
+        )
+        safe_endpoint_url = _validate_agent_endpoint_url(
+            request, payload["endpoint_url"]
+        )
         safe_healthcheck_url = None
         if payload.get("healthcheck_url"):
-            safe_healthcheck_url = _validate_outbound_url(payload["healthcheck_url"], "healthcheck_url")
+            safe_healthcheck_url = _validate_outbound_url(
+                payload["healthcheck_url"], "healthcheck_url"
+            )
         safe_verifier_url = None
         if payload.get("output_verifier_url"):
-            safe_verifier_url = _validate_outbound_url(payload["output_verifier_url"], "output_verifier_url")
+            safe_verifier_url = _validate_outbound_url(
+                payload["output_verifier_url"], "output_verifier_url"
+            )
         agent_id = registry.register_agent(
             name=payload["name"],
             description=payload["description"],
@@ -518,7 +571,9 @@ def onboarding_ingest(
     except (ValueError, sqlite3.IntegrityError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    agent = registry.get_agent_with_reputation(agent_id, include_unapproved=True) or registry.get_agent(
+    agent = registry.get_agent_with_reputation(
+        agent_id, include_unapproved=True
+    ) or registry.get_agent(
         agent_id,
         include_unapproved=True,
     )
@@ -545,19 +600,31 @@ def _credit_starter_balance(result: dict[str, Any]) -> None:
     try:
         wallet = payments.get_or_create_wallet(f"user:{result['user_id']}")
         if role == "hirer":
-            payments.deposit(wallet["wallet_id"], 200, "Signup credit ($2.00 — platform-funded)")
+            payments.deposit(
+                wallet["wallet_id"], 200, "Signup credit ($2.00 — platform-funded)"
+            )
         elif role == "both":
-            payments.deposit(wallet["wallet_id"], 100, "Welcome credit ($1.00 to get started)")
+            payments.deposit(
+                wallet["wallet_id"], 100, "Welcome credit ($1.00 to get started)"
+            )
     except Exception:
-        _LOG.warning("Failed to credit starter balance for new user %s", result.get("user_id"))
+        _LOG.warning(
+            "Failed to credit starter balance for new user %s", result.get("user_id")
+        )
 
 
 def _auth_legal_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {
-        "legal_acceptance_required": bool(payload.get("legal_acceptance_required", True)),
+        "legal_acceptance_required": bool(
+            payload.get("legal_acceptance_required", True)
+        ),
         "legal_accepted_at": payload.get("legal_accepted_at"),
-        "terms_version_current": str(payload.get("terms_version_current") or _auth.LEGAL_TERMS_VERSION),
-        "privacy_version_current": str(payload.get("privacy_version_current") or _auth.LEGAL_PRIVACY_VERSION),
+        "terms_version_current": str(
+            payload.get("terms_version_current") or _auth.LEGAL_TERMS_VERSION
+        ),
+        "privacy_version_current": str(
+            payload.get("privacy_version_current") or _auth.LEGAL_PRIVACY_VERSION
+        ),
         "terms_version_accepted": payload.get("terms_version_accepted"),
         "privacy_version_accepted": payload.get("privacy_version_accepted"),
     }
@@ -570,19 +637,25 @@ def _auth_legal_payload(payload: dict[str, Any]) -> dict[str, Any]:
     responses=_error_responses(400, 429, 500, 503),
 )
 @limiter.limit(_AUTH_RATE_LIMIT, key_func=get_remote_address)
-def auth_register(request: Request, body: UserRegisterRequest) -> core_models.AuthRegisterResponse:
+def auth_register(
+    request: Request, body: UserRegisterRequest
+) -> core_models.AuthRegisterResponse:
     """Create a new user account. Returns the initial API key (shown once)."""
     role = body.role or "both"
     try:
         _auth.init_auth_db()
-        result = _auth.register_user(body.username, body.email, body.password, role=role)
+        result = _auth.register_user(
+            body.username, body.email, body.password, role=role
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except sqlite3.DatabaseError:
         _LOG.exception("Auth register failed; retrying after auth schema init.")
         try:
             _auth.init_auth_db()
-            result = _auth.register_user(body.username, body.email, body.password, role=role)
+            result = _auth.register_user(
+                body.username, body.email, body.password, role=role
+            )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         except sqlite3.DatabaseError:
@@ -592,8 +665,12 @@ def auth_register(request: Request, body: UserRegisterRequest) -> core_models.Au
                 detail="Authentication service is temporarily unavailable. Please try again.",
             )
     _credit_starter_balance(result)
-    _email.send_welcome(result.get("email", ""), result.get("username", "there"), role=role)
-    return JSONResponse(content={**result, **_auth_legal_payload(result)}, status_code=201)
+    _email.send_welcome(
+        result.get("email", ""), result.get("username", "there"), role=role
+    )
+    return JSONResponse(
+        content={**result, **_auth_legal_payload(result)}, status_code=201
+    )
 
 
 @app.post(
@@ -602,7 +679,9 @@ def auth_register(request: Request, body: UserRegisterRequest) -> core_models.Au
     responses=_error_responses(401, 429, 500, 503),
 )
 @limiter.limit(_AUTH_RATE_LIMIT, key_func=get_remote_address)
-def auth_login(request: Request, body: UserLoginRequest) -> core_models.AuthLoginResponse:
+def auth_login(
+    request: Request, body: UserLoginRequest
+) -> core_models.AuthLoginResponse:
     """Verify credentials and return the user's session API key.
 
     By default the existing active session key is reused (raw value is None
@@ -640,7 +719,9 @@ def auth_login(request: Request, body: UserLoginRequest) -> core_models.AuthLogi
                 detail="Authentication service is temporarily unavailable. Please try again.",
             )
     if result is None:
-        raise HTTPException(status_code=401, detail="Invalid email/username or password.")
+        raise HTTPException(
+            status_code=401, detail="Invalid email/username or password."
+        )
     return JSONResponse(content={**result, **_auth_legal_payload(result)})
 
 
@@ -650,7 +731,9 @@ def auth_login(request: Request, body: UserLoginRequest) -> core_models.AuthLogi
     responses=_error_responses(400, 401, 429, 500, 503),
 )
 @limiter.limit(_AUTH_RATE_LIMIT, key_func=get_remote_address)
-def auth_google(request: Request, body: GoogleAuthRequest) -> core_models.AuthLoginResponse:
+def auth_google(
+    request: Request, body: GoogleAuthRequest
+) -> core_models.AuthLoginResponse:
     """Verify a Google ID token and log in (or create) the matching account.
 
     Verification uses Google's public ``tokeninfo`` endpoint so we don't need
@@ -681,15 +764,23 @@ def auth_google(request: Request, body: GoogleAuthRequest) -> core_models.AuthLo
     try:
         claims = resp.json()
     except ValueError:
-        raise HTTPException(status_code=401, detail="Google sign-in returned an invalid response.")
+        raise HTTPException(
+            status_code=401, detail="Google sign-in returned an invalid response."
+        )
     if claims.get("aud") != client_id:
-        raise HTTPException(status_code=401, detail="Google sign-in token is for a different app.")
+        raise HTTPException(
+            status_code=401, detail="Google sign-in token is for a different app."
+        )
     if str(claims.get("email_verified")).lower() != "true":
-        raise HTTPException(status_code=401, detail="Your Google account email is not verified.")
+        raise HTTPException(
+            status_code=401, detail="Your Google account email is not verified."
+        )
     email = (claims.get("email") or "").strip().lower()
     name = (claims.get("name") or "").strip()
     if not email:
-        raise HTTPException(status_code=400, detail="Google sign-in did not return an email address.")
+        raise HTTPException(
+            status_code=400, detail="Google sign-in did not return an email address."
+        )
     try:
         _auth.init_auth_db()
         result, created = _auth.login_or_register_via_google(email, name)
@@ -723,28 +814,36 @@ def auth_google(request: Request, body: GoogleAuthRequest) -> core_models.AuthLo
     responses=_error_responses(401, 403, 429, 500),
 )
 @limiter.limit("60/minute")
-def auth_me(request: Request, caller: core_models.CallerContext = Depends(_require_api_key)) -> core_models.AuthMeResponse:
+def auth_me(
+    request: Request, caller: core_models.CallerContext = Depends(_require_api_key)
+) -> core_models.AuthMeResponse:
     """Return the authenticated user's profile."""
     if caller["type"] == "master":
-        return JSONResponse(content={
-            "type": "master",
-            "user_id": None,
-            "username": "admin",
-            "scopes": ["caller", "worker", "admin"],
-        })
+        return JSONResponse(
+            content={
+                "type": "master",
+                "user_id": None,
+                "username": "admin",
+                "scopes": ["caller", "worker", "admin"],
+            }
+        )
     if caller["type"] == "agent_key":
-        raise HTTPException(status_code=403, detail="Agent-scoped keys cannot access /auth/me.")
+        raise HTTPException(
+            status_code=403, detail="Agent-scoped keys cannot access /auth/me."
+        )
     user = caller["user"]
-    return JSONResponse(content={
-        "user_id": user["user_id"],
-        "username": user["username"],
-        "email": user["email"],
-        "full_name": user.get("full_name"),
-        "phone": user.get("phone"),
-        "role": user.get("role") or "both",
-        "scopes": caller.get("scopes") or [],
-        **_auth_legal_payload(user),
-    })
+    return JSONResponse(
+        content={
+            "user_id": user["user_id"],
+            "username": user["username"],
+            "email": user["email"],
+            "full_name": user.get("full_name"),
+            "phone": user.get("phone"),
+            "role": user.get("role") or "both",
+            "scopes": caller.get("scopes") or [],
+            **_auth_legal_payload(user),
+        }
+    )
 
 
 @app.post(
@@ -827,10 +926,14 @@ def auth_update_role(
 ) -> dict:
     """Switch the authenticated user's role between builder, hirer, and both."""
     if caller["type"] != "user":
-        raise HTTPException(status_code=403, detail="Not available for master or agent-scoped keys.")
+        raise HTTPException(
+            status_code=403, detail="Not available for master or agent-scoped keys."
+        )
     new_role = str((body or {}).get("role") or "").strip()
     if new_role not in {"builder", "hirer", "both"}:
-        raise HTTPException(status_code=400, detail="role must be 'builder', 'hirer', or 'both'.")
+        raise HTTPException(
+            status_code=400, detail="role must be 'builder', 'hirer', or 'both'."
+        )
     user_id = caller["user"]["user_id"]
     try:
         _auth.update_user_role(user_id, new_role)
@@ -851,7 +954,9 @@ def auth_update_profile(
 ) -> dict:
     """Edit the authenticated user's profile (username, full name, phone, email)."""
     if caller["type"] != "user":
-        raise HTTPException(status_code=403, detail="Not available for master or agent-scoped keys.")
+        raise HTTPException(
+            status_code=403, detail="Not available for master or agent-scoped keys."
+        )
     payload = body or {}
     fields = {}
     for key in ("username", "full_name", "phone", "email"):
@@ -864,16 +969,18 @@ def auth_update_profile(
         updated = _auth.update_profile(user_id, **fields)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return JSONResponse(content={
-        "user_id": updated["user_id"],
-        "username": updated["username"],
-        "email": updated["email"],
-        "full_name": updated.get("full_name"),
-        "phone": updated.get("phone"),
-        "role": updated.get("role") or "both",
-        "scopes": caller.get("scopes") or [],
-        **_auth_legal_payload(updated),
-    })
+    return JSONResponse(
+        content={
+            "user_id": updated["user_id"],
+            "username": updated["username"],
+            "email": updated["email"],
+            "full_name": updated.get("full_name"),
+            "phone": updated.get("phone"),
+            "role": updated.get("role") or "both",
+            "scopes": caller.get("scopes") or [],
+            **_auth_legal_payload(updated),
+        }
+    )
 
 
 @app.post(
@@ -891,7 +998,9 @@ def auth_change_password(
     Existing API keys are revoked so every active session must re-authenticate.
     """
     if caller["type"] != "user":
-        raise HTTPException(status_code=403, detail="Not available for master or agent-scoped keys.")
+        raise HTTPException(
+            status_code=403, detail="Not available for master or agent-scoped keys."
+        )
     payload = body or {}
     current = str(payload.get("current_password") or "")
     new_password = str(payload.get("new_password") or "")
@@ -915,7 +1024,9 @@ def auth_accept_legal(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.AuthLegalAcceptResponse:
     if caller["type"] != "user":
-        raise HTTPException(status_code=403, detail="Not available for master or agent-scoped keys.")
+        raise HTTPException(
+            status_code=403, detail="Not available for master or agent-scoped keys."
+        )
     client_ip = _request_client_ip(request)
     accepted_ip = str(client_ip) if client_ip is not None else None
     try:
@@ -947,7 +1058,9 @@ def auth_accept_legal(
     responses=_error_responses(401, 403, 429, 500),
 )
 @limiter.limit("30/minute")
-def auth_list_keys(request: Request, caller: core_models.CallerContext = Depends(_require_api_key)) -> core_models.ApiKeyListResponse:
+def auth_list_keys(
+    request: Request, caller: core_models.CallerContext = Depends(_require_api_key)
+) -> core_models.ApiKeyListResponse:
     """List the caller's API keys (metadata only; raw keys are never returned after creation)."""
     if caller["type"] != "user":
         raise HTTPException(status_code=403, detail="Not available for master key.")
@@ -1068,7 +1181,9 @@ def auth_signup_start(request: Request, body: UserRegisterRequest) -> JSONRespon
     email = body.email.strip().lower()
     try:
         _auth.init_auth_db()
-        otp = _auth.issue_signup_verification(body.username, body.email, body.password, role=body.role or "both")
+        otp = _auth.issue_signup_verification(
+            body.username, body.email, body.password, role=body.role or "both"
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     _email.send_signup_verification_otp(email, otp)
@@ -1088,7 +1203,9 @@ def auth_signup_resend(request: Request, body: dict) -> JSONResponse:
         raise HTTPException(status_code=400, detail="Email is required.")
     otp = _auth.reissue_signup_verification_otp(email)
     if otp is None:
-        raise HTTPException(status_code=400, detail="No pending signup for that email. Start over.")
+        raise HTTPException(
+            status_code=400, detail="No pending signup for that email. Start over."
+        )
     _email.send_signup_verification_otp(email, otp)
     return JSONResponse(content={"sent": True, "email": email})
 
@@ -1110,8 +1227,14 @@ def auth_signup_verify(request: Request, body: dict) -> JSONResponse:
     except _auth.SignupVerificationError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     _credit_starter_balance(result)
-    _email.send_welcome(result.get("email", ""), result.get("username", "there"), role=result.get("role", "both"))
-    return JSONResponse(content={**result, **_auth_legal_payload(result)}, status_code=201)
+    _email.send_welcome(
+        result.get("email", ""),
+        result.get("username", "there"),
+        role=result.get("role", "both"),
+    )
+    return JSONResponse(
+        content={**result, **_auth_legal_payload(result)}, status_code=201
+    )
 
 
 @app.post(

@@ -10,8 +10,8 @@ from server.builtin_agents.constants import (
     ARXIV_RESEARCH_AGENT_ID,
     BROWSER_AGENT_ID,
     CODEREVIEW_AGENT_ID,
-    CVELOOKUP_AGENT_ID,
     CURATED_BUILTIN_AGENT_IDS,
+    CVELOOKUP_AGENT_ID,
     DB_SANDBOX_AGENT_ID,
     DEPENDENCY_AUDITOR_AGENT_ID,
     DNS_INSPECTOR_AGENT_ID,
@@ -210,14 +210,21 @@ _DEFAULT_CODEX_RECOMMENDED_BY_AGENT_ID = {
 }
 
 _DEFAULT_SHORT_USE_CASES_BY_AGENT_ID = {
-    CODEREVIEW_AGENT_ID: ["review a snippet", "review a diff", "security-focused review"],
+    CODEREVIEW_AGENT_ID: [
+        "review a snippet",
+        "review a diff",
+        "security-focused review",
+    ],
     CVELOOKUP_AGENT_ID: ["look up a CVE ID", "check affected package versions"],
     ARXIV_RESEARCH_AGENT_ID: ["find recent papers", "scan a research topic"],
     PYTHON_EXECUTOR_AGENT_ID: ["run a snippet", "verify runtime behavior"],
     WEB_RESEARCHER_AGENT_ID: ["fetch live docs", "compare a few web sources"],
     DNS_INSPECTOR_AGENT_ID: ["check DNS", "check SSL expiry", "inspect headers"],
     DEPENDENCY_AUDITOR_AGENT_ID: ["audit requirements.txt", "audit package.json"],
-    MULTI_FILE_EXECUTOR_AGENT_ID: ["run a small project", "verify imports and dependencies"],
+    MULTI_FILE_EXECUTOR_AGENT_ID: [
+        "run a small project",
+        "verify imports and dependencies",
+    ],
     LINTER_AGENT_ID: ["lint Python", "lint JS/TS"],
     SHELL_EXECUTOR_AGENT_ID: ["run tests", "inspect git state", "verify toolchain"],
     TYPE_CHECKER_AGENT_ID: ["run mypy", "run tsc"],
@@ -226,12 +233,35 @@ _DEFAULT_SHORT_USE_CASES_BY_AGENT_ID = {
     LIVE_ENDPOINT_TESTER_AGENT_ID: ["probe latency", "load-test a health endpoint"],
     BROWSER_AGENT_ID: ["render a page", "capture screenshot of SPA"],
     MULTI_LANGUAGE_EXECUTOR_AGENT_ID: ["run JS/TS", "run Go", "run Rust"],
-    SEMANTIC_CODEBASE_SEARCH_AGENT_ID: ["find implementation", "trace a feature across files"],
-    SECRET_SCANNER_AGENT_ID: ["scan a file for leaked keys", "audit .env for secrets", "pre-commit credential check"],
-    JSON_SCHEMA_VALIDATOR_AGENT_ID: ["validate API payload", "check config file shape", "verify tool-call args"],
-    REGEX_TESTER_AGENT_ID: ["test a regex against samples", "detect catastrophic backtracking", "preview substitution"],
-    SQL_EXPLAINER_AGENT_ID: ["EXPLAIN a slow query", "find missing indexes", "spot full scans"],
-    GIT_DIFF_ANALYZER_AGENT_ID: ["pre-PR risk triage", "flag auth/money changes", "spot deleted tests"],
+    SEMANTIC_CODEBASE_SEARCH_AGENT_ID: [
+        "find implementation",
+        "trace a feature across files",
+    ],
+    SECRET_SCANNER_AGENT_ID: [
+        "scan a file for leaked keys",
+        "audit .env for secrets",
+        "pre-commit credential check",
+    ],
+    JSON_SCHEMA_VALIDATOR_AGENT_ID: [
+        "validate API payload",
+        "check config file shape",
+        "verify tool-call args",
+    ],
+    REGEX_TESTER_AGENT_ID: [
+        "test a regex against samples",
+        "detect catastrophic backtracking",
+        "preview substitution",
+    ],
+    SQL_EXPLAINER_AGENT_ID: [
+        "EXPLAIN a slow query",
+        "find missing indexes",
+        "spot full scans",
+    ],
+    GIT_DIFF_ANALYZER_AGENT_ID: [
+        "pre-PR risk triage",
+        "flag auth/money changes",
+        "spot deleted tests",
+    ],
 }
 
 
@@ -244,29 +274,53 @@ def _normalize_builtin_spec(spec: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(f"Built-in spec {agent_id} must use an internal:// endpoint.")
     output_examples = spec.get("output_examples")
     if not isinstance(output_examples, list) or not output_examples:
-        raise ValueError(f"Built-in spec {agent_id} must include at least one output example.")
+        raise ValueError(
+            f"Built-in spec {agent_id} must include at least one output example."
+        )
     if agent_id in CURATED_BUILTIN_AGENT_IDS:
-        category = str(spec.get("category") or _DEFAULT_CATEGORY_BY_AGENT_ID.get(agent_id) or "").strip()
+        category = str(
+            spec.get("category") or _DEFAULT_CATEGORY_BY_AGENT_ID.get(agent_id) or ""
+        ).strip()
         if not category:
             raise ValueError(f"Built-in spec {agent_id} is missing category metadata.")
         cacheable = spec.get("cacheable")
         if cacheable is None:
             if agent_id not in _DEFAULT_CACHEABLE_BY_AGENT_ID:
-                raise ValueError(f"Built-in spec {agent_id} is missing cacheable metadata.")
+                raise ValueError(
+                    f"Built-in spec {agent_id} is missing cacheable metadata."
+                )
             cacheable = _DEFAULT_CACHEABLE_BY_AGENT_ID[agent_id]
         runtime_requirements = spec.get("runtime_requirements")
         if runtime_requirements is None:
-            runtime_requirements = _DEFAULT_RUNTIME_REQUIREMENTS_BY_AGENT_ID.get(agent_id, [])
+            runtime_requirements = _DEFAULT_RUNTIME_REQUIREMENTS_BY_AGENT_ID.get(
+                agent_id, []
+            )
         return {
             **spec,
             "category": category,
             "cacheable": bool(cacheable),
             "is_featured": bool(spec.get("is_featured", True)),
             "runtime_requirements": list(runtime_requirements),
-            "tooling_kind": str(spec.get("tooling_kind") or _DEFAULT_TOOLING_KIND_BY_AGENT_ID.get(agent_id) or "tool_execution"),
-            "stability_tier": str(spec.get("stability_tier") or _DEFAULT_STABILITY_TIER_BY_AGENT_ID.get(agent_id) or "stable"),
-            "codex_recommended": bool(spec.get("codex_recommended", _DEFAULT_CODEX_RECOMMENDED_BY_AGENT_ID.get(agent_id, False))),
-            "short_use_cases": list(spec.get("short_use_cases") or _DEFAULT_SHORT_USE_CASES_BY_AGENT_ID.get(agent_id, [])),
+            "tooling_kind": str(
+                spec.get("tooling_kind")
+                or _DEFAULT_TOOLING_KIND_BY_AGENT_ID.get(agent_id)
+                or "tool_execution"
+            ),
+            "stability_tier": str(
+                spec.get("stability_tier")
+                or _DEFAULT_STABILITY_TIER_BY_AGENT_ID.get(agent_id)
+                or "stable"
+            ),
+            "codex_recommended": bool(
+                spec.get(
+                    "codex_recommended",
+                    _DEFAULT_CODEX_RECOMMENDED_BY_AGENT_ID.get(agent_id, False),
+                )
+            ),
+            "short_use_cases": list(
+                spec.get("short_use_cases")
+                or _DEFAULT_SHORT_USE_CASES_BY_AGENT_ID.get(agent_id, [])
+            ),
         }
     return dict(spec)
 
@@ -294,15 +348,16 @@ def _all_builtin_specs() -> tuple[dict[str, Any], ...]:
 
 
 def builtin_agent_specs() -> list[dict[str, Any]]:
-    return [spec for spec in _all_builtin_specs() if spec.get("agent_id") in CURATED_BUILTIN_AGENT_IDS]
+    return [
+        spec
+        for spec in _all_builtin_specs()
+        if spec.get("agent_id") in CURATED_BUILTIN_AGENT_IDS
+    ]
 
 
 @lru_cache(maxsize=1)
 def builtin_spec_by_id() -> dict[str, dict[str, Any]]:
-    return {
-        str(spec["agent_id"]): dict(spec)
-        for spec in builtin_agent_specs()
-    }
+    return {str(spec["agent_id"]): dict(spec) for spec in builtin_agent_specs()}
 
 
 def builtin_catalog_metadata(agent_id: str) -> dict[str, Any] | None:

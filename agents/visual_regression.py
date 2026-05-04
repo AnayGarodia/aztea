@@ -26,6 +26,7 @@ Optional:
   ``threshold``  (int, 0–255, default 10) — per-channel delta below which pixels are ignored
   ``highlight_color`` (str, default "#ff0000") — hex color for diff overlay
 """
+
 from __future__ import annotations
 
 import base64
@@ -36,7 +37,6 @@ from urllib.parse import unquote
 import requests
 
 from core.url_security import validate_outbound_url
-
 
 _MAX_IMAGE_BYTES = 8 * 1024 * 1024
 
@@ -125,7 +125,10 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     left_source = _image_source(payload, "left")
     right_source = _image_source(payload, "right")
     if not left_source or not right_source:
-        return _err("visual_regression.missing_input", "Provide left_url/right_url or left_artifact/right_artifact.")
+        return _err(
+            "visual_regression.missing_input",
+            "Provide left_url/right_url or left_artifact/right_artifact.",
+        )
 
     try:
         Image, ImageChops, ImageDraw = _load_pillow()
@@ -134,13 +137,18 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         left = Image.open(io.BytesIO(left_bytes)).convert("RGBA")
         right = Image.open(io.BytesIO(right_bytes)).convert("RGBA")
     except requests.RequestException as exc:
-        return _err("visual_regression.fetch_failed", f"Failed to fetch image: {type(exc).__name__}")
+        return _err(
+            "visual_regression.fetch_failed",
+            f"Failed to fetch image: {type(exc).__name__}",
+        )
     except ValueError as exc:
         return _err("visual_regression.invalid_input", str(exc))
     except RuntimeError as exc:
         return _err("visual_regression.tool_unavailable", str(exc))
     except Exception as exc:
-        return _err("visual_regression.decode_failed", f"Could not decode input image: {exc}")
+        return _err(
+            "visual_regression.decode_failed", f"Could not decode input image: {exc}"
+        )
 
     if left.size != right.size:
         return _err(

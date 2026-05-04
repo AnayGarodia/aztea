@@ -19,18 +19,23 @@ from .db import (
     VALID_STATUSES,
     _clean_optional_text,
     _conn,
-    _decode_json,
-    _iso_after_seconds,
-    _msg_to_dict,
     _normalize_clarification_timeout_policy,
     _normalize_fee_bearer_policy,
     _normalize_parent_cascade_policy,
     _now,
-    _now_dt,
-    _parse_ts,
     _row_to_dict,
     _to_non_negative_int,
 )
+
+# Default values for job creation — named here so callers and the DB layer
+# both reference the same source of truth.
+DEFAULT_MAX_ATTEMPTS = 3
+DEFAULT_DISPUTE_WINDOW_HOURS = 72
+DEFAULT_PLATFORM_FEE_PCT = 10
+# Max caller_charge is 2x price (covers 100% fee) plus a $10 buffer for rounding.
+_MAX_CALLER_CHARGE_BUFFER_CENTS = 1000
+
+
 def create_job(
     agent_id: str,
     caller_owner_id: str,
@@ -41,17 +46,17 @@ def create_job(
     charge_tx_id: str,
     input_payload: dict,
     caller_charge_cents: int | None = None,
-    platform_fee_pct_at_create: int = 10,
+    platform_fee_pct_at_create: int = DEFAULT_PLATFORM_FEE_PCT,
     fee_bearer_policy: str = "caller",
     client_id: str | None = None,
     agent_owner_id: str | None = None,
-    max_attempts: int = 3,
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     parent_job_id: str | None = None,
     tree_depth: int = 0,
     parent_cascade_policy: str = "detach",
     clarification_timeout_seconds: int | None = None,
     clarification_timeout_policy: str = "fail",
-    dispute_window_hours: int = 72,
+    dispute_window_hours: int = DEFAULT_DISPUTE_WINDOW_HOURS,
     judge_agent_id: str | None = None,
     callback_url: str | None = None,
     callback_secret: str | None = None,
@@ -78,7 +83,9 @@ def create_job(
     """
     if price_cents < 0:
         raise ValueError("price_cents must be non-negative.")
-    parsed_caller_charge_cents = _to_non_negative_int(caller_charge_cents, default=price_cents)
+    parsed_caller_charge_cents = _to_non_negative_int(
+        caller_charge_cents, default=price_cents
+    )
     if parsed_caller_charge_cents <= 0 and price_cents > 0:
         raise ValueError(
             "invalid_charge_amount: caller_charge_cents must be positive when price is non-zero."
@@ -87,11 +94,13 @@ def create_job(
         raise ValueError("caller_charge_cents must be >= price_cents.")
     # Hard cap: caller_charge_cents must not exceed price_cents * 2 (room for 100% platform fee)
     # to prevent inflated charges that would produce a negative net payout on partial refund.
-    if parsed_caller_charge_cents > max(price_cents * 2, price_cents + 1000):
+    if parsed_caller_charge_cents > max(price_cents * 2, price_cents + _MAX_CALLER_CHARGE_BUFFER_CENTS):
         raise ValueError(
             "charge_exceeds_listed_price: caller_charge_cents must not exceed 2x price_cents."
         )
-    parsed_platform_fee_pct = _to_non_negative_int(platform_fee_pct_at_create, default=10)
+    parsed_platform_fee_pct = _to_non_negative_int(
+        platform_fee_pct_at_create, default=DEFAULT_PLATFORM_FEE_PCT
+    )
     if parsed_platform_fee_pct > 100:
         raise ValueError("platform_fee_pct_at_create must be <= 100.")
     normalized_fee_bearer_policy = _normalize_fee_bearer_policy(fee_bearer_policy)
@@ -100,7 +109,9 @@ def create_job(
     if parsed_max_attempts < 1:
         raise ValueError("max_attempts must be >= 1.")
     parsed_tree_depth = _to_non_negative_int(tree_depth, default=0)
-    normalized_parent_cascade_policy = _normalize_parent_cascade_policy(parent_cascade_policy)
+    normalized_parent_cascade_policy = _normalize_parent_cascade_policy(
+        parent_cascade_policy
+    )
     parsed_clarification_timeout_seconds = _to_non_negative_int(
         clarification_timeout_seconds,
         default=0,
@@ -205,7 +216,9 @@ def list_child_jobs(
     where_status = ""
     if statuses:
         normalized_statuses = tuple(
-            status for status in statuses if isinstance(status, str) and status in VALID_STATUSES
+            status
+            for status in statuses
+            if isinstance(status, str) and status in VALID_STATUSES
         )
         if normalized_statuses:
             placeholders = ", ".join(["?"] * len(normalized_statuses))
@@ -229,9 +242,7 @@ def list_child_jobs(
 
 def get_job(job_id: str) -> dict | None:
     with _conn() as conn:
-        row = conn.execute(
-            "SELECT * FROM jobs WHERE job_id = ?", (job_id,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
     return _row_to_dict(row) if row else None
 
 

@@ -10,11 +10,10 @@ them without booting the whole FastAPI application.
 from __future__ import annotations
 
 import logging
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
-from core import payments
-from core import registry
+from core import payments, registry
 
 _LOG = logging.getLogger("aztea.pricing")
 
@@ -26,7 +25,9 @@ def _usd_to_cents(value: Any) -> int:
         return 0
     if not amount.is_finite() or amount < 0:
         return 0
-    cents = int((amount * Decimal("100")).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    cents = int(
+        (amount * Decimal("100")).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    )
     if amount > 0 and cents == 0:
         return 1
     return cents
@@ -35,6 +36,7 @@ def _usd_to_cents(value: Any) -> int:
 def _builtin_pricing_overlay_initial() -> dict[str, dict[str, Any]]:
     try:
         from server.builtin_agents import get_pricing_overlay
+
         return get_pricing_overlay()
     except Exception:  # pragma: no cover - defensive
         return {}
@@ -88,7 +90,9 @@ def estimate_variable_charge(
     for name, cap in caps:
         if price_cents > cap:
             result["cap_violated"] = {
-                "scope": name, "limit_cents": cap, "price_cents": price_cents,
+                "scope": name,
+                "limit_cents": cap,
+                "price_cents": price_cents,
             }
             break
     return result
@@ -141,7 +145,9 @@ def maybe_refund_pricing_diff(
     if input_field:
         actual_payload[input_field] = actual_units
     resolved_fee_pct = (
-        int(platform_fee_pct) if platform_fee_pct is not None else int(payments.PLATFORM_FEE_PCT)
+        int(platform_fee_pct)
+        if platform_fee_pct is not None
+        else int(payments.PLATFORM_FEE_PCT)
     )
     resolved_bearer = str(fee_bearer_policy or "caller")
     actual_estimate = registry.estimate_price_cents(

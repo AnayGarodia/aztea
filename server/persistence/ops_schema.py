@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import sqlite3
 
-from core.db import get_db_connection
 from core import jobs
+from core.db import get_db_connection
 
 
 def migrate_job_event_deliveries_status_schema(conn: sqlite3.Connection) -> None:

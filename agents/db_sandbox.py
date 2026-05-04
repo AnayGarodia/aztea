@@ -27,6 +27,7 @@ Optional fields:
 All write operations are committed after each non-SELECT statement; PRAGMA
 ``foreign_keys=ON`` is set so FK constraints are honoured in the sandbox.
 """
+
 from __future__ import annotations
 
 import re as _re
@@ -35,7 +36,6 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Any
-
 
 _MAX_QUERY_CHARS = 40_000
 _MAX_STATEMENTS = 25
@@ -49,7 +49,9 @@ _BLOCKED_SQL_RE = _re.compile(r"^\s*(ATTACH|DETACH)\s", _re.IGNORECASE)
 def _check_sql_blocked(sql: str) -> "dict | None":
     if _BLOCKED_SQL_RE.match(sql):
         keyword = sql.strip().split()[0].upper()
-        return _err("db_sandbox.blocked_command", f"{keyword} is not permitted in the sandbox.")
+        return _err(
+            "db_sandbox.blocked_command", f"{keyword} is not permitted in the sandbox."
+        )
     return None
 
 
@@ -61,20 +63,48 @@ def _normalize_queries(payload: dict[str, Any]) -> list[dict[str, Any]]:
     queries = payload.get("queries")
     if isinstance(queries, list) and queries:
         if len(queries) > _MAX_STATEMENTS:
-            return [{"error": _err("db_sandbox.too_many_queries", f"queries may contain at most {_MAX_STATEMENTS} statements.")}]
+            return [
+                {
+                    "error": _err(
+                        "db_sandbox.too_many_queries",
+                        f"queries may contain at most {_MAX_STATEMENTS} statements.",
+                    )
+                }
+            ]
         normalized: list[dict[str, Any]] = []
         for index, item in enumerate(queries[:_MAX_STATEMENTS]):
             if not isinstance(item, dict):
-                return [{"error": _err("db_sandbox.invalid_query", f"queries[{index}] must be an object.")}]
+                return [
+                    {
+                        "error": _err(
+                            "db_sandbox.invalid_query",
+                            f"queries[{index}] must be an object.",
+                        )
+                    }
+                ]
             sql = str(item.get("sql") or "").strip()
             if not sql:
-                return [{"error": _err("db_sandbox.invalid_query", f"queries[{index}].sql is required.")}]
+                return [
+                    {
+                        "error": _err(
+                            "db_sandbox.invalid_query",
+                            f"queries[{index}].sql is required.",
+                        )
+                    }
+                ]
             blocked = _check_sql_blocked(sql)
             if blocked:
                 return [{"error": blocked}]
             params = item.get("params")
             if params is not None and not isinstance(params, list):
-                return [{"error": _err("db_sandbox.invalid_query", f"queries[{index}].params must be a list.")}]
+                return [
+                    {
+                        "error": _err(
+                            "db_sandbox.invalid_query",
+                            f"queries[{index}].params must be a list.",
+                        )
+                    }
+                ]
             normalized.append({"sql": sql, "params": params or []})
         return normalized
 
@@ -90,7 +120,9 @@ def _normalize_queries(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return [{"sql": sql, "params": params or []}]
 
 
-def _query_plan(cur: sqlite3.Cursor, sql: str, params: list[Any]) -> list[dict[str, Any]]:
+def _query_plan(
+    cur: sqlite3.Cursor, sql: str, params: list[Any]
+) -> list[dict[str, Any]]:
     try:
         rows = cur.execute(f"EXPLAIN QUERY PLAN {sql}", params).fetchall()
     except sqlite3.DatabaseError:
@@ -110,7 +142,10 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     """
     schema_sql = str(payload.get("schema_sql") or "").strip()
     if len(schema_sql) > _MAX_QUERY_CHARS:
-        return _err("db_sandbox.schema_too_large", f"schema_sql exceeds {_MAX_QUERY_CHARS} characters.")
+        return _err(
+            "db_sandbox.schema_too_large",
+            f"schema_sql exceeds {_MAX_QUERY_CHARS} characters.",
+        )
 
     if schema_sql:
         for _stmt in _re.split(r";\s*", schema_sql):
@@ -126,7 +161,10 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
 
     for query in normalized_queries:
         if len(query["sql"]) > _MAX_QUERY_CHARS:
-            return _err("db_sandbox.sql_too_large", f"Each sql statement must be <= {_MAX_QUERY_CHARS} characters.")
+            return _err(
+                "db_sandbox.sql_too_large",
+                f"Each sql statement must be <= {_MAX_QUERY_CHARS} characters.",
+            )
 
     timeout_seconds = _TIMEOUT_SECONDS
     explain = bool(payload.get("explain", True))
@@ -186,15 +224,22 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
                             "rows": rows,
                             "row_count": len(rows),
                             "truncated": truncated,
-                            "rows_affected": cursor.rowcount if cursor.rowcount >= 0 else None,
+                            "rows_affected": cursor.rowcount
+                            if cursor.rowcount >= 0
+                            else None,
                             "query_plan": plan,
-                            "execution_time_ms": int((time.monotonic() - statement_started) * 1000),
+                            "execution_time_ms": int(
+                                (time.monotonic() - statement_started) * 1000
+                            ),
                         }
                     )
                 except sqlite3.OperationalError as exc:
                     message = str(exc)
                     if "interrupted" in message.lower():
-                        return _err("db_sandbox.timeout", f"Query exceeded {timeout_seconds:.0f}s execution limit.")
+                        return _err(
+                            "db_sandbox.timeout",
+                            f"Query exceeded {timeout_seconds:.0f}s execution limit.",
+                        )
                     return _err("db_sandbox.sql_error", message)
                 except sqlite3.DatabaseError as exc:
                     return _err("db_sandbox.database_error", str(exc))

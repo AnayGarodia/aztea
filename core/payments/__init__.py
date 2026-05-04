@@ -23,11 +23,7 @@ intentionally excluded — it is only an internal alias inside
 
 from __future__ import annotations
 
-from . import base
-from . import trust_disputes
-from . import variable_pricing
-from . import subwallets
-from . import audit
+from . import audit, base, subwallets, trust_disputes, variable_pricing
 
 for _mod in (base, trust_disputes, variable_pricing, subwallets, audit):
     for _n in dir(_mod):

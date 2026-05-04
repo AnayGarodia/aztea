@@ -20,11 +20,7 @@ from __future__ import annotations
 
 from core import embeddings
 
-from . import agents_ops
-from . import call_history
-from . import core_schema
-from . import identity_backfill
-from . import pricing
+from . import agents_ops, call_history, core_schema, identity_backfill, pricing
 
 _SKIP = frozenset({"embeddings"})
 

@@ -9,11 +9,7 @@ from typing import Any, Callable
 
 import requests
 
-from core import fastpath
-from core import jobs
-from core import payments
-from core import registry
-from core import url_security
+from core import fastpath, jobs, payments, registry, url_security
 from server import pricing_helpers
 
 from . import db
@@ -52,7 +48,11 @@ def validate_definition(definition: dict) -> dict:
         depends_on_raw = raw_node.get("depends_on") or []
         if not isinstance(depends_on_raw, list):
             raise ValueError(f"Pipeline node '{node_id}' depends_on must be an array.")
-        depends_on = [str(item or "").strip() for item in depends_on_raw if str(item or "").strip()]
+        depends_on = [
+            str(item or "").strip()
+            for item in depends_on_raw
+            if str(item or "").strip()
+        ]
         nodes.append(
             {
                 "id": node_id,
@@ -66,7 +66,9 @@ def validate_definition(definition: dict) -> dict:
     for node in nodes:
         for dep in node["depends_on"]:
             if dep not in known_ids:
-                raise ValueError(f"Pipeline node '{node['id']}' depends on unknown node '{dep}'.")
+                raise ValueError(
+                    f"Pipeline node '{node['id']}' depends on unknown node '{dep}'."
+                )
 
     indegree: dict[str, int] = {node["id"]: 0 for node in nodes}
     outgoing: dict[str, list[str]] = {node["id"]: [] for node in nodes}
@@ -76,7 +78,9 @@ def validate_definition(definition: dict) -> dict:
             indegree[node["id"]] += 1
             outgoing[dep].append(node["id"])
 
-    queue = deque(sorted([node_id for node_id, degree in indegree.items() if degree == 0]))
+    queue = deque(
+        sorted([node_id for node_id, degree in indegree.items() if degree == 0])
+    )
     ordered: list[dict[str, Any]] = []
     while queue:
         node_id = queue.popleft()
@@ -115,10 +119,14 @@ def _invoke_agent(
 ) -> dict:
     price_cents, estimate, distribution = _agent_price_and_distribution(agent, payload)
     caller_charge_cents = int(distribution["caller_charge_cents"])
-    caller_wallet = payments.get_wallet(caller_wallet_id) or payments.get_or_create_wallet(caller_owner_id)
+    caller_wallet = payments.get_wallet(
+        caller_wallet_id
+    ) or payments.get_or_create_wallet(caller_owner_id)
     agent_wallet = payments.get_or_create_wallet(f"agent:{agent['agent_id']}")
     platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
-    charge_tx_id = payments.pre_call_charge(caller_wallet["wallet_id"], caller_charge_cents, agent["agent_id"])
+    charge_tx_id = payments.pre_call_charge(
+        caller_wallet["wallet_id"], caller_charge_cents, agent["agent_id"]
+    )
     job = jobs.create_job(
         agent_id=agent["agent_id"],
         caller_owner_id=caller_owner_id,
@@ -162,9 +170,15 @@ def _invoke_agent(
                 stream=True,
             ) as response:
                 if not response.ok:
-                    raise RuntimeError(f"Agent endpoint returned HTTP {response.status_code}.")
+                    raise RuntimeError(
+                        f"Agent endpoint returned HTTP {response.status_code}."
+                    )
                 declared = response.headers.get("Content-Length")
-                if declared and declared.isdigit() and int(declared) > _MAX_RESPONSE_BYTES:
+                if (
+                    declared
+                    and declared.isdigit()
+                    and int(declared) > _MAX_RESPONSE_BYTES
+                ):
                     raise RuntimeError("Agent response exceeds size limit.")
                 buf = bytearray()
                 for chunk in response.iter_content(chunk_size=64 * 1024):
@@ -175,12 +189,15 @@ def _invoke_agent(
                         raise RuntimeError("Agent response exceeds size limit.")
                 try:
                     import json as _json
+
                     output = _json.loads(buf.decode("utf-8"))
                 except (ValueError, UnicodeDecodeError) as exc:
                     raise RuntimeError("Agent returned malformed JSON.") from exc
         if not isinstance(output, dict):
             output = {"output": output}
-        jobs.update_job_status(job["job_id"], "complete", output_payload=output, completed=True)
+        jobs.update_job_status(
+            job["job_id"], "complete", output_payload=output, completed=True
+        )
         payments.post_call_payout(
             agent_wallet["wallet_id"],
             platform_wallet["wallet_id"],
@@ -213,8 +230,18 @@ def _invoke_agent(
         )
         return output
     except Exception:
-        jobs.update_job_status(job["job_id"], "failed", error_message="Pipeline step failed.", completed=True)
-        payments.post_call_refund(caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent["agent_id"])
+        jobs.update_job_status(
+            job["job_id"],
+            "failed",
+            error_message="Pipeline step failed.",
+            completed=True,
+        )
+        payments.post_call_refund(
+            caller_wallet["wallet_id"],
+            charge_tx_id,
+            caller_charge_cents,
+            agent["agent_id"],
+        )
         jobs.mark_settled(job["job_id"])
         registry.update_call_stats(
             agent["agent_id"],
@@ -242,7 +269,9 @@ def _execute_run(
             payload = resolve_input_map(node["input_map"], input_payload, step_results)
             agent = registry.get_agent(node["agent_id"], include_unapproved=True)
             if agent is None:
-                raise ValueError(f"Pipeline node '{node['id']}' agent '{node['agent_id']}' was not found.")
+                raise ValueError(
+                    f"Pipeline node '{node['id']}' agent '{node['agent_id']}' was not found."
+                )
             output = _invoke_agent(
                 agent=agent,
                 payload=payload,
@@ -257,7 +286,9 @@ def _execute_run(
         if len(terminal_nodes) == 1:
             final_output = step_results.get(terminal_nodes[0])
         else:
-            final_output = {node_id: step_results.get(node_id) for node_id in terminal_nodes}
+            final_output = {
+                node_id: step_results.get(node_id) for node_id in terminal_nodes
+            }
         db.complete_run(run_id, final_output)
     except Exception as exc:
         # Include the exception class so the error_message is self-explanatory

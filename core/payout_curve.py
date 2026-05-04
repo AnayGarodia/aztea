@@ -46,7 +46,9 @@ def parse_curve(raw: Any) -> dict[str, float] | None:
         except json.JSONDecodeError as exc:
             raise ValueError(f"payout_curve must be valid JSON: {exc}") from exc
     if not isinstance(raw, dict):
-        raise ValueError("payout_curve must be a JSON object mapping star ratings to fractions.")
+        raise ValueError(
+            "payout_curve must be a JSON object mapping star ratings to fractions."
+        )
     result: dict[str, float] = {}
     for key, val in raw.items():
         star = str(key).strip()
@@ -172,11 +174,16 @@ def apply_curve_clawback(
         return {"clawback_cents": 0, "payout_fraction": 1.0, "applied": False}
 
     clawback_cents = int(
-        (Decimal(str(agent_payout_cents)) * (1 - Decimal(str(payout_fraction))))
-        .quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+        (
+            Decimal(str(agent_payout_cents)) * (1 - Decimal(str(payout_fraction)))
+        ).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
     )
     if clawback_cents <= 0:
-        return {"clawback_cents": 0, "payout_fraction": payout_fraction, "applied": False}
+        return {
+            "clawback_cents": 0,
+            "payout_fraction": payout_fraction,
+            "applied": False,
+        }
 
     idempotency_key = f"payout_curve:{job_id}"
     from core.payments import base as _payments_base
@@ -188,7 +195,12 @@ def apply_curve_clawback(
             (idempotency_key,),
         ).fetchone()
         if existing is not None:
-            return {"clawback_cents": clawback_cents, "payout_fraction": payout_fraction, "applied": False, "reason": "already_applied"}
+            return {
+                "clawback_cents": clawback_cents,
+                "payout_fraction": payout_fraction,
+                "applied": False,
+                "reason": "already_applied",
+            }
         try:
             _debit_wallet_conn(
                 conn,
@@ -208,7 +220,11 @@ def apply_curve_clawback(
             )
         except (_payments_base.InsufficientBalanceError, LookupError) as exc:
             conn.rollback()
-            reason = "wallet_missing" if isinstance(exc, LookupError) else "insufficient_balance"
+            reason = (
+                "wallet_missing"
+                if isinstance(exc, LookupError)
+                else "insufficient_balance"
+            )
             _LOG.warning(
                 "payout_curve.clawback_skipped job=%s agent=%s reason=%s error=%s",
                 job_id,
@@ -226,6 +242,13 @@ def apply_curve_clawback(
 
     _LOG.info(
         "payout_curve.clawback job=%s agent=%s fraction=%.2f clawback_cents=%d",
-        job_id, agent_id, payout_fraction, clawback_cents,
+        job_id,
+        agent_id,
+        payout_fraction,
+        clawback_cents,
     )
-    return {"clawback_cents": clawback_cents, "payout_fraction": payout_fraction, "applied": True}
+    return {
+        "clawback_cents": clawback_cents,
+        "payout_fraction": payout_fraction,
+        "applied": True,
+    }

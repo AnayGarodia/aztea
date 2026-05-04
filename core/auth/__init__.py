@@ -23,9 +23,7 @@ All network-facing validation of user-supplied fields happens in
 
 from __future__ import annotations
 
-from . import schema
-from . import users
-from . import profile
+from . import profile, schema, users
 
 # Re-export every public symbol from the submodules so ``core.auth.<name>`` keeps
 # working. Underscored private helpers are included on purpose — integration tests

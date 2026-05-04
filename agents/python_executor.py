@@ -19,6 +19,7 @@ Output: {
 """
 
 import json
+import logging
 import multiprocessing as mp
 import os
 import re
@@ -30,8 +31,10 @@ import time
 from multiprocessing.pool import Pool
 from typing import Any
 
-from core.executor_sandbox import build_subprocess_env
+_LOG = logging.getLogger(__name__)
+
 from core import feature_flags as _feature_flags
+from core.executor_sandbox import build_subprocess_env
 from core.llm import CompletionRequest, Message, run_with_fallback
 
 _MAX_OUTPUT_CHARS = 8000
@@ -82,6 +85,7 @@ def _strip_injection_markers(text: str) -> tuple[str, bool]:
     redacted, n = _INJECTION_MARKERS_RE.subn("[REDACTED-INJECTION-PHRASE]", text)
     return redacted, n > 0
 
+
 # Prepended to every user submission. Runs FIRST inside the subprocess and
 # installs a PEP 578 audit hook that confines file I/O to the sandbox cwd
 # and blocks every outbound network / subprocess / dynamic-import escape.
@@ -98,21 +102,41 @@ def _strip_injection_markers(text: str) -> tuple[str, bool]:
 _SANDBOX_BLOCKED_AUDIT_EVENTS = (
     # Process / shell escapes
     "os.sy" + "stem",
-    "os.exec", "os.execv", "os.execve", "os.execvp", "os.execvpe",
-    "os.spawn", "os.spawnv", "os.spawnve", "os.spawnvp", "os.spawnvpe",
-    "os.fork", "os.forkpty", "os.posix_spawn", "os.posix_spawnp",
+    "os.exec",
+    "os.execv",
+    "os.execve",
+    "os.execvp",
+    "os.execvpe",
+    "os.spawn",
+    "os.spawnv",
+    "os.spawnve",
+    "os.spawnvp",
+    "os.spawnvpe",
+    "os.fork",
+    "os.forkpty",
+    "os.posix_spawn",
+    "os.posix_spawnp",
     "subprocess.Popen",
     # Filesystem mutators we don't want
-    "shutil.move", "shutil.copy", "shutil.copy2",
+    "shutil.move",
+    "shutil.copy",
+    "shutil.copy2",
     # Network — every form
-    "socket.connect", "socket.bind",
-    "socket.gethostbyname", "socket.getaddrinfo",
+    "socket.connect",
+    "socket.bind",
+    "socket.gethostbyname",
+    "socket.getaddrinfo",
     "urllib.Request",
     # Native code loading
-    "ctypes.dlopen", "ctypes.CDLL", "ctypes.PyDLL", "ctypes.WinDLL",
-    "ctypes.LoadLibrary", "ctypes.cdll.LoadLibrary",
+    "ctypes.dlopen",
+    "ctypes.CDLL",
+    "ctypes.PyDLL",
+    "ctypes.WinDLL",
+    "ctypes.LoadLibrary",
+    "ctypes.cdll.LoadLibrary",
     # Windows registry
-    "winreg.OpenKey", "winreg.CreateKey",
+    "winreg.OpenKey",
+    "winreg.CreateKey",
 )
 _SANDBOX_PRELUDE = (
     "import os as _os\n"
@@ -211,8 +235,10 @@ def _adjust_traceback_line_numbers(stderr: str) -> str:
     lines = []
     for line in stderr.splitlines():
         if 'File "' in line and ("main.py" in line or "aztea" in line.lower()):
+
             def _fix(m: re.Match) -> str:
                 return f"line {max(1, int(m.group(1)) - _PRELUDE_LINE_COUNT)}"
+
             line = re.sub(r"\bline (\d+)\b", _fix, line)
         lines.append(line)
     return "\n".join(lines)
@@ -245,7 +271,9 @@ _BLOCKED_PATTERNS = [
     r"os\.getenv\s*\(",
 ]
 
-_WARM_POOL_SIZE = max(1, min(int(os.environ.get("AZTEA_PYTHON_WARM_POOL_SIZE", "2") or "2"), 8))
+_WARM_POOL_SIZE = max(
+    1, min(int(os.environ.get("AZTEA_PYTHON_WARM_POOL_SIZE", "2") or "2"), 8)
+)
 _WARM_POOL: Pool | None = None
 
 
@@ -280,7 +308,10 @@ def _exec_in_pool(code: str, stdin_data: str) -> dict[str, Any]:
     timed_out = False
     try:
         sys.stdin = fake_stdin
-        with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
+        with (
+            contextlib.redirect_stdout(stdout_buffer),
+            contextlib.redirect_stderr(stderr_buffer),
+        ):
             exec(compile(code, "<aztea-python-executor>", "exec"), namespace, namespace)
     except SystemExit as exc:
         exit_code = int(exc.code) if isinstance(exc.code, int) else 1
@@ -349,14 +380,16 @@ def _run_in_subprocess(code: str, stdin_data: str, timeout: int) -> dict[str, An
         # Drop HOME so user code can't introspect the install path. Override
         # to the tempdir so libraries that respect HOME (pip cache, locale
         # files, etc.) write into the sandbox if they need to write at all.
-        sandbox_env = build_subprocess_env({
-            "HOME": tmpdir,
-            "TMPDIR": tmpdir,
-            "TMP": tmpdir,
-            "TEMP": tmpdir,
-            "PYTHONDONTWRITEBYTECODE": "1",
-            "PYTHONNOUSERSITE": "1",
-        })
+        sandbox_env = build_subprocess_env(
+            {
+                "HOME": tmpdir,
+                "TMPDIR": tmpdir,
+                "TMP": tmpdir,
+                "TEMP": tmpdir,
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTHONNOUSERSITE": "1",
+            }
+        )
 
         start = time.time()
         timed_out = False
@@ -394,9 +427,9 @@ def _run_in_subprocess(code: str, stdin_data: str, timeout: int) -> dict[str, An
     for line in stderr_raw.splitlines():
         if line.startswith("__VARS__:"):
             try:
-                variables_captured = json.loads(line[len("__VARS__:"):])
+                variables_captured = json.loads(line[len("__VARS__:") :])
             except Exception:
-                pass
+                _LOG.debug("Failed to parse captured variables from stderr line", exc_info=True)
         else:
             stderr_lines.append(line)
     return {
@@ -429,7 +462,10 @@ def run(payload: dict) -> dict:
         return _err("python_executor.missing_code", "code is required")
 
     if len(code) > _MAX_CODE_CHARS:
-        return _err("python_executor.code_too_long", f"code too long (max {_MAX_CODE_CHARS} chars)")
+        return _err(
+            "python_executor.code_too_long",
+            f"code too long (max {_MAX_CODE_CHARS} chars)",
+        )
 
     if not _is_safe(code):
         return {
@@ -444,12 +480,17 @@ def run(payload: dict) -> dict:
 
     stdin_data = str(payload.get("stdin", "") or "")
     if len(stdin_data) > 65536:
-        return _err("python_executor.stdin_too_long", "stdin must be 65536 characters or fewer")
+        return _err(
+            "python_executor.stdin_too_long", "stdin must be 65536 characters or fewer"
+        )
 
     try:
         timeout = max(1, min(int(payload.get("timeout", 10)), 30))
     except (TypeError, ValueError):
-        return _err("python_executor.invalid_timeout", "timeout must be a number between 1 and 30")
+        return _err(
+            "python_executor.invalid_timeout",
+            "timeout must be a number between 1 and 30",
+        )
 
     explain = bool(payload.get("explain", True))
 
@@ -524,7 +565,7 @@ def run(payload: dict) -> dict:
             raw = run_with_fallback(req)
             explanation = raw.text.strip()
         except Exception:
-            pass
+            _LOG.warning("LLM explanation failed for python execution", exc_info=True)
 
     return {
         "stdout": stdout,

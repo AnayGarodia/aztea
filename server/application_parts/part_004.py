@@ -6,13 +6,21 @@
 
 from server.pricing_helpers import (  # noqa: E402
     builtin_pricing_overlay as _builtin_pricing_overlay,  # noqa: F401
-    resolve_agent_pricing as _resolve_agent_pricing,  # noqa: F401
+)
+from server.pricing_helpers import (
     estimate_variable_charge as _estimate_variable_charge,  # noqa: F401
+)
+from server.pricing_helpers import (
     maybe_refund_pricing_diff as _maybe_refund_pricing_diff,  # noqa: F401
+)
+from server.pricing_helpers import (
+    resolve_agent_pricing as _resolve_agent_pricing,  # noqa: F401
 )
 
 
-def _validate_builtin_agent_payload(agent_id: str, input_payload: dict[str, Any]) -> None:
+def _validate_builtin_agent_payload(
+    agent_id: str, input_payload: dict[str, Any]
+) -> None:
     """Validate payload for Pydantic-model-backed builtins BEFORE charging.
 
     Raises ValueError (converted to 422) if invalid.
@@ -39,9 +47,13 @@ def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict
         result.setdefault("degraded_mode", False)
         if "llm_used" not in result:
             meta = _builtin_specs.builtin_catalog_metadata(agent_id) or {}
-            runtime_requirements = [str(item).lower() for item in meta.get("runtime_requirements") or []]
+            runtime_requirements = [
+                str(item).lower() for item in meta.get("runtime_requirements") or []
+            ]
             result["llm_used"] = (
-                False if result.get("degraded_mode") else any("llm provider" in item for item in runtime_requirements)
+                False
+                if result.get("degraded_mode")
+                else any("llm provider" in item for item in runtime_requirements)
             )
         result.setdefault("agent_contract_version", "builtin-v2")
         return result
@@ -57,11 +69,19 @@ def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict
         body = WikiRequest.model_validate(payload)
         return _finalize(_invoke_wiki_agent(body))
     if agent_id == _QUALITY_JUDGE_AGENT_ID:
-        return _finalize(judges.run_quality_judgment(
-            input_payload=payload.get("input_payload") if isinstance(payload, dict) else {},
-            output_payload=payload.get("output_payload") if isinstance(payload, dict) else {},
-            agent_description=str(payload.get("agent_description") or "") if isinstance(payload, dict) else "",
-        ))
+        return _finalize(
+            judges.run_quality_judgment(
+                input_payload=payload.get("input_payload")
+                if isinstance(payload, dict)
+                else {},
+                output_payload=payload.get("output_payload")
+                if isinstance(payload, dict)
+                else {},
+                agent_description=str(payload.get("agent_description") or "")
+                if isinstance(payload, dict)
+                else "",
+            )
+        )
     if agent_id == _CVELOOKUP_AGENT_ID:
         return _finalize(agent_cve_lookup.run(payload))
     if agent_id == _IMAGE_GENERATOR_AGENT_ID:
@@ -159,7 +179,9 @@ def _process_pending_builtin_job(job: dict) -> bool:
 
     try:
         if is_hosted_skill:
-            skill_row = _hosted_skills.get_hosted_skill_by_agent_id(str(claimed["agent_id"]))
+            skill_row = _hosted_skills.get_hosted_skill_by_agent_id(
+                str(claimed["agent_id"])
+            )
             if skill_row is None:
                 raise RuntimeError("Hosted skill record is missing.")
             output = _skill_executor.execute_hosted_skill(
@@ -179,8 +201,7 @@ def _process_pending_builtin_job(job: dict) -> bool:
                 "failed",
                 output_payload=output,
                 error_message=(
-                    failure_message
-                    or f"Agent reported {failure_code}; no charge."
+                    failure_message or f"Agent reported {failure_code}; no charge."
                 ),
                 completed=True,
             )
@@ -205,7 +226,10 @@ def _process_pending_builtin_job(job: dict) -> bool:
                 retried,
                 "job.retry_scheduled",
                 actor_owner_id=_BUILTIN_WORKER_OWNER_ID,
-                payload={"retry_count": retried["retry_count"], "next_retry_at": retried["next_retry_at"]},
+                payload={
+                    "retry_count": retried["retry_count"],
+                    "next_retry_at": retried["next_retry_at"],
+                },
             )
             return True
         updated = retried or jobs.update_job_status(
@@ -289,7 +313,9 @@ def _process_pending_builtin_job(job: dict) -> bool:
         completed=True,
     )
     if completed is not None:
-        settled = _settle_successful_job(completed, actor_owner_id=_BUILTIN_WORKER_OWNER_ID)
+        settled = _settle_successful_job(
+            completed, actor_owner_id=_BUILTIN_WORKER_OWNER_ID
+        )
         if agent is not None:
             distribution = payments.compute_success_distribution(
                 int(completed.get("price_cents") or 0),
@@ -299,7 +325,9 @@ def _process_pending_builtin_job(job: dict) -> bool:
             platform_fee_cents = int(distribution["platform_fee_cents"])
             judge_fee_cents = min(_JUDGE_FEE_CENTS, platform_fee_cents)
             if judge_fee_cents > 0:
-                judge_agent_id = str(settled.get("judge_agent_id") or _QUALITY_JUDGE_AGENT_ID)
+                judge_agent_id = str(
+                    settled.get("judge_agent_id") or _QUALITY_JUDGE_AGENT_ID
+                )
                 judge_wallet = payments.get_or_create_wallet(f"agent:{judge_agent_id}")
                 payments.record_judge_fee(
                     completed["platform_wallet_id"],
@@ -311,7 +339,9 @@ def _process_pending_builtin_job(job: dict) -> bool:
     return True
 
 
-def _process_pending_builtin_jobs(limit_per_agent: int = _BUILTIN_JOB_WORKER_BATCH_SIZE) -> dict[str, int]:
+def _process_pending_builtin_jobs(
+    limit_per_agent: int = _BUILTIN_JOB_WORKER_BATCH_SIZE,
+) -> dict[str, int]:
     batch_limit = min(max(1, int(limit_per_agent)), 500)
     scanned = 0
     processed = 0
@@ -345,7 +375,9 @@ def _builtin_worker_loop(stop_event: threading.Event) -> None:
                     last_error=None,
                 )
                 continue
-            summary = _process_pending_builtin_jobs(limit_per_agent=_BUILTIN_JOB_WORKER_BATCH_SIZE)
+            summary = _process_pending_builtin_jobs(
+                limit_per_agent=_BUILTIN_JOB_WORKER_BATCH_SIZE
+            )
             _set_builtin_worker_state(
                 last_run_at=started,
                 last_summary=summary,
@@ -366,7 +398,9 @@ _TIE_TIMEOUT_REASONING = (
 )
 
 
-def _run_pending_dispute_judgments(limit: int = 100, actor_owner_id: str = "system:dispute-judge") -> dict:
+def _run_pending_dispute_judgments(
+    limit: int = 100, actor_owner_id: str = "system:dispute-judge"
+) -> dict:
     capped = min(max(1, int(limit)), 500)
     pending = disputes.list_disputes(status="pending", limit=capped)
     judged_count = 0
@@ -383,7 +417,9 @@ def _run_pending_dispute_judgments(limit: int = 100, actor_owner_id: str = "syst
         if not dispute_id:
             continue
         try:
-            latest, _ = _resolve_dispute_with_judges(dispute_id, actor_owner_id=actor_owner_id)
+            latest, _ = _resolve_dispute_with_judges(
+                dispute_id, actor_owner_id=actor_owner_id
+            )
         except Exception as exc:
             errors.append({"dispute_id": dispute_id, "error": str(exc)})
             continue
@@ -398,7 +434,9 @@ def _run_pending_dispute_judgments(limit: int = 100, actor_owner_id: str = "syst
             tied_ids.append(dispute_id)
 
     # Auto-rule tied disputes older than _TIE_TIMEOUT_HOURS in favour of caller.
-    stale_tied = disputes.get_stale_tied_disputes(older_than_hours=_TIE_TIMEOUT_HOURS, limit=capped)
+    stale_tied = disputes.get_stale_tied_disputes(
+        older_than_hours=_TIE_TIMEOUT_HOURS, limit=capped
+    )
     for dispute_row in stale_tied:
         dispute_id = str(dispute_row.get("dispute_id") or "").strip()
         if not dispute_id:
@@ -429,7 +467,11 @@ def _run_pending_dispute_judgments(limit: int = 100, actor_owner_id: str = "syst
                         job,
                         "job.dispute_finalized",
                         actor_owner_id=actor_owner_id,
-                        payload={"dispute_id": dispute_id, "outcome": "caller_wins", "reason": "tie_timeout"},
+                        payload={
+                            "dispute_id": dispute_id,
+                            "outcome": "caller_wins",
+                            "reason": "tie_timeout",
+                        },
                     )
             tie_timeout_count += 1
             _LOG.warning(
@@ -459,7 +501,9 @@ def _dispute_judge_loop(stop_event: threading.Event) -> None:
     while not stop_event.wait(_DISPUTE_JUDGE_INTERVAL_SECONDS):
         started = _utc_now_iso()
         try:
-            summary = _run_pending_dispute_judgments(actor_owner_id="system:dispute-judge")
+            summary = _run_pending_dispute_judgments(
+                actor_owner_id="system:dispute-judge"
+            )
             _set_dispute_judge_state(
                 last_run_at=started,
                 last_summary=summary,
@@ -487,11 +531,14 @@ def _run_agent_health_checks() -> dict:
         try:
             current = _validate_outbound_url(url, "healthcheck_url")
             import httpx as _httpx
+
             status = "unhealthy"
             for _ in range(4):
                 resp = _httpx.get(current, timeout=10, follow_redirects=False)
                 if 300 <= resp.status_code < 400 and resp.headers.get("location"):
-                    current = _validate_outbound_url(resp.headers["location"], "healthcheck_url")
+                    current = _validate_outbound_url(
+                        resp.headers["location"], "healthcheck_url"
+                    )
                     continue
                 status = "healthy" if 200 <= resp.status_code < 300 else "unhealthy"
                 break
@@ -643,7 +690,7 @@ def _enqueue_job_callback(job: dict, event_id: int) -> None:
 
 def _hook_backoff_seconds(attempt_count: int) -> int:
     exponent = max(0, attempt_count - 1)
-    delay = _HOOK_DELIVERY_BASE_DELAY_SECONDS * (2 ** exponent)
+    delay = _HOOK_DELIVERY_BASE_DELAY_SECONDS * (2**exponent)
     return min(delay, _HOOK_DELIVERY_MAX_DELAY_SECONDS)
 
 
@@ -665,7 +712,8 @@ def _claim_due_hook_delivery(now_iso: str) -> dict | None:
             return None
 
         claim_until_iso = (
-            datetime.fromisoformat(now_iso) + timedelta(seconds=_HOOK_DELIVERY_CLAIM_LEASE_SECONDS)
+            datetime.fromisoformat(now_iso)
+            + timedelta(seconds=_HOOK_DELIVERY_CLAIM_LEASE_SECONDS)
         ).isoformat()
         result = conn.execute(
             """
@@ -818,7 +866,9 @@ def _process_due_hook_deliveries(limit: int = _HOOK_DELIVERY_BATCH_SIZE) -> dict
                 )
             _mark_hook_delivery(
                 delivery_id,
-                status="failed" if (attempt_count + 1) >= _HOOK_DELIVERY_MAX_ATTEMPTS else "pending",
+                status="failed"
+                if (attempt_count + 1) >= _HOOK_DELIVERY_MAX_ATTEMPTS
+                else "pending",
                 next_attempt_at=(
                     now_iso
                     if (attempt_count + 1) >= _HOOK_DELIVERY_MAX_ATTEMPTS
@@ -854,7 +904,9 @@ def _process_due_hook_deliveries(limit: int = _HOOK_DELIVERY_BATCH_SIZE) -> dict
         }
         secret = (delivery.get("secret") or "").strip()
         if secret:
-            digest = hmac.new(secret.encode("utf-8"), payload_bytes, hashlib.sha256).hexdigest()
+            digest = hmac.new(
+                secret.encode("utf-8"), payload_bytes, hashlib.sha256
+            ).hexdigest()
             headers["X-Aztea-Signature"] = f"sha256={digest}"
 
         status_code = None
@@ -914,7 +966,9 @@ def _process_due_hook_deliveries(limit: int = _HOOK_DELIVERY_BATCH_SIZE) -> dict
             continue
 
         retry_delay = _hook_backoff_seconds(next_attempt_count)
-        next_attempt_at = (datetime.now(timezone.utc) + timedelta(seconds=retry_delay)).isoformat()
+        next_attempt_at = (
+            datetime.now(timezone.utc) + timedelta(seconds=retry_delay)
+        ).isoformat()
         _mark_hook_delivery(
             delivery_id,
             status="pending",

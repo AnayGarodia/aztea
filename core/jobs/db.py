@@ -21,16 +21,17 @@ refunded on terminal status. Messages attach to a job so workers can request
 clarifications without holding open HTTP connections.
 """
 
-import json
 import hashlib
+import json
 import queue
 import sqlite3
-import threading
 import sys
+import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from core import models as _models
+from core import models as _models  # noqa: F401 — re-exported; messaging.py imports from here
+
 from core import db as _db
 
 DB_PATH = _db.DB_PATH
@@ -45,6 +46,7 @@ def _resolved_db_path() -> str:
         if isinstance(c, str) and c:
             return c
     return DB_PATH
+
 
 _CANONICAL_CREATED_AT = "1970-01-01T00:00:00+00:00"
 DEFAULT_LEASE_SECONDS = 300
@@ -389,8 +391,7 @@ def _jobs_table_exists(conn: sqlite3.Connection) -> bool:
 
 def _jobs_columns(conn: sqlite3.Connection) -> dict:
     return {
-        row["name"]: row
-        for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
+        row["name"]: row for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
     }
 
 
@@ -578,18 +579,33 @@ def _normalize_legacy_job_row(row: dict, used_job_ids: set[str]) -> tuple:
     used_job_ids.add(job_id)
 
     agent_id = _clean_optional_text(row.get("agent_id")) or "legacy-agent"
-    agent_owner_id = _clean_optional_text(row.get("agent_owner_id")) or f"agent:{agent_id}"
-    caller_owner_id = _clean_optional_text(row.get("caller_owner_id")) or f"legacy-caller:{job_id}"
-    caller_wallet_id = _clean_optional_text(row.get("caller_wallet_id")) or f"legacy-caller-wallet:{job_id}"
-    agent_wallet_id = _clean_optional_text(row.get("agent_wallet_id")) or f"legacy-agent-wallet:{job_id}"
-    platform_wallet_id = _clean_optional_text(row.get("platform_wallet_id")) or f"legacy-platform-wallet:{job_id}"
+    agent_owner_id = (
+        _clean_optional_text(row.get("agent_owner_id")) or f"agent:{agent_id}"
+    )
+    caller_owner_id = (
+        _clean_optional_text(row.get("caller_owner_id")) or f"legacy-caller:{job_id}"
+    )
+    caller_wallet_id = (
+        _clean_optional_text(row.get("caller_wallet_id"))
+        or f"legacy-caller-wallet:{job_id}"
+    )
+    agent_wallet_id = (
+        _clean_optional_text(row.get("agent_wallet_id"))
+        or f"legacy-agent-wallet:{job_id}"
+    )
+    platform_wallet_id = (
+        _clean_optional_text(row.get("platform_wallet_id"))
+        or f"legacy-platform-wallet:{job_id}"
+    )
 
     status = _clean_optional_text(row.get("status")) or "pending"
     if status not in VALID_STATUSES:
         status = "pending"
 
     price_cents = _to_non_negative_int(row.get("price_cents"), default=0)
-    caller_charge_cents = _to_non_negative_int(row.get("caller_charge_cents"), default=price_cents)
+    caller_charge_cents = _to_non_negative_int(
+        row.get("caller_charge_cents"), default=price_cents
+    )
     if caller_charge_cents < price_cents:
         caller_charge_cents = price_cents
     platform_fee_pct_at_create = _to_non_negative_int(
@@ -623,7 +639,9 @@ def _normalize_legacy_job_row(row: dict, used_job_ids: set[str]) -> tuple:
     max_attempts = max(1, _to_non_negative_int(row.get("max_attempts"), default=3))
     parent_job_id = _clean_optional_text(row.get("parent_job_id"))
     tree_depth = _to_non_negative_int(row.get("tree_depth"), default=0)
-    parent_cascade_policy = _normalize_parent_cascade_policy(row.get("parent_cascade_policy"))
+    parent_cascade_policy = _normalize_parent_cascade_policy(
+        row.get("parent_cascade_policy")
+    )
     retry_count = _to_non_negative_int(row.get("retry_count"), default=0)
     if retry_count > max_attempts:
         retry_count = max_attempts
@@ -633,13 +651,21 @@ def _normalize_legacy_job_row(row: dict, used_job_ids: set[str]) -> tuple:
 
     timeout_count = _to_non_negative_int(row.get("timeout_count"), default=0)
     last_timeout_at = _clean_optional_text(row.get("last_timeout_at"))
-    clarification_timeout_seconds = _to_non_negative_int(row.get("clarification_timeout_seconds"), default=0)
+    clarification_timeout_seconds = _to_non_negative_int(
+        row.get("clarification_timeout_seconds"), default=0
+    )
     clarification_timeout_policy = _normalize_clarification_timeout_policy(
         row.get("clarification_timeout_policy")
     )
-    clarification_requested_at = _clean_optional_text(row.get("clarification_requested_at"))
-    clarification_deadline_at = _clean_optional_text(row.get("clarification_deadline_at"))
-    dispute_window_hours = max(1, _to_non_negative_int(row.get("dispute_window_hours"), default=72))
+    clarification_requested_at = _clean_optional_text(
+        row.get("clarification_requested_at")
+    )
+    clarification_deadline_at = _clean_optional_text(
+        row.get("clarification_deadline_at")
+    )
+    dispute_window_hours = max(
+        1, _to_non_negative_int(row.get("dispute_window_hours"), default=72)
+    )
     dispute_outcome = _clean_optional_text(row.get("dispute_outcome"))
     judge_agent_id = _clean_optional_text(row.get("judge_agent_id"))
     judge_verdict = _clean_optional_text(row.get("judge_verdict"))
@@ -657,12 +683,18 @@ def _normalize_legacy_job_row(row: dict, used_job_ids: set[str]) -> tuple:
     output_verification_status = _normalize_output_verification_status(
         row.get("output_verification_status")
     )
-    output_verification_deadline_at = _clean_optional_text(row.get("output_verification_deadline_at"))
-    output_verification_decided_at = _clean_optional_text(row.get("output_verification_decided_at"))
+    output_verification_deadline_at = _clean_optional_text(
+        row.get("output_verification_deadline_at")
+    )
+    output_verification_decided_at = _clean_optional_text(
+        row.get("output_verification_decided_at")
+    )
     output_verification_decision_owner_id = _clean_optional_text(
         row.get("output_verification_decision_owner_id")
     )
-    output_verification_reason = _clean_optional_text(row.get("output_verification_reason"))
+    output_verification_reason = _clean_optional_text(
+        row.get("output_verification_reason")
+    )
     batch_id = _clean_optional_text(row.get("batch_id"))
 
     if claim_owner_id is None:
@@ -781,7 +813,9 @@ def _migrate_jobs_table(conn: sqlite3.Connection) -> None:
 
     violations = conn.execute("PRAGMA foreign_key_check").fetchall()
     if violations:
-        raise sqlite3.IntegrityError("jobs migration introduced foreign key violations.")
+        raise sqlite3.IntegrityError(
+            "jobs migration introduced foreign key violations."
+        )
 
 
 def _ensure_job_signature_columns(conn: sqlite3.Connection) -> None:
@@ -823,6 +857,7 @@ def init_jobs_db() -> None:
             ON job_messages(job_id, correlation_id, message_id)
             """
         )
+
 
 def _decode_json(raw, default):
     if raw is None:

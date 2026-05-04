@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import argparse
 import ast
-import os
 from pathlib import Path
 
 
@@ -72,9 +71,7 @@ def main() -> int:
             encoding="utf-8",
         )
 
-    init = (
-        '"""Sharded module — symbols re-exported from fragments."""\nfrom __future__ import annotations\n\n'
-    )
+    init = '"""Sharded module — symbols re-exported from fragments."""\nfrom __future__ import annotations\n\n'
     for p in part_paths:
         mod = p[:-3]
         init += f"from .{mod} import *\n"

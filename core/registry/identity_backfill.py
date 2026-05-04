@@ -4,6 +4,7 @@ Called from server startup to ensure every curated built-in agent has a
 signing keypair so completed jobs produce verifiable receipts. The UPDATE
 is a no-op when the key is already present.
 """
+
 from __future__ import annotations
 
 import logging

@@ -12,7 +12,6 @@ import fnmatch
 import os
 from pathlib import Path
 
-
 DEFAULT_EXCLUDES = [
     ".git/*",
     ".venv/*",

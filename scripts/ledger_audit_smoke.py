@@ -8,7 +8,6 @@ cache diverges from the insert-only ledger.
 from __future__ import annotations
 
 import json
-import sys
 
 from core import payments
 
@@ -22,4 +21,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

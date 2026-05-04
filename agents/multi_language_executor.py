@@ -21,6 +21,7 @@ Output:
     "error": ...               # only on tool failure (not code failure)
   }
 """
+
 from __future__ import annotations
 
 import os
@@ -55,7 +56,9 @@ def _version_string(bin_path: str, *args: str, fallback: str) -> str:
             timeout=5,
             env=build_subprocess_env(),
         )
-        text = " ".join(part.strip() for part in (proc.stdout, proc.stderr) if part and part.strip()).strip()
+        text = " ".join(
+            part.strip() for part in (proc.stdout, proc.stderr) if part and part.strip()
+        ).strip()
         return text[:50] or fallback
     except Exception:
         return fallback
@@ -85,7 +88,9 @@ def _available_runtimes() -> dict[str, list[str]]:
     if _which("go"):
         runtimes["go"] = ["go"]
 
-    rust_runtimes = [name for name in ("rust-script", "cargo-script", "rustc") if _which(name)]
+    rust_runtimes = [
+        name for name in ("rust-script", "cargo-script", "rustc") if _which(name)
+    ]
     if rust_runtimes:
         runtimes["rust"] = rust_runtimes
 
@@ -114,11 +119,21 @@ def _run_subprocess(
             env=build_subprocess_env(),
         )
     except subprocess.TimeoutExpired:
-        return {"stdout": "", "stderr": f"Timed out after {timeout}s.", "exit_code": 124, "timed_out": True}
+        return {
+            "stdout": "",
+            "stderr": f"Timed out after {timeout}s.",
+            "exit_code": 124,
+            "timed_out": True,
+        }
     elapsed_ms = int((time.monotonic() - t_start) * 1000)
     stdout = proc.stdout[:_OUTPUT_TRUNCATE]
     stderr = proc.stderr[:_OUTPUT_TRUNCATE]
-    return {"stdout": stdout, "stderr": stderr, "exit_code": proc.returncode, "elapsed_ms": elapsed_ms}
+    return {
+        "stdout": stdout,
+        "stderr": stderr,
+        "exit_code": proc.returncode,
+        "elapsed_ms": elapsed_ms,
+    }
 
 
 def _run_javascript(code: str, stdin: str, timeout: float) -> dict[str, Any]:
@@ -138,7 +153,10 @@ def _run_javascript(code: str, stdin: str, timeout: float) -> dict[str, Any]:
             result = _run_subprocess(cmd_template + [fpath], tmpdir, stdin, timeout)
         runtime_ver = f"{runtime_name} {_version_string(bin_path, '--version', fallback=runtime_name)[:30]}"
         return {**result, "runtime": runtime_ver}
-    return _err("multi_language_executor.tool_unavailable", "No JavaScript runtime found (tried bun, deno, node).")
+    return _err(
+        "multi_language_executor.tool_unavailable",
+        "No JavaScript runtime found (tried bun, deno, node).",
+    )
 
 
 def _run_typescript(code: str, stdin: str, timeout: float) -> dict[str, Any]:
@@ -167,9 +185,11 @@ def _run_typescript(code: str, stdin: str, timeout: float) -> dict[str, Any]:
             outdir = os.path.join(tmpdir, "dist")
             with open(fpath, "w", encoding="utf-8") as f:
                 f.write(code)
-            with open(os.path.join(tmpdir, "tsconfig.json"), "w", encoding="utf-8") as f:
+            with open(
+                os.path.join(tmpdir, "tsconfig.json"), "w", encoding="utf-8"
+            ) as f:
                 f.write(
-                    '{'
+                    "{"
                     '"compilerOptions":{'
                     '"target":"ES2020",'
                     '"module":"commonjs",'
@@ -178,9 +198,9 @@ def _run_typescript(code: str, stdin: str, timeout: float) -> dict[str, Any]:
                     '"skipLibCheck":true,'
                     '"esModuleInterop":true,'
                     f'"outDir":"{outdir}"'
-                    '},'
+                    "},"
                     '"include":["main.ts"]'
-                    '}'
+                    "}"
                 )
             compile = subprocess.run(
                 [tsc_bin, "--project", os.path.join(tmpdir, "tsconfig.json")],
@@ -193,13 +213,19 @@ def _run_typescript(code: str, stdin: str, timeout: float) -> dict[str, Any]:
             if compile.returncode != 0:
                 return {
                     "stdout": "",
-                    "stderr": compile.stderr[:_OUTPUT_TRUNCATE] or compile.stdout[:_OUTPUT_TRUNCATE],
+                    "stderr": compile.stderr[:_OUTPUT_TRUNCATE]
+                    or compile.stdout[:_OUTPUT_TRUNCATE],
                     "exit_code": compile.returncode,
                     "elapsed_ms": 0,
                     "runtime": f"tsc {_version_string(tsc_bin, '--version', fallback='tsc')}",
                 }
-            result = _run_subprocess([node_bin, os.path.join(outdir, "main.js")], tmpdir, stdin, timeout)
-        return {**result, "runtime": f"tsc+node {_version_string(tsc_bin, '--version', fallback='tsc')[:20]}"}
+            result = _run_subprocess(
+                [node_bin, os.path.join(outdir, "main.js")], tmpdir, stdin, timeout
+            )
+        return {
+            **result,
+            "runtime": f"tsc+node {_version_string(tsc_bin, '--version', fallback='tsc')[:20]}",
+        }
 
     tsnode = _which("ts-node")
     if tsnode:
@@ -214,14 +240,23 @@ def _run_typescript(code: str, stdin: str, timeout: float) -> dict[str, Any]:
                 fpath,
             ]
             result = _run_subprocess(cmd, tmpdir, stdin, timeout)
-        return {**result, "runtime": f"ts-node {_version_string(tsnode, '--version', fallback='ts-node')[:20]}"}
-    return _err("multi_language_executor.tool_unavailable", "No TypeScript runtime found (tried bun, deno, tsx, tsc+node, ts-node).")
+        return {
+            **result,
+            "runtime": f"ts-node {_version_string(tsnode, '--version', fallback='ts-node')[:20]}",
+        }
+    return _err(
+        "multi_language_executor.tool_unavailable",
+        "No TypeScript runtime found (tried bun, deno, tsx, tsc+node, ts-node).",
+    )
 
 
 def _run_go(code: str, stdin: str, timeout: float) -> dict[str, Any]:
     go_bin = _which("go")
     if go_bin is None:
-        return _err("multi_language_executor.tool_unavailable", "Go is not installed on this executor.")
+        return _err(
+            "multi_language_executor.tool_unavailable",
+            "Go is not installed on this executor.",
+        )
     with tempfile.TemporaryDirectory() as tmpdir:
         fpath = os.path.join(tmpdir, "main.go")
         with open(fpath, "w") as f:
@@ -244,7 +279,10 @@ def _run_rust(code: str, stdin: str, timeout: float) -> dict[str, Any]:
 
     rustc = _which("rustc")
     if rustc is None:
-        return _err("multi_language_executor.tool_unavailable", "Rust is not installed on this executor (tried rust-script, rustc).")
+        return _err(
+            "multi_language_executor.tool_unavailable",
+            "Rust is not installed on this executor (tried rust-script, rustc).",
+        )
 
     with tempfile.TemporaryDirectory() as tmpdir:
         src = os.path.join(tmpdir, "main.rs")
@@ -300,9 +338,15 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     """
     language = str(payload.get("language") or "").strip().lower()
     if not language:
-        return _err("multi_language_executor.missing_language", f"language is required. Supported: {', '.join(_SUPPORTED)}")
+        return _err(
+            "multi_language_executor.missing_language",
+            f"language is required. Supported: {', '.join(_SUPPORTED)}",
+        )
     if language not in _RUNNERS:
-        return _err("multi_language_executor.unsupported_language", f"Unsupported language '{language}'. Supported: {', '.join(_SUPPORTED)}")
+        return _err(
+            "multi_language_executor.unsupported_language",
+            f"Unsupported language '{language}'. Supported: {', '.join(_SUPPORTED)}",
+        )
     available = _available_runtimes()
     if language not in available:
         return _err(
@@ -314,7 +358,10 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     if not code:
         return _err("multi_language_executor.missing_code", "code is required.")
     if len(code) > 100_000:
-        return _err("multi_language_executor.code_too_long", "code must be <= 100 000 characters.")
+        return _err(
+            "multi_language_executor.code_too_long",
+            "code must be <= 100 000 characters.",
+        )
 
     stdin = str(payload.get("stdin") or "")
     timeout = float(min(float(payload.get("timeout_seconds") or 15), _TIMEOUT_MAX))

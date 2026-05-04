@@ -9,6 +9,7 @@ Configure via environment variables:
   FROM_EMAIL      e.g. noreply@aztea.ai
   FROM_NAME       e.g. Aztea
 """
+
 from __future__ import annotations
 
 import html
@@ -21,12 +22,12 @@ from email.mime.text import MIMEText
 
 _LOG = logging.getLogger(__name__)
 
-_SMTP_HOST     = os.environ.get("SMTP_HOST", "").strip()
-_SMTP_PORT     = int(os.environ.get("SMTP_PORT", "587") or "587")
-_SMTP_USER     = os.environ.get("SMTP_USER", "").strip()
+_SMTP_HOST = os.environ.get("SMTP_HOST", "").strip()
+_SMTP_PORT = int(os.environ.get("SMTP_PORT", "587") or "587")
+_SMTP_USER = os.environ.get("SMTP_USER", "").strip()
 _SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "").strip()
-_FROM_EMAIL    = os.environ.get("FROM_EMAIL", "noreply@aztea.ai").strip()
-_FROM_NAME     = os.environ.get("FROM_NAME", "Aztea").strip()
+_FROM_EMAIL = os.environ.get("FROM_EMAIL", "noreply@aztea.ai").strip()
+_FROM_NAME = os.environ.get("FROM_NAME", "Aztea").strip()
 
 ENABLED = bool(_SMTP_HOST and _SMTP_USER and _SMTP_PASSWORD)
 
@@ -56,7 +57,9 @@ def send(to: str, subject: str, html: str, text: str) -> None:
     """Send an email in a background thread. No-op if SMTP is not configured."""
     if not ENABLED or not to:
         return
-    threading.Thread(target=_send_sync, args=(to, subject, html, text), daemon=True).start()
+    threading.Thread(
+        target=_send_sync, args=(to, subject, html, text), daemon=True
+    ).start()
 
 
 def send_welcome(to: str, username: str, role: str = "both") -> None:

@@ -24,7 +24,6 @@ import json
 import secrets
 import sqlite3
 import sys
-import uuid
 from datetime import datetime, timezone
 
 from core import db as _db
@@ -39,6 +38,13 @@ VALID_KEY_SCOPES = {"caller", "worker", "admin"}
 DEFAULT_KEY_SCOPES = ("caller", "worker")
 _CANONICAL_TIMESTAMP = "1970-01-01T00:00:00+00:00"
 VALID_SUBJECT_STATUSES = {"active", "suspended", "banned"}
+
+# Validation bounds — shared by profile.py and users.py
+MIN_USERNAME_LEN = 3
+MAX_USERNAME_LEN = 32
+MAX_FULL_NAME_LEN = 80
+MIN_PASSWORD_LEN = 8
+MAX_USER_AGENT_LEN = 512
 LEGAL_TERMS_VERSION = "2026-04-19"
 LEGAL_PRIVACY_VERSION = "2026-04-19"
 
@@ -79,7 +85,9 @@ _ALLOWED_PRAGMA_TABLES = frozenset({"users", "api_keys", "agent_keys"})
 
 def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
     if table_name not in _ALLOWED_PRAGMA_TABLES:
-        raise ValueError(f"Disallowed table name for schema introspection: {table_name!r}")
+        raise ValueError(
+            f"Disallowed table name for schema introspection: {table_name!r}"
+        )
     return {
         row["name"]
         for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
@@ -105,7 +113,9 @@ def _create_users_table(conn: sqlite3.Connection, table_name: str = "users") -> 
     """)
 
 
-def _create_api_keys_table(conn: sqlite3.Connection, table_name: str = "api_keys") -> None:
+def _create_api_keys_table(
+    conn: sqlite3.Connection, table_name: str = "api_keys"
+) -> None:
     conn.execute(f"""
         CREATE TABLE IF NOT EXISTS {table_name} (
             key_id        TEXT PRIMARY KEY,
@@ -123,7 +133,9 @@ def _create_api_keys_table(conn: sqlite3.Connection, table_name: str = "api_keys
     """)
 
 
-def _create_agent_keys_table(conn: sqlite3.Connection, table_name: str = "agent_keys") -> None:
+def _create_agent_keys_table(
+    conn: sqlite3.Connection, table_name: str = "agent_keys"
+) -> None:
     # ``key_type`` is 'worker' (legacy `azk_` keys, valid for claim/heartbeat/complete)
     # or 'caller' (new `azac_` keys, valid for hiring other agents on behalf of this
     # agent — auth resolves them with owner_id='agent:<agent_id>' so the agent's
@@ -149,17 +161,25 @@ def _ensure_users_schema(conn: sqlite3.Connection) -> None:
 
     cols = _table_columns(conn, "users")
     if "username" not in cols:
-        conn.execute("ALTER TABLE users ADD COLUMN username TEXT NOT NULL DEFAULT 'unknown-user'")
+        conn.execute(
+            "ALTER TABLE users ADD COLUMN username TEXT NOT NULL DEFAULT 'unknown-user'"
+        )
     if "email" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT ''")
     if "password_hash" not in cols:
-        conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT NOT NULL DEFAULT ''")
+        conn.execute(
+            "ALTER TABLE users ADD COLUMN password_hash TEXT NOT NULL DEFAULT ''"
+        )
     if "salt" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN salt TEXT NOT NULL DEFAULT ''")
     if "created_at" not in cols:
-        conn.execute(f"ALTER TABLE users ADD COLUMN created_at TEXT NOT NULL DEFAULT '{_CANONICAL_TIMESTAMP}'")
+        conn.execute(
+            f"ALTER TABLE users ADD COLUMN created_at TEXT NOT NULL DEFAULT '{_CANONICAL_TIMESTAMP}'"
+        )
     if "status" not in cols:
-        conn.execute("ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'")
+        conn.execute(
+            "ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'"
+        )
     if "terms_version_accepted" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN terms_version_accepted TEXT")
     if "privacy_version_accepted" not in cols:
@@ -200,7 +220,10 @@ def _normalize_legacy_api_key_row(
     row: dict,
     used_key_ids: set[str],
     used_key_hashes: set[str],
-) -> tuple[str, str, str, str, str, str, int | None, int | None, str, str | None, int] | None:
+) -> (
+    tuple[str, str, str, str, str, str, int | None, int | None, str, str | None, int]
+    | None
+):
     legacy_rowid = int(row.get("_legacy_rowid") or 0)
 
     key_id = str(row.get("key_id") or "").strip()
@@ -244,7 +267,9 @@ def _normalize_legacy_api_key_row(
         parsed_max_spend = None
     per_job_cap_cents = row.get("per_job_cap_cents")
     try:
-        parsed_per_job_cap = int(per_job_cap_cents) if per_job_cap_cents is not None else None
+        parsed_per_job_cap = (
+            int(per_job_cap_cents) if per_job_cap_cents is not None else None
+        )
     except (TypeError, ValueError):
         parsed_per_job_cap = None
     if parsed_per_job_cap is not None and parsed_per_job_cap < 0:
@@ -274,14 +299,18 @@ def _normalize_legacy_api_key_row(
 
 
 def _migrate_api_keys_table(conn: sqlite3.Connection) -> None:
-    rows = conn.execute("SELECT rowid AS _legacy_rowid, * FROM api_keys ORDER BY rowid").fetchall()
+    rows = conn.execute(
+        "SELECT rowid AS _legacy_rowid, * FROM api_keys ORDER BY rowid"
+    ).fetchall()
     conn.execute("DROP TABLE IF EXISTS api_keys__canonical")
     _create_api_keys_table(conn, table_name="api_keys__canonical")
 
     used_key_ids: set[str] = set()
     used_key_hashes: set[str] = set()
     for raw in rows:
-        normalized = _normalize_legacy_api_key_row(dict(raw), used_key_ids, used_key_hashes)
+        normalized = _normalize_legacy_api_key_row(
+            dict(raw), used_key_ids, used_key_hashes
+        )
         if normalized is None:
             continue
         conn.execute(
@@ -309,21 +338,31 @@ def _ensure_api_keys_schema(conn: sqlite3.Connection) -> None:
         cols = _table_columns(conn, "api_keys")
 
     if "key_prefix" not in cols:
-        conn.execute(f"ALTER TABLE api_keys ADD COLUMN key_prefix TEXT NOT NULL DEFAULT '{KEY_PREFIX}legacy000'")
+        conn.execute(
+            f"ALTER TABLE api_keys ADD COLUMN key_prefix TEXT NOT NULL DEFAULT '{KEY_PREFIX}legacy000'"
+        )
     if "name" not in cols:
-        conn.execute("ALTER TABLE api_keys ADD COLUMN name TEXT NOT NULL DEFAULT 'Default'")
+        conn.execute(
+            "ALTER TABLE api_keys ADD COLUMN name TEXT NOT NULL DEFAULT 'Default'"
+        )
     if "scopes" not in cols:
-        conn.execute("""ALTER TABLE api_keys ADD COLUMN scopes TEXT NOT NULL DEFAULT '["caller","worker"]'""")
+        conn.execute(
+            """ALTER TABLE api_keys ADD COLUMN scopes TEXT NOT NULL DEFAULT '["caller","worker"]'"""
+        )
     if "max_spend_cents" not in cols:
         conn.execute("ALTER TABLE api_keys ADD COLUMN max_spend_cents INTEGER")
     if "per_job_cap_cents" not in cols:
         conn.execute("ALTER TABLE api_keys ADD COLUMN per_job_cap_cents INTEGER")
     if "created_at" not in cols:
-        conn.execute(f"ALTER TABLE api_keys ADD COLUMN created_at TEXT NOT NULL DEFAULT '{_CANONICAL_TIMESTAMP}'")
+        conn.execute(
+            f"ALTER TABLE api_keys ADD COLUMN created_at TEXT NOT NULL DEFAULT '{_CANONICAL_TIMESTAMP}'"
+        )
     if "last_used_at" not in cols:
         conn.execute("ALTER TABLE api_keys ADD COLUMN last_used_at TEXT")
     if "is_active" not in cols:
-        conn.execute("ALTER TABLE api_keys ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
+        conn.execute(
+            "ALTER TABLE api_keys ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1"
+        )
 
     conn.execute(
         """
@@ -383,14 +422,19 @@ def _ensure_agent_keys_schema(conn: sqlite3.Connection) -> None:
         return
     cols = _table_columns(conn, "agent_keys")
     if "key_id" not in cols or "agent_id" not in cols or "key_hash" not in cols:
-        rows = conn.execute("SELECT rowid AS _legacy_rowid, * FROM agent_keys ORDER BY rowid").fetchall()
+        rows = conn.execute(
+            "SELECT rowid AS _legacy_rowid, * FROM agent_keys ORDER BY rowid"
+        ).fetchall()
         conn.execute("DROP TABLE IF EXISTS agent_keys__canonical")
         _create_agent_keys_table(conn, table_name="agent_keys__canonical")
         used_ids: set[str] = set()
         used_hashes: set[str] = set()
         for row in rows:
             data = dict(row)
-            key_id = str(data.get("key_id") or "").strip() or f"legacy-agent-key-{data.get('_legacy_rowid', 0)}"
+            key_id = (
+                str(data.get("key_id") or "").strip()
+                or f"legacy-agent-key-{data.get('_legacy_rowid', 0)}"
+            )
             while key_id in used_ids:
                 key_id = f"{key_id}-dup"
             used_ids.add(key_id)
@@ -399,13 +443,22 @@ def _ensure_agent_keys_schema(conn: sqlite3.Connection) -> None:
                 continue
             key_hash = str(data.get("key_hash") or "").strip()
             if not key_hash:
-                key_hash = hashlib.sha256(f"legacy-agent-key:{key_id}:{agent_id}".encode("utf-8")).hexdigest()
+                key_hash = hashlib.sha256(
+                    f"legacy-agent-key:{key_id}:{agent_id}".encode("utf-8")
+                ).hexdigest()
             while key_hash in used_hashes:
-                key_hash = hashlib.sha256(f"{key_hash}:{key_id}".encode("utf-8")).hexdigest()
+                key_hash = hashlib.sha256(
+                    f"{key_hash}:{key_id}".encode("utf-8")
+                ).hexdigest()
             used_hashes.add(key_hash)
-            key_prefix = str(data.get("key_prefix") or "").strip() or f"{AGENT_KEY_PREFIX}{key_hash[:8]}"
+            key_prefix = (
+                str(data.get("key_prefix") or "").strip()
+                or f"{AGENT_KEY_PREFIX}{key_hash[:8]}"
+            )
             name = str(data.get("name") or "").strip() or "Agent key"
-            created_at = str(data.get("created_at") or "").strip() or _CANONICAL_TIMESTAMP
+            created_at = (
+                str(data.get("created_at") or "").strip() or _CANONICAL_TIMESTAMP
+            )
             revoked_at = str(data.get("revoked_at") or "").strip() or None
             conn.execute(
                 """
@@ -419,13 +472,21 @@ def _ensure_agent_keys_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE agent_keys__canonical RENAME TO agent_keys")
         cols = _table_columns(conn, "agent_keys")
     if "key_prefix" not in cols:
-        conn.execute(f"ALTER TABLE agent_keys ADD COLUMN key_prefix TEXT NOT NULL DEFAULT '{AGENT_KEY_PREFIX}legacy'")
+        conn.execute(
+            f"ALTER TABLE agent_keys ADD COLUMN key_prefix TEXT NOT NULL DEFAULT '{AGENT_KEY_PREFIX}legacy'"
+        )
     if "key_type" not in cols:
-        conn.execute("ALTER TABLE agent_keys ADD COLUMN key_type TEXT NOT NULL DEFAULT 'worker'")
+        conn.execute(
+            "ALTER TABLE agent_keys ADD COLUMN key_type TEXT NOT NULL DEFAULT 'worker'"
+        )
     if "name" not in cols:
-        conn.execute("ALTER TABLE agent_keys ADD COLUMN name TEXT NOT NULL DEFAULT 'Agent key'")
+        conn.execute(
+            "ALTER TABLE agent_keys ADD COLUMN name TEXT NOT NULL DEFAULT 'Agent key'"
+        )
     if "created_at" not in cols:
-        conn.execute(f"ALTER TABLE agent_keys ADD COLUMN created_at TEXT NOT NULL DEFAULT '{_CANONICAL_TIMESTAMP}'")
+        conn.execute(
+            f"ALTER TABLE agent_keys ADD COLUMN created_at TEXT NOT NULL DEFAULT '{_CANONICAL_TIMESTAMP}'"
+        )
     if "revoked_at" not in cols:
         conn.execute("ALTER TABLE agent_keys ADD COLUMN revoked_at TEXT")
     conn.execute(
@@ -495,7 +556,9 @@ def _decode_scopes_json(raw_scopes: str | None) -> list[str]:
     return normalized or list(DEFAULT_KEY_SCOPES)
 
 
-def _normalize_scopes(scopes: list[str] | tuple[str, ...] | set[str] | None) -> list[str]:
+def _normalize_scopes(
+    scopes: list[str] | tuple[str, ...] | set[str] | None,
+) -> list[str]:
     if scopes is None:
         return list(DEFAULT_KEY_SCOPES)
     if isinstance(scopes, (set, tuple)):
@@ -520,7 +583,9 @@ def _normalize_scopes(scopes: list[str] | tuple[str, ...] | set[str] | None) -> 
     return normalized
 
 
-def _normalize_optional_non_negative_int(value: int | str | None, *, field_name: str) -> int | None:
+def _normalize_optional_non_negative_int(
+    value: int | str | None, *, field_name: str
+) -> int | None:
     if value is None:
         return None
     try:
@@ -539,7 +604,9 @@ def _normalize_optional_text(value: object) -> str | None:
 
 def _legal_state_from_row(row: dict) -> dict:
     terms_version_accepted = _normalize_optional_text(row.get("terms_version_accepted"))
-    privacy_version_accepted = _normalize_optional_text(row.get("privacy_version_accepted"))
+    privacy_version_accepted = _normalize_optional_text(
+        row.get("privacy_version_accepted")
+    )
     legal_accepted_at = _normalize_optional_text(row.get("legal_accepted_at"))
     has_required_acceptance = (
         terms_version_accepted == LEGAL_TERMS_VERSION

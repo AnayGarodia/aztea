@@ -18,6 +18,7 @@ class CohereProvider:
             return
         try:
             import cohere
+
             self._client = cohere.ClientV2(api_key=api_key)
             self._available = True
         except ImportError:
@@ -29,7 +30,9 @@ class CohereProvider:
     def complete(self, req: CompletionRequest) -> LLMResponse:
         """Send a chat completion request to Cohere and return a normalised LLMResponse."""
         if not self._available:
-            raise LLMBadResponseError(self.name, req.model, "Cohere provider not available.", None)
+            raise LLMBadResponseError(
+                self.name, req.model, "Cohere provider not available.", None
+            )
         import cohere
 
         messages = [{"role": m.role, "content": m.content} for m in req.messages]
@@ -54,11 +57,17 @@ class CohereProvider:
         try:
             text = resp.message.content[0].text or ""
         except Exception as exc:
-            raise LLMBadResponseError(self.name, req.model, "Unexpected Cohere response shape.", exc) from exc
+            raise LLMBadResponseError(
+                self.name, req.model, "Unexpected Cohere response shape.", exc
+            ) from exc
 
         usage = Usage(
-            prompt_tokens=getattr(resp.usage, "billed_units", None) and getattr(resp.usage.billed_units, "input_tokens", 0) or 0,
-            completion_tokens=getattr(resp.usage, "billed_units", None) and getattr(resp.usage.billed_units, "output_tokens", 0) or 0,
+            prompt_tokens=getattr(resp.usage, "billed_units", None)
+            and getattr(resp.usage.billed_units, "input_tokens", 0)
+            or 0,
+            completion_tokens=getattr(resp.usage, "billed_units", None)
+            and getattr(resp.usage.billed_units, "output_tokens", 0)
+            or 0,
         )
         return LLMResponse(
             text=text,

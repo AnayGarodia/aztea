@@ -124,7 +124,9 @@ def _request_client_ip(request: Request) -> Any | None:
     except ValueError:
         return None
     if any(direct_ip in network for network in _TRUSTED_PROXY_NETWORKS):
-        forwarded_for = (request.headers.get("x-forwarded-for", "") or "").split(",")[0].strip()
+        forwarded_for = (
+            (request.headers.get("x-forwarded-for", "") or "").split(",")[0].strip()
+        )
         if forwarded_for:
             try:
                 return ipaddress.ip_address(forwarded_for)
@@ -144,17 +146,21 @@ def _require_admin_ip_allowlist(request: Request) -> None:
         return
     client_ip = _request_client_ip(request)
     if client_ip is None:
-        raise HTTPException(status_code=403, detail="Admin endpoint access denied from this network.")
+        raise HTTPException(
+            status_code=403, detail="Admin endpoint access denied from this network."
+        )
     if any(client_ip in network for network in _ADMIN_IP_ALLOWLIST_NETWORKS):
         return
-    raise HTTPException(status_code=403, detail="Admin endpoint access denied from this network.")
+    raise HTTPException(
+        status_code=403, detail="Admin endpoint access denied from this network."
+    )
 
 
 def _get_owner_email(owner_id: str) -> str | None:
     """Return email address for a user owner_id (user:<uuid>), or None."""
     if not isinstance(owner_id, str) or not owner_id.startswith("user:"):
         return None
-    user_id = owner_id[len("user:"):]
+    user_id = owner_id[len("user:") :]
     try:
         user = _auth.get_user_by_id(user_id)
         return user.get("email") if user else None
@@ -167,13 +173,19 @@ def _caller_has_scope(caller: core_models.CallerContext, required_scope: str) ->
         return True
     if caller["type"] == "agent_key":
         return required_scope == "worker"
-    scopes = {str(scope).strip().lower() for scope in (caller.get("scopes") or []) if str(scope).strip()}
+    scopes = {
+        str(scope).strip().lower()
+        for scope in (caller.get("scopes") or [])
+        if str(scope).strip()
+    }
     if "admin" in scopes:
         return True
     return required_scope in scopes
 
 
-def _require_scope(caller: core_models.CallerContext, required_scope: str, detail: str | None = None) -> None:
+def _require_scope(
+    caller: core_models.CallerContext, required_scope: str, detail: str | None = None
+) -> None:
     if _caller_has_scope(caller, required_scope):
         return
     scope_name = required_scope.strip().lower()
@@ -269,6 +281,7 @@ def _compute_bulk_agent_stats(agent_ids: list[str]) -> dict:
     """
     global _bulk_stats_cache, _bulk_stats_cache_at
     import time as _time
+
     now = _time.monotonic()
     if _bulk_stats_cache is not None and (now - _bulk_stats_cache_at) < _BULK_STATS_TTL:
         cached = _bulk_stats_cache
@@ -277,7 +290,8 @@ def _compute_bulk_agent_stats(agent_ids: list[str]) -> dict:
 
     if not agent_ids:
         return {}
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timedelta, timezone
+
     since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
     placeholders = ",".join("?" * len(agent_ids))
     with jobs._conn() as conn:
@@ -307,7 +321,14 @@ def _compute_bulk_agent_stats(agent_ids: list[str]) -> dict:
             """,
             (*agent_ids, since),
         ).fetchall()
-    stats: dict[str, dict] = {aid: {"jobs_last_30_days": 0, "job_completion_rate": None, "median_latency_seconds": None} for aid in agent_ids}
+    stats: dict[str, dict] = {
+        aid: {
+            "jobs_last_30_days": 0,
+            "job_completion_rate": None,
+            "median_latency_seconds": None,
+        }
+        for aid in agent_ids
+    }
     for r in rows:
         aid = r["agent_id"]
         total = int(r["total"] or 0)
@@ -315,7 +336,9 @@ def _compute_bulk_agent_stats(agent_ids: list[str]) -> dict:
         failed = int(r["failed"] or 0)
         denom = completed + failed
         stats[aid]["jobs_last_30_days"] = total
-        stats[aid]["job_completion_rate"] = round(completed / denom, 4) if denom > 0 else None
+        stats[aid]["job_completion_rate"] = (
+            round(completed / denom, 4) if denom > 0 else None
+        )
     by_agent: dict[str, list] = {}
     for lr in latency_rows:
         by_agent.setdefault(lr["agent_id"], []).append(float(lr["latency_s"]))
@@ -330,7 +353,9 @@ def _compute_bulk_agent_stats(agent_ids: list[str]) -> dict:
     return stats
 
 
-def _agent_response(agent: dict, caller: core_models.CallerContext | None, stats: dict | None = None) -> dict:
+def _agent_response(
+    agent: dict, caller: core_models.CallerContext | None, stats: dict | None = None
+) -> dict:
     min_caller_trust = _extract_caller_trust_min(agent.get("input_schema"))
     price_cents = _usd_to_cents(agent.get("price_per_call_usd") or 0.0)
     caller_charge_cents = payments.compute_success_distribution(
@@ -338,18 +363,26 @@ def _agent_response(agent: dict, caller: core_models.CallerContext | None, stats
         platform_fee_pct=payments.PLATFORM_FEE_PCT,
         fee_bearer_policy="caller",
     )["caller_charge_cents"]
-    is_internal = bool(agent.get("internal_only")) or str(agent.get("endpoint_url", "")).startswith("internal://")
+    is_internal = bool(agent.get("internal_only")) or str(
+        agent.get("endpoint_url", "")
+    ).startswith("internal://")
     caller_type = (caller or {}).get("type")
     out = dict(agent)
     if caller_type != "master":
         out.pop("owner_id", None)
     out["caller_trust_min"] = min_caller_trust
     out["caller_charge_cents"] = caller_charge_cents
-    builtin_meta = _builtin_specs.builtin_catalog_metadata(str(agent.get("agent_id") or ""))
+    builtin_meta = _builtin_specs.builtin_catalog_metadata(
+        str(agent.get("agent_id") or "")
+    )
     if builtin_meta:
-        out.update({key: value for key, value in builtin_meta.items() if value is not None})
+        out.update(
+            {key: value for key, value in builtin_meta.items() if value is not None}
+        )
     # Strip stored work examples for sensitive agents — privacy gate applies to reads, not just writes.
-    _SENSITIVE_IDS = frozenset({"1021c65c-d2bf-54ff-823a-897f9deb1029"})  # secret_scanner
+    _SENSITIVE_IDS = frozenset(
+        {"1021c65c-d2bf-54ff-823a-897f9deb1029"}
+    )  # secret_scanner
     if (
         str(out.get("agent_id") or "") in _SENSITIVE_IDS
         or bool(out.get("examples_sensitive"))
@@ -366,7 +399,9 @@ def _agent_response(agent: dict, caller: core_models.CallerContext | None, stats
     return out
 
 
-def _job_response(job: dict, caller: core_models.CallerContext, *, output_mode: str = "summary") -> dict:
+def _job_response(
+    job: dict, caller: core_models.CallerContext, *, output_mode: str = "summary"
+) -> dict:
     from core import feature_flags as _feature_flags
     from core import output_shaping as _output_shaping
 
@@ -413,9 +448,14 @@ def _caller_can_view_job(caller: core_models.CallerContext, job: dict) -> bool:
     if caller["type"] == "master":
         return True
     if caller["type"] == "agent_key":
-        return str(caller.get("agent_id") or "").strip() == str(job.get("agent_id") or "").strip()
+        return (
+            str(caller.get("agent_id") or "").strip()
+            == str(job.get("agent_id") or "").strip()
+        )
     owner_id = caller["owner_id"]
-    return owner_id == job["caller_owner_id"] or jobs.is_worker_authorized(job, owner_id)
+    return owner_id == job["caller_owner_id"] or jobs.is_worker_authorized(
+        job, owner_id
+    )
 
 
 def _resolve_parent_job_for_creation(
@@ -436,7 +476,10 @@ def _resolve_parent_job_for_creation(
 
     parent = jobs.get_job(normalized_parent_job_id)
     if parent is None:
-        raise HTTPException(status_code=404, detail=f"Parent job '{normalized_parent_job_id}' not found.")
+        raise HTTPException(
+            status_code=404,
+            detail=f"Parent job '{normalized_parent_job_id}' not found.",
+        )
 
     if caller["type"] == "master":
         return parent
@@ -454,7 +497,10 @@ def _caller_can_manage_agent(caller: core_models.CallerContext, agent: dict) -> 
     if caller["type"] == "master":
         return True
     if caller["type"] == "agent_key":
-        return str(caller.get("agent_id") or "").strip() == str(agent.get("agent_id") or "").strip()
+        return (
+            str(caller.get("agent_id") or "").strip()
+            == str(agent.get("agent_id") or "").strip()
+        )
     return caller["owner_id"] == agent.get("owner_id")
 
 
@@ -480,7 +526,9 @@ def _caller_can_access_agent(caller: core_models.CallerContext, agent: dict) -> 
 
 def _assert_agent_callable(agent_id: str, agent: dict) -> None:
     endpoint = str(agent.get("endpoint_url") or "").strip()
-    is_internal_builtin = str(agent_id).strip() in _BUILTIN_AGENT_IDS and endpoint.startswith("internal://")
+    is_internal_builtin = str(
+        agent_id
+    ).strip() in _BUILTIN_AGENT_IDS and endpoint.startswith("internal://")
     if agent.get("status") == "banned":
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
     if agent.get("status") == "suspended":
@@ -498,11 +546,16 @@ def _assert_agent_callable(agent_id: str, agent: dict) -> None:
         )
 
 
-def _caller_worker_authorized_for_job(caller: core_models.CallerContext, job: dict) -> bool:
+def _caller_worker_authorized_for_job(
+    caller: core_models.CallerContext, job: dict
+) -> bool:
     if caller["type"] == "master":
         return True
     if caller["type"] == "agent_key":
-        return str(caller.get("agent_id") or "").strip() == str(job.get("agent_id") or "").strip()
+        return (
+            str(caller.get("agent_id") or "").strip()
+            == str(job.get("agent_id") or "").strip()
+        )
     return jobs.is_worker_authorized(job, caller["owner_id"])
 
 
@@ -513,9 +566,13 @@ def _assert_worker_claim(
     claim_token: str | None,
 ) -> None:
     if not _caller_worker_authorized_for_job(caller, job):
-        raise HTTPException(status_code=403, detail="Not authorized for this agent job.")
+        raise HTTPException(
+            status_code=403, detail="Not authorized for this agent job."
+        )
     if (job.get("claim_owner_id") or "").strip() != worker_owner_id:
-        raise HTTPException(status_code=409, detail="Job is not currently claimed by this worker.")
+        raise HTTPException(
+            status_code=409, detail="Job is not currently claimed by this worker."
+        )
     stored_token = (job.get("claim_token") or "").strip()
     if not stored_token:
         raise HTTPException(status_code=409, detail="Job claim token is missing.")
@@ -584,14 +641,18 @@ def _assert_settlement_claim_or_grace(
         return
 
     if not _caller_worker_authorized_for_job(caller, job):
-        raise HTTPException(status_code=403, detail="Not authorized for this agent job.")
+        raise HTTPException(
+            status_code=403, detail="Not authorized for this agent job."
+        )
 
     if (job.get("claim_owner_id") or "").strip() == actor_owner_id:
         _assert_worker_claim(job, caller, actor_owner_id, claim_token)
         return
 
     if not _job_supports_late_worker_grace(job):
-        raise HTTPException(status_code=409, detail="Job is not currently claimed by this worker.")
+        raise HTTPException(
+            status_code=409, detail="Job is not currently claimed by this worker."
+        )
     if not claim_token:
         raise HTTPException(status_code=403, detail="Invalid or missing claim_token.")
     if not jobs.claim_token_was_recently_active(
@@ -613,7 +674,9 @@ def _assert_settlement_claim_or_grace(
     )
 
 
-def _timeout_stale_lease_at_touchpoint(job: dict, actor_owner_id: str, touchpoint: str) -> dict | None:
+def _timeout_stale_lease_at_touchpoint(
+    job: dict, actor_owner_id: str, touchpoint: str
+) -> dict | None:
     if not _job_has_stale_active_lease(job):
         return None
 
@@ -655,7 +718,9 @@ def _timeout_stale_lease_at_touchpoint(job: dict, actor_owner_id: str, touchpoin
         )
         return updated
 
-    return _settle_failed_job(updated, actor_owner_id=actor_owner_id, event_type="job.timeout_terminal")
+    return _settle_failed_job(
+        updated, actor_owner_id=actor_owner_id, event_type="job.timeout_terminal"
+    )
 
 
 def _job_latency_ms(job: dict) -> float:
@@ -667,7 +732,9 @@ def _job_latency_ms(job: dict) -> float:
         return 0.0
 
 
-def _validate_json_schema_subset(payload: Any, schema: dict, path: str = "$") -> list[str]:
+def _validate_json_schema_subset(
+    payload: Any, schema: dict, path: str = "$"
+) -> list[str]:
     if not isinstance(schema, dict) or not schema:
         return []
 
@@ -686,7 +753,9 @@ def _validate_json_schema_subset(payload: Any, schema: dict, path: str = "$") ->
         if expected == "integer":
             return isinstance(value, int) and not isinstance(value, bool)
         if expected == "number":
-            return (isinstance(value, int) and not isinstance(value, bool)) or isinstance(value, float)
+            return (
+                isinstance(value, int) and not isinstance(value, bool)
+            ) or isinstance(value, float)
         if expected == "boolean":
             return isinstance(value, bool)
         if expected == "null":
@@ -699,8 +768,14 @@ def _validate_json_schema_subset(payload: Any, schema: dict, path: str = "$") ->
             return errors
 
     if schema_type == "object":
-        properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
-        required = schema.get("required") if isinstance(schema.get("required"), list) else []
+        properties = (
+            schema.get("properties")
+            if isinstance(schema.get("properties"), dict)
+            else {}
+        )
+        required = (
+            schema.get("required") if isinstance(schema.get("required"), list) else []
+        )
         for field in required:
             key = str(field)
             if key not in payload:
@@ -709,7 +784,9 @@ def _validate_json_schema_subset(payload: Any, schema: dict, path: str = "$") ->
             for key, field_schema in properties.items():
                 if key in payload and isinstance(field_schema, dict):
                     errors.extend(
-                        _validate_json_schema_subset(payload[key], field_schema, path=f"{path}.{key}")
+                        _validate_json_schema_subset(
+                            payload[key], field_schema, path=f"{path}.{key}"
+                        )
                     )
         additional_properties = schema.get("additionalProperties")
         if additional_properties is False and isinstance(properties, dict):
@@ -721,7 +798,11 @@ def _validate_json_schema_subset(payload: Any, schema: dict, path: str = "$") ->
         item_schema = schema.get("items")
         if isinstance(item_schema, dict):
             for idx, value in enumerate(payload):
-                errors.extend(_validate_json_schema_subset(value, item_schema, path=f"{path}[{idx}]"))
+                errors.extend(
+                    _validate_json_schema_subset(
+                        value, item_schema, path=f"{path}[{idx}]"
+                    )
+                )
 
     return errors
 
@@ -796,7 +877,9 @@ def _normalize_protocol_artifact_list(
             size_bytes = int(size_raw)
         except (TypeError, ValueError):
             if strict:
-                raise ValueError(f"{field_name}[{index}].size_bytes must be a non-negative integer.")
+                raise ValueError(
+                    f"{field_name}[{index}].size_bytes must be a non-negative integer."
+                )
             continue
         if strict and (not name or not mime or not locator or size_bytes < 0):
             raise ValueError(
@@ -890,7 +973,9 @@ def _merge_protocol_input_envelope(
         protocol["private_task"] = bool(private_task)
     if protocol_metadata:
         existing_metadata = protocol.get("metadata")
-        merged_metadata = dict(existing_metadata) if isinstance(existing_metadata, dict) else {}
+        merged_metadata = (
+            dict(existing_metadata) if isinstance(existing_metadata, dict) else {}
+        )
         merged_metadata.update(protocol_metadata)
         protocol["metadata"] = merged_metadata
     if protocol:
@@ -914,7 +999,9 @@ def _merge_protocol_output_envelope(
         protocol["output_format"] = output_format
     if protocol_metadata:
         existing_metadata = protocol.get("metadata")
-        merged_metadata = dict(existing_metadata) if isinstance(existing_metadata, dict) else {}
+        merged_metadata = (
+            dict(existing_metadata) if isinstance(existing_metadata, dict) else {}
+        )
         merged_metadata.update(protocol_metadata)
         protocol["metadata"] = merged_metadata
     if protocol:

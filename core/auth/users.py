@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import random
 import secrets
 import sqlite3
@@ -24,6 +25,8 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
+_LOG = logging.getLogger(__name__)
+
 from .schema import (
     AGENT_CALLER_KEY_PREFIX,
     AGENT_KEY_PREFIX,
@@ -31,6 +34,10 @@ from .schema import (
     KEY_PREFIX,
     LEGAL_PRIVACY_VERSION,
     LEGAL_TERMS_VERSION,
+    MAX_USER_AGENT_LEN,
+    MAX_USERNAME_LEN,
+    MIN_PASSWORD_LEN,
+    MIN_USERNAME_LEN,
     _conn,
     _decode_scopes_json,
     _hash_password,
@@ -44,7 +51,6 @@ from .schema import (
     _now,
 )
 
-
 _VALID_ROLES = frozenset({"builder", "hirer", "both"})
 
 
@@ -55,7 +61,9 @@ def register_user(username: str, email: str, password: str, role: str = "both") 
     Raises ValueError on duplicate email or invalid role.
     """
     if role not in _VALID_ROLES:
-        raise ValueError(f"Invalid role '{role}'. Must be one of: builder, hirer, both.")
+        raise ValueError(
+            f"Invalid role '{role}'. Must be one of: builder, hirer, both."
+        )
     user_id = str(uuid.uuid4())
     salt = secrets.token_hex(32)
     pw_hash = _hash_password(password, salt)
@@ -73,16 +81,35 @@ def register_user(username: str, email: str, password: str, role: str = "both") 
             conn.execute(
                 "INSERT INTO users (user_id, username, email, password_hash, salt, created_at, role)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (user_id, normalized_username, normalized_email, pw_hash, salt, now, role),
+                (
+                    user_id,
+                    normalized_username,
+                    normalized_email,
+                    pw_hash,
+                    salt,
+                    now,
+                    role,
+                ),
             )
             conn.execute(
                 "INSERT INTO api_keys (key_id, user_id, key_hash, key_prefix, name, scopes, created_at)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (key_id, user_id, key_hash, key_prefix, "Session key", session_scopes_json, now),
+                (
+                    key_id,
+                    user_id,
+                    key_hash,
+                    key_prefix,
+                    "Session key",
+                    session_scopes_json,
+                    now,
+                ),
             )
         except sqlite3.IntegrityError as exc:
             message = str(exc).lower()
-            if "users.email" in message or "unique constraint failed: users.email" in message:
+            if (
+                "users.email" in message
+                or "unique constraint failed: users.email" in message
+            ):
                 raise ValueError("An account with that email already exists.")
             raise
 
@@ -247,22 +274,29 @@ def login_or_register_via_google(email: str, name: str = "") -> tuple[dict, bool
     candidate = base_username
     suffix = 0
     with _conn() as conn:
-        while conn.execute(
-            "SELECT 1 FROM users WHERE username = ?", (candidate,)
-        ).fetchone() is not None:
+        while (
+            conn.execute(
+                "SELECT 1 FROM users WHERE username = ?", (candidate,)
+            ).fetchone()
+            is not None
+        ):
             suffix += 1
             candidate = f"{base_username}{suffix}"[:32]
             if suffix > 9999:
                 candidate = f"user{secrets.token_hex(4)}"
                 break
     random_password = secrets.token_urlsafe(24)
-    return register_user(candidate, normalized_email, random_password, role="both"), True
+    return register_user(
+        candidate, normalized_email, random_password, role="both"
+    ), True
 
 
 def get_user_by_id(user_id: str) -> dict | None:
     """Fetch a user record by ID. Returns None if not found. Password hash is stripped from the result."""
     with _conn() as conn:
-        row = conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM users WHERE user_id = ?", (user_id,)
+        ).fetchone()
     if not row:
         return None
     d = dict(row)
@@ -274,7 +308,9 @@ def get_user_by_id(user_id: str) -> dict | None:
 def update_user_role(user_id: str, role: str) -> None:
     """Update the role for a user. Raises ValueError for invalid role."""
     if role not in _VALID_ROLES:
-        raise ValueError(f"Invalid role '{role}'. Must be one of: builder, hirer, both.")
+        raise ValueError(
+            f"Invalid role '{role}'. Must be one of: builder, hirer, both."
+        )
     with _conn() as conn:
         conn.execute("UPDATE users SET role = ? WHERE user_id = ?", (role, user_id))
 
@@ -442,7 +478,8 @@ def _flush_last_used(key_id: str) -> None:
                 (_now(), key_id),
             )
     except Exception:
-        pass
+        # Non-fatal: last_used_at is best-effort; don't fail the auth path
+        _LOG.warning("Failed to flush last_used_at for key %s", key_id, exc_info=True)
 
 
 def invalidate_key_cache(key_hash: str) -> None:
@@ -500,9 +537,7 @@ def verify_api_key(raw_key: str) -> dict | None:
         "key_name": row["key_name"],
         "scopes": _decode_scopes_json(row["scopes"]),
         "max_spend_cents": (
-            int(row["max_spend_cents"])
-            if row["max_spend_cents"] is not None
-            else None
+            int(row["max_spend_cents"]) if row["max_spend_cents"] is not None else None
         ),
         "per_job_cap_cents": (
             int(row["per_job_cap_cents"])
@@ -551,14 +586,19 @@ def accept_legal_terms(
 
     normalized_terms = str(terms_version or "").strip()
     normalized_privacy = str(privacy_version or "").strip()
-    if normalized_terms != LEGAL_TERMS_VERSION or normalized_privacy != LEGAL_PRIVACY_VERSION:
-        raise ValueError("Legal version mismatch. Refresh terms and privacy and try again.")
+    if (
+        normalized_terms != LEGAL_TERMS_VERSION
+        or normalized_privacy != LEGAL_PRIVACY_VERSION
+    ):
+        raise ValueError(
+            "Legal version mismatch. Refresh terms and privacy and try again."
+        )
 
     now = _now()
     normalized_ip = _normalize_optional_text(accepted_ip)
     normalized_ua = _normalize_optional_text(accepted_user_agent)
-    if normalized_ua and len(normalized_ua) > 512:
-        normalized_ua = normalized_ua[:512]
+    if normalized_ua and len(normalized_ua) > MAX_USER_AGENT_LEN:
+        normalized_ua = normalized_ua[:MAX_USER_AGENT_LEN]
 
     with _conn() as conn:
         result = conn.execute(
@@ -571,7 +611,14 @@ def accept_legal_terms(
                 legal_accept_user_agent = ?
             WHERE user_id = ?
             """,
-            (normalized_terms, normalized_privacy, now, normalized_ip, normalized_ua, normalized_user_id),
+            (
+                normalized_terms,
+                normalized_privacy,
+                now,
+                normalized_ip,
+                normalized_ua,
+                normalized_user_id,
+            ),
         )
         if result.rowcount < 1:
             raise ValueError("User not found.")
@@ -612,7 +659,14 @@ def create_agent_api_key(agent_id: str, name: str = "Agent key") -> dict:
             INSERT INTO agent_keys (key_id, agent_id, key_hash, key_prefix, key_type, name, created_at, revoked_at)
             VALUES (?, ?, ?, ?, 'worker', ?, ?, NULL)
             """,
-            (key_id, normalized_agent_id, key_hash, key_prefix, normalized_name, created_at),
+            (
+                key_id,
+                normalized_agent_id,
+                key_hash,
+                key_prefix,
+                normalized_name,
+                created_at,
+            ),
         )
     return {
         "key_id": key_id,
@@ -645,7 +699,14 @@ def create_agent_caller_api_key(agent_id: str, name: str = "Caller key") -> dict
             INSERT INTO agent_keys (key_id, agent_id, key_hash, key_prefix, key_type, name, created_at, revoked_at)
             VALUES (?, ?, ?, ?, 'caller', ?, ?, NULL)
             """,
-            (key_id, normalized_agent_id, key_hash, key_prefix, normalized_name, created_at),
+            (
+                key_id,
+                normalized_agent_id,
+                key_hash,
+                key_prefix,
+                normalized_name,
+                created_at,
+            ),
         )
     return {
         "key_id": key_id,
@@ -665,7 +726,10 @@ def verify_agent_api_key(raw_key: str) -> dict | None:
     ``'worker'`` or ``'caller'``. The auth layer in ``server.application_parts``
     branches on ``key_type`` to build the right ``CallerContext``.
     """
-    if not (raw_key.startswith(AGENT_KEY_PREFIX) or raw_key.startswith(AGENT_CALLER_KEY_PREFIX)):
+    if not (
+        raw_key.startswith(AGENT_KEY_PREFIX)
+        or raw_key.startswith(AGENT_CALLER_KEY_PREFIX)
+    ):
         return None
     key_hash = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
     with _conn() as conn:
@@ -771,18 +835,18 @@ def rotate_api_key(
     Returns the new key dict (including the raw secret, only time it is returned), or None
     if the old key was not found or already revoked.
     """
-    normalized_scopes = (
-        _normalize_scopes(scopes)
-        if scopes is not None
-        else None
-    )
+    normalized_scopes = _normalize_scopes(scopes) if scopes is not None else None
     normalized_max_spend = (
-        _normalize_optional_non_negative_int(max_spend_cents, field_name="max_spend_cents")
+        _normalize_optional_non_negative_int(
+            max_spend_cents, field_name="max_spend_cents"
+        )
         if max_spend_cents_provided
         else None
     )
     normalized_per_job_cap = (
-        _normalize_optional_non_negative_int(per_job_cap_cents, field_name="per_job_cap_cents")
+        _normalize_optional_non_negative_int(
+            per_job_cap_cents, field_name="per_job_cap_cents"
+        )
         if per_job_cap_cents_provided
         else None
     )
@@ -938,8 +1002,14 @@ def consume_password_reset_token(email: str, otp: str, new_password: str) -> Non
     if not normalized_email or not normalized_otp:
         raise PasswordResetError("Email and code are required.")
 
-    if len(new_password) < 8 or not any(c.isalpha() for c in new_password) or not any(c.isdigit() for c in new_password):
-        raise PasswordResetError("Password must be at least 8 characters and include letters and numbers.")
+    if (
+        len(new_password) < MIN_PASSWORD_LEN
+        or not any(c.isalpha() for c in new_password)
+        or not any(c.isdigit() for c in new_password)
+    ):
+        raise PasswordResetError(
+            f"Password must be at least {MIN_PASSWORD_LEN} characters and include letters and numbers."
+        )
 
     token_hash = _otp_hash(normalized_otp)
     now_iso = _now()
@@ -960,7 +1030,9 @@ def consume_password_reset_token(email: str, otp: str, new_password: str) -> Non
         if row is None:
             raise PasswordResetError("Invalid or expired code. Request a new one.")
         if row["used_at"] is not None:
-            raise PasswordResetError("This code has already been used. Request a new one.")
+            raise PasswordResetError(
+                "This code has already been used. Request a new one."
+            )
         if row["expires_at"] < now_iso:
             raise PasswordResetError("This code has expired. Request a new one.")
 
@@ -994,27 +1066,41 @@ class SignupVerificationError(Exception):
     """Raised when a pending signup token cannot be issued or consumed."""
 
 
-def _validate_signup_inputs(username: str, email: str, password: str, role: str) -> tuple[str, str]:
+def _validate_signup_inputs(
+    username: str, email: str, password: str, role: str
+) -> tuple[str, str]:
     if role not in _VALID_ROLES:
-        raise ValueError(f"Invalid role '{role}'. Must be one of: builder, hirer, both.")
+        raise ValueError(
+            f"Invalid role '{role}'. Must be one of: builder, hirer, both."
+        )
     normalized_email = str(email or "").strip().lower()
     normalized_username = str(username or "").strip()
     if not normalized_email or "@" not in normalized_email:
         raise ValueError("Enter a valid email address.")
-    if len(normalized_username) < 3 or len(normalized_username) > 32:
-        raise ValueError("Username must be between 3 and 32 characters.")
-    if len(password) < 8 or not any(c.isalpha() for c in password) or not any(c.isdigit() for c in password):
-        raise ValueError("Password must be at least 8 characters and include letters and numbers.")
+    if len(normalized_username) < MIN_USERNAME_LEN or len(normalized_username) > MAX_USERNAME_LEN:
+        raise ValueError(f"Username must be between {MIN_USERNAME_LEN} and {MAX_USERNAME_LEN} characters.")
+    if (
+        len(password) < MIN_PASSWORD_LEN
+        or not any(c.isalpha() for c in password)
+        or not any(c.isdigit() for c in password)
+    ):
+        raise ValueError(
+            f"Password must be at least {MIN_PASSWORD_LEN} characters and include letters and numbers."
+        )
     return normalized_email, normalized_username
 
 
-def issue_signup_verification(username: str, email: str, password: str, role: str = "both") -> str:
+def issue_signup_verification(
+    username: str, email: str, password: str, role: str = "both"
+) -> str:
     """
     Validate registration input, ensure the email is free, and store a pending
     signup row keyed by a 6-digit OTP. Returns the raw OTP so the caller can
     email it. Does NOT create the user row — that only happens on consume.
     """
-    normalized_email, normalized_username = _validate_signup_inputs(username, email, password, role)
+    normalized_email, normalized_username = _validate_signup_inputs(
+        username, email, password, role
+    )
 
     with _conn() as conn:
         existing = conn.execute(
@@ -1103,7 +1189,11 @@ def consume_signup_verification(email: str, otp: str) -> dict:
     """
     normalized_email = str(email or "").strip().lower()
     normalized_otp = str(otp or "").strip()
-    if not normalized_email or len(normalized_otp) != _OTP_LENGTH or not normalized_otp.isdigit():
+    if (
+        not normalized_email
+        or len(normalized_otp) != _OTP_LENGTH
+        or not normalized_otp.isdigit()
+    ):
         raise SignupVerificationError("Enter the 6-digit code from your email.")
 
     code_hash = _otp_hash(normalized_otp)
@@ -1121,7 +1211,9 @@ def consume_signup_verification(email: str, otp: str) -> dict:
         if row is None:
             raise SignupVerificationError("Invalid or expired code. Request a new one.")
         if row["consumed_at"] is not None:
-            raise SignupVerificationError("This code has already been used. Request a new one.")
+            raise SignupVerificationError(
+                "This code has already been used. Request a new one."
+            )
         if row["expires_at"] < now_iso:
             raise SignupVerificationError("This code has expired. Request a new one.")
 
@@ -1160,7 +1252,15 @@ def consume_signup_verification(email: str, otp: str) -> dict:
             conn.execute(
                 "INSERT INTO api_keys (key_id, user_id, key_hash, key_prefix, name, scopes, created_at)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (key_id, user_id, key_hash, key_prefix, "Session key", session_scopes_json, now_iso),
+                (
+                    key_id,
+                    user_id,
+                    key_hash,
+                    key_prefix,
+                    "Session key",
+                    session_scopes_json,
+                    now_iso,
+                ),
             )
             conn.execute(
                 "UPDATE signup_verification_tokens SET consumed_at = ? WHERE token_id = ?",
@@ -1168,8 +1268,13 @@ def consume_signup_verification(email: str, otp: str) -> dict:
             )
         except sqlite3.IntegrityError as exc:
             message = str(exc).lower()
-            if "users.email" in message or "unique constraint failed: users.email" in message:
-                raise SignupVerificationError("An account with that email already exists.") from exc
+            if (
+                "users.email" in message
+                or "unique constraint failed: users.email" in message
+            ):
+                raise SignupVerificationError(
+                    "An account with that email already exists."
+                ) from exc
             raise
 
     return {

@@ -46,6 +46,7 @@ _NS = "http://www.w3.org/2005/Atom"
 def _err(code: str, message: str) -> dict:
     return {"error": {"code": code, "message": message}}
 
+
 _SYNTHESIS_SYSTEM = """\
 You are a research scientist who reads arXiv papers daily. Given a set of paper titles and abstracts,
 produce a dense synthesis of the literature: key themes, what's converging, what's contested, seminal
@@ -69,7 +70,9 @@ Return JSON with exactly:
 }}"""
 
 
-def _fetch_arxiv(query: str, max_results: int, sort_by: str, categories: list[str]) -> list[dict]:
+def _fetch_arxiv(
+    query: str, max_results: int, sort_by: str, categories: list[str]
+) -> list[dict]:
     search_query = query
     if categories:
         cat_filter = " OR ".join(f"cat:{c}" for c in categories[:5])
@@ -108,7 +111,9 @@ def _fetch_arxiv(query: str, max_results: int, sort_by: str, categories: list[st
     except requests.exceptions.Timeout:
         raise RuntimeError("arXiv API timed out. Try again in a moment.")
     except requests.exceptions.HTTPError as e:
-        raise RuntimeError(f"arXiv API returned an error ({e.response.status_code}). Try again later.")
+        raise RuntimeError(
+            f"arXiv API returned an error ({e.response.status_code}). Try again later."
+        )
     except Exception as e:
         raise RuntimeError(f"Could not reach arXiv API: {type(e).__name__}.")
 
@@ -116,12 +121,17 @@ def _fetch_arxiv(query: str, max_results: int, sort_by: str, categories: list[st
     papers = []
 
     for entry in root.findall(f"{{{_NS}}}entry"):
+
         def _text(tag):
             el = entry.find(f"{{{_NS}}}{tag}")
             return el.text.strip() if el is not None and el.text else ""
 
         arxiv_id_full = _text("id")
-        arxiv_id = arxiv_id_full.split("/abs/")[-1] if "/abs/" in arxiv_id_full else arxiv_id_full
+        arxiv_id = (
+            arxiv_id_full.split("/abs/")[-1]
+            if "/abs/" in arxiv_id_full
+            else arxiv_id_full
+        )
 
         authors = [
             a.findtext(f"{{{_NS}}}name", "").strip()
@@ -154,20 +164,24 @@ def _fetch_arxiv(query: str, max_results: int, sort_by: str, categories: list[st
 
         abstract = re.sub(r"\s+", " ", _text("summary")).strip()
 
-        papers.append({
-            "arxiv_id": arxiv_id,
-            "title": _text("title"),
-            "authors": authors[:6],
-            "abstract": abstract[:600],
-            "categories": [c for c in categories_list if c][:4],
-            "published": _text("published")[:10],
-            "updated": _text("updated")[:10],
-            "pdf_url": pdf_url,
-            "abstract_url": abs_url,
-        })
+        papers.append(
+            {
+                "arxiv_id": arxiv_id,
+                "title": _text("title"),
+                "authors": authors[:6],
+                "abstract": abstract[:600],
+                "categories": [c for c in categories_list if c][:4],
+                "published": _text("published")[:10],
+                "updated": _text("updated")[:10],
+                "pdf_url": pdf_url,
+                "abstract_url": abs_url,
+            }
+        )
 
     if categories:
-        papers = [p for p in papers if any(c in categories for c in p.get("categories", []))]
+        papers = [
+            p for p in papers if any(c in categories for c in p.get("categories", []))
+        ]
 
     # Re-rank by query-token overlap with title+abstract. We always do this
     # post-filter (even when sort_by="relevance") because arXiv's relevance
@@ -175,13 +189,19 @@ def _fetch_arxiv(query: str, max_results: int, sort_by: str, categories: list[st
     # top hits frequently include topical neighbors with no overlap.
     query_tokens = {t for t in re.findall(r"[a-z0-9]+", query.lower()) if len(t) > 2}
     if query_tokens:
+
         def _overlap_score(paper: dict) -> tuple[int, int]:
-            haystack = (paper.get("title", "") + " " + paper.get("abstract", "")).lower()
+            haystack = (
+                paper.get("title", "") + " " + paper.get("abstract", "")
+            ).lower()
             haystack_tokens = set(re.findall(r"[a-z0-9]+", haystack))
             overlap = len(query_tokens & haystack_tokens)
             # Tie-break by date for stable ordering.
-            date_rank = int(re.sub(r"[^0-9]", "", paper.get("published") or "0")[:8] or 0)
+            date_rank = int(
+                re.sub(r"[^0-9]", "", paper.get("published") or "0")[:8] or 0
+            )
             return (overlap, date_rank)
+
         papers.sort(key=_overlap_score, reverse=True)
         # Drop papers with zero overlap when we have enough alternatives.
         papers_with_overlap = [p for p in papers if _overlap_score(p)[0] > 0]
@@ -211,6 +231,7 @@ def _fetch_full_abstract_data(arxiv_id: str) -> dict:
         # Manual redirect loop; each hop re-validated through the SSRF gate so
         # an attacker controlling a redirect target can't reach private IPs.
         from core.url_security import validate_outbound_url as _validate
+
         current = _validate(url, "arxiv_url")
         for _ in range(4):
             resp = requests.get(current, timeout=10, allow_redirects=False)
@@ -280,12 +301,17 @@ def run(payload: dict) -> dict:
     if not query:
         return _err("arxiv_research.missing_query", "query is required")
     if len(query) > 500:
-        return _err("arxiv_research.query_too_long", "query must be 500 characters or fewer")
+        return _err(
+            "arxiv_research.query_too_long", "query must be 500 characters or fewer"
+        )
 
     try:
         max_results = max(1, min(int(payload.get("max_results", 8)), 20))
     except (TypeError, ValueError):
-        return _err("arxiv_research.invalid_max_results", "max_results must be a number between 1 and 20")
+        return _err(
+            "arxiv_research.invalid_max_results",
+            "max_results must be a number between 1 and 20",
+        )
 
     sort_by = str(payload.get("sort_by", "relevance"))
     if sort_by not in _VALID_SORT_BY:
@@ -295,7 +321,7 @@ def run(payload: dict) -> dict:
     if not isinstance(raw_categories, list):
         return _err(
             "arxiv_research.invalid_categories",
-            "categories must be a list of arXiv category strings (e.g. [\"cs.AI\"])",
+            'categories must be a list of arXiv category strings (e.g. ["cs.AI"])',
         )
     categories = [str(c).strip() for c in raw_categories if str(c).strip()][:10]
 
@@ -337,10 +363,13 @@ def run(payload: dict) -> dict:
         model="",
         messages=[
             Message(role="system", content=_SYNTHESIS_SYSTEM),
-            Message(role="user", content=_SYNTHESIS_USER.format(
-                query=query,
-                papers_text=papers_text[:6000],
-            )),
+            Message(
+                role="user",
+                content=_SYNTHESIS_USER.format(
+                    query=query,
+                    papers_text=papers_text[:6000],
+                ),
+            ),
         ],
         temperature=0.2,
         max_tokens=800,
@@ -366,12 +395,27 @@ def run(payload: dict) -> dict:
 
     # Flag when no returned paper has any meaningful token overlap with the query.
     _query_tokens = {t for t in re.findall(r"[a-z0-9]+", query.lower()) if len(t) > 3}
-    _STOPWORDS = {"that", "this", "with", "from", "have", "been", "they", "their", "will"}
+    _STOPWORDS = {
+        "that",
+        "this",
+        "with",
+        "from",
+        "have",
+        "been",
+        "they",
+        "their",
+        "will",
+    }
     _query_tokens -= _STOPWORDS
 
     def _paper_overlaps(p: dict) -> bool:
-        text = " ".join([p.get("title") or "", p.get("abstract") or "",
-                         " ".join(p.get("categories") or [])]).lower()
+        text = " ".join(
+            [
+                p.get("title") or "",
+                p.get("abstract") or "",
+                " ".join(p.get("categories") or []),
+            ]
+        ).lower()
         return any(tok in text for tok in _query_tokens)
 
     if not _query_tokens:
@@ -379,11 +423,15 @@ def run(payload: dict) -> dict:
     else:
         low_confidence = bool(papers) and not any(_paper_overlaps(p) for p in papers)
 
-    return annotate_success({
-        "query": query,
-        "total_found": len(papers),
-        "papers": papers,
-        **synthesis_data,
-        "low_confidence_results": low_confidence,
-        "billing_units_actual": len(papers),
-    }, llm_used=llm_used, degraded_mode=degraded_mode)
+    return annotate_success(
+        {
+            "query": query,
+            "total_found": len(papers),
+            "papers": papers,
+            **synthesis_data,
+            "low_confidence_results": low_confidence,
+            "billing_units_actual": len(papers),
+        },
+        llm_used=llm_used,
+        degraded_mode=degraded_mode,
+    )

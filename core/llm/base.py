@@ -12,6 +12,7 @@ Critical usage notes:
   The fallback chain in ``core.llm.registry`` selects the model. Pass
   ``model=""`` or omit it.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -23,6 +24,7 @@ Role = Literal["system", "user", "assistant"]
 @dataclass
 class Message:
     """A single chat message with a role and text content."""
+
     role: Role
     content: str
 
@@ -35,6 +37,7 @@ class CompletionRequest:
     ``run_with_fallback`` — callers should leave it as an empty string or
     omit it rather than hardcoding a model name.
     """
+
     model: str
     messages: list[Message]
     temperature: float = 0.0
@@ -47,6 +50,7 @@ class CompletionRequest:
 @dataclass
 class Usage:
     """Token usage reported by the provider."""
+
     prompt_tokens: int = 0
     completion_tokens: int = 0
 
@@ -58,6 +62,7 @@ class LLMResponse:
     Always access the generated text via ``.text`` — there is no ``.content``
     attribute on this class.
     """
+
     text: str
     model: str
     provider: str
@@ -67,6 +72,7 @@ class LLMResponse:
 
 class LLMProvider(Protocol):
     """Interface every provider implementation must satisfy."""
+
     name: str
 
     def is_available(self) -> bool:

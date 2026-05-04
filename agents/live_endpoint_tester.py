@@ -30,6 +30,7 @@ histogram, sample_errors, execution_time_ms, billing_units_actual}``
 
 On error: ``{error: {code, message}}``
 """
+
 from __future__ import annotations
 
 import math
@@ -42,7 +43,6 @@ from typing import Any
 import requests
 
 from core.url_security import validate_outbound_url
-
 
 _MAX_REQUESTS = 200
 _MAX_TIMEOUT_SECONDS = 10.0
@@ -68,7 +68,14 @@ def _histogram(samples: list[float]) -> list[dict[str, Any]]:
         count = sum(1 for sample in samples if previous <= sample < upper)
         buckets.append({"lt_ms": upper, "count": count})
         previous = upper
-    buckets.append({"gte_ms": _HISTOGRAM_BUCKETS_MS[-1], "count": sum(1 for sample in samples if sample >= _HISTOGRAM_BUCKETS_MS[-1])})
+    buckets.append(
+        {
+            "gte_ms": _HISTOGRAM_BUCKETS_MS[-1],
+            "count": sum(
+                1 for sample in samples if sample >= _HISTOGRAM_BUCKETS_MS[-1]
+            ),
+        }
+    )
     return buckets
 
 
@@ -90,16 +97,28 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
 
     method = str(payload.get("method") or "GET").strip().upper()
     if method not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}:
-        return _err("live_endpoint_tester.invalid_method", f"Unsupported method '{method}'.")
+        return _err(
+            "live_endpoint_tester.invalid_method", f"Unsupported method '{method}'."
+        )
 
     headers = payload.get("headers") or {}
     if not isinstance(headers, dict):
-        return _err("live_endpoint_tester.invalid_headers", "headers must be an object.")
+        return _err(
+            "live_endpoint_tester.invalid_headers", "headers must be an object."
+        )
 
     body = payload.get("body")
-    requests_count = max(1, min(int(payload.get("requests") or payload.get("n_requests") or 50), _MAX_REQUESTS))
+    requests_count = max(
+        1,
+        min(
+            int(payload.get("requests") or payload.get("n_requests") or 50),
+            _MAX_REQUESTS,
+        ),
+    )
     concurrency = max(1, min(int(payload.get("concurrency") or 5), requests_count))
-    timeout_seconds = max(0.1, min(float(payload.get("timeout_seconds") or 5.0), _MAX_TIMEOUT_SECONDS))
+    timeout_seconds = max(
+        0.1, min(float(payload.get("timeout_seconds") or 5.0), _MAX_TIMEOUT_SECONDS)
+    )
 
     session = requests.Session()
     session.headers.update({"User-Agent": "aztea-live-endpoint-tester/1.0"})
@@ -124,9 +143,19 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
                 "bytes_out": len(response.content or b""),
             }
         except requests.exceptions.Timeout:
-            return {"ok": False, "status_code": 0, "latency_ms": timeout_seconds * 1000, "error": "timeout"}
+            return {
+                "ok": False,
+                "status_code": 0,
+                "latency_ms": timeout_seconds * 1000,
+                "error": "timeout",
+            }
         except requests.RequestException as exc:
-            return {"ok": False, "status_code": 0, "latency_ms": (time.monotonic() - started) * 1000, "error": type(exc).__name__}
+            return {
+                "ok": False,
+                "status_code": 0,
+                "latency_ms": (time.monotonic() - started) * 1000,
+                "error": type(exc).__name__,
+            }
 
     started = time.monotonic()
     results: list[dict[str, Any]] = []

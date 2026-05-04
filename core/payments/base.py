@@ -17,17 +17,16 @@
 # KNOWN DEBT:
 # - reconciliation only runs on manual trigger (POST /ops/payments/reconcile) — should be on cron
 
-import json
 import logging
 import os
 import sqlite3
 import sys
 import uuid
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 
-from core import logging_utils
 from core import db as _db
+from core import logging_utils
 
 DB_PATH = _db.DB_PATH
 _local = _db._local
@@ -41,6 +40,8 @@ def _resolved_db_path() -> str:
         if isinstance(candidate, str) and candidate:
             return candidate
     return DB_PATH
+
+
 PLATFORM_OWNER_ID = "platform"
 DISPUTE_ESCROW_OWNER_PREFIX = "dispute_escrow:"
 DISPUTE_DEPOSIT_OWNER_PREFIX = "dispute_deposit:"
@@ -69,7 +70,9 @@ class KeySpendLimitExceededError(Exception):
 
 
 class WalletDailySpendLimitExceededError(Exception):
-    def __init__(self, limit_cents: int, spent_last_24h_cents: int, attempted_cents: int):
+    def __init__(
+        self, limit_cents: int, spent_last_24h_cents: int, attempted_cents: int
+    ):
         self.limit_cents = int(limit_cents)
         self.spent_last_24h_cents = int(spent_last_24h_cents)
         self.attempted_cents = int(attempted_cents)
@@ -84,7 +87,9 @@ class WalletDailySpendLimitExceededError(Exception):
 # ---------------------------------------------------------------------------
 
 
-def _env_int(name: str, default: int, minimum: int | None = None, maximum: int | None = None) -> int:
+def _env_int(
+    name: str, default: int, minimum: int | None = None, maximum: int | None = None
+) -> int:
     raw = os.environ.get(name)
     if raw is None:
         value = default
@@ -112,7 +117,9 @@ def normalize_fee_bearer_policy(value: str | None) -> str:
     return normalized
 
 
-def compute_platform_fee_cents(price_cents: int, platform_fee_pct: int | None = None) -> int:
+def compute_platform_fee_cents(
+    price_cents: int, platform_fee_pct: int | None = None
+) -> int:
     """Return the platform fee in cents for a given price, rounded half-up.
 
     Uses ``PLATFORM_FEE_PCT`` (default 10) when ``platform_fee_pct`` is None.
@@ -124,9 +131,9 @@ def compute_platform_fee_cents(price_cents: int, platform_fee_pct: int | None = 
         raise ValueError("price_cents must be non-negative.")
     if pct < 0:
         raise ValueError("platform_fee_pct must be non-negative.")
-    fee = (
-        Decimal(price_cents) * Decimal(pct) / Decimal(100)
-    ).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    fee = (Decimal(price_cents) * Decimal(pct) / Decimal(100)).quantize(
+        Decimal("1"), rounding=ROUND_HALF_UP
+    )
     return int(fee)
 
 
@@ -168,6 +175,7 @@ def compute_success_distribution(
         "platform_fee_cents": int(fee_cents),
     }
 
+
 def _conn() -> sqlite3.Connection:
     """Return a thread-local SQLite connection with WAL mode."""
     return _db.get_raw_connection(_resolved_db_path())
@@ -195,6 +203,7 @@ def _add_column_if_missing(conn: sqlite3.Connection, ddl: str) -> None:
 # Schema
 # ---------------------------------------------------------------------------
 
+
 def init_payments_db() -> None:
     """Create wallets and transactions tables and indexes if needed."""
     with _conn() as conn:
@@ -209,16 +218,19 @@ def init_payments_db() -> None:
             )
         """)
         _add_column_if_missing(
-            conn, "ALTER TABLE wallets ADD COLUMN caller_trust REAL NOT NULL DEFAULT 0.5"
+            conn,
+            "ALTER TABLE wallets ADD COLUMN caller_trust REAL NOT NULL DEFAULT 0.5",
         )
         _add_column_if_missing(
             conn, "ALTER TABLE wallets ADD COLUMN daily_spend_limit_cents INTEGER"
         )
         _add_column_if_missing(
-            conn, "ALTER TABLE wallets ADD COLUMN parent_wallet_id TEXT REFERENCES wallets(wallet_id)"
+            conn,
+            "ALTER TABLE wallets ADD COLUMN parent_wallet_id TEXT REFERENCES wallets(wallet_id)",
         )
         _add_column_if_missing(
-            conn, "ALTER TABLE wallets ADD COLUMN guarantor_enabled INTEGER NOT NULL DEFAULT 0"
+            conn,
+            "ALTER TABLE wallets ADD COLUMN guarantor_enabled INTEGER NOT NULL DEFAULT 0",
         )
         _add_column_if_missing(
             conn, "ALTER TABLE wallets ADD COLUMN guarantor_cap_cents INTEGER"
@@ -274,9 +286,7 @@ def init_payments_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_tx_wallet ON transactions(wallet_id, created_at DESC)"
         )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_wallet_owner ON wallets(owner_id)"
-        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_wallet_owner ON wallets(owner_id)")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_wallets_parent_wallet_id ON wallets(parent_wallet_id)"
         )
@@ -303,6 +313,7 @@ def init_payments_db() -> None:
 # Internal ledger primitive
 # ---------------------------------------------------------------------------
 
+
 def _insert_tx(
     conn: sqlite3.Connection,
     wallet_id: str,
@@ -319,7 +330,9 @@ def _insert_tx(
     Returns the new tx_id.
     """
     tx_id = str(uuid.uuid4())
-    normalized_key_id = _resolve_charged_by_key_id(conn, charged_by_key_id, related_tx_id)
+    normalized_key_id = _resolve_charged_by_key_id(
+        conn, charged_by_key_id, related_tx_id
+    )
     conn.execute(
         """
         INSERT INTO transactions
@@ -357,7 +370,9 @@ def _insert_tx_only(
 ) -> str:
     """Insert a transaction row without mutating wallet balance (used when balance already updated)."""
     tx_id = str(uuid.uuid4())
-    normalized_key_id = _resolve_charged_by_key_id(conn, charged_by_key_id, related_tx_id)
+    normalized_key_id = _resolve_charged_by_key_id(
+        conn, charged_by_key_id, related_tx_id
+    )
     conn.execute(
         """
         INSERT INTO transactions
@@ -408,6 +423,7 @@ def _resolve_charged_by_key_id(
 # ---------------------------------------------------------------------------
 # Wallet management
 # ---------------------------------------------------------------------------
+
 
 def get_or_create_wallet(
     owner_id: str,
@@ -475,7 +491,9 @@ def get_wallet_by_owner(owner_id: str) -> dict | None:
     return dict(row) if row else None
 
 
-def set_wallet_daily_spend_limit(wallet_id: str, daily_spend_limit_cents: int | None) -> dict:
+def set_wallet_daily_spend_limit(
+    wallet_id: str, daily_spend_limit_cents: int | None
+) -> dict:
     """Update the caller wallet's daily spend cap. Pass None to remove the limit.
 
     Returns the updated wallet dict. Raises ``ValueError`` for negative values.
@@ -496,7 +514,9 @@ def set_wallet_daily_spend_limit(wallet_id: str, daily_spend_limit_cents: int | 
         ).rowcount
         if updated == 0:
             raise ValueError(f"Wallet '{wallet_id}' not found.")
-        row = conn.execute("SELECT * FROM wallets WHERE wallet_id = ?", (wallet_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM wallets WHERE wallet_id = ?", (wallet_id,)
+        ).fetchone()
     return dict(row)
 
 
@@ -554,7 +574,9 @@ def charge(wallet_id: str, amount_cents: int, memo: str = "") -> str:
         ).rowcount
         if updated == 0:
             raise InsufficientBalanceError(row["balance_cents"], amount_cents)
-        return _insert_tx_only(conn, wallet_id, "charge", -amount_cents, None, None, memo or "Withdrawal")
+        return _insert_tx_only(
+            conn, wallet_id, "charge", -amount_cents, None, None, memo or "Withdrawal"
+        )
 
 
 def get_wallet_transactions(wallet_id: str, limit: int = 20) -> list:
@@ -686,7 +708,11 @@ def admin_transfer(
             debit_id,
             f"[admin-transfer] {memo}",
         )
-    return {"debit_tx_id": debit_id, "credit_tx_id": credit_id, "amount_cents": int(amount_cents)}
+    return {
+        "debit_tx_id": debit_id,
+        "credit_tx_id": credit_id,
+        "amount_cents": int(amount_cents),
+    }
 
 
 def deposit(wallet_id: str, amount_cents: int, memo: str = "manual deposit") -> str:
@@ -707,6 +733,7 @@ def deposit(wallet_id: str, amount_cents: int, memo: str = "manual deposit") -> 
 # ---------------------------------------------------------------------------
 # Call lifecycle
 # ---------------------------------------------------------------------------
+
 
 def pre_call_charge(
     caller_wallet_id: str,
@@ -750,11 +777,7 @@ def pre_call_charge(
         parent_wallet_id = row["parent_wallet_id"]
         guarantor_on = bool(row["guarantor_enabled"])
         guarantor_cap = row["guarantor_cap_cents"]
-        if (
-            balance_cents < price_cents
-            and parent_wallet_id
-            and guarantor_on
-        ):
+        if balance_cents < price_cents and parent_wallet_id and guarantor_on:
             shortfall = price_cents - balance_cents
             # How much has already been backstopped from this parent today?
             today_iso = datetime.now(timezone.utc).date().isoformat()
@@ -772,7 +795,8 @@ def pre_call_charge(
             ).fetchone()
             used_today = int(today_used_row["used_cents"] or 0) if today_used_row else 0
             available_cap = (
-                None if guarantor_cap is None
+                None
+                if guarantor_cap is None
                 else max(0, int(guarantor_cap) - used_today)
             )
             if available_cap is not None and shortfall > available_cap:
@@ -783,17 +807,27 @@ def pre_call_charge(
                     "SELECT balance_cents FROM wallets WHERE wallet_id = ?",
                     (parent_wallet_id,),
                 ).fetchone()
-                parent_balance = int(parent_row["balance_cents"] or 0) if parent_row else 0
+                parent_balance = (
+                    int(parent_row["balance_cents"] or 0) if parent_row else 0
+                )
                 if parent_balance >= shortfall:
                     # Atomic intra-transaction transfer: parent → this wallet.
                     _insert_tx(
-                        conn, parent_wallet_id, "charge", -shortfall,
-                        agent_id, None,
+                        conn,
+                        parent_wallet_id,
+                        "charge",
+                        -shortfall,
+                        agent_id,
+                        None,
                         f"guarantor: backstop for {caller_wallet_id[:8]} call to {agent_id}",
                     )
                     _insert_tx(
-                        conn, caller_wallet_id, "deposit", shortfall,
-                        agent_id, None,
+                        conn,
+                        caller_wallet_id,
+                        "deposit",
+                        shortfall,
+                        agent_id,
+                        None,
                         f"guarantor: from parent {parent_wallet_id[:8]}",
                     )
                     balance_cents = balance_cents + shortfall  # for any later checks
@@ -834,7 +868,9 @@ def pre_call_charge(
                 """,
                 (caller_wallet_id, since_iso),
             ).fetchone()
-            net_spent_daily = int(spent_daily_row["net_spent_cents"] or 0) if spent_daily_row else 0
+            net_spent_daily = (
+                int(spent_daily_row["net_spent_cents"] or 0) if spent_daily_row else 0
+            )
             if net_spent_daily < 0:
                 net_spent_daily = 0
             if net_spent_daily + price_cents > daily_limit_cents:
@@ -858,7 +894,9 @@ def pre_call_charge(
                 "SELECT balance_cents FROM wallets WHERE wallet_id = ?",
                 (caller_wallet_id,),
             ).fetchone()
-            current_balance = int(current_row["balance_cents"] or 0) if current_row else 0
+            current_balance = (
+                int(current_row["balance_cents"] or 0) if current_row else 0
+            )
             raise InsufficientBalanceError(current_balance, price_cents)
         return _insert_tx_only(
             conn,
@@ -923,8 +961,13 @@ def post_call_payout(
         try:
             if agent_cents > 0:
                 _insert_tx(
-                    conn, agent_wallet_id, "payout", agent_cents, agent_id,
-                    charge_tx_id, f"Agent payout for call {charge_tx_id[:8]}",
+                    conn,
+                    agent_wallet_id,
+                    "payout",
+                    agent_cents,
+                    agent_id,
+                    charge_tx_id,
+                    f"Agent payout for call {charge_tx_id[:8]}",
                 )
                 applied = True
         except sqlite3.IntegrityError:
@@ -932,8 +975,13 @@ def post_call_payout(
         try:
             if fee_cents > 0:
                 _insert_tx(
-                    conn, platform_wallet_id, "fee", fee_cents, agent_id,
-                    charge_tx_id, f"Platform fee for call {charge_tx_id[:8]}",
+                    conn,
+                    platform_wallet_id,
+                    "fee",
+                    fee_cents,
+                    agent_id,
+                    charge_tx_id,
+                    f"Platform fee for call {charge_tx_id[:8]}",
                 )
                 applied = True
         except sqlite3.IntegrityError:
@@ -994,8 +1042,13 @@ def post_call_refund(
             return
         try:
             _insert_tx(
-                conn, caller_wallet_id, "refund", price_cents, agent_id,
-                charge_tx_id, f"Refund for failed call {charge_tx_id[:8]}",
+                conn,
+                caller_wallet_id,
+                "refund",
+                price_cents,
+                agent_id,
+                charge_tx_id,
+                f"Refund for failed call {charge_tx_id[:8]}",
             )
             applied = True
         except sqlite3.IntegrityError:
@@ -1047,7 +1100,9 @@ def post_call_partial_settle(
         if caller_charge_cents is None
         else max(0, int(caller_charge_cents))
     )
-    total_success_cents = int(distribution["agent_payout_cents"] + distribution["platform_fee_cents"])
+    total_success_cents = int(
+        distribution["agent_payout_cents"] + distribution["platform_fee_cents"]
+    )
     refund_fraction = max(0.0, min(1.0, float(refund_fraction)))
     refund_cents = int(
         (Decimal(total_charge_cents) * Decimal(str(refund_fraction))).quantize(
@@ -1059,8 +1114,12 @@ def post_call_partial_settle(
         agent_cents = 0
         fee_cents = 0
     else:
-        ratio = Decimal(distribution["platform_fee_cents"]) / Decimal(total_success_cents)
-        fee_cents = int((Decimal(kept_cents) * ratio).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        ratio = Decimal(distribution["platform_fee_cents"]) / Decimal(
+            total_success_cents
+        )
+        fee_cents = int(
+            (Decimal(kept_cents) * ratio).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+        )
         fee_cents = max(0, min(fee_cents, kept_cents))
         agent_cents = kept_cents - fee_cents
 
@@ -1077,21 +1136,33 @@ def post_call_partial_settle(
         try:
             if refund_cents > 0:
                 _insert_tx(
-                    conn, caller_wallet_id, "refund", refund_cents, agent_id,
+                    conn,
+                    caller_wallet_id,
+                    "refund",
+                    refund_cents,
+                    agent_id,
                     charge_tx_id,
-                    f"Partial refund ({int(refund_fraction*100)}%) for call {charge_tx_id[:8]}",
+                    f"Partial refund ({int(refund_fraction * 100)}%) for call {charge_tx_id[:8]}",
                 )
                 applied = True
             if agent_cents > 0:
                 _insert_tx(
-                    conn, agent_wallet_id, "payout", agent_cents, agent_id,
+                    conn,
+                    agent_wallet_id,
+                    "payout",
+                    agent_cents,
+                    agent_id,
                     charge_tx_id,
-                    f"Partial payout ({int((1-refund_fraction)*100)}%) for call {charge_tx_id[:8]}",
+                    f"Partial payout ({int((1 - refund_fraction) * 100)}%) for call {charge_tx_id[:8]}",
                 )
                 applied = True
             if fee_cents > 0:
                 _insert_tx(
-                    conn, platform_wallet_id, "fee", fee_cents, agent_id,
+                    conn,
+                    platform_wallet_id,
+                    "fee",
+                    fee_cents,
+                    agent_id,
                     charge_tx_id,
                     f"Platform fee for partial call {charge_tx_id[:8]}",
                 )
@@ -1117,4 +1188,3 @@ def post_call_partial_settle(
             "applied": applied,
         },
     )
-

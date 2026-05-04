@@ -15,6 +15,7 @@ Error types and fallback behaviour:
   structurally invalid response; fallback chain skips to next provider.
 - ``LLMError`` (base) — any other provider-level failure; fallback chain skips.
 """
+
 from __future__ import annotations
 
 

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import ast
-import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -48,7 +47,16 @@ def chunk_imports(chunk: str, db_names: set[str]) -> str:
             if isinstance(node.value, ast.Name) and node.value.id == "_models":
                 used.add("_models")
     # Always need db connection stack
-    used |= {"_conn", "_now", "_now_dt", "_parse_ts", "_iso_after_seconds", "_row_to_dict", "_msg_to_dict", "_decode_json"}
+    used |= {
+        "_conn",
+        "_now",
+        "_now_dt",
+        "_parse_ts",
+        "_iso_after_seconds",
+        "_row_to_dict",
+        "_msg_to_dict",
+        "_decode_json",
+    }
     used &= db_names | {"_models"}
     ordered = sorted(used)
     lines = [
@@ -71,7 +79,9 @@ def main() -> None:
     text = SRC.read_text(encoding="utf-8")
     lines = text.splitlines(keepends=True)
 
-    db_lines = lines[:772] + lines[2255:2310]  # include _decode_json block through _msg_to_dict
+    db_lines = (
+        lines[:772] + lines[2255:2310]
+    )  # include _decode_json block through _msg_to_dict
     # Fix _conn in db: insert sys + _resolved after _local line
     db_text = "".join(db_lines)
     db_text = db_text.replace(

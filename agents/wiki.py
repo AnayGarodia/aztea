@@ -61,7 +61,9 @@ def _strip_fences(text: str) -> str:
 
 def _sentences(text: str) -> list[str]:
     collapsed = re.sub(r"\s+", " ", str(text or "")).strip()
-    return [part.strip() for part in re.split(r"(?<=[.!?])\s+", collapsed) if part.strip()]
+    return [
+        part.strip() for part in re.split(r"(?<=[.!?])\s+", collapsed) if part.strip()
+    ]
 
 
 def _dedupe(items: list[str], *, limit: int) -> list[str]:
@@ -77,30 +79,63 @@ def _dedupe(items: list[str], *, limit: int) -> list[str]:
 
 def _classify_content_type(topic: str, content: str) -> str:
     lowered = f"{topic} {content[:1000]}".lower()
-    if any(token in lowered for token in ("born", "died", "actor", "scientist", "politician", "writer")):
+    if any(
+        token in lowered
+        for token in ("born", "died", "actor", "scientist", "politician", "writer")
+    ):
         return "person"
-    if any(token in lowered for token in ("company", "corporation", "founded", "subsidiary", "headquartered")):
+    if any(
+        token in lowered
+        for token in (
+            "company",
+            "corporation",
+            "founded",
+            "subsidiary",
+            "headquartered",
+        )
+    ):
         return "organization"
-    if any(token in lowered for token in ("city", "country", "province", "river", "mountain", "population")):
+    if any(
+        token in lowered
+        for token in ("city", "country", "province", "river", "mountain", "population")
+    ):
         return "place"
-    if any(token in lowered for token in ("war", "battle", "treaty", "revolution", "election")):
+    if any(
+        token in lowered
+        for token in ("war", "battle", "treaty", "revolution", "election")
+    ):
         return "event"
-    if any(token in lowered for token in ("algorithm", "software", "protocol", "device", "machine learning")):
+    if any(
+        token in lowered
+        for token in ("algorithm", "software", "protocol", "device", "machine learning")
+    ):
         return "technology"
-    if any(token in lowered for token in ("theory", "physics", "chemistry", "biology", "mathematics")):
+    if any(
+        token in lowered
+        for token in ("theory", "physics", "chemistry", "biology", "mathematics")
+    ):
         return "science"
     if any(token in lowered for token in ("film", "album", "novel", "art", "music")):
         return "culture"
-    if any(token in lowered for token in ("method", "framework", "concept", "philosophy", "economics")):
+    if any(
+        token in lowered
+        for token in ("method", "framework", "concept", "philosophy", "economics")
+    ):
         return "concept"
     return "other"
 
 
-def _deterministic_brief(*, page_title: str, page_url: str, content: str) -> dict[str, Any]:
+def _deterministic_brief(
+    *, page_title: str, page_url: str, content: str
+) -> dict[str, Any]:
     sentences = _sentences(content)
     summary = " ".join(sentences[:4]).strip()[:900]
     key_facts = _dedupe(
-        [sentence for sentence in sentences if any(char.isdigit() for char in sentence)][:8]
+        [
+            sentence
+            for sentence in sentences
+            if any(char.isdigit() for char in sentence)
+        ][:8]
         or sentences[:6],
         limit=8,
     )
@@ -114,15 +149,24 @@ def _deterministic_brief(*, page_title: str, page_url: str, content: str) -> dic
     statistics = []
     for sentence in sentences:
         if any(char.isdigit() for char in sentence):
-            statistics.append({"stat": sentence[:220], "source_note": "From the fetched Wikipedia article text."})
+            statistics.append(
+                {
+                    "stat": sentence[:220],
+                    "source_note": "From the fetched Wikipedia article text.",
+                }
+            )
         if len(statistics) >= 4:
             break
     notable_figures = []
-    name_matches = re.findall(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})\b", content[:4000])
+    name_matches = re.findall(
+        r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})\b", content[:4000]
+    )
     for name in name_matches:
         if name == page_title:
             continue
-        notable_figures.append({"name": name, "role": "Named in the fetched article text."})
+        notable_figures.append(
+            {"name": name, "role": "Named in the fetched article text."}
+        )
         if len(notable_figures) >= 5:
             break
     return annotate_success(
@@ -130,7 +174,8 @@ def _deterministic_brief(*, page_title: str, page_url: str, content: str) -> dic
             "title": page_title,
             "url": page_url,
             "content_type": _classify_content_type(page_title, content),
-            "summary": summary or "Wikipedia content fetched, but synthesis is unavailable.",
+            "summary": summary
+            or "Wikipedia content fetched, but synthesis is unavailable.",
             "key_facts": key_facts,
             "timeline": timeline,
             "notable_figures": notable_figures,
@@ -158,7 +203,9 @@ def _fetch_full_text(title: str) -> tuple[str, str]:
         "utf8": 1,
     }
     try:
-        r = requests.get(_WIKI_SECTIONS_API, params=params, headers=_WIKI_HEADERS, timeout=12)
+        r = requests.get(
+            _WIKI_SECTIONS_API, params=params, headers=_WIKI_HEADERS, timeout=12
+        )
         r.raise_for_status()
         pages = r.json().get("query", {}).get("pages", {})
         page = next(iter(pages.values()), {})
@@ -167,9 +214,13 @@ def _fetch_full_text(title: str) -> tuple[str, str]:
         return "", title
 
 
-def _normalize_llm_output(raw: Any, *, page_title: str, page_url: str, content: str) -> dict[str, Any]:
+def _normalize_llm_output(
+    raw: Any, *, page_title: str, page_url: str, content: str
+) -> dict[str, Any]:
     payload = raw if isinstance(raw, dict) else {}
-    deterministic = _deterministic_brief(page_title=page_title, page_url=page_url, content=content)
+    deterministic = _deterministic_brief(
+        page_title=page_title, page_url=page_url, content=content
+    )
 
     def _string_list(value: Any, fallback: list[str], limit: int) -> list[str]:
         if not isinstance(value, list):
@@ -215,7 +266,14 @@ def _normalize_llm_output(raw: Any, *, page_title: str, page_url: str, content: 
             stat = str(item.get("stat") or "").strip()
             source_note = str(item.get("source_note") or "").strip()
             if stat:
-                stats.append({"stat": stat[:220], "source_note": (source_note or "From the fetched article text.")[:180]})
+                stats.append(
+                    {
+                        "stat": stat[:220],
+                        "source_note": (
+                            source_note or "From the fetched article text."
+                        )[:180],
+                    }
+                )
             if len(stats) >= 6:
                 break
     if not stats:
@@ -225,9 +283,16 @@ def _normalize_llm_output(raw: Any, *, page_title: str, page_url: str, content: 
         {
             "title": str(payload.get("title") or page_title).strip() or page_title,
             "url": page_url,
-            "content_type": str(payload.get("content_type") or deterministic["content_type"]).strip() or "other",
-            "summary": str(payload.get("summary") or deterministic["summary"]).strip()[:1000],
-            "key_facts": _string_list(payload.get("key_facts"), deterministic["key_facts"], 10),
+            "content_type": str(
+                payload.get("content_type") or deterministic["content_type"]
+            ).strip()
+            or "other",
+            "summary": str(payload.get("summary") or deterministic["summary"]).strip()[
+                :1000
+            ],
+            "key_facts": _string_list(
+                payload.get("key_facts"), deterministic["key_facts"], 10
+            ),
             "timeline": timeline,
             "notable_figures": figures,
             "statistics": stats,
@@ -238,10 +303,18 @@ def _normalize_llm_output(raw: Any, *, page_title: str, page_url: str, content: 
                 }
                 for item in payload.get("controversies_and_debates", [])
                 if isinstance(item, dict) and str(item.get("topic") or "").strip()
-            ][:5] if isinstance(payload.get("controversies_and_debates"), list) else [],
-            "related_topics": _string_list(payload.get("related_topics"), deterministic["related_topics"], 8),
-            "primary_sources": _string_list(payload.get("primary_sources"), deterministic["primary_sources"], 8),
-            "knowledge_gaps": _string_list(payload.get("knowledge_gaps"), deterministic["knowledge_gaps"], 6),
+            ][:5]
+            if isinstance(payload.get("controversies_and_debates"), list)
+            else [],
+            "related_topics": _string_list(
+                payload.get("related_topics"), deterministic["related_topics"], 8
+            ),
+            "primary_sources": _string_list(
+                payload.get("primary_sources"), deterministic["primary_sources"], 8
+            ),
+            "knowledge_gaps": _string_list(
+                payload.get("knowledge_gaps"), deterministic["knowledge_gaps"], 6
+            ),
         },
         billing_units_actual=1,
         llm_used=True,
@@ -259,7 +332,9 @@ def run(topic: str, depth: str = "standard") -> dict:
         wiki = r.json()
     except requests.HTTPError as e:
         if e.response is not None and e.response.status_code == 404:
-            raise ValueError(f"Wikipedia article not found for: {topic!r}. Try a more specific name.") from e
+            raise ValueError(
+                f"Wikipedia article not found for: {topic!r}. Try a more specific name."
+            ) from e
         raise ValueError(f"Wikipedia API error: {e}") from e
     except requests.RequestException as e:
         raise ValueError(f"Failed to fetch Wikipedia data: {e}") from e
@@ -282,7 +357,12 @@ def run(topic: str, depth: str = "standard") -> dict:
                 model="",
                 messages=[
                     Message("system", _SYSTEM),
-                    Message("user", _USER.format(url=page_url, content=content[:_MAX_CONTENT_CHARS])),
+                    Message(
+                        "user",
+                        _USER.format(
+                            url=page_url, content=content[:_MAX_CONTENT_CHARS]
+                        ),
+                    ),
                 ],
                 max_tokens=1400,
                 json_mode=True,
@@ -290,5 +370,9 @@ def run(topic: str, depth: str = "standard") -> dict:
         )
         raw = json.loads(_strip_fences(resp.text))
     except Exception:
-        return _deterministic_brief(page_title=page_title, page_url=page_url, content=content)
-    return _normalize_llm_output(raw, page_title=page_title, page_url=page_url, content=content)
+        return _deterministic_brief(
+            page_title=page_title, page_url=page_url, content=content
+        )
+    return _normalize_llm_output(
+        raw, page_title=page_title, page_url=page_url, content=content
+    )

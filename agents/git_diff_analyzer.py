@@ -57,6 +57,7 @@ Output:
     "summary": str
   }
 """
+
 from __future__ import annotations
 
 import fnmatch
@@ -95,11 +96,19 @@ _LANGUAGE_BY_EXT = {
     "Dockerfile": "dockerfile",
 }
 
-_AUTH_PATH_RE = re.compile(r"(?i)(auth|login|signin|session|jwt|oauth|password|token|permission|rbac|acl)")
-_MONEY_PATH_RE = re.compile(r"(?i)(payment|stripe|charge|billing|invoice|wallet|ledger|payout|refund)")
+_AUTH_PATH_RE = re.compile(
+    r"(?i)(auth|login|signin|session|jwt|oauth|password|token|permission|rbac|acl)"
+)
+_MONEY_PATH_RE = re.compile(
+    r"(?i)(payment|stripe|charge|billing|invoice|wallet|ledger|payout|refund)"
+)
 _MIGRATION_PATH_RE = re.compile(r"(?i)(migrations?/|alembic/|schema\.sql$|\.sql$)")
-_PUBLIC_API_PATH_RE = re.compile(r"(?i)(routes?/|controllers?/|api/|handlers?/|views?/|endpoints?/)")
-_TEST_PATH_RE = re.compile(r"(?i)(^|/)(tests?|__tests__|spec|specs)/|(_|^)test_|\.test\.|\.spec\.")
+_PUBLIC_API_PATH_RE = re.compile(
+    r"(?i)(routes?/|controllers?/|api/|handlers?/|views?/|endpoints?/)"
+)
+_TEST_PATH_RE = re.compile(
+    r"(?i)(^|/)(tests?|__tests__|spec|specs)/|(_|^)test_|\.test\.|\.spec\."
+)
 _DOCKERFILE_RE = re.compile(r"(^|/)Dockerfile(\..+)?$")
 
 _SECRET_INLINE_RE = re.compile(
@@ -112,7 +121,9 @@ _SECRET_ASSIGN_RE = re.compile(
     r"private[_\-]?key|client[_\-]?secret)\s*[=:]\s*['\"][^'\"]{6,}['\"]",
     re.IGNORECASE,
 )
-_ERROR_HANDLING_RE = re.compile(r"^\s*(try:|except\b|raise\b|catch\s*\(|throw\s+)", re.MULTILINE)
+_ERROR_HANDLING_RE = re.compile(
+    r"^\s*(try:|except\b|raise\b|catch\s*\(|throw\s+)", re.MULTILINE
+)
 _TODO_RE = re.compile(r"\b(?:TODO|FIXME|XXX|HACK)\b")
 _DIFF_FILE_HEADER_RE = re.compile(r"^diff --git a/(.+?) b/(.+)$")
 _NEW_FILE_RE = re.compile(r"^new file mode")
@@ -159,7 +170,9 @@ def _split_files(diff: str) -> list[list[str]]:
     return files
 
 
-def _classify_file(file_lines: list[str], extra_risk_paths: list[str] | None = None) -> dict[str, Any]:
+def _classify_file(
+    file_lines: list[str], extra_risk_paths: list[str] | None = None
+) -> dict[str, Any]:
     header = file_lines[0] if file_lines else ""
     m = _DIFF_FILE_HEADER_RE.match(header)
     old_path = new_path = None
@@ -183,10 +196,10 @@ def _classify_file(file_lines: list[str], extra_risk_paths: list[str] | None = N
         elif _BINARY_RE.match(line):
             change_type = "binary"
             is_binary = True
-        elif (rm := _RENAME_FROM_RE.match(line)):
+        elif rm := _RENAME_FROM_RE.match(line):
             rename_from = rm.group(1)
             change_type = "renamed"
-        elif (rm := _RENAME_TO_RE.match(line)):
+        elif rm := _RENAME_TO_RE.match(line):
             rename_to = rm.group(1)
         elif _HUNK_RE.match(line):
             hunks += 1
@@ -222,7 +235,8 @@ def _classify_file(file_lines: list[str], extra_risk_paths: list[str] | None = N
     matched_custom_globs = [
         pattern
         for pattern in (extra_risk_paths or [])
-        if fnmatch.fnmatch(path, pattern) or (old_path and fnmatch.fnmatch(old_path, pattern))
+        if fnmatch.fnmatch(path, pattern)
+        or (old_path and fnmatch.fnmatch(old_path, pattern))
     ]
     if matched_custom_globs:
         risk_tags.append("custom_path_risk")
@@ -248,9 +262,7 @@ def _classify_file(file_lines: list[str], extra_risk_paths: list[str] | None = N
     if "test" in risk_tags and change_type != "removed" and removed_blob:
         removed_fn_count = len(_TEST_FUNCTION_RE.findall("\n".join(removed_blob)))
         if removed_fn_count > 0:
-            warnings.append(
-                f"{removed_fn_count} test function(s) removed from {path}."
-            )
+            warnings.append(f"{removed_fn_count} test function(s) removed from {path}.")
             risk_tags.append("test_functions_removed")
 
     todos_added = len(_TODO_RE.findall(added_text))
@@ -286,7 +298,10 @@ def run(payload: dict) -> dict:
 
     diff = payload.get("diff")
     if not isinstance(diff, str) or not diff.strip():
-        return _err("git_diff_analyzer.missing_diff", "'diff' is required and must be a non-empty unified-diff string")
+        return _err(
+            "git_diff_analyzer.missing_diff",
+            "'diff' is required and must be a non-empty unified-diff string",
+        )
     if len(diff) > _MAX_DIFF_CHARS:
         return _err(
             "git_diff_analyzer.diff_too_large",
@@ -299,7 +314,10 @@ def run(payload: dict) -> dict:
         )
     extra_risk_paths = payload.get("extra_risk_paths") or []
     if not isinstance(extra_risk_paths, list):
-        return _err("git_diff_analyzer.invalid_extra_risk_paths", "extra_risk_paths must be a list of glob strings")
+        return _err(
+            "git_diff_analyzer.invalid_extra_risk_paths",
+            "extra_risk_paths must be a list of glob strings",
+        )
     normalized_risk_paths: list[str] = []
     for index, pattern in enumerate(extra_risk_paths):
         if not isinstance(pattern, str) or not pattern.strip():
@@ -343,7 +361,10 @@ def run(payload: dict) -> dict:
             risk_summary["public_api_changes"] += 1
         if "test" in info["risk_tags"]:
             risk_summary["test_files"] += 1
-            if info["change_type"] == "removed" or "test_functions_removed" in info["risk_tags"]:
+            if (
+                info["change_type"] == "removed"
+                or "test_functions_removed" in info["risk_tags"]
+            ):
                 risk_summary["tests_removed"] = True
 
         if any("error-handling decrease" in w for w in info["warnings"]):
@@ -352,24 +373,36 @@ def run(payload: dict) -> dict:
             risk_summary["secret_pattern_added"] = True
 
         risk_summary["todos_added"] += int(info.pop("_todos_added", 0))
-        risk_summary["custom_risk_path_matches"] += len(info.pop("_custom_glob_matches", []))
+        risk_summary["custom_risk_path_matches"] += len(
+            info.pop("_custom_glob_matches", [])
+        )
         info.pop("_added_text", None)
         info.pop("_removed_text", None)
 
         files_out.append(info)
 
     bullet_points: list[str] = []
-    bullet_points.append(f"{len(files_out)} file(s), {total_hunks} hunk(s), +{total_added}/-{total_removed} lines.")
+    bullet_points.append(
+        f"{len(files_out)} file(s), {total_hunks} hunk(s), +{total_added}/-{total_removed} lines."
+    )
     if risk_summary["auth_changes"]:
-        bullet_points.append(f"{risk_summary['auth_changes']} auth-surface file(s) touched.")
+        bullet_points.append(
+            f"{risk_summary['auth_changes']} auth-surface file(s) touched."
+        )
     if risk_summary["money_changes"]:
-        bullet_points.append(f"{risk_summary['money_changes']} money-surface file(s) touched.")
+        bullet_points.append(
+            f"{risk_summary['money_changes']} money-surface file(s) touched."
+        )
     if risk_summary["migration_changes"]:
-        bullet_points.append(f"{risk_summary['migration_changes']} migration file(s) included.")
+        bullet_points.append(
+            f"{risk_summary['migration_changes']} migration file(s) included."
+        )
     if risk_summary["secret_pattern_added"]:
         bullet_points.append("⚠ Possible credential added — review immediately.")
     if risk_summary["tests_removed"]:
-        bullet_points.append("⚠ Test coverage removed (file deleted or test functions removed).")
+        bullet_points.append(
+            "⚠ Test coverage removed (file deleted or test functions removed)."
+        )
     if risk_summary["error_handling_removed"]:
         bullet_points.append("⚠ Net error-handling decrease detected.")
     if total_binary:

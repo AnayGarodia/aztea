@@ -50,18 +50,24 @@ def _size_bucket(width: int, height: int) -> str:
     return "1024x1024"
 
 
-def _build_image_prompt(prompt: str, style: str, input_images: list[dict[str, str]]) -> tuple[str, list[str]]:
+def _build_image_prompt(
+    prompt: str, style: str, input_images: list[dict[str, str]]
+) -> tuple[str, list[str]]:
     normalized_prompt = prompt.strip()
     warnings: list[str] = []
     if style.strip():
         normalized_prompt = f"{normalized_prompt}\n\nVisual style: {style.strip()}."
     if input_images:
-        warnings.append("Reference-image conditioning is provider-limited; references were converted into text guidance.")
+        warnings.append(
+            "Reference-image conditioning is provider-limited; references were converted into text guidance."
+        )
         refs = []
         for idx, item in enumerate(input_images[:4], start=1):
             role = str(item.get("role") or "reference").strip()
             refs.append(f"[reference {idx}: role={role}]")
-        normalized_prompt = f"{normalized_prompt}\n\nInspiration references: {' '.join(refs)}."
+        normalized_prompt = (
+            f"{normalized_prompt}\n\nInspiration references: {' '.join(refs)}."
+        )
     return normalized_prompt, warnings
 
 
@@ -77,9 +83,19 @@ def _openai_image_generation(
 ) -> dict[str, Any]:
     api_key = str(os.environ.get("OPENAI_API_KEY", "")).strip()
     if not api_key:
-        raise ValueError("OPENAI_API_KEY is required for model-backed image generation.")
-    model = str(model_override or os.environ.get("OPENAI_IMAGE_MODEL", "gpt-image-1")).strip() or "gpt-image-1"
-    quality = str(quality_override or os.environ.get("OPENAI_IMAGE_QUALITY", "high")).strip() or "high"
+        raise ValueError(
+            "OPENAI_API_KEY is required for model-backed image generation."
+        )
+    model = (
+        str(
+            model_override or os.environ.get("OPENAI_IMAGE_MODEL", "gpt-image-1")
+        ).strip()
+        or "gpt-image-1"
+    )
+    quality = (
+        str(quality_override or os.environ.get("OPENAI_IMAGE_QUALITY", "high")).strip()
+        or "high"
+    )
     timeout_seconds = _to_float_env("OPENAI_IMAGE_TIMEOUT_SECONDS", 120)
     final_prompt, warnings = _build_image_prompt(prompt, style, input_images)
     payload = {
@@ -100,7 +116,9 @@ def _openai_image_generation(
     )
     if response.status_code >= 400:
         detail = response.text[:500]
-        raise ValueError(f"OpenAI image generation failed ({response.status_code}): {detail}")
+        raise ValueError(
+            f"OpenAI image generation failed ({response.status_code}): {detail}"
+        )
     body = response.json()
     rows = body.get("data")
     if not isinstance(rows, list) or not rows:
@@ -124,7 +142,9 @@ def _openai_image_generation(
             "size_bytes": 0,
         }
     else:
-        raise ValueError("OpenAI image generation response did not include b64_json or url.")
+        raise ValueError(
+            "OpenAI image generation response did not include b64_json or url."
+        )
     return {
         "provider": "openai",
         "model": model,
@@ -141,25 +161,40 @@ def _replicate_headers(token: str) -> dict[str, str]:
     }
 
 
-def _replicate_prediction_request(model_spec: str, model_input: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+def _replicate_prediction_request(
+    model_spec: str, model_input: dict[str, Any]
+) -> tuple[str, dict[str, Any]]:
     normalized = str(model_spec or "").strip()
     if not normalized:
         raise ValueError("Replicate model spec is empty.")
     if ":" in normalized:
         owner_name, version = normalized.split(":", 1)
         if "/" not in owner_name or not version.strip():
-            raise ValueError("Replicate model with version must look like 'owner/model:version'.")
-        return f"{_REPLICATE_BASE_URL}/predictions", {"version": version.strip(), "input": model_input}
+            raise ValueError(
+                "Replicate model with version must look like 'owner/model:version'."
+            )
+        return f"{_REPLICATE_BASE_URL}/predictions", {
+            "version": version.strip(),
+            "input": model_input,
+        }
     if "/" not in normalized:
-        raise ValueError("Replicate model must look like 'owner/model' or 'owner/model:version'.")
-    return f"{_REPLICATE_BASE_URL}/models/{normalized}/predictions", {"input": model_input}
+        raise ValueError(
+            "Replicate model must look like 'owner/model' or 'owner/model:version'."
+        )
+    return f"{_REPLICATE_BASE_URL}/models/{normalized}/predictions", {
+        "input": model_input
+    }
 
 
-def _replicate_poll_result(*, token: str, status_url: str, timeout_seconds: float) -> dict[str, Any]:
+def _replicate_poll_result(
+    *, token: str, status_url: str, timeout_seconds: float
+) -> dict[str, Any]:
     poll_interval = _to_float_env("REPLICATE_POLL_INTERVAL_SECONDS", 2)
     started = time.time()
     while True:
-        response = requests.get(status_url, headers=_replicate_headers(token), timeout=timeout_seconds)
+        response = requests.get(
+            status_url, headers=_replicate_headers(token), timeout=timeout_seconds
+        )
         if response.status_code >= 400:
             raise ValueError(
                 f"Replicate polling failed ({response.status_code}): {response.text[:500]}"
@@ -196,10 +231,14 @@ def _extract_replicate_output_url(output: Any) -> str | None:
     return None
 
 
-def _replicate_run(*, model_spec: str, model_input: dict[str, Any], timeout_seconds: float) -> dict[str, Any]:
+def _replicate_run(
+    *, model_spec: str, model_input: dict[str, Any], timeout_seconds: float
+) -> dict[str, Any]:
     token = str(os.environ.get("REPLICATE_API_TOKEN", "")).strip()
     if not token:
-        raise ValueError("REPLICATE_API_TOKEN is required for model-backed video/image generation via Replicate.")
+        raise ValueError(
+            "REPLICATE_API_TOKEN is required for model-backed video/image generation via Replicate."
+        )
     create_url, payload = _replicate_prediction_request(model_spec, model_input)
     create = requests.post(
         create_url,
@@ -208,15 +247,21 @@ def _replicate_run(*, model_spec: str, model_input: dict[str, Any], timeout_seco
         timeout=timeout_seconds,
     )
     if create.status_code >= 400:
-        raise ValueError(f"Replicate prediction create failed ({create.status_code}): {create.text[:500]}")
+        raise ValueError(
+            f"Replicate prediction create failed ({create.status_code}): {create.text[:500]}"
+        )
     created = create.json()
     status = str(created.get("status") or "").strip().lower()
     if status == "succeeded":
         return created
     status_url = str(created.get("urls", {}).get("get") or "").strip()
     if not _is_http_url(status_url):
-        raise ValueError("Replicate create response did not include a valid polling URL.")
-    return _replicate_poll_result(token=token, status_url=status_url, timeout_seconds=timeout_seconds)
+        raise ValueError(
+            "Replicate create response did not include a valid polling URL."
+        )
+    return _replicate_poll_result(
+        token=token, status_url=status_url, timeout_seconds=timeout_seconds
+    )
 
 
 def generate_image(
@@ -245,7 +290,9 @@ def generate_image(
             quality_override=quality_override,
         )
 
-    replicate_model = str(model_override or os.environ.get("REPLICATE_IMAGE_MODEL", "")).strip()
+    replicate_model = str(
+        model_override or os.environ.get("REPLICATE_IMAGE_MODEL", "")
+    ).strip()
     if replicate_model:
         timeout_seconds = _to_float_env("REPLICATE_TIMEOUT_SECONDS", 300)
         final_prompt, warnings = _build_image_prompt(prompt, style, input_images)
@@ -256,7 +303,9 @@ def generate_image(
         )
         image_url = _extract_replicate_output_url(prediction.get("output"))
         if not image_url:
-            raise ValueError("Replicate image prediction completed but no output URL was returned.")
+            raise ValueError(
+                "Replicate image prediction completed but no output URL was returned."
+            )
         return {
             "provider": "replicate",
             "model": replicate_model,
@@ -314,7 +363,9 @@ def generate_video(
     )
     video_url = _extract_replicate_output_url(prediction.get("output"))
     if not video_url:
-        raise ValueError("Replicate video prediction completed but no video URL was returned.")
+        raise ValueError(
+            "Replicate video prediction completed but no video URL was returned."
+        )
     prediction_id = str(prediction.get("id") or "").strip()
     return {
         "provider": "replicate",

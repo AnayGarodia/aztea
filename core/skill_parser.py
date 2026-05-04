@@ -42,10 +42,10 @@ from typing import Any
 
 import yaml
 
-
 # ---------------------------------------------------------------------------
 # Exceptions
 # ---------------------------------------------------------------------------
+
 
 class SkillParseError(ValueError):
     """Raised when a SKILL.md cannot be parsed into a usable agent spec."""
@@ -55,37 +55,38 @@ class SkillParseError(ValueError):
 # Data model
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class OpenClawRequires:
-    bins: list[str] = field(default_factory=list)       # AND — all must be present
-    any_bins: list[str] = field(default_factory=list)   # OR  — at least one required
-    env: list[str] = field(default_factory=list)        # required environment variables
-    config: list[str] = field(default_factory=list)     # required OpenClaw config keys
+    bins: list[str] = field(default_factory=list)  # AND — all must be present
+    any_bins: list[str] = field(default_factory=list)  # OR  — at least one required
+    env: list[str] = field(default_factory=list)  # required environment variables
+    config: list[str] = field(default_factory=list)  # required OpenClaw config keys
 
 
 @dataclass
 class InstallEntry:
     id: str
-    kind: str       # brew | apt | node | go | uv | download
+    kind: str  # brew | apt | node | go | uv | download
     label: str
     bins: list[str] = field(default_factory=list)
-    formula: str | None = None          # brew
-    tap: str | None = None              # brew
-    package: str | None = None          # node / uv
-    module: str | None = None           # go
-    url: str | None = None              # download
-    archive: str | None = None          # download
-    extract: bool | None = None         # download
-    strip_components: int | None = None # download
-    target_dir: str | None = None       # download
-    os: list[str] | None = None         # platform restriction on this entry
+    formula: str | None = None  # brew
+    tap: str | None = None  # brew
+    package: str | None = None  # node / uv
+    module: str | None = None  # go
+    url: str | None = None  # download
+    archive: str | None = None  # download
+    extract: bool | None = None  # download
+    strip_components: int | None = None  # download
+    target_dir: str | None = None  # download
+    os: list[str] | None = None  # platform restriction on this entry
 
 
 @dataclass
 class ParsedSkill:
     name: str
     description: str
-    body: str                                # Markdown body — used as the LLM system prompt
+    body: str  # Markdown body — used as the LLM system prompt
     emoji: str | None = None
     homepage: str | None = None
     os_constraints: list[str] = field(default_factory=list)
@@ -178,6 +179,7 @@ _TEXT_OUTPUT_SCHEMA: dict[str, Any] = {
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def parse_skill_md(content: str, *, source: str = "<unknown>") -> ParsedSkill:
     """Parse a SKILL.md string and return a ParsedSkill.
 
@@ -262,13 +264,16 @@ def _parse_yaml(text: str, *, source: str) -> dict[str, Any]:
             f"{source}: YAML frontmatter could not be parsed: {exc}"
         ) from exc
     if not isinstance(result, dict):
-        raise SkillParseError(f"{source}: YAML frontmatter must be a mapping, got {type(result).__name__}")
+        raise SkillParseError(
+            f"{source}: YAML frontmatter must be a mapping, got {type(result).__name__}"
+        )
     return result
 
 
 # ---------------------------------------------------------------------------
 # Metadata extraction
 # ---------------------------------------------------------------------------
+
 
 def _extract_openclaw_block(fm: dict[str, Any]) -> dict[str, Any]:
     metadata = fm.get("metadata") or {}
@@ -289,13 +294,18 @@ def _parse_openclaw_metadata(
         env=_coerce_list(requires_raw.get("env")),
         config=_coerce_list(requires_raw.get("config")),
     )
-    install = [_parse_install_entry(e, source=source) for e in _coerce_list(block.get("install"))]
+    install = [
+        _parse_install_entry(e, source=source)
+        for e in _coerce_list(block.get("install"))
+    ]
     return requires, install
 
 
 def _parse_install_entry(raw: Any, *, source: str) -> InstallEntry:
     if not isinstance(raw, dict):
-        raise SkillParseError(f"{source}: install entry must be a mapping, got {type(raw).__name__}")
+        raise SkillParseError(
+            f"{source}: install entry must be a mapping, got {type(raw).__name__}"
+        )
     try:
         entry = InstallEntry(
             id=str(raw["id"]),
@@ -314,7 +324,9 @@ def _parse_install_entry(raw: Any, *, source: str) -> InstallEntry:
             os=_coerce_list(raw.get("os")) or None,
         )
     except KeyError as exc:
-        raise SkillParseError(f"{source}: install entry missing required field {exc}") from exc
+        raise SkillParseError(
+            f"{source}: install entry missing required field {exc}"
+        ) from exc
     return entry
 
 
@@ -344,7 +356,9 @@ def _parse_no_frontmatter(body: str, *, source: str) -> ParsedSkill:
     h1 = _H1_RE.search(body)
     name = h1.group(1).strip() if h1 else ""
     if not name:
-        raise SkillParseError(f"{source}: No frontmatter and no H1 heading — cannot infer skill name.")
+        raise SkillParseError(
+            f"{source}: No frontmatter and no H1 heading — cannot infer skill name."
+        )
 
     # First substantive paragraph after the H1
     search_from = h1.end() if h1 else 0
@@ -410,12 +424,15 @@ def _collect_body_warnings(skill: ParsedSkill) -> None:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _require_string(fm: dict[str, Any], key: str, source: str) -> str:
     val = fm.get(key)
     if not val:
         raise SkillParseError(f"{source}: frontmatter missing required field '{key}'")
     if not isinstance(val, str):
-        raise SkillParseError(f"{source}: frontmatter field '{key}' must be a string, got {type(val).__name__}")
+        raise SkillParseError(
+            f"{source}: frontmatter field '{key}' must be a string, got {type(val).__name__}"
+        )
     return val.strip()
 
 

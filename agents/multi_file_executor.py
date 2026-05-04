@@ -23,14 +23,18 @@ Output:
     "explanation": str
   }
 """
+
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
+
+_LOG = logging.getLogger(__name__)
 
 from core.llm import CompletionRequest, Message, run_with_fallback
 
@@ -48,19 +52,27 @@ def _err(code: str, message: str) -> dict:
     return {"error": {"code": code, "message": message}}
 
 
-def _install_requirements(tmpdir: str, requirements: str) -> tuple[list[str], str | None]:
+def _install_requirements(
+    tmpdir: str, requirements: str
+) -> tuple[list[str], str | None]:
     req_path = os.path.join(tmpdir, "_requirements.txt")
     with open(req_path, "w") as f:
         f.write(requirements.strip())
 
-    packages = [ln.strip() for ln in requirements.strip().splitlines() if ln.strip() and not ln.startswith("#")]
+    packages = [
+        ln.strip()
+        for ln in requirements.strip().splitlines()
+        if ln.strip() and not ln.startswith("#")
+    ]
     if not packages:
         return [], None
 
     try:
         result = subprocess.run(
             [sys.executable, "-m", "pip", "install", "-q", "-r", req_path],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True,
+            text=True,
+            timeout=60,
         )
         if result.returncode != 0:
             err = (result.stderr or result.stdout or "").strip()[:500]
@@ -91,9 +103,15 @@ def run(payload: dict) -> dict:
     """
     files = payload.get("files")
     if not files or not isinstance(files, list):
-        return _err("multi_file_executor.invalid_input", "'files' must be a non-empty list of {path, content} objects.")
+        return _err(
+            "multi_file_executor.invalid_input",
+            "'files' must be a non-empty list of {path, content} objects.",
+        )
     if len(files) > _MAX_FILES:
-        return _err("multi_file_executor.invalid_input", f"At most {_MAX_FILES} files allowed per call.")
+        return _err(
+            "multi_file_executor.invalid_input",
+            f"At most {_MAX_FILES} files allowed per call.",
+        )
 
     requirements = str(payload.get("requirements") or "").strip()[:_MAX_REQ_CHARS]
     entry_point = str(payload.get("entry_point") or "main.py").strip()
@@ -121,18 +139,28 @@ def run(payload: dict) -> dict:
             files_written += 1
 
         if files_written == 0:
-            return _err("multi_file_executor.invalid_input", "No valid files were written.")
+            return _err(
+                "multi_file_executor.invalid_input", "No valid files were written."
+            )
 
         packages_installed: list[str] = []
         install_error: str | None = None
         if requirements:
-            packages_installed, install_error = _install_requirements(tmpdir, requirements)
+            packages_installed, install_error = _install_requirements(
+                tmpdir, requirements
+            )
 
         entry_full = os.path.realpath(os.path.join(tmpdir, entry_point))
         if not entry_full.startswith(os.path.realpath(tmpdir)):
-            return _err("multi_file_executor.invalid_input", "entry_point must be inside the project directory.")
+            return _err(
+                "multi_file_executor.invalid_input",
+                "entry_point must be inside the project directory.",
+            )
         if not os.path.exists(entry_full):
-            return _err("multi_file_executor.invalid_input", f"entry_point '{entry_point}' not found in provided files.")
+            return _err(
+                "multi_file_executor.invalid_input",
+                f"entry_point '{entry_point}' not found in provided files.",
+            )
 
         start = time.monotonic()
         timed_out = False
@@ -168,7 +196,10 @@ def run(payload: dict) -> dict:
                 model="",
                 messages=[
                     Message("system", _EXPLAIN_SYSTEM),
-                    Message("user", f"entry_point: {entry_point}\nstdout:\n{stdout[:1500]}\nstderr:\n{stderr[:500]}\nexit_code: {exit_code}"),
+                    Message(
+                        "user",
+                        f"entry_point: {entry_point}\nstdout:\n{stdout[:1500]}\nstderr:\n{stderr[:500]}\nexit_code: {exit_code}",
+                    ),
                 ],
                 max_tokens=300,
             )
@@ -176,7 +207,7 @@ def run(payload: dict) -> dict:
                 raw = run_with_fallback(req)
                 explanation = raw.text.strip()
             except Exception:
-                pass
+                _LOG.warning("LLM explanation failed for multi-file execution", exc_info=True)
 
         return {
             "stdout": stdout,

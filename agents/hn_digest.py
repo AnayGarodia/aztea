@@ -18,8 +18,8 @@ Output: {
 
 import httpx
 
-from core.llm import CompletionRequest, Message, run_with_fallback
 from agents._contracts import annotate_success
+from core.llm import CompletionRequest, Message, run_with_fallback
 
 _HN_ALGOLIA = "https://hn.algolia.com/api/v1/search"
 _TIMEOUT = 10
@@ -27,6 +27,7 @@ _TIMEOUT = 10
 
 def _err(code: str, message: str) -> dict:
     return {"error": {"code": code, "message": message}}
+
 
 _SYSTEM = """\
 You are a sharp technology analyst who reads Hacker News daily.
@@ -109,11 +110,19 @@ def run(payload: dict) -> dict:
         resp.raise_for_status()
         data = resp.json()
     except httpx.TimeoutException:
-        return _err("hn_digest.timeout", "HN Algolia API timed out. Try again in a moment.")
+        return _err(
+            "hn_digest.timeout", "HN Algolia API timed out. Try again in a moment."
+        )
     except httpx.HTTPStatusError as exc:
-        return _err("hn_digest.http_error", f"HN Algolia API returned HTTP {exc.response.status_code}")
+        return _err(
+            "hn_digest.http_error",
+            f"HN Algolia API returned HTTP {exc.response.status_code}",
+        )
     except Exception as exc:
-        return _err("hn_digest.upstream_unreachable", f"Could not reach HN Algolia API: {type(exc).__name__}")
+        return _err(
+            "hn_digest.upstream_unreachable",
+            f"Could not reach HN Algolia API: {type(exc).__name__}",
+        )
 
     hits = data.get("hits", [])
 
@@ -124,14 +133,16 @@ def run(payload: dict) -> dict:
 
     stories = []
     for h in hits:
-        stories.append({
-            "title": h.get("title") or "",
-            "url": h.get("url") or "",
-            "score": h.get("points") or 0,
-            "comments": h.get("num_comments") or 0,
-            "author": h.get("author") or "",
-            "age": h.get("created_at") or "",
-        })
+        stories.append(
+            {
+                "title": h.get("title") or "",
+                "url": h.get("url") or "",
+                "score": h.get("points") or 0,
+                "comments": h.get("num_comments") or 0,
+                "author": h.get("author") or "",
+                "age": h.get("created_at") or "",
+            }
+        )
 
     if not stories:
         return {
@@ -143,7 +154,7 @@ def run(payload: dict) -> dict:
         }
 
     stories_text = "\n".join(
-        f"{i+1}. [{s['score']} pts / {s['comments']} comments] {s['title']}"
+        f"{i + 1}. [{s['score']} pts / {s['comments']} comments] {s['title']}"
         for i, s in enumerate(stories)
     )
 
@@ -173,19 +184,22 @@ def run(payload: dict) -> dict:
 
     # Remove the TOPICS: line from synthesis for cleaner output
     synthesis_lines = [
-        line for line in synthesis_full.splitlines()
+        line
+        for line in synthesis_full.splitlines()
         if not line.upper().startswith("TOPICS:")
     ]
     synthesis = " ".join(synthesis_lines).strip()
 
-    notable_discussions = [
-        s["title"] for s in stories if s["comments"] > 100
-    ][:3]
+    notable_discussions = [s["title"] for s in stories if s["comments"] > 100][:3]
 
-    return annotate_success({
-        "stories": stories,
-        "synthesis": synthesis,
-        "trending_topics": trending_topics,
-        "notable_discussions": notable_discussions,
-        "billing_units_actual": len(stories),
-    }, llm_used=llm_used, degraded_mode=degraded_mode)
+    return annotate_success(
+        {
+            "stories": stories,
+            "synthesis": synthesis,
+            "trending_topics": trending_topics,
+            "notable_discussions": notable_discussions,
+            "billing_units_actual": len(stories),
+        },
+        llm_used=llm_used,
+        degraded_mode=degraded_mode,
+    )

@@ -45,6 +45,7 @@ Output:
     "summary": str
   }
 """
+
 from __future__ import annotations
 
 import math
@@ -62,14 +63,18 @@ _RULES: list[tuple[str, str, re.Pattern[str], str, str]] = [
     (
         "aws-access-key-id",
         "AWS Access Key ID",
-        re.compile(r"\b(?:AKIA|ASIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ABIA|ACCA)[A-Z0-9]{16}\b"),
+        re.compile(
+            r"\b(?:AKIA|ASIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ABIA|ACCA)[A-Z0-9]{16}\b"
+        ),
         "critical",
         "Rotate the IAM key immediately and audit CloudTrail for misuse.",
     ),
     (
         "aws-secret-access-key",
         "AWS Secret Access Key (heuristic)",
-        re.compile(r"(?i)aws.{0,20}(?:secret|sk).{0,20}[\"'`]([A-Za-z0-9/+=]{40})[\"'`]"),
+        re.compile(
+            r"(?i)aws.{0,20}(?:secret|sk).{0,20}[\"'`]([A-Za-z0-9/+=]{40})[\"'`]"
+        ),
         "critical",
         "Rotate the IAM secret immediately and audit CloudTrail for misuse.",
     ),
@@ -156,7 +161,9 @@ _RULES: list[tuple[str, str, re.Pattern[str], str, str]] = [
     (
         "slack-webhook",
         "Slack Incoming Webhook URL",
-        re.compile(r"https://hooks\.slack\.com/services/T[A-Z0-9]+/B[A-Z0-9]+/[A-Za-z0-9]{20,}"),
+        re.compile(
+            r"https://hooks\.slack\.com/services/T[A-Z0-9]+/B[A-Z0-9]+/[A-Za-z0-9]{20,}"
+        ),
         "medium",
         "Regenerate the incoming webhook URL.",
     ),
@@ -202,7 +209,9 @@ _RULES: list[tuple[str, str, re.Pattern[str], str, str]] = [
     (
         "jwt",
         "JSON Web Token",
-        re.compile(r"\beyJ[A-Za-z0-9_\-]{10,}\.eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\b"),
+        re.compile(
+            r"\beyJ[A-Za-z0-9_\-]{10,}\.eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\b"
+        ),
         "medium",
         "Treat as compromised: invalidate the session and rotate signing key.",
     ),
@@ -240,14 +249,19 @@ _RULES: list[tuple[str, str, re.Pattern[str], str, str]] = [
     (
         "azure-storage-key",
         "Azure Storage Account Key",
-        re.compile(r"DefaultEndpointsProtocol=https;AccountName=[A-Za-z0-9]+;AccountKey=[A-Za-z0-9+/=]{40,}", re.IGNORECASE),
+        re.compile(
+            r"DefaultEndpointsProtocol=https;AccountName=[A-Za-z0-9]+;AccountKey=[A-Za-z0-9+/=]{40,}",
+            re.IGNORECASE,
+        ),
         "critical",
         "Rotate the storage account access key in the Azure portal.",
     ),
     (
         "generic-password-assignment",
         "Hardcoded password literal",
-        re.compile(r"""(?ix)\b(?:password|passwd|pwd|secret|api[_-]?key|access[_-]?token)\s*[:=]\s*["']([^"'\s]{8,})["']"""),
+        re.compile(
+            r"""(?ix)\b(?:password|passwd|pwd|secret|api[_-]?key|access[_-]?token)\s*[:=]\s*["']([^"'\s]{8,})["']"""
+        ),
         "low",
         "Move the value to an environment variable or secret manager.",
     ),
@@ -292,7 +306,10 @@ def run(payload: dict) -> dict:
 
     content = payload.get("content")
     if not isinstance(content, str) or not content.strip():
-        return _err("secret_scanner.missing_content", "'content' is required and must be a non-empty string")
+        return _err(
+            "secret_scanner.missing_content",
+            "'content' is required and must be a non-empty string",
+        )
     if len(content) > _MAX_CONTENT:
         return _err(
             "secret_scanner.content_too_large",
@@ -306,14 +323,20 @@ def run(payload: dict) -> dict:
     try:
         max_findings = int(payload.get("max_findings", _DEFAULT_MAX_FINDINGS))
     except (TypeError, ValueError):
-        return _err("secret_scanner.invalid_max_findings", "max_findings must be an integer")
+        return _err(
+            "secret_scanner.invalid_max_findings", "max_findings must be an integer"
+        )
     if max_findings <= 0 or max_findings > 1000:
-        return _err("secret_scanner.invalid_max_findings", "max_findings must be in [1, 1000]")
+        return _err(
+            "secret_scanner.invalid_max_findings", "max_findings must be in [1, 1000]"
+        )
 
     try:
         min_entropy = float(payload.get("min_entropy", _DEFAULT_MIN_ENTROPY))
     except (TypeError, ValueError):
-        return _err("secret_scanner.invalid_min_entropy", "min_entropy must be a number")
+        return _err(
+            "secret_scanner.invalid_min_entropy", "min_entropy must be a number"
+        )
     if min_entropy < 0:
         return _err("secret_scanner.invalid_min_entropy", "min_entropy must be >= 0")
 
@@ -351,7 +374,10 @@ def run(payload: dict) -> dict:
         for match in _GENERIC_TOKEN_RE.finditer(content):
             offset = match.start()
             end = match.end()
-            if any(start <= offset < stop or start < end <= stop for start, stop in seen_offsets):
+            if any(
+                start <= offset < stop or start < end <= stop
+                for start, stop in seen_offsets
+            ):
                 continue
             token = match.group(0)
             entropy = _shannon_entropy(token)

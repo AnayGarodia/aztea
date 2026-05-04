@@ -20,7 +20,6 @@ from typing import Any
 from core import db as _db
 from core.registry.core_schema import _resolved_db_path
 
-
 SKILL_ENDPOINT_SCHEME = "skill://"
 
 _DEFAULT_TEMPERATURE = 0.2
@@ -44,7 +43,7 @@ def parse_skill_id_from_endpoint(endpoint_url: str) -> str | None:
     value = (endpoint_url or "").strip()
     if not value.startswith(SKILL_ENDPOINT_SCHEME):
         return None
-    sid = value[len(SKILL_ENDPOINT_SCHEME):].strip().rstrip("/")
+    sid = value[len(SKILL_ENDPOINT_SCHEME) :].strip().rstrip("/")
     return sid or None
 
 
@@ -123,7 +122,9 @@ def _row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
     out = dict(row)
     metadata_text = out.get("parsed_metadata_json") or "{}"
     try:
-        out["parsed_metadata"] = json.loads(metadata_text) if isinstance(metadata_text, str) else {}
+        out["parsed_metadata"] = (
+            json.loads(metadata_text) if isinstance(metadata_text, str) else {}
+        )
     except json.JSONDecodeError:
         out["parsed_metadata"] = {}
     chain_text = out.get("model_chain")
@@ -152,7 +153,9 @@ def get_hosted_skill_by_agent_id(agent_id: str) -> dict[str, Any] | None:
     return _row_to_dict(row)
 
 
-def list_hosted_skills_for_owner(owner_id: str, limit: int = 100) -> list[dict[str, Any]]:
+def list_hosted_skills_for_owner(
+    owner_id: str, limit: int = 100
+) -> list[dict[str, Any]]:
     """Return all hosted skills owned by ``owner_id``, newest first, capped at 500."""
     capped = max(1, min(int(limit), 500))
     with _conn() as conn:
@@ -187,9 +190,7 @@ def list_pending_skill_agent_ids() -> list[str]:
     """
     try:
         with _conn() as conn:
-            rows = conn.execute(
-                "SELECT agent_id FROM hosted_skills"
-            ).fetchall()
+            rows = conn.execute("SELECT agent_id FROM hosted_skills").fetchall()
     except sqlite3.OperationalError:
         return []
     return [str(r["agent_id"]) for r in rows]

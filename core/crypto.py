@@ -30,10 +30,9 @@ from __future__ import annotations
 import base64
 import json
 
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
-from cryptography.exceptions import InvalidSignature
-
 
 _PEM = serialization.Encoding.PEM
 _PRIVATE_FMT = serialization.PrivateFormat.PKCS8
@@ -48,7 +47,9 @@ def generate_signing_keypair() -> tuple[str, str]:
     """
     private_key = ed25519.Ed25519PrivateKey.generate()
     private_pem = private_key.private_bytes(_PEM, _PRIVATE_FMT, _NO_ENC).decode("ascii")
-    public_pem = private_key.public_key().public_bytes(_PEM, _PUBLIC_FMT).decode("ascii")
+    public_pem = (
+        private_key.public_key().public_bytes(_PEM, _PUBLIC_FMT).decode("ascii")
+    )
     return private_pem, public_pem
 
 

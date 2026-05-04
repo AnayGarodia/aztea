@@ -63,4 +63,3 @@ def repair_wallet_balance_cache(wallet_id: str) -> dict:
                 (snapshot["ledger_balance_cents"], wallet_id),
             )
         return _wallet_balance_snapshot_conn(conn, wallet_id)
-

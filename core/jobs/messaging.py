@@ -20,43 +20,40 @@ The earlier monolithic ``core/jobs.py`` used to contain duplicate versions of
 these helpers that referenced an unresolved ``get_job``; those duplicates
 have been removed and this module is the single source of truth.
 """
+
 from __future__ import annotations
 
 from core import models as _models
 
 from .crud import get_job
-from .leases import (
-    _message_correlation_exists_conn,
-    _resolve_message_lease_behavior,
-    message_correlation_exists,
-    tool_call_correlation_exists,
-)
 from .db import (
-    DEFAULT_LEASE_SECONDS,
     _ACTIVE_CLAIM_EVENT_TYPES,
     _CLAIM_EVENT_MSG_TYPE,
     _LEASE_BEHAVIOR_EXTEND,
     _LEASE_BEHAVIOR_EXTEND_AND_MARK_AWAITING,
     _LEASE_BEHAVIOR_EXTEND_AND_RESUME_RUNNING,
+    DEFAULT_LEASE_SECONDS,
     _claim_token_sha256,
     _clean_optional_text,
     _conn,
     _decode_json,
     _insert_claim_event_row,
     _insert_job_message_row,
-    _iso_after_seconds,
     _models,
     _msg_to_dict,
     _now,
     _now_dt,
     _parse_ts,
     _publish_job_message,
-    _row_to_dict,
     _to_non_negative_int,
-    json,
-    sqlite3,
     timedelta,
 )
+from .leases import (
+    _message_correlation_exists_conn,
+    _resolve_message_lease_behavior,
+)
+
+
 def add_message(
     job_id: str,
     from_id: str,
@@ -132,20 +129,32 @@ def add_message(
             raw = dict(row)
             completed = _clean_optional_text(raw.get("completed_at")) is not None
             settled = _clean_optional_text(raw.get("settled_at")) is not None
-            should_update_status = status_target is not None and not completed and not settled
+            should_update_status = (
+                status_target is not None and not completed and not settled
+            )
             mark_clarification_requested = canonical_type == "clarification_request"
             clear_clarification_tracking = canonical_type == "clarification_response"
 
             claim_owner_id = _clean_optional_text(raw.get("claim_owner_id"))
             claim_token = _clean_optional_text(raw.get("claim_token"))
             lease_extended = (
-                should_extend_lease and claim_owner_id is not None and claim_token is not None
+                should_extend_lease
+                and claim_owner_id is not None
+                and claim_token is not None
             )
             next_lease_expires_at = None
             if lease_extended:
-                existing_expiry = _parse_ts(_clean_optional_text(raw.get("lease_expires_at")))
-                base_dt = existing_expiry if existing_expiry and existing_expiry > now_dt else now_dt
-                next_lease_expires_at = (base_dt + timedelta(seconds=lease_seconds)).isoformat()
+                existing_expiry = _parse_ts(
+                    _clean_optional_text(raw.get("lease_expires_at"))
+                )
+                base_dt = (
+                    existing_expiry
+                    if existing_expiry and existing_expiry > now_dt
+                    else now_dt
+                )
+                next_lease_expires_at = (
+                    base_dt + timedelta(seconds=lease_seconds)
+                ).isoformat()
 
             clarification_deadline_at = None
             if mark_clarification_requested:
@@ -154,9 +163,16 @@ def add_message(
                     default=0,
                 )
                 if timeout_seconds > 0:
-                    clarification_deadline_at = (now_dt + timedelta(seconds=timeout_seconds)).isoformat()
+                    clarification_deadline_at = (
+                        now_dt + timedelta(seconds=timeout_seconds)
+                    ).isoformat()
 
-            if should_update_status or lease_extended or mark_clarification_requested or clear_clarification_tracking:
+            if (
+                should_update_status
+                or lease_extended
+                or mark_clarification_requested
+                or clear_clarification_tracking
+            ):
                 conn.execute(
                     """
                     UPDATE jobs
@@ -207,7 +223,9 @@ def add_message(
                     metadata={
                         "message_type": normalized_type,
                         "canonical_message_type": canonical_type,
-                        "status_after": status_target if should_update_status else raw.get("status"),
+                        "status_after": status_target
+                        if should_update_status
+                        else raw.get("status"),
                     },
                     created_at=now,
                 )
@@ -290,7 +308,9 @@ def claim_token_was_recently_active(
             continue
         if _clean_optional_text(payload.get("claim_owner_id")) != owner_id:
             continue
-        lease_expires_at = _parse_ts(_clean_optional_text(payload.get("lease_expires_at")))
+        lease_expires_at = _parse_ts(
+            _clean_optional_text(payload.get("lease_expires_at"))
+        )
         if lease_expires_at is None:
             continue
         if lease_expires_at >= cutoff:
@@ -391,10 +411,14 @@ def count_open_clarification_requests(job_id: str) -> int:
             "SELECT COUNT(*) AS n FROM job_messages WHERE job_id = ? AND type = 'clarification_request'",
             (job_id,),
         ).fetchone()
-    answered = conn.execute(
-        "SELECT COUNT(*) AS n FROM job_messages WHERE job_id = ? AND type = 'clarification_response'",
-        (job_id,),
-    ).fetchone() if conn else None
+    answered = (
+        conn.execute(
+            "SELECT COUNT(*) AS n FROM job_messages WHERE job_id = ? AND type = 'clarification_response'",
+            (job_id,),
+        ).fetchone()
+        if conn
+        else None
+    )
     requests = int(row["n"]) if row else 0
     responses = int(answered["n"]) if answered else 0
     return max(0, requests - responses)
@@ -417,7 +441,13 @@ def get_latest_message_id(job_id: str) -> int | None:
     return int(latest) if latest is not None else None
 
 
-def set_job_quality_result(job_id: str, *, judge_verdict: str, quality_score: int | None, judge_agent_id: str | None) -> dict | None:
+def set_job_quality_result(
+    job_id: str,
+    *,
+    judge_verdict: str,
+    quality_score: int | None,
+    judge_agent_id: str | None,
+) -> dict | None:
     """Persist the quality judge verdict and score on the job row. Returns updated job or None."""
     now = _now()
     with _conn() as conn:
@@ -451,4 +481,3 @@ def set_job_dispute_outcome(job_id: str, outcome: str | None) -> dict | None:
             (_clean_optional_text(outcome), now, job_id),
         )
     return get_job(job_id)
-

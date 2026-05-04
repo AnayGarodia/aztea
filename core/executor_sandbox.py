@@ -30,11 +30,7 @@ def build_subprocess_env(
     extra_env: Mapping[str, object] | None = None,
 ) -> dict[str, str]:
     """Return a minimal subprocess environment with optional caller overrides."""
-    env = {
-        key: value
-        for key, value in os.environ.items()
-        if key in _SAFE_ENV_KEYS
-    }
+    env = {key: value for key, value in os.environ.items() if key in _SAFE_ENV_KEYS}
     if "LANG" not in env:
         env["LANG"] = "C.UTF-8"
     if "LC_ALL" not in env:

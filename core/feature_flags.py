@@ -94,6 +94,7 @@ REQUIRE_VERIFICATION: bool = flag("AZTEA_REQUIRE_VERIFICATION", default=False)
 # without restarting the server. Defaults are conservative.
 # ---------------------------------------------------------------------------
 
+
 def auto_invoke_enabled() -> bool:
     """Master switch for the aztea_do auto-invoke meta-tool. Default on."""
     return flag("AZTEA_AUTO_INVOKE_ENABLED", default=True)

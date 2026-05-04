@@ -40,6 +40,7 @@ Output:
     "summary": str
   }
 """
+
 from __future__ import annotations
 
 import re
@@ -78,7 +79,9 @@ def _err(code: str, message: str, **details: Any) -> dict[str, Any]:
     return {"error": {"code": code, "message": message, **details}}
 
 
-def _analyze_plan(plan_rows: list[tuple[int, int, int, str]]) -> tuple[list[str], list[str]]:
+def _analyze_plan(
+    plan_rows: list[tuple[int, int, int, str]],
+) -> tuple[list[str], list[str]]:
     """Return (issues, suggestions) from plan rows."""
     issues: list[str] = []
     suggestions: list[str] = []
@@ -97,7 +100,9 @@ def _analyze_plan(plan_rows: list[tuple[int, int, int, str]]) -> tuple[list[str]
             else:
                 issues.append(f"Full scan: {detail}")
         if "USE TEMP B-TREE" in upper:
-            issues.append("Plan uses a temporary B-tree (likely ORDER BY/GROUP BY without an index).")
+            issues.append(
+                "Plan uses a temporary B-tree (likely ORDER BY/GROUP BY without an index)."
+            )
             suggestions.append(
                 "Consider an index covering the ORDER BY/GROUP BY columns to remove the temp B-tree sort."
             )
@@ -105,7 +110,9 @@ def _analyze_plan(plan_rows: list[tuple[int, int, int, str]]) -> tuple[list[str]
             issues.append("Subquery materialized as a temp table.")
         if "CORRELATED" in upper:
             issues.append("Correlated subquery detected — may execute per outer row.")
-            suggestions.append("Consider rewriting the correlated subquery as a JOIN or CTE.")
+            suggestions.append(
+                "Consider rewriting the correlated subquery as a JOIN or CTE."
+            )
     # de-dup while preserving order
     seen: set[str] = set()
     issues = [x for x in issues if not (x in seen or seen.add(x))]
@@ -114,7 +121,13 @@ def _analyze_plan(plan_rows: list[tuple[int, int, int, str]]) -> tuple[list[str]
     return issues, suggestions
 
 
-def _authorizer(action_code: int, param1: str | None, param2: str | None, db_name: str | None, source: str | None) -> int:
+def _authorizer(
+    action_code: int,
+    param1: str | None,
+    param2: str | None,
+    db_name: str | None,
+    source: str | None,
+) -> int:
     if action_code in _DENIED_ACTION_CODES:
         return sqlite3.SQLITE_DENY
     if action_code == getattr(sqlite3, "SQLITE_FUNCTION", -1):
@@ -130,9 +143,15 @@ def run(payload: dict) -> dict:
 
     schema_sql = payload.get("schema_sql")
     if not isinstance(schema_sql, str) or not schema_sql.strip():
-        return _err("sql_explainer.missing_schema", "'schema_sql' is required and must contain DDL/seed SQL")
+        return _err(
+            "sql_explainer.missing_schema",
+            "'schema_sql' is required and must contain DDL/seed SQL",
+        )
     if len(schema_sql) > _MAX_SCHEMA_CHARS:
-        return _err("sql_explainer.schema_too_large", f"schema_sql exceeds {_MAX_SCHEMA_CHARS} chars")
+        return _err(
+            "sql_explainer.schema_too_large",
+            f"schema_sql exceeds {_MAX_SCHEMA_CHARS} chars",
+        )
     forbidden = _FORBIDDEN_SCHEMA_SQL_RE.search(schema_sql)
     if forbidden:
         return _err(
@@ -142,14 +161,25 @@ def run(payload: dict) -> dict:
 
     queries = payload.get("queries")
     if not isinstance(queries, list) or not queries:
-        return _err("sql_explainer.missing_queries", "'queries' is required and must be a non-empty list")
+        return _err(
+            "sql_explainer.missing_queries",
+            "'queries' is required and must be a non-empty list",
+        )
     if len(queries) > _MAX_QUERIES:
-        return _err("sql_explainer.too_many_queries", f"max {_MAX_QUERIES} queries per call")
+        return _err(
+            "sql_explainer.too_many_queries", f"max {_MAX_QUERIES} queries per call"
+        )
     for i, q in enumerate(queries):
         if not isinstance(q, str) or not q.strip():
-            return _err("sql_explainer.invalid_query", f"queries[{i}] must be a non-empty string")
+            return _err(
+                "sql_explainer.invalid_query",
+                f"queries[{i}] must be a non-empty string",
+            )
         if len(q) > _MAX_QUERY_CHARS:
-            return _err("sql_explainer.query_too_large", f"queries[{i}] exceeds {_MAX_QUERY_CHARS} chars")
+            return _err(
+                "sql_explainer.query_too_large",
+                f"queries[{i}] exceeds {_MAX_QUERY_CHARS} chars",
+            )
         if _DML_RE.match(q):
             return _err(
                 "sql_explainer.dml_not_supported",
@@ -183,12 +213,17 @@ def run(payload: dict) -> dict:
         except Exception:
             pass
         conn.set_authorizer(_authorizer)
-        conn.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 1_000)
+        conn.set_progress_handler(
+            lambda: 1 if time.monotonic() > deadline else 0, 1_000
+        )
         try:
             conn.executescript(schema_sql)
         except sqlite3.OperationalError as exc:
             if "interrupted" in str(exc).lower():
-                return _err("sql_explainer.timeout", f"schema_sql exceeded {_MAX_WALL_CLOCK_SECONDS:.0f}s execution limit")
+                return _err(
+                    "sql_explainer.timeout",
+                    f"schema_sql exceeded {_MAX_WALL_CLOCK_SECONDS:.0f}s execution limit",
+                )
             return _err(
                 "sql_explainer.schema_failed",
                 f"schema_sql failed to execute: {exc}",
@@ -224,7 +259,9 @@ def run(payload: dict) -> dict:
                         {
                             "sql": query,
                             "plan": [],
-                            "issues": [f"EXPLAIN timed out after {_MAX_WALL_CLOCK_SECONDS:.0f}s wall-clock budget."],
+                            "issues": [
+                                f"EXPLAIN timed out after {_MAX_WALL_CLOCK_SECONDS:.0f}s wall-clock budget."
+                            ],
                             "suggestions": [],
                             "elapsed_ms": round((time.monotonic() - start) * 1000.0, 2),
                             "error": str(exc),

@@ -84,7 +84,9 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     high_res = bool(payload.get("high_res"))
     requested_format = str(payload.get("output_format") or "png").strip().lower()
     requested_model = str(payload.get("model") or "").strip()
-    requested_quality = "high" if high_res else str(payload.get("quality") or "").strip().lower()
+    requested_quality = (
+        "high" if high_res else str(payload.get("quality") or "").strip().lower()
+    )
     input_images = _normalize_media_refs(payload.get("input_images"))
 
     artifacts: list[dict[str, Any]] = []

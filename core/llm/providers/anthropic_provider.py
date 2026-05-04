@@ -5,7 +5,12 @@ import os
 from typing import Any
 
 from ..base import CompletionRequest, LLMResponse, Usage
-from ..errors import LLMAuthError, LLMBadResponseError, LLMRateLimitError, LLMTimeoutError
+from ..errors import (
+    LLMAuthError,
+    LLMBadResponseError,
+    LLMRateLimitError,
+    LLMTimeoutError,
+)
 
 _JSON_SYSTEM_INJECT = (
     "You must respond with a single valid JSON object and nothing else. "
@@ -79,7 +84,8 @@ class AnthropicProvider:
                 json.loads(text)
             except json.JSONDecodeError as exc:
                 raise LLMBadResponseError(
-                    "anthropic", req.model,
+                    "anthropic",
+                    req.model,
                     f"json_mode=True but response is not valid JSON: {text[:200]}",
                     exc,
                 ) from exc

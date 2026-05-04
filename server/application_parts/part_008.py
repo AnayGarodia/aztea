@@ -69,6 +69,7 @@ def _coerce_payload_to_schema(payload: dict, schema: dict) -> dict:
             if stripped.startswith("["):
                 try:
                     import json as _json
+
                     out[key] = _json.loads(stripped)
                 except Exception:
                     pass
@@ -81,7 +82,9 @@ def _coerce_payload_to_schema(payload: dict, schema: dict) -> dict:
 
 def _allow_schema_string_coercion(request: Request) -> bool:
     content_type = str(request.headers.get("Content-Type") or "").lower()
-    return content_type.startswith("application/x-www-form-urlencoded") or content_type.startswith("multipart/form-data")
+    return content_type.startswith(
+        "application/x-www-form-urlencoded"
+    ) or content_type.startswith("multipart/form-data")
 
 
 class _SchemaValidationError(ValueError):
@@ -95,16 +98,22 @@ def _raise_schema_error(message: str, path: list[Any] | None = None) -> None:
     raise _SchemaValidationError(message, path)
 
 
-def _validate_schema_subset(instance: Any, schema: dict[str, Any], path: list[Any] | None = None) -> None:
+def _validate_schema_subset(
+    instance: Any, schema: dict[str, Any], path: list[Any] | None = None
+) -> None:
     current_path = list(path or [])
     declared_type = schema.get("type")
     if isinstance(declared_type, list):
-        if not any(_schema_type_matches(instance, candidate) for candidate in declared_type):
+        if not any(
+            _schema_type_matches(instance, candidate) for candidate in declared_type
+        ):
             _raise_schema_error(
                 f"Expected one of {', '.join(str(candidate) for candidate in declared_type)}.",
                 current_path,
             )
-    elif declared_type is not None and not _schema_type_matches(instance, declared_type):
+    elif declared_type is not None and not _schema_type_matches(
+        instance, declared_type
+    ):
         _raise_schema_error(f"Expected {declared_type}.", current_path)
 
     enum_values = schema.get("enum")
@@ -119,27 +128,37 @@ def _validate_schema_subset(instance: Any, schema: dict[str, Any], path: list[An
         if isinstance(required, list):
             for key in required:
                 if key not in instance:
-                    _raise_schema_error(f"Missing required field '{key}'.", current_path + [key])
+                    _raise_schema_error(
+                        f"Missing required field '{key}'.", current_path + [key]
+                    )
         properties = schema.get("properties")
         if isinstance(properties, dict):
             for key, prop_schema in properties.items():
                 if key in instance and isinstance(prop_schema, dict):
-                    _validate_schema_subset(instance[key], prop_schema, current_path + [key])
+                    _validate_schema_subset(
+                        instance[key], prop_schema, current_path + [key]
+                    )
         additional = schema.get("additionalProperties", True)
         if additional is False and isinstance(properties, dict):
             allowed = set(properties.keys())
             for key in instance:
                 if key not in allowed:
-                    _raise_schema_error(f"Unexpected field '{key}'.", current_path + [key])
+                    _raise_schema_error(
+                        f"Unexpected field '{key}'.", current_path + [key]
+                    )
         return
 
     if isinstance(instance, list):
         min_items = schema.get("minItems")
         if isinstance(min_items, int) and len(instance) < min_items:
-            _raise_schema_error(f"Array must contain at least {min_items} item(s).", current_path)
+            _raise_schema_error(
+                f"Array must contain at least {min_items} item(s).", current_path
+            )
         max_items = schema.get("maxItems")
         if isinstance(max_items, int) and len(instance) > max_items:
-            _raise_schema_error(f"Array must contain at most {max_items} item(s).", current_path)
+            _raise_schema_error(
+                f"Array must contain at most {max_items} item(s).", current_path
+            )
         item_schema = schema.get("items")
         if isinstance(item_schema, dict):
             for index, item in enumerate(instance):
@@ -149,15 +168,21 @@ def _validate_schema_subset(instance: Any, schema: dict[str, Any], path: list[An
     if isinstance(instance, str):
         min_length = schema.get("minLength")
         if isinstance(min_length, int) and len(instance) < min_length:
-            _raise_schema_error(f"String must be at least {min_length} character(s).", current_path)
+            _raise_schema_error(
+                f"String must be at least {min_length} character(s).", current_path
+            )
         max_length = schema.get("maxLength")
         if isinstance(max_length, int) and len(instance) > max_length:
-            _raise_schema_error(f"String must be at most {max_length} character(s).", current_path)
+            _raise_schema_error(
+                f"String must be at most {max_length} character(s).", current_path
+            )
         pattern = schema.get("pattern")
         if isinstance(pattern, str):
             try:
                 if re.search(pattern, instance) is None:
-                    _raise_schema_error("String does not match the required pattern.", current_path)
+                    _raise_schema_error(
+                        "String does not match the required pattern.", current_path
+                    )
             except re.error:
                 pass
         return
@@ -173,10 +198,16 @@ def _validate_schema_subset(instance: Any, schema: dict[str, Any], path: list[An
         if isinstance(maximum, (int, float)) and instance > maximum:
             _raise_schema_error(f"Value must be <= {maximum}.", current_path)
         exclusive_minimum = schema.get("exclusiveMinimum")
-        if isinstance(exclusive_minimum, (int, float)) and instance <= exclusive_minimum:
+        if (
+            isinstance(exclusive_minimum, (int, float))
+            and instance <= exclusive_minimum
+        ):
             _raise_schema_error(f"Value must be > {exclusive_minimum}.", current_path)
         exclusive_maximum = schema.get("exclusiveMaximum")
-        if isinstance(exclusive_maximum, (int, float)) and instance >= exclusive_maximum:
+        if (
+            isinstance(exclusive_maximum, (int, float))
+            and instance >= exclusive_maximum
+        ):
             _raise_schema_error(f"Value must be < {exclusive_maximum}.", current_path)
 
 
@@ -192,7 +223,9 @@ def _schema_type_matches(value: Any, declared_type: Any) -> bool:
     if declared_type == "integer":
         return isinstance(value, int) and not isinstance(value, bool)
     if declared_type == "number":
-        return (isinstance(value, int) or isinstance(value, float)) and not isinstance(value, bool)
+        return (isinstance(value, int) or isinstance(value, float)) and not isinstance(
+            value, bool
+        )
     if declared_type == "null":
         return value is None
     return True
@@ -206,9 +239,14 @@ def _validate_payload_against_schema(
 ) -> dict[str, Any]:
     if not isinstance(schema, dict) or not schema:
         return payload
-    normalized_payload = _coerce_payload_to_schema(payload, schema) if allow_string_coercion else dict(payload)
+    normalized_payload = (
+        _coerce_payload_to_schema(payload, schema)
+        if allow_string_coercion
+        else dict(payload)
+    )
     try:
         import jsonschema as _jsc
+
         _jsc.validate(instance=normalized_payload, schema=schema)
     except ImportError:
         _validate_schema_subset(normalized_payload, schema, [])
@@ -254,10 +292,14 @@ def registry_search(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    search_stats = _compute_bulk_agent_stats([item["agent"]["agent_id"] for item in ranked])
+    search_stats = _compute_bulk_agent_stats(
+        [item["agent"]["agent_id"] for item in ranked]
+    )
     results = [
         {
-            "agent": _agent_response(item["agent"], caller, search_stats.get(item["agent"]["agent_id"])),
+            "agent": _agent_response(
+                item["agent"], caller, search_stats.get(item["agent"]["agent_id"])
+            ),
             "similarity": item["similarity"],
             "trust": item["trust"],
             "blended_score": item["blended_score"],
@@ -281,8 +323,14 @@ def registry_get(
 ) -> core_models.AgentResponse:
     _require_any_scope(caller, "caller", "worker")
     include_unapproved = _caller_is_admin(caller)
-    agent = registry.get_agent_with_reputation(agent_id, include_unapproved=include_unapproved)
-    if agent is None or agent.get("status") == "banned" or not _caller_can_access_agent(caller, agent):
+    agent = registry.get_agent_with_reputation(
+        agent_id, include_unapproved=include_unapproved
+    )
+    if (
+        agent is None
+        or agent.get("status") == "banned"
+        or not _caller_can_access_agent(caller, agent)
+    ):
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
     agent_stats = _compute_bulk_agent_stats([agent_id]).get(agent_id)
     return JSONResponse(content=_agent_response(agent, caller, agent_stats))
@@ -305,7 +353,11 @@ def registry_agent_work_history(
     capped_limit = max(1, min(int(limit), 50))
     capped_offset = max(0, int(offset))
     agent = registry.get_agent(agent_id)
-    if agent is None or agent.get("status") == "banned" or not _caller_can_access_agent(caller, agent):
+    if (
+        agent is None
+        or agent.get("status") == "banned"
+        or not _caller_can_access_agent(caller, agent)
+    ):
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
     # Privacy gate: never return work examples for sensitive or security-category agents.
     if (
@@ -313,19 +365,40 @@ def registry_agent_work_history(
         or str(agent.get("category") or "").strip().lower() == "security"
         or str(agent.get("agent_id") or "") in {"1021c65c-d2bf-54ff-823a-897f9deb1029"}
     ):
-        return JSONResponse(content={"items": [], "total": 0, "limit": capped_limit, "offset": capped_offset, "note": "Work examples are not published for this agent."})
+        return JSONResponse(
+            content={
+                "items": [],
+                "total": 0,
+                "limit": capped_limit,
+                "offset": capped_offset,
+                "note": "Work examples are not published for this agent.",
+            }
+        )
     examples: list = agent.get("output_examples") or []
-    page = examples[capped_offset: capped_offset + capped_limit]
-    return JSONResponse(content={"items": page, "total": len(examples), "limit": capped_limit, "offset": capped_offset})
+    page = examples[capped_offset : capped_offset + capped_limit]
+    return JSONResponse(
+        content={
+            "items": page,
+            "total": len(examples),
+            "limit": capped_limit,
+            "offset": capped_offset,
+        }
+    )
 
 
-def _extract_sync_cache_controls(payload: dict[str, Any]) -> tuple[dict[str, Any], bool, int]:
+def _extract_sync_cache_controls(
+    payload: dict[str, Any],
+) -> tuple[dict[str, Any], bool, int]:
     raw = dict(payload or {})
     raw.pop("output_format", None)  # extracted separately by _extract_output_format
     use_cache_raw = raw.pop("use_cache", None)
     cache_ttl_raw = raw.pop("cache_ttl_hours", None)
     try:
-        use_cache = bool(_normalize_optional_bool(use_cache_raw, field_name="use_cache")) if use_cache_raw is not None else False
+        use_cache = (
+            bool(_normalize_optional_bool(use_cache_raw, field_name="use_cache"))
+            if use_cache_raw is not None
+            else False
+        )
     except ValueError as exc:
         raise HTTPException(
             status_code=422,
@@ -361,6 +434,7 @@ def _extract_output_format(payload_or_body: Any) -> str | None:
     if not isinstance(payload_or_body, dict):
         return None
     from core import output_formats as _output_formats
+
     return _output_formats.normalize_format(payload_or_body.get("output_format"))
 
 
@@ -378,6 +452,7 @@ def _decorate_with_rendered_output(
     if output is None:
         return response_payload
     from core import output_formats as _output_formats
+
     try:
         rendered = _output_formats.render(output, format=output_format)
     except Exception:  # pragma: no cover - renderer must never break a call
@@ -390,7 +465,11 @@ def _decorate_with_rendered_output(
 def _cache_hit_response_payload(cached_output: Any) -> dict[str, Any]:
     # Return the same envelope shape as a live call so clients need not
     # branch on whether the response came from cache.
-    inner = dict(cached_output) if isinstance(cached_output, dict) else {"result": cached_output}
+    inner = (
+        dict(cached_output)
+        if isinstance(cached_output, dict)
+        else {"result": cached_output}
+    )
     original_job_id = inner.pop("_cached_job_id", None)
     return {
         "job_id": original_job_id,
@@ -439,7 +518,9 @@ def _shape_sync_output_for_response(
 
     if not _feature_flags.OUTPUT_TRUNCATION:
         return payload, {}
-    shaped, truncated = _output_shaping.shape_output(payload, _response_output_mode(request))
+    shaped, truncated = _output_shaping.shape_output(
+        payload, _response_output_mode(request)
+    )
     extra: dict[str, Any] = {}
     if truncated and job_id:
         extra["output_truncated"] = True
@@ -462,16 +543,24 @@ def agent_cost_estimate(
 ) -> core_models.DynamicObjectResponse:
     _require_scope(caller, "caller")
     agent = registry.get_agent_with_reputation(agent_id, include_unapproved=True)
-    if agent is None or agent.get("status") == "banned" or not _caller_can_access_agent(caller, agent):
+    if (
+        agent is None
+        or agent.get("status") == "banned"
+        or not _caller_can_access_agent(caller, agent)
+    ):
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
     _assert_agent_callable(agent_id, agent)
-    payload, _, _ = _extract_sync_cache_controls(dict(body.root) if body is not None else {})
+    payload, _, _ = _extract_sync_cache_controls(
+        dict(body.root) if body is not None else {}
+    )
     try:
         payload, _ = _normalize_input_protocol_from_payload(payload)
     except ValueError as exc:
         raise HTTPException(
             status_code=422,
-            detail=error_codes.make_error(error_codes.INVALID_INPUT, str(exc), {"agent_id": agent_id}),
+            detail=error_codes.make_error(
+                error_codes.INVALID_INPUT, str(exc), {"agent_id": agent_id}
+            ),
         )
     pricing_estimate = _estimate_variable_charge(
         agent=agent,
@@ -518,6 +607,7 @@ def llm_providers_list(
 ):
     """List all registered LLM providers and their availability."""
     from core.llm import registry as llm_registry
+
     providers = llm_registry.list_providers()
     return JSONResponse(content={"providers": providers})
 
@@ -535,7 +625,9 @@ def registry_agent_key_list(
 ) -> core_models.AgentKeyListResponse:
     _require_scope(caller, "worker")
     if caller["type"] == "agent_key":
-        raise HTTPException(status_code=403, detail="Agent-scoped keys cannot list keys.")
+        raise HTTPException(
+            status_code=403, detail="Agent-scoped keys cannot list keys."
+        )
     agent = registry.get_agent(agent_id, include_unapproved=True)
     if agent is None or agent.get("status") == "banned":
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
@@ -560,7 +652,9 @@ def registry_agent_key_create(
 ) -> core_models.AgentKeyCreateResponse:
     _require_scope(caller, "worker")
     if caller["type"] == "agent_key":
-        raise HTTPException(status_code=403, detail="Agent-scoped keys cannot mint new keys.")
+        raise HTTPException(
+            status_code=403, detail="Agent-scoped keys cannot mint new keys."
+        )
     agent = registry.get_agent(agent_id, include_unapproved=True)
     if agent is None or agent.get("status") == "banned":
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
@@ -659,7 +753,9 @@ def admin_agent_ban(
         actor_owner_id=caller["owner_id"],
         reason="Agent was banned by an administrator.",
     )
-    return JSONResponse(content={"agent": _agent_response(agent, caller), "ban_summary": summary})
+    return JSONResponse(
+        content={"agent": _agent_response(agent, caller), "ban_summary": summary}
+    )
 
 
 @app.get(
@@ -675,7 +771,12 @@ def admin_agents_review_queue(
     _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
     _require_admin_ip_allowlist(request)
     agents = registry.list_pending_review_agents()
-    return JSONResponse(content={"agents": [_agent_response(agent, caller) for agent in agents], "count": len(agents)})
+    return JSONResponse(
+        content={
+            "agents": [_agent_response(agent, caller) for agent in agents],
+            "count": len(agents),
+        }
+    )
 
 
 @app.post(
@@ -714,17 +815,29 @@ def admin_review_agent(
             ok = False
             error_text = str(exc)
         endpoint_status = "healthy" if ok else "degraded"
-        endpoint_failures = 0 if ok else max(1, int(reviewed.get("endpoint_consecutive_failures") or 0) + 1)
-        reviewed = registry.set_agent_endpoint_health(
-            agent_id,
-            endpoint_health_status=endpoint_status,
-            endpoint_consecutive_failures=endpoint_failures,
-            endpoint_last_checked_at=_utc_now_iso(),
-            endpoint_last_error=None if ok else error_text,
-        ) or reviewed
+        endpoint_failures = (
+            0
+            if ok
+            else max(1, int(reviewed.get("endpoint_consecutive_failures") or 0) + 1)
+        )
+        reviewed = (
+            registry.set_agent_endpoint_health(
+                agent_id,
+                endpoint_health_status=endpoint_status,
+                endpoint_consecutive_failures=endpoint_failures,
+                endpoint_last_checked_at=_utc_now_iso(),
+                endpoint_last_error=None if ok else error_text,
+            )
+            or reviewed
+        )
         health_probe = {"ok": bool(ok), "error": error_text}
 
-    return JSONResponse(content={"agent": _agent_response(reviewed, caller), "health_probe": health_probe})
+    return JSONResponse(
+        content={
+            "agent": _agent_response(reviewed, caller),
+            "health_probe": health_probe,
+        }
+    )
 
 
 @app.post(
@@ -752,7 +865,9 @@ def registry_call(
     if idempotency_key:
         cached = _idempotency_lookup(caller_owner_id_early, agent_id, idempotency_key)
         if cached is not None:
-            return JSONResponse(content=cached, headers={"X-Idempotency-Replayed": "true"})
+            return JSONResponse(
+                content=cached, headers={"X-Idempotency-Replayed": "true"}
+            )
     agent = registry.get_agent(agent_id, include_unapproved=True)
     if agent is None:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
@@ -761,8 +876,12 @@ def registry_call(
     _assert_agent_callable(agent_id, agent)
     builtin_agent_id = _resolve_builtin_agent_id(agent)
     hosted_skill_row: dict | None = None
-    if builtin_agent_id is None and _hosted_skills.is_skill_endpoint(agent.get("endpoint_url")):
-        hosted_skill_row = _hosted_skills.get_hosted_skill_by_agent_id(str(agent["agent_id"]))
+    if builtin_agent_id is None and _hosted_skills.is_skill_endpoint(
+        agent.get("endpoint_url")
+    ):
+        hosted_skill_row = _hosted_skills.get_hosted_skill_by_agent_id(
+            str(agent["agent_id"])
+        )
         if hosted_skill_row is None:
             raise HTTPException(
                 status_code=502,
@@ -775,10 +894,16 @@ def registry_call(
     safe_endpoint_url = ""
     if builtin_agent_id is None and hosted_skill_row is None:
         try:
-            safe_endpoint_url = _validate_agent_endpoint_url(request, str(agent.get("endpoint_url") or ""))
+            safe_endpoint_url = _validate_agent_endpoint_url(
+                request, str(agent.get("endpoint_url") or "")
+            )
         except ValueError as exc:
-            _LOG.warning("Blocked misconfigured endpoint for agent %s: %s", agent_id, exc)
-            raise HTTPException(status_code=502, detail="Agent endpoint is misconfigured.")
+            _LOG.warning(
+                "Blocked misconfigured endpoint for agent %s: %s", agent_id, exc
+            )
+            raise HTTPException(
+                status_code=502, detail="Agent endpoint is misconfigured."
+            )
 
     caller_owner_id = _caller_owner_id(request)
     client_id = _request_client_id(request)
@@ -789,7 +914,9 @@ def registry_call(
     payload, use_cache, cache_ttl_hours = _extract_sync_cache_controls(raw_body)
     requested_output_formats: list[str] = []
     try:
-        payload, requested_output_formats = _normalize_input_protocol_from_payload(payload)
+        payload, requested_output_formats = _normalize_input_protocol_from_payload(
+            payload
+        )
     except ValueError as exc:
         raise HTTPException(
             status_code=422,
@@ -825,7 +952,10 @@ def registry_call(
                 detail=error_codes.make_error(
                     error_codes.INPUT_SCHEMA_VIOLATION,
                     f"Input validation failed: {_schema_exc.message if hasattr(_schema_exc, 'message') else str(_schema_exc)}",
-                    {"path": list(getattr(_schema_exc, "absolute_path", [])), "agent_id": agent_id},
+                    {
+                        "path": list(getattr(_schema_exc, "absolute_path", [])),
+                        "agent_id": agent_id,
+                    },
                 ),
             )
 
@@ -855,9 +985,15 @@ def registry_call(
     from core import feature_flags as _feature_flags
 
     cache_version_token = _cache.cache_identity(agent, agent_id)
-    cache_enabled = _feature_flags.RESULT_CACHE_V2 and _cache.agent_cacheable(agent) and not private_task
+    cache_enabled = (
+        _feature_flags.RESULT_CACHE_V2
+        and _cache.agent_cacheable(agent)
+        and not private_task
+    )
     if use_cache and cache_enabled:
-        cached_output = _cache.get_cached(agent_id, payload, version_token=cache_version_token)
+        cached_output = _cache.get_cached(
+            agent_id, payload, version_token=cache_version_token
+        )
         if cached_output is not None:
             cache_response = _cache_hit_response_payload(cached_output)
             shaped_output, extra = _shape_sync_output_for_response(
@@ -877,10 +1013,10 @@ def registry_call(
         fee_bearer_policy=fee_bearer_policy,
     )
     caller_charge_cents = int(success_distribution["caller_charge_cents"])
-    caller_wallet   = payments.get_or_create_wallet(caller_owner_id)
+    caller_wallet = payments.get_or_create_wallet(caller_owner_id)
     # Payouts settle to the canonical agent wallet keyed by agent_id.
     _agent_payout_owner = f"agent:{agent['agent_id']}"
-    agent_wallet    = payments.get_or_create_wallet(_agent_payout_owner)
+    agent_wallet = payments.get_or_create_wallet(_agent_payout_owner)
     platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
 
     charge_tx_id = _pre_call_charge_or_402(
@@ -907,13 +1043,19 @@ def registry_call(
                 agent_owner_id=agent.get("owner_id"),
                 max_attempts=1,
                 dispute_window_hours=_DEFAULT_JOB_DISPUTE_WINDOW_HOURS,
-                judge_agent_id=_extract_judge_agent_id(agent.get("input_schema")) or _QUALITY_JUDGE_AGENT_ID,
+                judge_agent_id=_extract_judge_agent_id(agent.get("input_schema"))
+                or _QUALITY_JUDGE_AGENT_ID,
             )
         except Exception:
             payments.post_call_refund(
-                caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent["agent_id"]
+                caller_wallet["wallet_id"],
+                charge_tx_id,
+                caller_charge_cents,
+                agent["agent_id"],
             )
-            _LOG.exception("Failed to create sync job for built-in agent %s.", agent["agent_id"])
+            _LOG.exception(
+                "Failed to create sync job for built-in agent %s.", agent["agent_id"]
+            )
             raise HTTPException(status_code=500, detail="Failed to create job.")
         _record_job_event(
             job,
@@ -936,15 +1078,16 @@ def registry_call(
             # charge-on-broken-tool gap reported in the 2026-04-28 audit (Browser,
             # Visual Regression, Linter, Type Checker, Image Generator all billed
             # users despite producing no usable output).
-            agent_failed, failure_code, failure_message = _is_agent_failure_envelope(output)
+            agent_failed, failure_code, failure_message = _is_agent_failure_envelope(
+                output
+            )
             if agent_failed:
                 failed = jobs.update_job_status(
                     job["job_id"],
                     "failed",
                     output_payload=output,
                     error_message=(
-                        failure_message
-                        or f"Agent reported {failure_code}; no charge."
+                        failure_message or f"Agent reported {failure_code}; no charge."
                     ),
                     completed=True,
                 )
@@ -958,7 +1101,8 @@ def registry_call(
                     status_code=502,
                     detail=error_codes.make_error(
                         error_codes.AGENT_INTERNAL_ERROR,
-                        failure_message or f"Agent unavailable ({failure_code}). You were not charged.",
+                        failure_message
+                        or f"Agent unavailable ({failure_code}). You were not charged.",
                         {
                             "agent_id": agent_id,
                             "error_code": failure_code,
@@ -1016,7 +1160,9 @@ def registry_call(
             response_payload["output"] = shaped_output
             response_payload.update(extra)
             if idempotency_key:
-                _idempotency_store(caller_owner_id_early, agent_id, idempotency_key, response_payload)
+                _idempotency_store(
+                    caller_owner_id_early, agent_id, idempotency_key, response_payload
+                )
             if cache_enabled:
                 _cache.set_cached(
                     agent["agent_id"],
@@ -1045,6 +1191,7 @@ def registry_call(
                     actor_owner_id=caller["owner_id"],
                     event_type="job.failed_validation",
                 )
+
             def _sanitize_errors(errors):
                 clean = []
                 for e in errors:
@@ -1092,7 +1239,9 @@ def registry_call(
                     actor_owner_id=caller["owner_id"],
                     event_type="job.failed_rate_limit",
                 )
-            raise HTTPException(status_code=503, detail=f"All LLM models rate-limited. ({exc})")
+            raise HTTPException(
+                status_code=503, detail=f"All LLM models rate-limited. ({exc})"
+            )
         except HTTPException:
             # Already a structured HTTP error (e.g. our tool_unavailable 502
             # with a refund). Pass it through untouched — the broad Exception
@@ -1152,13 +1301,19 @@ def registry_call(
             agent_owner_id=agent.get("owner_id"),
             max_attempts=1,
             dispute_window_hours=_DEFAULT_JOB_DISPUTE_WINDOW_HOURS,
-            judge_agent_id=_extract_judge_agent_id(agent.get("input_schema")) or _QUALITY_JUDGE_AGENT_ID,
+            judge_agent_id=_extract_judge_agent_id(agent.get("input_schema"))
+            or _QUALITY_JUDGE_AGENT_ID,
         )
     except Exception:
         payments.post_call_refund(
-            caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent["agent_id"]
+            caller_wallet["wallet_id"],
+            charge_tx_id,
+            caller_charge_cents,
+            agent["agent_id"],
         )
-        _LOG.exception("Failed to create sync job for remote agent %s.", agent["agent_id"])
+        _LOG.exception(
+            "Failed to create sync job for remote agent %s.", agent["agent_id"]
+        )
         raise HTTPException(status_code=500, detail="Failed to create job.")
     _record_job_event(
         job,
@@ -1212,7 +1367,9 @@ def registry_call(
                 actor_owner_id=caller["owner_id"],
                 event_type="job.failed_endpoint_offline",
             )
-        _LOG.warning("Upstream agent unreachable for %s: %s", agent_id, type(e).__name__)
+        _LOG.warning(
+            "Upstream agent unreachable for %s: %s", agent_id, type(e).__name__
+        )
         raise HTTPException(
             status_code=502,
             detail=error_codes.make_error(
@@ -1236,13 +1393,20 @@ def registry_call(
             _settle_failed_job(
                 failed,
                 actor_owner_id=caller["owner_id"],
-                event_type="job.failed_rejected_request" if 400 <= status_code < 500 else "job.failed_internal_error",
+                event_type="job.failed_rejected_request"
+                if 400 <= status_code < 500
+                else "job.failed_internal_error",
             )
         if 400 <= status_code < 500:
             # Surface agent's own error message (truncated) but never expose internals
             try:
                 agent_err = resp.json()
-                agent_msg = str(agent_err.get("error") or agent_err.get("message") or agent_err.get("detail") or "")[:500]
+                agent_msg = str(
+                    agent_err.get("error")
+                    or agent_err.get("message")
+                    or agent_err.get("detail")
+                    or ""
+                )[:500]
             except Exception:
                 agent_msg = ""
             msg = "Agent rejected the request. You were not charged."
@@ -1383,13 +1547,16 @@ def registry_call(
         response_payload, output_format=requested_output_format
     )
     if idempotency_key:
-        _idempotency_store(caller_owner_id_early, agent_id, idempotency_key, response_payload)
+        _idempotency_store(
+            caller_owner_id_early, agent_id, idempotency_key, response_payload
+        )
     return JSONResponse(content=response_payload, status_code=200)
 
 
 # ---------------------------------------------------------------------------
 # Jobs routes
 # ---------------------------------------------------------------------------
+
 
 @app.post(
     "/jobs",
@@ -1409,7 +1576,9 @@ def jobs_create(
         body.parent_job_id,
         parent_cascade_policy=body.parent_cascade_policy,
     )
-    parent_tree_depth = _to_non_negative_int((parent_job or {}).get("tree_depth"), default=0)
+    parent_tree_depth = _to_non_negative_int(
+        (parent_job or {}).get("tree_depth"), default=0
+    )
     tree_depth = parent_tree_depth + 1 if parent_job is not None else 0
     if tree_depth >= 10:
         raise HTTPException(
@@ -1422,7 +1591,9 @@ def jobs_create(
         )
     agent = registry.get_agent(body.agent_id, include_unapproved=True)
     if agent is None or not _caller_can_access_agent(caller, agent):
-        raise HTTPException(status_code=404, detail=f"Agent '{body.agent_id}' not found.")
+        raise HTTPException(
+            status_code=404, detail=f"Agent '{body.agent_id}' not found."
+        )
     _assert_agent_callable(body.agent_id, agent)
 
     # Validate callback_url at creation time (not just at delivery)
@@ -1471,7 +1642,10 @@ def jobs_create(
                 detail=error_codes.make_error(
                     error_codes.INPUT_SCHEMA_VIOLATION,
                     f"Input validation failed: {_schema_exc.message if hasattr(_schema_exc, 'message') else str(_schema_exc)}",
-                    {"path": list(getattr(_schema_exc, "absolute_path", [])), "agent_id": agent["agent_id"]},
+                    {
+                        "path": list(getattr(_schema_exc, "absolute_path", [])),
+                        "agent_id": agent["agent_id"],
+                    },
                 ),
             )
 
@@ -1531,7 +1705,10 @@ def jobs_create(
             detail=error_codes.make_error(
                 error_codes.INVALID_CHARGE_AMOUNT,
                 "Computed caller charge is non-positive.",
-                {"caller_charge_cents": caller_charge_cents, "price_cents": price_cents},
+                {
+                    "caller_charge_cents": caller_charge_cents,
+                    "price_cents": price_cents,
+                },
             ),
         )
     if caller_charge_cents > price_cents * 2:
@@ -1540,7 +1717,10 @@ def jobs_create(
             detail=error_codes.make_error(
                 error_codes.CHARGE_EXCEEDS_LISTED_PRICE,
                 "Caller charge must not exceed twice the listed price.",
-                {"caller_charge_cents": caller_charge_cents, "price_cents": price_cents},
+                {
+                    "caller_charge_cents": caller_charge_cents,
+                    "price_cents": price_cents,
+                },
             ),
         )
     if body.budget_cents is not None and price_cents > body.budget_cents:
@@ -1549,7 +1729,11 @@ def jobs_create(
             detail=error_codes.make_error(
                 error_codes.BUDGET_EXCEEDED,
                 f"Agent price ({price_cents}¢) exceeds your budget ({body.budget_cents}¢).",
-                {"price_cents": price_cents, "budget_cents": body.budget_cents, "agent_id": agent["agent_id"]},
+                {
+                    "price_cents": price_cents,
+                    "budget_cents": body.budget_cents,
+                    "agent_id": agent["agent_id"],
+                },
             ),
         )
     if price_cents > 2000 and not _agent_has_verified_contract(agent):
@@ -1641,15 +1825,20 @@ def jobs_create(
             parent_cascade_policy=body.parent_cascade_policy,
             clarification_timeout_seconds=body.clarification_timeout_seconds,
             clarification_timeout_policy=body.clarification_timeout_policy,
-            dispute_window_hours=body.dispute_window_hours or _DEFAULT_JOB_DISPUTE_WINDOW_HOURS,
-            judge_agent_id=_extract_judge_agent_id(agent.get("input_schema")) or _QUALITY_JUDGE_AGENT_ID,
+            dispute_window_hours=body.dispute_window_hours
+            or _DEFAULT_JOB_DISPUTE_WINDOW_HOURS,
+            judge_agent_id=_extract_judge_agent_id(agent.get("input_schema"))
+            or _QUALITY_JUDGE_AGENT_ID,
             callback_url=body.callback_url or None,
             callback_secret=body.callback_secret or None,
             output_verification_window_seconds=output_verification_window_seconds,
         )
     except Exception:
         payments.post_call_refund(
-            caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent["agent_id"]
+            caller_wallet["wallet_id"],
+            charge_tx_id,
+            caller_charge_cents,
+            agent["agent_id"],
         )
         _LOG.exception("Failed to create job for agent %s.", agent["agent_id"])
         raise HTTPException(status_code=500, detail="Failed to create job.")

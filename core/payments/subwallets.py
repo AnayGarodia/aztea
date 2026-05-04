@@ -231,24 +231,28 @@ def get_agent_earnings_breakdown_v2(parent_wallet_id: str) -> list[dict]:
     out = []
     for r in rows:
         owner_id = r["owner_id"] or ""
-        agent_id = owner_id[len("agent:"):] if owner_id.startswith("agent:") else None
-        out.append({
-            "agent_id": agent_id,
-            "wallet_id": r["wallet_id"],
-            "display_label": r["display_label"],
-            "current_balance_cents": int(r["balance_cents"] or 0),
-            "total_earned_cents": int(r["total_earned_cents"] or 0),
-            "total_spent_cents": int(r["total_spent_cents"] or 0),
-            "call_count": int(r["call_count"] or 0),
-            "last_earned_at": r["last_earned_at"],
-            "guarantor_enabled": bool(r["guarantor_enabled"]),
-            "guarantor_cap_cents": (
-                int(r["guarantor_cap_cents"]) if r["guarantor_cap_cents"] is not None else None
-            ),
-            "daily_spend_limit_cents": (
-                int(r["daily_spend_limit_cents"])
-                if r["daily_spend_limit_cents"] is not None
-                else None
-            ),
-        })
+        agent_id = owner_id[len("agent:") :] if owner_id.startswith("agent:") else None
+        out.append(
+            {
+                "agent_id": agent_id,
+                "wallet_id": r["wallet_id"],
+                "display_label": r["display_label"],
+                "current_balance_cents": int(r["balance_cents"] or 0),
+                "total_earned_cents": int(r["total_earned_cents"] or 0),
+                "total_spent_cents": int(r["total_spent_cents"] or 0),
+                "call_count": int(r["call_count"] or 0),
+                "last_earned_at": r["last_earned_at"],
+                "guarantor_enabled": bool(r["guarantor_enabled"]),
+                "guarantor_cap_cents": (
+                    int(r["guarantor_cap_cents"])
+                    if r["guarantor_cap_cents"] is not None
+                    else None
+                ),
+                "daily_spend_limit_cents": (
+                    int(r["daily_spend_limit_cents"])
+                    if r["daily_spend_limit_cents"] is not None
+                    else None
+                ),
+            }
+        )
     return out

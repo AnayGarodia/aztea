@@ -38,7 +38,6 @@ from typing import Any
 
 from core import feature_flags
 
-
 # ── Public types ───────────────────────────────────────────────────────────
 
 
@@ -376,16 +375,24 @@ def _score_candidate(
                 reasons.append(f"schema-shape partial ({len(present)}/{len(required)})")
         elif composite_score_variants:
             # No top-level required — check if any composite variant is fully satisfied.
-            if any(all(f in explicit_input for f in vreq) for vreq in composite_score_variants):
+            if any(
+                all(f in explicit_input for f in vreq)
+                for vreq in composite_score_variants
+            ):
                 score += 35
                 reasons.append("schema-shape match (composite variant)")
             else:
                 # Partial credit: find the best-matching variant.
-                best = max(composite_score_variants, key=lambda vr: sum(1 for f in vr if f in explicit_input))
+                best = max(
+                    composite_score_variants,
+                    key=lambda vr: sum(1 for f in vr if f in explicit_input),
+                )
                 n_present = sum(1 for f in best if f in explicit_input)
                 if n_present:
                     score += 15
-                    reasons.append(f"schema-shape partial (composite {n_present}/{len(best)})")
+                    reasons.append(
+                        f"schema-shape partial (composite {n_present}/{len(best)})"
+                    )
 
     return Ranked(candidate=c, score=round(score, 3), reasons=reasons)
 
@@ -453,7 +460,9 @@ def _resolve_payload(
             for variant_required in composite_variants:
                 if all(f in explicit_input for f in variant_required):
                     return explicit_input, []
-            return explicit_input, [f for f in composite_variants[0] if f not in explicit_input]
+            return explicit_input, [
+                f for f in composite_variants[0] if f not in explicit_input
+            ]
         return explicit_input, missing
 
     # No explicit_input. Determine all required fields.

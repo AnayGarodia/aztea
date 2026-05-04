@@ -10,9 +10,8 @@ import time
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
+from core import jobs, registry
 from core import models as core_models
-from core import jobs
-from core import registry
 from core.openapi_responses import pick_error_responses
 
 router = APIRouter()
@@ -40,7 +39,10 @@ def _db_path_writable(db_path: str) -> bool:
     response_model=core_models.HealthResponse,
     responses={
         200: {"description": "All checks passed."},
-        503: {"model": core_models.ErrorResponse, "description": "One or more checks failed."},
+        503: {
+            "model": core_models.ErrorResponse,
+            "description": "One or more checks failed.",
+        },
         **pick_error_responses(429, 500),
     },
 )

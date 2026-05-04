@@ -15,14 +15,16 @@ import threading
 from contextlib import contextmanager
 from typing import Generator
 
-_DEFAULT_DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "registry.db"))
+_DEFAULT_DB_PATH = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "registry.db")
+)
 
 # DATABASE_URL provides forward-compat with Postgres. SQLite-only for now.
 # Accepted forms: "sqlite:///absolute/path.db" or a bare path.
 # Postgres URLs (postgresql://...) are noted but not yet supported — swap this module when ready.
 _DATABASE_URL = os.environ.get("DATABASE_URL", "")
 if _DATABASE_URL.startswith("sqlite:///"):
-    _DEFAULT_DB_PATH = os.path.abspath(_DATABASE_URL[len("sqlite:///"):])
+    _DEFAULT_DB_PATH = os.path.abspath(_DATABASE_URL[len("sqlite:///") :])
 elif _DATABASE_URL and not _DATABASE_URL.startswith(("postgres", "postgresql")):
     _DEFAULT_DB_PATH = os.path.abspath(_DATABASE_URL)
 
@@ -112,7 +114,9 @@ def close_all_connections() -> None:
 
 
 @contextmanager
-def get_db_connection(db_path: str = DB_PATH) -> Generator[sqlite3.Connection, None, None]:
+def get_db_connection(
+    db_path: str = DB_PATH,
+) -> Generator[sqlite3.Connection, None, None]:
     """
     Context manager yielding the thread-local SQLite connection.
 

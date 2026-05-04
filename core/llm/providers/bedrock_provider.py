@@ -15,13 +15,19 @@ class BedrockProvider:
     def __init__(self) -> None:
         self._client: Any = None
         self._available = False
-        region = os.environ.get("AWS_BEDROCK_REGION", os.environ.get("AWS_DEFAULT_REGION", "us-east-1")).strip()
+        region = os.environ.get(
+            "AWS_BEDROCK_REGION", os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
+        ).strip()
         access_key = os.environ.get("AWS_ACCESS_KEY_ID", "").strip()
         secret_key = os.environ.get("AWS_SECRET_ACCESS_KEY", "").strip()
         # Also works with IAM roles (no explicit keys needed in that case)
         try:
             import boto3
-            kwargs: dict[str, Any] = {"region_name": region, "service_name": "bedrock-runtime"}
+
+            kwargs: dict[str, Any] = {
+                "region_name": region,
+                "service_name": "bedrock-runtime",
+            }
             if access_key and secret_key:
                 kwargs["aws_access_key_id"] = access_key
                 kwargs["aws_secret_access_key"] = secret_key
@@ -41,7 +47,9 @@ class BedrockProvider:
     def complete(self, req: CompletionRequest) -> LLMResponse:
         """Send a chat completion request to AWS Bedrock (Converse API) and return a normalised LLMResponse."""
         if not self._available:
-            raise LLMBadResponseError(self.name, req.model, "Bedrock provider not available.", None)
+            raise LLMBadResponseError(
+                self.name, req.model, "Bedrock provider not available.", None
+            )
 
         import botocore.exceptions
 
@@ -59,7 +67,9 @@ class BedrockProvider:
         if req.temperature is not None:
             inference_config["temperature"] = req.temperature
         if req.stop:
-            inference_config["stopSequences"] = req.stop if isinstance(req.stop, list) else [req.stop]
+            inference_config["stopSequences"] = (
+                req.stop if isinstance(req.stop, list) else [req.stop]
+            )
 
         converse_kwargs: dict[str, Any] = {
             "modelId": req.model,
@@ -85,7 +95,9 @@ class BedrockProvider:
         try:
             text = resp["output"]["message"]["content"][0]["text"]
         except Exception as exc:
-            raise LLMBadResponseError(self.name, req.model, "Unexpected Bedrock response shape.", exc) from exc
+            raise LLMBadResponseError(
+                self.name, req.model, "Unexpected Bedrock response shape.", exc
+            ) from exc
 
         token_usage = resp.get("usage", {})
         usage = Usage(

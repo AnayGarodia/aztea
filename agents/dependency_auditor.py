@@ -28,14 +28,18 @@ Output:
     "summary": str
   }
 """
+
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 from urllib.parse import quote
 
 import requests
+
+_LOG = logging.getLogger(__name__)
 
 _OSV_API = "https://api.osv.dev/v1/query"
 _PYPI_API = "https://pypi.org/pypi/{name}/json"
@@ -44,7 +48,7 @@ _TIMEOUT = 10
 _MAX_PACKAGES = 20
 _MAX_MANIFEST_CHARS = 10_000
 
-_COPYLEFT = {"gpl", "agpl", "lgpl", "eupl", "cddl", "mpl", "osl", "eupl"}
+_COPYLEFT = {"gpl", "agpl", "lgpl", "eupl", "cddl", "mpl", "osl"}
 _SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 
 
@@ -62,7 +66,11 @@ def _parse_pypi_manifest(manifest: str) -> list[tuple[str, str]]:
         if m:
             name = m.group(1).strip()
             ver_spec = (m.group(2) or "").strip()
-            ver = re.sub(r"[>=<!~^]+\s*", "", ver_spec).split(",")[0].strip() if ver_spec else ""
+            ver = (
+                re.sub(r"[>=<!~^]+\s*", "", ver_spec).split(",")[0].strip()
+                if ver_spec
+                else ""
+            )
             packages.append((name, ver))
     return packages
 
@@ -160,7 +168,11 @@ def _query_osv(pkg_name: str, version: str, ecosystem: str) -> list[dict]:
         # bucket (LOW/MODERATE/HIGH/CRITICAL). Use that as a fallback so we
         # don't report 0.0 when the upstream advisory only provides a label.
         if cvss == 0.0:
-            label = str((vuln.get("database_specific") or {}).get("severity") or "").strip().upper()
+            label = (
+                str((vuln.get("database_specific") or {}).get("severity") or "")
+                .strip()
+                .upper()
+            )
             cvss = {
                 "LOW": 3.0,
                 "MODERATE": 5.5,
@@ -182,26 +194,31 @@ def _query_osv(pkg_name: str, version: str, ecosystem: str) -> list[dict]:
                 break
 
         summary = (vuln.get("summary") or vuln.get("details") or "")[:600]
-        results.append({
-            "id": cve_id,
-            "cvss": cvss,
-            "severity": _cvss_to_severity(cvss),
-            "description": summary,
-            "fixed_in": fixed_in,
-        })
+        results.append(
+            {
+                "id": cve_id,
+                "cvss": cvss,
+                "severity": _cvss_to_severity(cvss),
+                "description": summary,
+                "fixed_in": fixed_in,
+            }
+        )
     return results
 
 
 def _fetch_pypi_latest(name: str) -> tuple[str | None, str | None]:
     """Returns (latest_version, license)."""
     try:
-        resp = requests.get(_PYPI_API.format(name=name), timeout=_TIMEOUT,
-                            headers={"User-Agent": "aztea-dependency-auditor/1.0"})
+        resp = requests.get(
+            _PYPI_API.format(name=name),
+            timeout=_TIMEOUT,
+            headers={"User-Agent": "aztea-dependency-auditor/1.0"},
+        )
         if resp.status_code == 200:
             info = resp.json().get("info", {})
             return info.get("version"), info.get("license")
     except Exception:
-        pass
+        _LOG.warning("PyPI version fetch failed for %s", name, exc_info=True)
     return None, None
 
 
@@ -223,9 +240,14 @@ def _fetch_npm_latest(name: str) -> tuple[str | None, str | None]:
     """Returns (latest_version, license)."""
     try:
         encoded = quote(name, safe="")
-        resp = requests.get(_NPM_API.format(name=encoded), timeout=_TIMEOUT,
-                            headers={"User-Agent": "aztea-dependency-auditor/1.0",
-                                     "Accept": "application/json"})
+        resp = requests.get(
+            _NPM_API.format(name=encoded),
+            timeout=_TIMEOUT,
+            headers={
+                "User-Agent": "aztea-dependency-auditor/1.0",
+                "Accept": "application/json",
+            },
+        )
         if resp.status_code == 200:
             data = resp.json()
             versions = data.get("versions") or {}
@@ -237,7 +259,7 @@ def _fetch_npm_latest(name: str) -> tuple[str | None, str | None]:
                 license_ = versions[latest].get("license")
             return latest, license_
     except Exception:
-        pass
+        _LOG.warning("npm version fetch failed for %s", name, exc_info=True)
     return None, None
 
 
@@ -271,7 +293,9 @@ def run(payload: dict) -> dict:
     """
     manifest = str(payload.get("manifest") or "").strip()
     if not manifest:
-        raise ValueError("'manifest' is required (contents of package.json or requirements.txt).")
+        raise ValueError(
+            "'manifest' is required (contents of package.json or requirements.txt)."
+        )
 
     ecosystem = str(payload.get("ecosystem") or "auto").strip().lower()
     if ecosystem == "auto":
@@ -325,11 +349,13 @@ def run(payload: dict) -> dict:
 
         is_outdated = False
         if "outdated" in checks and current_ver and latest_version:
+
             def _ver_tuple(v: str) -> tuple:
                 try:
                     return tuple(int(x) for x in re.split(r"[.\-]", v.strip())[:3])
                 except (ValueError, TypeError):
                     return (0, 0, 0)
+
             is_outdated = _ver_tuple(current_ver) < _ver_tuple(latest_version)
 
         l_risk = _license_risk(license_str) if fetch_license else "none"
@@ -356,15 +382,17 @@ def run(payload: dict) -> dict:
         else:
             action = "ok"
 
-        packages_out.append({
-            "name": name,
-            "current_version": current_ver or "unknown",
-            "latest_version": latest_version,
-            "cves": cves,
-            "license": license_str,
-            "license_risk": l_risk,
-            "action": action,
-        })
+        packages_out.append(
+            {
+                "name": name,
+                "current_version": current_ver or "unknown",
+                "latest_version": latest_version,
+                "cves": cves,
+                "license": license_str,
+                "license_risk": l_risk,
+                "action": action,
+            }
+        )
 
     # Sort: vulnerable first, then by severity
     def _sort_key(p: dict) -> tuple:
@@ -376,7 +404,9 @@ def run(payload: dict) -> dict:
     total = len(packages_out)
     summary_parts = [f"Audited {total} package(s)."]
     if vulnerable_count:
-        summary_parts.append(f"{vulnerable_count} with known CVEs ({critical_count} critical).")
+        summary_parts.append(
+            f"{vulnerable_count} with known CVEs ({critical_count} critical)."
+        )
     if outdated_count:
         summary_parts.append(f"{outdated_count} outdated.")
     if not vulnerable_count and not outdated_count:

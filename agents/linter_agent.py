@@ -46,7 +46,9 @@ def _npx_available() -> bool:
 
 
 def _run_ruff(code: str, checks: list[str]) -> tuple[list[dict], str]:
-    with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False, encoding="utf-8") as f:
+    with tempfile.NamedTemporaryFile(
+        suffix=".py", mode="w", delete=False, encoding="utf-8"
+    ) as f:
         f.write(code)
         tmppath = f.name
 
@@ -69,7 +71,13 @@ def _run_ruff(code: str, checks: list[str]) -> tuple[list[dict], str]:
         select_arg = ",".join(sorted(set(select_rules))) if select_rules else "ALL"
 
         result = subprocess.run(
-            ["ruff", "check", "--output-format=json", f"--select={select_arg}", tmppath],
+            [
+                "ruff",
+                "check",
+                "--output-format=json",
+                f"--select={select_arg}",
+                tmppath,
+            ],
             capture_output=True,
             text=True,
             timeout=15,
@@ -86,7 +94,9 @@ def _run_ruff(code: str, checks: list[str]) -> tuple[list[dict], str]:
                     "message": item.get("message") or "",
                     "line": loc.get("row"),
                     "column": loc.get("column"),
-                    "severity": "error" if code_val.startswith(("E", "F", "B", "S")) else "warning",
+                    "severity": "error"
+                    if code_val.startswith(("E", "F", "B", "S"))
+                    else "warning",
                     "fix_available": item.get("fix") is not None,
                 }
             )
@@ -268,7 +278,10 @@ def run(payload: dict) -> dict:
 
     if language == "python":
         if not _ruff_available():
-            return _err("linter_agent.tool_unavailable", "ruff is not available on this executor.")
+            return _err(
+                "linter_agent.tool_unavailable",
+                "ruff is not available on this executor.",
+            )
         issues, summary = _run_ruff(code, checks)
         tool = "ruff"
     elif language in {"javascript", "typescript"}:
@@ -283,7 +296,9 @@ def run(payload: dict) -> dict:
             return _err("linter_agent.tool_unavailable", f"eslint unavailable: {exc}")
         tool = "eslint"
     else:
-        return _err("linter_agent.invalid_language", f"Unsupported language: {language}")
+        return _err(
+            "linter_agent.invalid_language", f"Unsupported language: {language}"
+        )
 
     error_count = sum(1 for item in issues if item.get("severity") == "error")
     warning_count = sum(1 for item in issues if item.get("severity") == "warning")

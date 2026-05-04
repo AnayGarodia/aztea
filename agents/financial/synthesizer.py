@@ -119,7 +119,9 @@ def _sentences(text: str) -> list[str]:
     return [part.strip() for part in raw if part.strip()]
 
 
-def _select_sentences(sentences: list[str], keywords: tuple[str, ...], *, limit: int) -> list[str]:
+def _select_sentences(
+    sentences: list[str], keywords: tuple[str, ...], *, limit: int
+) -> list[str]:
     matches: list[str] = []
     for sentence in sentences:
         lowered = sentence.lower()
@@ -138,14 +140,37 @@ def _extract_business_summary(sentences: list[str]) -> str:
 
 def _deterministic_signal(highlights: list[str], risks: list[str]) -> tuple[str, str]:
     positive_terms = ("growth", "increased", "improved", "strong", "expanded", "profit")
-    negative_terms = ("decline", "decreased", "loss", "impairment", "pressure", "weak", "restructuring")
-    pos = sum(1 for item in highlights if any(term in item.lower() for term in positive_terms))
-    neg = sum(1 for item in highlights + risks if any(term in item.lower() for term in negative_terms))
+    negative_terms = (
+        "decline",
+        "decreased",
+        "loss",
+        "impairment",
+        "pressure",
+        "weak",
+        "restructuring",
+    )
+    pos = sum(
+        1 for item in highlights if any(term in item.lower() for term in positive_terms)
+    )
+    neg = sum(
+        1
+        for item in highlights + risks
+        if any(term in item.lower() for term in negative_terms)
+    )
     if pos >= neg + 2:
-        return "positive", "Recent filing evidence skews constructive relative to the highlighted risks."
+        return (
+            "positive",
+            "Recent filing evidence skews constructive relative to the highlighted risks.",
+        )
     if neg >= pos + 2:
-        return "negative", "Recent filing evidence is dominated by downside pressure and explicit risk language."
-    return "neutral", "The filing presents a mixed picture, so the deterministic fallback stays neutral."
+        return (
+            "negative",
+            "Recent filing evidence is dominated by downside pressure and explicit risk language.",
+        )
+    return (
+        "neutral",
+        "The filing presents a mixed picture, so the deterministic fallback stays neutral.",
+    )
 
 
 def _evidence_pack(filing_data: dict[str, Any]) -> dict[str, Any]:
@@ -165,7 +190,9 @@ def _evidence_pack(filing_data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _fallback_brief(filing_data: dict[str, Any], evidence: dict[str, Any]) -> dict[str, Any]:
+def _fallback_brief(
+    filing_data: dict[str, Any], evidence: dict[str, Any]
+) -> dict[str, Any]:
     return annotate_success(
         {
             "ticker": filing_data["ticker"],
@@ -190,7 +217,9 @@ def _fallback_brief(filing_data: dict[str, Any], evidence: dict[str, Any]) -> di
     )
 
 
-def _normalize_brief_output(raw: Any, filing_data: dict[str, Any], evidence: dict[str, Any]) -> dict[str, Any]:
+def _normalize_brief_output(
+    raw: Any, filing_data: dict[str, Any], evidence: dict[str, Any]
+) -> dict[str, Any]:
     payload = raw if isinstance(raw, dict) else {}
     highlights = payload.get("recent_financial_highlights")
     risks = payload.get("key_risks")
@@ -203,18 +232,28 @@ def _normalize_brief_output(raw: Any, filing_data: dict[str, Any], evidence: dic
             "company_name": filing_data["company_name"],
             "filing_type": filing_data["filing_type"],
             "filing_date": filing_data["filing_date"],
-            "business_summary": str(payload.get("business_summary") or evidence["business_summary"]).strip()[:500],
+            "business_summary": str(
+                payload.get("business_summary") or evidence["business_summary"]
+            ).strip()[:500],
             "recent_financial_highlights": _dedupe(
-                [str(item) for item in highlights] if isinstance(highlights, list) else evidence["financial_highlights"],
+                [str(item) for item in highlights]
+                if isinstance(highlights, list)
+                else evidence["financial_highlights"],
                 limit=5,
             ),
             "key_risks": _dedupe(
-                [str(item) for item in risks] if isinstance(risks, list) else evidence["risk_snippets"],
+                [str(item) for item in risks]
+                if isinstance(risks, list)
+                else evidence["risk_snippets"],
                 limit=5,
             ),
             "signal": signal,
-            "signal_reasoning": str(payload.get("signal_reasoning") or evidence["signal_reasoning"]).strip()[:500],
-            "generated_at": str(payload.get("generated_at") or datetime.now(timezone.utc).isoformat()).strip(),
+            "signal_reasoning": str(
+                payload.get("signal_reasoning") or evidence["signal_reasoning"]
+            ).strip()[:500],
+            "generated_at": str(
+                payload.get("generated_at") or datetime.now(timezone.utc).isoformat()
+            ).strip(),
             "source_document_url": evidence["source_document_url"],
             "source_evidence": {
                 "financial_highlights": evidence["financial_highlights"][:5],
@@ -237,8 +276,12 @@ def synthesize_brief(filing_data: dict[str, Any]) -> dict[str, Any]:
         filing_date=filing_data["filing_date"],
         schema=schema_str,
         business_context=evidence["business_summary"],
-        financial_highlights="\n".join(f"- {item}" for item in evidence["financial_highlights"]) or "- No high-confidence financial highlights extracted.",
-        risk_snippets="\n".join(f"- {item}" for item in evidence["risk_snippets"]) or "- No explicit risk snippets extracted from the available filing excerpt.",
+        financial_highlights="\n".join(
+            f"- {item}" for item in evidence["financial_highlights"]
+        )
+        or "- No high-confidence financial highlights extracted.",
+        risk_snippets="\n".join(f"- {item}" for item in evidence["risk_snippets"])
+        or "- No explicit risk snippets extracted from the available filing excerpt.",
     )
 
     req = CompletionRequest(

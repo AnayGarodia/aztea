@@ -17,27 +17,23 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from .crud import (
     get_job,
-    get_job_authorization_context,
     is_worker_authorized,
-    is_worker_authorized_for_job,
 )
 from .db import (
-    DEFAULT_LEASE_SECONDS,
-    MESSAGE_TYPE_LEASE_BEHAVIOR,
-    VALID_STATUSES,
     _ACTIVE_LEASE_STATUSES,
     _CLAIMABLE_STATUSES,
     _LEGACY_MESSAGE_TYPE_LEASE_BEHAVIOR,
+    DEFAULT_LEASE_SECONDS,
+    MESSAGE_TYPE_LEASE_BEHAVIOR,
+    VALID_STATUSES,
     _clean_optional_text,
     _conn,
-    _decode_json,
     _insert_claim_event_row,
     _iso_after_seconds,
-    _msg_to_dict,
     _normalize_output_verification_status,
     _now,
     _now_dt,
@@ -45,6 +41,8 @@ from .db import (
     _row_to_dict,
     _to_non_negative_int,
 )
+
+
 def _lease_is_active(job_row: dict, now_dt: datetime) -> bool:
     claim_owner_id = _clean_optional_text(job_row.get("claim_owner_id"))
     if claim_owner_id is None:
@@ -128,7 +126,9 @@ def claim_job(
             claim_token = str(uuid.uuid4())
             claimed_at = now
         else:
-            claim_token = _clean_optional_text(raw.get("claim_token")) or str(uuid.uuid4())
+            claim_token = _clean_optional_text(raw.get("claim_token")) or str(
+                uuid.uuid4()
+            )
             claimed_at = _clean_optional_text(raw.get("claimed_at")) or now
 
         next_status = "running" if raw["status"] == "pending" else raw["status"]
@@ -153,7 +153,9 @@ def claim_job(
                 job_id,
             ),
         )
-        event_type = "claim_reclaimed" if current_owner == owner_id else "claim_acquired"
+        event_type = (
+            "claim_reclaimed" if current_owner == owner_id else "claim_acquired"
+        )
         _insert_claim_event_row(
             conn,
             job_id,
@@ -215,7 +217,10 @@ def heartbeat_job_lease(
             return None
         if _clean_optional_text(raw.get("claim_owner_id")) != owner_id:
             return None
-        if claim_token is not None and _clean_optional_text(raw.get("claim_token")) != claim_token:
+        if (
+            claim_token is not None
+            and _clean_optional_text(raw.get("claim_token")) != claim_token
+        ):
             return None
 
         existing_expiry = _parse_ts(_clean_optional_text(raw.get("lease_expires_at")))
@@ -306,7 +311,10 @@ def release_job_claim(
             return None
         if _clean_optional_text(raw.get("claim_owner_id")) != owner_id:
             return None
-        if claim_token is not None and _clean_optional_text(raw.get("claim_token")) != claim_token:
+        if (
+            claim_token is not None
+            and _clean_optional_text(raw.get("claim_token")) != claim_token
+        ):
             return None
 
         previous_claim_token = _clean_optional_text(raw.get("claim_token"))
@@ -381,7 +389,10 @@ def schedule_job_retry(
                 return None
             if current_claim_owner != owner_id:
                 return None
-        if claim_token is not None and _clean_optional_text(raw.get("claim_token")) != claim_token:
+        if (
+            claim_token is not None
+            and _clean_optional_text(raw.get("claim_token")) != claim_token
+        ):
             return None
 
         attempt_count = _to_non_negative_int(raw.get("attempt_count"), default=0)
@@ -390,9 +401,19 @@ def schedule_job_retry(
 
         can_retry = attempt_count < max_attempts
         next_status = "pending" if can_retry else "failed"
-        next_retry_at = (now_dt + timedelta(seconds=retry_delay_seconds)).isoformat() if can_retry else None
-        completed_at = None if can_retry else (_clean_optional_text(raw.get("completed_at")) or now)
-        next_error = error_message if error_message is not None else raw.get("error_message")
+        next_retry_at = (
+            (now_dt + timedelta(seconds=retry_delay_seconds)).isoformat()
+            if can_retry
+            else None
+        )
+        completed_at = (
+            None
+            if can_retry
+            else (_clean_optional_text(raw.get("completed_at")) or now)
+        )
+        next_error = (
+            error_message if error_message is not None else raw.get("error_message")
+        )
 
         conn.execute(
             """
@@ -470,8 +491,16 @@ def mark_job_timeout(
 
         can_retry = allow_retry and attempt_count < max_attempts
         next_status = "pending" if can_retry else "failed"
-        next_retry_at = (now_dt + timedelta(seconds=retry_delay_seconds)).isoformat() if can_retry else None
-        completed_at = None if can_retry else (_clean_optional_text(raw.get("completed_at")) or now)
+        next_retry_at = (
+            (now_dt + timedelta(seconds=retry_delay_seconds)).isoformat()
+            if can_retry
+            else None
+        )
+        completed_at = (
+            None
+            if can_retry
+            else (_clean_optional_text(raw.get("completed_at")) or now)
+        )
 
         conn.execute(
             """
@@ -598,7 +627,9 @@ def list_jobs_with_expired_leases(limit: int = 100, now: str | None = None) -> l
     return [_row_to_dict(r) for r in rows]
 
 
-def list_jobs_with_expired_clarification_deadline(limit: int = 100, now: str | None = None) -> list:
+def list_jobs_with_expired_clarification_deadline(
+    limit: int = 100, now: str | None = None
+) -> list:
     """Sweeper query: return awaiting_clarification jobs past their ``clarification_deadline_at``."""
     limit = min(max(1, limit), 200)
     now_iso = now or _now()
@@ -619,7 +650,9 @@ def list_jobs_with_expired_clarification_deadline(limit: int = 100, now: str | N
     return [_row_to_dict(r) for r in rows]
 
 
-def list_jobs_past_sla(sla_seconds: int, limit: int = 100, now: str | None = None) -> list:
+def list_jobs_past_sla(
+    sla_seconds: int, limit: int = 100, now: str | None = None
+) -> list:
     """Sweeper query: return pending/running/awaiting_clarification jobs older than ``sla_seconds``."""
     if sla_seconds <= 0:
         raise ValueError("sla_seconds must be > 0.")
@@ -642,7 +675,9 @@ def list_jobs_past_sla(sla_seconds: int, limit: int = 100, now: str | None = Non
     return [_row_to_dict(r) for r in rows]
 
 
-def list_jobs_with_expired_output_verification(limit: int = 100, now: str | None = None) -> list:
+def list_jobs_with_expired_output_verification(
+    limit: int = 100, now: str | None = None
+) -> list:
     """Sweeper query: return complete jobs whose output-verification window has elapsed without a decision."""
     limit = min(max(1, limit), 200)
     now_iso = now or _now()
@@ -748,10 +783,14 @@ def update_job_status(
                 status,
                 clear_claim,
                 status,
-                has_signature, output_signature,
-                has_signature, output_signature_alg,
-                has_signature, output_signed_by_did,
-                has_signature, output_signed_at,
+                has_signature,
+                output_signature,
+                has_signature,
+                output_signature_alg,
+                has_signature,
+                output_signed_by_did,
+                has_signature,
+                output_signed_at,
                 job_id,
                 completed_flag,
             ),
@@ -787,14 +826,19 @@ def initialize_output_verification_state(job_id: str) -> dict | None:
         if row is None:
             return None
         raw = dict(row)
-        if raw.get("status") != "complete" or _clean_optional_text(raw.get("completed_at")) is None:
+        if (
+            raw.get("status") != "complete"
+            or _clean_optional_text(raw.get("completed_at")) is None
+        ):
             return _row_to_dict(row)
 
         window_seconds = _to_non_negative_int(
             raw.get("output_verification_window_seconds"),
             default=0,
         )
-        status = _normalize_output_verification_status(raw.get("output_verification_status"))
+        status = _normalize_output_verification_status(
+            raw.get("output_verification_status")
+        )
         completed_at_dt = _parse_ts(_clean_optional_text(raw.get("completed_at")))
         deadline = (
             (completed_at_dt + timedelta(seconds=window_seconds)).isoformat()
@@ -805,9 +849,14 @@ def initialize_output_verification_state(job_id: str) -> dict | None:
         if window_seconds <= 0:
             if (
                 status == "not_required"
-                and _clean_optional_text(raw.get("output_verification_deadline_at")) is None
-                and _clean_optional_text(raw.get("output_verification_decided_at")) is None
-                and _clean_optional_text(raw.get("output_verification_decision_owner_id")) is None
+                and _clean_optional_text(raw.get("output_verification_deadline_at"))
+                is None
+                and _clean_optional_text(raw.get("output_verification_decided_at"))
+                is None
+                and _clean_optional_text(
+                    raw.get("output_verification_decision_owner_id")
+                )
+                is None
                 and _clean_optional_text(raw.get("output_verification_reason")) is None
             ):
                 return _row_to_dict(row)
@@ -826,7 +875,9 @@ def initialize_output_verification_state(job_id: str) -> dict | None:
             )
             return get_job(job_id)
 
-        if status == "pending" and _clean_optional_text(raw.get("output_verification_deadline_at")):
+        if status == "pending" and _clean_optional_text(
+            raw.get("output_verification_deadline_at")
+        ):
             return _row_to_dict(row)
         if status in {"accepted", "rejected", "expired"}:
             return _row_to_dict(row)
@@ -870,7 +921,9 @@ def set_output_verification_decision(
         if row is None:
             return None
         raw = dict(row)
-        current = _normalize_output_verification_status(raw.get("output_verification_status"))
+        current = _normalize_output_verification_status(
+            raw.get("output_verification_status")
+        )
         if current == next_status:
             return _row_to_dict(row)
         if current != "pending":
@@ -897,7 +950,9 @@ def set_output_verification_decision(
     return get_job(job_id)
 
 
-def mark_output_verification_expired(job_id: str, *, decision_owner_id: str = "system:verification-expiry") -> dict | None:
+def mark_output_verification_expired(
+    job_id: str, *, decision_owner_id: str = "system:verification-expiry"
+) -> dict | None:
     """Called by the sweeper when the output-verification window expires without a caller decision.
 
     Sets ``output_verification_status`` to 'expired'. Returns None if the window has not expired
@@ -986,4 +1041,3 @@ def _resolve_message_lease_behavior(raw_type: str, canonical_type: str) -> str |
     if canonical_type in MESSAGE_TYPE_LEASE_BEHAVIOR:
         return MESSAGE_TYPE_LEASE_BEHAVIOR[canonical_type]
     return _LEGACY_MESSAGE_TYPE_LEASE_BEHAVIOR.get(raw_type)
-

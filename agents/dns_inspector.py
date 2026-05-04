@@ -132,9 +132,7 @@ def _http_check(domain: str) -> tuple[dict | None, str | None]:
         elapsed_ms = int((time.time() - start) * 1000)
         status_code = exc.code
         server_header = exc.headers.get("Server", "") if exc.headers else ""
-        hsts = (
-            "Strict-Transport-Security" in exc.headers if exc.headers else False
-        )
+        hsts = "Strict-Transport-Security" in exc.headers if exc.headers else False
     except Exception as exc:
         return None, str(exc)
 
@@ -169,13 +167,21 @@ def run(payload: dict) -> dict:
     """
     raw_domains = payload.get("domains")
     if not raw_domains or not isinstance(raw_domains, list):
-        return _err("dns_inspector.missing_domains", "domains is required and must be a non-empty list of domain names")
+        return _err(
+            "dns_inspector.missing_domains",
+            "domains is required and must be a non-empty list of domain names",
+        )
     if len(raw_domains) > _MAX_DOMAINS:
-        return _err("dns_inspector.too_many_domains", f"domains may contain at most {_MAX_DOMAINS} entries; got {len(raw_domains)}")
+        return _err(
+            "dns_inspector.too_many_domains",
+            f"domains may contain at most {_MAX_DOMAINS} entries; got {len(raw_domains)}",
+        )
 
     domains = [str(d).strip().lower() for d in raw_domains if str(d).strip()]
     if not domains:
-        return _err("dns_inspector.invalid_domains", "domains list contains no valid entries")
+        return _err(
+            "dns_inspector.invalid_domains", "domains list contains no valid entries"
+        )
 
     raw_checks = payload.get("checks", ["dns", "ssl", "http"])
     if not isinstance(raw_checks, list):
@@ -197,20 +203,30 @@ def run(payload: dict) -> dict:
 
         # --- Format guard ---
         if any(c in domain for c in ("@", " ", "[")):
-            results.append({"domain": domain, "a_records": [], "ssl_cert": None, "http": None, "issues": ["Invalid domain format"]})
+            results.append(
+                {
+                    "domain": domain,
+                    "a_records": [],
+                    "ssl_cert": None,
+                    "http": None,
+                    "issues": ["Invalid domain format"],
+                }
+            )
             continue
 
         # --- SSRF guard ---
         try:
             validate_outbound_url(f"https://{domain}", "domain")
         except Exception as exc:
-            results.append({
-                "domain": domain,
-                "a_records": [],
-                "ssl_cert": None,
-                "http": None,
-                "issues": [f"Domain blocked by security policy: {exc}"],
-            })
+            results.append(
+                {
+                    "domain": domain,
+                    "a_records": [],
+                    "ssl_cert": None,
+                    "http": None,
+                    "issues": [f"Domain blocked by security policy: {exc}"],
+                }
+            )
             continue
 
         # --- DNS ---
@@ -228,10 +244,9 @@ def run(payload: dict) -> dict:
         # We attempt mail.<domain> as a rough proxy for MX reachability.
         if "mx" in checks:
             try:
-                mail_ips = list({
-                    info[4][0]
-                    for info in socket.getaddrinfo("mail." + domain, None)
-                })
+                mail_ips = list(
+                    {info[4][0] for info in socket.getaddrinfo("mail." + domain, None)}
+                )
                 entry["possible_mail_ips"] = mail_ips
             except Exception:
                 entry["possible_mail_ips"] = []

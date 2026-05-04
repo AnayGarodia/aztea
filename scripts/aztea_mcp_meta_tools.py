@@ -5,6 +5,7 @@ These tools wrap Aztea's wallet, async job lifecycle, rating/dispute, discovery,
 and batch-hiring APIs. Unlike registry agent tools (which call 3rd-party workers),
 these are always present when authenticated and talk directly to the Aztea platform.
 """
+
 from __future__ import annotations
 
 import os
@@ -17,11 +18,34 @@ import requests
 _REQUEST_VERSION_HEADER = "X-Aztea-Version"
 _CLIENT_ID_HEADER = "X-Aztea-Client"
 _AZTEA_PROTOCOL_VERSION = "1.0"
-_DEFAULT_CLIENT_ID = (os.environ.get("AZTEA_CLIENT_ID", "claude-code") or "claude-code").strip()
-_PYDANTIC_HELP_URL_RE = re.compile(r"\s*For further information visit https://errors\.pydantic\.dev/[^\s]+", re.IGNORECASE)
+_DEFAULT_CLIENT_ID = (
+    os.environ.get("AZTEA_CLIENT_ID", "claude-code") or "claude-code"
+).strip()
+_PYDANTIC_HELP_URL_RE = re.compile(
+    r"\s*For further information visit https://errors\.pydantic\.dev/[^\s]+",
+    re.IGNORECASE,
+)
 _DISCOVERY_INTENTS: dict[str, set[str]] = {
-    "image": {"image", "generator", "generate", "picture", "png", "jpeg", "jpg", "visual", "art"},
-    "browser": {"browser", "playwright", "screenshot", "crawl", "page", "dom", "headless"},
+    "image": {
+        "image",
+        "generator",
+        "generate",
+        "picture",
+        "png",
+        "jpeg",
+        "jpg",
+        "visual",
+        "art",
+    },
+    "browser": {
+        "browser",
+        "playwright",
+        "screenshot",
+        "crawl",
+        "page",
+        "dom",
+        "headless",
+    },
     "dns": {"dns", "ssl", "tls", "certificate", "domain", "http", "hsts"},
     "code_search": {"semantic", "codebase", "repo", "repository", "symbols"},
 }
@@ -49,13 +73,20 @@ def _word_truncate(text: str, max_len: int, suffix: str = "…") -> str:
     return head + suffix
 
 
-def _annotations(*, read_only: bool, destructive: bool = False, open_world: bool = True, idempotent: bool = False) -> dict[str, Any]:
+def _annotations(
+    *,
+    read_only: bool,
+    destructive: bool = False,
+    open_world: bool = True,
+    idempotent: bool = False,
+) -> dict[str, Any]:
     return {
         "readOnlyHint": read_only,
         "destructiveHint": destructive,
         "openWorldHint": open_world,
         "idempotentHint": idempotent,
     }
+
 
 # ─── Tool schemas ────────────────────────────────────────────────────────────
 
@@ -829,14 +860,18 @@ _META_TOOL_ANNOTATIONS: dict[str, dict[str, Any]] = {
     "aztea_set_daily_limit": _annotations(read_only=False, idempotent=True),
     "aztea_topup_url": _annotations(read_only=False, idempotent=False),
     "aztea_session_summary": _annotations(read_only=True, idempotent=False),
-    "aztea_set_session_budget": _annotations(read_only=False, idempotent=True, open_world=False),
+    "aztea_set_session_budget": _annotations(
+        read_only=False, idempotent=True, open_world=False
+    ),
     "aztea_estimate_cost": _annotations(read_only=True, idempotent=False),
     "aztea_list_recipes": _annotations(read_only=True, idempotent=True),
     "aztea_list_pipelines": _annotations(read_only=True, idempotent=True),
     "aztea_hire_async": _annotations(read_only=False, idempotent=False),
     "aztea_job_status": _annotations(read_only=True, idempotent=False),
     "aztea_batch_status": _annotations(read_only=True, idempotent=False),
-    "aztea_cancel_job": _annotations(read_only=False, destructive=True, idempotent=True, open_world=False),
+    "aztea_cancel_job": _annotations(
+        read_only=False, destructive=True, idempotent=True, open_world=False
+    ),
     "aztea_follow_job": _annotations(read_only=True, idempotent=False),
     "aztea_data_retention_policy": _annotations(read_only=True, idempotent=True),
     "aztea_verify_job": _annotations(read_only=True, idempotent=True),
@@ -860,12 +895,15 @@ def get_meta_tools() -> list[dict[str, Any]]:
     enriched: list[dict[str, Any]] = []
     for tool in _TOOLS:
         item = dict(tool)
-        item["annotations"] = dict(_META_TOOL_ANNOTATIONS.get(item["name"], _annotations(read_only=False)))
+        item["annotations"] = dict(
+            _META_TOOL_ANNOTATIONS.get(item["name"], _annotations(read_only=False))
+        )
         enriched.append(item)
     return enriched
 
 
 # ─── Dispatcher ──────────────────────────────────────────────────────────────
+
 
 def call_meta_tool(
     tool_name: str,
@@ -910,16 +948,30 @@ def call_meta_tool(
         try:
             budget = int(arguments.get("budget_cents") or 0)
         except (TypeError, ValueError):
-            return False, {"error": "INVALID_INPUT", "message": "budget_cents must be an integer."}
+            return False, {
+                "error": "INVALID_INPUT",
+                "message": "budget_cents must be an integer.",
+            }
         if budget < 0:
-            return False, {"error": "INVALID_INPUT", "message": "budget_cents must be >= 0."}
+            return False, {
+                "error": "INVALID_INPUT",
+                "message": "budget_cents must be >= 0.",
+            }
         session_state["budget_cents"] = budget if budget > 0 else None
         spent = int(session_state.get("spent_cents") or 0)
         msg = (
-            f"Session budget set to ${budget / 100:.2f}. "
-            f"Current session spend: ${spent / 100:.2f}."
-        ) if budget > 0 else "Session budget cleared."
-        return True, {"budget_cents": budget or None, "spent_cents": spent, "message": msg}
+            (
+                f"Session budget set to ${budget / 100:.2f}. "
+                f"Current session spend: ${spent / 100:.2f}."
+            )
+            if budget > 0
+            else "Session budget cleared."
+        )
+        return True, {
+            "budget_cents": budget or None,
+            "spent_cents": spent,
+            "message": msg,
+        }
 
     # Session budget gate — block paid calls when cap is exhausted
     budget_cents = session_state.get("budget_cents")
@@ -1030,7 +1082,9 @@ def call_meta_tool(
 
 def _accrue(session_state: dict[str, Any], amount_cents: Any) -> None:
     if amount_cents is not None:
-        session_state["spent_cents"] = int(session_state.get("spent_cents") or 0) + int(amount_cents)
+        session_state["spent_cents"] = int(session_state.get("spent_cents") or 0) + int(
+            amount_cents
+        )
 
 
 def _refund(session_state: dict[str, Any], amount_cents: Any) -> None:
@@ -1055,7 +1109,12 @@ def _as_int(value: Any) -> int | None:
 def _charge_from_result(result: Any) -> int | None:
     if not isinstance(result, dict):
         return None
-    for key in ("caller_charge_cents", "total_charged_cents", "total_price_cents", "price_cents"):
+    for key in (
+        "caller_charge_cents",
+        "total_charged_cents",
+        "total_price_cents",
+        "price_cents",
+    ):
         amount = _as_int(result.get(key))
         if amount is not None:
             return amount
@@ -1127,7 +1186,10 @@ def _compact_wallet(result: dict[str, Any], *, limit: int = 5) -> dict[str, Any]
             compact["transaction_count"] = len(txs)
             compact["transactions_omitted"] = max(0, len(txs) - limit)
             compact.pop(key, None)
-            compact.setdefault("note", f"Showing {min(limit, len(txs))} most recent transactions; use aztea_spend_summary for audits.")
+            compact.setdefault(
+                "note",
+                f"Showing {min(limit, len(txs))} most recent transactions; use aztea_spend_summary for audits.",
+            )
             break
     return compact
 
@@ -1145,8 +1207,12 @@ def _compact_job_submission(result: dict[str, Any]) -> dict[str, Any]:
         "messages",
         "batch_id",
     }
-    compact = {key: value for key, value in result.items() if key in keep and value is not None}
-    omitted = sorted(key for key, value in result.items() if key not in compact and value is not None)
+    compact = {
+        key: value for key, value in result.items() if key in keep and value is not None
+    }
+    omitted = sorted(
+        key for key, value in result.items() if key not in compact and value is not None
+    )
     if omitted:
         compact["omitted_fields"] = omitted[:20]
         compact.setdefault("full_status_available_via", "aztea_job_status")
@@ -1157,22 +1223,33 @@ def _compact_recipe_or_pipeline(result: dict[str, Any]) -> dict[str, Any]:
     compact = dict(result)
     step_results = compact.get("step_results")
     output_payload = compact.get("output_payload")
-    if isinstance(step_results, dict) and len(step_results) == 1 and output_payload is not None:
+    if (
+        isinstance(step_results, dict)
+        and len(step_results) == 1
+        and output_payload is not None
+    ):
         only_step = next(iter(step_results.values()))
         if only_step == output_payload:
             compact.pop("output_payload", None)
-            compact["output_payload_omitted_reason"] = "Same as the single step result; see step_results."
+            compact["output_payload_omitted_reason"] = (
+                "Same as the single step result; see step_results."
+            )
     return compact
 
 
 # ─── Handlers ────────────────────────────────────────────────────────────────
 
-def _get(session: requests.Session, url: str, hdrs: dict, timeout: float, **kwargs: Any) -> tuple[bool, dict]:
+
+def _get(
+    session: requests.Session, url: str, hdrs: dict, timeout: float, **kwargs: Any
+) -> tuple[bool, dict]:
     r = session.get(url, headers=hdrs, timeout=timeout, **kwargs)
     return _parse(r)
 
 
-def _post(session: requests.Session, url: str, hdrs: dict, timeout: float, body: Any) -> tuple[bool, dict]:
+def _post(
+    session: requests.Session, url: str, hdrs: dict, timeout: float, body: Any
+) -> tuple[bool, dict]:
     r = session.post(url, headers=hdrs, timeout=timeout, json=body)
     return _parse(r)
 
@@ -1189,59 +1266,110 @@ def _parse(r: requests.Response) -> tuple[bool, dict]:
     detail.setdefault("status_code", r.status_code)
     if isinstance(body, dict):
         nested = body.get("detail") if isinstance(body.get("detail"), dict) else None
-        nested_data = nested.get("data") if isinstance(nested, dict) and isinstance(nested.get("data"), dict) else None
+        nested_data = (
+            nested.get("data")
+            if isinstance(nested, dict) and isinstance(nested.get("data"), dict)
+            else None
+        )
         if nested and "message" in nested and "message" not in detail:
             detail["message"] = nested["message"]
         for source in (body, nested or {}, nested_data or {}):
-            for key in ("refunded", "refund_amount_cents", "cost_usd", "wallet_balance_cents"):
+            for key in (
+                "refunded",
+                "refund_amount_cents",
+                "cost_usd",
+                "wallet_balance_cents",
+            ):
                 if key in source and key not in detail:
                     detail[key] = source[key]
     return False, {"error": "API_ERROR", **detail}
 
 
-def _wallet_balance(session: requests.Session, base: str, hdrs: dict, timeout: float) -> tuple[bool, dict]:
+def _wallet_balance(
+    session: requests.Session, base: str, hdrs: dict, timeout: float
+) -> tuple[bool, dict]:
     return _get(session, f"{base}/wallets/me", hdrs, timeout)
 
 
-def _spend_summary(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
+def _spend_summary(
+    session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
+) -> tuple[bool, dict]:
     period = str(args.get("period") or "7d")
     if period not in ("1d", "7d", "30d", "90d"):
         period = "7d"
-    return _get(session, f"{base}/wallets/spend-summary", hdrs, timeout, params={"period": period})
+    return _get(
+        session,
+        f"{base}/wallets/spend-summary",
+        hdrs,
+        timeout,
+        params={"period": period},
+    )
 
 
-def _set_daily_limit(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
+def _set_daily_limit(
+    session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
+) -> tuple[bool, dict]:
     limit_cents = int(args.get("limit_cents") or 0)
     # API field is daily_spend_limit_cents; None clears the cap (0 maps to None)
     daily_limit = limit_cents if limit_cents > 0 else None
-    return _post(session, f"{base}/wallets/me/daily-spend-limit", hdrs, timeout, {"daily_spend_limit_cents": daily_limit})
+    return _post(
+        session,
+        f"{base}/wallets/me/daily-spend-limit",
+        hdrs,
+        timeout,
+        {"daily_spend_limit_cents": daily_limit},
+    )
 
 
-def _topup_url(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
+def _topup_url(
+    session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
+) -> tuple[bool, dict]:
     amount_cents = int(args.get("amount_cents") or 500)
     if not (100 <= amount_cents <= 50000):
-        return False, {"error": "INVALID_INPUT", "message": "amount_cents must be 100–50 000 ($1–$500)."}
+        return False, {
+            "error": "INVALID_INPUT",
+            "message": "amount_cents must be 100–50 000 ($1–$500).",
+        }
     # The topup endpoint requires wallet_id from the caller's wallet
     ok_wallet, wallet = _get(session, f"{base}/wallets/me", hdrs, timeout)
     if not ok_wallet:
-        return False, {"error": "WALLET_FETCH_FAILED", "message": "Could not retrieve your wallet to create the topup session.", **wallet}
+        return False, {
+            "error": "WALLET_FETCH_FAILED",
+            "message": "Could not retrieve your wallet to create the topup session.",
+            **wallet,
+        }
     wallet_id = wallet.get("wallet_id")
     if not wallet_id:
-        return False, {"error": "WALLET_FETCH_FAILED", "message": "wallet_id not found in wallet response."}
-    ok, result = _post(session, f"{base}/wallets/topup/session", hdrs, timeout, {
-        "wallet_id": wallet_id,
-        "amount_cents": amount_cents,
-    })
+        return False, {
+            "error": "WALLET_FETCH_FAILED",
+            "message": "wallet_id not found in wallet response.",
+        }
+    ok, result = _post(
+        session,
+        f"{base}/wallets/topup/session",
+        hdrs,
+        timeout,
+        {
+            "wallet_id": wallet_id,
+            "amount_cents": amount_cents,
+        },
+    )
     if ok:
         result.setdefault("note", "Open checkout_url in a browser to complete payment.")
     return ok, result
 
 
 def _session_summary(
-    session: requests.Session, base: str, hdrs: dict, timeout: float, session_state: dict[str, Any]
+    session: requests.Session,
+    base: str,
+    hdrs: dict,
+    timeout: float,
+    session_state: dict[str, Any],
 ) -> tuple[bool, dict]:
     ok_bal, balance = _get(session, f"{base}/wallets/me", hdrs, timeout)
-    ok_spend, spend = _get(session, f"{base}/wallets/spend-summary", hdrs, timeout, params={"period": "1d"})
+    ok_spend, spend = _get(
+        session, f"{base}/wallets/spend-summary", hdrs, timeout, params={"period": "1d"}
+    )
     result: dict[str, Any] = {}
     if ok_bal:
         result["balance_cents"] = balance.get("balance_cents")
@@ -1255,11 +1383,15 @@ def _session_summary(
     result["session_spent_usd"] = round(float(result["session_spent_cents"]) / 100, 4)
     budget = session_state.get("budget_cents")
     result["session_budget_cents"] = budget
-    result["session_budget_usd"] = round(float(budget) / 100, 4) if budget is not None else None
+    result["session_budget_usd"] = (
+        round(float(budget) / 100, 4) if budget is not None else None
+    )
     return True, result
 
 
-def _resolve_agent_id(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[str, dict | None]:
+def _resolve_agent_id(
+    session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
+) -> tuple[str, dict | None]:
     """Accept either ``agent_id`` (UUID) or ``slug`` (tool name) for buyer ergonomics.
 
     Returns (agent_id, error_payload). On success error_payload is None; on
@@ -1274,12 +1406,21 @@ def _resolve_agent_id(session: requests.Session, base: str, hdrs: dict, timeout:
             "error": "INVALID_INPUT",
             "message": "Provide agent_id (UUID) or slug (tool name).",
         }
-    ok, payload = _post(session, f"{base}/registry/search", hdrs, timeout, {"query": slug, "limit": 5})
+    ok, payload = _post(
+        session, f"{base}/registry/search", hdrs, timeout, {"query": slug, "limit": 5}
+    )
     if not ok:
-        return "", {"error": "AGENT_LOOKUP_FAILED", "message": "Could not resolve slug to agent_id.", **payload}
+        return "", {
+            "error": "AGENT_LOOKUP_FAILED",
+            "message": "Could not resolve slug to agent_id.",
+            **payload,
+        }
     for item in payload.get("results") or []:
         agent = item.get("agent") or {}
-        if str(agent.get("slug") or "").strip().lower() == slug.lower() or str(agent.get("agent_slug") or "").strip().lower() == slug.lower():
+        if (
+            str(agent.get("slug") or "").strip().lower() == slug.lower()
+            or str(agent.get("agent_slug") or "").strip().lower() == slug.lower()
+        ):
             resolved = str(agent.get("agent_id") or "").strip()
             if resolved:
                 return resolved, None
@@ -1289,38 +1430,57 @@ def _resolve_agent_id(session: requests.Session, base: str, hdrs: dict, timeout:
     }
 
 
-def _estimate_cost(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
+def _estimate_cost(
+    session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
+) -> tuple[bool, dict]:
     agent_id, err = _resolve_agent_id(session, base, hdrs, timeout, args)
     if err is not None:
         return False, err
     body = args.get("input_payload") or {}
     if not isinstance(body, dict):
-        return False, {"error": "INVALID_INPUT", "message": "input_payload must be an object when provided."}
-    ok, result = _post(session, f"{base}/agents/{agent_id}/estimate", hdrs, timeout, body)
+        return False, {
+            "error": "INVALID_INPUT",
+            "message": "input_payload must be an object when provided.",
+        }
+    ok, result = _post(
+        session, f"{base}/agents/{agent_id}/estimate", hdrs, timeout, body
+    )
     if ok:
         result.setdefault("note", "This is a preview only. No charge has been applied.")
     return ok, result
 
 
-def _list_recipes(session: requests.Session, base: str, hdrs: dict, timeout: float) -> tuple[bool, dict]:
+def _list_recipes(
+    session: requests.Session, base: str, hdrs: dict, timeout: float
+) -> tuple[bool, dict]:
     ok, result = _get(session, f"{base}/recipes", hdrs, timeout)
     if ok:
         recipes = result.get("recipes") or []
         result.setdefault("count", len(recipes))
-        result.setdefault("note", "Use recipe_id with aztea_run_recipe to execute one of these workflows.")
+        result.setdefault(
+            "note",
+            "Use recipe_id with aztea_run_recipe to execute one of these workflows.",
+        )
     return ok, result
 
 
-def _list_pipelines(session: requests.Session, base: str, hdrs: dict, timeout: float) -> tuple[bool, dict]:
+def _list_pipelines(
+    session: requests.Session, base: str, hdrs: dict, timeout: float
+) -> tuple[bool, dict]:
     ok, result = _get(session, f"{base}/pipelines", hdrs, timeout)
     if ok:
         pipelines = result.get("pipelines") or []
         result.setdefault("count", len(pipelines))
-        result.setdefault("note", "Use pipeline_id with aztea_run_pipeline to execute one of these workflows.")
+        result.setdefault(
+            "note",
+            "Use pipeline_id with aztea_run_pipeline to execute one of these workflows.",
+        )
     return ok, result
 
 
-def _hire_async(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
+def _hire_async(
+    session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
+) -> tuple[bool, dict]:
     agent_id = str(args.get("agent_id") or "").strip()
     if not agent_id:
         return False, {"error": "INVALID_INPUT", "message": "agent_id is required."}
@@ -1338,14 +1498,19 @@ def _hire_async(session: requests.Session, base: str, hdrs: dict, timeout: float
         body["private_task"] = bool(args["private_task"])
     ok, result = _post(session, f"{base}/jobs", hdrs, timeout, body)
     if ok:
-        result.setdefault("note", (
-            f"Job submitted. Poll with aztea_job_status(job_id='{result.get('job_id', '')}') "
-            "to track progress and retrieve results."
-        ))
+        result.setdefault(
+            "note",
+            (
+                f"Job submitted. Poll with aztea_job_status(job_id='{result.get('job_id', '')}') "
+                "to track progress and retrieve results."
+            ),
+        )
     return ok, result
 
 
-def _job_status(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
+def _job_status(
+    session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
+) -> tuple[bool, dict]:
     job_id = str(args.get("job_id") or "").strip()
     if not job_id:
         return False, {"error": "INVALID_INPUT", "message": "job_id is required."}
@@ -1369,12 +1534,16 @@ def _job_status(session: requests.Session, base: str, hdrs: dict, timeout: float
     msg_params: dict[str, Any] = {}
     if since is not None:
         msg_params["since"] = int(since)
-    ok_msgs, msgs_body = _get(session, f"{base}/jobs/{job_id}/messages", hdrs, timeout, params=msg_params)
+    ok_msgs, msgs_body = _get(
+        session, f"{base}/jobs/{job_id}/messages", hdrs, timeout, params=msg_params
+    )
     if ok_msgs:
         messages = msgs_body.get("messages") or []
         result["messages"] = messages
         # Surface clarification requests prominently
-        clarifications = [m for m in messages if m.get("type") == "clarification_request"]
+        clarifications = [
+            m for m in messages if m.get("type") == "clarification_request"
+        ]
         if clarifications:
             result["clarification_needed"] = clarifications[-1].get("payload", {})
             result["note"] = (
@@ -1386,15 +1555,28 @@ def _job_status(session: requests.Session, base: str, hdrs: dict, timeout: float
     return True, result
 
 
-def _batch_status(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
+def _batch_status(
+    session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
+) -> tuple[bool, dict]:
     raw_job_ids = args.get("job_ids")
     if not isinstance(raw_job_ids, list) or not raw_job_ids:
-        return False, {"error": "INVALID_INPUT", "message": "job_ids must be a non-empty array."}
-    job_ids = [str(job_id or "").strip() for job_id in raw_job_ids if str(job_id or "").strip()]
+        return False, {
+            "error": "INVALID_INPUT",
+            "message": "job_ids must be a non-empty array.",
+        }
+    job_ids = [
+        str(job_id or "").strip() for job_id in raw_job_ids if str(job_id or "").strip()
+    ]
     if not job_ids:
-        return False, {"error": "INVALID_INPUT", "message": "job_ids must include at least one non-empty job_id."}
+        return False, {
+            "error": "INVALID_INPUT",
+            "message": "job_ids must include at least one non-empty job_id.",
+        }
     if len(job_ids) > 50:
-        return False, {"error": "INVALID_INPUT", "message": "Batch status is limited to 50 jobs."}
+        return False, {
+            "error": "INVALID_INPUT",
+            "message": "Batch status is limited to 50 jobs.",
+        }
 
     jobs: list[dict[str, Any]] = []
     counts = {"complete": 0, "failed": 0, "running": 0, "pending": 0, "other": 0}
@@ -1405,10 +1587,18 @@ def _batch_status(session: requests.Session, base: str, hdrs: dict, timeout: flo
             base,
             hdrs,
             timeout,
-            {"job_id": job_id, **({"since_message_id": since} if since is not None else {})},
+            {
+                "job_id": job_id,
+                **({"since_message_id": since} if since is not None else {}),
+            },
         )
         if not ok:
-            status = {"job_id": job_id, "status": "failed", "error": status.get("error"), "message": status.get("message")}
+            status = {
+                "job_id": job_id,
+                "status": "failed",
+                "error": status.get("error"),
+                "message": status.get("message"),
+            }
         normalized = str(status.get("status") or "other").strip().lower()
         counts[normalized if normalized in counts else "other"] += 1
         jobs.append(status)
@@ -1424,7 +1614,9 @@ def _batch_status(session: requests.Session, base: str, hdrs: dict, timeout: flo
     }
 
 
-def _data_retention_policy(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
+def _data_retention_policy(
+    session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
+) -> tuple[bool, dict]:
     """Surface the privacy posture buyers care about before sending sensitive data.
 
     Reads the per-agent privacy columns added in migration 0026 plus the
@@ -1439,8 +1631,7 @@ def _data_retention_policy(session: requests.Session, base: str, hdrs: dict, tim
         return False, agent
     category = str(agent.get("category") or "").strip()
     examples_blocked = (
-        bool(agent.get("examples_sensitive"))
-        or category.lower() == "security"
+        bool(agent.get("examples_sensitive")) or category.lower() == "security"
     )
     privacy = {
         "agent_id": agent_id,
@@ -1457,7 +1648,7 @@ def _data_retention_policy(session: requests.Session, base: str, hdrs: dict, tim
             "This agent does not publish work examples — caller inputs are not replayed publicly."
             if examples_blocked
             else "This agent may publish redacted work examples derived from past calls. "
-                 "Pass private_task=true on hire to suppress example recording for a specific call."
+            "Pass private_task=true on hire to suppress example recording for a specific call."
         ),
         "note": (
             "This is what Aztea publishes about the agent. The agent owner is responsible for "
@@ -1468,7 +1659,9 @@ def _data_retention_policy(session: requests.Session, base: str, hdrs: dict, tim
     return True, privacy
 
 
-def _verify_job_signature(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
+def _verify_job_signature(
+    session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
+) -> tuple[bool, dict]:
     """Verify a job's signed receipt against the agent's published DID document.
 
     Mirrors :pyfunc:`aztea.AzteaClient.verify_job` so the same guarantee is
@@ -1477,24 +1670,41 @@ def _verify_job_signature(session: requests.Session, base: str, hdrs: dict, time
     job_id = str(args.get("job_id") or "").strip()
     if not job_id:
         return False, {"error": "INVALID_INPUT", "message": "job_id is required."}
-    ok_sig, signature_payload = _get(session, f"{base}/jobs/{job_id}/signature", hdrs, timeout)
+    ok_sig, signature_payload = _get(
+        session, f"{base}/jobs/{job_id}/signature", hdrs, timeout
+    )
     if not ok_sig:
-        return False, {"verified": False, "verification_error": "signature unavailable", **(signature_payload or {})}
+        return False, {
+            "verified": False,
+            "verification_error": "signature unavailable",
+            **(signature_payload or {}),
+        }
     agent_did = str(signature_payload.get("agent_did") or "").strip()
     signature_b64 = str(signature_payload.get("signature") or "").strip()
     output_hash = str(signature_payload.get("output_hash") or "").strip()
     if not (agent_did and signature_b64 and output_hash):
-        return False, {"verified": False, "verification_error": "incomplete signature payload",
-                        "signature_payload": signature_payload}
+        return False, {
+            "verified": False,
+            "verification_error": "incomplete signature payload",
+            "signature_payload": signature_payload,
+        }
     agent_id = agent_did.rsplit(":", 1)[-1] if ":agents:" in agent_did else None
     if not agent_id:
-        return False, {"verified": False, "verification_error": f"could not parse agent_id from did {agent_did!r}"}
+        return False, {
+            "verified": False,
+            "verification_error": f"could not parse agent_id from did {agent_did!r}",
+        }
     ok_did, did_doc = _get(session, f"{base}/agents/{agent_id}/did.json", hdrs, timeout)
     if not ok_did:
-        return False, {"verified": False, "verification_error": "DID document unavailable",
-                        "agent_did": agent_did, **(did_doc or {})}
+        return False, {
+            "verified": False,
+            "verification_error": "DID document unavailable",
+            "agent_did": agent_did,
+            **(did_doc or {}),
+        }
     try:
         import base64
+
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
     except Exception:
         return True, {
@@ -1506,7 +1716,7 @@ def _verify_job_signature(session: requests.Session, base: str, hdrs: dict, time
             "did_doc": did_doc,
         }
     public_key_b64: str | None = None
-    for method in (did_doc.get("verificationMethod") or []):
+    for method in did_doc.get("verificationMethod") or []:
         if not isinstance(method, dict):
             continue
         jwk = method.get("publicKeyJwk")
@@ -1518,8 +1728,12 @@ def _verify_job_signature(session: requests.Session, base: str, hdrs: dict, time
             public_key_b64 = raw.lstrip("z")
             break
     if not public_key_b64:
-        return True, {"verified": False, "verification_error": "no Ed25519 verification method on DID doc",
-                        "agent_did": agent_did, "did_doc": did_doc}
+        return True, {
+            "verified": False,
+            "verification_error": "no Ed25519 verification method on DID doc",
+            "agent_did": agent_did,
+            "did_doc": did_doc,
+        }
     try:
         pad = "=" * (-len(public_key_b64) % 4)
         try:
@@ -1535,8 +1749,12 @@ def _verify_job_signature(session: requests.Session, base: str, hdrs: dict, time
             signature_bytes, output_hash.encode("utf-8")
         )
     except Exception as exc:
-        return True, {"verified": False, "verification_error": f"signature verification failed: {exc}",
-                        "agent_did": agent_did, "output_hash": output_hash}
+        return True, {
+            "verified": False,
+            "verification_error": f"signature verification failed: {exc}",
+            "agent_did": agent_did,
+            "output_hash": output_hash,
+        }
     return True, {
         "verified": True,
         "agent_did": agent_did,
@@ -1546,7 +1764,9 @@ def _verify_job_signature(session: requests.Session, base: str, hdrs: dict, time
     }
 
 
-def _cancel_job(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
+def _cancel_job(
+    session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
+) -> tuple[bool, dict]:
     job_id = str(args.get("job_id") or "").strip()
     if not job_id:
         return False, {"error": "INVALID_INPUT", "message": "job_id is required."}
@@ -1556,11 +1776,15 @@ def _cancel_job(session: requests.Session, base: str, hdrs: dict, timeout: float
         body["reason"] = reason[:200]
     ok, result = _post(session, f"{base}/jobs/{job_id}/cancel", hdrs, timeout, body)
     if ok:
-        result.setdefault("note", "Job cancelled. Any pre-call charge has been refunded.")
+        result.setdefault(
+            "note", "Job cancelled. Any pre-call charge has been refunded."
+        )
     return ok, result
 
 
-def _follow_job(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
+def _follow_job(
+    session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
+) -> tuple[bool, dict]:
     """Poll a job until terminal, then return the final aztea_job_status result."""
     import time as _time
 
@@ -1581,12 +1805,17 @@ def _follow_job(session: requests.Session, base: str, hdrs: dict, timeout: float
             return True, result
         remaining = deadline - _time.monotonic()
         if remaining <= 0:
-            result.setdefault("note", f"Timeout after {timeout_secs}s — job still running. Call aztea_follow_job again or use aztea_job_status to poll manually.")
+            result.setdefault(
+                "note",
+                f"Timeout after {timeout_secs}s — job still running. Call aztea_follow_job again or use aztea_job_status to poll manually.",
+            )
             return True, result
         _time.sleep(min(poll_interval, remaining))
 
 
-def _clarify(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
+def _clarify(
+    session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
+) -> tuple[bool, dict]:
     job_id = str(args.get("job_id") or "").strip()
     message = str(args.get("message") or "").strip()
     if not job_id:
@@ -1595,7 +1824,9 @@ def _clarify(session: requests.Session, base: str, hdrs: dict, timeout: float, a
         return False, {"error": "INVALID_INPUT", "message": "message is required."}
     request_message_id = args.get("request_message_id")
     if request_message_id is None:
-        ok_msgs, msgs_body = _get(session, f"{base}/jobs/{job_id}/messages", hdrs, timeout)
+        ok_msgs, msgs_body = _get(
+            session, f"{base}/jobs/{job_id}/messages", hdrs, timeout
+        )
         if not ok_msgs:
             return False, {
                 "error": "CLARIFICATION_LOOKUP_FAILED",
@@ -1604,7 +1835,11 @@ def _clarify(session: requests.Session, base: str, hdrs: dict, timeout: float, a
             }
         messages = msgs_body.get("messages") or []
         latest_request = next(
-            (msg for msg in reversed(messages) if msg.get("type") == "clarification_request" and msg.get("message_id")),
+            (
+                msg
+                for msg in reversed(messages)
+                if msg.get("type") == "clarification_request" and msg.get("message_id")
+            ),
             None,
         )
         if latest_request is None:
@@ -1623,17 +1858,23 @@ def _clarify(session: requests.Session, base: str, hdrs: dict, timeout: float, a
     return ok, result
 
 
-def _rate_job(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
+def _rate_job(
+    session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
+) -> tuple[bool, dict]:
     job_id = str(args.get("job_id") or "").strip()
     rating = int(args.get("rating") or 0)
     if not job_id:
         return False, {"error": "INVALID_INPUT", "message": "job_id is required."}
     if rating < 1 or rating > 5:
         return False, {"error": "INVALID_INPUT", "message": "rating must be 1–5."}
-    return _post(session, f"{base}/jobs/{job_id}/rating", hdrs, timeout, {"rating": rating})
+    return _post(
+        session, f"{base}/jobs/{job_id}/rating", hdrs, timeout, {"rating": rating}
+    )
 
 
-def _dispute_job(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
+def _dispute_job(
+    session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
+) -> tuple[bool, dict]:
     job_id = str(args.get("job_id") or "").strip()
     reason = str(args.get("reason") or "").strip()
     if not job_id:
@@ -1645,22 +1886,33 @@ def _dispute_job(session: requests.Session, base: str, hdrs: dict, timeout: floa
         body["evidence"] = str(args["evidence"])
     ok, result = _post(session, f"{base}/jobs/{job_id}/dispute", hdrs, timeout, body)
     if ok:
-        result.setdefault("note", "Dispute filed. An LLM judge will review the evidence and determine the outcome.")
+        result.setdefault(
+            "note",
+            "Dispute filed. An LLM judge will review the evidence and determine the outcome.",
+        )
     return ok, result
 
 
-def _verify_output(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
+def _verify_output(
+    session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
+) -> tuple[bool, dict]:
     job_id = str(args.get("job_id") or "").strip()
     decision = str(args.get("decision") or "").strip().lower()
     if not job_id:
         return False, {"error": "INVALID_INPUT", "message": "job_id is required."}
     if decision not in ("accept", "reject"):
-        return False, {"error": "INVALID_INPUT", "message": "decision must be 'accept' or 'reject'."}
+        return False, {
+            "error": "INVALID_INPUT",
+            "message": "decision must be 'accept' or 'reject'.",
+        }
     body: dict[str, Any] = {"decision": decision}
     if args.get("reason"):
         body["reason"] = str(args["reason"])
     elif decision == "reject":
-        return False, {"error": "INVALID_INPUT", "message": "reason is required when decision is 'reject'."}
+        return False, {
+            "error": "INVALID_INPUT",
+            "message": "reason is required when decision is 'reject'.",
+        }
     return _post(session, f"{base}/jobs/{job_id}/verification", hdrs, timeout, body)
 
 
@@ -1685,7 +1937,9 @@ def _agent_text(agent: dict[str, Any]) -> str:
     ).lower()
 
 
-def _intent_matches(agent: dict[str, Any], intent: str | None, intent_terms: set[str]) -> bool:
+def _intent_matches(
+    agent: dict[str, Any], intent: str | None, intent_terms: set[str]
+) -> bool:
     if intent is None:
         return True
     text = _agent_text(agent)
@@ -1694,13 +1948,21 @@ def _intent_matches(agent: dict[str, Any], intent: str | None, intent_terms: set
     if intent == "browser":
         return "browser" in text or "playwright" in text or "screenshot" in text
     if intent == "dns":
-        return "dns" in text or "ssl" in text or "certificate" in text or "domain" in text
+        return (
+            "dns" in text or "ssl" in text or "certificate" in text or "domain" in text
+        )
     if intent == "code_search":
-        return ("semantic" in text and "code" in text) or "codebase" in text or "repository" in text
+        return (
+            ("semantic" in text and "code" in text)
+            or "codebase" in text
+            or "repository" in text
+        )
     return bool(intent_terms & set(re.findall(r"[a-z0-9_+-]+", text)))
 
 
-def _discover(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
+def _discover(
+    session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
+) -> tuple[bool, dict]:
     query = str(args.get("query") or "").strip()
     if not query:
         return False, {"error": "INVALID_INPUT", "message": "query is required."}
@@ -1724,20 +1986,22 @@ def _discover(session: requests.Session, base: str, hdrs: dict, timeout: float, 
             agent = item.get("agent") or {}
             if not _intent_matches(agent, intent, intent_terms):
                 continue
-            compact.append({
-                "agent_id": agent.get("agent_id"),
-                "slug": agent.get("slug") or agent.get("agent_slug"),
-                "name": agent.get("name"),
-                "description": _word_truncate(agent.get("description") or "", 240),
-                "category": agent.get("category"),
-                "price_per_call_usd": agent.get("price_per_call_usd"),
-                "price_cents": agent.get("price_cents"),
-                "trust_score": agent.get("trust_score"),
-                "success_rate": agent.get("success_rate"),
-                "avg_latency_ms": agent.get("avg_latency_ms"),
-                "blended_score": item.get("blended_score"),
-                "match_reasons": item.get("match_reasons"),
-            })
+            compact.append(
+                {
+                    "agent_id": agent.get("agent_id"),
+                    "slug": agent.get("slug") or agent.get("agent_slug"),
+                    "name": agent.get("name"),
+                    "description": _word_truncate(agent.get("description") or "", 240),
+                    "category": agent.get("category"),
+                    "price_per_call_usd": agent.get("price_per_call_usd"),
+                    "price_cents": agent.get("price_cents"),
+                    "trust_score": agent.get("trust_score"),
+                    "success_rate": agent.get("success_rate"),
+                    "avg_latency_ms": agent.get("avg_latency_ms"),
+                    "blended_score": item.get("blended_score"),
+                    "match_reasons": item.get("match_reasons"),
+                }
+            )
         result["results"] = compact
         result["count"] = len(compact)
         if intent and not compact:
@@ -1748,7 +2012,9 @@ def _discover(session: requests.Session, base: str, hdrs: dict, timeout: float, 
     return ok, result
 
 
-def _get_examples(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
+def _get_examples(
+    session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
+) -> tuple[bool, dict]:
     agent_id, err = _resolve_agent_id(session, base, hdrs, timeout, args)
     if err is not None:
         return False, err
@@ -1758,14 +2024,16 @@ def _get_examples(session: requests.Session, base: str, hdrs: dict, timeout: flo
     examples = []
     for raw in (agent.get("output_examples") or [])[:10]:
         if isinstance(raw, dict):
-            examples.append({
-                "job_id": raw.get("job_id"),
-                "latency_ms": raw.get("latency_ms"),
-                "model_provider": raw.get("model_provider"),
-                "model_id": raw.get("model_id"),
-                "input": raw.get("input"),
-                "output": raw.get("output"),
-            })
+            examples.append(
+                {
+                    "job_id": raw.get("job_id"),
+                    "latency_ms": raw.get("latency_ms"),
+                    "model_provider": raw.get("model_provider"),
+                    "model_id": raw.get("model_id"),
+                    "input": raw.get("input"),
+                    "output": raw.get("output"),
+                }
+            )
     return True, {
         "agent_id": agent_id,
         "name": agent.get("name"),
@@ -1774,20 +2042,33 @@ def _get_examples(session: requests.Session, base: str, hdrs: dict, timeout: flo
         "note": (
             "These are real inputs and outputs from past jobs. "
             "Review them to verify the agent's quality before hiring."
-        ) if examples else "No public work examples are available for this agent yet.",
+        )
+        if examples
+        else "No public work examples are available for this agent yet.",
     }
 
 
-def _hire_batch(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
+def _hire_batch(
+    session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
+) -> tuple[bool, dict]:
     raw_jobs = args.get("jobs")
     if not isinstance(raw_jobs, list) or not raw_jobs:
-        return False, {"error": "INVALID_INPUT", "message": "jobs must be a non-empty array."}
+        return False, {
+            "error": "INVALID_INPUT",
+            "message": "jobs must be a non-empty array.",
+        }
     if len(raw_jobs) > 50:
-        return False, {"error": "INVALID_INPUT", "message": "Batch size is limited to 50 jobs."}
+        return False, {
+            "error": "INVALID_INPUT",
+            "message": "Batch size is limited to 50 jobs.",
+        }
     jobs_body = []
     for spec in raw_jobs:
         if not isinstance(spec, dict):
-            return False, {"error": "INVALID_INPUT", "message": "Each job spec must be an object."}
+            return False, {
+                "error": "INVALID_INPUT",
+                "message": "Each job spec must be an object.",
+            }
         job: dict[str, Any] = {
             "agent_id": str(spec.get("agent_id") or ""),
             "input_payload": spec.get("input_payload") or {},
@@ -1797,30 +2078,50 @@ def _hire_batch(session: requests.Session, base: str, hdrs: dict, timeout: float
         if spec.get("private_task") is not None:
             job["private_task"] = bool(spec["private_task"])
         jobs_body.append(job)
-    ok, result = _post(session, f"{base}/jobs/batch", hdrs, timeout, {"jobs": jobs_body})
+    ok, result = _post(
+        session, f"{base}/jobs/batch", hdrs, timeout, {"jobs": jobs_body}
+    )
     if ok:
-        job_ids = [j.get("job_id") for j in (result.get("jobs") or []) if isinstance(j, dict)]
-        result.setdefault("note", (
-            f"Batch of {len(jobs_body)} jobs submitted. "
-            "Poll the job_ids together with aztea_batch_status to track progress."
-        ))
+        job_ids = [
+            j.get("job_id") for j in (result.get("jobs") or []) if isinstance(j, dict)
+        ]
+        result.setdefault(
+            "note",
+            (
+                f"Batch of {len(jobs_body)} jobs submitted. "
+                "Poll the job_ids together with aztea_batch_status to track progress."
+            ),
+        )
         result.setdefault("job_ids", job_ids)
     return ok, result
 
 
-def _compare_agents(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
+def _compare_agents(
+    session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
+) -> tuple[bool, dict]:
     raw_agent_ids = args.get("agent_ids")
     if not isinstance(raw_agent_ids, list):
-        return False, {"error": "INVALID_INPUT", "message": "agent_ids must be an array."}
-    agent_ids = [str(item or "").strip() for item in raw_agent_ids if str(item or "").strip()]
+        return False, {
+            "error": "INVALID_INPUT",
+            "message": "agent_ids must be an array.",
+        }
+    agent_ids = [
+        str(item or "").strip() for item in raw_agent_ids if str(item or "").strip()
+    ]
     if len(agent_ids) < 2 or len(agent_ids) > 3:
-        return False, {"error": "INVALID_INPUT", "message": "agent_ids must contain 2 or 3 values."}
+        return False, {
+            "error": "INVALID_INPUT",
+            "message": "agent_ids must contain 2 or 3 values.",
+        }
     body: dict[str, Any] = {
         "agent_ids": agent_ids,
         "input_payload": args.get("input_payload") or {},
     }
     if not isinstance(body["input_payload"], dict):
-        return False, {"error": "INVALID_INPUT", "message": "input_payload must be an object."}
+        return False, {
+            "error": "INVALID_INPUT",
+            "message": "input_payload must be an object.",
+        }
     if args.get("max_attempts") is not None:
         body["max_attempts"] = int(args["max_attempts"])
     if args.get("private_task") is not None:
@@ -1836,29 +2137,39 @@ def _compare_agents(session: requests.Session, base: str, hdrs: dict, timeout: f
     deadline = time.monotonic() + wait_seconds
     latest = created
     while time.monotonic() < deadline:
-        ok_status, status = _get(session, f"{base}/jobs/compare/{compare_id}", hdrs, timeout)
+        ok_status, status = _get(
+            session, f"{base}/jobs/compare/{compare_id}", hdrs, timeout
+        )
         if not ok_status:
             return False, status
         latest = status
         if str(status.get("status") or "").strip().lower() == "complete":
             latest.setdefault(
                 "note",
-                "Compare session completed. Review the results, then call aztea_select_compare_winner to finalize payment."
+                "Compare session completed. Review the results, then call aztea_select_compare_winner to finalize payment.",
             )
-            if created.get("total_charged_cents") is not None and latest.get("total_charged_cents") is None:
+            if (
+                created.get("total_charged_cents") is not None
+                and latest.get("total_charged_cents") is None
+            ):
                 latest["total_charged_cents"] = created.get("total_charged_cents")
             return True, latest
         time.sleep(poll_interval)
     latest.setdefault(
         "note",
-        "Compare session is still running. Poll it with aztea_compare_status or wait longer with wait_seconds."
+        "Compare session is still running. Poll it with aztea_compare_status or wait longer with wait_seconds.",
     )
-    if created.get("total_charged_cents") is not None and latest.get("total_charged_cents") is None:
+    if (
+        created.get("total_charged_cents") is not None
+        and latest.get("total_charged_cents") is None
+    ):
         latest["total_charged_cents"] = created.get("total_charged_cents")
     return True, latest
 
 
-def _compare_status(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
+def _compare_status(
+    session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
+) -> tuple[bool, dict]:
     compare_id = str(args.get("compare_id") or "").strip()
     if not compare_id:
         return False, {"error": "INVALID_INPUT", "message": "compare_id is required."}
@@ -1868,20 +2179,25 @@ def _compare_status(session: requests.Session, base: str, hdrs: dict, timeout: f
         if status == "complete":
             result.setdefault(
                 "note",
-                "Compare session completed. Review the results, then call aztea_select_compare_winner to finalize payment."
+                "Compare session completed. Review the results, then call aztea_select_compare_winner to finalize payment.",
             )
         elif status == "running":
             result.setdefault("note", "Compare session is still running.")
     return ok, result
 
 
-def _select_compare_winner(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
+def _select_compare_winner(
+    session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
+) -> tuple[bool, dict]:
     compare_id = str(args.get("compare_id") or "").strip()
     winner_agent_id = str(args.get("winner_agent_id") or "").strip()
     if not compare_id:
         return False, {"error": "INVALID_INPUT", "message": "compare_id is required."}
     if not winner_agent_id:
-        return False, {"error": "INVALID_INPUT", "message": "winner_agent_id is required."}
+        return False, {
+            "error": "INVALID_INPUT",
+            "message": "winner_agent_id is required.",
+        }
     ok, result = _post(
         session,
         f"{base}/jobs/compare/{compare_id}/select",
@@ -1890,7 +2206,9 @@ def _select_compare_winner(session: requests.Session, base: str, hdrs: dict, tim
         {"winner_agent_id": winner_agent_id},
     )
     if ok:
-        result.setdefault("note", "Compare session finalized. Only the winner was paid.")
+        result.setdefault(
+            "note", "Compare session finalized. Only the winner was paid."
+        )
     return ok, result
 
 
@@ -1906,9 +2224,15 @@ def _poll_pipeline_run(
     poll_interval_seconds: float,
 ) -> tuple[bool, dict]:
     deadline = time.monotonic() + wait_seconds
-    latest: dict[str, Any] = {"run_id": run_id, "pipeline_id": pipeline_id, "status": "running"}
+    latest: dict[str, Any] = {
+        "run_id": run_id,
+        "pipeline_id": pipeline_id,
+        "status": "running",
+    }
     while time.monotonic() < deadline:
-        ok_status, status = _get(session, f"{base}/pipelines/{pipeline_id}/runs/{run_id}", hdrs, timeout)
+        ok_status, status = _get(
+            session, f"{base}/pipelines/{pipeline_id}/runs/{run_id}", hdrs, timeout
+        )
         if not ok_status:
             return False, status
         latest = status
@@ -1917,41 +2241,58 @@ def _poll_pipeline_run(
             if normalized == "complete":
                 latest.setdefault("note", "Pipeline run completed.")
             elif normalized == "failed":
-                latest.setdefault("note", "Pipeline run failed. Inspect error_message and step_results.")
+                latest.setdefault(
+                    "note",
+                    "Pipeline run failed. Inspect error_message and step_results.",
+                )
             else:
                 latest.setdefault("note", "Pipeline run was cancelled.")
             return True, latest
         time.sleep(poll_interval_seconds)
-    latest.setdefault("note", "Pipeline run is still running. Poll it with aztea_pipeline_status or wait longer with wait_seconds.")
+    latest.setdefault(
+        "note",
+        "Pipeline run is still running. Poll it with aztea_pipeline_status or wait longer with wait_seconds.",
+    )
     return True, latest
 
 
-def _pipeline_status(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
+def _pipeline_status(
+    session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
+) -> tuple[bool, dict]:
     pipeline_id = str(args.get("pipeline_id") or "").strip()
     run_id = str(args.get("run_id") or "").strip()
     if not pipeline_id:
         return False, {"error": "INVALID_INPUT", "message": "pipeline_id is required."}
     if not run_id:
         return False, {"error": "INVALID_INPUT", "message": "run_id is required."}
-    ok, result = _get(session, f"{base}/pipelines/{pipeline_id}/runs/{run_id}", hdrs, timeout)
+    ok, result = _get(
+        session, f"{base}/pipelines/{pipeline_id}/runs/{run_id}", hdrs, timeout
+    )
     if ok:
         status = str(result.get("status") or "").strip().lower()
         if status == "complete":
             result.setdefault("note", "Pipeline run completed.")
         elif status == "failed":
-            result.setdefault("note", "Pipeline run failed. Inspect error_message and step_results.")
+            result.setdefault(
+                "note", "Pipeline run failed. Inspect error_message and step_results."
+            )
         elif status == "running":
             result.setdefault("note", "Pipeline run is still running.")
     return ok, result
 
 
-def _run_pipeline(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
+def _run_pipeline(
+    session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
+) -> tuple[bool, dict]:
     pipeline_id = str(args.get("pipeline_id") or "").strip()
     if not pipeline_id:
         return False, {"error": "INVALID_INPUT", "message": "pipeline_id is required."}
     input_payload = args.get("input_payload")
     if not isinstance(input_payload, dict):
-        return False, {"error": "INVALID_INPUT", "message": "input_payload must be an object."}
+        return False, {
+            "error": "INVALID_INPUT",
+            "message": "input_payload must be an object.",
+        }
     ok, created = _post(
         session,
         f"{base}/pipelines/{pipeline_id}/run",
@@ -1978,13 +2319,21 @@ def _run_pipeline(session: requests.Session, base: str, hdrs: dict, timeout: flo
     )
 
 
-def _run_recipe(session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict) -> tuple[bool, dict]:
+def _run_recipe(
+    session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
+) -> tuple[bool, dict]:
     recipe_id = str(args.get("recipe_id") or args.get("recipe_name") or "").strip()
     if not recipe_id:
-        return False, {"error": "INVALID_INPUT", "message": "recipe_id or recipe_name is required."}
+        return False, {
+            "error": "INVALID_INPUT",
+            "message": "recipe_id or recipe_name is required.",
+        }
     input_payload = args.get("input_payload")
     if not isinstance(input_payload, dict):
-        return False, {"error": "INVALID_INPUT", "message": "input_payload must be an object."}
+        return False, {
+            "error": "INVALID_INPUT",
+            "message": "input_payload must be an object.",
+        }
     ok, created = _post(
         session,
         f"{base}/recipes/{recipe_id}/run",

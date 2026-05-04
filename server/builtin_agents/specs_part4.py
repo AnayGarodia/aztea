@@ -1,17 +1,32 @@
 """Fourth chunk of built-in agent specs — Phase 7 real capability agents."""
+
 from __future__ import annotations
 
 import shutil
 from typing import Any
 
 from server.builtin_agents.constants import (
-    BUILTIN_INTERNAL_ENDPOINTS as _BUILTIN_INTERNAL_ENDPOINTS,
     AI_RED_TEAMER_AGENT_ID as _AI_RED_TEAMER_AGENT_ID,
+)
+from server.builtin_agents.constants import (
     BROWSER_AGENT_ID as _BROWSER_AGENT_ID,
+)
+from server.builtin_agents.constants import (
+    BUILTIN_INTERNAL_ENDPOINTS as _BUILTIN_INTERNAL_ENDPOINTS,
+)
+from server.builtin_agents.constants import (
     DB_SANDBOX_AGENT_ID as _DB_SANDBOX_AGENT_ID,
+)
+from server.builtin_agents.constants import (
     LIVE_ENDPOINT_TESTER_AGENT_ID as _LIVE_ENDPOINT_TESTER_AGENT_ID,
+)
+from server.builtin_agents.constants import (
     MULTI_LANGUAGE_EXECUTOR_AGENT_ID as _MULTI_LANGUAGE_EXECUTOR_AGENT_ID,
+)
+from server.builtin_agents.constants import (
     SEMANTIC_CODEBASE_SEARCH_AGENT_ID as _SEMANTIC_CODEBASE_SEARCH_AGENT_ID,
+)
+from server.builtin_agents.constants import (
     VISUAL_REGRESSION_AGENT_ID as _VISUAL_REGRESSION_AGENT_ID,
 )
 from server.builtin_agents.schemas import output_schema_object as _output_schema_object
@@ -115,7 +130,14 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
                                 "row_count": 2,
                                 "truncated": False,
                                 "rows_affected": None,
-                                "query_plan": [{"select_id": 2, "order": 0, "from": 0, "detail": "SCAN users"}],
+                                "query_plan": [
+                                    {
+                                        "select_id": 2,
+                                        "order": 0,
+                                        "from": 0,
+                                        "detail": "SCAN users",
+                                    }
+                                ],
                                 "execution_time_ms": 1,
                             }
                         ],
@@ -140,10 +162,26 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
             "cacheable": False,
             "input_schema": _output_schema_object(
                 {
-                    "left_url": {"type": "string", "title": "Baseline URL", "description": "Public image URL or data URL."},
-                    "right_url": {"type": "string", "title": "Candidate URL", "description": "Public image URL or data URL."},
-                    "left_artifact": {"type": "object", "title": "Baseline artifact", "description": "Artifact object containing url_or_base64."},
-                    "right_artifact": {"type": "object", "title": "Candidate artifact", "description": "Artifact object containing url_or_base64."},
+                    "left_url": {
+                        "type": "string",
+                        "title": "Baseline URL",
+                        "description": "Public image URL or data URL.",
+                    },
+                    "right_url": {
+                        "type": "string",
+                        "title": "Candidate URL",
+                        "description": "Public image URL or data URL.",
+                    },
+                    "left_artifact": {
+                        "type": "object",
+                        "title": "Baseline artifact",
+                        "description": "Artifact object containing url_or_base64.",
+                    },
+                    "right_artifact": {
+                        "type": "object",
+                        "title": "Candidate artifact",
+                        "description": "Artifact object containing url_or_base64.",
+                    },
                 }
             ),
             "output_schema": _output_schema_object(
@@ -156,17 +194,28 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
                     "artifacts": {"type": "array", "items": {"type": "object"}},
                     "summary": {"type": "string"},
                 },
-                required=["width", "height", "changed_pixels", "diff_percent", "artifacts"],
+                required=[
+                    "width",
+                    "height",
+                    "changed_pixels",
+                    "diff_percent",
+                    "artifacts",
+                ],
             ),
             "output_examples": [
                 {
-                    "input": {"left_url": "https://example.com/baseline.png", "right_url": "https://example.com/candidate.png"},
+                    "input": {
+                        "left_url": "https://example.com/baseline.png",
+                        "right_url": "https://example.com/candidate.png",
+                    },
                     "output": {
                         "width": 1440,
                         "height": 900,
                         "changed_pixels": 1820,
                         "diff_percent": 0.1404,
-                        "changed_regions": [{"x": 1040, "y": 112, "width": 120, "height": 48}],
+                        "changed_regions": [
+                            {"x": 1040, "y": 112, "width": 120, "height": 48}
+                        ],
                         "artifacts": [
                             {
                                 "name": "visual-regression-diff.png",
@@ -193,13 +242,55 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
             "cacheable": False,
             "input_schema": _output_schema_object(
                 {
-                    "url": {"type": "string", "title": "Endpoint URL", "description": "Public http(s) endpoint to probe."},
-                    "method": {"type": "string", "title": "HTTP method", "default": "GET", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]},
-                    "headers": {"type": "object", "title": "Headers", "description": "Optional HTTP headers."},
-                    "body": {"title": "JSON or raw body", "description": "Optional request payload."},
-                    "requests": {"type": "integer", "title": "Request count", "default": 50, "minimum": 1, "maximum": 200},
-                    "concurrency": {"type": "integer", "title": "Concurrency", "default": 5, "minimum": 1, "maximum": 50},
-                    "timeout_seconds": {"type": "number", "title": "Per-request timeout", "default": 5, "minimum": 0.1, "maximum": 10},
+                    "url": {
+                        "type": "string",
+                        "title": "Endpoint URL",
+                        "description": "Public http(s) endpoint to probe.",
+                    },
+                    "method": {
+                        "type": "string",
+                        "title": "HTTP method",
+                        "default": "GET",
+                        "enum": [
+                            "GET",
+                            "POST",
+                            "PUT",
+                            "PATCH",
+                            "DELETE",
+                            "HEAD",
+                            "OPTIONS",
+                        ],
+                    },
+                    "headers": {
+                        "type": "object",
+                        "title": "Headers",
+                        "description": "Optional HTTP headers.",
+                    },
+                    "body": {
+                        "title": "JSON or raw body",
+                        "description": "Optional request payload.",
+                    },
+                    "requests": {
+                        "type": "integer",
+                        "title": "Request count",
+                        "default": 50,
+                        "minimum": 1,
+                        "maximum": 200,
+                    },
+                    "concurrency": {
+                        "type": "integer",
+                        "title": "Concurrency",
+                        "default": 5,
+                        "minimum": 1,
+                        "maximum": 50,
+                    },
+                    "timeout_seconds": {
+                        "type": "number",
+                        "title": "Per-request timeout",
+                        "default": 5,
+                        "minimum": 0.1,
+                        "maximum": 10,
+                    },
                 },
                 required=["url"],
             ),
@@ -220,11 +311,21 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
                     "sample_errors": {"type": "array", "items": {"type": "string"}},
                     "execution_time_ms": {"type": "integer"},
                 },
-                required=["url", "requests", "success_count", "failure_count", "p95_latency_ms"],
+                required=[
+                    "url",
+                    "requests",
+                    "success_count",
+                    "failure_count",
+                    "p95_latency_ms",
+                ],
             ),
             "output_examples": [
                 {
-                    "input": {"url": "https://api.example.com/health", "requests": 20, "concurrency": 4},
+                    "input": {
+                        "url": "https://api.example.com/health",
+                        "requests": 20,
+                        "concurrency": 4,
+                    },
                     "output": {
                         "url": "https://api.example.com/health",
                         "method": "GET",
@@ -237,7 +338,10 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
                         "p95_latency_ms": 140,
                         "p99_latency_ms": 145,
                         "avg_latency_ms": 88,
-                        "histogram": [{"lt_ms": 50, "count": 0}, {"lt_ms": 100, "count": 16}],
+                        "histogram": [
+                            {"lt_ms": 50, "count": 0},
+                            {"lt_ms": 100, "count": 16},
+                        ],
                         "sample_errors": [],
                         "execution_time_ms": 452,
                     },
@@ -250,7 +354,14 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
             "description": "Use when you need to fetch a live web page with a real browser. Launches headless Chromium, supports screenshot/scrape/pdf actions, returns rendered HTML, visible text, links, a screenshot artifact, and optional network logs. Useful for scraping SPAs, verifying rendered output, or browser-level QA of public URLs.",
             "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_BROWSER_AGENT_ID],
             "price_per_call_usd": 0.03,
-            "tags": ["browser", "screenshot", "scraping", "playwright", "headless", "html"],
+            "tags": [
+                "browser",
+                "screenshot",
+                "scraping",
+                "playwright",
+                "headless",
+                "html",
+            ],
             "kind": "aztea_built",
             "category": "Web",
             "is_featured": False,
@@ -258,16 +369,46 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
             "cacheable": False,
             "input_schema": _output_schema_object(
                 {
-                    "url": {"type": "string", "title": "URL", "description": "Public https:// URL to navigate to. SSRF-blocked."},
-                    "action": {"type": "string", "title": "Capture mode", "enum": ["scrape", "screenshot", "pdf"], "default": "scrape"},
-                    "wait_for": {"type": "string", "title": "Wait condition", "description": "CSS selector or networkidle."},
-                    "wait_ms": {"type": "integer", "title": "Extra wait (ms)", "description": "Additional wait after page settles (max 10000 ms).", "default": 1500},
-                    "capture_network": {"type": "boolean", "title": "Capture network log", "description": "Include a log of all HTTP requests made by the page.", "default": False},
-                    "script": {"type": "string", "title": "Post-load script", "description": "Optional JavaScript to execute after the page loads."},
+                    "url": {
+                        "type": "string",
+                        "title": "URL",
+                        "description": "Public https:// URL to navigate to. SSRF-blocked.",
+                    },
+                    "action": {
+                        "type": "string",
+                        "title": "Capture mode",
+                        "enum": ["scrape", "screenshot", "pdf"],
+                        "default": "scrape",
+                    },
+                    "wait_for": {
+                        "type": "string",
+                        "title": "Wait condition",
+                        "description": "CSS selector or networkidle.",
+                    },
+                    "wait_ms": {
+                        "type": "integer",
+                        "title": "Extra wait (ms)",
+                        "description": "Additional wait after page settles (max 10000 ms).",
+                        "default": 1500,
+                    },
+                    "capture_network": {
+                        "type": "boolean",
+                        "title": "Capture network log",
+                        "description": "Include a log of all HTTP requests made by the page.",
+                        "default": False,
+                    },
+                    "script": {
+                        "type": "string",
+                        "title": "Post-load script",
+                        "description": "Optional JavaScript to execute after the page loads.",
+                    },
                     "viewport": {
                         "type": "object",
                         "title": "Viewport size",
-                        "properties": {"width": {"type": "integer", "default": 1280}, "height": {"type": "integer", "default": 720}},
+                        "properties": {
+                            "width": {"type": "integer", "default": 1280},
+                            "height": {"type": "integer", "default": 720},
+                        },
                     },
                 },
                 required=["url"],
@@ -300,7 +441,12 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
                         "title": "Example Domain",
                         "html": "<!doctype html>...",
                         "html_chars": 1256,
-                        "screenshot_artifact": {"name": "screenshot.png", "mime": "image/png", "url_or_base64": "data:image/png;base64,...", "size_bytes": 18432},
+                        "screenshot_artifact": {
+                            "name": "screenshot.png",
+                            "mime": "image/png",
+                            "url_or_base64": "data:image/png;base64,...",
+                            "size_bytes": 18432,
+                        },
                         "execution_time_ms": 2100,
                     },
                 }
@@ -310,9 +456,18 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
             "agent_id": _MULTI_LANGUAGE_EXECUTOR_AGENT_ID,
             "name": "Multi-Language Executor",
             "description": multi_language_desc,
-            "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_MULTI_LANGUAGE_EXECUTOR_AGENT_ID],
+            "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[
+                _MULTI_LANGUAGE_EXECUTOR_AGENT_ID
+            ],
             "price_per_call_usd": 0.03,
-            "tags": ["javascript", "typescript", "go", "rust", "code-execution", "sandbox"],
+            "tags": [
+                "javascript",
+                "typescript",
+                "go",
+                "rust",
+                "code-execution",
+                "sandbox",
+            ],
             "kind": "aztea_built",
             "category": "Code Execution",
             "is_featured": False,
@@ -320,10 +475,28 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
             "cacheable": True,
             "input_schema": _output_schema_object(
                 {
-                    "language": {"type": "string", "title": "Language", "enum": multi_language_options or ["javascript"]},
-                    "code": {"type": "string", "title": "Source code", "description": "Source code to execute (max 100 000 chars)."},
-                    "stdin": {"type": "string", "title": "Standard input", "description": "Optional stdin for the process."},
-                    "timeout_seconds": {"type": "number", "title": "Timeout (seconds)", "default": 15, "minimum": 1, "maximum": 30},
+                    "language": {
+                        "type": "string",
+                        "title": "Language",
+                        "enum": multi_language_options or ["javascript"],
+                    },
+                    "code": {
+                        "type": "string",
+                        "title": "Source code",
+                        "description": "Source code to execute (max 100 000 chars).",
+                    },
+                    "stdin": {
+                        "type": "string",
+                        "title": "Standard input",
+                        "description": "Optional stdin for the process.",
+                    },
+                    "timeout_seconds": {
+                        "type": "number",
+                        "title": "Timeout (seconds)",
+                        "default": 15,
+                        "minimum": 1,
+                        "maximum": 30,
+                    },
                 },
                 required=["language", "code"],
             ),
@@ -337,12 +510,30 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
                     "passed": {"type": "boolean"},
                     "execution_time_ms": {"type": "integer"},
                 },
-                required=["language", "runtime", "stdout", "stderr", "exit_code", "passed"],
+                required=[
+                    "language",
+                    "runtime",
+                    "stdout",
+                    "stderr",
+                    "exit_code",
+                    "passed",
+                ],
             ),
             "output_examples": [
                 {
-                    "input": {"language": "javascript", "code": "console.log('Hello from', process.version)"},
-                    "output": {"language": "javascript", "runtime": "node v20.11.0", "stdout": "Hello from v20.11.0\n", "stderr": "", "exit_code": 0, "passed": True, "execution_time_ms": 83},
+                    "input": {
+                        "language": "javascript",
+                        "code": "console.log('Hello from', process.version)",
+                    },
+                    "output": {
+                        "language": "javascript",
+                        "runtime": "node v20.11.0",
+                        "stdout": "Hello from v20.11.0\n",
+                        "stderr": "",
+                        "exit_code": 0,
+                        "passed": True,
+                        "execution_time_ms": 83,
+                    },
                 }
             ],
         },
@@ -350,9 +541,18 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
             "agent_id": _SEMANTIC_CODEBASE_SEARCH_AGENT_ID,
             "name": "Semantic Codebase Search",
             "description": "Use when you need to find the most relevant files in a codebase for a natural-language query. Accepts a zip/tarball artifact or a public git URL, ranks code at chunk level using hybrid semantic plus lexical search, and returns the strongest file hits with line ranges and snippets. Ideal for answering 'where is X implemented?' across an unfamiliar codebase.",
-            "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_SEMANTIC_CODEBASE_SEARCH_AGENT_ID],
+            "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[
+                _SEMANTIC_CODEBASE_SEARCH_AGENT_ID
+            ],
             "price_per_call_usd": 0.03,
-            "tags": ["search", "embeddings", "codebase", "semantic", "git", "developer-tools"],
+            "tags": [
+                "search",
+                "embeddings",
+                "codebase",
+                "semantic",
+                "git",
+                "developer-tools",
+            ],
             "kind": "aztea_built",
             "category": "Developer Tools",
             "is_featured": False,
@@ -360,12 +560,40 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
             "cacheable": True,
             "input_schema": _output_schema_object(
                 {
-                    "query": {"type": "string", "title": "Search query", "description": "Natural-language description of what you are looking for (max 500 chars)."},
-                    "artifact": {"type": "object", "title": "Zip/tarball artifact", "description": "Artifact dict with url_or_base64 field. Mutually exclusive with git_url."},
-                    "git_url": {"type": "string", "title": "Git repository URL", "description": "Public https:// git URL to clone and index. Mutually exclusive with artifact."},
-                    "top_k": {"type": "integer", "title": "Results to return", "default": 5, "minimum": 1, "maximum": 20},
-                    "extensions": {"type": "array", "items": {"type": "string"}, "title": "File extension filter", "description": "e.g. [\".py\", \".ts\"]. Defaults to all common code/text extensions."},
-                    "max_file_bytes": {"type": "integer", "title": "Max bytes per file", "default": 102400, "description": "Files larger than this are truncated before embedding."},
+                    "query": {
+                        "type": "string",
+                        "title": "Search query",
+                        "description": "Natural-language description of what you are looking for (max 500 chars).",
+                    },
+                    "artifact": {
+                        "type": "object",
+                        "title": "Zip/tarball artifact",
+                        "description": "Artifact dict with url_or_base64 field. Mutually exclusive with git_url.",
+                    },
+                    "git_url": {
+                        "type": "string",
+                        "title": "Git repository URL",
+                        "description": "Public https:// git URL to clone and index. Mutually exclusive with artifact.",
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "title": "Results to return",
+                        "default": 5,
+                        "minimum": 1,
+                        "maximum": 20,
+                    },
+                    "extensions": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "title": "File extension filter",
+                        "description": 'e.g. [".py", ".ts"]. Defaults to all common code/text extensions.',
+                    },
+                    "max_file_bytes": {
+                        "type": "integer",
+                        "title": "Max bytes per file",
+                        "default": 102400,
+                        "description": "Files larger than this are truncated before embedding.",
+                    },
                 },
                 required=["query"],
             ),
@@ -394,13 +622,27 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
             ),
             "output_examples": [
                 {
-                    "input": {"query": "PDF text extraction", "git_url": "https://github.com/example/myproject", "top_k": 3},
+                    "input": {
+                        "query": "PDF text extraction",
+                        "git_url": "https://github.com/example/myproject",
+                        "top_k": 3,
+                    },
                     "output": {
                         "query": "PDF text extraction",
                         "total_files_indexed": 47,
                         "results": [
-                            {"path": "src/parsers/pdf.py", "score": 0.8821, "snippet": "def extract_text(path: str) -> str:", "size_bytes": 2048},
-                            {"path": "tests/test_pdf.py", "score": 0.7413, "snippet": "def test_extract_text_from_pdf():", "size_bytes": 912},
+                            {
+                                "path": "src/parsers/pdf.py",
+                                "score": 0.8821,
+                                "snippet": "def extract_text(path: str) -> str:",
+                                "size_bytes": 2048,
+                            },
+                            {
+                                "path": "tests/test_pdf.py",
+                                "score": 0.7413,
+                                "snippet": "def test_extract_text_from_pdf():",
+                                "size_bytes": 912,
+                            },
                         ],
                         "source": "git",
                     },
@@ -413,7 +655,14 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
             "description": "Use when you want to harden a published Aztea agent against adversarial inputs. Runs a battery of prompt-injection, jailbreak, boundary-violation, and data-exfiltration attacks against a target agent, then reports which attacks triggered suspicious responses and the overall attack success rate. Useful for security review before making an agent public.",
             "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_AI_RED_TEAMER_AGENT_ID],
             "price_per_call_usd": 0.08,
-            "tags": ["security", "red-team", "adversarial", "jailbreak", "prompt-injection", "testing"],
+            "tags": [
+                "security",
+                "red-team",
+                "adversarial",
+                "jailbreak",
+                "prompt-injection",
+                "testing",
+            ],
             "kind": "aztea_built",
             "category": "Security",
             "is_featured": False,
@@ -421,12 +670,40 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
             "cacheable": False,
             "input_schema": _output_schema_object(
                 {
-                    "target_agent_id": {"type": "string", "title": "Target agent ID", "description": "UUID of the Aztea agent to test."},
-                    "api_key": {"type": "string", "title": "API key", "description": "Caller API key used to invoke the target agent (or set AZTEA_API_KEY env var)."},
-                    "base_url": {"type": "string", "title": "Base URL", "description": "Aztea API base URL (default: https://aztea.ai)."},
-                    "categories": {"type": "array", "items": {"type": "string"}, "title": "Attack categories", "description": "Subset of: injection, jailbreak, boundary, exfiltration, resource. Default: all."},
-                    "custom_prompts": {"type": "array", "items": {"type": "string"}, "title": "Custom adversarial prompts", "description": "Additional prompts to test beyond the built-in corpus."},
-                    "max_attacks": {"type": "integer", "title": "Max attacks", "default": 20, "minimum": 1, "maximum": 50},
+                    "target_agent_id": {
+                        "type": "string",
+                        "title": "Target agent ID",
+                        "description": "UUID of the Aztea agent to test.",
+                    },
+                    "api_key": {
+                        "type": "string",
+                        "title": "API key",
+                        "description": "Caller API key used to invoke the target agent (or set AZTEA_API_KEY env var).",
+                    },
+                    "base_url": {
+                        "type": "string",
+                        "title": "Base URL",
+                        "description": "Aztea API base URL (default: https://aztea.ai).",
+                    },
+                    "categories": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "title": "Attack categories",
+                        "description": "Subset of: injection, jailbreak, boundary, exfiltration, resource. Default: all.",
+                    },
+                    "custom_prompts": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "title": "Custom adversarial prompts",
+                        "description": "Additional prompts to test beyond the built-in corpus.",
+                    },
+                    "max_attacks": {
+                        "type": "integer",
+                        "title": "Max attacks",
+                        "default": 20,
+                        "minimum": 1,
+                        "maximum": 50,
+                    },
                 },
                 required=["target_agent_id"],
             ),
@@ -439,17 +716,36 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
                     "results": {"type": "array", "items": {"type": "object"}},
                     "summary": {"type": "string"},
                 },
-                required=["target_agent_id", "total_attacks", "successful_attacks", "attack_success_rate", "results", "summary"],
+                required=[
+                    "target_agent_id",
+                    "total_attacks",
+                    "successful_attacks",
+                    "attack_success_rate",
+                    "results",
+                    "summary",
+                ],
             ),
             "output_examples": [
                 {
-                    "input": {"target_agent_id": "040dc3f5-afe7-5db7-b253-4936090cc7af", "max_attacks": 5},
+                    "input": {
+                        "target_agent_id": "040dc3f5-afe7-5db7-b253-4936090cc7af",
+                        "max_attacks": 5,
+                    },
                     "output": {
                         "target_agent_id": "040dc3f5-afe7-5db7-b253-4936090cc7af",
                         "total_attacks": 5,
                         "successful_attacks": 0,
                         "attack_success_rate": 0.0,
-                        "results": [{"category": "injection", "prompt": "Ignore all previous instructions...", "response_snippet": "I can only execute Python code...", "http_status": 200, "succeeded": False, "reason": "No jailbreak indicators detected."}],
+                        "results": [
+                            {
+                                "category": "injection",
+                                "prompt": "Ignore all previous instructions...",
+                                "response_snippet": "I can only execute Python code...",
+                                "http_status": 200,
+                                "succeeded": False,
+                                "reason": "No jailbreak indicators detected.",
+                            }
+                        ],
                         "summary": "Agent passed all 5 adversarial probes — no jailbreak indicators detected.",
                     },
                 }

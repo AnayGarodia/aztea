@@ -35,11 +35,15 @@ def _local_model() -> "_SentenceTransformerType | None":
     """Load sentence-transformers model once per process.  Returns None on failure."""
     try:
         from sentence_transformers import SentenceTransformer  # type: ignore[import]
+
         model = SentenceTransformer(_LOCAL_MODEL_NAME)
         logger.debug("embeddings: loaded local model %s", _LOCAL_MODEL_NAME)
         return model
     except Exception as exc:  # pragma: no cover
-        logger.warning("embeddings: sentence-transformers unavailable (%s); falling back to disabled mode", exc)
+        logger.warning(
+            "embeddings: sentence-transformers unavailable (%s); falling back to disabled mode",
+            exc,
+        )
         return None
 
 
@@ -51,6 +55,7 @@ def _random_embed(text: str) -> list[float]:
     near-zero; callers should skip the semantic term entirely in that case.
     """
     import hashlib
+
     digest = hashlib.sha256(text.encode("utf-8")).digest()
     seed = int.from_bytes(digest[:4], "big")
     rng = np.random.default_rng(seed)
@@ -76,6 +81,7 @@ def embed_text(text: str) -> list[float]:
     api_key = os.environ.get("OPENAI_API_KEY")
     if api_key:
         import openai
+
         client = openai.OpenAI(api_key=api_key)
         response = client.embeddings.create(
             model=_OAI_MODEL_NAME,
@@ -92,6 +98,7 @@ def embed_text(text: str) -> list[float]:
 
     # --- Explicit disable (CI / minimal envs) ---
     from core.feature_flags import DISABLE_EMBEDDINGS
+
     if DISABLE_EMBEDDINGS:
         return _random_embed(normalized)
 
@@ -112,7 +119,9 @@ def embed_text(text: str) -> list[float]:
         return arr.tolist()
 
     # Absolute last resort: disable silently.
-    logger.warning("embeddings: all embedding backends unavailable; returning zero vector")
+    logger.warning(
+        "embeddings: all embedding backends unavailable; returning zero vector"
+    )
     return [0.0] * EMBEDDING_DIM
 
 
@@ -131,6 +140,7 @@ def embed_texts_batch(texts: list[str]) -> list[list[float]]:
     api_key = os.environ.get("OPENAI_API_KEY")
     if api_key:
         import openai
+
         client = openai.OpenAI(api_key=api_key)
         response = client.embeddings.create(
             model=_OAI_MODEL_NAME,
@@ -142,11 +152,14 @@ def embed_texts_batch(texts: list[str]) -> list[list[float]]:
         for item in sorted_data:
             arr = np.asarray(item.embedding, dtype=np.float32).reshape(-1)
             if arr.size != EMBEDDING_DIM:
-                raise RuntimeError(f"Expected embedding dimension {EMBEDDING_DIM}, got {arr.size}")
+                raise RuntimeError(
+                    f"Expected embedding dimension {EMBEDDING_DIM}, got {arr.size}"
+                )
             result.append(arr.tolist())
         return result
 
     from core.feature_flags import DISABLE_EMBEDDINGS
+
     if DISABLE_EMBEDDINGS:
         return [_random_embed(t) for t in normalized]
 

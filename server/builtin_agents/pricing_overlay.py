@@ -35,7 +35,6 @@ from server.builtin_agents.constants import (
     WEB_RESEARCHER_AGENT_ID,
 )
 
-
 _OVERLAY: dict[str, dict[str, Any]] = {
     # Video Storyboard: model-backed video rendering is materially more
     # expensive than local deterministic tools, so keep a higher floor.
@@ -154,7 +153,9 @@ def get_pricing_overlay() -> dict[str, dict[str, Any]]:
     return {k: dict(v) for k, v in _OVERLAY.items()}
 
 
-def display_min_price_usd(agent_id: str, platform_fee_pct: float = 10.0) -> float | None:
+def display_min_price_usd(
+    agent_id: str, platform_fee_pct: float = 10.0
+) -> float | None:
     """Return the minimum caller-visible USD price for a variable-priced built-in.
 
     Returns None for agents not in the overlay (they use a fixed spec price).

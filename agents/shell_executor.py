@@ -19,6 +19,7 @@ Output:
     "elapsed_seconds": float
   }
 """
+
 from __future__ import annotations
 
 import os
@@ -35,18 +36,56 @@ _TIMEOUT_DEFAULT = 15
 _OUTPUT_MAX = 20_000
 
 _ALLOWLIST_PREFIXES = (
-    "npm ", "npm\t", "npx ", "node ", "python ", "python3 ",
-    "pip ", "pip3 ", "ruff ", "mypy ", "tsc ", "tsx ",
-    "git log", "git diff", "git status", "git show",
-    "make ", "cargo ", "go ", "pytest ", "uv ",
+    "npm ",
+    "npm\t",
+    "npx ",
+    "node ",
+    "python ",
+    "python3 ",
+    "pip ",
+    "pip3 ",
+    "ruff ",
+    "mypy ",
+    "tsc ",
+    "tsx ",
+    "git log",
+    "git diff",
+    "git status",
+    "git show",
+    "make ",
+    "cargo ",
+    "go ",
+    "pytest ",
+    "uv ",
 )
 
 _BLOCKLIST_PATTERNS = (
-    "rm ", "rm\t", "rmdir", "curl ", "wget ", "chmod ", "chown ",
-    "sudo ", "su ", "bash ", "sh ", "zsh ", "eval ", "exec ",
-    "dd ", "mkfs", "mount ", "umount", "iptables", "nc ", "ncat",
+    "rm ",
+    "rm\t",
+    "rmdir",
+    "curl ",
+    "wget ",
+    "chmod ",
+    "chown ",
+    "sudo ",
+    "su ",
+    "bash ",
+    "sh ",
+    "zsh ",
+    "eval ",
+    "exec ",
+    "dd ",
+    "mkfs",
+    "mount ",
+    "umount",
+    "iptables",
+    "nc ",
+    "ncat",
     # Command substitution and process substitution.
-    "$(", "`", "<(", ">(",
+    "$(",
+    "`",
+    "<(",
+    ">(",
 )
 
 # Patterns for inline code passed via `python3 -c` — blocks network + subprocess access.
@@ -108,7 +147,7 @@ def _is_allowed(command: str) -> bool:
     lower = stripped.lower()
     # Reject python3/python commands with multiple -c flags — can hide blocked code in later flags.
     if lower.startswith(("python3 ", "python ")):
-        if len(_re.findall(r'\s-c[\s]', lower)) > 1:
+        if len(_re.findall(r"\s-c[\s]", lower)) > 1:
             return False
     # For python3 -c INLINE, apply static analysis to the inline code.
     inline = _extract_python_inline(stripped)
@@ -173,11 +212,21 @@ def run(payload: dict) -> dict:
         exit_code = result.returncode
     except subprocess.TimeoutExpired as e:
         timed_out = True
-        stdout = (e.stdout or b"").decode("utf-8", errors="replace")[:_OUTPUT_MAX] if isinstance(e.stdout, bytes) else (e.stdout or "")[:_OUTPUT_MAX]
-        stderr = (e.stderr or b"").decode("utf-8", errors="replace")[:_OUTPUT_MAX] if isinstance(e.stderr, bytes) else (e.stderr or "")[:_OUTPUT_MAX]
+        stdout = (
+            (e.stdout or b"").decode("utf-8", errors="replace")[:_OUTPUT_MAX]
+            if isinstance(e.stdout, bytes)
+            else (e.stdout or "")[:_OUTPUT_MAX]
+        )
+        stderr = (
+            (e.stderr or b"").decode("utf-8", errors="replace")[:_OUTPUT_MAX]
+            if isinstance(e.stderr, bytes)
+            else (e.stderr or "")[:_OUTPUT_MAX]
+        )
         exit_code = -1
     except FileNotFoundError:
-        raise ValueError(f"Command not found: {shlex.split(command)[0]!r}. Make sure the tool is installed.")
+        raise ValueError(
+            f"Command not found: {shlex.split(command)[0]!r}. Make sure the tool is installed."
+        )
     except Exception as exc:
         raise RuntimeError(f"Failed to execute command: {exc}")
 

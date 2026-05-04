@@ -104,7 +104,12 @@ def create_compare(
             (
                 compare_id,
                 str(caller_owner_id).strip(),
-                json.dumps(input_payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")),
+                json.dumps(
+                    input_payload,
+                    ensure_ascii=True,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
                 json.dumps(agent_ids, ensure_ascii=True),
                 json.dumps(job_ids, ensure_ascii=True),
                 now,

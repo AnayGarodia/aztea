@@ -45,8 +45,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
 
-from core import error_codes
-from core import logging_utils
+from core import error_codes, logging_utils
 
 
 def _default_error_code_for_request(status_code: int, path: str, message: str) -> str:
@@ -80,7 +79,9 @@ def _error_code_from_message(status_code: int, path: str, message: str) -> str:
         return "auth.insufficient_scope"
     if lowered_message.startswith("not available for master key"):
         return "auth.insufficient_scope"
-    if lowered_message == "not authorized." or lowered_message.startswith("not authorized"):
+    if lowered_message == "not authorized." or lowered_message.startswith(
+        "not authorized"
+    ):
         return "auth.forbidden"
     if lowered_message.startswith("tool '"):
         return "mcp.tool_not_found"
@@ -96,7 +97,9 @@ def _error_code_from_message(status_code: int, path: str, message: str) -> str:
         return "request.invalid_status"
     if "idempotency-key is too long" in lowered_message:
         return "request.idempotency_key_too_long"
-    if lowered_message.startswith("a request with this idempotency-key is still in progress"):
+    if lowered_message.startswith(
+        "a request with this idempotency-key is still in progress"
+    ):
         return "request.idempotency_conflict"
     if lowered_message.startswith("failed to fetch manifest_url"):
         return "onboarding.manifest_fetch_failed"
@@ -110,7 +113,9 @@ def _error_code_from_message(status_code: int, path: str, message: str) -> str:
         return "job.not_claimable"
     if lowered_message.startswith("job is not currently claimed by this worker"):
         return "job.claim_missing"
-    if lowered_message.startswith("invalid or missing claim_token") or lowered_message.startswith("invalid or stale claim_token"):
+    if lowered_message.startswith(
+        "invalid or missing claim_token"
+    ) or lowered_message.startswith("invalid or stale claim_token"):
         return "job.invalid_claim_token"
     if lowered_message.startswith("unable to heartbeat this job claim"):
         return "job.heartbeat_failed"
@@ -134,7 +139,9 @@ def _error_code_from_message(status_code: int, path: str, message: str) -> str:
         return "auth.key_not_found"
     if lowered_message.startswith("disputes can only be filed for completed jobs"):
         return "dispute.invalid_state"
-    if lowered_message.startswith("disputes must be filed before the caller submits a rating"):
+    if lowered_message.startswith(
+        "disputes must be filed before the caller submits a rating"
+    ):
         return "dispute.rating_locked"
     if lowered_message.startswith("a dispute already exists for this job"):
         return "dispute.already_exists"
@@ -152,7 +159,9 @@ def _error_code_from_message(status_code: int, path: str, message: str) -> str:
         return "job.invalid_message_type"
     if lowered_message.startswith("agent.md spec not found"):
         return "onboarding.spec_not_found"
-    if lowered_message.startswith("cursor must not be empty") or lowered_message.startswith("invalid cursor"):
+    if lowered_message.startswith(
+        "cursor must not be empty"
+    ) or lowered_message.startswith("invalid cursor"):
         return "request.invalid_cursor"
     if lowered_message.startswith("limit must be > 0"):
         return "request.invalid_limit"
@@ -185,11 +194,16 @@ def normalize_error_payload(status_code: int, detail: Any, path: str) -> dict[st
             if details is None and "data" in detail:
                 details = detail.get("data")
             return error_codes.make_error(
-                raw_error or _error_code_from_message(status_code, path, str(detail.get("message") or "")),
+                raw_error
+                or _error_code_from_message(
+                    status_code, path, str(detail.get("message") or "")
+                ),
                 str(detail.get("message") or "Request failed."),
                 details,
             )
-        message = str(detail.get("message") or detail.get("detail") or "Request failed.").strip()
+        message = str(
+            detail.get("message") or detail.get("detail") or "Request failed."
+        ).strip()
         details = {
             str(k): v
             for k, v in detail.items()
@@ -221,12 +235,18 @@ def with_request_id(request: Request, payload: dict[str, Any]) -> dict[str, Any]
 
 def register_exception_handlers(app: FastAPI, *, logger: logging.Logger) -> None:
     @app.exception_handler(HTTPException)
-    async def _http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    async def _http_exception_handler(
+        request: Request, exc: HTTPException
+    ) -> JSONResponse:
         payload = normalize_error_payload(exc.status_code, exc.detail, request.url.path)
-        return JSONResponse(content=with_request_id(request, payload), status_code=exc.status_code)
+        return JSONResponse(
+            content=with_request_id(request, payload), status_code=exc.status_code
+        )
 
     @app.exception_handler(RequestValidationError)
-    async def _request_validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    async def _request_validation_exception_handler(
+        request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
         def _sanitize(errors):
             clean = []
             for e in errors:
@@ -245,7 +265,9 @@ def register_exception_handlers(app: FastAPI, *, logger: logging.Logger) -> None
         return JSONResponse(content=with_request_id(request, payload), status_code=422)
 
     @app.exception_handler(RateLimitExceeded)
-    async def _rate_limit_exception_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+    async def _rate_limit_exception_handler(
+        request: Request, exc: RateLimitExceeded
+    ) -> JSONResponse:
         retry_after = 60
         limit = getattr(exc, "limit", None)
         if limit is not None:
@@ -278,7 +300,9 @@ def register_exception_handlers(app: FastAPI, *, logger: logging.Logger) -> None
         )
 
     @app.exception_handler(Exception)
-    async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    async def _unhandled_exception_handler(
+        request: Request, exc: Exception
+    ) -> JSONResponse:
         logging_utils.log_event(
             logger,
             logging.ERROR,
@@ -286,5 +310,7 @@ def register_exception_handlers(app: FastAPI, *, logger: logging.Logger) -> None
             {"method": request.method, "path": request.url.path},
         )
         logger.exception("unhandled_exception")
-        payload = error_codes.make_error("server.internal_error", "Internal server error.")
+        payload = error_codes.make_error(
+            "server.internal_error", "Internal server error."
+        )
         return JSONResponse(content=with_request_id(request, payload), status_code=500)

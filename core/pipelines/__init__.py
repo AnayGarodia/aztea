@@ -16,8 +16,8 @@ from .db import (  # noqa: F401
     get_run,
     init_db,
     list_pipelines,
-    upsert_pipeline,
     update_run_step,
+    upsert_pipeline,
 )
 from .executor import run_pipeline, validate_definition  # noqa: F401
 from .resolver import resolve_input_map  # noqa: F401

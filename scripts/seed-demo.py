@@ -32,7 +32,11 @@ SEED_AMOUNT_CENTS = 5000  # $50
 
 def request(method, path, body=None, api_key=None, timeout=30):
     url = f"{BASE}{path}"
-    headers = {"Content-Type": "application/json", "Accept": "application/json", "X-Aztea-Version": "1.0"}
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "X-Aztea-Version": "1.0",
+    }
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     data = json.dumps(body).encode() if body else None
@@ -73,17 +77,23 @@ def main():
 
     # 2. Register videobot user
     print("1. Registering videobot user...")
-    status, res = request("POST", "/auth/register", {
-        "username": VIDEOBOT_USERNAME,
-        "email": VIDEOBOT_EMAIL,
-        "password": VIDEOBOT_PASS,
-    })
+    status, res = request(
+        "POST",
+        "/auth/register",
+        {
+            "username": VIDEOBOT_USERNAME,
+            "email": VIDEOBOT_EMAIL,
+            "password": VIDEOBOT_PASS,
+        },
+    )
     if status == 200:
         ok(status, res, "Registered videobot")
         caller_key = res.get("api_key", "")
     elif status == 409:
         print("  → already exists, logging in")
-        status, res = request("POST", "/auth/login", {"email": VIDEOBOT_EMAIL, "password": VIDEOBOT_PASS})
+        status, res = request(
+            "POST", "/auth/login", {"email": VIDEOBOT_EMAIL, "password": VIDEOBOT_PASS}
+        )
         if not ok(status, res, "Login videobot"):
             sys.exit(1)
         caller_key = res.get("api_key", "")
@@ -99,10 +109,15 @@ def main():
 
     # 3. Create a scoped caller key
     print("\n2. Creating scoped caller key...")
-    status, res = request("POST", "/auth/keys", {
-        "name": "video-demo-caller",
-        "scope": "caller",
-    }, api_key=caller_key)
+    status, res = request(
+        "POST",
+        "/auth/keys",
+        {
+            "name": "video-demo-caller",
+            "scope": "caller",
+        },
+        api_key=caller_key,
+    )
     if status in (200, 201):
         scoped_caller_key = res.get("api_key") or res.get("key") or caller_key
         ok(status, res, "Created scoped caller key")
@@ -112,9 +127,14 @@ def main():
 
     # 4. Deposit $50 (demo deposit)
     print("\n3. Depositing $50...")
-    status, res = request("POST", "/wallet/deposit", {"amount_cents": SEED_AMOUNT_CENTS, "demo": True}, api_key=scoped_caller_key)
+    status, res = request(
+        "POST",
+        "/wallet/deposit",
+        {"amount_cents": SEED_AMOUNT_CENTS, "demo": True},
+        api_key=scoped_caller_key,
+    )
     if status in (200, 201):
-        ok(status, res, f"Deposited ${SEED_AMOUNT_CENTS/100:.2f}")
+        ok(status, res, f"Deposited ${SEED_AMOUNT_CENTS / 100:.2f}")
     else:
         print(f"  → Deposit returned {status} (may already have balance)")
 
@@ -127,12 +147,16 @@ def main():
         "00000000-0000-0000-0000-000000000016": "CVE Lookup Agent",
     }
     for agent_id, name in security_agents.items():
-        status, res = request("GET", f"/registry/agents/{agent_id}", api_key=scoped_caller_key)
+        status, res = request(
+            "GET", f"/registry/agents/{agent_id}", api_key=scoped_caller_key
+        )
         ok(status, res, f"{name}: {agent_id[-4:]}")
 
     # 6. Warm the embedding model
     print("\n5. Warming embeddings...")
-    status, _ = request("GET", "/registry/agents?limit=5&q=security", api_key=scoped_caller_key)
+    status, _ = request(
+        "GET", "/registry/agents?limit=5&q=security", api_key=scoped_caller_key
+    )
     print(f"  → Search returned {status}")
     time.sleep(2)
 
@@ -181,13 +205,15 @@ def main():
     status, res = request("GET", "/wallet", api_key=scoped_caller_key)
     if status == 200:
         balance = res.get("balance_cents", 0)
-        print(f"  ✓ Balance: ${balance/100:.2f}")
+        print(f"  ✓ Balance: ${balance / 100:.2f}")
     else:
         print(f"  ✗ Wallet check failed: {status}")
 
     print("\n=== Seed complete ===")
     print(f"\nVideobot caller API key (use for Playwright):\n  {scoped_caller_key}")
-    print("\nRestart the backend if agents don't appear in the marketplace (new agents register on startup).")
+    print(
+        "\nRestart the backend if agents don't appear in the marketplace (new agents register on startup)."
+    )
 
 
 if __name__ == "__main__":

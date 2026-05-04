@@ -32,6 +32,7 @@ _filing_cache: dict[str, tuple[dict, float]] = {}
 # Cache helpers
 # ---------------------------------------------------------------------------
 
+
 def _cache_get(key: str) -> Optional[dict]:
     entry = _filing_cache.get(key)
     if entry:
@@ -49,6 +50,7 @@ def _cache_set(key: str, data: dict) -> None:
 # ---------------------------------------------------------------------------
 # EDGAR API calls
 # ---------------------------------------------------------------------------
+
 
 def get_cik_for_ticker(ticker: str) -> str:
     """Look up the SEC CIK number for a ticker symbol."""
@@ -75,10 +77,10 @@ def get_latest_filing(cik: str) -> dict:
 
     company_name = data.get("name", "Unknown")
     filings = data.get("filings", {}).get("recent", {})
-    forms         = filings.get("form", [])
-    dates         = filings.get("filingDate", [])
-    accessions    = filings.get("accessionNumber", [])
-    primary_docs  = filings.get("primaryDocument", [])
+    forms = filings.get("form", [])
+    dates = filings.get("filingDate", [])
+    accessions = filings.get("accessionNumber", [])
+    primary_docs = filings.get("primaryDocument", [])
 
     for i, form in enumerate(forms):
         if form in ("10-K", "10-Q"):
@@ -115,13 +117,19 @@ def fetch_filing_text(document_url: str, max_chars: int = 20_000) -> str:
 def _strip_html(html: str) -> str:
     """Remove HTML tags and collapse whitespace using stdlib only."""
     html = re.sub(
-        r"<(script|style)[^>]*>.*?</(script|style)>", " ", html,
+        r"<(script|style)[^>]*>.*?</(script|style)>",
+        " ",
+        html,
         flags=re.DOTALL | re.IGNORECASE,
     )
     html = re.sub(r"<[^>]+>", " ", html)
     html = (
-        html.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
-            .replace("&nbsp;", " ").replace("&#160;", " ").replace("&quot;", '"')
+        html.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&nbsp;", " ")
+        .replace("&#160;", " ")
+        .replace("&quot;", '"')
     )
     return re.sub(r"\s+", " ", html).strip()
 
@@ -129,6 +137,7 @@ def _strip_html(html: str) -> str:
 # ---------------------------------------------------------------------------
 # Top-level entry point (with cache)
 # ---------------------------------------------------------------------------
+
 
 def get_filing_data(ticker: str) -> dict:
     """

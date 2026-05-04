@@ -11,8 +11,14 @@ import re
 import secrets
 import sqlite3
 
-from .schema import _conn, _hash_password
-
+from .schema import (
+    MAX_FULL_NAME_LEN,
+    MAX_USERNAME_LEN,
+    MIN_PASSWORD_LEN,
+    MIN_USERNAME_LEN,
+    _conn,
+    _hash_password,
+)
 
 _PHONE_RE = re.compile(r"^\+?[0-9 ()\-]{6,32}$")
 
@@ -50,8 +56,8 @@ def update_profile(
 
     if username is not None:
         normalized_username = str(username).strip()
-        if len(normalized_username) < 3 or len(normalized_username) > 32:
-            raise ValueError("Username must be between 3 and 32 characters.")
+        if len(normalized_username) < MIN_USERNAME_LEN or len(normalized_username) > MAX_USERNAME_LEN:
+            raise ValueError(f"Username must be between {MIN_USERNAME_LEN} and {MAX_USERNAME_LEN} characters.")
         updates.append(("username", normalized_username))
 
     if email is not None:
@@ -62,8 +68,8 @@ def update_profile(
 
     if full_name is not None:
         normalized_full_name = _normalize_optional(full_name)
-        if normalized_full_name is not None and len(normalized_full_name) > 80:
-            raise ValueError("Full name must be 80 characters or fewer.")
+        if normalized_full_name is not None and len(normalized_full_name) > MAX_FULL_NAME_LEN:
+            raise ValueError(f"Full name must be {MAX_FULL_NAME_LEN} characters or fewer.")
         updates.append(("full_name", normalized_full_name))
 
     if phone is not None:
@@ -86,15 +92,16 @@ def update_profile(
     with _conn() as conn:
         try:
             conn.execute("BEGIN IMMEDIATE")
-            conn.execute(
-                f"UPDATE users SET {set_clause} WHERE user_id = ?", params
-            )
+            conn.execute(f"UPDATE users SET {set_clause} WHERE user_id = ?", params)
             row = conn.execute(
                 "SELECT * FROM users WHERE user_id = ?", (user_id,)
             ).fetchone()
         except sqlite3.IntegrityError as exc:
             message = str(exc).lower()
-            if "users.email" in message or "unique constraint failed: users.email" in message:
+            if (
+                "users.email" in message
+                or "unique constraint failed: users.email" in message
+            ):
                 raise ValueError("An account with that email already exists.")
             raise
 
@@ -113,11 +120,13 @@ def change_password(user_id: str, current_password: str, new_password: str) -> N
     if not isinstance(new_password, str):
         raise ValueError("New password is required.")
     if (
-        len(new_password) < 8
+        len(new_password) < MIN_PASSWORD_LEN
         or not any(c.isalpha() for c in new_password)
         or not any(c.isdigit() for c in new_password)
     ):
-        raise ValueError("Password must be at least 8 characters and include letters and numbers.")
+        raise ValueError(
+            f"Password must be at least {MIN_PASSWORD_LEN} characters and include letters and numbers."
+        )
 
     with _conn() as conn:
         row = conn.execute(

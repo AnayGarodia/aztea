@@ -20,7 +20,9 @@ class MetadataValidationError(ValueError):
 
 
 _HEADING_RE = re.compile(r"(?m)^\s{0,3}#{1,6}\s+(.+?)\s*$")
-_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.IGNORECASE | re.DOTALL)
+_JSON_FENCE_RE = re.compile(
+    r"```(?:json)?\s*(\{.*?\})\s*```", re.IGNORECASE | re.DOTALL
+)
 
 _REQUIRED_SECTIONS = (
     ("registry_endpoint", "Registry Endpoint"),
@@ -71,7 +73,11 @@ def _parse_sections(manifest_content: str) -> list[dict]:
     sections = []
     for index, match in enumerate(matches):
         body_start = match.end()
-        body_end = matches[index + 1].start() if index + 1 < len(matches) else len(manifest_content)
+        body_end = (
+            matches[index + 1].start()
+            if index + 1 < len(matches)
+            else len(manifest_content)
+        )
         heading = match.group(1).strip()
         body = manifest_content[body_start:body_end].strip()
         sections.append(
@@ -111,7 +117,9 @@ def _extract_metadata_object(section_body: str, source: str) -> dict:
             f"{source}: Registration Metadata JSON is malformed (line {exc.lineno}, column {exc.colno})."
         ) from exc
     if not isinstance(metadata, dict):
-        raise ManifestValidationError(f"{source}: Registration Metadata must decode to a JSON object.")
+        raise ManifestValidationError(
+            f"{source}: Registration Metadata must decode to a JSON object."
+        )
     return metadata
 
 
@@ -124,7 +132,9 @@ def _require_non_empty_text(raw: dict, keys: tuple[str, ...], field_name: str) -
         if text:
             return text
     alias_list = ", ".join(keys)
-    raise MetadataValidationError(f"Missing required '{field_name}' field (accepted keys: {alias_list}).")
+    raise MetadataValidationError(
+        f"Missing required '{field_name}' field (accepted keys: {alias_list})."
+    )
 
 
 def _normalize_endpoint_url(url: str) -> str:
@@ -149,7 +159,9 @@ def _normalize_tags(raw_tags) -> list[str]:
                 raise MetadataValidationError(f"tags[{index}] must be a string.")
             candidates.append(item.strip())
     else:
-        raise MetadataValidationError("tags must be a list of strings or a comma-separated string.")
+        raise MetadataValidationError(
+            "tags must be a list of strings or a comma-separated string."
+        )
 
     deduped = []
     seen = set()
@@ -196,13 +208,19 @@ def parse_registration_metadata(metadata: dict | str) -> dict:
     elif isinstance(metadata, dict):
         raw = metadata
     else:
-        raise MetadataValidationError("Registration metadata must be a dict or JSON string.")
+        raise MetadataValidationError(
+            "Registration metadata must be a dict or JSON string."
+        )
 
     if not isinstance(raw, dict):
-        raise MetadataValidationError("Registration metadata must decode to a JSON object.")
+        raise MetadataValidationError(
+            "Registration metadata must decode to a JSON object."
+        )
 
     name = _require_non_empty_text(raw, ("name", "agent_name"), "name")
-    description = _require_non_empty_text(raw, ("description", "summary"), "description")
+    description = _require_non_empty_text(
+        raw, ("description", "summary"), "description"
+    )
     endpoint_url = _normalize_endpoint_url(
         _require_non_empty_text(raw, ("endpoint_url", "endpoint"), "endpoint_url")
     )
@@ -213,9 +231,13 @@ def parse_registration_metadata(metadata: dict | str) -> dict:
     try:
         price_per_call_usd = float(raw_price)
     except (TypeError, ValueError) as exc:
-        raise MetadataValidationError("price_per_call_usd must be a finite non-negative number.") from exc
+        raise MetadataValidationError(
+            "price_per_call_usd must be a finite non-negative number."
+        ) from exc
     if not math.isfinite(price_per_call_usd) or price_per_call_usd < 0:
-        raise MetadataValidationError("price_per_call_usd must be a finite non-negative number.")
+        raise MetadataValidationError(
+            "price_per_call_usd must be a finite non-negative number."
+        )
 
     tags = _normalize_tags(raw.get("tags", raw.get("capabilities")))
     input_schema = _normalize_input_schema(raw.get("input_schema"))
@@ -258,7 +280,9 @@ def validate_manifest_content(manifest_content: str, source: str = "agent.md") -
             missing_sections.append(label)
             continue
         if not section["body"]:
-            raise ManifestValidationError(f"{source}: required section '{label}' is empty.")
+            raise ManifestValidationError(
+                f"{source}: required section '{label}' is empty."
+            )
         validated_sections[section_key] = {
             "heading": section["heading"],
             "content": section["body"],
@@ -276,7 +300,9 @@ def validate_manifest_content(manifest_content: str, source: str = "agent.md") -
     try:
         normalized_metadata = parse_registration_metadata(raw_metadata)
     except MetadataValidationError as exc:
-        raise ManifestValidationError(f"{source}: invalid registration metadata: {exc}") from exc
+        raise ManifestValidationError(
+            f"{source}: invalid registration metadata: {exc}"
+        ) from exc
 
     return {
         "source": source,

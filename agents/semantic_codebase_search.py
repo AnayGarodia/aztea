@@ -24,6 +24,7 @@ Output:
     "source": "artifact|git"
   }
 """
+
 from __future__ import annotations
 
 import base64
@@ -38,15 +39,34 @@ from pathlib import PurePosixPath
 from typing import Any
 
 from core import url_security
-from core.executor_sandbox import build_subprocess_env
 from core.embeddings import cosine, embed_texts_batch
+from core.executor_sandbox import build_subprocess_env
 from core.feature_flags import DISABLE_EMBEDDINGS
 
 _DEFAULT_TOP_K = 5
 _MAX_TOP_K = 20
 _DEFAULT_MAX_FILE_BYTES = 100_000
 _SNIPPET_CHARS = 400
-_DEFAULT_EXTENSIONS = {".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".rb", ".java", ".cpp", ".c", ".h", ".md", ".txt", ".yaml", ".yml", ".json", ".toml"}
+_DEFAULT_EXTENSIONS = {
+    ".py",
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".go",
+    ".rs",
+    ".rb",
+    ".java",
+    ".cpp",
+    ".c",
+    ".h",
+    ".md",
+    ".txt",
+    ".yaml",
+    ".yml",
+    ".json",
+    ".toml",
+}
 _MAX_ARCHIVE_BYTES = 12 * 1024 * 1024
 _MAX_ARCHIVE_MEMBERS = 500
 _MAX_TOTAL_EXTRACTED_BYTES = 20 * 1024 * 1024
@@ -62,7 +82,9 @@ def _err(code: str, message: str) -> dict[str, Any]:
 
 
 def _query_terms(query: str) -> list[str]:
-    parts = [term.lower() for term in re.findall(r"[a-zA-Z0-9_.:/#-]{2,}", str(query or ""))]
+    parts = [
+        term.lower() for term in re.findall(r"[a-zA-Z0-9_.:/#-]{2,}", str(query or ""))
+    ]
     seen: set[str] = set()
     ordered: list[str] = []
     for part in parts:
@@ -158,13 +180,17 @@ def _normalize_archive_path(path: str) -> str:
     return str(rel)
 
 
-def _extract_files_from_zip(data: bytes, extensions: set[str], max_file_bytes: int) -> dict[str, str]:
+def _extract_files_from_zip(
+    data: bytes, extensions: set[str], max_file_bytes: int
+) -> dict[str, str]:
     files: dict[str, str] = {}
     total_bytes = 0
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         members = zf.infolist()
         if len(members) > _MAX_ARCHIVE_MEMBERS:
-            raise ValueError(f"archive contains too many files (max {_MAX_ARCHIVE_MEMBERS})")
+            raise ValueError(
+                f"archive contains too many files (max {_MAX_ARCHIVE_MEMBERS})"
+            )
         for info in members:
             if info.is_dir():
                 continue
@@ -172,7 +198,9 @@ def _extract_files_from_zip(data: bytes, extensions: set[str], max_file_bytes: i
                 raise ValueError(f"archive member exceeds {_MAX_MEMBER_BYTES} bytes")
             total_bytes += info.file_size
             if total_bytes > _MAX_TOTAL_EXTRACTED_BYTES:
-                raise ValueError(f"archive exceeds {_MAX_TOTAL_EXTRACTED_BYTES} extracted bytes")
+                raise ValueError(
+                    f"archive exceeds {_MAX_TOTAL_EXTRACTED_BYTES} extracted bytes"
+                )
             normalized_path = _normalize_archive_path(info.filename)
             _, ext = os.path.splitext(normalized_path.lower())
             if extensions and ext not in extensions:
@@ -188,13 +216,17 @@ def _extract_files_from_zip(data: bytes, extensions: set[str], max_file_bytes: i
     return files
 
 
-def _extract_files_from_tarball(data: bytes, extensions: set[str], max_file_bytes: int) -> dict[str, str]:
+def _extract_files_from_tarball(
+    data: bytes, extensions: set[str], max_file_bytes: int
+) -> dict[str, str]:
     files: dict[str, str] = {}
     total_bytes = 0
     with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as tf:
         members = tf.getmembers()
         if len(members) > _MAX_ARCHIVE_MEMBERS:
-            raise ValueError(f"archive contains too many files (max {_MAX_ARCHIVE_MEMBERS})")
+            raise ValueError(
+                f"archive contains too many files (max {_MAX_ARCHIVE_MEMBERS})"
+            )
         for member in members:
             if member.issym() or member.islnk():
                 raise ValueError("archive contains links, which are not allowed")
@@ -204,7 +236,9 @@ def _extract_files_from_tarball(data: bytes, extensions: set[str], max_file_byte
                 raise ValueError(f"archive member exceeds {_MAX_MEMBER_BYTES} bytes")
             total_bytes += member.size
             if total_bytes > _MAX_TOTAL_EXTRACTED_BYTES:
-                raise ValueError(f"archive exceeds {_MAX_TOTAL_EXTRACTED_BYTES} extracted bytes")
+                raise ValueError(
+                    f"archive exceeds {_MAX_TOTAL_EXTRACTED_BYTES} extracted bytes"
+                )
             normalized_path = _normalize_archive_path(member.name)
             _, ext = os.path.splitext(normalized_path.lower())
             if extensions and ext not in extensions:
@@ -223,7 +257,9 @@ def _extract_files_from_tarball(data: bytes, extensions: set[str], max_file_byte
     return files
 
 
-def _extract_artifact(artifact: dict[str, Any], extensions: set[str], max_file_bytes: int) -> dict[str, str] | None:
+def _extract_artifact(
+    artifact: dict[str, Any], extensions: set[str], max_file_bytes: int
+) -> dict[str, str] | None:
     raw = str(artifact.get("url_or_base64") or "").strip()
     name = str(artifact.get("name") or "").lower()
 
@@ -242,7 +278,11 @@ def _extract_artifact(artifact: dict[str, Any], extensions: set[str], max_file_b
         raise ValueError(f"artifact exceeds {_MAX_ARCHIVE_BYTES} bytes")
 
     # Attempt zip first, then tarball
-    if name.endswith(".zip") or raw.startswith("data:application/zip") or raw.startswith("data:application/x-zip"):
+    if (
+        name.endswith(".zip")
+        or raw.startswith("data:application/zip")
+        or raw.startswith("data:application/x-zip")
+    ):
         try:
             files = _extract_files_from_zip(data, extensions, max_file_bytes)
             if files:
@@ -268,14 +308,19 @@ def _extract_artifact(artifact: dict[str, Any], extensions: set[str], max_file_b
     return None
 
 
-def _clone_git_repo(git_url: str, extensions: set[str], max_file_bytes: int) -> dict[str, str] | dict:
+def _clone_git_repo(
+    git_url: str, extensions: set[str], max_file_bytes: int
+) -> dict[str, str] | dict:
     try:
         git_url = url_security.validate_outbound_url(git_url, "git_url")
     except Exception as exc:
         return _err("semantic_codebase_search.url_blocked", str(exc))
 
     if not re.match(r"^https?://", git_url):
-        return _err("semantic_codebase_search.invalid_git_url", "git_url must be an https:// URL.")
+        return _err(
+            "semantic_codebase_search.invalid_git_url",
+            "git_url must be an https:// URL.",
+        )
 
     with tempfile.TemporaryDirectory() as tmpdir:
         try:
@@ -287,9 +332,15 @@ def _clone_git_repo(git_url: str, extensions: set[str], max_file_bytes: int) -> 
                 env=build_subprocess_env(),
             )
         except subprocess.CalledProcessError as exc:
-            return _err("semantic_codebase_search.clone_failed", f"git clone failed: {exc.stderr[:200] if exc.stderr else ''}")
+            return _err(
+                "semantic_codebase_search.clone_failed",
+                f"git clone failed: {exc.stderr[:200] if exc.stderr else ''}",
+            )
         except FileNotFoundError:
-            return _err("semantic_codebase_search.tool_unavailable", "git is not installed on this executor.")
+            return _err(
+                "semantic_codebase_search.tool_unavailable",
+                "git is not installed on this executor.",
+            )
 
         files: dict[str, str] = {}
         for root, _dirs, filenames in os.walk(tmpdir):
@@ -337,14 +388,23 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     if not query:
         return _err("semantic_codebase_search.missing_query", "query is required.")
     if len(query) > 500:
-        return _err("semantic_codebase_search.query_too_long", "query must be <= 500 characters.")
+        return _err(
+            "semantic_codebase_search.query_too_long",
+            "query must be <= 500 characters.",
+        )
 
     top_k = max(1, min(int(payload.get("top_k") or _DEFAULT_TOP_K), _MAX_TOP_K))
-    max_file_bytes = max(1024, min(int(payload.get("max_file_bytes") or _DEFAULT_MAX_FILE_BYTES), 500_000))
+    max_file_bytes = max(
+        1024,
+        min(int(payload.get("max_file_bytes") or _DEFAULT_MAX_FILE_BYTES), 500_000),
+    )
 
     ext_raw = payload.get("extensions")
     if isinstance(ext_raw, list) and ext_raw:
-        extensions: set[str] = {str(e).lower() if str(e).startswith(".") else f".{e.lower()}" for e in ext_raw}
+        extensions: set[str] = {
+            str(e).lower() if str(e).startswith(".") else f".{e.lower()}"
+            for e in ext_raw
+        }
     else:
         extensions = _DEFAULT_EXTENSIONS
 
@@ -352,7 +412,10 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     git_url = str(payload.get("git_url") or "").strip()
 
     if not artifact and not git_url:
-        return _err("semantic_codebase_search.missing_source", "Provide artifact (zip/tarball) or git_url.")
+        return _err(
+            "semantic_codebase_search.missing_source",
+            "Provide artifact (zip/tarball) or git_url.",
+        )
     if artifact and git_url:
         return _err(
             "semantic_codebase_search.ambiguous_source",
@@ -366,14 +429,20 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         except ValueError as exc:
             return _err("semantic_codebase_search.unsafe_artifact", str(exc))
         if files is None:
-            return _err("semantic_codebase_search.extraction_failed", "Could not extract files from the provided artifact. Ensure it is a valid zip or tarball.")
+            return _err(
+                "semantic_codebase_search.extraction_failed",
+                "Could not extract files from the provided artifact. Ensure it is a valid zip or tarball.",
+            )
     else:
         files = _clone_git_repo(git_url, extensions, max_file_bytes)
         if isinstance(files, dict) and "error" in files:
             return files
 
     if not files:
-        return _err("semantic_codebase_search.no_files", "No text files found in the provided source.")
+        return _err(
+            "semantic_codebase_search.no_files",
+            "No text files found in the provided source.",
+        )
 
     chunks: list[dict[str, Any]] = []
     for path, text in files.items():
@@ -381,7 +450,10 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         if len(chunks) >= _MAX_CHUNKS:
             break
     if not chunks:
-        return _err("semantic_codebase_search.no_files", "No indexable text chunks were found in the provided source.")
+        return _err(
+            "semantic_codebase_search.no_files",
+            "No indexable text chunks were found in the provided source.",
+        )
 
     if DISABLE_EMBEDDINGS:
         scored: list[tuple[float, dict[str, Any]]] = []
@@ -415,16 +487,22 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
             best_by_path[path] = candidate
 
     results = []
-    for item in sorted(best_by_path.values(), key=lambda row: row["score"], reverse=True)[:top_k]:
+    for item in sorted(
+        best_by_path.values(), key=lambda row: row["score"], reverse=True
+    )[:top_k]:
         snippet = _make_snippet(str(item["text"]), query)
-        results.append({
-            "path": item["path"],
-            "score": item["score"],
-            "snippet": snippet,
-            "size_bytes": len(files[str(item["path"])].encode("utf-8", errors="replace")),
-            "line_start": item["line_start"],
-            "line_end": item["line_end"],
-        })
+        results.append(
+            {
+                "path": item["path"],
+                "score": item["score"],
+                "snippet": snippet,
+                "size_bytes": len(
+                    files[str(item["path"])].encode("utf-8", errors="replace")
+                ),
+                "line_start": item["line_start"],
+                "line_end": item["line_end"],
+            }
+        )
 
     return {
         "query": query,

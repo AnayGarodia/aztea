@@ -16,6 +16,7 @@ Usage pattern (correct):
 
 Do NOT pass ``model=`` — the chain selects the model per provider.
 """
+
 from __future__ import annotations
 
 from dataclasses import replace

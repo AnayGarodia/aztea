@@ -35,7 +35,9 @@ def _slugify(value: str) -> str:
 
 
 def _field_json_schema(field: dict[str, Any]) -> dict[str, Any]:
-    raw_type = str(field.get("type") or field.get("input_type") or "string").strip().lower()
+    raw_type = (
+        str(field.get("type") or field.get("input_type") or "string").strip().lower()
+    )
     json_type = _FIELD_TYPE_MAP.get(raw_type, "string")
     schema: dict[str, Any] = {"type": json_type}
 
@@ -90,7 +92,8 @@ def normalize_schema(raw_schema: Any) -> dict[str, Any]:
     schema = dict(raw_schema)
     fields = schema.get("fields")
     if isinstance(fields, list) and not any(
-        key in schema for key in ("type", "properties", "items", "oneOf", "allOf", "anyOf")
+        key in schema
+        for key in ("type", "properties", "items", "oneOf", "allOf", "anyOf")
     ):
         converted = _fields_to_json_schema(fields)
         if converted.get("properties"):
@@ -140,7 +143,7 @@ def _quality_line(agent: dict[str, Any]) -> str:
     latency = agent.get("avg_latency_ms")
     if latency is not None and float(latency) > 0:
         ms = float(latency)
-        parts.append(f"~{ms/1000:.1f}s avg" if ms >= 1000 else f"~{int(ms)}ms avg")
+        parts.append(f"~{ms / 1000:.1f}s avg" if ms >= 1000 else f"~{int(ms)}ms avg")
     calls = agent.get("total_calls")
     if calls is not None and int(calls) > 0:
         parts.append(f"{int(calls):,} calls")
@@ -156,7 +159,9 @@ def _quality_line(agent: dict[str, Any]) -> str:
             reverse=True,
         )[:3]
         if ranked:
-            labels = ", ".join(f"{client_id} {int(score)}" for client_id, score in ranked)
+            labels = ", ".join(
+                f"{client_id} {int(score)}" for client_id, score in ranked
+            )
             parts.append(f"client trust: {labels}")
 
     # Pricing
@@ -226,7 +231,12 @@ def _tool_annotations(agent: dict[str, Any]) -> dict[str, Any]:
         "browser_automation",
     }
     read_only = tooling_kind in read_only_kinds
-    if str(agent.get("name") or "").strip().lower() in {"shell executor", "python code executor", "multi-file python executor", "multi-language executor"}:
+    if str(agent.get("name") or "").strip().lower() in {
+        "shell executor",
+        "python code executor",
+        "multi-file python executor",
+        "multi-language executor",
+    }:
         read_only = False
     return {
         "readOnlyHint": read_only,
@@ -254,7 +264,13 @@ def _example_snippet(agent: dict[str, Any]) -> str:
     return snippet
 
 
-_USE_WHEN_PREFIXES = ("use when", "use this when", "use to ", "call when", "call this when")
+_USE_WHEN_PREFIXES = (
+    "use when",
+    "use this when",
+    "use to ",
+    "call when",
+    "call this when",
+)
 
 
 def _normalize_description_for_claude(name: str, description: str) -> str:
@@ -276,7 +292,7 @@ def _normalize_description_for_claude(name: str, description: str) -> str:
     # Strip leading filler phrases before reframing
     for filler in ("this agent ", "an agent that ", "a tool that ", "this tool "):
         if lower.startswith(filler):
-            description = description[len(filler):].strip()
+            description = description[len(filler) :].strip()
             # Capitalize first char
             description = description[0].upper() + description[1:]
             break
@@ -333,7 +349,10 @@ def build_mcp_tool_entries(agents: list[dict[str, Any]]) -> list[dict[str, Any]]
             new_props: dict[str, Any] = {}
             for prop_name, prop_schema in props.items():
                 if isinstance(prop_schema, dict) and not prop_schema.get("description"):
-                    prop_schema = {**prop_schema, "description": f"{prop_name} parameter for {name}"}
+                    prop_schema = {
+                        **prop_schema,
+                        "description": f"{prop_name} parameter for {name}",
+                    }
                 new_props[prop_name] = prop_schema
             input_schema = {**input_schema, "properties": new_props}
 
@@ -355,7 +374,9 @@ def build_mcp_tool_entries(agents: list[dict[str, Any]]) -> list[dict[str, Any]]
                     "tags": list(agent.get("tags") or []),
                     "is_featured": bool(agent.get("is_featured", False)),
                     "cacheable": bool(agent.get("cacheable", False)),
-                    "runtime_requirements": list(agent.get("runtime_requirements") or []),
+                    "runtime_requirements": list(
+                        agent.get("runtime_requirements") or []
+                    ),
                     "tooling_kind": agent.get("tooling_kind"),
                     "stability_tier": agent.get("stability_tier"),
                     "codex_recommended": bool(agent.get("codex_recommended", False)),

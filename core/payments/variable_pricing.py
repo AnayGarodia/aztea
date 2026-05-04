@@ -23,7 +23,6 @@ from core import logging_utils
 
 from .base import _LOG, _conn, _insert_tx
 
-
 _PRICING_DIFF_MEMO_TAG = "[pricing-diff]"
 
 
@@ -130,7 +129,9 @@ def post_call_refund_difference(
             """,
             (charge_tx_id,),
         ).fetchone()
-        already_refunded = int(prior_refunds_row["refunded_cents"] or 0) if prior_refunds_row else 0
+        already_refunded = (
+            int(prior_refunds_row["refunded_cents"] or 0) if prior_refunds_row else 0
+        )
         remaining = max(0, original_debit - already_refunded)
         if remaining <= 0 or caller_refund > remaining:
             return None

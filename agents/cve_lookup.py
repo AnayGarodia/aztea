@@ -46,7 +46,7 @@ _NVD_API = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 _OSV_API = "https://api.osv.dev/v1/query"
 _NVD_TIMEOUT = 10
 _NVD_RATE_DELAY = 0.7  # NVD public API allows ~5 req/s without key
-_CVE_ID_PATTERN = re.compile(r'^CVE-\d{4}-\d{4,}$', re.IGNORECASE)
+_CVE_ID_PATTERN = re.compile(r"^CVE-\d{4}-\d{4,}$", re.IGNORECASE)
 
 
 def _err(code: str, message: str) -> dict:
@@ -83,7 +83,9 @@ def _cvss3_from_vector(vector: str) -> float:
     """Compute CVSS 3.1 base score from a vector string. Returns 0.0 on parse error."""
     try:
         parts = dict(p.split(":", 1) for p in vector.split("/") if ":" in p)
-        if not (parts.get("AV") and parts.get("AC") and parts.get("PR") and parts.get("UI")):
+        if not (
+            parts.get("AV") and parts.get("AC") and parts.get("PR") and parts.get("UI")
+        ):
             return 0.0
         scope = parts.get("S", "U")
         av = _CVSS3_AV.get(parts["AV"], 0)
@@ -108,6 +110,7 @@ def _cvss3_from_vector(vector: str) -> float:
             base = min(impact + exploit, 10.0)
         # Round up to one decimal per CVSS spec.
         import math
+
         return math.ceil(base * 10) / 10.0
     except (ValueError, KeyError, TypeError):
         return 0.0
@@ -194,7 +197,9 @@ def _pkg_ecosystems(pkg_name: str, hint: str | None = None) -> list[str]:
     return ["PyPI", "npm"]
 
 
-def _query_osv(pkg_name: str, version: str, ecosystem_hint: str | None = None) -> list[dict]:
+def _query_osv(
+    pkg_name: str, version: str, ecosystem_hint: str | None = None
+) -> list[dict]:
     """Query OSV.dev for CVEs affecting a specific package (+ optional version).
 
     Pass ``ecosystem_hint`` (``"npm"`` / ``"pypi"``) to narrow the lookup to a
@@ -245,15 +250,17 @@ def _query_osv(pkg_name: str, version: str, ecosystem_hint: str | None = None) -
                     break
 
             summary = (vuln.get("summary") or vuln.get("details") or "")[:400]
-            results.append({
-                "cve": cve_id,
-                "cvss": cvss,
-                "severity": _cvss_to_severity(cvss),
-                "description": summary,
-                "published": (vuln.get("published") or "")[:10],
-                "last_modified": (vuln.get("modified") or "")[:10],
-                "fixed_in": fixed_in,
-            })
+            results.append(
+                {
+                    "cve": cve_id,
+                    "cvss": cvss,
+                    "severity": _cvss_to_severity(cvss),
+                    "description": summary,
+                    "published": (vuln.get("published") or "")[:10],
+                    "last_modified": (vuln.get("modified") or "")[:10],
+                    "fixed_in": fixed_in,
+                }
+            )
 
     return results
 
@@ -268,9 +275,15 @@ def _hydrate_cve_details(cve_id: str, fallback: dict) -> dict:
         "cve": str(detailed.get("cve_id") or cve_id),
         "cvss": cvss,
         "severity": str(detailed.get("severity") or _cvss_to_severity(cvss)),
-        "description": str(detailed.get("description") or fallback.get("description") or "")[:400],
-        "published": str(detailed.get("published") or fallback.get("published") or "")[:10],
-        "last_modified": str(detailed.get("last_modified") or fallback.get("last_modified") or "")[:10],
+        "description": str(
+            detailed.get("description") or fallback.get("description") or ""
+        )[:400],
+        "published": str(detailed.get("published") or fallback.get("published") or "")[
+            :10
+        ],
+        "last_modified": str(
+            detailed.get("last_modified") or fallback.get("last_modified") or ""
+        )[:10],
         "fixed_in": str(fallback.get("fixed_in") or ""),
         "source": "osv+nvd",
     }
@@ -313,16 +326,20 @@ def _search_nvd_packages(pkg_name: str) -> tuple[list[dict], bool]:
         metrics = cve_obj.get("metrics", {})
         cvss = _extract_cvss(metrics)
         descriptions = cve_obj.get("descriptions", [])
-        desc = next((d["value"] for d in descriptions if d.get("lang") == "en"), "")[:400]
-        results.append({
-            "cve": cve_id,
-            "cvss": cvss,
-            "severity": _cvss_to_severity(cvss),
-            "description": desc,
-            "published": cve_obj.get("published", "")[:10],
-            "last_modified": cve_obj.get("lastModified", "")[:10],
-            "fixed_in": "",
-        })
+        desc = next((d["value"] for d in descriptions if d.get("lang") == "en"), "")[
+            :400
+        ]
+        results.append(
+            {
+                "cve": cve_id,
+                "cvss": cvss,
+                "severity": _cvss_to_severity(cvss),
+                "description": desc,
+                "published": cve_obj.get("published", "")[:10],
+                "last_modified": cve_obj.get("lastModified", "")[:10],
+                "fixed_in": "",
+            }
+        )
     return results, True
 
 
@@ -343,12 +360,18 @@ def _fetch_cve(cve_id: str) -> dict:
         if resp.status_code == 429:
             return {"cve_id": cve_id, "error": "NVD API rate limit reached"}
         if resp.status_code != 200:
-            return {"cve_id": cve_id, "error": f"NVD API returned status {resp.status_code}"}
+            return {
+                "cve_id": cve_id,
+                "error": f"NVD API returned status {resp.status_code}",
+            }
         data = resp.json()
     except requests.exceptions.Timeout:
         return {"cve_id": cve_id, "error": "NVD API timed out"}
     except Exception as e:
-        return {"cve_id": cve_id, "error": f"Could not reach NVD API: {type(e).__name__}"}
+        return {
+            "cve_id": cve_id,
+            "error": f"Could not reach NVD API: {type(e).__name__}",
+        }
 
     vulns = data.get("vulnerabilities", [])
     if not vulns:
@@ -393,22 +416,34 @@ def _fetch_cve_from_osv(cve_id: str) -> dict:
         if resp.status_code == 404:
             return {"cve_id": cve_id, "error": "not found"}
         if resp.status_code != 200:
-            return {"cve_id": cve_id, "error": f"OSV returned status {resp.status_code}"}
+            return {
+                "cve_id": cve_id,
+                "error": f"OSV returned status {resp.status_code}",
+            }
         data = resp.json()
     except Exception as exc:
-        return {"cve_id": cve_id, "error": f"Could not reach OSV API: {type(exc).__name__}"}
+        return {
+            "cve_id": cve_id,
+            "error": f"Could not reach OSV API: {type(exc).__name__}",
+        }
 
     aliases = data.get("aliases") or []
     cvss = _parse_osv_cvss(data.get("severity") or [])
     return {
-        "cve_id": next((alias for alias in aliases if str(alias).startswith("CVE-")), cve_id),
+        "cve_id": next(
+            (alias for alias in aliases if str(alias).startswith("CVE-")), cve_id
+        ),
         "cvss": cvss,
         "severity": _cvss_to_severity(cvss),
         "description": (data.get("summary") or data.get("details") or "")[:1200],
         "published": str(data.get("published") or "")[:10],
         "last_modified": str(data.get("modified") or "")[:10],
         "cwe_ids": [],
-        "references": [ref.get("url", "") for ref in (data.get("references") or [])[:5] if ref.get("url")],
+        "references": [
+            ref.get("url", "")
+            for ref in (data.get("references") or [])[:5]
+            if ref.get("url")
+        ],
         "source": "osv",
     }
 
@@ -445,7 +480,12 @@ def _run_cve_id_mode(cve_ids: list[str], single_mode: bool) -> dict:
         result = _fetch_cve(cve_id)
         if result.get("error") and any(
             marker in str(result.get("error") or "").lower()
-            for marker in ("timed out", "could not reach", "rate limit", "returned status 5")
+            for marker in (
+                "timed out",
+                "could not reach",
+                "rate limit",
+                "returned status 5",
+            )
         ):
             fallback = _fetch_cve_from_osv(cve_id)
             if "error" not in fallback:
@@ -501,18 +541,29 @@ def run(payload: dict) -> dict:
             return _err("cve_lookup.missing_id", "cve_id or cve_ids is required")
 
         if not isinstance(ids_to_lookup, list):
-            return _err("cve_lookup.invalid_input", "cve_ids must be a list of CVE ID strings")
+            return _err(
+                "cve_lookup.invalid_input", "cve_ids must be a list of CVE ID strings"
+            )
 
         if len(ids_to_lookup) > 10:
-            return _err("cve_lookup.too_many_ids", f"At most 10 CVE IDs can be looked up per call. You provided {len(ids_to_lookup)}.")
+            return _err(
+                "cve_lookup.too_many_ids",
+                f"At most 10 CVE IDs can be looked up per call. You provided {len(ids_to_lookup)}.",
+            )
 
         normalized = []
         for raw_id in ids_to_lookup:
             if not isinstance(raw_id, str):
-                return _err("cve_lookup.invalid_input", f"Each CVE ID must be a string, got: {type(raw_id).__name__}")
+                return _err(
+                    "cve_lookup.invalid_input",
+                    f"Each CVE ID must be a string, got: {type(raw_id).__name__}",
+                )
             upper_id = raw_id.strip().upper()
             if not _CVE_ID_PATTERN.match(upper_id):
-                return _err("cve_lookup.invalid_id_format", f"Invalid CVE ID format: {raw_id!r}. Expected pattern: CVE-YYYY-NNNNN")
+                return _err(
+                    "cve_lookup.invalid_id_format",
+                    f"Invalid CVE ID format: {raw_id!r}. Expected pattern: CVE-YYYY-NNNNN",
+                )
             normalized.append(upper_id)
 
         return _run_cve_id_mode(normalized, single_mode)
@@ -527,26 +578,38 @@ def run(payload: dict) -> dict:
         ecosystem_hint_for_query = ecosystem_hint
 
     if not isinstance(packages, list):
-        return _err("cve_lookup.invalid_input", "packages must be a list of strings (e.g. [\"express@4.17.1\"])")
+        return _err(
+            "cve_lookup.invalid_input",
+            'packages must be a list of strings (e.g. ["express@4.17.1"])',
+        )
 
     if not packages:
         return {
             "results": [],
             "total_vulnerable": 0,
             "total_packages_checked": 0,
-            "summary": "No packages provided. Pass a list like: [\"express@4.17.1\", \"lodash@4.17.20\"]",
+            "summary": 'No packages provided. Pass a list like: ["express@4.17.1", "lodash@4.17.20"]',
             "source": "osv",
             "billing_units_actual": 0,
         }
 
     if len(packages) > 10:
-        return _err("cve_lookup.too_many_packages", f"At most 10 packages can be checked per call. You provided {len(packages)}.")
+        return _err(
+            "cve_lookup.too_many_packages",
+            f"At most 10 packages can be checked per call. You provided {len(packages)}.",
+        )
 
     for raw_pkg in packages:
         if not isinstance(raw_pkg, str):
-            return _err("cve_lookup.invalid_input", "Each package must be a string like \"express@4.17.1\".")
+            return _err(
+                "cve_lookup.invalid_input",
+                'Each package must be a string like "express@4.17.1".',
+            )
         if len(str(raw_pkg)) > 200:
-            return _err("cve_lookup.package_name_too_long", f"Package name is too long (max 200 characters): {str(raw_pkg)[:40]}...")
+            return _err(
+                "cve_lookup.package_name_too_long",
+                f"Package name is too long (max 200 characters): {str(raw_pkg)[:40]}...",
+            )
 
     all_results: list[dict] = []
     seen_cves: set[str] = set()
@@ -584,22 +647,30 @@ def run(payload: dict) -> dict:
 
             exploit_available = any(
                 kw in str(hydrated.get("description") or "").lower()
-                for kw in ("exploit", "poc", "proof-of-concept", "metasploit", "actively exploited")
+                for kw in (
+                    "exploit",
+                    "poc",
+                    "proof-of-concept",
+                    "metasploit",
+                    "actively exploited",
+                )
             )
 
-            all_results.append({
-                "package": pkg_name,
-                "version": pkg_version or "unknown",
-                "cve": hydrated["cve"],
-                "cvss": hydrated["cvss"],
-                "severity": hydrated["severity"],
-                "description": hydrated["description"],
-                "published": hydrated["published"],
-                "last_modified": hydrated["last_modified"],
-                "affected_range": affected_range,
-                "fixed_in": fixed_in or "see advisory",
-                "exploit_available": exploit_available,
-            })
+            all_results.append(
+                {
+                    "package": pkg_name,
+                    "version": pkg_version or "unknown",
+                    "cve": hydrated["cve"],
+                    "cvss": hydrated["cvss"],
+                    "severity": hydrated["severity"],
+                    "description": hydrated["description"],
+                    "published": hydrated["published"],
+                    "last_modified": hydrated["last_modified"],
+                    "affected_range": affected_range,
+                    "fixed_in": fixed_in or "see advisory",
+                    "exploit_available": exploit_available,
+                }
+            )
 
     # Sort by CVSS descending
     all_results.sort(key=lambda x: x["cvss"], reverse=True)
@@ -609,7 +680,9 @@ def run(payload: dict) -> dict:
     medium = sum(1 for r in all_results if r["severity"] == "medium")
 
     pkg_names_with_vulns = {r["package"] for r in all_results}
-    summary_parts = [f"Found {len(all_results)} CVE(s) across {len(pkg_names_with_vulns)} package(s)."]
+    summary_parts = [
+        f"Found {len(all_results)} CVE(s) across {len(pkg_names_with_vulns)} package(s)."
+    ]
     if critical:
         summary_parts.append(f"{critical} critical")
     if high:

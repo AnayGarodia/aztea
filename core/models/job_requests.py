@@ -1,16 +1,17 @@
 """Pydantic models (split from legacy models.py for maintainability)."""
+
 from __future__ import annotations
 
-import re
-from typing import Annotated, Literal, TypeAlias, TypedDict
+from typing import Literal
 
 try:
     from typing import NotRequired
 except ImportError:  # Python 3.10
-    from typing_extensions import NotRequired
+    pass
 
 try:
     import jsonschema as _jsonschema
+
     _JSONSCHEMA_AVAILABLE = True
 except ImportError:  # pragma: no cover
     _JSONSCHEMA_AVAILABLE = False
@@ -20,17 +21,12 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    JsonValue,
-    RootModel,
-    TypeAdapter,
-    ValidationError,
     field_validator,
     model_validator,
 )
 
-from core import auth as _auth
-
 from .core_types import *  # noqa: F403
+
 
 class JobCreateRequest(BaseModel):
     model_config = ConfigDict(
@@ -201,7 +197,12 @@ class JobBatchCreateRequest(BaseModel):
 
 class JobCompleteRequest(BaseModel):
     model_config = ConfigDict(
-        json_schema_extra={"example": {"output_payload": {"signal": "positive"}, "claim_token": "claim-token-123"}}
+        json_schema_extra={
+            "example": {
+                "output_payload": {"signal": "positive"},
+                "claim_token": "claim-token-123",
+            }
+        }
     )
 
     output_payload: JSONObject
@@ -268,7 +269,12 @@ class JobFailRequest(BaseModel):
 
 class JobRetryRequest(BaseModel):
     model_config = ConfigDict(
-        json_schema_extra={"example": {"error_message": "Dependency timeout", "retry_delay_seconds": 30}}
+        json_schema_extra={
+            "example": {
+                "error_message": "Dependency timeout",
+                "retry_delay_seconds": 30,
+            }
+        }
     )
 
     error_message: str | None = Field(default=None, max_length=2000)
@@ -283,14 +289,20 @@ class JobClaimRequest(BaseModel):
 
 
 class JobHeartbeatRequest(BaseModel):
-    model_config = ConfigDict(json_schema_extra={"example": {"lease_seconds": 300, "claim_token": "claim-token-123"}})
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {"lease_seconds": 300, "claim_token": "claim-token-123"}
+        }
+    )
 
     lease_seconds: int = Field(default=DEFAULT_LEASE_SECONDS, ge=1, le=3600)
     claim_token: str | None = Field(default=None, max_length=128)
 
 
 class JobReleaseRequest(BaseModel):
-    model_config = ConfigDict(json_schema_extra={"example": {"claim_token": "claim-token-123"}})
+    model_config = ConfigDict(
+        json_schema_extra={"example": {"claim_token": "claim-token-123"}}
+    )
 
     claim_token: str | None = Field(default=None, max_length=128)
 
@@ -304,7 +316,9 @@ class JobCancelRequest(BaseModel):
     """
 
     model_config = ConfigDict(
-        json_schema_extra={"example": {"reason": "No longer needed — duplicate submission."}}
+        json_schema_extra={
+            "example": {"reason": "No longer needed — duplicate submission."}
+        }
     )
 
     reason: str | None = Field(default=None, max_length=200)
@@ -370,7 +384,12 @@ class JobVerificationDecisionRequest(BaseModel):
 
 class JobRateCallerRequest(BaseModel):
     model_config = ConfigDict(
-        json_schema_extra={"example": {"rating": 4, "comment": "Clear requirements and fast responses."}}
+        json_schema_extra={
+            "example": {
+                "rating": 4,
+                "comment": "Clear requirements and fast responses.",
+            }
+        }
     )
 
     rating: int = Field(ge=1, le=5)
@@ -414,7 +433,9 @@ class AdminDisputeRuleRequest(BaseModel):
     def validate_split_fields(self) -> "AdminDisputeRuleRequest":
         if self.outcome == "split":
             if self.split_caller_cents is None or self.split_agent_cents is None:
-                raise ValueError("split outcomes require split_caller_cents and split_agent_cents")
+                raise ValueError(
+                    "split outcomes require split_caller_cents and split_agent_cents"
+                )
         return self
 
 
@@ -448,4 +469,3 @@ class AgentSuspendRequest(BaseModel):
         max_length=500,
         description="Human-readable reason for the suspension, stored on the agent row.",
     )
-

@@ -1,8 +1,9 @@
 """Pydantic models (split from legacy models.py for maintainability)."""
+
 from __future__ import annotations
 
 import re
-from typing import Annotated, Literal, TypeAlias, TypedDict
+from typing import Literal, TypeAlias, TypedDict
 
 try:
     from typing import NotRequired
@@ -11,6 +12,7 @@ except ImportError:  # Python 3.10
 
 try:
     import jsonschema as _jsonschema
+
     _JSONSCHEMA_AVAILABLE = True
 except ImportError:  # pragma: no cover
     _JSONSCHEMA_AVAILABLE = False
@@ -20,9 +22,6 @@ from pydantic import (
     ConfigDict,
     Field,
     JsonValue,
-    RootModel,
-    TypeAdapter,
-    ValidationError,
     field_validator,
     model_validator,
 )
@@ -61,6 +60,8 @@ class CallerContext(TypedDict):
     user: NotRequired[AuthUser]
     agent_id: NotRequired[str]
     key_id: NotRequired[str]
+
+
 LEGACY_JOB_MESSAGE_TYPE_ALIASES = {
     "clarification_needed": "clarification_request",
     "clarification": "clarification_response",
@@ -140,7 +141,13 @@ class CodeReviewRequest(BaseModel):
         description="Source language hint. 'auto' detects from filename or content. Examples: 'python', 'javascript', 'go'.",
     )
     focus: Literal[
-        "all", "security", "performance", "bugs", "style", "correctness", "maintainability"
+        "all",
+        "security",
+        "performance",
+        "bugs",
+        "style",
+        "correctness",
+        "maintainability",
     ] = Field(
         default="all",
         description="Review emphasis. Default 'all' covers every category; narrower values prioritize one axis.",
@@ -163,7 +170,11 @@ class CodeReviewRequest(BaseModel):
 
 
 class WikiRequest(BaseModel):
-    model_config = ConfigDict(json_schema_extra={"example": {"topic": "Capital asset pricing model", "depth": "standard"}})
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {"topic": "Capital asset pricing model", "depth": "standard"}
+        }
+    )
 
     topic: str
     depth: str = "standard"
@@ -201,8 +212,14 @@ class AgentRegisterRequest(BaseModel):
                 "audit_logged": True,
                 "region_locked": "us",
                 "cacheable": True,
-                "input_schema": {"type": "object", "properties": {"ticker": {"type": "string"}}},
-                "output_schema": {"type": "object", "properties": {"summary": {"type": "string"}}},
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"ticker": {"type": "string"}},
+                },
+                "output_schema": {
+                    "type": "object",
+                    "properties": {"summary": {"type": "string"}},
+                },
                 "output_verifier_url": "https://example.com/verify",
             }
         }
@@ -237,8 +254,10 @@ class AgentRegisterRequest(BaseModel):
             raise ValueError("Agent name must be 100 characters or fewer.")
         letters = [c for c in s if c.isalpha()]
         if letters and sum(1 for c in letters if c.isupper()) / len(letters) >= 0.8:
-            raise ValueError("Agent name appears to be all-caps. Use title case, e.g. 'Financial Analyst'.")
-        if not re.search(r'[A-Za-z]', s):
+            raise ValueError(
+                "Agent name appears to be all-caps. Use title case, e.g. 'Financial Analyst'."
+            )
+        if not re.search(r"[A-Za-z]", s):
             raise ValueError("Agent name must contain at least one letter.")
         return s
 
@@ -261,8 +280,10 @@ class AgentRegisterRequest(BaseModel):
         s = v.strip()
         words = s.split()
         if len(words) < 3:
-            raise ValueError("Description must be at least 3 words — help callers understand what your agent does.")
-        if not re.search(r'[A-Za-z]', s):
+            raise ValueError(
+                "Description must be at least 3 words — help callers understand what your agent does."
+            )
+        if not re.search(r"[A-Za-z]", s):
             raise ValueError("Description must contain at least one letter.")
         return s
 
@@ -290,7 +311,9 @@ class AgentRegisterRequest(BaseModel):
             raise ValueError("At most 10 tags are allowed.")
         for t in deduped:
             if len(t) > 32:
-                raise ValueError(f"Tag '{t[:20]}...' is too long — tags must be 32 characters or fewer.")
+                raise ValueError(
+                    f"Tag '{t[:20]}...' is too long — tags must be 32 characters or fewer."
+                )
         return deduped
 
     @field_validator("region_locked")
@@ -317,21 +340,28 @@ class AgentRegisterRequest(BaseModel):
                 _jsonschema.Draft202012Validator.check_schema(v)
             except _jsonschema.exceptions.SchemaError as exc:
                 raise ValueError(f"Invalid JSON schema: {exc.message}") from exc
+
         # Depth and property count guards
         def _depth(obj, current=0):
             if current > 5:
                 return current
             if isinstance(obj, dict):
-                return max((_depth(vv, current + 1) for vv in obj.values()), default=current)
+                return max(
+                    (_depth(vv, current + 1) for vv in obj.values()), default=current
+                )
             if isinstance(obj, list):
                 return max((_depth(item, current + 1) for item in obj), default=current)
             return current
+
         if _depth(v) > 5:
-            raise ValueError("Schema nesting depth exceeds 5 levels. Flatten your schema.")
+            raise ValueError(
+                "Schema nesting depth exceeds 5 levels. Flatten your schema."
+            )
         props = v.get("properties", {})
         if isinstance(props, dict) and len(props) > 50:
             raise ValueError(f"Schema defines {len(props)} properties — maximum is 50.")
         return v
+
     input_schema: JSONObject = Field(default_factory=dict)
     output_schema: JSONObject = Field(default_factory=dict)
     output_verifier_url: str | None = None
@@ -417,6 +447,7 @@ class AgentRegisterRequest(BaseModel):
         if self.pricing_config is not None:
             try:
                 from core.registry.pricing import validate_pricing_config
+
                 validate_pricing_config(self.pricing_model, self.pricing_config)
             except ValueError as exc:
                 raise ValueError(str(exc)) from exc
@@ -428,7 +459,9 @@ class AgentRegisterRequest(BaseModel):
         """Normalise model_provider to a lowercase slug (max 64 chars). Returns None for empty input."""
         if value is None:
             return None
-        normalized = re.sub(r"[^a-z0-9._-]+", "-", str(value).strip().lower()).strip("-")
+        normalized = re.sub(r"[^a-z0-9._-]+", "-", str(value).strip().lower()).strip(
+            "-"
+        )
         if not normalized:
             return None
         if len(normalized) > 64:
@@ -446,7 +479,13 @@ class AgentRegisterRequest(BaseModel):
 
 class DepositRequest(BaseModel):
     model_config = ConfigDict(
-        json_schema_extra={"example": {"wallet_id": "user:abc123", "amount_cents": 5000, "memo": "initial funding"}}
+        json_schema_extra={
+            "example": {
+                "wallet_id": "user:abc123",
+                "amount_cents": 5000,
+                "memo": "initial funding",
+            }
+        }
     )
 
     wallet_id: str
@@ -456,6 +495,7 @@ class DepositRequest(BaseModel):
 
 class TopupSessionRequest(BaseModel):
     """Request body for POST /wallets/topup/session (Stripe Checkout)."""
+
     model_config = ConfigDict(
         json_schema_extra={"example": {"wallet_id": "wlt-abc123", "amount_cents": 1000}}
     )
@@ -466,8 +506,14 @@ class TopupSessionRequest(BaseModel):
 
 class ConnectOnboardRequest(BaseModel):
     """Request body for POST /wallets/connect/onboard."""
+
     model_config = ConfigDict(
-        json_schema_extra={"example": {"return_url": "https://aztea.dev/wallet", "refresh_url": "https://aztea.dev/wallet"}}
+        json_schema_extra={
+            "example": {
+                "return_url": "https://aztea.dev/wallet",
+                "refresh_url": "https://aztea.dev/wallet",
+            }
+        }
     )
     return_url: str | None = None
     refresh_url: str | None = None
@@ -475,9 +521,8 @@ class ConnectOnboardRequest(BaseModel):
 
 class WithdrawRequest(BaseModel):
     """Request body for POST /wallets/withdraw."""
-    model_config = ConfigDict(
-        json_schema_extra={"example": {"amount_cents": 500}}
-    )
+
+    model_config = ConfigDict(json_schema_extra={"example": {"amount_cents": 500}})
     amount_cents: int  # Minimum 100 ($1.00)
 
 
@@ -487,6 +532,7 @@ class AgentWalletSettingsRequest(BaseModel):
     All fields are optional; only provided fields update. Use ``None`` to clear
     a previously-set value (e.g. ``daily_spend_limit_cents=None`` removes the cap).
     """
+
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
@@ -509,9 +555,8 @@ class AgentWalletSweepRequest(BaseModel):
 
     Omit ``amount_cents`` to sweep the full current balance.
     """
-    model_config = ConfigDict(
-        json_schema_extra={"example": {"amount_cents": 1000}}
-    )
+
+    model_config = ConfigDict(json_schema_extra={"example": {"amount_cents": 1000}})
 
     amount_cents: int | None = None
 
@@ -550,15 +595,17 @@ class UserRegisterRequest(BaseModel):
             raise ValueError("Username must be at least 3 characters.")
         if len(s) > 32:
             raise ValueError("Username must be 32 characters or fewer.")
-        if not re.match(r'^[a-zA-Z0-9_-]+$', s):
-            raise ValueError("Username may only contain letters, numbers, underscores, and hyphens.")
+        if not re.match(r"^[a-zA-Z0-9_-]+$", s):
+            raise ValueError(
+                "Username may only contain letters, numbers, underscores, and hyphens."
+            )
         return s
 
     @field_validator("email")
     @classmethod
     def email_valid(cls, v):
         s = v.strip().lower()
-        if not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]{2,}$', s):
+        if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]{2,}$", s):
             raise ValueError("Enter a valid email address.")
         return s
 
@@ -570,9 +617,9 @@ class UserRegisterRequest(BaseModel):
             raise ValueError("Password must be at least 8 characters.")
         if len(v) > 1024:
             raise ValueError("Password must be at most 1024 characters.")
-        if not re.search(r'[A-Za-z]', v):
+        if not re.search(r"[A-Za-z]", v):
             raise ValueError("Password must contain at least one letter.")
-        if not re.search(r'\d', v):
+        if not re.search(r"\d", v):
             raise ValueError("Password must contain at least one number.")
         return v
 
@@ -613,7 +660,9 @@ class UserLoginRequest(BaseModel):
 
 
 class GoogleAuthRequest(BaseModel):
-    model_config = ConfigDict(json_schema_extra={"example": {"id_token": "eyJhbGciOi..."}})
+    model_config = ConfigDict(
+        json_schema_extra={"example": {"id_token": "eyJhbGciOi..."}}
+    )
 
     id_token: str
 
@@ -630,7 +679,9 @@ class GoogleAuthRequest(BaseModel):
 
 class AuthLegalAcceptRequest(BaseModel):
     model_config = ConfigDict(
-        json_schema_extra={"example": {"terms_version": "2026-04-19", "privacy_version": "2026-04-19"}}
+        json_schema_extra={
+            "example": {"terms_version": "2026-04-19", "privacy_version": "2026-04-19"}
+        }
     )
 
     terms_version: str
@@ -684,7 +735,9 @@ class CreateKeyRequest(BaseModel):
         for scope in scopes:
             value = str(scope).strip().lower()
             if value not in valid:
-                raise ValueError(f"Invalid scope '{value}'. Valid scopes: {', '.join(sorted(valid))}")
+                raise ValueError(
+                    f"Invalid scope '{value}'. Valid scopes: {', '.join(sorted(valid))}"
+                )
             if value not in normalized:
                 normalized.append(value)
         if not normalized:
@@ -720,7 +773,9 @@ class RotateKeyRequest(BaseModel):
         for scope in scopes:
             value = str(scope).strip().lower()
             if value not in valid:
-                raise ValueError(f"Invalid scope '{value}'. Valid scopes: {', '.join(sorted(valid))}")
+                raise ValueError(
+                    f"Invalid scope '{value}'. Valid scopes: {', '.join(sorted(valid))}"
+                )
             if value not in normalized:
                 normalized.append(value)
         if not normalized:

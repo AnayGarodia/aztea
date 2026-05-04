@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from core import pipelines
 from server.builtin_agents.constants import (
     CODEREVIEW_AGENT_ID,
     DEPENDENCY_AUDITOR_AGENT_ID,
@@ -9,8 +10,6 @@ from server.builtin_agents.constants import (
     LINTER_AGENT_ID,
     TYPE_CHECKER_AGENT_ID,
 )
-
-from core import pipelines
 
 PLATFORM_RECIPES_OWNER_ID = "platform:recipes"
 
@@ -95,7 +94,12 @@ BUILTIN_RECIPES: list[dict] = [
         "description": "Audit a dependency set for known vulnerabilities and summarize the highest-priority issues.",
         "default_input_schema": {
             "type": "object",
-            "properties": {"manifest": {"type": "string", "description": "Contents of package.json or requirements.txt"}},
+            "properties": {
+                "manifest": {
+                    "type": "string",
+                    "description": "Contents of package.json or requirements.txt",
+                }
+            },
             "required": ["manifest"],
         },
         "pipeline_definition": {

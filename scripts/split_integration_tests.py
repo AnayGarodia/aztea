@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import ast
-import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -31,7 +30,9 @@ def main() -> None:
 
     # Build chunks of tests by line count
     test_starts.append(len(lines) + 1)
-    chunks: list[tuple[int, int, int]] = []  # (start_line, end_line inclusive, file_idx)
+    chunks: list[
+        tuple[int, int, int]
+    ] = []  # (start_line, end_line inclusive, file_idx)
     i = 0
     file_idx = 0
     while i < len(test_starts) - 1:
@@ -59,7 +60,8 @@ def main() -> None:
         name = names[fi] if fi < len(names) else f"test_integration_extra_{fi}"
         body = "".join(lines[a - 1 : b])
         (OUT_DIR / f"{name}.py").write_text(
-            f'"""Server integration tests (auto-split fragment {idx + 1}/{len(chunks)})."""\n\n' + body,
+            f'"""Server integration tests (auto-split fragment {idx + 1}/{len(chunks)})."""\n\n'
+            + body,
             encoding="utf-8",
         )
     print(f"Wrote {len(chunks)} test modules + conftest to {OUT_DIR}")

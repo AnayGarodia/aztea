@@ -36,13 +36,11 @@ import threading
 import time
 import uuid
 from datetime import datetime, timezone
-from decimal import Decimal, ROUND_HALF_UP
-from typing import Any
 
 import numpy as np
 
-from core import embeddings
 from core import db as _db
+from core import embeddings
 
 DB_PATH = _db.DB_PATH
 _local = _db._local
@@ -135,6 +133,7 @@ _embeddings_cache: dict[str, np.ndarray] = {}
 # Connection
 # ---------------------------------------------------------------------------
 
+
 def _conn() -> sqlite3.Connection:
     """Return a thread-local SQLite connection with WAL mode."""
     return _db.get_raw_connection(_resolved_db_path())
@@ -201,12 +200,8 @@ def _create_agent_embeddings_table(conn: sqlite3.Connection) -> None:
 
 
 def _ensure_agents_indexes(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_agents_name ON agents(name)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_agents_created ON agents(created_at)"
-    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_agents_name ON agents(name)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_agents_created ON agents(created_at)")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_agent_embeddings_embedded_at ON agent_embeddings(embedded_at DESC)"
     )
@@ -227,8 +222,7 @@ def _agents_table_exists(conn: sqlite3.Connection) -> bool:
 
 def _agents_columns(conn: sqlite3.Connection) -> dict:
     return {
-        row["name"]: row
-        for row in conn.execute("PRAGMA table_info(agents)").fetchall()
+        row["name"]: row for row in conn.execute("PRAGMA table_info(agents)").fetchall()
     }
 
 
@@ -237,9 +231,7 @@ def _has_unique_name_constraint(conn: sqlite3.Connection) -> bool:
         if idx["unique"] != 1:
             continue
         idx_name = str(idx["name"]).replace("'", "''")
-        index_cols = conn.execute(
-            f"PRAGMA index_info('{idx_name}')"
-        ).fetchall()
+        index_cols = conn.execute(f"PRAGMA index_info('{idx_name}')").fetchall()
         col_names = [row["name"] for row in index_cols]
         if col_names == ["name"]:
             return True
@@ -264,7 +256,10 @@ def _needs_agents_migration(conn: sqlite3.Connection) -> bool:
         return True
     if cols["name"]["notnull"] != 1 or cols["description"]["notnull"] != 1:
         return True
-    if cols["endpoint_url"]["notnull"] != 1 or cols["price_per_call_usd"]["notnull"] != 1:
+    if (
+        cols["endpoint_url"]["notnull"] != 1
+        or cols["price_per_call_usd"]["notnull"] != 1
+    ):
         return True
     if cols["avg_latency_ms"]["dflt_value"] not in {"0.0", "0", "0.00"}:
         return True
@@ -282,7 +277,11 @@ def _needs_agents_migration(conn: sqlite3.Connection) -> bool:
         return True
     if cols["status"]["dflt_value"] not in {"'active'", '"active"', "active"}:
         return True
-    if cols["review_status"]["dflt_value"] not in {"'approved'", '"approved"', "approved"}:
+    if cols["review_status"]["dflt_value"] not in {
+        "'approved'",
+        '"approved"',
+        "approved",
+    }:
         return True
     if cols["trust_decay_multiplier"]["dflt_value"] not in {"1", "1.0", "1.00"}:
         return True
@@ -386,11 +385,15 @@ def _parse_output_schema(raw_schema) -> dict:
     return _parse_input_schema(raw_schema)
 
 
-def _build_embedding_source_text(name: str, description: str, tags: list[str], input_schema: dict) -> str:
+def _build_embedding_source_text(
+    name: str, description: str, tags: list[str], input_schema: dict
+) -> str:
     clean_name = str(name or "").strip()
     clean_description = str(description or "").strip()
     clean_tags = [str(tag).strip() for tag in tags if str(tag).strip()]
-    schema_text = json.dumps(input_schema if isinstance(input_schema, dict) else {}, sort_keys=True)
+    schema_text = json.dumps(
+        input_schema if isinstance(input_schema, dict) else {}, sort_keys=True
+    )
     return f"{clean_name}. {clean_description}. Tags: {', '.join(clean_tags)}. Input: {schema_text}"
 
 
@@ -434,7 +437,11 @@ def _upsert_agent_embedding_row(
     if existing and existing["source_text"] == source_text:
         return False
 
-    vector = embedding_vector if embedding_vector is not None else embeddings.embed_text(source_text)
+    vector = (
+        embedding_vector
+        if embedding_vector is not None
+        else embeddings.embed_text(source_text)
+    )
     conn.execute(
         """
         INSERT INTO agent_embeddings (agent_id, embedding, source_text, embedded_at)
@@ -464,7 +471,9 @@ def _invalidate_embeddings_cache() -> None:
 
 def _load_embeddings_for_agents(agent_ids: set[str]) -> dict[str, np.ndarray]:
     global _embeddings_cache_expires_at, _embeddings_cache
-    requested = {str(agent_id).strip() for agent_id in agent_ids if str(agent_id).strip()}
+    requested = {
+        str(agent_id).strip() for agent_id in agent_ids if str(agent_id).strip()
+    }
     if not requested:
         return {}
 
@@ -473,7 +482,11 @@ def _load_embeddings_for_agents(agent_ids: set[str]) -> dict[str, np.ndarray]:
         if now >= _embeddings_cache_expires_at:
             _embeddings_cache = {}
             _embeddings_cache_expires_at = now + _EMBEDDING_CACHE_TTL_SECONDS
-        cached = {agent_id: _embeddings_cache[agent_id] for agent_id in requested if agent_id in _embeddings_cache}
+        cached = {
+            agent_id: _embeddings_cache[agent_id]
+            for agent_id in requested
+            if agent_id in _embeddings_cache
+        }
         missing = sorted(requested.difference(cached.keys()))
 
     loaded: dict[str, np.ndarray] = {}
@@ -494,7 +507,11 @@ def _load_embeddings_for_agents(agent_ids: set[str]) -> dict[str, np.ndarray]:
             _embeddings_cache_expires_at,
             time.monotonic() + _EMBEDDING_CACHE_TTL_SECONDS,
         )
-        return {agent_id: _embeddings_cache[agent_id] for agent_id in requested if agent_id in _embeddings_cache}
+        return {
+            agent_id: _embeddings_cache[agent_id]
+            for agent_id in requested
+            if agent_id in _embeddings_cache
+        }
 
 
 def _dedupe_name(base_name: str, used_names: set) -> str:
@@ -510,7 +527,9 @@ def _dedupe_name(base_name: str, used_names: set) -> str:
         n += 1
 
 
-def _normalize_legacy_agent_row(row: dict, used_agent_ids: set, used_names: set) -> tuple:
+def _normalize_legacy_agent_row(
+    row: dict, used_agent_ids: set, used_names: set
+) -> tuple:
     legacy_rowid = row.get("_legacy_rowid", 0)
     raw_name = str(row.get("name") or "").strip()
     name = _dedupe_name(raw_name or "Unnamed Agent", used_names)
@@ -536,11 +555,18 @@ def _normalize_legacy_agent_row(row: dict, used_agent_ids: set, used_names: set)
         suffix += 1
     used_agent_ids.add(agent_id)
 
-    description = str(row.get("description") or "").strip() or "No description provided."
+    description = (
+        str(row.get("description") or "").strip() or "No description provided."
+    )
     owner_id = str(row.get("owner_id") or "").strip() or f"agent:{agent_id}"
-    endpoint_url = str(row.get("endpoint_url") or "").strip() or f"legacy://missing-endpoint/{agent_id}"
+    endpoint_url = (
+        str(row.get("endpoint_url") or "").strip()
+        or f"legacy://missing-endpoint/{agent_id}"
+    )
     healthcheck_url = str(row.get("healthcheck_url") or "").strip() or None
-    price_per_call_usd = _to_non_negative_float(row.get("price_per_call_usd"), default=0.0)
+    price_per_call_usd = _to_non_negative_float(
+        row.get("price_per_call_usd"), default=0.0
+    )
     avg_latency_ms = _to_non_negative_float(row.get("avg_latency_ms"), default=0.0)
     call_latency_ring = str(row.get("call_latency_ring") or "[]").strip() or "[]"
     total_calls = _to_non_negative_int(row.get("total_calls"), default=0)
@@ -561,14 +587,18 @@ def _normalize_legacy_agent_row(row: dict, used_agent_ids: set, used_names: set)
         verified = 1 if int(row.get("verified") or 0) else 0
     except (TypeError, ValueError):
         verified = 0
-    endpoint_health_status = str(row.get("endpoint_health_status") or "unknown").strip().lower()
+    endpoint_health_status = (
+        str(row.get("endpoint_health_status") or "unknown").strip().lower()
+    )
     if endpoint_health_status not in {"unknown", "healthy", "degraded"}:
         endpoint_health_status = "unknown"
     endpoint_consecutive_failures = _to_non_negative_int(
         row.get("endpoint_consecutive_failures"),
         default=0,
     )
-    endpoint_last_checked_at = str(row.get("endpoint_last_checked_at") or "").strip() or None
+    endpoint_last_checked_at = (
+        str(row.get("endpoint_last_checked_at") or "").strip() or None
+    )
     endpoint_last_error = str(row.get("endpoint_last_error") or "").strip() or None
     try:
         internal_only = 1 if int(row.get("internal_only") or 0) else 0
@@ -588,7 +618,9 @@ def _normalize_legacy_agent_row(row: dict, used_agent_ids: set, used_names: set)
     review_note = str(row.get("review_note") or "").strip() or None
     reviewed_at = str(row.get("reviewed_at") or "").strip() or None
     reviewed_by = str(row.get("reviewed_by") or "").strip() or None
-    trust_decay_multiplier = _to_non_negative_float(row.get("trust_decay_multiplier"), default=1.0)
+    trust_decay_multiplier = _to_non_negative_float(
+        row.get("trust_decay_multiplier"), default=1.0
+    )
     if trust_decay_multiplier <= 0:
         trust_decay_multiplier = 1.0
     last_decay_at = str(row.get("last_decay_at") or "").strip() or _CANONICAL_CREATED_AT
@@ -689,7 +721,9 @@ def _ensure_agent_identity_columns(conn: sqlite3.Connection) -> None:
 def _ensure_kind_column(conn: sqlite3.Connection) -> None:
     """Add kind column to agents table if not present. Idempotent."""
     try:
-        conn.execute("ALTER TABLE agents ADD COLUMN kind TEXT NOT NULL DEFAULT 'self_hosted'")
+        conn.execute(
+            "ALTER TABLE agents ADD COLUMN kind TEXT NOT NULL DEFAULT 'self_hosted'"
+        )
     except sqlite3.OperationalError as exc:
         if "duplicate column name" not in str(exc).lower():
             raise
@@ -750,6 +784,7 @@ def init_db() -> None:
 # Serialization
 # ---------------------------------------------------------------------------
 
+
 def _row_to_dict(row: sqlite3.Row) -> dict:
     d = dict(row)
     try:
@@ -760,7 +795,9 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
 
     try:
         parsed_call_ring = json.loads(d.get("call_latency_ring") or "[]")
-        d["call_latency_ring"] = parsed_call_ring if isinstance(parsed_call_ring, list) else []
+        d["call_latency_ring"] = (
+            parsed_call_ring if isinstance(parsed_call_ring, list) else []
+        )
     except (json.JSONDecodeError, TypeError):
         d["call_latency_ring"] = []
     try:
@@ -770,19 +807,25 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
         d["input_schema"] = {}
     try:
         parsed_output_schema = json.loads(d.get("output_schema") or "{}")
-        d["output_schema"] = parsed_output_schema if isinstance(parsed_output_schema, dict) else {}
+        d["output_schema"] = (
+            parsed_output_schema if isinstance(parsed_output_schema, dict) else {}
+        )
     except (json.JSONDecodeError, TypeError):
         d["output_schema"] = {}
     d["healthcheck_url"] = str(d.get("healthcheck_url") or "").strip() or None
-    d["output_verifier_url"] = (d.get("output_verifier_url") or None)
+    d["output_verifier_url"] = d.get("output_verifier_url") or None
     try:
         raw_examples = d.get("output_examples")
         parsed_examples = json.loads(raw_examples) if raw_examples else None
-        d["output_examples"] = parsed_examples if isinstance(parsed_examples, list) else None
+        d["output_examples"] = (
+            parsed_examples if isinstance(parsed_examples, list) else None
+        )
     except (json.JSONDecodeError, TypeError):
         d["output_examples"] = None
     d["verified"] = bool(int(d.get("verified") or 0))
-    endpoint_health_status = str(d.get("endpoint_health_status") or "unknown").strip().lower()
+    endpoint_health_status = (
+        str(d.get("endpoint_health_status") or "unknown").strip().lower()
+    )
     if endpoint_health_status not in {"unknown", "healthy", "degraded"}:
         endpoint_health_status = "unknown"
     d["endpoint_health_status"] = endpoint_health_status
@@ -790,7 +833,9 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
         d.get("endpoint_consecutive_failures"),
         default=0,
     )
-    d["endpoint_last_checked_at"] = str(d.get("endpoint_last_checked_at") or "").strip() or None
+    d["endpoint_last_checked_at"] = (
+        str(d.get("endpoint_last_checked_at") or "").strip() or None
+    )
     d["endpoint_last_error"] = str(d.get("endpoint_last_error") or "").strip() or None
     d["internal_only"] = bool(int(d.get("internal_only") or 0))
     cacheable_raw = d.get("cacheable")
@@ -804,11 +849,15 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     status = str(d.get("status") or "active").strip().lower()
     d["status"] = status if status in {"active", "suspended", "banned"} else "active"
     review_status = str(d.get("review_status") or "approved").strip().lower()
-    d["review_status"] = review_status if review_status in REVIEW_STATUSES else "approved"
+    d["review_status"] = (
+        review_status if review_status in REVIEW_STATUSES else "approved"
+    )
     d["review_note"] = str(d.get("review_note") or "").strip() or None
     d["reviewed_at"] = str(d.get("reviewed_at") or "").strip() or None
     d["reviewed_by"] = str(d.get("reviewed_by") or "").strip() or None
-    d["trust_decay_multiplier"] = _to_non_negative_float(d.get("trust_decay_multiplier"), default=1.0) or 1.0
+    d["trust_decay_multiplier"] = (
+        _to_non_negative_float(d.get("trust_decay_multiplier"), default=1.0) or 1.0
+    )
     d["last_decay_at"] = str(d.get("last_decay_at") or _CANONICAL_CREATED_AT)
     d["model_provider"] = str(d.get("model_provider") or "").strip().lower() or None
     d["model_id"] = str(d.get("model_id") or "").strip() or None
@@ -839,7 +888,10 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     if raw_pc:
         try:
             import json as _json
-            d["payout_curve"] = _json.loads(raw_pc) if isinstance(raw_pc, str) else raw_pc
+
+            d["payout_curve"] = (
+                _json.loads(raw_pc) if isinstance(raw_pc, str) else raw_pc
+            )
         except Exception:
             d["payout_curve"] = None
     else:

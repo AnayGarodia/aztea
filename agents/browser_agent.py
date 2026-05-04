@@ -21,6 +21,7 @@ Output:
     "error": str   # only on failure
   }
 """
+
 from __future__ import annotations
 
 import base64
@@ -153,16 +154,24 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
             page = context.new_page()
 
             if capture_network:
+
                 def _on_response(response: Any) -> None:  # noqa: ANN401
-                    network_log.append({
-                        "url": response.url,
-                        "method": response.request.method,
-                        "status": response.status,
-                    })
+                    network_log.append(
+                        {
+                            "url": response.url,
+                            "method": response.request.method,
+                            "status": response.status,
+                        }
+                    )
+
                 page.on("response", _on_response)
             page.on(
                 "console",
-                lambda message: console_messages.append(f"{message.type}: {message.text}") if len(console_messages) < 20 else None,
+                lambda message: (
+                    console_messages.append(f"{message.type}: {message.text}")
+                    if len(console_messages) < 20
+                    else None
+                ),
             )
 
             response = page.goto(url, wait_until="domcontentloaded", timeout=15_000)
@@ -178,22 +187,33 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
             title = page.title() or ""
             html = page.content()
             if len(html) > _HTML_TRUNCATE:
-                html = html[:_HTML_TRUNCATE] + f"\n<!-- [truncated {len(html) - _HTML_TRUNCATE} chars] -->"
+                html = (
+                    html[:_HTML_TRUNCATE]
+                    + f"\n<!-- [truncated {len(html) - _HTML_TRUNCATE} chars] -->"
+                )
             try:
                 visible_text = page.locator("body").inner_text(timeout=5_000)
             except Exception:
                 visible_text = ""
             if len(visible_text) > _TEXT_TRUNCATE:
-                visible_text = visible_text[:_TEXT_TRUNCATE] + f"\n[truncated {len(visible_text) - _TEXT_TRUNCATE} chars]"
+                visible_text = (
+                    visible_text[:_TEXT_TRUNCATE]
+                    + f"\n[truncated {len(visible_text) - _TEXT_TRUNCATE} chars]"
+                )
             links = _extract_links(page)
 
-            screenshot_bytes = page.screenshot(full_page=(action != "screenshot"), type="png")
+            screenshot_bytes = page.screenshot(
+                full_page=(action != "screenshot"), type="png"
+            )
             pdf_bytes = page.pdf(print_background=True) if action == "pdf" else None
             final_url = page.url
             context.close()
             browser.close()
     except Exception as exc:
-        return _err("browser_agent.navigation_failed", f"Browser navigation failed: {type(exc).__name__}: {exc}")
+        return _err(
+            "browser_agent.navigation_failed",
+            f"Browser navigation failed: {type(exc).__name__}: {exc}",
+        )
 
     elapsed_ms = int((time.monotonic() - t_start) * 1000)
     b64_screenshot = base64.b64encode(screenshot_bytes).decode("ascii")

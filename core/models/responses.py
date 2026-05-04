@@ -1,16 +1,17 @@
 """Pydantic models (split from legacy models.py for maintainability)."""
+
 from __future__ import annotations
 
-import re
-from typing import Annotated, Literal, TypeAlias, TypedDict
+from typing import Literal
 
 try:
     from typing import NotRequired
 except ImportError:  # Python 3.10
-    from typing_extensions import NotRequired
+    pass
 
 try:
     import jsonschema as _jsonschema
+
     _JSONSCHEMA_AVAILABLE = True
 except ImportError:  # pragma: no cover
     _JSONSCHEMA_AVAILABLE = False
@@ -19,17 +20,10 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    JsonValue,
-    RootModel,
-    TypeAdapter,
-    ValidationError,
-    field_validator,
-    model_validator,
 )
 
-from core import auth as _auth
-
 from .core_types import *  # noqa: F403
+
 
 class ErrorResponse(BaseModel):
     error: str
@@ -338,14 +332,22 @@ class JobsListResponse(BaseModel):
 
 
 class A2ATaskSendRequest(BaseModel):
-    skill_id: str = Field(description="The Aztea agent_id to hire (skill ID in A2A terms).")
-    input: JSONObject = Field(default_factory=dict, description="Input payload for the agent.")
-    callback_url: str | None = Field(default=None, description="Optional webhook URL for task completion push.")
+    skill_id: str = Field(
+        description="The Aztea agent_id to hire (skill ID in A2A terms)."
+    )
+    input: JSONObject = Field(
+        default_factory=dict, description="Input payload for the agent."
+    )
+    callback_url: str | None = Field(
+        default=None, description="Optional webhook URL for task completion push."
+    )
     client_id: str | None = Field(
         default=None,
         description="Optional calling-surface identifier for analytics and routing.",
     )
-    metadata: JSONObject = Field(default_factory=dict, description="Optional A2A passthrough metadata.")
+    metadata: JSONObject = Field(
+        default_factory=dict, description="Optional A2A passthrough metadata."
+    )
 
 
 class JobMessageResponse(BaseModel):

@@ -11,14 +11,12 @@ leaves the database in a consistent state.
 
 from __future__ import annotations
 
+import argparse
 import os
 import re
 import sqlite3
-import argparse
 
-_MIGRATIONS_DIR = os.path.join(
-    os.path.dirname(__file__), "..", "migrations"
-)
+_MIGRATIONS_DIR = os.path.join(os.path.dirname(__file__), "..", "migrations")
 _MIGRATION_FILENAME_RE = re.compile(r"^(\d{4})_.+\.sql$")
 
 
@@ -54,7 +52,9 @@ def _applied_versions(conn: sqlite3.Connection) -> set[int]:
     return {row[0] for row in rows}
 
 
-def _is_idempotent_add_column_duplicate(statement: str, exc: sqlite3.OperationalError) -> bool:
+def _is_idempotent_add_column_duplicate(
+    statement: str, exc: sqlite3.OperationalError
+) -> bool:
     message = str(exc).strip().lower()
     if "duplicate column name" not in message:
         return False

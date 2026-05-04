@@ -17,7 +17,9 @@ def registry_register(
 ) -> core_models.RegistryRegisterResponse:
     _require_scope(caller, "worker")
     if caller["type"] == "agent_key":
-        raise HTTPException(status_code=403, detail="Agent-scoped keys cannot register new agents.")
+        raise HTTPException(
+            status_code=403, detail="Agent-scoped keys cannot register new agents."
+        )
     _MAX_AGENTS_PER_OWNER = 20
     if caller["type"] != "master":
         current_count = registry.count_owner_agents(caller["owner_id"])
@@ -37,10 +39,14 @@ def registry_register(
             _probe_register_endpoint_or_400(safe_endpoint_url)
         safe_healthcheck_url = None
         if body.healthcheck_url:
-            safe_healthcheck_url = _validate_outbound_url(body.healthcheck_url, "healthcheck_url")
+            safe_healthcheck_url = _validate_outbound_url(
+                body.healthcheck_url, "healthcheck_url"
+            )
         safe_verifier_url = None
         if body.output_verifier_url:
-            safe_verifier_url = _validate_outbound_url(body.output_verifier_url, "output_verifier_url")
+            safe_verifier_url = _validate_outbound_url(
+                body.output_verifier_url, "output_verifier_url"
+            )
         registration_payload = {
             "name": body.name,
             "description": body.description,
@@ -83,7 +89,9 @@ def registry_register(
             payout_curve=body.payout_curve,
             cacheable=body.cacheable,
         )
-        agent = registry.get_agent_with_reputation(agent_id, include_unapproved=True) or registry.get_agent(
+        agent = registry.get_agent_with_reputation(
+            agent_id, include_unapproved=True
+        ) or registry.get_agent(
             agent_id,
             include_unapproved=True,
         )
@@ -127,8 +135,7 @@ def _mcp_tools_and_lookup() -> tuple[list[dict[str, Any]], dict[str, dict[str, A
     agents = _mcp_active_agents()
     entries = mcp_manifest.build_mcp_tool_entries(agents)
     return [entry["tool"] for entry in entries], {
-        str(entry["tool_name"]): agent
-        for entry, agent in zip(entries, agents)
+        str(entry["tool_name"]): agent for entry, agent in zip(entries, agents)
     }
 
 
@@ -205,7 +212,14 @@ def _parse_data_uri(value: str) -> tuple[str | None, str | None]:
 
 def _mcp_text_from_payload(payload: Any) -> str:
     if isinstance(payload, dict):
-        for key in ("summary", "message", "answer", "title", "one_line_summary", "signal_reasoning"):
+        for key in (
+            "summary",
+            "message",
+            "answer",
+            "title",
+            "one_line_summary",
+            "signal_reasoning",
+        ):
             value = payload.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
@@ -215,7 +229,9 @@ def _mcp_text_from_payload(payload: Any) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
-def _mcp_media_content_from_artifacts(artifacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _mcp_media_content_from_artifacts(
+    artifacts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     rendered: list[dict[str, Any]] = []
     for artifact in artifacts[:6]:
         mime = str(artifact.get("mime") or "").strip().lower()
@@ -225,16 +241,26 @@ def _mcp_media_content_from_artifacts(artifacts: list[dict[str, Any]]) -> list[d
         parsed_mime, base64_payload = _parse_data_uri(source)
         effective_mime = parsed_mime or mime
         if effective_mime.startswith("image/") and base64_payload:
-            rendered.append({"type": "image", "mimeType": effective_mime, "data": base64_payload})
+            rendered.append(
+                {"type": "image", "mimeType": effective_mime, "data": base64_payload}
+            )
             continue
         if source.startswith("http://") or source.startswith("https://"):
-            rendered.append({"type": "resource", "resource": {"uri": source, "mimeType": effective_mime}})
+            rendered.append(
+                {
+                    "type": "resource",
+                    "resource": {"uri": source, "mimeType": effective_mime},
+                }
+            )
             continue
         if base64_payload:
             rendered.append(
                 {
                     "type": "resource",
-                    "resource": {"uri": f"data:{effective_mime};base64,{base64_payload}", "mimeType": effective_mime},
+                    "resource": {
+                        "uri": f"data:{effective_mime};base64,{base64_payload}",
+                        "mimeType": effective_mime,
+                    },
                 }
             )
             continue
@@ -242,7 +268,9 @@ def _mcp_media_content_from_artifacts(artifacts: list[dict[str, Any]]) -> list[d
 
 
 def _mcp_content_from_payload(payload: Any) -> list[dict[str, Any]]:
-    content: list[dict[str, Any]] = [{"type": "text", "text": _mcp_text_from_payload(payload)}]
+    content: list[dict[str, Any]] = [
+        {"type": "text", "text": _mcp_text_from_payload(payload)}
+    ]
     if isinstance(payload, dict):
         raw_artifacts = payload.get("artifacts")
         if isinstance(raw_artifacts, list):
@@ -388,6 +416,7 @@ def agent_did_document(agent_id: str, request: Request) -> JSONResponse:
         )
     try:
         from core import crypto as _crypto
+
         jwk = _crypto.public_key_to_jwk(public_pem)
     except Exception:
         raise HTTPException(
@@ -433,12 +462,22 @@ def a2a_tasks_send(
 ) -> JSONResponse:
     _require_scope(caller, "caller")
     agent = registry.get_agent(body.skill_id, include_unapproved=True)
-    if agent is None or not _caller_can_access_agent(caller, agent) or agent.get("status") in {"banned"}:
-        raise HTTPException(status_code=404, detail=f"Skill (agent) '{body.skill_id}' not found.")
+    if (
+        agent is None
+        or not _caller_can_access_agent(caller, agent)
+        or agent.get("status") in {"banned"}
+    ):
+        raise HTTPException(
+            status_code=404, detail=f"Skill (agent) '{body.skill_id}' not found."
+        )
     if agent.get("status") == "suspended":
-        raise HTTPException(status_code=503, detail=f"Skill (agent) '{body.skill_id}' is suspended.")
+        raise HTTPException(
+            status_code=503, detail=f"Skill (agent) '{body.skill_id}' is suspended."
+        )
     if agent.get("internal_only"):
-        raise HTTPException(status_code=404, detail=f"Skill (agent) '{body.skill_id}' not found.")
+        raise HTTPException(
+            status_code=404, detail=f"Skill (agent) '{body.skill_id}' not found."
+        )
 
     price_cents = _usd_to_cents(agent["price_per_call_usd"])
     fee_bearer_policy = "caller"
@@ -483,20 +522,28 @@ def a2a_tasks_send(
             callback_url=body.callback_url or None,
         )
     except Exception:
-        payments.post_call_refund(caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent["agent_id"])
+        payments.post_call_refund(
+            caller_wallet["wallet_id"],
+            charge_tx_id,
+            caller_charge_cents,
+            agent["agent_id"],
+        )
         raise HTTPException(status_code=500, detail="Failed to create task.")
 
     _record_job_event(job, "job.created", actor_owner_id=caller["owner_id"])
-    return JSONResponse(content={
-        "id": job["job_id"],
-        "skill_id": agent["agent_id"],
-        "status": "submitted",
-        "job_id": job["job_id"],
-        "price_cents": price_cents,
-        "caller_charge_cents": caller_charge_cents,
-        "created_at": job["created_at"],
-        "aztea_job": _job_response(job, caller),
-    }, status_code=201)
+    return JSONResponse(
+        content={
+            "id": job["job_id"],
+            "skill_id": agent["agent_id"],
+            "status": "submitted",
+            "job_id": job["job_id"],
+            "price_cents": price_cents,
+            "caller_charge_cents": caller_charge_cents,
+            "created_at": job["created_at"],
+            "aztea_job": _job_response(job, caller),
+        },
+        status_code=201,
+    )
 
 
 @app.get(
@@ -516,19 +563,24 @@ def a2a_tasks_get(
     if job is None or not _caller_can_view_job(caller, job):
         raise HTTPException(status_code=403, detail="Task not found or not authorized.")
     a2a_status_map = {
-        "pending": "submitted", "claimed": "working", "complete": "completed",
-        "failed": "failed", "awaiting_clarification": "input-required",
+        "pending": "submitted",
+        "claimed": "working",
+        "complete": "completed",
+        "failed": "failed",
+        "awaiting_clarification": "input-required",
     }
-    return JSONResponse(content={
-        "id": task_id,
-        "skill_id": job["agent_id"],
-        "status": a2a_status_map.get(job.get("status", ""), job.get("status", "")),
-        "output": job.get("output_payload"),
-        "error": job.get("error_message"),
-        "created_at": job.get("created_at"),
-        "completed_at": job.get("completed_at"),
-        "aztea_job": _job_response(job, caller),
-    })
+    return JSONResponse(
+        content={
+            "id": task_id,
+            "skill_id": job["agent_id"],
+            "status": a2a_status_map.get(job.get("status", ""), job.get("status", "")),
+            "output": job.get("output_payload"),
+            "error": job.get("error_message"),
+            "created_at": job.get("created_at"),
+            "completed_at": job.get("completed_at"),
+            "aztea_job": _job_response(job, caller),
+        }
+    )
 
 
 @app.post(
@@ -548,8 +600,13 @@ def a2a_tasks_cancel(
     if job is None or not _caller_can_view_job(caller, job):
         raise HTTPException(status_code=403, detail="Task not found or not authorized.")
     if job.get("status") not in {"pending"}:
-        raise HTTPException(status_code=409, detail=f"Cannot cancel task in status '{job.get('status')}'.")
-    cancelled = jobs.update_job_status(task_id, "failed", error_message="Cancelled by caller.", completed=True)
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot cancel task in status '{job.get('status')}'.",
+        )
+    cancelled = jobs.update_job_status(
+        task_id, "failed", error_message="Cancelled by caller.", completed=True
+    )
     if cancelled:
         _settle_failed_job(cancelled, actor_owner_id=caller["owner_id"])
     return JSONResponse(content={"id": task_id, "status": "cancelled"})
@@ -559,9 +616,14 @@ def a2a_tasks_cancel(
 # Claude Code / SDK callers can abort a long-running compare or arxiv research
 # session. Refunds the pre-call charge via _settle_failed_job. See the
 # 2026-05-01 production-eval audit for context (no async cancel was the #3 P0).
-_CANCELLABLE_JOB_STATUSES: frozenset[str] = frozenset({
-    "pending", "claimed", "running", "awaiting_clarification",
-})
+_CANCELLABLE_JOB_STATUSES: frozenset[str] = frozenset(
+    {
+        "pending",
+        "claimed",
+        "running",
+        "awaiting_clarification",
+    }
+)
 
 
 @app.post(
@@ -724,10 +786,12 @@ def mcp_manifest_payload(
     )
 
 
-_MCP_COMPUTE_HEAVY_AGENT_IDS = frozenset({
-    _PYTHON_EXECUTOR_AGENT_ID,
-    _IMAGE_GENERATOR_AGENT_ID,
-})
+_MCP_COMPUTE_HEAVY_AGENT_IDS = frozenset(
+    {
+        _PYTHON_EXECUTOR_AGENT_ID,
+        _IMAGE_GENERATOR_AGENT_ID,
+    }
+)
 
 
 @app.post(
@@ -756,12 +820,12 @@ def mcp_invoke(
     if agent_key is None and user_key is None and not is_master:
         raise HTTPException(
             status_code=403,
-            detail=error_codes.make_error("auth.invalid_key", "Invalid or inactive API key."),
+            detail=error_codes.make_error(
+                "auth.invalid_key", "Invalid or inactive API key."
+            ),
         )
     caller_key_id = str(
-        (agent_key or {}).get("key_id")
-        or (user_key or {}).get("key_id")
-        or "master"
+        (agent_key or {}).get("key_id") or (user_key or {}).get("key_id") or "master"
     )
 
     # 2. Per-key sliding-window rate limit: 60 req/min.
@@ -779,7 +843,9 @@ def mcp_invoke(
     _, lookup = _mcp_tools_and_lookup()
     agent = lookup.get(body.tool_name)
     if agent is None:
-        raise HTTPException(status_code=404, detail=f"Tool '{body.tool_name}' not found.")
+        raise HTTPException(
+            status_code=404, detail=f"Tool '{body.tool_name}' not found."
+        )
 
     # Build caller context from the agent key.
     if agent_key is not None:
@@ -798,7 +864,11 @@ def mcp_invoke(
             "scopes": user_key.get("scopes") or ["caller"],
         }
     else:
-        caller = {"type": "master", "owner_id": "master", "scopes": ["caller", "worker", "admin"]}
+        caller = {
+            "type": "master",
+            "owner_id": "master",
+            "scopes": ["caller", "worker", "admin"],
+        }
 
     # 4. Dispatch. registry_call owns pre-call charge, payout, and refund-on-failure.
     agent_id = str(agent["agent_id"])
@@ -819,7 +889,9 @@ def mcp_invoke(
 
     # 6. Audit log (non-blocking; failure does not abort the response).
     input_json = json.dumps(body.input, default=str) if body.input is not None else "{}"
-    _mcp_log_invocation(agent_id, caller_key_id, body.tool_name, input_json, duration_ms, success)
+    _mcp_log_invocation(
+        agent_id, caller_key_id, body.tool_name, input_json, duration_ms, success
+    )
 
     payload = _mcp_payload_from_response(delegated)
     response_body: dict[str, Any] = {
@@ -884,7 +956,11 @@ def _build_model_catalog(
                 "success_rate": float(agent.get("success_rate") or 0.0),
             }
         )
-        if include_examples and capped_examples > 0 and len(bucket["work_examples"]) < capped_examples:
+        if (
+            include_examples
+            and capped_examples > 0
+            and len(bucket["work_examples"]) < capped_examples
+        ):
             examples = agent.get("output_examples")
             if isinstance(examples, list):
                 for example in examples:
@@ -905,14 +981,18 @@ def _build_model_catalog(
         model_agents = bucket.pop("agents")
         if model_agents:
             bucket["avg_success_rate"] = round(
-                sum(float(item.get("success_rate") or 0.0) for item in model_agents) / len(model_agents),
+                sum(float(item.get("success_rate") or 0.0) for item in model_agents)
+                / len(model_agents),
                 6,
             )
         else:
             bucket["avg_success_rate"] = 0.0
         bucket["agents"] = sorted(
             model_agents,
-            key=lambda item: (item.get("success_rate") or 0.0, -(item.get("price_per_call_usd") or 0.0)),
+            key=lambda item: (
+                item.get("success_rate") or 0.0,
+                -(item.get("price_per_call_usd") or 0.0),
+            ),
             reverse=True,
         )
         models.append(bucket)
@@ -956,6 +1036,7 @@ _agents_list_cache: dict | None = None
 _agents_list_cache_at: float = 0.0
 _AGENTS_LIST_TTL = 15.0  # seconds — agents don't change by the second
 
+
 @app.get(
     "/registry/agents",
     response_model=core_models.RegistryAgentsResponse,
@@ -972,11 +1053,21 @@ def registry_list(
 ) -> core_models.RegistryAgentsResponse:
     global _agents_list_cache, _agents_list_cache_at
     import time as _time
+
     include_unapproved = caller is not None and _caller_is_admin(caller)
     # Use cached agent+reputation rows for non-admin, no-filter requests
-    use_cache = not include_unapproved and tag is None and model_provider is None and include_reputation
+    use_cache = (
+        not include_unapproved
+        and tag is None
+        and model_provider is None
+        and include_reputation
+    )
     now = _time.monotonic()
-    if use_cache and _agents_list_cache is not None and (now - _agents_list_cache_at) < _AGENTS_LIST_TTL:
+    if (
+        use_cache
+        and _agents_list_cache is not None
+        and (now - _agents_list_cache_at) < _AGENTS_LIST_TTL
+    ):
         agents = _agents_list_cache
     else:
         try:
@@ -1000,7 +1091,15 @@ def registry_list(
             _agents_list_cache_at = now
     agents = _sorted_agents(agents, rank_by=rank_by)
     bulk_stats = _compute_bulk_agent_stats([a["agent_id"] for a in agents])
-    return JSONResponse(content={"agents": [_agent_response(a, caller, bulk_stats.get(a["agent_id"])) for a in agents], "count": len(agents)})
+    return JSONResponse(
+        content={
+            "agents": [
+                _agent_response(a, caller, bulk_stats.get(a["agent_id"]))
+                for a in agents
+            ],
+            "count": len(agents),
+        }
+    )
 
 
 @app.get(
@@ -1016,7 +1115,15 @@ def registry_list_mine(
 ) -> JSONResponse:
     agents = registry.get_agents_by_owner(caller["owner_id"])
     bulk_stats = _compute_bulk_agent_stats([a["agent_id"] for a in agents])
-    return JSONResponse(content={"agents": [_agent_response(a, caller, bulk_stats.get(a["agent_id"])) for a in agents], "count": len(agents)})
+    return JSONResponse(
+        content={
+            "agents": [
+                _agent_response(a, caller, bulk_stats.get(a["agent_id"]))
+                for a in agents
+            ],
+            "count": len(agents),
+        }
+    )
 
 
 class AgentUpdateRequest(BaseModel):
@@ -1067,9 +1174,13 @@ def registry_update_agent(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     if updated is None:
-        raise HTTPException(status_code=404, detail="Agent not found or you don't own it.")
+        raise HTTPException(
+            status_code=404, detail="Agent not found or you don't own it."
+        )
     bulk_stats = _compute_bulk_agent_stats([agent_id])
-    return JSONResponse(content=_agent_response(updated, caller, bulk_stats.get(agent_id)))
+    return JSONResponse(
+        content=_agent_response(updated, caller, bulk_stats.get(agent_id))
+    )
 
 
 @app.delete(
@@ -1088,5 +1199,7 @@ def registry_delist_agent(
     _require_scope(caller, "worker")
     ok = registry.delist_agent(agent_id, caller["owner_id"])
     if not ok:
-        raise HTTPException(status_code=404, detail="Agent not found or you don't own it.")
+        raise HTTPException(
+            status_code=404, detail="Agent not found or you don't own it."
+        )
     return JSONResponse(content={"delisted": True, "agent_id": agent_id})

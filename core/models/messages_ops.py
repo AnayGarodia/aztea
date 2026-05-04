@@ -1,17 +1,19 @@
 """Pydantic models (split from legacy models.py for maintainability)."""
+
 from __future__ import annotations
 
 import json
 import re
-from typing import Annotated, Literal, TypeAlias, TypedDict
+from typing import Annotated, Literal
 
 try:
     from typing import NotRequired
 except ImportError:  # Python 3.10
-    from typing_extensions import NotRequired
+    pass
 
 try:
     import jsonschema as _jsonschema
+
     _JSONSCHEMA_AVAILABLE = True
 except ImportError:  # pragma: no cover
     _JSONSCHEMA_AVAILABLE = False
@@ -20,7 +22,6 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    JsonValue,
     RootModel,
     TypeAdapter,
     ValidationError,
@@ -28,14 +29,13 @@ from pydantic import (
     model_validator,
 )
 
-from core import auth as _auth
-
-from .core_types import *  # noqa: F403
 from . import core_types as _core_types_pkg
+from .core_types import *  # noqa: F403
 
 for _k, _v in vars(_core_types_pkg).items():
     if _k.startswith("_") and not _k.startswith("__"):
         globals()[_k] = _v
+
 
 class ClarificationRequestPayload(BaseModel):
     question: str
@@ -242,7 +242,9 @@ class ToolCallMessage(_TypedJobMessageBase):
 
     @model_validator(mode="after")
     def sync_correlation_id(self):
-        corr = _normalize_optional_text(self.correlation_id or self.payload.correlation_id)
+        corr = _normalize_optional_text(
+            self.correlation_id or self.payload.correlation_id
+        )
         self.correlation_id = corr
         self.payload.correlation_id = corr
         return self
@@ -254,7 +256,9 @@ class ToolResultMessage(_TypedJobMessageBase):
 
     @model_validator(mode="after")
     def sync_correlation_id(self):
-        corr = _normalize_optional_text(self.correlation_id or self.payload.correlation_id)
+        corr = _normalize_optional_text(
+            self.correlation_id or self.payload.correlation_id
+        )
         if corr is None:
             raise ValueError("correlation_id is required for tool_result messages")
         self.correlation_id = corr
@@ -298,7 +302,9 @@ def canonical_job_message_type(msg_type: str, *, allow_legacy: bool = True) -> s
     return LEGACY_JOB_MESSAGE_TYPE_ALIASES.get(normalized_type, normalized_type)
 
 
-def _normalize_typed_payload_for_compat(msg_type: str, payload: JSONObject) -> JSONObject:
+def _normalize_typed_payload_for_compat(
+    msg_type: str, payload: JSONObject
+) -> JSONObject:
     normalized = dict(payload)
 
     if msg_type == "clarification_request":
@@ -308,7 +314,9 @@ def _normalize_typed_payload_for_compat(msg_type: str, payload: JSONObject) -> J
         normalized["question"] = question
         schema = normalized.get("input_schema") or normalized.get("schema")
         if schema is not None and not isinstance(schema, dict):
-            raise ValueError("clarification_request payload.input_schema must be an object.")
+            raise ValueError(
+                "clarification_request payload.input_schema must be an object."
+            )
         if schema is not None:
             normalized["input_schema"] = schema
             normalized.pop("schema", None)
@@ -330,9 +338,13 @@ def _normalize_typed_payload_for_compat(msg_type: str, payload: JSONObject) -> J
         try:
             percent = int(percent_raw)
         except (TypeError, ValueError) as exc:
-            raise ValueError("progress payload.percent must be an integer between 0 and 100.") from exc
+            raise ValueError(
+                "progress payload.percent must be an integer between 0 and 100."
+            ) from exc
         if percent < 0 or percent > 100:
-            raise ValueError("progress payload.percent must be an integer between 0 and 100.")
+            raise ValueError(
+                "progress payload.percent must be an integer between 0 and 100."
+            )
         normalized["percent"] = percent
         note = str(normalized.get("note") or normalized.get("message") or "").strip()
         if note:
@@ -350,7 +362,12 @@ def _normalize_typed_payload_for_compat(msg_type: str, payload: JSONObject) -> J
         return normalized
 
     if msg_type == "note":
-        text = str(normalized.get("text") or normalized.get("note") or normalized.get("message") or "").strip()
+        text = str(
+            normalized.get("text")
+            or normalized.get("note")
+            or normalized.get("message")
+            or ""
+        ).strip()
         if not text:
             raise ValueError("note payload.text is required.")
         normalized["text"] = text
@@ -370,7 +387,9 @@ def _normalize_typed_payload_for_compat(msg_type: str, payload: JSONObject) -> J
         elif body is None:
             raise ValueError("agent_message payload.body is required.")
         elif not isinstance(body, dict):
-            raise ValueError("agent_message payload.body must be an object or non-empty string.")
+            raise ValueError(
+                "agent_message payload.body must be an object or non-empty string."
+            )
         to_id = _normalize_optional_text(normalized.get("to_id"))
         if to_id is None:
             normalized.pop("to_id", None)
@@ -379,7 +398,9 @@ def _normalize_typed_payload_for_compat(msg_type: str, payload: JSONObject) -> J
         return normalized
 
     if msg_type == "tool_call":
-        tool_name = str(normalized.get("tool_name") or normalized.get("name") or "").strip()
+        tool_name = str(
+            normalized.get("tool_name") or normalized.get("name") or ""
+        ).strip()
         if not tool_name:
             raise ValueError("tool_call payload.tool_name is required.")
         normalized["tool_name"] = tool_name
@@ -437,7 +458,9 @@ def normalize_job_message_body(
         raise ValueError("payload must be an object.")
 
     normalized_correlation = _normalize_optional_text(correlation_id)
-    canonical_type = canonical_job_message_type(normalized_type, allow_legacy=allow_legacy)
+    canonical_type = canonical_job_message_type(
+        normalized_type, allow_legacy=allow_legacy
+    )
 
     if normalized_type == "clarification_needed" and allow_legacy:
         payload_model = ClarificationRequestPayload.model_validate(normalized_payload)
@@ -450,10 +473,14 @@ def normalize_job_message_body(
 
     if normalized_type == "clarification" and allow_legacy:
         if "request_message_id" in normalized_payload:
-            payload_model = ClarificationResponsePayload.model_validate(normalized_payload)
+            payload_model = ClarificationResponsePayload.model_validate(
+                normalized_payload
+            )
             normalized_data = payload_model.model_dump()
         else:
-            payload_model = LegacyClarificationResponsePayload.model_validate(normalized_payload)
+            payload_model = LegacyClarificationResponsePayload.model_validate(
+                normalized_payload
+            )
             normalized_data = payload_model.model_dump(exclude_none=True)
         return {
             "type": normalized_type,
@@ -463,7 +490,9 @@ def normalize_job_message_body(
         }
 
     if canonical_type in TYPED_JOB_MESSAGE_TYPES:
-        typed_payload = _normalize_typed_payload_for_compat(canonical_type, normalized_payload)
+        typed_payload = _normalize_typed_payload_for_compat(
+            canonical_type, normalized_payload
+        )
         try:
             parsed = parse_typed_job_message(
                 {
@@ -534,7 +563,12 @@ class OnboardingValidateRequest(BaseModel):
 
 class JobEventHookCreateRequest(BaseModel):
     model_config = ConfigDict(
-        json_schema_extra={"example": {"target_url": "https://hooks.example.com/job-events", "secret": "hook_secret"}}
+        json_schema_extra={
+            "example": {
+                "target_url": "https://hooks.example.com/job-events",
+                "secret": "hook_secret",
+            }
+        }
     )
 
     target_url: str
@@ -549,7 +583,9 @@ class HookDeliveryProcessRequest(BaseModel):
 
 class JobsSweepRequest(BaseModel):
     model_config = ConfigDict(
-        json_schema_extra={"example": {"retry_delay_seconds": 30, "sla_seconds": 900, "limit": 100}}
+        json_schema_extra={
+            "example": {"retry_delay_seconds": 30, "sla_seconds": 900, "limit": 100}
+        }
     )
 
     retry_delay_seconds: int = Field(default=DEFAULT_RETRY_DELAY_SECONDS, ge=0, le=3600)
@@ -570,9 +606,13 @@ class RegistryCallRequest(RootModel[JSONObject]):
     def guard_payload_shape(self):
         """Raise ValueError if the invoke payload exceeds 64 KB or violates structural constraints."""
         payload = self.root
-        encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(
+            "utf-8"
+        )
         if len(encoded) > 64 * 1024:
-            raise ValueError("Input payload is too large (max 64KB). Reduce field count or text size.")
+            raise ValueError(
+                "Input payload is too large (max 64KB). Reduce field count or text size."
+            )
 
         max_depth = 8
         max_keys = 120
@@ -589,7 +629,9 @@ class RegistryCallRequest(RootModel[JSONObject]):
 
         def _walk(value, depth: int) -> None:
             if depth > max_depth:
-                raise ValueError(f"Input payload is too deeply nested (max depth {max_depth}).")
+                raise ValueError(
+                    f"Input payload is too deeply nested (max depth {max_depth})."
+                )
             if isinstance(value, str):
                 if len(value) > max_string_len:
                     raise ValueError(
@@ -615,7 +657,9 @@ class RegistryCallRequest(RootModel[JSONObject]):
                     if not key:
                         raise ValueError("Input payload contains an empty field name.")
                     if len(key) > 100:
-                        raise ValueError("Input field names must be 100 characters or fewer.")
+                        raise ValueError(
+                            "Input field names must be 100 characters or fewer."
+                        )
                     _walk(nested, depth + 1)
 
         _walk(payload, depth=0)
@@ -702,7 +746,9 @@ class RegistrySearchRequest(BaseModel):
         for item in value:
             field_name = str(item).strip()
             if not field_name:
-                raise ValueError("required_input_fields entries must be non-empty strings")
+                raise ValueError(
+                    "required_input_fields entries must be non-empty strings"
+                )
             if field_name in seen:
                 continue
             seen.add(field_name)
@@ -714,7 +760,9 @@ class RegistrySearchRequest(BaseModel):
     def search_model_provider_valid(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        normalized = re.sub(r"[^a-z0-9._-]+", "-", str(value).strip().lower()).strip("-")
+        normalized = re.sub(r"[^a-z0-9._-]+", "-", str(value).strip().lower()).strip(
+            "-"
+        )
         return normalized or None
 
     @field_validator("region_locked")
@@ -724,4 +772,3 @@ class RegistrySearchRequest(BaseModel):
             return None
         normalized = re.sub(r"[^a-z0-9-]+", "-", str(value).strip().lower()).strip("-")
         return normalized or None
-

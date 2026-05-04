@@ -80,7 +80,9 @@ def _percentile(sorted_values: list[int], quantile: float) -> int:
     if low == high:
         return int(sorted_values[low])
     fraction = position - low
-    interpolated = sorted_values[low] + ((sorted_values[high] - sorted_values[low]) * fraction)
+    interpolated = sorted_values[low] + (
+        (sorted_values[high] - sorted_values[low]) * fraction
+    )
     return int(round(interpolated))
 
 
@@ -94,7 +96,9 @@ def compute_latency_estimate(
     Returns ``{p50_ms, p95_ms, sample_count}`` or the fallback value when the
     ring is empty.
     """
-    fallback = _to_non_negative_int(round(_to_non_negative_float(fallback_latency_ms, default=0.0)), default=0)
+    fallback = _to_non_negative_int(
+        round(_to_non_negative_float(fallback_latency_ms, default=0.0)), default=0
+    )
     latencies = sorted(
         _to_non_negative_int(item.get("latency_ms"), default=-1)
         for item in ring
@@ -108,7 +112,9 @@ def compute_latency_estimate(
             "p95_latency_ms": fallback,
             "confidence": "low",
         }
-    confidence = "high" if sample_count >= 20 else "medium" if sample_count >= 5 else "low"
+    confidence = (
+        "high" if sample_count >= 20 else "medium" if sample_count >= 5 else "low"
+    )
     return {
         "p50_latency_ms": _percentile(latencies, 0.50),
         "p95_latency_ms": _percentile(latencies, 0.95),

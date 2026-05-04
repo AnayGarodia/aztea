@@ -45,7 +45,8 @@ def _catalog_entries(agents: list[dict[str, Any]]) -> list[dict[str, Any]]:
             {
                 "name": str(tool.get("name") or "").strip(),
                 "description": str(tool.get("description") or "").strip(),
-                "input_schema": tool.get("input_schema") or {"type": "object", "properties": {}, "required": []},
+                "input_schema": tool.get("input_schema")
+                or {"type": "object", "properties": {}, "required": []},
                 "kind": "meta_tool",
                 "agent_id": None,
                 "agent": None,
@@ -56,14 +57,19 @@ def _catalog_entries(agents: list[dict[str, Any]]) -> list[dict[str, Any]]:
         tool = entry.get("tool") or {}
         agent_id = str(entry.get("agent_id") or "").strip() or None
         agent = next(
-            (item for item in agents if str(item.get("agent_id") or "").strip() == agent_id),
+            (
+                item
+                for item in agents
+                if str(item.get("agent_id") or "").strip() == agent_id
+            ),
             None,
         )
         catalog.append(
             {
                 "name": str(tool.get("name") or "").strip(),
                 "description": str(tool.get("description") or "").strip(),
-                "input_schema": tool.get("input_schema") or {"type": "object", "additionalProperties": True},
+                "input_schema": tool.get("input_schema")
+                or {"type": "object", "additionalProperties": True},
                 "kind": "registry_agent",
                 "agent_id": agent_id,
                 "agent": agent,
@@ -116,7 +122,9 @@ def build_openai_chat_manifest(agents: list[dict[str, Any]]) -> dict[str, Any]:
             "agent_id": item["agent_id"],
             "privacy": {
                 "pii_safe": bool(agent.get("pii_safe")) if agent else False,
-                "outputs_not_stored": bool(agent.get("outputs_not_stored")) if agent else False,
+                "outputs_not_stored": bool(agent.get("outputs_not_stored"))
+                if agent
+                else False,
                 "audit_logged": bool(agent.get("audit_logged")) if agent else False,
                 "region_locked": agent.get("region_locked") if agent else None,
             },

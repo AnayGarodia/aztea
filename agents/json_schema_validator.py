@@ -43,16 +43,18 @@ Output:
     "summary": str
   }
 """
+
 from __future__ import annotations
 
 import json
 import re
-from urllib.parse import urlparse
 from typing import Any
+from urllib.parse import urlparse
 
 try:
-    from jsonschema import Draft202012Validator, Draft201909Validator, Draft7Validator
+    from jsonschema import Draft7Validator, Draft201909Validator, Draft202012Validator
     from jsonschema.exceptions import SchemaError
+
     _JSONSCHEMA_AVAILABLE = True
 except ImportError:  # pragma: no cover
     _JSONSCHEMA_AVAILABLE = False
@@ -61,7 +63,15 @@ except ImportError:  # pragma: no cover
 _MAX_DOCUMENT_CHARS = 200_000
 _MAX_SCHEMA_CHARS = 50_000
 _MAX_ERRORS = 100
-_VALID_SCHEMA_TYPES = {"object", "array", "string", "integer", "number", "boolean", "null"}
+_VALID_SCHEMA_TYPES = {
+    "object",
+    "array",
+    "string",
+    "integer",
+    "number",
+    "boolean",
+    "null",
+}
 _SUPPORTED_DRAFTS = ("2020-12", "2019-09", "7")
 
 _DRAFT_MAP: dict[str, Any] = {}
@@ -197,13 +207,20 @@ def _type_matches(value: Any, declared_type: str) -> bool:
     if declared_type == "integer":
         return isinstance(value, int) and not isinstance(value, bool)
     if declared_type == "number":
-        return (isinstance(value, int) or isinstance(value, float)) and not isinstance(value, bool)
+        return (isinstance(value, int) or isinstance(value, float)) and not isinstance(
+            value, bool
+        )
     if declared_type == "null":
         return value is None
     return True
 
 
-def _validate_subset(document: Any, schema: dict[str, Any], path: list[Any] | None = None, schema_path: list[Any] | None = None) -> list[_SubsetValidationError]:
+def _validate_subset(
+    document: Any,
+    schema: dict[str, Any],
+    path: list[Any] | None = None,
+    schema_path: list[Any] | None = None,
+) -> list[_SubsetValidationError]:
     current_path = list(path or [])
     current_schema_path = list(schema_path or [])
     errors: list[_SubsetValidationError] = []
@@ -375,7 +392,9 @@ def _validate_subset(document: Any, schema: dict[str, Any], path: list[Any] | No
 def run(payload: dict) -> dict:
     """Validate a JSON document against a JSON Schema."""
     if not isinstance(payload, dict):
-        return _err("json_schema_validator.invalid_payload", "payload must be an object")
+        return _err(
+            "json_schema_validator.invalid_payload", "payload must be an object"
+        )
 
     document = payload.get("document")
     if document is None:
@@ -453,10 +472,15 @@ def run(payload: dict) -> dict:
             return _err(
                 "json_schema_validator.invalid_schema",
                 f"schema is not a valid JSON Schema: {exc.message}",
-                schema_path=list(exc.absolute_path) if hasattr(exc, "absolute_path") else None,
+                schema_path=list(exc.absolute_path)
+                if hasattr(exc, "absolute_path")
+                else None,
             )
         except Exception as exc:
-            return _err("json_schema_validator.invalid_schema", f"schema validation failed: {exc}")
+            return _err(
+                "json_schema_validator.invalid_schema",
+                f"schema validation failed: {exc}",
+            )
 
     projected: list[dict[str, Any]] = []
     raw_error_count = 0
@@ -473,9 +497,12 @@ def run(payload: dict) -> dict:
                     "json_path": _to_json_path(path_list),
                     "message": error.message,
                     "validator": error.validator,
-                    "validator_value": error.validator_value if isinstance(
-                        error.validator_value, (str, int, float, bool, list, dict, type(None))
-                    ) else str(error.validator_value),
+                    "validator_value": error.validator_value
+                    if isinstance(
+                        error.validator_value,
+                        (str, int, float, bool, list, dict, type(None)),
+                    )
+                    else str(error.validator_value),
                     "schema_path": _to_json_pointer(schema_path_list),
                 }
             )
@@ -500,7 +527,9 @@ def run(payload: dict) -> dict:
     elif raw_error_count == 1:
         summary = f"1 validation error: {projected[0]['message']}"
     else:
-        summary = f"{raw_error_count} validation errors. First: {projected[0]['message']}"
+        summary = (
+            f"{raw_error_count} validation errors. First: {projected[0]['message']}"
+        )
 
     return {
         "valid": valid,

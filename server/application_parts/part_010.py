@@ -16,6 +16,7 @@ def jobs_fail(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.JobResponse:
     _require_scope(caller, "worker")
+
     def _operation() -> tuple[dict, int]:
         job = jobs.get_job(job_id)
         if job is None:
@@ -23,7 +24,9 @@ def jobs_fail(
 
         actor_owner_id = caller["owner_id"]
         if not _caller_worker_authorized_for_job(caller, job):
-            raise HTTPException(status_code=403, detail="Not authorized for this agent job.")
+            raise HTTPException(
+                status_code=403, detail="Not authorized for this agent job."
+            )
         timed_out = _timeout_stale_lease_at_touchpoint(
             job,
             actor_owner_id=actor_owner_id,
@@ -91,6 +94,7 @@ def jobs_retry(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.JobResponse:
     _require_scope(caller, "worker")
+
     def _operation() -> tuple[dict, int]:
         job = jobs.get_job(job_id)
         if job is None:
@@ -98,7 +102,11 @@ def jobs_retry(
 
         actor_owner_id = caller["owner_id"]
         require_auth = caller["type"] == "user"
-        claim_owner_id = actor_owner_id if require_auth else (job.get("claim_owner_id") or actor_owner_id)
+        claim_owner_id = (
+            actor_owner_id
+            if require_auth
+            else (job.get("claim_owner_id") or actor_owner_id)
+        )
         if require_auth:
             _assert_worker_claim(job, caller, actor_owner_id, body.claim_token)
 
@@ -114,10 +122,14 @@ def jobs_retry(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc))
         if updated is None:
-            raise HTTPException(status_code=409, detail="Unable to schedule retry for this job.")
+            raise HTTPException(
+                status_code=409, detail="Unable to schedule retry for this job."
+            )
 
         if updated["status"] == "failed":
-            settled = _settle_failed_job(updated, actor_owner_id=actor_owner_id, event_type="job.retry_exhausted")
+            settled = _settle_failed_job(
+                updated, actor_owner_id=actor_owner_id, event_type="job.retry_exhausted"
+            )
             return _job_response(settled, caller), 200
 
         _record_job_event(
@@ -244,7 +256,10 @@ def jobs_message_create(
     elif msg_type == "tool_result":
         correlation_id = str(payload.get("correlation_id") or "").strip()
         if not correlation_id:
-            raise HTTPException(status_code=400, detail="tool_result payload.correlation_id is required.")
+            raise HTTPException(
+                status_code=400,
+                detail="tool_result payload.correlation_id is required.",
+            )
         if not _job_has_tool_call_correlation(job_id, correlation_id):
             raise HTTPException(
                 status_code=400,
@@ -282,8 +297,15 @@ def _extract_job_message_filters(
     to_id: str | None = None,
 ) -> dict[str, str | None]:
     normalized_type = str(msg_type or "").strip().lower() or None
-    if normalized_type is not None and normalized_type not in _TYPED_JOB_MESSAGE_TYPES.union(_LEGACY_JOB_MESSAGE_TYPES):
-        raise HTTPException(status_code=400, detail=f"Unsupported job message type filter: {normalized_type}")
+    if (
+        normalized_type is not None
+        and normalized_type
+        not in _TYPED_JOB_MESSAGE_TYPES.union(_LEGACY_JOB_MESSAGE_TYPES)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported job message type filter: {normalized_type}",
+        )
     normalized_from_id = str(from_id or "").strip() or None
     normalized_channel = str(channel or "").strip().lower() or None
     normalized_to_id = str(to_id or "").strip() or None
@@ -300,15 +322,24 @@ def _job_message_matches_filters(message: dict, filters: dict[str, str | None]) 
     expected_from_id = filters.get("from_id")
     expected_channel = filters.get("channel")
     expected_to_id = filters.get("to_id")
-    if expected_type and str(message.get("type") or "").strip().lower() != expected_type:
+    if (
+        expected_type
+        and str(message.get("type") or "").strip().lower() != expected_type
+    ):
         return False
-    if expected_from_id and str(message.get("from_id") or "").strip() != expected_from_id:
+    if (
+        expected_from_id
+        and str(message.get("from_id") or "").strip() != expected_from_id
+    ):
         return False
     payload = message.get("payload")
     if expected_channel or expected_to_id:
         if not isinstance(payload, dict):
             return False
-        if expected_channel and str(payload.get("channel") or "").strip().lower() != expected_channel:
+        if (
+            expected_channel
+            and str(payload.get("channel") or "").strip().lower() != expected_channel
+        ):
             return False
         if expected_to_id and str(payload.get("to_id") or "").strip() != expected_to_id:
             return False
@@ -409,7 +440,10 @@ def jobs_message_stream(
                     continue
 
                 latest_job = jobs.get_job(job_id)
-                if latest_job is None or latest_job.get("status") in _JOB_TERMINAL_STATUSES:
+                if (
+                    latest_job is None
+                    or latest_job.get("status") in _JOB_TERMINAL_STATUSES
+                ):
                     break
 
                 try:
@@ -417,7 +451,10 @@ def jobs_message_stream(
                 except Empty:
                     yield ": heartbeat\n\n"
                     latest_job = jobs.get_job(job_id)
-                    if latest_job is None or latest_job.get("status") in _JOB_TERMINAL_STATUSES:
+                    if (
+                        latest_job is None
+                        or latest_job.get("status") in _JOB_TERMINAL_STATUSES
+                    ):
                         break
                     continue
 
@@ -432,12 +469,15 @@ def jobs_message_stream(
             _unsubscribe_job_stream(job_id, subscriber)
 
     headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
-    return StreamingResponse(_iter_events(), media_type="text/event-stream", headers=headers)
+    return StreamingResponse(
+        _iter_events(), media_type="text/event-stream", headers=headers
+    )
 
 
 # ---------------------------------------------------------------------------
 # Reputation + operations routes
 # ---------------------------------------------------------------------------
+
 
 @app.post(
     "/jobs/{job_id}/rating",
@@ -453,11 +493,16 @@ def jobs_rate(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.JobRatingResponse:
     _require_scope(caller, "caller")
+
     def _operation() -> tuple[dict, int]:
         job = jobs.get_job(job_id)
         # Return 403 in both "not found" and "not authorized" cases to prevent job-ID enumeration.
-        if job is None or (caller["type"] != "master" and job["caller_owner_id"] != caller["owner_id"]):
-            raise HTTPException(status_code=403, detail="Job not found or not authorized.")
+        if job is None or (
+            caller["type"] != "master" and job["caller_owner_id"] != caller["owner_id"]
+        ):
+            raise HTTPException(
+                status_code=403, detail="Job not found or not authorized."
+            )
 
         # Block rating on non-terminal jobs (prevents trust farming)
         if job["status"] not in ("complete", "verified"):
@@ -471,7 +516,9 @@ def jobs_rate(
             )
 
         # Block self-rating (caller rates their own agent)
-        agent = registry.get_agent(str(job.get("agent_id") or ""), include_unapproved=True)
+        agent = registry.get_agent(
+            str(job.get("agent_id") or ""), include_unapproved=True
+        )
         if agent and agent.get("owner_id") == caller["owner_id"]:
             raise HTTPException(
                 status_code=400,
@@ -483,10 +530,14 @@ def jobs_rate(
             )
 
         if disputes.has_dispute_for_job(job_id):
-            raise HTTPException(status_code=409, detail="Ratings are locked once a dispute is filed.")
+            raise HTTPException(
+                status_code=409, detail="Ratings are locked once a dispute is filed."
+            )
 
         try:
-            rating = reputation.record_job_quality_rating(job_id, caller["owner_id"], body.rating)
+            rating = reputation.record_job_quality_rating(
+                job_id, caller["owner_id"], body.rating
+            )
         except ValueError as exc:
             message = str(exc)
             if "already has a quality rating" in message:
@@ -502,7 +553,9 @@ def jobs_rate(
 
         metrics = reputation.compute_trust_metrics(job["agent_id"])
         if body.rating == 5:
-            five_star_count = reputation.count_caller_given_ratings(caller["owner_id"], rating=5)
+            five_star_count = reputation.count_caller_given_ratings(
+                caller["owner_id"], rating=5
+            )
             if five_star_count >= 10:
                 milestone = five_star_count // 10
                 payments.adjust_caller_trust_once(
@@ -515,13 +568,17 @@ def jobs_rate(
         clawback_result = None
         if agent and job.get("settled_at"):
             from core import payout_curve as _pc
+
             raw_curve = agent.get("payout_curve")
             curve = _pc.parse_curve(raw_curve) if raw_curve else None
             fraction = _pc.fraction_for_rating(curve, body.rating)
             if fraction < 1.0:
                 distribution = payments.compute_success_distribution(
                     int(job.get("price_cents") or 0),
-                    platform_fee_pct=int(job.get("platform_fee_pct_at_create") or payments.PLATFORM_FEE_PCT),
+                    platform_fee_pct=int(
+                        job.get("platform_fee_pct_at_create")
+                        or payments.PLATFORM_FEE_PCT
+                    ),
                     fee_bearer_policy=str(job.get("fee_bearer_policy") or "caller"),
                 )
                 agent_payout_cents = int(distribution["agent_payout_cents"])
@@ -540,7 +597,11 @@ def jobs_rate(
             actor_owner_id=caller["owner_id"],
             payload={"rating": body.rating},
         )
-        return {"rating": rating, "agent_reputation": metrics, "clawback": clawback_result}, 201
+        return {
+            "rating": rating,
+            "agent_reputation": metrics,
+            "clawback": clawback_result,
+        }, 201
 
     return _run_idempotent_json_response(
         request=request,
@@ -569,7 +630,9 @@ def jobs_rate_caller(
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
     if not _caller_worker_authorized_for_job(caller, job):
-        raise HTTPException(status_code=403, detail="Only the job's agent owner can rate the caller.")
+        raise HTTPException(
+            status_code=403, detail="Only the job's agent owner can rate the caller."
+        )
 
     # Block rating on non-terminal jobs
     if job["status"] not in ("complete", "verified", "failed"):
@@ -582,7 +645,9 @@ def jobs_rate_caller(
             ),
         )
 
-    agent_owner_for_rating = job["agent_owner_id"] if caller["type"] == "agent_key" else caller["owner_id"]
+    agent_owner_for_rating = (
+        job["agent_owner_id"] if caller["type"] == "agent_key" else caller["owner_id"]
+    )
 
     try:
         rating = reputation.record_caller_rating(
@@ -605,7 +670,9 @@ def jobs_rate_caller(
     try:
         new_trust = caller_reputation.get("trust_score")
         if new_trust is not None:
-            payments.update_wallet_caller_trust(job["caller_owner_id"], float(new_trust))
+            payments.update_wallet_caller_trust(
+                job["caller_owner_id"], float(new_trust)
+            )
     except (TypeError, ValueError):
         pass
     _record_job_event(
@@ -614,7 +681,10 @@ def jobs_rate_caller(
         actor_owner_id=caller["owner_id"],
         payload={"rating": body.rating},
     )
-    return JSONResponse(content={"rating": rating, "caller_reputation": caller_reputation}, status_code=201)
+    return JSONResponse(
+        content={"rating": rating, "caller_reputation": caller_reputation},
+        status_code=201,
+    )
 
 
 @app.get(
@@ -633,7 +703,8 @@ def jobs_get_dispute(
     # Return 403 in both "not found" and "not authorized" cases to prevent job-ID enumeration.
     if job is None or (
         caller["type"] != "master"
-        and caller["owner_id"] not in (job.get("caller_owner_id"), job.get("agent_owner_id"))
+        and caller["owner_id"]
+        not in (job.get("caller_owner_id"), job.get("agent_owner_id"))
     ):
         raise HTTPException(status_code=403, detail="Job not found or not authorized.")
     dispute_row = disputes.get_dispute_by_job(job_id)
@@ -654,7 +725,8 @@ def ops_platform_stats(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> JSONResponse:
     _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timedelta, timezone
+
     since_30d = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
     with jobs._conn() as conn:
         totals = conn.execute(
@@ -678,10 +750,13 @@ def ops_platform_stats(
             """,
             (since_30d,),
         ).fetchone()
-        completed_30d_count = conn.execute(
-            "SELECT COUNT(*) AS n FROM jobs WHERE status = 'complete' AND created_at >= ?",
-            (since_30d,),
-        ).fetchone()["n"] or 1
+        completed_30d_count = (
+            conn.execute(
+                "SELECT COUNT(*) AS n FROM jobs WHERE status = 'complete' AND created_at >= ?",
+                (since_30d,),
+            ).fetchone()["n"]
+            or 1
+        )
         latency_rows = conn.execute(
             """
             SELECT (julianday(completed_at) - julianday(claimed_at)) * 86400 AS latency_s
@@ -696,27 +771,37 @@ def ops_platform_stats(
     lats = [float(r["latency_s"]) for r in latency_rows if r["latency_s"] is not None]
     if lats:
         mid = len(lats) // 2
-        median_latency = round(lats[mid] if len(lats) % 2 else (lats[mid - 1] + lats[mid]) / 2, 2)
+        median_latency = round(
+            lats[mid] if len(lats) % 2 else (lats[mid - 1] + lats[mid]) / 2, 2
+        )
     else:
         median_latency = None
     total_completed = int((totals["total_completed"] or 0) if totals else 0)
     completed_30d = int((totals["completed_30d"] or 0) if totals else 0)
     total_value_cents = int((totals["total_value_cents"] or 0) if totals else 0)
     total_disputes = int((dispute_stats["total_disputes"] or 0) if dispute_stats else 0)
-    resolved_disputes = int((dispute_stats["resolved_disputes"] or 0) if dispute_stats else 0)
+    resolved_disputes = int(
+        (dispute_stats["resolved_disputes"] or 0) if dispute_stats else 0
+    )
     disputes_30d = int((dispute_stats["disputes_30d"] or 0) if dispute_stats else 0)
-    dispute_rate = round(disputes_30d / completed_30d_count, 4) if completed_30d_count > 0 else 0.0
-    resolution_rate = round(resolved_disputes / total_disputes, 4) if total_disputes > 0 else 1.0
-    return JSONResponse(content={
-        "total_agents_registered": agent_count,
-        "total_jobs_completed": total_completed,
-        "total_jobs_last_30_days": completed_30d,
-        "total_value_settled_cents": total_value_cents,
-        "dispute_rate": dispute_rate,
-        "dispute_resolution_rate": resolution_rate,
-        "median_job_latency_seconds": median_latency,
-        "platform_uptime_pct": 99.9,
-    })
+    dispute_rate = (
+        round(disputes_30d / completed_30d_count, 4) if completed_30d_count > 0 else 0.0
+    )
+    resolution_rate = (
+        round(resolved_disputes / total_disputes, 4) if total_disputes > 0 else 1.0
+    )
+    return JSONResponse(
+        content={
+            "total_agents_registered": agent_count,
+            "total_jobs_completed": total_completed,
+            "total_jobs_last_30_days": completed_30d,
+            "total_value_settled_cents": total_value_cents,
+            "dispute_rate": dispute_rate,
+            "dispute_resolution_rate": resolution_rate,
+            "median_job_latency_seconds": median_latency,
+            "platform_uptime_pct": 99.9,
+        }
+    )
 
 
 @app.get(
@@ -733,11 +818,16 @@ def disputes_get(
     """Fetch a dispute by its ID."""
     dispute_row = disputes.get_dispute(dispute_id)
     if dispute_row is None:
-        raise HTTPException(status_code=404, detail=f"Dispute '{dispute_id}' not found.")
+        raise HTTPException(
+            status_code=404, detail=f"Dispute '{dispute_id}' not found."
+        )
     if caller["type"] != "master":
         job = jobs.get_job(dispute_row["job_id"])
         owner_id = caller["owner_id"]
-        if job and owner_id not in (job.get("caller_owner_id"), job.get("agent_owner_id")):
+        if job and owner_id not in (
+            job.get("caller_owner_id"),
+            job.get("agent_owner_id"),
+        ):
             raise HTTPException(status_code=403, detail="Not authorized.")
     dispute_row["judgments"] = disputes.get_judgments(dispute_id)
     return JSONResponse(content=_dispute_view(dispute_row))
@@ -757,28 +847,41 @@ def jobs_dispute(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.DisputeResponse:
     if not (_caller_has_scope(caller, "caller") or _caller_has_scope(caller, "worker")):
-        raise HTTPException(status_code=403, detail="This endpoint requires caller or worker scope.")
+        raise HTTPException(
+            status_code=403, detail="This endpoint requires caller or worker scope."
+        )
     job = jobs.get_job(job_id)
     # Return 403 for missing jobs to prevent job-ID enumeration; ownership is validated below.
     if job is None:
         raise HTTPException(status_code=403, detail="Job not found or not authorized.")
     if job.get("status") != "complete" or not job.get("completed_at"):
-        raise HTTPException(status_code=400, detail="Disputes can only be filed for completed jobs.")
+        raise HTTPException(
+            status_code=400, detail="Disputes can only be filed for completed jobs."
+        )
 
     completed_at = _parse_iso_datetime(job.get("completed_at"))
     if completed_at is None:
-        raise HTTPException(status_code=400, detail="Job completion timestamp is invalid.")
+        raise HTTPException(
+            status_code=400, detail="Job completion timestamp is invalid."
+        )
     deadline = _dispute_window_deadline(job)
     if deadline is None:
-        raise HTTPException(status_code=400, detail="Job completion timestamp is invalid.")
+        raise HTTPException(
+            status_code=400, detail="Job completion timestamp is invalid."
+        )
     if datetime.now(timezone.utc) > deadline:
-        raise HTTPException(status_code=400, detail="Dispute window has expired for this job.")
+        raise HTTPException(
+            status_code=400, detail="Dispute window has expired for this job."
+        )
 
     side = _dispute_side_for_caller(caller, job)
 
     # Block self-disputes (caller and agent have same owner)
-    if job.get("caller_owner_id") and job.get("agent_owner_id") and \
-            job["caller_owner_id"] == job["agent_owner_id"]:
+    if (
+        job.get("caller_owner_id")
+        and job.get("agent_owner_id")
+        and job["caller_owner_id"] == job["agent_owner_id"]
+    ):
         raise HTTPException(
             status_code=400,
             detail=error_codes.make_error(
@@ -789,14 +892,18 @@ def jobs_dispute(
         )
 
     if disputes.has_dispute_for_job(job_id):
-        raise HTTPException(status_code=409, detail="A dispute already exists for this job.")
+        raise HTTPException(
+            status_code=409, detail="A dispute already exists for this job."
+        )
     if reputation.get_job_quality_rating(job_id) is not None:
         raise HTTPException(
             status_code=409,
             detail="You already rated this job; disputes can only be filed before submitting a rating.",
         )
 
-    filing_deposit_cents = _compute_dispute_filing_deposit_cents(int(job.get("price_cents") or 0))
+    filing_deposit_cents = _compute_dispute_filing_deposit_cents(
+        int(job.get("price_cents") or 0)
+    )
     conn = payments._conn()
     lock_summary: dict[str, Any] = {}
     deposit_summary: dict[str, Any] = {}
@@ -824,7 +931,9 @@ def jobs_dispute(
         conn.execute("COMMIT")
     except sqlite3.IntegrityError:
         conn.execute("ROLLBACK")
-        raise HTTPException(status_code=409, detail="A dispute already exists for this job.")
+        raise HTTPException(
+            status_code=409, detail="A dispute already exists for this job."
+        )
     except ValueError as exc:
         conn.execute("ROLLBACK")
         raise HTTPException(status_code=400, detail=str(exc))
@@ -876,9 +985,13 @@ def disputes_judge(
     _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
     _require_admin_ip_allowlist(request)
     if disputes.get_dispute(dispute_id) is None:
-        raise HTTPException(status_code=404, detail=f"Dispute '{dispute_id}' not found.")
+        raise HTTPException(
+            status_code=404, detail=f"Dispute '{dispute_id}' not found."
+        )
     try:
-        dispute_payload, settlement = _resolve_dispute_with_judges(dispute_id, actor_owner_id=caller["owner_id"])
+        dispute_payload, settlement = _resolve_dispute_with_judges(
+            dispute_id, actor_owner_id=caller["owner_id"]
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except RuntimeError:
@@ -907,7 +1020,9 @@ def admin_list_disputes(
     for d in rows:
         job = jobs.get_job(d["job_id"])
         judgments_list = disputes.get_judgments(d["dispute_id"])
-        llm_judgments = [j for j in judgments_list if j.get("judge_kind") != "human_admin"]
+        llm_judgments = [
+            j for j in judgments_list if j.get("judge_kind") != "human_admin"
+        ]
         if len(llm_judgments) >= 2:
             v0, v1 = llm_judgments[0]["verdict"], llm_judgments[1]["verdict"]
             verdict_summary = (
@@ -916,19 +1031,21 @@ def admin_list_disputes(
                 else "Judges disagreed; needs ruling"
             )
         elif len(llm_judgments) == 1:
-            verdict_summary = f"1 judge: {llm_judgments[0]['verdict'].replace('_', ' ')}"
+            verdict_summary = (
+                f"1 judge: {llm_judgments[0]['verdict'].replace('_', ' ')}"
+            )
         else:
             verdict_summary = "Awaiting judgment"
-        result.append({
-            **d,
-            "price_cents": int((job or {}).get("price_cents") or 0),
-            "caller_owner_id": (job or {}).get("caller_owner_id"),
-            "agent_owner_id": (job or {}).get("agent_owner_id"),
-            "agent_id": (job or {}).get("agent_id"),
-            "verdict_summary": verdict_summary,
-            "judgment_count": len(judgments_list),
-        })
+        result.append(
+            {
+                **d,
+                "price_cents": int((job or {}).get("price_cents") or 0),
+                "caller_owner_id": (job or {}).get("caller_owner_id"),
+                "agent_owner_id": (job or {}).get("agent_owner_id"),
+                "agent_id": (job or {}).get("agent_id"),
+                "verdict_summary": verdict_summary,
+                "judgment_count": len(judgments_list),
+            }
+        )
     result.sort(key=lambda x: x.get("filed_at") or "")
     return JSONResponse(content={"disputes": result, "total": len(result)})
-
-

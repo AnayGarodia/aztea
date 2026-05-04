@@ -137,7 +137,9 @@ def create_pipeline(
                 str(owner_id).strip(),
                 str(name).strip(),
                 str(description or "").strip(),
-                json.dumps(definition, ensure_ascii=True, sort_keys=True, separators=(",", ":")),
+                json.dumps(
+                    definition, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+                ),
                 1 if is_public else 0,
                 now,
                 now,
@@ -189,7 +191,9 @@ def upsert_pipeline(
                 str(owner_id).strip(),
                 str(name).strip(),
                 str(description or "").strip(),
-                json.dumps(definition, ensure_ascii=True, sort_keys=True, separators=(",", ":")),
+                json.dumps(
+                    definition, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+                ),
                 1 if is_public else 0,
                 now,
                 now,
@@ -211,7 +215,9 @@ def get_pipeline(pipeline_id: str) -> dict | None:
     return _pipeline_row_to_dict(row)
 
 
-def list_pipelines(owner_id: str | None = None, *, include_public: bool = False) -> list[dict]:
+def list_pipelines(
+    owner_id: str | None = None, *, include_public: bool = False
+) -> list[dict]:
     """Return pipelines for ``owner_id``, optionally including public ones."""
     init_db()
     clauses: list[str] = []
@@ -267,7 +273,12 @@ def create_run(
                 run_id,
                 str(pipeline_id).strip(),
                 str(caller_owner_id).strip(),
-                json.dumps(input_payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")),
+                json.dumps(
+                    input_payload,
+                    ensure_ascii=True,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
                 now,
                 now,
             ),
@@ -313,7 +324,12 @@ def update_run_step(run_id: str, node_id: str, output_payload) -> dict | None:
             WHERE run_id = ?
             """,
             (
-                json.dumps(step_results, ensure_ascii=True, sort_keys=True, separators=(",", ":")),
+                json.dumps(
+                    step_results,
+                    ensure_ascii=True,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
                 now,
                 normalized_run_id,
             ),
@@ -337,7 +353,12 @@ def complete_run(run_id: str, output_payload) -> dict | None:
             WHERE run_id = ?
             """,
             (
-                json.dumps(output_payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")),
+                json.dumps(
+                    output_payload,
+                    ensure_ascii=True,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
                 now,
                 now,
                 str(run_id).strip(),

@@ -62,7 +62,9 @@ _SKILL_DEFAULT_OUTPUT_SCHEMA = {
 }
 
 
-@app.post("/skills", status_code=201, responses=_error_responses(400, 401, 403, 409, 413, 429))
+@app.post(
+    "/skills", status_code=201, responses=_error_responses(400, 401, 403, 409, 413, 429)
+)
 @limiter.limit("10/minute")
 def skills_create(
     request: Request,
@@ -72,7 +74,9 @@ def skills_create(
     """Upload a SKILL.md, register an agent for it, and persist the skill row."""
     _require_scope(caller, "worker")
     if caller["type"] == "agent_key":
-        raise HTTPException(status_code=403, detail="Agent-scoped keys cannot register hosted skills.")
+        raise HTTPException(
+            status_code=403, detail="Agent-scoped keys cannot register hosted skills."
+        )
     payload = body or {}
     raw_md = str(payload.get("skill_md") or "")
     if not raw_md.strip():
@@ -82,9 +86,14 @@ def skills_create(
     try:
         price_per_call_usd = float(payload.get("price_per_call_usd"))
     except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="price_per_call_usd is required and must be a number.")
+        raise HTTPException(
+            status_code=400,
+            detail="price_per_call_usd is required and must be a number.",
+        )
     if not (price_per_call_usd >= 0.0 and price_per_call_usd <= 25.0):
-        raise HTTPException(status_code=400, detail="price_per_call_usd must be between 0 and 25.")
+        raise HTTPException(
+            status_code=400, detail="price_per_call_usd must be between 0 and 25."
+        )
 
     try:
         parsed = _skill_parser.parse_skill_md(raw_md, source="upload")
@@ -107,16 +116,22 @@ def skills_create(
     display_name = str(base.get("name") or parsed.name).strip()
     description = str(base.get("description") or parsed.description).strip()
     if not display_name:
-        raise HTTPException(status_code=400, detail="Skill name is empty after parsing.")
+        raise HTTPException(
+            status_code=400, detail="Skill name is empty after parsing."
+        )
     if not description:
-        raise HTTPException(status_code=400, detail="Skill description is empty after parsing.")
+        raise HTTPException(
+            status_code=400, detail="Skill description is empty after parsing."
+        )
 
     # Optional override fields the builder may set in the request body.
     requested_temperature = payload.get("temperature")
     requested_max_tokens = payload.get("max_output_tokens")
     requested_chain = payload.get("model_chain")
     if requested_chain is not None and not isinstance(requested_chain, list):
-        raise HTTPException(status_code=400, detail="model_chain must be a list of strings.")
+        raise HTTPException(
+            status_code=400, detail="model_chain must be a list of strings."
+        )
 
     # Resolve a unique listing name. ``agents.name`` has a UNIQUE constraint,
     # so we retry with a numeric suffix when a collision occurs.
@@ -147,7 +162,10 @@ def skills_create(
             last_error = exc
             candidate_name = f"{display_name} #{attempt + 1}"
     if agent_id is None:
-        raise HTTPException(status_code=409, detail=f"Could not allocate a unique name (last: {last_error}).")
+        raise HTTPException(
+            status_code=409,
+            detail=f"Could not allocate a unique name (last: {last_error}).",
+        )
 
     try:
         skill_row = _hosted_skills.create_hosted_skill(
@@ -173,15 +191,22 @@ def skills_create(
                 },
             },
             model_chain=requested_chain,
-            temperature=float(requested_temperature) if requested_temperature is not None else 0.2,
-            max_output_tokens=int(requested_max_tokens) if requested_max_tokens is not None else 1500,
+            temperature=float(requested_temperature)
+            if requested_temperature is not None
+            else 0.2,
+            max_output_tokens=int(requested_max_tokens)
+            if requested_max_tokens is not None
+            else 1500,
         )
     except Exception:
         # Roll back the agent registration so we never leave a half-persisted skill.
         try:
             registry.delist_agent(agent_id, caller["owner_id"])
         except Exception:
-            _LOG.exception("Failed to roll back agent %s after hosted_skills insert failure.", agent_id)
+            _LOG.exception(
+                "Failed to roll back agent %s after hosted_skills insert failure.",
+                agent_id,
+            )
         raise
 
     # Now rewrite the agent's endpoint_url to point at the just-created skill_id.
@@ -208,7 +233,9 @@ def skills_create(
                 final_endpoint,
             )
     except Exception:
-        _LOG.warning("Failed to send skill-live email for skill %s", skill_row.get("skill_id"))
+        _LOG.warning(
+            "Failed to send skill-live email for skill %s", skill_row.get("skill_id")
+        )
 
     return JSONResponse(
         content={
@@ -246,7 +273,9 @@ def skills_get(
     if row is None:
         raise HTTPException(status_code=404, detail="Skill not found.")
     if caller["type"] != "master" and row.get("owner_id") != caller["owner_id"]:
-        raise HTTPException(status_code=403, detail="Skill belongs to a different owner.")
+        raise HTTPException(
+            status_code=403, detail="Skill belongs to a different owner."
+        )
     return _skill_response(row, include_raw_md=True)
 
 
@@ -297,12 +326,16 @@ def skills_delete(
     if row is None:
         raise HTTPException(status_code=404, detail="Skill not found.")
     if caller["type"] != "master" and row.get("owner_id") != caller["owner_id"]:
-        raise HTTPException(status_code=403, detail="Skill belongs to a different owner.")
+        raise HTTPException(
+            status_code=403, detail="Skill belongs to a different owner."
+        )
     # Delist the agent first so callers stop seeing it; then remove the skill row.
     try:
         registry.delist_agent(row["agent_id"], row["owner_id"])
     except Exception:
-        _LOG.exception("Failed to delist agent %s during skill delete.", row["agent_id"])
+        _LOG.exception(
+            "Failed to delist agent %s during skill delete.", row["agent_id"]
+        )
     _hosted_skills.delete_hosted_skill(skill_id)
     return {"deleted": True, "skill_id": skill_id}
 
@@ -333,6 +366,7 @@ def _skill_response(row: dict, include_raw_md: bool = False) -> dict:
 # passes. Otherwise returns a structured "candidates + reason" payload with
 # no charge. Both MCP frontends (mcp-server.js, scripts/aztea_mcp_server.py)
 # proxy their `aztea_do` tool here.
+
 
 class _AutoHireRequestBody(BaseModel):
     model_config = ConfigDict(extra="ignore")

@@ -20,12 +20,10 @@ so that the ``messaging`` implementations of ``set_job_quality_result`` /
 ``set_job_dispute_outcome`` (which correctly import ``get_job`` from ``.crud``)
 win over the older stubs in ``db``.
 """
+
 from __future__ import annotations
 
-from . import crud
-from . import db
-from . import leases
-from . import messaging
+from . import crud, db, leases, messaging
 
 for _mod in (db, crud, leases, messaging):
     for _n in dir(_mod):

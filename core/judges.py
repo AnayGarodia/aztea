@@ -89,7 +89,9 @@ def _local_dispute_fallback(context: dict) -> dict:
     job = context.get("job") or {}
     reason = str(dispute.get("reason") or "").strip()
     evidence = str(dispute.get("evidence") or "").strip()
-    combined = " ".join(part for part in [reason, evidence, str(job.get("error_message") or "")] if part).strip()
+    combined = " ".join(
+        part for part in [reason, evidence, str(job.get("error_message") or "")] if part
+    ).strip()
 
     caller_hits = _token_matches(combined, _CALLER_WIN_HINTS)
     agent_hits = _token_matches(combined, _AGENT_WIN_HINTS)
@@ -183,7 +185,9 @@ def run_judgment(dispute_id: str) -> dict:
         }
 
     disputes.set_dispute_status(dispute_id, "judging")
-    live_enabled = _env_enabled_any("AZTEA_ENABLE_LIVE_DISPUTE_JUDGES", "AGENTMARKET_ENABLE_LIVE_DISPUTE_JUDGES")
+    live_enabled = _env_enabled_any(
+        "AZTEA_ENABLE_LIVE_DISPUTE_JUDGES", "AGENTMARKET_ENABLE_LIVE_DISPUTE_JUDGES"
+    )
     if not live_enabled:
         fallback = _local_dispute_fallback(context)
         fallback_verdict = fallback["verdict"]
@@ -256,14 +260,18 @@ def _local_quality_fallback(
     if not payload:
         return {"verdict": "fail", "score": 1, "reason": "Output payload is empty."}
     if any(payload.get(field) for field in ("error", "errors", "exception")):
-        return {"verdict": "fail", "score": 2, "reason": "Output payload contains explicit error fields."}
+        return {
+            "verdict": "fail",
+            "score": 2,
+            "reason": "Output payload contains explicit error fields.",
+        }
 
     filled_fields = [
-        key
-        for key, value in payload.items()
-        if value not in (None, "", [], {}, ())
+        key for key, value in payload.items() if value not in (None, "", [], {}, ())
     ]
-    text_chars = sum(len(value.strip()) for value in payload.values() if isinstance(value, str))
+    text_chars = sum(
+        len(value.strip()) for value in payload.values() if isinstance(value, str)
+    )
     structured_sections = sum(
         1
         for value in payload.values()
@@ -304,7 +312,9 @@ def run_quality_judgment(
     Returns ``{score, reasoning, method}`` where ``method`` is either
     ``"llm"`` or ``"heuristic"``.
     """
-    if not _env_enabled_any("AZTEA_ENABLE_LIVE_QUALITY_JUDGE", "AGENTMARKET_ENABLE_LIVE_QUALITY_JUDGE"):
+    if not _env_enabled_any(
+        "AZTEA_ENABLE_LIVE_QUALITY_JUDGE", "AGENTMARKET_ENABLE_LIVE_QUALITY_JUDGE"
+    ):
         return _local_quality_fallback(
             input_payload=input_payload,
             output_payload=output_payload,
@@ -323,15 +333,17 @@ def run_quality_judgment(
         ensure_ascii=True,
     )
     try:
-        llm_resp = run_with_fallback(CompletionRequest(
-            model="",
-            messages=[
-                Message("system", _QUALITY_SYSTEM_PROMPT),
-                Message("user", user_prompt),
-            ],
-            temperature=0.0,
-            json_mode=True,
-        ))
+        llm_resp = run_with_fallback(
+            CompletionRequest(
+                model="",
+                messages=[
+                    Message("system", _QUALITY_SYSTEM_PROMPT),
+                    Message("user", user_prompt),
+                ],
+                temperature=0.0,
+                json_mode=True,
+            )
+        )
         content = llm_resp.text
     except Exception:
         return _local_quality_fallback(

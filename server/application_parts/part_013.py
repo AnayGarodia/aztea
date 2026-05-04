@@ -18,17 +18,26 @@ def create_topup_session(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> JSONResponse:
     if not _STRIPE_AVAILABLE or not _STRIPE_SECRET_KEY:
-        raise HTTPException(status_code=503, detail="Payment processing is not configured on this server.")
+        raise HTTPException(
+            status_code=503,
+            detail="Payment processing is not configured on this server.",
+        )
     _require_scope(caller, "caller")
     wallet = payments.get_wallet(body.wallet_id)
     if wallet is None:
-        raise HTTPException(status_code=404, detail=f"Wallet '{body.wallet_id}' not found.")
+        raise HTTPException(
+            status_code=404, detail=f"Wallet '{body.wallet_id}' not found."
+        )
     if caller["type"] != "master" and wallet["owner_id"] != caller["owner_id"]:
-        raise HTTPException(status_code=403, detail="Not authorized to top up this wallet.")
+        raise HTTPException(
+            status_code=403, detail="Not authorized to top up this wallet."
+        )
     if int(body.amount_cents) < MINIMUM_DEPOSIT_CENTS:
         raise _deposit_below_minimum_error(int(body.amount_cents))
     if not (100 <= body.amount_cents <= 50000):
-        raise HTTPException(status_code=400, detail="Amount must be between $1.00 and $500.00.")
+        raise HTTPException(
+            status_code=400, detail="Amount must be between $1.00 and $500.00."
+        )
     if _TOPUP_DAILY_LIMIT_CENTS > 0:
         used_last_24h = _wallet_stripe_topup_total_last_24h(body.wallet_id)
         projected_total = used_last_24h + int(body.amount_cents)
@@ -51,17 +60,19 @@ def create_topup_session(
     try:
         session = _stripe_lib.checkout.Session.create(
             payment_method_types=["card"],
-            line_items=[{
-                "price_data": {
-                    "currency": "usd",
-                    "product_data": {
-                        "name": "Aztea wallet top-up",
-                        "description": f"Add ${body.amount_cents / 100:.2f} to your Aztea wallet.",
+            line_items=[
+                {
+                    "price_data": {
+                        "currency": "usd",
+                        "product_data": {
+                            "name": "Aztea wallet top-up",
+                            "description": f"Add ${body.amount_cents / 100:.2f} to your Aztea wallet.",
+                        },
+                        "unit_amount": body.amount_cents,
                     },
-                    "unit_amount": body.amount_cents,
-                },
-                "quantity": 1,
-            }],
+                    "quantity": 1,
+                }
+            ],
             mode="payment",
             client_reference_id=body.wallet_id,
             metadata={
@@ -93,7 +104,9 @@ async def stripe_webhook(request: Request) -> JSONResponse:
 
     try:
         _stripe_lib.api_key = _STRIPE_SECRET_KEY
-        event = _stripe_lib.Webhook.construct_event(payload, sig_header, _STRIPE_WEBHOOK_SECRET)
+        event = _stripe_lib.Webhook.construct_event(
+            payload, sig_header, _STRIPE_WEBHOOK_SECRET
+        )
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid Stripe webhook signature.")
 
@@ -102,15 +115,16 @@ async def stripe_webhook(request: Request) -> JSONResponse:
         # access and fall back via getattr to avoid KeyError / AttributeError.
         session_obj = event["data"]["object"]
         _meta = _stripe_obj_get(session_obj, "metadata", None) or {}
-        wallet_id = (
-            _stripe_obj_get(session_obj, "client_reference_id", None)
-            or _stripe_obj_get(_meta, "wallet_id", None)
-        )
+        wallet_id = _stripe_obj_get(
+            session_obj, "client_reference_id", None
+        ) or _stripe_obj_get(_meta, "wallet_id", None)
         amount_cents = _stripe_obj_get(session_obj, "amount_total", None)
         session_id = _stripe_obj_id(session_obj)
 
         if not wallet_id or not amount_cents or not session_id:
-            _LOG.warning("Stripe webhook: missing wallet_id/amount/session_id in %s", session_id)
+            _LOG.warning(
+                "Stripe webhook: missing wallet_id/amount/session_id in %s", session_id
+            )
             return JSONResponse({"received": True, "status": "skipped"})
 
         idempotency_state = _stripe_begin_checkout_webhook_event(
@@ -124,21 +138,34 @@ async def stripe_webhook(request: Request) -> JSONResponse:
             return JSONResponse({"received": True, "status": "processing"})
 
         try:
-            payments.deposit(str(wallet_id), int(amount_cents), f"Stripe payment [{session_id[:12]}]")
+            payments.deposit(
+                str(wallet_id), int(amount_cents), f"Stripe payment [{session_id[:12]}]"
+            )
         except Exception as exc:
             _stripe_mark_checkout_webhook_failed(
                 session_id=session_id,
                 error_message=str(exc),
             )
-            _LOG.exception("Failed to deposit Stripe payment for session %s wallet %s", session_id, wallet_id)
-            return JSONResponse({"received": True, "status": "deposit_failed"}, status_code=500)
+            _LOG.exception(
+                "Failed to deposit Stripe payment for session %s wallet %s",
+                session_id,
+                wallet_id,
+            )
+            return JSONResponse(
+                {"received": True, "status": "deposit_failed"}, status_code=500
+            )
         _stripe_mark_checkout_webhook_processed(
             session_id=session_id,
             wallet_id=str(wallet_id),
             amount_cents=int(amount_cents),
         )
 
-        _LOG.info("Stripe top-up: %d cents → wallet %s (session %s)", amount_cents, wallet_id, session_id)
+        _LOG.info(
+            "Stripe top-up: %d cents → wallet %s (session %s)",
+            amount_cents,
+            wallet_id,
+            session_id,
+        )
         # Notify wallet owner
         try:
             _wallet_row = payments.get_wallet(str(wallet_id))
@@ -165,7 +192,9 @@ async def stripe_webhook(request: Request) -> JSONResponse:
                 _ac_conn.commit()
             _LOG.info(
                 "Stripe Connect account.updated: %s charges_enabled=%s payouts_enabled=%s",
-                account_id, charges_enabled, payouts_enabled,
+                account_id,
+                charges_enabled,
+                payouts_enabled,
             )
 
     return JSONResponse({"received": True, "status": "ok"})
@@ -177,7 +206,9 @@ def _create_connect_account() -> str:
     v2 = _stripe_obj_get(_stripe_lib, "v2", None)
     core = _stripe_obj_get(v2, "core", None) if v2 is not None else None
     accounts = _stripe_obj_get(core, "accounts", None) if core is not None else None
-    create_v2 = _stripe_obj_get(accounts, "create", None) if accounts is not None else None
+    create_v2 = (
+        _stripe_obj_get(accounts, "create", None) if accounts is not None else None
+    )
     if callable(create_v2):
         try:
             account_v2 = create_v2(
@@ -192,7 +223,10 @@ def _create_connect_account() -> str:
             if account_id:
                 return account_id
         except Exception as exc:
-            _LOG.warning("Stripe Accounts v2 account creation failed, falling back to v1: %s", exc)
+            _LOG.warning(
+                "Stripe Accounts v2 account creation failed, falling back to v1: %s",
+                exc,
+            )
 
     account_v1 = _stripe_lib.Account.create(
         type="express",
@@ -222,7 +256,10 @@ def connect_onboard(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> JSONResponse:
     if not _STRIPE_AVAILABLE or not _STRIPE_SECRET_KEY:
-        raise HTTPException(status_code=503, detail="Payment processing is not configured on this server.")
+        raise HTTPException(
+            status_code=503,
+            detail="Payment processing is not configured on this server.",
+        )
     _require_scope(caller, "caller")
 
     wallet = payments.get_wallet_by_owner(caller["owner_id"])
@@ -237,7 +274,9 @@ def connect_onboard(
         try:
             existing_account_id = _create_connect_account()
         except Exception as exc:
-            status_code, payload = _stripe_http_error("connect_onboard_account_create", exc)
+            status_code, payload = _stripe_http_error(
+                "connect_onboard_account_create", exc
+            )
             raise HTTPException(status_code=status_code, detail=payload)
         with get_db_connection() as _ac_conn:
             _ac_conn.execute(
@@ -246,8 +285,12 @@ def connect_onboard(
             )
             _ac_conn.commit()
 
-    return_url = (body.return_url or "").strip() or f"{_FRONTEND_BASE_URL}/wallet?connect=success"
-    refresh_url = (body.refresh_url or "").strip() or f"{_FRONTEND_BASE_URL}/wallet?connect=refresh"
+    return_url = (
+        body.return_url or ""
+    ).strip() or f"{_FRONTEND_BASE_URL}/wallet?connect=success"
+    refresh_url = (
+        body.refresh_url or ""
+    ).strip() or f"{_FRONTEND_BASE_URL}/wallet?connect=refresh"
 
     try:
         link = _stripe_lib.AccountLink.create(
@@ -274,7 +317,10 @@ def connect_status(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> JSONResponse:
     if not _STRIPE_AVAILABLE or not _STRIPE_SECRET_KEY:
-        raise HTTPException(status_code=503, detail="Payment processing is not configured on this server.")
+        raise HTTPException(
+            status_code=503,
+            detail="Payment processing is not configured on this server.",
+        )
     _require_scope(caller, "caller")
 
     wallet = payments.get_wallet_by_owner(caller["owner_id"])
@@ -283,7 +329,9 @@ def connect_status(
 
     account_id = wallet.get("stripe_connect_account_id")
     if not account_id:
-        return JSONResponse({"connected": False, "charges_enabled": False, "account_id": None})
+        return JSONResponse(
+            {"connected": False, "charges_enabled": False, "account_id": None}
+        )
 
     _stripe_lib.api_key = _STRIPE_SECRET_KEY
     try:
@@ -301,11 +349,13 @@ def connect_status(
             )
             _ac_conn.commit()
 
-    return JSONResponse({
-        "connected": True,
-        "charges_enabled": charges_enabled,
-        "account_id": account_id,
-    })
+    return JSONResponse(
+        {
+            "connected": True,
+            "charges_enabled": charges_enabled,
+            "account_id": account_id,
+        }
+    )
 
 
 @app.post(
@@ -321,13 +371,19 @@ def withdraw(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> JSONResponse:
     if not _STRIPE_AVAILABLE or not _STRIPE_SECRET_KEY:
-        raise HTTPException(status_code=503, detail="Payment processing is not configured on this server.")
+        raise HTTPException(
+            status_code=503,
+            detail="Payment processing is not configured on this server.",
+        )
     _require_scope(caller, "caller")
+
     def _operation() -> tuple[dict[str, Any], int]:
         if body.amount_cents < 100:
             raise HTTPException(status_code=400, detail="Minimum withdrawal is $1.00.")
         if body.amount_cents > 1_000_000:
-            raise HTTPException(status_code=400, detail="Maximum withdrawal is $10,000.00.")
+            raise HTTPException(
+                status_code=400, detail="Maximum withdrawal is $10,000.00."
+            )
 
         wallet = payments.get_wallet_by_owner(caller["owner_id"])
         if wallet is None:
@@ -353,13 +409,18 @@ def withdraw(
             )
 
         _stripe_lib.api_key = _STRIPE_SECRET_KEY
-        request_idempotency_key = (request.headers.get(_IDEMPOTENCY_KEY_HEADER, "") or "").strip()
+        request_idempotency_key = (
+            request.headers.get(_IDEMPOTENCY_KEY_HEADER, "") or ""
+        ).strip()
         stripe_idempotency_basis = request_idempotency_key or str(uuid.uuid4())
-        stripe_idempotency_key = "aztea-withdraw-" + hashlib.sha256(
-            f"{caller['owner_id']}:{wallet['wallet_id']}:{body.amount_cents}:{stripe_idempotency_basis}".encode(
-                "utf-8"
-            )
-        ).hexdigest()
+        stripe_idempotency_key = (
+            "aztea-withdraw-"
+            + hashlib.sha256(
+                f"{caller['owner_id']}:{wallet['wallet_id']}:{body.amount_cents}:{stripe_idempotency_basis}".encode(
+                    "utf-8"
+                )
+            ).hexdigest()
+        )
 
         # Debit wallet first (raises InsufficientBalanceError if something changed).
         try:
@@ -387,13 +448,19 @@ def withdraw(
                     memo=f"Withdrawal refund (Stripe error): {exc}",
                 )
             except Exception:
-                _LOG.exception("Critical: failed to refund withdrawal for wallet %s", wallet["wallet_id"])
+                _LOG.exception(
+                    "Critical: failed to refund withdrawal for wallet %s",
+                    wallet["wallet_id"],
+                )
             status_code, payload = _stripe_http_error("withdraw_transfer", exc)
             raise HTTPException(status_code=status_code, detail=payload)
 
         transfer_id = _stripe_obj_id(transfer)
         if not transfer_id:
-            raise HTTPException(status_code=502, detail="Stripe transfer response did not include an ID.")
+            raise HTTPException(
+                status_code=502,
+                detail="Stripe transfer response did not include an ID.",
+            )
 
         # Record the transfer for audit.
         with get_db_connection() as _tr_conn:
@@ -413,14 +480,20 @@ def withdraw(
 
         _LOG.info(
             "Stripe Connect withdrawal: %d¢ from wallet %s → account %s (transfer %s)",
-            body.amount_cents, wallet["wallet_id"], account_id, transfer_id,
+            body.amount_cents,
+            wallet["wallet_id"],
+            account_id,
+            transfer_id,
         )
         try:
             _withdraw_email = _get_owner_email(caller.get("owner_id", ""))
             if _withdraw_email:
                 _email.send_withdrawal_processed(_withdraw_email, body.amount_cents)
         except Exception:
-            _LOG.warning("Failed to send withdrawal email for owner %s", caller.get("owner_id", ""))
+            _LOG.warning(
+                "Failed to send withdrawal email for owner %s",
+                caller.get("owner_id", ""),
+            )
         return {
             "status": "ok",
             "transfer_id": transfer_id,
@@ -474,7 +547,9 @@ def wallet_get(
     if wallet is None:
         raise HTTPException(status_code=404, detail=f"Wallet '{wallet_id}' not found.")
     if caller["type"] != "master" and wallet["owner_id"] != caller["owner_id"]:
-        raise HTTPException(status_code=403, detail="Not authorized to view this wallet.")
+        raise HTTPException(
+            status_code=403, detail="Not authorized to view this wallet."
+        )
     txs = payments.get_wallet_transactions(wallet_id, limit=50)
     return JSONResponse(content={**wallet, "transactions": txs})
 
@@ -489,7 +564,9 @@ def wallet_get(
 
 def _require_user_caller(caller: core_models.CallerContext) -> dict:
     if caller["type"] != "user":
-        raise HTTPException(status_code=403, detail="Not available for master or agent-scoped keys.")
+        raise HTTPException(
+            status_code=403, detail="Not available for master or agent-scoped keys."
+        )
     return caller["user"]
 
 
@@ -509,7 +586,9 @@ def _ensure_stripe_customer(user: dict) -> str:
         raise HTTPException(status_code=status_code, detail=payload)
     customer_id = _stripe_obj_id(customer)
     if not customer_id:
-        raise HTTPException(status_code=502, detail="Stripe did not return a customer id.")
+        raise HTTPException(
+            status_code=502, detail="Stripe did not return a customer id."
+        )
     _auth.set_stripe_customer_id(user["user_id"], customer_id)
     return customer_id
 
@@ -541,18 +620,20 @@ def list_billing_topups(
             """,
             (wallet["wallet_id"], safe_limit),
         ).fetchall()
-    return JSONResponse({
-        "wallet_id": wallet["wallet_id"],
-        "topups": [
-            {
-                "session_id": r["session_id"],
-                "wallet_id": r["wallet_id"],
-                "amount_cents": int(r["amount_cents"] or 0),
-                "processed_at": r["processed_at"],
-            }
-            for r in rows
-        ],
-    })
+    return JSONResponse(
+        {
+            "wallet_id": wallet["wallet_id"],
+            "topups": [
+                {
+                    "session_id": r["session_id"],
+                    "wallet_id": r["wallet_id"],
+                    "amount_cents": int(r["amount_cents"] or 0),
+                    "processed_at": r["processed_at"],
+                }
+                for r in rows
+            ],
+        }
+    )
 
 
 @app.post(
@@ -567,7 +648,10 @@ def create_billing_setup_session(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> JSONResponse:
     if not _STRIPE_AVAILABLE or not _STRIPE_SECRET_KEY:
-        raise HTTPException(status_code=503, detail="Payment processing is not configured on this server.")
+        raise HTTPException(
+            status_code=503,
+            detail="Payment processing is not configured on this server.",
+        )
     user = _require_user_caller(caller)
     _require_scope(caller, "caller")
     customer_id = _ensure_stripe_customer(user)
@@ -583,10 +667,12 @@ def create_billing_setup_session(
     except Exception as exc:
         status_code, payload = _stripe_http_error("billing_setup_session", exc)
         raise HTTPException(status_code=status_code, detail=payload)
-    return JSONResponse({
-        "checkout_url": _stripe_obj_get(session, "url", None),
-        "session_id": _stripe_obj_id(session),
-    })
+    return JSONResponse(
+        {
+            "checkout_url": _stripe_obj_get(session, "url", None),
+            "session_id": _stripe_obj_id(session),
+        }
+    )
 
 
 @app.get(
@@ -601,7 +687,10 @@ def list_billing_payment_methods(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> JSONResponse:
     if not _STRIPE_AVAILABLE or not _STRIPE_SECRET_KEY:
-        raise HTTPException(status_code=503, detail="Payment processing is not configured on this server.")
+        raise HTTPException(
+            status_code=503,
+            detail="Payment processing is not configured on this server.",
+        )
     user = _require_user_caller(caller)
     _require_scope(caller, "caller")
     customer_id = _auth.get_stripe_customer_id(user["user_id"])
@@ -616,13 +705,15 @@ def list_billing_payment_methods(
     cards = []
     for pm in _stripe_obj_get(result, "data", []) or []:
         card = _stripe_obj_get(pm, "card", None)
-        cards.append({
-            "id": _stripe_obj_id(pm),
-            "brand": _stripe_obj_get(card, "brand", None) if card else None,
-            "last4": _stripe_obj_get(card, "last4", None) if card else None,
-            "exp_month": _stripe_obj_get(card, "exp_month", None) if card else None,
-            "exp_year": _stripe_obj_get(card, "exp_year", None) if card else None,
-        })
+        cards.append(
+            {
+                "id": _stripe_obj_id(pm),
+                "brand": _stripe_obj_get(card, "brand", None) if card else None,
+                "last4": _stripe_obj_get(card, "last4", None) if card else None,
+                "exp_month": _stripe_obj_get(card, "exp_month", None) if card else None,
+                "exp_year": _stripe_obj_get(card, "exp_year", None) if card else None,
+            }
+        )
     return JSONResponse({"payment_methods": cards})
 
 
@@ -639,7 +730,10 @@ def delete_billing_payment_method(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> JSONResponse:
     if not _STRIPE_AVAILABLE or not _STRIPE_SECRET_KEY:
-        raise HTTPException(status_code=503, detail="Payment processing is not configured on this server.")
+        raise HTTPException(
+            status_code=503,
+            detail="Payment processing is not configured on this server.",
+        )
     user = _require_user_caller(caller)
     _require_scope(caller, "caller")
     customer_id = _auth.get_stripe_customer_id(user["user_id"])
@@ -649,7 +743,9 @@ def delete_billing_payment_method(
     try:
         pm = _stripe_lib.PaymentMethod.retrieve(payment_method_id)
     except Exception as exc:
-        status_code, payload = _stripe_http_error("billing_payment_method_retrieve", exc)
+        status_code, payload = _stripe_http_error(
+            "billing_payment_method_retrieve", exc
+        )
         raise HTTPException(status_code=status_code, detail=payload)
     pm_customer = _stripe_obj_get(pm, "customer", None)
     if pm_customer != customer_id:
@@ -672,6 +768,7 @@ def delete_billing_payment_method(
 # ---------------------------------------------------------------------------
 
 from pathlib import Path as _SpaPath
+
 from fastapi.responses import FileResponse as _SpaFileResponse
 
 _FRONTEND_DIST_DIR = _SpaPath(_REPO_ROOT) / "frontend" / "dist"
@@ -716,10 +813,15 @@ def _resolved_under(parent: _SpaPath, candidate: _SpaPath) -> bool:
         parent_resolved = parent.resolve()
     except (OSError, RuntimeError):
         return False
-    return parent_resolved in candidate_resolved.parents or candidate_resolved == parent_resolved
+    return (
+        parent_resolved in candidate_resolved.parents
+        or candidate_resolved == parent_resolved
+    )
 
 
-def _pipeline_visible_to_caller(caller: core_models.CallerContext, pipeline_row: dict) -> bool:
+def _pipeline_visible_to_caller(
+    caller: core_models.CallerContext, pipeline_row: dict
+) -> bool:
     if caller.get("type") == "master":
         return True
     owner_id = str(pipeline_row.get("owner_id") or "").strip()
@@ -743,7 +845,11 @@ def _pipeline_response(pipeline_row: dict) -> dict:
 
 def _recipe_catalog_entry(pipeline_row: dict) -> dict:
     recipe_meta = next(
-        (item for item in recipes.BUILTIN_RECIPES if item.get("recipe_id") == pipeline_row.get("pipeline_id")),
+        (
+            item
+            for item in recipes.BUILTIN_RECIPES
+            if item.get("recipe_id") == pipeline_row.get("pipeline_id")
+        ),
         None,
     )
     payload = _pipeline_response(pipeline_row)
@@ -816,7 +922,11 @@ def pipelines_list(
 ) -> core_models.DynamicObjectResponse:
     _require_scope(caller, "caller")
     rows = pipelines.list_pipelines(caller["owner_id"], include_public=False)
-    visible = [_pipeline_response(row) for row in rows if row is not None and _pipeline_visible_to_caller(caller, row)]
+    visible = [
+        _pipeline_response(row)
+        for row in rows
+        if row is not None and _pipeline_visible_to_caller(caller, row)
+    ]
     return JSONResponse(content={"pipelines": visible, "count": len(visible)})
 
 
@@ -836,9 +946,13 @@ def pipelines_get(
     _require_scope(caller, "caller")
     pipeline_row = pipelines.get_pipeline(pipeline_id)
     if pipeline_row is None:
-        raise HTTPException(status_code=404, detail=f"Pipeline '{pipeline_id}' not found.")
+        raise HTTPException(
+            status_code=404, detail=f"Pipeline '{pipeline_id}' not found."
+        )
     if not _pipeline_visible_to_caller(caller, pipeline_row):
-        raise HTTPException(status_code=404, detail=f"Pipeline '{pipeline_id}' not found.")
+        raise HTTPException(
+            status_code=404, detail=f"Pipeline '{pipeline_id}' not found."
+        )
     return JSONResponse(content=_pipeline_response(pipeline_row))
 
 
@@ -859,9 +973,13 @@ def pipelines_run(
     _require_scope(caller, "caller")
     pipeline_row = pipelines.get_pipeline(pipeline_id)
     if pipeline_row is None:
-        raise HTTPException(status_code=404, detail=f"Pipeline '{pipeline_id}' not found.")
+        raise HTTPException(
+            status_code=404, detail=f"Pipeline '{pipeline_id}' not found."
+        )
     if not _pipeline_visible_to_caller(caller, pipeline_row):
-        raise HTTPException(status_code=404, detail=f"Pipeline '{pipeline_id}' not found.")
+        raise HTTPException(
+            status_code=404, detail=f"Pipeline '{pipeline_id}' not found."
+        )
     input_payload = body.get("input_payload") or {}
     if not isinstance(input_payload, dict):
         raise HTTPException(status_code=422, detail="input_payload must be an object.")
@@ -907,14 +1025,26 @@ def pipelines_run_get(
     _require_scope(caller, "caller")
     pipeline_row = pipelines.get_pipeline(pipeline_id)
     if pipeline_row is None:
-        raise HTTPException(status_code=404, detail=f"Pipeline '{pipeline_id}' not found.")
+        raise HTTPException(
+            status_code=404, detail=f"Pipeline '{pipeline_id}' not found."
+        )
     if not _pipeline_visible_to_caller(caller, pipeline_row):
-        raise HTTPException(status_code=404, detail=f"Pipeline '{pipeline_id}' not found.")
+        raise HTTPException(
+            status_code=404, detail=f"Pipeline '{pipeline_id}' not found."
+        )
     run = pipelines.get_run(run_id)
     if run is None or str(run.get("pipeline_id") or "") != pipeline_id:
-        raise HTTPException(status_code=404, detail=f"Pipeline run '{run_id}' not found.")
-    if caller.get("type") != "master" and caller["owner_id"] != run.get("caller_owner_id") and caller["owner_id"] != pipeline_row.get("owner_id"):
-        raise HTTPException(status_code=403, detail="Not authorized to view this pipeline run.")
+        raise HTTPException(
+            status_code=404, detail=f"Pipeline run '{run_id}' not found."
+        )
+    if (
+        caller.get("type") != "master"
+        and caller["owner_id"] != run.get("caller_owner_id")
+        and caller["owner_id"] != pipeline_row.get("owner_id")
+    ):
+        raise HTTPException(
+            status_code=403, detail="Not authorized to view this pipeline run."
+        )
     return JSONResponse(
         content={
             "run_id": run["run_id"],
@@ -947,8 +1077,10 @@ def recipes_list(
     _require_scope(caller, "caller")
     rows = pipelines.list_pipelines(caller["owner_id"], include_public=True)
     recipe_rows = [
-        row for row in rows
-        if row is not None and (
+        row
+        for row in rows
+        if row is not None
+        and (
             str(row.get("owner_id") or "") == recipes.PLATFORM_RECIPES_OWNER_ID
             or str(row.get("owner_id") or "") == caller["owner_id"]
         )
@@ -991,7 +1123,9 @@ def recipes_create(
     if not name:
         raise HTTPException(status_code=400, detail="'name' is required.")
     if len(name) > 80:
-        raise HTTPException(status_code=400, detail="'name' must be at most 80 characters.")
+        raise HTTPException(
+            status_code=400, detail="'name' must be at most 80 characters."
+        )
     definition = (body or {}).get("definition")
     if not isinstance(definition, dict):
         raise HTTPException(

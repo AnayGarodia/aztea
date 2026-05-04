@@ -76,7 +76,9 @@ def _normalize_decay_multiplier(value: float | int | None) -> float:
     return _clamp01(parsed if parsed > 0 else 1.0)
 
 
-def _normalize_agent_stats(total_calls, successful_calls, avg_latency_ms) -> tuple[int, int, float]:
+def _normalize_agent_stats(
+    total_calls, successful_calls, avg_latency_ms
+) -> tuple[int, int, float]:
     total = _to_non_negative_int(total_calls, default=0)
     successful = _to_non_negative_int(successful_calls, default=0)
     if successful > total:
@@ -98,9 +100,8 @@ def _compute_quality_score(avg_rating: float | None, rating_count: int) -> float
         return (_QUALITY_PRIOR_RATING - 1.0) / 4.0
     bounded_avg = min(5.0, max(1.0, float(avg_rating)))
     bayesian_avg = (
-        (bounded_avg * rating_count + _QUALITY_PRIOR_RATING * _QUALITY_PRIOR_WEIGHT)
-        / (rating_count + _QUALITY_PRIOR_WEIGHT)
-    )
+        bounded_avg * rating_count + _QUALITY_PRIOR_RATING * _QUALITY_PRIOR_WEIGHT
+    ) / (rating_count + _QUALITY_PRIOR_WEIGHT)
     return _clamp01((bayesian_avg - 1.0) / 4.0)
 
 
@@ -140,7 +141,9 @@ def _build_trust_metrics(
         + success_score * _SUCCESS_WEIGHT
         + latency_score * _LATENCY_WEIGHT
     )
-    trust_raw = (_NEUTRAL_TRUST * (1.0 - confidence_score)) + (base_score * confidence_score)
+    trust_raw = (_NEUTRAL_TRUST * (1.0 - confidence_score)) + (
+        base_score * confidence_score
+    )
     multiplier = _normalize_decay_multiplier(decay_multiplier)
     baseline = _NEUTRAL_TRUST * (1.0 - confidence_score)
     trust_raw = max(baseline, trust_raw * multiplier)
@@ -446,7 +449,9 @@ def _get_caller_quality_summary_map(caller_owner_ids: list[str]) -> dict[str, di
     for row in rows:
         summary[row["caller_owner_id"]] = {
             "rating_count": int(row["rating_count"] or 0),
-            "average_rating": float(row["average_rating"]) if row["average_rating"] is not None else None,
+            "average_rating": float(row["average_rating"])
+            if row["average_rating"] is not None
+            else None,
         }
     return summary
 
@@ -508,7 +513,9 @@ def _load_dispute_rates_map(agent_ids: list[str]) -> dict[str, int]:
         return {}
 
 
-def _load_client_quality_summary_map(agent_ids: list[str]) -> dict[tuple[str, str], dict]:
+def _load_client_quality_summary_map(
+    agent_ids: list[str],
+) -> dict[tuple[str, str], dict]:
     if not agent_ids:
         return {}
     placeholders = ",".join("?" * len(agent_ids))
@@ -543,7 +550,9 @@ def _load_client_quality_summary_map(agent_ids: list[str]) -> dict[tuple[str, st
     }
 
 
-def _load_client_stats_map(agent_ids: list[str]) -> dict[tuple[str, str], tuple[int, int, float]]:
+def _load_client_stats_map(
+    agent_ids: list[str],
+) -> dict[tuple[str, str], tuple[int, int, float]]:
     if not agent_ids:
         return {}
     placeholders = ",".join("?" * len(agent_ids))
@@ -583,7 +592,9 @@ def _load_client_stats_map(agent_ids: list[str]) -> dict[tuple[str, str], tuple[
     }
 
 
-def _build_client_trust_map(agent_ids: list[str], decay_by_agent: dict[str, float]) -> dict[str, dict[str, float]]:
+def _build_client_trust_map(
+    agent_ids: list[str], decay_by_agent: dict[str, float]
+) -> dict[str, dict[str, float]]:
     stats_map = _load_client_stats_map(agent_ids)
     quality_map = _load_client_quality_summary_map(agent_ids)
     result: dict[str, dict[str, float]] = {}
@@ -633,7 +644,9 @@ def enrich_agent_record(agent: dict) -> dict:
         avg_latency_ms=avg_latency_ms,
         rating_count=summary["rating_count"],
         average_quality_rating=summary["average_quality_rating"],
-        decay_multiplier=_normalize_decay_multiplier(agent.get("trust_decay_multiplier")),
+        decay_multiplier=_normalize_decay_multiplier(
+            agent.get("trust_decay_multiplier")
+        ),
     )
 
     dispute_counts = _load_dispute_rates_map([agent_id])
@@ -666,7 +679,9 @@ def enrich_agent_records(agents: list[dict]) -> list[dict]:
 
     dispute_counts = _load_dispute_rates_map(agent_ids)
     decay_by_agent = {
-        str(agent["agent_id"]): _normalize_decay_multiplier(agent.get("trust_decay_multiplier"))
+        str(agent["agent_id"]): _normalize_decay_multiplier(
+            agent.get("trust_decay_multiplier")
+        )
         for agent in agents
         if "agent_id" in agent
     }
@@ -695,7 +710,9 @@ def enrich_agent_records(agents: list[dict]) -> list[dict]:
             avg_latency_ms=avg_latency_ms,
             rating_count=summary["rating_count"],
             average_quality_rating=summary["average_quality_rating"],
-            decay_multiplier=_normalize_decay_multiplier(agent.get("trust_decay_multiplier")),
+            decay_multiplier=_normalize_decay_multiplier(
+                agent.get("trust_decay_multiplier")
+            ),
         )
 
         dc = dispute_counts.get(agent["agent_id"], 0)
@@ -716,7 +733,9 @@ def enrich_agent_records(agents: list[dict]) -> list[dict]:
 def rank_agents_by_trust(agents: list[dict], descending: bool = True) -> list[dict]:
     """Return enriched agents sorted by trust_score."""
     enriched = enrich_agent_records(agents)
-    return sorted(enriched, key=lambda item: item.get("trust_score", 0.0), reverse=descending)
+    return sorted(
+        enriched, key=lambda item: item.get("trust_score", 0.0), reverse=descending
+    )
 
 
 def compute_caller_trust_metrics(caller_owner_id: str) -> dict:
@@ -743,12 +762,16 @@ def compute_caller_trust_metrics(caller_owner_id: str) -> dict:
         "trust_score_normalized": round(trust_raw, 6),
         "quality_score": round(quality_score, 4),
         "rating_count": rating_count,
-        "average_rating": round(float(average_rating), 4) if average_rating is not None else None,
+        "average_rating": round(float(average_rating), 4)
+        if average_rating is not None
+        else None,
         "confidence_score": round(confidence, 4),
     }
 
 
-def count_caller_given_ratings(caller_owner_id: str, *, rating: int | None = None) -> int:
+def count_caller_given_ratings(
+    caller_owner_id: str, *, rating: int | None = None
+) -> int:
     """Count how many ratings a caller has submitted; optionally filter by a specific ``rating`` value.
 
     Used for abuse detection (e.g. detecting a caller who exclusively gives 1-star ratings).

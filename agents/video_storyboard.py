@@ -58,7 +58,11 @@ def _build_shot_plan(brief: str, duration_seconds: int) -> list[dict[str, Any]]:
     for idx in range(shot_count):
         prompt = lines[idx % len(lines)]
         start_second = current_start
-        end_second = duration_seconds if idx == shot_count - 1 else min(duration_seconds, current_start + seconds_per_shot)
+        end_second = (
+            duration_seconds
+            if idx == shot_count - 1
+            else min(duration_seconds, current_start + seconds_per_shot)
+        )
         current_start = end_second
         shot_plan.append(
             {
@@ -128,7 +132,9 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         "aspect_ratio": aspect_ratio,
         "style": style,
         "shot_plan": shot_plan,
-        "voiceover_script": " ".join(str(shot.get("voiceover_line") or "") for shot in shot_plan).strip(),
+        "voiceover_script": " ".join(
+            str(shot.get("voiceover_line") or "") for shot in shot_plan
+        ).strip(),
         "render_recipe": {
             "target_fps": 24,
             "transition_style": "cinematic cuts",

@@ -16,6 +16,7 @@ import time
 from datetime import datetime, timezone
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
 from agents.financial.fetcher import get_filing_data
@@ -51,7 +52,10 @@ def main() -> None:
 
     ticker = sys.argv[1].strip().upper()
     if not ticker.isalpha() or len(ticker) > 5:
-        print(f"Error: '{ticker}' does not look like a valid ticker symbol.", file=sys.stderr)
+        print(
+            f"Error: '{ticker}' does not look like a valid ticker symbol.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     try:

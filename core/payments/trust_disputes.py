@@ -21,15 +21,13 @@ specific to the dispute lifecycle:
 All helpers require both the ledger + disputes state to be consistent, so
 they run inside the shared ``_conn()`` transaction from ``core.payments.base``.
 """
+
 from __future__ import annotations
 
 import json
 import logging
-import os
 import sqlite3
 import uuid
-from datetime import datetime, timedelta, timezone
-from decimal import Decimal, ROUND_HALF_UP
 
 from core import logging_utils
 
@@ -59,7 +57,9 @@ compute_platform_fee_cents = _payments_core.compute_platform_fee_cents
 PLATFORM_FEE_PCT = _payments_core.PLATFORM_FEE_PCT
 DISPUTE_ESCROW_OWNER_PREFIX = _payments_core.DISPUTE_ESCROW_OWNER_PREFIX
 DISPUTE_DEPOSIT_OWNER_PREFIX = _payments_core.DISPUTE_DEPOSIT_OWNER_PREFIX
-DISPUTE_RETURN_PLATFORM_FEE_ON_CALLER_WINS = _payments_core.DISPUTE_RETURN_PLATFORM_FEE_ON_CALLER_WINS
+DISPUTE_RETURN_PLATFORM_FEE_ON_CALLER_WINS = (
+    _payments_core.DISPUTE_RETURN_PLATFORM_FEE_ON_CALLER_WINS
+)
 PLATFORM_OWNER_ID = _payments_core.PLATFORM_OWNER_ID
 _LOG = _payments_core._LOG
 InsufficientBalanceError = _payments_core.InsufficientBalanceError
@@ -76,7 +76,9 @@ def get_caller_trust(owner_id: str) -> float:
     return max(0.0, min(1.0, value))
 
 
-def adjust_caller_trust(owner_id: str, *, delta: float, reason: str, related_id: str | None = None) -> dict:
+def adjust_caller_trust(
+    owner_id: str, *, delta: float, reason: str, related_id: str | None = None
+) -> dict:
     """Insert a caller_trust adjustment row and update the running total.
 
     ``delta`` is a signed float (positive = improve trust, negative = reduce).
@@ -100,7 +102,9 @@ def adjust_caller_trust(owner_id: str, *, delta: float, reason: str, related_id:
             )
             before = 0.5
         else:
-            before = float(wallet["caller_trust"] if wallet["caller_trust"] is not None else 0.5)
+            before = float(
+                wallet["caller_trust"] if wallet["caller_trust"] is not None else 0.5
+            )
         after = max(0.0, min(1.0, before + float(delta)))
         conn.execute(
             "UPDATE wallets SET caller_trust = ? WHERE owner_id = ?",
@@ -123,7 +127,12 @@ def adjust_caller_trust(owner_id: str, *, delta: float, reason: str, related_id:
                 _now(),
             ),
         )
-    return {"owner_id": normalized_owner_id, "before": before, "after": after, "delta": float(delta)}
+    return {
+        "owner_id": normalized_owner_id,
+        "before": before,
+        "after": after,
+        "delta": float(delta),
+    }
 
 
 def adjust_caller_trust_once(
@@ -151,7 +160,9 @@ def adjust_caller_trust_once(
     if row is not None:
         current = get_caller_trust(owner_id)
         return {"owner_id": owner_id, "before": current, "after": current, "delta": 0.0}
-    return adjust_caller_trust(owner_id, delta=delta, reason=reason, related_id=related_id)
+    return adjust_caller_trust(
+        owner_id, delta=delta, reason=reason, related_id=related_id
+    )
 
 
 def record_judge_fee(
@@ -317,7 +328,9 @@ def _dispute_context_conn(conn: sqlite3.Connection, dispute_id: str) -> sqlite3.
     return row
 
 
-def _related_sum_conn(conn: sqlite3.Connection, *, related_tx_id: str, wallet_id: str, tx_type: str) -> int:
+def _related_sum_conn(
+    conn: sqlite3.Connection, *, related_tx_id: str, wallet_id: str, tx_type: str
+) -> int:
     row = conn.execute(
         """
         SELECT COALESCE(SUM(amount_cents), 0) AS total
@@ -336,7 +349,9 @@ def _lock_dispute_funds_conn(conn: sqlite3.Connection, dispute_id: str) -> dict:
     If payout has not happened yet, charge remains held and no extra movement is needed.
     """
     ctx = _dispute_context_conn(conn, dispute_id)
-    escrow_wallet_id = _get_or_create_wallet_id_conn(conn, f"{DISPUTE_ESCROW_OWNER_PREFIX}{dispute_id}")
+    escrow_wallet_id = _get_or_create_wallet_id_conn(
+        conn, f"{DISPUTE_ESCROW_OWNER_PREFIX}{dispute_id}"
+    )
 
     already_locked = _related_sum_conn(
         conn,
@@ -421,7 +436,9 @@ def _collect_dispute_filing_deposit_conn(
 ) -> dict:
     if amount_cents < 0:
         raise ValueError("amount_cents must be non-negative.")
-    deposit_wallet_id = _get_or_create_wallet_id_conn(conn, f"{DISPUTE_DEPOSIT_OWNER_PREFIX}{dispute_id}")
+    deposit_wallet_id = _get_or_create_wallet_id_conn(
+        conn, f"{DISPUTE_DEPOSIT_OWNER_PREFIX}{dispute_id}"
+    )
     if amount_cents == 0:
         return {
             "dispute_id": dispute_id,
@@ -506,7 +523,9 @@ def _release_dispute_filing_deposit_conn(
 ) -> dict:
     ctx = _dispute_context_conn(conn, dispute_id)
     configured_deposit_cents = int(ctx["filing_deposit_cents"] or 0)
-    deposit_wallet_id = _get_or_create_wallet_id_conn(conn, f"{DISPUTE_DEPOSIT_OWNER_PREFIX}{dispute_id}")
+    deposit_wallet_id = _get_or_create_wallet_id_conn(
+        conn, f"{DISPUTE_DEPOSIT_OWNER_PREFIX}{dispute_id}"
+    )
     if configured_deposit_cents <= 0:
         return {
             "deposit_wallet_id": deposit_wallet_id,
@@ -524,9 +543,8 @@ def _release_dispute_filing_deposit_conn(
         }
     filed_side = str(ctx["side"] or "").strip().lower()
     filer_owner_id = str(ctx["filed_by_owner_id"] or "").strip()
-    filer_won = (
-        (filed_side == "caller" and outcome == "caller_wins")
-        or (filed_side == "agent" and outcome == "agent_wins")
+    filer_won = (filed_side == "caller" and outcome == "caller_wins") or (
+        filed_side == "agent" and outcome == "agent_wins"
     )
     refund_to_filer = filer_won or outcome in {"split", "void"}
     if refund_to_filer and filer_owner_id:
@@ -578,7 +596,11 @@ def post_dispute_settlement(
         ctx = _dispute_context_conn(conn, dispute_id)
         agent_id = str(ctx["agent_id"])
         price_cents = int(ctx["price_cents"])
-        platform_fee_pct = int(ctx["platform_fee_pct_at_create"] if ctx["platform_fee_pct_at_create"] is not None else PLATFORM_FEE_PCT)
+        platform_fee_pct = int(
+            ctx["platform_fee_pct_at_create"]
+            if ctx["platform_fee_pct_at_create"] is not None
+            else PLATFORM_FEE_PCT
+        )
         fee_bearer_policy = normalize_fee_bearer_policy(ctx["fee_bearer_policy"])
         distribution = compute_success_distribution(
             price_cents,
@@ -594,7 +616,9 @@ def post_dispute_settlement(
         caller_wallet_id = str(ctx["caller_wallet_id"])
         agent_wallet_id = str(ctx["agent_wallet_id"])
         platform_wallet_id = str(ctx["platform_wallet_id"])
-        escrow_wallet_id = _get_or_create_wallet_id_conn(conn, f"{DISPUTE_ESCROW_OWNER_PREFIX}{dispute_id}")
+        escrow_wallet_id = _get_or_create_wallet_id_conn(
+            conn, f"{DISPUTE_ESCROW_OWNER_PREFIX}{dispute_id}"
+        )
 
         finalized = conn.execute(
             """
@@ -603,7 +627,11 @@ def post_dispute_settlement(
             WHERE related_tx_id = ? AND wallet_id = ? AND memo = ?
             LIMIT 1
             """,
-            (dispute_id, escrow_wallet_id, f"Dispute final settlement ({normalized_outcome})"),
+            (
+                dispute_id,
+                escrow_wallet_id,
+                f"Dispute final settlement ({normalized_outcome})",
+            ),
         ).fetchone()
         if finalized is not None:
             return {
@@ -659,7 +687,9 @@ def post_dispute_settlement(
         elif normalized_outcome == "agent_wins":
             if escrow_balance > 0:
                 payout_cents = min(default_agent_cents, escrow_balance)
-                fee_release_cents = min(fee_cents, max(0, escrow_balance - payout_cents))
+                fee_release_cents = min(
+                    fee_cents, max(0, escrow_balance - payout_cents)
+                )
                 release_total = payout_cents + fee_release_cents
                 if release_total > 0:
                     _debit_wallet_conn(
@@ -716,7 +746,9 @@ def post_dispute_settlement(
 
         elif normalized_outcome == "split":
             if split_caller_cents is None or split_agent_cents is None:
-                raise ValueError("split outcomes require split_caller_cents and split_agent_cents.")
+                raise ValueError(
+                    "split outcomes require split_caller_cents and split_agent_cents."
+                )
             caller_share = int(split_caller_cents)
             agent_share = int(split_agent_cents)
             if caller_share < 0 or agent_share < 0:
@@ -816,8 +848,12 @@ def post_dispute_settlement(
             "platform_delta_cents": platform_delta,
             "charge_tx_id": charge_tx_id,
             "filing_deposit_cents": int(filing_deposit_summary["filing_deposit_cents"]),
-            "filing_deposit_refunded_cents": int(filing_deposit_summary["filing_deposit_refunded_cents"]),
-            "filing_deposit_forfeited_cents": int(filing_deposit_summary["filing_deposit_forfeited_cents"]),
+            "filing_deposit_refunded_cents": int(
+                filing_deposit_summary["filing_deposit_refunded_cents"]
+            ),
+            "filing_deposit_forfeited_cents": int(
+                filing_deposit_summary["filing_deposit_forfeited_cents"]
+            ),
         }
     logging_utils.log_event(
         _LOG,
@@ -891,9 +927,9 @@ def compute_ledger_invariants(max_mismatches: int = 100) -> dict:
             """,
             (capped,),
         ).fetchall()
-        wallet_count = conn.execute(
-            "SELECT COUNT(*) AS count FROM wallets"
-        ).fetchone()["count"]
+        wallet_count = conn.execute("SELECT COUNT(*) AS count FROM wallets").fetchone()[
+            "count"
+        ]
         tx_count = conn.execute(
             "SELECT COUNT(*) AS count FROM transactions"
         ).fetchone()["count"]

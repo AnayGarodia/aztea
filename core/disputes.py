@@ -20,9 +20,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import uuid
 from datetime import datetime, timezone
+
+_LOG = logging.getLogger(__name__)
 
 from core import db as _db
 
@@ -88,7 +91,9 @@ def init_disputes_db() -> None:
             """
         )
         # caller_ratings is defined in reputation.py; that table must be initialized first
-        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_disputes_job_unique ON disputes(job_id)")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_disputes_job_unique ON disputes(job_id)"
+        )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_disputes_status_filed ON disputes(status, filed_at DESC)"
         )
@@ -139,11 +144,15 @@ def _validate_outcome(outcome: str | None) -> str | None:
     return normalized
 
 
-def _validate_split(outcome: str | None, split_caller_cents: int | None, split_agent_cents: int | None) -> tuple[int | None, int | None]:
+def _validate_split(
+    outcome: str | None, split_caller_cents: int | None, split_agent_cents: int | None
+) -> tuple[int | None, int | None]:
     if outcome != "split":
         return None, None
     if split_caller_cents is None or split_agent_cents is None:
-        raise ValueError("split outcomes require split_caller_cents and split_agent_cents.")
+        raise ValueError(
+            "split outcomes require split_caller_cents and split_agent_cents."
+        )
     if split_caller_cents < 0 or split_agent_cents < 0:
         raise ValueError("split amounts must be non-negative.")
     return int(split_caller_cents), int(split_agent_cents)
@@ -310,7 +319,10 @@ def set_dispute_tied(dispute_id: str) -> dict | None:
 def get_stale_tied_disputes(older_than_hours: int = 48, limit: int = 100) -> list[dict]:
     """Return tied disputes whose tied_since is older than the given threshold."""
     from datetime import timedelta
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=older_than_hours)).isoformat()
+
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(hours=older_than_hours)
+    ).isoformat()
     with _conn() as conn:
         rows = conn.execute(
             """
@@ -356,7 +368,9 @@ def finalize_dispute(
     """
     normalized_status = _validate_status(status)
     normalized_outcome = _validate_outcome(outcome)
-    caller_split, agent_split = _validate_split(normalized_outcome, split_caller_cents, split_agent_cents)
+    caller_split, agent_split = _validate_split(
+        normalized_outcome, split_caller_cents, split_agent_cents
+    )
     resolved_at = _now()
     with _conn() as conn:
         conn.execute(
@@ -431,7 +445,9 @@ def record_judgment(
     return judgment
 
 
-def append_audit_event(dispute_id: str, event: str, actor: str | None = None, extra: dict | None = None) -> None:
+def append_audit_event(
+    dispute_id: str, event: str, actor: str | None = None, extra: dict | None = None
+) -> None:
     """Append a structured entry to disputes.audit_log (JSON array).
 
     Safe to call even if the column doesn't exist yet (migration guard).
@@ -462,7 +478,7 @@ def append_audit_event(dispute_id: str, event: str, actor: str | None = None, ex
                 (json.dumps(log), dispute_id),
             )
     except Exception:  # noqa: BLE001 — audit must not break callers
-        pass
+        _LOG.warning("Failed to append audit log entry for dispute %s", dispute_id, exc_info=True)
 
 
 def get_judgments(dispute_id: str) -> list[dict]:
@@ -513,21 +529,24 @@ def get_dispute_context(dispute_id: str) -> dict | None:
         return None
 
     data = dict(row)
-    dispute = {key: data[key] for key in (
-        "dispute_id",
-        "job_id",
-        "filed_by_owner_id",
-        "side",
-        "reason",
-        "evidence",
-        "filing_deposit_cents",
-        "status",
-        "outcome",
-        "split_caller_cents",
-        "split_agent_cents",
-        "filed_at",
-        "resolved_at",
-    )}
+    dispute = {
+        key: data[key]
+        for key in (
+            "dispute_id",
+            "job_id",
+            "filed_by_owner_id",
+            "side",
+            "reason",
+            "evidence",
+            "filing_deposit_cents",
+            "status",
+            "outcome",
+            "split_caller_cents",
+            "split_agent_cents",
+            "filed_at",
+            "resolved_at",
+        )
+    }
     for field in ("split_caller_cents", "split_agent_cents"):
         value = dispute.get(field)
         dispute[field] = int(value) if value is not None else None

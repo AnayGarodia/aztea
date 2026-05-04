@@ -52,7 +52,10 @@ def _is_blocked_agent_host(host: str) -> bool:
 
 
 def _allow_private_default() -> bool:
-    return os.environ.get("ALLOW_PRIVATE_OUTBOUND_URLS", "0").strip().lower() in _ENV_ALLOW_PRIVATE_VALUES
+    return (
+        os.environ.get("ALLOW_PRIVATE_OUTBOUND_URLS", "0").strip().lower()
+        in _ENV_ALLOW_PRIVATE_VALUES
+    )
 
 
 def _is_disallowed_ip(ip_value: ipaddress._BaseAddress) -> bool:
@@ -141,7 +144,9 @@ def validate_outbound_url(
 
     # Reject URL-encoded characters in the hostname (e.g. 127%2E0%2E0%2E1 or %00 null-byte tricks)
     if host != unquote(host):
-        raise ValueError(f"{field_name} hostname must not contain percent-encoded characters.")
+        raise ValueError(
+            f"{field_name} hostname must not contain percent-encoded characters."
+        )
 
     if host == "localhost" or host.endswith(".localhost"):
         raise ValueError(

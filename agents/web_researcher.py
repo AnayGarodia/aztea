@@ -32,12 +32,12 @@ Output (multi URL): {
 }
 """
 
-import re
 import html
 import json
+import re
 import urllib.parse
-from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 
 import requests
 
@@ -96,15 +96,26 @@ Return JSON with exactly:
 
 def _strip_html(raw_html: str) -> tuple[str, list[dict], str]:
     """Minimal HTML→text: strip tags, decode entities, extract links and title."""
-    title_m = re.search(r"<title[^>]*>(.*?)</title>", raw_html, re.IGNORECASE | re.DOTALL)
+    title_m = re.search(
+        r"<title[^>]*>(.*?)</title>", raw_html, re.IGNORECASE | re.DOTALL
+    )
     title = html.unescape(title_m.group(1).strip()) if title_m else ""
 
     # Remove scripts, styles, nav, footer
-    cleaned = re.sub(r"<(script|style|nav|footer|header|aside)[^>]*>.*?</\1>", "", raw_html, flags=re.DOTALL | re.IGNORECASE)
+    cleaned = re.sub(
+        r"<(script|style|nav|footer|header|aside)[^>]*>.*?</\1>",
+        "",
+        raw_html,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
 
     # Extract links before stripping
     links = []
-    for m in re.finditer(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', cleaned, re.IGNORECASE | re.DOTALL):
+    for m in re.finditer(
+        r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>',
+        cleaned,
+        re.IGNORECASE | re.DOTALL,
+    ):
         href = m.group(1).strip()
         link_text = re.sub(r"<[^>]+>", "", m.group(2)).strip()
         if href.startswith("http") and link_text:
@@ -123,7 +134,12 @@ def _fetch_one(url: str) -> dict:
     try:
         safe_url = validate_outbound_url(url, "url")
     except ValueError:
-        return {"url": url, "content": None, "status": "error", "error": "URL is invalid or not allowed (must be public http/https)"}
+        return {
+            "url": url,
+            "content": None,
+            "status": "error",
+            "error": "URL is invalid or not allowed (must be public http/https)",
+        }
 
     # Manual redirect loop. Each hop is re-validated through the SSRF
     # gate so an attacker can't 301 us into 169.254.169.254 or localhost.
@@ -146,7 +162,12 @@ def _fetch_one(url: str) -> dict:
             if 300 <= resp.status_code < 400:
                 location = resp.headers.get("Location") or resp.headers.get("location")
                 if not location:
-                    return {"url": url, "content": None, "status": "error", "error": "redirect_no_location"}
+                    return {
+                        "url": url,
+                        "content": None,
+                        "status": "error",
+                        "error": "redirect_no_location",
+                    }
                 next_url = urllib.parse.urljoin(current_url, location)
                 try:
                     current_url = validate_outbound_url(next_url, "url")
@@ -160,28 +181,57 @@ def _fetch_one(url: str) -> dict:
                 continue
             break
         else:
-            return {"url": url, "content": None, "status": "error", "error": "too_many_redirects"}
+            return {
+                "url": url,
+                "content": None,
+                "status": "error",
+                "error": "too_many_redirects",
+            }
         resp.raise_for_status()
         chunks = []
         total = 0
         for chunk in resp.iter_content(chunk_size=65536, decode_unicode=False):
             total += len(chunk)
             if total > 5 * 1024 * 1024:
-                return {"url": url, "content": None, "status": "error", "error": "Page is too large to process (over 5 MB)"}
+                return {
+                    "url": url,
+                    "content": None,
+                    "status": "error",
+                    "error": "Page is too large to process (over 5 MB)",
+                }
             chunks.append(chunk)
         raw_html = b"".join(chunks).decode("utf-8", errors="replace")
     except requests.exceptions.Timeout:
-        return {"url": url, "content": None, "status": "error", "error": "Request timed out fetching the URL"}
+        return {
+            "url": url,
+            "content": None,
+            "status": "error",
+            "error": "Request timed out fetching the URL",
+        }
     except requests.exceptions.HTTPError as e:
-        return {"url": url, "content": None, "status": "error", "error": f"HTTP {e.response.status_code} fetching URL"}
+        return {
+            "url": url,
+            "content": None,
+            "status": "error",
+            "error": f"HTTP {e.response.status_code} fetching URL",
+        }
     except Exception as e:
-        return {"url": url, "content": None, "status": "error", "error": f"Failed to fetch URL: {type(e).__name__}"}
+        return {
+            "url": url,
+            "content": None,
+            "status": "error",
+            "error": f"Failed to fetch URL: {type(e).__name__}",
+        }
 
     text, links, html_title = _strip_html(raw_html)
 
     # Detect JS-rendered SPAs: page has a root mount point but essentially no text content
     is_spa = (
-        bool(re.search(r'<div\s+id=["\'](?:root|app|__next)["\']', raw_html, re.IGNORECASE))
+        bool(
+            re.search(
+                r'<div\s+id=["\'](?:root|app|__next)["\']', raw_html, re.IGNORECASE
+            )
+        )
         and len(text.strip()) < 200
     )
     if is_spa:
@@ -231,7 +281,9 @@ def run(payload: dict) -> dict:
     """
     question = str(payload.get("question", "")).strip()
     if len(question) > 1000:
-        return _err("web_researcher.invalid_input", "question must be 1000 characters or fewer")
+        return _err(
+            "web_researcher.invalid_input", "question must be 1000 characters or fewer"
+        )
 
     mode = str(payload.get("mode", "summary")).lower()
     if mode not in ("summary", "extract", "qa"):
@@ -244,12 +296,18 @@ def run(payload: dict) -> dict:
 
     if urls_raw is not None and len(urls_raw) > 0:
         if len(urls_raw) > _MAX_URLS:
-            return _err("web_researcher.too_many_urls", f"urls must contain at most {_MAX_URLS} URLs, got {len(urls_raw)}")
+            return _err(
+                "web_researcher.too_many_urls",
+                f"urls must contain at most {_MAX_URLS} URLs, got {len(urls_raw)}",
+            )
         urls = [str(u).strip() for u in urls_raw]
         multi_mode = True
     elif url_single:
         if len(url_single) > _MAX_URL_LENGTH:
-            return _err("web_researcher.invalid_url", "URL is invalid or not allowed (must be public http/https)")
+            return _err(
+                "web_researcher.invalid_url",
+                "URL is invalid or not allowed (must be public http/https)",
+            )
         urls = [url_single]
         multi_mode = False
     else:
@@ -258,7 +316,10 @@ def run(payload: dict) -> dict:
     # Validate URL lengths upfront (security check deferred to _fetch_one)
     for u in urls:
         if len(u) > _MAX_URL_LENGTH:
-            return _err("web_researcher.url_too_long", f"URL too long (max {_MAX_URL_LENGTH} chars): {u[:80]}...")
+            return _err(
+                "web_researcher.url_too_long",
+                f"URL too long (max {_MAX_URL_LENGTH} chars): {u[:80]}...",
+            )
 
     # Parallel fetch
     fetched_at = datetime.now(timezone.utc).isoformat()
@@ -271,7 +332,12 @@ def run(payload: dict) -> dict:
                 res = future.result()
             except Exception as exc:
                 u = future_to_url[future]
-                res = {"url": u, "content": None, "status": "error", "error": f"Unexpected fetch error: {type(exc).__name__}"}
+                res = {
+                    "url": u,
+                    "content": None,
+                    "status": "error",
+                    "error": f"Unexpected fetch error: {type(exc).__name__}",
+                }
             results_map[res["url"]] = res
 
     # Preserve original URL order
@@ -307,12 +373,15 @@ def run(payload: dict) -> dict:
             model="",
             messages=[
                 Message(role="system", content=_SYSTEM),
-                Message(role="user", content=_USER.format(
-                    url=url_single,
-                    question=question or "Provide a general analysis.",
-                    mode=mode,
-                    content=truncated,
-                )),
+                Message(
+                    role="user",
+                    content=_USER.format(
+                        url=url_single,
+                        question=question or "Provide a general analysis.",
+                        mode=mode,
+                        content=truncated,
+                    ),
+                ),
             ],
             temperature=0.15,
             max_tokens=900,
@@ -326,38 +395,45 @@ def run(payload: dict) -> dict:
             raw_text = truncated[:400]
             llm_used = False
             degraded_mode = True
-        llm_data = _parse_llm_json(raw_text, {
-            "title": html_title,
-            "summary": (
-                raw_text[:400]
-                if raw_text
-                else "Fetched the page successfully, but LLM synthesis is unavailable."
-            ),
-            "key_points": [],
-            "answer": "",
-            "quotes": [],
-            "content_type": "other",
-        })
+        llm_data = _parse_llm_json(
+            raw_text,
+            {
+                "title": html_title,
+                "summary": (
+                    raw_text[:400]
+                    if raw_text
+                    else "Fetched the page successfully, but LLM synthesis is unavailable."
+                ),
+                "key_points": [],
+                "answer": "",
+                "quotes": [],
+                "content_type": "other",
+            },
+        )
 
         synthesis = llm_data.get("summary", "")
 
-        return annotate_success({
-            "url": url_single,
-            "title": llm_data.get("title") or html_title,
-            "word_count": word_count,
-            "fetched_at": fetched_at,
-            "summary": llm_data.get("summary", ""),
-            "key_points": llm_data.get("key_points", []),
-            "answer": llm_data.get("answer", ""),
-            "quotes": llm_data.get("quotes", []),
-            "links": links,
-            "content_type": llm_data.get("content_type", "other"),
-            # New fields
-            "per_url_findings": per_url_findings,
-            "synthesis": synthesis,
-            "cross_source_consensus": None,
-            "billing_units_actual": billing_units_actual,
-        }, llm_used=llm_used, degraded_mode=degraded_mode)
+        return annotate_success(
+            {
+                "url": url_single,
+                "title": llm_data.get("title") or html_title,
+                "word_count": word_count,
+                "fetched_at": fetched_at,
+                "summary": llm_data.get("summary", ""),
+                "key_points": llm_data.get("key_points", []),
+                "answer": llm_data.get("answer", ""),
+                "quotes": llm_data.get("quotes", []),
+                "links": links,
+                "content_type": llm_data.get("content_type", "other"),
+                # New fields
+                "per_url_findings": per_url_findings,
+                "synthesis": synthesis,
+                "cross_source_consensus": None,
+                "billing_units_actual": billing_units_actual,
+            },
+            llm_used=llm_used,
+            degraded_mode=degraded_mode,
+        )
 
     # --- Multi URL mode ---
     if not successful:
@@ -376,7 +452,7 @@ def run(payload: dict) -> dict:
     # Build combined content for LLM
     combined_parts = []
     for r in successful:
-        truncated = r["content"][:_MAX_CONTENT_CHARS // len(successful)]
+        truncated = r["content"][: _MAX_CONTENT_CHARS // len(successful)]
         combined_parts.append(f"--- Source: {r['url']} ---\n{truncated}")
     combined_content = "\n\n".join(combined_parts)
 
@@ -384,12 +460,15 @@ def run(payload: dict) -> dict:
         model="",
         messages=[
             Message(role="system", content=_MULTI_SYSTEM),
-            Message(role="user", content=_MULTI_USER.format(
-                question=question or "Provide a general analysis.",
-                mode=mode,
-                n_sources=len(successful),
-                content=combined_content,
-            )),
+            Message(
+                role="user",
+                content=_MULTI_USER.format(
+                    question=question or "Provide a general analysis.",
+                    mode=mode,
+                    n_sources=len(successful),
+                    content=combined_content,
+                ),
+            ),
         ],
         temperature=0.15,
         max_tokens=1200,
@@ -403,26 +482,35 @@ def run(payload: dict) -> dict:
         raw_text = ""
         llm_used = False
         degraded_mode = True
-    llm_data = _parse_llm_json(raw_text, {
-        "synthesis": (
-            raw_text[:600]
-            if raw_text
-            else "Fetched the requested sources successfully, but cross-source synthesis is unavailable."
-        ),
-        "key_points": [],
-        "answer": "",
-        "cross_source_consensus": "",
-    })
+    llm_data = _parse_llm_json(
+        raw_text,
+        {
+            "synthesis": (
+                raw_text[:600]
+                if raw_text
+                else "Fetched the requested sources successfully, but cross-source synthesis is unavailable."
+            ),
+            "key_points": [],
+            "answer": "",
+            "cross_source_consensus": "",
+        },
+    )
 
-    cross_source_consensus = llm_data.get("cross_source_consensus") if len(successful) > 1 else None
+    cross_source_consensus = (
+        llm_data.get("cross_source_consensus") if len(successful) > 1 else None
+    )
 
-    return annotate_success({
-        "urls": urls,
-        "per_url_findings": per_url_findings,
-        "synthesis": llm_data.get("synthesis", ""),
-        "key_points": llm_data.get("key_points", []),
-        "answer": llm_data.get("answer", ""),
-        "cross_source_consensus": cross_source_consensus,
-        "billing_units_actual": billing_units_actual,
-        "fetched_at": fetched_at,
-    }, llm_used=llm_used, degraded_mode=degraded_mode)
+    return annotate_success(
+        {
+            "urls": urls,
+            "per_url_findings": per_url_findings,
+            "synthesis": llm_data.get("synthesis", ""),
+            "key_points": llm_data.get("key_points", []),
+            "answer": llm_data.get("answer", ""),
+            "cross_source_consensus": cross_source_consensus,
+            "billing_units_actual": billing_units_actual,
+            "fetched_at": fetched_at,
+        },
+        llm_used=llm_used,
+        degraded_mode=degraded_mode,
+    )

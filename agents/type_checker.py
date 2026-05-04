@@ -8,11 +8,14 @@ because the value proposition is deterministic diagnostics from a real checker.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
 import subprocess
 import tempfile
+
+_LOG = logging.getLogger(__name__)
 
 _TIMEOUT = 30
 _CODE_MAX = 100_000
@@ -36,7 +39,9 @@ def _normalize_diagnostic(item: dict, *, default_file: str) -> dict:
     return {
         "file": os.path.basename(str(item.get("file") or default_file)),
         "line": int(line) if isinstance(line, int) or str(line).isdigit() else None,
-        "col": int(column) if isinstance(column, int) or str(column).isdigit() else None,
+        "col": int(column)
+        if isinstance(column, int) or str(column).isdigit()
+        else None,
         "code": str(item.get("code") or item.get("rule") or "error"),
         "message": str(item.get("message") or item.get("text") or "").strip(),
         "severity": str(item.get("severity") or "error").lower(),
@@ -143,7 +148,9 @@ def _run_mypy(code: str, stubs: dict[str, str], strict: bool) -> dict:
             elif isinstance(obj, list):
                 for item in obj:
                     if isinstance(item, dict):
-                        diagnostics.append(_normalize_diagnostic(item, default_file="main.py"))
+                        diagnostics.append(
+                            _normalize_diagnostic(item, default_file="main.py")
+                        )
         if not diagnostics and result.returncode != 0:
             diagnostics = _parse_mypy_text_diagnostics(raw)
 
@@ -218,7 +225,12 @@ def _run_tsc(code: str, stubs: dict[str, str], strict: bool) -> dict:
         # Prefer a global tsc; fall back to npx (auto-installs typescript on demand).
         tsc_bin = shutil.which("tsc")
         if tsc_bin:
-            cmd = [tsc_bin, "--noEmit", "--project", os.path.join(tmpdir, "tsconfig.json")]
+            cmd = [
+                tsc_bin,
+                "--noEmit",
+                "--project",
+                os.path.join(tmpdir, "tsconfig.json"),
+            ]
         else:
             if not shutil.which("npx"):
                 return _err(
@@ -227,15 +239,25 @@ def _run_tsc(code: str, stubs: dict[str, str], strict: bool) -> dict:
                     "Install Node.js or TypeScript globally: npm install -g typescript",
                 )
             cmd = [
-                "npx", "--yes", "--package", "typescript", "tsc",
-                "--noEmit", "--project", os.path.join(tmpdir, "tsconfig.json"),
+                "npx",
+                "--yes",
+                "--package",
+                "typescript",
+                "tsc",
+                "--noEmit",
+                "--project",
+                os.path.join(tmpdir, "tsconfig.json"),
             ]
 
         npx_env = None
         if not tsc_bin:
             cache_dir = _tsc_cache_root()
             os.makedirs(cache_dir, exist_ok=True)
-            npx_env = {**os.environ, "npm_config_cache": cache_dir, "NPM_CONFIG_CACHE": cache_dir}
+            npx_env = {
+                **os.environ,
+                "npm_config_cache": cache_dir,
+                "NPM_CONFIG_CACHE": cache_dir,
+            }
 
         try:
             result = subprocess.run(
@@ -258,16 +280,20 @@ def _run_tsc(code: str, stubs: dict[str, str], strict: bool) -> dict:
         version_str = ""
         try:
             if tsc_bin:
-                v = subprocess.run([tsc_bin, "--version"], capture_output=True, text=True, timeout=5)
+                v = subprocess.run(
+                    [tsc_bin, "--version"], capture_output=True, text=True, timeout=5
+                )
             else:
                 v = subprocess.run(
                     ["npx", "--yes", "--package", "typescript", "tsc", "--version"],
-                    capture_output=True, text=True, timeout=15,
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
                     env=npx_env,
                 )
             version_str = (v.stdout + v.stderr).strip()
         except Exception:
-            pass
+            _LOG.debug("Failed to detect tsc version; will report as 'tsc'", exc_info=True)
         tool_version = version_str or "tsc"
         diagnostics = _parse_tsc_diagnostics(raw)
 
@@ -307,11 +333,16 @@ def run(payload: dict) -> dict:
     if not code:
         return _err("type_checker.missing_code", "'code' is required.")
     if len(code) > _CODE_MAX:
-        return _err("type_checker.code_too_long", f"'code' must be <= {_CODE_MAX} characters.")
+        return _err(
+            "type_checker.code_too_long", f"'code' must be <= {_CODE_MAX} characters."
+        )
 
     language = str(payload.get("language") or "python").strip().lower()
     if language not in {"python", "typescript"}:
-        return _err("type_checker.invalid_language", "'language' must be 'python' or 'typescript'.")
+        return _err(
+            "type_checker.invalid_language",
+            "'language' must be 'python' or 'typescript'.",
+        )
 
     stubs = payload.get("stubs") or {}
     if not isinstance(stubs, dict):

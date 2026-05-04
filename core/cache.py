@@ -53,15 +53,21 @@ def init_cache_db() -> None:
             )
             """
         )
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_cache_agent ON agent_result_cache(agent_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_cache_expires ON agent_result_cache(expires_at)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_cache_agent ON agent_result_cache(agent_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_cache_expires ON agent_result_cache(expires_at)"
+        )
 
 
 def _canonical_json(payload: Any) -> str:
     return json.dumps(payload, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
 
 
-def cache_key(agent_id: str, input_payload: Any, version_token: str | None = None) -> str:
+def cache_key(
+    agent_id: str, input_payload: Any, version_token: str | None = None
+) -> str:
     canonical = f"{str(agent_id).strip()}:{str(version_token or '').strip()}:{_canonical_json(input_payload)}"
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -106,7 +112,9 @@ def _current_trust_score(agent_id: str) -> float:
     return float(reputation.compute_trust_metrics(agent_id).get("trust_score") or 0.0)
 
 
-def get_cached(agent_id: str, input_payload: Any, *, version_token: str | None = None) -> Any | None:
+def get_cached(
+    agent_id: str, input_payload: Any, *, version_token: str | None = None
+) -> Any | None:
     """Look up a cached result for (agent_id, input_payload); returns None on miss or TTL expiry.
 
     Expired entries are deleted on read (lazy eviction). Returns the decoded
@@ -151,10 +159,13 @@ def _is_builtin_agent(agent_id: str) -> bool:
     if _BUILTIN_CACHE_BYPASS_THRESHOLD is None:
         try:
             from server.builtin_agents.constants import (
-                CURATED_PUBLIC_BUILTIN_AGENT_IDS,
                 BUILTIN_AGENT_IDS,
+                CURATED_PUBLIC_BUILTIN_AGENT_IDS,
             )
-            _BUILTIN_CACHE_BYPASS_THRESHOLD = set(CURATED_PUBLIC_BUILTIN_AGENT_IDS) | set(BUILTIN_AGENT_IDS)
+
+            _BUILTIN_CACHE_BYPASS_THRESHOLD = set(
+                CURATED_PUBLIC_BUILTIN_AGENT_IDS
+            ) | set(BUILTIN_AGENT_IDS)
         except Exception:
             _BUILTIN_CACHE_BYPASS_THRESHOLD = set()
     return str(agent_id).strip() in _BUILTIN_CACHE_BYPASS_THRESHOLD
@@ -196,7 +207,9 @@ def set_cached(
     if isinstance(output_payload, dict):
         payload_to_store = dict(output_payload)
         payload_to_store["_cached_job_id"] = str(job_id).strip()
-    output_json = json.dumps(payload_to_store, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    output_json = json.dumps(
+        payload_to_store, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+    )
     with _conn() as conn:
         conn.execute(
             """
@@ -209,7 +222,14 @@ def set_cached(
                 expires_at = excluded.expires_at,
                 job_id = excluded.job_id
             """,
-            (key, agent_id, output_json, created_at.isoformat(), expires_at.isoformat(), str(job_id).strip()),
+            (
+                key,
+                agent_id,
+                output_json,
+                created_at.isoformat(),
+                expires_at.isoformat(),
+                str(job_id).strip(),
+            ),
         )
     return True
 

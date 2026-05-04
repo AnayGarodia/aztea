@@ -48,9 +48,8 @@ from __future__ import annotations
 
 import json
 import math
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Mapping
-
 
 VALID_PRICING_MODELS = ("fixed", "per_unit", "tiered")
 _CENTS_PER_USD = Decimal("100")
@@ -94,7 +93,9 @@ def _to_positive_decimal(value: Any, *, field: str) -> Decimal:
     return parsed
 
 
-def validate_pricing_config(pricing_model: str, pricing_config: Any) -> dict[str, Any] | None:
+def validate_pricing_config(
+    pricing_model: str, pricing_config: Any
+) -> dict[str, Any] | None:
     """Return a canonicalised config dict, or ``None`` for ``fixed``.
 
     Raises :class:`VariablePricingError` for invalid configurations.
@@ -111,7 +112,9 @@ def validate_pricing_config(pricing_model: str, pricing_config: Any) -> dict[str
         try:
             parsed_raw: Any = json.loads(pricing_config)
         except json.JSONDecodeError as exc:
-            raise VariablePricingError(f"pricing_config is not valid JSON: {exc}") from exc
+            raise VariablePricingError(
+                f"pricing_config is not valid JSON: {exc}"
+            ) from exc
     else:
         parsed_raw = pricing_config
     if not isinstance(parsed_raw, dict):
@@ -122,7 +125,9 @@ def validate_pricing_config(pricing_model: str, pricing_config: Any) -> dict[str
         raise VariablePricingError("pricing_config.input_field is required.")
     unit = str(parsed_raw.get("unit") or input_field).strip() or input_field
 
-    min_cents = _to_int(parsed_raw.get("min_cents", 0), field="pricing_config.min_cents")
+    min_cents = _to_int(
+        parsed_raw.get("min_cents", 0), field="pricing_config.min_cents"
+    )
     max_raw = parsed_raw.get("max_cents")
     max_cents: int | None
     if max_raw is None:
@@ -130,9 +135,7 @@ def validate_pricing_config(pricing_model: str, pricing_config: Any) -> dict[str
     else:
         max_cents = _to_int(max_raw, field="pricing_config.max_cents", minimum=0)
     if max_cents is not None and max_cents < min_cents:
-        raise VariablePricingError(
-            "pricing_config.max_cents must be >= min_cents."
-        )
+        raise VariablePricingError("pricing_config.max_cents must be >= min_cents.")
 
     canonical: dict[str, Any] = {
         "input_field": input_field,
@@ -177,7 +180,9 @@ def validate_pricing_config(pricing_model: str, pricing_config: Any) -> dict[str
         last_threshold: int | None = None
         for idx, tier in enumerate(tiers_raw):
             if not isinstance(tier, dict):
-                raise VariablePricingError(f"pricing_config.tiers[{idx}] must be an object.")
+                raise VariablePricingError(
+                    f"pricing_config.tiers[{idx}] must be an object."
+                )
             up_to = _to_int(
                 tier.get("up_to_units"),
                 field=f"pricing_config.tiers[{idx}].up_to_units",
@@ -314,14 +319,16 @@ def estimate_price_cents(
     max_cents_raw = config.get("max_cents")
     max_cents = int(max_cents_raw) if max_cents_raw is not None else None
     unit = str(config.get("unit") or config.get("input_field") or "unit")
-    multipliers = config.get("multipliers") if isinstance(config.get("multipliers"), dict) else None
+    multipliers = (
+        config.get("multipliers")
+        if isinstance(config.get("multipliers"), dict)
+        else None
+    )
 
     if model == "per_unit":
         rate = float(config.get("rate_cents_per_unit") or 0.0)
         base = int(
-            Decimal(rate * max(0, units)).quantize(
-                Decimal("1"), rounding=ROUND_HALF_UP
-            )
+            Decimal(rate * max(0, units)).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
         )
         with_mults = _apply_multipliers(base, payload, multipliers)
         price_cents = _clamp(with_mults, min_cents=min_cents, max_cents=max_cents)
@@ -388,7 +395,9 @@ def price_usd_to_cents(value: Any) -> int:
         return 0
     if not amount.is_finite() or amount < 0:
         return 0
-    cents = int((amount * _CENTS_PER_USD).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    cents = int(
+        (amount * _CENTS_PER_USD).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    )
     if amount > 0 and cents == 0:
         return 1
     return cents
