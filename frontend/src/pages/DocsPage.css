@@ -208,12 +208,44 @@
 .docs-nav__group-title {
   margin: 0 0 4px;
   padding: 0 14px 4px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
   font-size: 0.6875rem;
-  font-weight: 600;
-  letter-spacing: 0.1em;
+  font-weight: 700;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: var(--terracotta, var(--accent));
 }
+
+.docs-nav__hub {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0 0 10px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--accent-border);
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background 0.12s, border-color 0.12s, color 0.12s, transform 0.12s;
+}
+.docs-nav__hub:hover {
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+.docs-nav__hub--active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+.docs-nav__hub--active:hover {
+  background: var(--accent);
+  color: white;
+}
+.docs-nav__hub svg { flex-shrink: 0; }
 
 .docs-nav__link {
   display: block;
@@ -871,6 +903,7 @@
   gap: 48px;
   width: 100%;
 }
+.docs-hub--chatting { gap: 28px; padding-top: 24px; }
 
 /* --- Hero ---------------------------------------------------- */
 .docs-hub__hero {
@@ -879,20 +912,15 @@
   flex-direction: column;
   align-items: center;
   gap: 18px;
+  /* Smooth collapse from full hero → just the input bar when a
+     conversation starts. The grid-row animation gives us a height
+     transition without measuring the DOM. */
+  transition: gap 0.35s cubic-bezier(0.22, 1, 0.36, 1);
 }
-.docs-hub__eyebrow {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 11px;
-  border-radius: 999px;
-  border: 1px solid var(--accent-border);
-  background: var(--accent-bg);
-  color: var(--accent);
-  font-size: 0.7rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+.docs-hub--chatting .docs-hub__hero {
+  gap: 0;
+  text-align: left;
+  align-items: stretch;
 }
 .docs-hub__title {
   margin: 0;
@@ -1157,6 +1185,11 @@
   flex-direction: column;
   gap: 18px;
   margin-top: 8px;
+  animation: docs-hub-thread-in 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes docs-hub-thread-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 .docs-hub__thread-head {
   display: flex;

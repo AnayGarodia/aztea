@@ -230,6 +230,14 @@ export default function DocsPage() {
 
   const renderNavLinks = (onSelect) => (
     <nav className="docs-nav" aria-label="Documentation list">
+      <Link
+        to="/docs"
+        onClick={onSelect}
+        className={`docs-nav__hub${inHub ? ' docs-nav__hub--active' : ''}`}
+      >
+        <Sparkles size={13} aria-hidden />
+        <span>Ask AI</span>
+      </Link>
       {filteredDocs.length === 0 ? (
         <p className="docs-nav__empty">No docs match "{query}".</p>
       ) : groupedDocs.map(([category, items]) => (
@@ -342,63 +350,8 @@ export default function DocsPage() {
 
         <section className="docs-page__content" aria-live="polite">
           {inHub && (
-            <div className="docs-hub">
-              <div className="docs-hub__hero">
-                <span className="docs-hub__eyebrow">
-                  <Sparkles size={12} aria-hidden />
-                  <span>Documentation · AI-grounded</span>
-                </span>
-                <h1 className="docs-hub__title">Ask anything about Aztea.</h1>
-                <p className="docs-hub__sub">
-                  Type a question. Answers are grounded in the documentation, with linked
-                  references back to the relevant pages — or browse the full index on the left.
-                </p>
-
-                <form
-                  className={`docs-hub__askbar${hubLoading ? ' docs-hub__askbar--loading' : ''}`}
-                  onSubmit={handleHubAsk}
-                >
-                  <Sparkles size={16} className="docs-hub__askbar-icon" aria-hidden />
-                  <input
-                    type="text"
-                    value={hubInput}
-                    onChange={(e) => setHubInput(e.target.value)}
-                    placeholder="How do I hire an agent? How does billing work?"
-                    aria-label="Ask the docs AI"
-                    autoFocus
-                    disabled={hubLoading}
-                  />
-                  <button
-                    type="submit"
-                    disabled={!hubInput.trim() || hubLoading}
-                    aria-label="Ask"
-                  >
-                    {hubLoading ? <span className="docs-hub__askbar-spin" aria-hidden /> : <Send size={14} />}
-                  </button>
-                </form>
-
-                {hubChat.length === 0 && (
-                  <div className="docs-hub__suggestions" aria-label="Example questions">
-                    {[
-                      'How do I hire an agent?',
-                      'Where are my API keys?',
-                      'How do I set up MCP in Claude?',
-                      'How does aztea_do work?',
-                    ].map((q) => (
-                      <button
-                        key={q}
-                        type="button"
-                        className="docs-hub__suggestion"
-                        onClick={() => setHubInput(q)}
-                      >
-                        {q}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {hubChat.length > 0 ? (
+            <div className={`docs-hub${hubChat.length > 0 ? ' docs-hub--chatting' : ''}`}>
+              {hubChat.length > 0 && (
                 <div className="docs-hub__thread">
                   <div className="docs-hub__thread-head">
                     <span>Conversation</span>
@@ -445,7 +398,64 @@ export default function DocsPage() {
                     </div>
                   )}
                 </div>
-              ) : (
+              )}
+
+              <div className="docs-hub__hero">
+                {hubChat.length === 0 && (
+                  <>
+                    <h1 className="docs-hub__title">Ask anything about Aztea.</h1>
+                    <p className="docs-hub__sub">
+                      Type a question. Answers are grounded in the documentation, with linked
+                      references back to the relevant pages — or browse the full index on the left.
+                    </p>
+                  </>
+                )}
+
+                <form
+                  className={`docs-hub__askbar${hubLoading ? ' docs-hub__askbar--loading' : ''}`}
+                  onSubmit={handleHubAsk}
+                >
+                  <Sparkles size={16} className="docs-hub__askbar-icon" aria-hidden />
+                  <input
+                    type="text"
+                    value={hubInput}
+                    onChange={(e) => setHubInput(e.target.value)}
+                    placeholder="How do I hire an agent? How does billing work?"
+                    aria-label="Ask the docs AI"
+                    autoFocus
+                    disabled={hubLoading}
+                  />
+                  <button
+                    type="submit"
+                    disabled={!hubInput.trim() || hubLoading}
+                    aria-label="Ask"
+                  >
+                    {hubLoading ? <span className="docs-hub__askbar-spin" aria-hidden /> : <Send size={14} />}
+                  </button>
+                </form>
+
+                {hubChat.length === 0 && (
+                  <div className="docs-hub__suggestions" aria-label="Example questions">
+                    {[
+                      'How do I hire an agent?',
+                      'Where are my API keys?',
+                      'How do I set up MCP in Claude?',
+                      'How does aztea_do work?',
+                    ].map((q) => (
+                      <button
+                        key={q}
+                        type="button"
+                        className="docs-hub__suggestion"
+                        onClick={() => setHubInput(q)}
+                      >
+                        {q}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {hubChat.length === 0 && (
                 <>
                   <section className="docs-hub__tldr" aria-label="Quickstart TL;DR">
                     <div className="docs-hub__tldr-head">
