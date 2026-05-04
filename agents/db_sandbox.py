@@ -29,6 +29,7 @@ All write operations are committed after each non-SELECT statement; PRAGMA
 """
 from __future__ import annotations
 
+import re as _re
 import sqlite3
 import tempfile
 import time
@@ -41,6 +42,15 @@ _MAX_STATEMENTS = 25
 _MAX_ROWS = 500
 _TIMEOUT_SECONDS = 5.0
 _MAX_DB_BYTES = 50 * 1024 * 1024
+
+_BLOCKED_SQL_RE = _re.compile(r"^\s*(ATTACH|DETACH)\s", _re.IGNORECASE)
+
+
+def _check_sql_blocked(sql: str) -> "dict | None":
+    if _BLOCKED_SQL_RE.match(sql):
+        keyword = sql.strip().split()[0].upper()
+        return _err("db_sandbox.blocked_command", f"{keyword} is not permitted in the sandbox.")
+    return None
 
 
 def _err(code: str, message: str) -> dict[str, Any]:
@@ -59,6 +69,9 @@ def _normalize_queries(payload: dict[str, Any]) -> list[dict[str, Any]]:
             sql = str(item.get("sql") or "").strip()
             if not sql:
                 return [{"error": _err("db_sandbox.invalid_query", f"queries[{index}].sql is required.")}]
+            blocked = _check_sql_blocked(sql)
+            if blocked:
+                return [{"error": blocked}]
             params = item.get("params")
             if params is not None and not isinstance(params, list):
                 return [{"error": _err("db_sandbox.invalid_query", f"queries[{index}].params must be a list.")}]
@@ -68,6 +81,9 @@ def _normalize_queries(payload: dict[str, Any]) -> list[dict[str, Any]]:
     sql = str(payload.get("sql") or "").strip()
     if not sql:
         return [{"error": _err("db_sandbox.missing_sql", "Provide sql or queries.")}]
+    blocked = _check_sql_blocked(sql)
+    if blocked:
+        return [{"error": blocked}]
     params = payload.get("params")
     if params is not None and not isinstance(params, list):
         return [{"error": _err("db_sandbox.invalid_params", "params must be a list.")}]
@@ -95,6 +111,14 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     schema_sql = str(payload.get("schema_sql") or "").strip()
     if len(schema_sql) > _MAX_QUERY_CHARS:
         return _err("db_sandbox.schema_too_large", f"schema_sql exceeds {_MAX_QUERY_CHARS} characters.")
+
+    if schema_sql:
+        for _stmt in _re.split(r";\s*", schema_sql):
+            _stmt = _stmt.strip()
+            if _stmt:
+                _b = _check_sql_blocked(_stmt)
+                if _b:
+                    return _b
 
     normalized_queries = _normalize_queries(payload)
     if normalized_queries and "error" in normalized_queries[0]:

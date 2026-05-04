@@ -737,6 +737,26 @@ def test_type_checker_falls_back_to_npx_when_tsc_missing(monkeypatch):
     assert "tsc" in captured["cmd"]
 
 
+def test_db_sandbox_blocks_attach_database():
+    result = db_sandbox.run({"sql": "ATTACH DATABASE '/etc/passwd' AS leak"})
+    assert "error" in result
+    code = result["error"]["code"]
+    assert "blocked" in code or "attach" in code.lower()
+
+
+def test_db_sandbox_blocks_attach_in_schema_sql():
+    result = db_sandbox.run({
+        "schema_sql": "ATTACH DATABASE '/tmp/other.db' AS other",
+        "sql": "SELECT 1"
+    })
+    assert "error" in result
+
+
+def test_db_sandbox_blocks_detach():
+    result = db_sandbox.run({"sql": "DETACH DATABASE leak"})
+    assert "error" in result
+
+
 def test_linter_agent_no_eval_and_no_var_rules_in_ts_eslint_command(monkeypatch):
     """Verify the ESLint command includes no-eval:error and no-var:warn for TypeScript."""
     import subprocess as _subprocess
