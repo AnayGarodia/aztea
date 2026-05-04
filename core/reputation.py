@@ -171,6 +171,8 @@ def _build_trust_metrics(
 
 def init_reputation_db() -> None:
     """Create job quality rating tables and indexes if needed."""
+    if _db.IS_POSTGRES:
+        return
     with _conn() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS job_quality_ratings (

@@ -205,6 +205,8 @@ def _add_column_if_missing(conn: _db.DbConnection, ddl: str) -> None:
 
 def init_payments_db() -> None:
     """Create wallets and transactions tables and indexes if needed."""
+    if _db.IS_POSTGRES:
+        return
     with _conn() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS wallets (

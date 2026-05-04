@@ -82,6 +82,8 @@ def _migrate_job_event_deliveries_status_schema(conn: _db.DbConnection) -> None:
 
 
 def _init_ops_db() -> None:
+    if _db.IS_POSTGRES:
+        return
     with jobs._conn() as conn:
         conn.execute(
             """
@@ -186,6 +188,8 @@ def _init_ops_db() -> None:
 
 def _init_stripe_db() -> None:
     """Create Stripe bookkeeping tables used for top-ups and webhook idempotency."""
+    if _db.IS_POSTGRES:
+        return
     with get_db_connection() as conn:
         conn.execute(
             """

@@ -56,6 +56,8 @@ def _now() -> str:
 
 def init_disputes_db() -> None:
     """Create dispute-related tables (disputes, dispute_judgments) if they do not exist. Idempotent."""
+    if _db.IS_POSTGRES:
+        return
     with _conn() as conn:
         conn.execute(
             """
