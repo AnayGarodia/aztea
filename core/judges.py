@@ -9,6 +9,7 @@ import os
 from typing import Any
 
 from core import disputes
+from core.functional import Err, Ok, Result
 from core.llm import CompletionRequest, Message, run_with_fallback
 from core.llm.registry import DEFAULT_CHAIN
 
@@ -158,6 +159,14 @@ def _judge_once(model_chain: list[str], context: dict) -> dict:
     }
 
 
+def _validate_dispute_judgeable(dispute_id: str) -> "Result[dict, str]":
+    """Pure guard: returns Ok(context) if the dispute exists and is not terminal."""
+    context = disputes.get_dispute_context(dispute_id)
+    if context is None:
+        return Err(f"Dispute '{dispute_id}' not found.")
+    return Ok(context)
+
+
 def run_judgment(dispute_id: str) -> dict:
     """Run LLM-based adjudication for a dispute and record the judgment vote.
 
@@ -172,9 +181,10 @@ def run_judgment(dispute_id: str) -> dict:
     Raises ``ValueError`` if the dispute is not found or already in a terminal
     state (``"resolved"`` or ``"final"``).
     """
-    context = disputes.get_dispute_context(dispute_id)
-    if context is None:
-        raise ValueError(f"Dispute '{dispute_id}' not found.")
+    _guard = _validate_dispute_judgeable(dispute_id)
+    if isinstance(_guard, Err):
+        raise ValueError(_guard.error)
+    context = _guard.value
 
     current_status = str(context["dispute"].get("status") or "").strip().lower()
     if current_status in {"resolved", "final"}:

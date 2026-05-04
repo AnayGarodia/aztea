@@ -18,6 +18,8 @@ import os
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
+from core.functional import Err, Ok, Result
+
 import numpy as np
 
 if TYPE_CHECKING:
@@ -182,6 +184,22 @@ def embed_texts_batch(texts: list[str]) -> list[list[float]]:
 
     logger.warning("embeddings: all backends unavailable; returning zero vectors")
     return [[0.0] * EMBEDDING_DIM for _ in normalized]
+
+
+def embed_text_result(text: str) -> "Result[list[float], str]":
+    """Result-returning variant of ``embed_text``; returns ``Err`` instead of raising."""
+    try:
+        return Ok(embed_text(text))
+    except (ValueError, RuntimeError) as exc:
+        return Err(str(exc))
+
+
+def embed_texts_batch_result(texts: list[str]) -> "Result[list[list[float]], str]":
+    """Result-returning variant of ``embed_texts_batch``; returns ``Err`` instead of raising."""
+    try:
+        return Ok(embed_texts_batch(texts))
+    except (ValueError, RuntimeError) as exc:
+        return Err(str(exc))
 
 
 def cosine(a: list[float] | np.ndarray, b: list[float] | np.ndarray) -> float:

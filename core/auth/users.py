@@ -21,6 +21,7 @@ import random
 import secrets
 
 from core import db as _db
+from core.functional import Err, Ok, Result
 import threading
 import time
 import uuid
@@ -55,21 +56,37 @@ from .schema import (
 _VALID_ROLES = frozenset({"builder", "hirer", "both"})
 
 
+def _validate_register_params(username: str, email: str, password: str, role: str) -> "Result[tuple[str, str, str, str], str]":
+    """Pure guard: normalises and validates registration inputs without DB access."""
+    normalized_role = str(role or "").strip().lower()
+    if normalized_role not in _VALID_ROLES:
+        return Err(f"Invalid role '{role}'. Must be one of: builder, hirer, both.")
+    normalized_username = str(username or "").strip()
+    if len(normalized_username) < MIN_USERNAME_LEN or len(normalized_username) > MAX_USERNAME_LEN:
+        return Err(
+            f"Username must be between {MIN_USERNAME_LEN} and {MAX_USERNAME_LEN} characters."
+        )
+    normalized_email = str(email or "").strip().lower()
+    if not normalized_email or "@" not in normalized_email:
+        return Err("A valid email address is required.")
+    if len(password) < MIN_PASSWORD_LEN:
+        return Err(f"Password must be at least {MIN_PASSWORD_LEN} characters.")
+    return Ok((normalized_username, normalized_email, password, normalized_role))
+
+
 def register_user(username: str, email: str, password: str, role: str = "both") -> dict:
     """
     Create a new user and mint a short-lived Session key so the frontend can
     authenticate immediately. Users create named API keys from /keys themselves.
     Raises ValueError on duplicate email or invalid role.
     """
-    if role not in _VALID_ROLES:
-        raise ValueError(
-            f"Invalid role '{role}'. Must be one of: builder, hirer, both."
-        )
+    _params = _validate_register_params(username, email, password, role)
+    if isinstance(_params, Err):
+        raise ValueError(_params.error)
+    normalized_username, normalized_email, password, role = _params.value
     user_id = str(uuid.uuid4())
     salt = secrets.token_hex(32)
     pw_hash = _hash_password(password, salt)
-    normalized_email = email.lower().strip()
-    normalized_username = username.strip()
 
     raw_key, key_hash, key_prefix = _make_api_key()
     key_id = str(uuid.uuid4())

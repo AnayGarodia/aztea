@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 _LOG = logging.getLogger(__name__)
 
 from core import db as _db
+from core.functional import Err, Ok, Result
 
 DB_PATH = _db.DB_PATH
 _local = _db._local
@@ -131,11 +132,25 @@ def _validate_side(side: str) -> str:
     return normalized
 
 
+def _validate_side_result(side: str) -> "Result[str, str]":
+    try:
+        return Ok(_validate_side(side))
+    except ValueError as exc:
+        return Err(str(exc))
+
+
 def _validate_status(status: str) -> str:
     normalized = str(status or "").strip().lower()
     if normalized not in DISPUTE_STATUSES:
         raise ValueError("invalid dispute status")
     return normalized
+
+
+def _validate_status_result(status: str) -> "Result[str, str]":
+    try:
+        return Ok(_validate_status(status))
+    except ValueError as exc:
+        return Err(str(exc))
 
 
 def _validate_outcome(outcome: str | None) -> str | None:
@@ -145,6 +160,13 @@ def _validate_outcome(outcome: str | None) -> str | None:
     if normalized not in DISPUTE_OUTCOMES:
         raise ValueError("invalid dispute outcome")
     return normalized
+
+
+def _validate_outcome_result(outcome: str | None) -> "Result[str | None, str]":
+    try:
+        return Ok(_validate_outcome(outcome))
+    except ValueError as exc:
+        return Err(str(exc))
 
 
 def _validate_split(
@@ -159,6 +181,15 @@ def _validate_split(
     if split_caller_cents < 0 or split_agent_cents < 0:
         raise ValueError("split amounts must be non-negative.")
     return int(split_caller_cents), int(split_agent_cents)
+
+
+def _validate_split_result(
+    outcome: str | None, split_caller_cents: int | None, split_agent_cents: int | None
+) -> "Result[tuple[int | None, int | None], str]":
+    try:
+        return Ok(_validate_split(outcome, split_caller_cents, split_agent_cents))
+    except ValueError as exc:
+        return Err(str(exc))
 
 
 def create_dispute(

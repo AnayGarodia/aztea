@@ -6,6 +6,8 @@ import json
 import re
 from typing import Annotated, Literal
 
+from core.functional import Err, Ok, Result
+
 try:
     from typing import NotRequired
 except ImportError:  # Python 3.10
@@ -772,3 +774,24 @@ class RegistrySearchRequest(BaseModel):
             return None
         normalized = re.sub(r"[^a-z0-9-]+", "-", str(value).strip().lower()).strip("-")
         return normalized or None
+
+
+def normalize_job_message_body_result(
+    *,
+    msg_type: str,
+    payload: "JSONObject | None" = None,
+    correlation_id: str | None = None,
+    allow_legacy: bool = True,
+) -> "Result[dict, str]":
+    """Result-returning variant of ``normalize_job_message_body``."""
+    try:
+        return Ok(
+            normalize_job_message_body(
+                msg_type=msg_type,
+                payload=payload,
+                correlation_id=correlation_id,
+                allow_legacy=allow_legacy,
+            )
+        )
+    except ValueError as exc:
+        return Err(str(exc))
