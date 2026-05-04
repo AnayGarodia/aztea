@@ -141,6 +141,10 @@ def _run_eslint(code: str, language: str, filename: str) -> tuple[list[dict], st
         "no-unused-vars:warn",
         "--rule",
         "no-unreachable:error",
+        "--rule",
+        "no-eval:error",
+        "--rule",
+        "no-var:warn",
     ]
     if language == "typescript":
         base_cmd = [
@@ -163,6 +167,10 @@ def _run_eslint(code: str, language: str, filename: str) -> tuple[list[dict], st
             "no-unused-vars:warn",
             "--rule",
             "no-unreachable:error",
+            "--rule",
+            "no-eval:error",
+            "--rule",
+            "no-var:warn",
         ]
 
     cache_dir = _eslint_cache_root()

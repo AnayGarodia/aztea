@@ -735,3 +735,25 @@ def test_type_checker_falls_back_to_npx_when_tsc_missing(monkeypatch):
     assert captured["cmd"][0] == "npx", "should fall back to npx"
     assert "--package" in captured["cmd"], "must specify --package typescript"
     assert "tsc" in captured["cmd"]
+
+
+def test_linter_agent_no_eval_and_no_var_rules_in_ts_eslint_command(monkeypatch):
+    """Verify the ESLint command includes no-eval:error and no-var:warn for TypeScript."""
+    import subprocess as _subprocess
+
+    captured_cmd: dict = {}
+
+    def fake_run(cmd, **kw):
+        captured_cmd["cmd"] = list(cmd)
+        import json
+        return _subprocess.CompletedProcess(cmd, 0, json.dumps([{"filePath": "f.ts", "messages": []}]), "")
+
+    monkeypatch.setattr(_subprocess, "run", fake_run)
+    monkeypatch.setattr("shutil.which", lambda x: "/usr/bin/npx" if x in ("npx", "node") else None)
+
+    from agents import linter_agent
+    linter_agent.run({"code": "const x = 1;", "language": "typescript"})
+    assert "cmd" in captured_cmd, "subprocess.run was never called"
+    cmd_str = " ".join(captured_cmd["cmd"])
+    assert "no-eval" in cmd_str, "TypeScript eslint command must include no-eval"
+    assert "no-var" in cmd_str, "TypeScript eslint command must include no-var"
