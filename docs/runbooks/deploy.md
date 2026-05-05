@@ -13,9 +13,12 @@ The full operational reference: production deploy, nginx, env vars, packaging, S
 ## Infrastructure
 
 - **Server:** AWS EC2 Ubuntu — `/home/aztea/app`
-- **Stack:** systemd service (`aztea.service`) running uvicorn directly — no Docker in production
-- **Process:** `/home/aztea/app/venv/bin/uvicorn server:app --host 127.0.0.1 --port 8000 --workers 1`
-- **Database:** SQLite WAL at the path set in `.env` (`DB_PATH`), on the host filesystem
+- **Stack:** two systemd services — no Docker in production
+  - `aztea.service` — Python/FastAPI (uvicorn, HTTP API + payments + auth)
+  - `aztea-elixir.service` — Elixir/OTP (job GenServers + lease sweeper + Phoenix.PubSub)
+- **Python process:** `/home/aztea/app/venv/bin/uvicorn server:app --host 127.0.0.1 --port 8000 --workers 3`
+- **Elixir process:** `/home/aztea/elixir-release/bin/aztea start` (beam.smp)
+- **Database:** PostgreSQL 16 (`aztea_prod`) — `DATABASE_URL=postgresql://aztea:...@localhost/aztea_prod` in `.env`
 - **Reverse proxy:** Caddy at `/etc/caddy/Caddyfile` is a thin reverse proxy to uvicorn on `127.0.0.1:8000`. It does NOT serve static files. **FastAPI owns SPA fallback** via the catch-all `@app.get("/{full_path:path}")` in `server/application_parts/part_013.py`: maps existing `frontend/dist/*` files to themselves, returns `index.html` for everything else, and 404s anything matching `_SPA_API_PREFIXES`.
 - **SSL:** Managed by certbot on the host; nginx handles termination.
 
