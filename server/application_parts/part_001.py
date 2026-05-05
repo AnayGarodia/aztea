@@ -737,7 +737,12 @@ async def spa_navigation_passthrough(request: Request, call_next):
     if _is_browser_navigation(request) and _path_is_spa_owned(path):
         index_file = _FRONTEND_DIST_DIR / "index.html"
         if index_file.is_file():
-            return _SpaFileResponse(index_file, status_code=200, media_type="text/html")
+            return _SpaFileResponse(
+                index_file,
+                status_code=200,
+                media_type="text/html",
+                headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+            )
     return await call_next(request)
 
 

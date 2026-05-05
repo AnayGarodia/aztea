@@ -136,20 +136,37 @@ export function MarketProvider({ apiKey, children }) {
     let es = null
     let retryTimer = null
     let closed = false
+    let failCount = 0
 
     const connect = () => {
       if (closed) return
       es = new EventSource(url)
       es.onmessage = (e) => {
+        failCount = 0
         try { applyJobEvent(JSON.parse(e.data)) } catch (_) {}
       }
       es.onerror = () => {
         es.close()
-        if (!closed) retryTimer = setTimeout(connect, 5000)
+        if (closed) return
+        failCount++
+        // After 3 consecutive failures give up — 60s poll keeps data current.
+        if (failCount >= 3) return
+        // Exponential backoff: 5s, 15s, 45s (capped at 60s).
+        const delay = Math.min(5000 * Math.pow(3, failCount - 1), 60000)
+        retryTimer = setTimeout(connect, delay)
       }
     }
 
-    connect()
+    // Probe auth before opening a persistent SSE stream to avoid silent 4xx retry loops.
+    // EventSource can't expose HTTP status codes, so a pre-flight fetch detects 401/403.
+    fetch(url, { method: 'HEAD' }).then(r => {
+      if (closed) return
+      if (r.ok || r.status === 405) connect()
+      // 401/403 → auth will fail on SSE too; 60s poll is the fallback.
+    }).catch(() => {
+      if (!closed) connect()
+    })
+
     return () => {
       closed = true
       clearTimeout(retryTimer)

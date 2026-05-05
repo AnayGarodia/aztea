@@ -1207,7 +1207,10 @@ def spa_root() -> _SpaFileResponse:
     """
     index_file = _FRONTEND_DIST_DIR / "index.html"
     if index_file.is_file():
-        return _SpaFileResponse(str(index_file))
+        return _SpaFileResponse(
+            str(index_file),
+            headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+        )
     raise HTTPException(
         status_code=404,
         detail=(
@@ -1257,7 +1260,10 @@ def spa_fallback(full_path: str) -> _SpaFileResponse:
 
     index_file = _FRONTEND_DIST_DIR / "index.html"
     if index_file.is_file():
-        return _SpaFileResponse(str(index_file))
+        return _SpaFileResponse(
+            str(index_file),
+            headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+        )
 
     raise HTTPException(
         status_code=404,

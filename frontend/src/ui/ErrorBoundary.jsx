@@ -12,7 +12,18 @@ export default class ErrorBoundary extends React.Component {
   }
 
   componentDidCatch(error) {
-    // Keep this lightweight; route-level fallback avoids blank screens in production.
+    // Chunk load errors happen when the browser has a stale index.html after a
+    // deploy — the old chunk URL 404s. Auto-reload fetches fresh index.html.
+    const msg = error?.message ?? ''
+    const isChunkError =
+      msg.includes('Failed to fetch dynamically imported module') ||
+      msg.includes('Importing a module script failed') ||
+      msg.includes('Loading chunk') ||
+      error?.name === 'ChunkLoadError'
+    if (isChunkError) {
+      window.location.reload()
+      return
+    }
     console.error('Route render failed:', error)
   }
 
