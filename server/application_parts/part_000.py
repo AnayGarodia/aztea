@@ -43,6 +43,7 @@ _APP_DIR = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.abspath(os.path.join(_APP_DIR, ".."))
 
 _SENTRY_DSN = os.environ.get("SENTRY_DSN", "").strip()
+_ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
 if _SENTRY_DSN:
     try:
         import sentry_sdk
@@ -55,11 +56,17 @@ if _SENTRY_DSN:
             traces_sample_rate=float(
                 os.environ.get("SENTRY_TRACES_SAMPLE_RATE", "0.1")
             ),
-            environment=os.environ.get("ENVIRONMENT", "production"),
+            environment=_ENVIRONMENT,
             send_default_pii=False,
         )
     except Exception as _sentry_exc:
         logging.warning("Sentry init failed: %s", _sentry_exc)
+elif _ENVIRONMENT == "production":
+    # Errors in production will be silent without Sentry — set SENTRY_DSN in .env to fix this.
+    logging.warning(
+        "SENTRY_DSN is not set in production. Unhandled exceptions will not be reported. "
+        "Set SENTRY_DSN=https://...@sentry.io/... in .env to enable error tracking."
+    )
 
 import groq as _groq
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request

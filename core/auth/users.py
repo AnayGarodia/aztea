@@ -81,8 +81,7 @@ def register_user(username: str, email: str, password: str, role: str = "both") 
     Raises ValueError on duplicate email or invalid role.
     """
     _params = _validate_register_params(username, email, password, role)
-    if isinstance(_params, Err):
-        raise ValueError(_params.error)
+    _params.raise_on_err()
     normalized_username, normalized_email, password, role = _params.value
     user_id = str(uuid.uuid4())
     salt = secrets.token_hex(32)

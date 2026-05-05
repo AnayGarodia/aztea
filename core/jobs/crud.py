@@ -109,8 +109,7 @@ def create_job(
             "charge_exceeds_listed_price: caller_charge_cents must not exceed 2x price_cents.",
         ))
     )
-    if isinstance(_price_check, Err):
-        raise ValueError(_price_check.error)
+    _price_check.raise_on_err()
     parsed_platform_fee_pct = _to_non_negative_int(
         platform_fee_pct_at_create, default=DEFAULT_PLATFORM_FEE_PCT
     )

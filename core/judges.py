@@ -182,8 +182,7 @@ def run_judgment(dispute_id: str) -> dict:
     state (``"resolved"`` or ``"final"``).
     """
     _guard = _validate_dispute_judgeable(dispute_id)
-    if isinstance(_guard, Err):
-        raise ValueError(_guard.error)
+    _guard.raise_on_err()
     context = _guard.value
 
     current_status = str(context["dispute"].get("status") or "").strip().lower()

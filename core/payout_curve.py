@@ -70,8 +70,7 @@ def parse_curve(raw: Any) -> dict[str, float] | None:
     Raises ValueError for invalid input.
     """
     r = parse_curve_result(raw)
-    if isinstance(r, Err):
-        raise ValueError(r.error)
+    r.raise_on_err()
     return r.value or None
 
 

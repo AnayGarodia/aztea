@@ -561,6 +561,48 @@ def _agent_health_loop(stop_event: threading.Event) -> None:
             _LOG.exception("Agent health check loop failed.")
 
 
+_ALERT_EMAIL = os.environ.get("ALERT_EMAIL", "").strip()
+
+
+def _send_reconciliation_drift_alert(summary: dict) -> None:
+    """Email the ops address and capture to Sentry when ledger drift is detected."""
+    drift = summary.get("drift_cents", "?")
+    mismatch_count = summary.get("mismatch_count", "?")
+    run_id = summary.get("run_id", "?")
+
+    if _ALERT_EMAIL:
+        subject = f"[Aztea] ALERT: Ledger drift detected — {drift}¢ across {mismatch_count} wallet(s)"
+        html_body = (
+            f"<p><strong>Ledger reconciliation detected drift.</strong></p>"
+            f"<ul>"
+            f"<li>Run ID: {run_id}</li>"
+            f"<li>Total drift: {drift}¢</li>"
+            f"<li>Wallets affected: {mismatch_count}</li>"
+            f"</ul>"
+            f"<p>Check server logs for <code>payments.reconciliation_invariant_failed</code> "
+            f"and run <code>POST /ops/payments/reconcile</code> for full details.</p>"
+        )
+        text_body = (
+            f"Ledger drift detected.\nRun ID: {run_id}\nDrift: {drift}¢\n"
+            f"Wallets affected: {mismatch_count}\n\n"
+            "Run POST /ops/payments/reconcile for full details."
+        )
+        _email.send(_ALERT_EMAIL, subject, html_body, text_body)
+
+    # Also surface in Sentry if configured — appears as a distinct issue, not buried in logs.
+    if _SENTRY_DSN:
+        try:
+            import sentry_sdk
+
+            sentry_sdk.capture_message(
+                f"Ledger drift: {drift}¢ across {mismatch_count} wallet(s)",
+                level="error",
+                extras=summary,
+            )
+        except Exception:
+            _LOG.exception("Failed to capture reconciliation drift in Sentry.")
+
+
 def _payments_reconciliation_loop(stop_event: threading.Event) -> None:
     _set_payments_reconciliation_state(running=True, started_at=_utc_now_iso())
     while not stop_event.is_set():
@@ -585,6 +627,7 @@ def _payments_reconciliation_loop(stop_event: threading.Event) -> None:
                         "mismatch_count": summary.get("mismatch_count"),
                     },
                 )
+                _send_reconciliation_drift_alert(summary)
         except Exception as exc:
             _LOG.exception("Payments reconciliation loop failed.")
             _set_payments_reconciliation_state(

@@ -52,6 +52,10 @@ class Ok(Generic[A]):
     def unwrap_or(self, default: A) -> A:  # type: ignore[misc]
         return self.value
 
+    def raise_on_err(self) -> A:
+        """Return the wrapped value. Ok variant is a no-op pass-through."""
+        return self.value
+
     def __bool__(self) -> bool:
         return True
 
@@ -77,6 +81,10 @@ class Err(Generic[E]):
 
     def unwrap_or(self, default: A) -> A:
         return default
+
+    def raise_on_err(self) -> None:
+        """Raise ValueError(error) directly — cleaner than isinstance checks at call sites."""
+        raise ValueError(self.error)
 
     def __bool__(self) -> bool:
         return False

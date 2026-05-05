@@ -190,8 +190,7 @@ def register_agent(
         price_per_call_usd, endpoint_health_status, status, review_status,
         is_internal, pricing_model, pricing_config,
     )
-    if isinstance(_scalars, Err):
-        raise ValueError(_scalars.error)
+    _scalars.raise_on_err()
     price = _scalars.value["price"]
     normalized_health_status = _scalars.value["normalized_health_status"]
     normalized_status = _scalars.value["normalized_status"]

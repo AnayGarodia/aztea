@@ -93,8 +93,7 @@ def claim_job(
     Raises ``ValueError`` for invalid arguments.
     """
     _params = _validate_claim_params(claim_owner_id, lease_seconds)
-    if isinstance(_params, Err):
-        raise ValueError(_params.error)
+    _params.raise_on_err()
     owner_id, lease_seconds = _params.value
 
     now_dt = _now_dt()

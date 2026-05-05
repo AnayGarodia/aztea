@@ -15,7 +15,8 @@
 #   without affecting the module constant — don't remove it.
 #
 # KNOWN DEBT:
-# - reconciliation only runs on manual trigger (POST /ops/payments/reconcile) — should be on cron
+# - Postgres mode lacks explicit per-path wallet locking for the guarantor-backstop branch in
+#   pre_call_charge; the rowcount guard prevents double-spend but allows phantom reads mid-transaction
 
 import logging
 import os
@@ -46,6 +47,13 @@ PLATFORM_OWNER_ID = "platform"
 DISPUTE_ESCROW_OWNER_PREFIX = "dispute_escrow:"
 DISPUTE_DEPOSIT_OWNER_PREFIX = "dispute_deposit:"
 DISPUTE_RETURN_PLATFORM_FEE_ON_CALLER_WINS = True
+
+# Under Postgres READ COMMITTED, concurrent wallet reads inside the same BEGIN block can
+# observe stale balance_cents before another transaction commits its UPDATE.  Locking the
+# wallet row with FOR UPDATE serialises concurrent charge attempts so the guarantor-backstop
+# branch and spend-limit checks work against the committed balance.
+# SQLite's BEGIN IMMEDIATE achieves the same effect without a row-level lock.
+_WALLET_LOCK = "FOR UPDATE" if _db.IS_POSTGRES else ""
 
 _LOG = logging.getLogger(__name__)
 
@@ -566,7 +574,8 @@ def charge(wallet_id: str, amount_cents: int, memo: str = "") -> str:
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT balance_cents FROM wallets WHERE wallet_id = %s", (wallet_id,)
+            f"SELECT balance_cents FROM wallets WHERE wallet_id = %s {_WALLET_LOCK}",
+            (wallet_id,),
         ).fetchone()
         if row is None:
             raise ValueError(f"Wallet '{wallet_id}' not found.")
@@ -672,6 +681,14 @@ def admin_transfer(
         raise ValueError("source and destination wallets must differ.")
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        # Lock both wallets in deterministic ID order so concurrent transfers between
+        # the same pair never deadlock (each grabs locks in the same sequence).
+        if _db.IS_POSTGRES:
+            first_id, second_id = sorted([from_wallet_id, to_wallet_id])
+            conn.execute(
+                "SELECT wallet_id FROM wallets WHERE wallet_id IN (%s, %s) ORDER BY wallet_id FOR UPDATE",
+                (first_id, second_id),
+            )
         src = conn.execute(
             "SELECT balance_cents FROM wallets WHERE wallet_id = %s", (from_wallet_id,)
         ).fetchone()
@@ -768,15 +785,14 @@ def pre_call_charge(
     DB lock held only for this short read-check-write sequence.
     """
     _params = _validate_pre_call_params(price_cents, charged_by_key_id, max_spend_cents)
-    if isinstance(_params, Err):
-        raise ValueError(_params.error)
+    _params.raise_on_err()
     normalized_key_id, normalized_max_spend = _params.value
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
             "SELECT balance_cents, daily_spend_limit_cents,"
             " parent_wallet_id, guarantor_enabled, guarantor_cap_cents"
-            " FROM wallets WHERE wallet_id = %s",
+            f" FROM wallets WHERE wallet_id = %s {_WALLET_LOCK}",
             (caller_wallet_id,),
         ).fetchone()
         if row is None:
@@ -819,7 +835,7 @@ def pre_call_charge(
                 pass
             else:
                 parent_row = conn.execute(
-                    "SELECT balance_cents FROM wallets WHERE wallet_id = %s",
+                    f"SELECT balance_cents FROM wallets WHERE wallet_id = %s {_WALLET_LOCK}",
                     (parent_wallet_id,),
                 ).fetchone()
                 parent_balance = (

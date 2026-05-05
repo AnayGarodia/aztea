@@ -18,6 +18,12 @@ ExecStop=/home/aztea/elixir-release/bin/aztea stop
 Restart=on-failure
 RestartSec=5s
 
+# OTP 25 on Ubuntu 24.04 ERTS segfaults on SIGTERM; send SIGINT instead which
+# triggers a clean :init.stop/0 path and avoids the SEGV crash dump on shutdown.
+KillSignal=SIGINT
+# Give the VM up to 30 s to flush Postgres connections and flush PubSub state.
+TimeoutStopSec=30
+
 # OTP crash dumps land here; readable without sudo.
 Environment=ERL_CRASH_DUMP=/home/aztea/elixir-release/erl_crash.dump
 
