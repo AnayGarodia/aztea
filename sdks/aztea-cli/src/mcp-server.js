@@ -1005,7 +1005,14 @@ async function callTool(name, args) {
     if (!entry.agent_id) return { ok: false, payload: { error: 'TOOL_NOT_FOUND', message: `Tool '${slug}' has no agent_id.` } }
     const blocked = budgetGuard()
     if (blocked) return { ok: false, payload: blocked }
-    const res = await callRegistryTool(entry, args.arguments)
+    // Forward `output_format` from the lazy aztea_call wrapper into the
+    // registry call body so the renderer attaches `rendered_output`. Without
+    // this merge the field is silently dropped.
+    const callArgs = { ...args.arguments }
+    if (typeof args.output_format === 'string' && args.output_format.trim() && !('output_format' in callArgs)) {
+      callArgs.output_format = args.output_format.trim()
+    }
+    const res = await callRegistryTool(entry, callArgs)
     if (res.ok) accumulate(res.body && (res.body.caller_charge_cents ?? res.body.price_cents))
     return { ok: res.ok, payload: res.body }
   }
