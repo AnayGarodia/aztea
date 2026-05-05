@@ -8,6 +8,8 @@ drift without duplicating SQL in multiple places.
 from __future__ import annotations
 
 
+from core import db as _db
+
 from .base import _conn
 
 

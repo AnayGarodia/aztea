@@ -24,6 +24,7 @@ import json
 import logging
 from typing import Any
 
+from core import db as _db
 from core.functional import Ok, Err, Result, compute_clawback_cents  # noqa: F401 — re-exported
 
 _LOG = logging.getLogger(__name__)

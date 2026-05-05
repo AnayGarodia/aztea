@@ -18,6 +18,7 @@ import json
 import uuid
 from datetime import datetime, timedelta
 
+from core import db as _db
 from core.functional import Err, Ok, Result
 
 from .crud import (

@@ -135,15 +135,15 @@ def test_pipe_passes_ok_through():
 
 
 def test_compose_right_to_left():
-    double = lambda x: x * 2
-    inc = lambda x: x + 1
+    def double(x): return x * 2
+    def inc(x): return x + 1
     # compose(double, inc)(3) == double(inc(3)) == double(4) == 8
     assert compose(double, inc)(3) == 8
 
 
 def test_pipeline_left_to_right():
-    double = lambda x: x * 2
-    inc = lambda x: x + 1
+    def double(x): return x * 2
+    def inc(x): return x + 1
     # pipeline(double, inc)(3) == inc(double(3)) == inc(6) == 7
     assert pipeline(double, inc)(3) == 7
 

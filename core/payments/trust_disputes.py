@@ -28,6 +28,7 @@ import json
 import logging
 import uuid
 
+from core import db as _db
 from core import logging_utils
 
 from . import base as _payments_core
