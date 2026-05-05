@@ -18,7 +18,7 @@ const CLIENT_ID = (process.env.AZTEA_CLIENT_ID || 'claude-code').trim() || 'clau
 const REFRESH_MS = parseInt(process.env.AZTEA_MCP_REFRESH_SECONDS || '60', 10) * 1000
 const TIMEOUT_MS = parseFloat(process.env.AZTEA_MCP_TIMEOUT_SECONDS || '30') * 1000
 const AZTEA_VERSION = '1.0'
-const USER_AGENT = 'aztea-mcp/0.17.4'
+const USER_AGENT = 'aztea-mcp/0.17.5'
 
 const AUTH_TOOL = {
   name: 'aztea_setup',
