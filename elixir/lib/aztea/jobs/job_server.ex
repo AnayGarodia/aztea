@@ -27,7 +27,8 @@ defmodule Aztea.Jobs.JobServer do
   alias Aztea.Repo
   alias Aztea.Jobs.Schema, as: Job
 
-  @terminal_statuses ~w[complete failed cancelled]
+  # heartbeat_interval is not stored in the jobs table; use a conservative default.
+  @default_heartbeat_interval_s 60
   @heartbeat_grace_seconds 30
 
   # ---------------------------------------------------------------------------
@@ -105,8 +106,7 @@ defmodule Aztea.Jobs.JobServer do
   def handle_call(:get_state, _from, state), do: {:reply, state.job, state}
 
   def handle_call(:heartbeat, _from, state) do
-    interval = state.job.heartbeat_interval || 60
-    new_expiry = utc_now_plus(interval + @heartbeat_grace_seconds)
+    new_expiry = utc_now_plus(@default_heartbeat_interval_s + @heartbeat_grace_seconds)
 
     {count, _} =
       Repo.update_all(
@@ -124,11 +124,11 @@ defmodule Aztea.Jobs.JobServer do
   end
 
   def handle_call({:complete, result}, _from, state) do
-    {:reply, result, apply_terminal(state, "complete", %{result: result})}
+    {:reply, result, apply_terminal(state, "complete", %{output_payload: result})}
   end
 
   def handle_call({:fail, error}, _from, state) do
-    {:reply, :ok, apply_terminal(state, "failed", %{error: error})}
+    {:reply, :ok, apply_terminal(state, "failed", %{error_message: error})}
   end
 
   def handle_call(:cancel, _from, state) do
@@ -196,9 +196,8 @@ defmodule Aztea.Jobs.JobServer do
     %{state | job: updated}
   end
 
-  defp schedule_lease_check(%Job{status: status, heartbeat_interval: interval})
-       when status == "running" do
-    ms = :timer.seconds((interval || 60) + @heartbeat_grace_seconds + 5)
+  defp schedule_lease_check(%Job{status: status}) when status == "running" do
+    ms = :timer.seconds(@default_heartbeat_interval_s + @heartbeat_grace_seconds + 5)
     Process.send_after(self(), :check_lease, ms)
   end
 

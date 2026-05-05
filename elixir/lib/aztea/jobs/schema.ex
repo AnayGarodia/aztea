@@ -3,8 +3,12 @@ defmodule Aztea.Jobs.Schema do
   Read-only Ecto schema for the `jobs` table.
 
   The jobs table is owned by the Python server — Elixir only reads and updates
-  status/lease columns. Column names match the Python schema exactly (TEXT
-  timestamps, TEXT status, etc.).
+  status/lease columns. Column names must match the PostgreSQL schema exactly.
+  Run `\d jobs` in psql to verify if adding fields.
+
+  # OWNS: Ecto struct mapping for the jobs table
+  # NOT OWNS: job creation, payments, auth (Python server owns those)
+  # INVARIANTS: never add Ecto migrations — schema is managed by Python migrate.py
   """
 
   use Ecto.Schema
@@ -16,18 +20,20 @@ defmodule Aztea.Jobs.Schema do
     field :status, :string
     field :agent_id, :string
     field :client_id, :string
-    field :task, :string
-    field :result, :string
-    field :error, :string
+    # Payload fields — real column names differ from the original scaffold
+    field :input_payload, :string
+    field :output_payload, :string
+    field :error_message, :string
     field :price_cents, :integer
     field :charge_tx_id, :string
     field :created_at, :string
     field :updated_at, :string
+    field :completed_at, :string
     field :lease_expires_at, :string
-    field :heartbeat_interval, :integer
-    field :max_retries, :integer
+    field :last_heartbeat_at, :string
+    field :attempt_count, :integer
+    field :max_attempts, :integer
     field :retry_count, :integer
-    field :timeout_seconds, :integer
     field :parent_job_id, :string
     field :parent_cascade_policy, :string
     field :batch_id, :string

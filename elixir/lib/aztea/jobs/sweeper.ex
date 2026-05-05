@@ -1,15 +1,18 @@
 defmodule Aztea.Jobs.Sweeper do
   @moduledoc """
-  Periodic GenServer that scans for expired leases and timed-out jobs.
+  Periodic GenServer that scans for expired leases and recovers JobServers.
 
-  Runs every `@sweep_interval_ms` (default 5s). For each expired job it:
-    1. Resets lease-expired running jobs → pending (so workers can re-claim)
-    2. Spawns a JobServer for any active job that doesn't have one yet
-       (recovery after a node restart)
-    3. Fails jobs that have exceeded their timeout_seconds
+  Runs every `@sweep_interval_ms` (default 10s). On each tick:
+    1. Resets lease-expired running jobs → pending (workers can re-claim)
+    2. Ensures a JobServer exists for every active job (node-restart recovery)
 
-  This mirrors the Python sweeper in server/application_parts/part_006.py but
-  runs as a native OTP process for better fault isolation and observability.
+  Timeout enforcement (timeout_seconds) is intentionally omitted here — it is
+  handled by the Python sweeper in server/application_parts/part_006.py, which
+  owns the authoritative timeout logic including retries and refunds.
+
+  # INVARIANTS:
+  # - Never touch payment or auth tables — Python owns those
+  # - Lease reset is idempotent; concurrent Python sweeper runs are safe
   """
 
   use GenServer
@@ -21,7 +24,8 @@ defmodule Aztea.Jobs.Sweeper do
   alias Aztea.Jobs.Schema, as: Job
   alias Aztea.Jobs.JobServer
 
-  @sweep_interval_ms 5_000
+  # Slower than Python (2s) to avoid racing on the same rows unnecessarily.
+  @sweep_interval_ms 10_000
   @active_statuses ~w[pending running awaiting_clarification]
 
   def start_link(_opts), do: GenServer.start_link(__MODULE__, [], name: __MODULE__)
@@ -44,7 +48,7 @@ defmodule Aztea.Jobs.Sweeper do
   defp sweep do
     now = DateTime.utc_now() |> DateTime.to_iso8601()
 
-    # 1. Expire stale running leases.
+    # 1. Expire stale running leases → pending so a worker can reclaim.
     {expired_count, expired_jobs} =
       Repo.update_all(
         from(j in Job,
@@ -58,37 +62,11 @@ defmodule Aztea.Jobs.Sweeper do
       )
 
     if expired_count > 0 do
-      Logger.info("sweeper.expired_leases", count: expired_count, job_ids: expired_jobs)
+      Logger.info("sweeper.expired_leases count=#{expired_count} job_ids=#{inspect(expired_jobs)}")
     end
 
-    # 2. Fail jobs that have exceeded timeout_seconds.
-    # created_at is stored as TEXT (ISO-8601); cast to timestamptz so Postgres
-    # can do interval arithmetic. fragment/1 bypasses Ecto's type system here.
-    {timed_out_count, _} =
-      Repo.update_all(
-        from(j in Job,
-          where:
-            j.status in ^["pending", "running"] and
-              not is_nil(j.timeout_seconds) and
-              j.timeout_seconds > 0 and
-              fragment(
-                "(? :: timestamptz + ? * INTERVAL '1 second') <= NOW()",
-                j.created_at,
-                j.timeout_seconds
-              )
-        ),
-        set: [
-          status: "failed",
-          error: "timeout",
-          updated_at: now
-        ]
-      )
-
-    if timed_out_count > 0 do
-      Logger.info("sweeper.timed_out", count: timed_out_count)
-    end
-
-    # 3. Ensure a JobServer exists for every active job (node recovery path).
+    # 2. Ensure a JobServer process exists for every active job.
+    # This is the Elixir-specific recovery path after a node restart.
     active_jobs =
       Repo.all(
         from(j in Job,
@@ -99,8 +77,13 @@ defmodule Aztea.Jobs.Sweeper do
 
     Enum.each(active_jobs, fn job_id ->
       case JobServer.start_or_find(job_id) do
-        {:ok, _pid} -> :ok
-        {:error, reason} -> Logger.warning("sweeper.start_failed", job_id: job_id, reason: inspect(reason))
+        {:ok, _pid} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning(
+            "sweeper.start_failed job_id=#{job_id} reason=#{inspect(reason)}"
+          )
       end
     end)
   end
