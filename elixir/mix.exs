@@ -25,7 +25,7 @@ defmodule Aztea.MixProject do
       # Postgres via Ecto — shares the same DB as the Python server.
       # Pinned to versions compatible with Elixir 1.14 (Ubuntu 24.04 default).
       # postgrex >= 0.18 requires Elixir ~> 1.15.
-      {:ecto_sql, "~> 3.10"},
+      {:ecto_sql, "~> 3.10.0"},
       {:postgrex, "~> 0.17.0"},
       # Real-time job events (optional Phoenix Channels later)
       {:phoenix_pubsub, "~> 2.1"},
