@@ -82,3 +82,42 @@ def record_call(
             logger.debug("observability: metric write failed: %s", exc)
     except Exception as exc:  # pragma: no cover
         logger.debug("observability: metric write failed: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# Payment event counters — incremented in core/payments/base.py
+# ---------------------------------------------------------------------------
+# Using a lazy-import pattern (same as part_001.py) so this module doesn't
+# hard-require prometheus_client in environments that don't install it.
+
+try:
+    from prometheus_client import Counter as _PCounter
+
+    payment_charges_total = _PCounter(
+        "aztea_payment_charges_total",
+        "Wallet pre-call charge outcomes",
+        ["outcome"],  # success | insufficient_balance | wallet_not_found | spend_limit_exceeded
+    )
+    payment_payouts_total = _PCounter(
+        "aztea_payment_payouts_total",
+        "Post-call payout outcomes",
+        ["outcome"],  # success | skipped_refund_exists
+    )
+    payment_refunds_total = _PCounter(
+        "aztea_payment_refunds_total",
+        "Post-call refund outcomes",
+        ["outcome"],  # success | skipped_payout_exists
+    )
+except ImportError:
+    # prometheus_client not installed — use no-op stubs so callers never need IS_PROM guards.
+    class _NoopLabels:
+        def inc(self, amount: int = 1) -> None:
+            pass
+
+    class _NoopCounter:
+        def labels(self, **_kwargs) -> "_NoopLabels":
+            return _NoopLabels()
+
+    payment_charges_total = _NoopCounter()  # type: ignore[assignment]
+    payment_payouts_total = _NoopCounter()  # type: ignore[assignment]
+    payment_refunds_total = _NoopCounter()  # type: ignore[assignment]

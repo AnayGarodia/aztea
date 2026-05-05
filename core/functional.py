@@ -156,6 +156,26 @@ def require_positive_int(value: object, field: str) -> Result:
     return Ok(value)
 
 
+def from_try(fn: Callable[..., A], *args: object, catch: "type | tuple" = Exception, **kwargs: object) -> "Result":
+    """Call fn(*args, **kwargs), wrapping the result in Ok or Err.
+
+    Only catches exception types listed in ``catch`` (default: Exception).
+    Unexpected errors that don't match ``catch`` propagate normally so they
+    surface as 500s rather than silent Err values.
+
+    Example::
+
+        result = (
+            from_try(parse_json, raw, catch=ValueError)
+            .and_then(lambda d: from_try(validate_schema, d, catch=KeyError))
+        )
+    """
+    try:
+        return Ok(fn(*args, **kwargs))
+    except catch as exc:  # type: ignore[misc]
+        return Err(str(exc))
+
+
 def require_non_negative_int(value: object, field: str) -> Result:
     """Validate that value is a non-negative integer."""
     if not isinstance(value, int) or isinstance(value, bool):

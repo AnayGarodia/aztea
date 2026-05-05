@@ -74,19 +74,17 @@ def _validate_register_params(username: str, email: str, password: str, role: st
     return Ok((normalized_username, normalized_email, password, normalized_role))
 
 
-def register_user(username: str, email: str, password: str, role: str = "both") -> dict:
+def _register_user_db(params: tuple) -> "Result[dict, str]":
+    """DB step of registration — pure Result, no raising.
+
+    Receives the validated (username, email, password, role) tuple from
+    ``_validate_register_params`` via ``and_then``.  Returns Err on duplicate
+    email so callers can handle it without a try/except.
     """
-    Create a new user and mint a short-lived Session key so the frontend can
-    authenticate immediately. Users create named API keys from /keys themselves.
-    Raises ValueError on duplicate email or invalid role.
-    """
-    _params = _validate_register_params(username, email, password, role)
-    _params.raise_on_err()
-    normalized_username, normalized_email, password, role = _params.value
+    normalized_username, normalized_email, password, role = params
     user_id = str(uuid.uuid4())
     salt = secrets.token_hex(32)
     pw_hash = _hash_password(password, salt)
-
     raw_key, key_hash, key_prefix = _make_api_key()
     key_id = str(uuid.uuid4())
     session_scopes_json = json.dumps(list(DEFAULT_KEY_SCOPES))
@@ -98,28 +96,12 @@ def register_user(username: str, email: str, password: str, role: str = "both") 
             conn.execute(
                 "INSERT INTO users (user_id, username, email, password_hash, salt, created_at, role)"
                 " VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                (
-                    user_id,
-                    normalized_username,
-                    normalized_email,
-                    pw_hash,
-                    salt,
-                    now,
-                    role,
-                ),
+                (user_id, normalized_username, normalized_email, pw_hash, salt, now, role),
             )
             conn.execute(
                 "INSERT INTO api_keys (key_id, user_id, key_hash, key_prefix, name, scopes, created_at)"
                 " VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                (
-                    key_id,
-                    user_id,
-                    key_hash,
-                    key_prefix,
-                    "Session key",
-                    session_scopes_json,
-                    now,
-                ),
+                (key_id, user_id, key_hash, key_prefix, "Session key", session_scopes_json, now),
             )
         except _db.IntegrityError as exc:
             message = str(exc).lower()
@@ -127,10 +109,10 @@ def register_user(username: str, email: str, password: str, role: str = "both") 
                 "users.email" in message
                 or "unique constraint failed: users.email" in message
             ):
-                raise ValueError("An account with that email already exists.")
-            raise
+                return Err("An account with that email already exists.")
+            raise  # unexpected — let it propagate as 500
 
-    return {
+    return Ok({
         "user_id": user_id,
         "username": normalized_username,
         "email": normalized_email,
@@ -139,7 +121,31 @@ def register_user(username: str, email: str, password: str, role: str = "both") 
         "key_id": key_id,
         "key_prefix": key_prefix,
         **_legal_state_from_row({}),
-    }
+    })
+
+
+def register_user_result(username: str, email: str, password: str, role: str = "both") -> "Result[dict, str]":
+    """Register a new user, returning Result[dict, str] instead of raising.
+
+    Composes validation and DB steps with ``and_then`` so the happy path is a
+    single chain and every Err short-circuits automatically.  Route handlers
+    that call this need no try/except for expected errors.
+    """
+    return (
+        _validate_register_params(username, email, password, role)
+        .and_then(_register_user_db)
+    )
+
+
+def register_user(username: str, email: str, password: str, role: str = "both") -> dict:
+    """Register a new user, raising ValueError on invalid inputs or duplicate email.
+
+    Thin raising wrapper around ``register_user_result`` for callers that prefer
+    exceptions (e.g. admin scripts, tests that expect ValueError).
+    """
+    result = register_user_result(username, email, password, role)
+    result.raise_on_err()
+    return result.value  # type: ignore[union-attr]
 
 
 class AccountSuspendedError(Exception):

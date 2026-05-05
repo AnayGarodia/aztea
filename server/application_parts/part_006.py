@@ -646,30 +646,20 @@ def auth_register(
     role = body.role or "both"
     try:
         _auth.init_auth_db()
-        result = _auth.register_user(
-            body.username, body.email, body.password, role=role
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
     except _db.OperationalError:
-        _LOG.exception("Auth register failed; retrying after auth schema init.")
-        try:
-            _auth.init_auth_db()
-            result = _auth.register_user(
-                body.username, body.email, body.password, role=role
-            )
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-        except _db.OperationalError:
-            _LOG.exception("Auth register failed due to auth DB error.")
-            raise HTTPException(
-                status_code=503,
-                detail="Authentication service is temporarily unavailable. Please try again.",
-            )
+        _LOG.exception("Auth DB init failed on register.")
+        raise HTTPException(
+            status_code=503,
+            detail="Authentication service is temporarily unavailable. Please try again.",
+        )
+    # register_user_result composes validation + DB with and_then — no try/except needed
+    # for expected errors (bad input, duplicate email).  Unexpected DB errors propagate as 500.
+    reg = _auth.register_user_result(body.username, body.email, body.password, role=role)
+    if not reg:
+        raise HTTPException(status_code=400, detail=reg.error)
+    result = reg.value
     _credit_starter_balance(result)
-    _email.send_welcome(
-        result.get("email", ""), result.get("username", "there"), role=role
-    )
+    _email.send_welcome(result.get("email", ""), result.get("username", "there"), role=role)
     return JSONResponse(
         content={**result, **_auth_legal_payload(result)}, status_code=201
     )

@@ -26,7 +26,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
 
 from core import db as _db
-from core import logging_utils
+from core import logging_utils, observability as _obs
 from core.functional import Err, Ok, Result
 
 DB_PATH = _db.DB_PATH
@@ -789,13 +789,37 @@ def pre_call_charge(
     normalized_key_id, normalized_max_spend = _params.value
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
+
+        if _db.IS_POSTGRES:
+            # Two-phase Postgres locking:
+            # Phase 1 — unlocked read to discover any parent wallet before we hold any locks.
+            # Phase 2 — acquire all needed locks in alphabetical wallet_id order.
+            #
+            # This matches the ordering used by transfer_funds() and prevents deadlock when a
+            # concurrent transfer_funds(parent → caller) races with this call.  Without this,
+            # two transactions could hold opposite ends of a (caller, parent) lock pair.
+            _pre = conn.execute(
+                "SELECT parent_wallet_id, guarantor_enabled FROM wallets WHERE wallet_id = %s",
+                (caller_wallet_id,),
+            ).fetchone()
+            _lock_ids = [caller_wallet_id]
+            if _pre and _pre.get("guarantor_enabled") and _pre.get("parent_wallet_id"):
+                _lock_ids.append(_pre["parent_wallet_id"])
+            _lock_ids.sort()
+            _ph = ", ".join(["%s"] * len(_lock_ids))
+            conn.execute(
+                f"SELECT wallet_id FROM wallets WHERE wallet_id IN ({_ph}) ORDER BY wallet_id FOR UPDATE",
+                tuple(_lock_ids),
+            )
+
         row = conn.execute(
             "SELECT balance_cents, daily_spend_limit_cents,"
             " parent_wallet_id, guarantor_enabled, guarantor_cap_cents"
-            f" FROM wallets WHERE wallet_id = %s {_WALLET_LOCK}",
+            " FROM wallets WHERE wallet_id = %s",
             (caller_wallet_id,),
         ).fetchone()
         if row is None:
+            _obs.payment_charges_total.labels(outcome="wallet_not_found").inc()
             raise ValueError(f"Wallet '{caller_wallet_id}' not found.")
 
         # ---- Owner backstop (Phase 2) ----------------------------------------
@@ -835,7 +859,7 @@ def pre_call_charge(
                 pass
             else:
                 parent_row = conn.execute(
-                    f"SELECT balance_cents FROM wallets WHERE wallet_id = %s {_WALLET_LOCK}",
+                    "SELECT balance_cents FROM wallets WHERE wallet_id = %s",
                     (parent_wallet_id,),
                 ).fetchone()
                 parent_balance = (
@@ -879,6 +903,7 @@ def pre_call_charge(
             if net_spent < 0:
                 net_spent = 0
             if net_spent + price_cents > normalized_max_spend:
+                _obs.payment_charges_total.labels(outcome="spend_limit_exceeded").inc()
                 raise KeySpendLimitExceededError(
                     limit_cents=normalized_max_spend,
                     spent_cents=net_spent,
@@ -905,6 +930,7 @@ def pre_call_charge(
             if net_spent_daily < 0:
                 net_spent_daily = 0
             if net_spent_daily + price_cents > daily_limit_cents:
+                _obs.payment_charges_total.labels(outcome="spend_limit_exceeded").inc()
                 raise WalletDailySpendLimitExceededError(
                     limit_cents=daily_limit_cents,
                     spent_last_24h_cents=net_spent_daily,
@@ -928,8 +954,9 @@ def pre_call_charge(
             current_balance = (
                 int(current_row["balance_cents"] or 0) if current_row else 0
             )
+            _obs.payment_charges_total.labels(outcome="insufficient_balance").inc()
             raise InsufficientBalanceError(current_balance, price_cents)
-        return _insert_tx_only(
+        tx_id = _insert_tx_only(
             conn,
             caller_wallet_id,
             "charge",
@@ -939,6 +966,8 @@ def pre_call_charge(
             f"Call to agent {agent_id}",
             normalized_key_id,
         )
+    _obs.payment_charges_total.labels(outcome="success").inc()
+    return tx_id
 
 
 def post_call_payout(
@@ -988,6 +1017,7 @@ def post_call_payout(
                     "agent_id": agent_id,
                 },
             )
+            _obs.payment_payouts_total.labels(outcome="skipped_refund_exists").inc()
             return
         try:
             if agent_cents > 0:
@@ -1017,6 +1047,7 @@ def post_call_payout(
                 applied = True
         except _db.IntegrityError:
             pass  # idempotency: fee already recorded
+    _obs.payment_payouts_total.labels(outcome="success").inc()
     logging_utils.log_event(
         _LOG,
         logging.INFO,
@@ -1070,6 +1101,7 @@ def post_call_refund(
                     "agent_id": agent_id,
                 },
             )
+            _obs.payment_refunds_total.labels(outcome="skipped_payout_exists").inc()
             return
         try:
             _insert_tx(
@@ -1084,6 +1116,7 @@ def post_call_refund(
             applied = True
         except _db.IntegrityError:
             pass  # idempotency: refund already recorded
+    _obs.payment_refunds_total.labels(outcome="success").inc()
     logging_utils.log_event(
         _LOG,
         logging.INFO,

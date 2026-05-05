@@ -589,16 +589,19 @@ def _send_reconciliation_drift_alert(summary: dict) -> None:
         )
         _email.send(_ALERT_EMAIL, subject, html_body, text_body)
 
-    # Also surface in Sentry if configured — appears as a distinct issue, not buried in logs.
+    # Surface in Sentry with structured extra context (not buried in logs).
+    # push_scope() is the correct way to attach extra data to a single capture.
     if _SENTRY_DSN:
         try:
             import sentry_sdk
 
-            sentry_sdk.capture_message(
-                f"Ledger drift: {drift}¢ across {mismatch_count} wallet(s)",
-                level="error",
-                extras=summary,
-            )
+            with sentry_sdk.push_scope() as _scope:
+                for _k, _v in summary.items():
+                    _scope.set_extra(_k, _v)
+                sentry_sdk.capture_message(
+                    f"Ledger drift: {drift}¢ across {mismatch_count} wallet(s)",
+                    level="error",
+                )
         except Exception:
             _LOG.exception("Failed to capture reconciliation drift in Sentry.")
 
