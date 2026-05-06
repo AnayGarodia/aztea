@@ -589,7 +589,17 @@ async function sessionSummary() {
 
 async function estimateCost(args) {
   const agentIdOrSlug = String(args.agent_id || args.slug || '').trim()
-  if (!agentIdOrSlug) return { ok: false, body: { error: 'INVALID_INPUT', message: 'agent_id or slug is required.' } }
+  if (!agentIdOrSlug) {
+    return {
+      ok: false,
+      body: {
+        error: 'INVALID_INPUT',
+        message: "aztea_budget(action='estimate') requires `slug` or `agent_id`. Estimate is per-agent so the platform can apply variable pricing.",
+        required_one_of: ['slug', 'agent_id'],
+        next_step: "Call aztea_search(query='...') to find the slug, then aztea_budget(action='estimate', slug='<slug>', input={...}).",
+      },
+    }
+  }
   const resolved = await resolveAgentId(agentIdOrSlug)
   if (!resolved.ok) return resolved
   const input = args.input_payload == null ? (args.input == null ? {} : args.input) : args.input_payload

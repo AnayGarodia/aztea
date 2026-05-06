@@ -934,6 +934,34 @@ _TOOLS: list[dict[str, Any]] = [
 #   aztea_workflow(action=compare_status)→ aztea_compare_status
 #   aztea_workflow(action=compare_select)→ aztea_select_compare_winner
 
+def _validate_grouped_action_inputs(
+    tool_name: str, action: str, sub_args: dict[str, Any]
+) -> tuple[bool, dict[str, Any] | None]:
+    """Reject grouped-tool actions that the JSON schema can't constrain.
+
+    Some grouped tools have actions that require fields the top-level schema
+    can't enforce (e.g. `aztea_budget(action="estimate")` needs a slug or
+    agent_id). Without this check the request reaches the server, which
+    returns a terse 400. Catching it here lets us return a structured,
+    Claude-readable hint that points to discovery.
+    """
+    if tool_name == "aztea_budget" and action == "estimate":
+        if not str(sub_args.get("slug") or sub_args.get("agent_id") or "").strip():
+            return False, {
+                "error": "INVALID_INPUT",
+                "message": (
+                    "aztea_budget(action='estimate') requires `slug` or `agent_id`. "
+                    "Estimate is per-agent so the platform can apply variable pricing."
+                ),
+                "required_one_of": ["slug", "agent_id"],
+                "next_step": (
+                    "Call aztea_search(query='...') to find the slug, then "
+                    "aztea_budget(action='estimate', slug='<slug>', input={...})."
+                ),
+            }
+    return True, None
+
+
 _GROUPED_DISPATCH: dict[str, dict[str, str]] = {
     "aztea_job": {
         "rate": "aztea_rate_job",
@@ -1074,7 +1102,8 @@ _GROUPED_TOOLS: list[dict[str, Any]] = [
                     ],
                     "description": "Which wallet/budget operation to run.",
                 },
-                "slug": {"type": "string", "description": "estimate: agent slug to estimate."},
+                "slug": {"type": "string", "description": "estimate (REQUIRED unless agent_id given) / retention (optional, omit for global policy): agent slug."},
+                "agent_id": {"type": "string", "description": "estimate (REQUIRED unless slug given) / retention (optional): agent UUID."},
                 "input": {
                     "type": "object",
                     "description": "estimate: optional input payload for variable-priced agents.",
@@ -1305,6 +1334,14 @@ def call_meta_tool(
                 "allowed_actions": sorted(action_map.keys()),
             }
         sub_args = {k: v for k, v in arguments.items() if k != "action"}
+        # Per-action input contract checks for grouped tools. Catches the
+        # schema/server drift where aztea_budget(action="estimate") needed a
+        # slug or agent_id but the JSON schema only marked `action` required.
+        ok_action, action_error = _validate_grouped_action_inputs(
+            tool_name, action, sub_args
+        )
+        if not ok_action:
+            return False, action_error
         return call_meta_tool(
             underlying,
             sub_args,

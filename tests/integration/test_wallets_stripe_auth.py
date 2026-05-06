@@ -989,3 +989,31 @@ def test_sync_builtin_call_signs_output_and_signature_verifies(client, monkeypat
     except Exception:
         signature_bytes = _b64.b64decode(sig_body["signature"] + sig_pad)
     public_key.verify(signature_bytes, signed_bytes)
+
+
+def test_sync_call_response_includes_pricing_units_block(client, monkeypatch):
+    """A sync registry call must surface a structured pricing_units block so
+    callers don't have to parse pricing semantics out of the description text."""
+    monkeypatch.setattr(
+        server.agent_linter_agent,
+        "run",
+        lambda payload: {"language": "python", "tool": "ruff", "issues": [], "clean": True},
+    )
+    caller = _register_user()
+    _fund_user_wallet(caller, 200)
+
+    resp = client.post(
+        f"/registry/agents/{server._LINTER_AGENT_ID}/call",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={"language": "python", "code": "print(1)\n"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert "pricing_units" in body, "sync response must include pricing_units"
+    units = body["pricing_units"]
+    assert units["pricing_model"] in {"fixed", "per_call"}
+    assert "caller_charge_cents" in units
+    assert units["caller_charge_cents"] >= 0
+    assert "platform_fee_pct" in units
+    assert units["fee_bearer_policy"] == "caller"
+    assert units["unit"]

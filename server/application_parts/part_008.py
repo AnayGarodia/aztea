@@ -564,14 +564,76 @@ def _sync_success_response_payload(
     output: Any,
     latency_ms: float,
     cached: bool = False,
+    pricing_units: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
+    payload: dict[str, Any] = {
         "job_id": job_id,
         "status": "complete",
         "output": output,
         "latency_ms": round(float(latency_ms), 1),
         "cached": bool(cached),
     }
+    if pricing_units:
+        payload["pricing_units"] = pricing_units
+    return payload
+
+
+def _build_pricing_units_block(
+    *,
+    pricing_estimate: dict[str, Any] | None,
+    output: dict[str, Any] | None,
+    caller_charge_cents: int,
+    success_distribution: dict[str, Any] | None = None,
+    platform_fee_pct: int | None = None,
+    fee_bearer_policy: str | None = None,
+) -> dict[str, Any] | None:
+    """Surface variable-pricing units in a structured response field so callers
+    no longer have to parse the agent description for billing semantics."""
+    if not pricing_estimate:
+        return None
+    pricing_model = str(pricing_estimate.get("pricing_model") or "fixed")
+    units_estimated_raw = pricing_estimate.get("units")
+    unit_label = pricing_estimate.get("unit")
+    units_actual: int | None = None
+    if isinstance(output, dict):
+        try:
+            actual_raw = output.get("billing_units_actual")
+            if actual_raw is not None:
+                units_actual = int(actual_raw)
+        except (TypeError, ValueError):
+            units_actual = None
+    block: dict[str, Any] = {
+        "pricing_model": pricing_model,
+        "unit": unit_label,
+        "caller_charge_cents": int(caller_charge_cents),
+        "caller_charge_usd": round(int(caller_charge_cents) / 100.0, 4),
+    }
+    if units_estimated_raw is not None:
+        try:
+            block["units_estimated"] = int(units_estimated_raw)
+        except (TypeError, ValueError):
+            block["units_estimated"] = units_estimated_raw
+    if units_actual is not None:
+        block["units_actual"] = units_actual
+    if pricing_estimate.get("detail") is not None:
+        block["detail"] = pricing_estimate.get("detail")
+    if success_distribution is not None:
+        block["agent_payout_cents"] = int(
+            success_distribution.get("agent_payout_cents") or 0
+        )
+        block["platform_fee_cents"] = int(
+            success_distribution.get("platform_fee_cents") or 0
+        )
+    if platform_fee_pct is not None:
+        block["platform_fee_pct"] = int(platform_fee_pct)
+    if fee_bearer_policy is not None:
+        block["fee_bearer_policy"] = str(fee_bearer_policy)
+    if pricing_model == "fixed":
+        # Fixed-price agents still benefit from the structured form so callers
+        # don't need separate code paths for fixed vs variable.
+        block["unit"] = block.get("unit") or "call"
+        block.setdefault("units_estimated", 1)
+    return block
 
 
 def _response_output_mode(request: Request) -> str:
@@ -1255,6 +1317,14 @@ def registry_call(
                 output=output,
                 latency_ms=_job_latency_ms(completed),
                 cached=False,
+                pricing_units=_build_pricing_units_block(
+                    pricing_estimate=pricing_estimate,
+                    output=output if isinstance(output, dict) else None,
+                    caller_charge_cents=caller_charge_cents,
+                    success_distribution=success_distribution,
+                    platform_fee_pct=platform_fee_pct_at_create,
+                    fee_bearer_policy=fee_bearer_policy,
+                ),
             )
             shaped_output, extra = _shape_sync_output_for_response(
                 request,
@@ -1642,6 +1712,14 @@ def registry_call(
         output=result_payload,
         latency_ms=_job_latency_ms(settled),
         cached=False,
+        pricing_units=_build_pricing_units_block(
+            pricing_estimate=pricing_estimate,
+            output=result_payload if isinstance(result_payload, dict) else None,
+            caller_charge_cents=caller_charge_cents,
+            success_distribution=success_distribution,
+            platform_fee_pct=platform_fee_pct_at_create,
+            fee_bearer_policy=fee_bearer_policy,
+        ),
     )
     shaped_output, extra = _shape_sync_output_for_response(
         request,

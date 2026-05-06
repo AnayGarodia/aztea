@@ -953,6 +953,23 @@ def test_batch_status_uses_compact_include_param(monkeypatch):
     assert captured["params"] == {"include": "minimal"}
 
 
+def test_budget_estimate_requires_slug_or_agent_id_with_helpful_error():
+    ok, result = meta_tools.call_meta_tool(
+        "aztea_budget",
+        {"action": "estimate", "input": {"task": "x"}},
+        base_url="https://aztea.test",
+        api_key="key",
+        timeout=5,
+        session=None,
+        session_state={},
+    )
+    assert ok is False
+    assert result["error"] == "INVALID_INPUT"
+    assert "slug" in result["message"]
+    assert result["required_one_of"] == ["slug", "agent_id"]
+    assert "aztea_search" in result["next_step"]
+
+
 def test_discover_includes_input_and_pricing_metadata(monkeypatch):
     def _fake_post(_session, _url, _hdrs, _timeout, _body):
         return True, {
