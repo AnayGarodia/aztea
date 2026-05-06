@@ -123,9 +123,21 @@ def load_builtin_specs_part1() -> list[dict[str, Any]]:
                     },
                     "filename": {"type": "string"},
                     "focus": {"type": "string"},
-                    "score": {"type": "integer"},
+                    "score": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "description": (
+                            "Overall review score, 1–10. 1 = critical issues "
+                            "(security/correctness blockers); 10 = production-ready. "
+                            "Mid-range (4–7) means improvements recommended before merge."
+                        ),
+                    },
                     "security_critical": {"type": "boolean"},
-                    "complexity_score": {"type": "integer"},
+                    "complexity_score": {
+                        "type": "integer",
+                        "description": "Cyclomatic complexity heuristic; lower is simpler. ~10 is typical, >20 is code-smell territory.",
+                    },
                     "issue_count": {"type": "integer"},
                     "severity_counts": {"type": "object"},
                     "issues": {"type": "array", "items": {"type": "object"}},

@@ -448,7 +448,9 @@ export class AgentmarketClient {
       input_payload: inputPayload,
     };
     if (options.maxCostUsd !== undefined) body.max_cost_usd = options.maxCostUsd;
-    return this.request<JsonObject>("/registry/agents/compare", { method: "POST", body });
+    // Server route is /jobs/compare (POST). /registry/agents/compare 404'd —
+    // cross-surface parity fix; mirrors the Python SDK.
+    return this.request<JsonObject>("/jobs/compare", { method: "POST", body });
   }
 
   async hire(

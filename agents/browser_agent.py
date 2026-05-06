@@ -145,7 +145,21 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
 
     try:
         with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True)
+            try:
+                browser = pw.chromium.launch(headless=True)
+            except Exception as launch_exc:  # noqa: BLE001
+                # Detect "Executable doesn't exist at ..." which is the chromium-not-installed
+                # signal. Surface as tool_unavailable so the platform refunds, instead of a
+                # generic 502 that wastes a billing unit and confuses callers.
+                msg = str(launch_exc)
+                if "Executable doesn't exist" in msg or "playwright install" in msg:
+                    return _err(
+                        "tool_unavailable",
+                        "Headless Chromium is not provisioned on this worker. "
+                        "Run `playwright install chromium` on the executor. "
+                        "The call was not billed.",
+                    )
+                raise
             context = browser.new_context(
                 viewport={"width": vp_width, "height": vp_height},
                 user_agent="Aztea-Browser-Agent/1.0 (headless; for authorized auditing)",

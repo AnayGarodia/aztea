@@ -348,12 +348,22 @@ def estimate_price_cents(
         )
         with_mults = _apply_multipliers(base, payload, multipliers)
         price_cents = _clamp(with_mults, min_cents=min_cents, max_cents=max_cents)
+        # Build a human-readable detail. When the floor (min_cents) overrides
+        # a tiny computed amount, surface that explicitly so callers don't see
+        # confusing strings like "0 seconds @ 0¢/second" — a known QA P2-12.
+        natural_detail = (
+            f"{units} {unit}{'s' if units != 1 else ''} @ {rate:g}¢/{unit}"
+        )
+        if min_cents and price_cents == min_cents and base < min_cents:
+            detail = f"{natural_detail} (floor {min_cents}¢ applied)"
+        else:
+            detail = natural_detail
         return {
             "price_cents": price_cents,
             "pricing_model": "per_unit",
             "units": units,
             "unit": unit,
-            "detail": f"{units} {unit}{'s' if units != 1 else ''} @ {rate:g}¢/{unit}",
+            "detail": detail,
         }
 
     if model == "tiered":

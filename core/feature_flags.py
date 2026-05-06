@@ -104,11 +104,12 @@ def auto_invoke_confidence_floor() -> float:
     """Minimum normalised confidence score (0.0–1.0) to auto-fire a hire.
 
     Below this floor the endpoint returns a search-style response with
-    candidates, no charge. Default 0.45 — requires real signal strength but
-    not full dominance over the runner-up. Raised back toward 0.55 once the
-    catalog has more high-trust agents.
+    candidates, no charge. Default 0.30 — Claude Code QA showed obvious
+    intents like "Run this Python: print(...)" scoring 0.27–0.30 and
+    refusing, which broke the headline UX. Lowering to 0.30 lets clear
+    matches through; the trust + price gates still protect spend.
     """
-    return flag_float("AZTEA_AUTO_INVOKE_CONFIDENCE", default=0.45)
+    return flag_float("AZTEA_AUTO_INVOKE_CONFIDENCE", default=0.30)
 
 
 def auto_invoke_server_cap_usd() -> float:

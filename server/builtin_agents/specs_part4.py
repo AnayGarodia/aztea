@@ -232,7 +232,7 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
         {
             "agent_id": _LIVE_ENDPOINT_TESTER_AGENT_ID,
             "name": "Live Endpoint Tester",
-            "description": "Use when you need to measure the real latency and status profile of an HTTP endpoint. Sends multiple live requests with bounded concurrency, returns p50/p95/p99 latency, status-code distribution, histogram buckets, and sample failures. VARIABLE BILLING: $0.01/request sent (default requests=50 → $0.50). Set requests=5 for a $0.05 minimum.",
+            "description": "Use when you need to measure the real latency and status profile of an HTTP endpoint. Sends multiple live requests with bounded concurrency, returns p50/p95/p99 latency, status-code distribution, histogram buckets, and sample failures. VARIABLE BILLING: tiered by `requests`. Floor: $0.03 (any requests<=5). $0.01 per request beyond the floor, capped at $0.50 for requests=50. Pass requests=5 for the $0.03 minimum.",
             "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_LIVE_ENDPOINT_TESTER_AGENT_ID],
             "price_per_call_usd": 0.03,
             "tags": ["http", "performance", "latency", "load-test", "qa"],

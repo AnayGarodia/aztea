@@ -330,6 +330,21 @@ _LAZY_SEARCH_TOOL: dict[str, Any] = {
                 "default": 8,
                 "description": "Max results to return.",
             },
+            "max_price_usd": {
+                "type": "number",
+                "minimum": 0,
+                "description": "Optional. Filter out agents whose per-call price exceeds this cap.",
+            },
+            "min_trust": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100,
+                "description": "Optional. Drop agents with trust_score below this floor (0-100).",
+            },
+            "category": {
+                "type": "string",
+                "description": "Optional. Filter to a specific category (e.g. 'Security', 'Code', 'Research').",
+            },
         },
         "required": ["query"],
     },
@@ -399,6 +414,11 @@ _LAZY_DO_TOOL: dict[str, Any] = {
                 "type": "boolean",
                 "default": False,
                 "description": "When true, decide which agent would be invoked and report it without running anything.",
+            },
+            "aggressive": {
+                "type": "boolean",
+                "default": False,
+                "description": "Lower the confidence floor to 0.20 so unambiguous short intents auto-fire. Trust + price gates still apply.",
             },
             "output_format": {
                 "type": "string",
@@ -1045,15 +1065,44 @@ class RegistryBridge:
                 return entry
         return None
 
-    def _search_catalog(self, query: str, limit: int = 8) -> dict[str, Any]:
+    def _search_catalog(
+        self,
+        query: str,
+        limit: int = 8,
+        *,
+        max_price_usd: float | None = None,
+        min_trust: float | None = None,
+        category: str | None = None,
+    ) -> dict[str, Any]:
         normalized = str(query or "").strip().lower()
         capped_limit = max(1, min(int(limit or 8), 20))
+        category_filter = (category or "").strip().lower() or None
         terms = _query_terms(normalized)
         intent, _intent_markers = _search_intent(terms)
         matches: list[tuple[int, dict[str, Any]]] = []
         for entry in self._catalog_entries():
             if intent is not None and not _entry_matches_intent(entry, intent):
                 continue
+            # Caller-supplied filters: price ceiling, trust floor, category narrow.
+            # Applied before scoring so excluded entries don't waste a slot.
+            if max_price_usd is not None:
+                price = entry.get("price_per_call_usd")
+                try:
+                    if price is not None and float(price) > float(max_price_usd):
+                        continue
+                except (TypeError, ValueError):
+                    pass
+            if min_trust is not None:
+                trust = entry.get("trust_score")
+                try:
+                    if trust is not None and float(trust) < float(min_trust):
+                        continue
+                except (TypeError, ValueError):
+                    pass
+            if category_filter is not None:
+                entry_cat = str(entry.get("category") or "").strip().lower()
+                if category_filter not in entry_cat:
+                    continue
             alias_text = " ".join(str(alias) for alias in entry.get("aliases") or [])
             haystack = "\n".join(
                 [
@@ -1209,6 +1258,19 @@ class RegistryBridge:
             latency = _compact_latency(entry.get("avg_latency_ms"))
             if latency:
                 quality_parts.append(latency)
+            required_list = list(entry.get("required_fields") or [])
+            input_list = list(entry.get("input_fields") or [])[:12]
+            # Append a "Inputs:" line to the truncated description so callers see
+            # the schema summary inline without a follow-up aztea_describe call.
+            # This fixes the 422-on-first-try problem documented in QA.
+            base_description = _word_truncate(entry["description"], 380)
+            if required_list:
+                inline_inputs = f" Inputs: required={required_list}"
+                if input_list:
+                    extras = [f for f in input_list if f not in required_list]
+                    if extras:
+                        inline_inputs += f", optional={extras[:6]}"
+                base_description = f"{base_description}{inline_inputs}"
             result_items.append(
                 {
                     "slug": entry["slug"],
@@ -1216,7 +1278,7 @@ class RegistryBridge:
                     "name": entry["name"],
                     "agent_id": entry.get("agent_id"),
                     "category": entry.get("category"),
-                    "description": _word_truncate(entry["description"], 400),
+                    "description": base_description,
                     "score": round(score, 2),
                     "price_per_call_usd": entry.get("price_per_call_usd"),
                     "trust_score": entry.get("trust_score"),
@@ -1226,8 +1288,8 @@ class RegistryBridge:
                     "stability_tier": entry.get("stability_tier"),
                     "codex_recommended": bool(entry.get("codex_recommended", False)),
                     "best_for": list(entry.get("short_use_cases") or [])[:4],
-                    "required_fields": list(entry.get("required_fields") or []),
-                    "input_fields": list(entry.get("input_fields") or [])[:12],
+                    "required_fields": required_list,
+                    "input_fields": input_list,
                     "pricing_model": entry.get("pricing_model"),
                     "pricing_config": entry.get("pricing_config"),
                     "quality_summary": " | ".join(quality_parts),
@@ -1364,7 +1426,19 @@ class RegistryBridge:
                     "message": "query is required.",
                 }
             return True, self._search_catalog(
-                query, limit=int(arguments.get("limit") or 8)
+                query,
+                limit=int(arguments.get("limit") or 8),
+                max_price_usd=(
+                    float(arguments["max_price_usd"])
+                    if arguments.get("max_price_usd") is not None
+                    else None
+                ),
+                min_trust=(
+                    float(arguments["min_trust"])
+                    if arguments.get("min_trust") is not None
+                    else None
+                ),
+                category=arguments.get("category") or None,
             )
 
         if tool_name == _LAZY_DESCRIBE_TOOL["name"]:
@@ -1385,6 +1459,7 @@ class RegistryBridge:
                 "intent": intent,
                 "max_cost_usd": float(arguments.get("max_cost_usd") or 0.10),
                 "dry_run": bool(arguments.get("dry_run") or False),
+                "aggressive": bool(arguments.get("aggressive") or False),
             }
             explicit_input = arguments.get("input")
             if isinstance(explicit_input, dict):

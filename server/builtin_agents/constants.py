@@ -113,9 +113,11 @@ CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
         SHELL_EXECUTOR_AGENT_ID,
         TYPE_CHECKER_AGENT_ID,
         DB_SANDBOX_AGENT_ID,
-        VISUAL_REGRESSION_AGENT_ID,
         LIVE_ENDPOINT_TESTER_AGENT_ID,
-        BROWSER_AGENT_ID,
+        # BROWSER_AGENT_ID and VISUAL_REGRESSION_AGENT_ID hidden from the curated
+        # catalog: Playwright/chromium is not provisioned on the production worker,
+        # so any navigation/screenshot path 502s. Re-add after the deploy runs
+        # `playwright install chromium`. Tracked in QA P0-2.
         MULTI_LANGUAGE_EXECUTOR_AGENT_ID,
         SEMANTIC_CODEBASE_SEARCH_AGENT_ID,
         AI_RED_TEAMER_AGENT_ID,

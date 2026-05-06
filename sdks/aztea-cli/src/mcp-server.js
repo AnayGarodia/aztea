@@ -649,7 +649,7 @@ async function hireAsync(args) {
   const res = parseApiResponse(await postJson('/jobs', body))
   if (res.ok) {
     accumulate(res.body.caller_charge_cents ?? res.body.price_cents)
-    if (!res.body.note) res.body.note = `Job submitted. Poll with aztea_job_status(job_id='${res.body.job_id || ''}').`
+    if (!res.body.note) res.body.note = `Job submitted. Poll with aztea_job(action='status', job_id='${res.body.job_id || ''}').`
   }
   return res
 }

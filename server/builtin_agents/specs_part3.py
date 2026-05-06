@@ -138,7 +138,7 @@ def load_builtin_specs_part3() -> list[dict[str, Any]]:
         {
             "agent_id": _LINTER_AGENT_ID,
             "name": "Linter Agent",
-            "description": "Use when you want to lint Python, JavaScript, or TypeScript code without a local toolchain. For Python, runs ruff (style, bugs, complexity). For JS/TS, runs ESLint with a minimal built-in ruleset. Returns structured issues with rule IDs, line numbers, severity, and whether a fix is available. Faster and cheaper than a full code review.",
+            "description": "Lint Python / JavaScript / TypeScript code without a local toolchain. (Does NOT support Go, Rust, Deno, or other languages — for polyglot execution use multi_language_executor.) For Python, runs ruff (style, bugs, complexity). For JS/TS, runs ESLint with a minimal built-in ruleset. Returns structured issues with rule IDs, line numbers, severity, and whether a fix is available. Faster and cheaper than a full code review.",
             "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_LINTER_AGENT_ID],
             "price_per_call_usd": 0.01,
             "tags": [
@@ -148,6 +148,28 @@ def load_builtin_specs_part3() -> list[dict[str, Any]]:
                 "javascript",
                 "developer-tools",
                 "code-quality",
+            ],
+            "match_keywords": [
+                "lint",
+                "linter",
+                "ruff",
+                "eslint",
+                "style",
+                "code quality",
+                "format",
+                "pep8",
+            ],
+            # Block search routing for languages this agent does NOT support so it
+            # stops ranking #1 for "Go Rust polyglot" queries (QA P1-10).
+            "block_keywords": [
+                "go ",
+                "golang",
+                "rust",
+                "cargo",
+                "deno",
+                "polyglot",
+                "multi-language",
+                "multi language",
             ],
             "kind": "aztea_built",
             "category": "Code Execution",

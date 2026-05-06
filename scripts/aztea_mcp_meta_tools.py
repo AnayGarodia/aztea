@@ -831,22 +831,23 @@ _TOOLS: list[dict[str, Any]] = [
     {
         "name": "aztea_pipeline_status",
         "description": (
-            "Poll an existing pipeline or recipe run by pipeline_id and run_id. "
-            "Use this after aztea_run_pipeline or aztea_run_recipe if the initial wait window expires; do not start a new run just to poll."
+            "Poll an existing pipeline or recipe run by run_id. "
+            "Use this after aztea_run_pipeline or aztea_run_recipe if the initial wait window expires; "
+            "do not start a new run just to poll. pipeline_id is optional — run_id alone is sufficient."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "pipeline_id": {
-                    "type": "string",
-                    "description": "Pipeline ID or recipe-backed pipeline ID.",
-                },
                 "run_id": {
                     "type": "string",
                     "description": "Run ID returned by aztea_run_pipeline or aztea_run_recipe.",
                 },
+                "pipeline_id": {
+                    "type": "string",
+                    "description": "Optional. Pipeline ID — only needed for legacy callers; run_id alone resolves the pipeline.",
+                },
             },
-            "required": ["pipeline_id", "run_id"],
+            "required": ["run_id"],
         },
     },
     {
@@ -1898,12 +1899,18 @@ def _list_pipelines(
 ) -> tuple[bool, dict]:
     ok, result = _get(session, f"{base}/pipelines", hdrs, timeout)
     if ok:
-        pipelines = result.get("pipelines") or []
-        result.setdefault("count", len(pipelines))
-        result.setdefault(
-            "note",
-            "Use pipeline_id with aztea_run_pipeline to execute one of these workflows.",
-        )
+        pipeline_rows = result.get("pipelines") or []
+        result.setdefault("count", len(pipeline_rows))
+        if not pipeline_rows:
+            result["note"] = (
+                "No user-created pipelines yet. Curated public workflows live "
+                "under recipes — call aztea_workflow(action='list_recipes')."
+            )
+        else:
+            result.setdefault(
+                "note",
+                "Use pipeline_id with aztea_run_pipeline to execute one of these workflows.",
+            )
     return ok, result
 
 
@@ -1935,7 +1942,7 @@ def _hire_async(
         result.setdefault(
             "note",
             (
-                f"Job submitted. Poll with aztea_job_status(job_id='{result.get('job_id', '')}') "
+                f"Job submitted. Poll with aztea_job(action='status', job_id='{result.get('job_id', '')}') "
                 "to track progress and retrieve results."
             ),
         )
@@ -2604,11 +2611,28 @@ def _hire_batch(
 def _compare_agents(
     session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
 ) -> tuple[bool, dict]:
+    # Accept either `agent_ids` (UUIDs) or `slugs` (human names from
+    # aztea_search). The grouped tool surface documents `slugs`, so when
+    # callers pass them we resolve client-side instead of 422-ing.
     raw_agent_ids = args.get("agent_ids")
+    raw_slugs = args.get("slugs")
+    if (raw_agent_ids is None or raw_agent_ids == []) and isinstance(raw_slugs, list):
+        resolved: list[str] = []
+        for slug in raw_slugs:
+            slug_str = str(slug or "").strip()
+            if not slug_str:
+                continue
+            resolved_id, err = _resolve_agent_id(
+                session, base, hdrs, timeout, {"slug": slug_str}
+            )
+            if err is not None:
+                return False, err
+            resolved.append(resolved_id)
+        raw_agent_ids = resolved
     if not isinstance(raw_agent_ids, list):
         return False, {
             "error": "INVALID_INPUT",
-            "message": "agent_ids must be an array.",
+            "message": "Provide either agent_ids[] (UUIDs) or slugs[] (tool names).",
         }
     agent_ids = [
         str(item or "").strip() for item in raw_agent_ids if str(item or "").strip()
@@ -2616,7 +2640,7 @@ def _compare_agents(
     if len(agent_ids) < 2 or len(agent_ids) > 3:
         return False, {
             "error": "INVALID_INPUT",
-            "message": "agent_ids must contain 2 or 3 values.",
+            "message": "Provide 2 or 3 unique agent_ids/slugs to compare.",
         }
     body: dict[str, Any] = {
         "agent_ids": agent_ids,
@@ -2696,12 +2720,20 @@ def _select_compare_winner(
 ) -> tuple[bool, dict]:
     compare_id = str(args.get("compare_id") or "").strip()
     winner_agent_id = str(args.get("winner_agent_id") or "").strip()
+    winner_slug = str(args.get("winner_slug") or "").strip()
     if not compare_id:
         return False, {"error": "INVALID_INPUT", "message": "compare_id is required."}
+    if not winner_agent_id and winner_slug:
+        resolved_id, err = _resolve_agent_id(
+            session, base, hdrs, timeout, {"slug": winner_slug}
+        )
+        if err is not None:
+            return False, err
+        winner_agent_id = resolved_id
     if not winner_agent_id:
         return False, {
             "error": "INVALID_INPUT",
-            "message": "winner_agent_id is required.",
+            "message": "Provide winner_agent_id (UUID) or winner_slug (tool name).",
         }
     ok, result = _post(
         session,
@@ -2766,13 +2798,16 @@ def _pipeline_status(
 ) -> tuple[bool, dict]:
     pipeline_id = str(args.get("pipeline_id") or "").strip()
     run_id = str(args.get("run_id") or "").strip()
-    if not pipeline_id:
-        return False, {"error": "INVALID_INPUT", "message": "pipeline_id is required."}
     if not run_id:
         return False, {"error": "INVALID_INPUT", "message": "run_id is required."}
-    ok, result = _get(
-        session, f"{base}/pipelines/{pipeline_id}/runs/{run_id}", hdrs, timeout
-    )
+    # run_id is sufficient — the server can resolve pipeline_id from it. Keep the
+    # qualified path for backward compatibility when both are provided.
+    if pipeline_id:
+        ok, result = _get(
+            session, f"{base}/pipelines/{pipeline_id}/runs/{run_id}", hdrs, timeout
+        )
+    else:
+        ok, result = _get(session, f"{base}/pipelines/runs/{run_id}", hdrs, timeout)
     if ok:
         status = str(result.get("status") or "").strip().lower()
         if status == "complete":

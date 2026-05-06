@@ -71,6 +71,22 @@ def _batch_job_trace_item(
     }
     if include_detail:
         item["detail"] = _job_response(job, caller)
+    # Inline a compact `output` payload on terminal jobs so callers don't have
+    # to fan-out N follow-up status calls for each child of a batch. Truncate
+    # at 6KB per job to keep the parent response sane; callers can still hit
+    # /jobs/{id} for the full payload when they need it.
+    if status == "complete" and job.get("output_payload") is not None:
+        try:
+            raw = json.dumps(job.get("output_payload"))
+            if len(raw) <= 6000:
+                item["output"] = job.get("output_payload")
+            else:
+                item["output_truncated"] = True
+                item["output_preview"] = raw[:6000]
+        except Exception:
+            item["output"] = None
+    elif status == "failed":
+        item["error"] = job.get("error_message")
     return item
 
 
@@ -1152,10 +1168,54 @@ def jobs_signature(request: Request, job_id: str) -> JSONResponse:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
     signature = job.get("output_signature")
     if not signature:
-        raise HTTPException(
-            status_code=404,
-            detail="This job has no signature (not yet completed, or the agent has no signing key).",
-        )
+        # Retroactively sign if the job is complete and the agent now has a key.
+        # This covers two real cases: (1) the job completed before lazy-key
+        # provisioning was wired up; (2) the lazy-provision blew up with an
+        # exception that signed:None ate at completion time. Either way we can
+        # produce a signature now without re-running the agent — the output
+        # is already canonical and frozen on the row.
+        agent_row = registry.get_agent(job.get("agent_id") or "", include_unapproved=True)
+        if (
+            agent_row is not None
+            and str(job.get("status") or "").lower() == "complete"
+            and job.get("output_payload") is not None
+        ):
+            try:
+                from core import crypto as _crypto
+
+                priv, _pub, did_v = registry.ensure_agent_signing_keys(
+                    agent_row.get("agent_id") or ""
+                )
+                if priv and did_v:
+                    sig_b64 = _crypto.sign_payload(priv, job.get("output_payload"))
+                    sig_alg = str(agent_row.get("signing_alg") or "ed25519")
+                    sig_at = datetime.now(timezone.utc).isoformat()
+                    jobs.update_job_signature(
+                        job["job_id"],
+                        output_signature=sig_b64,
+                        output_signature_alg=sig_alg,
+                        output_signed_by_did=did_v,
+                        output_signed_at=sig_at,
+                    )
+                    job = jobs.get_job(job_id) or job
+                    signature = job.get("output_signature")
+            except Exception:
+                _LOG.exception("Retroactive signing failed for job %s", job_id)
+    if not signature:
+        status_lower = str(job.get("status") or "").lower()
+        if status_lower != "complete":
+            detail = (
+                f"Job is in status '{status_lower or 'unknown'}'; "
+                "signatures are emitted only on completed jobs."
+            )
+        else:
+            detail = (
+                "This completed job has no signature. The agent may have completed "
+                "the job before signing keys were provisioned, or signing failed at "
+                "completion time. The retroactive sign attempt also failed; contact "
+                "support with this job_id."
+            )
+        raise HTTPException(status_code=404, detail=detail)
     agent_id = job.get("agent_id")
     base = (os.environ.get("SERVER_BASE_URL") or "").rstrip("/")
     verify_url = f"{base}/agents/{agent_id}/did.json" if base and agent_id else None

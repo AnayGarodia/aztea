@@ -377,6 +377,10 @@ class _AutoHireRequestBody(BaseModel):
     input: dict[str, Any] | None = None
     max_cost_usd: float = Field(default=0.10, ge=0.0, le=100.0)
     dry_run: bool = False
+    # When True, lower the confidence floor to 0.20 so unambiguous intents
+    # like "Run this Python: ..." don't bounce to recommendation mode.
+    # Caller still owns max_cost_usd; price + trust gates remain in force.
+    aggressive: bool = False
     # Optional rendering hint applied AFTER invocation. The agent's JSON
     # output stays canonical; if set, `rendered_output` (string or dict
     # for slack_blocks) is attached alongside.
@@ -472,6 +476,7 @@ def registry_auto_hire(
         explicit_input=body.input,
         max_cost_usd=float(body.max_cost_usd),
         candidates=candidates,
+        aggressive=bool(body.aggressive),
     )
 
     # 3. Gated path: short-circuit, no charge.

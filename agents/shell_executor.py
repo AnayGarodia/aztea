@@ -179,10 +179,24 @@ def run(payload: dict) -> dict:
 
     if not _is_allowed(command):
         allowed = [p.strip() for p in _ALLOWLIST_PREFIXES]
-        raise ValueError(
-            f"Command not permitted. Allowed prefixes: {', '.join(sorted(set(allowed)))}. "
-            "Pipe operators, shell redirects, and destructive commands are blocked."
-        )
+        # Identify the *specific* reason for the rejection so the caller
+        # doesn't have to guess. Pipe / redirect / chained-command rejection
+        # is qualitatively different from "binary not allowlisted" and the
+        # caller can act on the distinction (e.g. split into two calls).
+        chain_chars = ("&&", "||", "|", ";", "`", "$(", ">", "<")
+        chain_match = next((ch for ch in chain_chars if ch in command), None)
+        first_token = command.split()[0] if command.split() else "(empty)"
+        if chain_match:
+            why = (
+                f"Command not permitted — shell metacharacter {chain_match!r} is not allowed. "
+                "Each call must run a single command. Split into multiple aztea_call invocations."
+            )
+        else:
+            why = (
+                f"Command not permitted — binary {first_token!r} is not in the allowlist. "
+                f"Allowed prefixes: {', '.join(sorted(set(allowed)))}."
+            )
+        raise ValueError(why)
 
     timeout = int(payload.get("timeout") or _TIMEOUT_DEFAULT)
     timeout = max(_TIMEOUT_MIN, min(_TIMEOUT_MAX, timeout))

@@ -410,6 +410,13 @@ class AzteaClient:
     def get_pipeline_run(self, pipeline_id: str, run_id: str) -> JSONObject:
         return self._request_json("GET", f"/pipelines/{pipeline_id}/runs/{run_id}")
 
+    def get_pipeline_run_by_id(self, run_id: str) -> JSONObject:
+        """Look up a pipeline run by run_id alone — the server resolves
+        pipeline_id from it. Convenience for callers that only retained
+        run_id (e.g. after a recipe execution returned just {run_id, status}).
+        """
+        return self._request_json("GET", f"/pipelines/runs/{run_id}")
+
     def list_recipes(self) -> JSONObject:
         return self._request_json("GET", "/recipes")
 
@@ -657,7 +664,9 @@ class AzteaClient:
         }
         if max_cost_usd is not None:
             body["max_cost_usd"] = float(max_cost_usd)
-        return self._request_json("POST", "/registry/agents/compare", json_body=body)
+        # The server route is /jobs/compare (POST); the older SDK URL
+        # /registry/agents/compare returned 404. Cross-surface parity fix.
+        return self._request_json("POST", "/jobs/compare", json_body=body)
 
     def auto_hire(
         self,

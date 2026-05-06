@@ -282,6 +282,29 @@ def _run_tsc(code: str, stubs: dict[str, str], strict: bool) -> dict:
             )
 
         raw = result.stdout + result.stderr
+        # Detect worker-infrastructure failures (disk pressure, network, npm registry).
+        # Returning passed:false with empty diagnostics here is a billing-trust violation —
+        # the caller has no way to know the check didn't actually run. Surface as
+        # tool_unavailable so the platform refunds.
+        infra_markers = (
+            "ENOSPC",
+            "no space left on device",
+            "ETIMEDOUT",
+            "ECONNRESET",
+            "EAI_AGAIN",
+            "getaddrinfo",
+            "Could not resolve",
+            "npm error code E",
+        )
+        if result.returncode != 0 and not raw.strip().startswith("main.ts"):
+            lowered = raw.lower()
+            for marker in infra_markers:
+                if marker.lower() in lowered:
+                    return _err(
+                        "type_checker.tool_unavailable",
+                        f"tsc could not run on the worker (infrastructure error: {marker}). "
+                        "The call was not billed. Try again shortly; if it persists, contact support.",
+                    )
         version_str = ""
         try:
             if tsc_bin:

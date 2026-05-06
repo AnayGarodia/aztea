@@ -144,8 +144,14 @@ def decide(
     explicit_input: dict[str, Any] | None,
     max_cost_usd: float,
     candidates: list[CandidateAgent],
+    aggressive: bool = False,
 ) -> Decision:
-    """Run every auto-invoke gate; return a Decision the caller can act on."""
+    """Run every auto-invoke gate; return a Decision the caller can act on.
+
+    aggressive=True lowers the confidence floor to 0.20 (vs the env-tuned
+    default 0.30). Trust, price, and stability gates are unchanged. Used by
+    callers who want aztea_do to fire on shorter intents.
+    """
 
     if not feature_flags.auto_invoke_enabled():
         return Decision(
@@ -187,7 +193,10 @@ def decide(
 
     # ── Gate: confidence ───────────────────────────────────────────────
     confidence = _confidence(top, rest)
-    if confidence < feature_flags.auto_invoke_confidence_floor():
+    confidence_floor = (
+        0.20 if aggressive else feature_flags.auto_invoke_confidence_floor()
+    )
+    if confidence < confidence_floor:
         return Decision(
             auto_invoked=False,
             reason="low_confidence",

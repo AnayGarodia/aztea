@@ -74,6 +74,11 @@ function detailToString(detail) {
     return joined || null
   }
   if (typeof detail === 'object') {
+    // Prefer human-readable fields the server sets on structured errors
+    // (e.g. dispute 500 returns {error, phase, exception_type, message}).
+    if (typeof detail.message === 'string' && detail.message.trim()) {
+      return detail.message
+    }
     if (typeof detail.error === 'string' && detail.error) return detail.error
     return JSON.stringify(detail)
   }

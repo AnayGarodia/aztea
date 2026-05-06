@@ -1015,14 +1015,27 @@ def jobs_dispute(
                 "required_cents": exc.required_cents,
             },
         )
-    except Exception:
+    except Exception as exc:
         if not _committed:
             try:
                 conn.execute("ROLLBACK")
             except Exception:
                 pass
         _LOG.exception("Unexpected error filing dispute for job %s", job_id)
-        raise HTTPException(status_code=500, detail="Failed to file dispute.")
+        # Surface the underlying exception type so callers can act on it.
+        # Without this, every dispute failure looks like "Failed to file dispute"
+        # and there's no way for the client to distinguish a transient problem
+        # (retry) from a permanent one (give up). Money flows are at stake here —
+        # opaque errors are a recourse-trust violation.
+        detail = {
+            "error": "DISPUTE_FILING_FAILED",
+            "phase": insufficient_phase,
+            "exception_type": type(exc).__name__,
+            "message": str(exc) or "Failed to file dispute.",
+            "job_id": job_id,
+            "next_step": "Retry once. If it persists, contact support with this request_id.",
+        }
+        raise HTTPException(status_code=500, detail=detail)
     _record_job_event(
         job,
         "job.dispute_filed",

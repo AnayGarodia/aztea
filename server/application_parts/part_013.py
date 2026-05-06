@@ -1009,6 +1009,50 @@ def pipelines_run(
 
 
 @app.get(
+    "/pipelines/runs/{run_id}",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(401, 403, 404, 429, 500),
+    tags=["Pipelines"],
+    summary="Get pipeline run by run_id alone (no pipeline_id required).",
+)
+@limiter.limit("60/minute")
+def pipelines_run_get_by_id(
+    request: Request,
+    run_id: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
+    _require_scope(caller, "caller")
+    run = pipelines.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Pipeline run '{run_id}' not found.")
+    pipeline_id = str(run.get("pipeline_id") or "")
+    pipeline_row = pipelines.get_pipeline(pipeline_id) if pipeline_id else None
+    if pipeline_row is not None and not _pipeline_visible_to_caller(caller, pipeline_row):
+        raise HTTPException(status_code=404, detail=f"Pipeline run '{run_id}' not found.")
+    if (
+        caller.get("type") != "master"
+        and caller["owner_id"] != run.get("caller_owner_id")
+        and (pipeline_row is None or caller["owner_id"] != pipeline_row.get("owner_id"))
+    ):
+        raise HTTPException(status_code=403, detail="Not authorized to view this pipeline run.")
+    return JSONResponse(
+        content={
+            "run_id": run["run_id"],
+            "pipeline_id": run.get("pipeline_id"),
+            "caller_owner_id": run.get("caller_owner_id"),
+            "status": run.get("status"),
+            "input_payload": run.get("input_payload") or {},
+            "output_payload": run.get("output_payload"),
+            "error_message": run.get("error_message"),
+            "step_results": run.get("step_results") or {},
+            "created_at": run.get("created_at"),
+            "updated_at": run.get("updated_at"),
+            "completed_at": run.get("completed_at"),
+        }
+    )
+
+
+@app.get(
     "/pipelines/{pipeline_id}/runs/{run_id}",
     response_model=core_models.DynamicObjectResponse,
     responses=_error_responses(401, 403, 404, 429, 500),

@@ -810,6 +810,46 @@ def update_job_status(
     return get_job(job_id)
 
 
+def update_job_signature(
+    job_id: str,
+    *,
+    output_signature: str,
+    output_signature_alg: str,
+    output_signed_by_did: str,
+    output_signed_at: str,
+) -> dict | None:
+    """Retroactively attach an Ed25519 signature to a completed job.
+
+    Used by the public signature endpoint when an unsigned-but-completed job
+    is fetched — we sign-on-read once and persist so subsequent verifies are
+    cheap and idempotent. UPDATE is gated to never overwrite an existing
+    signature; signing is otherwise immutable once attached.
+    """
+    now = _now()
+    with _conn() as conn:
+        conn.execute(
+            """
+            UPDATE jobs
+            SET output_signature = %s,
+                output_signature_alg = %s,
+                output_signed_by_did = %s,
+                output_signed_at = %s,
+                updated_at = %s
+            WHERE job_id = %s AND status = 'complete'
+              AND (output_signature IS NULL OR output_signature = '')
+            """,
+            (
+                output_signature,
+                output_signature_alg,
+                output_signed_by_did,
+                output_signed_at,
+                now,
+                job_id,
+            ),
+        )
+    return get_job(job_id)
+
+
 def mark_settled(job_id: str) -> bool:
     """Set ``settled_at`` timestamp on a completed job. Returns True if the row was updated."""
     now = _now()

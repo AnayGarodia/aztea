@@ -1291,8 +1291,28 @@ def registry_call(
                         actor_owner_id=caller["owner_id"],
                         event_type="job.failed_dependency",
                     )
+                # 502 for genuine infra failures; 422 for caller-input validation
+                # failures so the SDK can act on the distinction without parsing
+                # error_code strings. Refund happened either way.
+                input_failure_markers = (
+                    ".invalid_input",
+                    ".invalid_payload",
+                    ".missing_",
+                    ".invalid_",
+                    ".unsupported_",
+                    ".query_too_long",
+                    ".code_too_long",
+                    ".stdin_too_long",
+                    ".url_too_long",
+                    ".too_many_",
+                    ".url_blocked",
+                )
+                lowered_code = (failure_code or "").lower()
+                http_status = 502
+                if any(marker in lowered_code for marker in input_failure_markers):
+                    http_status = 422
                 raise HTTPException(
-                    status_code=502,
+                    status_code=http_status,
                     detail=error_codes.make_error(
                         error_codes.AGENT_INTERNAL_ERROR,
                         failure_message

@@ -325,6 +325,16 @@ def _dispute_context_conn(conn: _db.DbConnection, dispute_id: str) -> dict:
     ).fetchone()
     if row is None:
         raise ValueError(f"Dispute '{dispute_id}' not found.")
+    # Defensive: jobs created before the wallet-id columns existed (migration 0019
+    # added them) may have NULLs. Surface a clear error rather than letting
+    # downstream str(None) produce "None" wallet_ids that fail UPDATE silently.
+    for required in ("agent_wallet_id", "platform_wallet_id", "caller_wallet_id"):
+        if not row.get(required):
+            raise ValueError(
+                f"Dispute context incomplete: jobs.{required} is NULL for job "
+                f"{row.get('job_id')}. This job pre-dates wallet-id tracking and "
+                f"cannot be auto-disputed; contact support."
+            )
     return row
 
 

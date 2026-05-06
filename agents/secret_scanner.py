@@ -55,7 +55,10 @@ from typing import Any
 
 _MAX_CONTENT = 200_000
 _DEFAULT_MAX_FINDINGS = 50
-_DEFAULT_MIN_ENTROPY = 4.5
+_DEFAULT_MIN_ENTROPY = 5.0  # Raised from 4.5 — old default flagged long camelCase
+# padding strings as "high-entropy" (QA P2-14). 5.0 still catches real tokens but
+# stops triggering on prose-like content. Callers can pass min_entropy=4.5 to
+# restore the old aggressive behavior.
 _GENERIC_TOKEN_RE = re.compile(r"[A-Za-z0-9+/=_\-]{24,}")
 
 # Each rule is (id, name, regex, severity, remediation).
