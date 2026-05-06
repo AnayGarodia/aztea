@@ -43,7 +43,7 @@ class JobCreateRequest(BaseModel):
     agent_id: str
     input_payload: JSONObject = Field(
         default_factory=dict,
-        validation_alias=AliasChoices("input_payload", "task"),
+        validation_alias=AliasChoices("input_payload", "input", "task"),
     )
     input_artifacts: list[JSONObject] = Field(
         default_factory=list,
@@ -204,6 +204,13 @@ class JobBatchCreateRequest(BaseModel):
         description=(
             "Optional hard cap for the whole batch. The batch is rejected before "
             "any charge if the sum of caller charges exceeds this value."
+        ),
+    )
+    dry_run: bool = Field(
+        default=False,
+        description=(
+            "When true, validate and estimate the batch without opening escrow "
+            "or creating jobs."
         ),
     )
     jobs: list["JobCreateRequest"] = Field(

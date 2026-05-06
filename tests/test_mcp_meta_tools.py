@@ -829,3 +829,166 @@ def test_grouped_dispatch_requires_action():
     assert ok is False
     assert result.get("error") == "INVALID_INPUT"
     assert "balance" in result["allowed_actions"]
+
+
+def test_hire_async_accepts_input_alias(monkeypatch):
+    def _fake_resolve(_session, _base, _hdrs, _timeout, args):
+        return f"agent-{args.get('slug') or args.get('agent_id')}", None
+
+    captured: dict[str, object] = {}
+
+    def _fake_post(_session, url, _hdrs, _timeout, body):
+        captured["url"] = url
+        captured["body"] = body
+        return True, {"job_id": "job_async_1", "status": "pending"}
+
+    monkeypatch.setattr(meta_tools, "_resolve_agent_id", _fake_resolve)
+    monkeypatch.setattr(meta_tools, "_post", _fake_post)
+    ok, result = meta_tools._hire_async(
+        session=None,
+        base="https://aztea.test",
+        hdrs={},
+        timeout=5,
+        args={"slug": "linter_agent", "input": {"language": "python", "code": "x=1\n"}},
+    )
+    assert ok is True
+    assert captured["body"]["input_payload"] == {"language": "python", "code": "x=1\n"}
+    assert result["job_id"] == "job_async_1"
+
+
+def test_hire_batch_accepts_input_alias_and_dry_run(monkeypatch):
+    def _fake_resolve(_session, _base, _hdrs, _timeout, args):
+        return f"agent-{args['slug']}", None
+
+    captured: dict[str, object] = {}
+
+    def _fake_post(_session, url, _hdrs, _timeout, body):
+        captured["url"] = url
+        captured["body"] = body
+        return True, {
+            "mode": "parallel_marketplace_hire_estimate",
+            "charge_status": "not_charged",
+            "estimated_total_charged_cents": 2,
+        }
+
+    monkeypatch.setattr(meta_tools, "_resolve_agent_id", _fake_resolve)
+    monkeypatch.setattr(meta_tools, "_post", _fake_post)
+    ok, result = meta_tools._hire_batch(
+        session=None,
+        base="https://aztea.test",
+        hdrs={},
+        timeout=5,
+        args={
+            "intent": "preview only",
+            "dry_run": True,
+            "jobs": [
+                {"slug": "linter_agent", "input": {"language": "python", "code": "x=1"}},
+                {"slug": "secret_scanner", "input": {"content": "ghp_FAKE"}},
+            ],
+        },
+    )
+    assert ok is True
+    assert captured["body"]["dry_run"] is True
+    assert captured["body"]["jobs"][0]["input_payload"]["code"] == "x=1"
+    assert captured["body"]["jobs"][1]["input_payload"]["content"] == "ghp_FAKE"
+    assert result["charge_status"] == "not_charged"
+    assert "claude_summary_hint" not in result
+
+
+def test_global_retention_no_slug_returns_default_policy():
+    ok, result = meta_tools._data_retention_policy(
+        session=None,
+        base="https://aztea.test",
+        hdrs={},
+        timeout=5,
+        args={},
+    )
+    assert ok is True
+    assert result["scope"] == "global"
+    assert result["private_task_supported"] is True
+    assert "private_task=true" in result["default_policy"]
+
+
+def test_estimate_cost_accepts_input_alias(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def _fake_resolve(_session, _base, _hdrs, _timeout, args):
+        return args["agent_id"], None
+
+    def _fake_post(_session, url, _hdrs, _timeout, body):
+        captured["body"] = body
+        return True, {"estimated_cost_cents": 5}
+
+    monkeypatch.setattr(meta_tools, "_resolve_agent_id", _fake_resolve)
+    monkeypatch.setattr(meta_tools, "_post", _fake_post)
+    ok, result = meta_tools._estimate_cost(
+        session=None,
+        base="https://aztea.test",
+        hdrs={},
+        timeout=5,
+        args={"agent_id": "agent_1", "input": {"task": "x"}},
+    )
+    assert ok is True
+    assert captured["body"] == {"task": "x"}
+    assert result["estimated_cost_cents"] == 5
+
+
+def test_batch_status_uses_compact_include_param(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def _fake_get(_session, url, _hdrs, _timeout, params=None):
+        captured["url"] = url
+        captured["params"] = params
+        return True, {"batch_id": "batch_X"}
+
+    monkeypatch.setattr(meta_tools, "_get", _fake_get)
+    ok, _result = meta_tools._batch_status(
+        session=None,
+        base="https://aztea.test",
+        hdrs={},
+        timeout=5,
+        args={"batch_id": "batch_X"},
+    )
+    assert ok is True
+    assert captured["params"] == {"include": "minimal"}
+
+
+def test_discover_includes_input_and_pricing_metadata(monkeypatch):
+    def _fake_post(_session, _url, _hdrs, _timeout, _body):
+        return True, {
+            "results": [
+                {
+                    "agent": {
+                        "agent_id": "dep",
+                        "slug": "dependency_auditor",
+                        "name": "Dependency Auditor",
+                        "description": "Audit deps for CVEs",
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {
+                                "manifest": {"type": "string"},
+                                "ecosystem": {"type": "string"},
+                            },
+                            "required": ["manifest"],
+                        },
+                        "pricing_model": "per_call",
+                        "pricing_config": {"per_call_cents": 1},
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setattr(meta_tools, "_post", _fake_post)
+    ok, result = meta_tools._discover(
+        session=None,
+        base="https://aztea.test",
+        hdrs={},
+        timeout=5,
+        args={"query": "audit dependencies for CVEs", "limit": 5},
+    )
+    assert ok is True
+    item = result["results"][0]
+    assert item["required_fields"] == ["manifest"]
+    assert "manifest" in item["input_fields"]
+    assert "ecosystem" in item["input_fields"]
+    assert item["pricing_model"] == "per_call"

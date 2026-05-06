@@ -355,6 +355,8 @@ def build_mcp_tool_entries(agents: list[dict[str, Any]]) -> list[dict[str, Any]]
                     }
                 new_props[prop_name] = prop_schema
             input_schema = {**input_schema, "properties": new_props}
+        input_fields = sorted((input_schema.get("properties") or {}).keys())
+        required_fields = list(input_schema.get("required") or [])
 
         tool = {
             "name": tool_name,
@@ -386,6 +388,10 @@ def build_mcp_tool_entries(agents: list[dict[str, Any]]) -> list[dict[str, Any]]
                     "avg_latency_ms": agent.get("avg_latency_ms"),
                     "price_per_call_usd": agent.get("price_per_call_usd"),
                     "verified": bool(agent.get("verified", False)),
+                    "required_fields": required_fields,
+                    "input_fields": input_fields,
+                    "pricing_model": agent.get("pricing_model"),
+                    "pricing_config": agent.get("pricing_config"),
                 },
             }
         )

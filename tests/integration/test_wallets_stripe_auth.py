@@ -803,3 +803,189 @@ def test_hook_delivery_dead_letter_listing(client, monkeypatch):
     )
     assert dead_letters.status_code == 200, dead_letters.text
     assert dead_letters.json()["count"] >= 1
+
+
+def test_jobs_batch_dry_run_does_not_charge_or_create(client):
+    worker = _register_user()
+    caller = _register_user()
+    wallet = _fund_user_wallet(caller, 200)
+    balance_before = payments.get_wallet(wallet["wallet_id"])["balance_cents"]
+
+    agent_id = _register_agent_via_api(
+        client,
+        worker["raw_api_key"],
+        name=f"Batch DryRun Agent {uuid.uuid4().hex[:6]}",
+        price=0.05,
+        tags=["batch-dry-run"],
+    )
+
+    resp = client.post(
+        "/jobs/batch",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={
+            "intent": "preview only",
+            "dry_run": True,
+            "jobs": [
+                {"agent_id": agent_id, "input_payload": {"task": "a"}},
+                {"agent_id": agent_id, "input_payload": {"task": "b"}},
+            ],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["mode"] == "parallel_marketplace_hire_estimate"
+    assert body["charge_status"] == "not_charged"
+    assert body["batch_id"] is None
+    assert body["job_count"] == 2
+    assert body["estimated_total_charged_cents"] == 12
+    assert len(body["planned_jobs"]) == 2
+    assert body["planned_jobs"][0]["fee_split"]["agent_payout_cents"] >= 0
+
+    balance_after = payments.get_wallet(wallet["wallet_id"])["balance_cents"]
+    assert balance_after == balance_before
+
+
+def test_jobs_batch_accepts_input_alias(client):
+    worker = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 200)
+
+    agent_id = _register_agent_via_api(
+        client,
+        worker["raw_api_key"],
+        name=f"Batch Alias Agent {uuid.uuid4().hex[:6]}",
+        price=0.05,
+        tags=["batch-alias"],
+    )
+
+    created = client.post(
+        "/jobs/batch",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={
+            "jobs": [
+                {"agent_id": agent_id, "input": {"task": "via_alias"}},
+            ]
+        },
+    )
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert body["count"] == 1
+    job = body["jobs"][0]
+    # The `input` alias must reach input_payload.
+    assert job["input_payload"]["task"] == "via_alias"
+
+
+def test_jobs_batch_status_compact_omits_duplicate_detail(client):
+    worker = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 200)
+
+    agent_id = _register_agent_via_api(
+        client,
+        worker["raw_api_key"],
+        name=f"Batch Compact Agent {uuid.uuid4().hex[:6]}",
+        price=0.05,
+        tags=["batch-compact"],
+    )
+    created = client.post(
+        "/jobs/batch",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={
+            "jobs": [
+                {"agent_id": agent_id, "input_payload": {"task": "a"}},
+                {"agent_id": agent_id, "input_payload": {"task": "b"}},
+            ]
+        },
+    )
+    assert created.status_code == 201, created.text
+    batch_id = created.json()["batch_id"]
+
+    full = client.get(
+        f"/jobs/batch/{batch_id}",
+        headers=_auth_headers(caller["raw_api_key"]),
+    )
+    assert full.status_code == 200
+    full_body = full.json()
+    assert "input_payload" in full_body["jobs"][0]
+
+    compact = client.get(
+        f"/jobs/batch/{batch_id}?include=minimal",
+        headers=_auth_headers(caller["raw_api_key"]),
+    )
+    assert compact.status_code == 200
+    compact_body = compact.json()
+    compact_jobs = compact_body["jobs"]
+    assert len(compact_jobs) == 2
+    sample = compact_jobs[0]
+    # Compact items must not embed the full job payload.
+    assert "input_payload" not in sample
+    assert "detail" not in sample
+    assert "fee_split" in sample
+    assert sample["receipt"]["status"] == "pending"
+    # Marketing fields must be gone.
+    trace = compact_body["parallel_hire_trace"]
+    assert "claude_summary_hint" not in compact_body
+    assert "caller_instruction" not in trace
+    assert "marketplace_summary" in trace
+
+
+def test_sync_builtin_call_signs_output_and_signature_verifies(client, monkeypatch):
+    """A sync builtin call must record an Ed25519 signature, and the
+    /jobs/{id}/signature endpoint must return a verifiable receipt."""
+    import json as _json
+    import base64 as _b64
+
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    from cryptography.hazmat.primitives import serialization
+
+    caller = _register_user()
+    _fund_user_wallet(caller, 500)
+
+    monkeypatch.setattr(
+        server.agent_linter_agent,
+        "run",
+        lambda payload: {"language": "python", "tool": "ruff", "issues": [], "clean": True},
+    )
+
+    sync_call = client.post(
+        f"/registry/agents/{server._LINTER_AGENT_ID}/call",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={"language": "python", "code": "print(1)\n"},
+    )
+    assert sync_call.status_code == 200, sync_call.text
+    job_id = sync_call.json()["job_id"]
+
+    sig = client.get(
+        f"/jobs/{job_id}/signature",
+        headers=_auth_headers(caller["raw_api_key"]),
+    )
+    assert sig.status_code == 200, sig.text
+    sig_body = sig.json()
+    assert sig_body["signature"]
+    assert sig_body["alg"] == "ed25519"
+    assert sig_body["agent_did"]
+    assert sig_body["output_hash"]
+
+    # Resolve the agent's public key from its in-DB DID document.
+    agent_row = registry.get_agent(server._LINTER_AGENT_ID, include_unapproved=True)
+    public_pem = agent_row.get("signing_public_key")
+    assert public_pem, "Builtin agent must have a public signing key."
+    public_key = serialization.load_pem_public_key(public_pem.encode("utf-8"))
+    assert isinstance(public_key, Ed25519PublicKey)
+
+    # Re-derive canonical bytes the same way the server signs them.
+    job_payload = client.get(
+        f"/jobs/{job_id}",
+        headers=_auth_headers(caller["raw_api_key"]),
+    ).json()
+    output_payload = job_payload["output_payload"]
+    signed_bytes = _json.dumps(
+        output_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+
+    sig_pad = "=" * (-len(sig_body["signature"]) % 4)
+    try:
+        signature_bytes = _b64.urlsafe_b64decode(sig_body["signature"] + sig_pad)
+    except Exception:
+        signature_bytes = _b64.b64decode(sig_body["signature"] + sig_pad)
+    public_key.verify(signature_bytes, signed_bytes)

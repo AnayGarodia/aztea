@@ -1018,6 +1018,10 @@ class RegistryBridge:
                     "avg_latency_ms": meta.get("avg_latency_ms"),
                     "price_per_call_usd": meta.get("price_per_call_usd"),
                     "verified": bool(meta.get("verified", False)),
+                    "required_fields": list(meta.get("required_fields") or []),
+                    "input_fields": list(meta.get("input_fields") or []),
+                    "pricing_model": meta.get("pricing_model"),
+                    "pricing_config": meta.get("pricing_config"),
                 }
             )
         # Surface platform recipes as first-class searchable entries. Without
@@ -1222,6 +1226,10 @@ class RegistryBridge:
                     "stability_tier": entry.get("stability_tier"),
                     "codex_recommended": bool(entry.get("codex_recommended", False)),
                     "best_for": list(entry.get("short_use_cases") or [])[:4],
+                    "required_fields": list(entry.get("required_fields") or []),
+                    "input_fields": list(entry.get("input_fields") or [])[:12],
+                    "pricing_model": entry.get("pricing_model"),
+                    "pricing_config": entry.get("pricing_config"),
                     "quality_summary": " | ".join(quality_parts),
                     "why": entry.get("_why") or [],
                 }

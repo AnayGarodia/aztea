@@ -476,6 +476,15 @@ def registry_auto_hire(
 
     # 3. Gated path: short-circuit, no charge.
     if not decision.auto_invoked:
+        top_candidate = decision.candidates[0] if decision.candidates else None
+        estimated_cost_usd = (
+            top_candidate.get("price_per_call_usd")
+            if isinstance(top_candidate, dict)
+            else None
+        )
+        estimated_cost_cents = (
+            _usd_to_cents(estimated_cost_usd) if estimated_cost_usd is not None else None
+        )
         return JSONResponse(
             content={
                 "auto_invoked": False,
@@ -490,6 +499,8 @@ def registry_auto_hire(
                 "confidence": decision.confidence,
                 "candidates": decision.candidates,
                 "missing_fields": decision.missing_fields,
+                "dry_run_cost_usd": estimated_cost_usd,
+                "estimated_cost_cents": estimated_cost_cents,
                 "next_step": decision.next_step,
             }
         )

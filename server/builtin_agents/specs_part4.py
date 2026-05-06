@@ -158,7 +158,7 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
             "kind": "aztea_built",
             "category": "QA",
             "is_featured": False,
-            "internal_only": True,
+            "internal_only": False,
             "cacheable": False,
             "input_schema": _output_schema_object(
                 {
@@ -365,7 +365,7 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
             "kind": "aztea_built",
             "category": "Web",
             "is_featured": False,
-            "internal_only": True,
+            "internal_only": False,
             "cacheable": False,
             "input_schema": _output_schema_object(
                 {

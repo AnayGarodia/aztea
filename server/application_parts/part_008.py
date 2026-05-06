@@ -1192,11 +1192,33 @@ def registry_call(
                         },
                     ),
                 )
+            sig_b64: str | None = None
+            sig_alg: str | None = None
+            sig_did: str | None = None
+            sig_at: str | None = None
+            try:
+                from core import crypto as _crypto
+
+                private_pem = agent.get("signing_private_key")
+                agent_did_value = agent.get("did")
+                if private_pem and agent_did_value:
+                    sig_b64 = _crypto.sign_payload(private_pem, output)
+                    sig_alg = str(agent.get("signing_alg") or "ed25519")
+                    sig_did = agent_did_value
+                    sig_at = datetime.now(timezone.utc).isoformat()
+            except Exception:
+                _LOG.exception("Failed to sign sync output for job %s", job["job_id"])
+                sig_b64 = sig_alg = sig_did = sig_at = None
+
             completed = jobs.update_job_status(
                 job["job_id"],
                 "complete",
                 output_payload=output,
                 completed=True,
+                output_signature=sig_b64,
+                output_signature_alg=sig_alg,
+                output_signed_by_did=sig_did,
+                output_signed_at=sig_at,
             )
             if completed is None:
                 raise RuntimeError("Failed to mark built-in sync job complete.")

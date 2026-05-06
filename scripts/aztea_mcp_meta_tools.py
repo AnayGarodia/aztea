@@ -216,7 +216,12 @@ _TOOLS: list[dict[str, Any]] = [
                 },
                 "input_payload": {
                     "type": "object",
-                    "description": "Optional task input used for variable-pricing estimates.",
+                    "description": "Optional task input used for variable-pricing estimates. `input` is also accepted.",
+                    "additionalProperties": True,
+                },
+                "input": {
+                    "type": "object",
+                    "description": "Alias for input_payload.",
                     "additionalProperties": True,
                 },
             },
@@ -271,7 +276,12 @@ _TOOLS: list[dict[str, Any]] = [
                 },
                 "input_payload": {
                     "type": "object",
-                    "description": "Task input matching the agent's input schema.",
+                    "description": "Task input matching the agent's input schema. `input` is also accepted.",
+                    "additionalProperties": True,
+                },
+                "input": {
+                    "type": "object",
+                    "description": "Alias for input_payload. Prefer this in grouped aztea_workflow calls.",
                     "additionalProperties": True,
                 },
                 "callback_url": {
@@ -295,7 +305,7 @@ _TOOLS: list[dict[str, Any]] = [
                     "default": False,
                 },
             },
-            "required": ["input_payload"],
+            "required": [],
             "anyOf": [{"required": ["agent_id"]}, {"required": ["slug"]}],
         },
     },
@@ -663,7 +673,12 @@ _TOOLS: list[dict[str, Any]] = [
                             },
                             "input_payload": {
                                 "type": "object",
-                                "description": "Task input matching the agent's input schema.",
+                                "description": "Task input matching the agent's input schema. `input` is also accepted.",
+                                "additionalProperties": True,
+                            },
+                            "input": {
+                                "type": "object",
+                                "description": "Alias for input_payload.",
                                 "additionalProperties": True,
                             },
                             "budget_cents": {
@@ -677,10 +692,15 @@ _TOOLS: list[dict[str, Any]] = [
                                 "default": False,
                             },
                         },
-                        "required": ["input_payload"],
+                        "required": [],
                         "anyOf": [{"required": ["agent_id"]}, {"required": ["slug"]}],
                         "additionalProperties": False,
                     },
+                },
+                "dry_run": {
+                    "type": "boolean",
+                    "description": "If true, validates jobs and returns estimated charges without opening escrow.",
+                    "default": False,
                 },
             },
             "required": ["jobs"],
@@ -1541,6 +1561,14 @@ def _clean_text(value: Any) -> Any:
     return value
 
 
+def _input_arg(args: dict[str, Any], *, default: dict[str, Any] | None = None) -> Any:
+    if "input_payload" in args:
+        return args.get("input_payload")
+    if "input" in args:
+        return args.get("input")
+    return {} if default is None else default
+
+
 def _compact_wallet(result: dict[str, Any], *, limit: int = 5) -> dict[str, Any]:
     compact = dict(result)
     for key in ("transactions", "transaction_history"):
@@ -1800,11 +1828,11 @@ def _estimate_cost(
     agent_id, err = _resolve_agent_id(session, base, hdrs, timeout, args)
     if err is not None:
         return False, err
-    body = args.get("input_payload") or {}
+    body = _input_arg(args) or {}
     if not isinstance(body, dict):
         return False, {
             "error": "INVALID_INPUT",
-            "message": "input_payload must be an object when provided.",
+            "message": "input/input_payload must be an object when provided.",
         }
     ok, result = _post(
         session, f"{base}/agents/{agent_id}/estimate", hdrs, timeout, body
@@ -1850,8 +1878,13 @@ def _hire_async(
         return False, err
     body: dict[str, Any] = {
         "agent_id": agent_id,
-        "input_payload": args.get("input_payload") or {},
+        "input_payload": _input_arg(args) or {},
     }
+    if not isinstance(body["input_payload"], dict):
+        return False, {
+            "error": "INVALID_INPUT",
+            "message": "input/input_payload must be an object.",
+        }
     if args.get("callback_url"):
         body["callback_url"] = str(args["callback_url"])
     if args.get("max_attempts") is not None:
@@ -1924,7 +1957,13 @@ def _batch_status(
 ) -> tuple[bool, dict]:
     batch_id = str(args.get("batch_id") or "").strip()
     if batch_id:
-        ok, result = _get(session, f"{base}/jobs/batch/{batch_id}", hdrs, timeout)
+        ok, result = _get(
+            session,
+            f"{base}/jobs/batch/{batch_id}",
+            hdrs,
+            timeout,
+            params={"include": "minimal"},
+        )
         if ok:
             result.setdefault(
                 "note",
@@ -1997,6 +2036,24 @@ def _data_retention_policy(
     sensitivity flags from the spec layer. Composed entirely from data the
     server already exposes — no new endpoint required.
     """
+    if not str(args.get("agent_id") or args.get("slug") or "").strip():
+        return True, {
+            "scope": "global",
+            "private_task_supported": True,
+            "default_policy": (
+                "Aztea stores job records for settlement, receipts, disputes, and audit logs. "
+                "Sensitive built-in agents do not publish work examples; pass private_task=true "
+                "on any hire to suppress work-example recording for that call."
+            ),
+            "recommended_for_sensitive_inputs": {
+                "private_task": True,
+                "verify_receipt_after_completion": True,
+            },
+            "next_step": (
+                "Pass slug or agent_id for an agent-specific retention answer, "
+                "or hire with private_task=true for sensitive data."
+            ),
+        }
     agent_id, err = _resolve_agent_id(session, base, hdrs, timeout, args)
     if err is not None:
         return False, err
@@ -2076,8 +2133,18 @@ def _verify_job_signature(
             "agent_did": agent_did,
             **(did_doc or {}),
         }
+    ok_job, job_payload = _get(session, f"{base}/jobs/{job_id}", hdrs, timeout)
+    if not ok_job:
+        return False, {
+            "verified": False,
+            "verification_error": "job output unavailable",
+            "agent_did": agent_did,
+            **(job_payload or {}),
+        }
+    output_payload = job_payload.get("output_payload")
     try:
         import base64
+        import json
 
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
     except Exception:
@@ -2119,9 +2186,13 @@ def _verify_job_signature(
             signature_bytes = base64.urlsafe_b64decode(signature_b64 + sig_pad)
         except Exception:
             signature_bytes = base64.b64decode(signature_b64 + sig_pad)
-        Ed25519PublicKey.from_public_bytes(public_key_bytes).verify(
-            signature_bytes, output_hash.encode("utf-8")
-        )
+        signed_bytes = json.dumps(
+            output_payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+        Ed25519PublicKey.from_public_bytes(public_key_bytes).verify(signature_bytes, signed_bytes)
     except Exception as exc:
         return True, {
             "verified": False,
@@ -2360,6 +2431,11 @@ def _discover(
             agent = item.get("agent") or {}
             if not _intent_matches(agent, intent, intent_terms):
                 continue
+            input_schema = agent.get("input_schema") if isinstance(agent, dict) else {}
+            if not isinstance(input_schema, dict):
+                input_schema = {}
+            properties = input_schema.get("properties")
+            fields = sorted(properties.keys()) if isinstance(properties, dict) else []
             compact.append(
                 {
                     "agent_id": agent.get("agent_id"),
@@ -2372,6 +2448,10 @@ def _discover(
                     "trust_score": agent.get("trust_score"),
                     "success_rate": agent.get("success_rate"),
                     "avg_latency_ms": agent.get("avg_latency_ms"),
+                    "required_fields": list(input_schema.get("required") or []),
+                    "input_fields": fields[:12],
+                    "pricing_model": agent.get("pricing_model"),
+                    "pricing_config": agent.get("pricing_config"),
                     "blended_score": item.get("blended_score"),
                     "match_reasons": item.get("match_reasons"),
                 }
@@ -2448,8 +2528,13 @@ def _hire_batch(
             return False, err
         job: dict[str, Any] = {
             "agent_id": agent_id,
-            "input_payload": spec.get("input_payload") or {},
+            "input_payload": _input_arg(spec) or {},
         }
+        if not isinstance(job["input_payload"], dict):
+            return False, {
+                "error": "INVALID_INPUT",
+                "message": "jobs[].input/input_payload must be an object.",
+            }
         if spec.get("budget_cents") is not None:
             job["budget_cents"] = int(spec["budget_cents"])
         if spec.get("private_task") is not None:
@@ -2461,6 +2546,8 @@ def _hire_batch(
         body["intent"] = intent
     if args.get("max_total_cents") is not None:
         body["max_total_cents"] = int(args["max_total_cents"])
+    if args.get("dry_run") is not None:
+        body["dry_run"] = bool(args["dry_run"])
     ok, result = _post(session, f"{base}/jobs/batch", hdrs, timeout, body)
     if ok:
         job_ids = [
@@ -2474,10 +2561,6 @@ def _hire_batch(
             ),
         )
         result.setdefault("job_ids", job_ids)
-        result.setdefault(
-            "claude_summary_hint",
-            "Tell the user Aztea hired these specialists in parallel through the marketplace rails. Include batch_id, total_charged_cents, each job_id, and next_step.",
-        )
     return ok, result
 
 

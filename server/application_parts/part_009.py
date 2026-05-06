@@ -6,7 +6,32 @@
 _COMPARE_SELECTION_WINDOW_SECONDS = 7 * 24 * 3600
 
 
-def _batch_job_trace_item(job: dict, caller: core_models.CallerContext) -> dict:
+def _batch_fee_split(job: dict) -> dict:
+    price_cents = int(job.get("price_cents") or 0)
+    caller_charge_cents = int(job.get("caller_charge_cents") or price_cents)
+    fee_bearer_policy = payments.normalize_fee_bearer_policy(
+        job.get("fee_bearer_policy") or "caller"
+    )
+    platform_fee_pct = int(
+        job.get("platform_fee_pct_at_create") or payments.PLATFORM_FEE_PCT
+    )
+    distribution = payments.compute_success_distribution(
+        price_cents,
+        platform_fee_pct=platform_fee_pct,
+        fee_bearer_policy=fee_bearer_policy,
+    )
+    return {
+        "fee_bearer_policy": fee_bearer_policy,
+        "platform_fee_pct": platform_fee_pct,
+        "caller_charge_cents": caller_charge_cents,
+        "agent_payout_cents": int(distribution["agent_payout_cents"]),
+        "platform_fee_cents": int(distribution["platform_fee_cents"]),
+    }
+
+
+def _batch_job_trace_item(
+    job: dict, caller: core_models.CallerContext, *, include_detail: bool = False
+) -> dict:
     """Compact per-job trace for caller agents narrating marketplace delegation."""
     agent = registry.get_agent(str(job.get("agent_id") or ""), include_unapproved=True)
     price_cents = int(job.get("caller_charge_cents") or job.get("price_cents") or 0)
@@ -14,7 +39,7 @@ def _batch_job_trace_item(job: dict, caller: core_models.CallerContext) -> dict:
     receipt_status = "available" if status == "complete" else "pending"
     if status == "failed":
         receipt_status = "unavailable"
-    return {
+    item = {
         "job_id": job.get("job_id"),
         "agent_id": job.get("agent_id"),
         "agent_name": (agent or {}).get("name"),
@@ -33,6 +58,7 @@ def _batch_job_trace_item(job: dict, caller: core_models.CallerContext) -> dict:
             if status == "failed"
             else "pending"
         ),
+        "fee_split": _batch_fee_split(job),
         "receipt": {
             "status": receipt_status,
             "verify_with": "aztea_job(action='verify', job_id=...)",
@@ -42,8 +68,10 @@ def _batch_job_trace_item(job: dict, caller: core_models.CallerContext) -> dict:
                 else None
             ),
         },
-        "detail": _job_response(job, caller),
     }
+    if include_detail:
+        item["detail"] = _job_response(job, caller)
+    return item
 
 
 def _batch_parallel_trace(
@@ -54,9 +82,13 @@ def _batch_parallel_trace(
     phase: str,
     intent: str | None = None,
     max_total_cents: int | None = None,
+    include_detail: bool = False,
 ) -> dict:
     """Aggregate trace that makes parallel marketplace hiring visible to agents."""
-    trace_jobs = [_batch_job_trace_item(job, caller) for job in batch_jobs]
+    trace_jobs = [
+        _batch_job_trace_item(job, caller, include_detail=include_detail)
+        for job in batch_jobs
+    ]
     counts = {
         "pending": 0,
         "running": 0,
@@ -75,10 +107,6 @@ def _batch_parallel_trace(
         "phase": phase,
         "intent": intent,
         "market_role": "Aztea rails: discovery, escrow, receipts, settlement, recourse",
-        "caller_instruction": (
-            "Tell the user these were parallel specialist hires through Aztea, "
-            "not local tool calls. Mention spend cap/escrow, job IDs, and receipt status."
-        ),
         "summary": (
             f"{len(trace_jobs)} specialist hires tracked in parallel; "
             f"{terminal_count}/{len(trace_jobs)} terminal."
@@ -90,6 +118,12 @@ def _batch_parallel_trace(
         ),
         "counts": counts,
         "jobs": trace_jobs,
+        "marketplace_summary": {
+            "rail": "jobs.batch",
+            "escrow": "per_job",
+            "settlement": "per_job_on_completion_or_refund",
+            "receipt": "signed_per_completed_job",
+        },
     }
 
 
@@ -681,12 +715,65 @@ def jobs_batch_create(
                 "caller_charge_cents": caller_charge_cents,
                 "platform_fee_pct_at_create": platform_fee_pct_at_create,
                 "fee_bearer_policy": fee_bearer_policy,
+                "success_distribution": success_distribution,
                 "client_id": _request_client_id(request, spec.client_id)
                 or request_client_id,
                 "spec": spec,
                 "input_payload": normalized_spec_input_payload,
                 "parent_job_id": (parent_job or {}).get("job_id"),
                 "tree_depth": tree_depth,
+            }
+        )
+
+    if body.dry_run:
+        planned_jobs: list[dict[str, Any]] = []
+        for index, item in enumerate(resolved):
+            agent = item["agent"]
+            distribution = item["success_distribution"]
+            planned_jobs.append(
+                {
+                    "index": index,
+                    "agent_id": agent["agent_id"],
+                    "agent_slug": agent.get("slug") or agent.get("agent_slug"),
+                    "agent_name": agent.get("name"),
+                    "price_cents": int(item["price_cents"]),
+                    "caller_charge_cents": int(item["caller_charge_cents"]),
+                    "fee_split": {
+                        "fee_bearer_policy": item["fee_bearer_policy"],
+                        "platform_fee_pct": int(item["platform_fee_pct_at_create"]),
+                        "agent_payout_cents": int(distribution["agent_payout_cents"]),
+                        "platform_fee_cents": int(distribution["platform_fee_cents"]),
+                    },
+                }
+            )
+        within_cap = (
+            True
+            if body.max_total_cents is None
+            else total_price_cents <= body.max_total_cents
+        )
+        return JSONResponse(
+            content={
+                "mode": "parallel_marketplace_hire_estimate",
+                "charge_status": "not_charged",
+                "batch_id": None,
+                "intent": body.intent,
+                "job_count": len(planned_jobs),
+                "estimated_total_charged_cents": total_price_cents,
+                "max_total_cents": body.max_total_cents,
+                "within_cap": within_cap,
+                "planned_jobs": planned_jobs,
+                "marketplace_summary": {
+                    "rail": "jobs.batch",
+                    "escrow": "would_open_per_job",
+                    "settlement": "would_settle_or_refund_per_job",
+                    "receipt": "signed_per_completed_job",
+                    "charge_status": "not_charged",
+                },
+                "next_step": (
+                    "Re-call with dry_run=false to submit this batch."
+                    if within_cap
+                    else "Raise max_total_cents or remove jobs before submitting."
+                ),
             }
         )
 
@@ -876,6 +963,8 @@ def jobs_batch_status(
     batch_jobs = jobs.list_jobs_for_batch(batch_id, owner_id)
     if not batch_jobs:
         raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found.")
+    include_mode = str(request.query_params.get("include") or "full").strip().lower()
+    compact = include_mode in {"minimal", "compact"}
 
     n_pending = 0
     n_running = 0
@@ -904,6 +993,10 @@ def jobs_batch_status(
         batch_jobs=batch_jobs,
         caller=caller,
         phase="status",
+        include_detail=not compact,
+    )
+    response_jobs = (
+        trace["jobs"] if compact else [_job_response(job, caller) for job in batch_jobs]
     )
     return JSONResponse(
         content={
@@ -919,7 +1012,7 @@ def jobs_batch_status(
                 int(job.get("caller_charge_cents") or job.get("price_cents") or 0)
                 for job in batch_jobs
             ),
-            "jobs": [_job_response(job, caller) for job in batch_jobs],
+            "jobs": response_jobs,
             "job_ids": [job.get("job_id") for job in batch_jobs if job.get("job_id")],
             "mode": "parallel_marketplace_hire",
             "marketplace_transaction": {
@@ -1059,14 +1152,24 @@ def jobs_signature(request: Request, job_id: str) -> JSONResponse:
     agent_id = job.get("agent_id")
     base = (os.environ.get("SERVER_BASE_URL") or "").rstrip("/")
     verify_url = f"{base}/agents/{agent_id}/did.json" if base and agent_id else None
+    output_payload = job.get("output_payload")
+    output_hash = None
+    try:
+        from core import crypto as _crypto
+
+        output_hash = hashlib.sha256(_crypto.canonical_json(output_payload)).hexdigest()
+    except Exception:
+        _LOG.exception("Failed to hash signed output for job %s", job_id)
     return JSONResponse(
         content={
             "job_id": job_id,
             "agent_id": agent_id,
+            "agent_did": job.get("output_signed_by_did"),
             "did": job.get("output_signed_by_did"),
             "alg": job.get("output_signature_alg") or "ed25519",
             "signature": signature,
             "signed_at": job.get("output_signed_at"),
+            "output_hash": output_hash,
             "verify_url": verify_url,
         }
     )

@@ -509,6 +509,7 @@ class AzteaClient:
         *,
         intent: str | None = None,
         max_total_cents: int | None = None,
+        dry_run: bool = False,
     ) -> JSONObject:
         """Submit independent jobs as one parallel marketplace hire.
 
@@ -523,11 +524,16 @@ class AzteaClient:
             body["intent"] = str(intent)
         if max_total_cents is not None:
             body["max_total_cents"] = int(max_total_cents)
+        if dry_run:
+            body["dry_run"] = True
         return self._request_json("POST", "/jobs/batch", json_body=body)
 
-    def get_batch(self, batch_id: str) -> JSONObject:
+    def get_batch(self, batch_id: str, *, include: str | None = None) -> JSONObject:
         """Fetch aggregate status for a parallel marketplace hire."""
-        return self._request_json("GET", f"/jobs/batch/{batch_id}")
+        path = f"/jobs/batch/{batch_id}"
+        if include:
+            path = f"{path}?include={include}"
+        return self._request_json("GET", path)
 
     def decide_output_verification(
         self,
@@ -757,11 +763,18 @@ class AzteaClient:
         except APIError as exc:
             return {"verified": False, "verification_error": f"DID document unavailable: {exc}",
                     "agent_did": agent_did}
+        try:
+            job_payload = self.get_job(job_id)
+        except APIError as exc:
+            return {"verified": False, "verification_error": f"job output unavailable: {exc}",
+                    "agent_did": agent_did, "output_hash": output_hash}
+        output_payload = job_payload.get("output_payload")
         # Try local Ed25519 verification when the cryptography library is
         # available; otherwise fall through with a structured "needs library"
         # marker so callers can install it on demand.
         try:
             import base64
+            import json
             from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
         except Exception:
             return {
@@ -800,7 +813,13 @@ class AzteaClient:
             except Exception:
                 signature_bytes = base64.b64decode(signature_b64 + sig_pad)
             pk = Ed25519PublicKey.from_public_bytes(public_key_bytes)
-            pk.verify(signature_bytes, output_hash.encode("utf-8"))
+            signed_bytes = json.dumps(
+                output_payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+            pk.verify(signature_bytes, signed_bytes)
         except Exception as exc:
             return {"verified": False, "verification_error": f"signature verification failed: {exc}",
                     "agent_did": agent_did, "output_hash": output_hash}
