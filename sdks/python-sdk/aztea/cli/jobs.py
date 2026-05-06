@@ -1,6 +1,7 @@
 """jobs: hire, status, cancel, rate, dispute, verify, estimate, follow."""
 from __future__ import annotations
 
+from typing import Any
 from typing import Optional
 
 import typer
@@ -14,7 +15,7 @@ from .common import (
     handle_error,
     parse_input,
 )
-from .output import emit, info, spinner, success
+from .output import emit, info, kv_table, spinner, success
 
 
 def _open_client(**kwargs):
@@ -24,6 +25,77 @@ def _open_client(**kwargs):
 
 
 app = typer.Typer(help="Hire agents and inspect jobs.", no_args_is_help=True)
+
+
+def _normalize_batch_specs(client, raw_specs: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_specs, list) or not raw_specs:
+        raise typer.BadParameter("Batch input must be a non-empty JSON array.")
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(raw_specs):
+        if not isinstance(item, dict):
+            raise typer.BadParameter(f"jobs[{index}] must be an object.")
+        raw_agent_id = str(item.get("agent_id") or "").strip()
+        raw_slug = str(item.get("slug") or "").strip()
+        if not raw_agent_id and not raw_slug:
+            raise typer.BadParameter(f"jobs[{index}] needs agent_id or slug.")
+        payload = item.get("input_payload", item.get("input", {}))
+        if not isinstance(payload, dict):
+            raise typer.BadParameter(f"jobs[{index}].input_payload must be an object.")
+        spec: dict[str, Any] = {
+            "agent_id": raw_agent_id or find_agent_id(client, raw_slug),
+            "input_payload": payload,
+        }
+        for key in ("budget_cents", "max_attempts", "private_task"):
+            if key in item:
+                spec[key] = item[key]
+        normalized.append(spec)
+    return normalized
+
+
+def _render_batch_trace(result: dict[str, Any]) -> None:
+    trace = result.get("parallel_hire_trace") if isinstance(result, dict) else None
+    jobs = (trace or {}).get("jobs") if isinstance(trace, dict) else None
+    kv_table(
+        [
+            ("Batch", str(result.get("batch_id") or "-")),
+            ("Mode", str(result.get("mode") or "parallel_marketplace_hire")),
+            ("Specialists", str(result.get("count") or len(jobs or []))),
+            ("Charged", f"${int(result.get('total_charged_cents') or result.get('total_price_cents') or 0) / 100:.2f}"),
+            ("Next", str(result.get("next_step") or "Poll batch status.")),
+        ],
+        title="Parallel Hire",
+    )
+    if not jobs:
+        return
+    try:
+        from rich.table import Table
+        from .output import console
+    except Exception:
+        for item in jobs:
+            typer.echo(
+                f"- {item.get('agent_slug') or item.get('agent_id')}: "
+                f"{item.get('status')} {item.get('job_id')}"
+            )
+        return
+    table = Table(show_header=True, header_style="label", box=None, padding=(0, 2))
+    table.add_column("Specialist", style="default")
+    table.add_column("Job", style="muted")
+    table.add_column("Status")
+    table.add_column("Escrow")
+    table.add_column("Receipt")
+    table.add_column("Charge", justify="right")
+    for item in jobs:
+        charge = int(item.get("charge_cents") or 0)
+        receipt = item.get("receipt") if isinstance(item.get("receipt"), dict) else {}
+        table.add_row(
+            str(item.get("agent_slug") or item.get("agent_name") or item.get("agent_id") or "-"),
+            str(item.get("job_id") or "-")[:12],
+            str(item.get("status") or "-"),
+            str(item.get("escrow") or "-"),
+            str(receipt.get("status") or "-"),
+            f"${charge / 100:.2f}",
+        )
+    console.print(table)
 
 
 def _call_agent(
@@ -73,6 +145,53 @@ def hire(
 ) -> None:
     """Hire an agent and wait for the result."""
     _call_agent(slug, input_value, api_key=api_key, base_url=base_url, json_mode=json_mode)
+
+
+@app.command(name="batch")
+def batch(
+    jobs_value: str = typer.Option(
+        ...,
+        "--jobs",
+        help="JSON array, @file.json, or '-' with {slug|agent_id,input_payload} specs.",
+    ),
+    intent: Optional[str] = typer.Option(
+        None,
+        "--intent",
+        help="One-line goal shown in the batch trace.",
+    ),
+    max_total_cents: Optional[int] = typer.Option(
+        None,
+        "--max-total-cents",
+        min=0,
+        help="Hard cap for the whole batch before any charge.",
+    ),
+    api_key: Optional[str] = ApiKeyOpt,
+    base_url: Optional[str] = BaseUrlOpt,
+    json_mode: bool = JsonOpt,
+) -> None:
+    """Hire multiple independent specialists in parallel through Aztea rails."""
+    try:
+        raw_specs = parse_input(jobs_value)
+        with build_client(api_key=api_key, base_url=base_url) as client:
+            specs = _normalize_batch_specs(client, raw_specs)
+            with spinner("Opening parallel marketplace hires", json_mode=json_mode):
+                result = client.hire_batch(
+                    specs,
+                    intent=intent,
+                    max_total_cents=max_total_cents,
+                )
+            if json_mode:
+                emit(result, json_mode=True)
+                return
+            success(
+                "Parallel hire submitted",
+                detail=f"batch {result.get('batch_id', '-')}",
+            )
+            _render_batch_trace(result)
+    except typer.Exit:
+        raise
+    except Exception as exc:
+        handle_error(exc)
 
 
 @app.command()

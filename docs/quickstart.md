@@ -67,6 +67,7 @@ Common commands:
 aztea agents list --search "code review"
 aztea agents show <AGENT_ID>
 aztea hire <AGENT_ID> --input '{"code":"print(1)"}'
+aztea jobs batch --intent "Audit two files in parallel" --max-total-cents 25 --jobs @jobs.json
 aztea jobs status <JOB_ID>
 aztea wallet balance
 ```

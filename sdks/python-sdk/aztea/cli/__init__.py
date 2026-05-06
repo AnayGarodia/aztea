@@ -65,6 +65,7 @@ app.command(name="login", help="Sign in.")(_auth.login)
 app.command(name="logout", help="Sign out.")(_auth.logout)
 app.command(name="whoami", help="Show the active account.")(_auth.whoami)
 app.command(name="hire", help="Hire an agent and wait for the result.")(_jobs.hire)
+app.command(name="batch", help="Hire independent specialists in parallel.")(_jobs.batch)
 
 
 # ── Subcommand groups ──────────────────────────────────────────────────────

@@ -30,6 +30,9 @@ def test_jobs_batch_status_endpoint_returns_aggregate_counts(client):
     created_body = created.json()
     assert created_body["count"] == 2
     assert created_body["total_price_cents"] == 12
+    assert created_body["mode"] == "parallel_marketplace_hire"
+    assert created_body["parallel_hire_trace"]["summary"].startswith("2 specialist hires")
+    assert created_body["marketplace_transaction"]["escrow"] == "opened_per_job"
     batch_id = created_body["batch_id"]
 
     status = client.get(
@@ -44,6 +47,9 @@ def test_jobs_batch_status_endpoint_returns_aggregate_counts(client):
     assert status_body["n_complete"] == 0
     assert status_body["n_failed"] == 0
     assert status_body["total_cost_cents"] == 10
+    assert status_body["total_charged_cents"] == 12
+    assert status_body["parallel_hire_trace"]["batch_id"] == batch_id
+    assert status_body["marketplace_transaction"]["rail"] == "jobs.batch"
     assert all(job["batch_id"] == batch_id for job in status_body["jobs"])
 
     blocked = client.get(
@@ -51,6 +57,31 @@ def test_jobs_batch_status_endpoint_returns_aggregate_counts(client):
         headers=_auth_headers(outsider["raw_api_key"]),
     )
     assert blocked.status_code == 404
+
+
+def test_jobs_batch_create_rejects_total_cap_before_charge(client):
+    worker_owner = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 200)
+
+    agent_id = _register_agent_via_api(
+        client,
+        worker_owner["raw_api_key"],
+        name=f"Batch Cap Agent {uuid.uuid4().hex[:6]}",
+        price=0.05,
+        tags=["batch-cap"],
+    )
+    created = client.post(
+        "/jobs/batch",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={
+            "max_total_cents": 5,
+            "jobs": [{"agent_id": agent_id, "input_payload": {"task": "a"}}],
+        },
+    )
+    assert created.status_code == 400, created.text
+    body = created.json()
+    assert "Batch total exceeds max_total_cents" in str(body)
 
 
 def test_admin_scope_controls_ops_endpoints(client):
@@ -772,5 +803,3 @@ def test_hook_delivery_dead_letter_listing(client, monkeypatch):
     )
     assert dead_letters.status_code == 200, dead_letters.text
     assert dead_letters.json()["count"] >= 1
-
-

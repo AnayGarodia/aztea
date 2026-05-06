@@ -6,6 +6,93 @@
 _COMPARE_SELECTION_WINDOW_SECONDS = 7 * 24 * 3600
 
 
+def _batch_job_trace_item(job: dict, caller: core_models.CallerContext) -> dict:
+    """Compact per-job trace for caller agents narrating marketplace delegation."""
+    agent = registry.get_agent(str(job.get("agent_id") or ""), include_unapproved=True)
+    price_cents = int(job.get("caller_charge_cents") or job.get("price_cents") or 0)
+    status = str(job.get("status") or "pending")
+    receipt_status = "available" if status == "complete" else "pending"
+    if status == "failed":
+        receipt_status = "unavailable"
+    return {
+        "job_id": job.get("job_id"),
+        "agent_id": job.get("agent_id"),
+        "agent_name": (agent or {}).get("name"),
+        "agent_slug": (agent or {}).get("slug") or (agent or {}).get("agent_slug"),
+        "status": status,
+        "charge_cents": price_cents,
+        "escrow": (
+            "opened"
+            if status in {"pending", "running", "awaiting_clarification"}
+            else "closed"
+        ),
+        "settlement": (
+            "settled"
+            if status == "complete"
+            else "refunded_or_failed"
+            if status == "failed"
+            else "pending"
+        ),
+        "receipt": {
+            "status": receipt_status,
+            "verify_with": "aztea_job(action='verify', job_id=...)",
+            "signature_endpoint": (
+                f"/jobs/{job.get('job_id')}/signature"
+                if status == "complete" and job.get("job_id")
+                else None
+            ),
+        },
+        "detail": _job_response(job, caller),
+    }
+
+
+def _batch_parallel_trace(
+    *,
+    batch_id: str,
+    batch_jobs: list[dict],
+    caller: core_models.CallerContext,
+    phase: str,
+    intent: str | None = None,
+    max_total_cents: int | None = None,
+) -> dict:
+    """Aggregate trace that makes parallel marketplace hiring visible to agents."""
+    trace_jobs = [_batch_job_trace_item(job, caller) for job in batch_jobs]
+    counts = {
+        "pending": 0,
+        "running": 0,
+        "awaiting_clarification": 0,
+        "complete": 0,
+        "failed": 0,
+    }
+    for job in batch_jobs:
+        status = str(job.get("status") or "")
+        if status in counts:
+            counts[status] += 1
+    total_charged_cents = sum(int(item.get("charge_cents") or 0) for item in trace_jobs)
+    terminal_count = counts["complete"] + counts["failed"]
+    return {
+        "batch_id": batch_id,
+        "phase": phase,
+        "intent": intent,
+        "market_role": "Aztea rails: discovery, escrow, receipts, settlement, recourse",
+        "caller_instruction": (
+            "Tell the user these were parallel specialist hires through Aztea, "
+            "not local tool calls. Mention spend cap/escrow, job IDs, and receipt status."
+        ),
+        "summary": (
+            f"{len(trace_jobs)} specialist hires tracked in parallel; "
+            f"{terminal_count}/{len(trace_jobs)} terminal."
+        ),
+        "total_charged_cents": total_charged_cents,
+        "max_total_cents": max_total_cents,
+        "within_cap": (
+            True if max_total_cents is None else total_charged_cents <= max_total_cents
+        ),
+        "counts": counts,
+        "jobs": trace_jobs,
+    }
+
+
 def _compare_jobs_by_agent(compare_row: dict) -> tuple[list[dict], bool]:
     subjobs: list[dict] = []
     all_terminal = True
@@ -604,6 +691,19 @@ def jobs_batch_create(
         )
 
     caller_wallet = payments.get_or_create_wallet(caller_owner_id)
+    if body.max_total_cents is not None and total_price_cents > body.max_total_cents:
+        raise HTTPException(
+            status_code=400,
+            detail=error_codes.make_error(
+                error_codes.BUDGET_EXCEEDED,
+                "Batch total exceeds max_total_cents.",
+                {
+                    "max_total_cents": body.max_total_cents,
+                    "attempted_cents": total_price_cents,
+                    "job_count": len(body.jobs),
+                },
+            ),
+        )
     if caller_wallet["balance_cents"] < total_price_cents:
         raise HTTPException(
             status_code=402,
@@ -715,12 +815,45 @@ def jobs_batch_create(
             status_code=500, detail="Batch creation failed; all charges refunded."
         )
 
+    trace = _batch_parallel_trace(
+        batch_id=batch_id,
+        batch_jobs=[
+            jobs.get_job(job["job_id"]) or job
+            for job in created_jobs
+            if isinstance(job, dict) and job.get("job_id")
+        ],
+        caller=caller,
+        phase="submitted",
+        intent=body.intent,
+        max_total_cents=body.max_total_cents,
+    )
     return JSONResponse(
         content={
             "batch_id": batch_id,
             "jobs": created_jobs,
             "count": len(created_jobs),
             "total_price_cents": total_price_cents,
+            "total_charged_cents": total_price_cents,
+            "job_ids": [
+                job.get("job_id")
+                for job in created_jobs
+                if isinstance(job, dict) and job.get("job_id")
+            ],
+            "mode": "parallel_marketplace_hire",
+            "intent": body.intent,
+            "max_total_cents": body.max_total_cents,
+            "marketplace_transaction": {
+                "status": "escrow_opened",
+                "rail": "jobs.batch",
+                "escrow": "opened_per_job",
+                "settlement": "per_job_on_completion_or_refund",
+                "receipt": "signed_per_completed_job",
+            },
+            "parallel_hire_trace": trace,
+            "next_step": (
+                f"Poll /jobs/batch/{batch_id} or aztea_workflow(action='batch_status', "
+                f"batch_id='{batch_id}') to watch the parallel specialist hires settle."
+            ),
         },
         status_code=201,
     )
@@ -766,6 +899,12 @@ def jobs_batch_status(
         elif status == "failed":
             n_failed += 1
 
+    trace = _batch_parallel_trace(
+        batch_id=batch_id,
+        batch_jobs=batch_jobs,
+        caller=caller,
+        phase="status",
+    )
     return JSONResponse(
         content={
             "batch_id": batch_id,
@@ -776,7 +915,29 @@ def jobs_batch_status(
             "n_complete": n_complete,
             "n_failed": n_failed,
             "total_cost_cents": total_cost_cents,
+            "total_charged_cents": sum(
+                int(job.get("caller_charge_cents") or job.get("price_cents") or 0)
+                for job in batch_jobs
+            ),
             "jobs": [_job_response(job, caller) for job in batch_jobs],
+            "job_ids": [job.get("job_id") for job in batch_jobs if job.get("job_id")],
+            "mode": "parallel_marketplace_hire",
+            "marketplace_transaction": {
+                "status": (
+                    "complete"
+                    if n_complete + n_failed == len(batch_jobs)
+                    else "in_progress"
+                ),
+                "rail": "jobs.batch",
+                "escrow": "per_job",
+                "settlement": "settled_or_refunded_per_job",
+                "receipt": "signed_per_completed_job",
+            },
+            "parallel_hire_trace": trace,
+            "next_step": (
+                "Summarize completed specialist outputs, call aztea_job(action='verify', job_id=...) "
+                "for completed receipts when provenance matters, and keep polling while jobs are pending."
+            ),
         }
     )
 

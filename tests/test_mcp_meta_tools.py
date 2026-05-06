@@ -500,6 +500,65 @@ def test_batch_status_polls_many_jobs(monkeypatch):
     assert [job["job_id"] for job in result["jobs"]] == ["job_1", "job_2"]
 
 
+def test_batch_status_prefers_batch_id(monkeypatch):
+    captured = {}
+
+    def _fake_get(_session, url, _hdrs, _timeout, params=None):
+        captured["url"] = url
+        captured["params"] = params
+        return True, {"batch_id": "batch_1", "parallel_hire_trace": {"jobs": []}}
+
+    monkeypatch.setattr(meta_tools, "_get", _fake_get)
+    ok, result = meta_tools._batch_status(
+        session=None,
+        base="https://aztea.test",
+        hdrs={},
+        timeout=5,
+        args={"batch_id": "batch_1"},
+    )
+    assert ok is True
+    assert captured["url"] == "https://aztea.test/jobs/batch/batch_1"
+    assert result["batch_id"] == "batch_1"
+    assert "parallel_hire_trace" in result
+
+
+def test_hire_batch_accepts_slugs_and_total_cap(monkeypatch):
+    def _fake_resolve(_session, _base, _hdrs, _timeout, args):
+        return f"agent-{args['slug']}", None
+
+    captured = {}
+
+    def _fake_post(_session, url, _hdrs, _timeout, body):
+        captured["url"] = url
+        captured["body"] = body
+        return True, {
+            "batch_id": "batch_1",
+            "jobs": [{"job_id": "job_1"}],
+            "total_charged_cents": 4,
+        }
+
+    monkeypatch.setattr(meta_tools, "_resolve_agent_id", _fake_resolve)
+    monkeypatch.setattr(meta_tools, "_post", _fake_post)
+    ok, result = meta_tools._hire_batch(
+        session=None,
+        base="https://aztea.test",
+        hdrs={},
+        timeout=5,
+        args={
+            "intent": "check two files",
+            "max_total_cents": 25,
+            "jobs": [{"slug": "linter_agent", "input_payload": {"code": "x=1"}}],
+        },
+    )
+    assert ok is True
+    assert captured["url"] == "https://aztea.test/jobs/batch"
+    assert captured["body"]["intent"] == "check two files"
+    assert captured["body"]["max_total_cents"] == 25
+    assert captured["body"]["jobs"][0]["agent_id"] == "agent-linter_agent"
+    assert result["job_ids"] == ["job_1"]
+    assert "parallel marketplace hire" in result["note"].lower()
+
+
 def test_discover_filters_toy_and_low_relevance_intent_matches(monkeypatch):
     def _fake_post(_session, _url, _hdrs, _timeout, _body):
         return True, {

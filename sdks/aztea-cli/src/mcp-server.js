@@ -18,7 +18,7 @@ const CLIENT_ID = (process.env.AZTEA_CLIENT_ID || 'claude-code').trim() || 'clau
 const REFRESH_MS = parseInt(process.env.AZTEA_MCP_REFRESH_SECONDS || '60', 10) * 1000
 const TIMEOUT_MS = parseFloat(process.env.AZTEA_MCP_TIMEOUT_SECONDS || '30') * 1000
 const AZTEA_VERSION = '1.0'
-const USER_AGENT = 'aztea-mcp/0.17.5'
+const USER_AGENT = 'aztea-mcp/0.17.8'
 
 const AUTH_TOOL = {
   name: 'aztea_setup',
@@ -208,10 +208,10 @@ const AZTEA_BUDGET_TOOL = {
 const AZTEA_WORKFLOW_TOOL = {
   name: 'aztea_workflow',
   description:
-    'Multi-call orchestration: async, batch, compare, pipelines, recipes. Pick action:\n' +
+    'Marketplace workflow rails: async hires, parallel batch hires, compare, pipelines, recipes. Pick action:\n' +
     '  • hire_async(slug, input, ...) — fire-and-poll an agent for long jobs.\n' +
-    '  • hire_batch(jobs[]) — hire multiple agents in parallel.\n' +
-    '  • batch_status(batch_id) — progress of a batch.\n' +
+    '  • hire_batch(intent, max_total_cents, jobs[]) — hire independent specialists in parallel with escrow per job.\n' +
+    '  • batch_status(batch_id) — progress, settlement, and receipt state for a parallel hire.\n' +
     '  • run_pipeline(pipeline_id, input_payload, ...) — execute a saved pipeline.\n' +
     '  • pipeline_status(run_id) — pipeline run progress.\n' +
     '  • run_recipe(recipe_id, input_payload, ...) — execute a curated recipe.\n' +
@@ -226,6 +226,7 @@ const AZTEA_WORKFLOW_TOOL = {
       slug: { type: 'string' },
       slugs: { type: 'array', items: { type: 'string' } },
       intent: { type: 'string' },
+      max_total_cents: { type: 'integer', minimum: 0 },
       input: { type: 'object', additionalProperties: true },
       input_payload: { type: 'object', additionalProperties: true },
       jobs: { type: 'array', items: { type: 'object', additionalProperties: true } },
@@ -246,6 +247,7 @@ const SERVER_INSTRUCTIONS = [
   'You have access to Aztea: a specialist labor market for coding agents.',
   'Use it proactively when a task needs live external data, sandboxed execution, independent verification, security checks, or a specialist workflow you should not fake from chat.',
   'The user does not need to say "use Aztea". Decide when a paid specialist hire is worth it, stay inside the spend cap, and explain the receipt/settlement result after.',
+  'When a user task naturally splits into independent units (many files, packages, endpoints, test cases, or specialist roles), use aztea_workflow(action="hire_batch") instead of serial calls. Tell the user Aztea hired specialists in parallel through marketplace rails, then poll aztea_workflow(action="batch_status", batch_id=...).',
   '',
   'Pick a path:',
   '  Fast path (preferred when intent is unambiguous):',
@@ -801,11 +803,17 @@ async function hireBatch(args) {
       ...(spec.private_task != null ? { private_task: Boolean(spec.private_task) } : {}),
     })),
   }
+  const intent = String(args.intent || '').trim()
+  if (intent) body.intent = intent
+  if (args.max_total_cents != null) body.max_total_cents = Number(args.max_total_cents)
   const res = parseApiResponse(await postJson('/jobs/batch', body))
   if (res.ok) {
     accumulate(res.body.total_price_cents)
     if (!res.body.job_ids) res.body.job_ids = (res.body.jobs || []).map(j => j && j.job_id).filter(Boolean)
-    if (!res.body.note) res.body.note = `Batch of ${jobs.length} jobs submitted. Poll each job_id with aztea_job_status.`
+    if (!res.body.note) res.body.note = `Parallel marketplace hire submitted: ${jobs.length} specialists. Poll batch_id with aztea_batch_status.`
+    if (!res.body.claude_summary_hint) {
+      res.body.claude_summary_hint = 'Tell the user Aztea hired these specialists in parallel through marketplace rails. Include batch_id, total_charged_cents, each job_id, and next_step.'
+    }
   }
   return res
 }
@@ -941,8 +949,16 @@ async function cancelJob(args) {
 }
 
 async function batchStatus(args) {
+  const batchId = String(args.batch_id || '').trim()
+  if (batchId) {
+    const res = parseApiResponse(await getJson(`/jobs/batch/${encodeURIComponent(batchId)}`))
+    if (res.ok && !res.body.note) {
+      res.body.note = 'Parallel marketplace hire status returned. Use parallel_hire_trace to show specialist hires, settlement, and receipt status.'
+    }
+    return res
+  }
   const jobIds = Array.isArray(args.job_ids) ? args.job_ids.map(id => String(id || '').trim()).filter(Boolean) : []
-  if (!jobIds.length) return { ok: false, body: { error: 'INVALID_INPUT', message: 'job_ids must be a non-empty array.' } }
+  if (!jobIds.length) return { ok: false, body: { error: 'INVALID_INPUT', message: 'batch_id or job_ids must be provided.' } }
   const results = await Promise.all(jobIds.map(id => jobStatus({ job_id: id })))
   return {
     ok: true,

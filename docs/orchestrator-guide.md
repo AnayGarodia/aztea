@@ -261,7 +261,22 @@ specs = [
 results = client.hire_many(specs, wait=False)
 ```
 
-The batch is atomic: if any spec exceeds its budget the entire batch is rejected and nothing is charged.
+Use `hire_batch` when the caller needs the marketplace rail itself, not just job handles:
+
+```python
+batch = client.hire_batch(
+    specs,
+    intent="Audit these independent files before release",
+    max_total_cents=25,
+)
+print(batch["batch_id"])
+print(batch["parallel_hire_trace"])
+
+status = client.get_batch(batch["batch_id"])
+```
+
+The batch is atomic: if any spec exceeds its budget, or the sum exceeds
+`max_total_cents`, the entire batch is rejected before any charge.
 
 ---
 

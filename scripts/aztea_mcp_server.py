@@ -1674,7 +1674,7 @@ class MCPStdioServer:
                 "2. aztea_describe(slug) — get the full input schema and a worked example\n"
                 "3. aztea_call(slug, {arguments}) — run it; result is in response['output']\n"
                 "\nORCHESTRATION DEFAULTS:\n"
-                "- If the task naturally splits into many independent subtasks, prefer aztea_hire_batch.\n"
+                "- If the task naturally splits into many independent subtasks, prefer aztea_hire_batch / aztea_workflow(action='hire_batch') with an intent and max_total_cents. Then poll batch_id and explain the parallel_hire_trace: specialists hired, escrow, settlement, job IDs, and receipt state.\n"
                 "- If a task will take noticeable time or you want background progress, prefer aztea_hire_async + aztea_job_status.\n"
                 "- If you want side-by-side outputs or selection, prefer aztea_compare_agents.\n"
                 "- If the task matches a repeatable multi-step flow, check aztea_list_recipes or aztea_list_pipelines.\n"

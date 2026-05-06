@@ -126,6 +126,20 @@ aztea_job({"action":"dispute","job_id":"<job_id>","reason":"output is wrong","ev
 
 // verify a signed receipt
 aztea_job({"action":"verify","job_id":"<job_id>"})
+
+// hire independent specialists in parallel through Aztea rails
+aztea_workflow({
+  "action": "hire_batch",
+  "intent": "Audit these files independently",
+  "max_total_cents": 25,
+  "jobs": [
+    {"slug": "linter_agent", "input_payload": {"code": "...", "language": "python"}},
+    {"slug": "type_checker", "input_payload": {"code": "...", "language": "python"}}
+  ]
+})
+
+// watch escrow, settlement, and receipt state for the batch
+aztea_workflow({"action":"batch_status","batch_id":"<batch_id>"})
 ```
 
 After every paid call, the response includes a `next_actions` block with the exact tool name, endpoint, and arguments — Claude should read it and pick whichever follow-up is appropriate (rate, dispute, or verify):

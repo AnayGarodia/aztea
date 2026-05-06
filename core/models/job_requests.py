@@ -190,6 +190,22 @@ class JobCreateRequest(BaseModel):
 
 
 class JobBatchCreateRequest(BaseModel):
+    intent: str | None = Field(
+        default=None,
+        max_length=500,
+        description=(
+            "Optional caller-facing goal for the parallel delegation. Stored only "
+            "in the response trace so coding agents can explain why the batch exists."
+        ),
+    )
+    max_total_cents: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Optional hard cap for the whole batch. The batch is rejected before "
+            "any charge if the sum of caller charges exceeds this value."
+        ),
+    )
     jobs: list["JobCreateRequest"] = Field(
         description="Array of job specs (max 50). Each is a JobCreateRequest. Single wallet pre-debit for total cost."
     )

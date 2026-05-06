@@ -79,6 +79,8 @@ export interface HireManyOptions {
   waitForCompletion?: boolean;
   timeoutSeconds?: number;
   pollIntervalMs?: number;
+  intent?: string;
+  maxTotalCents?: number;
 }
 
 interface RequestOptions {
@@ -494,6 +496,12 @@ export class AgentmarketClient {
         budget_cents: spec.budgetCents,
       })) as unknown as JsonValue[],
     };
+    if (options.intent !== undefined) {
+      body.intent = options.intent;
+    }
+    if (options.maxTotalCents !== undefined) {
+      body.max_total_cents = options.maxTotalCents;
+    }
     const created = await this.request<JsonObject>("/jobs/batch", { method: "POST", body });
     if (!options.waitForCompletion) {
       return created;
@@ -514,6 +522,21 @@ export class AgentmarketClient {
       settled.push(current);
     }
     return settled;
+  }
+
+  async hireBatch(
+    specs: HireManySpec[],
+    options: Pick<HireManyOptions, "intent" | "maxTotalCents"> = {},
+  ): Promise<JsonObject> {
+    return this.hireMany(specs, {
+      intent: options.intent,
+      maxTotalCents: options.maxTotalCents,
+      waitForCompletion: false,
+    }) as Promise<JsonObject>;
+  }
+
+  async getBatch(batchId: string): Promise<JsonObject> {
+    return this.request<JsonObject>(`/jobs/batch/${encodeURIComponent(batchId)}`);
   }
 
   async search(query: string, options: SearchOptions = {}): Promise<JsonObject> {

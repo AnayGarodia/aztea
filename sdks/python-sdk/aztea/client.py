@@ -503,6 +503,32 @@ class AzteaClient:
             return results
         return [self._poll_job_to_completion(item.job_id, timeout_seconds=timeout_seconds) for item in results]
 
+    def hire_batch(
+        self,
+        specs: list[dict[str, Any]],
+        *,
+        intent: str | None = None,
+        max_total_cents: int | None = None,
+    ) -> JSONObject:
+        """Submit independent jobs as one parallel marketplace hire.
+
+        Unlike :meth:`hire_many`, this returns the full batch rail response:
+        ``batch_id``, ``job_ids``, ``total_charged_cents``,
+        ``marketplace_transaction``, and ``parallel_hire_trace``. Use this
+        when the caller needs to show escrow, settlement, and receipt state
+        for the batch instead of only individual job handles.
+        """
+        body: JSONObject = {"jobs": cast(JSONValue, specs)}
+        if intent is not None:
+            body["intent"] = str(intent)
+        if max_total_cents is not None:
+            body["max_total_cents"] = int(max_total_cents)
+        return self._request_json("POST", "/jobs/batch", json_body=body)
+
+    def get_batch(self, batch_id: str) -> JSONObject:
+        """Fetch aggregate status for a parallel marketplace hire."""
+        return self._request_json("GET", f"/jobs/batch/{batch_id}")
+
     def decide_output_verification(
         self,
         job_id: str,

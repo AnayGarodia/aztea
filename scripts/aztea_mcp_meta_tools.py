@@ -265,6 +265,10 @@ _TOOLS: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "UUID of the registered Aztea agent to hire.",
                 },
+                "slug": {
+                    "type": "string",
+                    "description": "Agent slug returned by aztea_search. Prefer this when available.",
+                },
                 "input_payload": {
                     "type": "object",
                     "description": "Task input matching the agent's input schema.",
@@ -291,7 +295,8 @@ _TOOLS: list[dict[str, Any]] = [
                     "default": False,
                 },
             },
-            "required": ["agent_id", "input_payload"],
+            "required": ["input_payload"],
+            "anyOf": [{"required": ["agent_id"]}, {"required": ["slug"]}],
         },
     },
     {
@@ -322,12 +327,16 @@ _TOOLS: list[dict[str, Any]] = [
     {
         "name": "aztea_batch_status",
         "description": (
-            "Poll several async jobs from aztea_hire_batch in one call. "
-            "Returns compact status for each job plus aggregate counts, avoiding one MCP permission prompt per job."
+            "Poll a parallel marketplace hire from aztea_hire_batch. Prefer batch_id; "
+            "job_ids are accepted for older clients. Returns parallel_hire_trace so Claude can show which specialists were hired, settlement state, and receipt availability."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
+                "batch_id": {
+                    "type": "string",
+                    "description": "Batch ID returned by aztea_hire_batch. Preferred.",
+                },
                 "job_ids": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -341,7 +350,7 @@ _TOOLS: list[dict[str, Any]] = [
                     "minimum": 0,
                 },
             },
-            "required": ["job_ids"],
+            "anyOf": [{"required": ["batch_id"]}, {"required": ["job_ids"]}],
         },
     },
     {
@@ -621,17 +630,25 @@ _TOOLS: list[dict[str, Any]] = [
     {
         "name": "aztea_hire_batch",
         "description": (
-            "Submit up to 50 async jobs in one atomic request with a single wallet debit. "
-            "All jobs run in parallel. Returns job_ids; poll them together with aztea_batch_status. "
-            "Use for workflows like 'review all 10 files' or 'audit every dependency' — "
-            "far faster and cheaper than sequential hiring. This is the default tool for large independent task sets."
+            "Hire up to 50 independent marketplace specialists in parallel under one atomic batch rail. "
+            "Aztea opens escrow per job, tracks settlement/refunds, and returns a visible parallel_hire_trace. "
+            "Use this when a task naturally splits by file, package, endpoint, test case, or independent specialist role."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
+                "intent": {
+                    "type": "string",
+                    "description": "One-line goal for the batch so Claude can explain why these specialists were hired.",
+                },
+                "max_total_cents": {
+                    "type": "integer",
+                    "description": "Hard total spend cap for the batch. Rejected before charge if exceeded.",
+                    "minimum": 0,
+                },
                 "jobs": {
                     "type": "array",
-                    "description": "List of job specs (max 50). Each spec must include agent_id and input_payload.",
+                    "description": "List of job specs (max 50). Each spec must include agent_id or slug, plus input_payload.",
                     "maxItems": 50,
                     "items": {
                         "type": "object",
@@ -639,6 +656,10 @@ _TOOLS: list[dict[str, Any]] = [
                             "agent_id": {
                                 "type": "string",
                                 "description": "UUID of the Aztea agent to hire.",
+                            },
+                            "slug": {
+                                "type": "string",
+                                "description": "Agent slug returned by aztea_search.",
                             },
                             "input_payload": {
                                 "type": "object",
@@ -656,7 +677,8 @@ _TOOLS: list[dict[str, Any]] = [
                                 "default": False,
                             },
                         },
-                        "required": ["agent_id", "input_payload"],
+                        "required": ["input_payload"],
+                        "anyOf": [{"required": ["agent_id"]}, {"required": ["slug"]}],
                         "additionalProperties": False,
                     },
                 },
@@ -1823,9 +1845,9 @@ def _list_pipelines(
 def _hire_async(
     session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
 ) -> tuple[bool, dict]:
-    agent_id = str(args.get("agent_id") or "").strip()
-    if not agent_id:
-        return False, {"error": "INVALID_INPUT", "message": "agent_id is required."}
+    agent_id, err = _resolve_agent_id(session, base, hdrs, timeout, args)
+    if err is not None:
+        return False, err
     body: dict[str, Any] = {
         "agent_id": agent_id,
         "input_payload": args.get("input_payload") or {},
@@ -1900,11 +1922,21 @@ def _job_status(
 def _batch_status(
     session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
 ) -> tuple[bool, dict]:
+    batch_id = str(args.get("batch_id") or "").strip()
+    if batch_id:
+        ok, result = _get(session, f"{base}/jobs/batch/{batch_id}", hdrs, timeout)
+        if ok:
+            result.setdefault(
+                "note",
+                "Parallel marketplace hire status returned. Use parallel_hire_trace to explain which specialists were hired, what settled, and which receipts are available.",
+            )
+        return ok, result
+
     raw_job_ids = args.get("job_ids")
     if not isinstance(raw_job_ids, list) or not raw_job_ids:
         return False, {
             "error": "INVALID_INPUT",
-            "message": "job_ids must be a non-empty array.",
+            "message": "batch_id or job_ids must be provided.",
         }
     job_ids = [
         str(job_id or "").strip() for job_id in raw_job_ids if str(job_id or "").strip()
@@ -2411,8 +2443,11 @@ def _hire_batch(
                 "error": "INVALID_INPUT",
                 "message": "Each job spec must be an object.",
             }
+        agent_id, err = _resolve_agent_id(session, base, hdrs, timeout, spec)
+        if err is not None:
+            return False, err
         job: dict[str, Any] = {
-            "agent_id": str(spec.get("agent_id") or ""),
+            "agent_id": agent_id,
             "input_payload": spec.get("input_payload") or {},
         }
         if spec.get("budget_cents") is not None:
@@ -2420,9 +2455,13 @@ def _hire_batch(
         if spec.get("private_task") is not None:
             job["private_task"] = bool(spec["private_task"])
         jobs_body.append(job)
-    ok, result = _post(
-        session, f"{base}/jobs/batch", hdrs, timeout, {"jobs": jobs_body}
-    )
+    body: dict[str, Any] = {"jobs": jobs_body}
+    intent = str(args.get("intent") or "").strip()
+    if intent:
+        body["intent"] = intent
+    if args.get("max_total_cents") is not None:
+        body["max_total_cents"] = int(args["max_total_cents"])
+    ok, result = _post(session, f"{base}/jobs/batch", hdrs, timeout, body)
     if ok:
         job_ids = [
             j.get("job_id") for j in (result.get("jobs") or []) if isinstance(j, dict)
@@ -2430,11 +2469,15 @@ def _hire_batch(
         result.setdefault(
             "note",
             (
-                f"Batch of {len(jobs_body)} jobs submitted. "
-                "Poll the job_ids together with aztea_batch_status to track progress."
+                f"Parallel marketplace hire submitted: {len(jobs_body)} specialists. "
+                "Poll batch_id with aztea_batch_status to track escrow, settlement, and receipt status."
             ),
         )
         result.setdefault("job_ids", job_ids)
+        result.setdefault(
+            "claude_summary_hint",
+            "Tell the user Aztea hired these specialists in parallel through the marketplace rails. Include batch_id, total_charged_cents, each job_id, and next_step.",
+        )
     return ok, result
 
 

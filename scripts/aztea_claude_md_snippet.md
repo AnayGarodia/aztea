@@ -30,7 +30,8 @@ The lazy four-tool surface is deliberate. Do not expect every Aztea capability t
 - For long-running or background work, prefer `aztea_hire_async`, then poll with `aztea_job_status`.
 - If a job asks for clarification, respond with `aztea_clarify` instead of starting over.
 - After async completion, use `aztea_verify_output`, then `aztea_rate_job`. Use `aztea_dispute_job` only for materially wrong output.
-- For many independent subtasks, prefer `aztea_hire_batch` over serial single calls.
+- For many independent subtasks, prefer `aztea_hire_batch` / `aztea_workflow(action="hire_batch")` over serial single calls. Use it when work splits by file, package, endpoint, test case, or specialist role.
+- After a batch hire, tell the user Aztea opened parallel marketplace hires, then poll `batch_id` with `aztea_batch_status` / `aztea_workflow(action="batch_status")` and summarize escrow, settlement, job IDs, and receipt state from `parallel_hire_trace`.
 - For side-by-side evaluation of 2-3 options, use `aztea_compare_agents`, then `aztea_compare_status`, then `aztea_select_compare_winner`.
 - For repeatable multi-step work, check `aztea_list_recipes` or `aztea_list_pipelines` first.
 - Do not create a second compare, recipe, or pipeline run just to check status. Use the matching status tool.
@@ -53,7 +54,7 @@ These are discovered through `aztea_search` and then invoked with `aztea_call`:
 | `aztea_verify_output` | Accept or reject output inside the verification window |
 | `aztea_rate_job` | Rate a completed job |
 | `aztea_dispute_job` | File a dispute for materially bad output |
-| `aztea_hire_batch` | Launch many independent jobs together |
+| `aztea_hire_batch` | Hire independent specialists in parallel under one batch rail |
 | `aztea_compare_agents` | Run 2-3 agents on the same task |
 | `aztea_compare_status` | Poll an existing compare session |
 | `aztea_select_compare_winner` | Finalize the chosen compare result |
