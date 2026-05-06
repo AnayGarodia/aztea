@@ -1255,26 +1255,33 @@ def jobs_get_full_output(
         offset = 0
     if limit is not None and limit < 0:
         limit = 0
-    serialized = _stable_json_text(job.get("output_payload"))
+    output_payload = job.get("output_payload")
+    serialized = _stable_json_text(output_payload)
     total_size = len(serialized)
     effective_limit = MAX_CHUNK_CHARS if limit is None else min(limit, MAX_CHUNK_CHARS)
     end = min(total_size, offset + effective_limit)
     chunk = serialized[offset:end]
     has_more = end < total_size
-    return JSONResponse(
-        content={
-            "job_id": job_id,
-            "status": job.get("status"),
-            "format": "json_serialized",
-            "encoding": "utf-8",
-            "total_size": total_size,
-            "offset": offset,
-            "next_offset": end if has_more else None,
-            "has_more": has_more,
-            "chunk": chunk,
-            "chunk_size": len(chunk),
-        }
-    )
+    body: dict[str, Any] = {
+        "job_id": job_id,
+        "status": job.get("status"),
+        "format": "json_serialized",
+        "encoding": "utf-8",
+        "total_size": total_size,
+        "offset": offset,
+        "next_offset": end if has_more else None,
+        "has_more": has_more,
+        "chunk": chunk,
+        "chunk_size": len(chunk),
+    }
+    # Backward-compat: when the caller didn't ask for a paginated chunk
+    # (no offset, no limit) and the entire payload fits in one response,
+    # also include the original `output_payload` field. SDKs and existing
+    # callers consume that key directly. The chunk-paginated path is
+    # additive — new callers use it when output is too large.
+    if offset == 0 and limit is None and not has_more:
+        body["output_payload"] = output_payload
+    return JSONResponse(content=body)
 
 
 @app.get(
