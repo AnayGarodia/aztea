@@ -406,6 +406,30 @@ def ensure_builtin_agents_registered() -> None:
 
     registry.backfill_agent_signing_keys(list(managed_ids), now)
 
+    # Defensive idempotent re-activation: every agent in the curated public
+    # set must have status=active, review_status=approved, internal_only=0.
+    # Without this, a single past deploy that suspended a curated builtin
+    # leaves it stranded in 'suspended' state forever — the UPDATE path in
+    # the main loop sets status='active' but only fires when the spec row is
+    # newly inserted; if the row already existed and was simply marked
+    # suspended later, the resurrection never happened. (Bug found in prod:
+    # shell_executor was suspended despite being in CURATED_PUBLIC.)
+    with registry._conn() as conn:
+        for curated_id in _CURATED_PUBLIC_BUILTIN_AGENT_IDS:
+            conn.execute(
+                """
+                UPDATE agents
+                SET status = 'active',
+                    review_status = 'approved',
+                    internal_only = 0
+                WHERE agent_id = %s
+                  AND (status != 'active'
+                       OR review_status != 'approved'
+                       OR internal_only != 0)
+                """,
+                (curated_id,),
+            )
+
     deprecated_ids = _BUILTIN_AGENT_IDS - managed_ids
     for agent_id in deprecated_ids:
         stale = registry.get_agent(agent_id, include_unapproved=True)

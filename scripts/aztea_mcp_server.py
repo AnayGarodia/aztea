@@ -1282,6 +1282,63 @@ class RegistryBridge:
             enriched = dict(entry)
             enriched["_why"] = reasons
             matches.append((score, enriched))
+
+        # Typo-tolerant fallback: if the lexical scorer found nothing (or only
+        # very weak matches), do a Levenshtein-style similarity pass over each
+        # entry's slug, name, and aliases. Catches "secrt scaner" → secret_scanner,
+        # "browsr automate" → browser_agent, "linnt python" → linter_agent.
+        if normalized and (not matches or max(s for s, _ in matches) < 8):
+            from difflib import SequenceMatcher
+
+            for entry in self._catalog_entries():
+                if intent is not None and not _entry_matches_intent(entry, intent):
+                    continue
+                if max_price_usd is not None:
+                    price = entry.get("price_per_call_usd")
+                    try:
+                        if price is not None and float(price) > float(max_price_usd):
+                            continue
+                    except (TypeError, ValueError):
+                        pass
+                if min_trust is not None:
+                    trust = entry.get("trust_score")
+                    try:
+                        if trust is not None and float(trust) < float(min_trust):
+                            continue
+                    except (TypeError, ValueError):
+                        pass
+                if category_filter is not None:
+                    if category_filter not in str(entry.get("category") or "").strip().lower():
+                        continue
+                # Score against the slug, name, and each alias; take the best.
+                candidates = [entry["slug"].lower(), str(entry.get("name") or "").lower()]
+                candidates.extend(str(a).lower() for a in (entry.get("aliases") or []))
+                best_ratio = 0.0
+                for cand in candidates:
+                    if not cand:
+                        continue
+                    ratio = SequenceMatcher(None, normalized, cand).ratio()
+                    # Also try per-token: catches multi-word typos like "secrt scaner".
+                    for word in cand.split():
+                        ratio = max(
+                            ratio,
+                            max(
+                                SequenceMatcher(None, term, word).ratio()
+                                for term in (terms or [normalized])
+                            ),
+                        )
+                    if ratio > best_ratio:
+                        best_ratio = ratio
+                # Only surface high-confidence fuzzy matches (≥0.78 ratio).
+                # Lower thresholds produce noise; this catches single-letter
+                # typos and dropped vowels reliably.
+                if best_ratio >= 0.78:
+                    enriched = dict(entry)
+                    enriched["_why"] = [f"fuzzy match (similarity {best_ratio:.2f})"]
+                    fuzzy_score = 5 + int(best_ratio * 20)  # 5 → 25 range
+                    if not any(m[1].get("slug") == entry["slug"] for m in matches):
+                        matches.append((fuzzy_score, enriched))
+
         matches.sort(
             key=lambda item: (
                 item[0],

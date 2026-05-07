@@ -108,6 +108,7 @@ const GROUPED_DISPATCH = {
   aztea_job: {
     rate: 'aztea_rate_job',
     dispute: 'aztea_dispute_job',
+    dispute_status: 'aztea_dispute_status',
     verify: 'aztea_verify_job',
     verify_output: 'aztea_verify_output',
     full_output: 'aztea_job_full_output',
@@ -136,9 +137,11 @@ const GROUPED_DISPATCH = {
     run_recipe: 'aztea_run_recipe',
     list_pipelines: 'aztea_list_pipelines',
     list_recipes: 'aztea_list_recipes',
+    list_agents: 'aztea_list_agents',
     compare: 'aztea_compare_agents',
     compare_status: 'aztea_compare_status',
     compare_select: 'aztea_select_compare_winner',
+    session_audit: 'aztea_session_audit',
   },
 }
 
@@ -299,6 +302,9 @@ const META_TOOL_NAMES = new Set([
   'aztea_batch_status',
   'aztea_data_retention_policy',
   'aztea_verify_job',
+  'aztea_list_agents',
+  'aztea_session_audit',
+  'aztea_dispute_status',
   // Resource-grouped dispatchers — handled in callMetaTool().
   'aztea_job',
   'aztea_budget',
@@ -400,17 +406,47 @@ async function resolveAgentId(agentIdOrSlug) {
   const val = String(agentIdOrSlug || '').trim()
   if (!val) return { ok: false, body: { error: 'INVALID_INPUT', message: 'agent_id or slug is required.' } }
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val)) return { ok: true, id: val }
+  // Local catalog hit — already exact match by slug.
   const entry = _catalog.find(item => item.slug === val)
   if (entry && entry.agent_id) return { ok: true, id: entry.agent_id }
-  const res = parseApiResponse(await postJson('/registry/search', { query: val, limit: 1 }))
+  // STRICT exact-slug match only. Previous version took results[0] from a
+  // semantic search, which silently routed money to a similarly-named agent
+  // when the requested slug didn't appear at rank 1. Money-routing must
+  // never fall through to a different agent.
+  const slugLower = val.toLowerCase()
+  const res = parseApiResponse(await postJson('/registry/search', { query: val, limit: 50 }))
   if (!res.ok) return { ok: false, body: res.body }
   const results = Array.isArray(res.body.results) ? res.body.results : []
-  if (!results.length) return { ok: false, body: { error: 'AGENT_NOT_FOUND', message: `No agent found for '${val}'.`, hint: 'Use aztea_search to find the correct slug.' } }
-  const found = results[0]
-  const agent = found.agent || found
-  const id = agent.agent_id || found.agent_id
-  if (!id) return { ok: false, body: { error: 'AGENT_NOT_FOUND', message: `Agent found but has no agent_id.` } }
-  return { ok: true, id }
+  const candidates = []
+  for (const item of results) {
+    const agent = item.agent || item || {}
+    const cand = String(agent.slug || agent.agent_slug || '').trim().toLowerCase()
+    if (cand) candidates.push(cand)
+    if (cand && cand === slugLower) {
+      const id = agent.agent_id || item.agent_id
+      if (id) return { ok: true, id }
+    }
+  }
+  // Fallback: full registry list to handle a stale search index.
+  try {
+    const list = parseApiResponse(await getJson('/registry/agents'))
+    if (list.ok) {
+      const agents = Array.isArray(list.body.agents) ? list.body.agents : []
+      for (const agent of agents) {
+        const cand = String((agent && (agent.slug || agent.agent_slug)) || '').trim().toLowerCase()
+        if (cand === slugLower && agent.agent_id) return { ok: true, id: agent.agent_id }
+      }
+    }
+  } catch (_) {}
+  return {
+    ok: false,
+    body: {
+      error: 'AGENT_NOT_FOUND',
+      message: `No agent has the exact slug '${val}'. Slug matching is strict (no fuzzy fallback) to prevent money-routing to a similarly-named agent.`,
+      hint: 'Run aztea_search to find the right slug, then retry.',
+      search_returned_candidates: candidates.slice(0, 10),
+    },
+  }
 }
 
 function budgetGuard() {
@@ -536,8 +572,28 @@ function describeCatalog(slug) {
   }
 }
 
-async function walletBalance() {
-  return parseApiResponse(await getJson('/wallets/me'))
+async function walletBalance(args) {
+  // Trim the (potentially huge) transaction list to keep MCP responses small.
+  // Default: most recent 10. Pass tx_limit=N or include_transactions=false to override.
+  const opts = (args && typeof args === 'object') ? args : {}
+  const includeTx = opts.include_transactions !== false
+  let txLimit = parseInt(opts.tx_limit, 10)
+  if (Number.isNaN(txLimit) || txLimit < 0) txLimit = 10
+  if (txLimit > 200) txLimit = 200
+  const res = parseApiResponse(await getJson('/wallets/me'))
+  if (!res.ok || !res.body || !Array.isArray(res.body.transactions)) return res
+  const total = res.body.transactions.length
+  if (!includeTx || txLimit === 0) {
+    res.body.transactions = []
+    res.body.transactions_omitted = total
+    res.body.transactions_total = total
+  } else if (total > txLimit) {
+    res.body.transactions = res.body.transactions.slice(0, txLimit)
+    res.body.transactions_omitted = total - txLimit
+    res.body.transactions_total = total
+  }
+  res.body.transactions_hint = 'Default: 10 most recent. Pass tx_limit=N (max 200) for more, or include_transactions=false to omit.'
+  return res
 }
 
 async function spendSummary(args) {
@@ -1175,7 +1231,7 @@ async function callMetaTool(name, args) {
   }
 
   switch (name) {
-    case 'aztea_wallet_balance': return walletBalance()
+    case 'aztea_wallet_balance': return walletBalance(args)
     case 'aztea_spend_summary': return spendSummary(args)
     case 'aztea_set_daily_limit': return setDailyLimit(args)
     case 'aztea_topup_url': return topupUrl(args)
@@ -1204,8 +1260,101 @@ async function callMetaTool(name, args) {
     case 'aztea_batch_status': return batchStatus(args)
     case 'aztea_data_retention_policy': return dataRetentionPolicy(args)
     case 'aztea_verify_job': return verifyJobSignature(args)
+    case 'aztea_list_agents': return listAgents(args)
+    case 'aztea_session_audit': return sessionAudit(args)
+    case 'aztea_dispute_status': return disputeStatus(args)
     default: return { ok: false, body: { error: 'UNKNOWN_META_TOOL', tool: name } }
   }
+}
+
+async function listAgents(args) {
+  const opts = args && typeof args === 'object' ? args : {}
+  const categoryFilter = String(opts.category || '').trim().toLowerCase()
+  let limit = parseInt(opts.limit, 10)
+  if (Number.isNaN(limit) || limit <= 0) limit = 100
+  if (limit > 200) limit = 200
+  const res = parseApiResponse(await getJson('/registry/agents'))
+  if (!res.ok) return res
+  const agents = Array.isArray(res.body && res.body.agents) ? res.body.agents : []
+  const rows = []
+  for (const agent of agents) {
+    if (!agent || typeof agent !== 'object') continue
+    const cat = String(agent.category || '').trim()
+    if (categoryFilter && cat.toLowerCase() !== categoryFilter) continue
+    rows.push({
+      slug: agent.slug || agent.agent_slug,
+      agent_id: agent.agent_id,
+      name: agent.name,
+      category: cat || null,
+      description: String(agent.description || '').slice(0, 240),
+      price_per_call_usd: agent.price_per_call_usd,
+      trust_score: agent.trust_score,
+      success_rate: agent.success_rate,
+      tags: agent.tags || [],
+    })
+    if (rows.length >= limit) break
+  }
+  return {
+    ok: true,
+    body: {
+      count: rows.length,
+      category_filter: categoryFilter || null,
+      agents: rows,
+      note: 'All public Aztea agents in one shot. Pick a slug and call aztea_describe(slug=...) for the full schema.',
+    },
+  }
+}
+
+async function sessionAudit(args) {
+  const opts = args && typeof args === 'object' ? args : {}
+  let period = String(opts.period || '1d').trim().toLowerCase()
+  if (!['1d', '7d', '30d', '90d'].includes(period)) period = '1d'
+  const spend = parseApiResponse(await getJson(`/wallets/spend-summary?period=${encodeURIComponent(period)}`))
+  if (!spend.ok) return spend
+  let receipts = []
+  try {
+    const recent = parseApiResponse(await getJson('/jobs?limit=50&status=complete'))
+    if (recent.ok && recent.body && Array.isArray(recent.body.jobs)) {
+      receipts = recent.body.jobs.slice(0, 50).map(job => ({
+        job_id: job.job_id,
+        agent_id: job.agent_id,
+        agent_name: job.agent_name,
+        charge_cents: job.caller_charge_cents != null ? job.caller_charge_cents : job.price_cents,
+        settled_at: job.settled_at,
+        signature_endpoint: job.output_signature ? `/jobs/${job.job_id}/signature` : null,
+      }))
+    }
+  } catch (_) {}
+  return {
+    ok: true,
+    body: {
+      period,
+      spend: spend.body,
+      recent_signed_receipts: receipts,
+      audit_signature_method: 'per-job Ed25519 (call aztea_job(action=verify, job_id=...) to verify each)',
+      next_step: 'For an authoritative audit log, verify each receipt individually.',
+    },
+  }
+}
+
+async function disputeStatus(args) {
+  const disputeId = String((args && args.dispute_id) || '').trim()
+  if (!disputeId) {
+    return { ok: false, body: { error: 'INVALID_INPUT', message: "dispute_id is required (returned by aztea_job(action='dispute', ...))." } }
+  }
+  const res = parseApiResponse(await getJson(`/disputes/${encodeURIComponent(disputeId)}`))
+  if (!res.ok) return res
+  const status = String((res.body && res.body.status) || '').toLowerCase()
+  const judgments = (res.body && res.body.judgments) || []
+  let etaHint = null
+  if (status === 'pending') etaHint = 'Pending. LLM judges run on a 60s interval; expect first verdict within 1-2 minutes.'
+  else if (status === 'tied') etaHint = 'Tied after 2 rounds. Will auto-resolve to caller in 48h per policy.'
+  else if (status === 'resolved') etaHint = 'Resolved. Outcome and split visible in this response.'
+  if (res.body && typeof res.body === 'object') {
+    res.body.note = `Dispute status: ${status}. Judges so far: ${judgments.length}.`
+    if (etaHint) res.body.eta_hint = etaHint
+  }
+  return res
 }
 
 async function callRegistryTool(entry, args) {

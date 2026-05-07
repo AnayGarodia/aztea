@@ -640,7 +640,10 @@ def test_resolve_agent_id_prefers_explicit_uuid():
 def test_resolve_agent_id_falls_back_to_slug(monkeypatch):
     def _fake_post(_session, url, _hdrs, _timeout, body):
         assert url.endswith("/registry/search")
-        assert body == {"query": "linter_agent", "limit": 5}
+        # Increased to 50 (was 5) to defend against typo'd slugs that rank
+        # outside the top 5 in semantic search. Money-routing must never
+        # silently land on a similarly-named agent.
+        assert body == {"query": "linter_agent", "limit": 50}
         return True, {
             "results": [
                 {"agent": {"agent_id": "aaa", "slug": "code_review_agent"}},

@@ -496,6 +496,15 @@ def _run_cve_id_mode(cve_ids: list[str], single_mode: bool) -> dict:
     successful = [r for r in results if "error" not in r]
     billing_units_actual = len(successful)
 
+    # Normalize: every result should expose BOTH `cve` and `cve_id` keys
+    # so downstream consumers (quality judge, output renderers, SDK clients)
+    # don't fail on the path-dependent shape mismatch.
+    for r in results:
+        cve_value = r.get("cve") or r.get("cve_id")
+        if cve_value:
+            r.setdefault("cve", cve_value)
+            r.setdefault("cve_id", cve_value)
+
     output: dict = {
         "results": results,
         "billing_units_actual": billing_units_actual,

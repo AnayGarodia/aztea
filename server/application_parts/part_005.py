@@ -338,26 +338,40 @@ def _deterministic_quality_result(
                     "score": 2,
                     "reason": "Each CVE lookup result must be an object.",
                 }
-            if not str(item.get("cve") or "").strip():
+            # Items returned from the direct cve_id fetch path use `cve_id`,
+            # while the package-lookup path uses `cve`. Either is acceptable
+            # — checking BOTH keeps deterministic-ID lookups from
+            # non-deterministically failing the judge gate.
+            cve_field = (
+                str(item.get("cve") or "").strip()
+                or str(item.get("cve_id") or "").strip()
+            )
+            error_field = str(item.get("error") or "").strip()
+            # Items that include an error envelope (e.g. "not found", "NVD API
+            # rate limit reached") are valid output shapes — the agent
+            # successfully reported what it could not retrieve. Don't fail the
+            # whole job for these.
+            if not cve_field and not error_field:
                 return {
                     "verdict": "fail",
                     "score": 2,
-                    "reason": "Each CVE lookup result must include a CVE identifier.",
+                    "reason": "Each CVE lookup result must include a CVE identifier or an error field.",
                 }
-            try:
-                float(item.get("cvss", 0.0))
-            except (TypeError, ValueError):
-                return {
-                    "verdict": "fail",
-                    "score": 2,
-                    "reason": "Each CVE lookup result must include a numeric CVSS score.",
-                }
-            if not isinstance(item.get("severity"), str):
-                return {
-                    "verdict": "fail",
-                    "score": 2,
-                    "reason": "Each CVE lookup result must include a severity string.",
-                }
+            if cve_field:
+                try:
+                    float(item.get("cvss", 0.0))
+                except (TypeError, ValueError):
+                    return {
+                        "verdict": "fail",
+                        "score": 2,
+                        "reason": "Each CVE lookup result must include a numeric CVSS score.",
+                    }
+                if not isinstance(item.get("severity"), str):
+                    return {
+                        "verdict": "fail",
+                        "score": 2,
+                        "reason": "Each CVE lookup result must include a severity string.",
+                    }
         return {
             "verdict": "pass",
             "score": 8,

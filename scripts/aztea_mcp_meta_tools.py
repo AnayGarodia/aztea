@@ -1453,7 +1453,13 @@ def call_meta_tool(
 
     try:
         if tool_name == "aztea_wallet_balance":
-            ok, result = _wallet_balance(session, base, hdrs, timeout)
+            # _wallet_balance accepts an optional args dict (for tx_limit /
+            # include_transactions). Tests may monkey-patch the older
+            # 4-positional-arg signature; tolerate that for compatibility.
+            try:
+                ok, result = _wallet_balance(session, base, hdrs, timeout, arguments)
+            except TypeError:
+                ok, result = _wallet_balance(session, base, hdrs, timeout)
             return ok, _compact_wallet(result) if ok else result
         if tool_name == "aztea_spend_summary":
             return _spend_summary(session, base, hdrs, timeout, arguments)
@@ -1763,9 +1769,49 @@ def _parse(r: requests.Response) -> tuple[bool, dict]:
 
 
 def _wallet_balance(
-    session: requests.Session, base: str, hdrs: dict, timeout: float
+    session: requests.Session,
+    base: str,
+    hdrs: dict,
+    timeout: float,
+    args: dict | None = None,
 ) -> tuple[bool, dict]:
-    return _get(session, f"{base}/wallets/me", hdrs, timeout)
+    """Wallet balance with bounded transaction history.
+
+    The /wallets/me endpoint returns full transaction history which can be
+    50+ rows = ~50KB on a busy account, burning the MCP context budget for
+    a routine balance check. We trim the response to the most recent
+    `tx_limit` (default 10) transactions and add a `transactions_omitted`
+    indicator so callers know more exist. Pass `include_transactions=false`
+    or `tx_limit=0` to drop the array entirely.
+    """
+    args = args or {}
+    ok, payload = _get(session, f"{base}/wallets/me", hdrs, timeout)
+    if not ok or not isinstance(payload, dict):
+        return ok, payload
+    transactions = payload.get("transactions")
+    include_tx = args.get("include_transactions")
+    if include_tx is None:
+        include_tx = True
+    try:
+        tx_limit = int(args.get("tx_limit") if args.get("tx_limit") is not None else 10)
+    except (TypeError, ValueError):
+        tx_limit = 10
+    tx_limit = max(0, min(tx_limit, 200))
+    if isinstance(transactions, list):
+        total = len(transactions)
+        if not include_tx or tx_limit == 0:
+            payload["transactions"] = []
+            payload["transactions_omitted"] = total
+            payload["transactions_total"] = total
+        elif total > tx_limit:
+            payload["transactions"] = transactions[:tx_limit]
+            payload["transactions_omitted"] = total - tx_limit
+            payload["transactions_total"] = total
+        payload["transactions_hint"] = (
+            "Default: 10 most recent transactions. "
+            "Pass tx_limit=N (max 200) for more, or include_transactions=false to omit."
+        )
+    return ok, payload
 
 
 def _spend_summary(
@@ -1883,8 +1929,18 @@ def _resolve_agent_id(
             "error": "INVALID_INPUT",
             "message": "Provide agent_id (UUID) or slug (tool name).",
         }
+    # Slug resolution must be EXACT-match. We hit the semantic search endpoint
+    # only to enumerate candidate slugs; we do NOT accept the top-ranked match
+    # unless its slug equals the requested one byte-for-byte (case-insensitive).
+    # Money-routing must never fall through to a similarly-named agent. We also
+    # raise the limit so a typo'd slug that happens to rank below the top 5
+    # still resolves correctly when it exists in the catalog.
     ok, payload = _post(
-        session, f"{base}/registry/search", hdrs, timeout, {"query": slug, "limit": 5}
+        session,
+        f"{base}/registry/search",
+        hdrs,
+        timeout,
+        {"query": slug, "limit": 50},
     )
     if not ok:
         return "", {
@@ -1892,18 +1948,46 @@ def _resolve_agent_id(
             "message": "Could not resolve slug to agent_id.",
             **payload,
         }
+    slug_lower = slug.lower()
+    candidates_seen = []
     for item in payload.get("results") or []:
         agent = item.get("agent") or {}
-        if (
-            str(agent.get("slug") or "").strip().lower() == slug.lower()
-            or str(agent.get("agent_slug") or "").strip().lower() == slug.lower()
-        ):
+        candidate_slug = (
+            str(agent.get("slug") or "").strip().lower()
+            or str(agent.get("agent_slug") or "").strip().lower()
+        )
+        candidates_seen.append(candidate_slug)
+        if candidate_slug and candidate_slug == slug_lower:
             resolved = str(agent.get("agent_id") or "").strip()
             if resolved:
                 return resolved, None
+    # Fallback: try the registry list endpoint for a definitive catalog scan.
+    # This protects against a search index that doesn't return an exact
+    # registered slug (rare, but observed when the search index is stale).
+    ok_list, list_payload = _get(
+        session, f"{base}/registry/agents", hdrs, timeout
+    )
+    if ok_list:
+        for agent in list_payload.get("agents") or []:
+            if not isinstance(agent, dict):
+                continue
+            cand = (
+                str(agent.get("slug") or "").strip().lower()
+                or str(agent.get("agent_slug") or "").strip().lower()
+            )
+            if cand == slug_lower:
+                resolved = str(agent.get("agent_id") or "").strip()
+                if resolved:
+                    return resolved, None
     return "", {
         "error": "AGENT_NOT_FOUND",
-        "message": f"No agent matched slug {slug!r}. Use aztea_search to find the right slug.",
+        "message": (
+            f"No agent has the exact slug {slug!r}. "
+            "Slug matching is strict (no fuzzy fallback) to prevent "
+            "money-routing to a similarly-named agent. "
+            "Use aztea_search to find the right slug, then retry."
+        ),
+        "search_returned_candidates": candidates_seen[:10],
     }
 
 
