@@ -665,7 +665,13 @@ def list_jobs_with_expired_clarification_deadline(
 def list_jobs_past_sla(
     sla_seconds: int, limit: int = 100, now: str | None = None
 ) -> list:
-    """Sweeper query: return pending/running/awaiting_clarification jobs older than ``sla_seconds``."""
+    """Sweeper query: return active leased jobs older than ``sla_seconds``.
+
+    Queue wait is not an execution SLA breach. Pending jobs may sit behind a
+    bursty batch and must remain claimable; otherwise the sweeper converts
+    backlog into false "Job exceeded SLA" failures. Expired leases are handled
+    by ``list_jobs_with_expired_leases`` before this query runs.
+    """
     if sla_seconds <= 0:
         raise ValueError("sla_seconds must be > 0.")
     limit = min(max(1, limit), 200)
@@ -675,9 +681,10 @@ def list_jobs_past_sla(
         rows = conn.execute(
             """
             SELECT * FROM jobs
-            WHERE status IN ('pending', 'running', 'awaiting_clarification')
+            WHERE status IN ('running', 'awaiting_clarification')
               AND completed_at IS NULL
               AND settled_at IS NULL
+              AND claim_owner_id IS NOT NULL
               AND created_at <= %s
             ORDER BY created_at ASC
             LIMIT %s

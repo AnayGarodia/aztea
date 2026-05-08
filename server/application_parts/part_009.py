@@ -1565,6 +1565,24 @@ def jobs_signature(request: Request, job_id: str) -> JSONResponse:
                 public_key_jwk = _crypto.public_key_to_jwk(public_pem)
     except Exception:
         _LOG.exception("Failed to render signed output metadata for job %s", job_id)
+    # Embed the FULL canonical signed bytes alongside the signature so verifiers
+    # don't have to fetch /jobs/{id} (which is wire-truncated by _job_response).
+    # Without this, MCP verifiers re-hash a truncated payload and report
+    # verified=false against a perfectly valid signature. The canonical_json
+    # bytes here are exactly what was signed, so a verifier can verify in one
+    # round-trip with no truncation race.
+    signed_payload_b64: str | None = None
+    try:
+        from core import crypto as _crypto
+
+        signed_bytes = _crypto.canonical_json(output_payload)
+        import base64 as _b64
+
+        signed_payload_b64 = _b64.b64encode(signed_bytes).decode("ascii")
+    except Exception:
+        _LOG.exception(
+            "Failed to encode canonical signed payload for job %s", job_id
+        )
     return JSONResponse(
         content={
             "job_id": job_id,
@@ -1577,6 +1595,9 @@ def jobs_signature(request: Request, job_id: str) -> JSONResponse:
             "output_hash": output_hash,
             "public_key_jwk": public_key_jwk,
             "verify_url": verify_url,
+            "signed_payload_b64": signed_payload_b64,
+            "signed_payload_encoding": "base64-canonical-json",
+            "output_payload": output_payload,
         }
     )
 

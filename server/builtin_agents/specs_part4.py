@@ -460,14 +460,13 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
                 _MULTI_LANGUAGE_EXECUTOR_AGENT_ID
             ],
             "price_per_call_usd": 0.03,
-            "tags": [
-                "javascript",
-                "typescript",
-                "go",
-                "rust",
-                "code-execution",
-                "sandbox",
-            ],
+            # Tags must reflect what the executor can actually run right now.
+            # Listing "go", "rust", etc. when the runtime isn't installed is
+            # false advertising in search and was flagged in the 2026-05-07
+            # eval. Tags now derive from the runtimes detected at startup.
+            "tags": [*multi_language_options, "code-execution", "sandbox"]
+            if multi_language_options
+            else ["code-execution", "sandbox"],
             "kind": "aztea_built",
             "category": "Code Execution",
             "is_featured": False,

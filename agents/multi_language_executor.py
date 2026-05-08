@@ -372,6 +372,18 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     if "error" in result and isinstance(result.get("error"), dict):
         return result
 
+    # Timeout (exit_code 124, "Timed out after Xs.") is a runtime failure,
+    # not a successful execution. Return a structured error envelope so the
+    # settlement layer issues a refund instead of charging full price for a
+    # killed process. (2026-05-07 eval flagged the silent 3¢ charge.)
+    if int(result.get("exit_code", -1)) == 124 or "timed out" in str(
+        result.get("stderr", "")
+    ).lower():
+        return _err(
+            "multi_language_executor.timeout",
+            f"Execution timed out after {timeout}s. No partial output billed.",
+        )
+
     return {
         "language": language,
         "runtime": result.get("runtime", language),

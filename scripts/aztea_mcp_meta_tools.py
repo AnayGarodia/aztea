@@ -1781,17 +1781,63 @@ def _compact_recipe_or_pipeline(result: dict[str, Any]) -> dict[str, Any]:
 # ─── Handlers ────────────────────────────────────────────────────────────────
 
 
+_MAX_RATE_LIMIT_RETRIES = 2
+_RATE_LIMIT_MAX_WAIT_SECONDS = 30.0
+
+
+def _retry_after_seconds(r: requests.Response) -> float:
+    header = r.headers.get("Retry-After") if r.headers else None
+    if header:
+        try:
+            return float(header)
+        except (TypeError, ValueError):
+            pass
+    try:
+        body = r.json()
+    except Exception:
+        body = {}
+    if isinstance(body, dict):
+        for key in ("retry_after_seconds", "retry_after"):
+            value = body.get(key)
+            if value is not None:
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    continue
+    return 0.0
+
+
 def _get(
     session: requests.Session, url: str, hdrs: dict, timeout: float, **kwargs: Any
 ) -> tuple[bool, dict]:
-    r = session.get(url, headers=hdrs, timeout=timeout, **kwargs)
-    return _parse(r)
+    import time as _time
+
+    for attempt in range(_MAX_RATE_LIMIT_RETRIES + 1):
+        r = session.get(url, headers=hdrs, timeout=timeout, **kwargs)
+        if r.status_code != 429 or attempt >= _MAX_RATE_LIMIT_RETRIES:
+            return _parse(r)
+        wait = min(
+            _RATE_LIMIT_MAX_WAIT_SECONDS,
+            max(0.25, _retry_after_seconds(r) or (1 + attempt) * 2),
+        )
+        _time.sleep(wait)
+    return _parse(r)  # unreachable; keeps mypy/typing happy
 
 
 def _post(
     session: requests.Session, url: str, hdrs: dict, timeout: float, body: Any
 ) -> tuple[bool, dict]:
-    r = session.post(url, headers=hdrs, timeout=timeout, json=body)
+    import time as _time
+
+    for attempt in range(_MAX_RATE_LIMIT_RETRIES + 1):
+        r = session.post(url, headers=hdrs, timeout=timeout, json=body)
+        if r.status_code != 429 or attempt >= _MAX_RATE_LIMIT_RETRIES:
+            return _parse(r)
+        wait = min(
+            _RATE_LIMIT_MAX_WAIT_SECONDS,
+            max(0.25, _retry_after_seconds(r) or (1 + attempt) * 2),
+        )
+        _time.sleep(wait)
     return _parse(r)
 
 
@@ -2554,15 +2600,50 @@ def _verify_job_signature(
             "verified": False,
             "verification_error": f"could not parse agent_id from did {agent_did!r}",
         }
-    ok_job, job_payload = _get(session, f"{base}/jobs/{job_id}", hdrs, timeout)
-    if not ok_job:
-        return False, {
-            "verified": False,
-            "verification_error": "job output unavailable",
-            "agent_did": agent_did,
-            **(job_payload or {}),
-        }
-    output_payload = job_payload.get("output_payload")
+    # Prefer the canonical signed bytes embedded in the signature response —
+    # they are the exact bytes the agent signed and are unaffected by the
+    # /jobs/{id} truncation that previously caused verified=false. Fall back
+    # to /jobs/{id}/full (chunked, untruncated) before /jobs/{id}.
+    output_payload = None
+    canonical_signed_bytes: bytes | None = None
+    embedded_b64 = signature_payload.get("signed_payload_b64")
+    if isinstance(embedded_b64, str) and embedded_b64:
+        try:
+            import base64 as _b64
+
+            canonical_signed_bytes = _b64.b64decode(embedded_b64)
+        except Exception:
+            canonical_signed_bytes = None
+    embedded_payload = signature_payload.get("output_payload")
+    if embedded_payload is not None:
+        output_payload = embedded_payload
+    if canonical_signed_bytes is None and output_payload is None:
+        ok_full, full_payload = _get(
+            session, f"{base}/jobs/{job_id}/full", hdrs, timeout
+        )
+        if ok_full and isinstance(full_payload, dict):
+            if full_payload.get("output_payload") is not None:
+                output_payload = full_payload.get("output_payload")
+            elif (
+                isinstance(full_payload.get("chunk"), str)
+                and not full_payload.get("has_more")
+            ):
+                try:
+                    import json as _json
+
+                    output_payload = _json.loads(full_payload["chunk"])
+                except Exception:
+                    output_payload = None
+    if canonical_signed_bytes is None and output_payload is None:
+        ok_job, job_payload = _get(session, f"{base}/jobs/{job_id}", hdrs, timeout)
+        if not ok_job:
+            return False, {
+                "verified": False,
+                "verification_error": "job output unavailable",
+                "agent_did": agent_did,
+                **(job_payload or {}),
+            }
+        output_payload = job_payload.get("output_payload")
     try:
         import base64
         import json
@@ -2632,12 +2713,15 @@ def _verify_job_signature(
             signature_bytes = base64.urlsafe_b64decode(signature_b64 + sig_pad)
         except Exception:
             signature_bytes = base64.b64decode(signature_b64 + sig_pad)
-        signed_bytes = json.dumps(
-            output_payload,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-        ).encode("utf-8")
+        if canonical_signed_bytes is not None:
+            signed_bytes = canonical_signed_bytes
+        else:
+            signed_bytes = json.dumps(
+                output_payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
         Ed25519PublicKey.from_public_bytes(public_key_bytes).verify(signature_bytes, signed_bytes)
     except Exception as exc:
         return True, {

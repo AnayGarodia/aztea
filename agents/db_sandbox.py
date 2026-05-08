@@ -279,6 +279,15 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
                             ),
                         }
                     )
+                except (MemoryError, OverflowError, ValueError) as exc:
+                    # randomblob(100MB), oversized literals, and other limit
+                    # breaches surface as MemoryError / OverflowError. Without
+                    # this branch they bubble up as a generic 500 with no
+                    # refund path. Caught in the 2026-05-07 eval.
+                    return _err(
+                        "db_sandbox.resource_limit",
+                        f"Statement exceeded sandbox resource limits: {type(exc).__name__}: {str(exc)[:200]}",
+                    )
 
             size_bytes = db_path.stat().st_size if db_path.exists() else 0
             return {

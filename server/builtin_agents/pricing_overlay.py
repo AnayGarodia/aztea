@@ -151,6 +151,10 @@ _OVERLAY: dict[str, dict[str, Any]] = {
         "pricing_model": "tiered",
         "pricing_config": {
             "input_field": "cve_ids",
+            # Count packages and single-cve_id calls against the same tier
+            # curve. Without these fallbacks a packages=[...] call extracted
+            # 0 units and silently underbilled (caught in 2026-05-07 eval).
+            "fallback_input_fields": ["packages", "cve_id"],
             "unit": "CVE",
             "min_cents": 1,
             "tiers": [

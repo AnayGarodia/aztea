@@ -568,10 +568,14 @@ def _builtin_worker_loop(stop_event: threading.Event) -> None:
                 last_summary=summary,
                 last_error=None,
             )
-            # If we drained a full batch, immediately try again — there may
-            # be more queued behind it. This keeps long fan-outs flowing
-            # without waiting another `interval` seconds.
-            if summary.get("processed", 0) >= _BUILTIN_JOB_WORKER_PARALLELISM:
+            # If anything ran AND there's still depth in the queue, drain
+            # again immediately. This is what lets a 100+ job batch fan out
+            # without waiting `interval` seconds between worker ticks.
+            processed_this_tick = int(summary.get("processed", 0) or 0)
+            queue_remaining = int(summary.get("queue_depth", 0) or 0)
+            if processed_this_tick > 0 and queue_remaining > 0:
+                _BUILTIN_WORKER_WAKE_EVENT.set()
+            elif processed_this_tick >= _BUILTIN_JOB_WORKER_PARALLELISM:
                 _BUILTIN_WORKER_WAKE_EVENT.set()
         except Exception as exc:
             _LOG.exception("Built-in worker loop failed.")
@@ -584,7 +588,8 @@ def _builtin_worker_loop(stop_event: threading.Event) -> None:
 
 _TIE_TIMEOUT_HOURS = 48
 _TIE_TIMEOUT_REASONING = (
-    "Judges tied after two rounds. Defaulting to caller per platform policy."
+    "Judges tied after two rounds. Finalizing in favor of the agent because "
+    "the filer did not produce judge consensus."
 )
 
 
@@ -623,7 +628,9 @@ def _run_pending_dispute_judgments(
             tied_count += 1
             tied_ids.append(dispute_id)
 
-    # Auto-rule tied disputes older than _TIE_TIMEOUT_HOURS in favour of caller.
+    # Auto-finalize stale tied disputes in favor of the agent. A caller-favoring
+    # tie break creates positive expected value for frivolous disputes; the
+    # filer bears the burden of producing judge consensus.
     stale_tied = disputes.get_stale_tied_disputes(
         older_than_hours=_TIE_TIMEOUT_HOURS, limit=capped
     )
@@ -635,22 +642,22 @@ def _run_pending_dispute_judgments(
             disputes.record_judgment(
                 dispute_id,
                 judge_kind="human_admin",
-                verdict="caller_wins",
+                verdict="agent_wins",
                 reasoning=_TIE_TIMEOUT_REASONING,
                 model=None,
                 admin_user_id="system_tie_timeout",
             )
             payments.post_dispute_settlement(
                 dispute_id,
-                outcome="caller_wins",
+                outcome="agent_wins",
             )
             finalized = disputes.finalize_dispute(
                 dispute_id,
                 status="final",
-                outcome="caller_wins",
+                outcome="agent_wins",
             )
             if finalized is not None:
-                _apply_dispute_effects(finalized, "caller_wins")
+                _apply_dispute_effects(finalized, "agent_wins")
                 job = jobs.get_job(finalized["job_id"])
                 if job is not None:
                     _record_job_event(
@@ -659,13 +666,13 @@ def _run_pending_dispute_judgments(
                         actor_owner_id=actor_owner_id,
                         payload={
                             "dispute_id": dispute_id,
-                            "outcome": "caller_wins",
+                            "outcome": "agent_wins",
                             "reason": "tie_timeout",
                         },
                     )
             tie_timeout_count += 1
             _LOG.warning(
-                "Tie-timeout auto-ruling: dispute %s → caller_wins after %dh",
+                "Tie-timeout auto-ruling: dispute %s -> agent_wins after %dh",
                 dispute_id,
                 _TIE_TIMEOUT_HOURS,
             )

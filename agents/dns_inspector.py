@@ -282,6 +282,21 @@ def run(payload: dict) -> dict:
 
         results.append(entry)
 
+    # If every requested domain failed (DNS error, SSRF block, all checks
+    # rejected), the floor 1¢ would still be billed. Return a structured
+    # error envelope instead so the settlement layer refunds in full.
+    # 2026-05-07 eval flagged the floor charge on 169.254.169.254 / .invalid.
+    if successfully_inspected == 0 and results:
+        all_issues = []
+        for entry in results:
+            for issue in entry.get("issues") or []:
+                all_issues.append(str(issue))
+        joined = "; ".join(all_issues[:6]) or "no domain returned a valid answer"
+        return _err(
+            "dns_ssl.no_results",
+            f"All domains failed inspection: {joined}",
+        )
+
     return {
         "results": results,
         "billing_units_actual": successfully_inspected,

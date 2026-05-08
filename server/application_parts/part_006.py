@@ -30,6 +30,10 @@ def _sweep_jobs(
             continue
         if updated.get("status") == "pending":
             timeout_retry_job_ids.append(updated["job_id"])
+            try:
+                _wake_builtin_worker()
+            except Exception:
+                _LOG.debug("Failed to wake builtin worker after timeout retry.", exc_info=True)
             _record_job_event(
                 updated,
                 "job.timeout_retry_scheduled",
@@ -111,6 +115,10 @@ def _sweep_jobs(
         if advanced is None:
             continue
         retry_ready_job_ids.append(advanced["job_id"])
+        try:
+            _wake_builtin_worker()
+        except Exception:
+            _LOG.debug("Failed to wake builtin worker after retry ready.", exc_info=True)
         _record_job_event(
             advanced,
             "retry_ready",

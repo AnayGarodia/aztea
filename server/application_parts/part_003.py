@@ -157,6 +157,19 @@ _SENSITIVE_EXAMPLE_AGENT_IDS: frozenset[str] = frozenset(
         # Secret Scanner — inputs are credentials/source code by definition.
         # Recording any example would replay caller-submitted secrets to other buyers.
         "1021c65c-d2bf-54ff-823a-897f9deb1029",
+        # Python Code Executor — caller-submitted source code routinely
+        # contains business logic, sandbox-escape probes, or private files.
+        # The 2026-05-07 eval surfaced indirect-import bypass attempts via
+        # the public examples surface; lock it down.
+        "040dc3f5-afe7-5db7-b253-4936090cc7af",
+        # DB Sandbox — caller schemas/queries leak business model details
+        # (table layouts, column names, sample rows).
+        "be4d6c18-629d-5b1c-8c46-f82c00db4995",
+        # Multi-language Executor — same rationale as the Python sandbox.
+        "d4b2c3e5-f6a7-5b8c-9d0e-1f2a3b4c5d6e",
+        # Dependency Auditor — the manifest itself can disclose private
+        # package names from internal registries.
+        "11fab82a-426e-513e-abf3-528d99ef2b87",
     }
 )
 

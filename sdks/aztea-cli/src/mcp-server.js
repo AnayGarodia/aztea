@@ -374,12 +374,38 @@ function request(method, path, body, timeoutMs, extraHeaders = {}) {
   })
 }
 
+// Auto-retry on 429. The server returns either a Retry-After header or a
+// `retry_after_seconds` field in the JSON body. Without this an MCP client
+// hammering the API (e.g. a sandbox red-team or a 100-job batch poll) ate
+// hard 429s instead of pacing itself. The cap (3 attempts, 30s ceiling)
+// keeps the call from blocking the LLM forever if the server stays hot.
+async function _requestWithBackoff(method, path, body, timeoutMs, extra) {
+  let attempt = 0
+  while (true) {
+    const res = await request(method, path, body, timeoutMs, extra || {})
+    if (res.status !== 429 || attempt >= 2) return res
+    let retryAfter = 0
+    const headerVal = res.headers && (res.headers['retry-after'] || res.headers['Retry-After'])
+    if (headerVal) {
+      const parsed = Number(headerVal)
+      if (Number.isFinite(parsed)) retryAfter = parsed
+    }
+    if (!retryAfter && res.body && typeof res.body === 'object') {
+      const fromBody = Number(res.body.retry_after_seconds || res.body.retry_after)
+      if (Number.isFinite(fromBody)) retryAfter = fromBody
+    }
+    const waitMs = Math.max(250, Math.min(30000, (retryAfter || (1 + attempt) * 2) * 1000))
+    await new Promise(resolve => setTimeout(resolve, waitMs))
+    attempt += 1
+  }
+}
+
 function getJson(path) {
-  return request('GET', path, null, TIMEOUT_MS)
+  return _requestWithBackoff('GET', path, null, TIMEOUT_MS)
 }
 
 function postJson(path, body) {
-  return request('POST', path, body, TIMEOUT_MS)
+  return _requestWithBackoff('POST', path, body, TIMEOUT_MS)
 }
 
 function parseApiResponse(res) {
@@ -535,6 +561,25 @@ function localSearchCatalog(query, limit) {
   const normalized = String(query || '').trim().toLowerCase()
   const capped = Math.max(1, Math.min(Number(limit || 8), 20))
   const terms = normalized.split(/\s+/).filter(Boolean)
+  // Negation handling: queries phrased as "not X", "anything but X",
+  // "everything except X" should down-rank, not boost, X. Without this the
+  // local lexical scorer reinforces the wrong agent. Detect simple negation
+  // markers and demote any agent whose slug/description matches the negated
+  // token.
+  const negationMarkers = ['not ', "don't ", 'do not ', "doesn't ", 'never ', 'no ', 'except ', 'but not ', 'anything but ']
+  let isNegation = false
+  let negatedTerm = ''
+  for (const marker of negationMarkers) {
+    const idx = normalized.indexOf(marker)
+    if (idx !== -1) {
+      const after = normalized.slice(idx + marker.length).split(/\s+/).filter(Boolean)
+      if (after.length) {
+        isNegation = true
+        negatedTerm = after.slice(0, 3).join(' ')
+        break
+      }
+    }
+  }
   const scored = []
   for (const entry of _catalog) {
     // Skip platform meta-tools from agent-intent searches — they confuse results
@@ -548,9 +593,19 @@ function localSearchCatalog(query, limit) {
     for (const term of terms) {
       if (haystack.includes(term)) score += 3
     }
-    if (score > 0) scored.push({ score, entry })
+    if (isNegation && negatedTerm && (entry.slug.toLowerCase().includes(negatedTerm) || haystack.includes(negatedTerm))) {
+      // Push the negated agent below all positive matches.
+      score = score > 0 ? -score - 100 : -100
+    }
+    // Always keep agents in the candidate pool so an empty top result list
+    // doesn't trigger the dreaded "0 results" UX. Negative-score agents
+    // are still ranked, just below positive ones.
+    scored.push({ score, entry })
   }
   scored.sort((a, b) => b.score - a.score)
+  // Trim to capped, but never return zero results when the catalog has any
+  // agents. A "no matches" response here is almost always wrong — better to
+  // return weak matches and let the caller refine.
   const results = scored.slice(0, capped).map(({ score, entry }) => ({
     slug: entry.slug,
     kind: entry.kind,
@@ -1256,35 +1311,54 @@ async function verifyJobSignature(args) {
       jwk = embeddedJwk
       verificationMethod = 'embedded-jwk'
     }
-    let job
-    if (jwk) {
-      job = await getJson(`/jobs/${encodeURIComponent(jobId)}`)
-    } else {
-      const [didDoc, jobDoc] = await Promise.all([
-        getJson(`/agents/${encodeURIComponent(agentId)}/did.json`),
-        getJson(`/jobs/${encodeURIComponent(jobId)}`),
-      ])
-      job = jobDoc
+    if (!jwk) {
+      const didDoc = await getJson(`/agents/${encodeURIComponent(agentId)}/did.json`)
       const method = (didDoc.verificationMethod || []).find(m => m && m.publicKeyJwk && m.publicKeyJwk.crv === 'Ed25519')
       if (!method) throw new Error('no Ed25519 publicKeyJwk on DID document and none embedded in signature response')
       jwk = method.publicKeyJwk
       verificationMethod = 'did-document'
     }
     const publicKey = crypto.createPublicKey({ key: jwk, format: 'jwk' })
-    // The job document occasionally arrives as either the raw row (output_payload
-    // top-level) or the parseApiResponse-wrapped envelope ({ ok, body: {...} }).
-    // Tolerate both, and also fall back to the receipt's pre-computed
-    // output_hash when the payload was elided (e.g. private_task=true jobs).
-    const outputPayload =
-      (job && job.output_payload) ||
-      (job && job.body && job.body.output_payload) ||
-      null
-    if (!outputPayload && !res.body.output_hash) {
-      throw new Error('verify: job has no output_payload and no output_hash; cannot reconstruct signed bytes')
+    // The signature endpoint embeds the canonical signed bytes (base64) so
+    // we never re-hash a wire-truncated /jobs/{id} payload. Prefer that;
+    // fall back to /jobs/{id}/full (which always returns the untruncated
+    // output_payload) and only as a last resort to /jobs/{id} (which may
+    // be truncated by _job_response and thus mismatch the signature).
+    let signedBytes = null
+    if (res.body.signed_payload_b64) {
+      signedBytes = Buffer.from(String(res.body.signed_payload_b64), 'base64')
+    } else if (res.body.output_payload) {
+      signedBytes = Buffer.from(canonicalJson(res.body.output_payload), 'utf8')
     }
-    const signedBytes = outputPayload
-      ? Buffer.from(canonicalJson(outputPayload), 'utf8')
-      : Buffer.from(String(res.body.output_hash), 'utf8')
+    if (!signedBytes) {
+      // Fetch full untruncated payload through the chunked endpoint.
+      try {
+        const full = await getJson(`/jobs/${encodeURIComponent(jobId)}/full`)
+        const payload =
+          (full && full.output_payload) ||
+          (full && typeof full.chunk === 'string' && !full.has_more
+            ? JSON.parse(full.chunk)
+            : null)
+        if (payload != null) {
+          signedBytes = Buffer.from(canonicalJson(payload), 'utf8')
+        }
+      } catch (_) {
+        /* fall through */
+      }
+    }
+    if (!signedBytes) {
+      const job = await getJson(`/jobs/${encodeURIComponent(jobId)}`)
+      const outputPayload =
+        (job && job.output_payload) ||
+        (job && job.body && job.body.output_payload) ||
+        null
+      if (outputPayload != null) {
+        signedBytes = Buffer.from(canonicalJson(outputPayload), 'utf8')
+      }
+    }
+    if (!signedBytes) {
+      throw new Error('verify: could not obtain canonical signed bytes for this job')
+    }
     verified = crypto.verify(null, signedBytes, publicKey, Buffer.from(String(res.body.signature || ''), 'base64'))
   } catch (exc) {
     verificationError = String(exc && exc.message ? exc.message : exc)

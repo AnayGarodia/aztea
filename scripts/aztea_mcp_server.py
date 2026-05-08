@@ -1795,13 +1795,34 @@ class RegistryBridge:
 
         if response.ok:
             if isinstance(parsed_body, dict):
-                entry = resolved_entry or self._catalog_entry(resolved_tool_name)
-                if entry is not None:
-                    price_usd = entry.get("price_per_call_usd")
-                    if price_usd is not None:
-                        _session_accrue(
-                            self._session_state, round(float(price_usd) * 100)
-                        )
+                # Prefer the actual caller_charge_cents the server reported,
+                # so variable-pricing agents (e.g. cve_lookup with N CVEs)
+                # accrue the real charge instead of the catalog floor. Fall
+                # back to the catalog entry's price_per_call_usd only when
+                # the response doesn't report a charge (cache hit, refund).
+                accrued_cents = None
+                actual = parsed_body.get("caller_charge_cents")
+                if actual is None:
+                    pricing = parsed_body.get("pricing_units")
+                    if isinstance(pricing, dict):
+                        actual = pricing.get("caller_charge_cents")
+                if actual is None:
+                    actual = parsed_body.get("price_cents") or parsed_body.get(
+                        "total_charged_cents"
+                    )
+                if actual is not None:
+                    try:
+                        accrued_cents = int(actual)
+                    except (TypeError, ValueError):
+                        accrued_cents = None
+                if accrued_cents is None:
+                    entry = resolved_entry or self._catalog_entry(resolved_tool_name)
+                    if entry is not None:
+                        price_usd = entry.get("price_per_call_usd")
+                        if price_usd is not None:
+                            accrued_cents = round(float(price_usd) * 100)
+                if accrued_cents:
+                    _session_accrue(self._session_state, accrued_cents)
                 # Strip the verbose next_actions block on repeat calls to the
                 # same agent within a session — it's useful once but adds
                 # ~200 bytes to every subsequent response. The full block stays

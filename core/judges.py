@@ -16,7 +16,9 @@ from core.llm.registry import DEFAULT_CHAIN
 _SYSTEM_PROMPT = (
     "You are an impartial arbiter. Analyze the dispute evidence and return strict JSON "
     'with keys: {"verdict": "...", "reasoning": "...", "confidence": 0.0-1.0}. '
-    "Valid verdict values are: caller_wins, agent_wins, split, void."
+    "Valid verdict values are: caller_wins, agent_wins, split, void. The filer "
+    "has the burden of proof. If your reasoning says the output was accurate, "
+    "in-scope, or the dispute is frivolous, the verdict must be agent_wins."
 )
 _QUALITY_SYSTEM_PROMPT = (
     "You are a strict quality judge for agent outputs. "
@@ -49,6 +51,30 @@ _AGENT_WIN_HINTS = {
     "outside scope",
     "nonpayment",
     "threat",
+    "frivolous",
+    "accurate",
+    "correct output",
+}
+_CALLER_WIN_REASONING_HINTS = {
+    "agent failed",
+    "agent output is wrong",
+    "output is wrong",
+    "incorrect output",
+    "missing required",
+    "incomplete output",
+}
+_AGENT_WIN_REASONING_HINTS = {
+    "dispute is frivolous",
+    "frivolous dispute",
+    "agent's output was accurate",
+    "agent output was accurate",
+    "output was accurate",
+    "agent's output is accurate",
+    "agent output is accurate",
+    "output is accurate",
+    "agent fulfilled",
+    "agent complied",
+    "caller changed scope",
 }
 
 
@@ -85,6 +111,36 @@ def _token_matches(text: str, vocabulary: set[str]) -> list[str]:
     return sorted(token for token in vocabulary if token in lowered)
 
 
+def _reasoning_contains(reasoning: str, phrases: set[str]) -> bool:
+    lowered = str(reasoning or "").lower()
+    return any(phrase in lowered for phrase in phrases)
+
+
+def _guard_judge_consistency(
+    verdict: str, reasoning: str, confidence: float
+) -> tuple[str, str, float]:
+    """Correct obvious verdict/reasoning contradictions before settlement."""
+    if verdict == "caller_wins" and _reasoning_contains(
+        reasoning, _AGENT_WIN_REASONING_HINTS
+    ):
+        return (
+            "agent_wins",
+            reasoning
+            + " Deterministic consistency guard corrected verdict from caller_wins to agent_wins.",
+            min(confidence, 0.65),
+        )
+    if verdict == "agent_wins" and _reasoning_contains(
+        reasoning, _CALLER_WIN_REASONING_HINTS
+    ):
+        return (
+            "caller_wins",
+            reasoning
+            + " Deterministic consistency guard corrected verdict from agent_wins to caller_wins.",
+            min(confidence, 0.65),
+        )
+    return verdict, reasoning, confidence
+
+
 def _local_dispute_fallback(context: dict) -> dict:
     dispute = context.get("dispute") or {}
     job = context.get("job") or {}
@@ -99,6 +155,13 @@ def _local_dispute_fallback(context: dict) -> dict:
     output_payload = job.get("output_payload")
     if not output_payload:
         caller_hits.append("missing_output")
+    lowered_combined = combined.lower()
+    if (
+        "frivolous" in lowered_combined
+        or "output was accurate" in lowered_combined
+        or "output is accurate" in lowered_combined
+    ):
+        agent_hits.extend(["frivolous_dispute", "accurate_output"])
 
     side = str(dispute.get("side") or "").strip().lower()
     caller_score = len(caller_hits) + (1 if side == "caller" else 0)
@@ -110,7 +173,7 @@ def _local_dispute_fallback(context: dict) -> dict:
     elif delta <= -2:
         verdict = "agent_wins"
     else:
-        verdict = "split"
+        verdict = "agent_wins"
 
     confidence = min(0.9, max(0.55, 0.55 + (abs(delta) * 0.08)))
     fallback_reason = (
@@ -151,6 +214,9 @@ def _judge_once(model_chain: list[str], context: dict) -> dict:
     except (TypeError, ValueError):
         confidence = 0.0
     confidence = max(0.0, min(1.0, confidence))
+    verdict, reasoning, confidence = _guard_judge_consistency(
+        verdict, reasoning, confidence
+    )
     return {
         "verdict": verdict,
         "reasoning": reasoning,
@@ -243,14 +309,33 @@ def run_judgment(dispute_id: str) -> dict:
         model=secondary["model"],
     )
 
-    if primary["verdict"] == secondary["verdict"]:
+    if primary["verdict"] == secondary["verdict"] and primary["verdict"] != "split":
         disputes.set_dispute_consensus(dispute_id, primary["verdict"])
         status = "consensus"
         outcome = primary["verdict"]
     else:
-        disputes.set_dispute_tied(dispute_id)
-        status = "tied"
-        outcome = None
+        tiebreaker = _local_dispute_fallback(context)
+        tiebreaker_verdict = tiebreaker["verdict"]
+        disputes.record_judgment(
+            dispute_id,
+            judge_kind="human_admin",
+            verdict=tiebreaker_verdict,
+            reasoning="Deterministic tiebreaker after LLM disagreement: "
+            + tiebreaker["reasoning"],
+            model="deterministic",
+            admin_user_id="system_tiebreaker",
+        )
+        if (
+            tiebreaker_verdict != "split"
+            and tiebreaker_verdict in {primary["verdict"], secondary["verdict"]}
+        ):
+            disputes.set_dispute_consensus(dispute_id, tiebreaker_verdict)
+            status = "consensus"
+            outcome = tiebreaker_verdict
+        else:
+            disputes.set_dispute_tied(dispute_id)
+            status = "tied"
+            outcome = None
 
     return {
         "status": status,

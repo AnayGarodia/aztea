@@ -94,8 +94,22 @@ def _render_markdown(output: Any, meta: dict[str, Any]) -> str:
         sections.append(_md_code_review(output))
         rendered = True
 
+    # Secret-scanner shape: {findings:[{rule_id,redacted_preview,...}], total_findings, findings_by_severity}
+    # Detect this BEFORE the generic linter shape so secret-scan output isn't
+    # mislabeled as "## Linter" in markdown / slack rendering.
+    if isinstance(output.get("findings"), list) and (
+        "findings_by_severity" in output
+        or "total_findings" in output
+        or any(
+            isinstance(f, dict)
+            and ("redacted_preview" in f or "rule_id" in f or "entropy" in f)
+            for f in output.get("findings") or []
+        )
+    ):
+        sections.append(_md_secret_scan(output))
+        rendered = True
     # Linter shape: {findings | issues, total | issue_count, fixed_code?}
-    if isinstance(output.get("findings"), list):
+    elif isinstance(output.get("findings"), list):
         sections.append(_md_linter(output))
         rendered = True
 
@@ -189,6 +203,42 @@ def _md_code_review(output: dict[str, Any]) -> str:
         for p in positives[:10]:
             lines.append(f"- {p}")
     return "\n".join(lines).strip()
+
+
+def _md_secret_scan(output: dict[str, Any]) -> str:
+    findings = output.get("findings") or []
+    total = output.get("total_findings")
+    if not isinstance(total, int):
+        total = len(findings)
+    by_sev = output.get("findings_by_severity") or {}
+    summary = str(output.get("summary") or "").strip()
+    lines: list[str] = ["## Secret Scanner"]
+    if summary:
+        lines.append(summary)
+    elif total == 0:
+        lines.append("✓ No leaked credentials detected.")
+    else:
+        lines.append(f"{total} potential leak{'s' if total != 1 else ''} detected.")
+    if isinstance(by_sev, dict) and by_sev:
+        sev_summary = " · ".join(
+            f"**{int(by_sev.get(level) or 0)}** {level}"
+            for level in ("critical", "high", "medium", "low")
+            if int(by_sev.get(level) or 0)
+        )
+        if sev_summary:
+            lines.append(sev_summary)
+    if findings:
+        lines.append("\n| Severity | Rule | Location | Preview |")
+        lines.append("| --- | --- | --- | --- |")
+        for f in findings[:50]:
+            sev = str(f.get("severity") or "low")
+            rule = str(f.get("rule_name") or f.get("rule_id") or "")
+            line = f.get("line")
+            col = f.get("column")
+            loc = f"L{line}:{col}" if line and col else (f"L{line}" if line else "")
+            preview = str(f.get("redacted_preview") or "").replace("|", "\\|")
+            lines.append(f"| {sev} | `{rule}` | {loc} | `{preview}` |")
+    return "\n".join(lines)
 
 
 def _md_linter(output: dict[str, Any]) -> str:
@@ -399,6 +449,18 @@ def _render_slack(output: Any, meta: dict[str, Any]) -> dict:
     if isinstance(output, dict):
         if "issues" in output and ("severity_counts" in output or "summary" in output):
             return {"blocks": _slack_code_review_blocks(output)}
+        # Secret scanner before linter so we don't mislabel "Linter" on a
+        # leaked-credentials report.
+        if isinstance(output.get("findings"), list) and (
+            "findings_by_severity" in output
+            or "total_findings" in output
+            or any(
+                isinstance(f, dict)
+                and ("redacted_preview" in f or "rule_id" in f or "entropy" in f)
+                for f in output.get("findings") or []
+            )
+        ):
+            return {"blocks": _slack_secret_scan_blocks(output)}
         if isinstance(output.get("findings"), list):
             return {"blocks": _slack_linter_blocks(output)}
         if isinstance(output.get("vulnerabilities"), list):

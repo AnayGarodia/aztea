@@ -55,7 +55,11 @@ _MAX_FILE_SIZE_BYTES = (
     int(os.environ.get("AZTEA_PYTHON_MAX_FILE_SIZE_MB", "32") or "32") * 1024 * 1024
 )
 _MAX_CAPTURE_VALUE_CHARS = 1000
-_STATIC_ALLOCATION_LIMIT_BYTES = 32 * 1024 * 1024
+# Static analyzer's allocation cap. Must equal _MAX_MEMORY_MB so the
+# documented memory limit and the user-visible blocked message agree —
+# the 2026-05-07 eval caught these drifting (advertised 128 MB, blocked
+# at 32 MB with a hardcoded "32 MB sandbox policy" message).
+_STATIC_ALLOCATION_LIMIT_BYTES = _MAX_MEMORY_MB * 1024 * 1024
 
 _EXPLAIN_SYSTEM = """\
 You are a Python expert explaining a code snippet and its execution result to a developer.
@@ -312,9 +316,32 @@ def _err(code: str, message: str) -> dict[str, Any]:
 
 
 def _capture_variables(namespace: dict[str, Any]) -> dict[str, Any]:
+    """Capture top-level variable values for the response.
+
+    Drops module references, built-in functions, and other non-serializable
+    runtime objects. The 2026-05-07 eval surfaced ``<module 'os' (frozen)>``,
+    ``<built-in function __import__>``, and other implementation-detail
+    leakage when red-teaming the sandbox; those values give an attacker
+    free reconnaissance about the runtime and serve no caller use case.
+    """
+    import types as _types
+
     captured: dict[str, Any] = {}
     for key, value in list(namespace.items()):
         if key.startswith("_"):
+            continue
+        # Filter runtime internals: modules, classes, functions, builtins.
+        if isinstance(
+            value,
+            (
+                _types.ModuleType,
+                _types.FunctionType,
+                _types.BuiltinFunctionType,
+                _types.BuiltinMethodType,
+                _types.MethodType,
+                type,
+            ),
+        ):
             continue
         if isinstance(value, str):
             captured[key] = (

@@ -533,12 +533,19 @@ def _resolve_payload(
     if not all_required:
         return {"intent": intent}, []
 
-    # Single top-level string field: auto-fill from intent.
+    # Single top-level string field: auto-fill from intent — but only when
+    # the intent looks like the kind of input the agent expects. A
+    # conversational question like "what is the capital of France" must
+    # never be force-fitted into a `code`, `sql`, `manifest`, or `diff`
+    # field; that produced obvious garbage in the 2026-05-07 eval where
+    # python_code_executor was hired with the question as its `code`.
     if len(all_required) == 1 and not composite_variants:
         field_name = all_required[0]
         field_spec = properties.get(field_name) or {}
         field_type = str(field_spec.get("type") or "").lower()
         if field_type in {"string", ""}:
+            if _intent_unfit_for_field(intent, field_name):
+                return {}, [field_name]
             return {field_name: intent}, []
 
     # Composite schema without explicit_input: cannot auto-fill structured fields.
@@ -555,6 +562,77 @@ _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 def _tokenize(text: str) -> list[str]:
     return [t for t in _TOKEN_RE.findall(text or "") if len(t) > 2]
+
+
+# Field-name → intent shape gates. If the agent expects a chunk of source
+# code, SQL, a diff, or a manifest, a chat-style question is not valid input
+# and must be rejected at the auto-hire gate. Without this, aztea_do happily
+# routes "what is the capital of France" to python_code_executor as
+# ``code: "what is..."`` (caught in the 2026-05-07 eval).
+_CODE_LIKE_FIELDS = frozenset(
+    {"code", "sql", "diff", "manifest", "schema_sql", "patch", "source"}
+)
+_QUESTION_PREFIXES = (
+    "what ",
+    "what's ",
+    "whats ",
+    "who ",
+    "why ",
+    "when ",
+    "where ",
+    "how ",
+    "can ",
+    "could ",
+    "would ",
+    "should ",
+    "is ",
+    "are ",
+    "do ",
+    "does ",
+    "did ",
+    "will ",
+    "tell me ",
+    "explain ",
+    "describe ",
+    "summarize ",
+    "summarise ",
+)
+
+
+def _looks_like_question(intent: str) -> bool:
+    text = (intent or "").strip().lower()
+    if not text:
+        return False
+    if text.endswith("?"):
+        return True
+    return any(text.startswith(prefix) for prefix in _QUESTION_PREFIXES)
+
+
+def _looks_like_code(intent: str) -> bool:
+    text = intent or ""
+    if not text.strip():
+        return False
+    # Heuristic: real code has multiple lines, common code punctuation,
+    # or recognizable keywords/operators that don't appear in chat.
+    if "\n" in text:
+        return True
+    if any(token in text for token in ("def ", "class ", "import ", "->", "=>", "{", "};", "</", "/>", "select ", "SELECT ", "from ", "FROM ")):
+        return True
+    return False
+
+
+def _intent_unfit_for_field(intent: str, field_name: str) -> bool:
+    """Return True when the intent string is obviously the wrong shape for
+    the named field. Conservative — only blocks the clear-cut cases.
+    """
+    if not field_name:
+        return False
+    name = field_name.lower()
+    if name not in _CODE_LIKE_FIELDS:
+        return False
+    if _looks_like_question(intent) and not _looks_like_code(intent):
+        return True
+    return False
 
 
 def _safe_float(value: Any, default: float) -> float:

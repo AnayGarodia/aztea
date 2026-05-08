@@ -1784,7 +1784,10 @@ def _dispute_view(dispute_row: dict) -> dict:
             "resolve the dispute automatically."
         )
     elif status == "tied":
-        payload["eta_hint"] = "Tied disputes auto-resolve to caller after 48 hours."
+        payload["eta_hint"] = (
+            "Tied disputes auto-finalize as agent_wins after 48 hours unless "
+            "an admin resolves them first."
+        )
     elif status in {"resolved", "final"}:
         payload["eta_hint"] = "Dispute is resolved."
     return payload
