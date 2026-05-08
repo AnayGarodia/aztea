@@ -921,18 +921,25 @@ def compute_ledger_invariants(max_mismatches: int = 100) -> dict:
         ledger_total = conn.execute(
             "SELECT COALESCE(SUM(amount_cents), 0) AS total FROM transactions"
         ).fetchone()["total"]
+        # Postgres doesn't allow referencing GROUP BY aggregate aliases in
+        # HAVING/ORDER BY by name (only by expression). Wrap in a subquery so
+        # the same SQL works on both backends; the SQLite execution plan is
+        # unchanged. Bug surfaced as `column "ledger_balance_cents" does not
+        # exist` flooding production logs every reconciliation tick.
         mismatches = conn.execute(
             """
-            SELECT
-                w.wallet_id,
-                w.owner_id,
-                w.balance_cents,
-                COALESCE(SUM(t.amount_cents), 0) AS ledger_balance_cents
-            FROM wallets w
-            LEFT JOIN transactions t ON t.wallet_id = w.wallet_id
-            GROUP BY w.wallet_id
-            HAVING w.balance_cents != ledger_balance_cents
-            ORDER BY ABS(w.balance_cents - ledger_balance_cents) DESC, w.wallet_id ASC
+            SELECT * FROM (
+                SELECT
+                    w.wallet_id,
+                    w.owner_id,
+                    w.balance_cents,
+                    COALESCE(SUM(t.amount_cents), 0) AS ledger_balance_cents
+                FROM wallets w
+                LEFT JOIN transactions t ON t.wallet_id = w.wallet_id
+                GROUP BY w.wallet_id, w.owner_id, w.balance_cents
+            ) sub
+            WHERE balance_cents != ledger_balance_cents
+            ORDER BY ABS(balance_cents - ledger_balance_cents) DESC, wallet_id ASC
             LIMIT %s
             """,
             (capped,),

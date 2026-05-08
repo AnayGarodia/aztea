@@ -940,16 +940,28 @@ def _hook_backoff_seconds(attempt_count: int) -> int:
 
 
 def _claim_due_hook_delivery(now_iso: str) -> dict | None:
+    from core import db as _db_kind
+
     with jobs._conn() as conn:
         try:
-            exists = conn.execute(
-                """
-                SELECT 1
-                FROM sqlite_master
-                WHERE type = 'table' AND name = 'job_event_deliveries'
-                LIMIT 1
-                """
-            ).fetchone()
+            if _db_kind.IS_POSTGRES:
+                exists = conn.execute(
+                    """
+                    SELECT 1
+                    FROM information_schema.tables
+                    WHERE table_name = 'job_event_deliveries'
+                    LIMIT 1
+                    """
+                ).fetchone()
+            else:
+                exists = conn.execute(
+                    """
+                    SELECT 1
+                    FROM sqlite_master
+                    WHERE type = 'table' AND name = 'job_event_deliveries'
+                    LIMIT 1
+                    """
+                ).fetchone()
         except sqlite3.OperationalError as exc:
             if "database is locked" in str(exc).lower():
                 return None
