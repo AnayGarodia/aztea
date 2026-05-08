@@ -315,6 +315,27 @@ def ensure_builtin_agents_registered() -> None:
         for spec in specs
         if str(spec.get("agent_id") or "").strip()
     }
+    # Install the per-agent match/block keyword overlay used by the search
+    # ranker so jargon queries (SBOM, IMDS, ReDoS, prototype pollution,
+    # log4shell, ...) route to the right agent. Overlay lives in core/
+    # but is sourced from the built-in specs the server owns.
+    try:
+        from core.registry.agents_ops import set_routing_overlay
+
+        set_routing_overlay(
+            match_keywords={
+                str(spec.get("agent_id") or ""): list(spec.get("match_keywords") or [])
+                for spec in specs
+                if spec.get("match_keywords")
+            },
+            block_keywords={
+                str(spec.get("agent_id") or ""): list(spec.get("block_keywords") or [])
+                for spec in specs
+                if spec.get("block_keywords")
+            },
+        )
+    except Exception:
+        _LOG.exception("Failed to install routing keyword overlay; search ranking degraded.")
     now = _utc_now_iso()
 
     for spec in specs:

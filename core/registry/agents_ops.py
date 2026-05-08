@@ -1203,6 +1203,77 @@ def _lexical_match_score(query: str, agent: dict, supported_fields: set[str]) ->
     return max(0.0, min(1.0, score))
 
 
+# Routing overlay populated at startup by ``server.application`` from the
+# built-in spec definitions. Kept in this module so ``search_agents`` can
+# read curated match/block keyword lists without violating the core →
+# server one-way import rule. Overlay is keyed by agent_id.
+_ROUTING_OVERLAY_MATCH: dict[str, list[str]] = {}
+_ROUTING_OVERLAY_BLOCK: dict[str, list[str]] = {}
+
+
+def set_routing_overlay(
+    match_keywords: dict[str, list[str]] | None,
+    block_keywords: dict[str, list[str]] | None,
+) -> None:
+    """Install the per-agent routing keyword overlay used by search ranking.
+
+    Called once at application startup from the FastAPI lifespan. The
+    server layer owns the spec definitions; core registers them here so
+    the search ranker (which lives in core) can use them without a
+    server → core → server import cycle.
+    """
+    global _ROUTING_OVERLAY_MATCH, _ROUTING_OVERLAY_BLOCK
+    _ROUTING_OVERLAY_MATCH = {
+        str(k): [str(v).strip().lower() for v in (vs or []) if str(v).strip()]
+        for k, vs in (match_keywords or {}).items()
+        if k
+    }
+    _ROUTING_OVERLAY_BLOCK = {
+        str(k): [str(v).strip().lower() for v in (vs or []) if str(v).strip()]
+        for k, vs in (block_keywords or {}).items()
+        if k
+    }
+
+
+def _agent_match_keywords(agent: dict) -> list[str]:
+    """Curated routing vocabulary for an agent.
+
+    Pulls from (a) the agent row's ``match_keywords`` column when present
+    (e.g. registered via the SDK with explicit keywords), (b) the routing
+    overlay populated from built-in specs at startup. Caught in the
+    2026-05-07 eval where bucket-B jargon queries (SBOM, IMDS, ReDoS,
+    log4shell, prototype pollution) collapsed to cve_lookup_agent because
+    no agent uniquely owned those terms.
+    """
+    raw = agent.get("match_keywords")
+    if isinstance(raw, str):
+        try:
+            import json as _json
+
+            raw = _json.loads(raw)
+        except Exception:
+            raw = [raw]
+    if isinstance(raw, list) and raw:
+        return [str(item).strip().lower() for item in raw if str(item).strip()]
+    agent_id = str(agent.get("agent_id") or "").strip()
+    return _ROUTING_OVERLAY_MATCH.get(agent_id, [])
+
+
+def _agent_block_keywords(agent: dict) -> list[str]:
+    raw = agent.get("block_keywords")
+    if isinstance(raw, str):
+        try:
+            import json as _json
+
+            raw = _json.loads(raw)
+        except Exception:
+            raw = [raw]
+    if isinstance(raw, list) and raw:
+        return [str(item).strip().lower() for item in raw if str(item).strip()]
+    agent_id = str(agent.get("agent_id") or "").strip()
+    return _ROUTING_OVERLAY_BLOCK.get(agent_id, [])
+
+
 def _intent_match_bonus(query: str, agent: dict) -> float:
     terms = _query_terms(query)
     if not terms:
@@ -1212,7 +1283,27 @@ def _intent_match_bonus(query: str, agent: dict) -> float:
     description = str(agent.get("description") or "").lower()
     tags = {str(tag).strip().lower() for tag in _parse_tags(agent.get("tags"))}
     combined = " ".join([name, description, " ".join(sorted(tags))])
+    lowered_query = str(query or "").lower()
     bonus = 0.0
+
+    # Curated match_keywords are the single strongest discovery signal —
+    # they encode "if the query mentions X, this is the right agent" in
+    # plain language. Each hit adds 0.20 (capped at 0.60) to the bonus,
+    # which the blended score then weighs alongside lexical+semantic.
+    match_kws = _agent_match_keywords(agent)
+    if match_kws:
+        kw_hits = sum(1 for kw in match_kws if kw in lowered_query)
+        if kw_hits:
+            bonus += min(0.60, kw_hits * 0.20)
+
+    # block_keywords pull the agent down so it doesn't grab the slot it
+    # shouldn't. Example: json_schema_validator must not match
+    # "package.json vulnerabilities" — the schema validator has no CVE data.
+    block_kws = _agent_block_keywords(agent)
+    if block_kws:
+        block_hits = sum(1 for kw in block_kws if kw in lowered_query)
+        if block_hits:
+            bonus -= min(0.50, block_hits * 0.25)
 
     security_terms = {
         "security",
