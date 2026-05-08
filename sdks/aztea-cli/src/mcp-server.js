@@ -431,6 +431,12 @@ function accumulate(amountCents) {
   SESSION_STATE.spentCents += Number(amountCents) || 0
 }
 
+// Derive the canonical snake_case slug from a display name.
+// Mirrors core/mcp_manifest.py::_slugify — DB has no slug column, only name.
+function canonicalSlug(value) {
+  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+}
+
 // Resolve a slug or UUID to an agent UUID. Checks the in-memory catalog first,
 // then falls back to a registry search so callers can use friendly slugs.
 async function resolveAgentId(agentIdOrSlug) {
@@ -451,7 +457,9 @@ async function resolveAgentId(agentIdOrSlug) {
   const candidates = []
   for (const item of results) {
     const agent = item.agent || item || {}
-    const cand = String(agent.slug || agent.agent_slug || '').trim().toLowerCase()
+    // DB has no slug column — derive from name when explicit slug fields are absent.
+    const cand = (String(agent.slug || agent.agent_slug || '').trim().toLowerCase())
+      || canonicalSlug(agent.name)
     if (cand) candidates.push(cand)
     if (cand && cand === slugLower) {
       const id = agent.agent_id || item.agent_id
@@ -464,7 +472,8 @@ async function resolveAgentId(agentIdOrSlug) {
     if (list.ok) {
       const agents = Array.isArray(list.body.agents) ? list.body.agents : []
       for (const agent of agents) {
-        const cand = String((agent && (agent.slug || agent.agent_slug)) || '').trim().toLowerCase()
+        const cand = (String((agent && (agent.slug || agent.agent_slug)) || '').trim().toLowerCase())
+          || canonicalSlug(agent && agent.name)
         if (cand === slugLower && agent.agent_id) return { ok: true, id: agent.agent_id }
       }
     }
