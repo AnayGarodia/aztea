@@ -85,7 +85,10 @@ DB_PATH = os.environ.get("DB_PATH", _DEFAULT_DB_PATH)
 
 # Cap concurrent database connections to bound OS file descriptor usage.
 # PostgreSQL backend uses the same semaphore for parity.
-_MAX_CONNECTIONS = max(1, int(os.environ.get("DB_MAX_CONNECTIONS", "32")))
+# Default raised 32→96 on 2026-05-08: 24-worker batches + sweeper + dispute
+# judge + hook delivery + HTTP request handlers were exhausting the 32-conn
+# pool when a 100+ job batch was in flight, stalling fan-out at ~87 settled.
+_MAX_CONNECTIONS = max(1, int(os.environ.get("DB_MAX_CONNECTIONS", "96")))
 _conn_semaphore = threading.BoundedSemaphore(_MAX_CONNECTIONS)
 
 _local = threading.local()
