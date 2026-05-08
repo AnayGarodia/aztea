@@ -2375,6 +2375,19 @@ def _session_audit(
         "receipts_digest": receipts_digest,
         "receipts_digest_method": "sha256(job_id|output_hash|signed) joined by newline",
         "audit_signature_method": "per-job Ed25519 + did:web (call aztea_job(action=verify) to confirm any single receipt)",
+        # Self-discovery: every filter / mode this tool supports surfaced in
+        # one place so callers don't have to read docs to find them. Caught
+        # in the 2026-05-08 eval where the auditor scored this surface a C+
+        # because they couldn't tell time-range / bulk-verify / digest were
+        # already supported. Same payload shape regardless of which filters
+        # the caller passed.
+        "available_options": {
+            "period": "1d | 7d | 30d | 90d (default 1d)",
+            "since": "ISO-8601 lower bound on settled_at (e.g. 2026-05-01T00:00:00Z)",
+            "until": "ISO-8601 upper bound on settled_at",
+            "limit": "1..200 receipts (default 100, sorted newest-first)",
+            "verify_all": "true to Ed25519-verify every signed receipt in the window; returns aggregate verified/failed and first failure",
+        },
     }
 
     # Optional bulk verification — auditors who want the "I verified every

@@ -150,12 +150,29 @@ def _batch_parallel_trace(
         # directly avoids the cross-module-import-wrong-namespace bug where
         # importing part_004 as a separate module gave us its own zero-init
         # counter instead of the mutable one shared by all shards.
+        #
+        # Race correction (2026-05-08 eval): the raw counter can lag behind
+        # the DB snapshot. `counts["running"]` was computed from a SELECT
+        # that ran tens of milliseconds before this read, while inflight is
+        # decremented at the END of each worker thread (after the DB row
+        # transitions running → complete). For fast jobs (DB sandbox @ 42ms)
+        # the worker can finish + decrement BEFORE the trace reads, leaving
+        # a contradictory `in_flight_global: 0` while `this_batch_running`
+        # still reports the older snapshot. We therefore report the maximum
+        # of the live counter and the DB running-count for THIS batch, so
+        # the two fields cannot disagree in a way that destroys caller trust.
         try:
-            _inflight = globals().get("_BUILTIN_WORKER_INFLIGHT_COUNT", 0)
-            _parallelism = int(globals().get("_BUILTIN_JOB_WORKER_PARALLELISM") or _BUILTIN_JOB_WORKER_PARALLELISM)
-            in_flight_now = int(_inflight)
+            _inflight_raw = int(
+                globals().get("_BUILTIN_WORKER_INFLIGHT_COUNT", 0) or 0
+            )
+            _parallelism = int(
+                globals().get("_BUILTIN_JOB_WORKER_PARALLELISM")
+                or _BUILTIN_JOB_WORKER_PARALLELISM
+            )
+            in_flight_now = max(_inflight_raw, counts["running"])
             capacity_remaining_now = max(0, _parallelism - in_flight_now)
         except Exception:
+            _inflight_raw = None
             in_flight_now = None
             capacity_remaining_now = None
         worker_pool = {
@@ -165,12 +182,16 @@ def _batch_parallel_trace(
             "this_batch_pending": counts["pending"],
             "this_batch_running": counts["running"],
             "in_flight_global": in_flight_now,
+            "in_flight_global_raw": _inflight_raw,
             "capacity_remaining": capacity_remaining_now,
             "last_worker_summary": worker_state_summary,
             "hint": (
                 "Jobs run on a shared worker pool with persistent threads. "
                 "platform_queue_depth = total pending across all callers; "
-                "capacity_remaining = free worker slots right now. If "
+                "capacity_remaining = free worker slots right now. "
+                "in_flight_global is the floor MAX(live counter, this batch's "
+                "running count); in_flight_global_raw is the unadjusted counter "
+                "(may briefly lag the DB while fast jobs settle). If "
                 "platform_queue_depth > capacity_remaining + in_flight, "
                 "your jobs are queued behind other callers and will start "
                 "as soon as a slot frees."

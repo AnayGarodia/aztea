@@ -94,6 +94,40 @@ _SEARCH_RELEVANCE_FLOOR = 0.18
 _SEARCH_KEEP_FLOOR = 0.20
 _SEARCH_DROPOFF_BAND = 0.20
 
+# Off-catalog intent fingerprints. When the query unambiguously asks for a
+# capability the catalog does not yet have (research papers, type checking,
+# image generation, etc.) we want to surface "no match" with a clear
+# explanation instead of returning the highest-scoring distractor. The eval
+# flagged "find recent papers on attention mechanisms" → DNS Inspector and
+# "test if my endpoint is fast enough" → Visual Regression as confidence-
+# destroying. Each entry is (description, predicate-on-tokens).
+_OFF_CATALOG_PATTERNS = [
+    (
+        "research papers / academic literature",
+        lambda toks: bool(
+            {"papers", "paper", "arxiv", "academic", "preprint", "preprints", "research"}
+            & toks
+        ),
+    ),
+    (
+        "TypeScript / mypy type-checking",
+        lambda toks: ({"type", "typecheck", "type-check", "typecheck", "tsc", "mypy"} & toks)
+        and ("typescript" in toks or "ts" in toks or "python" in toks),
+    ),
+    (
+        "image generation",
+        lambda toks: bool(
+            {"dall", "midjourney", "stable", "diffusion", "generator"} & toks
+        )
+        and ("image" in toks or "picture" in toks),
+    ),
+    (
+        "endpoint latency / load testing",
+        lambda toks: ({"endpoint", "endpoints", "latency", "load"} & toks)
+        and ({"fast", "slow", "test", "perf", "performance", "p99", "p95"} & toks),
+    ),
+]
+
 # Typo + acronym → canonical-term expansions ONLY. Do not list "code
 # execution", "python", "base64", or other generic terms here — every
 # expansion you add to a query is a token every candidate's lexical
@@ -1373,7 +1407,22 @@ def _intent_match_bonus(query: str, agent: dict) -> float:
         "dall",
         "replicate",
         "picture",
+    }
+    # "render" used to live in image_terms, but the 2026-05-08 eval found that
+    # "render this webpage" matched image_terms (visual_regression description
+    # contains "image"), inflating its blended score above browser_agent. Web
+    # rendering and image generation share zero overlap in this catalog, so
+    # bonus the browser path explicitly without overloading the image path.
+    web_render_terms = {
         "render",
+        "renders",
+        "rendered",
+        "webpage",
+        "web-page",
+        "site",
+        "url",
+        "scrape",
+        "crawl",
     }
     finance_terms = {"edgar", "10-k", "10q", "10-q", "sec", "filing", "revenue"}
     red_team_terms = {
@@ -1458,19 +1507,27 @@ def _intent_match_bonus(query: str, agent: dict) -> float:
         ):
             bonus -= 0.05
 
-    if browser_terms & set(terms):
+    if browser_terms & set(terms) or web_render_terms & set(terms):
         wants_page_screenshot = bool(
             {"screenshot", "screenshots", "homepage"} & set(terms)
             and not (visual_compare_terms & set(terms))
         )
-        if wants_page_screenshot and any(
-            token in combined for token in ("browser", "playwright", "headless")
+        wants_web_render = bool(
+            web_render_terms & set(terms)
+            and not (visual_compare_terms & set(terms))
+        )
+        if (wants_page_screenshot or wants_web_render) and any(
+            token in combined for token in ("browser", "playwright", "headless", "chromium")
         ):
-            bonus += 0.55
-        elif wants_page_screenshot and any(
+            # Strong page-fetch signal: render/scrape/screenshot a real URL.
+            # Browser Agent must dominate Visual Regression here regardless of
+            # the "image" lexical match VR catches via "compare two images".
+            bonus += 0.65
+        elif (wants_page_screenshot or wants_web_render) and any(
             token in combined for token in ("visual regression", "pixel-level diff")
         ):
-            bonus -= 0.25
+            # Same intent class but routed at the wrong agent — push it down.
+            bonus -= 0.35
         elif any(
             token in combined
             for token in ("browser", "playwright", "screenshot", "headless")
@@ -1852,6 +1909,18 @@ def search_agents(
             ),
             reverse=True,
         )
+
+    # Off-catalog short-circuit: when the query unambiguously asks for a
+    # capability we don't have, return empty BEFORE the relevance-floor
+    # check so a weak lexical match can't sneak through.
+    query_token_set = set(_query_terms(normalized_query))
+    if price_query_mode is None and query_token_set:
+        for _description, predicate in _OFF_CATALOG_PATTERNS:
+            try:
+                if predicate(query_token_set):
+                    return []
+            except Exception:  # noqa: BLE001 — predicates must never crash search
+                continue
 
     # Confidence floor: drop low-relevance candidates so callers don't get
     # five mediocre matches when nothing in the catalog is a real fit. The

@@ -49,10 +49,23 @@ def _available_multi_language_options() -> list[str]:
 
 def load_builtin_specs_part4() -> list[dict[str, Any]]:
     multi_language_options = _available_multi_language_options()
-    multi_language_desc = (
-        "Use when you need to run sandboxed code in one of the runtimes actually installed on this executor. "
-        f"Currently available languages: {', '.join(multi_language_options) if multi_language_options else 'none'}."
-    )
+    # Description starts with what's installed RIGHT NOW so callers don't
+    # waste a hire discovering the catalog reality. The 2026-05-08 eval
+    # scored this agent down for misleading naming when only JavaScript
+    # was actually installed but the name suggested polyglot support.
+    if multi_language_options:
+        languages_pretty = ", ".join(multi_language_options)
+        multi_language_desc = (
+            f"Sandboxed code execution. Currently installed runtimes on this executor: "
+            f"{languages_pretty}. Other languages return a clear unsupported_language "
+            "error (no charge). For Python use the Python Code Executor instead."
+        )
+    else:
+        multi_language_desc = (
+            "Sandboxed code execution. NO runtimes are currently installed on this "
+            "executor — every call will return an unsupported_language error. Use "
+            "Python Code Executor for Python; this agent is dormant."
+        )
     return [
         {
             "agent_id": _DB_SANDBOX_AGENT_ID,

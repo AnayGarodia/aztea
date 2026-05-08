@@ -372,7 +372,44 @@ def _score_candidate(
         reasons.append("recommended")
 
     combined = " ".join([c.slug.lower(), c.name.lower(), c.description.lower(), " ".join(c.tags).lower()])
-    if {"run", "execute", "python"} & tokens and "python" in combined and "executor" in combined:
+    intent_lower_full = intent.lower()
+    # Audit/vulnerability/dependency intents must dominate over the generic
+    # python-execution rule. A user saying "Check vulnerabilities in my Python
+    # project, requests==2.25.0 pyyaml==5.3.1" mentions the word "python" but
+    # is NOT asking us to execute code — they want a dependency audit. Caught
+    # in the 2026-05-08 eval where aztea_do routed this exact intent to
+    # python_code_executor with confidence 0.97 and passed the natural-
+    # language string as `code`, producing a $0.01 SyntaxError.
+    audit_signal = (
+        bool({"audit", "audits", "auditing", "vulnerability", "vulnerabilities", "cve", "cves", "supply"} & tokens)
+        or "package.json" in intent_lower_full
+        or "requirements.txt" in intent_lower_full
+        or _looks_like_package_pinning(intent_lower_full)
+    )
+    is_dependency_agent = any(
+        tok in combined for tok in ("dependency_auditor", "dependency auditor", "dep-audit")
+    ) or ("dependency" in combined and "audit" in combined)
+    if audit_signal and is_dependency_agent:
+        score += 70
+        reasons.append("dependency audit intent")
+
+    # Python execution intent: require a strong execution verb AND no audit
+    # signal. The verb-only check ("python" in tokens) was too loose — every
+    # mention of Python the language fired the +45 bonus, including the user
+    # describing what stack their PROJECT is in.
+    has_strong_exec_verb = bool(
+        {"run", "execute", "evaluate", "repl", "interpreter", "compute"} & tokens
+    )
+    has_python_token = bool({"python", "py3", "python3"} & tokens)
+    looks_codey = ("\n" in intent) or any(
+        token in intent for token in ("def ", "class ", "import ", "print(", "lambda ")
+    )
+    python_exec_match = (
+        "python" in combined and "executor" in combined
+    )
+    if python_exec_match and not audit_signal and (
+        (has_strong_exec_verb and has_python_token) or looks_codey
+    ):
         score += 45
         reasons.append("python execution intent")
     if {"lint", "linter", "ruff", "eslint"} & tokens and "linter" in combined:
@@ -608,6 +645,45 @@ def _looks_like_question(intent: str) -> bool:
     return any(text.startswith(prefix) for prefix in _QUESTION_PREFIXES)
 
 
+_PACKAGE_PIN_RE = re.compile(
+    r"\b[a-z][a-z0-9_.-]{1,40}(?:==|@)\d[\w.\-+]*",
+    re.IGNORECASE,
+)
+# "Check ...", "Audit ...", "Review ...", "Find ..." used as imperatives at the
+# start of an intent are conversational asks — never raw code, SQL, manifest, or
+# diff content. Matters for the ``_intent_unfit_for_field`` gate so aztea_do
+# does not force-fit "Check vulnerabilities in requests==2.25.0" into a
+# code-shaped field.
+_IMPERATIVE_PREFIXES = (
+    "check ",
+    "audit ",
+    "review ",
+    "find ",
+    "look up ",
+    "lookup ",
+    "scan ",
+    "investigate ",
+    "analyze ",
+    "analyse ",
+    "evaluate ",
+    "assess ",
+    "diagnose ",
+)
+
+
+def _looks_like_package_pinning(intent: str) -> bool:
+    """True when the intent contains pinned package references like
+    ``requests==2.25.0`` or ``axios@1.6.0``. Used by both the auto-hire
+    routing rule (audit intents must beat python-execution) and the
+    field-fit gate (don't shove a sentence with package pins into a `code`
+    field).
+    """
+    text = intent or ""
+    if not text:
+        return False
+    return _PACKAGE_PIN_RE.search(text) is not None
+
+
 def _looks_like_code(intent: str) -> bool:
     text = intent or ""
     if not text.strip():
@@ -630,7 +706,17 @@ def _intent_unfit_for_field(intent: str, field_name: str) -> bool:
     name = field_name.lower()
     if name not in _CODE_LIKE_FIELDS:
         return False
-    if _looks_like_question(intent) and not _looks_like_code(intent):
+    if _looks_like_code(intent):
+        return False
+    if _looks_like_question(intent):
+        return True
+    text = (intent or "").strip().lower()
+    if any(text.startswith(prefix) for prefix in _IMPERATIVE_PREFIXES):
+        return True
+    if _looks_like_package_pinning(intent):
+        # Sentences with `requests==2.25.0` style pins are about packages,
+        # not raw code blocks. Force the caller to use structured input or
+        # to retry with a different intent.
         return True
     return False
 

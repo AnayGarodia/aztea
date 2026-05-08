@@ -27,14 +27,21 @@ from core import db as _db
 DB_PATH = _db.DB_PATH
 _local = _db._local
 
-_QUALITY_WEIGHT = 0.45
-_SUCCESS_WEIGHT = 0.35
-_LATENCY_WEIGHT = 0.20
+_QUALITY_WEIGHT = 0.40
+_SUCCESS_WEIGHT = 0.45
+_LATENCY_WEIGHT = 0.15
 _NEUTRAL_TRUST = 0.5
 _QUALITY_PRIOR_RATING = 3.0
 _QUALITY_PRIOR_WEIGHT = 5.0
 _LATENCY_HALF_SCORE_MS = 2000.0
-_CONFIDENCE_DENOMINATOR = 10.0
+# Confidence denominator was 10 — agents converged to their actual base
+# score too slowly, so trust scores clustered near NEUTRAL (50) even after
+# 30+ jobs. The 2026-05-08 eval scored the reputation surface D because of
+# this. Lower denominator = trust converges to "what the agent actually
+# delivers" faster, so a 22%-success agent reads as ~30 trust instead of
+# ~48. Still high enough to need a real track record (5+ jobs) before the
+# score moves materially.
+_CONFIDENCE_DENOMINATOR = 6.0
 
 
 def _conn() -> _db.DbConnection:

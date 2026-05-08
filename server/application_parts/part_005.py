@@ -1837,12 +1837,29 @@ def _dispute_view(dispute_row: dict) -> dict:
     payload["filing_deposit_disposition"] = deposit_disposition
     payload["filing_deposit_explanation"] = {
         "no_deposit_required": "No deposit was required for this dispute.",
-        "held": "Filer's deposit is held in escrow until judges resolve the dispute.",
-        "held_pending_admin": "Judges tied. Deposit is held until an admin resolves the dispute or the 48-hour auto-finalize window elapses.",
+        "held": (
+            "Filer's deposit is held in escrow until LLM judges resolve the "
+            "dispute. POLICY: deposit is REFUNDED in full if the filer "
+            "prevails (judges rule in your favor, dispute is voided, or "
+            "outcome is split); deposit is FORFEIT to the judges' compute "
+            "pool if the filer does not prevail. Forfeit funds the judges "
+            "and dissuades frivolous filings."
+        ),
+        "held_pending_admin": (
+            "Judges tied. Deposit is held until an admin resolves the dispute "
+            "or the 48-hour auto-finalize window elapses. Same policy applies: "
+            "refunded if filer prevails, forfeit otherwise."
+        ),
         "refunded_to_filer": "The filer's deposit was returned because they prevailed (or the dispute was voided/split).",
         "forfeit_to_judges_pool": "The filer's deposit was forfeit because they did not prevail. The deposit funds the LLM judges' compute and dissuades frivolous filings.",
         "unknown": "Deposit disposition is indeterminate for this dispute state.",
     }[deposit_disposition]
+    payload["filing_deposit_policy"] = {
+        "on_filer_prevails": "refunded_to_filer",
+        "on_filer_loses": "forfeit_to_judges_pool",
+        "on_split_or_void": "refunded_to_filer",
+        "on_tied_judges": "held_pending_admin (admin tie-break or 48h auto-finalize)",
+    }
     return payload
 
 

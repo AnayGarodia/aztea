@@ -300,10 +300,14 @@ _BLOCKED_PATTERNS = [
     # the subprocess startup cost on a clear escape attempt.
     r"open\s*\(\s*[\"']/(etc|proc|sys|root|home|var|boot)\b",
     r"open\s*\(\s*[\"'](?:\.\./){2,}",  # ../../ traversal
-    # os.environ readouts are noisy in logs; block at filter so the
-    # surface is obvious. Audit hook does not fire on env reads.
-    r"\bos\.environ\b",
-    r"os\.getenv\s*\(",
+    # NOTE: ``os.environ`` and ``os.getenv`` are NOT blocked here. The
+    # subprocess sandbox replaces the parent environment with ``sandbox_env``
+    # before the user code runs (see ``_apply_runtime_limits``), so reads
+    # cannot exfiltrate host secrets. Blocking the regex caused a 2026-05-08
+    # eval false positive: legitimate code like
+    # ``os.environ.get("DB_PASSWORD", "fallback")`` was rejected with
+    # ``python_executor.blocked_unsafe_code``. Reads are safe; writes that
+    # try to escalate are still caught by the runtime audit hook.
     # os.fork/forkpty are blocked by the audit hook at runtime but also
     # flagged here so the subprocess spawn overhead is skipped on obvious attempts.
     r"\bos\.fork\b",
