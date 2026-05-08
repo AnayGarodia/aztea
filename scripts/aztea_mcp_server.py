@@ -248,6 +248,12 @@ _BUILTIN_RECIPE_CATALOG_ENTRIES: list[dict[str, Any]] = [
     },
 ]
 
+# Minimum lexical score for a local-catalog match to be returned.
+# Score < this → the entry is considered off-catalog noise and dropped.
+# 3 pts = one term hit; 6 pts = two term hits or one description match;
+# anything below 6 on a 9-agent catalog is almost certainly unrelated.
+_LOCAL_SEARCH_MIN_SCORE = 6
+
 _SEARCH_INTENTS: dict[str, set[str]] = {
     "image": {
         "image",
@@ -1180,6 +1186,79 @@ class RegistryBridge:
                     return entry
         return None
 
+    def _http_search_fallback(
+        self,
+        query: str,
+        limit: int,
+    ) -> dict[str, Any] | None:
+        """Try the server-side semantic search when local lexical scoring is too weak.
+
+        Returns a search-result dict on success, None on any error or empty result.
+        Only triggered when local scores are all below _LOCAL_SEARCH_MIN_SCORE so
+        this is a lightweight fallback, not the primary path.
+        """
+        try:
+            resp = self._session.post(
+                f"{self.base_url}/registry/agents/search",
+                json={"query": query, "limit": limit},
+                headers=self._headers(),
+                timeout=5.0,
+            )
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+            raw_results = data.get("results") or []
+            if not raw_results:
+                return None
+            result_items = []
+            for item in raw_results:
+                agent = item.get("agent") or {}
+                slug = (
+                    agent.get("slug")
+                    or agent.get("agent_slug")
+                    or re.sub(r"[^a-z0-9]+", "_", str(agent.get("name") or "").lower()).strip("_")
+                )
+                if not slug:
+                    continue
+                input_hint = meta_tools._schema_input_hint(agent.get("input_schema"))
+                result_items.append(
+                    {
+                        "slug": slug,
+                        "kind": "registry_agent",
+                        "name": agent.get("name"),
+                        "agent_id": agent.get("agent_id"),
+                        "category": agent.get("category"),
+                        "description": _word_truncate(str(agent.get("description") or ""), 380),
+                        "score": round(float(item.get("blended_score") or 0), 2),
+                        "price_per_call_usd": agent.get("price_per_call_usd"),
+                        "trust_score": agent.get("trust_score"),
+                        "success_rate": agent.get("success_rate"),
+                        "avg_latency_ms": agent.get("avg_latency_ms"),
+                        "codex_recommended": bool(agent.get("codex_recommended", False)),
+                        "best_for": [],
+                        "required_fields": list(input_hint.get("required_fields") or []),
+                        "input_fields": [],
+                        "input_shape": input_hint.get("fields") or {},
+                        "example_arguments": input_hint.get("example_arguments") or {},
+                        "quality_summary": "",
+                        "why": item.get("match_reasons") or ["semantic match"],
+                    }
+                )
+            if not result_items:
+                return None
+            return {
+                "query": query,
+                "count": len(result_items),
+                "results": result_items,
+                "next_step": (
+                    f"Best match: {result_items[0]['slug']}. "
+                    f"Call aztea_describe(slug='{result_items[0]['slug']}') for the full schema."
+                ),
+                "search_method": "semantic_fallback",
+            }
+        except Exception:
+            return None
+
     def _search_catalog(
         self,
         query: str,
@@ -1194,6 +1273,17 @@ class RegistryBridge:
         category_filter = (category or "").strip().lower() or None
         terms = _query_terms(normalized)
         intent, _intent_markers = _search_intent(terms)
+        # Price-mode: queries asking for most/least expensive agent route via price
+        # rather than relevance. "show me most expensive" or "cheapest agent"
+        # should sort purely on price after any lexical pre-filter.
+        term_set = set(terms)
+        price_mode: str | None = None
+        if {"expensive", "priciest", "premium", "highest"} & term_set or (
+            "most" in term_set and {"expensive", "costly", "pricey"} & term_set
+        ):
+            price_mode = "most_expensive"
+        elif {"cheap", "cheapest", "lowest", "budget", "affordable"} & term_set:
+            price_mode = "cheapest"
         matches: list[tuple[int, dict[str, Any]]] = []
         for entry in self._catalog_entries():
             if intent is not None and not _entry_matches_intent(entry, intent):
@@ -1347,7 +1437,12 @@ class RegistryBridge:
                     "aztea_run_pipeline",
                 }:
                     score += 18
-            if score <= 0:
+            # For price-mode queries, every agent in the catalog is eligible
+            # (the ranking is handled by price, not by relevance score).
+            # For regular queries, require a minimum score to filter noise.
+            if price_mode is None and score < _LOCAL_SEARCH_MIN_SCORE:
+                continue
+            if price_mode is not None and score <= 0:
                 continue
             enriched = dict(entry)
             enriched["_why"] = reasons
@@ -1409,15 +1504,36 @@ class RegistryBridge:
                     if not any(m[1].get("slug") == entry["slug"] for m in matches):
                         matches.append((fuzzy_score, enriched))
 
-        matches.sort(
-            key=lambda item: (
-                item[0],
-                bool(item[1].get("codex_recommended")),
-                bool(item[1].get("is_featured")),
-                item[1]["kind"] == "registry_agent",
-            ),
-            reverse=True,
-        )
+        # When no local matches (or all below the floor), try the server-side
+        # semantic search — it has embedding-based understanding of natural
+        # language. This is the "small LLM" fallback the user requested:
+        # the server-side search uses a real embedding model + Groq for
+        # ranking, but only fires when local scoring found nothing useful.
+        if not matches and normalized:
+            http_result = self._http_search_fallback(normalized, capped_limit)
+            if http_result:
+                return http_result
+
+        # Price-mode: re-sort by price ignoring the lexical score so
+        # "most expensive agent" always puts the highest-price entry first.
+        if price_mode == "most_expensive":
+            matches.sort(
+                key=lambda item: -float(item[1].get("price_per_call_usd") or 0),
+            )
+        elif price_mode == "cheapest":
+            matches.sort(
+                key=lambda item: float(item[1].get("price_per_call_usd") or 0),
+            )
+        else:
+            matches.sort(
+                key=lambda item: (
+                    item[0],
+                    bool(item[1].get("codex_recommended")),
+                    bool(item[1].get("is_featured")),
+                    item[1]["kind"] == "registry_agent",
+                ),
+                reverse=True,
+            )
         result_items = []
         for score, entry in matches[:capped_limit]:
             quality_parts: list[str] = []
@@ -1475,7 +1591,7 @@ class RegistryBridge:
             f"Best match: {result_items[0]['slug']}. Call aztea_describe(slug='{result_items[0]['slug']}') for the full schema, "
             "then aztea_call(slug=..., arguments={...}) to run it."
             if result_items
-            else "No matches found. Try a broader query."
+            else "No catalog match found for this query. Use aztea_workflow(action='list_agents') to browse all available agents."
         )
         hints = _workflow_hints(query)
         payload = {

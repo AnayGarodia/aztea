@@ -145,14 +145,16 @@ def _batch_parallel_trace(
             if isinstance(_BUILTIN_WORKER_STATE, dict)
             else {}
         )
-        # Live snapshot of pool occupancy. Falls back gracefully if the
-        # helper is unavailable (e.g. mid-deploy when part_004 hasn't loaded
-        # yet); callers still get sane numbers from worker_state_summary.
+        # Live snapshot of pool occupancy. All shards execute in the same
+        # globals() namespace (server.application), so reading the counter
+        # directly avoids the cross-module-import-wrong-namespace bug where
+        # importing part_004 as a separate module gave us its own zero-init
+        # counter instead of the mutable one shared by all shards.
         try:
-            from server.application_parts.part_004 import (
-                _builtin_worker_inflight_snapshot,
-            )
-            in_flight_now, capacity_remaining_now = _builtin_worker_inflight_snapshot()
+            _inflight = globals().get("_BUILTIN_WORKER_INFLIGHT_COUNT", 0)
+            _parallelism = int(globals().get("_BUILTIN_JOB_WORKER_PARALLELISM") or _BUILTIN_JOB_WORKER_PARALLELISM)
+            in_flight_now = int(_inflight)
+            capacity_remaining_now = max(0, _parallelism - in_flight_now)
         except Exception:
             in_flight_now = None
             capacity_remaining_now = None

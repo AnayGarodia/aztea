@@ -172,10 +172,18 @@ _RULES: list[tuple[str, str, re.Pattern[str], str, str]] = [
     ),
     (
         "openai-api-key",
-        "OpenAI API Key",
+        "OpenAI API Key (classic)",
         re.compile(r"\bsk-[A-Za-z0-9]{20,}T3BlbkFJ[A-Za-z0-9]{20,}\b"),
         "high",
         "Revoke the OpenAI API key in platform.openai.com.",
+    ),
+    (
+        "openai-project-key",
+        "OpenAI Project API Key (sk-proj-)",
+        # New format introduced 2024: sk-proj-<base64url, 100+ chars>
+        re.compile(r"\bsk-proj-[A-Za-z0-9_\-]{50,}\b"),
+        "high",
+        "Revoke the OpenAI project key in platform.openai.com → API keys.",
     ),
     (
         "anthropic-api-key",

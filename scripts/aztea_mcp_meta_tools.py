@@ -21,6 +21,14 @@ _AZTEA_PROTOCOL_VERSION = "1.0"
 _DEFAULT_CLIENT_ID = (
     os.environ.get("AZTEA_CLIENT_ID", "claude-code") or "claude-code"
 ).strip()
+def _canonical_slug(value: Any) -> str:
+    """Derive a snake_case slug from a display name or raw slug."""
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    return re.sub(r"[^a-z0-9]+", "_", text).strip("_")
+
+
 _PYDANTIC_HELP_URL_RE = re.compile(
     r"\s*For further information visit https://errors\.pydantic\.dev/[^\s]+",
     re.IGNORECASE,
@@ -2205,7 +2213,10 @@ def _list_agents(
         input_hint = _schema_input_hint(agent.get("input_schema"))
         rows.append(
             {
-                "slug": agent.get("slug") or agent.get("agent_slug"),
+                # Prefer an explicit slug field; fall back to canonicalising
+                # the display name so aztea_call works without a separate
+                # aztea_describe step (fixes "Secret Scanner" → "secret_scanner").
+                "slug": agent.get("slug") or agent.get("agent_slug") or _canonical_slug(agent.get("name")),
                 "agent_id": agent.get("agent_id"),
                 "name": agent.get("name"),
                 "category": cat or None,

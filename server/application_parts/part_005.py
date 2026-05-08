@@ -1778,6 +1778,13 @@ def _dispute_view(dispute_row: dict) -> dict:
         next_judge_run_by = None
     payload["next_judge_run_by"] = next_judge_run_by
     payload["resolution_by"] = resolution_by
+    # Surface which LLM models have been assigned / have already weighed in.
+    # Callers watching an in-flight dispute can see which judge(s) ran and
+    # which model was used without having to decode the raw judgments list.
+    judge_models_used = [
+        str(j.get("model") or "unknown") for j in judgments if j.get("model")
+    ]
+    payload["judge_models_used"] = judge_models_used
     if status in {"pending", "judging"}:
         payload["eta_hint"] = (
             "Dispute judges run about once per minute. Two matching judgments "

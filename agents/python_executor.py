@@ -55,11 +55,12 @@ _MAX_FILE_SIZE_BYTES = (
     int(os.environ.get("AZTEA_PYTHON_MAX_FILE_SIZE_MB", "32") or "32") * 1024 * 1024
 )
 _MAX_CAPTURE_VALUE_CHARS = 1000
-# Static analyzer's allocation cap. Must equal _MAX_MEMORY_MB so the
-# documented memory limit and the user-visible blocked message agree —
-# the 2026-05-07 eval caught these drifting (advertised 128 MB, blocked
-# at 32 MB with a hardcoded "32 MB sandbox policy" message).
-_STATIC_ALLOCATION_LIMIT_BYTES = _MAX_MEMORY_MB * 1024 * 1024
+# Static analyzer's allocation cap — intentionally LOWER than _MAX_MEMORY_MB
+# so obvious bombs are caught before the subprocess is spawned. RLIMIT_AS at
+# _MAX_MEMORY_MB is the hard backstop for anything that slips through.
+# 32 MB is the right floor: any literal sequence > 32 MB in submitted code
+# has no plausible legitimate use inside the sandbox.
+_STATIC_ALLOCATION_LIMIT_BYTES = 32 * 1024 * 1024
 
 _EXPLAIN_SYSTEM = """\
 You are a Python expert explaining a code snippet and its execution result to a developer.
@@ -303,6 +304,10 @@ _BLOCKED_PATTERNS = [
     # surface is obvious. Audit hook does not fire on env reads.
     r"\bos\.environ\b",
     r"os\.getenv\s*\(",
+    # os.fork/forkpty are blocked by the audit hook at runtime but also
+    # flagged here so the subprocess spawn overhead is skipped on obvious attempts.
+    r"\bos\.fork\b",
+    r"\bos\.forkpty\b",
 ]
 
 _WARM_POOL_SIZE = max(
