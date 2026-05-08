@@ -2433,10 +2433,10 @@ def _batch_status(
             "error": "INVALID_INPUT",
             "message": "job_ids must include at least one non-empty job_id.",
         }
-    if len(job_ids) > 50:
+    if len(job_ids) > 250:
         return False, {
             "error": "INVALID_INPUT",
-            "message": "Batch status is limited to 50 jobs.",
+            "message": "Batch status is limited to 250 jobs.",
         }
 
     jobs: list[dict[str, Any]] = []
@@ -3087,10 +3087,10 @@ def _hire_batch(
             "error": "INVALID_INPUT",
             "message": "jobs must be a non-empty array.",
         }
-    if len(raw_jobs) > 50:
+    if len(raw_jobs) > 250:
         return False, {
             "error": "INVALID_INPUT",
-            "message": "Batch size is limited to 50 jobs.",
+            "message": "Batch size is limited to 250 jobs.",
         }
     jobs_body = []
     for spec in raw_jobs:

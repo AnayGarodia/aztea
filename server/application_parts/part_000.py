@@ -357,9 +357,15 @@ _DEFAULT_DISPUTE_JUDGE_INTERVAL_SECONDS = 60  # auto-resolve pending disputes ev
 # tick across PARALLELISM threads, and re-arms the wake event whenever a tick
 # actually does work. The 1s interval is the idle ceiling; fan-out latency is
 # bounded by per-job runtime, not by polling.
+#
+# IMPORTANT: PARALLELISM must stay safely below DB_MAX_CONNECTIONS (default 32)
+# so worker threads never block on the connection pool. A 64-worker pool with
+# a 32-connection DB caused exactly the load-test stall we saw on 2026-05-08:
+# 84/100 jobs settled, 16 froze because every connection was held by an
+# in-flight settlement waiting for a connection that never freed.
 _DEFAULT_BUILTIN_JOB_WORKER_INTERVAL_SECONDS = 1
 _DEFAULT_BUILTIN_JOB_WORKER_BATCH_SIZE = 400
-_DEFAULT_BUILTIN_JOB_WORKER_PARALLELISM = 64
+_DEFAULT_BUILTIN_JOB_WORKER_PARALLELISM = 24
 _DEFAULT_BUILTIN_JOB_WORKER_MAX_BATCH_TOTAL = 800
 _DEFAULT_TOPUP_DAILY_LIMIT_CENTS = 100_000
 _DEFAULT_PAYMENTS_RECONCILIATION_INTERVAL_SECONDS = 3600

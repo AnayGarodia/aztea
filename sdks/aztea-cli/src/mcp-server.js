@@ -1033,7 +1033,7 @@ async function getExamples(args) {
 async function hireBatch(args) {
   const jobs = args.jobs
   if (!Array.isArray(jobs) || !jobs.length) return { ok: false, body: { error: 'INVALID_INPUT', message: 'jobs must be a non-empty array.' } }
-  if (jobs.length > 50) return { ok: false, body: { error: 'INVALID_INPUT', message: 'Batch size is limited to 50 jobs.' } }
+  if (jobs.length > 250) return { ok: false, body: { error: 'INVALID_INPUT', message: 'Batch size is limited to 250 jobs.' } }
   const resolvedIds = await Promise.all(jobs.map(spec => resolveAgentId(spec.agent_id || spec.slug || '')))
   for (let i = 0; i < resolvedIds.length; i++) {
     if (!resolvedIds[i].ok) return { ok: false, body: { ...resolvedIds[i].body, job_index: i } }
