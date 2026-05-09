@@ -12,8 +12,15 @@ import requests
 
 from agents._contracts import annotate_success
 from core.llm import CompletionRequest, Message, run_with_fallback
+from core.outbound_ua import outbound_user_agent
 
-_WIKI_HEADERS = {"User-Agent": "aztea/1.0 (research-agent@aztea.dev)"}
+
+def _wiki_headers() -> dict[str, str]:
+    """Composed at call time so the User-Agent reflects the operator's
+    SERVER_BASE_URL, not a hardcoded aztea.ai contact address."""
+    return {"User-Agent": outbound_user_agent()}
+
+
 _WIKI_SUMMARY_API = "https://en.wikipedia.org/api/rest_v1/page/summary/{title}"
 _WIKI_SECTIONS_API = "https://en.wikipedia.org/w/api.php"
 _WIKI_OPENSEARCH_API = "https://en.wikipedia.org/w/api.php"
@@ -205,7 +212,7 @@ def _fetch_full_text(title: str) -> tuple[str, str]:
     }
     try:
         r = requests.get(
-            _WIKI_SECTIONS_API, params=params, headers=_WIKI_HEADERS, timeout=12
+            _WIKI_SECTIONS_API, params=params, headers=_wiki_headers(), timeout=12
         )
         r.raise_for_status()
         pages = r.json().get("query", {}).get("pages", {})
@@ -225,7 +232,7 @@ def _resolve_fuzzy_title(topic: str) -> str | None:
     }
     try:
         response = requests.get(
-            _WIKI_OPENSEARCH_API, params=params, headers=_WIKI_HEADERS, timeout=8
+            _WIKI_OPENSEARCH_API, params=params, headers=_wiki_headers(), timeout=8
         )
         response.raise_for_status()
         payload = response.json()
@@ -350,7 +357,7 @@ def run(topic: str, depth: str = "standard") -> dict:
     summary_url = _WIKI_SUMMARY_API.format(title=clean)
 
     try:
-        r = requests.get(summary_url, headers=_WIKI_HEADERS, timeout=10)
+        r = requests.get(summary_url, headers=_wiki_headers(), timeout=10)
         r.raise_for_status()
         wiki = r.json()
     except requests.HTTPError as e:

@@ -15,11 +15,19 @@ from typing import Optional
 
 import requests
 
-EDGAR_HEADERS = {
-    "User-Agent": "aztea research-agent@aztea.dev",
-    "Accept-Encoding": "gzip, deflate",
-    "Accept": "application/json,text/html,*/*",
-}
+from core.outbound_ua import outbound_user_agent
+
+
+def _edgar_headers() -> dict[str, str]:
+    """SEC EDGAR requires a contact User-Agent. We give them the operator's
+    SERVER_BASE_URL (or OUTBOUND_USER_AGENT override) so abuse complaints
+    reach the operator, not the upstream Aztea project. Composed at call
+    time so an env change takes effect without restarting the worker."""
+    return {
+        "User-Agent": outbound_user_agent(),
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "application/json,text/html,*/*",
+    }
 
 EDGAR_BASE = "https://data.sec.gov"
 EDGAR_SUBMISSIONS = "https://data.sec.gov/submissions/CIK{cik}.json"
@@ -55,7 +63,7 @@ def _cache_set(key: str, data: dict) -> None:
 def get_cik_for_ticker(ticker: str) -> str:
     """Look up the SEC CIK number for a ticker symbol."""
     tickers_url = "https://www.sec.gov/files/company_tickers.json"
-    resp = requests.get(tickers_url, headers=EDGAR_HEADERS, timeout=15)
+    resp = requests.get(tickers_url, headers=_edgar_headers(), timeout=15)
     resp.raise_for_status()
     data = resp.json()
     ticker_upper = ticker.upper()
@@ -71,7 +79,7 @@ def get_latest_filing(cik: str) -> dict:
     Returns: accession_number, filing_type, filing_date, document_url, company_name, cik.
     """
     url = EDGAR_SUBMISSIONS.format(cik=cik)
-    resp = requests.get(url, headers=EDGAR_HEADERS, timeout=15)
+    resp = requests.get(url, headers=_edgar_headers(), timeout=15)
     resp.raise_for_status()
     data = resp.json()
 
@@ -106,7 +114,7 @@ def fetch_filing_text(document_url: str, max_chars: int = 20_000) -> str:
     Download the filing document and return its text content truncated to max_chars.
     Strips HTML tags if the document is HTML.
     """
-    resp = requests.get(document_url, headers=EDGAR_HEADERS, timeout=30)
+    resp = requests.get(document_url, headers=_edgar_headers(), timeout=30)
     resp.raise_for_status()
     content = resp.text
     if "<html" in content.lower() or "<!doctype" in content.lower():

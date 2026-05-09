@@ -193,16 +193,23 @@ SYSTEM_USER_EMAIL = "system@aztea.internal"
 # LLM keys). Pure-tooling agents (linters, sandboxes, DNS) stay local
 # because there's no value-add from a hosted call.
 #
+# INVARIANT: deprecated agents (those in SUNSET_DEPRECATED_AGENT_IDS) MUST
+# NOT appear here — once an agent is sunsetting we want self-hosters to
+# stop relying on it, not silently route them through aztea.ai for it.
+# A startup assertion below enforces this.
+#
 # In OSS-mode (AZTEA_HOSTED_API_URL unset) this set is irrelevant — every
 # agent runs locally.
 PREFER_HOSTED_AGENT_IDS = frozenset(
     {
-        CODEREVIEW_AGENT_ID,
-        ARXIV_RESEARCH_AGENT_ID,
-        WEB_RESEARCHER_AGENT_ID,
         QUALITY_JUDGE_AGENT_ID,
-        AI_RED_TEAMER_AGENT_ID,
     }
+)
+# Sanity: no deprecated agent should be in the prefer-hosted set. This
+# fires at import time so a regressed addition is caught loudly.
+assert not (PREFER_HOSTED_AGENT_IDS & SUNSET_DEPRECATED_AGENT_IDS), (
+    "PREFER_HOSTED_AGENT_IDS must not include sunset agents — they should "
+    "either be removed from sunset or removed from prefer-hosted."
 )
 
 

@@ -1021,19 +1021,31 @@ def mark_agent_published_public(
     agent_id: str,
     listing_id: str | None,
     published_at: str,
-) -> None:
+    *,
+    owner_id: str,
+) -> bool:
     """Record that this agent has been syndicated to aztea.ai's public registry.
 
     Called from the /registry/agents/{id}/publish route after the hosted API
     confirms the listing was accepted. Idempotent — re-publish updates the
     timestamp and listing_id. Local-only deployments never call this.
+
+    The ``owner_id`` parameter is required. The UPDATE only succeeds when
+    the agent row's ``owner_id`` matches; this is a defence-in-depth check
+    so that even if the calling route forgets to pre-authorise ownership,
+    the data layer refuses to mark a foreign user's agent as published.
+    Returns True iff a row was updated.
     """
+    if not owner_id:
+        raise ValueError("owner_id is required for mark_agent_published_public")
     with _conn() as conn:
-        conn.execute(
+        result = conn.execute(
             "UPDATE agents SET published_to_public_at = %s, "
-            "published_to_public_listing_id = %s WHERE agent_id = %s",
-            (published_at, listing_id, agent_id),
+            "published_to_public_listing_id = %s "
+            "WHERE agent_id = %s AND owner_id = %s",
+            (published_at, listing_id, agent_id, owner_id),
         )
+    return getattr(result, "rowcount", 0) > 0
 
 
 def agent_exists_by_name(name: str) -> bool:

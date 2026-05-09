@@ -34,6 +34,8 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
+import time
 from typing import Any, Mapping, Optional
 
 import requests
@@ -49,6 +51,77 @@ _DEFAULT_READ_TIMEOUT_SECONDS = 8.0
 _DEFAULT_EXEC_TIMEOUT_SECONDS = 30.0
 _MAX_RESPONSE_BYTES = 4 * 1024 * 1024  # 4 MiB cap on hosted-API responses
 
+# Circuit-breaker defaults. Conservative — break only after 3 consecutive
+# failures within the lookback window, and stay open for 30s. Caller paths
+# (judge, call_agent) are then short-circuited to local fallback fast.
+_DEFAULT_CB_THRESHOLD = 3
+_DEFAULT_CB_COOLDOWN_SECONDS = 30.0
+
+
+class _CircuitBreaker:
+    """Per-path consecutive-failure tracker.
+
+    After ``threshold`` consecutive failures, opens the circuit for
+    ``cooldown_seconds``. While open, ``allow(path)`` returns False so
+    the caller short-circuits to local fallback without a 30s network
+    wait. After cooldown elapses, the next call is allowed as a probe —
+    if it succeeds (``record_success``) the circuit closes; if it fails
+    (``record_failure``) the circuit re-opens.
+
+    Thread-safe: a single lock guards the state dict. Worst-case
+    contention is one outbound HTTP call ↔ one breaker update, which is
+    cheap relative to network latency.
+    """
+
+    def __init__(
+        self,
+        *,
+        threshold: int = _DEFAULT_CB_THRESHOLD,
+        cooldown_seconds: float = _DEFAULT_CB_COOLDOWN_SECONDS,
+        clock: Any = None,
+    ) -> None:
+        self._threshold = max(1, int(threshold))
+        self._cooldown = max(1.0, float(cooldown_seconds))
+        self._clock = clock or time.monotonic
+        self._lock = threading.Lock()
+        # path → {"failures": int, "opened_at": float | None}
+        self._state: dict[str, dict[str, Any]] = {}
+
+    def allow(self, path: str) -> bool:
+        with self._lock:
+            entry = self._state.get(path)
+            if not entry or entry.get("opened_at") is None:
+                return True
+            if self._clock() - entry["opened_at"] >= self._cooldown:
+                # Cooldown elapsed — allow one probe and reset the counter.
+                entry["failures"] = 0
+                entry["opened_at"] = None
+                return True
+            return False
+
+    def record_success(self, path: str) -> None:
+        with self._lock:
+            self._state[path] = {"failures": 0, "opened_at": None}
+
+    def record_failure(self, path: str) -> None:
+        with self._lock:
+            entry = self._state.setdefault(
+                path, {"failures": 0, "opened_at": None}
+            )
+            entry["failures"] = int(entry.get("failures") or 0) + 1
+            if entry["failures"] >= self._threshold:
+                entry["opened_at"] = self._clock()
+                logger.warning(
+                    "hosted_client: circuit OPEN for %s after %s consecutive failures",
+                    path,
+                    entry["failures"],
+                )
+
+    def snapshot(self) -> dict[str, dict[str, Any]]:
+        """Read-only copy of the current state. Used in tests."""
+        with self._lock:
+            return {k: dict(v) for k, v in self._state.items()}
+
 
 class HostedClient:
     """Stateless client. Cheap to construct; no connection pooling state."""
@@ -60,6 +133,7 @@ class HostedClient:
         *,
         read_timeout: float | None = None,
         exec_timeout: float | None = None,
+        breaker: _CircuitBreaker | None = None,
     ) -> None:
         self._base_url = (base_url or feature_flags.hosted_api_url()).rstrip("/")
         self._api_key = api_key or feature_flags.hosted_api_key()
@@ -70,6 +144,14 @@ class HostedClient:
         self._exec_timeout = (
             exec_timeout if exec_timeout is not None
             else _env_float("AZTEA_HOSTED_EXEC_TIMEOUT", _DEFAULT_EXEC_TIMEOUT_SECONDS)
+        )
+        self._breaker = breaker or _CircuitBreaker(
+            threshold=int(_env_float(
+                "AZTEA_HOSTED_CB_THRESHOLD", float(_DEFAULT_CB_THRESHOLD)
+            )),
+            cooldown_seconds=_env_float(
+                "AZTEA_HOSTED_CB_COOLDOWN_SECONDS", _DEFAULT_CB_COOLDOWN_SECONDS
+            ),
         )
 
     def is_enabled(self) -> bool:
@@ -119,17 +201,17 @@ class HostedClient:
         )
 
     def push_rating(self, rating: Mapping[str, Any]) -> bool:
-        """Fire-and-forget rating push. Returns True on 2xx, False otherwise.
+        """Fire-and-forget rating push. Returns True on any 2xx (including
+        a 204 No Content), False otherwise.
 
         Caller should not block on the result. Failures are logged at debug
         level only — the local rating row is the source of truth.
         """
-        result = self._post_json(
+        return self._post_acknowledge(
             "/v1/reputation/ratings",
             payload=dict(rating),
             timeout=self._read_timeout,
         )
-        return result is not None
 
     def fetch_trust(self, agent_did: str) -> Optional[dict]:
         """Look up a federated trust score for an agent DID."""
@@ -169,6 +251,9 @@ class HostedClient:
         payload: Mapping[str, Any],
         timeout: float,
     ) -> Optional[dict]:
+        if not self._breaker.allow(path):
+            logger.info("hosted_client: short-circuit (circuit open) for %s", path)
+            return None
         url = self._validate_target(path)
         if not url:
             return None
@@ -181,12 +266,65 @@ class HostedClient:
                 allow_redirects=False,
                 stream=True,
             ) as response:
-                return _read_capped_json(response)
+                result = _read_capped_json(response)
         except requests.RequestException as exc:
             logger.info("hosted_client: POST %s failed: %s", path, exc)
+            self._breaker.record_failure(path)
             return None
+        if result is None:
+            self._breaker.record_failure(path)
+        else:
+            self._breaker.record_success(path)
+        return result
+
+    def _post_acknowledge(
+        self,
+        path: str,
+        *,
+        payload: Mapping[str, Any],
+        timeout: float,
+    ) -> bool:
+        """Fire-and-forget POST. Returns True on any 2xx response (including
+        an empty 204), False otherwise. Body content is ignored.
+        """
+        if not self._breaker.allow(path):
+            logger.info("hosted_client: short-circuit (circuit open) for %s", path)
+            return False
+        url = self._validate_target(path)
+        if not url:
+            return False
+        try:
+            response = requests.post(
+                url,
+                json=dict(payload),
+                headers=self._headers(),
+                timeout=timeout,
+                allow_redirects=False,
+            )
+        except requests.RequestException as exc:
+            logger.info("hosted_client: POST %s failed: %s", path, exc)
+            self._breaker.record_failure(path)
+            return False
+        ok = bool(getattr(response, "ok", False))
+        try:
+            response.close()
+        except Exception:  # noqa: BLE001 — close() in best-effort cleanup
+            pass
+        if ok:
+            self._breaker.record_success(path)
+        else:
+            logger.info(
+                "hosted_client: HTTP %s on %s",
+                getattr(response, "status_code", "?"),
+                path,
+            )
+            self._breaker.record_failure(path)
+        return ok
 
     def _get_json(self, path: str, *, timeout: float) -> Optional[dict]:
+        if not self._breaker.allow(path):
+            logger.info("hosted_client: short-circuit (circuit open) for %s", path)
+            return None
         url = self._validate_target(path)
         if not url:
             return None
@@ -198,10 +336,16 @@ class HostedClient:
                 allow_redirects=False,
                 stream=True,
             ) as response:
-                return _read_capped_json(response)
+                result = _read_capped_json(response)
         except requests.RequestException as exc:
             logger.info("hosted_client: GET %s failed: %s", path, exc)
+            self._breaker.record_failure(path)
             return None
+        if result is None:
+            self._breaker.record_failure(path)
+        else:
+            self._breaker.record_success(path)
+        return result
 
 
 def _env_float(name: str, default: float) -> float:

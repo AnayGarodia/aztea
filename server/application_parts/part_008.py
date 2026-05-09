@@ -2282,7 +2282,26 @@ def registry_agent_publish_public(
 
     listing_id = str(response.get("listing_id") or "").strip() or None
     published_at = str(response.get("published_at") or "").strip() or _utc_now_iso()
-    registry.mark_agent_published_public(agent_id, listing_id, published_at)
+    # Pass the agent row's own owner_id (already loaded) so the data layer
+    # can defence-in-depth verify ownership even though the route already
+    # called _caller_can_manage_agent above.
+    updated = registry.mark_agent_published_public(
+        agent_id,
+        listing_id,
+        published_at,
+        owner_id=str(agent.get("owner_id") or ""),
+    )
+    if not updated:
+        # Defensive: should not happen given prior _caller_can_manage_agent
+        # check + non-empty agent['owner_id'], but if the row vanished or the
+        # owner changed mid-request we surface a 409 rather than silently 200.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "registry.public_publish_lost_ownership",
+                "message": "Agent ownership changed during publish. Retry.",
+            },
+        )
 
     return JSONResponse(
         content={
