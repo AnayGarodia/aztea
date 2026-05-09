@@ -2,19 +2,64 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections import deque
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 import requests
 
-from core import fastpath, jobs, payments, registry, url_security
+from core import crypto, fastpath, jobs, payments, registry, url_security
 from core.functional import Err, Ok, Result
 from server import pricing_helpers
 
 from . import db
 from .resolver import resolve_input_map
+
+_LOG = logging.getLogger(__name__)
+
+
+def _sign_pipeline_step_output(agent: dict, output: dict) -> dict[str, Any]:
+    """Sign a pipeline-step output with the agent's Ed25519 key.
+
+    Mirrors the sync (part_008) and async (part_009) signing paths so
+    pipeline steps emit verifiable receipts identical to direct calls.
+    The 2026-05-09 stress test caught this gap: 1 of 100 receipts in
+    the 24h window was unsigned because pipeline steps called
+    ``jobs.update_job_status`` without the signature kwargs. Signing
+    must never break completion — any exception drops the signature
+    and lets the job complete unsigned (better than no completion).
+    """
+    sig_b64: str | None = None
+    sig_alg: str | None = None
+    sig_did: str | None = None
+    sig_at: str | None = None
+    try:
+        private_pem = agent.get("signing_private_key")
+        agent_did_value = agent.get("did")
+        if not private_pem or not agent_did_value:
+            private_pem, _public_pem, agent_did_value = (
+                registry.ensure_agent_signing_keys(agent.get("agent_id") or "")
+            )
+        if private_pem and agent_did_value and output is not None:
+            sig_b64 = crypto.sign_payload(private_pem, output)
+            sig_alg = str(agent.get("signing_alg") or "ed25519")
+            sig_did = agent_did_value
+            sig_at = datetime.now(timezone.utc).isoformat()
+    except Exception:
+        _LOG.exception(
+            "Failed to sign pipeline-step output for agent %s",
+            agent.get("agent_id"),
+        )
+        sig_b64 = sig_alg = sig_did = sig_at = None
+    return {
+        "output_signature": sig_b64,
+        "output_signature_alg": sig_alg,
+        "output_signed_by_did": sig_did,
+        "output_signed_at": sig_at,
+    }
 
 
 def validate_definition(definition: dict) -> dict:
@@ -261,7 +306,11 @@ def _invoke_agent(
         if _is_unchargeable_degraded(agent, output):
             raise RuntimeError("Agent returned unchargeable degraded fallback output.")
         jobs.update_job_status(
-            job["job_id"], "complete", output_payload=output, completed=True
+            job["job_id"],
+            "complete",
+            output_payload=output,
+            completed=True,
+            **_sign_pipeline_step_output(agent, output),
         )
         payments.post_call_payout(
             agent_wallet["wallet_id"],

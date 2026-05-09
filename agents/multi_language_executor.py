@@ -25,6 +25,7 @@ Output:
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -37,6 +38,86 @@ _TIMEOUT_MAX = 30
 _OUTPUT_TRUNCATE = 20_000
 
 _SUPPORTED = ("javascript", "typescript", "go", "rust")
+
+# Pre-execution SSRF/network block. The Python executor enforces a
+# "no network at all from the sandbox" policy via a regex pre-check
+# (see agents/python_executor.py::_is_safe). The JS/TS/Go/Rust runners
+# previously had no such pre-check, which the 2026-05-09 stress test
+# confirmed: a JS `fetch('http://169.254.169.254/...')` connected to
+# the AWS instance metadata service and returned HTTP 401 — the
+# IMDS endpoint was reachable. This static check matches the Python
+# policy across all four runtimes by refusing literal references to
+# private/loopback IPs and metadata hostnames, plus network-capable
+# stdlib imports/builtins. It is intentionally conservative: a
+# determined attacker can still construct the address dynamically,
+# but at that point the same pre-execution policy that applies to
+# Python applies here. Defense in depth (network namespace isolation)
+# remains the right long-term fix; this closes the parity gap today.
+_PRIVATE_HOST_PATTERNS = (
+    r"\b169\.254\.\d+\.\d+\b",                        # link-local incl. AWS/Azure IMDS
+    r"\b127(?:\.\d+){3}\b",                           # loopback /8
+    r"\b10(?:\.\d+){3}\b",                            # RFC1918 10/8
+    r"\b192\.168\.\d+\.\d+\b",                        # RFC1918 192.168/16
+    r"\b172\.(?:1[6-9]|2\d|3[0-1])\.\d+\.\d+\b",      # RFC1918 172.16/12
+    r"\[?::1\]?",                                     # IPv6 loopback
+    r"\bfd[0-9a-f]{2}:",                              # IPv6 ULA fc00::/7 lower half
+    r"\blocalhost\b",
+    r"\bmetadata\.google\.internal\b",                # GCP IMDS
+    r"\bmetadata\.azure\.com\b",                      # Azure IMDS
+)
+_NETWORK_API_PATTERNS = {
+    # JS/TS: top-level fetch + http/https/net/dns/dgram modules.
+    ("javascript", "typescript"): (
+        r"\bfetch\s*\(",
+        r"\bXMLHttpRequest\b",
+        r"""require\s*\(\s*['"](?:http|https|net|dns|dgram|tls)['"]\s*\)""",
+        r"""(?:from|import)\s+['"](?:node:)?(?:http|https|net|dns|dgram|tls)['"]""",
+    ),
+    # Go: net, net/http, net/url with Get/Dial/Post.
+    ("go",): (
+        r"""(?:^|\s)import\s+\(?[^)]*['"]net(?:/(?:http|url|rpc))?['"]""",
+        r"\bnet\.(?:Dial|Listen|Resolve)",
+        r"\bhttp\.(?:Get|Post|NewRequest|Head|PostForm)\b",
+    ),
+    # Rust: std::net plus common HTTP crates.
+    ("rust",): (
+        r"\bstd::net::",
+        r"\b(?:reqwest|hyper|surf|ureq|isahc)::",
+        r"\bTcpStream::connect\b",
+    ),
+}
+_PRIVATE_HOST_RE = re.compile("|".join(_PRIVATE_HOST_PATTERNS), re.IGNORECASE)
+
+
+def _is_code_network_safe(language: str, code: str) -> tuple[bool, str | None]:
+    """Pre-execution SSRF/network safety check.
+
+    Returns ``(True, None)`` if the code is allowed. Returns
+    ``(False, reason)`` with a human-readable explanation when a
+    private-host literal or a network-capable API surface appears in
+    the source. The reason is surfaced verbatim in the structured
+    error envelope so callers can fix the offending construct.
+    """
+    if _PRIVATE_HOST_RE.search(code):
+        return (
+            False,
+            "Code contains a literal reference to a private, loopback, "
+            "or cloud-metadata host. The sandbox has no network and "
+            "must not be used to reach internal services (SSRF policy).",
+        )
+    for langs, patterns in _NETWORK_API_PATTERNS.items():
+        if language not in langs:
+            continue
+        for pattern in patterns:
+            if re.search(pattern, code, re.MULTILINE):
+                return (
+                    False,
+                    "Code uses a network-capable API surface "
+                    "(http/https/net/fetch/etc.). The sandbox is offline; "
+                    "remove the network call or run on a host that has "
+                    "explicit egress.",
+                )
+    return True, None
 
 
 def _err(code: str, message: str) -> dict[str, Any]:
@@ -362,6 +443,10 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
             "multi_language_executor.code_too_long",
             "code must be <= 100 000 characters.",
         )
+
+    safe, reason = _is_code_network_safe(language, code)
+    if not safe:
+        return _err("multi_language_executor.blocked_unsafe_code", reason or "")
 
     stdin = str(payload.get("stdin") or "")
     timeout = float(min(float(payload.get("timeout_seconds") or 15), _TIMEOUT_MAX))

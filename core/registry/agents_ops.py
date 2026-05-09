@@ -1646,14 +1646,19 @@ def _intent_match_bonus(query: str, agent: dict) -> float:
 
 def _price_query_mode(query: str) -> str | None:
     terms = set(_query_terms(query))
+    # Bare "price"/"cost" are too ambiguous to trigger price-intent ranking on
+    # their own (e.g. "apple stock price" is a stock lookup, not a request for
+    # the cheapest agent). Require an explicit cheap/low/expensive/highest
+    # intent term — "lowest price" and "cheapest cost" still work because
+    # those qualifiers carry the intent.
     if not (
-        {"cheap", "cheapest", "low", "lowest", "price", "cost", "expensive", "highest"}
+        {"cheap", "cheapest", "low", "lowest", "expensive", "highest", "costliest"}
         & terms
     ):
         return None
     if {"expensive", "highest", "costliest"} & terms:
         return "most_expensive"
-    if {"cheap", "cheapest", "low", "lowest", "price", "cost"} & terms:
+    if {"cheap", "cheapest", "low", "lowest"} & terms:
         return "cheapest"
     return None
 
@@ -1999,9 +2004,12 @@ def search_agents(
 
     # Off-catalog short-circuit: when the query unambiguously asks for a
     # capability we don't have, return empty BEFORE the relevance-floor
-    # check so a weak lexical match can't sneak through.
+    # check so a weak lexical match can't sneak through. We keep this active
+    # in price-query mode too — "cheapest weather agent" still has nothing
+    # in the catalog, and we should not surface unrelated cheap agents just
+    # because the user expressed a price preference.
     query_token_set = set(_query_terms(normalized_query))
-    if price_query_mode is None and query_token_set:
+    if query_token_set:
         for _description, predicate in _OFF_CATALOG_PATTERNS:
             try:
                 if predicate(query_token_set):
@@ -2034,7 +2042,7 @@ def search_agents(
     # was no empty-result mode. We still keep at least the top hit if its
     # score crosses the floor; otherwise the response signals "no match" to
     # the caller via an empty list (callers branch on `count == 0`).
-    if price_query_mode is None and ranked:
+    if ranked:
         top_score = ranked[0]["blended_score"]
         # Reload thresholds per-call: env-tunable without redeploy
         # (see AZTEA_SEARCH_* in core/feature_flags.py).

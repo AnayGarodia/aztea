@@ -685,7 +685,7 @@ def _deterministic_quality_result(
                 "score": 2,
                 "reason": "Secret scanner output is internally inconsistent: total_findings does not match findings.",
             }
-        severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+        severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
         for item in findings:
             if not isinstance(item, dict):
                 return {

@@ -223,3 +223,167 @@ def test_registry_search_response_route_present():
 
     routes = {getattr(r, "path", "") for r in server_app.app.routes}
     assert "/registry/search" in routes
+
+
+# ---------------------------------------------------------------------------
+# 6. Secret scanner judge — accepts "info" severity (post-2026-05-09 stress).
+# ---------------------------------------------------------------------------
+
+
+def test_secret_scanner_judge_accepts_info_severity():
+    """The 2026-05-09 stress test (10/10 secret_scanner jobs failed) traced
+    to the judge's severity allowlist missing 'info'. The agent emits
+    severity='info' for example-tagged secrets like AKIAIOSFODNN7EXAMPLE
+    (a known false-positive class), but the judge rejected the whole
+    output because 'info' wasn't in {critical, high, medium, low}. Caller
+    was charged with no payout — a quality-judge logic bug, not an agent
+    bug. Fix: add 'info' to the judge's severity_counts.
+    """
+    # part_005.py is a shard — its globals only resolve once the
+    # multi-shard loader has built server.application, and importing
+    # the merged module pulls in agent-registration code that may be
+    # mid-flight on a developer checkout. Source-text assertion keeps
+    # this test independent of unrelated WIP elsewhere in the tree.
+    from pathlib import Path
+
+    src = (
+        Path(__file__).resolve().parent.parent
+        / "server"
+        / "application_parts"
+        / "part_005.py"
+    ).read_text()
+
+    # Locate the secret_scanner branch and assert its severity_counts
+    # init line includes "info". Using a focused window to avoid
+    # matching the unrelated codereview branch which also has its
+    # own severity_counts dict above.
+    marker = 'if agent_id == _SECRET_SCANNER_AGENT_ID:'
+    start = src.find(marker)
+    assert start != -1, "secret_scanner judge branch not found in part_005.py"
+    window = src[start:start + 4000]
+    assert (
+        'severity_counts = {"critical": 0, "high": 0, "medium": 0, '
+        '"low": 0, "info": 0}'
+    ) in window, (
+        "secret_scanner judge must initialize severity_counts with "
+        "an 'info' bucket. Without this, scanner findings tagged as "
+        "info (e.g. AKIAIOSFODNN7EXAMPLE — known-example AWS keys) "
+        "fail the per-finding severity check, which made 10/10 of "
+        "the 2026-05-09 stress B1 batch fail."
+    )
+
+
+# ---------------------------------------------------------------------------
+# 7. Search — ambiguous "price" must not trigger price-rank fallback.
+# ---------------------------------------------------------------------------
+
+
+def test_price_query_mode_ignores_bare_price_token():
+    """The 2026-05-09 stress D3 case: 'apple stock price' surfaced three
+    unrelated cheap agents because the bare word 'price' tripped
+    _price_query_mode -> 'cheapest', which then bypassed the off-catalog
+    short-circuit and the relevance floor. Fix: require explicit
+    cheap/low/expensive intent, not the noun 'price'/'cost' alone.
+    """
+    from core.registry import agents_ops
+
+    # The exact stress-test query — must NOT trip price-intent ranking.
+    assert agents_ops._price_query_mode("apple stock price") is None
+    assert agents_ops._price_query_mode("aws cost dashboard") is None
+    # Real price-intent queries with explicit qualifiers still trigger.
+    assert agents_ops._price_query_mode("cheapest CVE lookup") == "cheapest"
+    assert agents_ops._price_query_mode("lowest price agent") == "cheapest"
+    assert agents_ops._price_query_mode("most expensive option") == "most_expensive"
+
+
+def test_multi_language_executor_blocks_imds_ssrf():
+    """The 2026-05-09 stress test Z6 confirmed: a JS `fetch()` to
+    169.254.169.254/latest/meta-data/ inside multi_language_executor
+    returned HTTP 401 (the AWS instance metadata service was reachable).
+    The Python executor blocks this statically; JS/TS/Go/Rust did not.
+    Fix: pre-execution regex-based block on private-host literals and
+    network-capable APIs across all four runtimes.
+    """
+    from agents import multi_language_executor as mle
+
+    # Literal IMDS host across runtimes — must always be blocked.
+    imds = "fetch('http://169.254.169.254/latest/meta-data/')"
+    for lang in ("javascript", "typescript", "go", "rust"):
+        safe, reason = mle._is_code_network_safe(lang, imds)
+        assert not safe, f"{lang}: IMDS literal should be blocked"
+        assert "private, loopback, or cloud-metadata host" in (reason or "")
+
+    # JS network APIs — blocked even without an IP literal.
+    cases = [
+        ("javascript", "fetch('https://example.com')"),
+        ("javascript", "const http = require('http'); http.get('x', ()=>{})"),
+        ("typescript", "import http from 'node:http';"),
+        ("go", 'import "net/http"\nhttp.Get("https://example.com")'),
+        ("rust", "use std::net::TcpStream;\nTcpStream::connect(\"x:80\");"),
+    ]
+    for lang, code in cases:
+        safe, reason = mle._is_code_network_safe(lang, code)
+        assert not safe, f"{lang}: {code!r} should be blocked"
+        assert reason
+
+    # Sanity: benign code is allowed.
+    benign = "console.log(1+1);"
+    safe, reason = mle._is_code_network_safe("javascript", benign)
+    assert safe, f"benign JS should be allowed; reason: {reason!r}"
+
+    # Localhost is also blocked (covers most accidental SSRF too).
+    safe, _ = mle._is_code_network_safe(
+        "javascript", "fetch('http://localhost:8080/')"
+    )
+    assert not safe
+
+
+def test_pipeline_step_jobs_get_signed():
+    """The 2026-05-09 stress R2: 1 of 100 receipts in the 24h window
+    was unsigned because the pipeline executor called
+    ``jobs.update_job_status`` without the signature kwargs. Direct
+    sync/async paths sign at completion (part_008.py / part_009.py);
+    the pipeline path didn't, so recipe-step jobs landed unsigned.
+
+    Source-text assertion (the executor pulls in heavy server modules
+    on import).
+    """
+    from pathlib import Path
+
+    src = (
+        Path(__file__).resolve().parent.parent
+        / "core"
+        / "pipelines"
+        / "executor.py"
+    ).read_text()
+    assert "_sign_pipeline_step_output(" in src, (
+        "core/pipelines/executor.py must compute signature kwargs for "
+        "pipeline-step completions; without this, recipe runs land "
+        "unsigned receipts and the audit aggregate drifts."
+    )
+    # The success-path update_job_status MUST receive the kwargs.
+    assert "**_sign_pipeline_step_output(agent, output)" in src
+
+
+def test_off_catalog_gate_active_in_price_query_mode():
+    """Even when the user expresses price intent, off-catalog topics must
+    still short-circuit to []. 'cheapest weather forecast' has no agent
+    in the catalog and surfacing the cheapest unrelated agent is worse
+    than empty results.
+    """
+    from pathlib import Path
+
+    src = (
+        Path(__file__).resolve().parent.parent
+        / "core"
+        / "registry"
+        / "agents_ops.py"
+    ).read_text()
+    # The off_catalog short-circuit must NOT be guarded behind
+    # `price_query_mode is None`. A regression here would re-introduce
+    # the 2026-05-09 D3 bug.
+    assert "if price_query_mode is None and query_token_set:" not in src, (
+        "off_catalog short-circuit is gated by price_query_mode again — "
+        "this re-opens the D3 hole where price-intent queries surface "
+        "unrelated cheap agents."
+    )
