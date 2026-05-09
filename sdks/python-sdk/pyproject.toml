@@ -41,3 +41,6 @@ aztea = "aztea.cli:app"
 
 [tool.setuptools.packages.find]
 exclude = ["tests*"]
+
+[tool.setuptools.package-data]
+"aztea.cli" = ["templates/*.template"]

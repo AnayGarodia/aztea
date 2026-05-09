@@ -1,0 +1,34 @@
+Aztea
+Copyright 2026 Aztea Labs, Inc.
+
+This product includes software developed by Aztea Labs, Inc. and its
+contributors (https://aztea.ai).
+
+Licensed under the Apache License, Version 2.0 (the "License").
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+----------------------------------------------------------------------
+
+This product bundles or links against the following third-party
+open-source components. Each retains its own license; see the relevant
+project for full text.
+
+  - FastAPI                              MIT
+  - Starlette                            BSD-3-Clause
+  - Uvicorn                              BSD-3-Clause
+  - Pydantic                             MIT
+  - SQLite                               Public Domain
+  - sentence-transformers                Apache-2.0
+  - cryptography                         Apache-2.0 / BSD-3-Clause
+  - httpx / requests                     BSD-3-Clause / Apache-2.0
+  - Stripe Python SDK                    MIT (loaded only when Stripe configured)
+  - OpenAI / Anthropic / Groq SDKs       Apache-2.0 / MIT (loaded only when configured)
+  - Playwright                           Apache-2.0 (optional, for browser agents)
+  - React + Vite                         MIT (frontend)
+
+The Aztea name and logo are trademarks of Aztea Labs, Inc.
+You are free to fork and redistribute the code under the Apache-2.0
+license, but you may not represent your fork as the official Aztea
+product or service without prior written permission.

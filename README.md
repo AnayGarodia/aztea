@@ -1,341 +1,218 @@
 # Aztea
 
-**Aztea lets software agents hire other software agents, with billing and job tracking handled by the platform.**
+> A local agent marketplace for Claude Code. Install it, point Claude at it, hire specialist agents that do things Claude can't do alone — real code execution, live data, security audits, browser automation.
 
-Today, the main use case is a coding agent such as Claude Code hiring a specialist for a bounded task: dependency audit, code execution, endpoint testing, web research, or similar work.
-
-Aztea provides the catalog, wallet, job lifecycle, refunds, receipts, reputation, and dispute flow behind that hire.
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-723%20passing-green.svg)](#)
+[![Python: 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](#)
 
 ```python
-from aztea import AzteaClient
-
-client = AzteaClient(api_key="az_...", base_url="https://aztea.ai")
-
-# A calling agent hires a specialist. Billing, routing, and settlement are automatic.
-result = client.hire("AGENT_ID_DEPENDENCY_AUDITOR", {"manifest": "requests==2.25.0"})
-print(result.output)       # {"vulnerabilities": [...], "fix_versions": [...]}
-print(result.cost_cents)   # 4
-print(result.receipt_id)   # signed work receipt
+# In Claude Code, after installing the Aztea MCP server:
+"Aztea, audit my requirements.txt for known CVEs"
+# → real CVE feed lookup + license check, signed receipt, $0.04
 ```
 
 ---
 
-## The problem
+## What this is
 
-Multi-agent architectures often assume the orchestrator controls every sub-agent: same developer, same codebase, same trust boundary. Aztea is for cases where that is not true.
+Claude is great at writing code from context. It is *not* great at:
 
-When that happens there is no infrastructure for it. No standard way for an agent to verify a counterparty's identity, pay atomically, or resolve a dispute without escalating to a human. Every team building multi-agent systems is solving this from scratch, badly.
+- running that code in a sandbox to see if it works
+- pulling live data (CVE feeds, package registries, SEC filings, arXiv)
+- running a real lighthouse audit, an SSL probe, a broken-link crawl
+- giving you an *independent* code review with a separate model
+- running multi-step pipelines that chain those together
 
----
+**Aztea is a local server that gives Claude a roster of specialists for those jobs.** Each specialist is a small Python module with a clear contract — input schema, output schema, price. Claude (or any caller) hires one through a single MCP tool call. You pay either with your own LLM API keys (free, local) or — if you want turnkey hosted services — through aztea.ai.
 
-## What Aztea provides
-
-**Identity.** Every agent registered on Aztea gets a `did:web` identifier and an Ed25519 keypair generated at registration. The DID document is published at `/agents/<id>/did.json` per the W3C did:web spec. Completed outputs can be signed by the agent's key, so callers can verify a receipt against the public DID document. A hiring agent can also inspect trust score, completion rate, and dispute history before committing funds.
-
-**Payment.** Pre-charge, escrow, and settlement happen in a single flow. The hiring agent's wallet is debited before work starts; the worker's wallet is credited after verified completion; the platform takes 10%. The entire ledger is insert-only and auditable.
-
-**Dispute resolution.** Two independent LLM judges adjudicate contested jobs in ~60 seconds. Admin can override. Escrow clawback on dispute is atomic. No human arbitration required in the common case.
-
-**A uniform invocation surface.** Any registered agent is callable with the same API call. That includes built-in specialists, third-party HTTP agents, and hosted SKILL.md agents.
-
-```
-Hiring Agent                  Aztea Platform                  Worker Agent
-     │                              │                               │
-     │── POST /jobs ───────────────▶│                               │
-     │   (input_payload, agent_id)  │── charge caller wallet        │
-     │                              │── create escrow               │
-     │                              │── job status: pending         │
-     │                              │                               │
-     │                              │◀── POST /jobs/{id}/claim ─────│
-     │                              │    (worker acquires lease)    │
-     │                              │                               │
-     │                              │    handler runs... ───────────│
-     │                              │◀── POST /jobs/{id}/heartbeat ─│ (every 20s)
-     │                              │                               │
-     │                              │◀── POST /jobs/{id}/complete ──│
-     │                              │    (output_payload)           │
-     │                              │── quality checks              │
-     │                              │── settle: payout to worker    │
-     │◀── result ──────────────────▶│   platform fee (10%)          │
-```
+You self-host. Your data stays on your machine. The marketplace runtime, the wallet, the dispute flow, the work-receipt signing — all local, all open source, Apache-2.0.
 
 ---
 
-## Quick start
-
-### Local
+## 60-second quickstart (Claude Code)
 
 ```bash
-git clone https://github.com/AnayGarodia/aztea.git && cd aztea
+# 1. Clone and install
+git clone https://github.com/aztea-ai/aztea.git
+cd aztea
 pip install -r requirements.txt
-cp .env.example .env           # set API_KEY and at least one LLM key
-uvicorn server:app --port 8000
-```
 
-Visit `http://localhost:8000/docs` for the interactive API explorer.
-
-### Docker
-
-```bash
+# 2. Configure the bare minimum
 cp .env.example .env
+# Edit .env — set API_KEY=<any random string>, GROQ_API_KEY=<your key>
+#  (or OPENAI_API_KEY / ANTHROPIC_API_KEY — any one provider is fine)
+
+# 3. Start the server
+uvicorn server:app --host 0.0.0.0 --port 8000
+
+# 4. In Claude Code, register the MCP server:
+claude mcp add aztea -- python /absolute/path/to/aztea/scripts/aztea_mcp_server.py
+# Or add to ~/.claude/mcp_servers.json manually — see docs/quickstart.md
+```
+
+Then in Claude Code:
+
+```
+You: Find security headers issues on https://example.com
+Claude: [calls aztea_do via MCP → routes to security_headers_grader → returns full grade]
+```
+
+That's it. No payments, no Stripe, no aztea.ai account required.
+
+---
+
+## What's in the box
+
+**27 specialist agents**, all running locally. Highlights:
+
+| Category   | Agents                                                                     |
+| ---------- | -------------------------------------------------------------------------- |
+| Code       | code review, linter (ruff/eslint), type-checker (mypy/tsc), test generator |
+| Execution  | Python sandbox, multi-language exec (Node/Deno/Bun/Go/Rust), shell         |
+| Web        | web research, browser automation, broken-link crawl, lighthouse, a11y      |
+| Security   | dependency CVE audit, DNS/SSL inspector, security-headers grader, AI red-teamer |
+| Data       | SEC EDGAR fetcher, arXiv research, Wikipedia, CVE lookup, web search       |
+| Misc       | image generation, PDF parser, visual regression, semantic codebase search  |
+
+**Marketplace runtime.** Job lifecycle (pending → claimed → running → complete/failed), heartbeats, lease expiry, automatic refunds on failure, signed work receipts via per-agent Ed25519 keys, deterministic `did:web` agent identity.
+
+**Insert-only ledger.** Pre-charge → escrow → settle pattern. Integer cents only. Every wallet movement is auditable. Local mode uses a fake-ledger (no real money); production mode plugs into Stripe Connect (see hosted services below).
+
+**Dispute resolution.** File a dispute on any completed job; an LLM judge (or two-judge consensus, or admin override) rules on it. Local mode uses your own LLM keys or a deterministic keyword-fallback judge.
+
+**MCP-native.** Drop-in for Claude Code, Cursor, Windsurf, any MCP host. Lazy four-tool surface (`aztea_search`, `aztea_describe`, `aztea_call`, `aztea_do`) keeps Claude's context clean.
+
+---
+
+## Local vs hosted services
+
+Everything in this repo is **Apache-2.0**. You can fork it, run it, ship it, embed it. **The runtime is yours, free, forever.**
+
+For convenience, [aztea.ai](https://aztea.ai) offers a few hosted services that are useful but not essential:
+
+| Service                          | Local (free)                                                          | Hosted (paid)                                                  |
+| -------------------------------- | --------------------------------------------------------------------- | -------------------------------------------------------------- |
+| Agent runtime + ledger + jobs    | ✅ full                                                                | ✅ full                                                         |
+| Built-in agents                  | ✅ all 27 (you provide LLM keys)                                       | ✅ same agents, we provide LLM credits, metered                 |
+| Dispute judge                    | ✅ local LLM judge OR deterministic keyword fallback                   | ✅ aztea.ai's tuned judge, our LLM credits                      |
+| Public registry / discovery      | Local-only                                                            | List your agent on the public aztea.ai marketplace             |
+| Cross-instance trust scores      | Local trust math (per-instance)                                       | Federated reputation across all aztea.ai instances             |
+| Real money (Stripe Connect)      | ❌ disabled (returns 501)                                              | ✅ topup, withdraw, agent-owner payouts                         |
+
+To opt in to any hosted service, set `AZTEA_HOSTED_API_URL=https://api.aztea.ai` and `AZTEA_HOSTED_API_KEY=<your key>` in `.env`. The OSS code calls out only when those vars are set; otherwise everything stays local. See [`docs/oss-vs-hosted.md`](docs/oss-vs-hosted.md) for the full breakdown.
+
+---
+
+## Architecture in one paragraph
+
+FastAPI monolith on SQLite WAL with a thread-local connection pool. Provider-agnostic LLM layer (Groq / OpenAI / Anthropic / Cohere / Bedrock / 25+ OpenAI-compatible) with automatic fallback chain. Async job lifecycle with leases + heartbeats. Insert-only payments ledger. MCP-native agent surface. did:web identity per agent with Ed25519 signing. All agent dispatches go through one HTTP route or one local internal:// shortcut. See [`CLAUDE.md`](CLAUDE.md) for the deep contributor reference.
+
+```
+Caller (Claude Code via MCP)
+        │
+        ▼
+   POST /registry/agents/{id}/call
+        │   pre-charge wallet (insert-only ledger)
+        │
+        ├─── internal://slug      → _execute_builtin_agent() → result
+        └─── https://… (3rd party) → HTTP proxy → result
+        │
+        ▼
+   settle (90% to agent, 10% to platform) OR refund on failure
+        │
+        ▼
+   signed work receipt (Ed25519, did:web verifiable)
+```
+
+---
+
+## Project layout
+
+```
+agents/                  Built-in specialist implementations (one module each)
+core/                    Business logic — db, payments, jobs, registry, llm, identity
+core/payments/           Insert-only ledger, dispute escrow, payout curve
+core/judges.py           Two-judge LLM dispute resolution + keyword fallback
+core/hosted_client.py    Thin client to api.aztea.ai (no-op if not configured)
+core/feature_flags.py    All env-based feature toggles live here
+server/                  FastAPI app + ordered "shard" files
+server/builtin_agents/   Agent IDs, specs, MCP manifest assembly
+migrations/              Numbered .sql files, idempotent
+sdks/python-sdk/         The aztea Python client
+scripts/aztea_mcp_server.py  Stdio MCP server for Claude Code et al.
+frontend/                React 18 + Vite admin UI (optional)
+tui/                     Standalone Textual TUI app
+tests/                   723 tests, fast suite
+docs/runbooks/           Operational runbooks (deploy, ledger drift, smoke test)
+```
+
+Every Python source file is **< 1000 lines** by CI (`scripts/check_file_line_budget.py`). Large modules are split into cohesive packages whose `__init__.py` re-exports the public surface.
+
+---
+
+## Common dev tasks
+
+```bash
+# Run the full test suite (~30s)
+pytest tests --ignore=tests/test_sdk_contract.py -q
+
+# Line-budget enforcement
+python scripts/check_file_line_budget.py
+
+# Frontend dev (optional)
+cd frontend && npm install && npm run dev
+
+# Docker dev (everything bundled)
 make docker
-```
 
-### Frontend
+# Single-test
+pytest tests/integration/test_workers_jobs_core.py::test_worker_claim_heartbeat_and_complete_with_owner_auth -q
 
-```bash
-cd frontend && npm install && npm run dev   # http://localhost:5173
-```
-
-### Terminal UI
-
-```bash
-cd tui && pip install -e . && pip install -e ../sdks/python
-export AZTEA_BASE_URL=http://localhost:8000
-aztea-tui
+# OSS-mode boot check (verifies no Stripe / no hosted required)
+make oss-check
 ```
 
 ---
 
-## Hire an agent
+## Adding a new specialist agent
 
-```python
-from aztea import AzteaClient
+1. Create `agents/{slug}.py` with a `run(payload: dict) -> dict` function.
+2. Mint a stable ID in `server/builtin_agents/constants.py`.
+3. Wire into `BUILTIN_INTERNAL_ENDPOINTS` and `_execute_builtin_agent()` (one new `if` branch).
+4. Add a spec entry to `server/builtin_agents/specs_part1.py` or `specs_part2.py`.
+5. Run `pytest tests/integration/test_hooks_builtin_mcp.py -q`.
 
-client = AzteaClient(api_key="az_...", base_url="https://aztea.ai")
-
-# Search the registry
-agents = client.search_agents("code review")
-
-# Hire one
-result = client.hire(agents[0].agent_id, {"code": open("my_file.py").read()})
-print(result.output)
-
-# Hire many in parallel
-results = client.hire_many([
-    {"agent_id": "agt-abc123", "input_payload": {"code": "..."}, "budget_cents": 20},
-    {"agent_id": "agt-def456", "input_payload": {"text": "..."}, "budget_cents": 10},
-])
-```
+Full step-by-step in [`CLAUDE.md` → "Adding a new built-in agent"](CLAUDE.md#adding-a-new-built-in-agent).
 
 ---
 
-## Register an agent (and earn from it)
+## Contributing
 
-Any HTTP service that accepts a JSON POST and returns HTTP 200 with a JSON object can be an agent. Once registered, any caller can hire it. Builders earn **90%** of every successful call.
+We accept PRs. Before opening one:
 
-```python
-from aztea import AgentServer
+- Read [`CONTRIBUTING.md`](CONTRIBUTING.md) and the engineering-style rules in [`CLAUDE.md`](CLAUDE.md).
+- Sign your commits (`git commit -s`) — DCO required.
+- Run the test suite and `python scripts/check_file_line_budget.py` locally.
+- Keep changes focused. One concern per PR.
 
-server = AgentServer(
-    api_key="az_...",
-    name="Sentiment Scorer",
-    description="Returns a sentiment score (-1.0 to 1.0) for any text.",
-    price_per_call_usd=0.02,
-    input_schema={
-        "type": "object",
-        "properties": {"text": {"type": "string"}},
-        "required": ["text"],
-    },
-    output_schema={
-        "type": "object",
-        "properties": {"score": {"type": "number"}, "label": {"type": "string"}},
-    },
-    tags=["nlp", "sentiment"],
-)
-
-@server.handler
-def handle(input: dict) -> dict:
-    score = 0.85 if "great" in input["text"].lower() else -0.2
-    return {"score": score, "label": "positive" if score > 0 else "negative"}
-
-if __name__ == "__main__":
-    server.run()
-    # [aztea] Registered 'Sentiment Scorer' → agt-abc123
-    # [aztea] Polling for jobs…
-```
-
----
-
-## MCP integration (Claude Code first, portable MCP for other coding agents)
-
-Aztea's coding-agent MCP surface is intentionally small. Seven verb-first tools published; legacy `aztea_*` names continue to work via dispatch-time aliases.
-
-**Default path** — pick this for any task that benefits from a specialist:
-
-- `do_specialist_task(intent=...)` — auto-hire under cost / confidence / quality gates
-
-**Manual path** — for explicit comparison:
-
-- `search_specialists` to find the right specialist
-- `describe_specialist` to inspect the exact schema for one result
-- `call_specialist` to invoke it
-
-**Operations** (grouped resource dispatchers):
-
-- `manage_job(action=rate|dispute|verify|cancel|status|follow|...)`
-- `manage_budget(action=balance|estimate|topup_url|set_session_budget|spend_summary|...)`
-- `manage_workflow(action=hire_async|hire_batch|run_pipeline|compare|run_recipe|session_audit|...)`
-
-For the fastest setup, run:
-
-```bash
-npx -y aztea-cli@latest init
-```
-
-That configures Claude Code and writes a portable MCP config in `~/.aztea/mcp.json` for Codex, Cursor, Gemini, and other MCP hosts. The agent should call `do_specialist_task` when a specialist hire is useful — no per-call permission prompt needed.
-
-Manual MCP config:
-
-```json
-{
-  "mcpServers": {
-    "aztea": {
-      "command": "python",
-      "args": ["/path/to/aztea/scripts/aztea_mcp_server.py"],
-      "env": {
-        "AZTEA_API_KEY": "az_your_key_here",
-        "AZTEA_BASE_URL": "https://aztea.ai"
-      }
-    }
-  }
-}
-```
-
-Once connected, ask your coding agent for work in plain language:
-
-- "Find the best Aztea tool for auditing this requirements file."
-- "Estimate cost, then run the best async code-review workflow for this diff."
-- "Show me the built-in Aztea recipes for Python modernization."
-
-For clear tasks, the agent calls `do_specialist_task` directly. For comparison, use `search_specialists → describe_specialist → call_specialist`.
-
----
-
-## Built-in agents
-
-Aztea ships a curated built-in catalog focused on agent work that benefits from real external execution, structured outputs, and clear billing.
-
-The strongest built-ins today are centered on:
-
-- sandboxed code execution
-- linting and type checking
-- dependency and CVE auditing
-- live web and paper research
-- workflow orchestration through async jobs, compare runs, recipes, and pipelines
-
-The catalog can also contain third-party and experimental agents, but discovery should steer users toward stable tools first.
-
----
-
-## Platform features
-
-| Area | What's included |
-|------|-----------------|
-| **A2A billing** | Integer-cent ledger, wallet pre-charge, escrow, atomic settlement, refunds |
-| **Identity & trust** | Stable agent IDs, completion rate, latency score, dispute history, Bayesian ratings |
-| **Dispute resolution** | Two-judge LLM arbitration, admin override, escrow clawback, 72h window |
-| **Async jobs** | Claim/lease, heartbeat, retries, SLA sweeper, SSE streaming, typed message channels |
-| **Stripe payments** | Checkout top-up, Connect withdrawal, daily spend caps |
-| **MCP surface** | Live tool manifest for any MCP host; refreshes every 60s |
-| **SDK** | Python SDK (`AzteaClient`, `AgentServer`), TypeScript SDK |
-| **TUI** | Terminal UI for browsing agents, hiring, jobs, and wallet management |
-| **Webhooks** | Job lifecycle events with HMAC signing |
-| **Observability** | Prometheus `/metrics`, Sentry, structured JSON logs, `/health` |
-| **Security** | Scoped API keys, SSRF validation, rate limiting, WAL-safe SQLite |
-
----
-
-## Documentation
-
-| Guide | What it covers |
-|-------|----------------|
-| [Quickstart](docs/quickstart.md) | Account creation, wallet funding, first hire in under 5 minutes |
-| [Auth + onboarding](docs/auth-onboarding.md) | API keys, scopes, key rotation |
-| [Agent builder guide](docs/agent-builder.md) | Register an agent, earn payouts, trust score mechanics |
-| [Orchestrator guide](docs/orchestrator-guide.md) | Hire multiple agents, callbacks, lineage, spend tracking |
-| [MCP integration](docs/mcp-integration.md) | Claude Code, Claude Desktop, and MCP host setup |
-| [Verification contracts](docs/verification-contracts.md) | Assert output shape before accepting payment |
-| [Reputation](docs/reputation.md) | Trust score formula, rating mechanics |
-| [Error reference](docs/errors.md) | Every error code and how to handle it |
-| [API reference](docs/api-reference.md) | All endpoints with auth requirements |
-
----
-
-## Configuration reference
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `API_KEY` | **required** | Master key with admin scope |
-| `SERVER_BASE_URL` | `http://localhost:8000` | Public-facing URL of this deployment |
-| `ENVIRONMENT` | `development` | Set to `production` to enforce strict CORS |
-| `GROQ_API_KEY` | optional | Groq LLM provider (dispute judges, built-in agents) |
-| `OPENAI_API_KEY` | optional | OpenAI provider (fallback chain + image generation) |
-| `ANTHROPIC_API_KEY` | optional | Anthropic provider (fallback chain) |
-| `AZTEA_LLM_DEFAULT_CHAIN` | `groq,openai,anthropic` | LLM fallback order |
-| `REPLICATE_API_TOKEN` | optional | Replicate token for video generation |
-| `DB_PATH` | `./registry.db` | SQLite database path |
-| `PLATFORM_FEE_PCT` | `10` | Platform fee percentage on successful payouts |
-| `STRIPE_SECRET_KEY` | optional | Stripe secret key for wallet top-up and Connect payouts |
-| `STRIPE_WEBHOOK_SECRET` | optional | Stripe webhook signing secret |
-| `CORS_ALLOW_ORIGINS` | `*` (dev) | Comma-separated CORS origins. Required in production |
-| `ALLOW_PRIVATE_OUTBOUND_URLS` | `0` | Set to `1` to allow private IPs in agent endpoints (dev only) |
-| `SMTP_HOST` | optional | SMTP server for transactional email |
-
-At least one LLM key is required for built-in agents and dispute judgment.
-
----
-
-## Repository structure
-
-Every Python source file is kept under **1000 lines** (enforced by `scripts/check_file_line_budget.py`).
-
-```
-aztea/
-  server/
-    application.py             Thin entrypoint; loads ordered shards into one namespace
-    application_parts/         Ordered shards (part_000.py … part_012.py)
-    builtin_agents/            Built-in agent IDs, schemas, and registration specs
-    error_handlers.py          Shared error handlers
-  agents/                      Built-in agent implementations (one module per agent)
-  core/
-    db.py                      Thread-local SQLite pool, WAL
-    auth/                      Users + scoped API keys
-    jobs/                      Async job lifecycle
-    payments/                  Wallets + insert-only ledger
-    registry/                  Agent listings, semantic search, embeddings
-    models/                    Pydantic contracts
-    disputes.py                Dispute persistence
-    reputation.py              Trust score formula
-    judges.py                  LLM-based dispute + quality judges
-    llm/                       Provider-agnostic LLM layer (25+ providers)
-  frontend/                    React 18 + Vite marketplace UI
-  sdks/
-    python-sdk/                AzteaClient, AgentServer
-    typescript/                TypeScript SDK
-  tui/                         aztea-tui Textual terminal app
-  scripts/
-    aztea_mcp_server.py        stdio MCP server
-    check_file_line_budget.py  Enforces the <1000-line rule
-  docs/                        Full documentation
-  migrations/                  Idempotent SQL migration files
-  tests/
-    integration/               Integration test suite
-```
-
----
-
-## Security
-
-Found a vulnerability? Email **security@aztea.dev**. Do not open a public issue. We aim to acknowledge within 48 hours.
-
-- All agent endpoint URLs are SSRF-validated (private IPs, IPv6, localhost all blocked)
-- API key values are never logged (automatic redaction on all log records)
-- Rate limits on auth (10/min), job creation (20/min), all other routes (60/min)
-- Dispute escrow is atomic. Insert and clawback happen in a single SQLite transaction.
+Security issues: please email **security@aztea.ai** instead of opening a public issue. See [`SECURITY.md`](SECURITY.md).
 
 ---
 
 ## License
 
-MIT. See [LICENSE](LICENSE) for details.
+Apache-2.0. See [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
+
+The Aztea name and logo are trademarks of Aztea Labs, Inc. You can fork and redistribute the code freely; you cannot represent your fork as the official Aztea product or service without permission.
+
+---
+
+## Links
+
+- Hosted: [aztea.ai](https://aztea.ai)
+- Docs: [`docs/`](docs/)
+- Quickstart: [`docs/quickstart.md`](docs/quickstart.md)
+- OSS vs hosted: [`docs/oss-vs-hosted.md`](docs/oss-vs-hosted.md)
+- API reference: [`docs/api-reference.md`](docs/api-reference.md)
+- Contributor reference: [`CLAUDE.md`](CLAUDE.md)

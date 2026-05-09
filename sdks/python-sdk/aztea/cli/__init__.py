@@ -2,6 +2,7 @@
 
 Entry point: `aztea`. Commands:
     aztea login | logout | whoami
+    aztea publish <path>                        (SKILL.md, agent.md, or .py handler)
     aztea agents list | show | search
     aztea hire <slug> [--input ...]            (jobs.hire alias at top level)
     aztea jobs status | cancel | rate | dispute | verify | estimate | follow
@@ -25,6 +26,7 @@ from . import wallet as _wallet
 from . import pipelines as _pipelines
 from . import mcp as _mcp
 from . import status as _status
+from . import publish as _publish
 from .splash import render_splash
 
 
@@ -67,6 +69,7 @@ app.command(name="logout", help="Sign out.")(_auth.logout)
 app.command(name="whoami", help="Show the active account.")(_auth.whoami)
 app.command(name="hire", help="Hire an agent and wait for the result.")(_jobs.hire)
 app.command(name="batch", help="Hire independent specialists in parallel.")(_jobs.batch)
+app.command(name="publish", help="List a new agent on Aztea (SKILL.md, agent.md, or .py handler).")(_publish.publish)
 
 
 # ── Subcommand groups ──────────────────────────────────────────────────────

@@ -177,3 +177,34 @@ CURATED_BUILTIN_AGENT_IDS = frozenset(
 BUILTIN_WORKER_OWNER_ID = "system:builtin-worker"
 SYSTEM_USERNAME = "system"
 SYSTEM_USER_EMAIL = "system@aztea.internal"
+
+
+# Agents that the OSS-mode runtime should prefer to call against the hosted
+# aztea.ai API instead of dispatching locally. Currently only the quality
+# judge — its prompt + model are proprietary and shouldn't run locally.
+PREFER_HOSTED_AGENT_IDS = frozenset(
+    {
+        QUALITY_JUDGE_AGENT_ID,
+    }
+)
+# Sanity: no deprecated agent should be in the prefer-hosted set. This
+# fires at import time so a regressed addition is caught loudly.
+assert not (PREFER_HOSTED_AGENT_IDS & SUNSET_DEPRECATED_AGENT_IDS), (
+    "PREFER_HOSTED_AGENT_IDS must not include sunset agents — they should "
+    "either be removed from sunset or removed from prefer-hosted."
+)
+
+
+def agent_id_to_slug(agent_id: str) -> str | None:
+    """Map a built-in agent UUID to its hosted-API slug.
+
+    Slug is derived from the `internal://<slug>` endpoint registration. Returns
+    None for unknown / non-builtin agent IDs so the caller can skip the
+    hosted call.
+    """
+    endpoint = BUILTIN_INTERNAL_ENDPOINTS.get(agent_id)
+    if not endpoint:
+        return None
+    if not endpoint.startswith("internal://"):
+        return None
+    return endpoint.removeprefix("internal://").strip() or None

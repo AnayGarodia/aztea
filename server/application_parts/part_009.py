@@ -1775,10 +1775,12 @@ def jobs_claim(
     agent = registry.get_agent(str(job.get("agent_id") or ""), include_unapproved=True)
     if agent is None:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
-    if (
-        not _caller_is_admin(caller)
-        and str(agent.get("review_status") or "approved").strip().lower() != "approved"
-    ):
+    # 'probation' agents claim normally — the soft gate lives in auto_hire
+    # (rank + price cap on unsolicited routing). Only listings that admins
+    # have demoted to 'pending_review' or 'rejected' are blocked from
+    # claiming.
+    review = str(agent.get("review_status") or "approved").strip().lower()
+    if not _caller_is_admin(caller) and review not in {"approved", "probation"}:
         raise HTTPException(
             status_code=403,
             detail="Agent listing is pending review and cannot accept jobs.",

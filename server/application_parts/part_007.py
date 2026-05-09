@@ -36,8 +36,29 @@ def registry_register(
             )
     try:
         safe_endpoint_url = _validate_agent_endpoint_url(request, body.endpoint_url)
+        # Defence-in-depth: refuse anyone trying to register against an
+        # Aztea-owned host as their endpoint. SSRF check above already blocks
+        # private IPs; this catches the "list a clone of a built-in" footgun.
+        endpoint_findings = _listing_safety.scan_agent_md_endpoint(safe_endpoint_url)
+        if _listing_safety.has_block(endpoint_findings):
+            block = next(
+                f for f in endpoint_findings
+                if f.level == _listing_safety.LEVEL_BLOCK
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=error_codes.make_error(
+                    "listing.safety_block", block.message,
+                    {"code": block.code, "detail": block.detail},
+                ),
+            )
         if not os.environ.get("AZTEA_SKIP_REGISTER_ENDPOINT_PROBE"):
             _probe_register_endpoint_or_400(safe_endpoint_url)
+        _run_listing_safety_probe(
+            safe_endpoint_url,
+            input_schema=body.input_schema,
+            output_schema=body.output_schema,
+        )
         safe_healthcheck_url = None
         if body.healthcheck_url:
             safe_healthcheck_url = _validate_outbound_url(
@@ -65,6 +86,13 @@ def registry_register(
                 safe_verifier_url,
                 registration_payload=registration_payload,
             )
+        # Non-master registrations enter probation: live + callable, but
+        # ranked last in discovery and rate/price-capped until the listing
+        # accumulates a track record. See core/registry/auto_hire for the
+        # gating logic; the column itself is plain TEXT.
+        initial_review_status = (
+            "probation" if caller["type"] != "master" else None
+        )
         agent_id = registry.register_agent(
             name=body.name,
             description=body.description,
@@ -78,6 +106,7 @@ def registry_register(
             output_examples=body.output_examples or None,
             verified=verified,
             owner_id=caller["owner_id"],
+            review_status=initial_review_status,
             model_provider=body.model_provider,
             model_id=body.model_id,
             pricing_model=body.pricing_model,
@@ -1178,6 +1207,20 @@ def registry_list(
                     }
                 )
     bulk_stats = _compute_bulk_agent_stats([a["agent_id"] for a in agents])
+    # Weak ETag derived from (count, sorted agent_id|updated_at pairs). Stable
+    # across re-orderings of the agents list and cheap to compute. Used by the
+    # MCP server's tight (~5 s) registry poll: a 304 returns no body, so the
+    # bandwidth/CPU cost of polling every 5 s ≈ polling every 60 s before.
+    etag_seed = "|".join(
+        f"{a.get('agent_id') or ''}:{a.get('updated_at') or ''}:"
+        f"{a.get('review_status') or ''}:{a.get('status') or ''}"
+        for a in sorted(agents, key=lambda a: str(a.get("agent_id") or ""))
+    )
+    etag_seed += f"|count={len(agents)}|inc_unapp={int(include_unapproved)}"
+    etag_value = 'W/"' + hashlib.sha1(etag_seed.encode("utf-8")).hexdigest()[:24] + '"'
+    if_none_match = request.headers.get("if-none-match", "").strip()
+    if if_none_match and if_none_match == etag_value:
+        return Response(status_code=304, headers={"ETag": etag_value})
     return JSONResponse(
         content={
             "agents": [
@@ -1185,7 +1228,8 @@ def registry_list(
                 for a in agents
             ],
             "count": len(agents),
-        }
+        },
+        headers={"ETag": etag_value},
     )
 
 
@@ -1242,6 +1286,28 @@ def registry_update_agent(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> JSONResponse:
     _require_scope(caller, "worker")
+    # Re-run the listing safety scanner on any text the owner is mutating.
+    # Without this, an author could register a clean listing and then PATCH
+    # the description to inject prompt-injection content or leak an API key
+    # after the listing has earned trust.
+    mutable_text_parts = [
+        part for part in (body.name, body.description) if part
+    ]
+    if mutable_text_parts:
+        combined = "\n".join(mutable_text_parts)
+        update_findings = _listing_safety.scan_skill_md(combined)
+        if _listing_safety.has_block(update_findings):
+            block = next(
+                f for f in update_findings
+                if f.level == _listing_safety.LEVEL_BLOCK
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=error_codes.make_error(
+                    "listing.safety_block", block.message,
+                    {"code": block.code, "detail": block.detail},
+                ),
+            )
     try:
         updated = registry.update_agent(
             agent_id,

@@ -4,6 +4,8 @@ Aztea's MCP integration gives a coding agent seven tools for hiring agents throu
 
 > **Renamed in v0.2.0–v0.3.0**: the lazy tools and grouped dispatchers are now verb-first (`do_specialist_task`, `search_specialists`, `describe_specialist`, `call_specialist`, `manage_job`, `manage_budget`, `manage_workflow`). The old names (`aztea_do`, `aztea_search`, `aztea_describe`, `aztea_call`, `aztea_job`, `aztea_budget`, `aztea_workflow`) still work as aliases — the dispatch normalizes them — but new code should use the verb-first names. The rename is so the model picks these tools by what they *do*, not by recognizing the brand keyword.
 
+> **Renamed in v0.2.0**: the four lazy tools are now verb-first (`do_specialist_task`, `search_specialists`, `describe_specialist`, `call_specialist`). The old names (`aztea_do`, `aztea_search`, `aztea_describe`, `aztea_call`) still work as aliases — the dispatch normalizes them — but new code should use the verb-first names. The rename is so the model picks these tools by what they *do*, not by recognizing the brand keyword.
+
 There are two flows:
 
 **Fast path (preferred for unambiguous tasks):**

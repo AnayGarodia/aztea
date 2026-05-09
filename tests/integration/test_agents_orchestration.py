@@ -526,81 +526,83 @@ def test_dispute_window_hours_is_enforced_from_job_record(client):
     assert dispute.json()["error"] == "dispute.window_closed"
 
 
-def test_registry_register_marks_new_worker_agents_pending_review(client):
+def test_registry_register_marks_new_worker_agents_probation(client):
+    """Non-master registrations land in 'probation': live + callable, but
+    ranked last and price-capped on unsolicited auto-invoke until the
+    listing graduates by track record.
+    """
     worker = _register_user()
     response = client.post(
         "/registry/register",
         headers=_auth_headers(worker["raw_api_key"]),
         json={
-            "name": f"Pending Queue Agent {uuid.uuid4().hex[:6]}",
-            "description": "awaiting platform review",
+            "name": f"Probation Queue Agent {uuid.uuid4().hex[:6]}",
+            "description": "newly published listing on probation",
             "endpoint_url": f"https://agents.example.com/{uuid.uuid4().hex[:8]}",
             "price_per_call_usd": 0.10,
-            "tags": ["pending-review"],
+            "tags": ["probation-default"],
             "input_schema": {"type": "object", "properties": {"task": {"type": "string", "description": "task text"}}},
             "output_examples": [{"input": {"task": "x"}, "output": {"ok": True}}],
         },
     )
     assert response.status_code == 201, response.text
     body = response.json()
-    assert body["review_status"] == "pending_review"
-    assert body["agent"]["review_status"] == "pending_review"
-    assert "pending review" in body["message"].lower()
+    assert body["review_status"] == "probation"
+    assert body["agent"]["review_status"] == "probation"
 
 
-def test_pending_review_agent_hidden_from_public_listing_and_visible_in_admin_queue(client):
+def test_probation_agent_visible_in_public_listing(client):
+    """Probation listings ARE visible to public discovery — that's the whole
+    point of the new flow. The auto_hire ranker pushes them to the bottom on
+    unsolicited routing; no admin queue gate on the way in.
+    """
     worker = _register_user()
     caller = _register_user()
     register = client.post(
         "/registry/register",
         headers=_auth_headers(worker["raw_api_key"]),
         json={
-            "name": f"Pending Hidden Agent {uuid.uuid4().hex[:6]}",
-            "description": "awaiting platform review",
+            "name": f"Probation Visible Agent {uuid.uuid4().hex[:6]}",
+            "description": "newly published listing — should be in public listing",
             "endpoint_url": f"https://agents.example.com/{uuid.uuid4().hex[:8]}",
             "price_per_call_usd": 0.10,
-            "tags": ["pending-hidden"],
+            "tags": ["probation-visible"],
             "input_schema": {"type": "object", "properties": {"task": {"type": "string", "description": "task text"}}},
             "output_examples": [{"input": {"task": "x"}, "output": {"ok": True}}],
         },
     )
     assert register.status_code == 201, register.text
-    pending_agent_id = register.json()["agent_id"]
+    new_agent_id = register.json()["agent_id"]
+    assert register.json()["review_status"] == "probation"
 
     listing = client.get(
-        "/registry/agents?tag=pending-hidden",
+        "/registry/agents?tag=probation-visible",
         headers=_auth_headers(caller["raw_api_key"]),
     )
     assert listing.status_code == 200, listing.text
-    assert all(agent["agent_id"] != pending_agent_id for agent in listing.json()["agents"])
-
-    queue = client.get(
-        "/admin/agents/review-queue",
-        headers=_auth_headers(TEST_MASTER_KEY),
-    )
-    assert queue.status_code == 200, queue.text
-    assert any(agent["agent_id"] == pending_agent_id for agent in queue.json()["agents"])
+    ids = [agent["agent_id"] for agent in listing.json()["agents"]]
+    assert new_agent_id in ids
 
 
 def test_pending_review_agent_cannot_accept_job_claim(client):
+    """Agents an admin has explicitly demoted to 'pending_review' must not be
+    able to claim work mid-investigation. The default registration path now
+    lands listings in 'probation' (live + claimable), so we register and
+    then demote to specifically exercise the pending_review gate.
+    """
     worker = _register_user()
     caller = _register_user()
     _fund_user_wallet(caller, 500)
-    register = client.post(
-        "/registry/register",
-        headers=_auth_headers(worker["raw_api_key"]),
-        json={
-            "name": f"Pending Claim Agent {uuid.uuid4().hex[:6]}",
-            "description": "awaiting platform review",
-            "endpoint_url": f"https://agents.example.com/{uuid.uuid4().hex[:8]}",
-            "price_per_call_usd": 0.10,
-            "tags": ["pending-claim"],
-            "input_schema": {"type": "object", "properties": {"task": {"type": "string", "description": "task text"}}},
-            "output_examples": [{"input": {"task": "x"}, "output": {"ok": True}}],
-        },
+    pending_agent_id = registry.register_agent(
+        name=f"Pending Claim Agent {uuid.uuid4().hex[:6]}",
+        description="explicitly demoted to pending_review for the security test",
+        endpoint_url=f"https://agents.example.com/{uuid.uuid4().hex[:8]}",
+        price_per_call_usd=0.10,
+        tags=["pending-claim"],
+        input_schema={"type": "object", "properties": {"task": {"type": "string", "description": "task text"}}},
+        review_status="pending_review",
+        owner_id=f"user:{worker['user_id']}",
     )
-    assert register.status_code == 201, register.text
-    pending_agent_id = register.json()["agent_id"]
 
     caller_wallet = payments.get_or_create_wallet(f"user:{caller['user_id']}")
     agent_wallet = payments.get_or_create_wallet(f"agent:{pending_agent_id}")

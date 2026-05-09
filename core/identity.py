@@ -15,7 +15,11 @@ from __future__ import annotations
 import os
 from urllib.parse import urlparse
 
-_DEFAULT_HOST = "aztea.ai"
+# Last-resort fallback when SERVER_BASE_URL is unset and no host can be
+# derived. This is intentionally generic — self-hosters set SERVER_BASE_URL
+# in their environment (or the app fails fast at startup), so this default
+# only matters in degenerate test fixtures.
+_DEFAULT_HOST = "localhost"
 
 
 def _did_host_from_base_url(server_base_url: str | None) -> str:
@@ -63,5 +67,5 @@ def did_document_url(agent_id: str, server_base_url: str | None = None) -> str:
         if server_base_url is not None
         else os.environ.get("SERVER_BASE_URL")
     )
-    base = (base or f"https://{_DEFAULT_HOST}").rstrip("/")
+    base = (base or f"http://{_DEFAULT_HOST}:8000").rstrip("/")
     return f"{base}/agents/{agent_id}/did.json"

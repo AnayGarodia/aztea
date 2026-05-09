@@ -6,8 +6,9 @@ Configure via environment variables:
   SMTP_PORT       e.g. 587
   SMTP_USER       e.g. apikey
   SMTP_PASSWORD   e.g. your SMTP password or API key
-  FROM_EMAIL      e.g. noreply@aztea.ai
-  FROM_NAME       e.g. Aztea
+  FROM_EMAIL      e.g. noreply@yourdomain.com   (default: noreply@localhost)
+  FROM_NAME       e.g. Aztea                     (default: Aztea)
+  PUBLIC_BASE_URL e.g. https://yourdomain.com    (default: SERVER_BASE_URL or http://localhost:8000)
 """
 
 from __future__ import annotations
@@ -28,8 +29,23 @@ _SMTP_HOST = os.environ.get("SMTP_HOST", "").strip()
 _SMTP_PORT = int(os.environ.get("SMTP_PORT", "587") or "587")
 _SMTP_USER = os.environ.get("SMTP_USER", "").strip()
 _SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "").strip()
-_FROM_EMAIL = os.environ.get("FROM_EMAIL", "noreply@aztea.ai").strip()
+_FROM_EMAIL = os.environ.get("FROM_EMAIL", "noreply@localhost").strip()
 _FROM_NAME = os.environ.get("FROM_NAME", "Aztea").strip()
+
+
+def _public_base_url() -> str:
+    """Public-facing base URL for links in email bodies.
+
+    Read at call time so a runtime env change (e.g. an operator promoting
+    their instance to a new domain mid-process) propagates to subsequent
+    emails. Self-hosted instances set SERVER_BASE_URL; PUBLIC_BASE_URL
+    overrides when the email host differs from the API host.
+    """
+    return (
+        os.environ.get("PUBLIC_BASE_URL", "").strip()
+        or os.environ.get("SERVER_BASE_URL", "").strip()
+        or "http://localhost:8000"
+    ).rstrip("/")
 
 ENABLED = bool(_SMTP_HOST and _SMTP_USER and _SMTP_PASSWORD)
 
@@ -74,13 +90,13 @@ def send_welcome(to: str, username: str, role: str = "both") -> None:
             "<p>Welcome to Aztea! You're signed up as a <strong>builder</strong>.</p>"
             "<p>Upload your first <code>SKILL.md</code>, set a price, and start earning — "
             "you keep <strong>90%</strong> of every successful call.</p>"
-            "<p><a href='https://aztea.ai/list-skill'>List your first skill →</a></p>"
+            f"<p><a href='{_public_base_url()}/list-skill'>List your first skill →</a></p>"
             "<p>— The Aztea team</p>"
         )
         text_body = (
             f"Hi {username},\n\nWelcome to Aztea! You're signed up as a builder.\n\n"
             "Upload your first SKILL.md, set a price, and start earning — you keep 90% of every call.\n\n"
-            "Get started: https://aztea.ai/list-skill\n\n— The Aztea team"
+            f"Get started: {_public_base_url()}/list-skill\n\n— The Aztea team"
         )
     elif role == "hirer":
         html_body = (
@@ -88,12 +104,12 @@ def send_welcome(to: str, username: str, role: str = "both") -> None:
             f"<p>Welcome to Aztea! We've added <strong>{credit_fmt}</strong> of starter credit to your wallet — "
             "no card needed.</p>"
             "<p>Connect your coding agent, make the first hire, and inspect the signed receipt.</p>"
-            "<p><a href='https://aztea.ai/agents'>Browse agents →</a></p>"
+            f"<p><a href='{_public_base_url()}/agents'>Browse agents →</a></p>"
             "<p>— The Aztea team</p>"
         )
         text_body = (
             f"Hi {username},\n\nWelcome to Aztea! We've added {credit_fmt} of starter credit to your wallet — no card needed.\n\n"
-            "Connect your coding agent, make the first hire, and inspect the signed receipt: https://aztea.ai/agents\n\n— The Aztea team"
+            f"Connect your coding agent, make the first hire, and inspect the signed receipt: {_public_base_url()}/agents\n\n— The Aztea team"
         )
     else:
         html_body = (
@@ -136,12 +152,12 @@ def send_skill_live(
         f"<td style='padding:4px 0'><code style='font-size:0.85em'>{safe_endpoint}</code></td></tr>"
         f"</table>"
         f"<p>Callers can discover and hire your skill now. Payouts land in your wallet after each successful job.</p>"
-        f"<p><a href='https://aztea.ai/worker'>Open your worker dashboard →</a></p>"
+        f"<p><a href='{_public_base_url()}/worker'>Open your worker dashboard →</a></p>"
         "<p>— The Aztea team</p>",
         f"Hi {username},\n\nYour skill '{skill_name}' is now live on the Aztea marketplace.\n\n"
         f"Price per call: {price_fmt}\nYour cut (90%): {payout_fmt}\nEndpoint: {endpoint_url}\n\n"
         "Callers can hire it now. Payouts land in your wallet after each successful job.\n\n"
-        "Worker dashboard: https://aztea.ai/worker\n\n— The Aztea team",
+        f"Worker dashboard: {_public_base_url()}/worker\n\n— The Aztea team",
     )
 
 
@@ -164,10 +180,10 @@ def send_payout_received(
         f"<p><strong>{payout_fmt}</strong> has been credited to your wallet for a completed job on "
         f"<strong>{safe_name}</strong>.</p>"
         f"<p style='color:#666;font-size:0.9em'>Job ID: <code>{safe_job_id}</code></p>"
-        f"<p><a href='https://aztea.ai/wallet'>View your wallet →</a></p>"
+        f"<p><a href='{_public_base_url()}/wallet'>View your wallet →</a></p>"
         "<p>— The Aztea team</p>",
         f"Hi {username},\n\n{payout_fmt} credited to your wallet for a completed job on '{skill_name}'.\n"
-        f"Job ID: {job_id}\n\nWallet: https://aztea.ai/wallet\n\n— The Aztea team",
+        f"Job ID: {job_id}\n\nWallet: {_public_base_url()}/wallet\n\n— The Aztea team",
     )
 
 

@@ -38,6 +38,14 @@ from typing import Any
 
 from core import feature_flags
 
+# Probation gates — applied to agents whose review_status is 'probation'
+# (set automatically by /registry/register and /onboarding/ingest for non-
+# master callers). The penalty is large enough to drop a probation agent
+# below any approved peer with even a weak signal, but small enough that an
+# explicit slug match in the intent (+50 baseline) still wins.
+_PROBATION_RANK_PENALTY = 30.0
+_PROBATION_PRICE_CAP_USD = 1.00
+
 # ── Public types ───────────────────────────────────────────────────────────
 
 
@@ -257,6 +265,12 @@ def decide(
     price = top.candidate.price_per_call_usd
     server_cap = feature_flags.auto_invoke_server_cap_usd()
     effective_cap = min(max_cost_usd, server_cap)
+    # Probation listings get a hard $1.00 cap regardless of the caller's
+    # max_cost_usd, until they accumulate a track record and graduate to
+    # 'approved'. Direct aztea_call by slug still works — this gate only
+    # affects unsolicited auto-invoke routing.
+    if str(top.candidate.raw.get("review_status") or "").strip() == "probation":
+        effective_cap = min(effective_cap, _PROBATION_PRICE_CAP_USD)
     if price > effective_cap:
         return Decision(
             auto_invoked=False,
@@ -493,6 +507,14 @@ def _score_candidate(
                     reasons.append(
                         f"schema-shape partial (composite {n_present}/{len(best)})"
                     )
+
+    # Probation penalty — keeps brand-new listings out of the top spot for
+    # generic intents but never zeroes the score, so explicit slug/keyword
+    # matches still surface them. Graduates to no penalty once review_status
+    # transitions to 'approved'.
+    if str(c.raw.get("review_status") or "").strip() == "probation":
+        score -= _PROBATION_RANK_PENALTY
+        reasons.append("probation: ranked last")
 
     return Ranked(candidate=c, score=round(score, 3), reasons=reasons)
 

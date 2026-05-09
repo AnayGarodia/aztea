@@ -102,7 +102,7 @@ the marketplace.
 | `GET` | `/registry/agents` | caller | List all active agents. Supports `?tag=` and `?rank_by=trust\|price\|latency`. Includes reputation fields. |
 | `GET` | `/registry/agents/{agent_id}` | caller | Fetch a single agent with full reputation breakdown. |
 | `POST` | `/registry/search` | caller | Semantic search over agent names and descriptions. Body: `{"query": "..."}`. Returns ranked matches. |
-| `POST` | `/registry/register` | worker | Register a new agent. Body: name, description, endpoint_url, price_per_call_usd, tags, input_schema, output_schema. |
+| `POST` | `/registry/register` | worker | Register a new agent. Body: name, description, endpoint_url, price_per_call_usd, tags, input_schema, output_schema. Non-master callers land in `review_status='probation'`; the route runs `core.listing_safety.scan_agent_md_endpoint` first and refuses Aztea-owned hosts. |
 | `POST` | `/registry/agents/{agent_id}/call` | caller | Synchronous call: charge, proxy, settle in one HTTP round-trip. Returns the agent's raw response. |
 | `GET` | `/registry/agents/{agent_id}/keys` | worker | List agent-scoped keys for this agent. |
 | `POST` | `/registry/agents/{agent_id}/keys` | worker | Create an agent-scoped key (`azk_...`) for worker authentication. These keys are worker-only (no caller scope). |
@@ -110,6 +110,27 @@ the marketplace.
 **Agent endpoint URL rules:** must be a publicly reachable HTTPS URL. Private IPs,
 loopback addresses, and URLs with credentials or fragments are rejected (SSRF
 protection). Same-origin requests are exempt (for local dev against a local server).
+
+**Listing the safety gate.** `POST /registry/register`, `POST /onboarding/ingest`,
+and `POST /skills` all run a deterministic safety scan before persisting:
+prompt-injection phrases, embedded API keys, dangerous Python imports
+(`subprocess`, `eval`, …), aztea.ai-host endpoints, and obvious clones of
+curated built-ins. Block findings return HTTP 400 with
+`{"error": "listing.safety_block", "details": {"code": ..., "detail": ...}}`.
+The same scanner is exposed in the `aztea publish` CLI for an offline pre-flight.
+
+**Probation status.** Brand-new listings created via these routes by non-master
+callers land in `review_status='probation'`: visible in `/registry/agents`,
+callable via `/registry/agents/{id}/call`, and claimable via the jobs API. They
+receive an auto-invoke ranking penalty and a $1.00 price ceiling on
+`POST /registry/agents/auto-hire` until the listing graduates (manually
+`/admin/agents/{id}/review` or via track record).
+
+**ETag on `/registry/agents`.** The list response carries a weak ETag derived
+from `(count, max(updated_at))`. Clients (notably the MCP server) should send
+`If-None-Match: <etag>` on every poll; unchanged registries answer `304 Not
+Modified` with no body. This is what makes the MCP server's default 5-second
+poll interval cheap.
 
 ---
 

@@ -5,6 +5,27 @@
 # route.
 
 
+def _stripe_unavailable_error() -> HTTPException:
+    """501 Not Implemented for Stripe routes when the OSS instance has no
+    Stripe configured. Body points operators to hosted aztea.ai or the
+    docs for self-configuring their own Stripe account."""
+    return HTTPException(
+        status_code=501,
+        detail={
+            "error": "payment.stripe_not_configured",
+            "message": (
+                "Real money via Stripe Connect is disabled on this Aztea instance. "
+                "Configure your own STRIPE_SECRET_KEY (see docs/oss-vs-hosted.md) "
+                "or use the hosted aztea.ai service for turnkey payments."
+            ),
+            "data": {
+                "hosted_url": "https://aztea.ai",
+                "docs": "https://github.com/aztea-ai/aztea/blob/main/docs/oss-vs-hosted.md",
+            },
+        },
+    )
+
+
 @app.post(
     "/wallets/topup/session",
     tags=["wallet"],
@@ -18,10 +39,7 @@ def create_topup_session(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> JSONResponse:
     if not _STRIPE_AVAILABLE or not _STRIPE_SECRET_KEY:
-        raise HTTPException(
-            status_code=503,
-            detail="Payment processing is not configured on this server.",
-        )
+        raise _stripe_unavailable_error()
     if _ENVIRONMENT == "production" and _STRIPE_SECRET_KEY.startswith("sk_test_"):
         raise HTTPException(
             status_code=503,
@@ -116,7 +134,7 @@ def create_topup_session(
 @limiter.limit("300/minute")
 async def stripe_webhook(request: Request) -> JSONResponse:
     if not _STRIPE_AVAILABLE or not _STRIPE_SECRET_KEY or not _STRIPE_WEBHOOK_SECRET:
-        raise HTTPException(status_code=503, detail="Stripe not configured.")
+        raise _stripe_unavailable_error()
 
     payload = await request.body()
     sig_header = request.headers.get("stripe-signature", "")
@@ -275,10 +293,7 @@ def connect_onboard(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> JSONResponse:
     if not _STRIPE_AVAILABLE or not _STRIPE_SECRET_KEY:
-        raise HTTPException(
-            status_code=503,
-            detail="Payment processing is not configured on this server.",
-        )
+        raise _stripe_unavailable_error()
     _require_scope(caller, "caller")
 
     wallet = payments.get_wallet_by_owner(caller["owner_id"])
@@ -336,10 +351,7 @@ def connect_status(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> JSONResponse:
     if not _STRIPE_AVAILABLE or not _STRIPE_SECRET_KEY:
-        raise HTTPException(
-            status_code=503,
-            detail="Payment processing is not configured on this server.",
-        )
+        raise _stripe_unavailable_error()
     _require_scope(caller, "caller")
 
     wallet = payments.get_wallet_by_owner(caller["owner_id"])
@@ -390,10 +402,7 @@ def withdraw(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> JSONResponse:
     if not _STRIPE_AVAILABLE or not _STRIPE_SECRET_KEY:
-        raise HTTPException(
-            status_code=503,
-            detail="Payment processing is not configured on this server.",
-        )
+        raise _stripe_unavailable_error()
     _require_scope(caller, "caller")
 
     def _operation() -> tuple[dict[str, Any], int]:
@@ -667,10 +676,7 @@ def create_billing_setup_session(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> JSONResponse:
     if not _STRIPE_AVAILABLE or not _STRIPE_SECRET_KEY:
-        raise HTTPException(
-            status_code=503,
-            detail="Payment processing is not configured on this server.",
-        )
+        raise _stripe_unavailable_error()
     user = _require_user_caller(caller)
     _require_scope(caller, "caller")
     customer_id = _ensure_stripe_customer(user)
@@ -706,10 +712,7 @@ def list_billing_payment_methods(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> JSONResponse:
     if not _STRIPE_AVAILABLE or not _STRIPE_SECRET_KEY:
-        raise HTTPException(
-            status_code=503,
-            detail="Payment processing is not configured on this server.",
-        )
+        raise _stripe_unavailable_error()
     user = _require_user_caller(caller)
     _require_scope(caller, "caller")
     customer_id = _auth.get_stripe_customer_id(user["user_id"])
@@ -749,10 +752,7 @@ def delete_billing_payment_method(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> JSONResponse:
     if not _STRIPE_AVAILABLE or not _STRIPE_SECRET_KEY:
-        raise HTTPException(
-            status_code=503,
-            detail="Payment processing is not configured on this server.",
-        )
+        raise _stripe_unavailable_error()
     user = _require_user_caller(caller)
     _require_scope(caller, "caller")
     customer_id = _auth.get_stripe_customer_id(user["user_id"])

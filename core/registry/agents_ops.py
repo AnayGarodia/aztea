@@ -645,7 +645,8 @@ def get_agents(
         if not include_banned:
             where_clauses.append("status NOT IN ('banned', 'suspended')")
         if not include_unapproved:
-            where_clauses.append("review_status = 'approved'")
+            # See get_agent(): 'probation' is visible alongside 'approved'.
+            where_clauses.append("review_status IN ('approved', 'probation')")
         if tag:
             where_clauses.append("tags LIKE %s")
             params.append(f'%"{tag}"%')
@@ -903,10 +904,15 @@ def set_agent_decay_multiplier(agent_id: str, multiplier: float, at_iso: str) ->
 
 
 def get_agent(agent_id: str, *, include_unapproved: bool = True) -> dict | None:
-    """Return a single agent listing by ID, or None if not found."""
+    """Return a single agent listing by ID, or None if not found.
+
+    'probation' is treated as visible alongside 'approved': probationary
+    listings are live and callable; auto_hire ranking + price gates are the
+    soft brake. Filtering them out here would amount to silent rejection.
+    """
     where_sql = "agent_id = %s"
     if not include_unapproved:
-        where_sql += " AND review_status = 'approved'"
+        where_sql += " AND review_status IN ('approved', 'probation')"
     with _conn() as conn:
         row = conn.execute(
             f"SELECT * FROM agents WHERE {where_sql}",
@@ -1040,6 +1046,37 @@ def update_agent_health(agent_id: str, status: str, checked_at: str) -> None:
             "UPDATE agents SET last_health_status = %s, last_health_check_at = %s WHERE agent_id = %s",
             (status, checked_at, agent_id),
         )
+
+
+def mark_agent_published_public(
+    agent_id: str,
+    listing_id: str | None,
+    published_at: str,
+    *,
+    owner_id: str,
+) -> bool:
+    """Record that this agent has been syndicated to aztea.ai's public registry.
+
+    Called from the /registry/agents/{id}/publish route after the hosted API
+    confirms the listing was accepted. Idempotent — re-publish updates the
+    timestamp and listing_id. Local-only deployments never call this.
+
+    The ``owner_id`` parameter is required. The UPDATE only succeeds when
+    the agent row's ``owner_id`` matches; this is a defence-in-depth check
+    so that even if the calling route forgets to pre-authorise ownership,
+    the data layer refuses to mark a foreign user's agent as published.
+    Returns True iff a row was updated.
+    """
+    if not owner_id:
+        raise ValueError("owner_id is required for mark_agent_published_public")
+    with _conn() as conn:
+        result = conn.execute(
+            "UPDATE agents SET published_to_public_at = %s, "
+            "published_to_public_listing_id = %s "
+            "WHERE agent_id = %s AND owner_id = %s",
+            (published_at, listing_id, agent_id, owner_id),
+        )
+    return getattr(result, "rowcount", 0) > 0
 
 
 def agent_exists_by_name(name: str) -> bool:

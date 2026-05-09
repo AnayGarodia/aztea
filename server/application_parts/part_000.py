@@ -125,6 +125,7 @@ from core import email as _email
 from core import feature_flags as _feature_flags
 from core.jobs import disputable
 from core import hosted_skills as _hosted_skills
+from core import listing_safety as _listing_safety
 from core import models as core_models
 from core import skill_executor as _skill_executor
 from core import skill_parser as _skill_parser
