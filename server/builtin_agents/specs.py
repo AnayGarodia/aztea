@@ -375,3 +375,40 @@ def builtin_catalog_metadata(agent_id: str) -> dict[str, Any] | None:
         "short_use_cases": list(spec.get("short_use_cases") or []),
         "deprecated": False,
     }
+
+
+# Eager routing-overlay registration at module import time. Each uvicorn
+# worker imports `server.application`, which (transitively) imports this
+# module — so this runs once per process, deterministically, before any
+# request can reach the search ranker. Replaces the previous lifespan-
+# based hook which was racy: prod verification on a26b00e showed only 1
+# of 3 workers populating the overlay through that path. The lazy
+# self-heal in core.registry.agents_ops (e7a8073) is kept as a safety
+# net for any future code path that imports core/registry without
+# importing server first (e.g. unit tests, cron jobs).
+def _install_routing_overlay() -> None:
+    try:
+        from core.registry.agents_ops import set_routing_overlay
+
+        specs = builtin_agent_specs()
+        set_routing_overlay(
+            match_keywords={
+                str(spec.get("agent_id") or ""): list(spec.get("match_keywords") or [])
+                for spec in specs
+                if spec.get("match_keywords")
+            },
+            block_keywords={
+                str(spec.get("agent_id") or ""): list(spec.get("block_keywords") or [])
+                for spec in specs
+                if spec.get("block_keywords")
+            },
+        )
+    except Exception:  # noqa: BLE001 — search must never crash on overlay load
+        # If the eager registration fails (import order, partial init),
+        # the lazy self-heal in core.registry.agents_ops takes over on
+        # first read. We intentionally swallow the exception here so
+        # importing this module never aborts startup.
+        pass
+
+
+_install_routing_overlay()
