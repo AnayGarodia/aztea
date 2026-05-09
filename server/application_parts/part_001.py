@@ -315,6 +315,31 @@ def ensure_builtin_agents_registered() -> None:
         for spec in specs
         if str(spec.get("agent_id") or "").strip()
     }
+    # Self-heal: any curated built-in stuck in `suspended` from a prior
+    # run gets reactivated on startup. The auto-suspender now excludes
+    # curated builtins (see part_005._auto_suspend_low_performing_agents)
+    # but historic suspensions persist in the DB until cleared. Running
+    # this on every boot means a deploy is always sufficient to recover
+    # — no manual SQL UPDATE needed when an eval flips a builtin to
+    # suspended via failure-rate accumulation.
+    if managed_ids:
+        try:
+            with registry._conn() as conn:
+                placeholders = ",".join(["%s"] * len(managed_ids))
+                conn.execute(
+                    f"""
+                    UPDATE agents
+                    SET status = 'active', suspension_reason = NULL
+                    WHERE status = 'suspended'
+                      AND agent_id IN ({placeholders})
+                    """,
+                    tuple(managed_ids),
+                )
+        except Exception:
+            _LOG.exception(
+                "Failed to auto-heal suspended built-in agents at startup; "
+                "search may exclude them until manually cleared."
+            )
     # Install the per-agent match/block keyword overlay used by the search
     # ranker so jargon queries (SBOM, IMDS, ReDoS, prototype pollution,
     # log4shell, ...) route to the right agent. Overlay lives in core/

@@ -2089,15 +2089,38 @@ def _auto_suspend_low_performing_agents(actor_owner_id: str) -> dict[str, Any]:
     suspended_agent_ids: list[str] = []
     generated_events: list[dict[str, Any]] = []
     now_iso = _utc_now_iso()
+    # Curated built-in agents are NEVER auto-suspended. They run on
+    # in-process internal endpoints; their failure-rate is dominated by
+    # caller-side bad inputs (test red-team payloads, schema fuzzing in
+    # eval runs, intentionally invalid CVE IDs, etc.) — none of which
+    # reflect agent health. The 2026-05-09 eval surfaced this when
+    # Browser Agent / Visual Regression / Shell Executor / Live Endpoint
+    # Tester all hit the >60% failure threshold and silently disappeared
+    # from search results, leaving the rails looking degraded for hours
+    # until a manual UPDATE.
+    curated_ids = _builtin_constants.CURATED_PUBLIC_BUILTIN_AGENT_IDS
     with jobs._conn() as conn:
-        rows = conn.execute(
-            """
-            SELECT agent_id, owner_id, successful_calls, total_calls
-            FROM agents
-            WHERE status = 'active' AND total_calls >= %s
-            """,
-            (AUTO_SUSPEND_MIN_CALLS,),
-        ).fetchall()
+        if curated_ids:
+            placeholders = ",".join(["%s"] * len(curated_ids))
+            rows = conn.execute(
+                f"""
+                SELECT agent_id, owner_id, successful_calls, total_calls
+                FROM agents
+                WHERE status = 'active'
+                  AND total_calls >= %s
+                  AND agent_id NOT IN ({placeholders})
+                """,
+                (AUTO_SUSPEND_MIN_CALLS, *curated_ids),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT agent_id, owner_id, successful_calls, total_calls
+                FROM agents
+                WHERE status = 'active' AND total_calls >= %s
+                """,
+                (AUTO_SUSPEND_MIN_CALLS,),
+            ).fetchall()
         for row in rows:
             total_calls = int(row["total_calls"] or 0)
             successful_calls = int(row["successful_calls"] or 0)
