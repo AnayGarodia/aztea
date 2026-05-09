@@ -193,52 +193,60 @@ def _classify_failure(exit_code: int, stdout: str, stderr: str) -> str:
     return _FT_UNKNOWN
 
 
-def _fallback_diagnosis(failure_type: str, stderr: str) -> tuple[str, str]:
-    """Return (diagnosis, suggested_fix) from pattern matching when LLM unavailable."""
-    if failure_type == _FT_DEP:
-        first_line = next(
-            (ln for ln in stderr.splitlines() if _DEP_PATTERNS.search(ln)), stderr[:120]
-        )
-        return (
-            f"A required package or module is missing: {first_line.strip()!r}. "
-            "The dependency is referenced in code but not installed in the environment.",
-            "Run the appropriate install command (e.g. `pip install -r requirements.txt` "
-            "or `npm install`) and ensure it runs before the test step.",
-        )
-    if failure_type == _FT_ENV:
-        return (
-            "A required environment variable is missing or undefined. "
-            "The command references a variable that was not set before execution.",
-            "Export the missing variable in your CI environment configuration "
-            "(e.g. GitHub Actions `env:` block or CircleCI `environment:` key).",
-        )
-    if failure_type == _FT_CONFIG:
-        return (
-            "A configuration file expected by the command is absent or malformed. "
-            "The process could not parse its configuration before starting work.",
-            "Ensure the config file is committed to the repo and the working directory "
-            "is correct when the command runs.",
-        )
-    if failure_type == _FT_TIMEOUT:
-        return (
-            "The command exceeded its time limit and was killed. "
-            "This can indicate an infinite loop, a hanging network call, or a genuinely slow operation.",
-            "Increase the timeout limit, add explicit timeouts to network calls, "
-            "or isolate which test/step is slow with `--timeout` flags.",
-        )
-    if failure_type == _FT_CODE:
-        return (
-            "A test assertion or runtime error caused the command to exit non-zero. "
-            "Check the stderr output above for the specific failure.",
-            "Fix the failing assertion or exception shown in stderr. "
-            "Run the exact failing test locally to reproduce.",
-        )
-    return (
-        "The command exited with a non-zero code but the cause could not be "
-        "automatically classified from the output.",
-        "Inspect the stderr output above for clues. "
-        "Try running the command locally with verbose flags.",
+_STATIC_DIAGNOSES: dict[str, tuple[str, str]] = {
+    _FT_ENV: (
+        "A required environment variable is missing or undefined. "
+        "The command references a variable that was not set before execution.",
+        "Export the missing variable in your CI environment configuration "
+        "(e.g. GitHub Actions `env:` block or CircleCI `environment:` key).",
+    ),
+    _FT_CONFIG: (
+        "A configuration file expected by the command is absent or malformed. "
+        "The process could not parse its configuration before starting work.",
+        "Ensure the config file is committed to the repo and the working directory "
+        "is correct when the command runs.",
+    ),
+    _FT_TIMEOUT: (
+        "The command exceeded its time limit and was killed. "
+        "This can indicate an infinite loop, a hanging network call, or a genuinely slow operation.",
+        "Increase the timeout limit, add explicit timeouts to network calls, "
+        "or isolate which test/step is slow with `--timeout` flags.",
+    ),
+    _FT_CODE: (
+        "A test assertion or runtime error caused the command to exit non-zero. "
+        "Check the stderr output above for the specific failure.",
+        "Fix the failing assertion or exception shown in stderr. "
+        "Run the exact failing test locally to reproduce.",
+    ),
+}
+_UNKNOWN_DIAGNOSIS: tuple[str, str] = (
+    "The command exited with a non-zero code but the cause could not be "
+    "automatically classified from the output.",
+    "Inspect the stderr output above for clues. "
+    "Try running the command locally with verbose flags.",
+)
+_DEP_FIRST_LINE_FALLBACK_CHARS = 120
+
+
+def _diagnose_dep_failure(stderr: str) -> tuple[str, str]:
+    """Pure: tailored diagnosis when the failure regex caught a missing-dependency line."""
+    first_line = next(
+        (ln for ln in stderr.splitlines() if _DEP_PATTERNS.search(ln)),
+        stderr[:_DEP_FIRST_LINE_FALLBACK_CHARS],
     )
+    return (
+        f"A required package or module is missing: {first_line.strip()!r}. "
+        "The dependency is referenced in code but not installed in the environment.",
+        "Run the appropriate install command (e.g. `pip install -r requirements.txt` "
+        "or `npm install`) and ensure it runs before the test step.",
+    )
+
+
+def _fallback_diagnosis(failure_type: str, stderr: str) -> tuple[str, str]:
+    """Pure: pattern-match diagnosis used when the LLM is unavailable."""
+    if failure_type == _FT_DEP:
+        return _diagnose_dep_failure(stderr)
+    return _STATIC_DIAGNOSES.get(failure_type, _UNKNOWN_DIAGNOSIS)
 
 
 def _llm_diagnosis(
@@ -345,20 +353,12 @@ def _run_command(
 
 # ── public entry point ─────────────────────────────────────────────────────────
 
-def run(payload: dict) -> dict:
-    """Reproduce a CI failure by running the failing command in a clean sandbox.
-
-    Required:
-    - ``log`` (str): raw CI failure log (stdout + stderr from CI run).
-
-    Optional:
-    - ``commands`` (list[str]): commands to run instead of extracting from log.
-    - ``language`` (str): "python"|"node"|"go"|"auto" — aids sandbox env hints.
-    - ``working_dir_files`` (list[{name: str, content: str}]): files needed.
-    - ``timeout_seconds`` (int, default 30, max 120): per-command timeout.
-
-    Returns a structured diagnosis dict or an error envelope.
-    """
+def _normalize_run_inputs(
+    payload: dict,
+) -> dict | tuple[list[str], int, list[dict]]:
+    """Pure: validate ``log``/``commands``/``timeout_seconds``/``working_dir_files``."""
+    if not isinstance(payload, dict):
+        raise TypeError(f"payload must be dict, got {type(payload).__name__}")
     log = payload.get("log")
     if not log or not isinstance(log, str):
         return _err("ci_failure_reproducer.no_log", "Field 'log' is required.")
@@ -367,27 +367,22 @@ def run(payload: dict) -> dict:
             "ci_failure_reproducer.log_too_large",
             f"Log must be under {_MAX_LOG_BYTES // 1000}KB.",
         )
-
-    # ── resolve commands ───────────────────────────────────────────────────────
     raw_commands: list[str] | None = payload.get("commands")
     if raw_commands and isinstance(raw_commands, list):
         commands = [str(c).strip() for c in raw_commands if str(c).strip()]
     else:
         commands = _extract_commands_from_log(log)
-
     if not commands:
         return _err(
             "ci_failure_reproducer.no_commands",
             "Could not extract commands from log and none provided.",
         )
-
-    # ── validate / cap timeout ─────────────────────────────────────────────────
     try:
-        per_cmd_timeout = max(1, min(int(payload.get("timeout_seconds") or _DEFAULT_TIMEOUT), _MAX_SINGLE_TIMEOUT))
+        per_cmd_timeout = max(
+            1, min(int(payload.get("timeout_seconds") or _DEFAULT_TIMEOUT), _MAX_SINGLE_TIMEOUT)
+        )
     except (TypeError, ValueError):
         per_cmd_timeout = _DEFAULT_TIMEOUT
-
-    # ── working dir files ──────────────────────────────────────────────────────
     working_dir_files: list[dict] = payload.get("working_dir_files") or []
     if not isinstance(working_dir_files, list):
         working_dir_files = []
@@ -396,101 +391,113 @@ def run(payload: dict) -> dict:
             "ci_failure_reproducer.too_many_files",
             f"working_dir_files must not exceed {_MAX_FILES} entries.",
         )
+    return commands, per_cmd_timeout, working_dir_files
 
+
+def _execute_commands(
+    tmpdir: str, commands: list[str], per_cmd_timeout: int,
+) -> tuple[list[dict], dict | None]:
+    """Side-effect: run ``commands`` sequentially; returns ``(commands_tried, first_failure_or_None)``."""
+    commands_tried: list[dict] = []
+    first_failure: dict | None = None
+    total_elapsed = 0
+    for cmd in commands:
+        if _is_blocked(cmd):
+            _LOG.warning("ci_failure_reproducer: blocked dangerous command: %s", cmd)
+            continue
+        remaining = _MAX_TOTAL_TIMEOUT - total_elapsed
+        if remaining <= 0:
+            break
+        timeout = min(per_cmd_timeout, remaining)
+        outcome = _run_command(cmd, tmpdir, timeout)
+        total_elapsed += outcome["duration_ms"] // 1000
+        commands_tried.append({
+            "command": cmd,
+            "exit_code": outcome["exit_code"],
+            "duration_ms": outcome["duration_ms"],
+        })
+        if outcome["exit_code"] != 0 and first_failure is None:
+            first_failure = {"command": cmd, **outcome}
+    return commands_tried, first_failure
+
+
+def _all_passed_response(commands_tried: list[dict]) -> dict:
+    """Pure: response shape when every command passed in the sandbox."""
+    last = commands_tried[-1]
+    return {
+        "failure_type": _FT_FLAKY,
+        "failing_command": last["command"],
+        "exit_code": 0,
+        "stdout": "",
+        "stderr": "",
+        "diagnosis": (
+            "All commands passed in the sandbox. "
+            "The failure may be environment-specific or a flaky test "
+            "that does not reproduce consistently."
+        ),
+        "suggested_fix": (
+            "Retry the CI job to check for flakiness. "
+            "Compare sandbox environment variables with CI environment."
+        ),
+        "reproduction_command": last["command"],
+        "commands_tried": commands_tried,
+        "environment": _environment_info(),
+    }
+
+
+def _diagnose_failure(
+    tmpdir: str, first_failure: dict, commands_tried: list[dict], per_cmd_timeout: int,
+) -> dict:
+    """Side-effect: classify + diagnose; rerun the command once on _FT_CODE to detect flake."""
+    failing_command = first_failure["command"]
+    exit_code = first_failure["exit_code"]
+    stdout_raw = first_failure["stdout"]
+    stderr_raw = first_failure["stderr"]
+    failure_type = _classify_failure(exit_code, stdout_raw, stderr_raw)
+    if failure_type == _FT_CODE:
+        rerun = _run_command(failing_command, tmpdir, per_cmd_timeout)
+        if rerun["exit_code"] == 0:
+            failure_type = _FT_FLAKY
+    diagnosis, suggested_fix = _llm_diagnosis(failing_command, stderr_raw, failure_type)
+    return {
+        "failure_type": failure_type,
+        "failing_command": failing_command,
+        "exit_code": exit_code,
+        "stdout": _trunc(stdout_raw),
+        "stderr": _trunc(stderr_raw),
+        "diagnosis": diagnosis,
+        "suggested_fix": suggested_fix,
+        "reproduction_command": failing_command,
+        "commands_tried": commands_tried,
+        "environment": _environment_info(),
+    }
+
+
+def run(payload: dict) -> dict:
+    """Reproduce a CI failure by running the failing command in a clean sandbox.
+
+    Why: the agent reproduces the failure locally so the LLM-side diagnosis
+    has fresh stderr to ground its suggested fix; ``working_dir_files`` lets
+    callers attach the few files needed to make the command runnable.
+    """
+    parsed = _normalize_run_inputs(payload)
+    if isinstance(parsed, dict):
+        return parsed
+    commands, per_cmd_timeout, working_dir_files = parsed
     tmpdir = tempfile.mkdtemp(prefix="aztea_ci_")
     try:
-        # Write caller-supplied files
         if working_dir_files:
             write_err = _write_working_files(tmpdir, working_dir_files)
             if write_err:
                 return _err("ci_failure_reproducer.invalid_files", write_err)
-
-        # ── run commands in sequence ───────────────────────────────────────────
-        commands_tried: list[dict] = []
-        total_elapsed = 0
-        first_failure: dict | None = None
-
-        for cmd in commands:
-            if _is_blocked(cmd):
-                _LOG.warning("ci_failure_reproducer: blocked dangerous command: %s", cmd)
-                continue
-
-            remaining = _MAX_TOTAL_TIMEOUT - total_elapsed
-            if remaining <= 0:
-                break
-            timeout = min(per_cmd_timeout, remaining)
-
-            outcome = _run_command(cmd, tmpdir, timeout)
-            total_elapsed += outcome["duration_ms"] // 1000
-
-            commands_tried.append({
-                "command": cmd,
-                "exit_code": outcome["exit_code"],
-                "duration_ms": outcome["duration_ms"],
-            })
-
-            if outcome["exit_code"] != 0 and first_failure is None:
-                first_failure = {"command": cmd, **outcome}
-
-        # ── determine failing command ──────────────────────────────────────────
+        commands_tried, first_failure = _execute_commands(tmpdir, commands, per_cmd_timeout)
         if first_failure is None:
-            # All commands passed — check if any ran at all
             if not commands_tried:
                 return _err(
                     "ci_failure_reproducer.no_commands",
                     "All extracted commands were blocked or none ran.",
                 )
-            # Everything passed: possibly flaky or log mismatch
-            last = commands_tried[-1]
-            return {
-                "failure_type": _FT_FLAKY,
-                "failing_command": last["command"],
-                "exit_code": 0,
-                "stdout": "",
-                "stderr": "",
-                "diagnosis": (
-                    "All commands passed in the sandbox. "
-                    "The failure may be environment-specific or a flaky test "
-                    "that does not reproduce consistently."
-                ),
-                "suggested_fix": (
-                    "Retry the CI job to check for flakiness. "
-                    "Compare sandbox environment variables with CI environment."
-                ),
-                "reproduction_command": last["command"],
-                "commands_tried": commands_tried,
-                "environment": _environment_info(),
-            }
-
-        failing_command = first_failure["command"]
-        exit_code = first_failure["exit_code"]
-        stdout_raw = first_failure["stdout"]
-        stderr_raw = first_failure["stderr"]
-
-        failure_type = _classify_failure(exit_code, stdout_raw, stderr_raw)
-
-        # Flaky re-run check: if exit_code != 0 try once more
-        if failure_type == _FT_CODE:
-            rerun = _run_command(failing_command, tmpdir, per_cmd_timeout)
-            if rerun["exit_code"] == 0:
-                failure_type = _FT_FLAKY
-
-        diagnosis, suggested_fix = _llm_diagnosis(
-            failing_command, stderr_raw, failure_type
-        )
-
-        return {
-            "failure_type": failure_type,
-            "failing_command": failing_command,
-            "exit_code": exit_code,
-            "stdout": _trunc(stdout_raw),
-            "stderr": _trunc(stderr_raw),
-            "diagnosis": diagnosis,
-            "suggested_fix": suggested_fix,
-            "reproduction_command": failing_command,
-            "commands_tried": commands_tried,
-            "environment": _environment_info(),
-        }
-
+            return _all_passed_response(commands_tried)
+        return _diagnose_failure(tmpdir, first_failure, commands_tried, per_cmd_timeout)
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)

@@ -46,15 +46,41 @@ _LOG = logging.getLogger(__name__)
 _OSV_API = "https://api.osv.dev/v1/query"
 _PYPI_API = "https://pypi.org/pypi/{name}/json"
 _NPM_API = "https://registry.npmjs.org/{name}"
+_USER_AGENT = "aztea-dependency-auditor/1.0"
 _TIMEOUT = 10
 _MAX_PACKAGES = 20
 _MAX_MANIFEST_CHARS = 10_000
 _AUDIT_WORKERS = 8
 
+_SUPPORTED_ECOSYSTEMS = frozenset({"npm", "pypi", "auto"})
+_DEFAULT_CHECKS = ("cve", "outdated", "license")
+_TOP_PRIORITIES_LIMIT = 10
+
+# CVSS bucket boundaries (per FIRST.org). Used both to label numeric scores
+# and to back-fill scores from upstream "severity": "HIGH" labels.
+_CVSS_CRITICAL = 9.0
+_CVSS_HIGH = 7.0
+_CVSS_MEDIUM = 4.0
+_CVSS_LABEL_TO_SCORE = {
+    "LOW": 3.0,
+    "MODERATE": 5.5,
+    "MEDIUM": 5.5,
+    "HIGH": 7.5,
+    "CRITICAL": 9.5,
+}
+_OSV_SUMMARY_MAX_CHARS = 600
+
 _COPYLEFT = {"gpl", "agpl", "lgpl", "eupl", "cddl", "mpl", "osl"}
+_RESTRICTIVE_LICENSE_HINTS = ("unknown", "proprietary", "see license")
 _SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 _VER_SPLIT_RE = re.compile(r"[.\-]")
 _OSV_SCORE_TAIL_RE = re.compile(r"\b(\d+(?:\.\d+)?)$")
+_PYPI_REQ_LINE_RE = re.compile(
+    r"([A-Za-z0-9_\-\.]+)(?:\[[A-Za-z0-9_,\-\.]+\])?"
+    r"\s*([>=<!~]=?\s*[\w\.\*]+(?:\s*,\s*[>=<!~]=?\s*[\w\.\*]+)*)?"
+)
+_PYPI_VER_OP_RE = re.compile(r"[>=<!~^]+\s*")
+_NPM_VER_DIGITS_RE = re.compile(r"[^0-9\.]")
 
 
 def _ver_tuple(v: str) -> tuple[int, ...]:
@@ -69,74 +95,78 @@ def _detect_ecosystem(manifest: str) -> str:
 
 
 def _parse_pypi_manifest(manifest: str) -> list[tuple[str, str]]:
-    packages = []
-    for line in manifest.splitlines():
-        line = line.strip()
+    """Parse requirements.txt-style lines into ``(name, version)`` pairs.
+
+    Why: the regex matches *whole* requirement lines (re.fullmatch) so a
+    free-form sentence like "this is not a manifest" does not become a
+    package named "this". Pure: no I/O, no globals.
+    """
+    packages: list[tuple[str, str]] = []
+    for raw_line in manifest.splitlines():
+        line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
-        # Match whole requirement-ish lines only. A free-form sentence like
-        # "this is not a manifest" must not become package "this".
-        m = re.fullmatch(
-            r"([A-Za-z0-9_\-\.]+)(?:\[[A-Za-z0-9_,\-\.]+\])?\s*([>=<!~]=?\s*[\w\.\*]+(?:\s*,\s*[>=<!~]=?\s*[\w\.\*]+)*)?",
-            line,
-        )
-        if m:
-            name = m.group(1).strip()
-            ver_spec = (m.group(2) or "").strip()
-            ver = (
-                re.sub(r"[>=<!~^]+\s*", "", ver_spec).split(",")[0].strip()
-                if ver_spec
-                else ""
-            )
-            packages.append((name, ver))
+        m = _PYPI_REQ_LINE_RE.fullmatch(line)
+        if not m:
+            continue
+        name = m.group(1).strip()
+        ver_spec = (m.group(2) or "").strip()
+        if ver_spec:
+            ver = _PYPI_VER_OP_RE.sub("", ver_spec).split(",")[0].strip()
+        else:
+            ver = ""
+        packages.append((name, ver))
     return packages
 
 
-def _parse_npm_manifest(manifest: str) -> list[tuple[str, str]]:
-    # P2 fix: accept several common snippet shapes in addition to a full
-    # package.json. The eval flagged that the agent silently failed on
-    # `"dependencies": {"express": "4.17.1", ...}` — a copy-paste from a
-    # tutorial. Try the strictest form first, then progressively wrap looser
-    # inputs into a parseable JSON object before giving up.
-    text = manifest.strip()
+def _npm_extract_deps(data: Any) -> list[tuple[str, str]]:
+    """Pure: pull ``(name, ver)`` pairs from a parsed package.json-shaped dict."""
+    if not isinstance(data, dict):
+        return []
+    out: list[tuple[str, str]] = []
+    for key in ("dependencies", "devDependencies", "peerDependencies"):
+        for name, ver_spec in (data.get(key) or {}).items():
+            ver = _NPM_VER_DIGITS_RE.sub("", str(ver_spec)).strip(".") if ver_spec else ""
+            out.append((name, ver))
+    return out
+
+
+def _npm_candidate_payloads(text: str) -> list[str]:
+    """Build progressively-wrapped JSON candidates from a manifest snippet.
+
+    Why: callers paste several common shapes — full package.json, just a
+    "dependencies": {...} fragment, or a bare deps dict. Trying the strictest
+    form first preserves intent; widening only when the strict parse yields
+    nothing avoids misinterpreting a real package.json with empty deps.
+    """
     candidates = [text]
-    # `"dependencies": { ... }` → wrap with `{}` to make it a valid object.
     if text and not text.startswith("{") and '"dependencies"' in text:
         candidates.append("{" + text.rstrip(",") + "}")
-    # `{"express": "4.17.1", ...}` → treat as a bare deps dict.
     if text.startswith("{") and '"dependencies"' not in text and '"name"' not in text:
         candidates.append('{"dependencies": ' + text + "}")
+    return candidates
 
-    def _extract(data: Any) -> list[tuple[str, str]]:
-        if not isinstance(data, dict):
-            return []
-        out = []
-        for key in ("dependencies", "devDependencies", "peerDependencies"):
-            for name, ver_spec in (data.get(key) or {}).items():
-                ver = re.sub(r"[^0-9\.]", "", str(ver_spec)).strip(".") if ver_spec else ""
-                out.append((name, ver))
-        return out
 
-    # Try each candidate in order; pick the first that yields packages so a
-    # bare `{"express": "4.17.1"}` falls through to the wrapped form when the
-    # raw parse produces an empty deps tree.
-    for cand in candidates:
+def _parse_npm_manifest(manifest: str) -> list[tuple[str, str]]:
+    """Parse a package.json-shaped string into ``(name, version)`` pairs."""
+    for candidate in _npm_candidate_payloads(manifest.strip()):
         try:
-            parsed = json.loads(cand)
+            parsed = json.loads(candidate)
         except json.JSONDecodeError:
             continue
-        packages = _extract(parsed)
+        packages = _npm_extract_deps(parsed)
         if packages:
             return packages
     return []
 
 
 def _cvss_to_severity(score: float) -> str:
-    if score >= 9.0:
+    """Pure: map CVSS base score to its FIRST.org severity bucket."""
+    if score >= _CVSS_CRITICAL:
         return "critical"
-    if score >= 7.0:
+    if score >= _CVSS_HIGH:
         return "high"
-    if score >= 4.0:
+    if score >= _CVSS_MEDIUM:
         return "medium"
     if score > 0.0:
         return "low"
@@ -144,6 +174,7 @@ def _cvss_to_severity(score: float) -> str:
 
 
 def _extract_cvss(metrics: dict) -> float:
+    """Pure: pull a numeric CVSS score from NVD's metrics block, preferring v3.1."""
     for key in ("cvssMetricV31", "cvssMetricV30", "cvssMetricV2"):
         entries = metrics.get(key, [])
         if entries:
@@ -154,110 +185,120 @@ def _extract_cvss(metrics: dict) -> float:
     return 0.0
 
 
-def _query_osv(pkg_name: str, version: str, ecosystem: str) -> list[dict]:
-    """Query OSV.dev for CVEs affecting a specific package + version."""
+def _osv_score_from_severity_field(severity_entries: list) -> float:
+    """Pure: extract a CVSS score from OSV's ``severity`` array.
+
+    Why: the array can hold either a raw numeric base score or a full CVSS3
+    vector string; the trailing-number regex misses the score on a vector,
+    so we try a direct float() first and fall back to the regex.
+    """
+    for sev in severity_entries or []:
+        score_field = str(sev.get("score") or "").strip()
+        if not score_field:
+            continue
+        try:
+            return float(score_field)
+        except ValueError:
+            pass
+        m = _OSV_SCORE_TAIL_RE.search(score_field)
+        if m:
+            try:
+                return float(m.group(1))
+            except ValueError:
+                pass
+    return 0.0
+
+
+def _osv_score_from_label(vuln: dict) -> float:
+    """Pure: back-fill CVSS from OSV's ``database_specific.severity`` label.
+
+    Why: some advisories only ship a HIGH/CRITICAL label; without this
+    fallback the agent reports cvss=0 even on plainly serious vulns.
+    """
+    label = (
+        str((vuln.get("database_specific") or {}).get("severity") or "")
+        .strip()
+        .upper()
+    )
+    return _CVSS_LABEL_TO_SCORE.get(label, 0.0)
+
+
+def _osv_extract_fixed_in(vuln: dict) -> str | None:
+    """Pure: walk OSV's affected/ranges/events tree to find the first ``fixed`` event."""
+    for affected in vuln.get("affected") or []:
+        for r in affected.get("ranges") or []:
+            for ev in r.get("events") or []:
+                if "fixed" in ev:
+                    return ev["fixed"]
+    return None
+
+
+def _osv_canonical_cve_id(vuln: dict) -> str:
+    """Pure: prefer the CVE alias over OSV's internal id when both are present."""
+    vuln_id = vuln.get("id", "")
+    aliases = vuln.get("aliases") or []
+    return next((a for a in aliases if a.startswith("CVE-")), vuln_id)
+
+
+def _osv_vuln_to_cve(vuln: dict) -> dict:
+    """Pure: shape a single OSV vuln record into the agent's CVE schema."""
+    cvss = _osv_score_from_severity_field(vuln.get("severity") or [])
+    if cvss == 0.0:
+        cvss = _osv_score_from_label(vuln)
+    summary = (vuln.get("summary") or vuln.get("details") or "")[:_OSV_SUMMARY_MAX_CHARS]
+    return {
+        "id": _osv_canonical_cve_id(vuln),
+        "cvss": cvss,
+        "severity": _cvss_to_severity(cvss),
+        "description": summary,
+        "fixed_in": _osv_extract_fixed_in(vuln),
+    }
+
+
+def _osv_fetch(pkg_name: str, version: str, ecosystem: str) -> list[dict]:
+    """Side-effect: POST to OSV.dev and return the raw ``vulns`` list."""
     osv_ecosystem = "PyPI" if ecosystem == "pypi" else "npm"
+    body: dict = {"package": {"name": pkg_name, "ecosystem": osv_ecosystem}}
+    if version:
+        body["version"] = version
     try:
-        body: dict = {"package": {"name": pkg_name, "ecosystem": osv_ecosystem}}
-        if version:
-            body["version"] = version
         resp = requests.post(
-            _OSV_API,
-            json=body,
-            timeout=_TIMEOUT,
-            headers={"User-Agent": "aztea-dependency-auditor/1.0"},
+            _OSV_API, json=body, timeout=_TIMEOUT,
+            headers={"User-Agent": _USER_AGENT},
         )
-        if resp.status_code != 200:
-            _LOG.info("OSV non-200 for %s: status=%s", pkg_name, resp.status_code)
-            return []
-        data = resp.json()
     except Exception:
         _LOG.warning("OSV query failed for %s/%s", ecosystem, pkg_name, exc_info=True)
         return []
+    if resp.status_code != 200:
+        _LOG.info("OSV non-200 for %s: status=%s", pkg_name, resp.status_code)
+        return []
+    try:
+        return resp.json().get("vulns", []) or []
+    except ValueError:
+        _LOG.warning("OSV non-JSON response for %s", pkg_name, exc_info=True)
+        return []
 
-    results = []
+
+def _query_osv(pkg_name: str, version: str, ecosystem: str) -> list[dict]:
+    """Side-effect: query OSV.dev and return CVE records, deduped by CVE id."""
     seen: set[str] = set()
-    for vuln in data.get("vulns", []):
-        vuln_id = vuln.get("id", "")
-        aliases = vuln.get("aliases") or []
-        cve_id = next((a for a in aliases if a.startswith("CVE-")), vuln_id)
-        if cve_id in seen:
+    out: list[dict] = []
+    for vuln in _osv_fetch(pkg_name, version, ecosystem):
+        cve = _osv_vuln_to_cve(vuln)
+        if cve["id"] in seen:
             continue
-        seen.add(cve_id)
-
-        # OSV's ``severity`` array can hold either a raw CVSS base score
-        # (numeric string) or a full CVSS3 vector. We check for a numeric
-        # ``baseScore`` first, then fall back to parsing the vector via the
-        # canonical CVSS bucket boundaries. The previous regex only matched
-        # the *trailing* number of the score field, which left ``cvss = 0.0``
-        # for vectors like ``CVSS:3.1/AV:N/AC:L/...`` — exactly the case
-        # the live audit caught with lodash@4.17.20.
-        cvss = 0.0
-        for sev in vuln.get("severity") or []:
-            score_field = str(sev.get("score") or "").strip()
-            if not score_field:
-                continue
-            try:
-                cvss = float(score_field)
-                break
-            except ValueError:
-                pass
-            m = _OSV_SCORE_TAIL_RE.search(score_field)
-            if m:
-                try:
-                    cvss = float(m.group(1))
-                    break
-                except ValueError:
-                    pass
-        # Some OSV records carry a CVSS-derived ``database_specific.severity``
-        # bucket (LOW/MODERATE/HIGH/CRITICAL). Use that as a fallback so we
-        # don't report 0.0 when the upstream advisory only provides a label.
-        if cvss == 0.0:
-            label = (
-                str((vuln.get("database_specific") or {}).get("severity") or "")
-                .strip()
-                .upper()
-            )
-            cvss = {
-                "LOW": 3.0,
-                "MODERATE": 5.5,
-                "MEDIUM": 5.5,
-                "HIGH": 7.5,
-                "CRITICAL": 9.5,
-            }.get(label, 0.0)
-
-        fixed_in = None
-        for affected in vuln.get("affected") or []:
-            for r in affected.get("ranges") or []:
-                for ev in r.get("events") or []:
-                    if "fixed" in ev:
-                        fixed_in = ev["fixed"]
-                        break
-                if fixed_in:
-                    break
-            if fixed_in:
-                break
-
-        summary = (vuln.get("summary") or vuln.get("details") or "")[:600]
-        results.append(
-            {
-                "id": cve_id,
-                "cvss": cvss,
-                "severity": _cvss_to_severity(cvss),
-                "description": summary,
-                "fixed_in": fixed_in,
-            }
-        )
-    return results
+        seen.add(cve["id"])
+        out.append(cve)
+    return out
 
 
 def _fetch_pypi_latest(name: str) -> tuple[str | None, str | None]:
-    """Returns (latest_version, license)."""
+    """Side-effect: fetch ``(latest_version, license)`` from PyPI; ``(None, None)`` on failure."""
     try:
         resp = requests.get(
             _PYPI_API.format(name=name),
             timeout=_TIMEOUT,
-            headers={"User-Agent": "aztea-dependency-auditor/1.0"},
+            headers={"User-Agent": _USER_AGENT},
         )
         if resp.status_code == 200:
             info = resp.json().get("info", {})
@@ -268,7 +309,7 @@ def _fetch_pypi_latest(name: str) -> tuple[str | None, str | None]:
 
 
 def _best_npm_version(versions: dict[str, Any]) -> str | None:
-    """Pick the highest stable semver published in the npm metadata."""
+    """Pure: highest stable semver published in the npm metadata, or None."""
     parsed: list[tuple[tuple[int, int, int], str]] = []
     for version in versions:
         if not _SEMVER_RE.match(str(version)):
@@ -282,237 +323,260 @@ def _best_npm_version(versions: dict[str, Any]) -> str | None:
 
 
 def _fetch_npm_latest(name: str) -> tuple[str | None, str | None]:
-    """Returns (latest_version, license)."""
+    """Side-effect: fetch ``(latest_version, license)`` from npm; ``(None, None)`` on failure."""
     try:
         encoded = quote(name, safe="")
         resp = requests.get(
             _NPM_API.format(name=encoded),
             timeout=_TIMEOUT,
-            headers={
-                "User-Agent": "aztea-dependency-auditor/1.0",
-                "Accept": "application/json",
-            },
+            headers={"User-Agent": _USER_AGENT, "Accept": "application/json"},
         )
-        if resp.status_code == 200:
-            data = resp.json()
-            versions = data.get("versions") or {}
-            latest = (data.get("dist-tags") or {}).get("latest")
-            if latest not in versions:
-                latest = _best_npm_version(versions)
-            license_ = None
-            if latest and latest in versions:
-                license_ = versions[latest].get("license")
-            return latest, license_
+        if resp.status_code != 200:
+            return None, None
+        data = resp.json()
+        versions = data.get("versions") or {}
+        latest = (data.get("dist-tags") or {}).get("latest")
+        if latest not in versions:
+            latest = _best_npm_version(versions)
+        license_ = versions[latest].get("license") if latest and latest in versions else None
+        return latest, license_
     except Exception:
         _LOG.warning("npm version fetch failed for %s", name, exc_info=True)
-    return None, None
+        return None, None
 
 
 def _license_risk(license_str: str | None) -> str:
+    """Pure: bucket a SPDX/free-text license string into the auditor's risk levels."""
     if not license_str:
         return "low"
     lic = license_str.lower()
     if any(k in lic for k in _COPYLEFT):
         return "high"
-    if "unknown" in lic or "proprietary" in lic or "see license" in lic:
+    if any(hint in lic for hint in _RESTRICTIVE_LICENSE_HINTS):
         return "medium"
     return "none"
 
 
-def run(payload: dict) -> dict:
-    """Audit a dependency manifest for known CVEs and license issues.
+_NPM_FORMAT_HINTS = (
+    "Full package.json: {\"dependencies\": {\"express\": \"4.17.1\"}, ...}",
+    "Snippet: \"dependencies\": {\"express\": \"4.17.1\"}",
+    "Bare deps dict: {\"express\": \"4.17.1\"}",
+)
+_PYPI_FORMAT_HINTS = (
+    "requirements.txt: one package==version per line",
+    "pyproject.toml [tool.poetry.dependencies] block (paste the full block)",
+)
 
-    Required: ``manifest`` (str) — raw contents of ``package.json``,
-    ``requirements.txt``, or ``pyproject.toml``.
 
-    Optional:
-    - ``ecosystem`` (str, default ``"auto"``) — ``"python"`` | ``"node"`` |
-      ``"auto"`` (detect from manifest format).
-    - ``severity_threshold`` (str, default ``"medium"``) — minimum CVE severity
-      to include in results: ``"low"`` | ``"medium"`` | ``"high"`` | ``"critical"``.
-    - ``include_license_check`` (bool, default True) — flag packages with
-      restrictive licenses (GPL, AGPL, etc.).
+def _unsupported_ecosystem_error(ecosystem: str) -> dict:
+    """Pure: structured-error envelope for an unsupported ecosystem string."""
+    return _err(
+        "dependency_auditor.unsupported_ecosystem",
+        (
+            f"Ecosystem {ecosystem!r} is not supported by dependency_auditor. "
+            "Supported: npm (package.json), pypi (requirements.txt / "
+            "pyproject.toml). For maven use OWASP Dependency-Check, for "
+            "cargo use `cargo audit`, for go modules use `govulncheck`. "
+            "Run those via shell_executor."
+        ),
+        details={
+            "supported": sorted(_SUPPORTED_ECOSYSTEMS),
+            "received": ecosystem,
+            "next_step": (
+                "call_specialist(slug='shell_executor', ...) with the "
+                "ecosystem-native auditor"
+            ),
+        },
+    )
 
-    Returns ``{packages_scanned, vulnerabilities, license_issues, summary}``.
-    CVE data is fetched live from the NIST NVD API.
+
+def _invalid_manifest_error(ecosystem: str, manifest: str) -> dict:
+    """Pure: structured-error envelope listing accepted formats per ecosystem."""
+    hints = {"npm": _NPM_FORMAT_HINTS, "pypi": _PYPI_FORMAT_HINTS}.get(
+        ecosystem, ("See npm/pypi formats above.",)
+    )
+    return _err(
+        "dependency_auditor.invalid_manifest",
+        "No dependencies found in manifest.",
+        details={
+            "ecosystem": ecosystem,
+            "expected_formats": list(hints),
+            "received_first_120_chars": manifest[:120],
+        },
+    )
+
+
+def _normalize_run_inputs(payload: dict) -> tuple[str, str, list[str]]:
+    """Pure: validate + normalize ``run`` inputs. Raises ValueError for missing manifest.
+
+    Why: rule 4 — fail loudly at the boundary instead of letting an empty
+    manifest propagate into the parser.
     """
+    if not isinstance(payload, dict):
+        raise TypeError(f"payload must be dict, got {type(payload).__name__}")
     manifest = str(payload.get("manifest") or "").strip()
     if not manifest:
         raise ValueError(
             "'manifest' is required (contents of package.json or requirements.txt)."
         )
-
     ecosystem = str(payload.get("ecosystem") or "auto").strip().lower()
-    _SUPPORTED_ECOSYSTEMS = {"npm", "pypi", "auto"}
-    if ecosystem not in _SUPPORTED_ECOSYSTEMS:
-        return _err(
-            "dependency_auditor.unsupported_ecosystem",
-            (
-                f"Ecosystem {ecosystem!r} is not supported by dependency_auditor. "
-                "Supported: npm (package.json), pypi (requirements.txt / "
-                "pyproject.toml). For maven use OWASP Dependency-Check, for "
-                "cargo use `cargo audit`, for go modules use `govulncheck`. "
-                "Run those via shell_executor."
-            ),
-            details={
-                "supported": sorted(_SUPPORTED_ECOSYSTEMS),
-                "received": ecosystem,
-                "next_step": "call_specialist(slug='shell_executor', ...) with the ecosystem-native auditor",
-            },
-        )
-    if ecosystem == "auto":
-        ecosystem = _detect_ecosystem(manifest)
+    raw_checks = payload.get("checks")
+    checks = list(raw_checks) if isinstance(raw_checks, list) and raw_checks else list(_DEFAULT_CHECKS)
+    return manifest[:_MAX_MANIFEST_CHARS], ecosystem, checks
 
-    checks = payload.get("checks")
-    if not checks or not isinstance(checks, list):
-        checks = ["cve", "outdated", "license"]
 
-    manifest = manifest[:_MAX_MANIFEST_CHARS]
+def _parse_manifest(ecosystem: str, manifest: str) -> list[tuple[str, str]]:
+    """Pure dispatcher: route to the per-ecosystem parser and cap by ``_MAX_PACKAGES``."""
+    parser = _parse_pypi_manifest if ecosystem == "pypi" else _parse_npm_manifest
+    return parser(manifest)[:_MAX_PACKAGES]
 
-    if ecosystem == "pypi":
-        raw_packages = _parse_pypi_manifest(manifest)
-    else:
-        raw_packages = _parse_npm_manifest(manifest)
 
-    raw_packages = raw_packages[:_MAX_PACKAGES]
-    if not raw_packages:
-        # P2: clear, format-specific guidance. Tells the caller exactly what
-        # shape is accepted instead of a generic "no dependencies" message.
-        return _err(
-            "dependency_auditor.invalid_manifest",
-            "No dependencies found in manifest.",
-            details={
-                "ecosystem": ecosystem,
-                "expected_formats": (
-                    {
-                        "npm": [
-                            "Full package.json: {\"dependencies\": {\"express\": \"4.17.1\"}, ...}",
-                            "Snippet: \"dependencies\": {\"express\": \"4.17.1\"}",
-                            "Bare deps dict: {\"express\": \"4.17.1\"}",
-                        ],
-                        "pypi": [
-                            "requirements.txt: one package==version per line",
-                            "pyproject.toml [tool.poetry.dependencies] block (paste the full block)",
-                        ],
-                    }
-                ).get(ecosystem, ["See npm/pypi formats above."]),
-                "received_first_120_chars": manifest[:120],
-            },
-        )
+def _classify_package(
+    cves: list[dict], is_outdated: bool, license_risk: str
+) -> tuple[str, dict | None]:
+    """Pure: derive ``(action, top_cve_or_None)`` from per-package signals.
 
-    # Fetch the latest published version + license for both ecosystems whenever
-    # outdated or license checks are enabled. The original code only fetched
-    # latest for PyPI; npm packages never had ``latest_version`` populated, so
-    # ``is_outdated`` was always False and the auditor reported every npm
-    # package as up-to-date even when 5+ major versions behind.
+    Why: keeps the action/priority taxonomy in one place — touching the
+    rules later means editing here only, not the parallel auditor closure.
+    """
+    if cves:
+        action = "upgrade" if any(c["fixed_in"] for c in cves) else "replace"
+        top_cve = max(cves, key=lambda c: c["cvss"])
+        return action, top_cve
+    if is_outdated:
+        return "upgrade", None
+    if license_risk in ("high", "medium"):
+        return "review", None
+    return "ok", None
+
+
+def _format_priority(name: str, current_ver: str | None, top_cve: dict) -> str:
+    """Pure: human-readable priority line for the ``top_priorities`` summary list."""
+    cvss = top_cve["cvss"]
+    label = "CRITICAL" if cvss >= _CVSS_CRITICAL else "HIGH" if cvss >= _CVSS_HIGH else "MEDIUM"
+    return f"{label}: {name}@{current_ver or '?'} — {top_cve['id']} (CVSS {cvss})"
+
+
+def _audit_one(
+    item: tuple[str, str | None], *, ecosystem: str, checks: list[str]
+) -> dict[str, Any]:
+    """Side-effect: audit a single package via OSV + registry lookup.
+
+    Why: side-effecting because it issues HTTP calls; isolating it lets
+    callers parallelize over a thread pool while keeping classification
+    pure in ``_classify_package``.
+    """
+    name, current_ver = item
     fetch_latest = "outdated" in checks
     fetch_license = "license" in checks
+    latest_version: str | None = None
+    license_str: str | None = None
+    if fetch_latest or fetch_license:
+        fetcher = _fetch_pypi_latest if ecosystem == "pypi" else _fetch_npm_latest
+        latest_version, license_str = fetcher(name)
+    cves = _query_osv(name, current_ver, ecosystem) if "cve" in checks else []
+    is_outdated = bool(
+        fetch_latest and current_ver and latest_version
+        and _ver_tuple(current_ver) < _ver_tuple(latest_version)
+    )
+    risk = _license_risk(license_str) if fetch_license else "none"
+    action, top_cve = _classify_package(cves, is_outdated, risk)
+    priority = _format_priority(name, current_ver, top_cve) if top_cve else None
+    package = {
+        "name": name,
+        "current_version": current_ver or "unknown",
+        "latest_version": latest_version,
+        "cves": cves,
+        "license": license_str,
+        "license_risk": risk,
+        "action": action,
+    }
+    return {"package": package, "is_outdated": is_outdated, "priority": priority}
 
-    def _audit_one(item: tuple[str, str | None]) -> dict[str, Any]:
-        name, current_ver = item
-        cves: list[dict] = []
-        latest_version: str | None = None
-        license_str: str | None = None
 
-        # Single round-trip per package per registry — helper returns both fields.
-        if fetch_latest or fetch_license:
-            if ecosystem == "pypi":
-                latest_version, license_str = _fetch_pypi_latest(name)
-            elif ecosystem == "npm":
-                latest_version, license_str = _fetch_npm_latest(name)
-
-        if "cve" in checks:
-            cves = _query_osv(name, current_ver, ecosystem)
-
-        is_outdated = bool(
-            "outdated" in checks
-            and current_ver
-            and latest_version
-            and _ver_tuple(current_ver) < _ver_tuple(latest_version)
-        )
-        l_risk = _license_risk(license_str) if fetch_license else "none"
-
-        if cves:
-            max_cvss = max(c["cvss"] for c in cves)
-            action = "upgrade" if any(c["fixed_in"] for c in cves) else "replace"
-            top_cve = max(cves, key=lambda c: c["cvss"])
-            severity_label = (
-                "CRITICAL" if max_cvss >= 9.0
-                else "HIGH" if max_cvss >= 7.0
-                else "MEDIUM"
-            )
-            priority = (
-                f"{severity_label}: {name}@{current_ver or '?'} — "
-                f"{top_cve['id']} (CVSS {top_cve['cvss']})"
-            )
-        elif is_outdated:
-            action = "upgrade"
-            priority = None
-        elif l_risk in ("high", "medium"):
-            action = "review"
-            priority = None
-        else:
-            action = "ok"
-            priority = None
-
-        return {
-            "package": {
-                "name": name,
-                "current_version": current_ver or "unknown",
-                "latest_version": latest_version,
-                "cves": cves,
-                "license": license_str,
-                "license_risk": l_risk,
-                "action": action,
-            },
-            "is_outdated": is_outdated,
-            "priority": priority,
-        }
-
-    # WHY: per-package work is 2-3 independent HTTP calls; with up to _MAX_PACKAGES
-    # items this serial loop dominated wall-time. Order is restored by sort below.
+def _audit_all(
+    raw_packages: list[tuple[str, str | None]], ecosystem: str, checks: list[str]
+) -> list[dict[str, Any]]:
+    """Side-effect: parallel-audit every package, preserving input order."""
     workers = min(_AUDIT_WORKERS, max(1, len(raw_packages)))
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        audits = list(pool.map(_audit_one, raw_packages))
+        return list(pool.map(
+            lambda item: _audit_one(item, ecosystem=ecosystem, checks=checks),
+            raw_packages,
+        ))
 
-    packages_out = [a["package"] for a in audits]
-    vulnerable_count = sum(1 for p in packages_out if p["cves"])
-    critical_count = sum(
-        1 for p in packages_out
-        if p["cves"] and max(c["cvss"] for c in p["cves"]) >= 9.0
+
+def _aggregate_audits(audits: list[dict]) -> dict[str, Any]:
+    """Pure: derive vulnerable / outdated / critical counters and the priority list."""
+    packages = [a["package"] for a in audits]
+    vulnerable = sum(1 for p in packages if p["cves"])
+    critical = sum(
+        1 for p in packages
+        if p["cves"] and max(c["cvss"] for c in p["cves"]) >= _CVSS_CRITICAL
     )
-    # Each package contributes to outdated_count only when it has no CVEs;
-    # CVE-bearing packages already count toward vulnerable_count.
-    outdated_count = sum(
+    # WHY: a CVE-bearing package already counts in `vulnerable`; only count
+    # it as outdated when it has no CVEs to avoid double-billing the user.
+    outdated = sum(
         1 for a in audits if a["is_outdated"] and not a["package"]["cves"]
     )
-    top_priorities = [a["priority"] for a in audits if a["priority"]]
+    priorities = [a["priority"] for a in audits if a["priority"]]
+    return {
+        "packages": packages,
+        "vulnerable_count": vulnerable,
+        "critical_count": critical,
+        "outdated_count": outdated,
+        "top_priorities": priorities[:_TOP_PRIORITIES_LIMIT],
+    }
 
-    # Sort: vulnerable first, then by severity
-    def _sort_key(p: dict) -> tuple:
+
+def _sort_packages(packages: list[dict]) -> list[dict]:
+    """Pure: sort by max CVSS desc, then by 'has issue' so 'ok' rows sink."""
+    def key(p: dict) -> tuple[float, int]:
         max_cvss = max((c["cvss"] for c in p["cves"]), default=0.0)
         return (-max_cvss, 0 if p["action"] == "ok" else 1)
+    return sorted(packages, key=key)
 
-    packages_out.sort(key=_sort_key)
 
-    total = len(packages_out)
-    summary_parts = [f"Audited {total} package(s)."]
-    if vulnerable_count:
-        summary_parts.append(
-            f"{vulnerable_count} with known CVEs ({critical_count} critical)."
-        )
-    if outdated_count:
-        summary_parts.append(f"{outdated_count} outdated.")
-    if not vulnerable_count and not outdated_count:
-        summary_parts.append("No known CVEs or obvious outdated packages found.")
+def _summarise(total: int, vulnerable: int, critical: int, outdated: int) -> str:
+    """Pure: one-line audit summary suitable for the result envelope."""
+    parts = [f"Audited {total} package(s)."]
+    if vulnerable:
+        parts.append(f"{vulnerable} with known CVEs ({critical} critical).")
+    if outdated:
+        parts.append(f"{outdated} outdated.")
+    if not vulnerable and not outdated:
+        parts.append("No known CVEs or obvious outdated packages found.")
+    return " ".join(parts)
 
+
+def run(payload: dict) -> dict:
+    """Audit a dependency manifest for known CVEs, outdated packages, and license risk.
+
+    Why: the agent fans out OSV / PyPI / npm registry calls in parallel and
+    returns a stable shape regardless of ecosystem so renderers can pretty-
+    print without sniffing the input format.
+    """
+    manifest, ecosystem, checks = _normalize_run_inputs(payload)
+    if ecosystem not in _SUPPORTED_ECOSYSTEMS:
+        return _unsupported_ecosystem_error(ecosystem)
+    if ecosystem == "auto":
+        ecosystem = _detect_ecosystem(manifest)
+    raw_packages = _parse_manifest(ecosystem, manifest)
+    if not raw_packages:
+        return _invalid_manifest_error(ecosystem, manifest)
+    audits = _audit_all(raw_packages, ecosystem, checks)
+    agg = _aggregate_audits(audits)
+    packages = _sort_packages(agg["packages"])
+    total = len(packages)
     return {
         "ecosystem": ecosystem,
         "total_packages": total,
-        "vulnerable_count": vulnerable_count,
-        "outdated_count": outdated_count,
-        "critical_count": critical_count,
-        "packages": packages_out,
-        "top_priorities": top_priorities[:10],
-        "summary": " ".join(summary_parts),
+        "vulnerable_count": agg["vulnerable_count"],
+        "outdated_count": agg["outdated_count"],
+        "critical_count": agg["critical_count"],
+        "packages": packages,
+        "top_priorities": agg["top_priorities"],
+        "summary": _summarise(
+            total, agg["vulnerable_count"], agg["critical_count"], agg["outdated_count"]
+        ),
     }

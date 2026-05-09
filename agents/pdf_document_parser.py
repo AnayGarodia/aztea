@@ -52,6 +52,7 @@ _DEFAULT_MAX_PAGES = 50
 _HARD_MAX_PAGES = 100
 _DEFAULT_MAX_TEXT_CHARS = 60_000
 _HARD_MAX_TEXT_CHARS = 200_000
+_MIN_TEXT_CHARS = 1000
 _FETCH_TIMEOUT_S = 20.0
 _MAX_PDF_BYTES = 25 * 1024 * 1024  # 25 MB hard cap
 _TABLE_PREVIEW_ROWS = 10
@@ -144,41 +145,77 @@ def _extract_tables(pdf_bytes: bytes, max_pages: int) -> list[dict[str, Any]]:
     return out
 
 
-def run(payload: dict) -> dict:
-    """Fetch a PDF URL and extract structured text + tables + metadata.
-
-    Variable-priced per page returned. Hard-capped at 100 pages and 25 MB.
-    Tables are best-effort via pdfplumber; metadata via pymupdf.
-    """
+def _normalize_run_inputs(
+    payload: dict,
+) -> dict | tuple[str, int, int, bool]:
+    """Pure: validate ``url``/``max_pages``/``max_text_chars``; returns parsed bag or error envelope."""
+    if not isinstance(payload, dict):
+        raise TypeError(f"payload must be dict, got {type(payload).__name__}")
     raw_url = str(payload.get("url") or "").strip()
     if not raw_url:
         return _err("pdf_document_parser.missing_url", "url is required")
-
     try:
         url = validate_outbound_url(raw_url, "url")
     except ValueError as exc:
         return _err("pdf_document_parser.invalid_url", str(exc))
-
     try:
         max_pages = int(payload.get("max_pages") or _DEFAULT_MAX_PAGES)
     except (TypeError, ValueError):
         max_pages = _DEFAULT_MAX_PAGES
     max_pages = max(1, min(max_pages, _HARD_MAX_PAGES))
-
     try:
         max_text_chars = int(payload.get("max_text_chars") or _DEFAULT_MAX_TEXT_CHARS)
     except (TypeError, ValueError):
         max_text_chars = _DEFAULT_MAX_TEXT_CHARS
-    max_text_chars = max(1000, min(max_text_chars, _HARD_MAX_TEXT_CHARS))
-
+    max_text_chars = max(_MIN_TEXT_CHARS, min(max_text_chars, _HARD_MAX_TEXT_CHARS))
     include_tables = bool(payload.get("include_tables", True))
+    return url, max_pages, max_text_chars, include_tables
 
-    pdf_bytes, fetch_err = _fetch_pdf(url)
-    if pdf_bytes is None:
-        return {"error": fetch_err} if fetch_err else _err(
-            "pdf_document_parser.fetch_failed", "PDF fetch returned no bytes"
-        )
 
+def _shape_pdf_metadata(meta_raw: dict[str, Any]) -> dict[str, str | None]:
+    """Pure: shape pymupdf's metadata blob into the agent's stable shape."""
+    return {
+        "title": _stringify_meta(meta_raw.get("title")),
+        "author": _stringify_meta(meta_raw.get("author")),
+        "subject": _stringify_meta(meta_raw.get("subject")),
+        "creator": _stringify_meta(meta_raw.get("creator")),
+        "producer": _stringify_meta(meta_raw.get("producer")),
+        "creation_date": _stringify_meta(meta_raw.get("creationDate")),
+    }
+
+
+def _read_pages(
+    doc: Any, pages_to_read: int, max_text_chars: int,
+) -> tuple[list[dict[str, Any]], str]:
+    """Side-effect: walk pymupdf's pages and shape the per-page output + truncated full text."""
+    pages_out: list[dict[str, Any]] = []
+    all_text_parts: list[str] = []
+    running_total = 0
+    for idx in range(pages_to_read):
+        try:
+            page = doc.load_page(idx)
+            page_text = page.get_text("text") or ""
+        except Exception as exc:
+            _LOG.warning("Failed to read page %d: %s", idx + 1, exc, exc_info=True)
+            continue
+        pages_out.append({"page": idx + 1, "text": page_text, "char_count": len(page_text)})
+        if running_total < max_text_chars:
+            budget_left = max_text_chars - running_total
+            snippet = page_text if len(page_text) <= budget_left else page_text[:budget_left]
+            all_text_parts.append(snippet)
+            running_total += len(snippet)
+    full_text = "\n\n".join(all_text_parts)
+    if running_total >= max_text_chars:
+        full_text += f"\n[truncated at {max_text_chars} chars]"
+    return pages_out, full_text
+
+
+def _open_pdf(pdf_bytes: bytes) -> Any:
+    """Side-effect: open a PyMuPDF doc; returns the doc or an error envelope.
+
+    Why (rule 11): pymupdf is a heavy native dep — keeping the import lazy
+    lets the agent module import on machines without the wheel installed.
+    """
     try:
         import fitz  # type: ignore[import]  # PyMuPDF
     except ImportError:
@@ -186,59 +223,42 @@ def run(payload: dict) -> dict:
             "pdf_document_parser.runtime_missing",
             "pymupdf (fitz) is not installed. Add `pymupdf` to requirements.txt.",
         )
-
     try:
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        return fitz.open(stream=pdf_bytes, filetype="pdf")
     except Exception as exc:
         return _err(
             "pdf_document_parser.parse_failed",
             f"Could not open PDF: {type(exc).__name__}: {exc}",
         )
 
+
+def run(payload: dict) -> dict:
+    """Fetch a PDF URL and extract structured text + tables + metadata.
+
+    Why: pricing is variable per page returned; capping page+byte budgets at
+    the boundary stops a malicious caller from amortising a 100MB scan at
+    the price of a single page.
+    """
+    parsed = _normalize_run_inputs(payload)
+    if isinstance(parsed, dict):
+        return parsed
+    url, max_pages, max_text_chars, include_tables = parsed
+    pdf_bytes, fetch_err = _fetch_pdf(url)
+    if pdf_bytes is None:
+        return {"error": fetch_err} if fetch_err else _err(
+            "pdf_document_parser.fetch_failed", "PDF fetch returned no bytes"
+        )
+    doc = _open_pdf(pdf_bytes)
+    if isinstance(doc, dict):  # error envelope
+        return doc
     try:
         page_count = doc.page_count
-        meta_raw = doc.metadata or {}
-        metadata = {
-            "title": _stringify_meta(meta_raw.get("title")),
-            "author": _stringify_meta(meta_raw.get("author")),
-            "subject": _stringify_meta(meta_raw.get("subject")),
-            "creator": _stringify_meta(meta_raw.get("creator")),
-            "producer": _stringify_meta(meta_raw.get("producer")),
-            "creation_date": _stringify_meta(meta_raw.get("creationDate")),
-        }
-
+        metadata = _shape_pdf_metadata(doc.metadata or {})
         pages_to_read = min(page_count, max_pages)
-        pages_out: list[dict[str, Any]] = []
-        all_text_parts: list[str] = []
-        running_total = 0
-
-        for idx in range(pages_to_read):
-            try:
-                page = doc.load_page(idx)
-                page_text = page.get_text("text") or ""
-            except Exception as exc:
-                _LOG.warning("Failed to read page %d: %s", idx + 1, exc, exc_info=True)
-                continue
-            char_count = len(page_text)
-            pages_out.append(
-                {"page": idx + 1, "text": page_text, "char_count": char_count}
-            )
-            if running_total < max_text_chars:
-                budget_left = max_text_chars - running_total
-                snippet = page_text if len(page_text) <= budget_left else page_text[:budget_left]
-                all_text_parts.append(snippet)
-                running_total += len(snippet)
+        pages_out, full_text = _read_pages(doc, pages_to_read, max_text_chars)
     finally:
         doc.close()
-
-    full_text = "\n\n".join(all_text_parts)
-    if running_total >= max_text_chars:
-        full_text += f"\n[truncated at {max_text_chars} chars]"
-
-    tables: list[dict[str, Any]] = []
-    if include_tables:
-        tables = _extract_tables(pdf_bytes, pages_to_read)
-
+    tables = _extract_tables(pdf_bytes, pages_to_read) if include_tables else []
     return {
         "url": url,
         "page_count": page_count,

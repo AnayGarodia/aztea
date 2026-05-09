@@ -57,10 +57,19 @@ _TIMEOUT_S = 8.0
 _DEFAULT_COUNT = 10
 _HARD_MAX_COUNT = 20
 _MAX_QUERY_LEN = 400
-# DDG's `df` (date filter) values match Brave's freshness enum 1:1 — d/w/m/y —
-# so we accept the Brave-style enum and translate. Saves callers from learning
-# both vocabularies.
+_VALID_MODES = ("web", "news")
+_DEFAULT_REGION = "wt-wt"
+# DDG `df` matches Brave's freshness enum 1:1; accept Brave-style and translate.
 _FRESHNESS_TO_DDG_DF = {"pd": "d", "pw": "w", "pm": "m", "py": "y"}
+# DDG's HTML endpoint rate-limits bare httpx UAs harder; mirror a real browser.
+_DDG_REQUEST_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9",
+    "Accept-Language": "en-US,en;q=0.5",
+}
 
 
 
@@ -131,9 +140,10 @@ def _parse_ddg_html(html: str, limit: int) -> list[dict[str, Any]]:
     return out
 
 
-def run(payload: dict) -> dict[str, Any]:
-    payload = payload or {}
-
+def _validate_run_inputs(payload: dict) -> dict | tuple[str, int, str, str, str | None]:
+    """Pure: validate ``query``/``count``/``mode``/``country``/``freshness``; returns parsed bag or error envelope."""
+    if not isinstance(payload, dict):
+        raise TypeError(f"payload must be dict, got {type(payload).__name__}")
     query = str(payload.get("query") or "").strip()
     if not query:
         return _err("web_search.missing_query", "query is required.")
@@ -142,58 +152,39 @@ def run(payload: dict) -> dict[str, Any]:
             "web_search.query_too_long",
             f"query exceeds {_MAX_QUERY_LEN} characters.",
         )
-
     try:
         count = int(payload.get("count") or _DEFAULT_COUNT)
     except (TypeError, ValueError):
         return _err("web_search.invalid_count", "count must be an integer.")
-    if count < 1:
-        count = 1
-    if count > _HARD_MAX_COUNT:
-        count = _HARD_MAX_COUNT
-
+    count = max(1, min(count, _HARD_MAX_COUNT))
     mode = str(payload.get("mode") or "web").strip().lower()
-    if mode not in ("web", "news"):
+    if mode not in _VALID_MODES:
         return _err(
             "web_search.invalid_mode",
-            "mode must be one of: web, news.",
+            f"mode must be one of: {', '.join(_VALID_MODES)}.",
         )
-    # DDG HTML endpoint serves the same result set for both; we surface the
-    # caller's mode in the output for contract symmetry but don't branch.
-
-    region = str(payload.get("country") or "wt-wt").strip().lower()
-    # Accept ISO codes like "US" — translate to DDG's "us-en" form.
+    region = str(payload.get("country") or _DEFAULT_REGION).strip().lower()
     if len(region) == 2 and region.isalpha():
-        region = f"{region}-en"
-
-    freshness = str(payload.get("freshness") or "").strip().lower()
+        region = f"{region}-en"  # ISO code → DDG "us-en" form
+    freshness = str(payload.get("freshness") or "").strip().lower() or None
     if freshness and freshness not in _FRESHNESS_TO_DDG_DF:
         return _err(
             "web_search.invalid_freshness",
             "freshness must be one of: pd, pw, pm, py.",
         )
+    return query, count, mode, region, freshness
 
+
+def _ddg_request(query: str, region: str, freshness: str | None) -> dict | str:
+    """Side-effect: POST to DuckDuckGo's HTML endpoint; returns response.text or error envelope."""
     form_data = {"q": query, "kl": region}
     if freshness:
         form_data["df"] = _FRESHNESS_TO_DDG_DF[freshness]
-
-    headers = {
-        # DDG's HTML endpoint requires a browser-like UA; bare `python-httpx`
-        # gets rate-limited harder. This is the same UA pattern the
-        # community `duckduckgo-search` package uses.
-        "User-Agent": (
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
-        ),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9",
-        "Accept-Language": "en-US,en;q=0.5",
-    }
-
     try:
         resp = httpx.post(
             _DDG_HTML_ENDPOINT,
             data=form_data,
-            headers=headers,
+            headers=_DDG_REQUEST_HEADERS,
             timeout=_TIMEOUT_S,
             follow_redirects=True,
         )
@@ -204,48 +195,59 @@ def run(payload: dict) -> dict[str, Any]:
             "web_search.upstream_unreachable",
             f"DuckDuckGo request failed: {exc}",
         )
-
     if resp.status_code == 429:
         return _err(
             "web_search.rate_limited",
             "DuckDuckGo rate-limited this request. Retry shortly.",
-        )
-    if resp.status_code >= 500:
-        return _err(
-            "web_search.upstream_error",
-            f"DuckDuckGo returned HTTP {resp.status_code}.",
         )
     if resp.status_code != 200:
         return _err(
             "web_search.upstream_error",
             f"DuckDuckGo returned HTTP {resp.status_code}.",
         )
+    return resp.text
 
+
+def _filter_safe_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Pure-ish: drop rows with empty title/url and SSRF-validate every surviving URL.
+
+    Why: DDG sanitises but cannot vouch for individual result URLs; the
+    SSRF gate enforces CLAUDE.md's "all outbound URLs go through
+    url_security.py" invariant on user-visible URLs too.
+    """
+    safe: list[dict[str, Any]] = []
+    for r in results:
+        if not (r["title"] and r["url"]):
+            continue
+        try:
+            validate_outbound_url(r["url"], "result")
+        except Exception:
+            continue  # WHY: drop a single bad row instead of failing the whole call
+        safe.append(r)
+    return safe
+
+
+def run(payload: dict) -> dict[str, Any]:
+    """Search the web via DuckDuckGo's HTML endpoint and return ranked rows.
+
+    Why: DDG's HTML endpoint is keyless and stable; ditching the paid Brave
+    API removes a per-call vendor dependency for the marketplace listing.
+    """
+    parsed = _validate_run_inputs(payload or {})
+    if isinstance(parsed, dict):
+        return parsed
+    query, count, mode, region, freshness = parsed
+    body = _ddg_request(query, region, freshness)
+    if isinstance(body, dict):
+        return body  # error envelope
     try:
-        results = _parse_ddg_html(resp.text, count)
-    except Exception as exc:  # noqa: BLE001 — never let parser bugs leak as 500s
+        results = _parse_ddg_html(body, count)
+    except Exception as exc:  # WHY: parser bugs must not surface as a 500
         return _err(
             "web_search.parse_failed",
             f"Failed to parse DuckDuckGo HTML: {exc}",
         )
-
-    # Drop rows missing title/url (defence against parser drift).
-    results = [r for r in results if r["title"] and r["url"]]
-
-    # SSRF guardrail on every URL we surface back to the caller. DDG sanitises
-    # to a degree, but CLAUDE.md's "all outbound URLs go through
-    # url_security.py" invariant covers result URLs too — if a DDG row ever
-    # decoded to a private/loopback/reserved address, the caller should not
-    # see it.
-    safe_results = []
-    for r in results:
-        try:
-            validate_outbound_url(r["url"], "result")
-            safe_results.append(r)
-        except Exception:
-            # Drop the row silently rather than fail the whole call.
-            continue
-
+    safe_results = _filter_safe_results(results)
     return {
         "query": query,
         "mode": mode,

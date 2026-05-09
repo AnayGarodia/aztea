@@ -355,16 +355,20 @@ def _line_col(newlines: list[int], offset: int) -> tuple[int, int]:
 
 
 
-def run(payload: dict) -> dict:
-    """Scan ``content`` for leaked credentials and high-entropy literals.
+_MAX_FINDINGS_HARD_CAP = 1000
+_KNOWN_EXAMPLE_REMEDIATION = (
+    "This is a documented vendor example value, not an active credential. "
+    "Remove it from production code paths to avoid noise in scanners."
+)
+_HIGH_ENTROPY_REMEDIATION = (
+    "Confirm the value is not a secret; if it is, rotate and move to env/secret store."
+)
 
-    Findings include redacted previews only — the full match is never returned
-    in the response, so an Aztea worker logging a successful call does not
-    leak the secret further.
-    """
+
+def _validate_run_inputs(payload: dict) -> dict | tuple[str, str | None, int, float]:
+    """Pure: validate ``content``/``max_findings``/``min_entropy``; return parsed bag or error envelope."""
     if not isinstance(payload, dict):
         return _err("secret_scanner.invalid_payload", "payload must be an object")
-
     content = payload.get("content")
     if not isinstance(content, str) or not content.strip():
         return _err(
@@ -374,139 +378,162 @@ def run(payload: dict) -> dict:
     if len(content) > _MAX_CONTENT:
         return _err(
             "secret_scanner.content_too_large",
-            f"content exceeds {_MAX_CONTENT} chars (got {len(content)}); split the file before scanning",
+            f"content exceeds {_MAX_CONTENT} chars (got {len(content)}); "
+            "split the file before scanning",
         )
-
-    filename = payload.get("filename")
-    if filename is not None:
-        filename = str(filename).strip() or None
-
+    raw_filename = payload.get("filename")
+    filename = str(raw_filename).strip() or None if raw_filename is not None else None
     try:
         max_findings = int(payload.get("max_findings", _DEFAULT_MAX_FINDINGS))
     except (TypeError, ValueError):
+        return _err("secret_scanner.invalid_max_findings", "max_findings must be an integer")
+    if max_findings <= 0 or max_findings > _MAX_FINDINGS_HARD_CAP:
         return _err(
-            "secret_scanner.invalid_max_findings", "max_findings must be an integer"
+            "secret_scanner.invalid_max_findings",
+            f"max_findings must be in [1, {_MAX_FINDINGS_HARD_CAP}]",
         )
-    if max_findings <= 0 or max_findings > 1000:
-        return _err(
-            "secret_scanner.invalid_max_findings", "max_findings must be in [1, 1000]"
-        )
-
     try:
         min_entropy = float(payload.get("min_entropy", _DEFAULT_MIN_ENTROPY))
     except (TypeError, ValueError):
-        return _err(
-            "secret_scanner.invalid_min_entropy", "min_entropy must be a number"
-        )
-    if min_entropy < 0:
-        min_entropy = 0.0
+        return _err("secret_scanner.invalid_min_entropy", "min_entropy must be a number")
+    return content, filename, max_findings, max(0.0, min_entropy)
 
+
+def _shape_rule_finding(
+    rule_id: str, rule_name: str, severity: str, remediation: str,
+    matched: str, line: int, column: int,
+) -> dict[str, Any]:
+    """Pure: project a regex match into the agent's finding shape, applying the known-example
+    downgrade so vendor docs don't dominate scan results.
+
+    Why: Stripe/AWS publish documented example credentials that the strict
+    rules treat as criticals; we surface them as ``info`` with a tagged
+    ``rule_id-known-example`` so callers can filter them.
+    """
+    is_example = _is_known_example(matched)
+    if is_example:
+        return {
+            "rule_id": f"{rule_id}-known-example",
+            "rule_name": f"{rule_name} (known documentation example — not a real credential)",
+            "severity": "info",
+            "line": line,
+            "column": column,
+            "redacted_preview": _redact(matched),
+            "match_length": len(matched),
+            "entropy": round(_shannon_entropy(matched), 3),
+            "remediation": _KNOWN_EXAMPLE_REMEDIATION,
+            "is_known_example": True,
+        }
+    return {
+        "rule_id": rule_id,
+        "rule_name": rule_name,
+        "severity": severity,
+        "line": line,
+        "column": column,
+        "redacted_preview": _redact(matched),
+        "match_length": len(matched),
+        "entropy": round(_shannon_entropy(matched), 3),
+        "remediation": remediation,
+        "is_known_example": False,
+    }
+
+
+def _scan_known_rules(
+    content: str, newlines: list[int], *, max_findings: int,
+) -> tuple[list[dict[str, Any]], set[tuple[int, int]]]:
+    """Pure: walk the curated ``_RULES`` regex catalog over ``content``."""
     findings: list[dict[str, Any]] = []
-    seen_offsets: set[tuple[int, int]] = set()
-    newlines = _build_newline_index(content)
-
+    seen: set[tuple[int, int]] = set()
     for rule_id, rule_name, pattern, severity, remediation in _RULES:
         for match in pattern.finditer(content):
-            offset = match.start()
-            end = match.end()
-            if (offset, end) in seen_offsets:
+            span = (match.start(), match.end())
+            if span in seen:
                 continue
-            seen_offsets.add((offset, end))
-            matched = match.group(0)
-            line, column = _line_col(newlines, offset)
-            # P2 fix: documented vendor example credentials (Stripe and AWS
-            # SDK docs publish well-known examples) were the largest
-            # false-positive class in the eval. Downgrade to `info` severity
-            # and tag the rule_id so callers can filter them without losing
-            # the signal entirely. See _KNOWN_EXAMPLE_TOKENS for the list.
-            is_example = _is_known_example(matched)
-            effective_severity = "info" if is_example else severity
-            effective_rule_id = f"{rule_id}-known-example" if is_example else rule_id
-            effective_rule_name = (
-                f"{rule_name} (known documentation example — not a real credential)"
-                if is_example
-                else rule_name
-            )
-            effective_remediation = (
-                "This is a documented vendor example value, not an active credential. "
-                "Remove it from production code paths to avoid noise in scanners."
-                if is_example
-                else remediation
-            )
-            findings.append(
-                {
-                    "rule_id": effective_rule_id,
-                    "rule_name": effective_rule_name,
-                    "severity": effective_severity,
-                    "line": line,
-                    "column": column,
-                    "redacted_preview": _redact(matched),
-                    "match_length": len(matched),
-                    "entropy": round(_shannon_entropy(matched), 3),
-                    "remediation": effective_remediation,
-                    "is_known_example": is_example,
-                }
-            )
+            seen.add(span)
+            line, column = _line_col(newlines, span[0])
+            findings.append(_shape_rule_finding(
+                rule_id, rule_name, severity, remediation,
+                match.group(0), line, column,
+            ))
             if len(findings) >= max_findings:
-                break
+                return findings, seen
+    return findings, seen
+
+
+def _shape_entropy_finding(
+    token: str, entropy: float, line: int, column: int,
+) -> dict[str, Any]:
+    """Pure: project a high-entropy generic-token match into a finding shape."""
+    return {
+        "rule_id": "high-entropy-string",
+        "rule_name": "High-entropy string (heuristic)",
+        "severity": "low",
+        "line": line,
+        "column": column,
+        "redacted_preview": _redact(token),
+        "match_length": len(token),
+        "entropy": round(entropy, 3),
+        "remediation": _HIGH_ENTROPY_REMEDIATION,
+    }
+
+
+def _scan_high_entropy(
+    content: str, newlines: list[int], *, min_entropy: float,
+    max_findings: int, findings: list[dict[str, Any]], seen: set[tuple[int, int]],
+) -> None:
+    """Side-effect (mutating ``findings``): append high-entropy generic-token matches."""
+    for match in _GENERIC_TOKEN_RE.finditer(content):
+        offset, end = match.start(), match.end()
+        if any(start <= offset < stop or start < end <= stop for start, stop in seen):
+            continue
+        token = match.group(0)
+        entropy = _shannon_entropy(token)
+        if entropy < min_entropy:
+            continue
+        line, column = _line_col(newlines, offset)
+        findings.append(_shape_entropy_finding(token, entropy, line, column))
+        seen.add((offset, end))
         if len(findings) >= max_findings:
-            break
+            return
 
+
+def _summarise(findings: list[dict[str, Any]], counts: dict[str, int]) -> str:
+    """Pure: human-readable summary line for the scan response."""
+    if not findings:
+        return "Clean. No credential patterns or high-entropy literals detected."
+    parts = [
+        f"{counts[label]} {label}"
+        for label in ("critical", "high", "medium", "low")
+        if counts.get(label)
+    ]
+    return f"Found {len(findings)} potential leak(s): {', '.join(parts)}."
+
+
+def run(payload: dict) -> dict:
+    """Scan ``content`` for leaked credentials and high-entropy literals.
+
+    Why: findings include only redacted previews so a worker logging a
+    successful call does not leak the secret further.
+    """
+    parsed = _validate_run_inputs(payload)
+    if isinstance(parsed, dict):
+        return parsed
+    content, filename, max_findings, min_entropy = parsed
+    newlines = _build_newline_index(content)
+    findings, seen = _scan_known_rules(content, newlines, max_findings=max_findings)
     if min_entropy > 0 and len(findings) < max_findings:
-        for match in _GENERIC_TOKEN_RE.finditer(content):
-            offset = match.start()
-            end = match.end()
-            if any(
-                start <= offset < stop or start < end <= stop
-                for start, stop in seen_offsets
-            ):
-                continue
-            token = match.group(0)
-            entropy = _shannon_entropy(token)
-            if entropy < min_entropy:
-                continue
-            line, column = _line_col(newlines, offset)
-            findings.append(
-                {
-                    "rule_id": "high-entropy-string",
-                    "rule_name": "High-entropy string (heuristic)",
-                    "severity": "low",
-                    "line": line,
-                    "column": column,
-                    "redacted_preview": _redact(token),
-                    "match_length": len(token),
-                    "entropy": round(entropy, 3),
-                    "remediation": "Confirm the value is not a secret; if it is, rotate and move to env/secret store.",
-                }
-            )
-            seen_offsets.add((offset, end))
-            if len(findings) >= max_findings:
-                break
-
+        _scan_high_entropy(
+            content, newlines, min_entropy=min_entropy, max_findings=max_findings,
+            findings=findings, seen=seen,
+        )
     severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
     for finding in findings:
         sev = finding["severity"]
         severity_counts[sev] = severity_counts.get(sev, 0) + 1
-
-    if not findings:
-        summary = "Clean. No credential patterns or high-entropy literals detected."
-    else:
-        parts = [
-            f"{n} {label}"
-            for label, n in (
-                ("critical", severity_counts["critical"]),
-                ("high", severity_counts["high"]),
-                ("medium", severity_counts["medium"]),
-                ("low", severity_counts["low"]),
-            )
-            if n
-        ]
-        summary = f"Found {len(findings)} potential leak(s): {', '.join(parts)}."
-
     return {
         "filename": filename,
         "total_findings": len(findings),
         "findings_by_severity": severity_counts,
         "findings": findings,
-        "summary": summary,
+        "summary": _summarise(findings, severity_counts),
     }

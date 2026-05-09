@@ -40,10 +40,11 @@ from core.url_security import validate_outbound_url
 from agents._contracts import agent_error as _err
 
 _MAX_IMAGE_BYTES = 8 * 1024 * 1024
-# Allow up to N SSRF-validated HTTP redirects (e.g. CDN images redirect to S3).
-# Each Location header is re-validated by validate_outbound_url before following,
-# so SSRF via open redirects is blocked even when the initial host is trusted.
+# Allow up to N SSRF-validated HTTP redirects (e.g. CDN → S3). Each Location
+# header is re-validated before following so SSRF via open redirects is blocked.
 _MAX_REDIRECTS = 5
+_DIFF_OUTLINE_RGB = (255, 0, 0, 255)
+_DIFF_OUTLINE_WIDTH = 3
 
 
 
@@ -114,24 +115,13 @@ def _image_source(payload: dict[str, Any], prefix: str) -> str:
     return source
 
 
-def run(payload: dict[str, Any]) -> dict[str, Any]:
-    """Compare two images pixel-by-pixel and return a diff report.
+def _load_image_pair(
+    payload: dict[str, Any]
+) -> dict | tuple[Any, Any, Any, Any]:
+    """Side-effect: fetch + decode both images. Returns ``(left, right, ImageChops, ImageDraw)`` or error envelope.
 
-    Accepts images via URL (``left_url`` / ``right_url``) or base64 data-URL
-    (``left_artifact`` / ``right_artifact``). At least one source pair is required.
-
-    Optional:
-    - ``threshold`` (int, 0–255, default 10) — per-channel delta below which
-      a pixel is treated as unchanged.
-    - ``highlight_color`` (str, default ``"#ff0000"``) — hex color for the
-      diff overlay in the output image.
-    - ``output_format`` (str, default ``"png"``) — ``"png"`` | ``"jpeg"``.
-
-    Runtime requirement: **Pillow** must be installed. Returns
-    ``tool_unavailable`` if absent.
-
-    Returns ``{changed, diff_pixel_count, diff_pixel_pct, diff_image_b64,
-    dimensions, execution_time_ms}``.
+    Why: bundles the four error-class branches that share the same recovery
+    path; ``run`` keeps a single error-envelope return.
     """
     left_source = _image_source(payload, "left")
     right_source = _image_source(payload, "right")
@@ -140,7 +130,6 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
             "visual_regression.missing_input",
             "Provide left_url/right_url or left_artifact/right_artifact.",
         )
-
     try:
         Image, ImageChops, ImageDraw = _load_pillow()
         left_bytes = _load_image_bytes(left_source, "left")
@@ -160,54 +149,75 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         return _err(
             "visual_regression.decode_failed", f"Could not decode input image: {exc}"
         )
+    return left, right, ImageChops, ImageDraw
 
-    if left.size != right.size:
-        return _err(
-            "visual_regression.dimension_mismatch",
-            f"Images must have the same dimensions. Left={left.size}, right={right.size}.",
-        )
 
+def _diff_image_pair(left: Any, right: Any, ImageChops: Any, ImageDraw: Any) -> dict[str, Any]:
+    """Pure-ish (Pillow ops): compute pixel-difference stats between two RGBA images."""
     analysis_left = left.convert("RGB")
     analysis_right = right.convert("RGB")
     diff = ImageChops.difference(analysis_left, analysis_right)
     width, height = left.size
     changed_pixels = 0
     changed_regions: list[dict[str, int]] = []
-
-    bbox = diff.getbbox()
     annotated = right.copy()
+    bbox = diff.getbbox()
     if bbox:
         x0, y0, x1, y1 = bbox
         changed_regions.append({"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0})
         draw = ImageDraw.Draw(annotated)
-        draw.rectangle(bbox, outline=(255, 0, 0, 255), width=3)
+        draw.rectangle(bbox, outline=_DIFF_OUTLINE_RGB, width=_DIFF_OUTLINE_WIDTH)
         diff_alpha = diff.convert("L")
         changed_pixels = sum(1 for value in diff_alpha.getdata() if value > 0)
-
     total_pixels = width * height if width and height else 1
     diff_percent = round((changed_pixels / total_pixels) * 100.0, 4)
+    return {
+        "width": width, "height": height,
+        "changed_pixels": changed_pixels, "diff_percent": diff_percent,
+        "changed_regions": changed_regions, "annotated": annotated,
+    }
 
+
+def _encode_artifact(annotated: Any) -> dict[str, Any]:
+    """Pure-ish: PNG-encode ``annotated`` and return the artifact dict."""
     buffer = io.BytesIO()
     annotated.save(buffer, format="PNG")
     encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
-    artifact = {
+    return {
         "name": "visual-regression-diff.png",
         "mime": "image/png",
         "url_or_base64": f"data:image/png;base64,{encoded}",
         "size_bytes": len(buffer.getvalue()),
     }
 
+
+def run(payload: dict[str, Any]) -> dict[str, Any]:
+    """Compare two images pixel-by-pixel and return a diff report.
+
+    Why: agents that take screenshots need a robust regression check; pixel
+    diff is sufficient for layout drift / colour shifts and produces a
+    visual artifact the caller can inspect directly.
+    """
+    if not isinstance(payload, dict):
+        raise TypeError(f"payload must be dict, got {type(payload).__name__}")
+    loaded = _load_image_pair(payload)
+    if isinstance(loaded, dict):
+        return loaded
+    left, right, ImageChops, ImageDraw = loaded
+    if left.size != right.size:
+        return _err(
+            "visual_regression.dimension_mismatch",
+            f"Images must have the same dimensions. Left={left.size}, right={right.size}.",
+        )
+    diff = _diff_image_pair(left, right, ImageChops, ImageDraw)
+    artifact = _encode_artifact(diff.pop("annotated"))
+    summary = (
+        "Images are identical." if diff["changed_pixels"] == 0
+        else f"Detected {diff['changed_pixels']} changed pixels ({diff['diff_percent']}% of the image)."
+    )
     return {
-        "width": width,
-        "height": height,
-        "changed_pixels": changed_pixels,
-        "diff_percent": diff_percent,
-        "changed_regions": changed_regions,
+        **diff,
         "artifacts": [artifact],
         "billing_units_actual": 1,
-        "summary": (
-            "Images are identical."
-            if changed_pixels == 0
-            else f"Detected {changed_pixels} changed pixels ({diff_percent}% of the image)."
-        ),
+        "summary": summary,
     }

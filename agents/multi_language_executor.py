@@ -256,13 +256,26 @@ def _run_javascript(code: str, stdin: str, timeout: float) -> dict[str, Any]:
     )
 
 
-def _run_typescript(code: str, stdin: str, timeout: float) -> dict[str, Any]:
-    # Prefer bun/deno/tsx, then compile with tsc+node, then ts-node as a last resort.
-    for runtime_name, cmd_template, ext in [
-        ("bun", ["bun", "run", "--smol"], "ts"),
-        ("deno", ["deno", "run", "--allow-read"], "ts"),
-        ("tsx", ["tsx"], "ts"),
-    ]:
+# In TypeScript fallback chain we try direct runtimes (bun/deno/tsx) first,
+# then the slower tsc-then-node path; ts-node is a last resort.
+_TS_DIRECT_RUNTIMES: tuple[tuple[str, list[str], str], ...] = (
+    ("bun", ["bun", "run", "--smol"], "ts"),
+    ("deno", ["deno", "run", "--allow-read"], "ts"),
+    ("tsx", ["tsx"], "ts"),
+)
+_TS_TSCONFIG_TEMPLATE = (
+    '{"compilerOptions":{"target":"ES2020","module":"commonjs",'
+    '"moduleResolution":"node","strict":false,"skipLibCheck":true,'
+    '"esModuleInterop":true,"outDir":"%s"},"include":["main.ts"]}'
+)
+_TSC_MIN_TIMEOUT = 30
+_VERSION_PREFIX_CHARS = 30
+_VERSION_SHORT_CHARS = 20
+
+
+def _try_ts_direct_runtime(code: str, stdin: str, timeout: float) -> dict[str, Any] | None:
+    """Side-effect: try bun/deno/tsx in order; returns the run dict or ``None`` if none available."""
+    for runtime_name, cmd_template, ext in _TS_DIRECT_RUNTIMES:
         bin_path = _which(runtime_name)
         if bin_path is None:
             continue
@@ -271,76 +284,73 @@ def _run_typescript(code: str, stdin: str, timeout: float) -> dict[str, Any]:
             with open(fpath, "w", encoding="utf-8") as f:
                 f.write(code)
             result = _run_subprocess(cmd_template + [fpath], tmpdir, stdin, timeout)
-        runtime_ver = f"{runtime_name} {_version_string(bin_path, '--version', fallback=runtime_name)[:30]}"
-        return {**result, "runtime": runtime_ver}
+        ver = _version_string(bin_path, "--version", fallback=runtime_name)[:_VERSION_PREFIX_CHARS]
+        return {**result, "runtime": f"{runtime_name} {ver}"}
+    return None
 
+
+def _try_ts_tsc_node(code: str, stdin: str, timeout: float) -> dict[str, Any] | None:
+    """Side-effect: tsc compile then node-run; ``None`` if either binary is missing."""
     tsc_bin = _which("tsc")
     node_bin = _which("node")
-    if tsc_bin and node_bin:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            fpath = os.path.join(tmpdir, "main.ts")
-            outdir = os.path.join(tmpdir, "dist")
-            with open(fpath, "w", encoding="utf-8") as f:
-                f.write(code)
-            with open(
-                os.path.join(tmpdir, "tsconfig.json"), "w", encoding="utf-8"
-            ) as f:
-                f.write(
-                    "{"
-                    '"compilerOptions":{'
-                    '"target":"ES2020",'
-                    '"module":"commonjs",'
-                    '"moduleResolution":"node",'
-                    '"strict":false,'
-                    '"skipLibCheck":true,'
-                    '"esModuleInterop":true,'
-                    f'"outDir":"{outdir}"'
-                    "},"
-                    '"include":["main.ts"]'
-                    "}"
-                )
-            compile = subprocess.run(
-                [tsc_bin, "--project", os.path.join(tmpdir, "tsconfig.json")],
-                capture_output=True,
-                text=True,
-                timeout=max(timeout, 30),
-                cwd=tmpdir,
-                env=build_subprocess_env(),
-            )
-            if compile.returncode != 0:
-                return {
-                    "stdout": "",
-                    "stderr": compile.stderr[:_OUTPUT_TRUNCATE]
-                    or compile.stdout[:_OUTPUT_TRUNCATE],
-                    "exit_code": compile.returncode,
-                    "elapsed_ms": 0,
-                    "runtime": f"tsc {_version_string(tsc_bin, '--version', fallback='tsc')}",
-                }
-            result = _run_subprocess(
-                [node_bin, os.path.join(outdir, "main.js")], tmpdir, stdin, timeout
-            )
-        return {
-            **result,
-            "runtime": f"tsc+node {_version_string(tsc_bin, '--version', fallback='tsc')[:20]}",
-        }
+    if not (tsc_bin and node_bin):
+        return None
+    with tempfile.TemporaryDirectory() as tmpdir:
+        fpath = os.path.join(tmpdir, "main.ts")
+        outdir = os.path.join(tmpdir, "dist")
+        with open(fpath, "w", encoding="utf-8") as f:
+            f.write(code)
+        with open(os.path.join(tmpdir, "tsconfig.json"), "w", encoding="utf-8") as f:
+            f.write(_TS_TSCONFIG_TEMPLATE % outdir)
+        compile_proc = subprocess.run(
+            [tsc_bin, "--project", os.path.join(tmpdir, "tsconfig.json")],
+            capture_output=True, text=True,
+            timeout=max(timeout, _TSC_MIN_TIMEOUT), cwd=tmpdir,
+            env=build_subprocess_env(),
+        )
+        if compile_proc.returncode != 0:
+            ver = _version_string(tsc_bin, "--version", fallback="tsc")
+            return {
+                "stdout": "",
+                "stderr": (compile_proc.stderr[:_OUTPUT_TRUNCATE]
+                           or compile_proc.stdout[:_OUTPUT_TRUNCATE]),
+                "exit_code": compile_proc.returncode,
+                "elapsed_ms": 0,
+                "runtime": f"tsc {ver}",
+            }
+        result = _run_subprocess(
+            [node_bin, os.path.join(outdir, "main.js")], tmpdir, stdin, timeout,
+        )
+    ver = _version_string(tsc_bin, "--version", fallback="tsc")[:_VERSION_SHORT_CHARS]
+    return {**result, "runtime": f"tsc+node {ver}"}
 
+
+def _try_ts_node(code: str, stdin: str, timeout: float) -> dict[str, Any] | None:
+    """Side-effect: ts-node fallback; ``None`` if absent."""
     tsnode = _which("ts-node")
-    if tsnode:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            fpath = os.path.join(tmpdir, "main.ts")
-            with open(fpath, "w", encoding="utf-8") as f:
-                f.write(code)
-            cmd = [
-                tsnode,
-                "--compiler-options",
-                '{"module":"commonjs","moduleResolution":"node"}',
-                fpath,
-            ]
-            result = _run_subprocess(cmd, tmpdir, stdin, timeout)
-        return {
-            **result,
-            "runtime": f"ts-node {_version_string(tsnode, '--version', fallback='ts-node')[:20]}",
-        }
+    if not tsnode:
+        return None
+    with tempfile.TemporaryDirectory() as tmpdir:
+        fpath = os.path.join(tmpdir, "main.ts")
+        with open(fpath, "w", encoding="utf-8") as f:
+            f.write(code)
+        cmd = [
+            tsnode,
+            "--compiler-options",
+            '{"module":"commonjs","moduleResolution":"node"}',
+            fpath,
+        ]
+        result = _run_subprocess(cmd, tmpdir, stdin, timeout)
+    ver = _version_string(tsnode, "--version", fallback="ts-node")[:_VERSION_SHORT_CHARS]
+    return {**result, "runtime": f"ts-node {ver}"}
+
+
+def _run_typescript(code: str, stdin: str, timeout: float) -> dict[str, Any]:
+    """Side-effect: run TS with the first available runtime in the configured chain."""
+    for attempt in (_try_ts_direct_runtime, _try_ts_tsc_node, _try_ts_node):
+        result = attempt(code, stdin, timeout)
+        if result is not None:
+            return result
     return _err(
         "multi_language_executor.tool_unavailable",
         "No TypeScript runtime found (tried bun, deno, tsx, tsc+node, ts-node).",
@@ -363,17 +373,27 @@ def _run_go(code: str, stdin: str, timeout: float) -> dict[str, Any]:
     return {**result, "runtime": runtime_ver}
 
 
-def _run_rust(code: str, stdin: str, timeout: float) -> dict[str, Any]:
-    # cargo-script / rustscript approach using `rust-script` or plain rustc
-    rust_script = _which("rust-script") or _which("cargo-script")
-    if rust_script:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            fpath = os.path.join(tmpdir, "main.rs")
-            with open(fpath, "w") as f:
-                f.write(code)
-            result = _run_subprocess([rust_script, fpath], tmpdir, stdin, timeout)
-        return {**result, "runtime": "rust-script"}
+_RUSTC_COMPILE_TIMEOUT_S = 60
 
+
+def _run_rust_via_script(code: str, stdin: str, timeout: float) -> dict[str, Any] | None:
+    """Side-effect: ``rust-script``/``cargo-script`` shortcut; ``None`` if neither is on PATH."""
+    rust_script = _which("rust-script") or _which("cargo-script")
+    if not rust_script:
+        return None
+    with tempfile.TemporaryDirectory() as tmpdir:
+        fpath = os.path.join(tmpdir, "main.rs")
+        with open(fpath, "w") as f:
+            f.write(code)
+        result = _run_subprocess([rust_script, fpath], tmpdir, stdin, timeout)
+    return {**result, "runtime": "rust-script"}
+
+
+def _run_rust(code: str, stdin: str, timeout: float) -> dict[str, Any]:
+    """Side-effect: run Rust via ``rust-script`` if present, else compile+run with ``rustc``."""
+    short = _run_rust_via_script(code, stdin, timeout)
+    if short is not None:
+        return short
     rustc = _which("rustc")
     if rustc is None:
         return _err(
@@ -386,12 +406,11 @@ def _run_rust(code: str, stdin: str, timeout: float) -> dict[str, Any]:
         out = os.path.join(tmpdir, "main")
         with open(src, "w") as f:
             f.write(code)
-        # Compile
         compile_result = subprocess.run(
             [rustc, src, "-o", out],
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=_RUSTC_COMPILE_TIMEOUT_S,
             cwd=tmpdir,
             env=build_subprocess_env(),
         )
@@ -415,24 +434,17 @@ _RUNNERS = {
 }
 
 
-def run(payload: dict[str, Any]) -> dict[str, Any]:
-    """Execute code in a sandboxed subprocess for the specified language.
+_MAX_CODE_CHARS = 100_000
+_DEFAULT_TIMEOUT_S = 15
+_TIMEOUT_EXIT_CODE = 124
 
-    Required:
-    - ``language`` (str) — one of the supported runtimes (see ``_SUPPORTED``):
-      ``node``, ``deno``, ``bun``, ``go``, ``rust``.
-    - ``code`` (str) — source code to execute.
 
-    Optional:
-    - ``stdin`` (str) — data piped to stdin.
-    - ``timeout_seconds`` (float, default 10.0, max 30.0).
-
-    Runtime requirement: the selected language binary must be installed and
-    on PATH. Returns ``tool_unavailable`` with a descriptive message if absent
-    (e.g. ``"node not found"``).
-
-    Returns ``{stdout, stderr, exit_code, execution_time_ms, timed_out, language}``.
-    """
+def _validate_run_inputs(
+    payload: dict[str, Any],
+) -> dict | tuple[str, str, str, float]:
+    """Pure: validate ``language``/``code``/``stdin``/``timeout_seconds``; returns parsed bag or error envelope."""
+    if not isinstance(payload, dict):
+        raise TypeError(f"payload must be dict, got {type(payload).__name__}")
     language = str(payload.get("language") or "").strip().lower()
     if not language:
         return _err(
@@ -448,43 +460,27 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     if language not in available:
         return _err(
             "multi_language_executor.tool_unavailable",
-            f"{language} is not available on this executor. Available languages: {', '.join(available_languages()) or 'none'}",
+            f"{language} is not available on this executor. "
+            f"Available languages: {', '.join(available_languages()) or 'none'}",
         )
-
     code = str(payload.get("code") or "").strip()
     if not code:
         return _err("multi_language_executor.missing_code", "code is required.")
-    if len(code) > 100_000:
+    if len(code) > _MAX_CODE_CHARS:
         return _err(
             "multi_language_executor.code_too_long",
-            "code must be <= 100 000 characters.",
+            f"code must be <= {_MAX_CODE_CHARS} characters.",
         )
-
     safe, reason = _is_code_network_safe(language, code)
     if not safe:
         return _err("multi_language_executor.blocked_unsafe_code", reason or "")
-
     stdin = str(payload.get("stdin") or "")
-    timeout = float(min(float(payload.get("timeout_seconds") or 15), _TIMEOUT_MAX))
+    timeout = float(min(float(payload.get("timeout_seconds") or _DEFAULT_TIMEOUT_S), _TIMEOUT_MAX))
+    return language, code, stdin, timeout
 
-    result = _RUNNERS[language](code, stdin, timeout)
 
-    # If runner returned an error envelope, pass it through
-    if "error" in result and isinstance(result.get("error"), dict):
-        return result
-
-    # Timeout (exit_code 124, "Timed out after Xs.") is a runtime failure,
-    # not a successful execution. Return a structured error envelope so the
-    # settlement layer issues a refund instead of charging full price for a
-    # killed process. (2026-05-07 eval flagged the silent 3¢ charge.)
-    if int(result.get("exit_code", -1)) == 124 or "timed out" in str(
-        result.get("stderr", "")
-    ).lower():
-        return _err(
-            "multi_language_executor.timeout",
-            f"Execution timed out after {timeout}s. No partial output billed.",
-        )
-
+def _shape_run_response(language: str, result: dict[str, Any]) -> dict[str, Any]:
+    """Pure: project a runner's ``result`` dict into the agent's response shape."""
     return {
         "language": language,
         "runtime": result.get("runtime", language),
@@ -494,3 +490,37 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         "passed": result.get("exit_code", -1) == 0,
         "execution_time_ms": result.get("elapsed_ms", 0),
     }
+
+
+def _is_runner_timeout(result: dict[str, Any]) -> bool:
+    """Pure: True when a runner's exit code or stderr signals a kill-on-timeout.
+
+    Why: a SIGTERM-killed process must surface as a structured timeout
+    error so the settlement layer refunds, not as a successful run.
+    """
+    if int(result.get("exit_code", -1)) == _TIMEOUT_EXIT_CODE:
+        return True
+    return "timed out" in str(result.get("stderr", "")).lower()
+
+
+def run(payload: dict[str, Any]) -> dict[str, Any]:
+    """Execute code in a sandboxed subprocess for the specified language.
+
+    Why: a single agent that supports node/deno/bun/go/rust amortises the
+    sandbox/SSRF wiring across runtimes; the per-language helper picks the
+    best available runtime at call time so the deployment image only
+    needs whichever interpreters operations chose to install.
+    """
+    parsed = _validate_run_inputs(payload)
+    if isinstance(parsed, dict):
+        return parsed
+    language, code, stdin, timeout = parsed
+    result = _RUNNERS[language](code, stdin, timeout)
+    if "error" in result and isinstance(result.get("error"), dict):
+        return result
+    if _is_runner_timeout(result):
+        return _err(
+            "multi_language_executor.timeout",
+            f"Execution timed out after {timeout}s. No partial output billed.",
+        )
+    return _shape_run_response(language, result)

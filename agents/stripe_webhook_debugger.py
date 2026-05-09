@@ -50,6 +50,9 @@ from agents._contracts import agent_error as _err
 # ---------------------------------------------------------------------------
 
 _MAX_TIMEOUT_SECONDS = 30
+_TOP_ISSUES_PREVIEW = 3
+_EVENT_ID_HEX_CHARS = 16
+_WRONG_SECRET_FIXTURE = "whsec_wrongsecretwillnotmatch"
 _DEFAULT_TIMEOUT_SECONDS = 10
 _MAX_EVENT_TYPES = 10
 
@@ -225,47 +228,48 @@ def _result(test_name: str, event_type: str, status: str, http_status: int,
     }
 
 
+def _diagnose_valid_sig_failure(status: int | None) -> str:
+    """Pure: human-readable diagnosis for a non-200 response on a valid signature."""
+    if status == 400:
+        return ("Handler returned 400 on a correctly signed event. "
+                "Signature is verifying OK but the payload shape may not match expectations.")
+    if status in (401, 403):
+        return (f"Handler returned {status}. The endpoint may require extra auth, "
+                "or the webhook_secret does not match the server's configured secret.")
+    if status == 404:
+        return "Endpoint URL returned 404. Verify the path and that the server listens on this route."
+    if status == 500:
+        return ("Handler returned 500 — an unhandled exception in your webhook code. "
+                "Check server logs; this means a valid Stripe event crashes your handler.")
+    if status is not None and status >= 500:
+        return (f"Handler returned {status}. A server-side error on a valid event "
+                "will cause Stripe to retry, potentially triggering duplicate processing.")
+    if status is not None and status >= 300:
+        return (f"Handler returned {status} (redirect). "
+                "Stripe does not follow redirects — the webhook route must be the final URL.")
+    return f"Unexpected status {status} on a valid signed event."
+
+
 def _test_valid_sig(
     session: requests.Session, url: str, event_type: str,
     payload_bytes: bytes, secret: str, now_ts: int, timeout: float,
 ) -> tuple[dict[str, Any], int | None, bool]:
-    """Run the valid-signature test.  Returns (result_dict, http_status, passed)."""
+    """Side-effect: send a correctly signed event; returns ``(result, status, passed)``."""
     sig = _make_stripe_signature(payload_bytes, secret, now_ts)
     status, elapsed_ms, net_err = _fire(session, url, payload_bytes, sig, timeout)
     name = f"{event_type} — valid signature"
-
     if net_err and status is None:
-        r = _result(name, event_type, "error", 0, elapsed_ms, net_err,
-                    f"Could not reach the endpoint. Verify it is running and accepts POST. ({net_err})")
-        return r, None, False
-
+        return (_result(
+            name, event_type, "error", 0, elapsed_ms, net_err,
+            f"Could not reach the endpoint. Verify it is running and accepts POST. ({net_err})",
+        ), None, False)
     if status == 200:
         return _result(name, event_type, "pass", status, elapsed_ms, "", ""), status, True
-
-    # Any non-200 is a failure; build a targeted diagnosis.
-    if status == 400:
-        diag = ("Handler returned 400 on a correctly signed event. "
-                "Signature is verifying OK but the payload shape may not match expectations.")
-    elif status in (401, 403):
-        diag = (f"Handler returned {status}. The endpoint may require extra auth, "
-                "or the webhook_secret does not match the server's configured secret.")
-    elif status == 404:
-        diag = "Endpoint URL returned 404. Verify the path and that the server listens on this route."
-    elif status == 500:
-        diag = ("Handler returned 500 — an unhandled exception in your webhook code. "
-                "Check server logs; this means a valid Stripe event crashes your handler.")
-    elif status is not None and status >= 500:
-        diag = (f"Handler returned {status}. A server-side error on a valid event "
-                "will cause Stripe to retry, potentially triggering duplicate processing.")
-    elif status is not None and status >= 300:
-        diag = (f"Handler returned {status} (redirect). "
-                "Stripe does not follow redirects — the webhook route must be the final URL.")
-    else:
-        diag = f"Unexpected status {status} on a valid signed event."
-
-    r = _result(name, event_type, "fail", status or 0, elapsed_ms,
-                f"Expected 200, got {status}", diag)
-    return r, status, False
+    diag = _diagnose_valid_sig_failure(status)
+    return (_result(
+        name, event_type, "fail", status or 0, elapsed_ms,
+        f"Expected 200, got {status}", diag,
+    ), status, False)
 
 
 def _test_invalid_sig(
@@ -273,7 +277,7 @@ def _test_invalid_sig(
     payload_bytes: bytes, now_ts: int, timeout: float,
 ) -> tuple[dict[str, Any], bool | None]:
     """Run the invalid-signature test.  Returns (result_dict, passed_or_None_if_network_error)."""
-    bad_sig = _make_stripe_signature(payload_bytes, "whsec_wrongsecretwillnotmatch", now_ts)
+    bad_sig = _make_stripe_signature(payload_bytes, _WRONG_SECRET_FIXTURE, now_ts)
     status, elapsed_ms, net_err = _fire(session, url, payload_bytes, bad_sig, timeout)
     name = f"{event_type} — invalid signature"
 
@@ -334,12 +338,61 @@ def _test_replay(
 # ---------------------------------------------------------------------------
 
 
-def _parse_inputs(payload: dict[str, Any]) -> dict[str, Any] | tuple[list[str], str, int]:
-    """Validate and extract run() inputs.  Returns error dict or (event_types, url, timeout)."""
+def _parse_event_types(raw_event_types: Any) -> list[str] | dict:
+    """Pure: shape ``event_types`` into a list or return an error envelope."""
+    if raw_event_types is None:
+        return list(_DEFAULT_EVENT_TYPES)
+    if not isinstance(raw_event_types, list) or not raw_event_types:
+        return _err(
+            "stripe_webhook_debugger.invalid_event_types",
+            "event_types must be a non-empty list of Stripe event type strings.",
+        )
+    cleaned = [str(e).strip() for e in raw_event_types if str(e).strip()]
+    if len(cleaned) > _MAX_EVENT_TYPES:
+        return _err(
+            "stripe_webhook_debugger.too_many_event_types",
+            f"event_types may contain at most {_MAX_EVENT_TYPES} entries.",
+        )
+    return cleaned
+
+
+def _validate_endpoint_url(endpoint_url: str) -> str | dict:
+    """Pure-ish: SSRF-validate the endpoint URL with a hint when callers want localhost.
+
+    Why: this agent's normal use case is testing local/staging handlers; without
+    a hint the operator has no obvious knob to permit private targets.
+    """
+    try:
+        return validate_outbound_url(endpoint_url, "endpoint_url")
+    except ValueError as exc:
+        msg = str(exc)
+        is_private = "private" in msg.lower() or "localhost" in msg.lower()
+        hint = (
+            " Since this agent tests local/staging handlers, "
+            "set ALLOW_PRIVATE_OUTBOUND_URLS=1 on the Aztea server to allow "
+            "private-IP and localhost targets."
+            if is_private else ""
+        )
+        return _err("stripe_webhook_debugger.invalid_url", msg + hint)
+
+
+def _parse_timeout(raw_timeout: Any) -> int:
+    """Pure: clamp ``timeout_seconds`` to the supported range; default on parse failure."""
+    try:
+        return max(1, min(int(raw_timeout), _MAX_TIMEOUT_SECONDS))
+    except (TypeError, ValueError):
+        return _DEFAULT_TIMEOUT_SECONDS
+
+
+def _parse_inputs(
+    payload: dict[str, Any],
+) -> dict | tuple[list[str], str, str, int]:
+    """Pure: validate run inputs; returns ``(event_types, url, secret, timeout)`` or error envelope."""
+    if not isinstance(payload, dict):
+        raise TypeError(f"payload must be dict, got {type(payload).__name__}")
     endpoint_url = str(payload.get("endpoint_url") or "").strip()
     if not endpoint_url:
         return _err("stripe_webhook_debugger.missing_endpoint", "endpoint_url is required.")
-
     webhook_secret = str(payload.get("webhook_secret") or "").strip()
     if not webhook_secret:
         return _err("stripe_webhook_debugger.missing_secret", "webhook_secret is required.")
@@ -349,134 +402,156 @@ def _parse_inputs(payload: dict[str, Any]) -> dict[str, Any] | tuple[list[str], 
             "webhook_secret must start with 'whsec_' — copy it from the Stripe dashboard "
             "under Webhooks → your endpoint → Signing secret.",
         )
-
-    raw_event_types = payload.get("event_types")
-    if raw_event_types is None:
-        event_types = list(_DEFAULT_EVENT_TYPES)
-    elif not isinstance(raw_event_types, list) or not raw_event_types:
-        return _err(
-            "stripe_webhook_debugger.invalid_event_types",
-            "event_types must be a non-empty list of Stripe event type strings.",
-        )
-    else:
-        event_types = [str(e).strip() for e in raw_event_types if str(e).strip()]
-        if len(event_types) > _MAX_EVENT_TYPES:
-            return _err(
-                "stripe_webhook_debugger.too_many_event_types",
-                f"event_types may contain at most {_MAX_EVENT_TYPES} entries.",
-            )
-
-    raw_timeout = payload.get("timeout_seconds", _DEFAULT_TIMEOUT_SECONDS)
-    try:
-        timeout = max(1, min(int(raw_timeout), _MAX_TIMEOUT_SECONDS))
-    except (TypeError, ValueError):
-        timeout = _DEFAULT_TIMEOUT_SECONDS
-
-    # SSRF guard — validate_outbound_url respects ALLOW_PRIVATE_OUTBOUND_URLS.
-    # Private/localhost URLs are often exactly what this agent needs (testing local handlers),
-    # so we surface a clear actionable error when the env var is missing.
-    try:
-        validated_url = validate_outbound_url(endpoint_url, "endpoint_url")
-    except ValueError as exc:
-        msg = str(exc)
-        is_private = "private" in msg.lower() or "localhost" in msg.lower()
-        hint = (" Since this agent tests local/staging handlers, set ALLOW_PRIVATE_OUTBOUND_URLS=1 "
-                "on the Aztea server to allow private-IP and localhost targets." if is_private else "")
-        return _err("stripe_webhook_debugger.invalid_url", msg + hint)
-
+    event_types = _parse_event_types(payload.get("event_types"))
+    if isinstance(event_types, dict):
+        return event_types
+    validated_url = _validate_endpoint_url(endpoint_url)
+    if isinstance(validated_url, dict):
+        return validated_url
+    timeout = _parse_timeout(payload.get("timeout_seconds", _DEFAULT_TIMEOUT_SECONDS))
     return event_types, validated_url, webhook_secret, timeout
+
+
+def _record_valid_sig(
+    r_valid: dict, first_status: int | None, ok: bool, event_type: str,
+    add_issue: "Any",
+) -> tuple[int, int]:
+    """Pure-ish: increment pass/fail counters and append issues for the valid-sig test."""
+    if ok:
+        return 1, 0
+    if first_status == 500:
+        add_issue(f"Endpoint returned 500 on a valid {event_type} event — handler is crashing")
+    elif first_status is not None and first_status >= 300:
+        add_issue(
+            f"Endpoint returned non-200 ({first_status}) on a valid event — "
+            "Stripe will retry indefinitely"
+        )
+    elif first_status is None:
+        add_issue(f"Endpoint unreachable: {r_valid.get('failure_reason', '')}")
+    return 0, 1
+
+
+def _record_invalid_sig(
+    r_invalid: dict, invalid_ok: bool | None, add_issue: "Any",
+) -> tuple[int, int]:
+    """Pure-ish: increment counters / record issue for the invalid-sig test."""
+    if invalid_ok is True:
+        return 1, 0
+    if invalid_ok is False:
+        if r_invalid.get("failure_reason", "").startswith("Handler accepted"):
+            add_issue(
+                "Endpoint accepted invalid Stripe signature — "
+                "signature verification is missing"
+            )
+        return 0, 1
+    return 0, 0  # network error — neither pass nor fail
+
+
+def _record_replay(
+    r_replay: dict, replay_ok: bool, add_issue: "Any",
+) -> tuple[int, int]:
+    """Pure-ish: increment counters / record issue for the replay test."""
+    if replay_ok:
+        return 1, 0
+    if r_replay["status"] == "fail":
+        add_issue(
+            "No idempotency handling detected — "
+            "replayed event produced a different response code"
+        )
+        return 0, 1
+    return 0, 0
+
+
+def _run_event_suite(
+    session: requests.Session, *, event_type: str, validated_url: str,
+    webhook_secret: str, timeout: float, add_issue: "Any",
+) -> tuple[list[dict[str, Any]], int, int]:
+    """Side-effect: run the 3 probe tests for one event type."""
+    event_id = uuid.uuid4().hex[:_EVENT_ID_HEX_CHARS]
+    payload_bytes = json.dumps(
+        _make_event(event_type, event_id), separators=(",", ":"),
+    ).encode("utf-8")
+    now_ts = int(time.time())
+    r_valid, first_status, ok = _test_valid_sig(
+        session, validated_url, event_type, payload_bytes, webhook_secret, now_ts, timeout,
+    )
+    r_invalid, invalid_ok = _test_invalid_sig(
+        session, validated_url, event_type, payload_bytes, now_ts, timeout,
+    )
+    r_replay, replay_ok = _test_replay(
+        session, validated_url, event_type, payload_bytes,
+        webhook_secret, now_ts, timeout, first_status,
+    )
+    p1, f1 = _record_valid_sig(r_valid, first_status, ok, event_type, add_issue)
+    p2, f2 = _record_invalid_sig(r_invalid, invalid_ok, add_issue)
+    p3, f3 = _record_replay(r_replay, replay_ok, add_issue)
+    return [r_valid, r_invalid, r_replay], p1 + p2 + p3, f1 + f2 + f3
+
+
+def _summarise_run(passed: int, failed: int, tests_run: int, issues: list[str]) -> str:
+    """Pure: human-readable summary line for the response envelope."""
+    if failed == 0:
+        return (
+            f"All {passed} tests passed. The webhook handler correctly verifies Stripe "
+            "signatures, returns 200 on valid events, and produces consistent responses on replay."
+        )
+    fragment = "; ".join(issues[:_TOP_ISSUES_PREVIEW]) if issues else "see results for details"
+    return f"{passed}/{tests_run} tests passed, {failed} failed. Key issues: {fragment}."
+
+
+def _drive_all_event_types(
+    event_types: list[str], validated_url: str, webhook_secret: str, timeout: int,
+) -> tuple[list[dict[str, Any]], int, int, list[str]]:
+    """Side-effect: probe every event type with one shared session; returns aggregated state."""
+    common_issues: list[str] = []
+    seen_issues: set[str] = set()
+
+    def add_issue(issue: str) -> None:
+        if issue not in seen_issues:
+            seen_issues.add(issue)
+            common_issues.append(issue)
+
+    results: list[dict[str, Any]] = []
+    passed = 0
+    failed = 0
+    session = requests.Session()
+    try:
+        for event_type in event_types:
+            rows, p, f = _run_event_suite(
+                session,
+                event_type=event_type, validated_url=validated_url,
+                webhook_secret=webhook_secret, timeout=float(timeout),
+                add_issue=add_issue,
+            )
+            results.extend(rows)
+            passed += p
+            failed += f
+    finally:
+        session.close()
+    return results, passed, failed, common_issues
 
 
 def run(payload: dict[str, Any]) -> dict[str, Any]:
     """Send Stripe-signed test events to a webhook endpoint and diagnose common bugs.
 
-    Required: ``endpoint_url`` (str), ``webhook_secret`` (str, must start with "whsec_").
-    Optional: ``event_types`` (list[str]), ``timeout_seconds`` (int, default 10, max 30).
-
-    Returns a structured report: per-test status, HTTP codes, response times, and
-    actionable diagnoses for failures.
+    Why: webhooks are the most common Stripe-integration bug source — missing
+    signature verification, 500s on valid events, and missing idempotency.
+    The agent runs the same three probes per event type and produces actionable
+    fixes rather than a binary pass/fail.
     """
     parsed = _parse_inputs(payload)
-    if isinstance(parsed, dict):  # error envelope from _parse_inputs
+    if isinstance(parsed, dict):
         return parsed
     event_types, validated_url, webhook_secret, timeout = parsed
-
-    session = requests.Session()
-    results: list[dict[str, Any]] = []
-    common_issues: list[str] = []
-    seen_issues: set[str] = set()
-    passed = 0
-    failed = 0
-
-    def _add_issue(issue: str) -> None:
-        if issue not in seen_issues:
-            seen_issues.add(issue)
-            common_issues.append(issue)
-
-    for event_type in event_types:
-        event_id = uuid.uuid4().hex[:16]
-        event_dict = _make_event(event_type, event_id)
-        payload_bytes = json.dumps(event_dict, separators=(",", ":")).encode("utf-8")
-        now_ts = int(time.time())
-
-        # Test 1: valid signature
-        r_valid, first_status, ok = _test_valid_sig(
-            session, validated_url, event_type, payload_bytes, webhook_secret, now_ts, float(timeout)
-        )
-        results.append(r_valid)
-        if ok:
-            passed += 1
-        else:
-            failed += 1
-            if first_status == 500:
-                _add_issue(f"Endpoint returned 500 on a valid {event_type} event — handler is crashing")
-            elif first_status is not None and first_status >= 300:
-                _add_issue(f"Endpoint returned non-200 ({first_status}) on a valid event — Stripe will retry indefinitely")
-            elif first_status is None:
-                _add_issue(f"Endpoint unreachable: {r_valid.get('failure_reason', '')}")
-
-        # Test 2: invalid signature
-        r_invalid, invalid_ok = _test_invalid_sig(
-            session, validated_url, event_type, payload_bytes, now_ts, float(timeout)
-        )
-        results.append(r_invalid)
-        if invalid_ok is True:
-            passed += 1
-        elif invalid_ok is False:
-            failed += 1
-            if r_invalid.get("failure_reason", "").startswith("Handler accepted"):
-                _add_issue("Endpoint accepted invalid Stripe signature — signature verification is missing")
-
-        # Test 3: replay / idempotency
-        r_replay, replay_ok = _test_replay(
-            session, validated_url, event_type, payload_bytes,
-            webhook_secret, now_ts, float(timeout), first_status,
-        )
-        results.append(r_replay)
-        if replay_ok:
-            passed += 1
-        elif r_replay["status"] == "fail":
-            failed += 1
-            _add_issue("No idempotency handling detected — replayed event produced a different response code")
-
-    session.close()
-
-    tests_run = len(results)
-    if failed == 0:
-        summary = (
-            f"All {passed} tests passed. The webhook handler correctly verifies Stripe "
-            "signatures, returns 200 on valid events, and produces consistent responses on replay."
-        )
-    else:
-        issue_fragment = "; ".join(common_issues[:3]) if common_issues else "see results for details"
-        summary = f"{passed}/{tests_run} tests passed, {failed} failed. Key issues: {issue_fragment}."
-
+    results, passed, failed, common_issues = _drive_all_event_types(
+        event_types, validated_url, webhook_secret, timeout,
+    )
     return {
         "endpoint_url": validated_url,
-        "tests_run": tests_run,
+        "tests_run": len(results),
         "passed": passed,
         "failed": failed,
         "results": results,
         "common_issues_detected": common_issues,
-        "summary": summary,
+        "summary": _summarise_run(passed, failed, len(results), common_issues),
     }

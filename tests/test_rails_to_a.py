@@ -61,12 +61,14 @@ def test_r1_cve_empty_input_returns_structured_error():
 def test_r2_python_executor_skips_explainer_on_timeout():
     """The 2026-05-08 eval saw `while True: pass` time out at exit 124 and
     THEN spend ~300ms running an LLM 'explanation' that added zero insight.
-    The conditional that gates the explainer must include `not timed_out`.
+    The conditional that gates the explainer must skip when timed_out.
     """
     src = Path("agents/python_executor.py").read_text()
-    # Find the explainer-gating conditional. We assert it short-circuits
-    # on `timed_out` rather than the older form that only checked exit_code.
-    assert "if explain and not timed_out" in src, (
+    # Match the gating clause whether the timed_out flag is a local
+    # variable (`not timed_out`) or a dict field on the returned struct
+    # (`not raw["timed_out"]`) — both are equivalent. The semantic is what
+    # matters: the explainer call must short-circuit on timeout.
+    assert re.search(r"if\s+explain\s+and\s+not\s+(raw\[[\"']timed_out[\"']\]|timed_out)", src), (
         "Explainer must skip when timed_out is True (eval finding R2)."
     )
 

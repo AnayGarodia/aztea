@@ -60,10 +60,10 @@ from agents._contracts import agent_error as _err
 
 _LOG = logging.getLogger(__name__)
 
-# Hard limits — named constants so CI magic-number grep is satisfied.
 _MAX_FILES = 20
 _MAX_TOTAL_BYTES = 100_000  # 100 KB
 _SUBPROCESS_TIMEOUT = 60    # seconds per tool invocation
+_TOOL_OUTPUT_PREVIEW_CHARS = 200
 
 # Severity ordering used for sorting (lower index = shown first).
 _SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"]
@@ -150,78 +150,67 @@ def _write_files(files: list[dict], tmpdir: str) -> None:
 # semgrep
 # ---------------------------------------------------------------------------
 
-def _run_semgrep(tmpdir: str, rulesets: list[str] | None) -> list[dict[str, Any]]:
-    """Run semgrep on ``tmpdir`` and return normalised findings."""
-    if rulesets:
-        config_args: list[str] = []
-        for rs in rulesets:
-            config_args += ["--config", rs]
-    else:
-        config_args = ["--config", "auto"]
+def _semgrep_config_args(rulesets: list[str] | None) -> list[str]:
+    """Pure: build ``--config`` flag pairs for the semgrep CLI."""
+    if not rulesets:
+        return ["--config", "auto"]
+    args: list[str] = []
+    for rs in rulesets:
+        args += ["--config", rs]
+    return args
 
-    cmd = ["semgrep", "--json", *config_args, tmpdir]
+
+def _semgrep_invoke(tmpdir: str, rulesets: list[str] | None) -> dict[str, Any] | None:
+    """Side-effect: run the semgrep CLI; returns parsed JSON or ``None`` on failure."""
+    cmd = ["semgrep", "--json", *_semgrep_config_args(rulesets), tmpdir]
     try:
         result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=_SUBPROCESS_TIMEOUT,
+            cmd, capture_output=True, text=True, timeout=_SUBPROCESS_TIMEOUT,
         )
     except FileNotFoundError:
         _LOG.debug("semgrep not found on PATH")
-        return []
+        return None
     except subprocess.TimeoutExpired:
         _LOG.warning("semgrep timed out after %s s", _SUBPROCESS_TIMEOUT)
-        return []
-
+        return None
     # semgrep exits 1 when findings are present; that is expected.
-    # Parse JSON regardless and fall back to empty on decode failure.
     try:
-        data = json.loads(result.stdout)
+        return json.loads(result.stdout)
     except json.JSONDecodeError:
-        _LOG.warning("semgrep JSON decode failed: %s", result.stdout[:200])
+        _LOG.warning("semgrep JSON decode failed: %s", result.stdout[:_TOOL_OUTPUT_PREVIEW_CHARS])
+        return None
+
+
+def _semgrep_finding(item: dict[str, Any], tmpdir: str) -> dict[str, Any]:
+    """Pure: shape one semgrep ``results[]`` row into the agent's finding schema."""
+    extra = item.get("extra") or {}
+    severity = _SEMGREP_SEV_MAP.get(str(extra.get("severity") or "INFO").upper(), "info")
+    check_id = str(item.get("check_id") or "semgrep.unknown")
+    metadata = extra.get("metadata") or {}
+    cwe_raw = metadata.get("cwe") or ""
+    cwe = (cwe_raw[0] if isinstance(cwe_raw, list) and cwe_raw else str(cwe_raw))
+    fix_hint = str(extra.get("fix") or "") or _semgrep_fix_hint(check_id)
+    start = item.get("start") or {}
+    return {
+        "file":         _strip_tmpdir(str(item.get("path") or ""), tmpdir),
+        "line":         int(start.get("line") or 0),
+        "column":       int(start.get("col") or 0),
+        "severity":     severity,
+        "rule_id":      check_id,
+        "cwe":          cwe,
+        "message":      str(extra.get("message") or ""),
+        "code_snippet": str(extra.get("lines") or "").rstrip(),
+        "fix_hint":     fix_hint,
+        "tool":         "semgrep",
+    }
+
+
+def _run_semgrep(tmpdir: str, rulesets: list[str] | None) -> list[dict[str, Any]]:
+    """Side-effect: run semgrep on ``tmpdir``; returns normalised findings (empty on failure)."""
+    data = _semgrep_invoke(tmpdir, rulesets)
+    if data is None:
         return []
-
-    findings: list[dict[str, Any]] = []
-    for item in data.get("results") or []:
-        raw_sev = str(
-            (item.get("extra") or {}).get("severity") or "INFO"
-        ).upper()
-        severity = _SEMGREP_SEV_MAP.get(raw_sev, "info")
-
-        check_id = str(item.get("check_id") or "semgrep.unknown")
-        metadata = (item.get("extra") or {}).get("metadata") or {}
-        cwe_raw = metadata.get("cwe") or ""
-        if isinstance(cwe_raw, list):
-            cwe = cwe_raw[0] if cwe_raw else ""
-        else:
-            cwe = str(cwe_raw)
-
-        message = str((item.get("extra") or {}).get("message") or "")
-        code_snippet = str((item.get("extra") or {}).get("lines") or "")
-        fix_hint = str((item.get("extra") or {}).get("fix") or "")
-        if not fix_hint:
-            fix_hint = _semgrep_fix_hint(check_id)
-
-        raw_path = str(item.get("path") or "")
-        rel_path = _strip_tmpdir(raw_path, tmpdir)
-
-        start = item.get("start") or {}
-        findings.append(
-            {
-                "file":         rel_path,
-                "line":         int(start.get("line") or 0),
-                "column":       int(start.get("col") or 0),
-                "severity":     severity,
-                "rule_id":      check_id,
-                "cwe":          cwe,
-                "message":      message,
-                "code_snippet": code_snippet.rstrip(),
-                "fix_hint":     fix_hint,
-                "tool":         "semgrep",
-            }
-        )
-    return findings
+    return [_semgrep_finding(item, tmpdir) for item in data.get("results") or []]
 
 
 def _semgrep_fix_hint(check_id: str) -> str:
@@ -249,70 +238,63 @@ def _semgrep_fix_hint(check_id: str) -> str:
 # bandit (Python only)
 # ---------------------------------------------------------------------------
 
-def _run_bandit(tmpdir: str) -> list[dict[str, Any]]:
-    """Run bandit on ``tmpdir`` (Python files only) and return findings."""
+def _bandit_invoke(tmpdir: str) -> dict[str, Any] | None:
+    """Side-effect: run the bandit CLI; returns parsed JSON or ``None`` on failure."""
     cmd = ["bandit", "-r", tmpdir, "-f", "json"]
     try:
         result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=_SUBPROCESS_TIMEOUT,
+            cmd, capture_output=True, text=True, timeout=_SUBPROCESS_TIMEOUT,
         )
     except FileNotFoundError:
         _LOG.debug("bandit not found on PATH")
-        return []
+        return None
     except subprocess.TimeoutExpired:
         _LOG.warning("bandit timed out after %s s", _SUBPROCESS_TIMEOUT)
-        return []
-
-    # bandit returns exit code 1 when issues are found; that is expected.
-    # Exit code 0 means clean; 2+ means tool error. Parse JSON regardless.
+        return None
     try:
-        data = json.loads(result.stdout)
+        return json.loads(result.stdout)
     except json.JSONDecodeError:
-        _LOG.warning("bandit JSON decode failed: %s", result.stdout[:200])
+        _LOG.warning("bandit JSON decode failed: %s", result.stdout[:_TOOL_OUTPUT_PREVIEW_CHARS])
+        return None
+
+
+def _bandit_cwe(item: dict[str, Any]) -> str:
+    """Pure: shape bandit's CWE field, tolerating older bandit versions where it's a string."""
+    cwe_raw = item.get("issue_cwe") or {}
+    if isinstance(cwe_raw, dict):
+        cwe_id = cwe_raw.get("id")
+        return f"CWE-{cwe_id}" if cwe_id else ""
+    return str(cwe_raw)
+
+
+def _bandit_finding(item: dict[str, Any], tmpdir: str) -> dict[str, Any]:
+    """Pure: shape one bandit ``results[]`` row into the agent's finding schema."""
+    raw_sev = str(item.get("issue_severity") or "LOW").upper()
+    raw_conf = str(item.get("issue_confidence") or "LOW").upper()
+    severity = _BANDIT_CONFIDENCE_BUMP.get(
+        (raw_sev, raw_conf), _BANDIT_SEV_MAP.get(raw_sev, "low"),
+    )
+    test_id = str(item.get("test_id") or "bandit.unknown")
+    return {
+        "file":         _strip_tmpdir(str(item.get("filename") or ""), tmpdir),
+        "line":         int(item.get("line_number") or 0),
+        "column":       0,  # bandit does not report column
+        "severity":     severity,
+        "rule_id":      test_id,
+        "cwe":          _bandit_cwe(item),
+        "message":      str(item.get("issue_text") or ""),
+        "code_snippet": str(item.get("code") or "").rstrip(),
+        "fix_hint":     _bandit_fix_hint(test_id),
+        "tool":         "bandit",
+    }
+
+
+def _run_bandit(tmpdir: str) -> list[dict[str, Any]]:
+    """Side-effect: run bandit on ``tmpdir`` (Python only); returns normalised findings."""
+    data = _bandit_invoke(tmpdir)
+    if data is None:
         return []
-
-    findings: list[dict[str, Any]] = []
-    for item in (data.get("results") or []):
-        raw_sev = str(item.get("issue_severity") or "LOW").upper()
-        raw_conf = str(item.get("issue_confidence") or "LOW").upper()
-        severity = _BANDIT_CONFIDENCE_BUMP.get(
-            (raw_sev, raw_conf),
-            _BANDIT_SEV_MAP.get(raw_sev, "low"),
-        )
-
-        raw_path = str(item.get("filename") or "")
-        rel_path = _strip_tmpdir(raw_path, tmpdir)
-
-        test_id = str(item.get("test_id") or "bandit.unknown")
-        message = str(item.get("issue_text") or "")
-        code_snippet = str(item.get("code") or "").rstrip()
-
-        # bandit's CWE field was added in v1.7.5; guard for older installs.
-        cwe_raw = item.get("issue_cwe") or {}
-        if isinstance(cwe_raw, dict):
-            cwe_id = cwe_raw.get("id")
-            cwe = f"CWE-{cwe_id}" if cwe_id else ""
-        else:
-            cwe = str(cwe_raw)
-
-        findings.append(
-            {
-                "file":         rel_path,
-                "line":         int(item.get("line_number") or 0),
-                "column":       0,  # bandit does not report column
-                "severity":     severity,
-                "rule_id":      test_id,
-                "cwe":          cwe,
-                "message":      message,
-                "code_snippet": code_snippet,
-                "fix_hint":     _bandit_fix_hint(test_id),
-                "tool":         "bandit",
-            }
-        )
-    return findings
+    return [_bandit_finding(item, tmpdir) for item in (data.get("results") or [])]
 
 
 def _bandit_fix_hint(test_id: str) -> str:
@@ -396,25 +378,14 @@ def _strip_tmpdir(path: str, tmpdir: str) -> str:
 # Public entry point
 # ---------------------------------------------------------------------------
 
-def run(payload: dict) -> dict:
-    """Run semgrep + bandit on caller-supplied code files and return findings.
-
-    ``files`` is a required list of ``{"name": str, "content": str}`` objects.
-    Up to 20 files, 100 KB total content.
-
-    Returns SARIF-style structured findings with severity, CWE, code snippet,
-    and remediation hint for each issue.
-    """
-    if not isinstance(payload, dict):
-        return _err("sast_scanner.invalid_payload", "payload must be an object")
-
+def _validate_files(payload: dict) -> dict | list[dict]:
+    """Pure: enforce ``files`` shape, count, and total-byte limits."""
     files = payload.get("files")
     if not files or not isinstance(files, list):
         return _err(
             "sast_scanner.no_files",
             "'files' is required and must be a non-empty list of {name, content} objects",
         )
-
     validated: list[dict] = []
     for i, f in enumerate(files):
         if not isinstance(f, dict):
@@ -423,86 +394,103 @@ def run(payload: dict) -> dict:
                 f"files[{i}] must be an object with 'name' and 'content' keys",
             )
         if not isinstance(f.get("content"), str):
-            return _err(
-                "sast_scanner.invalid_file",
-                f"files[{i}].content must be a string",
-            )
+            return _err("sast_scanner.invalid_file", f"files[{i}].content must be a string")
         validated.append(f)
-
     if len(validated) > _MAX_FILES:
         return _err(
             "sast_scanner.too_large",
             f"Too many files: {len(validated)} submitted, maximum is {_MAX_FILES}",
         )
-
     total_bytes = sum(len((f.get("content") or "").encode("utf-8")) for f in validated)
     if total_bytes > _MAX_TOTAL_BYTES:
         return _err(
             "sast_scanner.too_large",
             f"Total content size {total_bytes} bytes exceeds limit of {_MAX_TOTAL_BYTES} bytes",
         )
+    return validated
 
+
+def _resolve_languages_and_rulesets(
+    payload: dict, validated: list[dict],
+) -> tuple[list[str], list[str] | None]:
+    """Pure: detect languages from filenames + caller hint; parse optional ``rulesets``."""
     language_hint = str(payload.get("language") or "auto").strip().lower()
     rulesets_raw = payload.get("rulesets")
-    rulesets: list[str] | None = None
-    if isinstance(rulesets_raw, list) and rulesets_raw:
-        rulesets = [str(r) for r in rulesets_raw if r]
+    rulesets: list[str] | None = (
+        [str(r) for r in rulesets_raw if r]
+        if isinstance(rulesets_raw, list) and rulesets_raw
+        else None
+    )
+    detected = _detect_languages(validated)
+    if language_hint not in ("auto", "") and language_hint not in detected:
+        detected = sorted(set(detected) | {language_hint})
+    return detected, rulesets
 
-    detected_langs = _detect_languages(validated)
-    if language_hint not in ("auto", "") and language_hint not in detected_langs:
-        # Caller gave an explicit hint; honour it alongside extension detection.
-        detected_langs = sorted(set(detected_langs) | {language_hint})
 
+def _select_tools(detected_langs: list[str]) -> dict | tuple[bool, bool]:
+    """Pure-ish: query PATH for tool availability; returns flags or error envelope when nothing runs."""
     has_python = "python" in detected_langs
-
     semgrep_ok = _is_tool_available("semgrep")
     bandit_ok = _is_tool_available("bandit") and has_python
-
-    if not semgrep_ok and not bandit_ok:
-        if has_python:
-            return _err(
-                "sast_scanner.no_tools_available",
-                "Neither semgrep nor bandit is installed; install at least one to run SAST scans",
-            )
+    if semgrep_ok or bandit_ok:
+        return semgrep_ok, bandit_ok
+    if has_python:
         return _err(
             "sast_scanner.no_tools_available",
-            "semgrep is not installed; install it to run SAST scans on non-Python files",
+            "Neither semgrep nor bandit is installed; install at least one to run SAST scans",
         )
+    return _err(
+        "sast_scanner.no_tools_available",
+        "semgrep is not installed; install it to run SAST scans on non-Python files",
+    )
 
-    t_start = time.monotonic()
+
+def _scan_with_tools(
+    validated: list[dict], rulesets: list[str] | None,
+    semgrep_ok: bool, bandit_ok: bool,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Side-effect: run enabled scanners; returns ``(all_findings, tools_used)``."""
     all_findings: list[dict[str, Any]] = []
     tools_used: list[str] = []
-
     with tempfile.TemporaryDirectory() as tmpdir:
         _write_files(validated, tmpdir)
-
         if semgrep_ok:
-            sg_findings = _run_semgrep(tmpdir, rulesets)
-            all_findings.extend(sg_findings)
+            all_findings.extend(_run_semgrep(tmpdir, rulesets))
+            tools_used.append("semgrep")
         else:
             _LOG.debug("semgrep unavailable; skipping")
-
         if bandit_ok:
-            bd_findings = _run_bandit(tmpdir)
-            all_findings.extend(bd_findings)
+            all_findings.extend(_run_bandit(tmpdir))
+            tools_used.append("bandit")
+    return all_findings, tools_used
 
-    # Record which tools ran regardless of whether they produced findings.
-    if semgrep_ok:
-        tools_used.append("semgrep")
-    if bandit_ok:
-        tools_used.append("bandit")
 
-    deduped = _dedup(all_findings)
-    sorted_findings = _sort_findings(deduped)
-    by_severity = _tally(sorted_findings)
-    scan_time_ms = int((time.monotonic() - t_start) * 1000)
+def run(payload: dict) -> dict:
+    """Run semgrep + bandit on caller-supplied files and return SARIF-style findings.
 
+    Why: SAST tools are the right thing to ship as a hosted agent because
+    they require specific binaries on PATH; we provide a uniform, capped
+    interface so callers don't need to care which scanner runs.
+    """
+    if not isinstance(payload, dict):
+        return _err("sast_scanner.invalid_payload", "payload must be an object")
+    validated = _validate_files(payload)
+    if isinstance(validated, dict):
+        return validated
+    detected_langs, rulesets = _resolve_languages_and_rulesets(payload, validated)
+    selected = _select_tools(detected_langs)
+    if isinstance(selected, dict):
+        return selected
+    semgrep_ok, bandit_ok = selected
+    t_start = time.monotonic()
+    all_findings, tools_used = _scan_with_tools(validated, rulesets, semgrep_ok, bandit_ok)
+    sorted_findings = _sort_findings(_dedup(all_findings))
     return {
         "findings":           sorted_findings,
         "total_findings":     len(sorted_findings),
-        "by_severity":        by_severity,
+        "by_severity":        _tally(sorted_findings),
         "files_scanned":      len(validated),
         "languages_detected": detected_langs,
         "tools_used":         tools_used,
-        "scan_time_ms":       scan_time_ms,
+        "scan_time_ms":       int((time.monotonic() - t_start) * 1000),
     }

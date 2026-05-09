@@ -55,6 +55,7 @@ import json
 import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
+from typing import Any
 from urllib.parse import urlparse
 
 import requests
@@ -68,6 +69,9 @@ _HTTP_TIMEOUT_S = 10
 _MAX_CHARS_PER_PAGE = 8_000   # chars sent to LLM per fetched page
 _MAX_PAGES_TO_FETCH = 3
 _MAX_SEARCH_RESULTS = 5
+_MAX_LIBRARY_NAME_CHARS = 100
+_EXCERPT_PREVIEW_CHARS = 300
+_RAW_FALLBACK_CHARS = 600
 
 # Browser-like User-Agent so docs CDNs don't block the request.
 _FETCH_HEADERS = {
@@ -235,109 +239,149 @@ def _synthesise(
         return None
 
 
-def run(payload: dict) -> dict:
-    """Fetch current official documentation for a library and answer a question about it."""
-    payload = payload or {}
-
+def _normalize_run_inputs(payload: dict) -> dict | tuple[str, str, str]:
+    """Pure: validate ``library`` and pull ``question``/``version``; returns parsed bag or error envelope."""
+    if not isinstance(payload, dict):
+        raise TypeError(f"payload must be dict, got {type(payload).__name__}")
     library = str(payload.get("library") or "").strip()
     if not library:
         return _err("docs_grounder.missing_library", "library is required.")
-    if len(library) > 100:
-        return _err("docs_grounder.invalid_library", "library name is too long (max 100 chars).")
-
+    if len(library) > _MAX_LIBRARY_NAME_CHARS:
+        return _err(
+            "docs_grounder.invalid_library",
+            f"library name is too long (max {_MAX_LIBRARY_NAME_CHARS} chars).",
+        )
     question = str(payload.get("question") or "").strip()
     version = str(payload.get("version") or "").strip()
+    return library, question, version
 
-    today = date.today().isoformat()
-    query = _build_search_query(library, version, question)
 
-    # --- Step 1: search for documentation pages ---
+def _search_docs(library: str, query: str) -> dict | list[dict]:
+    """Side-effect: hit ``web_search`` for ranked candidates; returns rows or error envelope."""
     search_result = _web_search.run({"query": query, "count": _MAX_SEARCH_RESULTS})
     if "error" in search_result:
         return _err(
             "docs_grounder.not_found",
-            f"Web search failed for library '{library}': {search_result['error'].get('message', '')}",
+            f"Web search failed for library '{library}': "
+            f"{search_result['error'].get('message', '')}",
         )
-
     raw_results: list[dict] = search_result.get("results") or []
     if not raw_results:
         return _err(
             "docs_grounder.not_found",
             f"No documentation found for '{library}'. Try a more specific library name.",
         )
+    return raw_results
 
-    # --- Step 2: rank by source quality and drop duplicate hosts ---
-    ranked = _rank_and_deduplicate(raw_results, library)
 
-    # --- Step 3: fetch and strip top pages (parallel; order preserved) ---
-    candidates = [
-        r for r in ranked[:_MAX_PAGES_TO_FETCH]
-        if _is_safe_http_url(r.get("url", ""))
-    ]
+def _fetch_pages_parallel(
+    candidates: list[dict],
+) -> tuple[list[dict], list[str]]:
+    """Side-effect: fetch every candidate URL in parallel; returns ``(sources, fetched_texts)``.
+
+    Why: serial fetches dominate latency for top-K doc pages; the parallel
+    pool keeps the candidate-list order so the highest-ranked source still
+    appears first in the response.
+    """
     sources: list[dict] = []
     fetched_texts: list[str] = []
-    if candidates:
-        urls = [c.get("url", "") for c in candidates]
-        with ThreadPoolExecutor(max_workers=min(_MAX_PAGES_TO_FETCH, len(urls))) as pool:
-            page_texts = list(pool.map(_fetch_page, urls))
-        for result, page_text in zip(candidates, page_texts):
-            url = result.get("url", "")
-            title = result.get("title", "")
-            description = result.get("description", "")
-            if page_text:
-                excerpt = page_text[:300].replace("\n", " ").strip()
-                fetched_texts.append(page_text[:_MAX_CHARS_PER_PAGE])
-            else:
-                excerpt = description[:300]
-            sources.append({"url": url, "title": title, "excerpt": excerpt})
+    if not candidates:
+        return sources, fetched_texts
+    urls = [c.get("url", "") for c in candidates]
+    with ThreadPoolExecutor(max_workers=min(_MAX_PAGES_TO_FETCH, len(urls))) as pool:
+        page_texts = list(pool.map(_fetch_page, urls))
+    for result, page_text in zip(candidates, page_texts):
+        description = result.get("description", "")
+        if page_text:
+            excerpt = page_text[:_EXCERPT_PREVIEW_CHARS].replace("\n", " ").strip()
+            fetched_texts.append(page_text[:_MAX_CHARS_PER_PAGE])
+        else:
+            excerpt = description[:_EXCERPT_PREVIEW_CHARS]
+        sources.append({
+            "url": result.get("url", ""),
+            "title": result.get("title", ""),
+            "excerpt": excerpt,
+        })
+    return sources, fetched_texts
 
+
+def _project_synthesis(
+    synthesis: dict | None, *, version: str, sources: list[dict], combined_docs: str,
+) -> dict[str, Any]:
+    """Pure: project LLM synthesis into the response shape, falling back to raw text on failure.
+
+    Why: agents that perform real retrieval must still return something
+    useful when the LLM is unavailable; this preserves the pricing model
+    and keeps the contract single-shaped.
+    """
+    if synthesis is not None:
+        return {
+            "version_found": str(synthesis.get("version_found") or version or "unknown"),
+            "summary": str(synthesis.get("summary") or ""),
+            "code_example": str(synthesis.get("code_example") or ""),
+            "api_signatures": [str(s) for s in (synthesis.get("api_signatures") or []) if s],
+            "gotchas": [str(g) for g in (synthesis.get("gotchas") or []) if g],
+        }
+    raw_summary = combined_docs[:_RAW_FALLBACK_CHARS] if combined_docs else (
+        sources[0]["excerpt"] if sources else ""
+    )
+    return {
+        "version_found": version or "unknown",
+        "summary": f"LLM synthesis unavailable. Raw documentation excerpt:\n\n{raw_summary}",
+        "code_example": "",
+        "api_signatures": [],
+        "gotchas": [],
+    }
+
+
+def _gather_sources(
+    library: str, version: str, question: str,
+) -> dict | tuple[list[dict], list[str], str]:
+    """Side-effect: search + rank + fetch top docs pages; returns triple or error envelope."""
+    query = _build_search_query(library, version, question)
+    raw = _search_docs(library, query)
+    if isinstance(raw, dict):
+        return raw
+    ranked = _rank_and_deduplicate(raw, library)
+    candidates = [r for r in ranked[:_MAX_PAGES_TO_FETCH] if _is_safe_http_url(r.get("url", ""))]
+    sources, fetched_texts = _fetch_pages_parallel(candidates)
     if not fetched_texts and not sources:
         return _err(
             "docs_grounder.not_found",
             f"Found search results for '{library}' but could not fetch any documentation pages.",
         )
+    return sources, fetched_texts, query
 
+
+def run(payload: dict) -> dict:
+    """Fetch current official documentation for a library and answer a question about it.
+
+    Why: callers want grounded answers that reflect the live docs, not LLM
+    training-data drift; we always include source URLs so the caller can
+    audit the provenance of every claim.
+    """
+    parsed = _normalize_run_inputs(payload or {})
+    if isinstance(parsed, dict):
+        return parsed
+    library, question, version = parsed
+    gathered = _gather_sources(library, version, question)
+    if isinstance(gathered, dict):
+        return gathered
+    sources, fetched_texts, query = gathered
     combined_docs = "\n\n---\n\n".join(fetched_texts) if fetched_texts else ""
-
-    # --- Step 4: LLM synthesis ---
-    synthesis = None
-    if combined_docs:
-        synthesis = _synthesise(library, version, question, combined_docs)
-
-    if synthesis is not None:
-        version_found = str(synthesis.get("version_found") or version or "unknown")
-        summary = str(synthesis.get("summary") or "")
-        code_example = str(synthesis.get("code_example") or "")
-        api_signatures = [str(s) for s in (synthesis.get("api_signatures") or []) if s]
-        gotchas = [str(g) for g in (synthesis.get("gotchas") or []) if g]
-    else:
-        # Graceful degradation: LLM unavailable or returned unparseable output.
-        # Still return the raw fetched content so the caller gets something useful.
-        raw_summary = combined_docs[:600] if combined_docs else (
-            sources[0]["excerpt"] if sources else ""
-        )
-        version_found = version or "unknown"
-        summary = (
-            f"LLM synthesis unavailable. Raw documentation excerpt:\n\n{raw_summary}"
-        )
-        code_example = ""
-        api_signatures = []
-        gotchas = []
-
-    if not summary and not sources:
+    synthesis = _synthesise(library, version, question, combined_docs) if combined_docs else None
+    projected = _project_synthesis(
+        synthesis, version=version, sources=sources, combined_docs=combined_docs,
+    )
+    if not projected["summary"] and not sources:
         return _err(
             "docs_grounder.not_found",
             f"Could not retrieve documentation for '{library}'.",
         )
-
     return {
         "library": library,
-        "version_found": version_found,
-        "summary": summary,
-        "code_example": code_example,
-        "api_signatures": api_signatures,
-        "gotchas": gotchas,
+        **projected,
         "sources": sources,
-        "as_of_date": today,
+        "as_of_date": date.today().isoformat(),
         "query_used": query,
     }

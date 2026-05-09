@@ -62,13 +62,16 @@ from agents._contracts import agent_error as _err
 
 _LOG = logging.getLogger(__name__)
 
-_DEFAULT_CATEGORIES = ["performance", "accessibility", "best-practices", "seo"]
-_VALID_CATEGORIES = {"performance", "accessibility", "best-practices", "seo", "pwa"}
+_DEFAULT_CATEGORIES = ("performance", "accessibility", "best-practices", "seo")
+_VALID_CATEGORIES = frozenset({"performance", "accessibility", "best-practices", "seo", "pwa"})
+_VALID_STRATEGIES = frozenset({"mobile", "desktop"})
 _DEFAULT_STRATEGY = "mobile"
 _DEFAULT_TIMEOUT = 90
+_MIN_TIMEOUT = 20
 _MAX_TIMEOUT = 180
 _MAX_OPPORTUNITIES = 8
 _MAX_FAILED_AUDITS = 15
+_STDERR_TAIL_CHARS = 600
 
 
 
@@ -183,22 +186,19 @@ def _extract_failed_audits(report: dict) -> list[dict]:
     return failed[:_MAX_FAILED_AUDITS]
 
 
-def run(payload: dict) -> dict:
-    """Run Google Lighthouse against a public URL with headless Chromium.
-
-    Returns category scores (0-100), key Web Vitals (LCP, FCP, CLS, TBT, TTI),
-    top performance opportunities sorted by potential savings, and a list of
-    failed audits across categories. Single-shot, ~20-45s per call.
-    """
+def _normalize_run_inputs(
+    payload: dict,
+) -> dict | tuple[str, list[str], str, int]:
+    """Pure: validate ``url``/``categories``/``strategy``/``max_wait_seconds``; returns parsed bag or error envelope."""
+    if not isinstance(payload, dict):
+        raise TypeError(f"payload must be dict, got {type(payload).__name__}")
     raw_url = str(payload.get("url") or "").strip()
     if not raw_url:
         return _err("lighthouse_auditor.missing_url", "url is required")
-
     try:
         url = validate_outbound_url(raw_url, "url")
     except ValueError as exc:
         return _err("lighthouse_auditor.invalid_url", str(exc))
-
     raw_categories = payload.get("categories")
     if raw_categories is None or not isinstance(raw_categories, list) or not raw_categories:
         categories = list(_DEFAULT_CATEGORIES)
@@ -210,20 +210,46 @@ def run(payload: dict) -> dict:
                 "lighthouse_auditor.invalid_categories",
                 f"Unsupported categories: {invalid}. Allowed: {sorted(_VALID_CATEGORIES)}",
             )
-
     strategy = str(payload.get("strategy") or _DEFAULT_STRATEGY).strip().lower()
-    if strategy not in {"mobile", "desktop"}:
+    if strategy not in _VALID_STRATEGIES:
         return _err(
             "lighthouse_auditor.invalid_strategy",
             "strategy must be 'mobile' or 'desktop'",
         )
-
     try:
         timeout_s = int(payload.get("max_wait_seconds") or _DEFAULT_TIMEOUT)
     except (TypeError, ValueError):
         timeout_s = _DEFAULT_TIMEOUT
-    timeout_s = max(20, min(timeout_s, _MAX_TIMEOUT))
+    return url, categories, strategy, max(_MIN_TIMEOUT, min(timeout_s, _MAX_TIMEOUT))
 
+
+def _execute_lighthouse(
+    url: str, categories: list[str], strategy: str, timeout_s: int, out_path: str,
+) -> dict | None:
+    """Side-effect: subprocess invoke; returns error envelope on failure or ``None`` on success."""
+    cmd = _build_cmd(url, categories, strategy, out_path)
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout_s, check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return _err(
+            "lighthouse_auditor.timeout",
+            f"Lighthouse exceeded {timeout_s}s; site may be unreachable or too slow.",
+        )
+    if proc.returncode != 0 and not os.path.exists(out_path):
+        stderr_tail = (proc.stderr or "")[-_STDERR_TAIL_CHARS:]
+        return _err(
+            "lighthouse_auditor.run_failed",
+            f"Lighthouse exited {proc.returncode}: {stderr_tail.strip() or 'no stderr'}",
+        )
+    return None
+
+
+def _run_lighthouse_cli(
+    url: str, categories: list[str], strategy: str, timeout_s: int,
+) -> dict[str, Any]:
+    """Side-effect: orchestrate one Lighthouse run; returns the report dict or error envelope."""
     if not _resolve_lighthouse_bin():
         return _err(
             "lighthouse_auditor.runtime_missing",
@@ -231,36 +257,15 @@ def run(payload: dict) -> dict:
             "or set LIGHTHOUSE_BIN to its path. The production image installs it "
             "automatically; this only fires in stripped-down environments.",
         )
-
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
         out_path = tmp.name
-
     try:
-        cmd = _build_cmd(url, categories, strategy, out_path)
-        try:
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout_s,
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
-            return _err(
-                "lighthouse_auditor.timeout",
-                f"Lighthouse exceeded {timeout_s}s; site may be unreachable or too slow.",
-            )
-
-        if proc.returncode != 0 and not os.path.exists(out_path):
-            stderr_tail = (proc.stderr or "")[-600:]
-            return _err(
-                "lighthouse_auditor.run_failed",
-                f"Lighthouse exited {proc.returncode}: {stderr_tail.strip() or 'no stderr'}",
-            )
-
+        err = _execute_lighthouse(url, categories, strategy, timeout_s, out_path)
+        if err is not None:
+            return err
         try:
             with open(out_path, encoding="utf-8") as fp:
-                report = json.load(fp)
+                return json.load(fp)
         except (OSError, json.JSONDecodeError) as exc:
             return _err(
                 "lighthouse_auditor.parse_failed",
@@ -272,32 +277,34 @@ def run(payload: dict) -> dict:
         except OSError:
             pass
 
+
+def _audit_num(audits: dict[str, Any], audit_id: str) -> Any:
+    """Pure: pull ``numericValue`` from a lighthouse audit, ``None`` if absent."""
+    a = audits.get(audit_id)
+    return a.get("numericValue") if isinstance(a, dict) else None
+
+
+def _shape_lighthouse_report(
+    *, url: str, strategy: str, report: dict[str, Any],
+) -> dict[str, Any]:
+    """Pure: project a parsed lighthouse JSON report into the agent's response shape."""
     cats = report.get("categories") or {}
     scores = {
         "performance": _score_to_int((cats.get("performance") or {}).get("score")),
         "accessibility": _score_to_int((cats.get("accessibility") or {}).get("score")),
-        "best_practices": _score_to_int(
-            (cats.get("best-practices") or {}).get("score")
-        ),
+        "best_practices": _score_to_int((cats.get("best-practices") or {}).get("score")),
         "seo": _score_to_int((cats.get("seo") or {}).get("score")),
         "pwa": _score_to_int((cats.get("pwa") or {}).get("score")),
     }
-
     audits = report.get("audits") or {}
-
-    def _audit_num(audit_id: str) -> Any:
-        a = audits.get(audit_id)
-        return a.get("numericValue") if isinstance(a, dict) else None
-
     metrics = {
-        "lcp_ms": _ms(_audit_num("largest-contentful-paint")),
-        "fcp_ms": _ms(_audit_num("first-contentful-paint")),
-        "cls": round(float(_audit_num("cumulative-layout-shift") or 0.0), 3),
-        "tbt_ms": _ms(_audit_num("total-blocking-time")),
-        "tti_ms": _ms(_audit_num("interactive")),
-        "speed_index_ms": _ms(_audit_num("speed-index")),
+        "lcp_ms": _ms(_audit_num(audits, "largest-contentful-paint")),
+        "fcp_ms": _ms(_audit_num(audits, "first-contentful-paint")),
+        "cls": round(float(_audit_num(audits, "cumulative-layout-shift") or 0.0), 3),
+        "tbt_ms": _ms(_audit_num(audits, "total-blocking-time")),
+        "tti_ms": _ms(_audit_num(audits, "interactive")),
+        "speed_index_ms": _ms(_audit_num(audits, "speed-index")),
     }
-
     return {
         "url": url,
         "final_url": str(report.get("finalUrl") or report.get("finalDisplayedUrl") or url),
@@ -310,3 +317,20 @@ def run(payload: dict) -> dict:
         "failed_audits": _extract_failed_audits(report),
         "billing_units_actual": 1,
     }
+
+
+def run(payload: dict) -> dict:
+    """Run Google Lighthouse against a public URL with headless Chromium.
+
+    Why: a single-shot CLI invocation gives canonical category scores +
+    web-vitals; we cap wall-time and tail stderr so a misbehaving page
+    can't hang the worker or hide its failure from the caller.
+    """
+    parsed = _normalize_run_inputs(payload)
+    if isinstance(parsed, dict):
+        return parsed
+    url, categories, strategy, timeout_s = parsed
+    report = _run_lighthouse_cli(url, categories, strategy, timeout_s)
+    if "error" in report:
+        return report  # error envelope
+    return _shape_lighthouse_report(url=url, strategy=strategy, report=report)

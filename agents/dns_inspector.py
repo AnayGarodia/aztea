@@ -41,6 +41,7 @@ import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from typing import Any
 
 from core.url_security import validate_outbound_url
 from agents._contracts import agent_error as _err
@@ -52,6 +53,11 @@ _SSL_TIMEOUT = 5
 _HTTP_TIMEOUT = 5
 _INSPECT_WORKERS = 10
 _CERT_DATE_FMT = "%b %d %H:%M:%S %Y %Z"
+_CERT_NEAR_EXPIRY_DAYS = 30
+_INVALID_DOMAIN_CHARS = ("@", " ", "[")
+_INVALID_DOMAIN_ISSUES_PREVIEW = 6
+_DEFAULT_CHECKS = ("dns", "ssl", "http")
+_HTTPS_PORT = 443
 
 
 def _dns_check(domain: str) -> tuple[list[str], list[str], str | None]:
@@ -74,49 +80,41 @@ def _dns_check(domain: str) -> tuple[list[str], list[str], str | None]:
     return a_records, aaaa_records, None
 
 
-def _ssl_check(domain: str) -> tuple[dict | None, str | None]:
-    """Return (cert_info_dict, error_or_None)."""
-    ctx = ssl.create_default_context()
+def _flatten_rdns(rdns_seq: tuple) -> dict[str, str]:
+    """Pure: flatten an X.509 RDN sequence ``((('CN','x'),),)`` into a single dict."""
+    out: dict[str, str] = {}
+    for rdn in rdns_seq:
+        for name, val in rdn:
+            out[name] = val
+    return out
+
+
+def _days_until(not_after_str: str, domain: str) -> int | None:
+    """Pure-ish: parse ``notAfter`` and return whole days remaining; ``None`` on parse failure."""
     try:
-        with socket.create_connection((domain, 443), timeout=_SSL_TIMEOUT) as sock:
+        expires_dt = datetime.strptime(not_after_str, _CERT_DATE_FMT).replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        _LOG.info("Could not parse cert notAfter %r for %s", not_after_str, domain)
+        return None
+    return (expires_dt - datetime.now(timezone.utc)).days
+
+
+def _ssl_check(domain: str) -> tuple[dict | None, str | None]:
+    """Side-effect: fetch and shape SSL certificate metadata for ``domain``."""
+    try:
+        with socket.create_connection((domain, _HTTPS_PORT), timeout=_SSL_TIMEOUT) as sock:
+            ctx = ssl.create_default_context()
             with ctx.wrap_socket(sock, server_hostname=domain) as ssock:
                 cert = ssock.getpeercert()
     except Exception as exc:
         return None, str(exc)
-
-    def _flatten_rdns(rdns_seq) -> dict:
-        out = {}
-        for rdn in rdns_seq:
-            for name, val in rdn:
-                out[name] = val
-        return out
-
-    subject = _flatten_rdns(cert.get("subject", ()))
-    issuer = _flatten_rdns(cert.get("issuer", ()))
     not_after_str = cert.get("notAfter", "")
-
-    days_until_expiry = None
-    try:
-        expires_dt = datetime.strptime(not_after_str, _CERT_DATE_FMT).replace(
-            tzinfo=timezone.utc
-        )
-        now = datetime.now(timezone.utc)
-        days_until_expiry = (expires_dt - now).days
-    except (ValueError, TypeError):
-        _LOG.info("Could not parse cert notAfter %r for %s", not_after_str, domain)
-        expires_dt = None
-
-    san_names: list[str] = []
-    for entry in cert.get("subjectAltName", ()):
-        kind, val = entry
-        if kind == "DNS":
-            san_names.append(val)
-
+    san_names = [val for kind, val in cert.get("subjectAltName", ()) if kind == "DNS"]
     return {
-        "issuer": issuer,
-        "subject": subject,
+        "issuer": _flatten_rdns(cert.get("issuer", ())),
+        "subject": _flatten_rdns(cert.get("subject", ())),
         "expires_at": not_after_str,
-        "days_until_expiry": days_until_expiry,
+        "days_until_expiry": _days_until(not_after_str, domain),
         "san_names": san_names,
     }, None
 
@@ -153,23 +151,99 @@ def _http_check(domain: str) -> tuple[dict | None, str | None]:
 
 
 
-def run(payload: dict) -> dict:
-    """Perform live DNS record lookups and SSL certificate inspection.
+def _empty_inspection_entry(domain: str) -> dict[str, Any]:
+    """Pure: skeleton entry for one domain; per-check helpers fill it in."""
+    return {
+        "domain": domain,
+        "a_records": [],
+        "ssl_cert": None,
+        "http": None,
+        "issues": [],
+    }
 
-    Required: ``domains`` (list[str]) — one or more domain names
-    (max ``_MAX_DOMAINS``). Plain hostnames without scheme; the agent adds
-    ``https://`` internally for SSL checks.
 
-    Optional:
-    - ``record_types`` (list[str], default all) — DNS record types to query:
-      any subset of ``["A", "AAAA", "MX", "NS", "TXT", "CNAME", "SOA"]``.
-    - ``include_ssl`` (bool, default True) — fetch SSL certificate metadata
-      (issuer, expiry, SANs) for each domain.
-    - ``include_http_meta`` (bool, default True) — fetch HTTP headers and
-      detect redirects.
+def _check_dns_into(entry: dict[str, Any], domain: str) -> bool:
+    """Side-effect (mutating ``entry``): run DNS A lookup; returns ``True`` if domain is healthy."""
+    a_records, _aaaa, dns_error = _dns_check(domain)
+    entry["a_records"] = a_records
+    if dns_error:
+        entry["issues"].append(f"DNS error: {dns_error}")
+        return False
+    if not a_records:
+        entry["issues"].append("No DNS A records found")
+    return True
 
-    Returns ``{domains: [{hostname, records, ssl, http_meta, error?}]}``.
+
+def _check_mx_into(entry: dict[str, Any], domain: str) -> None:
+    """Side-effect (mutating ``entry``): heuristic MX probe via ``mail.<domain>``.
+
+    Why: stdlib lacks DNS MX lookup; mail.<domain> is a rough proxy when
+    ``dnspython`` isn't installed. A missing record is the common case.
     """
+    try:
+        mail_ips = list(
+            {info[4][0] for info in socket.getaddrinfo("mail." + domain, None)}
+        )
+        entry["possible_mail_ips"] = mail_ips
+    except Exception:
+        _LOG.debug("mail.%s lookup failed", domain, exc_info=True)
+        entry["possible_mail_ips"] = []
+
+
+def _check_ssl_into(entry: dict[str, Any], domain: str) -> None:
+    """Side-effect (mutating ``entry``): SSL handshake + cert decode + near-expiry warning."""
+    cert_info, ssl_error = _ssl_check(domain)
+    if ssl_error:
+        entry["ssl_cert"] = None
+        entry["issues"].append(f"SSL connection failed: {ssl_error}")
+        return
+    entry["ssl_cert"] = cert_info
+    if not cert_info:
+        return
+    days = cert_info.get("days_until_expiry")
+    if days is not None and days < _CERT_NEAR_EXPIRY_DAYS:
+        entry["issues"].append(f"SSL certificate expires in {days} days")
+
+
+def _check_http_into(entry: dict[str, Any], domain: str) -> None:
+    """Side-effect (mutating ``entry``): HTTP probe + HSTS header check."""
+    http_info, http_error = _http_check(domain)
+    if http_error:
+        entry["http"] = None
+        entry["issues"].append(f"HTTP check failed: {http_error}")
+        return
+    entry["http"] = http_info
+    if http_info and not http_info.get("hsts"):
+        entry["issues"].append("Missing HSTS header")
+
+
+def _inspect_one(domain: str, checks: set[str]) -> tuple[dict[str, Any], bool]:
+    """Side-effect: run every requested check for ``domain``; returns ``(entry, ok_flag)``."""
+    entry = _empty_inspection_entry(domain)
+    if any(c in domain for c in _INVALID_DOMAIN_CHARS):
+        entry["issues"].append("Invalid domain format")
+        return entry, False
+    try:
+        validate_outbound_url(f"https://{domain}", "domain")
+    except Exception as exc:
+        entry["issues"].append(f"Domain blocked by security policy: {exc}")
+        return entry, False
+    domain_ok = True
+    if "dns" in checks:
+        domain_ok = _check_dns_into(entry, domain)
+    if "mx" in checks:
+        _check_mx_into(entry, domain)
+    if "ssl" in checks:
+        _check_ssl_into(entry, domain)
+    if "http" in checks:
+        _check_http_into(entry, domain)
+    return entry, domain_ok
+
+
+def _normalize_run_inputs(payload: dict) -> dict | tuple[list[str], set[str]]:
+    """Pure: validate + normalize ``run`` inputs; returns ``(domains, checks)`` or an error envelope."""
+    if not isinstance(payload, dict):
+        raise TypeError(f"payload must be dict, got {type(payload).__name__}")
     raw_domains = payload.get("domains")
     if not raw_domains or not isinstance(raw_domains, list):
         return _err(
@@ -181,110 +255,51 @@ def run(payload: dict) -> dict:
             "dns_inspector.too_many_domains",
             f"domains may contain at most {_MAX_DOMAINS} entries; got {len(raw_domains)}",
         )
-
     domains = [str(d).strip().lower() for d in raw_domains if str(d).strip()]
     if not domains:
         return _err(
-            "dns_inspector.invalid_domains", "domains list contains no valid entries"
+            "dns_inspector.invalid_domains", "domains list contains no valid entries",
         )
-
-    raw_checks = payload.get("checks", ["dns", "ssl", "http"])
+    raw_checks = payload.get("checks", list(_DEFAULT_CHECKS))
     if not isinstance(raw_checks, list):
-        raw_checks = ["dns", "ssl", "http"]
-    checks = {str(c).strip().lower() for c in raw_checks}
+        raw_checks = list(_DEFAULT_CHECKS)
+    return domains, {str(c).strip().lower() for c in raw_checks}
 
-    results = []
-    successfully_inspected = 0
 
-    def _inspect_one(domain: str) -> tuple[dict, bool]:
-        entry: dict = {
-            "domain": domain,
-            "a_records": [],
-            "ssl_cert": None,
-            "http": None,
-            "issues": [],
-        }
-        if any(c in domain for c in ("@", " ", "[")):
-            entry["issues"].append("Invalid domain format")
-            return entry, False
-        try:
-            validate_outbound_url(f"https://{domain}", "domain")
-        except Exception as exc:
-            entry["issues"].append(f"Domain blocked by security policy: {exc}")
-            return entry, False
-
-        domain_ok = True
-        if "dns" in checks:
-            a_records, _aaaa, dns_error = _dns_check(domain)
-            entry["a_records"] = a_records
-            if dns_error:
-                entry["issues"].append(f"DNS error: {dns_error}")
-                domain_ok = False
-            elif not a_records:
-                entry["issues"].append("No DNS A records found")
-
-        # WHY: stdlib lacks DNS MX lookup; mail.<domain> is a rough proxy.
-        if "mx" in checks:
-            try:
-                mail_ips = list(
-                    {info[4][0] for info in socket.getaddrinfo("mail." + domain, None)}
-                )
-                entry["possible_mail_ips"] = mail_ips
-            except Exception:
-                _LOG.debug("mail.%s lookup failed", domain, exc_info=True)
-                entry["possible_mail_ips"] = []
-
-        if "ssl" in checks:
-            cert_info, ssl_error = _ssl_check(domain)
-            if ssl_error:
-                entry["ssl_cert"] = None
-                entry["issues"].append(f"SSL connection failed: {ssl_error}")
-            else:
-                entry["ssl_cert"] = cert_info
-                if cert_info and cert_info.get("days_until_expiry") is not None:
-                    days = cert_info["days_until_expiry"]
-                    if days < 30:
-                        entry["issues"].append(
-                            f"SSL certificate expires in {days} days"
-                        )
-
-        if "http" in checks:
-            http_info, http_error = _http_check(domain)
-            if http_error:
-                entry["http"] = None
-                entry["issues"].append(f"HTTP check failed: {http_error}")
-            else:
-                entry["http"] = http_info
-                if http_info and not http_info.get("hsts"):
-                    entry["issues"].append("Missing HSTS header")
-
-        return entry, domain_ok
-
-    # WHY: each domain does DNS + SSL handshake + HTTP — wall-time dominated by
-    # network round-trips. Parallel inspection preserves input order.
+def _aggregate_results(
+    domains: list[str], checks: set[str]
+) -> tuple[list[dict[str, Any]], int]:
+    """Side-effect: parallel-inspect every domain; returns ``(results, ok_count)``."""
     workers = min(_INSPECT_WORKERS, max(1, len(domains)))
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        for entry, ok in pool.map(_inspect_one, domains):
-            results.append(entry)
-            if ok:
-                successfully_inspected += 1
+        outcomes = list(pool.map(lambda d: _inspect_one(d, checks), domains))
+    results = [entry for entry, _ in outcomes]
+    ok_count = sum(1 for _, ok in outcomes if ok)
+    return results, ok_count
 
-    # If every requested domain failed (DNS error, SSRF block, all checks
-    # rejected), the floor 1¢ would still be billed. Return a structured
-    # error envelope instead so the settlement layer refunds in full.
-    # 2026-05-07 eval flagged the floor charge on 169.254.169.254 / .invalid.
-    if successfully_inspected == 0 and results:
-        all_issues = []
-        for entry in results:
-            for issue in entry.get("issues") or []:
-                all_issues.append(str(issue))
-        joined = "; ".join(all_issues[:6]) or "no domain returned a valid answer"
-        return _err(
-            "dns_ssl.no_results",
-            f"All domains failed inspection: {joined}",
-        )
 
-    return {
-        "results": results,
-        "billing_units_actual": successfully_inspected,
-    }
+def _all_failed_envelope(results: list[dict[str, Any]]) -> dict:
+    """Pure: roll up all-failed results into one error envelope so the platform refunds."""
+    issues: list[str] = []
+    for entry in results:
+        for issue in entry.get("issues") or []:
+            issues.append(str(issue))
+    joined = "; ".join(issues[:_INVALID_DOMAIN_ISSUES_PREVIEW]) or "no domain returned a valid answer"
+    return _err("dns_ssl.no_results", f"All domains failed inspection: {joined}")
+
+
+def run(payload: dict) -> dict:
+    """Perform live DNS record lookups and SSL/HTTP inspection for one or more domains.
+
+    Why: the agent must surface trustable trust-store + cert-expiry signals
+    without pulling in dnspython; stdlib socket + ssl is sufficient when
+    callers pass plain hostnames.
+    """
+    parsed = _normalize_run_inputs(payload)
+    if isinstance(parsed, dict):
+        return parsed
+    domains, checks = parsed
+    results, ok_count = _aggregate_results(domains, checks)
+    if ok_count == 0 and results:
+        return _all_failed_envelope(results)
+    return {"results": results, "billing_units_actual": ok_count}
