@@ -53,14 +53,21 @@ def test_audit_endpoint_is_registered():
 
 
 def test_search_content_floor_default(monkeypatch):
-    """Default content floor sits at 0.30. Tunable via env."""
+    """Default content floor sits at 0.45 (semantic) and 0.10 (lexical).
+    Both tunable via env so production can retune the noise band without
+    a redeploy."""
     from core import feature_flags
 
     monkeypatch.delenv("AZTEA_SEARCH_CONTENT_FLOOR", raising=False)
-    assert feature_flags.search_content_floor() == 0.30
-
-    monkeypatch.setenv("AZTEA_SEARCH_CONTENT_FLOOR", "0.45")
     assert feature_flags.search_content_floor() == 0.45
+
+    monkeypatch.setenv("AZTEA_SEARCH_CONTENT_FLOOR", "0.55")
+    assert feature_flags.search_content_floor() == 0.55
+
+    monkeypatch.delenv("AZTEA_SEARCH_LEXICAL_FLOOR", raising=False)
+    assert feature_flags.search_lexical_content_floor() == 0.10
+    monkeypatch.setenv("AZTEA_SEARCH_LEXICAL_FLOOR", "0.20")
+    assert feature_flags.search_lexical_content_floor() == 0.20
 
 
 def test_search_llm_rerank_off_by_default(monkeypatch):
@@ -110,22 +117,23 @@ def test_search_content_floor_blocks_off_catalog_query():
         {
             "agent": {"agent_id": "x", "name": "Code Executor"},
             "blended_score": 0.25,  # boosted purely by trust
-            "lexical_score": 0.0,
-            "similarity": 0.10,
+            "lexical_score": 0.02,  # one coincidental common word like "me"
+            "similarity": 0.13,     # noise-band semantic similarity
             "trust": 0.55,
             "match_reasons": ["trust 0.55"],
         }
     ]
-    # Reach into the same predicate the gate uses.
     top = candidates[0]
-    floor = 0.30
+    semantic_floor = 0.45
+    lexical_floor = 0.10
     has_signal = (
-        float(top["lexical_score"]) > 0.0 or float(top["similarity"]) >= floor
+        float(top["lexical_score"]) >= lexical_floor
+        or float(top["similarity"]) >= semantic_floor
     )
     assert has_signal is False, (
-        "A candidate with zero lexical and similarity below the content "
-        "floor must NOT clear the content gate — that's the bug class "
-        "the 2026-05-09 fix targets."
+        "A candidate carried only by trust and price (lexical and "
+        "semantic both in the noise band) must NOT clear the content "
+        "gate — that's the bug class the 2026-05-09 fix targets."
     )
 
 
@@ -133,12 +141,23 @@ def test_search_content_floor_admits_legitimate_match():
     """A query with real lexical overlap (or strong embedding similarity)
     still passes the gate so legitimate searches keep working."""
     top = {
-        "lexical_score": 0.42,  # nonzero lexical match
+        "lexical_score": 0.42,  # strong lexical match
         "similarity": 0.18,     # below floor on semantic, but lexical carries it
     }
-    floor = 0.30
-    has_signal = top["lexical_score"] > 0.0 or top["similarity"] >= floor
+    semantic_floor = 0.45
+    lexical_floor = 0.10
+    has_signal = (
+        top["lexical_score"] >= lexical_floor
+        or top["similarity"] >= semantic_floor
+    )
     assert has_signal is True
+
+    # Symmetric: high semantic similarity passes even when lexical doesn't.
+    top2 = {"lexical_score": 0.05, "similarity": 0.55}
+    assert (
+        top2["lexical_score"] >= lexical_floor
+        or top2["similarity"] >= semantic_floor
+    ) is True
 
 
 # ---------------------------------------------------------------------------

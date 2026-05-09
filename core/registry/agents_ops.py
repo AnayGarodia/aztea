@@ -1947,14 +1947,25 @@ def search_agents(
     # like "tell me a joke" or "cook me dinner" cleared the floor and
     # returned three random code-execution agents in the eval. The fix
     # gates on actual content match: the top candidate must have either a
-    # nonzero lexical match OR semantic similarity above the content
-    # floor. If neither, the catalog has nothing topically relevant and we
+    # MEANINGFUL lexical match (>= a small floor — NOT just one
+    # coincidental common word like "me" matching "use me for X" in an
+    # agent description) OR semantic similarity above the content floor.
+    # If neither, the catalog has nothing topically relevant and we
     # return empty regardless of how high trust/price boosted the blend.
+    #
+    # Both thresholds are env-tunable so production can retune without a
+    # redeploy if the catalog grows in ways that shift the noise band.
+    # Defaults sized against real-world embeddings: sentence-transformers
+    # MiniLM cosine sits ~0.10–0.20 for unrelated short queries, so 0.45
+    # stays safely above noise; lexical scores from a single coincidental
+    # common-word match land near 0.02–0.05, so 0.10 keeps those out
+    # while still admitting any real keyword overlap.
     if price_query_mode is None and ranked:
         top = ranked[0]
         _content_floor = _feature_flags.search_content_floor()
+        _lex_floor = _feature_flags.search_lexical_content_floor()
         has_content_signal = (
-            float(top.get("lexical_score") or 0.0) > 0.0
+            float(top.get("lexical_score") or 0.0) >= _lex_floor
             or float(top.get("similarity") or 0.0) >= _content_floor
         )
         if not has_content_signal:
