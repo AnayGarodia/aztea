@@ -1257,17 +1257,22 @@ def _lexical_match_score(query: str, agent: dict, supported_fields: set[str]) ->
     example_score = _lexical_overlap_score(query_terms, example_text)
 
     lowered_query = query.lower()
+    name_lower = name_text.lower()
+    desc_lower = desc_text.lower()
+    tag_lower = tag_text.lower()
+    example_lower = example_text.lower()
+
     phrase_bonus = 0.0
-    if lowered_query in name_text.lower():
+    if lowered_query in name_lower:
         phrase_bonus += 0.25
-    elif lowered_query in desc_text.lower():
+    elif lowered_query in desc_lower:
         phrase_bonus += 0.18
-    elif lowered_query in example_text.lower():
+    elif lowered_query in example_lower:
         phrase_bonus += 0.12
 
-    if query_terms and all(term in name_text.lower() for term in query_terms):
+    if query_terms and all(term in name_lower for term in query_terms):
         phrase_bonus += 0.12
-    if query_terms and any(term in tag_text.lower() for term in query_terms):
+    if query_terms and any(term in tag_lower for term in query_terms):
         phrase_bonus += 0.08
 
     score = (
@@ -1369,10 +1374,8 @@ def _agent_match_keywords(agent: dict) -> list[str]:
     raw = agent.get("match_keywords")
     if isinstance(raw, str):
         try:
-            import json as _json
-
-            raw = _json.loads(raw)
-        except Exception:
+            raw = json.loads(raw)
+        except (ValueError, TypeError):
             raw = [raw]
     if isinstance(raw, list) and raw:
         return [str(item).strip().lower() for item in raw if str(item).strip()]
@@ -1385,10 +1388,8 @@ def _agent_block_keywords(agent: dict) -> list[str]:
     raw = agent.get("block_keywords")
     if isinstance(raw, str):
         try:
-            import json as _json
-
-            raw = _json.loads(raw)
-        except Exception:
+            raw = json.loads(raw)
+        except (ValueError, TypeError):
             raw = [raw]
     if isinstance(raw, list) and raw:
         return [str(item).strip().lower() for item in raw if str(item).strip()]

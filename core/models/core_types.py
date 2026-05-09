@@ -28,6 +28,12 @@ from pydantic import (
 
 from core import auth as _auth
 
+# Hot-path regexes — pydantic validators run on every request.
+_RE_LETTER = re.compile(r"[A-Za-z]")
+_RE_DIGIT = re.compile(r"\d")
+_RE_USERNAME = re.compile(r"^[a-zA-Z0-9_-]+$")
+_RE_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]{2,}$")
+
 DEFAULT_LEASE_SECONDS = 300
 DEFAULT_RETRY_DELAY_SECONDS = 30
 DEFAULT_SLA_SECONDS = 900
@@ -161,7 +167,7 @@ class AgentRegisterRequest(BaseModel):
             raise ValueError(
                 "Agent name appears to be all-caps. Use title case, e.g. 'Financial Analyst'."
             )
-        if not re.search(r"[A-Za-z]", s):
+        if not _RE_LETTER.search(s):
             raise ValueError("Agent name must contain at least one letter.")
         return s
 
@@ -187,7 +193,7 @@ class AgentRegisterRequest(BaseModel):
             raise ValueError(
                 "Description must be at least 3 words — help callers understand what your agent does."
             )
-        if not re.search(r"[A-Za-z]", s):
+        if not _RE_LETTER.search(s):
             raise ValueError("Description must contain at least one letter.")
         return s
 
@@ -499,7 +505,7 @@ class UserRegisterRequest(BaseModel):
             raise ValueError("Username must be at least 3 characters.")
         if len(s) > 32:
             raise ValueError("Username must be 32 characters or fewer.")
-        if not re.match(r"^[a-zA-Z0-9_-]+$", s):
+        if not _RE_USERNAME.match(s):
             raise ValueError(
                 "Username may only contain letters, numbers, underscores, and hyphens."
             )
@@ -509,7 +515,7 @@ class UserRegisterRequest(BaseModel):
     @classmethod
     def email_valid(cls, v):
         s = v.strip().lower()
-        if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]{2,}$", s):
+        if not _RE_EMAIL.match(s):
             raise ValueError("Enter a valid email address.")
         return s
 
@@ -521,9 +527,9 @@ class UserRegisterRequest(BaseModel):
             raise ValueError("Password must be at least 8 characters.")
         if len(v) > 1024:
             raise ValueError("Password must be at most 1024 characters.")
-        if not re.search(r"[A-Za-z]", v):
+        if not _RE_LETTER.search(v):
             raise ValueError("Password must contain at least one letter.")
-        if not re.search(r"\d", v):
+        if not _RE_DIGIT.search(v):
             raise ValueError("Password must contain at least one number.")
         return v
 
