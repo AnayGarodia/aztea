@@ -66,7 +66,12 @@ def test_registry_bridge_uses_lazy_tool_list_when_flag_enabled(monkeypatch):
     names = [tool["name"] for tool in tools]
     # Lazy mode: 4 core lazy tools + 3 always-visible resource-grouped tools.
     # Order matters: lazy core first, then grouped resource dispatchers.
-    assert names[:4] == ["aztea_search", "aztea_describe", "aztea_call", "aztea_do"]
+    assert names[:4] == [
+        "search_specialists",
+        "describe_specialist",
+        "call_specialist",
+        "do_specialist_task",
+    ]
     assert set(names[4:]) == {"aztea_job", "aztea_budget", "aztea_workflow"}
     assert tools[0]["annotations"]["readOnlyHint"] is True
     assert tools[2]["annotations"]["readOnlyHint"] is False
@@ -148,7 +153,12 @@ def test_registry_bridge_describe_accepts_agent_suffix_alias(monkeypatch):
 def test_initialize_instructions_encourage_proactive_orchestration():
     server = _MODULE.MCPStdioServer(bridge=_DummyBridge(), refresh_seconds=60)
     instructions = server._initialize_result()["instructions"]
-    assert "Do not wait for the user to explicitly tell you to use Aztea" in instructions
+    # Categorical routing rule replaces the old "use Aztea" exhortation: the
+    # decision rule is the load-bearing sentence, plus an explicit no-brand-keyword
+    # clause so the model picks specialists on intent matching alone.
+    assert "Decision rule" in instructions
+    assert "do_specialist_task" in instructions
+    assert "do NOT need" in instructions and "brand keyword" in instructions
     assert "aztea_hire_batch" in instructions
     assert "aztea_hire_async + aztea_job_status" in instructions
 
@@ -220,12 +230,32 @@ def test_aztea_do_tool_is_registered_in_lazy_surface():
     """The fast-path auto-invoke tool must be exposed alongside the legacy
     search/describe/call lazy trio. Catches accidental removal during
     refactors of the lazy tool registration."""
-    assert _MODULE._LAZY_DO_TOOL["name"] == "aztea_do"
+    assert _MODULE._LAZY_DO_TOOL["name"] == "do_specialist_task"
     schema = _MODULE._LAZY_DO_TOOL["input_schema"]
     assert "intent" in schema["properties"]
     assert "max_cost_usd" in schema["properties"]
     assert "dry_run" in schema["properties"]
     assert schema["required"] == ["intent"]
+    # Backward-compat: the legacy `aztea_do` name must still resolve.
+    assert _MODULE._LAZY_TOOL_NAME_ALIASES["aztea_do"] == "do_specialist_task"
+
+
+def test_legacy_lazy_tool_names_alias_to_verb_first_dispatch():
+    """Old clients (cached tool lists, hardcoded SDK examples) keep calling
+    `aztea_do` / `aztea_search` / `aztea_describe` / `aztea_call`. The
+    dispatch must normalize these so behavior is identical to the new names."""
+    aliases = _MODULE._LAZY_TOOL_NAME_ALIASES
+    assert aliases == {
+        "aztea_do": "do_specialist_task",
+        "aztea_search": "search_specialists",
+        "aztea_describe": "describe_specialist",
+        "aztea_call": "call_specialist",
+    }
+    # New names ARE the canonical names on the four lazy tool dicts.
+    assert _MODULE._LAZY_SEARCH_TOOL["name"] == "search_specialists"
+    assert _MODULE._LAZY_DESCRIBE_TOOL["name"] == "describe_specialist"
+    assert _MODULE._LAZY_CALL_TOOL["name"] == "call_specialist"
+    assert _MODULE._LAZY_DO_TOOL["name"] == "do_specialist_task"
 
 
 def test_mcp_text_formatter_makes_search_results_readable():

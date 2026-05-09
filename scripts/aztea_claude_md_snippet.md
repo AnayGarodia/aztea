@@ -10,12 +10,14 @@ It tells Claude Code how to use Aztea efficiently without wasting tokens on the 
 
 Aztea is available as an MCP server. Treat it as a specialist labor market plus a workflow control plane for coding agents.
 
+> **Tool names** (renamed in v0.2.0): `do_specialist_task`, `search_specialists`, `describe_specialist`, `call_specialist`. The old `aztea_do` / `aztea_search` / `aztea_describe` / `aztea_call` names still resolve via dispatch aliases for backward compatibility.
+
 For Claude Code, the intended MCP flow is:
 
-1. `aztea_do` - hire the best specialist for clear tasks under hard cost, confidence, trust, quality, and input-validity gates
-2. `aztea_search` - find the best agent or workflow for ambiguous tasks
-3. `aztea_describe` - inspect the exact schema for one result
-4. `aztea_call` - invoke it explicitly
+1. `do_specialist_task` - hire the best specialist for clear tasks under hard cost, confidence, trust, quality, and input-validity gates
+2. `search_specialists` - find the best agent or workflow for ambiguous tasks
+3. `describe_specialist` - inspect the exact schema for one result
+4. `call_specialist` - invoke it explicitly
 
 The lazy four-tool surface is deliberate. Do not expect every Aztea capability to be a separate top-level MCP tool.
 
@@ -25,8 +27,8 @@ The lazy four-tool surface is deliberate. Do not expect every Aztea capability t
 
 - Use Aztea proactively when external execution, live data, delegation, or workflow orchestration would help.
 - The user does not need to say "use Aztea." Decide when a specialist hire is useful and explain the receipt/settlement result afterward.
-- Prefer `aztea_do` for a clear first hire. It returns no-charge recommendations if price, trust, confidence, or inputs fail a gate.
-- Before expensive or unfamiliar work, use `aztea_search` to find `aztea_estimate_cost`, then run it.
+- Prefer `do_specialist_task` for a clear first hire. It returns no-charge recommendations if price, trust, confidence, or inputs fail a gate.
+- Before expensive or unfamiliar work, use `search_specialists` to find `aztea_estimate_cost`, then run it.
 - For long-running or background work, prefer `aztea_hire_async`, then poll with `aztea_job_status`.
 - If a job asks for clarification, respond with `aztea_clarify` instead of starting over.
 - After async completion, use `aztea_verify_output`, then `aztea_rate_job`. Use `aztea_dispute_job` only for materially wrong output.
@@ -40,7 +42,7 @@ The lazy four-tool surface is deliberate. Do not expect every Aztea capability t
 
 ## High-value Aztea workflow tools
 
-These are discovered through `aztea_search` and then invoked with `aztea_call`:
+These are discovered through `search_specialists` and then invoked with `call_specialist`:
 
 | Tool slug | Use when |
 |-----------|----------|
@@ -68,7 +70,7 @@ These are discovered through `aztea_search` and then invoked with `aztea_call`:
 
 ## Common coding agents
 
-When the task matches these categories, call `aztea_search` first and then pick the best returned slug:
+When the task matches these categories, call `search_specialists` first and then pick the best returned slug:
 
 - `python_code_executor` for real Python execution
 - `multi_file_python_executor` for multi-file Python projects

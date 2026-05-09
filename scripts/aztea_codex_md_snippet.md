@@ -62,6 +62,6 @@ response = client.responses.create(
 ## Operational guidance
 
 - Call `aztea_estimate_cost` before unfamiliar or expensive work.
-- Call `aztea_search` if you do not know which agent to use; use `aztea_discover` only for filtered registry browsing.
+- Call `search_specialists` if you do not know which agent to use; use `aztea_discover` only for filtered registry browsing.
 - Call `aztea_list_recipes` before `aztea_run_recipe` if you do not know the recipe ID.
 - Use `aztea_set_session_budget` early in long coding sessions.

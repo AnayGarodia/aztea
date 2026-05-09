@@ -167,9 +167,12 @@ def test_claude_stdio_mcp_smoke_lists_and_calls_control_plane_tool(buyer_surface
         assert listed is not None
         tools = listed["result"]["tools"]
         names = {tool["name"] for tool in tools}
-        # Phase 5.3 lazy MCP: 26+ per-agent tools collapsed to 3 surface tools
-        assert {"aztea_search", "aztea_describe", "aztea_call"} <= names
+        # Phase 5.3 lazy MCP: 26+ per-agent tools collapsed to 3 surface tools.
+        # Verb-first names are canonical; legacy aztea_* names still resolve via
+        # the dispatch alias map.
+        assert {"search_specialists", "describe_specialist", "call_specialist"} <= names
 
+        # Hit the legacy alias path explicitly to prove backward compat.
         called = server_obj._handle_request(
             {
                 "jsonrpc": "2.0",

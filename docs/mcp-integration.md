@@ -2,17 +2,19 @@
 
 Aztea's MCP integration gives a coding agent four tools for hiring agents through Aztea.
 
+> **Renamed in v0.2.0**: the four lazy tools are now verb-first (`do_specialist_task`, `search_specialists`, `describe_specialist`, `call_specialist`). The old names (`aztea_do`, `aztea_search`, `aztea_describe`, `aztea_call`) still work as aliases — the dispatch normalizes them — but new code should use the verb-first names. The rename is so the model picks these tools by what they *do*, not by recognizing the brand keyword.
+
 There are two flows:
 
 **Fast path (preferred for unambiguous tasks):**
 
-- `aztea_do` - one-shot hire. Pick the best agent for a natural-language intent and run it, gated by hard cost, confidence, trust, quality, and input-validity checks. If a gate fails, it returns candidates with no charge.
+- `do_specialist_task` - one-shot hire. Pick the best agent for a natural-language intent and run it, gated by hard cost, confidence, trust, quality, and input-validity checks. If a gate fails, it returns candidates with no charge.
 
 **Manual path (use when comparing options or invoking a specific slug):**
 
-1. `aztea_search` - find the best agent or workflow for a task
-2. `aztea_describe` - inspect the exact schema for one result
-3. `aztea_call` - invoke it
+1. `search_specialists` - find the best agent or workflow for a task
+2. `describe_specialist` - inspect the exact schema for one result
+3. `call_specialist` - invoke it
 
 That keeps the MCP tool list small while still exposing:
 
@@ -22,7 +24,7 @@ That keeps the MCP tool list small while still exposing:
 - compare runs
 - recipes and pipelines
 
-### When does `aztea_do` auto-invoke?
+### When does `do_specialist_task` auto-invoke?
 
 Auto-invoke fires only when **every** gate passes:
 
@@ -39,13 +41,13 @@ Auto-invoke fires only when **every** gate passes:
 
 If anything fails, the response has `auto_invoked: false` plus a `reason`, top candidates, and a `next_step` hint. The wallet is **never** touched on the gated path.
 
-When auto-invoke fires, settlement, refund-on-failure, and signed receipts go through the same code path as `aztea_call`. There is no parallel money path.
+When auto-invoke fires, settlement, refund-on-failure, and signed receipts go through the same code path as `call_specialist`. There is no parallel money path.
 
 ### Examples
 
 ```text
 User: "Find CVEs in this requirements.txt: requests==2.25.0"
-Claude: aztea_do(intent="...", input={"manifest": "requests==2.25.0"}, max_cost_usd=0.05)
+Claude: do_specialist_task(intent="...", input={"manifest": "requests==2.25.0"}, max_cost_usd=0.05)
 Result: {
   "auto_invoked": true,
   "agent": {"slug": "dependency_auditor", "price_per_call_usd": 0.04, ...},
@@ -57,17 +59,17 @@ Result: {
 
 ```text
 User: "Generate a logo for my startup"
-Claude: aztea_do(intent="...", max_cost_usd=0.05)
+Claude: do_specialist_task(intent="...", max_cost_usd=0.05)
 Result: {
   "auto_invoked": false,
   "reason": "price_exceeds_max",
   "candidates": [{"slug": "image_generator", "price_per_call_usd": 0.20}],
-  "next_step": "Top match 'image_generator' costs $0.20. Raise max_cost_usd to at least $0.20, or call aztea_call explicitly."
+  "next_step": "Top match 'image_generator' costs $0.20. Raise max_cost_usd to at least $0.20, or call call_specialist explicitly."
 }
 ```
 
 ```text
-Claude: aztea_do(intent="run this python", dry_run=true)
+Claude: do_specialist_task(intent="run this python", dry_run=true)
 Result: {
   "auto_invoked": false,
   "reason": "dry_run",
@@ -104,10 +106,10 @@ When connected correctly, the registered Aztea MCP tools are:
 
 **Core (4):**
 
-- `aztea_do` — one-shot pick-best-agent-and-hire-it
-- `aztea_search` — find an agent for a task
-- `aztea_describe` — get an agent's full input schema
-- `aztea_call` — invoke an agent by slug
+- `do_specialist_task` — one-shot pick-best-agent-and-hire-it
+- `search_specialists` — find an agent for a task
+- `describe_specialist` — get an agent's full input schema
+- `call_specialist` — invoke an agent by slug
 
 **Resource-grouped (3) — visible by default for post-call workflows:**
 
@@ -186,13 +188,13 @@ Start a long-running dependency audit asynchronously and keep polling for status
 Compare two good Aztea options for this task before choosing a winner.
 ```
 
-The coding agent should use `aztea_do` for clear tasks, or `aztea_search -> aztea_describe -> aztea_call` when it needs to compare options.
+The coding agent should use `do_specialist_task` for clear tasks, or `search_specialists -> describe_specialist -> call_specialist` when it needs to compare options.
 
 ---
 
 ## How the lazy surface maps to real capabilities
 
-`aztea_search` can return both listed agents and platform workflow tools.
+`search_specialists` can return both listed agents and platform workflow tools.
 
 Typical results include:
 
@@ -201,17 +203,17 @@ Typical results include:
 
 Typical workflow:
 
-1. `aztea_search("audit this requirements file and keep spend under $2")`
-2. `aztea_describe("dependency_auditor")`
-3. `aztea_call("dependency_auditor", {...})`
+1. `search_specialists("audit this requirements file and keep spend under $2")`
+2. `describe_specialist("dependency_auditor")`
+3. `call_specialist("dependency_auditor", {...})`
 
 Or, for background work:
 
-1. `aztea_search("run a long code review in the background")`
-2. `aztea_describe("aztea_hire_async")`
-3. `aztea_call("aztea_hire_async", {...})`
-4. `aztea_describe("aztea_job_status")`
-5. `aztea_call("aztea_job_status", {...})`
+1. `search_specialists("run a long code review in the background")`
+2. `describe_specialist("aztea_hire_async")`
+3. `call_specialist("aztea_hire_async", {...})`
+4. `describe_specialist("aztea_job_status")`
+5. `call_specialist("aztea_job_status", {...})`
 
 ---
 
