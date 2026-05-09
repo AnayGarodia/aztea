@@ -133,6 +133,18 @@ def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict
         return _finalize(agent_sql_explainer.run(payload))
     if agent_id == _GIT_DIFF_ANALYZER_AGENT_ID:
         return _finalize(agent_git_diff_analyzer.run(payload))
+    if agent_id == _LIGHTHOUSE_AUDITOR_AGENT_ID:
+        return _finalize(agent_lighthouse_auditor.run(payload))
+    if agent_id == _ACCESSIBILITY_AUDITOR_AGENT_ID:
+        return _finalize(agent_accessibility_auditor.run(payload))
+    if agent_id == _SECURITY_HEADERS_GRADER_AGENT_ID:
+        return _finalize(agent_security_headers_grader.run(payload))
+    if agent_id == _BROKEN_LINK_CRAWLER_AGENT_ID:
+        return _finalize(agent_broken_link_crawler.run(payload))
+    if agent_id == _PDF_DOCUMENT_PARSER_AGENT_ID:
+        return _finalize(agent_pdf_document_parser.run(payload))
+    if agent_id == _WEB_SEARCH_AGENT_ID:
+        return _finalize(agent_web_search.run(payload))
     raise ValueError(f"Unsupported built-in agent '{agent_id}'.")
 
 

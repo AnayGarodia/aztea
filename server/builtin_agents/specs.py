@@ -6,8 +6,10 @@ from functools import lru_cache
 from typing import Any
 
 from server.builtin_agents.constants import (
+    ACCESSIBILITY_AUDITOR_AGENT_ID,
     AI_RED_TEAMER_AGENT_ID,
     ARXIV_RESEARCH_AGENT_ID,
+    BROKEN_LINK_CRAWLER_AGENT_ID,
     BROWSER_AGENT_ID,
     CODEREVIEW_AGENT_ID,
     CURATED_BUILTIN_AGENT_IDS,
@@ -20,14 +22,17 @@ from server.builtin_agents.constants import (
     HN_DIGEST_AGENT_ID,
     IMAGE_GENERATOR_AGENT_ID,
     JSON_SCHEMA_VALIDATOR_AGENT_ID,
+    LIGHTHOUSE_AUDITOR_AGENT_ID,
     LINTER_AGENT_ID,
     LIVE_ENDPOINT_TESTER_AGENT_ID,
     MULTI_FILE_EXECUTOR_AGENT_ID,
     MULTI_LANGUAGE_EXECUTOR_AGENT_ID,
+    PDF_DOCUMENT_PARSER_AGENT_ID,
     PYTHON_EXECUTOR_AGENT_ID,
     QUALITY_JUDGE_AGENT_ID,
     REGEX_TESTER_AGENT_ID,
     SECRET_SCANNER_AGENT_ID,
+    SECURITY_HEADERS_GRADER_AGENT_ID,
     SEMANTIC_CODEBASE_SEARCH_AGENT_ID,
     SHELL_EXECUTOR_AGENT_ID,
     SQL_EXPLAINER_AGENT_ID,
@@ -35,6 +40,7 @@ from server.builtin_agents.constants import (
     VIDEO_STORYBOARD_AGENT_ID,
     VISUAL_REGRESSION_AGENT_ID,
     WEB_RESEARCHER_AGENT_ID,
+    WEB_SEARCH_AGENT_ID,
     WIKI_AGENT_ID,
 )
 from server.builtin_agents.specs_part1 import load_builtin_specs_part1
@@ -42,6 +48,7 @@ from server.builtin_agents.specs_part2 import load_builtin_specs_part2
 from server.builtin_agents.specs_part3 import load_builtin_specs_part3
 from server.builtin_agents.specs_part4 import load_builtin_specs_part4
 from server.builtin_agents.specs_part5 import load_builtin_specs_part5
+from server.builtin_agents.specs_part6 import load_builtin_specs_part6
 
 _DEFAULT_CATEGORY_BY_AGENT_ID = {
     FINANCIAL_AGENT_ID: "Finance",
@@ -67,6 +74,12 @@ _DEFAULT_CATEGORY_BY_AGENT_ID = {
     REGEX_TESTER_AGENT_ID: "Developer Tools",
     SQL_EXPLAINER_AGENT_ID: "Developer Tools",
     GIT_DIFF_ANALYZER_AGENT_ID: "Developer Tools",
+    LIGHTHOUSE_AUDITOR_AGENT_ID: "Quality",
+    ACCESSIBILITY_AUDITOR_AGENT_ID: "Quality",
+    SECURITY_HEADERS_GRADER_AGENT_ID: "Security",
+    BROKEN_LINK_CRAWLER_AGENT_ID: "Quality",
+    PDF_DOCUMENT_PARSER_AGENT_ID: "Research",
+    WEB_SEARCH_AGENT_ID: "Research",
 }
 
 _DEFAULT_CACHEABLE_BY_AGENT_ID = {
@@ -92,6 +105,12 @@ _DEFAULT_CACHEABLE_BY_AGENT_ID = {
     REGEX_TESTER_AGENT_ID: True,
     SQL_EXPLAINER_AGENT_ID: True,
     GIT_DIFF_ANALYZER_AGENT_ID: True,
+    LIGHTHOUSE_AUDITOR_AGENT_ID: False,
+    ACCESSIBILITY_AUDITOR_AGENT_ID: False,
+    SECURITY_HEADERS_GRADER_AGENT_ID: False,
+    BROKEN_LINK_CRAWLER_AGENT_ID: False,
+    PDF_DOCUMENT_PARSER_AGENT_ID: True,
+    WEB_SEARCH_AGENT_ID: False,
 }
 
 _DEFAULT_RUNTIME_REQUIREMENTS_BY_AGENT_ID = {
@@ -117,6 +136,12 @@ _DEFAULT_RUNTIME_REQUIREMENTS_BY_AGENT_ID = {
     REGEX_TESTER_AGENT_ID: [],
     SQL_EXPLAINER_AGENT_ID: ["sqlite3"],
     GIT_DIFF_ANALYZER_AGENT_ID: [],
+    LIGHTHOUSE_AUDITOR_AGENT_ID: ["lighthouse cli", "node>=18", "chromium"],
+    ACCESSIBILITY_AUDITOR_AGENT_ID: ["playwright", "chromium"],
+    SECURITY_HEADERS_GRADER_AGENT_ID: ["httpx"],
+    BROKEN_LINK_CRAWLER_AGENT_ID: ["httpx", "beautifulsoup4"],
+    PDF_DOCUMENT_PARSER_AGENT_ID: ["pymupdf", "pdfplumber"],
+    WEB_SEARCH_AGENT_ID: ["BRAVE_SEARCH_API_KEY"],
 }
 
 _DEFAULT_TOOLING_KIND_BY_AGENT_ID = {
@@ -147,6 +172,12 @@ _DEFAULT_TOOLING_KIND_BY_AGENT_ID = {
     REGEX_TESTER_AGENT_ID: "sandbox_execution",
     SQL_EXPLAINER_AGENT_ID: "sandbox_execution",
     GIT_DIFF_ANALYZER_AGENT_ID: "tool_execution",
+    LIGHTHOUSE_AUDITOR_AGENT_ID: "browser_automation",
+    ACCESSIBILITY_AUDITOR_AGENT_ID: "browser_automation",
+    SECURITY_HEADERS_GRADER_AGENT_ID: "live_network_checks",
+    BROKEN_LINK_CRAWLER_AGENT_ID: "live_network_checks",
+    PDF_DOCUMENT_PARSER_AGENT_ID: "live_fetch_plus_parse",
+    WEB_SEARCH_AGENT_ID: "live_api",
 }
 
 _DEFAULT_STABILITY_TIER_BY_AGENT_ID = {
@@ -177,6 +208,12 @@ _DEFAULT_STABILITY_TIER_BY_AGENT_ID = {
     REGEX_TESTER_AGENT_ID: "stable",
     SQL_EXPLAINER_AGENT_ID: "stable",
     GIT_DIFF_ANALYZER_AGENT_ID: "stable",
+    LIGHTHOUSE_AUDITOR_AGENT_ID: "beta",
+    ACCESSIBILITY_AUDITOR_AGENT_ID: "beta",
+    SECURITY_HEADERS_GRADER_AGENT_ID: "stable",
+    BROKEN_LINK_CRAWLER_AGENT_ID: "beta",
+    PDF_DOCUMENT_PARSER_AGENT_ID: "beta",
+    WEB_SEARCH_AGENT_ID: "beta",
 }
 
 _DEFAULT_CODEX_RECOMMENDED_BY_AGENT_ID = {
@@ -207,6 +244,12 @@ _DEFAULT_CODEX_RECOMMENDED_BY_AGENT_ID = {
     REGEX_TESTER_AGENT_ID: True,
     SQL_EXPLAINER_AGENT_ID: True,
     GIT_DIFF_ANALYZER_AGENT_ID: True,
+    LIGHTHOUSE_AUDITOR_AGENT_ID: True,
+    ACCESSIBILITY_AUDITOR_AGENT_ID: True,
+    SECURITY_HEADERS_GRADER_AGENT_ID: True,
+    BROKEN_LINK_CRAWLER_AGENT_ID: True,
+    PDF_DOCUMENT_PARSER_AGENT_ID: False,
+    WEB_SEARCH_AGENT_ID: True,
 }
 
 _DEFAULT_SHORT_USE_CASES_BY_AGENT_ID = {
@@ -261,6 +304,36 @@ _DEFAULT_SHORT_USE_CASES_BY_AGENT_ID = {
         "pre-PR risk triage",
         "flag auth/money changes",
         "spot deleted tests",
+    ],
+    LIGHTHOUSE_AUDITOR_AGENT_ID: [
+        "audit a launch site",
+        "score Web Vitals",
+        "find perf regressions",
+    ],
+    ACCESSIBILITY_AUDITOR_AGENT_ID: [
+        "WCAG audit a page",
+        "find a11y violations",
+        "spot missing alt text",
+    ],
+    SECURITY_HEADERS_GRADER_AGENT_ID: [
+        "grade security headers",
+        "check CSP / HSTS",
+        "pre-launch security review",
+    ],
+    BROKEN_LINK_CRAWLER_AGENT_ID: [
+        "find 404s",
+        "audit redirect chains",
+        "spot mixed content",
+    ],
+    PDF_DOCUMENT_PARSER_AGENT_ID: [
+        "extract a PDF whitepaper",
+        "pull tables from a research paper",
+        "summarize a long PDF",
+    ],
+    WEB_SEARCH_AGENT_ID: [
+        "search the live web",
+        "find recent news",
+        "compare top results",
     ],
 }
 
@@ -332,6 +405,7 @@ def _all_builtin_specs() -> tuple[dict[str, Any], ...]:
     specs.extend(load_builtin_specs_part3())
     specs.extend(load_builtin_specs_part4())
     specs.extend(load_builtin_specs_part5())
+    specs.extend(load_builtin_specs_part6())
     normalized = [_normalize_builtin_spec(spec) for spec in specs]
     seen_ids: set[str] = set()
     seen_endpoints: set[str] = set()

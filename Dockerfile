@@ -11,20 +11,28 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
+    && apt-get install -y --no-install-recommends curl ca-certificates gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt gunicorn
 
-# browser_agent + visual_regression need a real Chromium. `playwright
-# install-deps` pulls in the (long) list of shared-libs Chromium needs on
-# slim Debian, then `playwright install chromium` downloads the browser
-# binary. We do this as root before dropping privileges. ~300MB image
-# growth, but otherwise both agents return 0% success in prod.
+# browser_agent + visual_regression + accessibility_auditor + lighthouse_auditor
+# all need a real Chromium. `playwright install-deps` pulls in the (long) list
+# of shared-libs Chromium needs on slim Debian, then `playwright install
+# chromium` downloads the browser binary. We do this as root before dropping
+# privileges. ~300MB image growth, but otherwise these agents return 0% success
+# in prod.
 RUN python -m playwright install-deps chromium \
     && python -m playwright install chromium \
     && rm -rf /var/lib/apt/lists/*
+
+# lighthouse_auditor shells out to the Node-native lighthouse CLI. Installed
+# globally so it's on PATH for the appuser. ~80MB.
+RUN npm install -g lighthouse@11 \
+    && npm cache clean --force
 
 COPY . .
 

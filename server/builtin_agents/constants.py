@@ -40,6 +40,12 @@ JSON_SCHEMA_VALIDATOR_AGENT_ID = "1b0b5820-b796-53cc-8d31-5e336d86d875"
 REGEX_TESTER_AGENT_ID = "36ae44b0-895b-5ef7-bc1f-1ecf08fce3ee"
 SQL_EXPLAINER_AGENT_ID = "91258740-dd32-51b6-be91-a7638fae190f"
 GIT_DIFF_ANALYZER_AGENT_ID = "8ac84144-4fd1-5883-bfad-e7b64d729b8f"
+LIGHTHOUSE_AUDITOR_AGENT_ID = "6047127b-e49a-51c0-81d7-7934c0be424d"
+ACCESSIBILITY_AUDITOR_AGENT_ID = "41e95324-2480-5e53-9414-302d55673d50"
+SECURITY_HEADERS_GRADER_AGENT_ID = "33171c82-b9a0-5cef-b867-c7da3889cff1"
+BROKEN_LINK_CRAWLER_AGENT_ID = "79199276-9dc3-593d-9d85-26241365f292"
+PDF_DOCUMENT_PARSER_AGENT_ID = "c569490b-c886-5c94-b22b-192027d8c485"
+WEB_SEARCH_AGENT_ID = "7d5f4e06-60b5-5950-a885-eaef04cf0b33"
 
 BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
     FINANCIAL_AGENT_ID: "internal://financial",
@@ -71,6 +77,12 @@ BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
     REGEX_TESTER_AGENT_ID: "internal://regex_tester",
     SQL_EXPLAINER_AGENT_ID: "internal://sql_explainer",
     GIT_DIFF_ANALYZER_AGENT_ID: "internal://git_diff_analyzer",
+    LIGHTHOUSE_AUDITOR_AGENT_ID: "internal://lighthouse_auditor",
+    ACCESSIBILITY_AUDITOR_AGENT_ID: "internal://accessibility_auditor",
+    SECURITY_HEADERS_GRADER_AGENT_ID: "internal://security_headers_grader",
+    BROKEN_LINK_CRAWLER_AGENT_ID: "internal://broken_link_crawler",
+    PDF_DOCUMENT_PARSER_AGENT_ID: "internal://pdf_document_parser",
+    WEB_SEARCH_AGENT_ID: "internal://web_search",
 }
 
 BUILTIN_LEGACY_ROUTE_ENDPOINTS: dict[str, str] = {
@@ -147,6 +159,12 @@ CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
         VISUAL_REGRESSION_AGENT_ID,
         MULTI_LANGUAGE_EXECUTOR_AGENT_ID,
         SECRET_SCANNER_AGENT_ID,
+        LIGHTHOUSE_AUDITOR_AGENT_ID,
+        ACCESSIBILITY_AUDITOR_AGENT_ID,
+        SECURITY_HEADERS_GRADER_AGENT_ID,
+        BROKEN_LINK_CRAWLER_AGENT_ID,
+        PDF_DOCUMENT_PARSER_AGENT_ID,
+        WEB_SEARCH_AGENT_ID,
     }
 )
 # Sanity: a sunset agent must never accidentally re-appear in the public set.

@@ -30,3 +30,9 @@ playwright>=1.40.0
 # effectively lexical-only. The 2026-05-07 power-user eval scored discovery
 # 5/10 specifically because production had no embedding backend installed.
 sentence-transformers>=3.0.0
+# pdf_document_parser uses pymupdf (fitz) for fast text + metadata extraction
+# and pdfplumber for best-effort tabular parsing.
+pymupdf>=1.24.0
+pdfplumber>=0.11.0
+# broken_link_crawler uses BeautifulSoup to extract <a>/<img>/<script>/<link>.
+beautifulsoup4>=4.12.0
