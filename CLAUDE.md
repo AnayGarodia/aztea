@@ -252,6 +252,19 @@ Makefile                         Dev shortcuts: make dev / test / docker / migra
 - **Provider-agnostic.** Don't hardcode a provider or model in any built-in agent. Use `run_with_fallback(req)` which tries `AZTEA_LLM_DEFAULT_CHAIN` (env-overridable).
 - **Graceful LLM degradation.** If synthesis fails because no LLM provider is configured, agents that performed real retrieval must still return the retrieval output rather than raising. See `agents/arxiv_research.py` for the pattern.
 
+### OSS / hosted boundary
+
+The codebase is **Apache-2.0** open source. It runs fully self-contained when `AZTEA_HOSTED_API_URL` is unset. Hosted aztea.ai layers a few paid services on top: dispute judges (LLM credits), hosted built-in agents, public registry syndication, federated reputation, and Stripe Connect.
+
+- **The OSS build must never make a network call to `aztea.ai`.** The only module that talks to the hosted API is `core/hosted_client.py`. If you find yourself adding `requests.post("https://api.aztea.ai/...")` outside that file, stop — route it through `HostedClient` instead.
+- **Every hosted call soft-fails to local.** A hosted outage degrades to local LLM (judges, prefer_hosted agents) or to deterministic fallback. A hosted call failure must never bubble up as a 500 to the caller.
+- **OSS-mode tests live in `tests/test_oss_mode_isolation.py`.** They monkeypatch `requests.post` to raise so any accidental outbound call surfaces as a test failure. Add new assertions there when you wire a new hosted service.
+- **Hosted-only routes return 501 with a structured pointer** (`docs/oss-vs-hosted.md`) to the hosted aztea.ai service. Use the pattern from `_stripe_unavailable_error` in `part_013.py`.
+- **No hardcoded `aztea.ai` URLs in `core/`, `server/`, or `agents/`.** All public-facing URLs in code must read from `SERVER_BASE_URL` or `PUBLIC_BASE_URL` (email links). The 501 pointer copy is the only documented exception.
+- **`PREFER_HOSTED_AGENT_IDS` in `server/builtin_agents/constants.py`** governs which built-ins try the hosted endpoint first. Default is local; opt agents in only when the hosted version meaningfully outperforms a self-hosted run with user-provided LLM keys.
+
+See `docs/oss-vs-hosted.md` for the full local-vs-hosted matrix.
+
 ### Built-in agents
 
 - Agent IDs are **deterministic UUID v5** from namespace `6ba7b810-9dad-11d1-80b4-00c04fd430c8` + `aztea.builtin.{slug}`. Constants live in `server/builtin_agents/constants.py` (single source of truth).

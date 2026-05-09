@@ -18,11 +18,15 @@
 #   base  = quality*0.45 + success*0.35 + latency*0.20
 #   score = NEUTRAL*(1-confidence) + base*confidence, then * decay_multiplier
 
+import logging
 import math
+import threading
 import uuid
 from datetime import datetime, timezone
 
 from core import db as _db
+
+_LOG = logging.getLogger(__name__)
 
 DB_PATH = _db.DB_PATH
 _local = _db._local
@@ -288,6 +292,14 @@ def record_job_quality_rating(job_id: str, caller_owner_id: str, rating: int) ->
             raise ValueError(f"Job '{job_id}' already has a quality rating.") from e
 
     created = get_job_quality_rating(job_id)
+    if created:
+        _push_rating_to_hosted_async(
+            kind="quality",
+            job_id=job_id,
+            agent_id=created.get("agent_id"),
+            caller_owner_id=caller_owner_id,
+            rating=validated_rating,
+        )
     return created if created else {}
 
 
@@ -360,6 +372,14 @@ def record_caller_rating(
             raise ValueError(f"Job '{job_id}' already has a caller rating.") from e
 
     created = get_job_caller_rating(job_id)
+    if created:
+        _push_rating_to_hosted_async(
+            kind="caller",
+            job_id=job_id,
+            agent_owner_id=agent_owner_id,
+            caller_owner_id=created.get("caller_owner_id"),
+            rating=validated_rating,
+        )
     return created if created else {}
 
 
@@ -811,3 +831,26 @@ def count_caller_given_ratings(
                 (normalized_owner_id, validated),
             ).fetchone()
     return int(row["count"] if row else 0)
+
+
+def _push_rating_to_hosted_async(**rating: object) -> None:
+    """Best-effort push of a rating to aztea.ai's federated reputation cache.
+
+    No-ops in OSS-mode (AZTEA_HOSTED_API_URL unset). Runs in a daemon
+    thread so the request returns immediately. Failures are logged at
+    debug level — the local rating row is the source of truth and
+    federated trust is purely additive.
+    """
+
+    def _send() -> None:
+        try:
+            from core.hosted_client import get_hosted_client
+
+            client = get_hosted_client()
+            if not client.is_enabled():
+                return
+            client.push_rating(rating)
+        except Exception as exc:  # noqa: BLE001 — fire-and-forget, must not raise
+            _LOG.debug("reputation: hosted push failed: %s", exc)
+
+    threading.Thread(target=_send, daemon=True).start()

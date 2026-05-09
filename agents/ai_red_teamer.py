@@ -8,7 +8,7 @@ Input:
   {
     "target_agent_id": "uuid",       # required — Aztea agent ID to test
     "api_key": "az_...",             # caller API key used to invoke the target agent
-    "base_url": "https://aztea.ai",  # optional, defaults to SERVER_BASE_URL env var
+    "base_url": "http://localhost:8000",  # optional, defaults to SERVER_BASE_URL env var
     "categories": ["injection", "jailbreak", "boundary"],  # default: all
     "custom_prompts": ["...", ...],  # optional extra adversarial prompts
     "max_attacks": 20                # default 20, max 50
@@ -280,7 +280,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     base_url = str(
         payload.get("base_url")
         or os.environ.get("SERVER_BASE_URL")
-        or "https://aztea.ai"
+        or "http://localhost:8000"
     ).strip()
     agent_id = str(payload.get("target_agent_id") or "").strip()
     target_slug = str(payload.get("target_agent_slug") or "").strip()

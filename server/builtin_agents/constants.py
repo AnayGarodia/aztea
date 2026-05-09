@@ -183,3 +183,39 @@ CURATED_BUILTIN_AGENT_IDS = frozenset(
 BUILTIN_WORKER_OWNER_ID = "system:builtin-worker"
 SYSTEM_USERNAME = "system"
 SYSTEM_USER_EMAIL = "system@aztea.internal"
+
+
+# Agents whose default behavior, when an instance is configured to talk to
+# aztea.ai's hosted API, is to route through the hosted endpoint instead
+# of running locally. Choice criterion: agents that lean heavily on tuned
+# LLM prompts and benefit from aztea.ai's continuous prompt + provider
+# tuning (and where running locally requires the user to wire their own
+# LLM keys). Pure-tooling agents (linters, sandboxes, DNS) stay local
+# because there's no value-add from a hosted call.
+#
+# In OSS-mode (AZTEA_HOSTED_API_URL unset) this set is irrelevant — every
+# agent runs locally.
+PREFER_HOSTED_AGENT_IDS = frozenset(
+    {
+        CODEREVIEW_AGENT_ID,
+        ARXIV_RESEARCH_AGENT_ID,
+        WEB_RESEARCHER_AGENT_ID,
+        QUALITY_JUDGE_AGENT_ID,
+        AI_RED_TEAMER_AGENT_ID,
+    }
+)
+
+
+def agent_id_to_slug(agent_id: str) -> str | None:
+    """Map a built-in agent UUID to its hosted-API slug.
+
+    Slug is derived from the `internal://<slug>` endpoint registration. Returns
+    None for unknown / non-builtin agent IDs so the caller can skip the
+    hosted call.
+    """
+    endpoint = BUILTIN_INTERNAL_ENDPOINTS.get(agent_id)
+    if not endpoint:
+        return None
+    if not endpoint.startswith("internal://"):
+        return None
+    return endpoint.removeprefix("internal://").strip() or None

@@ -1,10 +1,26 @@
 """
 judges.py — LLM arbitration helpers for disputes.
+
+Three execution modes, in priority order:
+
+1. **Hosted** — when AZTEA_HOSTED_API_URL is set, the hosted aztea.ai
+   service runs the judge and we just record its verdict. This is the
+   path the hosted product uses; it burns aztea.ai's LLM credits.
+2. **Local LLM** — when AZTEA_ENABLE_LIVE_DISPUTE_JUDGES=1 and the
+   instance has its own LLM provider configured. Two heterogeneous
+   judges run via `_judge_once`.
+3. **Deterministic fallback** — keyword-based heuristic when neither
+   hosted nor local LLM is available. Always returns a verdict so a
+   dispute never strands.
+
+Hosted failures fall through to local-LLM; local-LLM failures fall
+through to deterministic. Disputes never get stuck at "judging".
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import Any
 
@@ -12,6 +28,8 @@ from core import disputes
 from core.functional import Err, Ok, Result
 from core.llm import CompletionRequest, Message, run_with_fallback
 from core.llm.registry import DEFAULT_CHAIN
+
+logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = (
     "You are an impartial arbiter. Analyze the dispute evidence and return strict JSON "
@@ -251,6 +269,58 @@ def _validate_dispute_judgeable(dispute_id: str) -> "Result[dict, str]":
     return Ok(context)
 
 
+def _try_hosted_judgment(dispute_id: str, context: dict) -> dict | None:
+    """Attempt to resolve a dispute via the hosted aztea.ai judge.
+
+    Returns the standard run_judgment result dict on success, or None if
+    hosted mode is disabled or the call fails for any reason. Caller
+    falls back to local LLM / deterministic on None.
+    """
+    # Local import to avoid a hard dep when hosted_client is absent (e.g.
+    # in trimmed-down test fixtures).
+    from core.hosted_client import get_hosted_client
+
+    client = get_hosted_client()
+    if not client.is_enabled():
+        return None
+    response = client.judge_dispute(context)
+    if not response or not isinstance(response, dict):
+        return None
+    try:
+        verdict = _normalize_verdict(response.get("verdict"))
+    except ValueError:
+        logger.warning(
+            "judges: hosted judge returned invalid verdict %r for dispute %s",
+            response.get("verdict"),
+            dispute_id,
+        )
+        return None
+    reasoning = str(response.get("reasoning") or "").strip() or "Hosted judge."
+    model_label = str(response.get("model") or "hosted").strip() or "hosted"
+    # Record both primary + secondary as the hosted verdict; aztea.ai's
+    # hosted judge already runs heterogeneous votes server-side.
+    disputes.record_judgment(
+        dispute_id,
+        judge_kind="llm_primary",
+        verdict=verdict,
+        reasoning=reasoning,
+        model=f"hosted:{model_label}",
+    )
+    disputes.record_judgment(
+        dispute_id,
+        judge_kind="llm_secondary",
+        verdict=verdict,
+        reasoning=reasoning,
+        model=f"hosted:{model_label}",
+    )
+    disputes.set_dispute_consensus(dispute_id, verdict)
+    return {
+        "status": "consensus",
+        "outcome": verdict,
+        "judgments": disputes.get_judgments(dispute_id),
+    }
+
+
 def run_judgment(dispute_id: str) -> dict:
     """Run LLM-based adjudication for a dispute and record the judgment vote.
 
@@ -278,6 +348,16 @@ def run_judgment(dispute_id: str) -> dict:
         }
 
     disputes.set_dispute_status(dispute_id, "judging")
+
+    # Hosted-first: if this instance is configured to call aztea.ai's
+    # hosted judge, use it. The hosted endpoint runs the heterogeneous
+    # two-judge protocol server-side and bills against the instance's
+    # hosted account. On any error (network, auth, malformed response)
+    # we fall through to the local LLM path below.
+    hosted_result = _try_hosted_judgment(dispute_id, context)
+    if hosted_result is not None:
+        return hosted_result
+
     live_enabled = _env_enabled_any(
         "AZTEA_ENABLE_LIVE_DISPUTE_JUDGES", "AGENTMARKET_ENABLE_LIVE_DISPUTE_JUDGES"
     )

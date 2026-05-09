@@ -739,7 +739,7 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
                     "base_url": {
                         "type": "string",
                         "title": "Base URL",
-                        "description": "Aztea API base URL (default: https://aztea.ai).",
+                        "description": "Aztea API base URL (default: SERVER_BASE_URL env var or http://localhost:8000).",
                     },
                     "categories": {
                         "type": "array",

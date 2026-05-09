@@ -518,8 +518,8 @@ class ConnectOnboardRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "return_url": "https://aztea.dev/wallet",
-                "refresh_url": "https://aztea.dev/wallet",
+                "return_url": "https://example.com/wallet",
+                "refresh_url": "https://example.com/wallet",
             }
         }
     )

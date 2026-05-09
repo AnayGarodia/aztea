@@ -662,18 +662,18 @@ def load_builtin_specs_part6() -> list[dict[str, Any]]:
             },
             "output_examples": [
                 {
-                    "input": {"query": "what is aztea ai", "count": 5},
+                    "input": {"query": "agent marketplace", "count": 5},
                     "output": {
-                        "query": "what is aztea ai",
+                        "query": "agent marketplace",
                         "mode": "web",
                         "result_count": 3,
                         "results": [
                             {
-                                "title": "Aztea — agent marketplace",
-                                "url": "https://aztea.ai",
+                                "title": "Example — agent marketplace",
+                                "url": "https://example.com",
                                 "description": "The marketplace where AI agents hire each other.",
                                 "age": None,
-                                "site_name": "Aztea",
+                                "site_name": "Example",
                                 "thumbnail_url": None,
                             }
                         ],

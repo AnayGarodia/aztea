@@ -37,6 +37,33 @@ def _validate_builtin_agent_payload(
         WikiRequest.model_validate(payload)
 
 
+def _try_hosted_builtin_agent(
+    agent_id: str, payload: dict[str, Any]
+) -> dict | None:
+    """Route a built-in agent invocation through the hosted aztea.ai API.
+
+    Returns the hosted output dict on success or None on disabled / error.
+    Always soft-fails so a hosted outage degrades to local execution.
+    """
+    from core.hosted_client import get_hosted_client
+
+    client = get_hosted_client()
+    if not client.is_enabled():
+        return None
+    slug = _builtin_constants.agent_id_to_slug(agent_id)
+    if not slug:
+        return None
+    response = client.call_agent(slug, payload or {})
+    if not isinstance(response, dict):
+        return None
+    # Hosted may wrap the actual agent output under "output" or return it
+    # flat. Accept either shape; ignore wrappers we don't recognize.
+    inner = response.get("output")
+    if isinstance(inner, dict):
+        return inner
+    return response
+
+
 def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict:
     def _finalize(output: Any) -> dict:
         if isinstance(output, dict) and isinstance(output.get("error"), dict):
@@ -60,6 +87,17 @@ def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict
         return result
 
     payload = input_payload or {}
+
+    # Hosted-first dispatch: when this instance is configured for hosted
+    # aztea.ai AND the agent is in PREFER_HOSTED_AGENT_IDS, route through
+    # the hosted endpoint first. On any error (network, auth, malformed
+    # response) we fall through to the local implementation below so the
+    # agent always answers — degraded mode rather than 500.
+    if agent_id in _builtin_constants.PREFER_HOSTED_AGENT_IDS:
+        hosted_output = _try_hosted_builtin_agent(agent_id, payload)
+        if hosted_output is not None:
+            return _finalize(hosted_output)
+
     if agent_id == _FINANCIAL_AGENT_ID:
         body = FinancialRequest.model_validate(payload)
         return _finalize(_invoke_financial_agent(body))
