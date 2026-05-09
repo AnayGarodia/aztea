@@ -47,8 +47,27 @@ def _migration_files() -> list[tuple[int, str]]:
 
 
 def _split_statements(sql: str) -> list[str]:
-    """Split SQL on semicolons, skipping empty fragments and comment-only lines."""
-    return [s.strip() for s in sql.split(";") if s.strip()]
+    """Split SQL on semicolons, skipping empty fragments and pure-comment lines.
+
+    A fragment whose only non-blank lines are SQL comments (`-- ...`) is
+    dropped — Postgres treats a comment-only buffer as an empty query and
+    raises `psycopg2.ProgrammingError: can't execute an empty query`. This
+    matters for documentary migrations like `SELECT 1;  -- no-op`, where
+    the trailing comment becomes a phantom second statement after split.
+    """
+    out: list[str] = []
+    for fragment in sql.split(";"):
+        stripped = fragment.strip()
+        if not stripped:
+            continue
+        non_comment_lines = [
+            line for line in stripped.splitlines()
+            if line.strip() and not line.strip().startswith("--")
+        ]
+        if not non_comment_lines:
+            continue
+        out.append(stripped)
+    return out
 
 
 # ---------------------------------------------------------------------------
