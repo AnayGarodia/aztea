@@ -643,6 +643,13 @@ def test_registry_lists_new_builtin_agents(client):
         "Semantic Codebase Search",
         "AI Red Teamer",
         "Image Generator Agent",
+        # YC launch-audit demo agents (added 2026-05-09):
+        "Lighthouse Auditor",
+        "Accessibility Auditor",
+        "Security Headers Grader",
+        "Broken Link Crawler",
+        "PDF Document Parser",
+        "Web Search",
     }.issubset(names)
 
 

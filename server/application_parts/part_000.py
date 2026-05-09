@@ -77,8 +77,10 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
+from agents import accessibility_auditor as agent_accessibility_auditor
 from agents import ai_red_teamer as agent_ai_red_teamer
 from agents import arxiv_research as agent_arxiv_research
+from agents import broken_link_crawler as agent_broken_link_crawler
 from agents import browser_agent as agent_browser_agent
 from agents import codereview as agent_codereview
 from agents import cve_lookup as agent_cve_lookup
@@ -89,13 +91,16 @@ from agents import git_diff_analyzer as agent_git_diff_analyzer
 from agents import hn_digest as agent_hn_digest
 from agents import image_generator as agent_image_generator
 from agents import json_schema_validator as agent_json_schema_validator
+from agents import lighthouse_auditor as agent_lighthouse_auditor
 from agents import linter_agent as agent_linter_agent
 from agents import live_endpoint_tester as agent_live_endpoint_tester
 from agents import multi_file_executor as agent_multi_file_executor
 from agents import multi_language_executor as agent_multi_language_executor
+from agents import pdf_document_parser as agent_pdf_document_parser
 from agents import python_executor as agent_python_executor
 from agents import regex_tester as agent_regex_tester
 from agents import secret_scanner as agent_secret_scanner
+from agents import security_headers_grader as agent_security_headers_grader
 from agents import semantic_codebase_search as agent_semantic_codebase_search
 from agents import shell_executor as agent_shell_executor
 from agents import sql_explainer as agent_sql_explainer
@@ -103,6 +108,7 @@ from agents import type_checker as agent_type_checker
 from agents import video_storyboard as agent_video_storyboard
 from agents import visual_regression as agent_visual_regression
 from agents import web_researcher as agent_web_researcher
+from agents import web_search as agent_web_search
 from agents import wiki as agent_wiki
 from core import auth as _auth
 from core import cache as _cache
@@ -322,6 +328,12 @@ _JSON_SCHEMA_VALIDATOR_AGENT_ID = _builtin_constants.JSON_SCHEMA_VALIDATOR_AGENT
 _REGEX_TESTER_AGENT_ID = _builtin_constants.REGEX_TESTER_AGENT_ID
 _SQL_EXPLAINER_AGENT_ID = _builtin_constants.SQL_EXPLAINER_AGENT_ID
 _GIT_DIFF_ANALYZER_AGENT_ID = _builtin_constants.GIT_DIFF_ANALYZER_AGENT_ID
+_LIGHTHOUSE_AUDITOR_AGENT_ID = _builtin_constants.LIGHTHOUSE_AUDITOR_AGENT_ID
+_ACCESSIBILITY_AUDITOR_AGENT_ID = _builtin_constants.ACCESSIBILITY_AUDITOR_AGENT_ID
+_SECURITY_HEADERS_GRADER_AGENT_ID = _builtin_constants.SECURITY_HEADERS_GRADER_AGENT_ID
+_BROKEN_LINK_CRAWLER_AGENT_ID = _builtin_constants.BROKEN_LINK_CRAWLER_AGENT_ID
+_PDF_DOCUMENT_PARSER_AGENT_ID = _builtin_constants.PDF_DOCUMENT_PARSER_AGENT_ID
+_WEB_SEARCH_AGENT_ID = _builtin_constants.WEB_SEARCH_AGENT_ID
 
 _normalize_endpoint_ref = _builtin_constants.normalize_endpoint_ref
 _BUILTIN_INTERNAL_ENDPOINTS = _builtin_constants.BUILTIN_INTERNAL_ENDPOINTS
