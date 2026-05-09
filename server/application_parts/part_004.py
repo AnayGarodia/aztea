@@ -22,13 +22,15 @@ import sqlite3
 def _validate_builtin_agent_payload(
     agent_id: str, input_payload: dict[str, Any]
 ) -> None:
-    """Validate payload for Pydantic-model-backed builtins BEFORE charging.
+    """Pre-charge validation hook for Pydantic-model-backed builtins.
 
-    Raises ValueError (converted to 422) if invalid.
-    Agents that use their own run() validation are skipped here — they return
-    error dicts rather than raising, so they never cause a spurious charge.
+    All sunset agents that needed pre-charge validation have been removed;
+    every remaining builtin validates inside its own run() and returns an
+    error dict rather than raising, so this is a no-op kept as a future
+    extension point. New agents that need pre-charge raise-on-invalid
+    validation should add their case here.
     """
-    payload = input_payload or {}
+    return
 
 
 def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict:

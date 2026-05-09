@@ -54,7 +54,7 @@ from __future__ import annotations
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, timezone
+from datetime import date
 from urllib.parse import urlparse
 
 import requests

@@ -397,8 +397,9 @@ def test_each_legacy_alias_dispatches_to_its_verb_first_handler(
     """tools/call with the legacy name must reach the same handler as the
     canonical name. We verify by patching the alias map and confirming the
     dispatch normalization happens before any handler dispatch."""
-    bridge = _make_bridge_with_one_agent(monkeypatch)
-    # The alias map IS the source of truth for normalization.
+    # Helper sets LAZY_MCP_SCHEMAS via monkeypatch; the bridge itself is
+    # unused here — only the alias map matters for this assertion.
+    _make_bridge_with_one_agent(monkeypatch)
     assert _MODULE._LAZY_TOOL_NAME_ALIASES[legacy] == canonical
 
 
