@@ -121,6 +121,31 @@ _OFF_CATALOG_PATTERNS = [
         lambda toks: ({"endpoint", "endpoints", "latency", "load"} & toks)
         and ({"fast", "slow", "test", "perf", "performance", "p99", "p95"} & toks),
     ),
+    # 2026-05-09 eval additions: queries that whack-a-mole through
+    # per-agent blocks because they share generic security/dev tokens
+    # with too many candidates. Catching them at the global gate is
+    # cleaner and stops the missing-block-on-agent-N pattern from
+    # leaking through.
+    (
+        "OWASP guidance / threat-model frameworks",
+        lambda toks: "owasp" in toks,
+    ),
+    (
+        "JWT / JOSE token decoding",
+        lambda toks: "jwt" in toks or "jose" in toks,
+    ),
+    (
+        "joke / chitchat",
+        lambda toks: bool({"joke", "jokes", "funny"} & toks),
+    ),
+    (
+        "cooking / food",
+        lambda toks: bool({"cook", "cooking", "dinner", "recipe", "recipes", "food"} & toks),
+    ),
+    (
+        "credit card / payment-card",
+        lambda toks: ("credit" in toks and "card" in toks) or ("credit" in toks and "cards" in toks),
+    ),
 ]
 
 # Typo + acronym → canonical-term expansions ONLY. Do not list "code
