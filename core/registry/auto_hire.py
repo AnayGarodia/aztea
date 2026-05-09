@@ -157,7 +157,7 @@ def decide(
         return Decision(
             auto_invoked=False,
             reason="disabled",
-            next_step="Use aztea_search + aztea_call directly.",
+            next_step="Use search_specialists + call_specialist directly.",
         )
 
     if not candidates:
@@ -203,8 +203,8 @@ def decide(
             confidence=round(confidence, 3),
             candidates=[r.candidate.public_dict() for r in ranked[:3]],
             next_step=(
-                "Multiple agents could fit. Call aztea_describe on a candidate, "
-                "then aztea_call to run it."
+                "Multiple agents could fit. Call describe_specialist on a candidate, "
+                "then call_specialist to run it."
             ),
         )
 
@@ -216,7 +216,7 @@ def decide(
             confidence=round(confidence, 3),
             candidates=[top.candidate.public_dict()],
             next_step=(
-                f"Top match {top.candidate.slug!r} is in beta. Call aztea_call "
+                f"Top match {top.candidate.slug!r} is in beta. Call call_specialist "
                 "explicitly if you want to use it."
             ),
         )
@@ -265,7 +265,7 @@ def decide(
             candidates=[top.candidate.public_dict()],
             next_step=(
                 f"Top match {top.candidate.slug!r} costs ${price:.2f}. Raise "
-                f"max_cost_usd to at least ${price:.2f}, or call aztea_call "
+                f"max_cost_usd to at least ${price:.2f}, or call call_specialist "
                 "explicitly."
             ),
         )

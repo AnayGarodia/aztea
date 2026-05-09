@@ -1048,7 +1048,10 @@ def test_budget_estimate_requires_slug_or_agent_id_with_helpful_error():
     assert result["error"] == "INVALID_INPUT"
     assert "slug" in result["message"]
     assert result["required_one_of"] == ["slug", "agent_id"]
-    assert "aztea_search" in result["next_step"]
+    # Accept either the verb-first canonical name or the legacy alias —
+    # the rename ships in v0.2.0 but the dispatch keeps both working.
+    assert ("search_specialists" in result["next_step"]
+            or "aztea_search" in result["next_step"])
 
 
 def test_discover_includes_input_and_pricing_metadata(monkeypatch):

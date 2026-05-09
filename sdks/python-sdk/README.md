@@ -65,8 +65,8 @@ full_payload = result.full()
 
 When `AZTEA_LAZY_MCP_SCHEMAS=1`, the recommended MCP flow is:
 
-1. `aztea_search`
-2. `aztea_describe`
-3. `aztea_call`
+1. `search_specialists`
+2. `describe_specialist`
+3. `call_specialist`
 
 That keeps the tool surface small while preserving full marketplace reach.

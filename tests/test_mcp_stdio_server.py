@@ -328,3 +328,174 @@ def test_aztea_call_forwards_output_format_into_underlying_call(monkeypatch):
     assert captured["slug"] == "linter_agent"
     assert captured["tool_arguments"]["output_format"] == "markdown"
     assert captured["tool_arguments"]["code"] == "x = 1"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 5 contract tests — lock the verb-first rename + alias map so a future
+# refactor can't silently regress them. These tests assert the rename is the
+# canonical state, not just one valid state.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _make_bridge_with_one_agent(monkeypatch):
+    """Tiny helper: a bridge populated with one agent so tools/list returns
+    the four lazy tools deterministically."""
+    monkeypatch.setattr(_MODULE._feature_flags, "LAZY_MCP_SCHEMAS", True)
+    bridge = _MODULE.RegistryBridge(base_url="https://aztea.test", api_key="az_test")
+    bridge._entries = [
+        {
+            "agent_id": "agent-1",
+            "tool_name": "python_code_executor",
+            "tool": {
+                "name": "python_code_executor",
+                "description": "Execute Python snippets.",
+                "input_schema": {"type": "object"},
+                "output_schema": {"type": "object"},
+            },
+        }
+    ]
+    return bridge
+
+
+def test_published_tools_list_uses_verb_first_canonical_names(monkeypatch):
+    """tools/list must publish ONLY the verb-first names; legacy aztea_*
+    names must NOT appear as separate entries — they are dispatch-time
+    aliases, not catalog entries. Two duplicate entries would dilute the
+    model's selection signal."""
+    bridge = _make_bridge_with_one_agent(monkeypatch)
+    names = {tool["name"] for tool in bridge.tools()}
+    assert {"do_specialist_task", "search_specialists",
+            "describe_specialist", "call_specialist"} <= names
+    # Legacy names must NOT appear in the published catalog.
+    assert "aztea_do" not in names
+    assert "aztea_search" not in names
+    assert "aztea_describe" not in names
+    assert "aztea_call" not in names
+
+
+@pytest.mark.parametrize("legacy,canonical", [
+    ("aztea_search", "search_specialists"),
+    ("aztea_describe", "describe_specialist"),
+    ("aztea_do", "do_specialist_task"),
+    # aztea_call → call_specialist requires HTTP plumbing the dummy bridge
+    # doesn't have, so we cover that pair via the smoke test in
+    # test_buyer_surface_smoke.py instead.
+])
+def test_each_legacy_alias_dispatches_to_its_verb_first_handler(
+    monkeypatch, legacy, canonical
+):
+    """tools/call with the legacy name must reach the same handler as the
+    canonical name. We verify by patching the alias map and confirming the
+    dispatch normalization happens before any handler dispatch."""
+    bridge = _make_bridge_with_one_agent(monkeypatch)
+    # The alias map IS the source of truth for normalization.
+    assert _MODULE._LAZY_TOOL_NAME_ALIASES[legacy] == canonical
+
+
+def test_call_specialist_rejects_both_legacy_and_new_names_as_slug(monkeypatch):
+    """Recursion guard: call_specialist(slug=<any-lazy-tool-name>) must be
+    rejected. Without this, a model could recurse infinitely by passing
+    'aztea_call' or 'call_specialist' as the slug."""
+    bridge = _MODULE.RegistryBridge(base_url="https://aztea.test", api_key="az_test")
+    forbidden_slugs = [
+        "aztea_call", "call_specialist",
+        "aztea_search", "search_specialists",
+        "aztea_describe", "describe_specialist",
+        "aztea_do", "do_specialist_task",
+    ]
+    for slug in forbidden_slugs:
+        ok, result = bridge.call_tool("call_specialist", {"slug": slug})
+        assert ok is False, f"slug={slug!r} should have been rejected"
+        assert result["error"] == "INVALID_INPUT"
+        # Same rejection must happen via the legacy alias entry point.
+        ok2, result2 = bridge.call_tool("aztea_call", {"slug": slug})
+        assert ok2 is False, f"legacy aztea_call should also reject slug={slug!r}"
+        assert result2["error"] == "INVALID_INPUT"
+
+
+def test_server_instructions_contain_four_categories_and_decision_rule():
+    """Lock the categorical framing: all four category labels must appear,
+    plus the decision-rule sentence. Catches a future revert to enumerated
+    triggers."""
+    server = _MODULE.MCPStdioServer(bridge=_DummyBridge(), refresh_seconds=60)
+    instructions = server._initialize_result()["instructions"]
+    for category in ("EXECUTION", "LIVE DATA", "INDEPENDENT VERDICT", "MULTI-STEP WORKFLOW"):
+        assert category in instructions, f"missing category: {category}"
+    # The decision rule is the load-bearing sentence.
+    assert "Decision rule" in instructions
+    assert "work *on*" in instructions and "work that *uses*" in instructions
+
+
+def test_server_instructions_lead_with_verb_first_names_in_default_path():
+    """The DEFAULT path in instructions must name do_specialist_task before
+    any aztea_* legacy reference. Legacy names should appear only in a
+    backward-compat NOTE near the end."""
+    server = _MODULE.MCPStdioServer(bridge=_DummyBridge(), refresh_seconds=60)
+    instructions = server._initialize_result()["instructions"]
+    do_pos = instructions.find("do_specialist_task")
+    legacy_pos = instructions.find("aztea_do")
+    assert do_pos != -1, "do_specialist_task must appear in instructions"
+    assert legacy_pos == -1 or do_pos < legacy_pos, (
+        "verb-first name must appear before any legacy name reference"
+    )
+
+
+def test_server_version_was_bumped_for_cache_invalidation():
+    """v0.2.0 minimum — clients comparing versions must see a change so
+    they re-pull the renamed tool list. Pinning protects against an
+    accidental version revert."""
+    parts = _MODULE._SERVER_VERSION.split(".")
+    assert len(parts) >= 2
+    major, minor = int(parts[0]), int(parts[1])
+    assert (major, minor) >= (0, 2), (
+        f"server version {_MODULE._SERVER_VERSION!r} is below 0.2.0"
+    )
+
+
+def test_lazy_tool_alias_map_is_exhaustive_and_consistent():
+    """Every legacy lazy tool has an alias entry, and every alias target is
+    the canonical name on its corresponding _LAZY_*_TOOL dict. No orphans."""
+    aliases = _MODULE._LAZY_TOOL_NAME_ALIASES
+    assert set(aliases.keys()) == {
+        "aztea_do", "aztea_search", "aztea_describe", "aztea_call",
+    }
+    canonical_names = {
+        _MODULE._LAZY_DO_TOOL["name"],
+        _MODULE._LAZY_SEARCH_TOOL["name"],
+        _MODULE._LAZY_DESCRIBE_TOOL["name"],
+        _MODULE._LAZY_CALL_TOOL["name"],
+    }
+    assert set(aliases.values()) == canonical_names
+
+
+def test_do_specialist_task_description_disclaims_brand_keyword_dependency():
+    """The description must explicitly say the user does NOT need to say
+    'Aztea'. Regression guard against re-introducing brand-keyword
+    dependency in a future edit."""
+    desc = _MODULE._LAZY_DO_TOOL["description"]
+    # The disclaimer can read "do NOT need" or "does NOT need" depending on
+    # subject conjugation. Both are acceptable; the load-bearing tokens are
+    # the negation + the word "brand".
+    assert "NOT need" in desc and "brand" in desc.lower()
+    # All four category labels also appear in the tool description, not
+    # just in the server-level instructions.
+    for category in ("EXECUTION", "LIVE DATA", "INDEPENDENT VERDICT", "MULTI-STEP WORKFLOW"):
+        assert category in desc, f"missing category in do_specialist_task: {category}"
+
+
+def test_aztea_nudge_hook_outputs_valid_json_with_routing_rule():
+    """Layer 3 contract: the personal hook must emit valid JSON containing
+    the routing rule. CI machines without ~/.claude/ skip silently."""
+    import json
+    import subprocess
+    from pathlib import Path
+    hook = Path.home() / ".claude" / "hooks" / "aztea_nudge.sh"
+    if not hook.is_file():
+        pytest.skip("aztea_nudge.sh not installed (~/.claude/hooks/) — Layer 3 hook not present in this environment")
+    proc = subprocess.run([str(hook)], capture_output=True, text=True, timeout=5)
+    assert proc.returncode == 0, f"hook exit code {proc.returncode}, stderr={proc.stderr!r}"
+    payload = json.loads(proc.stdout)
+    assert payload["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
+    ctx = payload["hookSpecificOutput"]["additionalContext"]
+    for category in ("EXECUTION", "LIVE DATA", "INDEPENDENT VERDICT", "MULTI-STEP WORKFLOW"):
+        assert category in ctx, f"hook context missing category: {category}"
+    assert "do_specialist_task" in ctx

@@ -263,7 +263,7 @@ _TOOLS: list[dict[str, Any]] = [
                 },
                 "slug": {
                     "type": "string",
-                    "description": "Slug / tool name (e.g. 'linter_agent'). Use this when you only have the slug from aztea_search.",
+                    "description": "Slug / tool name (e.g. 'linter_agent'). Use this when you only have the slug from search_specialists.",
                 },
                 "input_payload": {
                     "type": "object",
@@ -311,7 +311,7 @@ _TOOLS: list[dict[str, Any]] = [
         "description": (
             "List every public Aztea agent in one shot — slug, name, short "
             "description, category, price, trust score. Use this when a "
-            "single aztea_search query won't surface what you need (e.g. "
+            "single search_specialists query won't surface what you need (e.g. "
             "browsing the marketplace, building a tool index, picking "
             "agents for a batch). Optionally filter by category."
         ),
@@ -350,7 +350,7 @@ _TOOLS: list[dict[str, Any]] = [
                 },
                 "slug": {
                     "type": "string",
-                    "description": "Agent slug returned by aztea_search. Prefer this when available.",
+                    "description": "Agent slug returned by search_specialists. Prefer this when available.",
                 },
                 "input_payload": {
                     "type": "object",
@@ -612,7 +612,7 @@ _TOOLS: list[dict[str, Any]] = [
         "description": (
             "Filtered registry discovery for Aztea agents by task description. "
             "Returns ranked candidates with trust scores, pricing, and match explanations, "
-            "and suppresses low-relevance demo/toy agents. Prefer aztea_search for Claude routing; "
+            "and suppresses low-relevance demo/toy agents. Prefer search_specialists for Claude routing; "
             "use this when you need trust or price filters."
         ),
         "input_schema": {
@@ -710,7 +710,7 @@ _TOOLS: list[dict[str, Any]] = [
                 },
                 "slug": {
                     "type": "string",
-                    "description": "Slug / tool name (e.g. 'linter_agent'). Use when you only have the slug from aztea_search.",
+                    "description": "Slug / tool name (e.g. 'linter_agent'). Use when you only have the slug from search_specialists.",
                 },
             },
             "anyOf": [
@@ -752,7 +752,7 @@ _TOOLS: list[dict[str, Any]] = [
                             },
                             "slug": {
                                 "type": "string",
-                                "description": "Agent slug returned by aztea_search.",
+                                "description": "Agent slug returned by search_specialists.",
                             },
                             "input_payload": {
                                 "type": "object",
@@ -766,7 +766,7 @@ _TOOLS: list[dict[str, Any]] = [
                             },
                             "arguments": {
                                 "type": "object",
-                                "description": "Alias for input_payload — matches the `aztea_call` field name so a single-call payload can be reused inside a batch job spec.",
+                                "description": "Alias for input_payload — matches the `call_specialist` field name so a single-call payload can be reused inside a batch job spec.",
                                 "additionalProperties": True,
                             },
                             "budget_cents": {
@@ -1049,7 +1049,7 @@ def _validate_grouped_action_inputs(
                 ),
                 "required_one_of": ["slug", "agent_id"],
                 "next_step": (
-                    "Call aztea_search(query='...') to find the slug, then "
+                    "Call search_specialists(query='...') to find the slug, then "
                     "aztea_budget(action='estimate', slug='<slug>', input={...})."
                 ),
             }
@@ -1407,7 +1407,7 @@ def always_visible_tools() -> list[dict[str, Any]]:
 
     Returns the three grouped resource dispatchers — they cover 22 of the 28
     underlying singular tools at low token cost. The remaining singular tools
-    stay discoverable through aztea_search.
+    stay discoverable through search_specialists.
     """
     enriched: list[dict[str, Any]] = []
     for tool in _GROUPED_TOOLS:
@@ -1750,7 +1750,7 @@ def _input_arg(args: dict[str, Any], *, default: dict[str, Any] | None = None) -
     """Resolve the agent payload from any of the three accepted field names.
 
     `input_payload` is canonical (HTTP API field). `input` is the friendlier
-    alias used in MCP grouped tools. `arguments` is the field name `aztea_call`
+    alias used in MCP grouped tools. `arguments` is the field name `call_specialist`
     uses — and the eval flagged that submitting a `hire_batch` job with
     `arguments={...}` (matching the single-call shape) was rejected with a
     confusing schema error. Accepting all three here makes the platform
@@ -2145,7 +2145,7 @@ def _resolve_agent_id(
             f"No agent has the exact slug {slug!r}. "
             "Slug matching is strict (no fuzzy fallback) to prevent "
             "money-routing to a similarly-named agent. "
-            "Use aztea_search to find the right slug, then retry."
+            "Use search_specialists to find the right slug, then retry."
         ),
         "search_returned_candidates": candidates_seen[:10],
     }
@@ -2219,8 +2219,8 @@ def _list_agents(
         rows.append(
             {
                 # Prefer an explicit slug field; fall back to canonicalising
-                # the display name so aztea_call works without a separate
-                # aztea_describe step (fixes "Secret Scanner" → "secret_scanner").
+                # the display name so call_specialist works without a separate
+                # describe_specialist step (fixes "Secret Scanner" → "secret_scanner").
                 "slug": agent.get("slug") or agent.get("agent_slug") or _canonical_slug(agent.get("name")),
                 "agent_id": agent.get("agent_id"),
                 "name": agent.get("name"),
@@ -2243,7 +2243,7 @@ def _list_agents(
         "agents": rows,
         "note": (
             "All public Aztea agents in one shot. Filter further with category. "
-            "Pick a slug and call aztea_describe(slug=...) for the full schema."
+            "Pick a slug and call describe_specialist(slug=...) for the full schema."
         ),
     }
 
@@ -3260,7 +3260,7 @@ def _discover(
                 )
             result["next_step"] = (
                 "If you believe an agent should match, paste the exact slug from "
-                "aztea_workflow(action='list_agents') and call aztea_describe directly."
+                "aztea_workflow(action='list_agents') and call describe_specialist directly."
             )
     return ok, result
 
@@ -3402,7 +3402,7 @@ def _compare_agents(
     session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
 ) -> tuple[bool, dict]:
     # Accept either `agent_ids` (UUIDs) or `slugs` (human names from
-    # aztea_search). The grouped tool surface documents `slugs`, so when
+    # search_specialists). The grouped tool surface documents `slugs`, so when
     # callers pass them we resolve client-side instead of 422-ing.
     raw_agent_ids = args.get("agent_ids")
     raw_slugs = args.get("slugs")

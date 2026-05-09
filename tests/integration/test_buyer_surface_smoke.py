@@ -186,6 +186,25 @@ def test_claude_stdio_mcp_smoke_lists_and_calls_control_plane_tool(buyer_surface
         assert result.get("isError") is not True
         structured = result["structuredContent"]
         assert structured["count"] >= 1
+
+        # And the canonical verb-first name must produce a structurally
+        # equivalent payload — this is the no-divergence contract.
+        called_canonical = server_obj._handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {"name": "search_specialists", "arguments": {"query": "code"}},
+            }
+        )
+        assert called_canonical is not None
+        result_canonical = called_canonical["result"]
+        assert result_canonical.get("isError") is not True
+        structured_canonical = result_canonical["structuredContent"]
+        assert structured_canonical["count"] == structured["count"]
+        # Same shape, same key set: alias path and canonical path are
+        # interchangeable from the model's perspective.
+        assert set(structured_canonical.keys()) == set(structured.keys())
     finally:
         module._DEFAULT_CLIENT_ID = old_client_id
 
