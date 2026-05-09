@@ -485,6 +485,36 @@ def _deterministic_quality_result(
             return {"verdict": "fail", "score": 2, "reason": "CI failure reproducer output must include commands_tried list."}
         return {"verdict": "pass", "score": 8, "reason": "Structured CI failure reproducer output is internally consistent."}
 
+    if agent_id == _JWT_DEBUGGER_AGENT_ID:
+        for key in ["header", "payload", "algorithm", "decoded_at"]:
+            if key not in payload:
+                return {"verdict": "fail", "score": 2, "reason": f"JWT debugger output must include '{key}'."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured JWT debugger output is internally consistent."}
+
+    if agent_id == _DOCKERFILE_ANALYZER_AGENT_ID:
+        for key in ["findings", "total_findings", "by_severity", "score"]:
+            if key not in payload:
+                return {"verdict": "fail", "score": 2, "reason": f"Dockerfile analyzer output must include '{key}'."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured Dockerfile analyzer output is internally consistent."}
+
+    if agent_id == _OPENAPI_VALIDATOR_AGENT_ID:
+        for key in ["valid", "errors", "stats"]:
+            if key not in payload:
+                return {"verdict": "fail", "score": 2, "reason": f"OpenAPI validator output must include '{key}'."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured OpenAPI validator output is internally consistent."}
+
+    if agent_id == _COVERAGE_RUNNER_AGENT_ID:
+        for key in ["overall_pct", "exit_code", "files"]:
+            if key not in payload:
+                return {"verdict": "fail", "score": 2, "reason": f"Coverage runner output must include '{key}'."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured coverage runner output is internally consistent."}
+
+    if agent_id == _EMAIL_DELIVERABILITY_CHECKER_AGENT_ID:
+        for key in ["domain", "spf", "dkim", "dmarc", "score", "verdict"]:
+            if key not in payload:
+                return {"verdict": "fail", "score": 2, "reason": f"Email deliverability checker output must include '{key}'."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured email deliverability checker output is internally consistent."}
+
     return None
 
 

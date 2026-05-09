@@ -97,6 +97,11 @@ from agents import sast_scanner as agent_sast_scanner
 from agents import stripe_webhook_debugger as agent_stripe_webhook_debugger
 from agents import load_tester as agent_load_tester
 from agents import ci_failure_reproducer as agent_ci_failure_reproducer
+from agents import jwt_debugger as agent_jwt_debugger
+from agents import dockerfile_analyzer as agent_dockerfile_analyzer
+from agents import openapi_validator as agent_openapi_validator
+from agents import coverage_runner as agent_coverage_runner
+from agents import email_deliverability_checker as agent_email_deliverability_checker
 from core import auth as _auth
 from core import cache as _cache
 from core import (
@@ -301,6 +306,11 @@ _SAST_SCANNER_AGENT_ID = _builtin_constants.SAST_SCANNER_AGENT_ID
 _STRIPE_WEBHOOK_DEBUGGER_AGENT_ID = _builtin_constants.STRIPE_WEBHOOK_DEBUGGER_AGENT_ID
 _LOAD_TESTER_AGENT_ID = _builtin_constants.LOAD_TESTER_AGENT_ID
 _CI_FAILURE_REPRODUCER_AGENT_ID = _builtin_constants.CI_FAILURE_REPRODUCER_AGENT_ID
+_JWT_DEBUGGER_AGENT_ID = _builtin_constants.JWT_DEBUGGER_AGENT_ID
+_DOCKERFILE_ANALYZER_AGENT_ID = _builtin_constants.DOCKERFILE_ANALYZER_AGENT_ID
+_OPENAPI_VALIDATOR_AGENT_ID = _builtin_constants.OPENAPI_VALIDATOR_AGENT_ID
+_COVERAGE_RUNNER_AGENT_ID = _builtin_constants.COVERAGE_RUNNER_AGENT_ID
+_EMAIL_DELIVERABILITY_CHECKER_AGENT_ID = _builtin_constants.EMAIL_DELIVERABILITY_CHECKER_AGENT_ID
 
 _normalize_endpoint_ref = _builtin_constants.normalize_endpoint_ref
 _BUILTIN_INTERNAL_ENDPOINTS = _builtin_constants.BUILTIN_INTERNAL_ENDPOINTS

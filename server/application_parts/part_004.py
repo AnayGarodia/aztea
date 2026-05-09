@@ -182,6 +182,16 @@ def _execute_builtin_agent_inner(
         return _finalize(agent_load_tester.run(payload))
     if agent_id == _CI_FAILURE_REPRODUCER_AGENT_ID:
         return _finalize(agent_ci_failure_reproducer.run(payload))
+    if agent_id == _JWT_DEBUGGER_AGENT_ID:
+        return _finalize(agent_jwt_debugger.run(payload))
+    if agent_id == _DOCKERFILE_ANALYZER_AGENT_ID:
+        return _finalize(agent_dockerfile_analyzer.run(payload))
+    if agent_id == _OPENAPI_VALIDATOR_AGENT_ID:
+        return _finalize(agent_openapi_validator.run(payload))
+    if agent_id == _COVERAGE_RUNNER_AGENT_ID:
+        return _finalize(agent_coverage_runner.run(payload))
+    if agent_id == _EMAIL_DELIVERABILITY_CHECKER_AGENT_ID:
+        return _finalize(agent_email_deliverability_checker.run(payload))
     raise ValueError(f"Unsupported built-in agent '{agent_id}'.")
 
 

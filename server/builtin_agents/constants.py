@@ -51,6 +51,11 @@ SAST_SCANNER_AGENT_ID = "91d229dc-1f37-5044-aaa2-f157e9425159"
 STRIPE_WEBHOOK_DEBUGGER_AGENT_ID = "0dd11350-0307-5900-ac19-71105117a9c9"
 LOAD_TESTER_AGENT_ID = "38143c50-4484-595c-827f-629d3c877f7e"
 CI_FAILURE_REPRODUCER_AGENT_ID = "fec9fdac-4685-579f-b26f-82119124c73e"
+JWT_DEBUGGER_AGENT_ID = "e4aa9794-c37a-5e2f-992e-b325fabb2caf"
+DOCKERFILE_ANALYZER_AGENT_ID = "e91f9b2f-f695-5890-b1f5-a9156c1b9a54"
+OPENAPI_VALIDATOR_AGENT_ID = "ce4230c8-1f16-5820-9852-7511b34603d7"
+COVERAGE_RUNNER_AGENT_ID = "20e5454b-5953-5b20-a993-1dfc92c20cfb"
+EMAIL_DELIVERABILITY_CHECKER_AGENT_ID = "37d58c2f-7624-529c-9bcd-f0f5e44f1e12"
 
 BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
     QUALITY_JUDGE_AGENT_ID: "internal://quality-judge",
@@ -74,6 +79,11 @@ BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
     STRIPE_WEBHOOK_DEBUGGER_AGENT_ID: "internal://stripe_webhook_debugger",
     LOAD_TESTER_AGENT_ID: "internal://load_tester",
     CI_FAILURE_REPRODUCER_AGENT_ID: "internal://ci_failure_reproducer",
+    JWT_DEBUGGER_AGENT_ID: "internal://jwt_debugger",
+    DOCKERFILE_ANALYZER_AGENT_ID: "internal://dockerfile_analyzer",
+    OPENAPI_VALIDATOR_AGENT_ID: "internal://openapi_validator",
+    COVERAGE_RUNNER_AGENT_ID: "internal://coverage_runner",
+    EMAIL_DELIVERABILITY_CHECKER_AGENT_ID: "internal://email_deliverability_checker",
 }
 
 BUILTIN_LEGACY_ROUTE_ENDPOINTS: dict[str, str] = {
@@ -144,6 +154,11 @@ CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
         STRIPE_WEBHOOK_DEBUGGER_AGENT_ID,
         LOAD_TESTER_AGENT_ID,
         CI_FAILURE_REPRODUCER_AGENT_ID,
+        JWT_DEBUGGER_AGENT_ID,
+        DOCKERFILE_ANALYZER_AGENT_ID,
+        OPENAPI_VALIDATOR_AGENT_ID,
+        COVERAGE_RUNNER_AGENT_ID,
+        EMAIL_DELIVERABILITY_CHECKER_AGENT_ID,
     }
 )
 # Sanity: a sunset agent must never accidentally re-appear in the public set.

@@ -9,8 +9,13 @@ from __future__ import annotations
 from server.builtin_agents.constants import (
     BUILTIN_INTERNAL_ENDPOINTS,
     CI_FAILURE_REPRODUCER_AGENT_ID,
+    COVERAGE_RUNNER_AGENT_ID,
+    DOCKERFILE_ANALYZER_AGENT_ID,
     DOCS_GROUNDER_AGENT_ID,
+    EMAIL_DELIVERABILITY_CHECKER_AGENT_ID,
+    JWT_DEBUGGER_AGENT_ID,
     LOAD_TESTER_AGENT_ID,
+    OPENAPI_VALIDATOR_AGENT_ID,
     SAST_SCANNER_AGENT_ID,
     STRIPE_WEBHOOK_DEBUGGER_AGENT_ID,
 )
@@ -498,6 +503,384 @@ def load_builtin_specs_part7() -> list[dict]:
                         "suggested_fix": "pip install PyJWT and add it to requirements.txt",
                         "reproduction_command": "pip install -r requirements.txt && pytest tests/test_api.py",
                         "commands_tried": [{"command": "pytest tests/test_api.py", "exit_code": 1, "duration_ms": 820}],
+                    },
+                }
+            ],
+        },
+        # ------------------------------------------------------------------ #
+        # JWT Debugger — decode and verify JSON Web Tokens                    #
+        # ------------------------------------------------------------------ #
+        {
+            "agent_id": JWT_DEBUGGER_AGENT_ID,
+            "name": "JWT Debugger",
+            "slug": "jwt-debugger",
+            "description": (
+                "Decodes and verifies JSON Web Tokens. Detects alg:none attacks, "
+                "RS256→HS256 confusion, expired claims, and invalid signatures — "
+                "with or without a key."
+            ),
+            "endpoint_url": BUILTIN_INTERNAL_ENDPOINTS[JWT_DEBUGGER_AGENT_ID],
+            "price_per_call_usd": 0.005,
+            "tags": ["security", "authentication", "jwt", "debugging"],
+            "is_featured": True,
+            "cacheable": False,
+            "category": "Security",
+            "runtime_requirements": ["cryptography"],
+            "tooling_kind": "tool_execution",
+            "stability_tier": "stable",
+            "codex_recommended": True,
+            "short_use_cases": [
+                "debug a JWT",
+                "detect alg confusion attack",
+                "verify token signature",
+            ],
+            "match_keywords": [
+                "jwt", "json web token", "bearer token", "token expired",
+                "alg none", "signature", "auth token", "decode jwt",
+            ],
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "token": {
+                        "type": "string",
+                        "description": "The JWT string to decode and analyze.",
+                    },
+                    "secret": {
+                        "type": "string",
+                        "description": "Optional signing secret or public key for signature verification.",
+                    },
+                },
+                "required": ["token"],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "header": {"type": "object"},
+                    "payload": {"type": "object"},
+                    "algorithm": {"type": "string"},
+                    "signature_valid": {"type": "boolean"},
+                    "alg_confusion_risk": {"type": "boolean"},
+                    "expired": {"type": "boolean"},
+                    "claims_issues": {"type": "array", "items": {"type": "string"}},
+                    "verified": {"type": "boolean"},
+                    "decoded_at": {"type": "string"},
+                },
+                "required": ["header", "payload", "algorithm", "decoded_at"],
+            },
+            "output_examples": [
+                {
+                    "input": {"token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0IiwiZXhwIjo5OTk5OTk5OTk5fQ.abc"},
+                    "output": {
+                        "header": {"alg": "HS256", "typ": "JWT"},
+                        "payload": {"sub": "1234", "exp": 9999999999},
+                        "signature_valid": True,
+                        "algorithm": "HS256",
+                        "alg_confusion_risk": False,
+                        "expired": False,
+                        "claims_issues": [],
+                        "verified": False,
+                        "decoded_at": "2026-05-09T12:00:00Z",
+                    },
+                }
+            ],
+        },
+        # ------------------------------------------------------------------ #
+        # Dockerfile Analyzer — security and best-practice linting            #
+        # ------------------------------------------------------------------ #
+        {
+            "agent_id": DOCKERFILE_ANALYZER_AGENT_ID,
+            "name": "Dockerfile Analyzer",
+            "slug": "dockerfile-analyzer",
+            "description": (
+                "Runs hadolint and custom security checks on Dockerfiles. "
+                "Finds unpinned images, secrets in ENV, root-user risks, and "
+                "pipe-to-shell patterns. Returns scored findings."
+            ),
+            "endpoint_url": BUILTIN_INTERNAL_ENDPOINTS[DOCKERFILE_ANALYZER_AGENT_ID],
+            "price_per_call_usd": 0.005,
+            "tags": ["security", "docker", "containers", "devops", "static-analysis"],
+            "is_featured": True,
+            "cacheable": True,
+            "category": "Security",
+            "runtime_requirements": ["hadolint (optional — degrades to regex checks)"],
+            "tooling_kind": "tool_execution",
+            "stability_tier": "stable",
+            "codex_recommended": True,
+            "short_use_cases": [
+                "lint a Dockerfile",
+                "find security issues in Docker image",
+                "check for unpinned base image",
+            ],
+            "match_keywords": [
+                "dockerfile", "docker", "container", "hadolint",
+                "base image", "docker security", "FROM latest",
+            ],
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "dockerfile": {
+                        "type": "string",
+                        "description": "The full contents of the Dockerfile to analyze.",
+                    },
+                },
+                "required": ["dockerfile"],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "findings": {"type": "array", "items": {"type": "object"}},
+                    "total_findings": {"type": "integer"},
+                    "by_severity": {"type": "object"},
+                    "score": {"type": "integer"},
+                    "pinned_base_image": {"type": "boolean"},
+                    "runs_as_root": {"type": "boolean"},
+                    "has_secrets_in_env": {"type": "boolean"},
+                    "tool_used": {"type": "string"},
+                },
+                "required": ["findings", "total_findings", "by_severity", "score"],
+            },
+            "output_examples": [
+                {
+                    "input": {"dockerfile": "FROM ubuntu:latest\nRUN apt-get install curl\n"},
+                    "output": {
+                        "findings": [{"line": 1, "severity": "warning", "rule": "DL3007", "message": "Using latest is best avoided", "fix_hint": "Pin to a specific image tag"}],
+                        "total_findings": 1,
+                        "by_severity": {"error": 0, "warning": 1, "info": 0},
+                        "score": 95,
+                        "pinned_base_image": False,
+                        "runs_as_root": True,
+                        "has_secrets_in_env": False,
+                        "tool_used": "regex",
+                    },
+                }
+            ],
+        },
+        # ------------------------------------------------------------------ #
+        # OpenAPI Validator — structural validation + breaking change detect  #
+        # ------------------------------------------------------------------ #
+        {
+            "agent_id": OPENAPI_VALIDATOR_AGENT_ID,
+            "name": "OpenAPI Validator",
+            "slug": "openapi-validator",
+            "description": (
+                "Validates OpenAPI 3.x specs for structural correctness and detects "
+                "breaking changes between two versions (removed endpoints, added required "
+                "params, type changes)."
+            ),
+            "endpoint_url": BUILTIN_INTERNAL_ENDPOINTS[OPENAPI_VALIDATOR_AGENT_ID],
+            "price_per_call_usd": 0.01,
+            "tags": ["api", "openapi", "validation", "breaking-changes", "developer-tools"],
+            "is_featured": True,
+            "cacheable": True,
+            "category": "Developer Tools",
+            "runtime_requirements": ["openapi-spec-validator (optional)", "PyYAML"],
+            "tooling_kind": "tool_execution",
+            "stability_tier": "stable",
+            "codex_recommended": True,
+            "short_use_cases": [
+                "validate an OpenAPI spec",
+                "find breaking API changes",
+                "check spec structure",
+            ],
+            "match_keywords": [
+                "openapi", "swagger", "api spec", "breaking change",
+                "api validation", "yaml spec", "rest api",
+            ],
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "spec": {
+                        "type": "string",
+                        "description": "OpenAPI 3.x spec in YAML or JSON string format.",
+                    },
+                    "previous_spec": {
+                        "type": "string",
+                        "description": "Optional previous version spec for breaking-change comparison.",
+                    },
+                },
+                "required": ["spec"],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "valid": {"type": "boolean"},
+                    "errors": {"type": "array", "items": {"type": "string"}},
+                    "warnings": {"type": "array", "items": {"type": "string"}},
+                    "breaking_changes": {"type": "array", "items": {"type": "object"}},
+                    "stats": {"type": "object"},
+                    "spec_title": {"type": "string"},
+                    "spec_version": {"type": "string"},
+                },
+                "required": ["valid", "errors", "stats"],
+            },
+            "output_examples": [
+                {
+                    "input": {"spec": "openapi: 3.0.3\ninfo:\n  title: My API\n  version: 1.0.0\npaths: {}"},
+                    "output": {
+                        "valid": True,
+                        "errors": [],
+                        "warnings": [],
+                        "breaking_changes": [],
+                        "stats": {"endpoints": 8, "schemas": 4, "parameters": 12, "openapi_version": "3.0.3"},
+                        "spec_title": "My API",
+                        "spec_version": "1.0.0",
+                    },
+                }
+            ],
+        },
+        # ------------------------------------------------------------------ #
+        # Coverage Runner — pytest coverage in isolated sandbox               #
+        # ------------------------------------------------------------------ #
+        {
+            "agent_id": COVERAGE_RUNNER_AGENT_ID,
+            "name": "Coverage Runner",
+            "slug": "coverage-runner",
+            "description": (
+                "Runs pytest with coverage in an isolated sandbox. Returns overall "
+                "coverage percentage, per-file uncovered line numbers, and branch "
+                "coverage data."
+            ),
+            "endpoint_url": BUILTIN_INTERNAL_ENDPOINTS[COVERAGE_RUNNER_AGENT_ID],
+            "price_per_call_usd": 0.02,
+            "tags": ["testing", "coverage", "pytest", "code-quality", "sandbox"],
+            "is_featured": True,
+            "cacheable": False,
+            "category": "Code Execution",
+            "runtime_requirements": ["python3", "pytest", "coverage"],
+            "tooling_kind": "sandbox_execution",
+            "stability_tier": "stable",
+            "codex_recommended": True,
+            "short_use_cases": [
+                "measure test coverage",
+                "find uncovered lines",
+                "check coverage threshold",
+            ],
+            "match_keywords": [
+                "coverage", "test coverage", "pytest", "uncovered lines",
+                "branch coverage", "code coverage", "missing coverage",
+            ],
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "files": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": "List of {name, content} file objects to write into the sandbox.",
+                    },
+                    "threshold": {
+                        "type": "number",
+                        "description": "Optional minimum coverage percentage (0–100) to enforce.",
+                    },
+                    "test_path": {
+                        "type": "string",
+                        "description": "Optional path or pattern to pass to pytest (default: auto-discover).",
+                    },
+                },
+                "required": ["files"],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "overall_pct": {"type": "number"},
+                    "passed_threshold": {"type": "boolean"},
+                    "files": {"type": "array", "items": {"type": "object"}},
+                    "total_statements": {"type": "integer"},
+                    "total_missing": {"type": "integer"},
+                    "exit_code": {"type": "integer"},
+                },
+                "required": ["overall_pct", "exit_code", "files"],
+            },
+            "output_examples": [
+                {
+                    "input": {
+                        "files": [
+                            {"name": "calculator.py", "content": "def add(a, b):\n    return a + b\n"},
+                            {"name": "test_calculator.py", "content": "from calculator import add\ndef test_add():\n    assert add(1, 2) == 3\n"},
+                        ],
+                        "threshold": 80,
+                    },
+                    "output": {
+                        "overall_pct": 78.5,
+                        "passed_threshold": True,
+                        "files": [{"name": "calculator.py", "coverage_pct": 85.0, "total_statements": 20, "missing_count": 3, "uncovered_lines": [14, 15, 22]}],
+                        "total_statements": 40,
+                        "total_missing": 8,
+                        "exit_code": 0,
+                    },
+                }
+            ],
+        },
+        # ------------------------------------------------------------------ #
+        # Email Deliverability Checker — MX/SPF/DKIM/DMARC DNS audit         #
+        # ------------------------------------------------------------------ #
+        {
+            "agent_id": EMAIL_DELIVERABILITY_CHECKER_AGENT_ID,
+            "name": "Email Deliverability Checker",
+            "slug": "email-deliverability-checker",
+            "description": (
+                "Checks MX records, SPF, DKIM, and DMARC DNS configuration for a domain. "
+                "Returns a scored verdict and actionable recommendations to improve email "
+                "deliverability."
+            ),
+            "endpoint_url": BUILTIN_INTERNAL_ENDPOINTS[EMAIL_DELIVERABILITY_CHECKER_AGENT_ID],
+            "price_per_call_usd": 0.01,
+            "tags": ["email", "dns", "spf", "dkim", "dmarc", "deliverability"],
+            "is_featured": True,
+            "cacheable": False,
+            "category": "Developer Tools",
+            "runtime_requirements": ["dnspython"],
+            "tooling_kind": "live_network_checks",
+            "stability_tier": "stable",
+            "codex_recommended": True,
+            "short_use_cases": [
+                "check SPF/DKIM/DMARC",
+                "debug email deliverability",
+                "pre-launch email config audit",
+            ],
+            "match_keywords": [
+                "spf", "dkim", "dmarc", "email deliverability",
+                "mx record", "email dns", "spam", "email configuration",
+            ],
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "domain": {
+                        "type": "string",
+                        "description": "Domain name to check, e.g. 'example.com'.",
+                    },
+                    "dkim_selector": {
+                        "type": "string",
+                        "description": "Optional DKIM selector to look up (default: 'default').",
+                    },
+                },
+                "required": ["domain"],
+            },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "domain": {"type": "string"},
+                    "mx_found": {"type": "boolean"},
+                    "spf": {"type": "object"},
+                    "dkim": {"type": "object"},
+                    "dmarc": {"type": "object"},
+                    "score": {"type": "integer"},
+                    "verdict": {"type": "string"},
+                    "recommendations": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["domain", "spf", "dkim", "dmarc", "score", "verdict"],
+            },
+            "output_examples": [
+                {
+                    "input": {"domain": "example.com"},
+                    "output": {
+                        "domain": "example.com",
+                        "mx_found": True,
+                        "spf": {"found": True, "valid": True, "policy": "softfail", "issues": []},
+                        "dkim": {"found": True, "has_public_key": True, "issues": []},
+                        "dmarc": {"found": True, "policy": "reject", "pct": 100, "issues": []},
+                        "score": 95,
+                        "verdict": "pass",
+                        "recommendations": [],
                     },
                 }
             ],
