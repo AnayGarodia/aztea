@@ -43,11 +43,12 @@ from .output import (
 from ._detect import DetectionError, DetectionResult, detect
 from . import wizard as _wizard
 
-# Re-use the shared scanner. The CLI imports from `core` because the SDK and
-# server share a checkout in this monorepo; in a pip-only install path the
-# server module is bundled with the SDK (see pyproject `packages = [...]`).
+# Re-use the shared scanner. We prefer the vendored copy that ships with
+# the SDK (so `pip install aztea` users get a working `publish` command);
+# fall back to `core.listing_safety` for monorepo dev installs that may
+# have an older SDK package without the vendored module.
 try:
-    from core.listing_safety import (  # type: ignore[import-not-found]
+    from .._listing_safety import (
         LEVEL_BLOCK,
         LEVEL_WARN,
         VerificationFinding,
@@ -57,17 +58,28 @@ try:
         scan_python_handler,
         scan_skill_md,
     )
-except ImportError:  # pragma: no cover — only happens in a partial install
-    # We keep a graceful path so `aztea publish --help` still works without
-    # the full server checkout. The actual command will refuse at call time.
-    LEVEL_BLOCK = "block"
-    LEVEL_WARN = "warn"
-    VerificationFinding = None  # type: ignore[assignment]
-    has_block = None  # type: ignore[assignment]
-    scan_agent_md_endpoint = None  # type: ignore[assignment]
-    scan_clone_against = None  # type: ignore[assignment]
-    scan_python_handler = None  # type: ignore[assignment]
-    scan_skill_md = None  # type: ignore[assignment]
+except ImportError:
+    try:
+        from core.listing_safety import (  # type: ignore[import-not-found]
+            LEVEL_BLOCK,
+            LEVEL_WARN,
+            VerificationFinding,
+            has_block,
+            scan_agent_md_endpoint,
+            scan_clone_against,
+            scan_python_handler,
+            scan_skill_md,
+        )
+    except ImportError:  # pragma: no cover — only on broken installs
+        # Keep `aztea publish --help` working; refuse at call time.
+        LEVEL_BLOCK = "block"
+        LEVEL_WARN = "warn"
+        VerificationFinding = None  # type: ignore[assignment]
+        has_block = None  # type: ignore[assignment]
+        scan_agent_md_endpoint = None  # type: ignore[assignment]
+        scan_clone_against = None  # type: ignore[assignment]
+        scan_python_handler = None  # type: ignore[assignment]
+        scan_skill_md = None  # type: ignore[assignment]
 
 
 # Single command (not a Typer sub-app) so `aztea publish <path>` reads

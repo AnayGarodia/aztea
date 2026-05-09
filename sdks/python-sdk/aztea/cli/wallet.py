@@ -153,7 +153,6 @@ def _render_wallet_card(wallet) -> None:
     from rich import box
 
     total = balance_cents + escrow_cents
-    available_frac = (balance_cents / total) if total > 0 else 1.0
 
     hero = Text()
     hero.append(f"${balance_cents/100:,.2f}", style="hero")
@@ -165,16 +164,25 @@ def _render_wallet_card(wallet) -> None:
         sub.append(f"   {DOT}   ", style="border")
         sub.append(f"${escrow_cents/100:,.2f} in escrow", style="muted")
 
-    bar_row = Table(show_header=False, show_edge=False, box=None, padding=(0, 1))
-    bar_row.add_column(no_wrap=True)
-    bar_row.add_column(justify="right", style="muted", no_wrap=True)
-    bar_row.add_row(mini_bar(available_frac, width=42), f"{available_frac*100:.0f}%")
-
-    inner = Group(
-        Padding(hero, (0, 0, 0, 1)),
-        Padding(sub, (0, 0, 1, 1)),
-        Padding(bar_row, (0, 0, 0, 0)),
-    )
+    # Only show the available-vs-escrow bar when there's actually escrow to
+    # visualise — for normal users the ratio is always 100% and the bar adds
+    # decoration without information.
+    if escrow_cents > 0 and total > 0:
+        available_frac = balance_cents / total
+        bar_row = Table(show_header=False, show_edge=False, box=None, padding=(0, 1))
+        bar_row.add_column(no_wrap=True)
+        bar_row.add_column(justify="right", style="muted", no_wrap=True)
+        bar_row.add_row(mini_bar(available_frac, width=42), f"{available_frac*100:.0f}%")
+        inner = Group(
+            Padding(hero, (0, 0, 0, 1)),
+            Padding(sub, (0, 0, 1, 1)),
+            Padding(bar_row, (0, 0, 0, 0)),
+        )
+    else:
+        inner = Group(
+            Padding(hero, (0, 0, 0, 1)),
+            Padding(sub, (0, 0, 0, 1)),
+        )
 
     panel = Panel(
         inner,
