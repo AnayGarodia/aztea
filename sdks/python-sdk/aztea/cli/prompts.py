@@ -140,7 +140,7 @@ def multiline_or_editor(
     if use_editor:
         return _spawn_editor(initial, suffix=suffix)
     console.print(
-        f"  [muted]Paste your content below. End with a single line containing "
+        "  [muted]Paste your content below. End with a single line containing "
         "EOF and press Enter.[/muted]"
     )
     lines: list[str] = []

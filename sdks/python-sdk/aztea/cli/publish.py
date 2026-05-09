@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import re
-import sys
 from pathlib import Path
 from typing import Any, Optional
 
@@ -512,7 +511,7 @@ def _emit_receipt(
     kv_table(rows)
     console.print()
     console.print(
-        f"[muted]Buyers using `aztea` MCP will see this listing within 5 s.[/muted]"
+        "[muted]Buyers using `aztea` MCP will see this listing within 5 s.[/muted]"
     )
     if review_status == "probation":
         console.print(

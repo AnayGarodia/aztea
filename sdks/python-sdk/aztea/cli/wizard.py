@@ -14,27 +14,20 @@ logic stay identical to the path-given case.
 from __future__ import annotations
 
 import json
-import os
 import re
-import sys
 from pathlib import Path
 from string import Template
-from typing import Any, Callable
 
 import typer
 
 from ..config import load_config
 from .common import resolve_settings, slugify
 from .output import (
-    ARROW,
-    BULLET,
-    CHECK,
     banner,
     console,
     err_console,
     info,
     success,
-    warn,
 )
 from . import prompts as _p
 
@@ -323,7 +316,7 @@ def _wizard_python_handler() -> Path:
     file_name = name.replace("-", "_") + ".py"
     path = _write_file(file_name, rendered)
     info(
-        f"Deploy this file at the URL you'll provide next, then we'll list it "
+        "Deploy this file at the URL you'll provide next, then we'll list it "
         "as an external endpoint."
     )
     return path
