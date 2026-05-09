@@ -33,6 +33,62 @@ def _validate_builtin_agent_payload(
     return
 
 
+# Per-agent concurrency caps. Without these, par>=25 fan-outs against
+# heavy agents (web_search, git_diff_analyzer, browser_agent) saturate
+# their internal pools and surface as 502 agent.endpoint_misconfigured.
+# We now fail fast at the dispatch boundary with a clean rate-limit
+# rejection so the caller's batch infrastructure refunds and retries.
+# Heavy agents (subprocess/Playwright/HTTP-fanout) get tighter caps;
+# pure-CPU helpers can run wide.
+_AGENT_CONCURRENCY_DEFAULT = int(os.environ.get("AZTEA_AGENT_CONCURRENCY_DEFAULT", "16"))
+_AGENT_CONCURRENCY_LIMITS: dict[str, int] = {
+    _PYTHON_EXECUTOR_AGENT_ID: 16,
+    _MULTI_LANGUAGE_EXECUTOR_AGENT_ID: 8,
+    _BROWSER_AGENT_ID: 4,
+    _VISUAL_REGRESSION_AGENT_ID: 4,
+    _LIGHTHOUSE_AUDITOR_AGENT_ID: 4,
+    _ACCESSIBILITY_AUDITOR_AGENT_ID: 4,
+    _BROKEN_LINK_CRAWLER_AGENT_ID: 4,
+    _DB_SANDBOX_AGENT_ID: 8,
+}
+_AGENT_SEMAPHORES: dict[str, threading.BoundedSemaphore] = {}
+_AGENT_SEMAPHORES_LOCK = threading.Lock()
+# Acquire wait — short, because the caller's batch is timing-sensitive and
+# a hard 429 lets them refund and retry next tick. Tunable via env so ops
+# can lengthen for slower-but-cheaper backpressure if needed.
+_AGENT_SEMAPHORE_WAIT_SECONDS = float(
+    os.environ.get("AZTEA_AGENT_SEMAPHORE_WAIT_SECONDS", "0.5")
+)
+
+
+class _AgentSlotUnavailable(Exception):
+    """Raised when an agent's concurrency cap is saturated. Caller must
+    refund and surface a 429 with `agent.upstream_timeout`."""
+
+    def __init__(self, agent_id: str, limit: int):
+        self.agent_id = agent_id
+        self.limit = limit
+        super().__init__(
+            f"Agent '{agent_id}' is at its concurrency cap ({limit} in flight)."
+        )
+
+
+def _agent_semaphore(agent_id: str) -> threading.BoundedSemaphore:
+    sem = _AGENT_SEMAPHORES.get(agent_id)
+    if sem is not None:
+        return sem
+    with _AGENT_SEMAPHORES_LOCK:
+        sem = _AGENT_SEMAPHORES.get(agent_id)
+        if sem is not None:
+            return sem
+        limit = max(
+            1, _AGENT_CONCURRENCY_LIMITS.get(agent_id, _AGENT_CONCURRENCY_DEFAULT)
+        )
+        sem = threading.BoundedSemaphore(limit)
+        _AGENT_SEMAPHORES[agent_id] = sem
+        return sem
+
+
 def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict:
     def _finalize(output: Any) -> dict:
         if isinstance(output, dict) and isinstance(output.get("error"), dict):
@@ -56,6 +112,22 @@ def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict
         return result
 
     payload = input_payload or {}
+
+    sem = _agent_semaphore(agent_id)
+    if not sem.acquire(timeout=_AGENT_SEMAPHORE_WAIT_SECONDS):
+        raise _AgentSlotUnavailable(
+            agent_id,
+            _AGENT_CONCURRENCY_LIMITS.get(agent_id, _AGENT_CONCURRENCY_DEFAULT),
+        )
+    try:
+        return _execute_builtin_agent_inner(agent_id, payload, _finalize)
+    finally:
+        sem.release()
+
+
+def _execute_builtin_agent_inner(
+    agent_id: str, payload: dict[str, Any], _finalize
+) -> dict:
     if agent_id == _QUALITY_JUDGE_AGENT_ID:
         return _finalize(
             judges.run_quality_judgment(

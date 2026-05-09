@@ -40,6 +40,22 @@ from core.executor_sandbox import build_subprocess_env
 from core.llm import CompletionRequest, Message, run_with_fallback
 
 _MAX_OUTPUT_CHARS = 8000
+
+# Strips ANSI escape sequences (CSI, OSC, single-char) from sandboxed
+# subprocess output before it is returned to the caller. Without this,
+# `print("\x1b[2J\x1b[H")` from inside the sandbox would clear the
+# buyer's terminal, and OSC sequences could spoof prompts or titles.
+_ANSI_ESCAPE_RE = re.compile(
+    r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])"
+)
+
+
+def _strip_terminal_escapes(text: str) -> str:
+    if not text:
+        return text
+    cleaned = _ANSI_ESCAPE_RE.sub("", text)
+    # BEL and backspace can also be abused to overwrite or beep.
+    return cleaned.replace("\x07", "").replace("\x08", "")
 _MAX_CODE_CHARS = 16000
 _MAX_MEMORY_MB = max(
     64, min(int(os.environ.get("AZTEA_PYTHON_MAX_MEMORY_MB", "128") or "128"), 1024)
@@ -783,8 +799,8 @@ def run(payload: dict) -> dict:
         elapsed_ms = raw_result["execution_time_ms"]
         variables_captured = raw_result["variables_captured"]
 
-    stdout = stdout[:_MAX_OUTPUT_CHARS]
-    stderr = stderr[:2000]
+    stdout = _strip_terminal_escapes(stdout[:_MAX_OUTPUT_CHARS])
+    stderr = _strip_terminal_escapes(stderr[:2000])
 
     explanation = ""
     explanation_sanitized = False

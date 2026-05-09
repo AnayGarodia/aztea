@@ -557,9 +557,23 @@ def _caller_can_access_agent(caller: core_models.CallerContext, agent: dict) -> 
 
 def _assert_agent_callable(agent_id: str, agent: dict) -> None:
     endpoint = str(agent.get("endpoint_url") or "").strip()
-    is_internal_builtin = str(
-        agent_id
-    ).strip() in _BUILTIN_AGENT_IDS and endpoint.startswith("internal://")
+    agent_id_str = str(agent_id).strip()
+    is_internal_builtin = (
+        agent_id_str in _BUILTIN_AGENT_IDS and endpoint.startswith("internal://")
+    )
+    # Sunset agents (json_schema_validator, regex_tester, etc.) live in the DB
+    # for receipt resolution but have no internal endpoint. Without this check
+    # we'd dispatch into a missing handler and surface a confusing 502
+    # `agent.endpoint_misconfigured`. Return a clean 410 Gone instead.
+    if agent_id_str in _SUNSET_DEPRECATED_AGENT_IDS:
+        raise HTTPException(
+            status_code=410,
+            detail=error_codes.make_error(
+                error_codes.AGENT_SUNSET,
+                f"Agent '{agent_id}' was removed from the public catalog and is no longer callable.",
+                {"agent_id": agent_id, "deprecated": True},
+            ),
+        )
     if agent.get("status") == "banned":
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
     if agent.get("status") == "suspended":
