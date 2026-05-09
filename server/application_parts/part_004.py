@@ -29,8 +29,6 @@ def _validate_builtin_agent_payload(
     error dicts rather than raising, so they never cause a spurious charge.
     """
     payload = input_payload or {}
-    if agent_id == _FINANCIAL_AGENT_ID:
-        FinancialRequest.model_validate(payload)
 
 
 def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict:
@@ -56,9 +54,6 @@ def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict
         return result
 
     payload = input_payload or {}
-    if agent_id == _FINANCIAL_AGENT_ID:
-        body = FinancialRequest.model_validate(payload)
-        return _finalize(_invoke_financial_agent(body))
     if agent_id == _QUALITY_JUDGE_AGENT_ID:
         return _finalize(
             judges.run_quality_judgment(
@@ -75,44 +70,22 @@ def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict
         )
     if agent_id == _CVELOOKUP_AGENT_ID:
         return _finalize(agent_cve_lookup.run(payload))
-    if agent_id == _IMAGE_GENERATOR_AGENT_ID:
-        return _finalize(agent_image_generator.run(payload))
-    if agent_id == _VIDEO_STORYBOARD_AGENT_ID:
-        return _finalize(agent_video_storyboard.run(payload))
-    if agent_id == _ARXIV_RESEARCH_AGENT_ID:
-        return _finalize(agent_arxiv_research.run(payload))
     if agent_id == _PYTHON_EXECUTOR_AGENT_ID:
         return _finalize(agent_python_executor.run(payload))
-    if agent_id == _HN_DIGEST_AGENT_ID:
-        return _finalize(agent_hn_digest.run(payload))
     if agent_id == _DNS_INSPECTOR_AGENT_ID:
         return _finalize(agent_dns_inspector.run(payload))
     if agent_id == _DEPENDENCY_AUDITOR_AGENT_ID:
         return _finalize(agent_dependency_auditor.run(payload))
-    if agent_id == _MULTI_FILE_EXECUTOR_AGENT_ID:
-        return _finalize(agent_multi_file_executor.run(payload))
-    if agent_id == _LINTER_AGENT_ID:
-        return _finalize(agent_linter_agent.run(payload))
-    if agent_id == _SHELL_EXECUTOR_AGENT_ID:
-        return _finalize(agent_shell_executor.run(payload))
-    if agent_id == _TYPE_CHECKER_AGENT_ID:
-        return _finalize(agent_type_checker.run(payload))
     if agent_id == _DB_SANDBOX_AGENT_ID:
         return _finalize(agent_db_sandbox.run(payload))
     if agent_id == _VISUAL_REGRESSION_AGENT_ID:
         return _finalize(agent_visual_regression.run(payload))
-    if agent_id == _LIVE_ENDPOINT_TESTER_AGENT_ID:
-        return _finalize(agent_live_endpoint_tester.run(payload))
     if agent_id == _BROWSER_AGENT_ID:
         return _finalize(agent_browser_agent.run(payload))
     if agent_id == _MULTI_LANGUAGE_EXECUTOR_AGENT_ID:
         return _finalize(agent_multi_language_executor.run(payload))
-    if agent_id == _SEMANTIC_CODEBASE_SEARCH_AGENT_ID:
-        return _finalize(agent_semantic_codebase_search.run(payload))
     if agent_id == _SECRET_SCANNER_AGENT_ID:
         return _finalize(agent_secret_scanner.run(payload))
-    if agent_id == _SQL_EXPLAINER_AGENT_ID:
-        return _finalize(agent_sql_explainer.run(payload))
     if agent_id == _LIGHTHOUSE_AUDITOR_AGENT_ID:
         return _finalize(agent_lighthouse_auditor.run(payload))
     if agent_id == _ACCESSIBILITY_AUDITOR_AGENT_ID:
@@ -138,9 +111,10 @@ def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict
     raise ValueError(f"Unsupported built-in agent '{agent_id}'.")
 
 
-_DEGRADED_UNCHARGEABLE_AGENT_IDS = {
-    _FINANCIAL_AGENT_ID,
-}
+# No agents currently use the degraded-unchargeable path; keep the set
+# empty so _is_unchargeable_degraded_output() always returns False until
+# a new agent that needs it is added.
+_DEGRADED_UNCHARGEABLE_AGENT_IDS: set[str] = set()
 
 
 def _is_unchargeable_degraded_output(agent_id: str, output: Any) -> bool:

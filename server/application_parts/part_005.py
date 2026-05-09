@@ -126,89 +126,6 @@ def _deterministic_quality_result(
     agent_id = str(agent.get("agent_id") or "").strip()
     payload = output_payload if isinstance(output_payload, dict) else {}
 
-    if agent_id == _TYPE_CHECKER_AGENT_ID:
-        errors = payload.get("errors")
-        diagnostics = payload.get("diagnostics")
-        if not isinstance(errors, list) or not isinstance(diagnostics, list):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Type checker output must include list-shaped errors and diagnostics.",
-            }
-        try:
-            error_count = int(payload.get("error_count"))
-        except (TypeError, ValueError):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Type checker output must include a valid error_count.",
-            }
-        passed = payload.get("passed")
-        if not isinstance(passed, bool):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Type checker output must include a boolean passed field.",
-            }
-        if error_count != len(errors) or error_count != len(diagnostics):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Type checker output is internally inconsistent: error_count does not match diagnostics.",
-            }
-        if passed != (error_count == 0):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Type checker output is internally inconsistent: passed does not match error_count.",
-            }
-        return {
-            "verdict": "pass",
-            "score": 8 if error_count == 0 else 9,
-            "reason": "Structured type-checker output is internally consistent.",
-        }
-
-    if agent_id == _LINTER_AGENT_ID:
-        issues = payload.get("issues")
-        if not isinstance(issues, list):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Linter output must include an issues list.",
-            }
-        try:
-            total_issues = int(payload.get("total_issues"))
-        except (TypeError, ValueError):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Linter output must include a valid total_issues count.",
-            }
-        clean = payload.get("clean")
-        if not isinstance(clean, bool):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Linter output must include a boolean clean field.",
-            }
-        if total_issues != len(issues):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Linter output is internally inconsistent: total_issues does not match issues.",
-            }
-        if clean != (total_issues == 0):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Linter output is internally inconsistent: clean does not match total_issues.",
-            }
-        return {
-            "verdict": "pass",
-            "score": 8 if total_issues == 0 else 9,
-            "reason": "Structured linter output is internally consistent.",
-        }
-
     if agent_id == _PYTHON_EXECUTOR_AGENT_ID:
         if not isinstance(payload.get("stdout"), str) or not isinstance(
             payload.get("stderr"), str
@@ -243,37 +160,6 @@ def _deterministic_quality_result(
             "verdict": "pass",
             "score": 8,
             "reason": "Structured Python executor output is internally consistent.",
-        }
-
-    if agent_id == _MULTI_FILE_EXECUTOR_AGENT_ID:
-        if not isinstance(payload.get("stdout"), str) or not isinstance(
-            payload.get("stderr"), str
-        ):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Multi-file executor output must include stdout/stderr strings.",
-            }
-        if not isinstance(payload.get("timed_out"), bool):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Multi-file executor output must include a boolean timed_out field.",
-            }
-        try:
-            int(payload.get("exit_code"))
-            int(payload.get("execution_time_ms"))
-            int(payload.get("files_written"))
-        except (TypeError, ValueError):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Multi-file executor output must include numeric exit_code, execution_time_ms, and files_written.",
-            }
-        return {
-            "verdict": "pass",
-            "score": 8,
-            "reason": "Structured multi-file executor output is internally consistent.",
         }
 
     if agent_id == _MULTI_LANGUAGE_EXECUTOR_AGENT_ID:
@@ -377,116 +263,6 @@ def _deterministic_quality_result(
             "reason": "Structured CVE lookup output is internally consistent.",
         }
 
-    if agent_id == _FINANCIAL_AGENT_ID:
-        highlights = payload.get("recent_financial_highlights")
-        risks = payload.get("key_risks")
-        signal = str(payload.get("signal") or "").strip().lower()
-        if (
-            not isinstance(payload.get("ticker"), str)
-            or not str(payload.get("ticker")).strip()
-        ):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Financial research output must include a ticker.",
-            }
-        if not isinstance(highlights, list) or not isinstance(risks, list):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Financial research output must include recent_financial_highlights and key_risks lists.",
-            }
-        if signal not in {"positive", "neutral", "negative"}:
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Financial research output must include signal=positive|neutral|negative.",
-            }
-        if not isinstance(payload.get("business_summary"), str) or not isinstance(
-            payload.get("signal_reasoning"), str
-        ):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Financial research output must include business_summary and signal_reasoning strings.",
-            }
-        return {
-            "verdict": "pass",
-            "score": 8,
-            "reason": "Structured financial research output is internally consistent.",
-        }
-
-    if agent_id == _SEMANTIC_CODEBASE_SEARCH_AGENT_ID:
-        if (
-            not isinstance(payload.get("query"), str)
-            or not str(payload.get("query")).strip()
-        ):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Semantic code search output must include the original query string.",
-            }
-        try:
-            total_files_indexed = int(payload.get("total_files_indexed"))
-        except (TypeError, ValueError):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Semantic code search output must include numeric total_files_indexed.",
-            }
-        if total_files_indexed < 0:
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Semantic code search output cannot report a negative total_files_indexed.",
-            }
-        if str(payload.get("source") or "").strip() not in {"artifact", "git"}:
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Semantic code search output must include source=artifact|git.",
-            }
-        results = payload.get("results")
-        if not isinstance(results, list):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Semantic code search output must include a results list.",
-            }
-        for item in results:
-            if not isinstance(item, dict):
-                return {
-                    "verdict": "fail",
-                    "score": 2,
-                    "reason": "Each semantic code search result must be an object.",
-                }
-            if not str(item.get("path") or "").strip():
-                return {
-                    "verdict": "fail",
-                    "score": 2,
-                    "reason": "Each semantic code search result must include a path.",
-                }
-            if not isinstance(item.get("snippet"), str):
-                return {
-                    "verdict": "fail",
-                    "score": 2,
-                    "reason": "Each semantic code search result must include a snippet string.",
-                }
-            try:
-                float(item.get("score"))
-                int(item.get("size_bytes"))
-            except (TypeError, ValueError):
-                return {
-                    "verdict": "fail",
-                    "score": 2,
-                    "reason": "Each semantic code search result must include numeric score and size_bytes.",
-                }
-        return {
-            "verdict": "pass",
-            "score": 8,
-            "reason": "Structured semantic code search output is internally consistent.",
-        }
-
     if agent_id == _SECRET_SCANNER_AGENT_ID:
         findings = payload.get("findings")
         counts = payload.get("findings_by_severity")
@@ -544,51 +320,6 @@ def _deterministic_quality_result(
             "verdict": "pass",
             "score": 8,
             "reason": "Structured secret scanner output is internally consistent.",
-        }
-
-    if agent_id == _SQL_EXPLAINER_AGENT_ID:
-        queries = payload.get("queries")
-        if not isinstance(queries, list):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "SQL explainer output must include a queries list.",
-            }
-        try:
-            total_issues = int(payload.get("total_issues"))
-        except (TypeError, ValueError):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "SQL explainer output must include a numeric total_issues.",
-            }
-        counted_issues = 0
-        for item in queries:
-            if not isinstance(item, dict):
-                return {
-                    "verdict": "fail",
-                    "score": 2,
-                    "reason": "Each SQL explainer query result must be an object.",
-                }
-            issues = item.get("issues")
-            suggestions = item.get("suggestions")
-            if not isinstance(issues, list) or not isinstance(suggestions, list):
-                return {
-                    "verdict": "fail",
-                    "score": 2,
-                    "reason": "Each SQL explainer query result must include issues and suggestions lists.",
-                }
-            counted_issues += len(issues)
-        if total_issues != counted_issues:
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "SQL explainer output is internally inconsistent: total_issues does not match query issues.",
-            }
-        return {
-            "verdict": "pass",
-            "score": 8,
-            "reason": "Structured SQL explainer output is internally consistent.",
         }
 
     if agent_id == _DB_SANDBOX_AGENT_ID:
@@ -662,36 +393,6 @@ def _deterministic_quality_result(
             "reason": "Structured DNS inspector output is internally consistent.",
         }
 
-    if agent_id == _LIVE_ENDPOINT_TESTER_AGENT_ID:
-        try:
-            requests_count = int(payload.get("requests"))
-            success_count = int(payload.get("success_count"))
-            failure_count = int(payload.get("failure_count"))
-            billing_units_actual = int(payload.get("billing_units_actual"))
-        except (TypeError, ValueError):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Live endpoint tester output must include numeric request counts.",
-            }
-        if requests_count != success_count + failure_count:
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Live endpoint tester output is internally inconsistent: requests does not match success_count + failure_count.",
-            }
-        if billing_units_actual != requests_count:
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Live endpoint tester output is internally inconsistent: billing_units_actual does not match requests.",
-            }
-        return {
-            "verdict": "pass",
-            "score": 8,
-            "reason": "Structured live endpoint tester output is internally consistent.",
-        }
-
     if agent_id == _BROWSER_AGENT_ID:
         if (
             not isinstance(payload.get("url"), str)
@@ -724,51 +425,6 @@ def _deterministic_quality_result(
             "verdict": "pass",
             "score": 8,
             "reason": "Structured browser output is internally consistent.",
-        }
-
-    if agent_id == _IMAGE_GENERATOR_AGENT_ID:
-        artifacts = payload.get("artifacts")
-        if not isinstance(artifacts, list) or not artifacts:
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Image generator output must include artifacts.",
-            }
-        if not isinstance(payload.get("provider"), str) or not isinstance(
-            payload.get("model"), str
-        ):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Image generator output must include provider and model strings.",
-            }
-        return {
-            "verdict": "pass",
-            "score": 8,
-            "reason": "Structured image generation output is internally consistent.",
-        }
-
-    if agent_id == _VIDEO_STORYBOARD_AGENT_ID:
-        if not isinstance(payload.get("shot_plan"), list) or not payload.get(
-            "shot_plan"
-        ):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Video storyboard output must include a non-empty shot_plan.",
-            }
-        if not isinstance(payload.get("artifacts"), list) or not payload.get(
-            "artifacts"
-        ):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Video storyboard output must include artifacts.",
-            }
-        return {
-            "verdict": "pass",
-            "score": 8,
-            "reason": "Structured video storyboard output is internally consistent.",
         }
 
     if agent_id == _DOCS_GROUNDER_AGENT_ID:
@@ -833,17 +489,6 @@ def _deterministic_quality_result(
 
 
 def _quality_hint_for_agent(agent: dict) -> str:
-    agent_id = str(agent.get("agent_id") or "").strip()
-    if agent_id == _TYPE_CHECKER_AGENT_ID:
-        return (
-            "This is a deterministic type-checker. A result with passed=true, error_count=0, "
-            "and empty errors/diagnostics is a valid successful outcome, not a failure to find issues."
-        )
-    if agent_id == _LINTER_AGENT_ID:
-        return (
-            "This is a deterministic linter. A result with clean=true, total_issues=0, "
-            "and an empty issues list is a valid successful outcome."
-        )
     return ""
 
 

@@ -4,17 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.models import (
-    FinancialRequest,
-)
 from server.builtin_agents.constants import (
     BUILTIN_INTERNAL_ENDPOINTS as _BUILTIN_INTERNAL_ENDPOINTS,
 )
 from server.builtin_agents.constants import (
     CVELOOKUP_AGENT_ID as _CVELOOKUP_AGENT_ID,
-)
-from server.builtin_agents.constants import (
-    FINANCIAL_AGENT_ID as _FINANCIAL_AGENT_ID,
 )
 from server.builtin_agents.constants import (
     QUALITY_JUDGE_AGENT_ID as _QUALITY_JUDGE_AGENT_ID,
@@ -27,77 +21,6 @@ from server.builtin_agents.schemas import (
 
 def load_builtin_specs_part1() -> list[dict[str, Any]]:
     return [
-        {
-            "agent_id": _FINANCIAL_AGENT_ID,
-            "name": "Financial Research Agent",
-            "description": "Use when looking up financial data for a public company. Fetches the latest 10-K or 10-Q directly from SEC EDGAR, extracts concrete filing evidence, and returns a structured brief with grounded highlights, key risks, and a positive/neutral/negative signal tied to the filing.",
-            "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_FINANCIAL_AGENT_ID],
-            "price_per_call_usd": 0.03,
-            "tags": ["financial-research", "sec-filings", "equity-analysis"],
-            "input_schema": FinancialRequest.model_json_schema(),
-            "output_schema": _output_schema_object(
-                {
-                    "ticker": {"type": "string"},
-                    "company_name": {"type": "string"},
-                    "filing_type": {"type": "string"},
-                    "filing_date": {"type": "string"},
-                    "business_summary": {"type": "string"},
-                    "recent_financial_highlights": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                    "key_risks": {"type": "array", "items": {"type": "string"}},
-                    "signal": {"type": "string"},
-                    "signal_reasoning": {"type": "string"},
-                    "generated_at": {"type": "string"},
-                },
-                required=["ticker", "signal"],
-            ),
-            "output_examples": [
-                {
-                    "input": {"ticker": "AAPL"},
-                    "output": {
-                        "ticker": "AAPL",
-                        "company_name": "Apple Inc.",
-                        "filing_type": "10-Q",
-                        "filing_date": "2026-01-31",
-                        "business_summary": "Consumer hardware and services ecosystem.",
-                        "recent_financial_highlights": [
-                            "Revenue growth in Services",
-                            "Stable gross margin",
-                        ],
-                        "key_risks": [
-                            "Regulatory pressure",
-                            "Supply chain concentration",
-                        ],
-                        "signal": "positive",
-                        "signal_reasoning": "Recurring revenue expansion offsets hardware cyclicality.",
-                        "generated_at": "2026-02-01T00:00:00+00:00",
-                    },
-                },
-                {
-                    "input": {"ticker": "TSLA"},
-                    "output": {
-                        "ticker": "TSLA",
-                        "company_name": "Tesla, Inc.",
-                        "filing_type": "10-Q",
-                        "filing_date": "2026-02-05",
-                        "business_summary": "EV manufacturing and energy storage business.",
-                        "recent_financial_highlights": [
-                            "Automotive margin compression",
-                            "Energy growth",
-                        ],
-                        "key_risks": [
-                            "Price competition",
-                            "Execution risk on new models",
-                        ],
-                        "signal": "neutral",
-                        "signal_reasoning": "Growth opportunities remain, but profitability volatility is elevated.",
-                        "generated_at": "2026-02-06T00:00:00+00:00",
-                    },
-                },
-            ],
-        },
         {
             "agent_id": _QUALITY_JUDGE_AGENT_ID,
             "name": "Quality Judge Agent",

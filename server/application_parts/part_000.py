@@ -78,29 +78,18 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from agents import accessibility_auditor as agent_accessibility_auditor
-from agents import arxiv_research as agent_arxiv_research
 from agents import broken_link_crawler as agent_broken_link_crawler
 from agents import browser_agent as agent_browser_agent
 from agents import cve_lookup as agent_cve_lookup
 from agents import db_sandbox as agent_db_sandbox
 from agents import dependency_auditor as agent_dependency_auditor
 from agents import dns_inspector as agent_dns_inspector
-from agents import hn_digest as agent_hn_digest
-from agents import image_generator as agent_image_generator
 from agents import lighthouse_auditor as agent_lighthouse_auditor
-from agents import linter_agent as agent_linter_agent
-from agents import live_endpoint_tester as agent_live_endpoint_tester
-from agents import multi_file_executor as agent_multi_file_executor
 from agents import multi_language_executor as agent_multi_language_executor
 from agents import pdf_document_parser as agent_pdf_document_parser
 from agents import python_executor as agent_python_executor
 from agents import secret_scanner as agent_secret_scanner
 from agents import security_headers_grader as agent_security_headers_grader
-from agents import semantic_codebase_search as agent_semantic_codebase_search
-from agents import shell_executor as agent_shell_executor
-from agents import sql_explainer as agent_sql_explainer
-from agents import type_checker as agent_type_checker
-from agents import video_storyboard as agent_video_storyboard
 from agents import visual_regression as agent_visual_regression
 from agents import web_search as agent_web_search
 from agents import docs_grounder as agent_docs_grounder
@@ -147,7 +136,6 @@ from core.models import (
     AuthLegalAcceptRequest,
     CreateKeyRequest,
     DepositRequest,
-    FinancialRequest,
     GoogleAuthRequest,
     HookDeliveryProcessRequest,
     JobCancelRequest,
@@ -175,7 +163,6 @@ from core.models import (
 )
 from core.openapi_responses import pick_error_responses as _error_responses
 from core.registry import auto_hire as _auto_hire
-from scripts.financial_cli import run as _run_financial
 from server.builtin_agents import specs as _builtin_specs
 from server.error_handlers import register_exception_handlers
 from server.routes import system as _system_routes
@@ -293,37 +280,16 @@ except ImportError:
 # prefix so the rest of the shards continue to compile unchanged.
 from server.builtin_agents import constants as _builtin_constants
 
-_FINANCIAL_AGENT_ID = _builtin_constants.FINANCIAL_AGENT_ID
-_CODEREVIEW_AGENT_ID = _builtin_constants.CODEREVIEW_AGENT_ID
-_WIKI_AGENT_ID = _builtin_constants.WIKI_AGENT_ID
 _CVELOOKUP_AGENT_ID = _builtin_constants.CVELOOKUP_AGENT_ID
 _QUALITY_JUDGE_AGENT_ID = _builtin_constants.QUALITY_JUDGE_AGENT_ID
-_IMAGE_GENERATOR_AGENT_ID = _builtin_constants.IMAGE_GENERATOR_AGENT_ID
-_VIDEO_STORYBOARD_AGENT_ID = _builtin_constants.VIDEO_STORYBOARD_AGENT_ID
-_ARXIV_RESEARCH_AGENT_ID = _builtin_constants.ARXIV_RESEARCH_AGENT_ID
 _PYTHON_EXECUTOR_AGENT_ID = _builtin_constants.PYTHON_EXECUTOR_AGENT_ID
-_WEB_RESEARCHER_AGENT_ID = _builtin_constants.WEB_RESEARCHER_AGENT_ID
-_HN_DIGEST_AGENT_ID = _builtin_constants.HN_DIGEST_AGENT_ID
 _DNS_INSPECTOR_AGENT_ID = _builtin_constants.DNS_INSPECTOR_AGENT_ID
 _DEPENDENCY_AUDITOR_AGENT_ID = _builtin_constants.DEPENDENCY_AUDITOR_AGENT_ID
-_MULTI_FILE_EXECUTOR_AGENT_ID = _builtin_constants.MULTI_FILE_EXECUTOR_AGENT_ID
-_LINTER_AGENT_ID = _builtin_constants.LINTER_AGENT_ID
-_SHELL_EXECUTOR_AGENT_ID = _builtin_constants.SHELL_EXECUTOR_AGENT_ID
-_TYPE_CHECKER_AGENT_ID = _builtin_constants.TYPE_CHECKER_AGENT_ID
 _DB_SANDBOX_AGENT_ID = _builtin_constants.DB_SANDBOX_AGENT_ID
 _VISUAL_REGRESSION_AGENT_ID = _builtin_constants.VISUAL_REGRESSION_AGENT_ID
-_LIVE_ENDPOINT_TESTER_AGENT_ID = _builtin_constants.LIVE_ENDPOINT_TESTER_AGENT_ID
 _BROWSER_AGENT_ID = _builtin_constants.BROWSER_AGENT_ID
 _MULTI_LANGUAGE_EXECUTOR_AGENT_ID = _builtin_constants.MULTI_LANGUAGE_EXECUTOR_AGENT_ID
-_SEMANTIC_CODEBASE_SEARCH_AGENT_ID = (
-    _builtin_constants.SEMANTIC_CODEBASE_SEARCH_AGENT_ID
-)
-_AI_RED_TEAMER_AGENT_ID = _builtin_constants.AI_RED_TEAMER_AGENT_ID
 _SECRET_SCANNER_AGENT_ID = _builtin_constants.SECRET_SCANNER_AGENT_ID
-_JSON_SCHEMA_VALIDATOR_AGENT_ID = _builtin_constants.JSON_SCHEMA_VALIDATOR_AGENT_ID
-_REGEX_TESTER_AGENT_ID = _builtin_constants.REGEX_TESTER_AGENT_ID
-_SQL_EXPLAINER_AGENT_ID = _builtin_constants.SQL_EXPLAINER_AGENT_ID
-_GIT_DIFF_ANALYZER_AGENT_ID = _builtin_constants.GIT_DIFF_ANALYZER_AGENT_ID
 _LIGHTHOUSE_AUDITOR_AGENT_ID = _builtin_constants.LIGHTHOUSE_AUDITOR_AGENT_ID
 _ACCESSIBILITY_AUDITOR_AGENT_ID = _builtin_constants.ACCESSIBILITY_AUDITOR_AGENT_ID
 _SECURITY_HEADERS_GRADER_AGENT_ID = _builtin_constants.SECURITY_HEADERS_GRADER_AGENT_ID

@@ -56,6 +56,7 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Any
+from agents._contracts import agent_error as _err
 
 _LOG = logging.getLogger(__name__)
 
@@ -102,9 +103,6 @@ _BANDIT_CONFIDENCE_BUMP: dict[tuple[str, str], str] = {
     ("LOW",  "LOW"):  "info",
 }
 
-
-def _err(code: str, message: str) -> dict[str, Any]:
-    return {"error": {"code": code, "message": message}}
 
 
 def _is_tool_available(name: str) -> bool:

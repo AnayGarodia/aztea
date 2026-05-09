@@ -131,47 +131,6 @@ def test_quality_gate_honest_fallback_without_contract_or_judge(monkeypatch):
     assert result["reason"] == "No output contract defined. Structural check passed."
 
 
-def test_quality_gate_accepts_consistent_type_checker_output_without_live_judge(monkeypatch):
-    monkeypatch.setenv("AZTEA_ENABLE_LIVE_QUALITY_JUDGE", "1")
-    monkeypatch.setenv("GROQ_API_KEY", "test-key")
-
-    def should_not_run_judge(**kwargs):
-        raise AssertionError("Deterministic checker outputs should bypass the live quality judge.")
-
-    monkeypatch.setattr(server.judges, "run_quality_judgment", should_not_run_judge)
-
-    result = server._run_quality_gate(
-        {"job_id": "job-type-check", "agent_id": server._TYPE_CHECKER_AGENT_ID, "input_payload": {"code": "def f():\n    return 1\n"}},
-        {
-            "agent_id": server._TYPE_CHECKER_AGENT_ID,
-            "name": "Type Checker",
-            "description": "Run mypy and return structured type errors.",
-            "output_schema": {
-                "type": "object",
-                "properties": {
-                    "passed": {"type": "boolean"},
-                    "error_count": {"type": "integer"},
-                    "errors": {"type": "array"},
-                    "diagnostics": {"type": "array"},
-                },
-                "required": ["passed", "error_count", "errors", "diagnostics"],
-            },
-            "output_verifier_url": None,
-        },
-        {
-            "language": "python",
-            "passed": True,
-            "error_count": 0,
-            "errors": [],
-            "diagnostics": [],
-            "tool_version": "mypy 1.20.2",
-        },
-    )
-    assert result["judge_verdict"] == "pass"
-    assert result["quality_score"] >= 8
-    assert result["passed"] is True
-    assert "internally consistent" in result["reason"]
-
 
 @pytest.mark.parametrize(
     ("agent_id", "output_payload", "output_schema"),
@@ -201,32 +160,6 @@ def test_quality_gate_accepts_consistent_type_checker_output_without_live_judge(
             },
         ),
         (
-            server._SEMANTIC_CODEBASE_SEARCH_AGENT_ID,
-            {
-                "query": "CVE-2023-50447 pillow fix",
-                "total_files_indexed": 2,
-                "results": [
-                    {
-                        "path": "src/pillow_fix.py",
-                        "score": 0.88,
-                        "snippet": "def fix_cve_2023_50447():",
-                        "size_bytes": 64,
-                    }
-                ],
-                "source": "artifact",
-            },
-            {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string"},
-                    "total_files_indexed": {"type": "integer"},
-                    "results": {"type": "array"},
-                    "source": {"type": "string"},
-                },
-                "required": ["query", "total_files_indexed", "results", "source"],
-            },
-        ),
-        (
             server._SECRET_SCANNER_AGENT_ID,
             {
                 "filename": ".env",
@@ -250,31 +183,6 @@ def test_quality_gate_accepts_consistent_type_checker_output_without_live_judge(
                     "summary": {"type": "string"},
                 },
                 "required": ["total_findings", "findings_by_severity", "findings", "summary"],
-            },
-        ),
-        (
-            server._SQL_EXPLAINER_AGENT_ID,
-            {
-                "queries": [
-                    {
-                        "sql": "SELECT * FROM users WHERE email = ?",
-                        "plan": [{"id": 2, "parent": 0, "detail": "SCAN users"}],
-                        "issues": ["Full scan on `users`"],
-                        "suggestions": ["Consider an index on the WHERE/JOIN columns used against `users`."],
-                        "elapsed_ms": 0.3,
-                    }
-                ],
-                "total_issues": 1,
-                "summary": "Found 1 potential plan issue(s) across 1 query/queries.",
-            },
-            {
-                "type": "object",
-                "properties": {
-                    "queries": {"type": "array"},
-                    "total_issues": {"type": "integer"},
-                    "summary": {"type": "string"},
-                },
-                "required": ["queries", "total_issues", "summary"],
             },
         ),
     ],
@@ -386,52 +294,6 @@ def _wait_for_job_terminal(client, api_key: str, job_id: str, *, attempts: int =
                 "variables_captured": {},
             },
         ),
-        (
-            "_MULTI_FILE_EXECUTOR_AGENT_ID",
-            "agent_multi_file_executor",
-            {"files": [{"path": "main.py", "content": "print('ok')"}]},
-            {
-                "stdout": "ok\n",
-                "stderr": "",
-                "exit_code": 0,
-                "timed_out": False,
-                "execution_time_ms": 7,
-                "files_written": 1,
-                "packages_installed": [],
-                "install_error": None,
-                "explanation": "prints ok",
-            },
-        ),
-        (
-            "_LINTER_AGENT_ID",
-            "agent_linter_agent",
-            {"language": "python", "code": "print(1)\n"},
-            {
-                "language": "python",
-                "tool": "ruff",
-                "issues": [],
-                "total_issues": 0,
-                "error_count": 0,
-                "warning_count": 0,
-                "clean": True,
-                "summary": "No issues found by ruff.",
-            },
-        ),
-        (
-            "_TYPE_CHECKER_AGENT_ID",
-            "agent_type_checker",
-            {"language": "python", "code": "def f() -> int:\n    return 1\n"},
-            {
-                "language": "python",
-                "ok": True,
-                "passed": True,
-                "error_count": 0,
-                "diagnostics": [],
-                "errors": [],
-                "raw_output": "",
-                "tool_version": "mypy 1.20.2",
-            },
-        ),
     ],
 )
 def test_builtin_sync_and_async_paths_return_identical_payloads(
@@ -466,65 +328,17 @@ def test_builtin_sync_and_async_paths_return_identical_payloads(
     assert terminal["output_payload"] == sync_output
 
 
-def test_builtin_structured_error_refunds_sync_and_async_equally(client, monkeypatch):
-    caller = _register_user()
-    wallet = _fund_user_wallet(caller, 500)
-    balance_before = payments.get_wallet(wallet["wallet_id"])["balance_cents"]
-
-    monkeypatch.setattr(
-        server.agent_linter_agent,
-        "run",
-        lambda payload: {
-            "error": {
-                "code": "linter_agent.tool_unavailable",
-                "message": "ruff is not available on this executor.",
-            }
-        },
-    )
-
-    sync_call = client.post(
-        f"/registry/agents/{server._LINTER_AGENT_ID}/call",
-        headers=_auth_headers(caller["raw_api_key"]),
-        json={"language": "python", "code": "print(1)\n"},
-    )
-    assert sync_call.status_code == 502, sync_call.text
-    balance_after_sync = payments.get_wallet(wallet["wallet_id"])["balance_cents"]
-    assert balance_after_sync == balance_before
-
-    created = client.post(
-        "/jobs",
-        headers=_auth_headers(caller["raw_api_key"]),
-        json={
-            "agent_id": server._LINTER_AGENT_ID,
-            "input_payload": {"language": "python", "code": "print(1)\n"},
-            "max_attempts": 1,
-        },
-    )
-    assert created.status_code == 201, created.text
-    terminal = _wait_for_job_terminal(client, caller["raw_api_key"], created.json()["job_id"])
-    assert terminal["status"] == "failed"
-    assert terminal["output_payload"]["error"]["code"] == "linter_agent.tool_unavailable"
-    assert "ruff is not available" in terminal["error_message"]
-    balance_after_async = payments.get_wallet(wallet["wallet_id"])["balance_cents"]
-    assert balance_after_async == balance_before
-
-
 def test_registry_lists_new_builtin_agents(client):
     listed = client.get("/registry/agents", headers=_auth_headers(TEST_MASTER_KEY))
     assert listed.status_code == 200, listed.text
     names = {agent["name"] for agent in listed.json()["agents"]}
     assert {
-        "arXiv Research Agent",
         "Python Code Executor",
         "CVE Lookup Agent",
         "DB Sandbox",
-        "Live Endpoint Tester",
         "Browser Agent",
         "Visual Regression",
         "Multi-Language Executor",
-        "Semantic Codebase Search",
-        "Image Generator Agent",
-        # YC launch-audit demo agents (added 2026-05-09):
         "Lighthouse Auditor",
         "Accessibility Auditor",
         "Security Headers Grader",
@@ -566,10 +380,6 @@ def test_builtin_agents_registered_to_system_owner_with_internal_endpoints(clien
         server._CVELOOKUP_AGENT_ID,
         server._PYTHON_EXECUTOR_AGENT_ID,
         server._DEPENDENCY_AUDITOR_AGENT_ID,
-        server._MULTI_FILE_EXECUTOR_AGENT_ID,
-        server._LINTER_AGENT_ID,
-        server._SHELL_EXECUTOR_AGENT_ID,
-        server._TYPE_CHECKER_AGENT_ID,
     ):
         agent = registry.get_agent(builtin_id, include_unapproved=True)
         assert agent is not None
@@ -578,46 +388,6 @@ def test_builtin_agents_registered_to_system_owner_with_internal_endpoints(clien
         assert float(agent["price_per_call_usd"]) > 0
         assert isinstance(agent.get("output_examples"), list)
         assert len(agent["output_examples"]) >= 1
-
-    # Video storyboard is still a builtin but not in the curated public set
-    for non_curated_id in (
-        server._VIDEO_STORYBOARD_AGENT_ID,
-    ):
-        agent = registry.get_agent(non_curated_id, include_unapproved=True)
-        if agent is not None:
-            assert str(agent["endpoint_url"]).startswith("internal://")
-
-
-def test_registry_call_rejects_wrong_type_before_charge(client):
-    caller = _register_user()
-    _fund_user_wallet(caller, 100)
-    me = client.get("/auth/me", headers=_auth_headers(caller["raw_api_key"]))
-    assert me.status_code == 200, me.text
-    accepted = client.post(
-        "/auth/legal/accept",
-        headers=_auth_headers(caller["raw_api_key"]),
-        json={
-            "terms_version": me.json()["terms_version_current"],
-            "privacy_version": me.json()["privacy_version_current"],
-        },
-    )
-    assert accepted.status_code == 200, accepted.text
-    before = client.get("/wallets/me", headers=_auth_headers(caller["raw_api_key"]))
-    assert before.status_code == 200, before.text
-    before_balance = before.json()["balance_cents"]
-
-    response = client.post(
-        f"/registry/agents/{server._LINTER_AGENT_ID}/call",
-        headers=_auth_headers(caller["raw_api_key"]),
-        json={"code": 12345, "language": "python"},
-    )
-    assert response.status_code == 422, response.text
-    body = response.json()
-    assert body["error"] == "request.input_schema_violation"
-
-    after = client.get("/wallets/me", headers=_auth_headers(caller["raw_api_key"]))
-    assert after.status_code == 200, after.text
-    assert after.json()["balance_cents"] == before_balance
 
 
 def test_suspended_internal_builtin_is_reactivated_at_call_gate(client):
@@ -723,48 +493,6 @@ def test_registry_call_normalizes_protocol_envelope_for_builtin_responses(client
     assert sent_protocol["communication_channel"] == "analysis"
     assert sent_protocol["metadata"]["request_id"] == "req-42"
     assert sent_protocol["preferred_output_formats"] == ["application/json"]
-
-
-def test_image_generator_builtin_is_public_registry_callable(client, monkeypatch):
-    caller = _register_user()
-    _fund_user_wallet(caller, 200)
-    monkeypatch.setattr(
-        server.agent_image_generator,
-        "_generate_image_artifact",
-        lambda **kwargs: {
-            "provider": "openai",
-            "model": "gpt-image-1",
-            "artifact": {
-                "name": "generated.png",
-                "mime": "image/png",
-                "url_or_base64": "data:image/png;base64,AAAA",
-                "size_bytes": 4,
-            },
-            "warnings": [],
-            "generation_prompt": kwargs["prompt"],
-        },
-    )
-    response = client.post(
-        f"/registry/agents/{server._IMAGE_GENERATOR_AGENT_ID}/call",
-        headers=_auth_headers(caller["raw_api_key"]),
-        json={
-            "prompt": "Minimal logo concept for a robotics startup",
-            "style": "flat vector",
-            "width": 768,
-            "height": 768,
-            "input_images": [
-                {
-                    "mime": "image/png",
-                    "url_or_base64": "https://example.com/reference-logo.png",
-                    "role": "style_reference",
-                }
-            ],
-        },
-    )
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["output"]["artifacts"][0]["name"] == "generated.png"
-    assert body["output"]["provider"] == "openai"
 
 
 def test_mcp_tools_manifest_exposes_registered_agent_schema(client):
@@ -881,39 +609,6 @@ def test_mcp_invoke_delegates_to_registry_call_path(client, monkeypatch):
     caller_wallet = payments.get_or_create_wallet(f"user:{caller['user_id']}")
     # python_executor is a deterministic sandbox, so it stays at the 1¢ floor.
     assert payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"] == 99
-
-
-def test_mcp_invoke_exposes_image_generator_tool(client, monkeypatch):
-    caller = _register_user()
-    _fund_user_wallet(caller, 100)
-    monkeypatch.setattr(
-        server.agent_image_generator,
-        "_generate_image_artifact",
-        lambda **kwargs: {
-            "provider": "openai",
-            "model": "gpt-image-1",
-            "artifact": {
-                "name": "generated.png",
-                "mime": "image/png",
-                "url_or_base64": "data:image/png;base64,AAAA",
-                "size_bytes": 4,
-            },
-            "warnings": [],
-            "generation_prompt": kwargs["prompt"],
-        },
-    )
-    response = client.post(
-        "/mcp/invoke",
-        json={
-            "tool_name": "image_generator_agent",
-            "input": {"prompt": "Simple gradient logo"},
-            "api_key": caller["raw_api_key"],
-        },
-    )
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["structuredContent"]["artifacts"][0]["name"] == "generated.png"
-    assert body["content"][0]["type"] == "text"
 
 
 def test_python_executor_builtin_runs_code_and_returns_output(client, monkeypatch):

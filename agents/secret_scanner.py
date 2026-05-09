@@ -48,10 +48,12 @@ Output:
 
 from __future__ import annotations
 
+import bisect
 import math
 import re
 from collections import Counter
 from typing import Any
+from agents._contracts import agent_error as _err
 
 _MAX_CONTENT = 200_000
 _DEFAULT_MAX_FINDINGS = 50
@@ -339,16 +341,18 @@ def _redact(s: str) -> str:
     return f"{s[:4]}…[{len(s)} chars]…{s[-4:]}"
 
 
-def _line_col(content: str, offset: int) -> tuple[int, int]:
-    prefix = content[:offset]
-    line = prefix.count("\n") + 1
-    last_newline = prefix.rfind("\n")
-    column = offset - last_newline if last_newline >= 0 else offset + 1
+def _build_newline_index(content: str) -> list[int]:
+    return [i for i, ch in enumerate(content) if ch == "\n"]
+
+
+def _line_col(newlines: list[int], offset: int) -> tuple[int, int]:
+    # WHY: O(log N) per match vs the prior O(N) prefix-slice + count, which
+    # dominated runtime on large content with many findings.
+    n = bisect.bisect_left(newlines, offset)
+    line = n + 1
+    column = offset - newlines[n - 1] if n > 0 else offset + 1
     return line, column
 
-
-def _err(code: str, message: str) -> dict[str, Any]:
-    return {"error": {"code": code, "message": message}}
 
 
 def run(payload: dict) -> dict:
@@ -399,6 +403,7 @@ def run(payload: dict) -> dict:
 
     findings: list[dict[str, Any]] = []
     seen_offsets: set[tuple[int, int]] = set()
+    newlines = _build_newline_index(content)
 
     for rule_id, rule_name, pattern, severity, remediation in _RULES:
         for match in pattern.finditer(content):
@@ -408,7 +413,7 @@ def run(payload: dict) -> dict:
                 continue
             seen_offsets.add((offset, end))
             matched = match.group(0)
-            line, column = _line_col(content, offset)
+            line, column = _line_col(newlines, offset)
             # P2 fix: documented vendor example credentials (Stripe and AWS
             # SDK docs publish well-known examples) were the largest
             # false-positive class in the eval. Downgrade to `info` severity
@@ -460,7 +465,7 @@ def run(payload: dict) -> dict:
             entropy = _shannon_entropy(token)
             if entropy < min_entropy:
                 continue
-            line, column = _line_col(content, offset)
+            line, column = _line_col(newlines, offset)
             findings.append(
                 {
                     "rule_id": "high-entropy-string",

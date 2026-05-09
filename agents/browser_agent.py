@@ -29,6 +29,7 @@ import time
 from typing import Any
 
 from core import url_security
+from agents._contracts import agent_error as _err
 
 _MAX_WAIT_MS = 10_000
 _DEFAULT_WAIT_MS = 1_500
@@ -36,9 +37,6 @@ _HTML_TRUNCATE = 200_000
 _TEXT_TRUNCATE = 60_000
 _VALID_ACTIONS = {"scrape", "screenshot", "pdf"}
 
-
-def _err(code: str, message: str) -> dict[str, Any]:
-    return {"error": {"code": code, "message": message}}
 
 
 def _normalize_action(value: Any) -> str:

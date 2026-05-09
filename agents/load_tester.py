@@ -50,6 +50,7 @@ from typing import Any
 import requests as _requests
 
 from core.url_security import validate_outbound_url
+from agents._contracts import agent_error as _err
 
 # ---------------------------------------------------------------------------
 # Hard limits — never changed by caller input
@@ -69,9 +70,6 @@ _ALLOWED_METHODS = {"GET", "POST", "PUT", "DELETE"}
 # Helpers
 # ---------------------------------------------------------------------------
 
-
-def _err(code: str, message: str) -> dict[str, Any]:
-    return {"error": {"code": code, "message": message}}
 
 
 def _percentile(sorted_data: list[float], p: float) -> float:

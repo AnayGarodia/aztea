@@ -47,6 +47,7 @@ Notes:
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from typing import Any
 from urllib.parse import urljoin, urlparse, urlunparse
@@ -55,6 +56,9 @@ import httpx
 from bs4 import BeautifulSoup
 
 from core.url_security import validate_outbound_url
+from agents._contracts import agent_error as _err
+
+_LOG = logging.getLogger(__name__)
 
 _DEFAULT_MAX_PAGES = 25
 _HARD_MAX_PAGES = 50
@@ -68,9 +72,6 @@ _MAX_REDIRECT_HOPS = 6
 _MAX_HTML_BYTES = 1_500_000
 _USER_AGENT = "Aztea-Broken-Link-Crawler/1.0"
 
-
-def _err(code: str, message: str) -> dict[str, Any]:
-    return {"error": {"code": code, "message": message}}
 
 
 def _normalize(url: str) -> str:
@@ -142,6 +143,7 @@ def _extract_links_and_assets(
     try:
         soup = BeautifulSoup(html, "html.parser")
     except Exception:
+        _LOG.warning("BeautifulSoup parse failed for %s", page_url, exc_info=True)
         return [], [], []
 
     links: list[str] = []

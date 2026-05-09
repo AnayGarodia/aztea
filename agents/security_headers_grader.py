@@ -43,6 +43,7 @@ from typing import Any
 import httpx
 
 from core.url_security import validate_outbound_url
+from agents._contracts import agent_error as _err
 
 _TIMEOUT_S = 10.0
 _MAX_REDIRECTS = 5
@@ -159,9 +160,6 @@ def _hsts_max_age(value: str) -> int | None:
                 return None
     return None
 
-
-def _err(code: str, message: str) -> dict[str, Any]:
-    return {"error": {"code": code, "message": message}}
 
 
 def _grade_from_score(score: int, is_https: bool, has_csp: bool, has_hsts: bool) -> str:

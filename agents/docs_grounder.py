@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timezone
 from urllib.parse import urlparse
 
@@ -61,6 +62,7 @@ import requests
 import agents.web_search as _web_search
 from core.llm import CompletionRequest, Message, run_with_fallback
 from core.llm.errors import LLMError
+from agents._contracts import agent_error as _err
 
 _HTTP_TIMEOUT_S = 10
 _MAX_CHARS_PER_PAGE = 8_000   # chars sent to LLM per fetched page
@@ -76,6 +78,11 @@ _FETCH_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
 }
+
+_RE_SCRIPT_STYLE = re.compile(r"<(script|style)[^>]*>.*?</\1>", re.DOTALL | re.IGNORECASE)
+_RE_TAG = re.compile(r"<[^>]+>")
+_RE_HORIZ_WS = re.compile(r"[ \t]+")
+_RE_VERT_WS = re.compile(r"\n{3,}")
 
 _SYNTHESIS_SYSTEM = """\
 You are a senior engineer who reads official library documentation daily. \
@@ -101,9 +108,6 @@ Return JSON with exactly these keys:
   "gotchas": ["common mistakes, breaking changes, or migration notes found in the docs"]
 }}"""
 
-
-def _err(code: str, message: str) -> dict:
-    return {"error": {"code": code, "message": message}}
 
 
 def _is_safe_http_url(url: str) -> bool:
@@ -142,14 +146,11 @@ def _strip_html(html: str) -> str:
     Not a full parser — handles the common case of docs pages well enough
     for LLM synthesis. See KNOWN DEBT above.
     """
-    # Remove script and style blocks entirely (content is noise).
-    text = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", html, flags=re.DOTALL | re.IGNORECASE)
-    # Remove all remaining HTML tags.
-    text = re.sub(r"<[^>]+>", " ", text)
-    # Collapse runs of whitespace.
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    # Decode common HTML entities.
+    text = _RE_SCRIPT_STYLE.sub("", html)
+    text = _RE_TAG.sub(" ", text)
+    text = _RE_HORIZ_WS.sub(" ", text)
+    text = _RE_VERT_WS.sub("\n\n", text)
+    # Decode common HTML entities (full parser is overkill for docs-page extraction).
     text = text.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
     text = text.replace("&quot;", '"').replace("&#39;", "'").replace("&nbsp;", " ")
     return text.strip()
@@ -268,27 +269,27 @@ def run(payload: dict) -> dict:
     # --- Step 2: rank by source quality and drop duplicate hosts ---
     ranked = _rank_and_deduplicate(raw_results, library)
 
-    # --- Step 3: fetch and strip top pages ---
+    # --- Step 3: fetch and strip top pages (parallel; order preserved) ---
+    candidates = [
+        r for r in ranked[:_MAX_PAGES_TO_FETCH]
+        if _is_safe_http_url(r.get("url", ""))
+    ]
     sources: list[dict] = []
     fetched_texts: list[str] = []
-
-    for result in ranked[:_MAX_PAGES_TO_FETCH]:
-        url = result.get("url", "")
-        title = result.get("title", "")
-        description = result.get("description", "")
-
-        if not _is_safe_http_url(url):
-            continue
-
-        page_text = _fetch_page(url)
-        if page_text:
-            excerpt = page_text[:300].replace("\n", " ").strip()
-            fetched_texts.append(page_text[:_MAX_CHARS_PER_PAGE])
-        else:
-            # Fall back to the search snippet as a minimal excerpt.
-            excerpt = description[:300]
-
-        sources.append({"url": url, "title": title, "excerpt": excerpt})
+    if candidates:
+        urls = [c.get("url", "") for c in candidates]
+        with ThreadPoolExecutor(max_workers=min(_MAX_PAGES_TO_FETCH, len(urls))) as pool:
+            page_texts = list(pool.map(_fetch_page, urls))
+        for result, page_text in zip(candidates, page_texts):
+            url = result.get("url", "")
+            title = result.get("title", "")
+            description = result.get("description", "")
+            if page_text:
+                excerpt = page_text[:300].replace("\n", " ").strip()
+                fetched_texts.append(page_text[:_MAX_CHARS_PER_PAGE])
+            else:
+                excerpt = description[:300]
+            sources.append({"url": url, "title": title, "excerpt": excerpt})
 
     if not fetched_texts and not sources:
         return _err(

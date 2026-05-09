@@ -36,11 +36,15 @@ Mode 2: Package-based CVE search (original)
   }
 """
 
+import logging
 import os
 import re
 import time
 
 import requests
+from agents._contracts import agent_error as _err
+
+_LOG = logging.getLogger(__name__)
 
 _NVD_API = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 _OSV_API = "https://api.osv.dev/v1/query"
@@ -48,9 +52,6 @@ _NVD_TIMEOUT = 10
 _NVD_RATE_DELAY = 0.7  # NVD public API allows ~5 req/s without key
 _CVE_ID_PATTERN = re.compile(r"^CVE-\d{4}-\d{4,}$", re.IGNORECASE)
 
-
-def _err(code: str, message: str) -> dict:
-    return {"error": {"code": code, "message": message}}
 
 
 def _cvss_to_severity(score: float) -> str:
@@ -222,9 +223,11 @@ def _query_osv(
                 headers={"User-Agent": "aztea-cve-lookup/1.0"},
             )
             if resp.status_code != 200:
+                _LOG.info("OSV non-200 for %s: status=%s", pkg_name, resp.status_code)
                 continue
             data = resp.json()
         except Exception:
+            _LOG.warning("OSV query failed for %s/%s", ecosystem, pkg_name, exc_info=True)
             continue
 
         for vuln in data.get("vulns", []):
@@ -314,9 +317,11 @@ def _search_nvd_packages(pkg_name: str) -> tuple[list[dict], bool]:
         if resp.status_code == 429 or resp.status_code >= 500:
             return [], False
         if resp.status_code != 200:
+            _LOG.info("NVD non-200 for %s: status=%s", pkg_name, resp.status_code)
             return [], False
         data = resp.json()
     except Exception:
+        _LOG.warning("NVD query failed for %s", pkg_name, exc_info=True)
         return [], False
 
     results = []

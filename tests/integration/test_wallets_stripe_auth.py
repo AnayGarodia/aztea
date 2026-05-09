@@ -1110,20 +1110,19 @@ def test_sync_builtin_call_signs_output_and_signature_verifies(client, monkeypat
     _fund_user_wallet(caller, 500)
 
     monkeypatch.setattr(
-        server.agent_linter_agent,
+        server.agent_secret_scanner,
         "run",
         lambda payload: {
-            "language": "python",
-            "tool": "ruff",
-            "issues": [],
-            "clean": True,
+            "total_findings": 0,
+            "findings": [],
+            "files_scanned": 1,
         },
     )
 
     sync_call = client.post(
-        f"/registry/agents/{server._LINTER_AGENT_ID}/call",
+        f"/registry/agents/{server._SECRET_SCANNER_AGENT_ID}/call",
         headers=_auth_headers(caller["raw_api_key"]),
-        json={"language": "python", "code": "print(1)\n"},
+        json={"content": "print(1)"},
     )
     assert sync_call.status_code == 200, sync_call.text
     job_id = sync_call.json()["job_id"]
@@ -1140,7 +1139,7 @@ def test_sync_builtin_call_signs_output_and_signature_verifies(client, monkeypat
     assert sig_body["output_hash"]
 
     # Resolve the agent's public key from its in-DB DID document.
-    agent_row = registry.get_agent(server._LINTER_AGENT_ID, include_unapproved=True)
+    agent_row = registry.get_agent(server._SECRET_SCANNER_AGENT_ID, include_unapproved=True)
     public_pem = agent_row.get("signing_public_key")
     assert public_pem, "Builtin agent must have a public signing key."
     public_key = serialization.load_pem_public_key(public_pem.encode("utf-8"))
@@ -1168,22 +1167,21 @@ def test_sync_call_response_includes_pricing_units_block(client, monkeypatch):
     """A sync registry call must surface a structured pricing_units block so
     callers don't have to parse pricing semantics out of the description text."""
     monkeypatch.setattr(
-        server.agent_linter_agent,
+        server.agent_secret_scanner,
         "run",
         lambda payload: {
-            "language": "python",
-            "tool": "ruff",
-            "issues": [],
-            "clean": True,
+            "total_findings": 0,
+            "findings": [],
+            "files_scanned": 1,
         },
     )
     caller = _register_user()
     _fund_user_wallet(caller, 200)
 
     resp = client.post(
-        f"/registry/agents/{server._LINTER_AGENT_ID}/call",
+        f"/registry/agents/{server._SECRET_SCANNER_AGENT_ID}/call",
         headers=_auth_headers(caller["raw_api_key"]),
-        json={"language": "python", "code": "print(1)\n"},
+        json={"content": "print(1)"},
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -1241,22 +1239,21 @@ def test_sync_builtin_lazy_provisions_signing_keys_when_missing(client, monkeypa
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
     from cryptography.hazmat.primitives import serialization
 
-    # Wipe the linter agent's signing keys to mimic the bad prod state.
+    # Wipe the secret_scanner agent's signing keys to mimic the bad prod state.
     with registry._conn() as conn:
         conn.execute(
             "UPDATE agents SET signing_public_key = NULL, signing_private_key = NULL, did = NULL "
             "WHERE agent_id = %s",
-            (server._LINTER_AGENT_ID,),
+            (server._SECRET_SCANNER_AGENT_ID,),
         )
 
     monkeypatch.setattr(
-        server.agent_linter_agent,
+        server.agent_secret_scanner,
         "run",
         lambda payload: {
-            "language": "python",
-            "tool": "ruff",
-            "issues": [],
-            "clean": True,
+            "total_findings": 0,
+            "findings": [],
+            "files_scanned": 1,
         },
     )
 
@@ -1264,9 +1261,9 @@ def test_sync_builtin_lazy_provisions_signing_keys_when_missing(client, monkeypa
     _fund_user_wallet(caller, 500)
 
     sync_call = client.post(
-        f"/registry/agents/{server._LINTER_AGENT_ID}/call",
+        f"/registry/agents/{server._SECRET_SCANNER_AGENT_ID}/call",
         headers=_auth_headers(caller["raw_api_key"]),
-        json={"language": "python", "code": "print(1)\n"},
+        json={"content": "print(1)"},
     )
     assert sync_call.status_code == 200, sync_call.text
     job_id = sync_call.json()["job_id"]
@@ -1281,7 +1278,7 @@ def test_sync_builtin_lazy_provisions_signing_keys_when_missing(client, monkeypa
     assert sig_body["agent_did"]
 
     # The agent row should now have a key (provisioned during the call).
-    agent_row = registry.get_agent(server._LINTER_AGENT_ID, include_unapproved=True)
+    agent_row = registry.get_agent(server._SECRET_SCANNER_AGENT_ID, include_unapproved=True)
     assert agent_row["signing_private_key"]
     assert agent_row["signing_public_key"]
     public_key = serialization.load_pem_public_key(
@@ -1324,7 +1321,7 @@ def test_ops_identity_backfill_admin_provisions_missing_keys(client):
         conn.execute(
             "UPDATE agents SET signing_public_key = NULL, signing_private_key = NULL, did = NULL "
             "WHERE agent_id = %s",
-            (server._LINTER_AGENT_ID,),
+            (server._SECRET_SCANNER_AGENT_ID,),
         )
 
     caller_only = client.post(
@@ -1342,6 +1339,6 @@ def test_ops_identity_backfill_admin_provisions_missing_keys(client):
     assert body["total_builtin_agents"] >= 1
     assert body["failed_count"] == 0
 
-    agent_row = registry.get_agent(server._LINTER_AGENT_ID, include_unapproved=True)
+    agent_row = registry.get_agent(server._SECRET_SCANNER_AGENT_ID, include_unapproved=True)
     assert agent_row["signing_private_key"]
     assert agent_row["did"]

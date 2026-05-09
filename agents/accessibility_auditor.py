@@ -50,6 +50,7 @@ import time
 from typing import Any
 
 from core import url_security
+from agents._contracts import agent_error as _err
 
 _AXE_CDN_URL = "https://cdnjs.cloudflare.com/ajax/libs/axe-core/4.8.4/axe.min.js"
 _DEFAULT_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]
@@ -59,9 +60,6 @@ _MAX_VIOLATIONS = 30
 _MAX_NODES_PER_VIOLATION = 5
 _NODE_HTML_TRUNCATE = 400
 
-
-def _err(code: str, message: str) -> dict[str, Any]:
-    return {"error": {"code": code, "message": message}}
 
 
 def _install_request_guard(context: Any) -> None:  # noqa: ANN401

@@ -50,6 +50,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from core.url_security import validate_outbound_url
+from agents._contracts import agent_error as _err
 
 _DDG_HTML_ENDPOINT = "https://html.duckduckgo.com/html/"
 _TIMEOUT_S = 8.0
@@ -61,9 +62,6 @@ _MAX_QUERY_LEN = 400
 # both vocabularies.
 _FRESHNESS_TO_DDG_DF = {"pd": "d", "pw": "w", "pm": "m", "py": "y"}
 
-
-def _err(code: str, message: str) -> dict[str, Any]:
-    return {"error": {"code": code, "message": message}}
 
 
 def _unwrap_ddg_redirect(href: str) -> str:
@@ -84,7 +82,7 @@ def _unwrap_ddg_redirect(href: str) -> str:
             target = qs.get("uddg", [""])[0]
             if target:
                 return unquote(target)
-        except Exception:
+        except (ValueError, TypeError):
             return href
     return href
 
@@ -92,12 +90,12 @@ def _unwrap_ddg_redirect(href: str) -> str:
 def _site_name_from_url(url: str) -> str | None:
     try:
         host = urlparse(url).hostname or ""
-        # Strip a leading "www." so "www.example.com" reads as "example.com".
-        if host.startswith("www."):
-            host = host[4:]
-        return host or None
-    except Exception:
+    except (ValueError, TypeError):
         return None
+    # Strip a leading "www." so "www.example.com" reads as "example.com".
+    if host.startswith("www."):
+        host = host[4:]
+    return host or None
 
 
 def _parse_ddg_html(html: str, limit: int) -> list[dict[str, Any]]:

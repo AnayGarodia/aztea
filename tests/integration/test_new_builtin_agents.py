@@ -1,4 +1,4 @@
-"""Integration tests for hn_digest, dns_inspector, and the YC-demo built-ins
+"""Integration tests for dns_inspector and the YC-demo built-ins
 (lighthouse_auditor, accessibility_auditor, security_headers_grader,
 broken_link_crawler, pdf_document_parser, web_search)."""
 
@@ -7,7 +7,6 @@ from unittest.mock import patch, MagicMock
 
 from tests.integration.support import *  # noqa: F403
 
-HN_DIGEST_AGENT_ID = server._HN_DIGEST_AGENT_ID
 DNS_INSPECTOR_AGENT_ID = server._DNS_INSPECTOR_AGENT_ID
 LIGHTHOUSE_AUDITOR_AGENT_ID = server._LIGHTHOUSE_AUDITOR_AGENT_ID
 ACCESSIBILITY_AUDITOR_AGENT_ID = server._ACCESSIBILITY_AUDITOR_AGENT_ID
@@ -15,15 +14,6 @@ SECURITY_HEADERS_GRADER_AGENT_ID = server._SECURITY_HEADERS_GRADER_AGENT_ID
 BROKEN_LINK_CRAWLER_AGENT_ID = server._BROKEN_LINK_CRAWLER_AGENT_ID
 PDF_DOCUMENT_PARSER_AGENT_ID = server._PDF_DOCUMENT_PARSER_AGENT_ID
 WEB_SEARCH_AGENT_ID = server._WEB_SEARCH_AGENT_ID
-
-
-def test_hn_digest_not_in_public_catalog(client):
-    """HN Digest is intentionally not in the curated public set (removed in v2)."""
-    _ = client
-    import server as _server
-    from core import registry as _registry
-    agent = _registry.get_agent(_server._HN_DIGEST_AGENT_ID, include_unapproved=True)
-    assert agent is None, "HN Digest should not be registered in the curated public catalog"
 
 
 def test_dns_inspector_basic(client):

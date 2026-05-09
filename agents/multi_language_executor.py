@@ -33,6 +33,7 @@ import time
 from typing import Any
 
 from core.executor_sandbox import build_subprocess_env
+from agents._contracts import agent_error as _err
 
 _TIMEOUT_MAX = 30
 _OUTPUT_TRUNCATE = 20_000
@@ -65,7 +66,7 @@ _PRIVATE_HOST_PATTERNS = (
     r"\bmetadata\.google\.internal\b",                # GCP IMDS
     r"\bmetadata\.azure\.com\b",                      # Azure IMDS
 )
-_NETWORK_API_PATTERNS = {
+_NETWORK_API_PATTERNS_RAW = {
     # JS/TS: top-level fetch + http/https/net/dns/dgram modules.
     ("javascript", "typescript"): (
         r"\bfetch\s*\(",
@@ -85,6 +86,10 @@ _NETWORK_API_PATTERNS = {
         r"\b(?:reqwest|hyper|surf|ureq|isahc)::",
         r"\bTcpStream::connect\b",
     ),
+}
+_NETWORK_API_PATTERNS = {
+    langs: tuple(re.compile(p, re.MULTILINE) for p in patterns)
+    for langs, patterns in _NETWORK_API_PATTERNS_RAW.items()
 }
 _PRIVATE_HOST_RE = re.compile("|".join(_PRIVATE_HOST_PATTERNS), re.IGNORECASE)
 
@@ -109,7 +114,7 @@ def _is_code_network_safe(language: str, code: str) -> tuple[bool, str | None]:
         if language not in langs:
             continue
         for pattern in patterns:
-            if re.search(pattern, code, re.MULTILINE):
+            if pattern.search(code):
                 return (
                     False,
                     "Code uses a network-capable API surface "
@@ -119,9 +124,6 @@ def _is_code_network_safe(language: str, code: str) -> tuple[bool, str | None]:
                 )
     return True, None
 
-
-def _err(code: str, message: str) -> dict[str, Any]:
-    return {"error": {"code": code, "message": message}}
 
 
 def _which(name: str) -> str | None:

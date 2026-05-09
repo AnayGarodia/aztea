@@ -33,18 +33,24 @@ Output: {
 Imports: stdlib only — socket, ssl, urllib, time, datetime. No httpx or third-party DNS.
 """
 
+import logging
 import socket
 import ssl
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from core.url_security import validate_outbound_url
+from agents._contracts import agent_error as _err
+
+_LOG = logging.getLogger(__name__)
 
 _MAX_DOMAINS = 10
 _SSL_TIMEOUT = 5
 _HTTP_TIMEOUT = 5
+_INSPECT_WORKERS = 10
 _CERT_DATE_FMT = "%b %d %H:%M:%S %Y %Z"
 
 
@@ -62,7 +68,8 @@ def _dns_check(domain: str) -> tuple[list[str], list[str], str | None]:
         infos6 = socket.getaddrinfo(domain, None, socket.AF_INET6)
         aaaa_records = list({info[4][0] for info in infos6})
     except Exception:
-        pass  # IPv6 is optional
+        # WHY: IPv6 is optional — absent AAAA is normal, not an error.
+        _LOG.debug("AAAA lookup absent for %s", domain, exc_info=True)
 
     return a_records, aaaa_records, None
 
@@ -95,7 +102,8 @@ def _ssl_check(domain: str) -> tuple[dict | None, str | None]:
         )
         now = datetime.now(timezone.utc)
         days_until_expiry = (expires_dt - now).days
-    except Exception:
+    except (ValueError, TypeError):
+        _LOG.info("Could not parse cert notAfter %r for %s", not_after_str, domain)
         expires_dt = None
 
     san_names: list[str] = []
@@ -144,9 +152,6 @@ def _http_check(domain: str) -> tuple[dict | None, str | None]:
     }, None
 
 
-def _err(code: str, message: str) -> dict:
-    return {"error": {"code": code, "message": message}}
-
 
 def run(payload: dict) -> dict:
     """Perform live DNS record lookups and SSL certificate inspection.
@@ -191,7 +196,7 @@ def run(payload: dict) -> dict:
     results = []
     successfully_inspected = 0
 
-    for domain in domains:
+    def _inspect_one(domain: str) -> tuple[dict, bool]:
         entry: dict = {
             "domain": domain,
             "a_records": [],
@@ -199,37 +204,16 @@ def run(payload: dict) -> dict:
             "http": None,
             "issues": [],
         }
-        domain_ok = True
-
-        # --- Format guard ---
         if any(c in domain for c in ("@", " ", "[")):
-            results.append(
-                {
-                    "domain": domain,
-                    "a_records": [],
-                    "ssl_cert": None,
-                    "http": None,
-                    "issues": ["Invalid domain format"],
-                }
-            )
-            continue
-
-        # --- SSRF guard ---
+            entry["issues"].append("Invalid domain format")
+            return entry, False
         try:
             validate_outbound_url(f"https://{domain}", "domain")
         except Exception as exc:
-            results.append(
-                {
-                    "domain": domain,
-                    "a_records": [],
-                    "ssl_cert": None,
-                    "http": None,
-                    "issues": [f"Domain blocked by security policy: {exc}"],
-                }
-            )
-            continue
+            entry["issues"].append(f"Domain blocked by security policy: {exc}")
+            return entry, False
 
-        # --- DNS ---
+        domain_ok = True
         if "dns" in checks:
             a_records, _aaaa, dns_error = _dns_check(domain)
             entry["a_records"] = a_records
@@ -239,9 +223,7 @@ def run(payload: dict) -> dict:
             elif not a_records:
                 entry["issues"].append("No DNS A records found")
 
-        # --- MX (stdlib limitation note) ---
-        # Full MX record lookup requires dnspython; socket only resolves hostnames.
-        # We attempt mail.<domain> as a rough proxy for MX reachability.
+        # WHY: stdlib lacks DNS MX lookup; mail.<domain> is a rough proxy.
         if "mx" in checks:
             try:
                 mail_ips = list(
@@ -249,9 +231,9 @@ def run(payload: dict) -> dict:
                 )
                 entry["possible_mail_ips"] = mail_ips
             except Exception:
+                _LOG.debug("mail.%s lookup failed", domain, exc_info=True)
                 entry["possible_mail_ips"] = []
 
-        # --- SSL ---
         if "ssl" in checks:
             cert_info, ssl_error = _ssl_check(domain)
             if ssl_error:
@@ -266,7 +248,6 @@ def run(payload: dict) -> dict:
                             f"SSL certificate expires in {days} days"
                         )
 
-        # --- HTTP ---
         if "http" in checks:
             http_info, http_error = _http_check(domain)
             if http_error:
@@ -277,10 +258,16 @@ def run(payload: dict) -> dict:
                 if http_info and not http_info.get("hsts"):
                     entry["issues"].append("Missing HSTS header")
 
-        if domain_ok:
-            successfully_inspected += 1
+        return entry, domain_ok
 
-        results.append(entry)
+    # WHY: each domain does DNS + SSL handshake + HTTP — wall-time dominated by
+    # network round-trips. Parallel inspection preserves input order.
+    workers = min(_INSPECT_WORKERS, max(1, len(domains)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for entry, ok in pool.map(_inspect_one, domains):
+            results.append(entry)
+            if ok:
+                successfully_inspected += 1
 
     # If every requested domain failed (DNS error, SSRF block, all checks
     # rejected), the floor 1¢ would still be billed. Return a structured

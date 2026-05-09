@@ -53,28 +53,16 @@ LOAD_TESTER_AGENT_ID = "38143c50-4484-595c-827f-629d3c877f7e"
 CI_FAILURE_REPRODUCER_AGENT_ID = "fec9fdac-4685-579f-b26f-82119124c73e"
 
 BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
-    FINANCIAL_AGENT_ID: "internal://financial",
     QUALITY_JUDGE_AGENT_ID: "internal://quality-judge",
     CVELOOKUP_AGENT_ID: "internal://cve-lookup",
-    IMAGE_GENERATOR_AGENT_ID: "internal://image-generator",
-    VIDEO_STORYBOARD_AGENT_ID: "internal://video-storyboard-generator",
-    ARXIV_RESEARCH_AGENT_ID: "internal://arxiv-research",
     PYTHON_EXECUTOR_AGENT_ID: "internal://python-executor",
-    HN_DIGEST_AGENT_ID: "internal://hn_digest",
     DNS_INSPECTOR_AGENT_ID: "internal://dns_inspector",
     DEPENDENCY_AUDITOR_AGENT_ID: "internal://dependency_auditor",
-    MULTI_FILE_EXECUTOR_AGENT_ID: "internal://multi_file_executor",
-    LINTER_AGENT_ID: "internal://linter_agent",
-    SHELL_EXECUTOR_AGENT_ID: "internal://shell_executor",
-    TYPE_CHECKER_AGENT_ID: "internal://type_checker",
     DB_SANDBOX_AGENT_ID: "internal://db_sandbox",
     VISUAL_REGRESSION_AGENT_ID: "internal://visual_regression",
-    LIVE_ENDPOINT_TESTER_AGENT_ID: "internal://live_endpoint_tester",
     BROWSER_AGENT_ID: "internal://browser_agent",
     MULTI_LANGUAGE_EXECUTOR_AGENT_ID: "internal://multi_language_executor",
-    SEMANTIC_CODEBASE_SEARCH_AGENT_ID: "internal://semantic_codebase_search",
     SECRET_SCANNER_AGENT_ID: "internal://secret_scanner",
-    SQL_EXPLAINER_AGENT_ID: "internal://sql_explainer",
     LIGHTHOUSE_AUDITOR_AGENT_ID: "internal://lighthouse_auditor",
     ACCESSIBILITY_AUDITOR_AGENT_ID: "internal://accessibility_auditor",
     SECURITY_HEADERS_GRADER_AGENT_ID: "internal://security_headers_grader",
@@ -89,12 +77,8 @@ BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
 }
 
 BUILTIN_LEGACY_ROUTE_ENDPOINTS: dict[str, str] = {
-    FINANCIAL_AGENT_ID: f"{SERVER_BASE_URL}/agents/financial",
     QUALITY_JUDGE_AGENT_ID: f"{SERVER_BASE_URL}/agents/quality-judge",
     CVELOOKUP_AGENT_ID: f"{SERVER_BASE_URL}/agents/cve-lookup",
-    IMAGE_GENERATOR_AGENT_ID: f"{SERVER_BASE_URL}/agents/image-generator",
-    VIDEO_STORYBOARD_AGENT_ID: f"{SERVER_BASE_URL}/agents/video-storyboard-generator",
-    ARXIV_RESEARCH_AGENT_ID: f"{SERVER_BASE_URL}/agents/arxiv-research",
     PYTHON_EXECUTOR_AGENT_ID: f"{SERVER_BASE_URL}/agents/python-executor",
 }
 
@@ -104,9 +88,6 @@ for _agent_id, _endpoint in BUILTIN_INTERNAL_ENDPOINTS.items():
     _legacy = BUILTIN_LEGACY_ROUTE_ENDPOINTS.get(_agent_id)
     if _legacy:
         BUILTIN_ENDPOINT_TO_AGENT_ID[normalize_endpoint_ref(_legacy)] = _agent_id
-BUILTIN_ENDPOINT_TO_AGENT_ID[normalize_endpoint_ref(f"{SERVER_BASE_URL}/analyze")] = (
-    FINANCIAL_AGENT_ID
-)
 
 BUILTIN_AGENT_IDS = frozenset(BUILTIN_INTERNAL_ENDPOINTS.keys())
 

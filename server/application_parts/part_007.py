@@ -817,7 +817,6 @@ def mcp_manifest_payload(
 _MCP_COMPUTE_HEAVY_AGENT_IDS = frozenset(
     {
         _PYTHON_EXECUTOR_AGENT_ID,
-        _IMAGE_GENERATOR_AGENT_ID,
     }
 )
 

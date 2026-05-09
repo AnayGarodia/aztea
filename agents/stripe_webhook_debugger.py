@@ -43,6 +43,7 @@ from typing import Any
 import requests
 
 from core.url_security import validate_outbound_url
+from agents._contracts import agent_error as _err
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -209,9 +210,6 @@ def _fire(
 # Per-test helpers (keep run() slim)
 # ---------------------------------------------------------------------------
 
-
-def _err(code: str, message: str) -> dict[str, Any]:
-    return {"error": {"code": code, "message": message}}
 
 
 def _result(test_name: str, event_type: str, status: str, http_status: int,

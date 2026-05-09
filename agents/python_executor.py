@@ -31,6 +31,7 @@ import textwrap
 import time
 from multiprocessing.pool import Pool
 from typing import Any
+from agents._contracts import agent_error as _err
 
 _LOG = logging.getLogger(__name__)
 
@@ -319,9 +320,6 @@ _WARM_POOL_SIZE = max(
 )
 _WARM_POOL: Pool | None = None
 
-
-def _err(code: str, message: str) -> dict[str, Any]:
-    return {"error": {"code": code, "message": message}}
 
 
 def _capture_variables(namespace: dict[str, Any]) -> dict[str, Any]:

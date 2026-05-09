@@ -9,19 +9,9 @@ from agents import browser_agent
 from agents import cve_lookup
 from agents import dependency_auditor
 from agents import db_sandbox
-from agents import hn_digest
-from agents import linter_agent
-from agents import live_endpoint_tester
-from agents import multi_file_executor
 from agents import python_executor
-from agents import shell_executor
 from agents import secret_scanner
-from agents import semantic_codebase_search
-from agents import type_checker
-from agents import video_storyboard
 from agents import visual_regression
-from agents import arxiv_research
-from agents.financial import synthesizer as financial_synthesizer
 
 
 class _FakeResponse:
@@ -160,86 +150,6 @@ def test_cve_lookup_rejects_mutually_exclusive_id_fields():
     assert result["error"]["code"] == "cve_lookup.mutually_exclusive_ids"
 
 
-def test_type_checker_parses_mypy_json(monkeypatch):
-    def fake_run(cmd, capture_output=False, text=False, timeout=None, cwd=None, **kwargs):
-        del capture_output, text, timeout, cwd, kwargs
-        if cmd[:4] == ["python3", "-m", "mypy", "--version"]:
-            return SimpleNamespace(returncode=0, stdout="mypy 1.11.2\n", stderr="")
-        if cmd[:3] == ["python3", "-m", "mypy"]:
-            payload = [
-                {
-                    "file": "main.py",
-                    "line": 1,
-                    "column": 5,
-                    "code": "arg-type",
-                    "message": 'Argument 1 to "f" has incompatible type "str"; expected "int"',
-                    "severity": "error",
-                }
-            ]
-            return SimpleNamespace(returncode=1, stdout=json.dumps(payload), stderr="")
-        raise AssertionError(f"Unexpected subprocess command: {cmd!r}")
-
-    monkeypatch.setattr(type_checker.subprocess, "run", fake_run)
-
-    result = type_checker.run({"language": "python", "code": "def f(x: int) -> None:\n    pass\nf('x')"})
-    assert result["passed"] is False
-    assert result["ok"] is False
-    assert result["tool_version"] == "mypy 1.11.2"
-    assert result["error_count"] == 1
-    assert result["diagnostics"][0]["code"] == "arg-type"
-
-
-def test_type_checker_returns_structured_error_for_missing_code():
-    result = type_checker.run({"language": "python"})
-    assert result["error"]["code"] == "type_checker.missing_code"
-
-
-def test_linter_agent_returns_tool_unavailable_for_js_without_node(monkeypatch):
-    monkeypatch.setattr(linter_agent.shutil, "which", lambda name: None)
-    result = linter_agent.run({"language": "javascript", "code": "const x = y;"})
-    assert result["error"]["code"] == "linter_agent.tool_unavailable"
-
-
-def test_linter_agent_uses_ruff_for_python(monkeypatch):
-    monkeypatch.setattr(linter_agent.shutil, "which", lambda name: "/usr/bin/ruff" if name == "ruff" else None)
-
-    def fake_run(cmd, capture_output=False, text=False, timeout=None, **kwargs):
-        del capture_output, text, timeout, kwargs
-        assert cmd[0] == "ruff"
-        return SimpleNamespace(
-            returncode=1,
-            stdout=json.dumps(
-                [
-                    {
-                        "code": "F401",
-                        "message": "`os` imported but unused",
-                        "location": {"row": 1, "column": 8},
-                        "fix": None,
-                    }
-                ]
-            ),
-            stderr="",
-        )
-
-    monkeypatch.setattr(linter_agent.subprocess, "run", fake_run)
-    result = linter_agent.run({"language": "python", "code": "import os\n"})
-    assert result["tool"] == "ruff"
-    assert result["error_count"] == 1
-    assert result["issues"][0]["rule"] == "F401"
-
-
-def test_linter_agent_returns_structured_error_for_missing_code():
-    result = linter_agent.run({"language": "python"})
-    assert result["error"]["code"] == "linter_agent.missing_code"
-
-
-def test_linter_agent_detects_obvious_go_python_mismatch():
-    result = linter_agent.run(
-        {"language": "python", "code": 'package main\nimport "fmt"\nfunc main(){fmt.Println("hi")}'}
-    )
-    assert result["error"]["code"] == "linter_agent.language_mismatch"
-
-
 def test_db_sandbox_executes_sql_and_returns_plan():
     result = db_sandbox.run(
         {
@@ -269,35 +179,6 @@ def test_db_sandbox_accepts_string_queries_and_keeps_partial_errors():
 def test_secret_scanner_negative_entropy_disables_entropy_check():
     result = secret_scanner.run({"content": "plain text only", "min_entropy": -1})
     assert result["total_findings"] == 0
-
-
-def test_live_endpoint_tester_uses_mocked_upstream(monkeypatch):
-    class _FakeResponse:
-        ok = True
-        status_code = 200
-        content = b"ok"
-
-    class _FakeSession:
-        def __init__(self):
-            self.headers = {}
-            self.calls = 0
-
-        def request(self, method, url, headers=None, json=None, data=None, timeout=None, allow_redirects=None):
-            del headers, json, data, timeout
-            self.calls += 1
-            assert method == "GET"
-            assert url == "https://example.com/health"
-            assert allow_redirects is False
-            return _FakeResponse()
-
-        def close(self):
-            return None
-
-    monkeypatch.setattr(live_endpoint_tester.requests, "Session", _FakeSession)
-    result = live_endpoint_tester.run({"url": "https://example.com/health", "requests": 5, "concurrency": 2})
-    assert result["success_count"] == 5
-    assert result["failure_count"] == 0
-    assert result["status_counts"]["200"] == 5
 
 
 def test_visual_regression_returns_annotated_artifact(monkeypatch):
@@ -359,42 +240,6 @@ def test_browser_agent_rejects_invalid_url_via_ssrf_guard():
     assert "absolute http(s) URL" in result["error"]["message"]
 
 
-def test_hn_digest_returns_structured_error_on_timeout(monkeypatch):
-    def fake_get(*args, **kwargs):
-        del args, kwargs
-        raise hn_digest.httpx.TimeoutException("boom")
-
-    monkeypatch.setattr(hn_digest.httpx, "get", fake_get)
-    result = hn_digest.run({})
-    assert result["error"]["code"] == "hn_digest.timeout"
-
-
-def test_hn_digest_degrades_gracefully_without_llm(monkeypatch):
-    class _FakeResponse:
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict:
-            return {
-                "hits": [
-                    {
-                        "title": "New compiler release",
-                        "url": "https://example.com/compiler",
-                        "points": 123,
-                        "num_comments": 45,
-                        "author": "alice",
-                        "created_at": "2026-04-28T00:00:00Z",
-                    }
-                ]
-            }
-
-    monkeypatch.setattr(hn_digest.httpx, "get", lambda *args, **kwargs: _FakeResponse())
-    monkeypatch.setattr(hn_digest, "run_with_fallback", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("no llm")))
-    result = hn_digest.run({"count": 1})
-    assert result["stories"][0]["title"] == "New compiler release"
-    assert "no LLM provider" in result["synthesis"]
-
-
 def test_python_executor_returns_structured_error_for_missing_code():
     result = python_executor.run({})
     assert result["error"]["code"] == "python_executor.missing_code"
@@ -413,168 +258,9 @@ def test_python_executor_traceback_line_numbers_match_user_code():
     )
 
 
-def test_arxiv_research_returns_structured_error_for_missing_query():
-    result = arxiv_research.run({})
-    assert result["error"]["code"] == "arxiv_research.missing_query"
-
-
-def test_arxiv_research_degrades_gracefully_without_llm(monkeypatch):
-    monkeypatch.setattr(
-        arxiv_research,
-        "_fetch_arxiv",
-        lambda *args, **kwargs: [
-            {
-                "arxiv_id": "2404.12345",
-                "title": "Transformer Systems",
-                "authors": ["Alice", "Bob"],
-                "abstract": "A paper about transformers.",
-                "categories": ["cs.AI"],
-                "published": "2024-04-01",
-                "updated": "2024-04-02",
-                "pdf_url": "https://arxiv.org/pdf/2404.12345",
-                "abstract_url": "https://arxiv.org/abs/2404.12345",
-            }
-        ],
-    )
-    monkeypatch.setattr(arxiv_research, "run_with_fallback", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("no llm")))
-    result = arxiv_research.run({"query": "transformers", "max_results": 1})
-    assert result["total_found"] == 1
-    assert "no LLM provider" in result["synthesis"]
-
-
-def test_arxiv_research_flags_low_confidence_for_nonsense_query(monkeypatch):
-    import agents.arxiv_research as arxiv
-
-    fake_papers = [{
-        "arxiv_id": "1234.5678",
-        "title": "Quantum entanglement in photonic circuits",
-        "authors": ["A. Researcher"],
-        "abstract": "We study quantum entanglement.",
-        "categories": ["quant-ph"],
-        "published": "2024-01-01",
-        "updated": "2024-01-01",
-        "pdf_url": "https://arxiv.org/pdf/1234.5678",
-        "abstract_url": "https://arxiv.org/abs/1234.5678",
-    }]
-    monkeypatch.setattr(arxiv, "_fetch_arxiv", lambda *a, **kw: fake_papers)
-
-    class FakeLLMResp:
-        text = '{"key_themes":[],"seminal_papers":[],"open_questions":[],"suggested_follow_ups":[]}'
-
-    monkeypatch.setattr(arxiv, "run_with_fallback", lambda req: FakeLLMResp())
-
-    result = arxiv.run({"query": "xyzzyplughqwerty123nonsense"})
-    assert "error" not in result
-    assert result.get("low_confidence_results") is True, (
-        "Should set low_confidence_results=True when papers don't match query tokens"
-    )
-
-
-def test_financial_synthesizer_returns_grounded_fallback_without_llm(monkeypatch):
-    monkeypatch.setattr(
-        financial_synthesizer,
-        "run_with_fallback",
-        lambda req: (_ for _ in ()).throw(RuntimeError("no llm")),
-    )
-    result = financial_synthesizer.synthesize_brief(
-        {
-            "ticker": "TEST",
-            "company_name": "Test Corp",
-            "filing_type": "10-Q",
-            "filing_date": "2026-01-31",
-            "document_url": "https://sec.example/test",
-            "text": (
-                "Test Corp develops enterprise software and support services. "
-                "Revenue increased to $10.2 billion during the quarter. "
-                "Operating cash flow was $2.1 billion. "
-                "The company warned that competition and supply chain risk could pressure margins."
-            ),
-        }
-    )
-    assert result["llm_used"] is False
-    assert result["degraded_mode"] is True
-    assert result["recent_financial_highlights"]
-    assert result["key_risks"]
-    assert result["signal"] in {"positive", "neutral", "negative"}
-    assert result["source_evidence"]["financial_highlights"]
-
-
-def test_semantic_codebase_search_rejects_invalid_git_url_via_ssrf_guard():
-    result = semantic_codebase_search.run({"query": "pdf extraction", "git_url": "ftp://example.com/repo"})
-    assert result["error"]["code"] == "semantic_codebase_search.url_blocked"
-    assert "absolute http(s) URL" in result["error"]["message"]
-
-
-def test_semantic_codebase_search_rejects_ambiguous_source_inputs():
-    result = semantic_codebase_search.run(
-        {
-            "query": "pdf extraction",
-            "git_url": "https://github.com/example/repo",
-            "artifact": {"url_or_base64": "Zm9v", "name": "repo.zip"},
-        }
-    )
-    assert result["error"]["code"] == "semantic_codebase_search.ambiguous_source"
-
-
-def test_semantic_codebase_search_rejects_zip_traversal_artifact():
-    # Build a valid ZIP with a path-traversal entry (``../evil.txt``) at runtime
-    # rather than hardcoding base64 — the previously inlined string had broken
-    # padding and decoded as garbage, causing the agent to fail at the decode
-    # step before the traversal guard could fire.
-    import base64
-    import io
-    import zipfile
-
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
-        zf.writestr("../evil.txt", "hello")
-    encoded = base64.b64encode(buf.getvalue()).decode("ascii")
-
-    payload = {
-        "query": "pdf extraction",
-        "artifact": {
-            "name": "repo.zip",
-            "url_or_base64": f"data:application/zip;base64,{encoded}",
-        },
-    }
-    result = semantic_codebase_search.run(payload)
-    assert result["error"]["code"] == "semantic_codebase_search.unsafe_artifact"
-    assert "unsafe traversal" in result["error"]["message"]
-
-
-def test_semantic_codebase_search_lexical_fallback_returns_relevant_file(monkeypatch):
-    monkeypatch.setattr(
-        semantic_codebase_search,
-        "_extract_artifact",
-        lambda artifact, extensions, max_file_bytes: {
-            "src/pillow_fix.py": "def fix_cve_2023_50447():\n    return 'patched'\n",
-            "README.md": "general project overview",
-        },
-    )
-    monkeypatch.setattr(semantic_codebase_search, "DISABLE_EMBEDDINGS", True)
-    result = semantic_codebase_search.run(
-        {
-            "query": "CVE-2023-50447 pillow fix",
-            "artifact": {"name": "repo.zip", "url_or_base64": "Zm9v"},
-        }
-    )
-    assert result["results"]
-    assert result["results"][0]["path"] == "src/pillow_fix.py"
-    assert "cve_2023_50447" in result["results"][0]["snippet"].lower()
-    assert result["results"][0]["line_start"] >= 1
-    assert result["results"][0]["line_end"] >= result["results"][0]["line_start"]
-
-
 def test_browser_agent_rejects_invalid_action():
     result = browser_agent.run({"url": "https://example.com", "action": "interact"})
     assert result["error"]["code"] == "browser_agent.invalid_action"
-
-
-def test_multi_file_executor_accepts_mapping_files_shape():
-    result = multi_file_executor.run({"files": {"main.py": "print('hi')"}})
-    assert result["exit_code"] == 0
-    assert result["files_written"] == 1
-    assert "hi" in result["stdout"]
 
 
 def test_browser_agent_request_guard_aborts_private_subrequests():
@@ -605,59 +291,6 @@ def test_browser_agent_request_guard_aborts_private_subrequests():
     assert events == ["abort", "continue"]
 
 
-def test_video_storyboard_returns_structured_error_when_backend_is_unavailable(monkeypatch):
-    monkeypatch.setattr(
-        video_storyboard,
-        "_generate_video_artifact",
-        lambda **kwargs: (_ for _ in ()).throw(ValueError("REPLICATE_VIDEO_MODEL is required for video generation.")),
-    )
-    result = video_storyboard.run({"brief": "A launch teaser for an AI product."})
-    assert result["error"]["code"] == "video_storyboard.not_configured"
-
-
-def test_shell_executor_does_not_forward_host_secrets(monkeypatch):
-    monkeypatch.setenv("AZTEA_API_KEY", "super-secret")
-    captured: dict[str, str] = {}
-
-    def fake_run(cmd, capture_output=None, text=None, timeout=None, cwd=None, env=None):
-        del cmd, capture_output, text, timeout, cwd
-        captured.update(env or {})
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(shell_executor.subprocess, "run", fake_run)
-    result = shell_executor.run({"command": "python -V"})
-    assert result["exit_code"] == 0
-    assert "AZTEA_API_KEY" not in captured
-
-
-def test_type_checker_falls_back_to_npx_when_tsc_missing(monkeypatch):
-    """If global tsc is absent, _run_tsc should use npx --package typescript tsc."""
-    import importlib
-    import shutil as _shutil
-    monkeypatch.setattr(_shutil, "which", lambda name: None if name == "tsc" else f"/usr/bin/{name}")
-
-    import subprocess as _subprocess
-    captured = {}
-
-    def fake_run(cmd, **kwargs):
-        captured["cmd"] = list(cmd)
-        return _subprocess.CompletedProcess(cmd, 0, "", "")
-
-    monkeypatch.setattr(_subprocess, "run", fake_run)
-
-    import agents.type_checker as tc
-    importlib.reload(tc)
-    tc._run_tsc("const x: number = 1;", {}, False)
-    assert "cmd" in captured, "subprocess.run was never called — patch may be broken"
-    assert (
-        captured["cmd"][0] == "npx"
-        or captured["cmd"][0].endswith("/node_modules/.bin/tsc")
-    ), "should fall back to npx or the repo-bundled tsc"
-    if captured["cmd"][0] == "npx":
-        assert "--package" in captured["cmd"], "must specify --package typescript"
-        assert "tsc" in captured["cmd"]
-
-
 def test_db_sandbox_blocks_attach_database():
     result = db_sandbox.run({"sql": "ATTACH DATABASE '/etc/passwd' AS leak"})
     assert "error" in result
@@ -677,62 +310,5 @@ def test_db_sandbox_blocks_detach():
     result = db_sandbox.run({"sql": "DETACH DATABASE leak"})
     assert "error" in result
 
-
-def test_linter_agent_no_eval_and_no_var_rules_in_ts_eslint_command(monkeypatch):
-    """Verify the ESLint command includes no-eval:error and no-var:warn for TypeScript."""
-    import subprocess as _subprocess
-
-    captured_cmd: dict = {}
-
-    def fake_run(cmd, **kw):
-        captured_cmd["cmd"] = list(cmd)
-        import json
-        return _subprocess.CompletedProcess(cmd, 0, json.dumps([{"filePath": "f.ts", "messages": []}]), "")
-
-    monkeypatch.setattr(_subprocess, "run", fake_run)
-    monkeypatch.setattr("shutil.which", lambda x: "/usr/bin/npx" if x in ("npx", "node") else None)
-
-    from agents import linter_agent
-    linter_agent.run({"code": "const x = 1;", "language": "typescript"})
-    assert "cmd" in captured_cmd, "subprocess.run was never called"
-    cmd_str = " ".join(captured_cmd["cmd"])
-    assert "no-eval" in cmd_str, "TypeScript eslint command must include no-eval"
-    assert "no-var" in cmd_str, "TypeScript eslint command must include no-var"
-
-
-def test_shell_executor_blocks_network_in_python3_c():
-    from agents import shell_executor
-    try:
-        result = shell_executor.run({"command": "python3 -c 'import socket'"})
-        assert result.get("exit_code", 0) != 0 or "blocked" in (result.get("stderr") or "").lower()
-    except ValueError as exc:
-        assert "not permitted" in str(exc).lower() or "blocked" in str(exc).lower()
-
-
-def test_shell_executor_blocks_subprocess_import_in_python3_c():
-    from agents import shell_executor
-    try:
-        result = shell_executor.run({"command": "python3 -c 'import subprocess'"})
-        assert result.get("exit_code", 0) != 0 or "blocked" in (result.get("stderr") or "").lower()
-    except ValueError as exc:
-        assert "not permitted" in str(exc).lower() or "blocked" in str(exc).lower()
-
-
-def test_shell_executor_blocks_from_socket_import_in_python3_c():
-    from agents import shell_executor
-    try:
-        result = shell_executor.run({"command": "python3 -c 'from socket import connect'"})
-        assert result.get("exit_code", 0) != 0 or "blocked" in (result.get("stderr") or "").lower()
-    except ValueError as exc:
-        assert "not permitted" in str(exc).lower() or "blocked" in str(exc).lower()
-
-
-def test_shell_executor_blocks_multiple_c_flags_in_python3():
-    from agents import shell_executor
-    try:
-        result = shell_executor.run({"command": "python3 -c 'pass' -c 'import socket'"})
-        assert result.get("exit_code", 0) != 0 or "blocked" in (result.get("stderr") or "").lower()
-    except ValueError as exc:
-        assert "not permitted" in str(exc).lower() or "blocked" in str(exc).lower()
 
 

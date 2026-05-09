@@ -19,9 +19,6 @@ from server.builtin_agents.constants import (
 from server.builtin_agents.constants import (
     SECRET_SCANNER_AGENT_ID as _SECRET_SCANNER_AGENT_ID,
 )
-from server.builtin_agents.constants import (
-    SQL_EXPLAINER_AGENT_ID as _SQL_EXPLAINER_AGENT_ID,
-)
 from server.builtin_agents.schemas import output_schema_object as _output_schema_object
 
 
@@ -173,82 +170,6 @@ def load_builtin_specs_part5() -> list[dict[str, Any]]:
                             }
                         ],
                         "summary": "Found 2 potential leak(s): 2 critical.",
-                    },
-                }
-            ],
-        },
-        {
-            "agent_id": _SQL_EXPLAINER_AGENT_ID,
-            "name": "SQL Explainer",
-            "description": (
-                "Use to run EXPLAIN QUERY PLAN against a real SQLite database populated from your "
-                "schema. Spins an in-memory SQLite per call, executes restricted DDL/seed SQL "
-                "(no ATTACH, VACUUM, pragmas, or virtual tables), then runs EXPLAIN for one or "
-                "more SELECT/WITH statements. Surfaces full scans, temp B-trees, correlated "
-                "subqueries, and provides index suggestions. Read-only after schema setup. "
-                "SQLite-only, but plan shapes generalize to other relational engines. No LLM."
-            ),
-            "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_SQL_EXPLAINER_AGENT_ID],
-            "price_per_call_usd": 0.01,
-            "tags": ["sql", "sqlite", "performance", "developer-tools", "database"],
-            "kind": "aztea_built",
-            "category": "Developer Tools",
-            "is_featured": True,
-            "cacheable": True,
-            "input_schema": _output_schema_object(
-                {
-                    "schema_sql": {
-                        "type": "string",
-                        "title": "Schema/seed SQL",
-                        "description": "DDL plus optional seed INSERTs. Max 30,000 chars.",
-                        "maxLength": 30000,
-                    },
-                    "queries": {
-                        "type": "array",
-                        "title": "Queries",
-                        "description": "1..10 SELECT or WITH statements to EXPLAIN.",
-                        "items": {"type": "string"},
-                        "minItems": 1,
-                        "maxItems": 10,
-                    },
-                    "params": {
-                        "type": "array",
-                        "description": "Optional positional/named params, parallel to queries.",
-                        "items": {},
-                    },
-                },
-                required=["schema_sql", "queries"],
-            ),
-            "output_schema": _output_schema_object(
-                {
-                    "queries": {"type": "array", "items": {"type": "object"}},
-                    "total_issues": {"type": "integer"},
-                    "summary": {"type": "string"},
-                },
-                required=["queries", "total_issues", "summary"],
-            ),
-            "output_examples": [
-                {
-                    "input": {
-                        "schema_sql": "CREATE TABLE users(id INTEGER PRIMARY KEY, email TEXT); INSERT INTO users VALUES (1,'a@x'),(2,'b@x');",
-                        "queries": ["SELECT * FROM users WHERE email = 'a@x'"],
-                    },
-                    "output": {
-                        "queries": [
-                            {
-                                "sql": "SELECT * FROM users WHERE email = 'a@x'",
-                                "plan": [
-                                    {"id": 2, "parent": 0, "detail": "SCAN users"}
-                                ],
-                                "issues": ["Full scan on `users`"],
-                                "suggestions": [
-                                    "Consider an index on the WHERE/JOIN columns used against `users`."
-                                ],
-                                "elapsed_ms": 0.3,
-                            }
-                        ],
-                        "total_issues": 1,
-                        "summary": "Found 1 potential plan issue(s) across 1 query/queries.",
                     },
                 }
             ],

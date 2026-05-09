@@ -58,6 +58,7 @@ import tempfile
 from typing import Any
 
 from core.url_security import validate_outbound_url
+from agents._contracts import agent_error as _err
 
 _LOG = logging.getLogger(__name__)
 
@@ -69,12 +70,6 @@ _MAX_TIMEOUT = 180
 _MAX_OPPORTUNITIES = 8
 _MAX_FAILED_AUDITS = 15
 
-
-def _err(code: str, message: str, details: dict | None = None) -> dict:
-    err: dict[str, Any] = {"code": code, "message": message}
-    if details:
-        err["details"] = details
-    return {"error": err}
 
 
 def _score_to_int(raw: Any) -> int | None:

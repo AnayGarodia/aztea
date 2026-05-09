@@ -44,6 +44,7 @@ from typing import Any
 import httpx
 
 from core.url_security import validate_outbound_url
+from agents._contracts import agent_error as _err
 
 _LOG = logging.getLogger(__name__)
 
@@ -57,9 +58,6 @@ _TABLE_PREVIEW_ROWS = 10
 _TABLE_PREVIEW_COLS = 8
 _USER_AGENT = "Aztea-PDF-Parser/1.0"
 
-
-def _err(code: str, message: str) -> dict[str, Any]:
-    return {"error": {"code": code, "message": message}}
 
 
 def _stringify_meta(value: Any) -> str | None:

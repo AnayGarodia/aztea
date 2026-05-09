@@ -37,6 +37,7 @@ from urllib.parse import unquote
 import requests
 
 from core.url_security import validate_outbound_url
+from agents._contracts import agent_error as _err
 
 _MAX_IMAGE_BYTES = 8 * 1024 * 1024
 # Allow up to N SSRF-validated HTTP redirects (e.g. CDN images redirect to S3).
@@ -44,9 +45,6 @@ _MAX_IMAGE_BYTES = 8 * 1024 * 1024
 # so SSRF via open redirects is blocked even when the initial host is trusted.
 _MAX_REDIRECTS = 5
 
-
-def _err(code: str, message: str) -> dict[str, Any]:
-    return {"error": {"code": code, "message": message}}
 
 
 def _load_pillow():

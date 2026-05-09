@@ -30,6 +30,7 @@ import sys
 import tempfile
 import time
 from typing import Any
+from agents._contracts import agent_error as _err
 
 _LOG = logging.getLogger(__name__)
 
@@ -122,9 +123,6 @@ insufficient — say so in the DIAGNOSIS section."""
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
-
-def _err(code: str, message: str) -> dict:
-    return {"error": {"code": code, "message": message}}
 
 
 def _trunc(text: str, limit: int = _MAX_OUTPUT_CHARS) -> str:

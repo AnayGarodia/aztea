@@ -36,6 +36,7 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Any
+from agents._contracts import agent_error as _err
 
 _MAX_QUERY_CHARS = 40_000
 _MAX_STATEMENTS = 25
@@ -54,9 +55,6 @@ def _check_sql_blocked(sql: str) -> "dict | None":
         )
     return None
 
-
-def _err(code: str, message: str) -> dict[str, Any]:
-    return {"error": {"code": code, "message": message}}
 
 
 def _normalize_queries(payload: dict[str, Any]) -> list[dict[str, Any]]:
