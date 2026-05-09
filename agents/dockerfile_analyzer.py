@@ -283,10 +283,10 @@ def _run_regex(content: str) -> list[dict[str, Any]]:
 
     # Additional check: no USER instruction at all.
     has_user = any(
-        _USER_RE.match(l) for l in lines
-        if l.strip() and not l.strip().startswith("#")
+        _USER_RE.match(line) for line in lines
+        if line.strip() and not line.strip().startswith("#")
     )
-    if not has_user and any(_FROM_RE.match(l) for l in lines):
+    if not has_user and any(_FROM_RE.match(line) for line in lines):
         findings.append(
             {
                 "line": 0,

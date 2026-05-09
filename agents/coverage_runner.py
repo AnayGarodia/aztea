@@ -311,7 +311,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         if os.path.isfile(coverage_json_path):
             try:
                 parsed = _parse_coverage_json(coverage_json_path, user_file_names)
-            except Exception as exc:
+            except Exception:
                 _LOG.warning("Failed to parse coverage.json", exc_info=True)
                 parsed = None
         else:
