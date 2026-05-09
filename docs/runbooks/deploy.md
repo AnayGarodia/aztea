@@ -37,8 +37,17 @@ sudo -u aztea git reset --hard origin/main
 # 2. Rebuild the React frontend
 cd frontend && npm ci && npm run build && cd ..
 
-# 3. Restart the API (migrations run automatically on startup)
-sudo systemctl kill -s SIGKILL aztea   # force-kill if stuck in shutdown
+# 3. Restart the API (migrations run automatically on startup).
+# Force-kill ALL uvicorn processes before starting — `systemctl restart`
+# alone leaves zombie workers from the old deploy because graceful
+# shutdown takes 60+ seconds while the embedding model lazy-loads.
+# Zombie workers serve a fraction of incoming requests with stale code,
+# producing inconsistent ranking results that look like "the deploy
+# half-took". Discovered 2026-05-09 — only 1 of 3 workers had the new
+# routing keyword overlay because the other 2 were still ~3 minutes old.
+sudo pkill -9 -f "uvicorn server:app" || true
+sudo pkill -9 -f "spawn_main" || true
+sleep 2
 sudo systemctl start aztea
 
 # 4. Verify
