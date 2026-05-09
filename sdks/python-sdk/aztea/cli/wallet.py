@@ -7,7 +7,7 @@ from typing import Optional
 import typer
 
 from .common import ApiKeyOpt, BaseUrlOpt, JsonOpt, build_client, handle_error
-from .output import emit, info, kv_table, spinner, success
+from .output import big_balance, emit, info, kv_table, spinner, success
 
 
 app = typer.Typer(help="Inspect and fund your wallet.", no_args_is_help=True)
@@ -27,13 +27,12 @@ def balance(
             if json_mode:
                 emit(wallet, json_mode=True)
                 return
+            big_balance(f"${wallet.balance_cents / 100:.2f}")
             kv_table(
                 [
-                    ("balance",  f"${wallet.balance_cents / 100:.2f}"),
                     ("currency", "USD"),
                     ("escrow",   f"${getattr(wallet, 'escrow_cents', 0) / 100:.2f}"),
                 ],
-                title="wallet",
             )
     except typer.Exit:
         raise

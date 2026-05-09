@@ -4,12 +4,15 @@ from __future__ import annotations
 from .. import __version__
 from .output import _HAS_RICH, console
 
-_LOGO = r"""
-       _
-   __ |/| _________  ___ _
-  / _` |  /_  / __/ -_) _` |
-  \__,_| /___\__/\__/\__,_|
-"""
+# Block-character logo — tested to render clearly in macOS Terminal, iTerm2,
+# and VS Code integrated terminal. Unicode box-drawing + block elements.
+_LOGO = """\
+ █████╗ ███████╗████████╗███████╗ █████╗
+██╔══██╗   ███╔╝╚══██╔══╝██╔════╝██╔══██╗
+███████║  ███╔╝    ██║   █████╗  ███████║
+██╔══██║ ███╔╝     ██║   ██╔══╝  ██╔══██║
+██║  ██║███████╗   ██║   ███████╗██║  ██║
+╚═╝  ╚═╝╚══════╝   ╚═╝   ╚══════╝╚═╝  ╚═╝"""
 
 
 def render_splash() -> None:
@@ -17,28 +20,35 @@ def render_splash() -> None:
         from rich.text import Text
         from rich.align import Align
 
-        title = Text(_LOGO.strip("\n"), style="terracotta")
-        body = Text()
-        body.append("the clearing house for agent-to-agent commerce\n\n", style="muted")
-        body.append("aztea login         ", style="code")
-        body.append("sign in or create an account\n", style="muted")
-        body.append("aztea hire <slug>   ", style="code")
-        body.append("hire an agent and wait for the result\n", style="muted")
-        body.append("aztea mcp install   ", style="code")
-        body.append("add Aztea to Claude Code or Cursor\n", style="muted")
-        body.append("aztea --help        ", style="code")
-        body.append("see every command\n", style="muted")
-
         console.print()
-        console.print(Align.center(title))
+        console.print(Align.center(Text(_LOGO, style="terracotta")))
+        console.print()
+        console.print(Align.center(Text(
+            "agent labor · discovery · escrow · signed receipts",
+            style="muted",
+        )))
+        console.print()
+
+        body = Text()
+        body.append("  aztea login         ", style="code")
+        body.append("→  sign in and set up\n", style="muted")
+        body.append("  aztea hire <slug>   ", style="code")
+        body.append("→  hire a specialist\n", style="muted")
+        body.append("  aztea agents list   ", style="code")
+        body.append("→  browse the market\n", style="muted")
+        body.append("  aztea --help        ", style="code")
+        body.append("→  all commands\n", style="muted")
+
         console.print(Align.center(body))
         console.print(Align.center(Text(f"v{__version__}", style="muted")))
         console.print()
         return
 
     console.print(_LOGO)
-    console.print("aztea login        sign in or create an account")
-    console.print("aztea hire <slug>  hire an agent and wait for the result")
-    console.print("aztea mcp install  add Aztea to Claude Code or Cursor")
-    console.print("aztea --help       see every command")
+    console.print("agent labor · discovery · escrow · signed receipts")
+    console.print()
+    console.print("  aztea login         →  sign in and set up")
+    console.print("  aztea hire <slug>   →  hire a specialist")
+    console.print("  aztea agents list   →  browse the market")
+    console.print("  aztea --help        →  all commands")
     console.print(f"v{__version__}")

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -142,6 +143,17 @@ def install(
         with spinner("Verifying credentials", json_mode=json_mode):
             with build_client(api_key=key, base_url=url) as client_obj:
                 client_obj.auth.me()
+
+        # Ask before touching the editor config file.
+        if not json_mode and sys.stdout.isatty():
+            answer = typer.prompt(
+                f"  Register Aztea MCP server in {target.label} ({target.config_path})?",
+                default="Y",
+            ).strip().lower()
+            if answer not in ("y", "yes", ""):
+                from .output import warn as _warn
+                _warn("Aborted. Run `aztea mcp install` again to register.")
+                raise typer.Exit(code=0)
 
         data = _read_config(target.config_path)
         servers = data.setdefault("mcpServers", {})

@@ -77,6 +77,50 @@ DOT   = "·"
 BULLET = "•"
 
 
+# ── Layout primitives ──────────────────────────────────────────────────────
+
+def divider() -> None:
+    """Thin teal rule — use sparingly between major sections."""
+    if not _HAS_RICH:
+        console.print("─" * 42)
+        return
+    console.print(Text("─" * 42, style="accent"))
+
+
+def step(n: int, total: int, label: str) -> None:
+    """Numbered step indicator for multi-step flows."""
+    if not _HAS_RICH:
+        console.print(f"[{n}/{total}] {label}")
+        return
+    counter = Text(f"[{n}/{total}]", style="gold")
+    counter.append(f" {label}")
+    console.print(counter)
+
+
+def setup_complete(rows: list[tuple[str, str]]) -> None:
+    """Receipt-style summary at the end of a setup flow."""
+    if not _HAS_RICH:
+        for label, value in rows:
+            console.print(f"  {label}: {value}")
+        return
+    for label, value in rows:
+        line = Text(f"  {label}  ", style="muted")
+        line.append(value, style="default")
+        console.print(line)
+
+
+def big_balance(amount_str: str) -> None:
+    """Prominent gold balance line for wallet display."""
+    if not _HAS_RICH:
+        console.print(f"balance  {amount_str}")
+        return
+    line = Text("balance  ", style="muted")
+    line.append(amount_str, style="bold gold")
+    console.print()
+    console.print(line)
+    console.print()
+
+
 # ── Spinner ────────────────────────────────────────────────────────────────
 
 @contextmanager
@@ -223,6 +267,7 @@ if _HAS_RICH:
         "console", "err_console", "spinner",
         "banner", "success", "info", "warn", "error",
         "emit", "kv_table",
+        "divider", "step", "setup_complete", "big_balance",
         "CHECK", "CROSS", "ARROW", "DOT", "BULLET",
         "Panel", "Table", "Text",
     ]
@@ -231,5 +276,6 @@ else:
         "console", "err_console", "spinner",
         "banner", "success", "info", "warn", "error",
         "emit", "kv_table",
+        "divider", "step", "setup_complete", "big_balance",
         "CHECK", "CROSS", "ARROW", "DOT", "BULLET",
     ]

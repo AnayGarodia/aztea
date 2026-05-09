@@ -57,23 +57,37 @@ def list_cmd(
 
             try:
                 from rich.table import Table
+                from rich.text import Text as _Text
                 table = Table(
                     show_edge=False,
                     show_lines=False,
                     pad_edge=False,
-                    padding=(0, 2),
+                    padding=(0, 1),
                     header_style="label",
                 )
                 table.add_column("slug", style="code", no_wrap=True)
-                table.add_column("price", justify="right", style="default")
-                table.add_column("trust", justify="right", style="muted")
-                table.add_column("ok%", justify="right", style="muted")
+                table.add_column("price", justify="right", no_wrap=True)
+                table.add_column("trust", justify="right", no_wrap=True)
+                table.add_column("ok%", justify="right", style="muted", no_wrap=True)
                 table.add_column("name", style="default")
                 for agent in agents:
+                    price_usd = agent.price_per_call_usd
+                    price_str = _Text(
+                        f"${price_usd:.2f}",
+                        style="gold" if price_usd >= 0.10 else "default",
+                    )
+                    trust = agent.trust_score
+                    if trust >= 80:
+                        trust_style = "success"
+                    elif trust >= 50:
+                        trust_style = "warn"
+                    else:
+                        trust_style = "muted"
+                    trust_str = _Text(f"{trust:.0f}", style=trust_style)
                     table.add_row(
                         slugify(agent.name),
-                        f"${agent.price_per_call_usd:.2f}",
-                        f"{agent.trust_score:.0f}",
+                        price_str,
+                        trust_str,
                         f"{agent.success_rate:.0%}",
                         agent.name,
                     )

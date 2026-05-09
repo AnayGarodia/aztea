@@ -15,7 +15,32 @@ from .common import (
     handle_error,
     parse_input,
 )
-from .output import emit, info, kv_table, spinner, success
+from .output import CHECK, emit, info, kv_table, spinner, success
+
+
+try:
+    from rich.text import Text as _Text
+    _HAS_RICH_TEXT = True
+except ImportError:
+    _HAS_RICH_TEXT = False
+    _Text = str  # type: ignore[assignment,misc]
+
+_STATUS_STYLES: dict[str, str] = {
+    "pending":                "muted",
+    "running":                "info",
+    "complete":               "success",
+    "completed":              "success",
+    "failed":                 "error",
+    "cancelled":              "muted",
+    "awaiting_clarification": "warn",
+}
+
+
+def _status_text(status: str):
+    if not _HAS_RICH_TEXT:
+        return status
+    style = _STATUS_STYLES.get(status.lower(), "default")
+    return _Text(status, style=style)
 
 
 def _open_client(**kwargs):
@@ -77,22 +102,24 @@ def _render_batch_trace(result: dict[str, Any]) -> None:
                 f"{item.get('status')} {item.get('job_id')}"
             )
         return
-    table = Table(show_header=True, header_style="label", box=None, padding=(0, 2))
+    table = Table(show_header=True, header_style="label", box=None, padding=(0, 1))
     table.add_column("Specialist", style="default")
     table.add_column("Job", style="muted")
     table.add_column("Status")
-    table.add_column("Escrow")
     table.add_column("Receipt")
     table.add_column("Charge", justify="right")
     for item in jobs:
         charge = int(item.get("charge_cents") or 0)
         receipt = item.get("receipt") if isinstance(item.get("receipt"), dict) else {}
+        receipt_verified = isinstance(receipt, dict) and receipt.get("status") == "verified"
+        status_raw = str(item.get("status") or "-")
+        status_cell = _status_text(status_raw)
+        receipt_cell = _Text(f"{CHECK} verified", style="gold") if receipt_verified else _Text(str(receipt.get("status") or "-"), style="muted")
         table.add_row(
             str(item.get("agent_slug") or item.get("agent_name") or item.get("agent_id") or "-"),
             str(item.get("job_id") or "-")[:12],
-            str(item.get("status") or "-"),
-            str(item.get("escrow") or "-"),
-            str(receipt.get("status") or "-"),
+            status_cell,
+            receipt_cell,
             f"${charge / 100:.2f}",
         )
     console.print(table)
@@ -122,8 +149,13 @@ def _call_agent(
                     json_mode=True,
                 )
                 return
+            receipt_verified = (
+                isinstance(getattr(result, "receipt", None), dict)
+                and result.receipt.get("status") == "verified"
+            )
+            receipt_tag = f"  {CHECK} receipt" if receipt_verified else ""
             success(
-                f"Job complete  ${result.cost_cents/100:.2f}",
+                f"Job complete  ${result.cost_cents/100:.2f}{receipt_tag}",
                 detail=result.job_id,
             )
             emit(result.output, json_mode=False)
