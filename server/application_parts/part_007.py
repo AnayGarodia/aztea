@@ -1127,6 +1127,57 @@ def registry_list(
     if not include_unapproved:
         sunset = _builtin_constants.SUNSET_DEPRECATED_AGENT_IDS
         agents = [a for a in agents if a.get("agent_id") not in sunset]
+
+    # Curated-public-set parity: any agent in CURATED_PUBLIC_BUILTIN_AGENT_IDS
+    # must surface here, even if the registry seed hasn't run on a fresh
+    # deploy or the agents-list cache is stale. The 2026-05-08 power-user
+    # eval saw list_agents return 7 while search and the spend ledger
+    # revealed 9 reachable agents (Browser Agent + Visual Regression
+    # missing) — symptom of a half-seeded registry. Augmenting from the
+    # spec ensures the public surface is always self-consistent. We DON'T
+    # write to the DB here (that belongs in the lifespan startup); we
+    # just synthesize a registry-shaped row from the spec for any missing
+    # curated id, so the response is correct without any cache to evict.
+    #
+    # Only augment when the caller is browsing the unfiltered public catalog.
+    # `tag` / `model_provider` filters were applied to the SQL query, so
+    # synthesizing builtin rows here would bypass them and silently inflate
+    # the response (regression caught by test_quality_rating_and_trust_ranking).
+    if (
+        not include_unapproved
+        and tag is None
+        and model_provider is None
+    ):
+        present_ids = {str(a.get("agent_id") or "") for a in agents}
+        missing_curated = (
+            set(_builtin_constants.CURATED_PUBLIC_BUILTIN_AGENT_IDS) - present_ids
+        )
+        if missing_curated:
+            spec_by_id = _builtin_specs.builtin_spec_by_id()
+            for missing_id in missing_curated:
+                spec = spec_by_id.get(missing_id)
+                if spec is None:
+                    continue
+                agents.append(
+                    {
+                        "agent_id": missing_id,
+                        "name": spec.get("name"),
+                        "description": spec.get("description", ""),
+                        "endpoint_url": spec.get("endpoint_url"),
+                        "price_per_call_usd": float(
+                            spec.get("price_per_call_usd", 0.01)
+                        ),
+                        "tags": list(spec.get("tags") or []),
+                        "input_schema": spec.get("input_schema"),
+                        "output_schema": spec.get("output_schema"),
+                        "category": spec.get("category"),
+                        "status": "active",
+                        "review_status": "approved",
+                        "internal_only": 0,
+                        "trust_score": None,
+                        "success_rate": None,
+                    }
+                )
     bulk_stats = _compute_bulk_agent_stats([a["agent_id"] for a in agents])
     return JSONResponse(
         content={

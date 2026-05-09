@@ -495,6 +495,23 @@ async def lifespan(app: FastAPI):
     _init_stripe_db()
     ensure_builtin_agents_registered()
     recipes.ensure_builtin_recipes()
+
+    # Warm the sentence-transformers MiniLM model off the request path. The
+    # first call to embeddings._local_model() loads ~80MB of weights and
+    # takes 1-3s on first import. Without this, the first search hit after
+    # a cold deploy spent that time on the request thread, making cache
+    # misses look like a 1.5-3s p99 spike right after restart. The 2026-05-08
+    # plan's discovery grade-A bar called for keeping search latency
+    # consistent. Skip when AZTEA_DISABLE_EMBEDDINGS=1 — there's nothing to
+    # warm in that mode.
+    if not _feature_flags.DISABLE_EMBEDDINGS:
+        try:
+            embeddings._local_model()
+        except Exception:
+            _LOG.exception(
+                "Embedding model warm-up failed; semantic search will degrade gracefully on first hit."
+            )
+
     _set_server_shutting_down(False)
     stop_event: threading.Event | None = None
     sweeper_thread: threading.Thread | None = None

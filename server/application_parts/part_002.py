@@ -401,6 +401,25 @@ def _agent_response(
         out["jobs_last_30_days"] = stats.get("jobs_last_30_days", 0)
         out["job_completion_rate"] = stats.get("job_completion_rate")
         out["median_latency_seconds"] = stats.get("median_latency_seconds")
+    # Expose a `trust_breakdown` view of the reputation metrics so callers
+    # can see WHY a trust score is what it is. Pre-2026-05-08 only the
+    # rolled-up score was visible, which led the eval to grade reputation
+    # "B" for compression — without the components, callers couldn't tell
+    # whether a 51 reflected slow latency, low ratings, or low success.
+    # Aliases an existing field; no DB or migration change.
+    _rep = out.get("reputation")
+    if isinstance(_rep, dict):
+        out["trust_breakdown"] = {
+            "trust_score": _rep.get("trust_score"),
+            "quality_score": _rep.get("quality_score"),
+            "success_score": _rep.get("success_score"),
+            "latency_score": _rep.get("latency_score"),
+            "confidence_score": _rep.get("confidence_score"),
+            "rating_count": _rep.get("rating_count"),
+            "total_calls": _rep.get("total_calls"),
+            "successful_calls": _rep.get("successful_calls"),
+            "avg_latency_ms": _rep.get("avg_latency_ms"),
+        }
     return out
 
 

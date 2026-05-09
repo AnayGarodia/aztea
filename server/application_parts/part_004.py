@@ -307,11 +307,54 @@ def _process_pending_builtin_job(job: dict) -> bool:
                 event_type="job.failed_builtin",
             )
         return True
+    except (TimeoutError, ConnectionError, OSError) as exc:
+        # Transient I/O. The 2026-05-08 power-user eval saw the first job
+        # of a 20-job batch flip to `failed` instantly while the same
+        # input succeeded as a single hire moments earlier — almost
+        # certainly a one-shot transient (network blip, ephemeral DNS,
+        # subprocess pipe). Don't burn a retry budget on first sight.
+        # Pre-2026-05-08 this exception class was caught by the broad
+        # `except Exception` below and immediately marked terminal-failed.
+        retried = jobs.schedule_job_retry(
+            claimed["job_id"],
+            retry_delay_seconds=_SWEEPER_RETRY_DELAY_SECONDS,
+            error_message=f"Built-in worker transient {type(exc).__name__}: {exc}",
+            claim_owner_id=_BUILTIN_WORKER_OWNER_ID,
+            claim_token=claimed.get("claim_token"),
+            require_authorized_owner=False,
+        )
+        if retried is not None and retried["status"] == "pending":
+            _record_job_event(
+                retried,
+                "job.retry_scheduled",
+                actor_owner_id=_BUILTIN_WORKER_OWNER_ID,
+                payload={
+                    "retry_count": retried["retry_count"],
+                    "next_retry_at": retried["next_retry_at"],
+                    "error_class": type(exc).__name__,
+                },
+            )
+            return True
+        updated = retried or jobs.update_job_status(
+            claimed["job_id"],
+            "failed",
+            error_message=f"Built-in worker transient {type(exc).__name__} (retries exhausted): {exc}",
+            completed=True,
+        )
+        if updated is not None:
+            _settle_failed_job(
+                updated,
+                actor_owner_id=_BUILTIN_WORKER_OWNER_ID,
+                event_type="job.failed_builtin",
+            )
+        return True
     except Exception as exc:
+        # Unexpected exception class. Stash error_class in the failure
+        # record so post-mortems can find these without log-grepping.
         updated = jobs.update_job_status(
             claimed["job_id"],
             "failed",
-            error_message=f"Built-in execution failed: {exc}",
+            error_message=f"Built-in execution failed: {type(exc).__name__}: {exc}",
             completed=True,
         )
         if updated is not None:

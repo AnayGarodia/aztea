@@ -1382,20 +1382,18 @@ class RegistryBridge:
                 score += 5
             if entry.get("verified"):
                 score += 2
-            if entry.get("kind") == "registry_agent":
-                try:
-                    score += float(entry.get("success_rate") or 0.0) * 10.0
-                except (TypeError, ValueError):
-                    pass
-                try:
-                    score += float(entry.get("trust_score") or 0.0) / 20.0
-                except (TypeError, ValueError):
-                    pass
-                if str(entry.get("stability_tier") or "").strip().lower() == "stable":
-                    score += 4
-                elif str(entry.get("stability_tier") or "").strip().lower() == "beta":
-                    score += 1
-            else:
+            # No quality-prior baseline for registry agents. Adding
+            # success_rate*10 + trust/20 + stability_bonus to every catalog
+            # entry was the 2026-05-08 eval's core discovery bug: the
+            # baseline trivially cleared _LOCAL_SEARCH_MIN_SCORE, so even
+            # off-topic queries ("solve riemann hypothesis", "render this
+            # webpage") passed the floor and the local lexical layer
+            # claimed a hit instead of falling through to the server-side
+            # semantic ranker. Quality enters only as a tie-break and
+            # post-rank multiplier in core/registry/agents_ops.py — not
+            # here. Verb/intent/featured boosts above are kept because
+            # they require a topical signal in the query.
+            if entry.get("kind") != "registry_agent":
                 if any(
                     term in {"async", "background", "poll", "job"} for term in terms
                 ) and entry["slug"] in {
@@ -1591,12 +1589,35 @@ class RegistryBridge:
                     "why": entry.get("_why") or [],
                 }
             )
-        next_step = (
-            f"Best match: {result_items[0]['slug']}. Call aztea_describe(slug='{result_items[0]['slug']}') for the full schema, "
-            "then aztea_call(slug=..., arguments={...}) to run it."
-            if result_items
-            else "No catalog match found for this query. Use aztea_workflow(action='list_agents') to browse all available agents."
-        )
+        if result_items:
+            next_step = (
+                f"Best match: {result_items[0]['slug']}. Call aztea_describe(slug='{result_items[0]['slug']}') for the full schema, "
+                "then aztea_call(slug=..., arguments={...}) to run it."
+            )
+        else:
+            # Pull live categories from the catalog itself — never hardcode
+            # them. The 2026-05-08 eval's "no empty-result mode" bug was here:
+            # the prior hint was generic and didn't tell the caller what the
+            # catalog actually covers, so they re-queried with similar bad
+            # terms. Enumerating real categories steers them somewhere useful.
+            _live_categories = sorted(
+                {
+                    str(entry.get("category")).strip()
+                    for entry in self._catalog_entries()
+                    if entry.get("kind") == "registry_agent"
+                    and entry.get("category")
+                }
+            )
+            _cat_hint = (
+                f" Catalog covers: {', '.join(_live_categories)}."
+                if _live_categories
+                else ""
+            )
+            next_step = (
+                "No agent in the live catalog matches this task."
+                f"{_cat_hint}"
+                " Try a different phrasing, or aztea_workflow(action='list_agents') to browse."
+            )
         hints = _workflow_hints(query)
         payload = {
             "query": query,

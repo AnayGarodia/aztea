@@ -85,14 +85,9 @@ INVERSE_PRICE_WEIGHT_HYBRID = 0.08
 # 9-agent live catalog so genuinely-on-target queries ("scan code for
 # secrets", "look up CVE") still surface results, but adversarial /
 # off-catalog queries ("image generator", "find recent papers") return
-# empty rather than weak distractors. Adjust if the catalog grows past
-# ~50 agents and the score distribution shifts.
-_SEARCH_RELEVANCE_FLOOR = 0.18
-# Within a result set, drop agents that score far below the leader. Keeps
-# tied/near-tied agents but cuts off the "long tail of trust-only matches"
-# that previously polluted every search.
-_SEARCH_KEEP_FLOOR = 0.20
-_SEARCH_DROPOFF_BAND = 0.20
+# empty rather than weak distractors. Defaults match the legacy literals;
+# override at runtime via AZTEA_SEARCH_* env vars (see core/feature_flags.py).
+# Read on each call so a redeploy isn't needed to retune.
 
 # Off-catalog intent fingerprints. When the query unambiguously asks for a
 # capability the catalog does not yet have (research papers, type checking,
@@ -1931,11 +1926,16 @@ def search_agents(
     # the caller via an empty list (callers branch on `count == 0`).
     if price_query_mode is None and ranked:
         top_score = ranked[0]["blended_score"]
-        if top_score >= _SEARCH_RELEVANCE_FLOOR:
+        # Reload thresholds per-call: env-tunable without redeploy
+        # (see AZTEA_SEARCH_* in core/feature_flags.py).
+        _floor = _feature_flags.search_relevance_floor()
+        _keep = _feature_flags.search_keep_floor()
+        _band = _feature_flags.search_dropoff_band()
+        if top_score >= _floor:
             ranked = [
                 item for item in ranked
-                if item["blended_score"] >= _SEARCH_KEEP_FLOOR
-                or item["blended_score"] >= top_score - _SEARCH_DROPOFF_BAND
+                if item["blended_score"] >= _keep
+                or item["blended_score"] >= top_score - _band
             ]
         else:
             # No agent matches strongly. Returning weak distractors is worse

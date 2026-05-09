@@ -2397,6 +2397,13 @@ def _session_audit(
         verified = 0
         failed = 0
         first_failure: dict | None = None
+        # Per-receipt timeout cap so bulk-verify on a long window can never
+        # hang the audit. Each Ed25519 verification is sub-50ms server-side
+        # over LAN; 1.0s is generous for transient hiccups but bounded.
+        # The 2026-05-08 plan's audit grade-A bar required: bulk verify
+        # must never block. With this cap, the worst case for N receipts
+        # is N × 1.0s plus network overhead.
+        _verify_timeout = min(float(timeout or 1.0), 1.0)
         for r in receipts:
             if not r.get("signed"):
                 continue
@@ -2404,7 +2411,7 @@ def _session_audit(
                 session,
                 f"{base}/jobs/{r.get('job_id')}/signature",
                 hdrs,
-                timeout,
+                _verify_timeout,
             )
             if ok_v and bool(vbody.get("verified")):
                 verified += 1

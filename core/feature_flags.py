@@ -84,6 +84,34 @@ PYTHON_WARM_POOL: bool = flag("AZTEA_PYTHON_WARM_POOL", default=False)
 # Default: on.
 RESULT_CACHE_V2: bool = flag("AZTEA_RESULT_CACHE_V2", default=True)
 
+
+# ---------------------------------------------------------------------------
+# Search ranking thresholds (read at call time, see core/registry/agents_ops.py)
+# Introduced post-2026-05-08 eval to make the empty-result floor and dropoff
+# band tunable without a redeploy.  Defaults preserve current behavior.
+# ---------------------------------------------------------------------------
+
+
+def search_relevance_floor() -> float:
+    """Top blended score below which the search returns an empty list.
+
+    Rationale: returning weak distractors creates false confidence in low-
+    relevance results. Empty signals "use a different query".
+    """
+    return flag_float("AZTEA_SEARCH_RELEVANCE_FLOOR", default=0.18)
+
+
+def search_keep_floor() -> float:
+    """Per-result blended score below which an item is dropped post-ranking,
+    unless within the dropoff band of the top hit."""
+    return flag_float("AZTEA_SEARCH_KEEP_FLOOR", default=0.20)
+
+
+def search_dropoff_band() -> float:
+    """Score band relative to top hit; results within it survive even when
+    they fall under the keep floor."""
+    return flag_float("AZTEA_SEARCH_DROPOFF_BAND", default=0.20)
+
 # Require an external verifier to approve output before settling payment.
 # Off by default: settle immediately and allow clawback via disputes.
 REQUIRE_VERIFICATION: bool = flag("AZTEA_REQUIRE_VERIFICATION", default=False)

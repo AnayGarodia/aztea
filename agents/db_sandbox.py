@@ -290,11 +290,38 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
                     )
 
             size_bytes = db_path.stat().st_size if db_path.exists() else 0
+            error_count = sum(1 for item in results if item.get("error"))
+
+            # When every statement errored, refund: the caller got nothing
+            # actionable and other agents (cve_lookup, dependency_auditor)
+            # already refund in this case. The 2026-05-08 eval flagged
+            # `DROP TABLE sqlite_master` as charging 2¢ for a guaranteed
+            # block. Mixed success/error stays charged — the caller did
+            # get usable rows back for the successful statements.
+            if results and error_count == len(results):
+                first_error = next(
+                    (item.get("error") for item in results if item.get("error")),
+                    None,
+                ) or {}
+                return {
+                    "error": {
+                        "code": "db_sandbox.sql_error",
+                        "message": str(
+                            first_error.get("message")
+                            or "All SQL statements failed."
+                        ),
+                        "details": {
+                            "statements_executed": len(results),
+                            "statement_error_count": error_count,
+                        },
+                    }
+                }
+
             return {
                 "engine": "sqlite",
                 "results": results,
                 "statements_executed": len(results),
-                "statement_error_count": sum(1 for item in results if item.get("error")),
+                "statement_error_count": error_count,
                 "db_size_bytes": size_bytes,
                 "execution_time_ms": int((time.monotonic() - start) * 1000),
             }

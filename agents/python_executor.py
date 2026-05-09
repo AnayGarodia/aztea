@@ -790,7 +790,11 @@ def run(payload: dict) -> dict:
 
     explanation = ""
     explanation_sanitized = False
-    if explain and (stdout or stderr or exit_code != 0):
+    # Skip the explainer LLM call when the run timed out: the only useful
+    # message there is "your code didn't terminate", which we already convey
+    # via stderr + exit_code 124. The 2026-05-08 eval clocked the explainer
+    # adding ~300ms onto every timed-out run for zero added insight.
+    if explain and not timed_out and (stdout or stderr or exit_code != 0):
         # Sanitize untrusted inputs (code, stdout, stderr) against prompt
         # injection before passing them to the explainer LLM. The system
         # prompt instructs the model to treat these as data, but stripping

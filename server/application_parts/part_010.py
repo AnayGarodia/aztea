@@ -928,25 +928,20 @@ def jobs_dispute(
     # job_id returns the same status across status/cancel/dispute — the
     # prior /jobs/<bogus>/dispute → 403 while /jobs/<bogus>/status → 404
     # was the inconsistency the 2026-05-07 power-user eval flagged.
-    if job.get("status") != "complete" or not job.get("completed_at"):
-        raise HTTPException(
-            status_code=400, detail="Disputes can only be filed for completed jobs."
-        )
-
-    completed_at = _parse_iso_datetime(job.get("completed_at"))
-    if completed_at is None:
-        raise HTTPException(
-            status_code=400, detail="Job completion timestamp is invalid."
-        )
+    # Single eligibility predicate (core/jobs/disputable.py). The 2026-05-08
+    # eval found that the prior strict `status == "complete"` check rejected
+    # disputes on receipts whose status had churned post-completion (sweepers,
+    # verification rejections); the helper anchors on `completed_at` which is
+    # set exactly once and never zeroed.
     deadline = _dispute_window_deadline(job)
-    if deadline is None:
-        raise HTTPException(
-            status_code=400, detail="Job completion timestamp is invalid."
-        )
-    if datetime.now(timezone.utc) > deadline:
-        raise HTTPException(
-            status_code=400, detail="Dispute window has expired for this job."
-        )
+    reason = disputable.is_disputable(
+        job,
+        deadline=deadline,
+        has_existing_dispute=disputes.has_dispute_for_job(job_id),
+        has_quality_rating=reputation.get_job_quality_rating(job_id) is not None,
+    )
+    if reason is not None:
+        raise HTTPException(status_code=reason.status_code, detail=reason.message)
 
     side = _dispute_side_for_caller(caller, job)
 
@@ -963,16 +958,6 @@ def jobs_dispute(
                 "You can't dispute a job on an agent you own.",
                 {"job_id": job_id},
             ),
-        )
-
-    if disputes.has_dispute_for_job(job_id):
-        raise HTTPException(
-            status_code=409, detail="A dispute already exists for this job."
-        )
-    if reputation.get_job_quality_rating(job_id) is not None:
-        raise HTTPException(
-            status_code=409,
-            detail="You already rated this job; disputes can only be filed before submitting a rating.",
         )
 
     filing_deposit_cents = _compute_dispute_filing_deposit_cents(

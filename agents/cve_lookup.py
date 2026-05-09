@@ -600,14 +600,15 @@ def run(payload: dict) -> dict:
         )
 
     if not packages:
-        return {
-            "results": [],
-            "total_vulnerable": 0,
-            "total_packages_checked": 0,
-            "summary": 'No packages provided. Pass a list like: ["express@4.17.1", "lodash@4.17.20"]',
-            "source": "osv",
-            "billing_units_actual": 0,
-        }
+        # The 2026-05-08 power-user eval found that an empty {} payload returned
+        # a 502 with empty raw_body — it bypassed every above check and fell into
+        # this silent-success branch, which the platform then mishandled. Raise a
+        # structured input error so the platform converts it to a 422 + refund,
+        # matching how dependency_auditor signals unsupported_ecosystem.
+        return _err(
+            "cve_lookup.missing_input",
+            "Provide one of: cve_id (single), cve_ids (list), or packages (list of name@version).",
+        )
 
     if len(packages) > 10:
         return _err(
