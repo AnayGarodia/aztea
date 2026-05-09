@@ -36,10 +36,6 @@ def _open_client(**kwargs):
 
     return _factory(**kwargs)
 from .output import (
-    ARROW,
-    BULLET,
-    CHECK,
-    banner,
     console,
     emit,
     err_console,
@@ -453,36 +449,55 @@ def _is_tty() -> bool:
 
 def _handle_dispute_error(exc: Exception) -> None:
     """Map dispute-specific error codes to friendly hints, then fall back
-    to the generic CLI error funnel."""
+    to the generic CLI error funnel.
+
+    Order matters: the structured-shortfall branch must run BEFORE the
+    generic per-code branch, since insufficient-balance errors carry the
+    same `code` but only the structured detail has the exact deficit
+    needed to render an actionable top-up amount.
+    """
     from .output import error as _print_error
 
-    code = getattr(exc, "code", None) or getattr(exc, "error_code", None)
+    # Resolve the structured error code from either the exception's `code`
+    # attribute (set by SDK from the response body's `error.code`) OR from
+    # the FastAPI HTTPException-shaped detail dict (`{"detail": {"error": ...}}`)
+    # that the SDK preserves verbatim.
+    detail = getattr(exc, "detail", None) or getattr(exc, "body", None)
+    nested: dict | None = None
+    if isinstance(detail, dict):
+        nested = detail.get("detail") if isinstance(detail.get("detail"), dict) else detail
+    nested_error = nested.get("error") if isinstance(nested, dict) else None
+    code = (
+        getattr(exc, "code", None)
+        or getattr(exc, "error_code", None)
+        or nested_error
+    )
+
+    # Shortfall override fires only for the *filing-deposit* case — that's
+    # the one the user can fix by topping up. Clawback-insufficient touches
+    # the agent's wallet, not the user's; the generic hint is correct there.
+    if (
+        code == "dispute.filing_deposit_insufficient_balance"
+        and isinstance(nested, dict)
+    ):
+        shortfall_cents = max(
+            0,
+            _safe_int(nested.get("required_cents"))
+            - _safe_int(nested.get("balance_cents")),
+        )
+        hint = _DISPUTE_ERROR_HINTS[code]
+        if shortfall_cents > 0:
+            hint = (
+                f"Top up at least ${shortfall_cents / 100:.2f} with "
+                f"`aztea wallet topup --amount {shortfall_cents / 100:.2f}` and retry."
+            )
+        _print_error(str(exc) or code, hint=hint, code=code)
+        raise typer.Exit(code=1)
+
     if isinstance(code, str) and code in _DISPUTE_ERROR_HINTS:
         message = str(exc) or _DISPUTE_ERROR_HINTS[code]
         _print_error(message, hint=_DISPUTE_ERROR_HINTS[code], code=code)
         raise typer.Exit(code=1)
-
-    # Insufficient balance for the deposit comes through as
-    # InsufficientFundsError; unwrap the structured detail for a
-    # specific top-up amount when the server provided one.
-    detail = getattr(exc, "detail", None) or getattr(exc, "body", None)
-    if isinstance(detail, dict):
-        nested = detail.get("detail") if isinstance(detail.get("detail"), dict) else detail
-        nested_error = nested.get("error") if isinstance(nested, dict) else None
-        if nested_error in _DISPUTE_ERROR_HINTS:
-            shortfall_cents = max(
-                0,
-                _safe_int(nested.get("required_cents"))
-                - _safe_int(nested.get("balance_cents")),
-            )
-            hint = _DISPUTE_ERROR_HINTS[nested_error]
-            if shortfall_cents > 0:
-                hint = (
-                    f"Top up at least ${shortfall_cents / 100:.2f} with "
-                    f"`aztea wallet topup --amount {shortfall_cents / 100:.2f}` and retry."
-                )
-            _print_error(str(exc) or nested_error, hint=hint, code=nested_error)
-            raise typer.Exit(code=1)
 
     handle_error(exc)
 

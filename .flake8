@@ -63,6 +63,9 @@ per-file-ignores =
     # them via the fixture injection protocol. Tests also alias shared fixtures
     # as function parameters, which trips F811. These are not real issues.
     tests/*.py: F401, F811
+    # SDK package ships its own test suite with the same pytest fixture pattern.
+    sdks/python-sdk/tests/*.py: F401, F811
+    sdks/python-sdk/tests/conftest.py: F401, F811
 
 exclude =
     .git,

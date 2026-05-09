@@ -28,8 +28,6 @@ def _open_client(**kwargs):
 
     return _factory(**kwargs)
 from .output import (
-    ARROW,
-    BULLET,
     banner,
     console,
     err_console,
