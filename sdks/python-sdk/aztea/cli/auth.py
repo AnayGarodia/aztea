@@ -16,9 +16,11 @@ from .output import (
     divider,
     emit,
     kv_table,
+    login_intro,
     setup_complete,
     spinner,
     step,
+    styled_prompt,
     success,
     warn,
 )
@@ -204,6 +206,8 @@ def login(
     json_mode: bool = JsonOpt,
 ) -> None:
     """Sign in, save credentials, and set up MCP + CLAUDE.md."""
+    if not json_mode:
+        login_intro()
     try:
         with _new_client(base_url=base_url, api_key=api_key, client_id="aztea-cli-login") as client:
             if api_key:
@@ -218,8 +222,15 @@ def login(
                 _run_setup(api_key, base_url)
                 return
 
-            login_email = email or typer.prompt("Email")
-            login_password = password or typer.prompt("Password", hide_input=True)
+            login_email = email or (
+                typer.prompt("Email") if json_mode else styled_prompt("Email")
+            )
+            login_password = password or (
+                typer.prompt("Password", hide_input=True)
+                if json_mode
+                else styled_prompt("Password", password=True)
+            )
+            console.print()
             with spinner("Signing in", json_mode=json_mode):
                 data = client.auth.login(login_email, login_password)
             raw_key = str(data.get("raw_api_key") or "")

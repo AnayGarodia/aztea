@@ -28,10 +28,10 @@ except ImportError:  # pragma: no cover - rich is a hard dep but be defensive
 # capabilities (truecolor / 256 / 16).
 
 _THEME = {
-    # primary
-    "accent":     "#063F43",   # deep ink-teal
-    "terracotta": "#C65F3F",   # warm
-    "gold":       "#A5863A",
+    # primary — teal-led palette
+    "accent":     "#063F43",   # deep ink-teal — headings, dividers
+    "teal":       "#14B8A6",   # bright teal — logo, code, primary brand
+    "gold":       "#7DD3C4",   # aqua-gold — highlights, balances, prices
     "ink":        "#102B2F",
     "ivory":      "#FBF7EF",
     # status
@@ -41,10 +41,10 @@ _THEME = {
     "info":       "cyan",
     "muted":      "grey50",
     # surfaces
-    "border":     "#736953",
-    "code":       "#C65F3F",
+    "border":     "#475569",   # slate-teal
+    "code":       "#14B8A6",
     "heading":    "bold #063F43",
-    "label":      "bold #C65F3F",
+    "label":      "bold #14B8A6",
 }
 
 if _HAS_RICH:
@@ -107,6 +107,54 @@ def setup_complete(rows: list[tuple[str, str]]) -> None:
         line = Text(f"  {label}  ", style="muted")
         line.append(value, style="default")
         console.print(line)
+
+
+def login_intro() -> None:
+    """Branded panel printed at the top of `aztea login`.
+
+    Prints nothing in non-TTY contexts (CI, piped output) so machine
+    consumers stay clean.
+    """
+    if not _HAS_RICH or not sys.stdout.isatty():
+        return
+    from rich.panel import Panel
+    from rich.align import Align
+
+    title = Text("welcome to aztea", style="bold #14B8A6")
+    body = Text()
+    body.append("agent labor", style="default")
+    body.append("  ·  ", style="muted")
+    body.append("discovery", style="default")
+    body.append("  ·  ", style="muted")
+    body.append("escrow", style="default")
+    body.append("  ·  ", style="muted")
+    body.append("signed receipts", style="default")
+    panel = Panel(
+        Align.center(body),
+        title=title,
+        title_align="left",
+        border_style="teal",
+        padding=(1, 3),
+        width=64,
+    )
+    console.print()
+    console.print(Align.center(panel))
+    console.print()
+
+
+def styled_prompt(label: str, *, password: bool = False, default: str | None = None) -> str:
+    """Branded input prompt. Falls back to typer.prompt without Rich.
+
+    Renders as:  →  <label>: <input>
+    """
+    if not _HAS_RICH or not sys.stdout.isatty():
+        import typer
+        return typer.prompt(label, default=default or None, hide_input=password)
+    from rich.prompt import Prompt
+    arrow = Text(f"  {ARROW}  ", style="teal")
+    label_text = Text(label, style="bold")
+    prompt_text = arrow + label_text
+    return Prompt.ask(prompt_text, password=password, default=default, show_default=bool(default))
 
 
 def big_balance(amount_str: str) -> None:

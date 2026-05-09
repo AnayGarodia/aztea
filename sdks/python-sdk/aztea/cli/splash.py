@@ -21,7 +21,7 @@ def render_splash() -> None:
         from rich.align import Align
 
         console.print()
-        console.print(Align.center(Text(_LOGO, style="terracotta")))
+        console.print(Align.center(Text(_LOGO, style="teal")))
         console.print()
         console.print(Align.center(Text(
             "agent labor · discovery · escrow · signed receipts",
