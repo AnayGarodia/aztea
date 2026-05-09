@@ -580,6 +580,136 @@ def _cache_hit_response_payload(cached_output: Any) -> dict[str, Any]:
     }
 
 
+# In-process singleflight for cache-eligible identical-input calls. Without
+# this, a fan-out of 30 simultaneous CVE lookups all miss the cache (none has
+# finished writing yet) and bill the caller 30 times. Now: the first request
+# does the work, the others block on its Event up to a short ceiling and then
+# re-check the cache. Process-local — multi-dyno fan-outs still race, but a
+# single Uvicorn worker handles ~95% of the audit's "stampede" problem.
+_CACHE_SINGLEFLIGHT_LOCK = threading.Lock()
+_CACHE_SINGLEFLIGHT_INFLIGHT: dict[str, threading.Event] = {}
+_CACHE_SINGLEFLIGHT_WAIT_SECONDS = 8.0
+
+
+def _cache_singleflight_acquire(cache_key: str) -> threading.Event | None:
+    """Returns None if this caller is the leader (must do the work + signal).
+    Returns the existing Event if another caller is already in flight."""
+    if not cache_key:
+        return None
+    with _CACHE_SINGLEFLIGHT_LOCK:
+        existing = _CACHE_SINGLEFLIGHT_INFLIGHT.get(cache_key)
+        if existing is not None:
+            return existing
+        _CACHE_SINGLEFLIGHT_INFLIGHT[cache_key] = threading.Event()
+        return None
+
+
+def _cache_singleflight_release(cache_key: str) -> None:
+    if not cache_key:
+        return
+    with _CACHE_SINGLEFLIGHT_LOCK:
+        ev = _CACHE_SINGLEFLIGHT_INFLIGHT.pop(cache_key, None)
+    if ev is not None:
+        ev.set()
+
+
+def _build_inline_receipt(
+    *,
+    job: dict | None,
+    agent: dict | None,
+    output_payload: Any,
+) -> dict[str, Any] | None:
+    """Build a verifiable receipt block to inline in the sync call response.
+
+    Mirrors the body of GET /jobs/{id}/signature so callers verifying
+    "every call produces a signed receipt" don't need a follow-up GET.
+    Returns None if the receipt cannot be assembled (e.g. job not yet
+    complete, agent has no signing key after lazy provision attempt).
+    The DID document at /agents/{agent_id}/did.json remains the canonical
+    source of truth — fields here are a convenience copy.
+    """
+    if job is None or agent is None or output_payload is None:
+        return None
+    try:
+        from core import crypto as _crypto
+    except Exception:
+        return None
+
+    job_id = str(job.get("job_id") or "")
+    agent_id = str(agent.get("agent_id") or "")
+    sig_b64 = job.get("output_signature")
+    sig_alg = job.get("output_signature_alg")
+    sig_did = job.get("output_signed_by_did")
+    sig_at = job.get("output_signed_at")
+
+    # Lazy-sign when the job completed without a signature (HTTP-mode agents
+    # don't sign at completion time today). This keeps the inline receipt
+    # invariant honest for every successful call.
+    if not sig_b64 and str(job.get("status") or "").lower() == "complete" and agent_id:
+        try:
+            priv, _pub, did_v = registry.ensure_agent_signing_keys(agent_id)
+            if priv and did_v:
+                sig_b64 = _crypto.sign_payload(priv, output_payload)
+                sig_alg = str(agent.get("signing_alg") or "ed25519")
+                sig_did = did_v
+                sig_at = datetime.now(timezone.utc).isoformat()
+                if job_id:
+                    try:
+                        jobs.update_job_signature(
+                            job_id,
+                            output_signature=sig_b64,
+                            output_signature_alg=sig_alg,
+                            output_signed_by_did=sig_did,
+                            output_signed_at=sig_at,
+                        )
+                    except Exception:
+                        _LOG.exception(
+                            "Failed to persist lazy signature for job %s", job_id
+                        )
+        except Exception:
+            _LOG.exception("Lazy-sign for inline receipt failed: %s", job_id)
+            return None
+    if not sig_b64:
+        return None
+
+    public_key_jwk: dict | None = None
+    try:
+        public_pem = agent.get("signing_public_key")
+        if public_pem:
+            public_key_jwk = _crypto.public_key_to_jwk(public_pem)
+    except Exception:
+        public_key_jwk = None
+
+    signed_payload_b64: str | None = None
+    output_hash: str | None = None
+    try:
+        signed_bytes = _crypto.canonical_json(output_payload)
+        output_hash = hashlib.sha256(signed_bytes).hexdigest()
+        import base64 as _b64
+
+        signed_payload_b64 = _b64.b64encode(signed_bytes).decode("ascii")
+    except Exception:
+        _LOG.exception("Failed to canonicalize output for inline receipt %s", job_id)
+
+    base_url = (os.environ.get("SERVER_BASE_URL") or "").rstrip("/")
+    verify_url = (
+        f"{base_url}/agents/{agent_id}/did.json" if base_url and agent_id else None
+    )
+    return {
+        "job_id": job_id or None,
+        "agent_id": agent_id or None,
+        "did": sig_did,
+        "alg": sig_alg or "ed25519",
+        "signature": sig_b64,
+        "signed_at": sig_at,
+        "output_hash": output_hash,
+        "public_key_jwk": public_key_jwk,
+        "verify_url": verify_url,
+        "signed_payload_b64": signed_payload_b64,
+        "signed_payload_encoding": "base64-canonical-json",
+    }
+
+
 def _sync_success_response_payload(
     *,
     job_id: str | None,
@@ -587,6 +717,7 @@ def _sync_success_response_payload(
     latency_ms: float,
     cached: bool = False,
     pricing_units: dict[str, Any] | None = None,
+    receipt: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "job_id": job_id,
@@ -597,6 +728,8 @@ def _sync_success_response_payload(
     }
     if pricing_units:
         payload["pricing_units"] = pricing_units
+    if receipt:
+        payload["receipt"] = receipt
     return payload
 
 
@@ -1210,6 +1343,7 @@ def registry_call(
     # default left the cache dormant — even repeated CVE lookups never hit.
     if use_cache is None:
         use_cache = cache_enabled
+    singleflight_key: str | None = None
     if use_cache and cache_enabled:
         cached_output = _cache.get_cached(
             agent_id, payload, version_token=cache_version_token
@@ -1227,6 +1361,41 @@ def registry_call(
                 cache_response, output_format=requested_output_format
             )
             return JSONResponse(content=cache_response)
+        # Singleflight: collapse concurrent identical-input calls so a fan-out
+        # of N doesn't all miss + all charge. Followers wait for the leader's
+        # cache write and re-check.
+        try:
+            singleflight_key = _cache.cache_key(
+                agent_id, payload, version_token=cache_version_token
+            )
+        except Exception:
+            singleflight_key = None
+        if singleflight_key:
+            existing_event = _cache_singleflight_acquire(singleflight_key)
+            if existing_event is not None:
+                # Another caller is already executing this exact input. Wait
+                # briefly, then re-check the cache. If the leader produced a
+                # result, return it; otherwise fall through to fresh execution.
+                existing_event.wait(_CACHE_SINGLEFLIGHT_WAIT_SECONDS)
+                cached_output = _cache.get_cached(
+                    agent_id, payload, version_token=cache_version_token
+                )
+                if cached_output is not None:
+                    cache_response = _cache_hit_response_payload(cached_output)
+                    shaped_output, extra = _shape_sync_output_for_response(
+                        request,
+                        job_id=cache_response.get("job_id"),
+                        payload=cache_response.get("output"),
+                    )
+                    cache_response["output"] = shaped_output
+                    cache_response.update(extra)
+                    cache_response = _decorate_with_rendered_output(
+                        cache_response, output_format=requested_output_format
+                    )
+                    return JSONResponse(content=cache_response)
+                # Leader timed out / failed without writing — claim leadership
+                # ourselves so subsequent followers wait on the right event.
+                _cache_singleflight_acquire(singleflight_key)
     success_distribution = payments.compute_success_distribution(
         price_cents,
         platform_fee_pct=platform_fee_pct_at_create,
@@ -1287,7 +1456,45 @@ def registry_call(
             if hosted_skill_row is not None:
                 output = _skill_executor.execute_hosted_skill(hosted_skill_row, payload)
             else:
-                output = _execute_builtin_agent(builtin_agent_id, payload)
+                try:
+                    output = _execute_builtin_agent(builtin_agent_id, payload)
+                except _AgentSlotUnavailable as slot_exc:
+                    # Per-agent concurrency cap saturated. Refund the caller,
+                    # mark the job failed, and surface 429 — was previously a
+                    # 502 cascade from downstream-pool exhaustion.
+                    failed = jobs.update_job_status(
+                        job["job_id"],
+                        "failed",
+                        error_message=(
+                            f"Agent '{slot_exc.agent_id}' is at capacity "
+                            f"({slot_exc.limit} in flight). Refunded; retry shortly."
+                        ),
+                        completed=True,
+                    )
+                    if failed is not None:
+                        _settle_failed_job(
+                            failed,
+                            actor_owner_id=caller["owner_id"],
+                            event_type="job.failed_rate_limited",
+                        )
+                    raise HTTPException(
+                        status_code=429,
+                        headers={"Retry-After": "1"},
+                        detail=error_codes.make_error(
+                            error_codes.AGENT_UPSTREAM_TIMEOUT,
+                            (
+                                f"Agent is at capacity ({slot_exc.limit} concurrent "
+                                "in flight). You were not charged. Retry in ~1s."
+                            ),
+                            {
+                                "agent_id": slot_exc.agent_id,
+                                "concurrency_limit": slot_exc.limit,
+                                "refunded_cents": int(
+                                    job.get("caller_charge_cents") or 0
+                                ),
+                            },
+                        ),
+                    )
             output = _normalize_output_protocol_for_response(
                 output,
                 requested_output_formats=requested_output_formats,
@@ -1342,10 +1549,19 @@ def registry_call(
                 http_status = 502
                 if any(marker in lowered_code for marker in input_failure_markers):
                     http_status = 422
+                # Don't tag caller-input validation failures with a code from
+                # the 5xx-class taxonomy — monitors paging on `agent.internal_error`
+                # would fire on every malformed URL the user types. Use the
+                # 4xx-class `agent.invalid_input` for 422 paths.
+                envelope_code = (
+                    error_codes.AGENT_INVALID_INPUT
+                    if http_status == 422
+                    else error_codes.AGENT_INTERNAL_ERROR
+                )
                 raise HTTPException(
                     status_code=http_status,
                     detail=error_codes.make_error(
-                        error_codes.AGENT_INTERNAL_ERROR,
+                        envelope_code,
                         failure_message
                         or f"Agent unavailable ({failure_code}). You were not charged.",
                         {
@@ -1434,6 +1650,9 @@ def registry_call(
                     platform_fee_pct=platform_fee_pct_at_create,
                     fee_bearer_policy=fee_bearer_policy,
                 ),
+                receipt=_build_inline_receipt(
+                    job=completed, agent=agent, output_payload=output
+                ),
             )
             shaped_output, extra = _shape_sync_output_for_response(
                 request,
@@ -1455,6 +1674,7 @@ def registry_call(
                     ttl_hours=cache_ttl_hours,
                     version_token=cache_version_token,
                 )
+                _cache_singleflight_release(singleflight_key or "")
             response_payload = _decorate_with_rendered_output(
                 response_payload, output_format=requested_output_format
             )
@@ -1816,6 +2036,7 @@ def registry_call(
             ttl_hours=cache_ttl_hours,
             version_token=cache_version_token,
         )
+        _cache_singleflight_release(singleflight_key or "")
     response_payload = _sync_success_response_payload(
         job_id=job["job_id"],
         output=result_payload,
@@ -1828,6 +2049,9 @@ def registry_call(
             success_distribution=success_distribution,
             platform_fee_pct=platform_fee_pct_at_create,
             fee_bearer_policy=fee_bearer_policy,
+        ),
+        receipt=_build_inline_receipt(
+            job=settled, agent=agent, output_payload=result_payload
         ),
     )
     shaped_output, extra = _shape_sync_output_for_response(

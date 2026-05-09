@@ -38,6 +38,20 @@ from agents._contracts import agent_error as _err
 _TIMEOUT_MAX = 30
 _OUTPUT_TRUNCATE = 20_000
 
+# Strip ANSI escape sequences from sandboxed subprocess output before
+# returning to the caller — prevents screen-clear / cursor-positioning
+# / OSC-prompt-spoof attacks on buyer terminals.
+_ANSI_ESCAPE_RE = re.compile(
+    r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])"
+)
+
+
+def _strip_terminal_escapes(text: str) -> str:
+    if not text:
+        return text
+    cleaned = _ANSI_ESCAPE_RE.sub("", text)
+    return cleaned.replace("\x07", "").replace("\x08", "")
+
 _SUPPORTED = ("javascript", "typescript", "go", "rust")
 
 # Pre-execution SSRF/network block. The Python executor enforces a
@@ -209,8 +223,8 @@ def _run_subprocess(
             "timed_out": True,
         }
     elapsed_ms = int((time.monotonic() - t_start) * 1000)
-    stdout = proc.stdout[:_OUTPUT_TRUNCATE]
-    stderr = proc.stderr[:_OUTPUT_TRUNCATE]
+    stdout = _strip_terminal_escapes(proc.stdout[:_OUTPUT_TRUNCATE])
+    stderr = _strip_terminal_escapes(proc.stderr[:_OUTPUT_TRUNCATE])
     return {
         "stdout": stdout,
         "stderr": stderr,

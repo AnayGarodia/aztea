@@ -922,12 +922,20 @@ def wallet_deposit(
 @limiter.limit("60/minute")
 def wallet_me(
     request: Request,
+    limit: int = 50,
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.WalletResponse:
     _require_any_scope(caller, "caller", "worker")
     owner_id = _caller_owner_id(request)
     wallet = payments.get_or_create_wallet(owner_id)
-    txs = payments.get_wallet_transactions(wallet["wallet_id"], limit=50)
+    # Honor the requested transaction page size. Was: silently clamped to 50
+    # regardless of `?limit=` (audit S3.8). Cap at 500 so a single response
+    # can't blow past the JSON-size budget.
+    try:
+        page_size = max(1, min(int(limit), 500))
+    except (TypeError, ValueError):
+        page_size = 50
+    txs = payments.get_wallet_transactions(wallet["wallet_id"], limit=page_size)
     caller_trust = payments.get_caller_trust(owner_id)
     return JSONResponse(
         content={**wallet, "caller_trust": caller_trust, "transactions": txs}

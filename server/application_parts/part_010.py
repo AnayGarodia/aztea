@@ -594,7 +594,17 @@ def jobs_rate(
         except ValueError as exc:
             message = str(exc)
             if "already has a quality rating" in message:
-                raise HTTPException(status_code=409, detail=message)
+                # Was: 409 with bare-string detail, which downstream serializers
+                # pattern-matched into a misleading `job.not_found` code. Surface
+                # the dedicated `job.already_rated` envelope instead.
+                raise HTTPException(
+                    status_code=409,
+                    detail=error_codes.make_error(
+                        error_codes.JOB_ALREADY_RATED,
+                        "This job already has a quality rating from this caller.",
+                        {"job_id": job_id},
+                    ),
+                )
             raise HTTPException(
                 status_code=400,
                 detail=error_codes.make_error(

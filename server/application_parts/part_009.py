@@ -1504,10 +1504,14 @@ def jobs_get(
 ) -> core_models.JobResponse:
     _require_scope(caller, "caller")
     job = jobs.get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
-    if not _caller_can_view_job(caller, job):
-        raise HTTPException(status_code=403, detail="Job not found or not authorized.")
+    # Unify "doesn't exist" and "exists but not yours" into a single 403
+    # response so callers can't probe for valid job UUIDs by status code.
+    # The other /jobs/{job_id}/* endpoints (rating, dispute, signature)
+    # already use this pattern; jobs_get is what the audit caught leaking.
+    if job is None or not _caller_can_view_job(caller, job):
+        raise HTTPException(
+            status_code=403, detail="Job not found or not authorized."
+        )
     if str(job.get("status") or "").strip().lower() == "pending":
         try:
             _wake_builtin_worker()
