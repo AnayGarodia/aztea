@@ -1287,6 +1287,28 @@ def registry_update_agent(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> JSONResponse:
     _require_scope(caller, "worker")
+    # Re-run the listing safety scanner on any text the owner is mutating.
+    # Without this, an author could register a clean listing and then PATCH
+    # the description to inject prompt-injection content or leak an API key
+    # after the listing has earned trust.
+    mutable_text_parts = [
+        part for part in (body.name, body.description) if part
+    ]
+    if mutable_text_parts:
+        combined = "\n".join(mutable_text_parts)
+        update_findings = _listing_safety.scan_skill_md(combined)
+        if _listing_safety.has_block(update_findings):
+            block = next(
+                f for f in update_findings
+                if f.level == _listing_safety.LEVEL_BLOCK
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=error_codes.make_error(
+                    "listing.safety_block", block.message,
+                    {"code": block.code, "detail": block.detail},
+                ),
+            )
     try:
         updated = registry.update_agent(
             agent_id,

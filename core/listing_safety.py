@@ -25,6 +25,8 @@ from __future__ import annotations
 import ast
 import json
 import re
+import unicodedata
+import urllib.parse
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
@@ -98,6 +100,38 @@ _PROMPT_INJECTION_PHRASES: tuple[str, ...] = (
     "dump the conversation",
 )
 
+# Compile each phrase as `\s+`-joined word run so multi-line spread, multiple
+# spaces, and tabs in between words can't bypass the matcher. Each pattern is
+# applied to the NFKC-normalised, zero-width-stripped, lowercased text.
+_PROMPT_INJECTION_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(r"\s+".join(re.escape(w) for w in phrase.split()))
+    for phrase in _PROMPT_INJECTION_PHRASES
+)
+
+# Zero-width spaces, joiners, BIDI overrides, BOM. Stripped before pattern
+# matching so attackers can't hide a phrase by splicing in invisible chars.
+_ZERO_WIDTH_RE = re.compile(
+    r"[​-‏‪-‮⁠-⁯﻿]"
+)
+
+
+def _normalize_for_phrase_scan(text: str) -> str:
+    """Canonicalise text before phrase matching.
+
+    NFKC folds fullwidth → ASCII (`Ｉｇｎｏｒｅ` → `Ignore`) and combining
+    marks → base char. Zero-width chars are then dropped so an attacker can't
+    split a phrase with invisible glue. The result is lowercased once so all
+    downstream matchers can assume case-folded input.
+    """
+    # NFKD decomposes accented chars (e.g. "ó" → "o" + combining acute) so
+    # we can drop the combining marks and treat the base char alone.
+    decomposed = unicodedata.normalize("NFKD", text)
+    no_marks = "".join(
+        ch for ch in decomposed if unicodedata.category(ch) != "Mn"
+    )
+    stripped = _ZERO_WIDTH_RE.sub("", no_marks)
+    return stripped.lower()
+
 # API-key-shaped substrings we never want hardcoded inside a published skill.
 # Live keys here are an obvious leak; placeholder ones are a smell.
 _API_KEY_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -127,10 +161,10 @@ def scan_skill_md(skill_md: str) -> list[VerificationFinding]:
     if not isinstance(skill_md, str):
         raise TypeError("skill_md must be a str")
     findings: list[VerificationFinding] = []
-    lower = skill_md.lower()
+    canonical = _normalize_for_phrase_scan(skill_md)
 
-    for phrase in _PROMPT_INJECTION_PHRASES:
-        if phrase in lower:
+    for phrase, pattern in zip(_PROMPT_INJECTION_PHRASES, _PROMPT_INJECTION_PATTERNS):
+        if pattern.search(canonical):
             findings.append(
                 VerificationFinding(
                     code="skill.prompt_injection",
@@ -143,22 +177,28 @@ def scan_skill_md(skill_md: str) -> list[VerificationFinding]:
                 )
             )
 
-    for pattern in _API_KEY_PATTERNS:
-        match = pattern.search(skill_md)
-        if match:
-            findings.append(
-                VerificationFinding(
-                    code="skill.embedded_api_key",
-                    level=LEVEL_BLOCK,
-                    message=(
-                        "SKILL.md contains what looks like an embedded API "
-                        "key. Remove it and store secrets in caller-supplied "
-                        "input or your own backend."
-                    ),
-                    detail={"prefix": match.group(0)[:8] + "..."},
+    # Scan both the original text and a whitespace-stripped form so an
+    # attacker can't split a key across a newline to bypass the regex.
+    compact = re.sub(r"\s+", "", skill_md)
+    for source in (skill_md, compact):
+        for pattern in _API_KEY_PATTERNS:
+            match = pattern.search(source)
+            if match:
+                findings.append(
+                    VerificationFinding(
+                        code="skill.embedded_api_key",
+                        level=LEVEL_BLOCK,
+                        message=(
+                            "SKILL.md contains what looks like an embedded API "
+                            "key. Remove it and store secrets in caller-supplied "
+                            "input or your own backend."
+                        ),
+                        detail={"prefix": match.group(0)[:8] + "..."},
+                    )
                 )
-            )
-            break  # one is enough to refuse
+                break  # one is enough to refuse
+        if any(f.code == "skill.embedded_api_key" for f in findings):
+            break
 
     blob = _BASE64_RE.search(skill_md)
     if blob:
@@ -291,6 +331,31 @@ def scan_python_handler(source: str) -> list[VerificationFinding]:
                         detail={"name": func.id, "line": node.lineno},
                     )
                 )
+            # importlib.import_module("subprocess") and friends — lazy
+            # import bypass for the static `import` rules above.
+            elif (
+                isinstance(func, ast.Attribute)
+                and isinstance(func.value, ast.Name)
+                and func.value.id == "importlib"
+                and func.attr == "import_module"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+                and node.args[0].value.split(".")[0] in _BLOCKED_IMPORTS
+            ):
+                target = node.args[0].value
+                findings.append(
+                    VerificationFinding(
+                        code="python.blocked_import",
+                        level=LEVEL_BLOCK,
+                        message=(
+                            f"Python handler dynamically imports '{target}' "
+                            "via importlib.import_module, which is not allowed "
+                            "for in-process listings."
+                        ),
+                        detail={"module": target, "line": node.lineno},
+                    )
+                )
             # os.system / os.popen / os.exec* / os.spawn*.
             elif (
                 isinstance(func, ast.Attribute)
@@ -348,31 +413,77 @@ def scan_python_handler(source: str) -> list[VerificationFinding]:
 # by the SSRF check in core/url_security.py instead.
 _AZTEA_OWN_HOST_SUFFIXES: tuple[str, ...] = ("aztea.ai",)
 
+# Common Cyrillic look-alikes that visually impersonate Latin letters used in
+# our own host name. NFKC does NOT fold these; we apply this map explicitly so
+# `aztеa.ai` (Cyrillic 'е') resolves to `aztea.ai` for comparison purposes.
+_HOMOGLYPH_FOLD = str.maketrans({
+    "а": "a", "А": "A",
+    "е": "e", "Е": "E",
+    "о": "o", "О": "O",
+    "р": "p", "Р": "P",
+    "с": "c", "С": "C",
+    "у": "y", "У": "Y",
+    "х": "x", "Х": "X",
+    "ѕ": "s", "Ѕ": "S",
+    "і": "i", "І": "I",
+    "ј": "j", "Ј": "J",
+    "ԛ": "q", "Ԛ": "Q",
+})
+
+
+def _candidate_endpoint_forms(raw: str) -> set[str]:
+    """Return the set of canonical forms the suffix check should run against.
+
+    We compare in three forms so percent-encoding and Cyrillic-homoglyph
+    bypasses are caught:
+      1. NFKC-folded + lowered original
+      2. percent-decoded version of (1)
+      3. (2) with Cyrillic look-alikes folded to ASCII
+    """
+    forms: set[str] = set()
+    base = unicodedata.normalize("NFKC", raw.strip()).lower()
+    forms.add(base)
+    try:
+        decoded = urllib.parse.unquote(base)
+    except Exception:  # noqa: BLE001 — malformed input shouldn't blow up scan
+        decoded = base
+    forms.add(decoded)
+    forms.add(decoded.translate(_HOMOGLYPH_FOLD))
+    return forms
+
 
 def scan_agent_md_endpoint(endpoint_url: str) -> list[VerificationFinding]:
     """Endpoint-URL sanity above and beyond the SSRF check.
 
     SSRF / private-IP enforcement is in core.url_security; here we only catch
-    the "you registered against aztea.ai itself" footgun.
+    the "you registered against aztea.ai itself" footgun, including
+    percent-encoded and Cyrillic-homoglyph bypass attempts.
     """
     if not isinstance(endpoint_url, str):
         raise TypeError("endpoint_url must be a str")
     findings: list[VerificationFinding] = []
-    lower = endpoint_url.strip().lower()
+    if not endpoint_url.strip():
+        return findings
+    candidates = _candidate_endpoint_forms(endpoint_url)
     for suffix in _AZTEA_OWN_HOST_SUFFIXES:
-        if f"://{suffix}" in lower or f".{suffix}/" in lower or lower.endswith(suffix):
-            findings.append(
-                VerificationFinding(
-                    code="manifest.endpoint_is_aztea",
-                    level=LEVEL_BLOCK,
-                    message=(
-                        "endpoint_url points at an Aztea-owned host. Third-"
-                        "party agents must host their own endpoint."
-                    ),
-                    detail={"host_suffix": suffix},
+        for candidate in candidates:
+            if (
+                f"://{suffix}" in candidate
+                or f".{suffix}/" in candidate
+                or candidate.endswith(suffix)
+            ):
+                findings.append(
+                    VerificationFinding(
+                        code="manifest.endpoint_is_aztea",
+                        level=LEVEL_BLOCK,
+                        message=(
+                            "endpoint_url points at an Aztea-owned host. Third-"
+                            "party agents must host their own endpoint."
+                        ),
+                        detail={"host_suffix": suffix},
+                    )
                 )
-            )
-            break
+                return findings
     return findings
 
 

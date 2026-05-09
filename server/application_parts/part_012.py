@@ -28,6 +28,24 @@ def skills_validate(
         raise HTTPException(status_code=400, detail="skill_md is required.")
     if len(raw_md.encode("utf-8")) > 256 * 1024:
         raise HTTPException(status_code=413, detail="skill_md exceeds 256 KB.")
+
+    # Run the same safety scanner /skills runs at upload time. Without this,
+    # /skills/validate would happily preview blocked content as `valid=true`,
+    # giving an attacker an oracle for whether the live route would refuse.
+    safety_findings = _listing_safety.scan_skill_md(raw_md)
+    if _listing_safety.has_block(safety_findings):
+        first_block = next(
+            f for f in safety_findings if f.level == _listing_safety.LEVEL_BLOCK
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=error_codes.make_error(
+                "listing.safety_block",
+                first_block.message,
+                {"code": first_block.code, "detail": first_block.detail},
+            ),
+        )
+
     try:
         parsed = _skill_parser.parse_skill_md(raw_md, source="upload")
     except _skill_parser.SkillParseError as exc:
@@ -38,6 +56,11 @@ def skills_validate(
         "description": parsed.description,
         "warnings": parsed.warnings,
         "registration_preview": parsed.to_aztea_registration(),
+        "safety_warnings": [
+            {"code": f.code, "level": f.level, "message": f.message}
+            for f in safety_findings
+            if f.level != _listing_safety.LEVEL_BLOCK
+        ],
     }
 
 
