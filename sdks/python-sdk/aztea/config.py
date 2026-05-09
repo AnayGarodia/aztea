@@ -17,18 +17,21 @@ def config_path() -> Path:
 
 def load_config() -> dict[str, Any] | None:
     path = config_path()
-    if not path.exists():
-        return None
-    try:
-        raw = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
-        return None
-    if not isinstance(raw, dict):
-        return None
+    raw: dict[str, Any] = {}
+    if path.exists():
+        try:
+            disk = json.loads(path.read_text())
+            if isinstance(disk, dict):
+                raw = disk
+        except (OSError, json.JSONDecodeError):
+            raw = {}
     env_url = os.environ.get("AZTEA_BASE_URL")
     if env_url:
         raw["base_url"] = env_url
-    return raw
+    env_key = os.environ.get("AZTEA_API_KEY")
+    if env_key:
+        raw["api_key"] = env_key
+    return raw or None
 
 
 def save_config(*, api_key: str, base_url: str, username: str) -> None:

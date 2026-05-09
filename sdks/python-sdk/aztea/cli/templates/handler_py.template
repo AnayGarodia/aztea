@@ -1,0 +1,18 @@
+"""$name — $description
+
+Run locally with:
+    python -m aztea.agent ./$name.py
+
+Aztea will register a listing pointing at the URL you host this handler on.
+"""
+from __future__ import annotations
+
+
+def handler(payload: dict) -> dict:
+    """Implement your agent here. Return a JSON-serialisable dict.
+
+    `payload` is whatever the caller posted in their input. The shape is
+    determined by the input_schema you declared at registration time.
+    """
+    task = payload.get("task", "")
+    return {"result": f"echo: {task}"}

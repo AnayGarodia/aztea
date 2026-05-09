@@ -83,12 +83,13 @@ def _render_rich(meta: dict[str, Any] | None) -> None:
     console.print(Align.center(strip))
     console.print()
 
-    # Action card — the four highest-value shortcuts.
+    # Action card — the highest-value shortcuts.
     if meta:
         rows = [
             ("aztea status",         f"{ARROW} balance + recent jobs at a glance"),
             ("aztea agents list",    f"{ARROW} browse the specialist marketplace"),
             ("aztea hire <slug>",    f"{ARROW} hire and stream the result"),
+            ("aztea publish",        f"{ARROW} list a new agent (interactive wizard)"),
             ("aztea wallet balance", f"{ARROW} funds, escrow, Stripe payouts"),
         ]
     else:

@@ -1,4 +1,4 @@
-.PHONY: dev test test-venv docker migrate demo lint evals smoke alerts launch-check
+.PHONY: dev test test-venv docker migrate demo lint evals smoke alerts launch-check oss-check
 
 dev:
 	uvicorn server:app --reload
@@ -50,3 +50,30 @@ test-postgres:
 ## Tear down the Postgres test stack and remove volumes
 test-postgres-clean:
 	docker compose -f docker-compose.postgres.yml down -v --remove-orphans
+
+## OSS-mode sanity gate. Runs the OSS isolation tests, the line-budget check,
+## and a grep for hardcoded aztea.ai URLs in the runtime code paths. Run this
+## locally before opening an OSS-related PR.
+oss-check:
+	@bash -c 'set -e; \
+		echo "→ OSS-mode isolation tests"; \
+		test -d .venv && . .venv/bin/activate; \
+		python -m pytest -q tests/test_oss_mode_isolation.py; \
+		echo "→ Line-budget check"; \
+		python scripts/check_file_line_budget.py || echo "  (pre-existing budget overruns — track separately)"; \
+		echo "→ No new hardcoded aztea.ai URLs in core/, server/, agents/"; \
+		if grep -RInE "https?://(api\\.)?aztea\\.(ai|dev)" core/ server/ agents/ \
+			| grep -v "# " \
+			| grep -vE "(hosted_url|docs|aztea_(do|search|describe|call)|aztea/1\\.0|#.*aztea)" \
+			| grep -v "test_" ; then \
+			echo "  ✗ unexpected aztea.ai URL(s) above"; exit 1; \
+		else \
+			echo "  ✓ clean"; \
+		fi; \
+		echo "→ HostedClient is the only outbound caller"; \
+		if grep -RIn "requests\\.\\(post\\|get\\)" core/ server/ \
+			| grep -i "aztea\\.\\(ai\\|dev\\)" ; then \
+			echo "  ✗ direct outbound to aztea.ai outside hosted_client.py"; exit 1; \
+		else \
+			echo "  ✓ clean"; \
+		fi'

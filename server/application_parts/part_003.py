@@ -861,6 +861,96 @@ def _probe_register_endpoint_or_400(url: str) -> None:
         _LOG.debug("POST probe failed during agent registration check", exc_info=True)
 
 
+# Per-probe timeout. The adversarial gate fires up to four POSTs (one
+# synthetic + three adversarial), so a tight per-call cap keeps the worst-
+# case register latency bounded.
+_LISTING_SAFETY_PROBE_TIMEOUT = 3.0
+
+
+def _run_listing_safety_probe(
+    url: str,
+    *,
+    input_schema: dict | None,
+    output_schema: dict | None,
+) -> None:
+    """Stage-3 behavioural probe for an external agent endpoint.
+
+    Posts (a) one schema-conformant synthetic input and (b) up to three
+    adversarial inputs from ``listing_safety.adversarial_probes()``. Refuses
+    to register if any response leaks an API key prefix or echoes the probe
+    string verbatim.
+
+    Network errors are intentionally non-fatal: the basic liveness check
+    above has already validated reachability, and a single flaky probe
+    shouldn't block a legitimate listing. Only behavioural findings
+    (`probe.leaked_api_key`, `probe.shape_mismatch` at block level) refuse.
+    """
+    # Skip rules:
+    #   AZTEA_SKIP_REGISTER_SAFETY_PROBE=1 → off (production override)
+    #   AZTEA_SKIP_REGISTER_ENDPOINT_PROBE=1 → off by default (matches the
+    #     test-suite assumption that the registered endpoint isn't actually
+    #     reachable from the test harness), unless tests opt back in via
+    #     AZTEA_RUN_REGISTER_SAFETY_PROBE=1 (monkey-patches http.post to
+    #     return canned responses without real network).
+    if os.environ.get("AZTEA_SKIP_REGISTER_SAFETY_PROBE"):
+        return
+    if os.environ.get("AZTEA_SKIP_REGISTER_ENDPOINT_PROBE") and not os.environ.get(
+        "AZTEA_RUN_REGISTER_SAFETY_PROBE"
+    ):
+        return
+
+    findings: list = []
+    payloads: list[dict] = []
+    synthetic = _listing_safety.synthesize_input_from_schema(input_schema)
+    if synthetic:
+        payloads.append(synthetic)
+    payloads.extend(_listing_safety.adversarial_probes())
+
+    for payload in payloads:
+        try:
+            resp = http.post(
+                url,
+                json=payload,
+                timeout=_LISTING_SAFETY_PROBE_TIMEOUT,
+                allow_redirects=False,
+                headers={"Content-Type": "application/json"},
+            )
+        except Exception:  # noqa: BLE001 — best-effort
+            _LOG.debug(
+                "listing safety probe POST failed (non-fatal)", exc_info=True
+            )
+            continue
+        body: object
+        try:
+            body = resp.json()
+        except Exception:  # noqa: BLE001
+            body = resp.text
+        # Only the synthetic call is shape-checked; adversarial calls would
+        # always fail shape simply because their payload is unrelated to the
+        # schema, so we'd produce noise. Pass output_schema=None for those.
+        is_synthetic = payload is (payloads[0] if synthetic else object())
+        findings.extend(
+            _listing_safety.evaluate_probe_response(
+                body,
+                output_schema=output_schema if is_synthetic else None,
+            )
+        )
+
+    block = next(
+        (f for f in findings if f.level == _listing_safety.LEVEL_BLOCK),
+        None,
+    )
+    if block is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=error_codes.make_error(
+                "listing.safety_block",
+                block.message,
+                {"code": block.code, "detail": block.detail},
+            ),
+        )
+
+
 def _create_job_event_hook(
     owner_id: str, target_url: str, secret: str | None = None
 ) -> dict:

@@ -79,6 +79,7 @@ migrations/                  SQL migrations — never delete, always add new
 |---|---|
 | Touch any money path | `CLAUDE.md` → "Critical invariants — money" + `core/payments/base.py` docstring |
 | Add a new built-in agent | `CLAUDE.md` → "Adding a new built-in agent" checklist |
+| List a third-party agent (no server change) | `aztea publish <path>` — see `CLAUDE.md` → "Adding a third-party agent" |
 | Build a frontend component or page | `.agents/DESIGN.md` — product feeling, design system, copy voice |
 | Pick what to work on | `.agents/TODO.md` |
 | Understand the product direction | `.agents/VISION.md` |

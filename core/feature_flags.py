@@ -189,3 +189,48 @@ def auto_invoke_success_floor() -> float:
     env var temporarily until rolling-window stats stabilize.
     """
     return flag_float("AZTEA_AUTO_INVOKE_SUCCESS_FLOOR", default=0.80)
+
+
+# ---------------------------------------------------------------------------
+# OSS / hosted boundary
+#
+# Aztea ships as Apache-2.0 OSS that runs fully self-contained by default.
+# The hosted aztea.ai deployment turns on extra services (judges using our
+# LLM credits, public registry syndication, federated reputation, real
+# Stripe Connect money movement). The flags below are the single switch
+# governing whether those services are reachable from this instance.
+#
+# INVARIANT: when AZTEA_HOSTED_API_URL is unset, no module may make a
+# network call to aztea.ai. All hosted-service calls go through
+# core/hosted_client.py, which short-circuits to None / local fallback when
+# is_enabled() returns False.
+# ---------------------------------------------------------------------------
+
+
+def hosted_mode_enabled() -> bool:
+    """True iff this instance is configured to call out to aztea.ai's hosted API.
+
+    Read at call time so a deploy can flip between local and hosted without
+    a restart by setting AZTEA_HOSTED_API_URL in the env.
+    """
+    return bool(os.environ.get("AZTEA_HOSTED_API_URL", "").strip())
+
+
+def hosted_api_url() -> str:
+    """Base URL for hosted aztea.ai services. Empty string when disabled."""
+    return os.environ.get("AZTEA_HOSTED_API_URL", "").strip().rstrip("/")
+
+
+def hosted_api_key() -> str:
+    """Bearer token for the hosted API. Empty string when not configured."""
+    return os.environ.get("AZTEA_HOSTED_API_KEY", "").strip()
+
+
+def stripe_enabled() -> bool:
+    """True iff Stripe topup/withdraw/Connect routes are wired up.
+
+    Computed from the presence of STRIPE_SECRET_KEY rather than a separate
+    flag, so the env stays minimal: configure Stripe → Stripe routes work;
+    omit Stripe → the routes return 501 with a pointer to hosted aztea.ai.
+    """
+    return bool(os.environ.get("STRIPE_SECRET_KEY", "").strip())

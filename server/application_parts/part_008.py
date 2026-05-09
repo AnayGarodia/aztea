@@ -2390,3 +2390,164 @@ def jobs_create(
     except Exception:
         pass
     return JSONResponse(content=_job_response(job, caller), status_code=201)
+
+
+@app.get(
+    "/registry/agents/{agent_id}/global-trust",
+    responses=_error_responses(401, 404, 429, 500, 501),
+    tags=["Registry"],
+    summary="Federated trust score for an agent. Hosted-only.",
+)
+@limiter.limit("60/minute")
+def registry_agent_global_trust(
+    request: Request,
+    agent_id: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    """Return the cross-instance trust score from aztea.ai's federated cache.
+
+    OSS-mode returns 501. The local trust score (from caller_ratings on
+    this instance) is always available via the regular agent endpoint.
+    """
+    _require_any_scope(caller, "caller", "worker")
+    agent = registry.get_agent(agent_id)
+    if agent is None or agent.get("status") == "banned":
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+
+    from core.hosted_client import get_hosted_client
+
+    client = get_hosted_client()
+    if not client.is_enabled():
+        raise HTTPException(
+            status_code=501,
+            detail={
+                "error": "registry.global_trust_disabled",
+                "message": (
+                    "Federated trust scores require hosted aztea.ai. "
+                    "Local trust is available on the regular agent endpoint."
+                ),
+            },
+        )
+    did = str(agent.get("did") or "").strip()
+    if not did:
+        raise HTTPException(status_code=404, detail="Agent has no DID.")
+    response = client.fetch_trust(did)
+    if not response:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "error": "registry.global_trust_fetch_failed",
+                "message": "Hosted aztea.ai did not return a trust score.",
+            },
+        )
+    return JSONResponse(content=response)
+
+
+@app.post(
+    "/registry/agents/{agent_id}/publish",
+    status_code=200,
+    responses=_error_responses(401, 403, 404, 429, 500, 501),
+    tags=["Registry"],
+    summary="Syndicate an agent to aztea.ai's public registry. Hosted-only.",
+)
+@limiter.limit("10/minute")
+def registry_agent_publish_public(
+    request: Request,
+    agent_id: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    """Push this agent's spec to aztea.ai's public marketplace.
+
+    Returns 501 in OSS-mode (no AZTEA_HOSTED_API_URL configured). When
+    hosted-mode is enabled, sends the agent spec to the hosted publish
+    endpoint and records the listing on the local agent row. The hosted
+    side enforces the listing fee or commission on traffic through the
+    public listing.
+    """
+    _require_scope(caller, "worker")
+    if caller["type"] in {"agent_key", "agent_caller"}:
+        raise HTTPException(
+            status_code=403,
+            detail="Agent-scoped keys cannot publish listings.",
+        )
+    agent = registry.get_agent(agent_id, include_unapproved=True)
+    if agent is None or agent.get("status") == "banned":
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    if not _caller_can_manage_agent(caller, agent):
+        raise HTTPException(status_code=403, detail="Not authorized.")
+
+    from core.hosted_client import get_hosted_client
+
+    client = get_hosted_client()
+    if not client.is_enabled():
+        raise HTTPException(
+            status_code=501,
+            detail={
+                "error": "registry.public_publish_disabled",
+                "message": (
+                    "Public registry syndication requires hosted aztea.ai. "
+                    "Set AZTEA_HOSTED_API_URL and AZTEA_HOSTED_API_KEY to opt in."
+                ),
+                "data": {
+                    "hosted_url": "https://aztea.ai",
+                    "docs": "https://github.com/aztea-ai/aztea/blob/main/docs/oss-vs-hosted.md",
+                },
+            },
+        )
+
+    # Build a minimal spec — the hosted side validates and stores the rest.
+    spec = {
+        "agent_id": agent.get("agent_id"),
+        "name": agent.get("name"),
+        "description": agent.get("description"),
+        "category": agent.get("category"),
+        "tags": agent.get("tags") or [],
+        "price_per_call_usd": agent.get("price_per_call_usd"),
+        "input_schema": agent.get("input_schema") or {},
+        "output_schema": agent.get("output_schema") or {},
+        "endpoint_url": agent.get("endpoint_url"),
+        "did": agent.get("did"),
+        "signing_public_key": agent.get("signing_public_key"),
+        "signing_alg": agent.get("signing_alg"),
+    }
+    response = client.publish_listing(spec)
+    if not response:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "error": "registry.public_publish_failed",
+                "message": "Hosted aztea.ai did not accept the listing. Try again shortly.",
+            },
+        )
+
+    listing_id = str(response.get("listing_id") or "").strip() or None
+    published_at = str(response.get("published_at") or "").strip() or _utc_now_iso()
+    # Pass the agent row's own owner_id (already loaded) so the data layer
+    # can defence-in-depth verify ownership even though the route already
+    # called _caller_can_manage_agent above.
+    updated = registry.mark_agent_published_public(
+        agent_id,
+        listing_id,
+        published_at,
+        owner_id=str(agent.get("owner_id") or ""),
+    )
+    if not updated:
+        # Defensive: should not happen given prior _caller_can_manage_agent
+        # check + non-empty agent['owner_id'], but if the row vanished or the
+        # owner changed mid-request we surface a 409 rather than silently 200.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "registry.public_publish_lost_ownership",
+                "message": "Agent ownership changed during publish. Retry.",
+            },
+        )
+
+    return JSONResponse(
+        content={
+            "agent_id": agent_id,
+            "listing_id": listing_id,
+            "published_at": published_at,
+            "public_url": response.get("public_url"),
+        }
+    )

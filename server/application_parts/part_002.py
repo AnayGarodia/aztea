@@ -548,7 +548,12 @@ def _caller_can_access_agent(caller: core_models.CallerContext, agent: dict) -> 
     if bool(agent.get("internal_only")):
         return _caller_can_manage_agent(caller, agent)
     review_status = str(agent.get("review_status") or "approved").strip().lower()
-    if review_status != "approved":
+    # 'probation' is intentionally accessible: probationary listings ARE
+    # live and callable by direct slug/agent_id; the soft gate lives in
+    # core/registry/auto_hire.py (rank penalty + $1.00 price cap on
+    # unsolicited auto-invoke). Treating probation as inaccessible here
+    # would amount to silently rejecting them, which defeats the purpose.
+    if review_status not in {"approved", "probation"}:
         return False
     if str(agent.get("status") or "").strip().lower() == "banned":
         return False

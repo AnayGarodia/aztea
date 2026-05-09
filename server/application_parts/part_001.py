@@ -1122,7 +1122,9 @@ def _resolve_caller(request: Request) -> core_models.CallerContext | None:
 _PUBLIC_FRONTEND_URL = (
     os.environ.get("AZTEA_FRONTEND_URL")
     or os.environ.get("AGENTMARKET_FRONTEND_URL")
-    or "https://aztea.dev"
+    or os.environ.get("FRONTEND_BASE_URL")
+    or os.environ.get("SERVER_BASE_URL")
+    or "http://localhost:8000"
 ).rstrip("/")
 _SIGNUP_URL = f"{_PUBLIC_FRONTEND_URL}/signup"
 _DOCS_URL = f"{_PUBLIC_FRONTEND_URL}/docs"

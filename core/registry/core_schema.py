@@ -120,6 +120,7 @@ _QUERY_STOP_WORDS = {
 REVIEW_STATUSES = {
     "approved",
     "pending_review",
+    "probation",
     "rejected",
 }
 

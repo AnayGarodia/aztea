@@ -1,0 +1,15 @@
+# $name
+
+## Registry Endpoint
+POST /registry/register
+
+## Registration Flow
+Validate the manifest, register the listing, and settle on success.
+
+## Settlement Flow Expectations
+On a successful call the platform pays out 90% to the agent owner. On failure the caller's pre-charge is refunded.
+
+## Registration Metadata
+```json
+$metadata_json
+```

@@ -18,11 +18,24 @@
 #   base  = quality*0.45 + success*0.35 + latency*0.20
 #   score = NEUTRAL*(1-confidence) + base*confidence, then * decay_multiplier
 
+import hashlib
+import hmac
+import logging
 import math
+import os
+import threading
 import uuid
 from datetime import datetime, timezone
 
 from core import db as _db
+
+_LOG = logging.getLogger(__name__)
+
+# Fields in the rating push payload that contain a *local* identifier
+# (user_id or job_id) and must be hashed before leaving this instance.
+# Agent IDs (UUIDv5 from a public namespace) and the integer rating are
+# safe to send raw — they are either public or non-sensitive.
+_LOCAL_ID_FIELDS_TO_HASH = ("caller_owner_id", "agent_owner_id", "job_id")
 
 DB_PATH = _db.DB_PATH
 _local = _db._local
@@ -288,6 +301,14 @@ def record_job_quality_rating(job_id: str, caller_owner_id: str, rating: int) ->
             raise ValueError(f"Job '{job_id}' already has a quality rating.") from e
 
     created = get_job_quality_rating(job_id)
+    if created:
+        _push_rating_to_hosted_async(
+            kind="quality",
+            job_id=job_id,
+            agent_id=created.get("agent_id"),
+            caller_owner_id=caller_owner_id,
+            rating=validated_rating,
+        )
     return created if created else {}
 
 
@@ -360,6 +381,14 @@ def record_caller_rating(
             raise ValueError(f"Job '{job_id}' already has a caller rating.") from e
 
     created = get_job_caller_rating(job_id)
+    if created:
+        _push_rating_to_hosted_async(
+            kind="caller",
+            job_id=job_id,
+            agent_owner_id=agent_owner_id,
+            caller_owner_id=created.get("caller_owner_id"),
+            rating=validated_rating,
+        )
     return created if created else {}
 
 
@@ -811,3 +840,89 @@ def count_caller_given_ratings(
                 (normalized_owner_id, validated),
             ).fetchone()
     return int(row["count"] if row else 0)
+
+
+def _instance_hmac_key() -> bytes:
+    """Per-instance HMAC key used to anonymise local IDs before leaving the box.
+
+    Resolution order (call-time):
+      1. ``AZTEA_INSTANCE_SALT`` — explicit operator-set value (preferred).
+      2. SHA-256 of ``API_KEY`` — derived, stable as long as the master key
+         is stable. Rotating ``API_KEY`` rotates the salt, which is fine:
+         the hosted side just sees a fresh set of opaque IDs.
+      3. ``b"aztea-oss-default-salt"`` — last-resort. Logs a warning
+         because it means cross-instance hashes collide; not catastrophic
+         (federated trust is additive) but worth knowing.
+    """
+    explicit = os.environ.get("AZTEA_INSTANCE_SALT", "").strip()
+    if explicit:
+        return explicit.encode("utf-8")
+    api_key = os.environ.get("API_KEY", "").strip()
+    if api_key:
+        return hashlib.sha256(api_key.encode("utf-8")).digest()
+    _LOG.warning(
+        "reputation: no AZTEA_INSTANCE_SALT or API_KEY set; using default salt — "
+        "hosted hashes will collide with other unconfigured instances."
+    )
+    return b"aztea-oss-default-salt"
+
+
+def _instance_hash(local_id: object) -> str:
+    """HMAC-SHA256 a local identifier to a 16-hex-char opaque token.
+
+    The hosted side cannot reverse this back to the original ID without the
+    instance salt. Same input → same output within an instance, which is
+    what the federated trust cache needs to dedupe ratings from one user.
+    """
+    if local_id is None:
+        return ""
+    raw = str(local_id).encode("utf-8")
+    digest = hmac.new(_instance_hmac_key(), raw, hashlib.sha256).hexdigest()
+    return digest[:16]
+
+
+def _redact_rating_payload(rating: dict[str, object]) -> dict[str, object]:
+    """Return a copy of ``rating`` with local IDs replaced by HMAC hashes.
+
+    The shape is preserved — fields keep their names and approximate
+    string-shape — so the hosted server can dedupe without learning the
+    original user_id or job_id.
+    """
+    redacted: dict[str, object] = {}
+    for key, value in rating.items():
+        if key in _LOCAL_ID_FIELDS_TO_HASH:
+            redacted[key] = _instance_hash(value) if value is not None else None
+        else:
+            redacted[key] = value
+    return redacted
+
+
+def _push_rating_to_hosted_async(**rating: object) -> None:
+    """Best-effort push of a rating to aztea.ai's federated reputation cache.
+
+    No-ops in OSS-mode (AZTEA_HOSTED_API_URL unset). Runs in a daemon
+    thread so the request returns immediately. Failures are logged at
+    debug level — the local rating row is the source of truth and
+    federated trust is purely additive.
+
+    PRIVACY: every local identifier (caller_owner_id, agent_owner_id,
+    job_id) is HMAC-hashed with an instance-scoped salt before being sent.
+    The hosted server can dedupe ratings from the same user but cannot
+    re-identify the user. ``agent_id`` (UUIDv5 from a public namespace) is
+    sent raw because the federated network needs it to attribute ratings
+    to the right agent.
+    """
+    payload = _redact_rating_payload(dict(rating))
+
+    def _send() -> None:
+        try:
+            from core.hosted_client import get_hosted_client
+
+            client = get_hosted_client()
+            if not client.is_enabled():
+                return
+            client.push_rating(payload)
+        except Exception as exc:  # noqa: BLE001 — fire-and-forget, must not raise
+            _LOG.debug("reputation: hosted push failed: %s", exc)
+
+    threading.Thread(target=_send, daemon=True).start()
