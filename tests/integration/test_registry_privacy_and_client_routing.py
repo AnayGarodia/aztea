@@ -11,7 +11,16 @@ from tests.integration.helpers import (
 )
 
 
-def test_registry_search_and_manifests_expose_privacy_and_client_routing(client):
+def test_registry_search_and_manifests_expose_privacy_and_client_routing(
+    client, monkeypatch
+):
+    # The 2026-05-09 ranker raise (relevance_floor 0.18 → 0.30) is sized
+    # against the production catalog — single-agent fixtures with weak
+    # query overlap fall under the floor since there's no peer
+    # distribution to normalise against. Lower the floor for this
+    # privacy-filter test so the ranker's keyword/embedding behavior is
+    # exercised independently of the empty-result gate.
+    monkeypatch.setenv("AZTEA_SEARCH_RELEVANCE_FLOOR", "0.05")
     worker = _register_user()
     caller = _register_user()
     _fund_user_wallet(caller, amount_cents=2_000)

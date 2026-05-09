@@ -712,9 +712,36 @@ def test_job_sweeper_handles_timeouts_sla_and_event_hooks(client, monkeypatch):
             "UPDATE jobs SET status = 'running', lease_expires_at = ? WHERE job_id = ?",
             (expired, timeout_job_id),
         )
+        # SLA timeout fires only on ACTIVELY-LEASED jobs (running /
+        # awaiting_clarification). Queue wait is not an SLA breach —
+        # pending jobs sitting behind a bursty batch must remain
+        # claimable. Mark the job claimed by a worker so the sweeper
+        # treats the 2-hour-old created_at as an execution SLA breach.
+        # See core/jobs/leases.py:list_jobs_past_sla for the rule.
+        sla_lease_active = (datetime.now(timezone.utc) + timedelta(seconds=60)).isoformat()
         conn.execute(
-            "UPDATE jobs SET created_at = ?, updated_at = ? WHERE job_id = ?",
-            (old, old, sla_job_id),
+            """
+            UPDATE jobs
+            SET created_at = ?,
+                updated_at = ?,
+                status = 'running',
+                claim_owner_id = ?,
+                claim_token = ?,
+                claimed_at = ?,
+                lease_expires_at = ?,
+                last_heartbeat_at = ?
+            WHERE job_id = ?
+            """,
+            (
+                old,
+                old,
+                f"user:{worker['user_id']}",
+                "sla-claim-token",
+                old,
+                sla_lease_active,
+                old,
+                sla_job_id,
+            ),
         )
         conn.execute(
             """
