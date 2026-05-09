@@ -10,7 +10,9 @@ import typer
 from ..config import clear_config, config_path, load_config, save_config
 from .common import ApiKeyOpt, BaseUrlOpt, JsonOpt, build_client, handle_error
 from .output import (
+    BAR,
     DOT,
+    _HAS_RICH,
     banner,
     console,
     divider,
@@ -308,23 +310,119 @@ def whoami(
                 )
                 return
 
-            banner("aztea", "current account")
-            balance = (
-                f"${(wallet.balance_cents / 100):.2f}"
-                if wallet is not None
-                else "—"
-            )
-            kv_table(
-                [
-                    ("user",     str(profile.get("username") or "—")),
-                    ("email",    str(profile.get("email") or "—")),
-                    ("scopes",   ", ".join(profile.get("scopes") or []) or "—"),
-                    ("api key",  masked),
-                    ("base url", base),
-                    ("balance",  balance),
-                ]
+            _render_profile_card(
+                profile=profile,
+                wallet=wallet,
+                masked=masked,
+                base_url=base,
             )
     except typer.Exit:
         raise
     except Exception as exc:
         handle_error(exc)
+
+
+def _initials(name: str) -> str:
+    parts = [p for p in (name or "").replace("_", " ").replace("-", " ").split() if p]
+    if not parts:
+        return "AZ"
+    if len(parts) == 1:
+        return parts[0][:2].upper()
+    return (parts[0][0] + parts[-1][0]).upper()
+
+
+def _render_profile_card(*, profile: dict, wallet, masked: str, base_url: str) -> None:
+    """Beautiful, dense profile card for `aztea whoami`."""
+    username = str(profile.get("username") or "—")
+    email = str(profile.get("email") or "—")
+    scopes = profile.get("scopes") or []
+    balance_cents = getattr(wallet, "balance_cents", None)
+    escrow_cents = getattr(wallet, "escrow_cents", 0) or 0
+
+    if not _HAS_RICH:
+        banner("aztea", "current account")
+        kv_table([
+            ("user",     username),
+            ("email",    email),
+            ("scopes",   ", ".join(scopes) or "—"),
+            ("api key",  masked),
+            ("base url", base_url),
+            ("balance",  f"${(balance_cents or 0)/100:.2f}" if balance_cents is not None else "—"),
+        ])
+        return
+
+    from rich.text import Text
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.padding import Padding
+    from rich.console import Group
+    from rich import box
+
+    # ── Identity block: avatar tile + name + status pill
+    avatar_text = Text(f" {_initials(username)} ", style="bold #0F2A2D on #5EEAD4")
+    name_block = Text()
+    name_block.append(username, style="bold #5EEAD4")
+    name_block.append("\n")
+    name_block.append(email, style="muted")
+
+    pill = Text()
+    pill.append(f"{BAR} ", style="success")
+    pill.append("active", style="success")
+
+    id_table = Table(show_header=False, show_edge=False, box=None, padding=(0, 1))
+    id_table.add_column(no_wrap=True)
+    id_table.add_column()
+    id_table.add_column(justify="right")
+    id_table.add_row(avatar_text, name_block, pill)
+
+    # ── Detail block: api key, base url, scopes
+    scope_text = Text()
+    if scopes:
+        for i, scope in enumerate(scopes):
+            if i:
+                scope_text.append("  ", style="border")
+            scope_text.append(f" {scope} ", style="kbd")
+    else:
+        scope_text.append("—", style="muted")
+
+    detail = Table(show_header=False, show_edge=False, box=None, padding=(0, 2))
+    detail.add_column(justify="right", style="muted", no_wrap=True)
+    detail.add_column(style="default")
+    detail.add_row("api key", Text(masked, style="code"))
+    detail.add_row("base url", Text(base_url, style="default"))
+    detail.add_row("scopes", scope_text)
+
+    # ── Wallet stripe
+    bal_line = Text()
+    if balance_cents is not None:
+        bal_line.append(f"${balance_cents/100:,.2f}", style="hero")
+        bal_line.append("  USD", style="muted")
+        if escrow_cents:
+            bal_line.append(f"     {DOT}  ", style="border")
+            bal_line.append(f"${escrow_cents/100:,.2f} in escrow", style="muted")
+    else:
+        bal_line.append("balance unavailable", style="muted")
+
+    inner = Group(
+        id_table,
+        Text(""),
+        Text("─" * 64, style="border_dim"),
+        Text(""),
+        Padding(detail, (0, 0, 0, 0)),
+        Text(""),
+        Text("  WALLET", style="label"),
+        Padding(bal_line, (0, 0, 0, 2)),
+    )
+
+    panel = Panel(
+        inner,
+        title=Text(" account ", style="bold #0F2A2D on #5EEAD4"),
+        title_align="left",
+        border_style="border_dim",
+        box=box.ROUNDED,
+        padding=(1, 2),
+        width=72,
+    )
+    console.print()
+    console.print(panel)
+    console.print()

@@ -24,6 +24,7 @@ from . import jobs as _jobs
 from . import wallet as _wallet
 from . import pipelines as _pipelines
 from . import mcp as _mcp
+from . import status as _status
 from .splash import render_splash
 
 
@@ -74,6 +75,7 @@ app.add_typer(_jobs.app,      name="jobs")
 app.add_typer(_wallet.app,    name="wallet")
 app.add_typer(_pipelines.app, name="pipelines")
 app.add_typer(_mcp.app,       name="mcp")
+app.command(name="status", help="At-a-glance dashboard: wallet + recent jobs.")(_status.status_cmd)
 
 
 __all__ = ["app"]

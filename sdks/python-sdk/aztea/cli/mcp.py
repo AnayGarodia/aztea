@@ -13,13 +13,17 @@ import typer
 from ..config import load_config
 from .common import ApiKeyOpt, BaseUrlOpt, JsonOpt, build_client, handle_error
 from .output import (
+    BAR,
     CHECK,
     CROSS,
+    DOT,
+    _HAS_RICH,
     banner,
     console,
     emit,
     info,
     kv_table,
+    section,
     spinner,
     success,
     warn,
@@ -240,27 +244,10 @@ def doctor(
             raise typer.Exit(code=1)
         return
 
-    banner(f"aztea mcp doctor — {target.label}")
-    for name, passed, hint in checks:
-        glyph = CHECK if passed else CROSS
-        style = "success" if passed else "error"
-        line = f"[{style}]{glyph}[/{style}]  {name}"
-        if not passed and hint:
-            line += f"  [muted]({hint})[/muted]"
-        console.print(line)
-    console.print()
-
-    if all_ok:
-        kv_table(
-            [
-                ("client",    target.label),
-                ("config",    str(target.config_path)),
-                ("base url",  base_url),
-                ("user",      profile_user or "—"),
-            ],
-        )
-    else:
-        warn("Run `aztea mcp install` to fix.")
+    _render_doctor(
+        target.label, str(target.config_path), base_url, profile_user, checks, all_ok,
+    )
+    if not all_ok:
         raise typer.Exit(code=1)
 
 
@@ -339,3 +326,87 @@ def serve(
         subprocess.run([npx, "-y", "aztea-cli", "mcp"], env=env, check=False)
     except KeyboardInterrupt:
         raise typer.Exit(code=130)
+
+
+def _render_doctor(
+    label: str,
+    config_path: str,
+    base_url: str,
+    profile_user: str,
+    checks: list[tuple[str, bool, str]],
+    all_ok: bool,
+) -> None:
+    """Sectioned checklist with summary panel — used by `aztea mcp doctor`."""
+    if not _HAS_RICH:
+        banner(f"aztea mcp doctor — {label}")
+        for name, passed, hint in checks:
+            glyph = CHECK if passed else CROSS
+            console.print(f"  {glyph}  {name}" + (f"  ({hint})" if not passed and hint else ""))
+        if all_ok:
+            kv_table([
+                ("client", label), ("config", config_path),
+                ("base url", base_url), ("user", profile_user or "—"),
+            ])
+        else:
+            warn("Run `aztea mcp install` to fix.")
+        return
+
+    from rich.text import Text
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.console import Group
+    from rich.padding import Padding
+    from rich import box
+
+    section("mcp doctor", label)
+
+    rows = Table(show_header=False, show_edge=False, box=None, padding=(0, 1))
+    rows.add_column(width=2, no_wrap=True)
+    rows.add_column(no_wrap=False)
+    rows.add_column(style="muted")
+    for name, passed, hint in checks:
+        glyph = Text(CHECK, style="success") if passed else Text(CROSS, style="error")
+        check_name = Text(name, style="default" if passed else "error")
+        hint_text = Text(hint if (not passed and hint) else "", style="muted")
+        rows.add_row(glyph, check_name, hint_text)
+    console.print(Padding(rows, (1, 0, 1, 1)))
+
+    # Summary card
+    if all_ok:
+        summary = Table(show_header=False, show_edge=False, box=None, padding=(0, 2))
+        summary.add_column(justify="right", style="muted", no_wrap=True)
+        summary.add_column(style="default")
+        summary.add_row("client", label)
+        summary.add_row("config", config_path)
+        summary.add_row("base url", base_url)
+        summary.add_row("user", profile_user or "—")
+
+        head = Text()
+        head.append(f"{BAR} ", style="success")
+        head.append("integration healthy", style="success")
+        head.append(f"   {DOT}   ", style="border")
+        head.append("restart your editor to pick up changes", style="muted")
+        panel = Panel(
+            Group(head, Text(""), summary),
+            border_style="border_dim",
+            box=box.ROUNDED,
+            padding=(1, 2),
+            title=Text(" ready ", style="bold #0F2A2D on #5EEAD4"),
+            title_align="left",
+        )
+        console.print(panel)
+        console.print()
+    else:
+        head = Text()
+        head.append(f"{BAR} ", style="error")
+        head.append("integration not healthy", style="error")
+        head.append("   run ", style="muted")
+        head.append("aztea mcp install", style="code")
+        head.append(" to fix", style="muted")
+        panel = Panel(
+            head, border_style="error", box=box.ROUNDED, padding=(1, 2),
+            title=Text(" attention ", style="bold white on #EF4444"),
+            title_align="left",
+        )
+        console.print(panel)
+        console.print()

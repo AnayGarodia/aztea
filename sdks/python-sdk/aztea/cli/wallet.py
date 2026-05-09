@@ -7,7 +7,18 @@ from typing import Optional
 import typer
 
 from .common import ApiKeyOpt, BaseUrlOpt, JsonOpt, build_client, handle_error
-from .output import big_balance, emit, info, kv_table, spinner, success
+from .output import (
+    DOT,
+    _HAS_RICH,
+    big_balance,
+    console,
+    emit,
+    info,
+    kv_table,
+    mini_bar,
+    spinner,
+    success,
+)
 
 
 app = typer.Typer(help="Inspect and fund your wallet.", no_args_is_help=True)
@@ -27,13 +38,7 @@ def balance(
             if json_mode:
                 emit(wallet, json_mode=True)
                 return
-            big_balance(f"${wallet.balance_cents / 100:.2f}")
-            kv_table(
-                [
-                    ("currency", "USD"),
-                    ("escrow",   f"${getattr(wallet, 'escrow_cents', 0) / 100:.2f}"),
-                ],
-            )
+            _render_wallet_card(wallet)
     except typer.Exit:
         raise
     except Exception as exc:
@@ -125,6 +130,70 @@ def withdraw(
         raise
     except Exception as exc:
         handle_error(exc)
+
+
+def _render_wallet_card(wallet) -> None:
+    """Hero balance card with escrow split visual + currency."""
+    balance_cents = int(getattr(wallet, "balance_cents", 0) or 0)
+    escrow_cents = int(getattr(wallet, "escrow_cents", 0) or 0)
+
+    if not _HAS_RICH:
+        big_balance(f"${balance_cents / 100:.2f}")
+        kv_table([
+            ("currency", "USD"),
+            ("escrow", f"${escrow_cents / 100:.2f}"),
+        ])
+        return
+
+    from rich.text import Text
+    from rich.panel import Panel
+    from rich.padding import Padding
+    from rich.console import Group
+    from rich.table import Table
+    from rich import box
+
+    total = balance_cents + escrow_cents
+    available_frac = (balance_cents / total) if total > 0 else 1.0
+
+    hero = Text()
+    hero.append(f"${balance_cents/100:,.2f}", style="hero")
+    hero.append("  USD", style="muted")
+
+    sub = Text()
+    sub.append("available", style="muted")
+    if escrow_cents:
+        sub.append(f"   {DOT}   ", style="border")
+        sub.append(f"${escrow_cents/100:,.2f} in escrow", style="muted")
+
+    bar_row = Table(show_header=False, show_edge=False, box=None, padding=(0, 1))
+    bar_row.add_column(no_wrap=True)
+    bar_row.add_column(justify="right", style="muted", no_wrap=True)
+    bar_row.add_row(mini_bar(available_frac, width=42), f"{available_frac*100:.0f}%")
+
+    inner = Group(
+        Padding(hero, (0, 0, 0, 1)),
+        Padding(sub, (0, 0, 1, 1)),
+        Padding(bar_row, (0, 0, 0, 0)),
+    )
+
+    panel = Panel(
+        inner,
+        title=Text(" wallet ", style="bold #0F2A2D on #5EEAD4"),
+        title_align="left",
+        border_style="border_dim",
+        box=box.ROUNDED,
+        padding=(1, 2),
+        width=64,
+    )
+    console.print()
+    console.print(panel)
+    console.print()
+    foot = Text()
+    foot.append(f"  {DOT} ", style="border")
+    foot.append("top up:  ", style="muted")
+    foot.append("aztea wallet topup <amount>", style="code")
+    console.print(foot)
+    console.print()
 
 
 @app.command()

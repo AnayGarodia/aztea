@@ -13,7 +13,17 @@ from .common import (
     handle_error,
     slugify,
 )
-from .output import emit, spinner, console
+from .output import (
+    BAR,
+    DOT,
+    _HAS_RICH,
+    console,
+    emit,
+    money,
+    spinner,
+    trust_gauge,
+    price_tier,
+)
 
 
 def _open_client(**kwargs):
@@ -55,50 +65,7 @@ def list_cmd(
                 emit(agents, json_mode=True)
                 return
 
-            try:
-                from rich.table import Table
-                from rich.text import Text as _Text
-                table = Table(
-                    show_edge=False,
-                    show_lines=False,
-                    pad_edge=False,
-                    padding=(0, 1),
-                    header_style="label",
-                )
-                table.add_column("slug", style="code", no_wrap=True)
-                table.add_column("price", justify="right", no_wrap=True)
-                table.add_column("trust", justify="right", no_wrap=True)
-                table.add_column("ok%", justify="right", style="muted", no_wrap=True)
-                table.add_column("name", style="default")
-                for agent in agents:
-                    price_usd = agent.price_per_call_usd
-                    price_str = _Text(
-                        f"${price_usd:.2f}",
-                        style="gold" if price_usd >= 0.10 else "default",
-                    )
-                    trust = agent.trust_score
-                    if trust >= 80:
-                        trust_style = "success"
-                    elif trust >= 50:
-                        trust_style = "warn"
-                    else:
-                        trust_style = "muted"
-                    trust_str = _Text(f"{trust:.0f}", style=trust_style)
-                    table.add_row(
-                        slugify(agent.name),
-                        price_str,
-                        trust_str,
-                        f"{agent.success_rate:.0%}",
-                        agent.name,
-                    )
-                console.print()
-                console.print(table)
-                console.print()
-            except ImportError:
-                for agent in agents:
-                    console.print(
-                        f"{slugify(agent.name)}  ${agent.price_per_call_usd:.2f}  {agent.name}"
-                    )
+            _render_agent_table(agents, query=search)
     except typer.Exit:
         raise
     except Exception as exc:
@@ -142,3 +109,100 @@ def search(
         base_url=base_url,
         json_mode=json_mode,
     )
+
+
+def _render_agent_table(agents, *, query: Optional[str] = None) -> None:
+    """Premium agent table — trust gauges, price tiers, last-active, totals row."""
+    if not _HAS_RICH:
+        for agent in agents:
+            console.print(
+                f"{slugify(agent.name)}  ${agent.price_per_call_usd:.2f}  {agent.name}"
+            )
+        return
+
+    from rich.table import Table
+    from rich.text import Text as _Text
+    from rich.panel import Panel
+    from rich import box
+
+    if not agents:
+        body = _Text()
+        body.append("no specialists matched", style="muted")
+        if query:
+            body.append("\nquery: ", style="muted")
+            body.append(query, style="code")
+        console.print()
+        console.print(Panel(
+            body, border_style="border_dim", box=box.ROUNDED,
+            title=_Text(" marketplace ", style="bold #0F2A2D on #5EEAD4"),
+            title_align="left", padding=(1, 2),
+        ))
+        console.print()
+        return
+
+    # Header strip — count, query, sort
+    header = _Text()
+    header.append(f"  {len(agents)} specialist{'s' if len(agents) != 1 else ''}", style="bold")
+    if query:
+        header.append("   matching ", style="muted")
+        header.append(f'"{query}"', style="code")
+    header.append(f"   {DOT}   sorted by ", style="muted")
+    header.append("trust", style="default")
+
+    table = Table(
+        show_edge=False,
+        show_lines=False,
+        pad_edge=False,
+        padding=(0, 1),
+        header_style="label",
+        box=box.SIMPLE_HEAD,
+        border_style="border_dim",
+    )
+    table.add_column("",          width=1, no_wrap=True)
+    table.add_column("SLUG",      style="code", no_wrap=True)
+    table.add_column("NAME",      style="default", no_wrap=False, max_width=32)
+    table.add_column("PRICE",     justify="right", no_wrap=True)
+    table.add_column("",          width=4, no_wrap=True)  # price tier marker
+    table.add_column("TRUST",     justify="left", no_wrap=True)
+    table.add_column("SUCCESS",   justify="right", style="muted", no_wrap=True)
+
+    sorted_agents = sorted(
+        agents,
+        key=lambda a: (-(getattr(a, "trust_score", 0) or 0), getattr(a, "price_per_call_usd", 0) or 0),
+    )
+
+    for agent in sorted_agents:
+        price_usd = float(getattr(agent, "price_per_call_usd", 0) or 0)
+        trust = float(getattr(agent, "trust_score", 0) or 0)
+        success = float(getattr(agent, "success_rate", 0) or 0)
+
+        if trust >= 80:
+            mark_style = "success"
+        elif trust >= 50:
+            mark_style = "gold"
+        elif trust >= 25:
+            mark_style = "warn"
+        else:
+            mark_style = "muted"
+
+        table.add_row(
+            _Text(BAR, style=mark_style),
+            slugify(agent.name),
+            agent.name,
+            money(round(price_usd * 100)),
+            price_tier(price_usd),
+            trust_gauge(trust),
+            f"{success:.0%}",
+        )
+
+    console.print()
+    console.print(header)
+    console.print(table)
+
+    # Footer hint
+    foot = _Text()
+    foot.append(f"  {DOT} ", style="border")
+    foot.append("hire any specialist with ", style="muted")
+    foot.append("aztea hire <slug>", style="code")
+    console.print(foot)
+    console.print()

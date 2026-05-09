@@ -15,7 +15,19 @@ from .common import (
     handle_error,
     parse_input,
 )
-from .output import CHECK, emit, info, kv_table, spinner, success
+from .output import (
+    CHECK,
+    _HAS_RICH,
+    console,
+    emit,
+    info,
+    kv_table,
+    money,
+    receipt_panel,
+    spinner,
+    status_pill,
+    success,
+)
 
 
 try:
@@ -94,7 +106,6 @@ def _render_batch_trace(result: dict[str, Any]) -> None:
         return
     try:
         from rich.table import Table
-        from .output import console
     except Exception:
         for item in jobs:
             typer.echo(
@@ -149,15 +160,7 @@ def _call_agent(
                     json_mode=True,
                 )
                 return
-            receipt_verified = (
-                isinstance(getattr(result, "receipt", None), dict)
-                and result.receipt.get("status") == "verified"
-            )
-            receipt_tag = f"  {CHECK} receipt" if receipt_verified else ""
-            success(
-                f"Job complete  ${result.cost_cents/100:.2f}{receipt_tag}",
-                detail=result.job_id,
-            )
+            _render_hire_receipt(result, slug=slug)
             emit(result.output, json_mode=False)
     except typer.Exit:
         raise
@@ -391,3 +394,36 @@ def follow(
         raise
     except Exception as exc:
         handle_error(exc)
+
+
+def _render_hire_receipt(result, *, slug: str) -> None:
+    """Receipt panel for a completed sync hire. Uses receipt_panel primitive."""
+    receipt = getattr(result, "receipt", None) if not isinstance(result, dict) else result.get("receipt")
+    receipt_verified = isinstance(receipt, dict) and receipt.get("status") == "verified"
+    cost_cents = int(getattr(result, "cost_cents", 0) or 0)
+    job_id = str(getattr(result, "job_id", "") or "")
+    duration_ms = getattr(result, "duration_ms", None) or (receipt or {}).get("duration_ms") if isinstance(receipt, dict) else None
+
+    if not _HAS_RICH:
+        receipt_tag = f"  {CHECK} receipt" if receipt_verified else ""
+        success(f"Job complete  ${cost_cents/100:.2f}{receipt_tag}", detail=job_id)
+        return
+
+    from rich.text import Text as _Text
+
+    rows = [
+        ("specialist", _Text(slug, style="code")),
+        ("job",        _Text(job_id, style="muted")),
+        ("status",     status_pill("complete")),
+        ("charged",    money(cost_cents)),
+    ]
+    if isinstance(duration_ms, (int, float)) and duration_ms > 0:
+        secs = float(duration_ms) / 1000.0
+        rows.append(("duration", _Text(f"{secs:.2f}s", style="default")))
+
+    receipt_panel(
+        "hire complete",
+        rows,
+        seal=receipt_verified,
+        footer=f"rate this job:  aztea jobs rate {job_id} <1-5>",
+    )
