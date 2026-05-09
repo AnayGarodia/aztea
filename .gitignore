@@ -65,3 +65,4 @@ skills-lock.json
 .pytest_cache/
 .release-venv/
 core/runs.jsonl
+docs/personal/

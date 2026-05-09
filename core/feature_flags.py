@@ -86,9 +86,8 @@ RESULT_CACHE_V2: bool = flag("AZTEA_RESULT_CACHE_V2", default=True)
 
 
 # ---------------------------------------------------------------------------
-# Search ranking thresholds (read at call time, see core/registry/agents_ops.py)
-# Introduced post-2026-05-08 eval to make the empty-result floor and dropoff
-# band tunable without a redeploy.  Defaults preserve current behavior.
+# Search ranking thresholds (read at call time, see core/registry/agents_ops.py).
+# Tunable without a redeploy via env vars.
 # ---------------------------------------------------------------------------
 
 
@@ -98,10 +97,10 @@ def search_relevance_floor() -> float:
     Rationale: returning weak distractors creates false confidence in
     low-relevance results. Empty signals "use a different query".
 
-    Default sized against live production data (2026-05-09 calibration):
-    measured blended_score for off-catalog queries like "tell me a joke"
-    or "cook me dinner" lands at 0.23–0.26 (carried by trust + price
-    contributions when content overlap is in the noise band). Legitimate
+    Default calibrated against measured off-catalog query distribution:
+    blended_score for queries like "tell me a joke" or "cook me dinner"
+    lands at 0.23–0.26 (carried by trust + price when content overlap is
+    in the noise band). Legitimate
     queries cluster at 0.33+. The 0.30 floor sits cleanly between the
     two distributions.
     """
@@ -184,11 +183,9 @@ def auto_invoke_trust_floor() -> float:
 def auto_invoke_success_floor() -> float:
     """Minimum success rate (0.0–1.0) to be eligible for auto-invoke.
 
-    Default 0.50 — most curated builtins sit between 0.40 and 0.80 because
-    the success counter mixes pre-fix schema rejections in with real failures.
-    A 0.80 floor effectively disables auto-invoke for most of the catalog,
-    which silently breaks `aztea_do`. Raise back toward 0.80 after the
-    rolling-window stats have stabilized post-deprecation cleanup
-    (2026-05-07).
+    Default 0.80. The success counter mixes pre-fix schema rejections in with
+    real failures, so most curated builtins sit between 0.40 and 0.80; a 0.80
+    floor effectively disables auto-invoke for most of the catalog. Lower the
+    env var temporarily until rolling-window stats stabilize.
     """
     return flag_float("AZTEA_AUTO_INVOKE_SUCCESS_FLOOR", default=0.80)

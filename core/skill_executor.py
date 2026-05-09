@@ -140,8 +140,14 @@ def _format_user_message(payload: dict[str, Any]) -> str:
 def _check_payload_size(payload: dict[str, Any]) -> None:
     try:
         size = len(json.dumps(payload, default=str).encode("utf-8"))
-    except Exception:
-        size = 0
+    except (TypeError, ValueError) as exc:
+        # WHY: serialisation failure means the payload is structurally invalid;
+        # reject explicitly rather than silently treating it as zero bytes
+        # (which would defeat the size guard).
+        raise SkillInputTooLargeError(
+            "Hosted skill input payload is not JSON-serialisable; "
+            f"reduce or restructure it and retry. ({type(exc).__name__})"
+        ) from exc
     if size > MAX_INPUT_PAYLOAD_BYTES:
         raise SkillInputTooLargeError(
             f"Hosted skill input payload exceeds the {MAX_INPUT_PAYLOAD_BYTES}-byte limit "
@@ -244,7 +250,7 @@ def _coerce_to_result_string(value: Any) -> str:
         return ""
     try:
         return json.dumps(value, ensure_ascii=False, default=str)
-    except Exception:
+    except (TypeError, ValueError):
         return str(value)
 
 

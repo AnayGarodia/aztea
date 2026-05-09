@@ -1,14 +1,14 @@
 """Curated public pipeline recipes.
 
-Every node in every recipe must point at an agent that is in
-``CURATED_PUBLIC_BUILTIN_AGENT_IDS`` — a pipeline that fans out to a
-sunset agent will silently fail or refund, which is worse than not
-having the recipe at all. The 2026-05-07 eval found 4/5 recipes
-referenced sunset slugs (code_review / linter / type_checker /
-git_diff_analyzer); this rewrite uses only live agents.
+Every node in every recipe must point at an agent in
+``CURATED_PUBLIC_BUILTIN_AGENT_IDS``. A pipeline that fans out to a sunset
+agent silently fails or refunds, which is worse than not shipping the
+recipe at all.
 """
 
 from __future__ import annotations
+
+import logging
 
 from core import pipelines
 from server.builtin_agents.constants import (
@@ -17,6 +17,8 @@ from server.builtin_agents.constants import (
     DNS_INSPECTOR_AGENT_ID,
     SECRET_SCANNER_AGENT_ID,
 )
+
+_LOG = logging.getLogger(__name__)
 
 PLATFORM_RECIPES_OWNER_ID = "platform:recipes"
 
@@ -131,19 +133,17 @@ def ensure_builtin_recipes() -> list[dict]:
             )
         )
         keep_ids.add(recipe["recipe_id"])
-    # Best-effort cleanup of stale platform recipes referencing sunset agents.
-    # The pipelines layer doesn't expose a delete API today, so we mark stale
-    # recipes private by re-upserting them with a tombstone description and
-    # is_public=False. Discovery surfaces (``list_recipes``) only return
-    # ``is_public=True`` rows so this hides them from non-admin callers
-    # without dropping the row (kept for receipt/back-compat reads).
+    # WHY: pipelines has no delete API; mark stale recipes private + tombstoned.
+    # `list_recipes` only returns is_public=True rows, so they're hidden from
+    # non-admin callers while preserved for receipt/back-compat reads.
     try:
         existing = pipelines.list_pipelines(
             PLATFORM_RECIPES_OWNER_ID, include_public=True
         )
     except Exception:
+        _LOG.warning("recipes: failed to list existing pipelines for cleanup", exc_info=True)
         existing = []
-    for row in existing or []:
+    for row in existing:
         existing_id = str(row.get("pipeline_id") or "").strip()
         if not existing_id or existing_id in keep_ids:
             continue
@@ -160,5 +160,9 @@ def ensure_builtin_recipes() -> list[dict]:
                 pipeline_id=existing_id,
             )
         except Exception:
-            pass
+            _LOG.warning(
+                "recipes: failed to tombstone stale recipe %s",
+                existing_id,
+                exc_info=True,
+            )
     return ensured

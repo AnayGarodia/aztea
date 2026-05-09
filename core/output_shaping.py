@@ -11,39 +11,51 @@ _MAX_STRING_CHARS = 2048
 _MAX_LIST_ITEMS = 50
 _MAX_DICT_ITEMS = 100
 _MAX_DEPTH = 6
+_TRUNCATE_HEAD_CHARS = 1536
+_TRUNCATE_TAIL_CHARS = 256
+assert _TRUNCATE_HEAD_CHARS + _TRUNCATE_TAIL_CHARS <= _MAX_STRING_CHARS
+
+# Heuristic floors for "this string is base64 of meaningful binary content".
+_BASE64_MIN_RAW_CHARS = 1024
+_BASE64_ALPHABET_SAMPLE_CHARS = 256
+_BASE64_MIN_ALPHABET_DIVERSITY = 8
+_BASE64_MIN_DECODED_BYTES = 768
+
+_ARTIFACT_PREVIEW_CHARS = 96
+_ARTIFACT_DIGEST_CHARS = 16
 
 
 def _truncate_string(value: str) -> tuple[str, bool]:
     if len(value) <= _MAX_STRING_CHARS:
         return value, False
-    head = value[:1536]
-    tail = value[-256:]
+    head = value[:_TRUNCATE_HEAD_CHARS]
+    tail = value[-_TRUNCATE_TAIL_CHARS:]
     omitted = len(value) - len(head) - len(tail)
     return f"{head}\n...[truncated {omitted} chars]...\n{tail}", True
 
 
 def _looks_like_base64_blob(value: str) -> bool:
     stripped = value.strip()
-    if len(stripped) < 1024 or len(stripped) % 4 != 0:
+    if len(stripped) < _BASE64_MIN_RAW_CHARS or len(stripped) % 4 != 0:
         return False
-    if len(set(stripped[:256])) < 8:
+    if len(set(stripped[:_BASE64_ALPHABET_SAMPLE_CHARS])) < _BASE64_MIN_ALPHABET_DIVERSITY:
         return False
     try:
         decoded = base64.b64decode(stripped, validate=True)
     except (binascii.Error, ValueError):
         return False
-    return len(decoded) >= 768
+    return len(decoded) >= _BASE64_MIN_DECODED_BYTES
 
 
 def _shape_artifact_blob(value: str) -> dict[str, Any]:
     stripped = value.strip()
-    preview = stripped[:96]
+    preview = stripped[:_ARTIFACT_PREVIEW_CHARS]
     size_bytes = 0
     try:
         size_bytes = len(base64.b64decode(stripped, validate=True))
     except (binascii.Error, ValueError):
         size_bytes = len(stripped.encode("utf-8", errors="ignore"))
-    digest = hashlib.sha256(stripped.encode("utf-8", errors="ignore")).hexdigest()[:16]
+    digest = hashlib.sha256(stripped.encode("utf-8", errors="ignore")).hexdigest()[:_ARTIFACT_DIGEST_CHARS]
     return {
         "_artifact_id": digest,
         "size_bytes": size_bytes,

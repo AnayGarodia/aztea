@@ -912,12 +912,10 @@ def _row_to_dict(row: dict) -> dict:
     raw_pc = d.get("payout_curve")
     if raw_pc:
         try:
-            import json as _json
-
             d["payout_curve"] = (
-                _json.loads(raw_pc) if isinstance(raw_pc, str) else raw_pc
+                json.loads(raw_pc) if isinstance(raw_pc, str) else raw_pc
             )
-        except Exception:
+        except (ValueError, TypeError):
             d["payout_curve"] = None
     else:
         d["payout_curve"] = None

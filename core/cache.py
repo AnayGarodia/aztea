@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import sys
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from core import db as _db
 from core import reputation
+
+_LOG = logging.getLogger(__name__)
 
 DB_PATH = _db.DB_PATH
 _local = _db._local
@@ -165,17 +168,18 @@ def _is_builtin_agent(agent_id: str) -> bool:
             _BUILTIN_CACHE_BYPASS_THRESHOLD = set(
                 CURATED_PUBLIC_BUILTIN_AGENT_IDS
             ) | set(BUILTIN_AGENT_IDS)
-        except Exception:
+        except ImportError:
+            _LOG.warning(
+                "builtin agent IDs unavailable; cache bypass set empty",
+                exc_info=True,
+            )
             _BUILTIN_CACHE_BYPASS_THRESHOLD = set()
     return str(agent_id).strip() in _BUILTIN_CACHE_BYPASS_THRESHOLD
 
 
-# Trust threshold used to gate caching for *external* agents. The original 80.0
-# value was so high that no real-world agent ever crossed it on a young
-# marketplace, and the cache was effectively dead. ``compute_trust_metrics``
-# returns trust_score on a 0–100 scale (see core/reputation.py); 60.0 lets
-# agents with at least a handful of positive ratings start benefiting from
-# result caching while still excluding fresh / low-trust agents.
+# WHY: trust_score is on a 0–100 scale (see core/reputation.py). 60.0 admits
+# agents with a handful of positive ratings while excluding fresh / low-trust
+# accounts; below this floor the cache is effectively dead for the agent.
 _EXTERNAL_AGENT_CACHE_TRUST_THRESHOLD = 60.0
 
 

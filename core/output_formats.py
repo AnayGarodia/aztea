@@ -37,6 +37,11 @@ SUPPORTED_FORMATS: tuple[str, ...] = (
     "text",  # flat plaintext, no markdown
 )
 
+# Slack Block Kit text fields cap at 3000 chars; keep margin for safety.
+_SLACK_BLOCK_CHAR_LIMIT = 2900
+_GENERIC_MD_MAX_CHARS = 4000
+_DEP_AUDIT_DESC_PREVIEW_CHARS = 400
+
 
 def normalize_format(value: Any) -> str | None:
     """Return one of SUPPORTED_FORMATS or None for unknown/missing."""
@@ -384,8 +389,8 @@ def _generic_md(output: Any) -> str:
     if isinstance(output, str):
         return output.strip()
     pretty = json.dumps(output, indent=2, ensure_ascii=False, default=str)
-    if len(pretty) > 4000:
-        pretty = pretty[:4000] + "\n…"
+    if len(pretty) > _GENERIC_MD_MAX_CHARS:
+        pretty = pretty[:_GENERIC_MD_MAX_CHARS] + "\n…"
     return f"```json\n{pretty}\n```"
 
 
@@ -481,11 +486,11 @@ def _slack_header(text: str) -> dict:
 
 
 def _slack_section(md: str) -> dict:
-    return {"type": "section", "text": {"type": "mrkdwn", "text": md[:2900]}}
+    return {"type": "section", "text": {"type": "mrkdwn", "text": md[:_SLACK_BLOCK_CHAR_LIMIT]}}
 
 
 def _slack_context(md: str) -> dict:
-    return {"type": "context", "elements": [{"type": "mrkdwn", "text": md[:2900]}]}
+    return {"type": "context", "elements": [{"type": "mrkdwn", "text": md[:_SLACK_BLOCK_CHAR_LIMIT]}]}
 
 
 def _slack_code_review_blocks(output: dict[str, Any]) -> list[dict]:
@@ -586,12 +591,12 @@ def _slack_dep_audit_blocks(output: dict[str, Any]) -> list[dict]:
             desc = str(v.get("description") or v.get("summary") or "").strip()
             body = f"{_count_emoji(sev)} *{sev.upper()}* · `{pkg}` · `{cve}`\n*Fix in:* `{fix}`"
             if desc:
-                body += f"\n{desc[:400]}"
+                body += f"\n{desc[:_DEP_AUDIT_DESC_PREVIEW_CHARS]}"
             blocks.append(_slack_section(body))
     return blocks
 
 
-def _split_for_slack(text: str, *, limit: int = 2900) -> list[str]:
+def _split_for_slack(text: str, *, limit: int = _SLACK_BLOCK_CHAR_LIMIT) -> list[str]:
     """Slack section blocks max ~3000 chars. Split on blank lines."""
     if len(text) <= limit:
         return [text]

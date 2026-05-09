@@ -670,6 +670,11 @@ _IMPERATIVE_PREFIXES = (
     "diagnose ",
 )
 
+_CODE_TOKENS = (
+    "def ", "class ", "import ", "->", "=>", "{", "};", "</", "/>",
+    "select ", "SELECT ", "from ", "FROM ",
+)
+
 
 def _looks_like_package_pinning(intent: str) -> bool:
     """True when the intent contains pinned package references like
@@ -692,9 +697,7 @@ def _looks_like_code(intent: str) -> bool:
     # or recognizable keywords/operators that don't appear in chat.
     if "\n" in text:
         return True
-    if any(token in text for token in ("def ", "class ", "import ", "->", "=>", "{", "};", "</", "/>", "select ", "SELECT ", "from ", "FROM ")):
-        return True
-    return False
+    return any(token in text for token in _CODE_TOKENS)
 
 
 def _intent_unfit_for_field(intent: str, field_name: str) -> bool:

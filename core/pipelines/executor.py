@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -292,9 +293,7 @@ def _invoke_agent(
                     if len(buf) > _MAX_RESPONSE_BYTES:
                         raise RuntimeError("Agent response exceeds size limit.")
                 try:
-                    import json as _json
-
-                    output = _json.loads(buf.decode("utf-8"))
+                    output = json.loads(buf.decode("utf-8"))
                 except (ValueError, UnicodeDecodeError) as exc:
                     raise RuntimeError("Agent returned malformed JSON.") from exc
         if not isinstance(output, dict):

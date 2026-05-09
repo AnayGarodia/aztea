@@ -310,9 +310,9 @@ def run_judgment(dispute_id: str) -> dict:
     try:
         primary = _judge_once(primary_chain, context)
     except Exception:
-        # LLM call failed (no provider configured, network error, rate limit).
-        # Reset status to 'pending' so the next sweeper pass retries instead of
-        # leaving the dispute stuck at 'judging' forever (P0 bug from the eval).
+        # WHY: a provider/network/rate-limit failure here would otherwise leave
+        # the dispute stuck in 'judging' forever; reset to 'pending' so the
+        # next sweeper pass retries.
         disputes.set_dispute_status(dispute_id, "pending")
         raise
     disputes.record_judgment(
