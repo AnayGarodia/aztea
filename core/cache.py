@@ -1,4 +1,26 @@
-"""Result-cache helpers for trusted agent outputs."""
+"""Result-cache helpers for trusted agent outputs.
+
+# OWNS: opt-out result cache for agent outputs keyed by (agent_id, request hash).
+# NOT OWNS: trust-score computation (delegated to core.reputation), agent
+#           pricing, or any settlement logic. Pure read/write surface.
+# INVARIANTS:
+#   * Endpoints in _NON_CACHEABLE_INTERNAL_ENDPOINTS must never be cached
+#     (side-effecting agents like the python executor).
+#   * TTL values are bounded and derived from trust score; the cache layer
+#     never extends TTL beyond what reputation.py reports.
+# DECISIONS:
+#   * Trust-based TTL has a small staleness window: between the moment a
+#     cache hit is read and the moment we re-check the trust score, the
+#     score could decay below the cacheable threshold. We accept that
+#     gap because the cache is a perf optimization, not a security gate.
+#     A correctness-critical reader must re-validate trust at the call
+#     site, not rely on the cache hit alone.
+#   * Cache keys are SHA256 of the canonicalized JSON request — chosen
+#     for stability across Python versions, not for crypto security.
+# KNOWN DEBT: the trust check between cache lookup and return is not
+#             atomic. Acceptable for non-critical reads. Re-evaluate if
+#             we ever cache anything money-bearing.
+"""
 
 from __future__ import annotations
 
