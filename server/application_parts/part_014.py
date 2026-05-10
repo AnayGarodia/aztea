@@ -1,8 +1,10 @@
-# server.application shard 12 — wallet routes (top-up, deposit, withdraw,
+# server.application shard 14 — wallet routes (top-up, deposit, withdraw,
 # connect onboard, wallet read), run history, and the catch-all SPA
 # fallback that serves frontend/dist/ for non-API URLs. MUST remain the
 # last shard so the SPA catch-all route is registered after every API
-# route.
+# route. (Renamed from shard 13 in 2026-05-09 to make room for shard 13
+# which now owns the co-pilot mode routes — they had to register before
+# the catch-all.)
 
 
 def _stripe_unavailable_error() -> HTTPException:

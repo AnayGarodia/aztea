@@ -28,6 +28,28 @@ from pydantic import (
 from .core_types import *  # noqa: F403
 
 
+class StopWhenPredicate(BaseModel):
+    """One JMESPath predicate that aborts a job when it matches a partial_output.
+
+    The full validation (length, complexity, parse-correctness) lives in
+    ``core/copilot_predicates.validate_stop_when`` so the same bounds are
+    enforced regardless of which surface accepts the predicate. This class
+    only carries the wire shape — strict bounds checks happen at submit time.
+    """
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "label": "found_high_severity",
+                "expr": "severity == 'high'",
+            }
+        }
+    )
+
+    label: str
+    expr: str
+
+
 class JobCreateRequest(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -157,6 +179,25 @@ class JobCreateRequest(BaseModel):
             "'caller' charges caller price+fee, worker gets full listed price. "
             "'worker' keeps caller price unchanged and deducts fee from worker payout. "
             "'split' splits fee between caller and worker."
+        ),
+    )
+    stop_when: list[StopWhenPredicate] | None = Field(
+        default=None,
+        description=(
+            "Optional co-pilot mode stop predicates. Each {label, expr} runs as "
+            "JMESPath against every partial_output payload. The first match "
+            "transitions the job to 'stopped' and settles billing per "
+            "billing_unit. Bounds (count, length, complexity) are enforced via "
+            "core.copilot_predicates.validate_stop_when at submit time."
+        ),
+    )
+    billing_unit: Literal["call", "partial"] | None = Field(
+        default=None,
+        description=(
+            "Optional co-pilot mode billing unit. 'call' bills the listed "
+            "price once at terminal regardless of how many partials fired. "
+            "'partial' bills per emitted partial_output up to the listed "
+            "price ceiling. Defaults to 'call' when null."
         ),
     )
 

@@ -2129,6 +2129,34 @@ def jobs_create(
                 ),
             )
 
+    # Co-pilot mode: validate stop_when bounds + JMESPath complexity before
+    # the caller is charged so a malformed predicate never opens an escrow.
+    # Storage shape (persisted later as JSON text on jobs.stop_when_json):
+    #   {"predicates": [{"label","expr"}, ...]}
+    # max_units lives next to predicates for forward-compat but is not in v1
+    # request body; the column stays a single JSON envelope so future runtime
+    # readers don't have to special-case missing keys.
+    validated_stop_when: list[dict] = []
+    if body.stop_when is not None:
+        from core import copilot_predicates as _copilot_predicates
+
+        raw_predicates = [
+            {"label": item.label, "expr": item.expr} for item in body.stop_when
+        ]
+        try:
+            validated_stop_when = _copilot_predicates.validate_stop_when(
+                raw_predicates
+            )
+        except _copilot_predicates.StopWhenInvalid as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=error_codes.make_error(
+                    "stop_when.invalid",
+                    str(exc),
+                    {"field": "stop_when"},
+                ),
+            )
+
     caller_owner_id = _caller_owner_id(request)
     client_id = _request_client_id(request, body.client_id)
     min_caller_trust = _extract_caller_trust_min(agent.get("input_schema"))
@@ -2371,6 +2399,26 @@ def jobs_create(
         )
         _LOG.exception("Failed to create job for agent %s.", agent["agent_id"])
         raise HTTPException(status_code=500, detail="Failed to create job.")
+
+    # Co-pilot mode: persist stop_when + billing_unit on the freshly created
+    # job row. Done as a separate UPDATE rather than threading new kwargs
+    # through jobs.create_job so the surface stays minimal until more callers
+    # adopt the feature. Both fields are optional — skip the write entirely
+    # when nothing is set.
+    if validated_stop_when or body.billing_unit is not None:
+        import json as _json
+
+        _stop_when_json = (
+            _json.dumps({"predicates": validated_stop_when})
+            if validated_stop_when
+            else None
+        )
+        with get_db_connection() as _conn:
+            _conn.execute(
+                "UPDATE jobs SET stop_when_json = %s, billing_unit = %s "
+                "WHERE job_id = %s",
+                (_stop_when_json, body.billing_unit, job["job_id"]),
+            )
 
     _record_job_event(
         job,
