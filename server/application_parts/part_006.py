@@ -5,21 +5,19 @@ from core import db as _db
 # me, legal accept, keys CRUD). First shard that registers HTTP routes.
 
 
-def _sweep_jobs(
-    retry_delay_seconds: int = _DEFAULT_RETRY_DELAY_SECONDS,
-    sla_seconds: int = _DEFAULT_SLA_SECONDS,
-    limit: int = 100,
-    actor_owner_id: str = "system:sweeper",
-) -> dict:
-    if retry_delay_seconds < 0:
-        raise ValueError("retry_delay_seconds must be >= 0.")
-    if sla_seconds <= 0:
-        raise ValueError("sla_seconds must be > 0.")
-    limit = min(max(1, limit), 500)
+def _sweep_expired_leases(
+    *,
+    limit: int,
+    retry_delay_seconds: int,
+    actor_owner_id: str,
+) -> tuple[list[dict], list[str], list[str]]:
+    """Process jobs with expired leases.
 
+    Returns (expired_rows, timeout_retry_ids, timeout_failed_ids).
+    """
     expired = jobs.list_jobs_with_expired_leases(limit=limit)
-    timeout_failed_job_ids: list[str] = []
     timeout_retry_job_ids: list[str] = []
+    timeout_failed_job_ids: list[str] = []
     for item in expired:
         updated = jobs.mark_job_timeout(
             item["job_id"],
@@ -50,16 +48,24 @@ def _sweep_jobs(
                 event_type="job.timeout_terminal",
             )
             timeout_failed_job_ids.append(settled["job_id"])
+    return expired, timeout_retry_job_ids, timeout_failed_job_ids
 
+
+def _sweep_clarification_timeouts(
+    *,
+    limit: int,
+    actor_owner_id: str,
+) -> tuple[list[dict], list[str], list[str]]:
+    """Process jobs whose clarification deadline has passed.
+
+    Returns (expired_rows, failed_ids, proceeded_ids).
+    """
+    expired_clarification = jobs.list_jobs_with_expired_clarification_deadline(limit=limit)
     clarification_timeout_failed_job_ids: list[str] = []
     clarification_timeout_proceeded_job_ids: list[str] = []
-    expired_clarification = jobs.list_jobs_with_expired_clarification_deadline(
-        limit=limit
-    )
     for item in expired_clarification:
         timeout_policy = (
-            str(item.get("clarification_timeout_policy") or "").strip().lower()
-            or "fail"
+            str(item.get("clarification_timeout_policy") or "").strip().lower() or "fail"
         )
         if timeout_policy == "proceed":
             resumed = jobs.update_job_status(item["job_id"], "running", completed=False)
@@ -70,12 +76,9 @@ def _sweep_jobs(
                 resumed,
                 "job.clarification_timeout_proceeded",
                 actor_owner_id=actor_owner_id,
-                payload={
-                    "clarification_deadline_at": item.get("clarification_deadline_at")
-                },
+                payload={"clarification_deadline_at": item.get("clarification_deadline_at")},
             )
             continue
-
         failed = jobs.update_job_status(
             item["job_id"],
             "failed",
@@ -91,7 +94,16 @@ def _sweep_jobs(
             refund_fraction=1.0,
         )
         clarification_timeout_failed_job_ids.append(settled["job_id"])
+    return expired_clarification, clarification_timeout_failed_job_ids, clarification_timeout_proceeded_job_ids
 
+
+def _sweep_sla_breaches(
+    *,
+    limit: int,
+    sla_seconds: int,
+    actor_owner_id: str,
+) -> list[str]:
+    """Fail and settle jobs that have exceeded the SLA. Returns failed job IDs."""
     sla_failed_job_ids: list[str] = []
     for item in jobs.list_jobs_past_sla(sla_seconds=sla_seconds, limit=limit):
         updated = jobs.update_job_status(
@@ -106,7 +118,15 @@ def _sweep_jobs(
             updated, actor_owner_id=actor_owner_id, event_type="job.sla_expired"
         )
         sla_failed_job_ids.append(settled["job_id"])
+    return sla_failed_job_ids
 
+
+def _sweep_due_retries(
+    *,
+    limit: int,
+    actor_owner_id: str,
+) -> tuple[list[dict], list[str]]:
+    """Advance jobs that are due for retry. Returns (due_retry_rows, ready_ids)."""
     due_retry = jobs.list_jobs_due_for_retry(limit=limit)
     retry_ready_job_ids: list[str] = []
     for item in due_retry:
@@ -125,6 +145,18 @@ def _sweep_jobs(
             actor_owner_id=actor_owner_id,
             payload={"previous_next_retry_at": previous_next_retry_at},
         )
+    return due_retry, retry_ready_job_ids
+
+
+def _sweep_output_verification_expirations(
+    *,
+    limit: int,
+    actor_owner_id: str,
+) -> tuple[list[str], list[str]]:
+    """Expire pending output-verification windows and auto-settle where appropriate.
+
+    Returns (expired_ids, auto_settled_ids).
+    """
     output_verification_expired_job_ids: list[str] = []
     output_verification_auto_settled_job_ids: list[str] = []
     for item in jobs.list_jobs_with_expired_output_verification(limit=limit):
@@ -137,22 +169,61 @@ def _sweep_jobs(
             "job.output_verification_expired",
             actor_owner_id=actor_owner_id,
             payload={
-                "output_verification_deadline_at": item.get(
-                    "output_verification_deadline_at"
-                )
+                "output_verification_deadline_at": item.get("output_verification_deadline_at")
             },
         )
         auto_settled = _settle_successful_job(expired, actor_owner_id=actor_owner_id)
         if auto_settled.get("settled_at"):
             output_verification_auto_settled_job_ids.append(auto_settled["job_id"])
-    completed_pending_settlement = jobs.list_completed_jobs_pending_settlement(
-        limit=limit
-    )
+    return output_verification_expired_job_ids, output_verification_auto_settled_job_ids
+
+
+def _sweep_pending_settlements(
+    *,
+    limit: int,
+    actor_owner_id: str,
+) -> tuple[list[dict], list[str]]:
+    """Settle completed jobs still awaiting payment. Returns (scanned, settled_ids)."""
+    completed_pending_settlement = jobs.list_completed_jobs_pending_settlement(limit=limit)
     settled_successful_job_ids: list[str] = []
     for item in completed_pending_settlement:
         settled = _settle_successful_job(item, actor_owner_id=actor_owner_id)
         if settled.get("settled_at"):
             settled_successful_job_ids.append(settled["job_id"])
+    return completed_pending_settlement, settled_successful_job_ids
+
+
+def _sweep_jobs(
+    retry_delay_seconds: int = _DEFAULT_RETRY_DELAY_SECONDS,
+    sla_seconds: int = _DEFAULT_SLA_SECONDS,
+    limit: int = 100,
+    actor_owner_id: str = "system:sweeper",
+) -> dict:
+    if retry_delay_seconds < 0:
+        raise ValueError("retry_delay_seconds must be >= 0.")
+    if sla_seconds <= 0:
+        raise ValueError("sla_seconds must be > 0.")
+    limit = min(max(1, limit), 500)
+
+    expired, timeout_retry_job_ids, timeout_failed_job_ids = _sweep_expired_leases(
+        limit=limit, retry_delay_seconds=retry_delay_seconds, actor_owner_id=actor_owner_id
+    )
+    (
+        expired_clarification,
+        clarification_timeout_failed_job_ids,
+        clarification_timeout_proceeded_job_ids,
+    ) = _sweep_clarification_timeouts(limit=limit, actor_owner_id=actor_owner_id)
+    sla_failed_job_ids = _sweep_sla_breaches(
+        limit=limit, sla_seconds=sla_seconds, actor_owner_id=actor_owner_id
+    )
+    due_retry, retry_ready_job_ids = _sweep_due_retries(limit=limit, actor_owner_id=actor_owner_id)
+    (
+        output_verification_expired_job_ids,
+        output_verification_auto_settled_job_ids,
+    ) = _sweep_output_verification_expirations(limit=limit, actor_owner_id=actor_owner_id)
+    completed_pending_settlement, settled_successful_job_ids = _sweep_pending_settlements(
+        limit=limit, actor_owner_id=actor_owner_id
+    )
     endpoint_health_summary = _monitor_agent_endpoints(limit=limit)
     suspension_summary = _auto_suspend_low_performing_agents(actor_owner_id)
     decay_summary = _apply_reputation_decay()
@@ -216,64 +287,67 @@ def _jobs_sweeper_loop(stop_event: threading.Event) -> None:
     _set_sweeper_state(running=False)
 
 
-def _jobs_metrics(sla_seconds: int = _DEFAULT_SLA_SECONDS) -> dict:
-    events_since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
-    with jobs._conn() as conn:
-        rows = conn.execute(
-            "SELECT status, COUNT(*) AS count FROM jobs GROUP BY status"
-        ).fetchall()
-        status_counts = {row["status"]: int(row["count"]) for row in rows}
-        unsettled = conn.execute(
-            "SELECT COUNT(*) AS count FROM jobs WHERE settled_at IS NULL"
-        ).fetchone()["count"]
-        failed_unsettled = conn.execute(
-            "SELECT COUNT(*) AS count FROM jobs WHERE status = 'failed' AND settled_at IS NULL"
-        ).fetchone()["count"]
-        events_24h = conn.execute(
-            "SELECT COUNT(*) AS count FROM job_events WHERE created_at >= %s",
-            (events_since,),
-        ).fetchone()["count"]
-        delivery_rows = conn.execute(
-            """
-            SELECT status, COUNT(*) AS count
-            FROM job_event_deliveries
-            GROUP BY status
-            """
-        ).fetchall()
-        delivery_attempted_24h = conn.execute(
-            """
-            SELECT COUNT(*) AS count
-            FROM job_event_deliveries
-            WHERE last_attempt_at IS NOT NULL AND last_attempt_at >= %s
-            """,
-            (events_since,),
-        ).fetchone()["count"]
-        delivery_success_24h = conn.execute(
-            """
-            SELECT COUNT(*) AS count
-            FROM job_event_deliveries
-            WHERE last_success_at IS NOT NULL AND last_success_at >= %s
-            """,
-            (events_since,),
-        ).fetchone()["count"]
-        job_window_rows = conn.execute(
-            """
-            SELECT created_at, claimed_at, settled_at, timeout_count
-            FROM jobs
-            WHERE created_at >= %s
-            """,
-            (events_since,),
-        ).fetchall()
+def _collect_job_status_counts(conn: Any, events_since: str) -> dict:
+    """Return status_counts, unsettled, failed_unsettled, events_24h from one DB conn."""
+    rows = conn.execute(
+        "SELECT status, COUNT(*) AS count FROM jobs GROUP BY status"
+    ).fetchall()
+    status_counts = {row["status"]: int(row["count"]) for row in rows}
+    unsettled = conn.execute(
+        "SELECT COUNT(*) AS count FROM jobs WHERE settled_at IS NULL"
+    ).fetchone()["count"]
+    failed_unsettled = conn.execute(
+        "SELECT COUNT(*) AS count FROM jobs WHERE status = 'failed' AND settled_at IS NULL"
+    ).fetchone()["count"]
+    events_24h = conn.execute(
+        "SELECT COUNT(*) AS count FROM job_events WHERE created_at >= %s",
+        (events_since,),
+    ).fetchone()["count"]
+    return {
+        "status_counts": status_counts,
+        "unsettled": int(unsettled),
+        "failed_unsettled": int(failed_unsettled),
+        "events_24h": int(events_24h),
+    }
 
-    expired_leases_count = len(jobs.list_jobs_with_expired_leases(limit=200))
-    due_retry_count = len(jobs.list_jobs_due_for_retry(limit=200))
-    sla_breach_count = len(jobs.list_jobs_past_sla(sla_seconds=sla_seconds, limit=200))
+
+def _collect_delivery_metrics(conn: Any, events_since: str) -> dict:
+    """Return delivery status counts and 24h attempt/success counts."""
+    delivery_rows = conn.execute(
+        "SELECT status, COUNT(*) AS count FROM job_event_deliveries GROUP BY status"
+    ).fetchall()
+    delivery_attempted_24h = conn.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM job_event_deliveries
+        WHERE last_attempt_at IS NOT NULL AND last_attempt_at >= %s
+        """,
+        (events_since,),
+    ).fetchone()["count"]
+    delivery_success_24h = conn.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM job_event_deliveries
+        WHERE last_success_at IS NOT NULL AND last_success_at >= %s
+        """,
+        (events_since,),
+    ).fetchone()["count"]
     delivery_status_counts = {row["status"]: int(row["count"]) for row in delivery_rows}
     delivery_success_rate_24h = (
         round(float(delivery_success_24h) / float(delivery_attempted_24h), 4)
         if delivery_attempted_24h > 0
         else None
     )
+    return {
+        "status_counts": delivery_status_counts,
+        "attempted_24h": int(delivery_attempted_24h),
+        "success_24h": int(delivery_success_24h),
+        "success_rate_24h": delivery_success_rate_24h,
+    }
+
+
+def _collect_latency_metrics(job_window_rows: list) -> dict:
+    """Compute claim/settlement p95 latencies and timeout rate from 24h job rows."""
     claim_latencies_ms: list[float] = []
     settlement_latencies_ms: list[float] = []
     timeout_jobs_24h = 0
@@ -282,36 +356,38 @@ def _jobs_metrics(sla_seconds: int = _DEFAULT_SLA_SECONDS) -> dict:
         created_at = _parse_iso_datetime(row["created_at"])
         if created_at is None:
             continue
-
         claimed_at = _parse_iso_datetime(row["claimed_at"])
         if claimed_at is not None and claimed_at >= created_at:
-            claim_latencies_ms.append(
-                (claimed_at - created_at).total_seconds() * 1000.0
-            )
-
+            claim_latencies_ms.append((claimed_at - created_at).total_seconds() * 1000.0)
         settled_at = _parse_iso_datetime(row["settled_at"])
         if settled_at is not None and settled_at >= created_at:
-            settlement_latencies_ms.append(
-                (settled_at - created_at).total_seconds() * 1000.0
-            )
-
+            settlement_latencies_ms.append((settled_at - created_at).total_seconds() * 1000.0)
         if int(row["timeout_count"] or 0) > 0:
             timeout_jobs_24h += 1
-
-    claim_p95_ms = (
-        round(_p95(claim_latencies_ms) or 0.0, 3) if claim_latencies_ms else None
-    )
+    claim_p95_ms = round(_p95(claim_latencies_ms) or 0.0, 3) if claim_latencies_ms else None
     settlement_p95_ms = (
-        round(_p95(settlement_latencies_ms) or 0.0, 3)
-        if settlement_latencies_ms
-        else None
+        round(_p95(settlement_latencies_ms) or 0.0, 3) if settlement_latencies_ms else None
     )
     timeout_rate_24h = (
         round(float(timeout_jobs_24h) / float(total_jobs_24h), 4)
         if total_jobs_24h > 0
         else None
     )
-    slo = {
+    return {
+        "claim_p95_ms": claim_p95_ms,
+        "settlement_p95_ms": settlement_p95_ms,
+        "timeout_rate_24h": timeout_rate_24h,
+    }
+
+
+def _build_slo_envelope(
+    *,
+    claim_p95_ms: float | None,
+    settlement_p95_ms: float | None,
+    timeout_rate_24h: float | None,
+    delivery_success_rate_24h: float | None,
+) -> dict:
+    return {
         "window_hours": 24,
         "targets": {
             "claim_latency_p95_ms_max": _SLO_CLAIM_P95_TARGET_MS,
@@ -325,7 +401,19 @@ def _jobs_metrics(sla_seconds: int = _DEFAULT_SLA_SECONDS) -> dict:
         "hook_success_rate_last_24h": delivery_success_rate_24h,
     }
 
-    alerts = []
+
+def _build_metrics_alerts(
+    *,
+    failed_unsettled: int,
+    expired_leases_count: int,
+    sla_breach_count: int,
+    delivery_status_counts: dict,
+    claim_p95_ms: float | None,
+    settlement_p95_ms: float | None,
+    timeout_rate_24h: float | None,
+    delivery_success_rate_24h: float | None,
+) -> list[str]:
+    alerts: list[str] = []
     if failed_unsettled > 0:
         alerts.append(f"{failed_unsettled} failed jobs are not settled.")
     if expired_leases_count > 0:
@@ -339,36 +427,25 @@ def _jobs_metrics(sla_seconds: int = _DEFAULT_SLA_SECONDS) -> dict:
         alerts.append(
             f"Claim latency p95 {claim_p95_ms}ms exceeds SLO target {_SLO_CLAIM_P95_TARGET_MS}ms."
         )
-    if (
-        settlement_p95_ms is not None
-        and settlement_p95_ms > _SLO_SETTLEMENT_P95_TARGET_MS
-    ):
+    if settlement_p95_ms is not None and settlement_p95_ms > _SLO_SETTLEMENT_P95_TARGET_MS:
         alerts.append(
-            "Settlement latency p95 "
-            f"{settlement_p95_ms}ms exceeds SLO target {_SLO_SETTLEMENT_P95_TARGET_MS}ms."
+            f"Settlement latency p95 {settlement_p95_ms}ms exceeds SLO target {_SLO_SETTLEMENT_P95_TARGET_MS}ms."
         )
     if timeout_rate_24h is not None and timeout_rate_24h > _SLO_TIMEOUT_RATE_MAX:
         alerts.append(
             f"Timeout rate {timeout_rate_24h:.4f} exceeds SLO max {_SLO_TIMEOUT_RATE_MAX:.4f}."
         )
-    if (
-        delivery_success_rate_24h is not None
-        and delivery_success_rate_24h < _SLO_HOOK_SUCCESS_RATE_MIN
-    ):
+    if delivery_success_rate_24h is not None and delivery_success_rate_24h < _SLO_HOOK_SUCCESS_RATE_MIN:
         alerts.append(
-            "Hook delivery success rate "
-            f"{delivery_success_rate_24h:.4f} is below SLO min {_SLO_HOOK_SUCCESS_RATE_MIN:.4f}."
+            f"Hook delivery success rate {delivery_success_rate_24h:.4f} is below SLO min {_SLO_HOOK_SUCCESS_RATE_MIN:.4f}."
         )
+    return alerts
 
+
+def _collect_worker_states() -> dict:
+    """Return a snapshot of all background-worker state dicts."""
     with _SWEEPER_STATE_LOCK:
         sweeper_state = dict(_SWEEPER_STATE)
-    sweeper_last_summary = sweeper_state.get("last_summary")
-    if not isinstance(sweeper_last_summary, dict):
-        sweeper_last_summary = {}
-    retry_ready_last_sweep = int(sweeper_last_summary.get("retry_ready_count") or 0)
-    auto_suspended_last_sweep = int(
-        sweeper_last_summary.get("auto_suspended_count") or 0
-    )
     with _HOOK_WORKER_STATE_LOCK:
         hook_worker_state = dict(_HOOK_WORKER_STATE)
     with _BUILTIN_WORKER_STATE_LOCK:
@@ -377,27 +454,72 @@ def _jobs_metrics(sla_seconds: int = _DEFAULT_SLA_SECONDS) -> dict:
         dispute_judge_state = dict(_DISPUTE_JUDGE_STATE)
     with _PAYMENTS_RECONCILIATION_STATE_LOCK:
         payments_reconciliation_state = dict(_PAYMENTS_RECONCILIATION_STATE)
-
     return {
-        "status_counts": status_counts,
-        "unsettled_jobs": int(unsettled),
-        "failed_unsettled_jobs": int(failed_unsettled),
-        "expired_leases": expired_leases_count,
-        "due_retries": due_retry_count,
-        "retry_ready_last_sweep": retry_ready_last_sweep,
-        "auto_suspended_last_sweep": auto_suspended_last_sweep,
-        "sla_breaches": sla_breach_count,
-        "events_last_24h": int(events_24h),
-        "alerts": alerts,
         "sweeper": sweeper_state,
         "hook_worker": hook_worker_state,
         "builtin_worker": builtin_worker_state,
         "dispute_judge": dispute_judge_state,
         "payments_reconciliation": payments_reconciliation_state,
+    }
+
+
+def _jobs_metrics(sla_seconds: int = _DEFAULT_SLA_SECONDS) -> dict:
+    events_since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    with jobs._conn() as conn:
+        job_counts = _collect_job_status_counts(conn, events_since)
+        delivery = _collect_delivery_metrics(conn, events_since)
+        job_window_rows = conn.execute(
+            "SELECT created_at, claimed_at, settled_at, timeout_count FROM jobs WHERE created_at >= %s",
+            (events_since,),
+        ).fetchall()
+
+    expired_leases_count = len(jobs.list_jobs_with_expired_leases(limit=200))
+    due_retry_count = len(jobs.list_jobs_due_for_retry(limit=200))
+    sla_breach_count = len(jobs.list_jobs_past_sla(sla_seconds=sla_seconds, limit=200))
+
+    latency = _collect_latency_metrics(job_window_rows)
+    claim_p95_ms = latency["claim_p95_ms"]
+    settlement_p95_ms = latency["settlement_p95_ms"]
+    timeout_rate_24h = latency["timeout_rate_24h"]
+    delivery_success_rate_24h = delivery["success_rate_24h"]
+
+    slo = _build_slo_envelope(
+        claim_p95_ms=claim_p95_ms,
+        settlement_p95_ms=settlement_p95_ms,
+        timeout_rate_24h=timeout_rate_24h,
+        delivery_success_rate_24h=delivery_success_rate_24h,
+    )
+    alerts = _build_metrics_alerts(
+        failed_unsettled=job_counts["failed_unsettled"],
+        expired_leases_count=expired_leases_count,
+        sla_breach_count=sla_breach_count,
+        delivery_status_counts=delivery["status_counts"],
+        claim_p95_ms=claim_p95_ms,
+        settlement_p95_ms=settlement_p95_ms,
+        timeout_rate_24h=timeout_rate_24h,
+        delivery_success_rate_24h=delivery_success_rate_24h,
+    )
+    worker_states = _collect_worker_states()
+    sweeper_last_summary = worker_states["sweeper"].get("last_summary") or {}
+    if not isinstance(sweeper_last_summary, dict):
+        sweeper_last_summary = {}
+
+    return {
+        "status_counts": job_counts["status_counts"],
+        "unsettled_jobs": job_counts["unsettled"],
+        "failed_unsettled_jobs": job_counts["failed_unsettled"],
+        "expired_leases": expired_leases_count,
+        "due_retries": due_retry_count,
+        "retry_ready_last_sweep": int(sweeper_last_summary.get("retry_ready_count") or 0),
+        "auto_suspended_last_sweep": int(sweeper_last_summary.get("auto_suspended_count") or 0),
+        "sla_breaches": sla_breach_count,
+        "events_last_24h": job_counts["events_24h"],
+        "alerts": alerts,
+        **worker_states,
         "hook_delivery": {
-            "status_counts": delivery_status_counts,
-            "attempted_last_24h": int(delivery_attempted_24h),
-            "delivered_last_24h": int(delivery_success_24h),
+            "status_counts": delivery["status_counts"],
+            "attempted_last_24h": delivery["attempted_24h"],
+            "delivered_last_24h": delivery["success_24h"],
             "success_rate_last_24h": delivery_success_rate_24h,
         },
         "slo": slo,
