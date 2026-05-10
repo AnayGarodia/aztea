@@ -16,7 +16,11 @@ from server.pricing_helpers import (
 from server.pricing_helpers import (
     resolve_agent_pricing as _resolve_agent_pricing,  # noqa: F401
 )
-import sqlite3
+# Backend-aware exception types and feature switch from core.db so this
+# module stays portable across SQLite (dev/test) and Postgres (prod).
+# CLAUDE.md: "Never open a raw sqlite3.connect() ... callers stay
+# backend-agnostic" — also applies to backend-specific exception classes.
+from core import db as _db
 
 
 def _validate_builtin_agent_payload(
@@ -1221,16 +1225,24 @@ def _claim_due_hook_delivery(now_iso: str) -> dict | None:
                     LIMIT 1
                     """
                 ).fetchone()
-        except sqlite3.OperationalError as exc:
-            if "database is locked" in str(exc).lower():
+        except _db.OperationalError as exc:
+            # SQLite raises "database is locked"; Postgres raises
+            # "could not obtain lock"/"deadlock detected". Either signals
+            # contention — return None so the sweeper retries.
+            msg = str(exc).lower()
+            if "database is locked" in msg or "lock" in msg or "deadlock" in msg:
                 return None
             raise
         if exists is None:
             return None
         try:
             conn.execute("BEGIN IMMEDIATE")
-        except sqlite3.OperationalError as exc:
-            if "database is locked" in str(exc).lower():
+        except _db.OperationalError as exc:
+            # SQLite raises "database is locked"; Postgres raises
+            # "could not obtain lock"/"deadlock detected". Either signals
+            # contention — return None so the sweeper retries.
+            msg = str(exc).lower()
+            if "database is locked" in msg or "lock" in msg or "deadlock" in msg:
                 return None
             raise
         row = conn.execute(
@@ -1570,11 +1582,14 @@ def _list_hook_deliveries(
     capped_limit = min(max(1, limit), 500)
     where: list[str] = []
     params: list[Any] = []
+    # Use canonical %s placeholders so core/db.py's SQLite normaliser
+    # rewrites consistently. Hard-coded ? slipped through review and
+    # silently broke this query path on Postgres.
     if owner_id is not None:
-        where.append("owner_id = ?")
+        where.append("owner_id = %s")
         params.append(owner_id)
     if status is not None:
-        where.append("status = ?")
+        where.append("status = %s")
         params.append(status)
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
     params.append(capped_limit)

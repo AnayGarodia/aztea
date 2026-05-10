@@ -232,7 +232,12 @@ def _mcp_invoke_lookup() -> dict[str, dict[str, Any]]:
     manifest endpoints (/mcp/tools, /openai_*, /gemini_*) hide them."""
     agents = [
         reputation.enrich_agent_record(agent)
-        for agent in registry.get_agents(include_internal=True, include_banned=True)
+        # include_sunset=True because the dispatch table intentionally
+        # accepts owner-retracted slugs so live integrations get an HTTP
+        # 410 (sunset) response from the call site rather than 404 here.
+        for agent in registry.get_agents(
+            include_internal=True, include_banned=True, include_sunset=True,
+        )
         if (
             str(agent.get("status") or "").strip().lower() == "active"
             or str(agent.get("agent_id") or "")

@@ -21,7 +21,13 @@ from core import payments
 from core import pipelines
 from core import registry
 from core import reputation
-from scripts import aztea_mcp_meta_tools as meta_tools
+# 1.6.3: meta_tools moved from scripts/ to the in-package aztea.mcp.* tree.
+import sys as _sys
+from pathlib import Path as _Path
+_SDK = str(_Path(__file__).resolve().parents[2] / "sdks" / "python-sdk")
+if _SDK not in _sys.path:
+    _sys.path.insert(0, _SDK)
+from aztea.mcp import meta_tools  # noqa: E402
 import server.application as server
 
 from tests.integration.helpers import TEST_MASTER_KEY, _close_module_conn
@@ -146,11 +152,16 @@ def _execute_platform_tool(
 
 def test_claude_stdio_mcp_smoke_lists_and_calls_control_plane_tool(buyer_surface_server):
     caller = _register_user_via_http(buyer_surface_server, prefix="claude-caller")
-    script_path = Path(__file__).resolve().parents[2] / "scripts" / "aztea_mcp_server.py"
-    spec = importlib.util.spec_from_file_location("aztea_mcp_server_live", script_path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    # 1.6.3: the canonical MCP server module moved from scripts/ into the
+    # SDK package (PR #38 consolidation). Use a real package import so the
+    # relative imports inside `aztea.mcp.server` (`from . import manifest`)
+    # resolve — `spec_from_file_location` can't establish the parent
+    # package and breaks the file's relative imports.
+    import sys
+    _SDK = str(Path(__file__).resolve().parents[2] / "sdks" / "python-sdk")
+    if _SDK not in sys.path:
+        sys.path.insert(0, _SDK)
+    module = importlib.import_module("aztea.mcp.server")
 
     old_client_id = module._DEFAULT_CLIENT_ID
     module._DEFAULT_CLIENT_ID = "claude-code"

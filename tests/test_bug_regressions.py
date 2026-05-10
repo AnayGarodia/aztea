@@ -737,7 +737,13 @@ def test_fix12_search_security_includes_secret_scanner():
     so it should receive the +12 boost after the fix.
     """
     import threading
-    import scripts.aztea_mcp_server as mcp
+    # 1.6.3: RegistryBridge moved out of scripts/ into the SDK tree.
+    import sys as _sys
+    from pathlib import Path as _Path
+    _SDK = str(_Path(__file__).resolve().parents[1] / "sdks" / "python-sdk")
+    if _SDK not in _sys.path:
+        _sys.path.insert(0, _SDK)
+    from aztea.mcp import server as mcp  # noqa: E402
 
     cat = mcp.RegistryBridge.__new__(mcp.RegistryBridge)
     cat._lock = threading.Lock()

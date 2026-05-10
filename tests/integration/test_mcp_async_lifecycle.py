@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from scripts import aztea_mcp_meta_tools as meta_tools
+# 1.6.3: meta_tools moved from scripts/ to the in-package aztea.mcp.* tree.
+import sys as _sys
+from pathlib import Path as _Path
+_SDK = str(_Path(__file__).resolve().parents[2] / "sdks" / "python-sdk")
+if _SDK not in _sys.path:
+    _sys.path.insert(0, _SDK)
+from aztea.mcp import meta_tools  # noqa: E402
 
 from tests.integration.helpers import (
     _auth_headers,

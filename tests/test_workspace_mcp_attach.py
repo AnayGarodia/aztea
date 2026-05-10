@@ -24,8 +24,18 @@ def _isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.fixture
 def mcp_server_module():
-    """Import the MCP server module fresh to pick up the test env."""
-    module = importlib.import_module("scripts.aztea_mcp_server")
+    """Import the MCP server module fresh to pick up the test env.
+
+    1.6.3: the canonical module moved from ``scripts.aztea_mcp_server``
+    into the SDK at ``aztea.mcp.server``. Path-injection so the fixture
+    works whether or not the SDK is pip-installed in the test venv.
+    """
+    import sys
+    from pathlib import Path
+    _SDK = str(Path(__file__).resolve().parents[1] / "sdks" / "python-sdk")
+    if _SDK not in sys.path:
+        sys.path.insert(0, _SDK)
+    module = importlib.import_module("aztea.mcp.server")
     return module
 
 

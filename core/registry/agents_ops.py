@@ -710,11 +710,17 @@ def get_agents(
     include_internal: bool = False,
     include_banned: bool = False,
     include_unapproved: bool = True,
+    include_sunset: bool = False,
     model_provider: str | None = None,
 ) -> list:
     """
     Return all agent listings, optionally filtered by tag or model_provider.
     Tag matching uses exact JSON-array membership to avoid substring false-positives.
+
+    'sunset' (review_status) is excluded by default — owner-self-retracted
+    listings should not show up in catalog enumeration, health checks, or
+    /health agent_count. Admin paths that need to see them must pass
+    include_sunset=True (mirrors include_banned for the row-level status).
     """
     normalized_provider = str(model_provider or "").strip().lower() or None
     with _conn() as conn:
@@ -727,6 +733,8 @@ def get_agents(
         if not include_unapproved:
             # See get_agent(): 'probation' is visible alongside 'approved'.
             where_clauses.append("review_status IN ('approved', 'probation')")
+        if not include_sunset:
+            where_clauses.append("review_status != 'sunset'")
         if tag:
             where_clauses.append("tags LIKE %s")
             params.append(f'%"{tag}"%')
