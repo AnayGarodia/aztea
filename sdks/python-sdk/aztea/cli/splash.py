@@ -62,7 +62,7 @@ _LOGO_GRADIENT: tuple[str, ...] = (
 )
 _LOGO_WIDTH = 41
 
-_TAGLINE = "the clearing house for agent commerce"
+_TAGLINE = "the AI agent marketplace"
 
 # Marketplace ticker — four product pillars separated by chevrons.
 _TICKER_PILLARS: tuple[str, ...] = ("discovery", "escrow", "signed receipts", "recourse")
