@@ -27,26 +27,23 @@ class CohereProvider:
     def is_available(self) -> bool:
         return self._available
 
-    def complete(self, req: CompletionRequest) -> LLMResponse:
-        """Send a chat completion request to Cohere and return a normalised LLMResponse."""
-        if not self._available:
-            raise LLMBadResponseError(
-                self.name, req.model, "Cohere provider not available.", None
-            )
-        import cohere
-
-        messages = [{"role": m.role, "content": m.content} for m in req.messages]
+    def _build_chat_kwargs(self, req: CompletionRequest) -> dict[str, Any]:
+        """Pure: shape ``CompletionRequest`` into Cohere chat-API kwargs."""
         kwargs: dict[str, Any] = {
             "model": req.model,
-            "messages": messages,
+            "messages": [{"role": m.role, "content": m.content} for m in req.messages],
         }
         if req.max_tokens is not None:
             kwargs["max_tokens"] = req.max_tokens
         if req.temperature is not None:
             kwargs["temperature"] = req.temperature
+        return kwargs
 
+    def _invoke_chat(self, req: CompletionRequest, kwargs: dict[str, Any]) -> Any:
+        """Side-effect: call ``client.chat`` and translate vendor errors to our taxonomy."""
+        import cohere
         try:
-            resp = self._client.chat(**kwargs)
+            return self._client.chat(**kwargs)
         except cohere.errors.TooManyRequestsError as exc:
             raise LLMRateLimitError(self.name, req.model, str(exc), exc) from exc
         except cohere.errors.UnauthorizedError as exc:
@@ -54,25 +51,32 @@ class CohereProvider:
         except Exception as exc:
             raise LLMBadResponseError(self.name, req.model, str(exc), exc) from exc
 
+    @staticmethod
+    def _extract_usage(resp: Any) -> Usage:
+        """Pure: pull billed_units from a Cohere response, defaulting to zero on missing fields."""
+        billed = getattr(resp.usage, "billed_units", None) if resp.usage else None
+        return Usage(
+            prompt_tokens=(getattr(billed, "input_tokens", 0) if billed else 0) or 0,
+            completion_tokens=(getattr(billed, "output_tokens", 0) if billed else 0) or 0,
+        )
+
+    def complete(self, req: CompletionRequest) -> LLMResponse:
+        """Side-effect: chat completion via the Cohere chat API."""
+        if not self._available:
+            raise LLMBadResponseError(
+                self.name, req.model, "Cohere provider not available.", None,
+            )
+        resp = self._invoke_chat(req, self._build_chat_kwargs(req))
         try:
             text = resp.message.content[0].text or ""
         except Exception as exc:
             raise LLMBadResponseError(
-                self.name, req.model, "Unexpected Cohere response shape.", exc
+                self.name, req.model, "Unexpected Cohere response shape.", exc,
             ) from exc
-
-        usage = Usage(
-            prompt_tokens=getattr(resp.usage, "billed_units", None)
-            and getattr(resp.usage.billed_units, "input_tokens", 0)
-            or 0,
-            completion_tokens=getattr(resp.usage, "billed_units", None)
-            and getattr(resp.usage.billed_units, "output_tokens", 0)
-            or 0,
-        )
         return LLMResponse(
             text=text,
             model=req.model,
             provider=self.name,
-            usage=usage,
+            usage=self._extract_usage(resp),
             finish_reason=resp.finish_reason or "stop",
         )

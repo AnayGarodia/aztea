@@ -46,8 +46,8 @@ class OpenAICompatibleProvider:
     def is_available(self) -> bool:
         return self._available
 
-    def complete(self, req: CompletionRequest) -> LLMResponse:
-        """Send a chat completion request to an OpenAI-compatible endpoint and return a normalised LLMResponse."""
+    def _build_chat_kwargs(self, req: CompletionRequest) -> dict[str, Any]:
+        """Pure: shape ``CompletionRequest`` into OpenAI chat-completion kwargs."""
         kwargs: dict[str, Any] = {
             "model": req.model,
             "temperature": req.temperature,
@@ -60,9 +60,12 @@ class OpenAICompatibleProvider:
             kwargs["stop"] = req.stop
         if req.json_mode:
             kwargs["response_format"] = {"type": "json_object"}
+        return kwargs
 
+    def _invoke_chat(self, req: CompletionRequest, kwargs: dict[str, Any]) -> Any:
+        """Side-effect: call the OpenAI-compatible client and translate vendor errors."""
         try:
-            completion = self._client.chat.completions.create(**kwargs)
+            return self._client.chat.completions.create(**kwargs)
         except self._openai_mod.RateLimitError as exc:
             raise LLMRateLimitError(self.name, req.model, str(exc), exc) from exc
         except self._openai_mod.APITimeoutError as exc:
@@ -72,6 +75,9 @@ class OpenAICompatibleProvider:
         except Exception as exc:
             raise LLMBadResponseError(self.name, req.model, str(exc), exc) from exc
 
+    def complete(self, req: CompletionRequest) -> LLMResponse:
+        """Side-effect: chat completion via an OpenAI-compatible endpoint."""
+        completion = self._invoke_chat(req, self._build_chat_kwargs(req))
         try:
             text = (completion.choices[0].message.content or "").strip()
         except Exception as exc:

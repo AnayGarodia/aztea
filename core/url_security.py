@@ -19,6 +19,7 @@ from __future__ import annotations
 import ipaddress
 import os
 import socket
+from typing import Any
 from urllib.parse import unquote, urlparse
 
 from core.functional import Err, Ok, Result
@@ -105,37 +106,18 @@ def validate_agent_endpoint_url(
     return normalized
 
 
-def validate_outbound_url(
-    url: str,
-    field_name: str,
-    *,
-    allow_private: bool | None = None,
-) -> str:
-    """
-    Validate a caller-supplied outbound URL and return the stripped form.
+def _check_url_shape(parsed: Any, field_name: str) -> str:
+    """Pure: enforce scheme, netloc, credential, fragment, port rules; returns lowercase host.
 
-    Raises ``ValueError`` with a human-readable, ``field_name``-prefixed message
-    on any of:
-      - non-http(s) scheme or missing host,
-      - embedded credentials or fragments,
-      - invalid port,
-      - percent-encoded hostname (SSRF evasion),
-      - localhost / *.localhost targets,
-      - direct or resolved IP in private / loopback / reserved ranges.
-
-    Set ``allow_private=True`` to skip the private-IP checks explicitly.
-    By default the ``ALLOW_PRIVATE_OUTBOUND_URLS`` environment variable is
-    consulted (truthy values: ``1``, ``true``, ``yes``).
+    Why: every caller-supplied URL goes through SSRF validation; failing
+    fast on syntactic violations stops a malformed URL from reaching DNS.
     """
-    normalized = url.strip()
-    parsed = urlparse(normalized)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ValueError(f"{field_name} must be an absolute http(s) URL.")
     if parsed.username or parsed.password:
         raise ValueError(f"{field_name} must not include username or password.")
     if parsed.fragment:
         raise ValueError(f"{field_name} must not include URL fragments.")
-
     host = (parsed.hostname or "").strip().lower()
     if not host:
         raise ValueError(f"{field_name} hostname is missing.")
@@ -143,47 +125,81 @@ def validate_outbound_url(
         parsed.port
     except ValueError as exc:
         raise ValueError(f"{field_name} has an invalid port.") from exc
+    return host
 
-    if allow_private is None:
-        allow_private = _allow_private_default()
-    if allow_private:
-        return normalized
 
-    # Reject URL-encoded characters in the hostname (e.g. 127%2E0%2E0%2E1 or %00 null-byte tricks)
+def _enforce_hostname_safety(host: str, field_name: str) -> None:
+    """Pure: reject percent-encoded hostnames + localhost variants.
+
+    Why: percent-encoded forms like ``127%2E0%2E0%2E1`` and ``%00`` null-byte
+    tricks evade naive blocklists; the localhost guard fires before DNS so
+    the operator's intent is clear in the error message.
+    """
     if host != unquote(host):
         raise ValueError(
             f"{field_name} hostname must not contain percent-encoded characters."
         )
-
     if host == "localhost" or host.endswith(".localhost"):
         raise ValueError(
             f"{field_name} cannot target localhost unless ALLOW_PRIVATE_OUTBOUND_URLS=1."
         )
 
+
+def _check_resolved_ips(host: str, field_name: str) -> None:
+    """Side-effect: resolve ``host`` and reject if any A/AAAA record is private/reserved.
+
+    Why: a hostname pointing at ``169.254.169.254`` would otherwise bypass
+    the direct-IP check; ``getaddrinfo`` is the only practical way to
+    enforce SSRF policy on hostnames.
+    """
+    try:
+        resolved_rows = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        return
+    except OSError as exc:
+        raise ValueError(f"{field_name} hostname resolution failed.") from exc
+    for row in resolved_rows:
+        sockaddr = row[4]
+        if not sockaddr:
+            continue
+        try:
+            resolved_ip = ipaddress.ip_address(sockaddr[0])
+        except ValueError:
+            continue
+        if _is_disallowed_ip(resolved_ip):
+            raise ValueError(
+                f"{field_name} cannot target hostnames resolving to private/loopback/reserved IPs "
+                "unless ALLOW_PRIVATE_OUTBOUND_URLS=1."
+            )
+
+
+def validate_outbound_url(
+    url: str,
+    field_name: str,
+    *,
+    allow_private: bool | None = None,
+) -> str:
+    """Validate a caller-supplied outbound URL and return the stripped form.
+
+    Raises ``ValueError`` (with ``field_name`` prefix) for any of: non-http(s)
+    scheme, missing host, embedded credentials, fragments, invalid port,
+    percent-encoded hostname, localhost targets, or IPs in private /
+    loopback / reserved ranges. Pass ``allow_private=True`` to skip the
+    private-IP checks; default consults ``ALLOW_PRIVATE_OUTBOUND_URLS``.
+    """
+    normalized = url.strip()
+    parsed = urlparse(normalized)
+    host = _check_url_shape(parsed, field_name)
+    if allow_private is None:
+        allow_private = _allow_private_default()
+    if allow_private:
+        return normalized
+    _enforce_hostname_safety(host, field_name)
     try:
         direct_ip = ipaddress.ip_address(host)
     except ValueError:
-        try:
-            resolved_rows = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
-        except socket.gaierror:
-            return normalized
-        except OSError as exc:
-            raise ValueError(f"{field_name} hostname resolution failed.") from exc
-        for row in resolved_rows:
-            sockaddr = row[4]
-            if not sockaddr:
-                continue
-            try:
-                resolved_ip = ipaddress.ip_address(sockaddr[0])
-            except ValueError:
-                continue
-            if _is_disallowed_ip(resolved_ip):
-                raise ValueError(
-                    f"{field_name} cannot target hostnames resolving to private/loopback/reserved IPs "
-                    "unless ALLOW_PRIVATE_OUTBOUND_URLS=1."
-                )
+        _check_resolved_ips(host, field_name)
         return normalized
-
     if _is_disallowed_ip(direct_ip):
         raise ValueError(
             f"{field_name} cannot target private/loopback/reserved IPs unless "

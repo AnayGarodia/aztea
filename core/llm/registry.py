@@ -125,50 +125,63 @@ def _provider_env_prefix(provider_name: str) -> str:
     return slug.upper()
 
 
+def _try_register_specific_provider(
+    name: str,
+) -> "LLMProvider" | None:
+    """Side-effect: register an OpenAI-compatible provider if its specific env vars are set."""
+    from .providers.openai_compatible_provider import OpenAICompatibleProvider
+
+    prefix = _provider_env_prefix(name)
+    api_env = f"{prefix}_API_KEY"
+    base_env = f"{prefix}_BASE_URL"
+    if not (os.environ.get(api_env, "").strip() and os.environ.get(base_env, "").strip()):
+        return None
+    provider = OpenAICompatibleProvider(
+        name=name, api_key_env=api_env, base_url_env=base_env, default_base_url="",
+    )
+    register_provider(provider)
+    return provider
+
+
+def _try_register_generic_provider(
+    name: str,
+) -> "LLMProvider" | None:
+    """Side-effect: register a provider via the shared ``OPENAI_COMPAT_*`` env vars."""
+    from .providers.openai_compatible_provider import OpenAICompatibleProvider
+
+    if not (
+        os.environ.get("OPENAI_COMPAT_API_KEY", "").strip()
+        and os.environ.get("OPENAI_COMPAT_BASE_URL", "").strip()
+    ):
+        return None
+    provider = OpenAICompatibleProvider(
+        name=name,
+        api_key_env="OPENAI_COMPAT_API_KEY",
+        base_url_env="OPENAI_COMPAT_BASE_URL",
+        default_base_url="",
+    )
+    register_provider(provider)
+    return provider
+
+
 def _register_dynamic_openai_compatible_provider(
     provider_name: str,
 ) -> "LLMProvider" | None:
-    """Attempt to auto-register an unknown provider as an OpenAI-compatible endpoint.
+    """Side-effect: auto-register an unknown provider as an OpenAI-compatible endpoint.
 
-    Checks for ``{PREFIX}_API_KEY`` + ``{PREFIX}_BASE_URL`` env vars first, then
-    falls back to the generic ``OPENAI_COMPAT_API_KEY`` / ``OPENAI_COMPAT_BASE_URL``
-    pair. Returns ``None`` if neither set of vars is present.
+    Why: callers can target any OpenAI-shaped endpoint by exporting either
+    ``{PREFIX}_API_KEY`` + ``{PREFIX}_BASE_URL`` or the shared
+    ``OPENAI_COMPAT_*`` pair without us shipping an explicit provider class.
     """
     normalized = provider_name.strip().lower()
     if not normalized:
         return None
     if normalized in _PROVIDERS:
         return _PROVIDERS[normalized]
-
-    from .providers.openai_compatible_provider import OpenAICompatibleProvider
-
-    prefix = _provider_env_prefix(normalized)
-    specific_api_env = f"{prefix}_API_KEY"
-    specific_base_env = f"{prefix}_BASE_URL"
-    specific_api_key = os.environ.get(specific_api_env, "").strip()
-    specific_base_url = os.environ.get(specific_base_env, "").strip()
-    if specific_api_key and specific_base_url:
-        provider = OpenAICompatibleProvider(
-            name=normalized,
-            api_key_env=specific_api_env,
-            base_url_env=specific_base_env,
-            default_base_url="",
-        )
-        register_provider(provider)
-        return provider
-
-    generic_api_key = os.environ.get("OPENAI_COMPAT_API_KEY", "").strip()
-    generic_base_url = os.environ.get("OPENAI_COMPAT_BASE_URL", "").strip()
-    if generic_api_key and generic_base_url:
-        provider = OpenAICompatibleProvider(
-            name=normalized,
-            api_key_env="OPENAI_COMPAT_API_KEY",
-            base_url_env="OPENAI_COMPAT_BASE_URL",
-            default_base_url="",
-        )
-        register_provider(provider)
-        return provider
-    return None
+    return (
+        _try_register_specific_provider(normalized)
+        or _try_register_generic_provider(normalized)
+    )
 
 
 def resolve(spec: str) -> tuple["LLMProvider", str]:
@@ -234,12 +247,48 @@ def list_providers() -> list[dict]:
     return result
 
 
-def _bootstrap() -> None:
-    """Register all built-in providers at import time.
+# OpenAI-compatible providers: (name, api_key_env, base_url_env, default_base_url).
+# Anything not on this list either has a native provider class or isn't supported.
+_COMPAT_PROVIDERS: tuple[tuple[str, str, str, str], ...] = (
+    ("grok", "XAI_API_KEY", "XAI_BASE_URL", "https://api.x.ai/v1"),
+    ("kimi", "KIMI_API_KEY", "KIMI_BASE_URL", "https://api.moonshot.ai/v1"),
+    ("gemini", "GEMINI_API_KEY", "GEMINI_BASE_URL",
+     "https://generativelanguage.googleapis.com/v1beta/openai/"),
+    ("mistral", "MISTRAL_API_KEY", "MISTRAL_BASE_URL", "https://api.mistral.ai/v1"),
+    ("together", "TOGETHER_API_KEY", "TOGETHER_BASE_URL", "https://api.together.xyz/v1"),
+    ("fireworks", "FIREWORKS_API_KEY", "FIREWORKS_BASE_URL",
+     "https://api.fireworks.ai/inference/v1"),
+    ("deepseek", "DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+    ("perplexity", "PERPLEXITY_API_KEY", "PERPLEXITY_BASE_URL", "https://api.perplexity.ai"),
+    ("cerebras", "CEREBRAS_API_KEY", "CEREBRAS_BASE_URL", "https://api.cerebras.ai/v1"),
+    ("openrouter", "OPENROUTER_API_KEY", "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+    ("sambanova", "SAMBANOVA_API_KEY", "SAMBANOVA_BASE_URL", "https://api.sambanova.ai/v1"),
+    ("novita", "NOVITA_API_KEY", "NOVITA_BASE_URL", "https://api.novita.ai/v3/openai"),
+    ("ai21", "AI21_API_KEY", "AI21_BASE_URL", "https://api.ai21.com/studio/v1"),
+    ("deepinfra", "DEEPINFRA_API_KEY", "DEEPINFRA_BASE_URL",
+     "https://api.deepinfra.com/v1/openai"),
+    ("hyperbolic", "HYPERBOLIC_API_KEY", "HYPERBOLIC_BASE_URL", "https://api.hyperbolic.xyz/v1"),
+    ("anyscale", "ANYSCALE_API_KEY", "ANYSCALE_BASE_URL",
+     "https://api.endpoints.anyscale.com/v1"),
+    ("octoai", "OCTOAI_API_KEY", "OCTOAI_BASE_URL", "https://text.octoai.run/v1"),
+    ("nvidia", "NVIDIA_API_KEY", "NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
+    ("predibase", "PREDIBASE_API_KEY", "PREDIBASE_BASE_URL",
+     "https://serving.app.predibase.com/v1"),
+    ("huggingface", "HUGGINGFACE_API_KEY", "HUGGINGFACE_BASE_URL",
+     "https://api-inference.huggingface.co/v1"),
+    ("lepton", "LEPTON_API_KEY", "LEPTON_BASE_URL", ""),
+    ("azure", "AZURE_OPENAI_API_KEY", "AZURE_OPENAI_BASE_URL", ""),
+    ("ollama", "OLLAMA_API_KEY", "OLLAMA_BASE_URL", "http://localhost:11434/v1"),
+    ("lmstudio", "LMSTUDIO_API_KEY", "LMSTUDIO_BASE_URL", "http://localhost:1234/v1"),
+    ("openai_compat", "OPENAI_COMPAT_API_KEY", "OPENAI_COMPAT_BASE_URL", ""),
+)
 
-    Native providers (groq, openai, anthropic, cohere, bedrock) use their own
-    provider classes. Everything else goes through ``OpenAICompatibleProvider``
-    with provider-specific env-var names and default base URLs.
+
+def _bootstrap() -> None:
+    """Side-effect: register every built-in provider at module import time.
+
+    Why: a single import path lets ``run_with_fallback`` resolve provider
+    chains by name without each agent re-registering its own copy.
     """
     from .providers.anthropic_provider import AnthropicProvider
     from .providers.bedrock_provider import BedrockProvider
@@ -248,120 +297,11 @@ def _bootstrap() -> None:
     from .providers.openai_compatible_provider import OpenAICompatibleProvider
     from .providers.openai_provider import OpenAIProvider
 
-    register_provider(GroqProvider())
-    register_provider(OpenAIProvider())
-    register_provider(AnthropicProvider())
-    register_provider(CohereProvider())
-    register_provider(BedrockProvider())
-
-    _COMPAT_PROVIDERS = [
-        ("grok", "XAI_API_KEY", "XAI_BASE_URL", "https://api.x.ai/v1"),
-        ("kimi", "KIMI_API_KEY", "KIMI_BASE_URL", "https://api.moonshot.ai/v1"),
-        (
-            "gemini",
-            "GEMINI_API_KEY",
-            "GEMINI_BASE_URL",
-            "https://generativelanguage.googleapis.com/v1beta/openai/",
-        ),
-        ("mistral", "MISTRAL_API_KEY", "MISTRAL_BASE_URL", "https://api.mistral.ai/v1"),
-        (
-            "together",
-            "TOGETHER_API_KEY",
-            "TOGETHER_BASE_URL",
-            "https://api.together.xyz/v1",
-        ),
-        (
-            "fireworks",
-            "FIREWORKS_API_KEY",
-            "FIREWORKS_BASE_URL",
-            "https://api.fireworks.ai/inference/v1",
-        ),
-        (
-            "deepseek",
-            "DEEPSEEK_API_KEY",
-            "DEEPSEEK_BASE_URL",
-            "https://api.deepseek.com",
-        ),
-        (
-            "perplexity",
-            "PERPLEXITY_API_KEY",
-            "PERPLEXITY_BASE_URL",
-            "https://api.perplexity.ai",
-        ),
-        (
-            "cerebras",
-            "CEREBRAS_API_KEY",
-            "CEREBRAS_BASE_URL",
-            "https://api.cerebras.ai/v1",
-        ),
-        (
-            "openrouter",
-            "OPENROUTER_API_KEY",
-            "OPENROUTER_BASE_URL",
-            "https://openrouter.ai/api/v1",
-        ),
-        (
-            "sambanova",
-            "SAMBANOVA_API_KEY",
-            "SAMBANOVA_BASE_URL",
-            "https://api.sambanova.ai/v1",
-        ),
-        (
-            "novita",
-            "NOVITA_API_KEY",
-            "NOVITA_BASE_URL",
-            "https://api.novita.ai/v3/openai",
-        ),
-        ("ai21", "AI21_API_KEY", "AI21_BASE_URL", "https://api.ai21.com/studio/v1"),
-        (
-            "deepinfra",
-            "DEEPINFRA_API_KEY",
-            "DEEPINFRA_BASE_URL",
-            "https://api.deepinfra.com/v1/openai",
-        ),
-        (
-            "hyperbolic",
-            "HYPERBOLIC_API_KEY",
-            "HYPERBOLIC_BASE_URL",
-            "https://api.hyperbolic.xyz/v1",
-        ),
-        (
-            "anyscale",
-            "ANYSCALE_API_KEY",
-            "ANYSCALE_BASE_URL",
-            "https://api.endpoints.anyscale.com/v1",
-        ),
-        ("octoai", "OCTOAI_API_KEY", "OCTOAI_BASE_URL", "https://text.octoai.run/v1"),
-        (
-            "nvidia",
-            "NVIDIA_API_KEY",
-            "NVIDIA_BASE_URL",
-            "https://integrate.api.nvidia.com/v1",
-        ),
-        (
-            "predibase",
-            "PREDIBASE_API_KEY",
-            "PREDIBASE_BASE_URL",
-            "https://serving.app.predibase.com/v1",
-        ),
-        (
-            "huggingface",
-            "HUGGINGFACE_API_KEY",
-            "HUGGINGFACE_BASE_URL",
-            "https://api-inference.huggingface.co/v1",
-        ),
-        ("lepton", "LEPTON_API_KEY", "LEPTON_BASE_URL", ""),
-        ("azure", "AZURE_OPENAI_API_KEY", "AZURE_OPENAI_BASE_URL", ""),
-        ("ollama", "OLLAMA_API_KEY", "OLLAMA_BASE_URL", "http://localhost:11434/v1"),
-        (
-            "lmstudio",
-            "LMSTUDIO_API_KEY",
-            "LMSTUDIO_BASE_URL",
-            "http://localhost:1234/v1",
-        ),
-        ("openai_compat", "OPENAI_COMPAT_API_KEY", "OPENAI_COMPAT_BASE_URL", ""),
-    ]
-
+    for native in (
+        GroqProvider(), OpenAIProvider(), AnthropicProvider(),
+        CohereProvider(), BedrockProvider(),
+    ):
+        register_provider(native)
     for name, api_key_env, base_url_env, default_base_url in _COMPAT_PROVIDERS:
         register_provider(
             OpenAICompatibleProvider(
