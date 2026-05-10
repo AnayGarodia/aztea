@@ -4,6 +4,83 @@ from core import db as _db
 # here for agent-facing surfaces.
 
 
+_MAX_AGENTS_PER_OWNER = 20
+
+
+def _check_agent_registration_limit(caller: core_models.CallerContext) -> None:
+    """Raise 403 if caller has reached the per-owner agent cap."""
+    if caller["type"] == "agent_key":
+        raise HTTPException(
+            status_code=403, detail="Agent-scoped keys cannot register new agents."
+        )
+    if caller["type"] != "master":
+        current_count = registry.count_owner_agents(caller["owner_id"])
+        if current_count >= _MAX_AGENTS_PER_OWNER:
+            raise HTTPException(
+                status_code=403,
+                detail=error_codes.make_error(
+                    error_codes.REGISTRY_AGENT_LIMIT,
+                    f"You've reached the {_MAX_AGENTS_PER_OWNER}-agent limit. "
+                    "Delete or archive an existing agent to register a new one.",
+                    {"current": current_count, "max": _MAX_AGENTS_PER_OWNER},
+                ),
+            )
+
+
+def _validate_register_urls(
+    request: Request,
+    body: AgentRegisterRequest,
+) -> tuple[str, str | None, str | None]:
+    """Validate endpoint, healthcheck, and verifier URLs for registration.
+
+    Returns (safe_endpoint_url, safe_healthcheck_url, safe_verifier_url).
+    Raises HTTPException on SSRF/safety-block failures.
+    """
+    safe_endpoint_url = _validate_agent_endpoint_url(request, body.endpoint_url)
+    endpoint_findings = _listing_safety.scan_agent_md_endpoint(safe_endpoint_url)
+    if _listing_safety.has_block(endpoint_findings):
+        block = next(f for f in endpoint_findings if f.level == _listing_safety.LEVEL_BLOCK)
+        raise HTTPException(
+            status_code=400,
+            detail=error_codes.make_error(
+                "listing.safety_block", block.message,
+                {"code": block.code, "detail": block.detail},
+            ),
+        )
+    if not os.environ.get("AZTEA_SKIP_REGISTER_ENDPOINT_PROBE"):
+        _probe_register_endpoint_or_400(safe_endpoint_url)
+    _run_listing_safety_probe(
+        safe_endpoint_url,
+        input_schema=body.input_schema,
+        output_schema=body.output_schema,
+    )
+    safe_healthcheck_url = (
+        _validate_outbound_url(body.healthcheck_url, "healthcheck_url")
+        if body.healthcheck_url
+        else None
+    )
+    safe_verifier_url = (
+        _validate_outbound_url(body.output_verifier_url, "output_verifier_url")
+        if body.output_verifier_url
+        else None
+    )
+    return safe_endpoint_url, safe_healthcheck_url, safe_verifier_url
+
+
+def _build_register_message(
+    agent: dict | None,
+    safe_verifier_url: str | None,
+    verifier_reason: str,
+) -> str:
+    if safe_verifier_url:
+        if agent and agent.get("verified"):
+            return "Agent registered and verifier approved."
+        return f"Agent registered; verifier did not approve ({verifier_reason})."
+    if (agent or {}).get("review_status") == "pending_review":
+        return "Your agent listing is pending review. You will be notified when it goes live."
+    return "Agent registered successfully."
+
+
 @app.post(
     "/registry/register",
     status_code=201,
@@ -17,126 +94,45 @@ def registry_register(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.RegistryRegisterResponse:
     _require_scope(caller, "worker")
-    if caller["type"] == "agent_key":
-        raise HTTPException(
-            status_code=403, detail="Agent-scoped keys cannot register new agents."
-        )
-    _MAX_AGENTS_PER_OWNER = 20
-    if caller["type"] != "master":
-        current_count = registry.count_owner_agents(caller["owner_id"])
-        if current_count >= _MAX_AGENTS_PER_OWNER:
-            raise HTTPException(
-                status_code=403,
-                detail=error_codes.make_error(
-                    error_codes.REGISTRY_AGENT_LIMIT,
-                    f"You've reached the {_MAX_AGENTS_PER_OWNER}-agent limit. "
-                    "Delete or archive an existing agent to register a new one.",
-                    {"current": current_count, "max": _MAX_AGENTS_PER_OWNER},
-                ),
-            )
+    _check_agent_registration_limit(caller)
     try:
-        safe_endpoint_url = _validate_agent_endpoint_url(request, body.endpoint_url)
-        # Defence-in-depth: refuse anyone trying to register against an
-        # Aztea-owned host as their endpoint. SSRF check above already blocks
-        # private IPs; this catches the "list a clone of a built-in" footgun.
-        endpoint_findings = _listing_safety.scan_agent_md_endpoint(safe_endpoint_url)
-        if _listing_safety.has_block(endpoint_findings):
-            block = next(
-                f for f in endpoint_findings
-                if f.level == _listing_safety.LEVEL_BLOCK
-            )
-            raise HTTPException(
-                status_code=400,
-                detail=error_codes.make_error(
-                    "listing.safety_block", block.message,
-                    {"code": block.code, "detail": block.detail},
-                ),
-            )
-        if not os.environ.get("AZTEA_SKIP_REGISTER_ENDPOINT_PROBE"):
-            _probe_register_endpoint_or_400(safe_endpoint_url)
-        _run_listing_safety_probe(
-            safe_endpoint_url,
-            input_schema=body.input_schema,
-            output_schema=body.output_schema,
+        safe_endpoint_url, safe_healthcheck_url, safe_verifier_url = (
+            _validate_register_urls(request, body)
         )
-        safe_healthcheck_url = None
-        if body.healthcheck_url:
-            safe_healthcheck_url = _validate_outbound_url(
-                body.healthcheck_url, "healthcheck_url"
-            )
-        safe_verifier_url = None
-        if body.output_verifier_url:
-            safe_verifier_url = _validate_outbound_url(
-                body.output_verifier_url, "output_verifier_url"
-            )
-        registration_payload = {
-            "name": body.name,
-            "description": body.description,
-            "endpoint_url": safe_endpoint_url,
-            "healthcheck_url": safe_healthcheck_url,
-            "price_per_call_usd": body.price_per_call_usd,
-            "tags": body.tags,
-            "input_schema": body.input_schema,
-            "output_schema": body.output_schema,
-        }
         verified = False
         verifier_reason = "no verifier configured"
         if safe_verifier_url:
+            registration_payload = {
+                "name": body.name, "description": body.description,
+                "endpoint_url": safe_endpoint_url, "healthcheck_url": safe_healthcheck_url,
+                "price_per_call_usd": body.price_per_call_usd, "tags": body.tags,
+                "input_schema": body.input_schema, "output_schema": body.output_schema,
+            }
             verified, verifier_reason = _run_registration_verifier(
-                safe_verifier_url,
-                registration_payload=registration_payload,
+                safe_verifier_url, registration_payload=registration_payload
             )
-        # Non-master registrations enter probation: live + callable, but
-        # ranked last in discovery and rate/price-capped until the listing
-        # accumulates a track record. See core/registry/auto_hire for the
-        # gating logic; the column itself is plain TEXT.
-        initial_review_status = (
-            "probation" if caller["type"] != "master" else None
-        )
+        initial_review_status = "probation" if caller["type"] != "master" else None
         agent_id = registry.register_agent(
-            name=body.name,
-            description=body.description,
-            endpoint_url=safe_endpoint_url,
-            healthcheck_url=safe_healthcheck_url,
-            price_per_call_usd=body.price_per_call_usd,
-            tags=body.tags,
-            input_schema=body.input_schema,
-            output_schema=body.output_schema,
-            output_verifier_url=safe_verifier_url,
-            output_examples=body.output_examples or None,
-            verified=verified,
-            owner_id=caller["owner_id"],
-            review_status=initial_review_status,
-            model_provider=body.model_provider,
-            model_id=body.model_id,
-            pricing_model=body.pricing_model,
-            pricing_config=body.pricing_config,
-            kind="self_hosted",
-            pii_safe=body.pii_safe,
-            outputs_not_stored=body.outputs_not_stored,
-            audit_logged=body.audit_logged,
-            region_locked=body.region_locked,
-            payout_curve=body.payout_curve,
-            cacheable=body.cacheable,
+            name=body.name, description=body.description,
+            endpoint_url=safe_endpoint_url, healthcheck_url=safe_healthcheck_url,
+            price_per_call_usd=body.price_per_call_usd, tags=body.tags,
+            input_schema=body.input_schema, output_schema=body.output_schema,
+            output_verifier_url=safe_verifier_url, output_examples=body.output_examples or None,
+            verified=verified, owner_id=caller["owner_id"], review_status=initial_review_status,
+            model_provider=body.model_provider, model_id=body.model_id,
+            pricing_model=body.pricing_model, pricing_config=body.pricing_config,
+            kind="self_hosted", pii_safe=body.pii_safe, outputs_not_stored=body.outputs_not_stored,
+            audit_logged=body.audit_logged, region_locked=body.region_locked,
+            payout_curve=body.payout_curve, cacheable=body.cacheable,
         )
-        agent = registry.get_agent_with_reputation(
-            agent_id, include_unapproved=True
-        ) or registry.get_agent(
-            agent_id,
-            include_unapproved=True,
+        agent = registry.get_agent_with_reputation(agent_id, include_unapproved=True) or (
+            registry.get_agent(agent_id, include_unapproved=True)
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except _db.IntegrityError:
         raise HTTPException(status_code=409, detail="Agent ID or name already exists.")
-    message = "Agent registered successfully."
-    if safe_verifier_url:
-        if agent and agent.get("verified"):
-            message = "Agent registered and verifier approved."
-        else:
-            message = f"Agent registered; verifier did not approve ({verifier_reason})."
-    if (agent or {}).get("review_status") == "pending_review":
-        message = "Your agent listing is pending review. You will be notified when it goes live."
+    message = _build_register_message(agent, safe_verifier_url, verifier_reason)
     return JSONResponse(
         content={
             "agent_id": agent_id,
@@ -630,6 +626,63 @@ def agent_did_document(agent_id: str, request: Request) -> JSONResponse:
     )
 
 
+def _resolve_a2a_agent(
+    caller: core_models.CallerContext, skill_id: str
+) -> dict:
+    """Resolve and validate an A2A skill/agent; raise 404/503 on failure."""
+    agent = registry.get_agent(skill_id, include_unapproved=True)
+    if (
+        agent is None
+        or not _caller_can_access_agent(caller, agent)
+        or agent.get("status") in {"banned"}
+        or agent.get("internal_only")
+    ):
+        raise HTTPException(status_code=404, detail=f"Skill (agent) '{skill_id}' not found.")
+    if agent.get("status") == "suspended":
+        raise HTTPException(status_code=503, detail=f"Skill (agent) '{skill_id}' is suspended.")
+    return agent
+
+
+def _create_a2a_job(
+    agent: dict,
+    caller: core_models.CallerContext,
+    request: Request,
+    body: core_models.A2ATaskSendRequest,
+) -> dict:
+    """Charge caller, create job, refund on failure. Returns job dict."""
+    price_cents = _usd_to_cents(agent["price_per_call_usd"])
+    fee_bearer_policy = "caller"
+    platform_fee_pct_at_create = int(payments.PLATFORM_FEE_PCT)
+    success_distribution = payments.compute_success_distribution(
+        price_cents, platform_fee_pct=platform_fee_pct_at_create, fee_bearer_policy=fee_bearer_policy
+    )
+    caller_charge_cents = int(success_distribution["caller_charge_cents"])
+    caller_owner_id = _caller_owner_id(request)
+    caller_wallet = payments.get_or_create_wallet(caller_owner_id)
+    agent_wallet = payments.get_or_create_wallet(f"agent:{agent['agent_id']}")
+    platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
+    charge_tx_id = _pre_call_charge_or_402(
+        caller=caller, caller_wallet_id=caller_wallet["wallet_id"],
+        charge_cents=caller_charge_cents, agent_id=agent["agent_id"],
+    )
+    try:
+        return jobs.create_job(
+            agent_id=agent["agent_id"], caller_owner_id=caller_owner_id,
+            caller_wallet_id=caller_wallet["wallet_id"], agent_wallet_id=agent_wallet["wallet_id"],
+            platform_wallet_id=platform_wallet["wallet_id"], price_cents=price_cents,
+            caller_charge_cents=caller_charge_cents, platform_fee_pct_at_create=platform_fee_pct_at_create,
+            fee_bearer_policy=fee_bearer_policy, client_id=_request_client_id(request, body.client_id),
+            charge_tx_id=charge_tx_id, input_payload=body.input or {}, agent_owner_id=agent.get("owner_id"),
+            max_attempts=3, dispute_window_hours=_DEFAULT_JOB_DISPUTE_WINDOW_HOURS,
+            judge_agent_id=_QUALITY_JUDGE_AGENT_ID, callback_url=body.callback_url or None,
+        )
+    except Exception:
+        payments.post_call_refund(
+            caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent["agent_id"]
+        )
+        raise HTTPException(status_code=500, detail="Failed to create task.")
+
+
 @app.post(
     "/a2a/tasks/send",
     status_code=201,
@@ -644,75 +697,14 @@ def a2a_tasks_send(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> JSONResponse:
     _require_scope(caller, "caller")
-    agent = registry.get_agent(body.skill_id, include_unapproved=True)
-    if (
-        agent is None
-        or not _caller_can_access_agent(caller, agent)
-        or agent.get("status") in {"banned"}
-    ):
-        raise HTTPException(
-            status_code=404, detail=f"Skill (agent) '{body.skill_id}' not found."
-        )
-    if agent.get("status") == "suspended":
-        raise HTTPException(
-            status_code=503, detail=f"Skill (agent) '{body.skill_id}' is suspended."
-        )
-    if agent.get("internal_only"):
-        raise HTTPException(
-            status_code=404, detail=f"Skill (agent) '{body.skill_id}' not found."
-        )
-
+    agent = _resolve_a2a_agent(caller, body.skill_id)
+    job = _create_a2a_job(agent, caller, request, body)
     price_cents = _usd_to_cents(agent["price_per_call_usd"])
-    fee_bearer_policy = "caller"
-    platform_fee_pct_at_create = int(payments.PLATFORM_FEE_PCT)
-    success_distribution = payments.compute_success_distribution(
-        price_cents,
-        platform_fee_pct=platform_fee_pct_at_create,
-        fee_bearer_policy=fee_bearer_policy,
+    caller_charge_cents = int(
+        payments.compute_success_distribution(
+            price_cents, platform_fee_pct=int(payments.PLATFORM_FEE_PCT), fee_bearer_policy="caller"
+        )["caller_charge_cents"]
     )
-    caller_charge_cents = int(success_distribution["caller_charge_cents"])
-    caller_owner_id = _caller_owner_id(request)
-    client_id = _request_client_id(request, body.client_id)
-    caller_wallet = payments.get_or_create_wallet(caller_owner_id)
-    agent_wallet = payments.get_or_create_wallet(f"agent:{agent['agent_id']}")
-    platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
-
-    charge_tx_id = _pre_call_charge_or_402(
-        caller=caller,
-        caller_wallet_id=caller_wallet["wallet_id"],
-        charge_cents=caller_charge_cents,
-        agent_id=agent["agent_id"],
-    )
-
-    try:
-        job = jobs.create_job(
-            agent_id=agent["agent_id"],
-            caller_owner_id=caller_owner_id,
-            caller_wallet_id=caller_wallet["wallet_id"],
-            agent_wallet_id=agent_wallet["wallet_id"],
-            platform_wallet_id=platform_wallet["wallet_id"],
-            price_cents=price_cents,
-            caller_charge_cents=caller_charge_cents,
-            platform_fee_pct_at_create=platform_fee_pct_at_create,
-            fee_bearer_policy=fee_bearer_policy,
-            client_id=client_id,
-            charge_tx_id=charge_tx_id,
-            input_payload=body.input or {},
-            agent_owner_id=agent.get("owner_id"),
-            max_attempts=3,
-            dispute_window_hours=_DEFAULT_JOB_DISPUTE_WINDOW_HOURS,
-            judge_agent_id=_QUALITY_JUDGE_AGENT_ID,
-            callback_url=body.callback_url or None,
-        )
-    except Exception:
-        payments.post_call_refund(
-            caller_wallet["wallet_id"],
-            charge_tx_id,
-            caller_charge_cents,
-            agent["agent_id"],
-        )
-        raise HTTPException(status_code=500, detail="Failed to create task.")
-
     _record_job_event(job, "job.created", actor_owner_id=caller["owner_id"])
     return JSONResponse(
         content={
@@ -977,17 +969,13 @@ _MCP_COMPUTE_HEAVY_AGENT_IDS = frozenset(
 )
 
 
-@app.post(
-    "/mcp/invoke",
-    response_model=core_models.DynamicObjectResponse,
-    responses=_error_responses(400, 401, 403, 402, 404, 429, 500),
-)
-def mcp_invoke(
-    request: Request,
-    body: MCPInvokeRequest,
-) -> core_models.DynamicObjectResponse:
-    # 1. Auth: accept agent keys (azk_), regular user caller keys (az_), or master key.
-    raw_key = str(body.api_key or "").strip()
+def _mcp_authenticate(
+    raw_key: str,
+) -> tuple[core_models.CallerContext, str]:
+    """Authenticate an MCP API key; return (caller, caller_key_id).
+
+    Raises 401/403 HTTPException on invalid keys.
+    """
     if not raw_key:
         raise HTTPException(
             status_code=401,
@@ -1003,36 +991,11 @@ def mcp_invoke(
     if agent_key is None and user_key is None and not is_master:
         raise HTTPException(
             status_code=403,
-            detail=error_codes.make_error(
-                "auth.invalid_key", "Invalid or inactive API key."
-            ),
+            detail=error_codes.make_error("auth.invalid_key", "Invalid or inactive API key."),
         )
     caller_key_id = str(
         (agent_key or {}).get("key_id") or (user_key or {}).get("key_id") or "master"
     )
-
-    # 2. Per-key sliding-window rate limit: 60 req/min.
-    if not _mcp_check_rate_limit(caller_key_id):
-        raise HTTPException(
-            status_code=429,
-            headers={"Retry-After": "60"},
-            detail=error_codes.make_error(
-                error_codes.RATE_LIMITED,
-                "MCP rate limit exceeded. Maximum 60 requests per minute per key.",
-            ),
-        )
-
-    # 3. Tool lookup. Sunset agents stay resolvable here so existing slug-based
-    # invocations don't break, even though they're hidden from the public
-    # manifest endpoints (see _mcp_active_agents).
-    lookup = _mcp_invoke_lookup()
-    agent = lookup.get(body.tool_name)
-    if agent is None:
-        raise HTTPException(
-            status_code=404, detail=f"Tool '{body.tool_name}' not found."
-        )
-
-    # Build caller context from the agent key.
     if agent_key is not None:
         caller: core_models.CallerContext = {
             "type": "agent_key",
@@ -1049,19 +1012,38 @@ def mcp_invoke(
             "scopes": user_key.get("scopes") or ["caller"],
         }
     else:
-        caller = {
-            "type": "master",
-            "owner_id": "master",
-            "scopes": ["caller", "worker", "admin"],
-        }
+        caller = {"type": "master", "owner_id": "master", "scopes": ["caller", "worker", "admin"]}
+    return caller, caller_key_id
 
-    # 4. Dispatch. registry_call owns pre-call charge, payout, and refund-on-failure.
+
+@app.post(
+    "/mcp/invoke",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(400, 401, 403, 402, 404, 429, 500),
+)
+def mcp_invoke(
+    request: Request,
+    body: MCPInvokeRequest,
+) -> core_models.DynamicObjectResponse:
+    raw_key = str(body.api_key or "").strip()
+    caller, caller_key_id = _mcp_authenticate(raw_key)
+
+    if not _mcp_check_rate_limit(caller_key_id):
+        raise HTTPException(
+            status_code=429, headers={"Retry-After": "60"},
+            detail=error_codes.make_error(
+                error_codes.RATE_LIMITED,
+                "MCP rate limit exceeded. Maximum 60 requests per minute per key.",
+            ),
+        )
+
+    lookup = _mcp_invoke_lookup()
+    agent = lookup.get(body.tool_name)
+    if agent is None:
+        raise HTTPException(status_code=404, detail=f"Tool '{body.tool_name}' not found.")
+
     agent_id = str(agent["agent_id"])
     request.state._caller = caller
-    # Workspace context (optional): MCP-attached summary of caller's local cwd.
-    # Two ingest modes — full bundle (first call from a directory) or just a
-    # fingerprint (subsequent calls). Fingerprint mode looks up the cached
-    # bundle and rehydrates it; cache miss silently degrades to no-context.
     merged_input = dict(body.input or {})
     _merge_workspace_context_into_payload(merged_input, body)
     t0 = time.monotonic()
@@ -1076,18 +1058,13 @@ def mcp_invoke(
         success = True
     except Exception:
         raise
-    duration_ms = int((time.monotonic() - t0) * 1000)
-
-    # 6. Audit log (non-blocking; failure does not abort the response).
-    input_json = json.dumps(body.input, default=str) if body.input is not None else "{}"
-    _mcp_log_invocation(
-        agent_id, caller_key_id, body.tool_name, input_json, duration_ms, success
-    )
+    finally:
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        input_json = json.dumps(body.input, default=str) if body.input is not None else "{}"
+        _mcp_log_invocation(agent_id, caller_key_id, body.tool_name, input_json, duration_ms, success)
 
     payload = _mcp_payload_from_response(delegated)
-    response_body: dict[str, Any] = {
-        "content": _mcp_content_from_payload(payload),
-    }
+    response_body: dict[str, Any] = {"content": _mcp_content_from_payload(payload)}
     if isinstance(payload, dict):
         response_body["structuredContent"] = payload
     elif payload is not None:
@@ -1103,17 +1080,15 @@ def _normalize_model_provider_filter(raw_value: str | None) -> str | None:
     return normalized or None
 
 
-def _build_model_catalog(
+def _group_agents_by_model(
     agents: list[dict[str, Any]],
     *,
-    model_provider: str | None = None,
-    model_id: str | None = None,
-    include_examples: bool = True,
-    example_limit: int = 5,
-) -> list[dict[str, Any]]:
-    normalized_provider = _normalize_model_provider_filter(model_provider)
-    normalized_model_id = str(model_id or "").strip() or None
-    capped_examples = min(max(0, int(example_limit)), 20)
+    normalized_provider: str | None,
+    normalized_model_id: str | None,
+    include_examples: bool,
+    capped_examples: int,
+) -> dict[tuple[str, str], dict[str, Any]]:
+    """Group agents into (provider, model_id) buckets, applying filters."""
     grouped: dict[tuple[str, str], dict[str, Any]] = {}
     for agent in agents:
         provider = _normalize_model_provider_filter(agent.get("model_provider"))
@@ -1125,74 +1100,76 @@ def _build_model_catalog(
         if normalized_model_id and model != normalized_model_id:
             continue
         key = (provider, model)
-        bucket = grouped.get(key)
-        if bucket is None:
-            bucket = {
-                "model_provider": provider,
-                "model_id": model,
-                "agent_count": 0,
-                "total_calls": 0,
-                "avg_success_rate": 0.0,
-                "agents": [],
-                "work_examples": [],
-            }
-            grouped[key] = bucket
+        bucket = grouped.setdefault(key, {
+            "model_provider": provider, "model_id": model,
+            "agent_count": 0, "total_calls": 0, "avg_success_rate": 0.0,
+            "agents": [], "work_examples": [],
+        })
         bucket["agent_count"] += 1
         bucket["total_calls"] += int(agent.get("total_calls") or 0)
-        bucket["agents"].append(
-            {
-                "agent_id": str(agent.get("agent_id") or ""),
-                "name": str(agent.get("name") or ""),
-                "price_per_call_usd": float(agent.get("price_per_call_usd") or 0.0),
-                "success_rate": float(agent.get("success_rate") or 0.0),
-            }
-        )
-        if (
-            include_examples
-            and capped_examples > 0
-            and len(bucket["work_examples"]) < capped_examples
-        ):
-            examples = agent.get("output_examples")
-            if isinstance(examples, list):
-                for example in examples:
-                    if not isinstance(example, dict):
-                        continue
-                    bucket["work_examples"].append(
-                        {
-                            "agent_id": str(agent.get("agent_id") or ""),
-                            "agent_name": str(agent.get("name") or ""),
-                            "example": example,
-                        }
-                    )
-                    if len(bucket["work_examples"]) >= capped_examples:
-                        break
+        bucket["agents"].append({
+            "agent_id": str(agent.get("agent_id") or ""),
+            "name": str(agent.get("name") or ""),
+            "price_per_call_usd": float(agent.get("price_per_call_usd") or 0.0),
+            "success_rate": float(agent.get("success_rate") or 0.0),
+        })
+        if include_examples and capped_examples > 0 and len(bucket["work_examples"]) < capped_examples:
+            for example in (agent.get("output_examples") or []):
+                if not isinstance(example, dict):
+                    continue
+                bucket["work_examples"].append({
+                    "agent_id": str(agent.get("agent_id") or ""),
+                    "agent_name": str(agent.get("name") or ""),
+                    "example": example,
+                })
+                if len(bucket["work_examples"]) >= capped_examples:
+                    break
+    return grouped
 
+
+def _finalize_model_buckets(grouped: dict) -> list[dict[str, Any]]:
+    """Compute avg_success_rate, sort agents within each bucket, return sorted list."""
     models: list[dict[str, Any]] = []
     for bucket in grouped.values():
         model_agents = bucket.pop("agents")
-        if model_agents:
-            bucket["avg_success_rate"] = round(
+        bucket["avg_success_rate"] = (
+            round(
                 sum(float(item.get("success_rate") or 0.0) for item in model_agents)
                 / len(model_agents),
                 6,
             )
-        else:
-            bucket["avg_success_rate"] = 0.0
+            if model_agents
+            else 0.0
+        )
         bucket["agents"] = sorted(
             model_agents,
-            key=lambda item: (
-                item.get("success_rate") or 0.0,
-                -(item.get("price_per_call_usd") or 0.0),
-            ),
+            key=lambda item: (item.get("success_rate") or 0.0, -(item.get("price_per_call_usd") or 0.0)),
             reverse=True,
         )
         models.append(bucket)
-
     return sorted(
         models,
         key=lambda item: (item.get("agent_count") or 0, item.get("total_calls") or 0),
         reverse=True,
     )
+
+
+def _build_model_catalog(
+    agents: list[dict[str, Any]],
+    *,
+    model_provider: str | None = None,
+    model_id: str | None = None,
+    include_examples: bool = True,
+    example_limit: int = 5,
+) -> list[dict[str, Any]]:
+    grouped = _group_agents_by_model(
+        agents,
+        normalized_provider=_normalize_model_provider_filter(model_provider),
+        normalized_model_id=str(model_id or "").strip() or None,
+        include_examples=include_examples,
+        capped_examples=min(max(0, int(example_limit)), 20),
+    )
+    return _finalize_model_buckets(grouped)
 
 
 @app.get(
@@ -1228,6 +1205,80 @@ _agents_list_cache_at: float = 0.0
 _AGENTS_LIST_TTL = 15.0  # seconds — agents don't change by the second
 
 
+def _registry_list_fetch_agents(
+    tag: str | None,
+    model_provider: str | None,
+    include_reputation: bool,
+    include_unapproved: bool,
+) -> list[dict]:
+    """Fetch agent rows from the DB or the in-process cache."""
+    global _agents_list_cache, _agents_list_cache_at
+    import time as _time
+
+    use_cache = (
+        not include_unapproved
+        and tag is None
+        and model_provider is None
+        and include_reputation
+    )
+    now = _time.monotonic()
+    if use_cache and _agents_list_cache is not None and (now - _agents_list_cache_at) < _AGENTS_LIST_TTL:
+        return _agents_list_cache
+    try:
+        agents = (
+            registry.get_agents_with_reputation(tag=tag, include_unapproved=include_unapproved, model_provider=model_provider)
+            if include_reputation
+            else registry.get_agents(tag=tag, include_unapproved=include_unapproved, model_provider=model_provider)
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if use_cache:
+        _agents_list_cache = agents
+        _agents_list_cache_at = _time.monotonic()
+    return agents
+
+
+def _registry_list_augment_curated(agents: list[dict]) -> list[dict]:
+    """Synthesize registry rows for curated builtins missing from the DB result."""
+    present_ids = {str(a.get("agent_id") or "") for a in agents}
+    missing_curated = set(_builtin_constants.CURATED_PUBLIC_BUILTIN_AGENT_IDS) - present_ids
+    if not missing_curated:
+        return agents
+    spec_by_id = _builtin_specs.builtin_spec_by_id()
+    augmented = list(agents)
+    for missing_id in missing_curated:
+        spec = spec_by_id.get(missing_id)
+        if spec is None:
+            continue
+        augmented.append({
+            "agent_id": missing_id,
+            "name": spec.get("name"),
+            "description": spec.get("description", ""),
+            "endpoint_url": spec.get("endpoint_url"),
+            "price_per_call_usd": float(spec.get("price_per_call_usd", 0.01)),
+            "tags": list(spec.get("tags") or []),
+            "input_schema": spec.get("input_schema"),
+            "output_schema": spec.get("output_schema"),
+            "category": spec.get("category"),
+            "status": "active",
+            "review_status": "approved",
+            "internal_only": 0,
+            "trust_score": None,
+            "success_rate": None,
+        })
+    return augmented
+
+
+def _registry_list_etag(agents: list[dict], include_unapproved: bool) -> str:
+    etag_seed = "|".join(
+        f"{a.get('agent_id') or ''}:{a.get('updated_at') or ''}:"
+        f"{a.get('review_status') or ''}:{a.get('status') or ''}"
+        for a in sorted(agents, key=lambda a: str(a.get("agent_id") or ""))
+    )
+    etag_seed += f"|count={len(agents)}|inc_unapp={int(include_unapproved)}"
+    return 'W/"' + hashlib.sha1(etag_seed.encode("utf-8")).hexdigest()[:24] + '"'
+
+
 @app.get(
     "/registry/agents",
     response_model=core_models.RegistryAgentsResponse,
@@ -1242,124 +1293,22 @@ def registry_list(
     model_provider: str | None = None,
     caller: core_models.CallerContext | None = Depends(_optional_api_key),
 ) -> core_models.RegistryAgentsResponse:
-    global _agents_list_cache, _agents_list_cache_at
-    import time as _time
-
     include_unapproved = caller is not None and _caller_is_admin(caller)
-    # Use cached agent+reputation rows for non-admin, no-filter requests
-    use_cache = (
-        not include_unapproved
-        and tag is None
-        and model_provider is None
-        and include_reputation
-    )
-    now = _time.monotonic()
-    if (
-        use_cache
-        and _agents_list_cache is not None
-        and (now - _agents_list_cache_at) < _AGENTS_LIST_TTL
-    ):
-        agents = _agents_list_cache
-    else:
-        try:
-            agents = (
-                registry.get_agents_with_reputation(
-                    tag=tag,
-                    include_unapproved=include_unapproved,
-                    model_provider=model_provider,
-                )
-                if include_reputation
-                else registry.get_agents(
-                    tag=tag,
-                    include_unapproved=include_unapproved,
-                    model_provider=model_provider,
-                )
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-        if use_cache:
-            _agents_list_cache = agents
-            _agents_list_cache_at = now
+    agents = _registry_list_fetch_agents(tag, model_provider, include_reputation, include_unapproved)
     agents = _sorted_agents(agents, rank_by=rank_by)
-    # Hide sunset/deprecated builtins from the public catalog. They remain
-    # callable by direct slug or agent_id (so historical job_ids and signed
-    # receipts still resolve), but they no longer surface to discovery,
-    # search, or auto-hire. Admins still see everything for ops work.
     if not include_unapproved:
         sunset = _builtin_constants.SUNSET_DEPRECATED_AGENT_IDS
         agents = [a for a in agents if a.get("agent_id") not in sunset]
-
-    # Curated-public-set parity: any agent in CURATED_PUBLIC_BUILTIN_AGENT_IDS
-    # must surface here, even if the registry seed hasn't run on a fresh
-    # deploy or the agents-list cache is stale. The 2026-05-08 power-user
-    # eval saw list_agents return 7 while search and the spend ledger
-    # revealed 9 reachable agents (Browser Agent + Visual Regression
-    # missing) — symptom of a half-seeded registry. Augmenting from the
-    # spec ensures the public surface is always self-consistent. We DON'T
-    # write to the DB here (that belongs in the lifespan startup); we
-    # just synthesize a registry-shaped row from the spec for any missing
-    # curated id, so the response is correct without any cache to evict.
-    #
-    # Only augment when the caller is browsing the unfiltered public catalog.
-    # `tag` / `model_provider` filters were applied to the SQL query, so
-    # synthesizing builtin rows here would bypass them and silently inflate
-    # the response (regression caught by test_quality_rating_and_trust_ranking).
-    if (
-        not include_unapproved
-        and tag is None
-        and model_provider is None
-    ):
-        present_ids = {str(a.get("agent_id") or "") for a in agents}
-        missing_curated = (
-            set(_builtin_constants.CURATED_PUBLIC_BUILTIN_AGENT_IDS) - present_ids
-        )
-        if missing_curated:
-            spec_by_id = _builtin_specs.builtin_spec_by_id()
-            for missing_id in missing_curated:
-                spec = spec_by_id.get(missing_id)
-                if spec is None:
-                    continue
-                agents.append(
-                    {
-                        "agent_id": missing_id,
-                        "name": spec.get("name"),
-                        "description": spec.get("description", ""),
-                        "endpoint_url": spec.get("endpoint_url"),
-                        "price_per_call_usd": float(
-                            spec.get("price_per_call_usd", 0.01)
-                        ),
-                        "tags": list(spec.get("tags") or []),
-                        "input_schema": spec.get("input_schema"),
-                        "output_schema": spec.get("output_schema"),
-                        "category": spec.get("category"),
-                        "status": "active",
-                        "review_status": "approved",
-                        "internal_only": 0,
-                        "trust_score": None,
-                        "success_rate": None,
-                    }
-                )
+    if not include_unapproved and tag is None and model_provider is None:
+        agents = _registry_list_augment_curated(agents)
     bulk_stats = _compute_bulk_agent_stats([a["agent_id"] for a in agents])
-    # Weak ETag derived from (count, sorted agent_id|updated_at pairs). Stable
-    # across re-orderings of the agents list and cheap to compute. Used by the
-    # MCP server's tight (~5 s) registry poll: a 304 returns no body, so the
-    # bandwidth/CPU cost of polling every 5 s ≈ polling every 60 s before.
-    etag_seed = "|".join(
-        f"{a.get('agent_id') or ''}:{a.get('updated_at') or ''}:"
-        f"{a.get('review_status') or ''}:{a.get('status') or ''}"
-        for a in sorted(agents, key=lambda a: str(a.get("agent_id") or ""))
-    )
-    etag_seed += f"|count={len(agents)}|inc_unapp={int(include_unapproved)}"
-    etag_value = 'W/"' + hashlib.sha1(etag_seed.encode("utf-8")).hexdigest()[:24] + '"'
+    etag_value = _registry_list_etag(agents, include_unapproved)
     if_none_match = request.headers.get("if-none-match", "").strip()
     if if_none_match and if_none_match == etag_value:
         return Response(status_code=304, headers={"ETag": etag_value})
     return JSONResponse(
         content={
-            "agents": [
-                _agent_response(a, caller, bulk_stats.get(a["agent_id"]))
-                for a in agents
-            ],
+            "agents": [_agent_response(a, caller, bulk_stats.get(a["agent_id"])) for a in agents],
             "count": len(agents),
         },
         headers={"ETag": etag_value},
