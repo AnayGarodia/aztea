@@ -195,6 +195,28 @@ def run(payload: dict) -> dict:
     results = _build_results(patterns, strings, compiled_flag)
     total_matches = sum(r["match_count"] for r in results)
 
+    # Refund-on-total-failure: if every (pattern x string) result errored AND
+    # the caller submitted exactly one pattern, the call delivered no value
+    # and should refund — same contract as JWT debugger / dependency_auditor.
+    # Per-result errors stay informational when the caller batched multiple
+    # patterns (one bad one shouldn't void a useful batch).
+    all_errored = bool(results) and all(r.get("error") for r in results)
+    if all_errored and len(patterns) == 1:
+        first_error = results[0]["error"] or {}
+        return {
+            "error": {
+                "code": first_error.get("code", "regex_tester.invalid_pattern"),
+                "message": first_error.get(
+                    "message", "Pattern could not be compiled."
+                ),
+                "details": {
+                    "pattern": patterns[0],
+                    "patterns_tested": len(patterns),
+                    "strings_tested": len(strings),
+                },
+            }
+        }
+
     return {
         "patterns_tested": len(patterns),
         "strings_tested": len(strings),

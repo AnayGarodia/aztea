@@ -98,7 +98,60 @@ const LAZY_DO_TOOL = {
   },
 }
 
-const LAZY_TOOL_NAMES = new Set([LAZY_SEARCH_TOOL.name, LAZY_DESCRIBE_TOOL.name, LAZY_CALL_TOOL.name, LAZY_DO_TOOL.name])
+// ─── Co-pilot mode tools (PR #14) ──────────────────────────────────────────
+// Streaming + steer get top-level lazy slots so MCP clients don't have to
+// hop through manage_job action verbs for every partial / steer.
+
+const AZTEA_CALL_STREAMING_TOOL = {
+  name: 'aztea_call_streaming',
+  description: (
+    'Invoke a specialist with streaming partials. Returns a job_id immediately and streams '
+    + '`partial_output` chunks until the agent finishes, errors, or matches a stop_when predicate. '
+    + 'Use this when you want to render results incrementally or interleave reads with the agent\'s work.'
+  ),
+  inputSchema: {
+    type: 'object',
+    properties: {
+      slug:          { type: 'string',  description: 'Slug returned by search_specialists.' },
+      arguments:     { type: 'object',  description: 'Input payload matching the agent\'s input_schema.' },
+      stop_when:     {
+        type: 'array',
+        description: 'Optional list of stop predicates. Each item is {label, expr (jmespath), reason}. The first matching predicate stops the job and returns its current partial as the final output.',
+        items: {
+          type: 'object',
+          properties: {
+            label:  { type: 'string' },
+            expr:   { type: 'string', description: 'JMESPath expression evaluated against the latest partial. Stops the job when truthy.' },
+            reason: { type: 'string' },
+          },
+          required: ['label', 'expr'],
+        },
+      },
+      max_cost_usd: { type: 'number', default: 0.10, minimum: 0 },
+    },
+    required: ['slug', 'arguments'],
+  },
+}
+
+const AZTEA_STEER_TOOL = {
+  name: 'aztea_steer',
+  description: (
+    'Send a steering message to a running streaming job. The agent receives the message and may '
+    + 'adjust its current generation. Steers do not terminate the job — only stop_when predicates do. '
+    + 'Returns the updated steer_count.'
+  ),
+  inputSchema: {
+    type: 'object',
+    properties: {
+      job_id:  { type: 'string', description: 'Job id from aztea_call_streaming.' },
+      message: { type: 'string', description: 'Steering directive (max 4000 chars).', maxLength: 4000 },
+      metadata: { type: 'object', description: 'Optional structured metadata sent alongside the steer.' },
+    },
+    required: ['job_id', 'message'],
+  },
+}
+
+const LAZY_TOOL_NAMES = new Set([LAZY_SEARCH_TOOL.name, LAZY_DESCRIBE_TOOL.name, LAZY_CALL_TOOL.name, LAZY_DO_TOOL.name, AZTEA_CALL_STREAMING_TOOL.name, AZTEA_STEER_TOOL.name])
 
 // Old → new tool name aliases. Old clients (cached tool lists, hardcoded SDK
 // examples, third-party docs) keep calling `aztea_do` etc.; we normalize at
@@ -580,7 +633,11 @@ function getTools() {
   // Lazy 4 + 3 always-visible resource-grouped dispatchers. The grouped tools
   // cover post-call ops, wallet/budget, and workflow orchestration without
   // bloating the surface with 22 separate tool names.
-  return [LAZY_SEARCH_TOOL, LAZY_DESCRIBE_TOOL, LAZY_CALL_TOOL, LAZY_DO_TOOL, AZTEA_JOB_TOOL, AZTEA_BUDGET_TOOL, AZTEA_WORKFLOW_TOOL]
+  return [
+    LAZY_SEARCH_TOOL, LAZY_DESCRIBE_TOOL, LAZY_CALL_TOOL, LAZY_DO_TOOL,
+    AZTEA_CALL_STREAMING_TOOL, AZTEA_STEER_TOOL,
+    AZTEA_JOB_TOOL, AZTEA_BUDGET_TOOL, AZTEA_WORKFLOW_TOOL,
+  ]
 }
 
 function authRequiredResponse() {
@@ -1866,6 +1923,54 @@ async function callTool(name, args) {
     const res = await callRegistryTool(entry, callArgs)
     if (res.ok) accumulate(res.body && (res.body.caller_charge_cents ?? res.body.price_cents))
     return { ok: res.ok, payload: res.body }
+  }
+  // Co-pilot mode: streaming + steer. Both delegate to REST; the server owns
+  // stop_when persistence, complexity validation, and partial drain.
+  if (name === AZTEA_CALL_STREAMING_TOOL.name) {
+    const rawSlug = String(args.slug || '').trim()
+    if (!rawSlug) return { ok: false, payload: { error: 'INVALID_INPUT', message: 'slug is required.' } }
+    const argObject = (args.arguments != null && typeof args.arguments === 'object' && !Array.isArray(args.arguments))
+      ? args.arguments : null
+    if (!argObject) return { ok: false, payload: { error: 'INVALID_INPUT', message: 'arguments must be an object.' } }
+    if (!_catalog.length) await refreshCatalog()
+    const slug = canonicalSlug(rawSlug) || rawSlug
+    const entry = _catalog.find(item => item.slug === slug || canonicalSlug(item.name) === slug)
+    if (!entry || !entry.agent_id) {
+      return { ok: false, payload: { error: 'TOOL_NOT_FOUND', message: `Unknown agent slug '${rawSlug}'.`, hint: 'Use search_specialists first.' } }
+    }
+    const blocked = budgetGuard()
+    if (blocked) return { ok: false, payload: blocked }
+    const body = { agent_id: entry.agent_id, input: argObject }
+    if (Array.isArray(args.stop_when) && args.stop_when.length > 0) {
+      body.stop_when = args.stop_when
+    }
+    const res = await postJson('/jobs', body)
+    if (res.status === 401 || res.status === 403) {
+      _authRequired = true
+      return { ok: false, payload: authRequiredResponse() }
+    }
+    const parsed = parseApiResponse(res)
+    return { ok: parsed.ok, payload: parsed.body }
+  }
+  if (name === AZTEA_STEER_TOOL.name) {
+    const jobId = String(args.job_id || '').trim()
+    const message = String(args.message || '').trim()
+    if (!jobId) return { ok: false, payload: { error: 'INVALID_INPUT', message: 'job_id is required.' } }
+    if (!message) return { ok: false, payload: { error: 'INVALID_INPUT', message: 'message is required.' } }
+    const payload = { msg_type: 'steer', payload: { message } }
+    if (args.metadata && typeof args.metadata === 'object' && !Array.isArray(args.metadata)) {
+      payload.payload.metadata = args.metadata
+    }
+    const res = await postJson(`/jobs/${encodeURIComponent(jobId)}/messages`, payload)
+    if (res.status === 401 || res.status === 403) {
+      _authRequired = true
+      return { ok: false, payload: authRequiredResponse() }
+    }
+    if (res.status === 409) {
+      return { ok: false, payload: { error: 'JOB_TERMINAL', message: `Job ${jobId} is terminal; cannot accept steer.` } }
+    }
+    const parsed = parseApiResponse(res)
+    return { ok: parsed.ok, payload: parsed.body }
   }
   // Resource-grouped dispatchers — route directly to callMetaTool, which
   // unpacks the action and forwards to the underlying singular tool.

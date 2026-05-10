@@ -68,7 +68,10 @@ def test_publish_skill_clean_succeeds(client):
     )
     assert resp.status_code == 201, resp.text
     body = resp.json()
-    assert body["review_status"] == "approved"  # hosted skills auto-approve
+    # 1.6.1: hosted skills published by non-master callers land in probation;
+    # graduate_probation_listings() promotes them on track record. Master
+    # callers still auto-approve (covered separately).
+    assert body["review_status"] == "probation"
     assert body["endpoint_url"].startswith("skill://")
 
 

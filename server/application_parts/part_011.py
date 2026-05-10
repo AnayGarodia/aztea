@@ -35,6 +35,7 @@ def admin_get_dispute(
     "/admin/disputes/{dispute_id}/rule",
     response_model=core_models.DisputeJudgeResponse,
     responses=_error_responses(400, 401, 403, 404, 409, 429, 500),
+    dependencies=[Depends(_require_admin_caller)],
 )
 @limiter.limit("30/minute")
 def disputes_admin_rule(
@@ -43,6 +44,10 @@ def disputes_admin_rule(
     body: AdminDisputeRuleRequest,
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.DisputeJudgeResponse:
+    # Belt-and-braces: route-level dep above already 403s non-admin callers
+    # before body parse, so this in-handler check is redundant for fresh
+    # requests. Kept so future refactors that move the route can't silently
+    # drop the scope guard.
     _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
     _require_admin_ip_allowlist(request)
     dispute_row = disputes.get_dispute(dispute_id)
@@ -1745,5 +1750,79 @@ def admin_platform_withdraw(
             "debit_tx_id": result["debit_tx_id"],
             "credit_tx_id": result["credit_tx_id"],
             "admin_wallet_id": dest_wallet["wallet_id"],
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
+# Watchers — minimal JSON discovery surface (1.6.1)
+# ---------------------------------------------------------------------------
+# The watcher CRUD module shipped with PR #15 / #16 but never gained a public
+# JSON route. Tools probing /watchers, /api/watchers, /v1/watchers all hit the
+# SPA fallback and got HTML. This GET makes the surface discoverable; mutating
+# operations stay in the dedicated owner-scoped routes (kept in core/watchers
+# for now until the schema stabilises further).
+
+@app.get(
+    "/watchers",
+    responses=_error_responses(401, 403, 429, 500),
+    tags=["Watchers"],
+    summary="List watchers owned by the calling user.",
+)
+@limiter.limit("60/minute")
+def watchers_list(
+    request: Request,
+    limit: int = 100,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    _require_any_scope(caller, "caller", "worker")
+    from core import watchers as _watchers
+
+    owner_id = caller.get("owner_id") or ""
+    rows = _watchers.crud.list_watchers_for_owner(owner_id, limit=int(limit))
+    return JSONResponse(content={"watchers": rows, "count": len(rows)})
+
+
+# ---------------------------------------------------------------------------
+# Caller self-reconcile (1.6.1)
+# ---------------------------------------------------------------------------
+# /ops/payments/reconcile is admin-only (system-wide audit). Callers couldn't
+# verify their own wallet drift without root creds. This endpoint lets a
+# caller-scoped key reconcile only their own wallet.
+
+@app.get(
+    "/wallets/me/reconcile",
+    responses=_error_responses(401, 403, 404, 429, 500),
+    tags=["Wallets"],
+    summary="Reconcile the caller's own wallet (cached balance vs ledger sum).",
+)
+@limiter.limit("10/minute")
+def wallet_self_reconcile(
+    request: Request,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    _require_any_scope(caller, "caller", "worker")
+    owner_id = caller.get("owner_id") or ""
+    wallet = payments.get_or_create_wallet(owner_id)
+    wallet_id = wallet["wallet_id"]
+    cached = int(wallet.get("balance_cents") or 0)
+    with get_db_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT COALESCE(SUM(amount_cents), 0) AS net
+            FROM transactions
+            WHERE wallet_id = %s
+            """,
+            (wallet_id,),
+        ).fetchone()
+    ledger = int((dict(row) if row else {}).get("net") or 0)
+    drift = cached - ledger
+    return JSONResponse(
+        content={
+            "wallet_id": wallet_id,
+            "cached_balance_cents": cached,
+            "ledger_sum_cents": ledger,
+            "drift_cents": drift,
+            "invariant_ok": drift == 0,
         }
     )

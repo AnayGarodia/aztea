@@ -171,6 +171,14 @@ def _call_agent(
 @app.command()
 def hire(
     slug: str,
+    positional_input: Optional[str] = typer.Argument(
+        None,
+        metavar="[INPUT]",
+        help=(
+            "Optional positional JSON (e.g. `aztea hire wiki '{\"query\":\"x\"}'`). "
+            "If omitted, --input is consulted."
+        ),
+    ),
     input_value: Optional[str] = typer.Option(
         None, "--input", help="@file.json, '-', inline JSON, or k=v pairs."
     ),
@@ -178,8 +186,16 @@ def hire(
     base_url: Optional[str] = BaseUrlOpt,
     json_mode: bool = JsonOpt,
 ) -> None:
-    """Hire an agent and wait for the result."""
-    _call_agent(slug, input_value, api_key=api_key, base_url=base_url, json_mode=json_mode)
+    """Hire an agent and wait for the result.
+
+    Accepts input as either a positional JSON string or via ``--input``.
+    Positional wins when both are provided so copy-pasted examples from the
+    docs (which use the positional form) keep working without --input.
+    """
+    effective_input = positional_input if positional_input is not None else input_value
+    _call_agent(
+        slug, effective_input, api_key=api_key, base_url=base_url, json_mode=json_mode,
+    )
 
 
 @app.command(name="batch")

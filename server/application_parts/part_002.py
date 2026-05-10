@@ -212,6 +212,25 @@ def _require_any_scope(caller: core_models.CallerContext, *scopes: str) -> None:
     )
 
 
+def _require_admin_caller(
+    request: Request,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.CallerContext:
+    """Route-level dependency: hard 403 BEFORE body parse for admin routes.
+
+    Why this exists separately from the in-body ``_require_scope`` call:
+    FastAPI runs Pydantic body validation at the same time as parameter
+    dependencies, so a malformed admin-route body returns 422 even when the
+    caller has no admin scope. Mounting this as ``dependencies=[Depends(...)]``
+    on the route decorator forces the scope check to run before body parsing,
+    so callers see 403 (not 422) and can't probe the body schema unauthenticated.
+    """
+    _require_scope(
+        caller, "admin", detail="This endpoint requires admin scope."
+    )
+    return caller
+
+
 def _proxy_headers_for_agent(agent: dict) -> dict[str, str]:
     return {"Content-Type": "application/json"}
 

@@ -155,6 +155,10 @@ class Wallet:
     wallet_id: str
     owner_id: str
     balance_cents: int
+    # escrow_cents was missing from the dataclass before 1.6.1, so JSON output
+    # of `aztea wallet balance --json` silently dropped the field. Pinned at 0
+    # default for back-compat with deserializers that don't supply it.
+    escrow_cents: int = 0
     caller_trust: float = 0.5
     created_at: str = ""
 
@@ -165,6 +169,7 @@ class Wallet:
                 ("Wallet", self.wallet_id),
                 ("Owner", self.owner_id),
                 ("Balance", f"${self.balance_cents / 100:.2f}"),
+                ("Escrow", f"${self.escrow_cents / 100:.2f}"),
                 ("Trust", f"{self.caller_trust:.0%}"),
                 ("Created", self.created_at or "-"),
             ],

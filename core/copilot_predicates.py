@@ -41,6 +41,11 @@ STOP_WHEN_MAX_EXPR_LEN = 500
 STOP_WHEN_MAX_LABEL_LEN = 64
 STOP_WHEN_MAX_PROJECTION_DEPTH = 2
 STOP_WHEN_MAX_OR_CHAIN = 4
+# Cap chained attribute access (a.b.c.d…). Eight covers every realistic
+# stop_when (output.results[0].matches[0].full_match is depth 5); deeper
+# expressions usually mean the caller is trying to evade complexity bounds
+# via dot-chains since projections are already capped above.
+STOP_WHEN_MAX_NESTING_DEPTH = 8
 STOP_WHEN_EVAL_BUDGET_S = 0.025
 
 # Singleton executor — reusing a small pool is cheaper than spawning a fresh
@@ -126,7 +131,7 @@ def _check_complexity(node: dict, *, label: str) -> None:
     predicates to pass and only block expressions that could blow up eval
     time on large payloads.
     """
-    proj_depth, or_count = _walk_ast(node)
+    proj_depth, or_count, nesting = _walk_ast(node)
     if proj_depth > STOP_WHEN_MAX_PROJECTION_DEPTH:
         raise StopWhenInvalid(
             f"stop_when[{label}] uses wildcard projection deeper than "
@@ -136,6 +141,11 @@ def _check_complexity(node: dict, *, label: str) -> None:
         raise StopWhenInvalid(
             f"stop_when[{label}] uses more than {STOP_WHEN_MAX_OR_CHAIN} "
             f"|| operators"
+        )
+    if nesting > STOP_WHEN_MAX_NESTING_DEPTH:
+        raise StopWhenInvalid(
+            f"stop_when[{label}] chains attribute access deeper than "
+            f"{STOP_WHEN_MAX_NESTING_DEPTH} levels"
         )
 
 
@@ -147,19 +157,28 @@ _PROJECTION_NODE_TYPES = {
 }
 
 
-def _walk_ast(node: Any) -> tuple[int, int]:
-    """Return (max_projection_depth, or_count) for a parsed JMESPath AST.
+# JMESPath parses chained attribute access (a.b.c.d.e) as a SINGLE
+# `subexpression` node whose children are the chain segments. So we measure
+# nesting by max child-count of these flattening nodes — not by recursive
+# depth, which would always read 1.
+_FLATTENED_CHAIN_NODE_TYPES = {"subexpression", "index_expression"}
+
+
+def _walk_ast(node: Any) -> tuple[int, int, int]:
+    """Return (max_projection_depth, or_count, max_chain_width) for a parsed JMESPath AST.
 
     JMESPath's parsed form is a dict with 'type' and 'children'. We walk
     iteratively and track the maximum nested-projection depth seen on any
     path from the root. ``or`` operators are counted globally (across all
-    branches) since the cost is roughly additive.
+    branches) since the cost is roughly additive. ``max_chain_width`` counts
+    the longest flattened attribute chain (e.g. `a.b.c.d.e` → width 5) so
+    callers can't bypass the projection cap by avoiding wildcards.
     """
     if not isinstance(node, dict):
-        return (0, 0)
+        return (0, 0, 0)
     max_depth = 0
     or_count = 0
-    # Stack holds (subtree, depth-so-far).
+    max_chain_width = 0
     stack: list[tuple[dict, int]] = [(node, 0)]
     while stack:
         cur, depth = stack.pop()
@@ -169,10 +188,13 @@ def _walk_ast(node: Any) -> tuple[int, int]:
             max_depth = new_depth
         if ntype == "or_expression":
             or_count += 1
-        for child in cur.get("children", []) or []:
+        children = cur.get("children", []) or []
+        if ntype in _FLATTENED_CHAIN_NODE_TYPES and len(children) > max_chain_width:
+            max_chain_width = len(children)
+        for child in children:
             if isinstance(child, dict):
                 stack.append((child, new_depth))
-    return max_depth, or_count
+    return max_depth, or_count, max_chain_width
 
 
 def evaluate_first_match(

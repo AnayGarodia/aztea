@@ -1052,6 +1052,14 @@ def _row_to_dict(row: dict) -> dict:
     d = dict(row)
     d["input_payload"] = _decode_json(d.get("input_payload"), default={})
     d["output_payload"] = _decode_json(d.get("output_payload"), default=None)
+    # Co-pilot mode: stop_when_json persists as TEXT but every reader expects
+    # the structured envelope ({"predicates": [...]}). Decode here so callers
+    # never have to special-case the raw string. Also surface the legacy
+    # stop_reason_json envelope on jobs that ran to a stop_when match.
+    if "stop_when_json" in d:
+        d["stop_when_json"] = _decode_json(d.get("stop_when_json"), default=None)
+    if "stop_reason_json" in d:
+        d["stop_reason_json"] = _decode_json(d.get("stop_reason_json"), default=None)
     return d
 
 

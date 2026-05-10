@@ -1531,6 +1531,13 @@ def _lexical_match_score(query: str, agent: dict, supported_fields: set[str]) ->
     desc_lower = desc_text.lower()
     tag_lower = tag_text.lower()
     example_lower = example_text.lower()
+    # The slug is the canonical identifier callers type — treat exact slug
+    # token matches as the strongest relevance signal short of a full phrase
+    # match. Without this, "regex matching" surfaced secret-scanner above
+    # regex-tester because both had similar lexical scores and trust dominated
+    # the tie-break (eval finding 2026-05-09).
+    slug_tokens = {tok for tok in _query_terms(name_text) if tok}
+    slug_token_hit = any(term in slug_tokens for term in query_terms)
 
     phrase_bonus = 0.0
     if lowered_query in name_lower:
@@ -1544,6 +1551,10 @@ def _lexical_match_score(query: str, agent: dict, supported_fields: set[str]) ->
         phrase_bonus += 0.12
     if query_terms and any(term in tag_lower for term in query_terms):
         phrase_bonus += 0.08
+    # Strong bonus for an exact slug-token match — outweighs the trust gap
+    # that previously let high-trust adjacent agents win an unambiguous query.
+    if slug_token_hit:
+        phrase_bonus += 0.20
 
     score = (
         0.38 * name_score

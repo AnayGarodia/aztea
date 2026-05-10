@@ -82,21 +82,31 @@ SUNSET_AGENT_SLUGS: frozenset[str] = frozenset({
 
 
 def find_agent_id(client: AzteaClient, slug: str) -> str:
-    """Resolve `slug` to an agent_id. Accepts UUID or kebab-cased name."""
-    slug = slug.strip()
+    """Resolve `slug` to an agent_id. Accepts UUID, kebab-case, or snake_case.
+
+    Why both case styles: MCP tool catalogs surface canonical snake_case slugs
+    (``regex_tester``) while CLI flows + display names use kebab (``regex-tester``).
+    Users copy-paste either form interchangeably; rejecting one of them was a
+    real ergonomics regression.
+    """
+    raw = slug.strip()
+    # Normalize snake_case → kebab-case so `regex_tester` resolves the same as
+    # `regex-tester`. Hyphens are the canonical CLI form (slugify emits them).
+    candidates = {raw, raw.replace("_", "-")}
     agents = client.list_agents()
-    for agent in agents:
-        if agent.agent_id == slug:
-            return agent.agent_id
-    for agent in agents:
-        if slugify(agent.name) == slug:
-            return agent.agent_id
-    if slug.lower() in SUNSET_AGENT_SLUGS:
+    for cand in candidates:
+        for agent in agents:
+            if agent.agent_id == cand:
+                return agent.agent_id
+        for agent in agents:
+            if slugify(agent.name) == cand:
+                return agent.agent_id
+    if raw.replace("_", "-").lower() in SUNSET_AGENT_SLUGS:
         raise typer.BadParameter(
-            f"Agent '{slug}' was removed from the public catalog and is no longer "
+            f"Agent '{raw}' was removed from the public catalog and is no longer "
             "callable. See `aztea agents list` for current alternatives."
         )
-    raise typer.BadParameter(f"Unknown agent '{slug}'. Try `aztea agents list`.")
+    raise typer.BadParameter(f"Unknown agent '{raw}'. Try `aztea agents list`.")
 
 
 # ── Settings / client construction ─────────────────────────────────────────

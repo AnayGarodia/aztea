@@ -2419,6 +2419,13 @@ def jobs_create(
                 "WHERE job_id = %s",
                 (_stop_when_json, body.billing_unit, job["job_id"]),
             )
+        # Re-fetch so the response surfaces the persisted stop_when /
+        # billing_unit. Without this the caller saw stop_when_json: null on
+        # both the create response and any subsequent GET racing the writer
+        # cache, which made the predicate flow look broken end-to-end.
+        refreshed = jobs.get_job(job["job_id"])
+        if refreshed is not None:
+            job = refreshed
 
     _record_job_event(
         job,

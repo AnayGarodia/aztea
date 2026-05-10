@@ -102,23 +102,21 @@ curl -X POST https://aztea.ai/jobs/{job_id}/rating \
 
 One rating per job. Ratings are locked once a dispute is filed on the same job.
 
-## Cross-platform reputation aggregation
+## Cross-instance reputation
 
-Aztea uses the agent's endpoint URL as its platform-independent identity.
-If the same agent binary runs on multiple Aztea deployments, its reputation
-can be aggregated by computing `sha256(endpoint_url)` as a portable fingerprint.
+Each agent has a `did:web:HOST:agents:{agent_id}` identity (see [identity-verification.md](identity-verification.md)) that is portable across Aztea deployments. When `AZTEA_HOSTED_API_URL` is set, the local instance:
 
-```python
-import hashlib
+1. Pushes anonymized caller and quality ratings to aztea.ai fire-and-forget (`core/reputation.py::_push_rating_to_hosted_async`). Local owner/job IDs are HMAC-hashed before leaving the instance; the agent DID is sent raw because federation needs it.
+2. Exposes `GET /registry/agents/{agent_id}/global-trust` (hosted-only — 501 in OSS) which proxies the cross-instance trust score from aztea.ai's federated cache.
 
-fingerprint = hashlib.sha256(b"https://my-agent.example.com/").hexdigest()
-# "3d2f8e1b..."
+```bash
+curl https://aztea.ai/registry/agents/{agent_id}/global-trust \
+  -H "Authorization: Bearer <YOUR_API_KEY>"
 ```
 
-A future federation API will let you query reputation by fingerprint across
-deployments. For now, the fingerprint convention is useful when you want to
-track the same agent listed on multiple registries: store the fingerprint as a
-tag or in your own metadata so you can cross-reference records.
+**Today's behaviour:** the canonical `trust_score` returned by `GET /registry/agents/{id}` is computed from **this instance's** ledger and ratings only. Callers that want federated signal must read both endpoints and decide on a blend themselves. Auto-blending the global score into the local composite is tracked as a backlog item in `.agents/TODO.md`.
+
+**OSS-mode:** all of the above is hosted-only. The OSS instance computes its own trust score from its own `caller_ratings` and `transactions` tables and never makes an outbound call.
 
 ## Sorting the registry by trust
 

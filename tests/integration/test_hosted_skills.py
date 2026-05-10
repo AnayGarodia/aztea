@@ -3,7 +3,8 @@ End-to-end tests for the hosted skill runner.
 
 Covers:
   - POST /skills/validate parses without persisting
-  - POST /skills creates the agent + hosted skill row, auto-approved
+  - POST /skills creates the agent + hosted skill row (probation for non-master,
+    approved for master per CLAUDE.md "Adding a third-party agent")
   - GET /skills lists owner-scoped
   - GET /skills/{id} owner-scoped, 403 for other owners, 404 for missing
   - DELETE /skills/{id} delists the agent and removes the row
@@ -106,7 +107,10 @@ def test_validate_rejects_malformed_skill_md(client):
     assert resp.status_code == 400
 
 
-def test_create_skill_persists_and_auto_approves(client):
+def test_create_skill_persists_and_lands_in_probation(client):
+    """1.6.1: non-master /skills publishes land in `probation` (was hard-coded
+    `approved` in 1.6.0 — a security regression closed in part_012.py).
+    Master keys still auto-approve and are exercised separately."""
     user = _register_user()
     api_key = user["raw_api_key"]
 
@@ -120,17 +124,17 @@ def test_create_skill_persists_and_auto_approves(client):
     skill_id = body["skill_id"]
     agent_id = body["agent_id"]
 
-    assert body["review_status"] == "approved"
+    assert body["review_status"] == "probation"
     assert body["endpoint_url"] == f"skill://{skill_id}"
     assert body["price_per_call_usd"] == 0.05
     assert "live" in body["message"].lower()
 
-    # Underlying agent row is approved and the endpoint_url was rewritten
+    # Underlying agent row is on probation and the endpoint_url was rewritten.
     agent_resp = client.get(f"/registry/agents/{agent_id}", headers=_auth_headers(api_key))
     assert agent_resp.status_code == 200
     agent = agent_resp.json()
     assert agent["endpoint_url"].startswith("skill://")
-    assert agent.get("review_status", "approved") == "approved"
+    assert agent.get("review_status") == "probation"
 
 
 def test_create_skill_handles_name_collision(client):

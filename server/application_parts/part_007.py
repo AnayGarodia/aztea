@@ -630,6 +630,33 @@ def agent_did_document(agent_id: str, request: Request) -> JSONResponse:
     )
 
 
+@app.get(
+    "/.well-known/did.json",
+    include_in_schema=False,
+    tags=["Identity"],
+    responses=_error_responses(400, 404),
+)
+def well_known_did_document(
+    request: Request, agent_id: str | None = None,
+) -> JSONResponse:
+    """Well-known alias for ``/agents/{agent_id}/did.json``.
+
+    Why: spec consumers (and our own docs) sometimes look for the W3C
+    well-known path. Without this alias they 404 even though the canonical
+    DID document is reachable elsewhere. Honouring the well-known path
+    matches the agent.json pattern above.
+    """
+    if not agent_id:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "agent_id query parameter is required. Use "
+                "/agents/{id}/did.json for the canonical path."
+            ),
+        )
+    return agent_did_document(agent_id, request)
+
+
 @app.post(
     "/a2a/tasks/send",
     status_code=201,

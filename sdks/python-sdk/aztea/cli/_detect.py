@@ -78,6 +78,27 @@ def detect(path: Path) -> DetectionResult:
         )
 
     if suffix == ".md" or suffix == ".markdown":
+        # Explicit kind: declaration wins over heuristics. Lets users force
+        # the agent.md path even when their file uses ## headings that the
+        # hosted-skill parser would otherwise grab. Without this the
+        # SSRF-aware /onboarding/ingest path was bypassed because /skills
+        # accepts any `## section` form (eval finding 2026-05-09).
+        explicit_kind = _explicit_kind_from_frontmatter(text)
+        if explicit_kind == "agent":
+            return DetectionResult(
+                kind="agent_md",
+                path=expanded,
+                raw=text,
+                reason="explicit `kind: agent` declared in frontmatter.",
+            )
+        if explicit_kind == "skill":
+            return DetectionResult(
+                kind="skill_md",
+                path=expanded,
+                raw=text,
+                reason="explicit `kind: skill` declared in frontmatter.",
+            )
+
         looks_like_agent_md = _matches_agent_md(text)
         if looks_like_agent_md:
             return DetectionResult(
@@ -124,6 +145,34 @@ def _matches_agent_md(text: str) -> bool:
     head = text[:8192].lower()
     hits = sum(1 for heading in _AGENT_MD_HEADINGS if heading in head)
     return hits >= 3
+
+
+_FRONTMATTER_KIND_RE = re.compile(
+    r"^---\s*$(?P<body>.*?)^---\s*$",
+    re.MULTILINE | re.DOTALL,
+)
+_FRONTMATTER_KIND_LINE_RE = re.compile(
+    r"^kind\s*:\s*['\"]?(?P<kind>skill|agent)['\"]?\s*$",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+
+def _explicit_kind_from_frontmatter(text: str) -> str | None:
+    """Return 'skill' or 'agent' when YAML frontmatter declares ``kind:``.
+
+    Why: heading-shape heuristics confused agent.md files that use
+    ``## endpoint`` style sections with hosted skills, silently bypassing
+    the SSRF-aware ingest path. An explicit ``kind:`` lets callers be
+    unambiguous.
+    """
+    m = _FRONTMATTER_KIND_RE.search(text[:4096])
+    if not m:
+        return None
+    body = m.group("body") or ""
+    km = _FRONTMATTER_KIND_LINE_RE.search(body)
+    if not km:
+        return None
+    return km.group("kind").lower()
 
 
 __all__ = ["DetectionError", "DetectionResult", "ListingKind", "detect"]

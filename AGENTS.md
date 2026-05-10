@@ -18,7 +18,7 @@ Every PR is graded against both. See `.agents/VISION.md` for the full philosophy
 
 ## Architecture in one sentence
 
-FastAPI monolith on SQLite WAL, provider-agnostic LLM layer, async job lifecycle, insert-only ledger, MCP-native agent surface, `did:web` identity per agent.
+FastAPI monolith with dual-backend persistence (Postgres in prod, SQLite WAL in dev/tests), provider-agnostic LLM layer, async job lifecycle, insert-only ledger, MCP-native agent surface, `did:web` identity per agent.
 
 ---
 
@@ -131,4 +131,4 @@ npm --prefix frontend run build   # frontend prod build
 python scripts/check_file_line_budget.py   # enforce <1000-line rule
 ```
 
-Current test status: 453 passed, 1 skipped (intentional, feature-flag gated).
+Current test status: see `CLAUDE.md` → "Dev commands" for the canonical pytest invocation and the most recent counted run. Don't claim a specific count here — it drifts; the numbers in `CLAUDE.md` are dated and updated when the suite is re-run.

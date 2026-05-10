@@ -34,6 +34,7 @@ Imports: stdlib only — socket, ssl, urllib, time, datetime. No httpx or third-
 """
 
 import logging
+import re
 import socket
 import ssl
 import time
@@ -240,6 +241,32 @@ def _inspect_one(domain: str, checks: set[str]) -> tuple[dict[str, Any], bool]:
     return entry, domain_ok
 
 
+# A bare hostname (no scheme, no path, no IP). Permits ASCII letters, digits,
+# dots, hyphens (per RFC 1035-ish). Rejects URLs, IP literals, and any
+# value containing characters that mark non-domain inputs (':', '/', '@').
+# IPv4-shaped strings are also rejected — DNS lookups on raw IPs are
+# meaningless and would otherwise let a caller probe internal hosts.
+_HOSTNAME_RE = re.compile(r"^(?=.{1,253}$)(?!-)[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63})+(?<!-)$")
+_IPV4_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
+
+
+def _is_valid_public_domain(value: str) -> bool:
+    """Pure: True when ``value`` is a syntactically valid bare hostname.
+
+    Rejects URL-shaped inputs ("http://10.0.0.1"), IP literals ("10.0.0.1"),
+    and any value containing scheme/path/userinfo separators. SSRF-adjacent:
+    DNS resolution itself is harmless, but the SSL + HTTP checks downstream
+    will reach the resolved address — letting an internal IP through here
+    means an attacker can probe the metadata service or internal services
+    via the curated public agent surface.
+    """
+    if not value or any(ch in value for ch in (":", "/", "@", "?", "#", " ")):
+        return False
+    if _IPV4_RE.match(value):
+        return False
+    return bool(_HOSTNAME_RE.match(value))
+
+
 def _normalize_run_inputs(payload: dict) -> dict | tuple[list[str], set[str]]:
     """Pure: validate + normalize ``run`` inputs; returns ``(domains, checks)`` or an error envelope."""
     if not isinstance(payload, dict):
@@ -255,11 +282,19 @@ def _normalize_run_inputs(payload: dict) -> dict | tuple[list[str], set[str]]:
             "dns_inspector.too_many_domains",
             f"domains may contain at most {_MAX_DOMAINS} entries; got {len(raw_domains)}",
         )
-    domains = [str(d).strip().lower() for d in raw_domains if str(d).strip()]
-    if not domains:
+    candidates = [str(d).strip().lower() for d in raw_domains if str(d).strip()]
+    if not candidates:
         return _err(
             "dns_inspector.invalid_domains", "domains list contains no valid entries",
         )
+    rejected = [d for d in candidates if not _is_valid_public_domain(d)]
+    if rejected:
+        return _err(
+            "dns_inspector.invalid_domain_format",
+            "domains entries must be bare hostnames (no schemes, paths, IPs). "
+            f"Rejected: {rejected[:3]}",
+        )
+    domains = candidates
     raw_checks = payload.get("checks", list(_DEFAULT_CHECKS))
     if not isinstance(raw_checks, list):
         raw_checks = list(_DEFAULT_CHECKS)

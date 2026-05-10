@@ -955,6 +955,11 @@ def _row_to_dict(row: dict) -> dict:
     total = d["total_calls"]
     successful = d.pop("successful_calls")
     d["success_rate"] = round(successful / total, 4) if total > 0 else 1.0
+    # Distinguish "no call history" from "100% success" in renderers. Without
+    # this flag the frontend shows 0% (or 100%, depending on which surface
+    # consumed the field) for agents that simply haven't been called yet,
+    # which misleads buyers comparing trust signals.
+    d["has_call_history"] = total > 0
     return d
 
 

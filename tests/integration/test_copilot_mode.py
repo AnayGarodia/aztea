@@ -107,6 +107,29 @@ def test_stop_when_complexity_rejected_at_submit(client):
     assert err == "stop_when.invalid", body
 
 
+def test_stop_when_chained_attribute_depth_rejected_at_submit(client):
+    """A 10-deep dot chain (no projections) was previously accepted because
+    only projection depth was checked. Pinned here so the new
+    STOP_WHEN_MAX_NESTING_DEPTH bound stays load-bearing."""
+    _, caller, agent_id = _setup_caller_and_agent(client)
+    resp = client.post(
+        "/jobs",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={
+            "agent_id": agent_id,
+            "input_payload": {"task": "x"},
+            "stop_when": [{
+                "label": "deep_chain",
+                "expr": "output.a.b.c.d.e.f.g.h.i.j == `1`",
+            }],
+        },
+    )
+    assert resp.status_code == 400, resp.text
+    err = (resp.json().get("error")
+           or resp.json().get("detail", {}).get("error"))
+    assert err == "stop_when.invalid", resp.text
+
+
 # ---------------------------------------------------------------------------
 # Lease behavior
 # ---------------------------------------------------------------------------
@@ -187,7 +210,11 @@ def test_stop_when_aborts_at_exact_partial(client):
     assert j["partials_count"] == 2
     assert j["terminal_at"] is not None
     assert j["stop_reason_json"] is not None
-    reason = json.loads(j["stop_reason_json"])
+    # _row_to_dict now decodes stop_reason_json on read so callers receive a
+    # structured envelope. Tolerate both shapes for tests run against older
+    # readers / cached compiled bytecode.
+    raw_reason = j["stop_reason_json"]
+    reason = raw_reason if isinstance(raw_reason, dict) else json.loads(raw_reason)
     assert reason["label"] == "critical"
     assert reason["matched_message_id"] is not None
 

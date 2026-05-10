@@ -180,6 +180,22 @@ def skills_create(
     candidate_name = display_name
     agent_id: str | None = None
     last_error: Exception | None = None
+    # Master keys publish trusted hosted skills (internal automation, ops);
+    # everyone else lands in probation per CLAUDE.md so auto-invoke caps the
+    # price + rank-penalises until graduate_probation_listings() promotes the
+    # skill on track record. The earlier behaviour silently rubber-stamped
+    # every external publish, which let a community skill show up next to
+    # master-curated agents on day one — a real trust regression.
+    is_master = caller.get("type") == "master"
+    initial_review_status = "approved" if is_master else "probation"
+    initial_review_note = (
+        "Auto-approved hosted skill." if is_master
+        else "Auto-published hosted skill — probation pending track record."
+    )
+    initial_reviewed_by = (
+        "system:auto-approve-hosted-skill" if is_master
+        else "system:auto-probation-hosted-skill"
+    )
     for attempt in range(1, 8):
         try:
             agent_id = registry.register_agent(
@@ -191,10 +207,10 @@ def skills_create(
                 input_schema=_SKILL_DEFAULT_INPUT_SCHEMA,
                 output_schema=_SKILL_DEFAULT_OUTPUT_SCHEMA,
                 owner_id=caller["owner_id"],
-                review_status="approved",
-                review_note="Auto-approved hosted skill.",
+                review_status=initial_review_status,
+                review_note=initial_review_note,
                 reviewed_at=_utc_now_iso(),
-                reviewed_by="system:auto-approve-hosted-skill",
+                reviewed_by=initial_reviewed_by,
                 kind="community_skill",
             )
             break
@@ -286,9 +302,14 @@ def skills_create(
             "endpoint_url": final_endpoint,
             "name": candidate_name,
             "price_per_call_usd": price_per_call_usd,
-            "review_status": "approved",
+            "review_status": initial_review_status,
             "warnings": parsed.warnings,
-            "message": "Skill is live. Callers can hire it now.",
+            "message": (
+                "Skill is live and approved. Callers can hire it now."
+                if initial_review_status == "approved"
+                else "Skill is live on probation. Successful calls + a few "
+                     "ratings ≥ 3.5 graduate it to approved."
+            ),
         },
         status_code=201,
     )
