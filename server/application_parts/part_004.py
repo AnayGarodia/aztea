@@ -254,7 +254,12 @@ def _sign_builtin_output(agent: dict | None, output: dict) -> dict[str, str | No
     return sig
 
 
-def _process_pending_builtin_job(job: dict) -> bool:
+def _claim_and_announce_job(job: dict) -> dict | None:
+    """Atomically claim the job lease and emit the initial progress events.
+
+    Returns the claimed job row, or ``None`` if the claim raced with another
+    worker (idempotent: caller should return ``False`` without further work).
+    """
     claimed = jobs.claim_job(
         job["job_id"],
         claim_owner_id=_BUILTIN_WORKER_OWNER_ID,
@@ -262,8 +267,7 @@ def _process_pending_builtin_job(job: dict) -> bool:
         require_authorized_owner=False,
     )
     if claimed is None:
-        return False
-
+        return None
     _record_job_event(
         claimed,
         "job.claimed",
@@ -280,6 +284,182 @@ def _process_pending_builtin_job(job: dict) -> bool:
         msg_type="progress",
         payload={"message": "Built-in worker started processing.", "percent": 5},
     )
+    return claimed
+
+
+def _dispatch_agent_output(
+    *,
+    claimed: dict,
+    is_hosted_skill: bool,
+    heartbeat_cb,
+) -> Any:
+    """Execute the agent (hosted or built-in) and return its raw output dict."""
+    if is_hosted_skill:
+        skill_row = _hosted_skills.get_hosted_skill_by_agent_id(
+            str(claimed["agent_id"])
+        )
+        if skill_row is None:
+            raise RuntimeError("Hosted skill record is missing.")
+        return _skill_executor.execute_hosted_skill(
+            skill_row,
+            claimed.get("input_payload") or {},
+            heartbeat_cb=heartbeat_cb,
+        )
+    return _execute_builtin_agent(
+        str(claimed["agent_id"]),
+        claimed.get("input_payload") or {},
+    )
+
+
+def _handle_retryable_exception(
+    *,
+    claimed: dict,
+    exc: Exception,
+    error_message: str,
+    extra_payload: dict | None = None,
+) -> bool:
+    """Schedule a retry or mark terminal failure for transient/rate-limit errors.
+
+    Returns ``True`` (processed) in all branches so the caller can tail-return.
+    """
+    retried = jobs.schedule_job_retry(
+        claimed["job_id"],
+        retry_delay_seconds=_SWEEPER_RETRY_DELAY_SECONDS,
+        error_message=error_message,
+        claim_owner_id=_BUILTIN_WORKER_OWNER_ID,
+        claim_token=claimed.get("claim_token"),
+        require_authorized_owner=False,
+    )
+    if retried is not None and retried["status"] == "pending":
+        event_payload: dict = {
+            "retry_count": retried["retry_count"],
+            "next_retry_at": retried["next_retry_at"],
+        }
+        if extra_payload:
+            event_payload.update(extra_payload)
+        _record_job_event(
+            retried,
+            "job.retry_scheduled",
+            actor_owner_id=_BUILTIN_WORKER_OWNER_ID,
+            payload=event_payload,
+        )
+        return True
+    updated = retried or jobs.update_job_status(
+        claimed["job_id"],
+        "failed",
+        error_message=error_message,
+        completed=True,
+    )
+    if updated is not None:
+        _settle_failed_job(
+            updated,
+            actor_owner_id=_BUILTIN_WORKER_OWNER_ID,
+            event_type="job.failed_builtin",
+        )
+    return True
+
+
+def _validate_and_gate_output(
+    *,
+    claimed: dict,
+    agent: dict,
+    output: Any,
+) -> tuple[bool, bool]:
+    """Run schema validation and quality gate. Returns (failed, done).
+
+    If either check fails the job is marked failed+settled and ``(True, True)``
+    is returned so the caller can short-circuit with ``return True``.
+    Returns ``(False, False)`` when all checks pass.
+    """
+    output_schema = agent.get("output_schema")
+    if isinstance(output_schema, dict) and output_schema:
+        mismatches = _validate_json_schema_subset(output, output_schema)
+        if mismatches:
+            updated = jobs.update_job_status(
+                claimed["job_id"],
+                "failed",
+                error_message=f"Output schema mismatch: {', '.join(mismatches[:3])}",
+                completed=True,
+            )
+            if updated is not None:
+                _settle_failed_job(
+                    updated,
+                    actor_owner_id=_BUILTIN_WORKER_OWNER_ID,
+                    event_type="job.failed_schema",
+                )
+            return True, True
+
+    quality = _run_quality_gate(claimed, agent, output)
+    jobs.set_job_quality_result(
+        claimed["job_id"],
+        judge_verdict=quality["judge_verdict"],
+        quality_score=quality["quality_score"],
+        judge_agent_id=quality["judge_agent_id"],
+    )
+    if not quality["passed"]:
+        updated = jobs.update_job_status(
+            claimed["job_id"],
+            "failed",
+            error_message=f"Quality judge failed: {quality['reason']}",
+            completed=True,
+        )
+        if updated is not None:
+            _settle_failed_job(
+                updated,
+                actor_owner_id=_BUILTIN_WORKER_OWNER_ID,
+                event_type="job.failed_quality",
+            )
+        return True, True
+
+    return False, False
+
+
+def _settle_successful_builtin_job(
+    *,
+    claimed: dict,
+    agent: dict | None,
+    output: Any,
+) -> None:
+    """Sign output, mark complete, settle payment, and optionally record judge fee."""
+    signature = _sign_builtin_output(agent, output if isinstance(output, dict) else {})
+    completed = jobs.update_job_status(
+        claimed["job_id"],
+        "complete",
+        output_payload=output,
+        completed=True,
+        output_signature=signature["signature"],
+        output_signature_alg=signature["alg"],
+        output_signed_by_did=signature["did"],
+        output_signed_at=signature["signed_at"],
+    )
+    if completed is None:
+        return
+    settled = _settle_successful_job(completed, actor_owner_id=_BUILTIN_WORKER_OWNER_ID)
+    if agent is None:
+        return
+    distribution = payments.compute_success_distribution(
+        int(completed.get("price_cents") or 0),
+        platform_fee_pct=completed.get("platform_fee_pct_at_create"),
+        fee_bearer_policy=completed.get("fee_bearer_policy"),
+    )
+    platform_fee_cents = int(distribution["platform_fee_cents"])
+    judge_fee_cents = min(_JUDGE_FEE_CENTS, platform_fee_cents)
+    if judge_fee_cents > 0:
+        judge_agent_id = str(settled.get("judge_agent_id") or _QUALITY_JUDGE_AGENT_ID)
+        judge_wallet = payments.get_or_create_wallet(f"agent:{judge_agent_id}")
+        payments.record_judge_fee(
+            completed["platform_wallet_id"],
+            judge_wallet["wallet_id"],
+            charge_tx_id=completed["charge_tx_id"],
+            agent_id=completed["agent_id"],
+            fee_cents=judge_fee_cents,
+        )
+
+
+def _process_pending_builtin_job(job: dict) -> bool:
+    claimed = _claim_and_announce_job(job)
+    if claimed is None:
+        return False
 
     agent_for_run = registry.get_agent(claimed["agent_id"], include_unapproved=True)
     is_hosted_skill = bool(
@@ -297,22 +477,11 @@ def _process_pending_builtin_job(job: dict) -> bool:
         )
 
     try:
-        if is_hosted_skill:
-            skill_row = _hosted_skills.get_hosted_skill_by_agent_id(
-                str(claimed["agent_id"])
-            )
-            if skill_row is None:
-                raise RuntimeError("Hosted skill record is missing.")
-            output = _skill_executor.execute_hosted_skill(
-                skill_row,
-                claimed.get("input_payload") or {},
-                heartbeat_cb=_heartbeat,
-            )
-        else:
-            output = _execute_builtin_agent(
-                str(claimed["agent_id"]),
-                claimed.get("input_payload") or {},
-            )
+        output = _dispatch_agent_output(
+            claimed=claimed,
+            is_hosted_skill=is_hosted_skill,
+            heartbeat_cb=_heartbeat,
+        )
         if _is_unchargeable_degraded_output(str(claimed["agent_id"]), output):
             output = _degraded_unchargeable_error(str(claimed["agent_id"]))
         agent_failed, failure_code, failure_message = _is_agent_failure_envelope(output)
@@ -334,38 +503,11 @@ def _process_pending_builtin_job(job: dict) -> bool:
                 )
             return True
     except _groq.RateLimitError as exc:
-        retried = jobs.schedule_job_retry(
-            claimed["job_id"],
-            retry_delay_seconds=_SWEEPER_RETRY_DELAY_SECONDS,
+        return _handle_retryable_exception(
+            claimed=claimed,
+            exc=exc,
             error_message=f"Built-in worker rate-limited: {exc}",
-            claim_owner_id=_BUILTIN_WORKER_OWNER_ID,
-            claim_token=claimed.get("claim_token"),
-            require_authorized_owner=False,
         )
-        if retried is not None and retried["status"] == "pending":
-            _record_job_event(
-                retried,
-                "job.retry_scheduled",
-                actor_owner_id=_BUILTIN_WORKER_OWNER_ID,
-                payload={
-                    "retry_count": retried["retry_count"],
-                    "next_retry_at": retried["next_retry_at"],
-                },
-            )
-            return True
-        updated = retried or jobs.update_job_status(
-            claimed["job_id"],
-            "failed",
-            error_message=f"Built-in worker rate-limited: {exc}",
-            completed=True,
-        )
-        if updated is not None:
-            _settle_failed_job(
-                updated,
-                actor_owner_id=_BUILTIN_WORKER_OWNER_ID,
-                event_type="job.failed_builtin",
-            )
-        return True
     except (TimeoutError, ConnectionError, OSError) as exc:
         # Transient I/O. The 2026-05-08 power-user eval saw the first job
         # of a 20-job batch flip to `failed` instantly while the same
@@ -374,39 +516,12 @@ def _process_pending_builtin_job(job: dict) -> bool:
         # subprocess pipe). Don't burn a retry budget on first sight.
         # Pre-2026-05-08 this exception class was caught by the broad
         # `except Exception` below and immediately marked terminal-failed.
-        retried = jobs.schedule_job_retry(
-            claimed["job_id"],
-            retry_delay_seconds=_SWEEPER_RETRY_DELAY_SECONDS,
+        return _handle_retryable_exception(
+            claimed=claimed,
+            exc=exc,
             error_message=f"Built-in worker transient {type(exc).__name__}: {exc}",
-            claim_owner_id=_BUILTIN_WORKER_OWNER_ID,
-            claim_token=claimed.get("claim_token"),
-            require_authorized_owner=False,
+            extra_payload={"error_class": type(exc).__name__},
         )
-        if retried is not None and retried["status"] == "pending":
-            _record_job_event(
-                retried,
-                "job.retry_scheduled",
-                actor_owner_id=_BUILTIN_WORKER_OWNER_ID,
-                payload={
-                    "retry_count": retried["retry_count"],
-                    "next_retry_at": retried["next_retry_at"],
-                    "error_class": type(exc).__name__,
-                },
-            )
-            return True
-        updated = retried or jobs.update_job_status(
-            claimed["job_id"],
-            "failed",
-            error_message=f"Built-in worker transient {type(exc).__name__} (retries exhausted): {exc}",
-            completed=True,
-        )
-        if updated is not None:
-            _settle_failed_job(
-                updated,
-                actor_owner_id=_BUILTIN_WORKER_OWNER_ID,
-                event_type="job.failed_builtin",
-            )
-        return True
     except Exception as exc:
         # Unexpected exception class. Stash error_class in the failure
         # record so post-mortems can find these without log-grepping.
@@ -432,79 +547,13 @@ def _process_pending_builtin_job(job: dict) -> bool:
     )
     agent = registry.get_agent(claimed["agent_id"], include_unapproved=True)
     if agent is not None:
-        output_schema = agent.get("output_schema")
-        if isinstance(output_schema, dict) and output_schema:
-            mismatches = _validate_json_schema_subset(output, output_schema)
-            if mismatches:
-                updated = jobs.update_job_status(
-                    claimed["job_id"],
-                    "failed",
-                    error_message=f"Output schema mismatch: {', '.join(mismatches[:3])}",
-                    completed=True,
-                )
-                if updated is not None:
-                    _settle_failed_job(
-                        updated,
-                        actor_owner_id=_BUILTIN_WORKER_OWNER_ID,
-                        event_type="job.failed_schema",
-                    )
-                return True
-        quality = _run_quality_gate(claimed, agent, output)
-        jobs.set_job_quality_result(
-            claimed["job_id"],
-            judge_verdict=quality["judge_verdict"],
-            quality_score=quality["quality_score"],
-            judge_agent_id=quality["judge_agent_id"],
+        _failed, _done = _validate_and_gate_output(
+            claimed=claimed, agent=agent, output=output
         )
-        if not quality["passed"]:
-            updated = jobs.update_job_status(
-                claimed["job_id"],
-                "failed",
-                error_message=f"Quality judge failed: {quality['reason']}",
-                completed=True,
-            )
-            if updated is not None:
-                _settle_failed_job(
-                    updated,
-                    actor_owner_id=_BUILTIN_WORKER_OWNER_ID,
-                    event_type="job.failed_quality",
-                )
+        if _done:
             return True
-    signature = _sign_builtin_output(agent, output if isinstance(output, dict) else {})
-    completed = jobs.update_job_status(
-        claimed["job_id"],
-        "complete",
-        output_payload=output,
-        completed=True,
-        output_signature=signature["signature"],
-        output_signature_alg=signature["alg"],
-        output_signed_by_did=signature["did"],
-        output_signed_at=signature["signed_at"],
-    )
-    if completed is not None:
-        settled = _settle_successful_job(
-            completed, actor_owner_id=_BUILTIN_WORKER_OWNER_ID
-        )
-        if agent is not None:
-            distribution = payments.compute_success_distribution(
-                int(completed.get("price_cents") or 0),
-                platform_fee_pct=completed.get("platform_fee_pct_at_create"),
-                fee_bearer_policy=completed.get("fee_bearer_policy"),
-            )
-            platform_fee_cents = int(distribution["platform_fee_cents"])
-            judge_fee_cents = min(_JUDGE_FEE_CENTS, platform_fee_cents)
-            if judge_fee_cents > 0:
-                judge_agent_id = str(
-                    settled.get("judge_agent_id") or _QUALITY_JUDGE_AGENT_ID
-                )
-                judge_wallet = payments.get_or_create_wallet(f"agent:{judge_agent_id}")
-                payments.record_judge_fee(
-                    completed["platform_wallet_id"],
-                    judge_wallet["wallet_id"],
-                    charge_tx_id=completed["charge_tx_id"],
-                    agent_id=completed["agent_id"],
-                    fee_cents=judge_fee_cents,
-                )
+
+    _settle_successful_builtin_job(claimed=claimed, agent=agent, output=output)
     return True
 
 
@@ -557,6 +606,109 @@ def _builtin_worker_inflight_snapshot() -> tuple[int, int]:
         )
 
 
+def _fetch_pending_jobs_for_eligible_agents(
+    *,
+    eligible_agent_ids: set[str],
+    fetch_limit: int,
+    batch_limit: int,
+) -> list[dict]:
+    """Return pending jobs from the DB, falling back to per-agent queries."""
+    try:
+        return jobs.list_pending_jobs(limit=fetch_limit)
+    except AttributeError:
+        all_pending: list[dict] = []
+        for agent_id in eligible_agent_ids:
+            all_pending.extend(
+                jobs.list_jobs_for_agent(agent_id, status="pending", limit=batch_limit)
+            )
+        return all_pending
+
+
+def _filter_jobs_to_capacity(
+    *,
+    all_pending: list[dict],
+    eligible_agent_ids: set[str],
+    already_inflight: set[str],
+    batch_limit: int,
+    capacity_remaining: int,
+) -> list[dict]:
+    """Filter, deduplicate, and cap pending jobs to available pool capacity."""
+    pending_jobs: list[dict] = []
+    seen_ids: set[str] = set()
+    per_agent_count: dict[str, int] = {}
+    for job in all_pending:
+        agent_id = str(job.get("agent_id") or "")
+        if agent_id not in eligible_agent_ids:
+            continue
+        if per_agent_count.get(agent_id, 0) >= batch_limit:
+            continue
+        job_id = str(job.get("job_id") or "")
+        if not job_id or job_id in seen_ids:
+            continue
+        # Defensive: an in-flight ID could still be visible in `pending` for a
+        # microsecond before claim_job lands in the DB. Skip it explicitly.
+        if job_id in already_inflight:
+            continue
+        seen_ids.add(job_id)
+        per_agent_count[agent_id] = per_agent_count.get(agent_id, 0) + 1
+        pending_jobs.append(job)
+        if len(pending_jobs) >= capacity_remaining:
+            break
+    return pending_jobs
+
+
+def _submit_job_to_pool(
+    *,
+    pool: Any,
+    job: dict,
+    job_id: str,
+) -> bool:
+    """Increment in-flight counter, submit the job to the pool, and return True.
+
+    On pool submission failure the counter is decremented and False is returned.
+    """
+    global _BUILTIN_WORKER_INFLIGHT_COUNT
+
+    with _BUILTIN_WORKER_INFLIGHT_LOCK:
+        _BUILTIN_WORKER_INFLIGHT_COUNT += 1
+        _BUILTIN_WORKER_INFLIGHT_IDS.add(job_id)
+
+    def _runner(captured_job=job, captured_id=job_id) -> bool:
+        global _BUILTIN_WORKER_INFLIGHT_COUNT
+        try:
+            return _process_pending_builtin_job(captured_job)
+        except Exception:
+            _LOG.exception("Built-in parallel worker task failed.")
+            return False
+        finally:
+            with _BUILTIN_WORKER_INFLIGHT_LOCK:
+                _BUILTIN_WORKER_INFLIGHT_COUNT = max(
+                    0, _BUILTIN_WORKER_INFLIGHT_COUNT - 1
+                )
+                _BUILTIN_WORKER_INFLIGHT_IDS.discard(captured_id)
+            # When a slot frees up, wake the loop so the next batch starts
+            # immediately rather than waiting up to interval_seconds. This
+            # is what gets concurrent batches off the queue under load.
+            _wake_event = globals().get("_BUILTIN_WORKER_WAKE_EVENT")
+            if _wake_event is not None:
+                try:
+                    _wake_event.set()
+                except Exception:
+                    pass
+
+    try:
+        pool.submit(_runner)
+        return True
+    except Exception:
+        with _BUILTIN_WORKER_INFLIGHT_LOCK:
+            _BUILTIN_WORKER_INFLIGHT_COUNT = max(
+                0, _BUILTIN_WORKER_INFLIGHT_COUNT - 1
+            )
+            _BUILTIN_WORKER_INFLIGHT_IDS.discard(job_id)
+        _LOG.exception("Failed to submit built-in worker task to pool.")
+        return False
+
+
 def _process_pending_builtin_jobs(
     limit_per_agent: int = _BUILTIN_JOB_WORKER_BATCH_SIZE,
 ) -> dict[str, int]:
@@ -568,8 +720,6 @@ def _process_pending_builtin_jobs(
     of the `pending` set via `claim_job`'s atomic state change, so nothing
     is double-claimed.
     """
-    global _BUILTIN_WORKER_INFLIGHT_COUNT
-
     batch_limit = min(max(1, int(limit_per_agent)), 500)
     max_total = max(batch_limit, int(_BUILTIN_JOB_WORKER_MAX_BATCH_TOTAL))
 
@@ -593,39 +743,22 @@ def _process_pending_builtin_jobs(
         }
 
     fetch_limit = min(max_total, capacity_remaining * 4)
+    all_pending = _fetch_pending_jobs_for_eligible_agents(
+        eligible_agent_ids=eligible_agent_ids,
+        fetch_limit=fetch_limit,
+        batch_limit=batch_limit,
+    )
 
-    try:
-        all_pending = jobs.list_pending_jobs(limit=fetch_limit)
-    except AttributeError:
-        all_pending = []
-        for agent_id in eligible_agent_ids:
-            all_pending.extend(
-                jobs.list_jobs_for_agent(agent_id, status="pending", limit=batch_limit)
-            )
-
-    pending_jobs: list[dict] = []
-    seen_ids: set[str] = set()
-    per_agent_count: dict[str, int] = {}
     with _BUILTIN_WORKER_INFLIGHT_LOCK:
         already_inflight = set(_BUILTIN_WORKER_INFLIGHT_IDS)
-    for job in all_pending:
-        agent_id = str(job.get("agent_id") or "")
-        if agent_id not in eligible_agent_ids:
-            continue
-        if per_agent_count.get(agent_id, 0) >= batch_limit:
-            continue
-        job_id = str(job.get("job_id") or "")
-        if not job_id or job_id in seen_ids:
-            continue
-        # Defensive: an in-flight ID could still be visible in `pending` for a
-        # microsecond before claim_job lands in the DB. Skip it explicitly.
-        if job_id in already_inflight:
-            continue
-        seen_ids.add(job_id)
-        per_agent_count[agent_id] = per_agent_count.get(agent_id, 0) + 1
-        pending_jobs.append(job)
-        if len(pending_jobs) >= capacity_remaining:
-            break
+
+    pending_jobs = _filter_jobs_to_capacity(
+        all_pending=all_pending,
+        eligible_agent_ids=eligible_agent_ids,
+        already_inflight=already_inflight,
+        batch_limit=batch_limit,
+        capacity_remaining=capacity_remaining,
+    )
     scanned = len(pending_jobs)
 
     if not pending_jobs:
@@ -639,46 +772,11 @@ def _process_pending_builtin_jobs(
         }
 
     pool = _get_builtin_worker_pool()
-    submitted = 0
-    for job in pending_jobs:
-        job_id = str(job.get("job_id") or "")
-        with _BUILTIN_WORKER_INFLIGHT_LOCK:
-            _BUILTIN_WORKER_INFLIGHT_COUNT += 1
-            _BUILTIN_WORKER_INFLIGHT_IDS.add(job_id)
-
-        def _runner(captured_job=job, captured_id=job_id) -> bool:
-            global _BUILTIN_WORKER_INFLIGHT_COUNT
-            try:
-                return _process_pending_builtin_job(captured_job)
-            except Exception:
-                _LOG.exception("Built-in parallel worker task failed.")
-                return False
-            finally:
-                with _BUILTIN_WORKER_INFLIGHT_LOCK:
-                    _BUILTIN_WORKER_INFLIGHT_COUNT = max(
-                        0, _BUILTIN_WORKER_INFLIGHT_COUNT - 1
-                    )
-                    _BUILTIN_WORKER_INFLIGHT_IDS.discard(captured_id)
-                # When a slot frees up, wake the loop so the next batch starts
-                # immediately rather than waiting up to interval_seconds. This
-                # is what gets concurrent batches off the queue under load.
-                _wake_event = globals().get("_BUILTIN_WORKER_WAKE_EVENT")
-                if _wake_event is not None:
-                    try:
-                        _wake_event.set()
-                    except Exception:
-                        pass
-
-        try:
-            pool.submit(_runner)
-            submitted += 1
-        except Exception:
-            with _BUILTIN_WORKER_INFLIGHT_LOCK:
-                _BUILTIN_WORKER_INFLIGHT_COUNT = max(
-                    0, _BUILTIN_WORKER_INFLIGHT_COUNT - 1
-                )
-                _BUILTIN_WORKER_INFLIGHT_IDS.discard(job_id)
-            _LOG.exception("Failed to submit built-in worker task to pool.")
+    submitted = sum(
+        1
+        for job in pending_jobs
+        if _submit_job_to_pool(pool=pool, job=job, job_id=str(job.get("job_id") or ""))
+    )
 
     try:
         remaining = jobs.count_pending_jobs(agent_ids=list(eligible_agent_ids))
@@ -1281,6 +1379,242 @@ def _mark_hook_delivery(
         )
 
 
+def _check_hook_is_active(
+    *,
+    hook_id: str,
+    delivery_id: int,
+    attempt_count: int,
+    now_iso: str,
+) -> bool:
+    """Return ``True`` if the hook is still active; cancel the delivery and return
+    ``False`` if it has been deactivated or deleted.  Caller should ``continue``
+    to the next delivery when ``False`` is returned."""
+    with jobs._conn() as conn:
+        hook_row = conn.execute(
+            "SELECT is_active FROM job_event_hooks WHERE hook_id = %s",
+            (hook_id,),
+        ).fetchone()
+    if hook_row is None or int(hook_row["is_active"]) != 1:
+        error_text = "Hook is inactive or deleted."
+        _update_hook_attempt_metadata(
+            hook_id=hook_id,
+            attempted_at=now_iso,
+            success=False,
+            status_code=None,
+            error_text=error_text,
+        )
+        _mark_hook_delivery(
+            delivery_id,
+            status="cancelled",
+            next_attempt_at=now_iso,
+            attempt_count=attempt_count,
+            status_code=None,
+            error_text=error_text,
+            now_iso=now_iso,
+            mark_success=False,
+        )
+        return False
+    return True
+
+
+def _build_hook_request(
+    *,
+    delivery: dict,
+) -> tuple[bytes, dict]:
+    """Deserialise the delivery payload and build the HTTP headers to send."""
+    try:
+        payload = json.loads(delivery["payload"] or "{}")
+    except (TypeError, json.JSONDecodeError):
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    payload_bytes = _stable_json_text(payload).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+        "X-Aztea-Event-Id": str(delivery["event_id"]),
+        "X-Aztea-Event-Type": str(payload.get("event_type") or "unknown"),
+    }
+    secret = (delivery.get("secret") or "").strip()
+    if secret:
+        digest = hmac.new(
+            secret.encode("utf-8"), payload_bytes, hashlib.sha256
+        ).hexdigest()
+        headers["X-Aztea-Signature"] = f"sha256={digest}"
+    return payload_bytes, headers
+
+
+def _post_hook_delivery(
+    *,
+    safe_target_url: str,
+    payload_bytes: bytes,
+    headers: dict,
+) -> tuple[bool, int | None, str | None]:
+    """Execute the HTTP POST.  Returns ``(success, status_code, error_text)``."""
+    try:
+        resp = http.post(
+            safe_target_url,
+            data=payload_bytes,
+            headers=headers,
+            timeout=5,
+            allow_redirects=False,
+        )
+        status_code = int(resp.status_code)
+        success = 200 <= status_code < 300
+        error_text = None if success else f"Non-2xx status: {status_code}"
+        return success, status_code, error_text
+    except http.RequestException as exc:
+        return False, None, str(exc)
+
+
+def _record_hook_outcome(
+    *,
+    delivery_id: int,
+    hook_id: str,
+    is_job_callback: bool,
+    attempt_count: int,
+    success: bool,
+    status_code: int | None,
+    error_text: str | None,
+    now_iso: str,
+) -> str:
+    """Persist the delivery outcome and return the bucket name: 'delivered',
+    'failed', or 'retried'."""
+    if not is_job_callback:
+        _update_hook_attempt_metadata(
+            hook_id=hook_id,
+            attempted_at=now_iso,
+            success=success,
+            status_code=status_code,
+            error_text=error_text,
+        )
+    if success:
+        _mark_hook_delivery(
+            delivery_id,
+            status="delivered",
+            next_attempt_at=now_iso,
+            attempt_count=attempt_count,
+            status_code=status_code,
+            error_text=None,
+            now_iso=now_iso,
+            mark_success=True,
+        )
+        return "delivered"
+    next_attempt_count = attempt_count + 1
+    if next_attempt_count >= _HOOK_DELIVERY_MAX_ATTEMPTS:
+        _mark_hook_delivery(
+            delivery_id,
+            status="failed",
+            next_attempt_at=now_iso,
+            attempt_count=next_attempt_count,
+            status_code=status_code,
+            error_text=error_text,
+            now_iso=now_iso,
+            mark_success=False,
+        )
+        return "failed"
+    retry_delay = _hook_backoff_seconds(next_attempt_count)
+    next_attempt_at = (
+        datetime.now(timezone.utc) + timedelta(seconds=retry_delay)
+    ).isoformat()
+    _mark_hook_delivery(
+        delivery_id,
+        status="pending",
+        next_attempt_at=next_attempt_at,
+        attempt_count=next_attempt_count,
+        status_code=status_code,
+        error_text=error_text,
+        now_iso=now_iso,
+        mark_success=False,
+    )
+    return "retried"
+
+
+def _deliver_one_hook(
+    *,
+    delivery: dict,
+) -> str:
+    """Process a single claimed delivery row.
+
+    Returns the outcome bucket: ``'cancelled'``, ``'invalid_url'``,
+    ``'delivered'``, ``'failed'``, or ``'retried'``.
+    """
+    now_iso = _utc_now_iso()
+    delivery_id = int(delivery["delivery_id"])
+    hook_id = str(delivery["hook_id"])
+    attempt_count = int(delivery["attempt_count"])
+    is_job_callback = hook_id.startswith(_JOB_CALLBACK_HOOK_PREFIX)
+
+    if not is_job_callback:
+        if not _check_hook_is_active(
+            hook_id=hook_id,
+            delivery_id=delivery_id,
+            attempt_count=attempt_count,
+            now_iso=now_iso,
+        ):
+            return "cancelled"
+
+    try:
+        safe_target_url = _validate_hook_url(str(delivery["target_url"]))
+    except ValueError as exc:
+        error_text = f"Blocked unsafe hook target: {exc}"
+        if not is_job_callback:
+            _update_hook_attempt_metadata(
+                hook_id=hook_id,
+                attempted_at=now_iso,
+                success=False,
+                status_code=None,
+                error_text=error_text,
+            )
+        next_count = attempt_count + 1
+        _mark_hook_delivery(
+            delivery_id,
+            status="failed" if next_count >= _HOOK_DELIVERY_MAX_ATTEMPTS else "pending",
+            next_attempt_at=(
+                now_iso
+                if next_count >= _HOOK_DELIVERY_MAX_ATTEMPTS
+                else (
+                    datetime.now(timezone.utc)
+                    + timedelta(seconds=_hook_backoff_seconds(next_count))
+                ).isoformat()
+            ),
+            attempt_count=next_count,
+            status_code=None,
+            error_text=error_text,
+            now_iso=now_iso,
+            mark_success=False,
+        )
+        return "failed" if next_count >= _HOOK_DELIVERY_MAX_ATTEMPTS else "retried"
+
+    payload_bytes, headers = _build_hook_request(delivery=delivery)
+    success, status_code, error_text = _post_hook_delivery(
+        safe_target_url=safe_target_url,
+        payload_bytes=payload_bytes,
+        headers=headers,
+    )
+    return _record_hook_outcome(
+        delivery_id=delivery_id,
+        hook_id=hook_id,
+        is_job_callback=is_job_callback,
+        attempt_count=attempt_count,
+        success=success,
+        status_code=status_code,
+        error_text=error_text,
+        now_iso=now_iso,
+    )
+
+
+def _fetch_hook_delivery_queue_depths() -> tuple[int, int]:
+    """Return (pending_count, failed_total) for the metrics envelope."""
+    with jobs._conn() as conn:
+        pending = conn.execute(
+            "SELECT COUNT(*) AS count FROM job_event_deliveries WHERE status = 'pending'"
+        ).fetchone()["count"]
+        failed_total = conn.execute(
+            "SELECT COUNT(*) AS count FROM job_event_deliveries WHERE status = 'failed'"
+        ).fetchone()["count"]
+    return int(pending), int(failed_total)
+
+
 def _process_due_hook_deliveries(limit: int = _HOOK_DELIVERY_BATCH_SIZE) -> dict:
     batch_limit = min(max(1, int(limit)), 500)
     processed = 0
@@ -1296,181 +1630,17 @@ def _process_due_hook_deliveries(limit: int = _HOOK_DELIVERY_BATCH_SIZE) -> dict
             break
 
         processed += 1
-        delivery_id = int(delivery["delivery_id"])
-        hook_id = str(delivery["hook_id"])
-        attempt_count = int(delivery["attempt_count"])
-
-        is_job_callback = hook_id.startswith(_JOB_CALLBACK_HOOK_PREFIX)
-        if not is_job_callback:
-            with jobs._conn() as conn:
-                hook_row = conn.execute(
-                    "SELECT is_active FROM job_event_hooks WHERE hook_id = %s",
-                    (hook_id,),
-                ).fetchone()
-
-            if hook_row is None or int(hook_row["is_active"]) != 1:
-                error_text = "Hook is inactive or deleted."
-                _update_hook_attempt_metadata(
-                    hook_id=hook_id,
-                    attempted_at=now_iso,
-                    success=False,
-                    status_code=None,
-                    error_text=error_text,
-                )
-                _mark_hook_delivery(
-                    delivery_id,
-                    status="cancelled",
-                    next_attempt_at=now_iso,
-                    attempt_count=attempt_count,
-                    status_code=None,
-                    error_text=error_text,
-                    now_iso=now_iso,
-                    mark_success=False,
-                )
-                cancelled += 1
-                continue
-
-        try:
-            safe_target_url = _validate_hook_url(str(delivery["target_url"]))
-        except ValueError as exc:
-            error_text = f"Blocked unsafe hook target: {exc}"
-            if not is_job_callback:
-                _update_hook_attempt_metadata(
-                    hook_id=hook_id,
-                    attempted_at=now_iso,
-                    success=False,
-                    status_code=None,
-                    error_text=error_text,
-                )
-            _mark_hook_delivery(
-                delivery_id,
-                status="failed"
-                if (attempt_count + 1) >= _HOOK_DELIVERY_MAX_ATTEMPTS
-                else "pending",
-                next_attempt_at=(
-                    now_iso
-                    if (attempt_count + 1) >= _HOOK_DELIVERY_MAX_ATTEMPTS
-                    else (
-                        datetime.now(timezone.utc)
-                        + timedelta(seconds=_hook_backoff_seconds(attempt_count + 1))
-                    ).isoformat()
-                ),
-                attempt_count=attempt_count + 1,
-                status_code=None,
-                error_text=error_text,
-                now_iso=now_iso,
-                mark_success=False,
-            )
-            if (attempt_count + 1) >= _HOOK_DELIVERY_MAX_ATTEMPTS:
-                failed += 1
-            else:
-                retried += 1
-            continue
-
-        try:
-            payload = json.loads(delivery["payload"] or "{}")
-        except (TypeError, json.JSONDecodeError):
-            payload = {}
-        if not isinstance(payload, dict):
-            payload = {}
-        payload_bytes = _stable_json_text(payload).encode("utf-8")
-
-        headers = {
-            "Content-Type": "application/json",
-            "X-Aztea-Event-Id": str(delivery["event_id"]),
-            "X-Aztea-Event-Type": str(payload.get("event_type") or "unknown"),
-        }
-        secret = (delivery.get("secret") or "").strip()
-        if secret:
-            digest = hmac.new(
-                secret.encode("utf-8"), payload_bytes, hashlib.sha256
-            ).hexdigest()
-            headers["X-Aztea-Signature"] = f"sha256={digest}"
-
-        status_code = None
-        error_text = None
-        success = False
-        try:
-            resp = http.post(
-                safe_target_url,
-                data=payload_bytes,
-                headers=headers,
-                timeout=5,
-                allow_redirects=False,
-            )
-            status_code = int(resp.status_code)
-            success = 200 <= status_code < 300
-            if not success:
-                error_text = f"Non-2xx status: {status_code}"
-        except http.RequestException as exc:
-            error_text = str(exc)
-
-        if not is_job_callback:
-            _update_hook_attempt_metadata(
-                hook_id=hook_id,
-                attempted_at=now_iso,
-                success=success,
-                status_code=status_code,
-                error_text=error_text,
-            )
-
-        if success:
-            _mark_hook_delivery(
-                delivery_id,
-                status="delivered",
-                next_attempt_at=now_iso,
-                attempt_count=attempt_count,
-                status_code=status_code,
-                error_text=None,
-                now_iso=now_iso,
-                mark_success=True,
-            )
+        outcome = _deliver_one_hook(delivery=delivery)
+        if outcome == "delivered":
             delivered += 1
-            continue
-
-        next_attempt_count = attempt_count + 1
-        if next_attempt_count >= _HOOK_DELIVERY_MAX_ATTEMPTS:
-            _mark_hook_delivery(
-                delivery_id,
-                status="failed",
-                next_attempt_at=now_iso,
-                attempt_count=next_attempt_count,
-                status_code=status_code,
-                error_text=error_text,
-                now_iso=now_iso,
-                mark_success=False,
-            )
+        elif outcome == "failed":
             failed += 1
-            continue
+        elif outcome == "retried":
+            retried += 1
+        elif outcome == "cancelled":
+            cancelled += 1
 
-        retry_delay = _hook_backoff_seconds(next_attempt_count)
-        next_attempt_at = (
-            datetime.now(timezone.utc) + timedelta(seconds=retry_delay)
-        ).isoformat()
-        _mark_hook_delivery(
-            delivery_id,
-            status="pending",
-            next_attempt_at=next_attempt_at,
-            attempt_count=next_attempt_count,
-            status_code=status_code,
-            error_text=error_text,
-            now_iso=now_iso,
-            mark_success=False,
-        )
-        retried += 1
-
-    with jobs._conn() as conn:
-        pending = conn.execute(
-            """
-            SELECT COUNT(*) AS count
-            FROM job_event_deliveries
-            WHERE status = 'pending'
-            """
-        ).fetchone()["count"]
-        failed_total = conn.execute(
-            "SELECT COUNT(*) AS count FROM job_event_deliveries WHERE status = 'failed'"
-        ).fetchone()["count"]
-
+    pending, failed_total = _fetch_hook_delivery_queue_depths()
     return {
         "processed": int(processed),
         "delivered": int(delivered),
