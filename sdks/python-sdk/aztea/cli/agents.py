@@ -65,11 +65,23 @@ def list_cmd(
                 # Inject the kebab-cased slug into each row so programmatic
                 # consumers can hire by slug. The server response only has
                 # agent_id + name; we derive slug client-side via slugify(name).
+                # `Agent` is a slots dataclass — dict(a) raises, so use asdict.
+                from dataclasses import asdict, is_dataclass
                 from .common import slugify
                 rows = []
                 for a in agents:
-                    raw = a.model_dump() if hasattr(a, "model_dump") else dict(a)
-                    raw.setdefault("slug", slugify(str(raw.get("name") or "")))
+                    if hasattr(a, "model_dump"):
+                        raw = a.model_dump()
+                    elif is_dataclass(a):
+                        raw = asdict(a)
+                    elif isinstance(a, dict):
+                        raw = dict(a)
+                    else:
+                        raw = {k: v for k, v in vars(a).items() if not k.startswith("_")}
+                    name = str(raw.get("name") or "")
+                    derived = slugify(name)
+                    if derived and not raw.get("slug"):
+                        raw["slug"] = derived
                     rows.append(raw)
                 emit(rows, json_mode=True)
                 return

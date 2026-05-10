@@ -54,6 +54,33 @@ def slugify(value: str) -> str:
     return "-".join(part for part in lowered.split("-") if part)
 
 
+# Slugs that used to be public but were removed from the catalog. We surface
+# a distinct error so users hitting an old README/blog post can tell the
+# difference between "you typed the name wrong" and "we removed this agent".
+# Source: server/builtin_agents/constants.py · SUNSET_DEPRECATED_AGENT_IDS.
+SUNSET_AGENT_SLUGS: frozenset[str] = frozenset({
+    "arxiv-research-agent",
+    "multi-file-executor",
+    "linter",
+    "shell-executor",
+    "type-checker",
+    "semantic-codebase-search",
+    "image-generator",
+    "financial-agent",
+    "live-endpoint-tester",
+    "sql-explainer",
+    # Legacy aliases users may type from old docs / blog posts.
+    "web-researcher",
+    "ai-red-teamer",
+    "codereview",
+    "code-review",
+    "json-schema-validator",
+    "git-diff-analyzer",
+    "wikipedia-research-agent",
+    "regex-tester",  # replaced by the batch-3 regex-tester (different ID)
+})
+
+
 def find_agent_id(client: AzteaClient, slug: str) -> str:
     """Resolve `slug` to an agent_id. Accepts UUID or kebab-cased name."""
     slug = slug.strip()
@@ -64,6 +91,11 @@ def find_agent_id(client: AzteaClient, slug: str) -> str:
     for agent in agents:
         if slugify(agent.name) == slug:
             return agent.agent_id
+    if slug.lower() in SUNSET_AGENT_SLUGS:
+        raise typer.BadParameter(
+            f"Agent '{slug}' was removed from the public catalog and is no longer "
+            "callable. See `aztea agents list` for current alternatives."
+        )
     raise typer.BadParameter(f"Unknown agent '{slug}'. Try `aztea agents list`.")
 
 

@@ -443,4 +443,10 @@ def run(payload: dict) -> dict:
     if isinstance(parsed, dict):
         return parsed
     seed, max_pages, max_depth, include_external, check_images = parsed
-    return _run_crawl_sync(seed, max_pages, max_depth, include_external, check_images)
+    # Belt-and-suspenders: any unanticipated crash inside the async crawler
+    # (e.g. asyncio.CancelledError, OSError on banned hosts) must surface as a
+    # structured agent error rather than bubbling up to a generic HTTP 502.
+    try:
+        return _run_crawl_sync(seed, max_pages, max_depth, include_external, check_images)
+    except Exception as exc:  # noqa: BLE001 — last-resort envelope
+        return _err("broken_link_crawler.crawl_failed", f"Crawl failed: {exc}")

@@ -308,10 +308,16 @@ def run(payload: dict) -> dict:
 
     decoded_at = _ts_to_iso(now_ts)
 
+    # Schema declares signature_valid as boolean. When no key was provided we
+    # intentionally didn't verify; expose that distinction via `verified` and
+    # collapse signature_valid → False so the contract validator stays happy.
+    signature_valid_bool = bool(signature_valid) if signature_valid is not None else False
+
     return {
         "header": header,
         "payload": jwt_payload,
-        "signature_valid": signature_valid,
+        "signature_valid": signature_valid_bool,
+        "verified": verified,
         "algorithm": alg or None,
         "alg_confusion_risk": alg_confusion_risk,
         "alg_confusion_detail": alg_confusion_detail,
@@ -322,5 +328,4 @@ def run(payload: dict) -> dict:
         "claims_issues": claims_issues,
         "key_id": key_id,
         "decoded_at": decoded_at,
-        "verified": verified,
     }

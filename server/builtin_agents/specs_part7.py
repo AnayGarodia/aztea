@@ -705,7 +705,17 @@ def load_builtin_specs_part7() -> list[dict]:
                 "properties": {
                     "valid": {"type": "boolean"},
                     "errors": {"type": "array", "items": {"type": "string"}},
-                    "warnings": {"type": "array", "items": {"type": "string"}},
+                    "warnings": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string"},
+                                "message": {"type": "string"},
+                            },
+                            "required": ["message"],
+                        },
+                    },
                     "breaking_changes": {"type": "array", "items": {"type": "object"}},
                     "stats": {"type": "object"},
                     "spec_title": {"type": "string"},

@@ -175,7 +175,9 @@ def _extract_code(body: Any) -> str | None:
     return None
 
 
-def _extract_hint(body: Any, detail: Any, status_code: int) -> str | None:
+def _extract_hint(
+    body: Any, detail: Any, status_code: int, code_name: str | None = None,
+) -> str | None:
     if isinstance(body, dict):
         raw = body.get("hint")
         if isinstance(raw, str) and raw.strip():
@@ -185,6 +187,13 @@ def _extract_hint(body: Any, detail: Any, status_code: int) -> str | None:
     if status_code == 402:
         return "Top up your wallet or lower the job budget."
     if status_code == 403:
+        # The generic "lacks scope" hint is wrong for revoked keys — the server
+        # message already explains the situation, so return no hint to avoid
+        # contradicting it (e.g. "key revoked ... your key is valid but ...").
+        if code_name and code_name.upper() in {
+            "API_KEY_REVOKED", "AUTH.API_KEY_REVOKED",
+        }:
+            return "Run `aztea login` to mint a fresh key, or `aztea mcp install` to refresh the MCP-side key."
         return "Your key is valid but lacks the required scope."
     if status_code == 404:
         return "Confirm the agent, job, or pipeline id is correct."
@@ -211,7 +220,7 @@ def raise_for_error_response(response: requests.Response) -> None:
     else:
         message = str(detail)
     code = response.status_code
-    hint = _extract_hint(body, detail, code)
+    hint = _extract_hint(body, detail, code, code_name=code_name)
 
     if code == 401:
         raise UnauthorizedError(code, message, detail, body, code=code_name, hint=hint)

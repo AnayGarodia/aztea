@@ -836,6 +836,9 @@ def run(payload: dict) -> dict:
         explanation, explanation_sanitized = _generate_explanation(
             code, stdout, stderr, raw["exit_code"],
         )
+    # `_generate_explanation` calls an LLM. Be truthful in `llm_used` so callers
+    # can tell that part of the response was AI-authored, even though the
+    # actual code execution remains a real sandboxed subprocess.
     return {
         "stdout": stdout,
         "stderr": stderr,
@@ -844,5 +847,6 @@ def run(payload: dict) -> dict:
         "execution_time_ms": raw["execution_time_ms"],
         "explanation": explanation,
         "explanation_sanitized": explanation_sanitized,
+        "explanation_llm_used": bool(explanation),
         "variables_captured": raw["variables_captured"],
     }

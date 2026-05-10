@@ -36,3 +36,10 @@ pymupdf>=1.24.0
 pdfplumber>=0.11.0
 # broken_link_crawler uses BeautifulSoup to extract <a>/<img>/<script>/<link>.
 beautifulsoup4>=4.12.0
+# email_deliverability_checker uses dnspython for SPF / DKIM / MX lookups.
+# Without this the agent fails every call with "dnspython not installed".
+dnspython>=2.6.0
+# sast_scanner shells out to semgrep or bandit. Without at least one in the
+# image, every sast call fails with "Neither semgrep nor bandit is installed".
+semgrep>=1.70.0
+bandit>=1.7.0

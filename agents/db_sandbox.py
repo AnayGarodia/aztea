@@ -60,6 +60,18 @@ def _check_sql_blocked(sql: str) -> "dict | None":
     return None
 
 
+def _looks_multi_statement(sql: str) -> bool:
+    """Pure: True iff `sql` contains ≥2 non-empty top-level statements separated by `;`.
+
+    Strips trailing/empty fragments so `"SELECT 1;"` and `"SELECT 1; ; "`
+    both register as single statements. Comments and string literals are not
+    parsed — false positives on `;` inside quoted strings are acceptable
+    here since the caller can switch to the `queries: [...]` form anyway.
+    """
+    pieces = [p.strip() for p in _STATEMENT_SPLIT_RE.split(sql) if p.strip()]
+    return len(pieces) > 1
+
+
 
 def _err_envelope_in_list(envelope: dict) -> list[dict[str, Any]]:
     """Pure: wrap an error envelope in the shape ``_normalize_queries`` returns."""
@@ -83,6 +95,16 @@ def _normalize_one_query(index: int, item: Any) -> dict[str, Any]:
             "error": _err(
                 "db_sandbox.invalid_query",
                 f"queries[{index}].sql is required.",
+            )
+        }
+    # SQLite's `cur.execute` rejects multi-statement input with an opaque
+    # `sqlite3.Warning`. Detect it up-front and return a structured error
+    # pointing the caller at `queries: [...]` so we never surface a raw 502.
+    if _looks_multi_statement(sql):
+        return {
+            "error": _err(
+                "db_sandbox.multi_statement_not_allowed",
+                f"queries[{index}].sql contains multiple statements; pass them as a list under `queries`.",
             )
         }
     blocked = _check_sql_blocked(sql)
