@@ -17,6 +17,7 @@ const TABS = [
   { id: 'awaiting_clarification', label: 'Needs input' },
   { id: 'pending', label: 'Pending' },
   { id: 'complete', label: 'Complete' },
+  { id: 'stopped', label: 'Stopped' },
   { id: 'failed', label: 'Failed' },
 ]
 

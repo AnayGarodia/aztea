@@ -42,6 +42,7 @@ _SCRIPTS_DIR = str(Path(__file__).resolve().parent)
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 import aztea_mcp_meta_tools as meta_tools
+import aztea_mcp_copilot_tools as copilot_tools
 
 _LOG = logging.getLogger("aztea.mcp")
 _SERVER_NAME = "aztea-registry-mcp"
@@ -1135,9 +1136,15 @@ class RegistryBridge:
                 _LAZY_DESCRIBE_TOOL,
                 _LAZY_CALL_TOOL,
                 _LAZY_DO_TOOL,
+                copilot_tools.CALL_STREAMING_TOOL,
+                copilot_tools.STEER_TOOL,
                 *meta_tools.always_visible_tools(),
             ]
-        return meta_tools.get_meta_tools() + registry_tools
+        return (
+            meta_tools.get_meta_tools()
+            + [copilot_tools.CALL_STREAMING_TOOL, copilot_tools.STEER_TOOL]
+            + registry_tools
+        )
 
     def _catalog_entries(self) -> list[dict[str, Any]]:
         with self._lock:
@@ -2148,6 +2155,23 @@ class RegistryBridge:
 
         if auth_required or tool_name == _AUTH_TOOL_NAME:
             return self._auth_required_response()
+
+        if tool_name == copilot_tools.CALL_STREAMING_TOOL["name"]:
+            return copilot_tools.call_streaming(
+                session=self._session,
+                base_url=self.base_url,
+                headers=self._headers(),
+                timeout_seconds=self.timeout_seconds,
+                arguments=arguments,
+            )
+        if tool_name == copilot_tools.STEER_TOOL["name"]:
+            return copilot_tools.steer(
+                session=self._session,
+                base_url=self.base_url,
+                headers=self._headers(),
+                timeout_seconds=self.timeout_seconds,
+                arguments=arguments,
+            )
 
         if tool_name == _LAZY_SEARCH_TOOL["name"]:
             query = str(arguments.get("query") or "").strip()

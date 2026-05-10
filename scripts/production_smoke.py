@@ -122,7 +122,7 @@ def _poll_job(api_key: str, job_id: str, *, timeout_s: float = 45.0) -> dict[str
     last: dict[str, Any] = {}
     while time.monotonic() < deadline:
         last = _request("GET", f"/jobs/{job_id}", api_key=api_key)
-        if str(last.get("status") or "").lower() in {"complete", "failed"}:
+        if str(last.get("status") or "").lower() in {"complete", "failed", "stopped"}:
             return last
         time.sleep(1.0)
     raise SmokeFailure(

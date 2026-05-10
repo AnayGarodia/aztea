@@ -100,7 +100,7 @@ function MessageBubble({ msg }) {
   )
 }
 
-const TERMINAL = new Set(['complete', 'failed', 'cancelled'])
+const TERMINAL = new Set(['complete', 'failed', 'cancelled', 'stopped'])
 
 const OUTCOME_LABELS = {
   caller_wins: 'Caller wins',
@@ -191,9 +191,9 @@ export default function JobDetailPage() {
           setRatingDone(true)
         }
       }
-      if (data?.status === 'complete' || data?.status === 'failed') {
+      if (data?.status === 'complete' || data?.status === 'failed' || data?.status === 'stopped') {
         await loadMessages()
-        if (data.status === 'complete') await loadDispute()
+        if (data.status === 'complete' || data.status === 'stopped') await loadDispute()
       }
     } catch {
       // Network blip during polling - keep stale data rather than clearing
@@ -241,7 +241,7 @@ export default function JobDetailPage() {
           })
         }
         // If stream signals job completion, do a final refresh
-        if (msg?.type === 'complete' || msg?.type === 'failed' || msg?.status === 'complete' || msg?.status === 'failed') {
+        if (msg?.type === 'complete' || msg?.type === 'failed' || msg?.type === 'stopped' || msg?.status === 'complete' || msg?.status === 'failed' || msg?.status === 'stopped') {
           pollJob()
           loadMessages()
         }
@@ -407,7 +407,7 @@ export default function JobDetailPage() {
     )
   }
 
-  const isTerminal = job.status === 'complete' || job.status === 'failed'
+  const isTerminal = job.status === 'complete' || job.status === 'failed' || job.status === 'stopped'
   const output = job.output_payload
 
   return (

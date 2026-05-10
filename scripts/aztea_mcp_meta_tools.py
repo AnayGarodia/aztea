@@ -3027,7 +3027,7 @@ def _follow_job(
     )
     started = _time.monotonic()
     deadline = started + timeout_secs
-    _TERMINAL = {"complete", "failed", "cancelled"}
+    _TERMINAL = {"complete", "failed", "cancelled", "stopped"}
     poll_count = 0
 
     while True:

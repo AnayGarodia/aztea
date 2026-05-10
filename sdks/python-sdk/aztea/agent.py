@@ -8,7 +8,7 @@ import time
 from typing import Any, Callable
 
 from .client import AzteaClient, _coerce_payload
-from .errors import AzteaError, ClarificationNeeded, InputError
+from .errors import AzteaError, AzteaJobStoppedError, ClarificationNeeded, ConflictError, InputError
 
 _HEARTBEAT_INTERVAL = 20
 _POLL_INTERVAL = 2
@@ -202,3 +202,43 @@ class AgentServer:
                 self._client.jobs.heartbeat(job_id, claim_token, lease_seconds=_LEASE_SECONDS)
             except AzteaError:
                 break
+
+    def emit_partial(self, job_id: str, payload: dict[str, Any]) -> None:
+        """Emit a partial_output message for an in-flight job.
+
+        Wraps the user payload in the typed PartialOutputMessage envelope
+        (``{type: "partial_output", payload: {"payload": payload}}``). Raises
+        ``AzteaJobStoppedError`` when the server returns 409 with code
+        ``job.terminal`` — that signals the caller's ``stop_when`` fired and
+        the agent should exit cleanly. All other errors propagate.
+        """
+        try:
+            self._client.jobs.post_message(job_id, "partial_output", {"payload": payload})
+        except ConflictError as exc:
+            if (exc.code or "").strip().lower() == "job.terminal":
+                raise AzteaJobStoppedError(job_id, exc.message or None) from exc
+            raise
+
+    def read_steers(
+        self, job_id: str, since_id: int | None = None
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Fetch steer messages newer than ``since_id`` for ``job_id``.
+
+        Returns ``(steers, max_message_id_seen)``. The cursor advances across
+        all returned messages — not just steers — so subsequent reads don't
+        re-walk non-steer rows. When the response is empty the cursor is
+        left unchanged.
+        """
+        data = self._client.jobs.list_messages(job_id, since=since_id)
+        raw_messages = data.get("messages") or []
+        steers: list[dict[str, Any]] = []
+        max_seen = since_id or 0
+        for message in raw_messages:
+            if not isinstance(message, dict):
+                continue
+            msg_id = message.get("message_id")
+            if isinstance(msg_id, int) and msg_id > max_seen:
+                max_seen = msg_id
+            if message.get("type") == "steer":
+                steers.append(message)
+        return steers, max_seen

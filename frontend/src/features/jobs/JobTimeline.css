@@ -71,6 +71,12 @@
   box-shadow: 0 0 0 4px var(--negative-bg);
 }
 
+.jtl__dot--stopped {
+  background: var(--warn);
+  border-color: var(--warn);
+  box-shadow: 0 0 0 4px var(--warn-bg);
+}
+
 .jtl__pulse {
   position: absolute;
   inset: -4px;
@@ -107,5 +113,6 @@
 .jtl__label--active { color: var(--accent); }
 .jtl__label--future { color: var(--text-muted); opacity: 0.5; }
 .jtl__label--fail   { color: var(--negative); }
+.jtl__label--stopped { color: var(--warn); }
 
 .jtl__step:first-child .jtl__label-wrap { margin-left: 6px; }

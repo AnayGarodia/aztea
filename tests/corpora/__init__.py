@@ -50,6 +50,7 @@ JOB_STATES: tuple[str, ...] = (
     "expired",
     "failed",
     "cancelled",
+    "stopped",
 )
 
 JOB_EVENTS: tuple[str, ...] = (

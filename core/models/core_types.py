@@ -78,11 +78,13 @@ TYPED_JOB_MESSAGE_TYPES = frozenset(
         "clarification_response",
         "progress",
         "partial_result",
+        "partial_output",
         "artifact",
         "agent_message",
         "tool_call",
         "tool_result",
         "note",
+        "steer",
     }
 )
 

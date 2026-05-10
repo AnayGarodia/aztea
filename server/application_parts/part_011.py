@@ -452,7 +452,7 @@ def wallet_spend_summary(
             SELECT agent_id, SUM(price_cents) AS total_cents, COUNT(*) AS job_count
             FROM jobs
             WHERE caller_owner_id = %s
-              AND status IN ('complete', 'failed')
+              AND status IN ('complete', 'failed', 'stopped')
               AND created_at >= %s
             GROUP BY agent_id
             ORDER BY total_cents DESC
@@ -610,7 +610,7 @@ def wallet_audit(
             SELECT agent_id, SUM(price_cents) AS total_cents, COUNT(*) AS job_count
             FROM jobs
             WHERE caller_owner_id = %s
-              AND status IN ('complete', 'failed')
+              AND status IN ('complete', 'failed', 'stopped')
               AND created_at >= %s
             GROUP BY agent_id
             ORDER BY total_cents DESC

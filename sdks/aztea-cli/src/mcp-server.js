@@ -1032,7 +1032,7 @@ async function followJob(args) {
   const timeoutSecs = Math.min(Number(args.timeout_seconds || args.max_wait_seconds || 180), 300)
   const deadline = Date.now() + timeoutSecs * 1000
   const POLL_MS = 4000
-  const TERMINAL = new Set(['complete', 'failed', 'cancelled'])
+  const TERMINAL = new Set(['complete', 'failed', 'cancelled', 'stopped'])
   while (true) {
     const res = await jobStatus({ job_id: jobId })
     if (!res.ok) return res

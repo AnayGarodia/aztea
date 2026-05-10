@@ -4,6 +4,7 @@ STATUS_STYLES: dict[str, str] = {
     "awaiting_clarification": "#06b6d4 bold",
     "complete":               "#10b981 bold",
     "failed":                 "#ef4444 bold",
+    "stopped":                "#f59e0b bold",
     "unknown":                "#64748b",
 }
 
@@ -21,4 +22,4 @@ NAV_ITEMS: list[tuple[str, str, str]] = [
     ("4", "my-agents", "  My Agents"),
 ]
 
-TERMINAL_STATUSES = frozenset({"complete", "failed"})
+TERMINAL_STATUSES = frozenset({"complete", "failed", "stopped"})

@@ -37,6 +37,7 @@ from .client import AzteaClient
 from .config import clear_config, config_path, load_config, save_config
 from .errors import (
     AzteaError,
+    AzteaJobStoppedError,
     APIError,
     AgentNotFoundError,
     AuthenticationError,
@@ -84,6 +85,7 @@ __all__ = [
     "Wallet",
     # Exceptions
     "AzteaError",
+    "AzteaJobStoppedError",
     "APIError",
     "AgentNotFoundError",
     "AuthenticationError",

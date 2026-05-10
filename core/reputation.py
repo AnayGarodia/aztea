@@ -312,7 +312,7 @@ def _check_quality_rating_eligible(
     conn: Any, job: dict[str, Any], caller_owner_id: str, job_id: str,
 ) -> None:
     """Pure-ish: enforce caller-ownership + completion + no-active-dispute invariants."""
-    if job["status"] != "complete":
+    if job["status"] not in ("complete", "stopped"):
         raise ValueError("Only completed jobs can be rated.")
     if job["caller_owner_id"] != caller_owner_id:
         raise ValueError("Only the job caller can submit a quality rating.")
@@ -410,7 +410,7 @@ def _check_caller_rating_eligible(
     Why: ratings are locked once a dispute opens — this gate is the only
     place that decision is made, so dispute integrity stays single-sourced.
     """
-    if job["status"] != "complete":
+    if job["status"] not in ("complete", "stopped"):
         raise ValueError("Only completed jobs can be rated.")
     if job["agent_owner_id"] != agent_owner_id:
         raise ValueError("Only the job's agent owner can rate this caller.")

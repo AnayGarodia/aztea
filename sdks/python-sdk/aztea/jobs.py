@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from .client import AzteaClient
 
 
-TERMINAL_JOB_STATUSES = {"complete", "failed"}
+TERMINAL_JOB_STATUSES = {"complete", "failed", "stopped"}
 
 
 @dataclass

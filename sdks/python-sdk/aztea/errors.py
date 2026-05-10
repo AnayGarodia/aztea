@@ -139,6 +139,16 @@ class ClarificationNeeded(Exception):
         self.question = question
 
 
+class AzteaJobStoppedError(AzteaError):
+    """Raised when the server rejects a partial because the job has reached a
+    terminal state (e.g. the caller's stop_when fired). Agents should treat
+    this as a clean terminal signal, not as an error to log."""
+
+    def __init__(self, job_id: str, message: str | None = None) -> None:
+        super().__init__(message or f"Job {job_id} has reached a terminal state.")
+        self.job_id = job_id
+
+
 InsufficientFundsError = InsufficientBalanceError
 
 

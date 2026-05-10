@@ -55,6 +55,20 @@ from .leases import (
     _resolve_message_lease_behavior,
 )
 
+import json as _json
+import logging as _logging
+
+_LOG = _logging.getLogger(__name__)
+
+
+class JobAlreadyTerminal(Exception):
+    """Raised when partial_output or steer is sent to an already-terminal job.
+
+    Routes translate this to HTTP 409 (job.terminal). Surfacing it as its
+    own type keeps the messaging tx atomic and lets callers distinguish
+    "you're racing the stop" from "your input is malformed".
+    """
+
 
 _LEASE_EXTENDING_BEHAVIORS = frozenset({
     _LEASE_BEHAVIOR_EXTEND,
@@ -270,11 +284,30 @@ def _normalize_message_for_insert(
     }
 
 
+_COPILOT_SIDE_EFFECT_TYPES = ("partial_output", "steer")
+
+
+def _guard_terminal_for_copilot(row: dict, *, job_id: str, canonical_type: str) -> None:
+    """Pure-ish: refuse partial_output / steer once the job has hit terminal_at.
+
+    Why: an in-flight client could otherwise squeeze a steer in after the
+    job was already stopped by a stop_when match — making "stopped" not
+    actually terminal. This is the only ordering guard that matters for
+    copilot side-effects.
+    """
+    if canonical_type not in _COPILOT_SIDE_EFFECT_TYPES:
+        return
+    if _clean_optional_text(row.get("terminal_at")) is not None:
+        raise JobAlreadyTerminal(
+            f"job {job_id} is terminal; cannot accept {canonical_type}"
+        )
+
+
 def _insert_message_within_txn(
     conn: Any, *, job_id: str, from_id: str, n: dict[str, Any], now: str, now_dt: Any,
     lease_seconds: int,
-) -> int:
-    """Side-effect: validate + insert + apply side-effects for one message; returns message_id."""
+) -> tuple[int, str | None]:
+    """Side-effect: validate + insert + apply side-effects; returns (message_id, copilot_terminal_state)."""
     _validate_tool_result_correlation(
         conn, job_id=job_id, canonical_type=n["canonical_type"],
         normalized_correlation_id=n["normalized_correlation_id"],
@@ -282,11 +315,22 @@ def _insert_message_within_txn(
     row = conn.execute(
         "SELECT * FROM jobs WHERE job_id = %s", (job_id,),
     ).fetchone()
+    if row is not None:
+        _guard_terminal_for_copilot(
+            dict(row), job_id=job_id, canonical_type=n["canonical_type"],
+        )
     message_id = _insert_job_message_row(
         conn, job_id=job_id, from_id=from_id,
         msg_type=n["normalized_type"], payload=n["normalized_payload"],
         correlation_id=n["normalized_correlation_id"], created_at=now,
     )
+    copilot_terminal_state: str | None = None
+    if row is not None and n["canonical_type"] in _COPILOT_SIDE_EFFECT_TYPES:
+        copilot_terminal_state, _ = _apply_copilot_side_effects(
+            conn, job_id=job_id, canonical_type=n["canonical_type"],
+            payload=n["normalized_payload"], message_id=message_id,
+            now=now, row=dict(row),
+        )
     if row is not None and (n["should_extend_lease"] or n["status_target"] is not None):
         _apply_lease_effects_within_txn(
             conn, job_id=job_id, row=row, now=now, now_dt=now_dt,
@@ -294,7 +338,7 @@ def _insert_message_within_txn(
             from_id=from_id, status_target=n["status_target"],
             should_extend_lease=n["should_extend_lease"], lease_seconds=lease_seconds,
         )
-    return message_id
+    return message_id, copilot_terminal_state
 
 
 def add_message(
@@ -318,13 +362,140 @@ def add_message(
     now = now_dt.isoformat()
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        message_id = _insert_message_within_txn(
+        message_id, copilot_terminal_state = _insert_message_within_txn(
             conn, job_id=job_id, from_id=from_id, n=n,
             now=now, now_dt=now_dt, lease_seconds=lease_seconds,
         )
     message = get_message(job_id, message_id)
     _publish_job_message(job_id, message)
+
+    # Synchronous post-commit drain: if this message caused a stop_when match,
+    # the messaging tx already enqueued the pending_settlements row. Drain it
+    # now so the caller sees ledger settlement and (in Phase 3) the signed
+    # receipt without a separate poll.
+    if copilot_terminal_state == "stopped":
+        try:
+            from core import settlement_runner
+
+            settlement_runner.drain_one(job_id=job_id)
+        except Exception:
+            _LOG.exception(
+                "settlement_runner.sync_drain_failed", extra={"job_id": job_id}
+            )
+
     return message
+
+
+def _apply_copilot_side_effects(
+    conn,
+    *,
+    job_id: str,
+    canonical_type: str,
+    payload: dict,
+    message_id: int,
+    now: str,
+    row: dict,
+) -> tuple[str | None, dict | None]:
+    """Counter increments, stop_when checks, terminal stamping, settlement enqueue.
+
+    Runs inside the messaging tx. Returns (terminal_state, stop_reason) so the
+    caller can trigger a synchronous settlement drain after commit.
+
+    For partial_output: increments partials_count; if any registered
+    stop_when predicate matches, stamps terminal_at + terminal_message_id +
+    stop_reason_json + status='stopped' on the job and inserts a
+    pending_settlements row.
+
+    For steer: increments steer_count only. (Steers themselves never
+    terminate the job.)
+    """
+    if canonical_type == "steer":
+        conn.execute(
+            "UPDATE jobs SET steer_count = COALESCE(steer_count, 0) + 1, updated_at = %s WHERE job_id = %s",
+            (now, job_id),
+        )
+        return None, None
+
+    conn.execute(
+        "UPDATE jobs SET partials_count = COALESCE(partials_count, 0) + 1, updated_at = %s WHERE job_id = %s",
+        (now, job_id),
+    )
+
+    stop_when_raw = row.get("stop_when_json")
+    if not stop_when_raw:
+        return None, None
+
+    predicates = _parse_stop_when_for_eval(stop_when_raw)
+    if not predicates:
+        return None, None
+
+    # Run predicates against the inner free-form dict — the pydantic model
+    # wraps it under {payload: {...}}, but the user-facing semantics is "the
+    # dict the agent emitted." So we target payload["payload"] when present,
+    # falling back to the whole payload otherwise.
+    target = payload.get("payload") if isinstance(payload, dict) else payload
+    if target is None:
+        target = payload
+
+    from core.copilot_predicates import evaluate_first_match
+
+    match = evaluate_first_match(predicates, target)
+    if match is None:
+        return None, None
+
+    stop_reason = {
+        "label": match.get("label"),
+        "expr": match.get("expr"),
+        "matched_message_id": message_id,
+        "matched_at": now,
+    }
+    conn.execute(
+        """
+        UPDATE jobs
+           SET status = 'stopped',
+               terminal_at = %s,
+               terminal_message_id = %s,
+               stop_reason_json = %s,
+               completed_at = COALESCE(completed_at, %s),
+               updated_at = %s
+         WHERE job_id = %s
+        """,
+        (now, message_id, _json.dumps(stop_reason), now, now, job_id),
+    )
+
+    conn.execute(
+        """
+        INSERT INTO pending_settlements (job_id, terminal_state, terminal_at)
+        VALUES (%s, 'stopped', %s)
+        ON CONFLICT (job_id) DO NOTHING
+        """,
+        (job_id, now),
+    )
+    return "stopped", stop_reason
+
+
+def _parse_stop_when_for_eval(raw: object) -> list[dict]:
+    """Parse the persisted stop_when_json into a list of {label, expr} dicts.
+
+    The persisted shape is {"predicates": [{label, expr}, ...], "max_units": ?}
+    OR a bare list of predicates (older format if any). This helper tolerates
+    both shapes without throwing — predicate parsing must never crash a
+    partial_output insert.
+    """
+    if not raw:
+        return []
+    parsed = raw
+    if isinstance(raw, str):
+        try:
+            parsed = _json.loads(raw)
+        except (TypeError, ValueError):
+            return []
+    if isinstance(parsed, dict):
+        preds = parsed.get("predicates") or []
+        return [p for p in preds if isinstance(p, dict)]
+    if isinstance(parsed, list):
+        return [p for p in parsed if isinstance(p, dict)]
+    return []
 
 
 def add_claim_event(

@@ -273,17 +273,60 @@ class NoteMessage(_TypedJobMessageBase):
     payload: NotePayload
 
 
+class PartialOutputPayload(BaseModel):
+    """Free-form partial output emitted by an agent during a long call.
+
+    The body is a caller-defined JSON object. Server evaluates registered
+    ``stop_when`` predicates against this payload synchronously inside the
+    same transaction that inserts the message; on match the job transitions
+    to ``stopped`` and a settlement row is enqueued.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    payload: JSONObject = Field(default_factory=dict)
+
+
+class PartialOutputMessage(_TypedJobMessageBase):
+    type: Literal["partial_output"]
+    payload: PartialOutputPayload
+
+
+class SteerPayload(BaseModel):
+    """Caller-driven mid-flight guidance for an in-progress agent call."""
+
+    message: str
+    metadata: JSONObject | None = None
+
+    @field_validator("message")
+    @classmethod
+    def message_not_empty(cls, value: str) -> str:
+        text = (value or "").strip()
+        if not text:
+            raise ValueError("steer message must not be empty")
+        if len(text) > 4000:
+            raise ValueError("steer message must be <= 4000 characters")
+        return text
+
+
+class SteerMessage(_TypedJobMessageBase):
+    type: Literal["steer"]
+    payload: SteerPayload
+
+
 TypedJobMessage = Annotated[
     (
         ClarificationRequestMessage
         | ClarificationResponseMessage
         | ProgressMessage
         | PartialResultMessage
+        | PartialOutputMessage
         | ArtifactMessage
         | AgentMessage
         | ToolCallMessage
         | ToolResultMessage
         | NoteMessage
+        | SteerMessage
     ),
     Field(discriminator="type"),
 ]
@@ -459,11 +502,47 @@ def _normalize_tool_result_payload(normalized: JSONObject) -> JSONObject:
     return normalized
 
 
+_STEER_MESSAGE_MAX_LEN = 4000
+
+
+def _normalize_partial_output_payload(normalized: JSONObject) -> JSONObject:
+    """Pure: nested ``payload`` defaulted to {} when absent.
+
+    Why: agents stream incremental drafts via partial_output; an absent
+    payload means "still working" rather than an error, so we coerce
+    rather than raise.
+    """
+    partial_payload = normalized.get("payload")
+    if partial_payload is None:
+        normalized["payload"] = {}
+    elif not isinstance(partial_payload, dict):
+        raise ValueError("partial_output payload.payload must be an object.")
+    return normalized
+
+
+def _normalize_steer_payload(normalized: JSONObject) -> JSONObject:
+    """Pure: ``message`` required + length-bounded; ``metadata`` object-typed."""
+    text = str(normalized.get("message") or "").strip()
+    if not text:
+        raise ValueError("steer payload.message is required.")
+    if len(text) > _STEER_MESSAGE_MAX_LEN:
+        raise ValueError(
+            f"steer payload.message must be <= {_STEER_MESSAGE_MAX_LEN} characters."
+        )
+    normalized["message"] = text
+    meta = normalized.get("metadata")
+    if meta is not None and not isinstance(meta, dict):
+        raise ValueError("steer payload.metadata must be an object.")
+    return normalized
+
+
 _TYPED_PAYLOAD_NORMALIZERS = {
     "clarification_request": _normalize_clarification_request_payload,
     "clarification_response": _normalize_clarification_response_payload,
     "progress": _normalize_progress_payload,
     "partial_result": _normalize_partial_result_payload,
+    "partial_output": _normalize_partial_output_payload,
+    "steer": _normalize_steer_payload,
     "note": _normalize_note_payload,
     "agent_message": _normalize_agent_message_payload,
     "tool_call": _normalize_tool_call_payload,

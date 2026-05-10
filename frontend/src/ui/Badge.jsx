@@ -7,6 +7,7 @@ const VARIANT_MAP = {
   awaiting_clarification:'warn',
   complete:              'positive',
   failed:                'negative',
+  stopped:               'warn',
   // signal
   positive:              'positive',
   negative:              'negative',

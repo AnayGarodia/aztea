@@ -840,7 +840,7 @@ _SHUTDOWN_THREAD_JOIN_TIMEOUT_SECONDS = _env_int(
     maximum=120,
 )
 _JOB_STREAM_HEARTBEAT_SECONDS = 15
-_JOB_TERMINAL_STATUSES = {"complete", "failed"}
+_JOB_TERMINAL_STATUSES = {"complete", "failed", "stopped"}
 _LEGACY_JOB_MESSAGE_TYPES = {
     "question",
     "partial_result",
@@ -854,11 +854,13 @@ _TYPED_JOB_MESSAGE_TYPES = {
     "clarification_response",
     "progress",
     "partial_result",
+    "partial_output",
     "artifact",
     "agent_message",
     "note",
     "tool_call",
     "tool_result",
+    "steer",
 }
 _AGENT_WORK_EXAMPLES_MAX = _env_int(
     "AGENT_WORK_EXAMPLES_MAX",

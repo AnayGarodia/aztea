@@ -9,6 +9,7 @@ const LABELS = {
   awaiting_clarification:  'Needs input',
   complete:                'Done',
   failed:                  'Failed',
+  stopped:                 'Stopped',
 }
 
 function deriveNodes(status) {
@@ -24,9 +25,14 @@ function fmtTs(isoString) {
 export default function JobTimeline({ status, timestamps = {} }) {
   if (!status) return null
 
-  const isFailed  = status === 'failed'
-  const nodes     = isFailed ? ['pending', 'running', 'failed'] : deriveNodes(status)
-  const activeIdx = isFailed ? nodes.length - 1 : nodes.indexOf(status)
+  const isFailed   = status === 'failed'
+  const isStopped  = status === 'stopped'
+  const nodes      = isFailed
+    ? ['pending', 'running', 'failed']
+    : isStopped
+      ? ['pending', 'running', 'stopped']
+      : deriveNodes(status)
+  const activeIdx  = (isFailed || isStopped) ? nodes.length - 1 : nodes.indexOf(status)
 
   return (
     <div className="jtl" role="status" aria-label={`Job status: ${status}`}>
@@ -35,6 +41,7 @@ export default function JobTimeline({ status, timestamps = {} }) {
         const isActive  = i === activeIdx
         const isFuture  = i > activeIdx
         const isFailNode = node === 'failed'
+        const isStoppedNode = node === 'stopped'
 
         return (
           <div key={node} className="jtl__step">
@@ -59,6 +66,7 @@ export default function JobTimeline({ status, timestamps = {} }) {
               isActive ? 'jtl__dot--active'  : '',
               isFuture ? 'jtl__dot--future'  : '',
               isFailNode ? 'jtl__dot--fail'  : '',
+              isStoppedNode ? 'jtl__dot--stopped' : '',
             ].filter(Boolean).join(' ')}>
               {isPast && !isFailNode && (
                 <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
@@ -88,6 +96,7 @@ export default function JobTimeline({ status, timestamps = {} }) {
                 isActive ? 'jtl__label--active'  : '',
                 isFuture ? 'jtl__label--future'  : '',
                 isFailNode ? 'jtl__label--fail'  : '',
+                isStoppedNode ? 'jtl__label--stopped' : '',
               ].filter(Boolean).join(' ')}>
                 {LABELS[node] ?? node}
               </span>

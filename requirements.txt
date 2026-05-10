@@ -43,3 +43,6 @@ dnspython>=2.6.0
 # image, every sast call fails with "Neither semgrep nor bandit is installed".
 semgrep>=1.70.0
 bandit>=1.7.0
+# core/copilot_predicates.py uses jmespath for stop_when expression evaluation.
+# Without this every copilot stop_when call fails to import at module load.
+jmespath>=1.0.0

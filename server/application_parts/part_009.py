@@ -283,7 +283,7 @@ def _compare_jobs_by_agent(compare_row: dict) -> tuple[list[dict], bool]:
             )
             continue
         status = str(job.get("status") or "").strip().lower()
-        if status not in {"complete", "failed"}:
+        if status not in {"complete", "failed", "stopped"}:
             all_terminal = False
         subjobs.append(job)
     return subjobs, all_terminal

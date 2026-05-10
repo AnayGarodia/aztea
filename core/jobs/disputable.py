@@ -19,12 +19,15 @@ creates a tighter loop. Keep this module dependency-light.
 #   read it, even though the receipt had been issued and signed).
 # DECISIONS:
 #   1. Eligibility anchors on `completed_at`, not `status`. Any status that
-#      is not pre-terminal is accepted as long as `completed_at` is set.
-#      A job that completed-then-was-failed by a downstream sweeper (e.g.
-#      verification rejection) is still a job the caller paid for and may
-#      want to dispute. Pre-completion `failed` jobs (completed_at IS NULL)
-#      are refunded automatically and cannot be disputed — no payout to
-#      claw back.
+#      is not pre-terminal (i.e. `complete`, `failed` post-completion, or
+#      `stopped` from a stop_when match) is accepted as long as
+#      `completed_at` is set. A job that completed-then-was-failed by a
+#      downstream sweeper (e.g. verification rejection) is still a job the
+#      caller paid for and may want to dispute. Pre-completion `failed`
+#      jobs (completed_at IS NULL) are refunded automatically and cannot
+#      be disputed — no payout to claw back. `stopped` jobs (co-pilot
+#      stop_when fired) get a partial payout via pending_settlements and
+#      are disputable on the same terms as `complete`.
 #   2. We do NOT pre-check whether an escrow payout exists; we let the
 #      clawback transaction in core/payments/trust_disputes.py decide.
 #      That path is ledger-idempotent: `_lock_dispute_funds_conn` keys on

@@ -62,16 +62,19 @@ _ACTIVE_CLAIM_EVENT_TYPES = {
 _LEASE_BEHAVIOR_EXTEND = "extend"
 _LEASE_BEHAVIOR_EXTEND_AND_MARK_AWAITING = "extend_and_mark_awaiting"
 _LEASE_BEHAVIOR_EXTEND_AND_RESUME_RUNNING = "extend_and_resume_running"
+_LEASE_BEHAVIOR_NONE = "none"
 MESSAGE_TYPE_LEASE_BEHAVIOR = {
     "clarification_request": _LEASE_BEHAVIOR_EXTEND_AND_MARK_AWAITING,
     "clarification_response": _LEASE_BEHAVIOR_EXTEND_AND_RESUME_RUNNING,
     "progress": _LEASE_BEHAVIOR_EXTEND,
     "partial_result": _LEASE_BEHAVIOR_EXTEND,
+    "partial_output": _LEASE_BEHAVIOR_EXTEND,
     "artifact": _LEASE_BEHAVIOR_EXTEND,
     "agent_message": _LEASE_BEHAVIOR_EXTEND,
     "tool_call": _LEASE_BEHAVIOR_EXTEND,
     "tool_result": _LEASE_BEHAVIOR_EXTEND,
     "note": _LEASE_BEHAVIOR_EXTEND,
+    "steer": _LEASE_BEHAVIOR_NONE,
 }
 _LEGACY_MESSAGE_TYPE_LEASE_BEHAVIOR = {
     "clarification_needed": _LEASE_BEHAVIOR_EXTEND_AND_MARK_AWAITING,
@@ -86,7 +89,13 @@ VALID_STATUSES = {
     "awaiting_clarification",
     "complete",
     "failed",
+    "stopped",
 }
+
+# Terminal states — used by sweepers, rating windows, dispute deadlines, SDK
+# wait_for_completion, MCP manage_job, frontend timeline, and metrics labels.
+# Adding 'stopped' here is the single source of truth for the boy-scout sweep.
+TERMINAL_STATUSES = frozenset({"complete", "failed", "stopped"})
 
 PARENT_CASCADE_POLICIES = {
     "detach",
@@ -365,6 +374,10 @@ def _insert_claim_event_row(
     )
 
 
+_JOB_MESSAGE_WAITERS_LOCK = threading.Lock()
+_JOB_MESSAGE_WAITERS: dict[str, set[threading.Event]] = {}
+
+
 def _publish_job_message(job_id: str, message: dict | None) -> None:
     if message is None:
         return
@@ -372,6 +385,30 @@ def _publish_job_message(job_id: str, message: dict | None) -> None:
         subscribers = list(_JOB_MESSAGE_SUBSCRIBERS.get(job_id, set()))
     for subscriber in subscribers:
         subscriber.put_nowait(message)
+    # Wake long-poll waiters (separate from SSE subscribers — fired once and
+    # cleared by the waiter; publisher just sets the event cross-thread).
+    with _JOB_MESSAGE_WAITERS_LOCK:
+        waiters = list(_JOB_MESSAGE_WAITERS.get(job_id, set()))
+    for ev in waiters:
+        ev.set()
+
+
+def register_message_waiter(job_id: str) -> threading.Event:
+    """Register a one-shot waiter that fires when a new message lands for ``job_id``."""
+    ev = threading.Event()
+    with _JOB_MESSAGE_WAITERS_LOCK:
+        _JOB_MESSAGE_WAITERS.setdefault(job_id, set()).add(ev)
+    return ev
+
+
+def unregister_message_waiter(job_id: str, ev: threading.Event) -> None:
+    with _JOB_MESSAGE_WAITERS_LOCK:
+        waiters = _JOB_MESSAGE_WAITERS.get(job_id)
+        if waiters is None:
+            return
+        waiters.discard(ev)
+        if not waiters:
+            _JOB_MESSAGE_WAITERS.pop(job_id, None)
 
 
 def subscribe_job_messages(job_id: str) -> queue.Queue:

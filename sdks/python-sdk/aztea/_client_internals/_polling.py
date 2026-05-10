@@ -29,9 +29,12 @@ def poll_job_to_completion(
             raise AzteaError(f"Job {job_id} did not complete within {timeout_seconds}s.")
         job = client.jobs.get_raw(job_id)
         status = str(job.get("status") or "")
-        if status == "complete":
+        if status in ("complete", "stopped"):
             output = _coerce_payload(job.get("output_payload"))
-            if contract is not None:
+            # Skip contract verification for stop_when-aborted jobs since the
+            # output is a partial — verifying a partial against a complete-job
+            # contract would always fail and obscure the real reason for stop.
+            if contract is not None and status == "complete":
                 _verify_contract(output, contract)
             return JobResult(
                 job_id=job_id,
