@@ -35,11 +35,14 @@ import logging
 import re
 import uuid
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any, Callable
 
 _LOG = logging.getLogger(__name__)
 
 from core.llm import CompletionRequest, Message, run_with_fallback
+from core.db import get_db_connection
+from core.jobs import messaging as _job_messaging
 
 # ---------------------------------------------------------------------------
 # Hardened prompt scaffolding
@@ -94,6 +97,142 @@ class SkillInputTooLargeError(ValueError):
 
 class SkillExecutionError(RuntimeError):
     pass
+
+
+class SkillStoppedError(Exception):
+    """Raised when a partial_output emit indicates the job was stopped.
+
+    Either ``add_message`` raised ``JobAlreadyTerminal`` (the job was already
+    terminal before the emit), or the emit landed but the messaging tx flipped
+    the job to ``stopped`` because a caller ``stop_when`` predicate matched on
+    this very partial. The skill loop should treat this as a clean terminal —
+    not an error to log.
+    """
+
+
+# ---------------------------------------------------------------------------
+# Co-pilot helpers — emit_partial, read_steers, aztea namespace
+# ---------------------------------------------------------------------------
+
+
+def emit_partial(job_id: str, agent_id: str, payload: dict[str, Any]) -> None:
+    """Emit a ``partial_output`` message for ``job_id`` from ``agent_id``.
+
+    Wraps ``payload`` under ``{"payload": payload}`` to match the
+    ``partial_output`` message schema. If the messaging layer reports the job
+    is already terminal, or if the emit lands but the job's status has
+    transitioned to ``stopped`` inside the same tx (caller ``stop_when``
+    matched on this partial), raise :class:`SkillStoppedError` so the skill
+    loop can exit cleanly.
+    """
+    try:
+        _job_messaging.add_message(
+            job_id,
+            from_id=agent_id,
+            msg_type="partial_output",
+            payload={"payload": payload},
+        )
+    except _job_messaging.JobAlreadyTerminal as exc:
+        raise SkillStoppedError(str(exc)) from exc
+
+    # The emit succeeded, but stop_when may have matched in the same tx and
+    # flipped the job to 'stopped' before returning. Re-read the status; if
+    # it's stopped, surface as SkillStoppedError so the skill terminates.
+    if _job_status_is_stopped(job_id):
+        raise SkillStoppedError(f"job {job_id} stopped by caller stop_when match")
+
+
+def read_steers(
+    job_id: str, since_id: int | None = None
+) -> tuple[list[dict[str, Any]], int]:
+    """Return (steers with message_id > ``since_id``, new cursor).
+
+    If the job is terminal (``terminal_message_id`` is set), filter out any
+    steer with ``message_id > terminal_message_id`` so a skill that races a
+    steer-read against a stop never sees post-terminal steers. The new cursor
+    is the max ``message_id`` returned, or ``since_id`` (defaulting to 0) when
+    no rows match.
+    """
+    cursor = since_id if since_id is not None else 0
+    rows = _query_steer_rows(job_id, since_id)
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        mid = int(row["message_id"])
+        out.append(
+            {
+                "message_id": mid,
+                "payload": _decode_payload(row.get("payload")),
+                "created_at": row.get("created_at"),
+            }
+        )
+        if mid > cursor:
+            cursor = mid
+    return out, cursor
+
+
+def _job_status_is_stopped(job_id: str) -> bool:
+    """Return True if the job's current status is ``'stopped'``."""
+    with get_db_connection() as conn:
+        row = conn.execute(
+            "SELECT status FROM jobs WHERE job_id = %s",
+            (job_id,),
+        ).fetchone()
+    if row is None:
+        return False
+    return str(dict(row).get("status") or "").strip().lower() == "stopped"
+
+
+def _query_steer_rows(job_id: str, since_id: int | None) -> list[dict[str, Any]]:
+    """Fetch steer messages for ``job_id`` capped at ``terminal_message_id``.
+
+    Capping at the job's ``terminal_message_id`` (when set) preserves the
+    invariant that no post-terminal steer is ever surfaced to the agent.
+    """
+    sql = [
+        "SELECT m.message_id, m.payload, m.created_at",
+        "FROM job_messages m",
+        "JOIN jobs j ON j.job_id = m.job_id",
+        "WHERE m.job_id = %s AND m.type = 'steer'",
+        "AND (j.terminal_message_id IS NULL OR m.message_id <= j.terminal_message_id)",
+    ]
+    params: list[Any] = [job_id]
+    if since_id is not None:
+        sql.append("AND m.message_id > %s")
+        params.append(int(since_id))
+    sql.append("ORDER BY m.message_id ASC")
+    with get_db_connection() as conn:
+        rows = conn.execute("\n".join(sql), tuple(params)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _decode_payload(value: Any) -> Any:
+    """Return ``value`` as-is if dict/list/None; JSON-decode if it's a string."""
+    if value is None or isinstance(value, (dict, list)):
+        return value
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            value = value.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (TypeError, json.JSONDecodeError):
+            return value
+    return value
+
+
+def build_aztea_namespace(job_id: str, agent_id: str) -> SimpleNamespace:
+    """Return the ``aztea`` namespace exposed to skill code for ``job_id``.
+
+    Helpers are pre-bound to the current ``job_id`` and ``agent_id`` so skill
+    authors call ``aztea.emit_partial({...})`` and ``aztea.read_steers()``
+    without juggling identifiers.
+    """
+    return SimpleNamespace(
+        emit_partial=lambda payload: emit_partial(job_id, agent_id, payload),
+        read_steers=lambda since_id=None: read_steers(job_id, since_id),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +362,8 @@ def execute_hosted_skill(
     heartbeat_cb: Callable[[], None] | None = None,
     caller_context: Any | None = None,
     max_cost_cents: int = 100,
+    job_id: str | None = None,
+    agent_id: str | None = None,
 ) -> dict[str, Any]:
     """Execute a hosted SKILL.md against the platform LLM chain.
 
@@ -240,6 +381,14 @@ def execute_hosted_skill(
             ``None`` so existing callers behave exactly as before.
         max_cost_cents: Hard ceiling on combined nested-call spend when
             ``caller_context`` is set.  Ignored when caller_context is None.
+        job_id: Optional async-job id. When set together with ``agent_id``,
+            an ``aztea`` namespace bound to this job is available via
+            :func:`build_aztea_namespace` so skill code can emit partials and
+            read steers. The current LLM-only loop does not consume the
+            namespace — it is exposed for skill authors who drive their own
+            multi-turn loop.
+        agent_id: Optional agent identifier used as ``from_id`` when emitting
+            partial_output messages on behalf of this skill execution.
 
     Returns:
         Dict shaped ``{"result": str, "_meta": {...}}``.
