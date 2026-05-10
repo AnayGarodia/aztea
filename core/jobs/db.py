@@ -374,6 +374,10 @@ def _insert_claim_event_row(
     )
 
 
+_JOB_MESSAGE_WAITERS_LOCK = threading.Lock()
+_JOB_MESSAGE_WAITERS: dict[str, set[threading.Event]] = {}
+
+
 def _publish_job_message(job_id: str, message: dict | None) -> None:
     if message is None:
         return
@@ -381,6 +385,30 @@ def _publish_job_message(job_id: str, message: dict | None) -> None:
         subscribers = list(_JOB_MESSAGE_SUBSCRIBERS.get(job_id, set()))
     for subscriber in subscribers:
         subscriber.put_nowait(message)
+    # Wake long-poll waiters (separate from SSE subscribers — fired once and
+    # cleared by the waiter; publisher just sets the event cross-thread).
+    with _JOB_MESSAGE_WAITERS_LOCK:
+        waiters = list(_JOB_MESSAGE_WAITERS.get(job_id, set()))
+    for ev in waiters:
+        ev.set()
+
+
+def register_message_waiter(job_id: str) -> threading.Event:
+    """Register a one-shot waiter that fires when a new message lands for ``job_id``."""
+    ev = threading.Event()
+    with _JOB_MESSAGE_WAITERS_LOCK:
+        _JOB_MESSAGE_WAITERS.setdefault(job_id, set()).add(ev)
+    return ev
+
+
+def unregister_message_waiter(job_id: str, ev: threading.Event) -> None:
+    with _JOB_MESSAGE_WAITERS_LOCK:
+        waiters = _JOB_MESSAGE_WAITERS.get(job_id)
+        if waiters is None:
+            return
+        waiters.discard(ev)
+        if not waiters:
+            _JOB_MESSAGE_WAITERS.pop(job_id, None)
 
 
 def subscribe_job_messages(job_id: str) -> queue.Queue:

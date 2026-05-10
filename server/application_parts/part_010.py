@@ -4,6 +4,10 @@ from core import db as _db
 # stream + ratings (caller → agent, agent → caller) + disputes (get, file,
 # trust-dispute management) + platform-level ops endpoints.
 
+# Cap long-poll wait on GET /jobs/{id}/messages. 25s leaves margin under
+# typical 30s proxy/idle timeouts so the response always lands client-side.
+_JOB_MESSAGES_LONG_POLL_MAX_MS = 25_000
+
 
 @app.post(
     "/jobs/{job_id}/fail",
@@ -367,7 +371,7 @@ def _job_message_matches_filters(message: dict, filters: dict[str, str | None]) 
     responses=_error_responses(401, 403, 404, 429, 500),
 )
 @limiter.limit("60/minute")
-def jobs_message_list(
+async def jobs_message_list(
     request: Request,
     job_id: str,
     since: int | None = None,
@@ -375,6 +379,7 @@ def jobs_message_list(
     from_id: str | None = None,
     channel: str | None = None,
     to_id: str | None = None,
+    wait_ms: int = Query(default=0, ge=0, le=_JOB_MESSAGES_LONG_POLL_MAX_MS),
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.JobMessagesResponse:
     job = jobs.get_job(job_id)
@@ -387,15 +392,30 @@ def jobs_message_list(
         channel=channel,
         to_id=to_id,
     )
-    items = jobs.get_messages(
-        job_id,
-        since_id=since,
-        msg_type=filters["msg_type"],
-        from_id=filters["from_id"],
-        channel=filters["channel"],
-        to_id=filters["to_id"],
-    )
-    return JSONResponse(content={"messages": items})
+
+    def _query() -> list:
+        return jobs.get_messages(
+            job_id,
+            since_id=since,
+            msg_type=filters["msg_type"],
+            from_id=filters["from_id"],
+            channel=filters["channel"],
+            to_id=filters["to_id"],
+        )
+
+    items = _query()
+    if items or wait_ms <= 0:
+        return JSONResponse(content={"messages": items})
+    # Long-poll: register a cross-thread waiter, sleep until signalled or timeout,
+    # then re-run the query once. Always returns 200 (possibly empty on timeout).
+    ev = jobs.register_message_waiter(job_id)
+    try:
+        await asyncio.get_running_loop().run_in_executor(
+            None, ev.wait, wait_ms / 1000.0
+        )
+    finally:
+        jobs.unregister_message_waiter(job_id, ev)
+    return JSONResponse(content={"messages": _query()})
 
 
 @app.get(
