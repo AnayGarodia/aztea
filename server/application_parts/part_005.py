@@ -120,460 +120,333 @@ def _run_registration_verifier(
     )
 
 
+def _dq_fail(reason: str) -> dict:
+    """Shorthand for a deterministic quality fail envelope."""
+    return {"verdict": "fail", "score": 2, "reason": reason}
+
+
+def _dq_pass(reason: str) -> dict:
+    """Shorthand for a deterministic quality pass envelope."""
+    return {"verdict": "pass", "score": 8, "reason": reason}
+
+
+def _dq_required_keys(payload: dict, keys: list[str], agent_name: str) -> dict | None:
+    """Return a fail envelope if any key is missing, else None."""
+    for key in keys:
+        if key not in payload:
+            return _dq_fail(f"{agent_name} output must include '{key}'.")
+    return None
+
+
+def _dq_check_python_executor(payload: dict) -> dict:
+    if not isinstance(payload.get("stdout"), str) or not isinstance(payload.get("stderr"), str):
+        return _dq_fail("Python executor output must include stdout/stderr strings.")
+    if not isinstance(payload.get("timed_out"), bool):
+        return _dq_fail("Python executor output must include a boolean timed_out field.")
+    if not isinstance(payload.get("variables_captured"), dict):
+        return _dq_fail("Python executor output must include variables_captured.")
+    try:
+        int(payload.get("exit_code"))
+        int(payload.get("execution_time_ms"))
+    except (TypeError, ValueError):
+        return _dq_fail("Python executor output must include numeric exit_code and execution_time_ms.")
+    return _dq_pass("Structured Python executor output is internally consistent.")
+
+
+def _dq_check_multi_language_executor(payload: dict) -> dict:
+    if not isinstance(payload.get("stdout"), str) or not isinstance(payload.get("stderr"), str):
+        return _dq_fail("Multi-language executor output must include stdout/stderr strings.")
+    if not isinstance(payload.get("runtime"), str) or not str(payload.get("runtime")).strip():
+        return _dq_fail("Multi-language executor output must include a runtime string.")
+    passed = payload.get("passed")
+    if not isinstance(passed, bool):
+        return _dq_fail("Multi-language executor output must include a boolean passed field.")
+    try:
+        exit_code = int(payload.get("exit_code"))
+        int(payload.get("execution_time_ms"))
+    except (TypeError, ValueError):
+        return _dq_fail("Multi-language executor output must include numeric exit_code and execution_time_ms.")
+    if passed != (exit_code == 0):
+        return _dq_fail("Multi-language executor output is internally inconsistent: passed does not match exit_code.")
+    return _dq_pass("Structured multi-language executor output is internally consistent.")
+
+
+def _dq_check_cve_lookup(payload: dict) -> dict:
+    results = payload.get("results")
+    if not isinstance(results, list):
+        return _dq_fail("CVE lookup output must include a results list.")
+    for item in results:
+        if not isinstance(item, dict):
+            return _dq_fail("Each CVE lookup result must be an object.")
+        # Items returned from the direct cve_id fetch path use `cve_id`,
+        # while the package-lookup path uses `cve`. Either is acceptable
+        # — checking BOTH keeps deterministic-ID lookups from
+        # non-deterministically failing the judge gate.
+        cve_field = (
+            str(item.get("cve") or "").strip() or str(item.get("cve_id") or "").strip()
+        )
+        error_field = str(item.get("error") or "").strip()
+        # Items that include an error envelope (e.g. "not found", "NVD API
+        # rate limit reached") are valid output shapes — the agent
+        # successfully reported what it could not retrieve. Don't fail the
+        # whole job for these.
+        if not cve_field and not error_field:
+            return _dq_fail("Each CVE lookup result must include a CVE identifier or an error field.")
+        if cve_field:
+            try:
+                float(item.get("cvss", 0.0))
+            except (TypeError, ValueError):
+                return _dq_fail("Each CVE lookup result must include a numeric CVSS score.")
+            if not isinstance(item.get("severity"), str):
+                return _dq_fail("Each CVE lookup result must include a severity string.")
+    return _dq_pass("Structured CVE lookup output is internally consistent.")
+
+
+def _dq_check_secret_scanner(payload: dict) -> dict:
+    findings = payload.get("findings")
+    counts = payload.get("findings_by_severity")
+    if not isinstance(findings, list) or not isinstance(counts, dict):
+        return _dq_fail("Secret scanner output must include findings and findings_by_severity.")
+    try:
+        total_findings = int(payload.get("total_findings"))
+    except (TypeError, ValueError):
+        return _dq_fail("Secret scanner output must include a numeric total_findings.")
+    if total_findings != len(findings):
+        return _dq_fail("Secret scanner output is internally inconsistent: total_findings does not match findings.")
+    severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+    for item in findings:
+        if not isinstance(item, dict):
+            return _dq_fail("Each secret scanner finding must be an object.")
+        severity = str(item.get("severity") or "").strip().lower()
+        if severity not in severity_counts:
+            return _dq_fail("Each secret scanner finding must include a valid severity.")
+        severity_counts[severity] += 1
+        if not isinstance(item.get("redacted_preview"), str):
+            return _dq_fail("Each secret scanner finding must include a redacted_preview string.")
+    if any(int(counts.get(key, 0)) != value for key, value in severity_counts.items()):
+        return _dq_fail("Secret scanner output is internally inconsistent: findings_by_severity does not match findings.")
+    return _dq_pass("Structured secret scanner output is internally consistent.")
+
+
+def _dq_check_db_sandbox(payload: dict) -> dict:
+    results = payload.get("results")
+    if not isinstance(results, list):
+        return _dq_fail("DB sandbox output must include a results list.")
+    try:
+        statements_executed = int(payload.get("statements_executed"))
+        int(payload.get("db_size_bytes"))
+        int(payload.get("execution_time_ms"))
+    except (TypeError, ValueError):
+        return _dq_fail("DB sandbox output must include numeric statements_executed, db_size_bytes, and execution_time_ms.")
+    if statements_executed != len(results):
+        return _dq_fail("DB sandbox output is internally inconsistent: statements_executed does not match results.")
+    return _dq_pass("Structured DB sandbox output is internally consistent.")
+
+
+def _dq_check_dns_inspector(payload: dict) -> dict:
+    results = payload.get("results")
+    if not isinstance(results, list):
+        return _dq_fail("DNS inspector output must include a results list.")
+    try:
+        billing_units_actual = int(payload.get("billing_units_actual"))
+    except (TypeError, ValueError):
+        return _dq_fail("DNS inspector output must include numeric billing_units_actual.")
+    successful_results = [
+        item for item in results
+        if isinstance(item, dict) and not item.get("error") and not item.get("issues")
+    ]
+    if billing_units_actual > len(results) or billing_units_actual < 0:
+        return _dq_fail("DNS inspector output is internally inconsistent: billing_units_actual exceeds results.")
+    if billing_units_actual not in {len(results), len(successful_results)}:
+        return _dq_fail("DNS inspector output is internally inconsistent: billing_units_actual must count attempted domains or fully successful domains.")
+    return _dq_pass("Structured DNS inspector output is internally consistent.")
+
+
+def _dq_check_browser_agent(payload: dict) -> dict:
+    if not isinstance(payload.get("url"), str) or not str(payload.get("url")).strip():
+        return _dq_fail("Browser agent output must include a final URL.")
+    if not isinstance(payload.get("html"), str) or not isinstance(payload.get("title"), str):
+        return _dq_fail("Browser agent output must include html and title strings.")
+    artifact = payload.get("screenshot_artifact")
+    if not isinstance(artifact, dict) or not str(artifact.get("url_or_base64") or "").strip():
+        return _dq_fail("Browser agent output must include a screenshot artifact.")
+    return _dq_pass("Structured browser output is internally consistent.")
+
+
+def _dq_check_docs_grounder(payload: dict) -> dict:
+    if not isinstance(payload.get("sources"), list):
+        return _dq_fail("Docs grounder output must include a sources list.")
+    if not isinstance(payload.get("summary"), str):
+        return _dq_fail("Docs grounder output must include a summary string.")
+    if not str(payload.get("library") or "").strip():
+        return _dq_fail("Docs grounder output must include a library field.")
+    return _dq_pass("Docs grounder output is internally consistent.")
+
+
+def _dq_check_sast_scanner(payload: dict) -> dict:
+    findings = payload.get("findings")
+    counts = payload.get("by_severity")
+    if not isinstance(findings, list) or not isinstance(counts, dict):
+        return _dq_fail("SAST scanner output must include findings and by_severity.")
+    try:
+        total = int(payload.get("total_findings"))
+    except (TypeError, ValueError):
+        return _dq_fail("SAST scanner output must include numeric total_findings.")
+    if total != len(findings):
+        return _dq_fail("SAST scanner output is inconsistent: total_findings does not match findings.")
+    return _dq_pass("Structured SAST scanner output is internally consistent.")
+
+
+def _dq_check_stripe_webhook_debugger(payload: dict) -> dict:
+    results = payload.get("results")
+    if not isinstance(results, list):
+        return _dq_fail("Stripe webhook debugger output must include a results list.")
+    try:
+        tests_run = int(payload.get("tests_run"))
+        passed = int(payload.get("passed"))
+        failed = int(payload.get("failed"))
+    except (TypeError, ValueError):
+        return _dq_fail("Stripe webhook debugger output must include numeric tests_run, passed, failed.")
+    if tests_run != passed + failed:
+        return _dq_fail("Stripe webhook debugger output is inconsistent: tests_run != passed + failed.")
+    return _dq_pass("Structured Stripe webhook debugger output is internally consistent.")
+
+
+def _dq_check_load_tester(payload: dict) -> dict:
+    latency = payload.get("latency_ms")
+    if not isinstance(latency, dict):
+        return _dq_fail("Load tester output must include a latency_ms dict.")
+    try:
+        total = int(payload.get("total_requests"))
+        success = int(payload.get("success_count"))
+        errors = int(payload.get("error_count"))
+    except (TypeError, ValueError):
+        return _dq_fail("Load tester output must include numeric total_requests, success_count, error_count.")
+    if total != success + errors:
+        return _dq_fail("Load tester output is inconsistent: total_requests != success_count + error_count.")
+    return _dq_pass("Structured load tester output is internally consistent.")
+
+
+def _dq_check_ci_failure_reproducer(payload: dict) -> dict:
+    valid_types = {"code_error", "dependency_error", "env_error", "config_error", "flaky_test", "timeout", "unknown"}
+    if str(payload.get("failure_type") or "") not in valid_types:
+        return _dq_fail("CI failure reproducer output must include a valid failure_type.")
+    if not isinstance(payload.get("commands_tried"), list):
+        return _dq_fail("CI failure reproducer output must include commands_tried list.")
+    return _dq_pass("Structured CI failure reproducer output is internally consistent.")
+
+
+def _dq_check_ssl_certificate_decoder(payload: dict) -> dict:
+    # Single cert returns subject/valid_from; batch returns certificates list
+    has_single = "subject" in payload and "valid_from" in payload
+    has_batch = "certificates" in payload
+    if not has_single and not has_batch:
+        return _dq_fail("SSL certificate decoder output must include subject+valid_from or certificates list.")
+    return _dq_pass("Structured SSL certificate decoder output is internally consistent.")
+
+
+def _dq_check_unicode_inspector(payload: dict) -> dict:
+    has_single = "length_chars" in payload and "security" in payload
+    has_batch = "results" in payload and "texts_analyzed" in payload
+    if not has_single and not has_batch:
+        return _dq_fail("Unicode inspector output must include length_chars+security or results+texts_analyzed.")
+    return _dq_pass("Structured unicode inspector output is internally consistent.")
+
+
+def _dq_check_color_contrast_checker(payload: dict) -> dict:
+    has_single = "contrast_ratio" in payload and "grade" in payload
+    has_batch = "results" in payload and "pairs_checked" in payload
+    if not has_single and not has_batch:
+        return _dq_fail("Color contrast checker output must include contrast_ratio+grade or results+pairs_checked.")
+    return _dq_pass("Structured color contrast checker output is internally consistent.")
+
+
+def _dq_check_keys_only(payload: dict, keys: list[str], agent_name: str) -> dict:
+    """Validate that all required keys are present, return pass or fail."""
+    miss = _dq_required_keys(payload, keys, agent_name)
+    if miss is not None:
+        return miss
+    return _dq_pass(f"Structured {agent_name} output is internally consistent.")
+
+
+# Dispatch table: agent_id -> pure checker(payload) -> dict.
+# Evaluated lazily so agent ID constants are already bound at call time.
+def _build_deterministic_quality_dispatch() -> dict:
+    return {
+        _PYTHON_EXECUTOR_AGENT_ID: _dq_check_python_executor,
+        _MULTI_LANGUAGE_EXECUTOR_AGENT_ID: _dq_check_multi_language_executor,
+        _CVELOOKUP_AGENT_ID: _dq_check_cve_lookup,
+        _SECRET_SCANNER_AGENT_ID: _dq_check_secret_scanner,
+        _DB_SANDBOX_AGENT_ID: _dq_check_db_sandbox,
+        _DNS_INSPECTOR_AGENT_ID: _dq_check_dns_inspector,
+        _BROWSER_AGENT_ID: _dq_check_browser_agent,
+        _DOCS_GROUNDER_AGENT_ID: _dq_check_docs_grounder,
+        _SAST_SCANNER_AGENT_ID: _dq_check_sast_scanner,
+        _STRIPE_WEBHOOK_DEBUGGER_AGENT_ID: _dq_check_stripe_webhook_debugger,
+        _LOAD_TESTER_AGENT_ID: _dq_check_load_tester,
+        _CI_FAILURE_REPRODUCER_AGENT_ID: _dq_check_ci_failure_reproducer,
+        _JWT_DEBUGGER_AGENT_ID: lambda p: _dq_check_keys_only(
+            p, ["header", "payload", "algorithm", "decoded_at"], "JWT debugger"
+        ),
+        _DOCKERFILE_ANALYZER_AGENT_ID: lambda p: _dq_check_keys_only(
+            p, ["findings", "total_findings", "by_severity", "score"], "Dockerfile analyzer"
+        ),
+        _OPENAPI_VALIDATOR_AGENT_ID: lambda p: _dq_check_keys_only(
+            p, ["valid", "errors", "stats"], "OpenAPI validator"
+        ),
+        _COVERAGE_RUNNER_AGENT_ID: lambda p: _dq_check_keys_only(
+            p, ["overall_pct", "exit_code", "files"], "Coverage runner"
+        ),
+        _EMAIL_DELIVERABILITY_CHECKER_AGENT_ID: lambda p: _dq_check_keys_only(
+            p, ["domain", "spf", "dkim", "dmarc", "score", "verdict"], "Email deliverability checker"
+        ),
+        _REGEX_TESTER_AGENT_ID: lambda p: _dq_check_keys_only(
+            p, ["results", "total_matches", "patterns_tested", "strings_tested"], "Regex tester"
+        ),
+        _CRON_EXPRESSION_PARSER_AGENT_ID: lambda p: _dq_check_keys_only(
+            p, ["expression", "valid", "next_runs", "timezone"], "Cron expression parser"
+        ),
+        _SSL_CERTIFICATE_DECODER_AGENT_ID: _dq_check_ssl_certificate_decoder,
+        _DIFF_ANALYZER_AGENT_ID: lambda p: _dq_check_keys_only(
+            p, ["files_changed", "total_additions", "total_deletions", "risk_summary"], "Diff analyzer"
+        ),
+        _K8S_MANIFEST_VALIDATOR_AGENT_ID: lambda p: _dq_check_keys_only(
+            p, ["valid", "resources_parsed", "total_findings", "by_severity"], "K8s manifest validator"
+        ),
+        _ARCHIVE_INSPECTOR_AGENT_ID: lambda p: _dq_check_keys_only(
+            p, ["format", "total_entries", "total_uncompressed_bytes", "security"], "Archive inspector"
+        ),
+        _UNICODE_INSPECTOR_AGENT_ID: _dq_check_unicode_inspector,
+        _TERRAFORM_PLAN_ANALYZER_AGENT_ID: lambda p: _dq_check_keys_only(
+            p, ["summary", "changes", "risk_summary"], "Terraform plan analyzer"
+        ),
+        _COLOR_CONTRAST_CHECKER_AGENT_ID: _dq_check_color_contrast_checker,
+    }
+
+
+_DETERMINISTIC_QUALITY_DISPATCH: dict | None = None
+_DETERMINISTIC_QUALITY_DISPATCH_LOCK = threading.Lock()
+
+
+def _get_deterministic_quality_dispatch() -> dict:
+    global _DETERMINISTIC_QUALITY_DISPATCH
+    if _DETERMINISTIC_QUALITY_DISPATCH is not None:
+        return _DETERMINISTIC_QUALITY_DISPATCH
+    with _DETERMINISTIC_QUALITY_DISPATCH_LOCK:
+        if _DETERMINISTIC_QUALITY_DISPATCH is None:
+            _DETERMINISTIC_QUALITY_DISPATCH = _build_deterministic_quality_dispatch()
+    return _DETERMINISTIC_QUALITY_DISPATCH
+
+
 def _deterministic_quality_result(
     agent: dict, output_payload: dict
 ) -> dict[str, Any] | None:
     agent_id = str(agent.get("agent_id") or "").strip()
     payload = output_payload if isinstance(output_payload, dict) else {}
-
-    if agent_id == _PYTHON_EXECUTOR_AGENT_ID:
-        if not isinstance(payload.get("stdout"), str) or not isinstance(
-            payload.get("stderr"), str
-        ):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Python executor output must include stdout/stderr strings.",
-            }
-        if not isinstance(payload.get("timed_out"), bool):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Python executor output must include a boolean timed_out field.",
-            }
-        if not isinstance(payload.get("variables_captured"), dict):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Python executor output must include variables_captured.",
-            }
-        try:
-            int(payload.get("exit_code"))
-            int(payload.get("execution_time_ms"))
-        except (TypeError, ValueError):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Python executor output must include numeric exit_code and execution_time_ms.",
-            }
-        return {
-            "verdict": "pass",
-            "score": 8,
-            "reason": "Structured Python executor output is internally consistent.",
-        }
-
-    if agent_id == _MULTI_LANGUAGE_EXECUTOR_AGENT_ID:
-        if not isinstance(payload.get("stdout"), str) or not isinstance(
-            payload.get("stderr"), str
-        ):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Multi-language executor output must include stdout/stderr strings.",
-            }
-        if (
-            not isinstance(payload.get("runtime"), str)
-            or not str(payload.get("runtime")).strip()
-        ):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Multi-language executor output must include a runtime string.",
-            }
-        passed = payload.get("passed")
-        if not isinstance(passed, bool):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Multi-language executor output must include a boolean passed field.",
-            }
-        try:
-            exit_code = int(payload.get("exit_code"))
-            int(payload.get("execution_time_ms"))
-        except (TypeError, ValueError):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Multi-language executor output must include numeric exit_code and execution_time_ms.",
-            }
-        if passed != (exit_code == 0):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Multi-language executor output is internally inconsistent: passed does not match exit_code.",
-            }
-        return {
-            "verdict": "pass",
-            "score": 8,
-            "reason": "Structured multi-language executor output is internally consistent.",
-        }
-
-    if agent_id == _CVELOOKUP_AGENT_ID:
-        results = payload.get("results")
-        if not isinstance(results, list):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "CVE lookup output must include a results list.",
-            }
-        for item in results:
-            if not isinstance(item, dict):
-                return {
-                    "verdict": "fail",
-                    "score": 2,
-                    "reason": "Each CVE lookup result must be an object.",
-                }
-            # Items returned from the direct cve_id fetch path use `cve_id`,
-            # while the package-lookup path uses `cve`. Either is acceptable
-            # — checking BOTH keeps deterministic-ID lookups from
-            # non-deterministically failing the judge gate.
-            cve_field = (
-                str(item.get("cve") or "").strip()
-                or str(item.get("cve_id") or "").strip()
-            )
-            error_field = str(item.get("error") or "").strip()
-            # Items that include an error envelope (e.g. "not found", "NVD API
-            # rate limit reached") are valid output shapes — the agent
-            # successfully reported what it could not retrieve. Don't fail the
-            # whole job for these.
-            if not cve_field and not error_field:
-                return {
-                    "verdict": "fail",
-                    "score": 2,
-                    "reason": "Each CVE lookup result must include a CVE identifier or an error field.",
-                }
-            if cve_field:
-                try:
-                    float(item.get("cvss", 0.0))
-                except (TypeError, ValueError):
-                    return {
-                        "verdict": "fail",
-                        "score": 2,
-                        "reason": "Each CVE lookup result must include a numeric CVSS score.",
-                    }
-                if not isinstance(item.get("severity"), str):
-                    return {
-                        "verdict": "fail",
-                        "score": 2,
-                        "reason": "Each CVE lookup result must include a severity string.",
-                    }
-        return {
-            "verdict": "pass",
-            "score": 8,
-            "reason": "Structured CVE lookup output is internally consistent.",
-        }
-
-    if agent_id == _SECRET_SCANNER_AGENT_ID:
-        findings = payload.get("findings")
-        counts = payload.get("findings_by_severity")
-        if not isinstance(findings, list) or not isinstance(counts, dict):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Secret scanner output must include findings and findings_by_severity.",
-            }
-        try:
-            total_findings = int(payload.get("total_findings"))
-        except (TypeError, ValueError):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Secret scanner output must include a numeric total_findings.",
-            }
-        if total_findings != len(findings):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Secret scanner output is internally inconsistent: total_findings does not match findings.",
-            }
-        severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
-        for item in findings:
-            if not isinstance(item, dict):
-                return {
-                    "verdict": "fail",
-                    "score": 2,
-                    "reason": "Each secret scanner finding must be an object.",
-                }
-            severity = str(item.get("severity") or "").strip().lower()
-            if severity not in severity_counts:
-                return {
-                    "verdict": "fail",
-                    "score": 2,
-                    "reason": "Each secret scanner finding must include a valid severity.",
-                }
-            severity_counts[severity] += 1
-            if not isinstance(item.get("redacted_preview"), str):
-                return {
-                    "verdict": "fail",
-                    "score": 2,
-                    "reason": "Each secret scanner finding must include a redacted_preview string.",
-                }
-        if any(
-            int(counts.get(key, 0)) != value for key, value in severity_counts.items()
-        ):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Secret scanner output is internally inconsistent: findings_by_severity does not match findings.",
-            }
-        return {
-            "verdict": "pass",
-            "score": 8,
-            "reason": "Structured secret scanner output is internally consistent.",
-        }
-
-    if agent_id == _DB_SANDBOX_AGENT_ID:
-        results = payload.get("results")
-        if not isinstance(results, list):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "DB sandbox output must include a results list.",
-            }
-        try:
-            statements_executed = int(payload.get("statements_executed"))
-            int(payload.get("db_size_bytes"))
-            int(payload.get("execution_time_ms"))
-        except (TypeError, ValueError):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "DB sandbox output must include numeric statements_executed, db_size_bytes, and execution_time_ms.",
-            }
-        if statements_executed != len(results):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "DB sandbox output is internally inconsistent: statements_executed does not match results.",
-            }
-        return {
-            "verdict": "pass",
-            "score": 8,
-            "reason": "Structured DB sandbox output is internally consistent.",
-        }
-
-    if agent_id == _DNS_INSPECTOR_AGENT_ID:
-        results = payload.get("results")
-        if not isinstance(results, list):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "DNS inspector output must include a results list.",
-            }
-        try:
-            billing_units_actual = int(payload.get("billing_units_actual"))
-        except (TypeError, ValueError):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "DNS inspector output must include numeric billing_units_actual.",
-            }
-        successful_results = [
-            item
-            for item in results
-            if isinstance(item, dict)
-            and not item.get("error")
-            and not item.get("issues")
-        ]
-        if billing_units_actual > len(results) or billing_units_actual < 0:
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "DNS inspector output is internally inconsistent: billing_units_actual exceeds results.",
-            }
-        if billing_units_actual not in {len(results), len(successful_results)}:
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "DNS inspector output is internally inconsistent: billing_units_actual must count attempted domains or fully successful domains.",
-            }
-        return {
-            "verdict": "pass",
-            "score": 8,
-            "reason": "Structured DNS inspector output is internally consistent.",
-        }
-
-    if agent_id == _BROWSER_AGENT_ID:
-        if (
-            not isinstance(payload.get("url"), str)
-            or not str(payload.get("url")).strip()
-        ):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Browser agent output must include a final URL.",
-            }
-        if not isinstance(payload.get("html"), str) or not isinstance(
-            payload.get("title"), str
-        ):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Browser agent output must include html and title strings.",
-            }
-        artifact = payload.get("screenshot_artifact")
-        if (
-            not isinstance(artifact, dict)
-            or not str(artifact.get("url_or_base64") or "").strip()
-        ):
-            return {
-                "verdict": "fail",
-                "score": 2,
-                "reason": "Browser agent output must include a screenshot artifact.",
-            }
-        return {
-            "verdict": "pass",
-            "score": 8,
-            "reason": "Structured browser output is internally consistent.",
-        }
-
-    if agent_id == _DOCS_GROUNDER_AGENT_ID:
-        if not isinstance(payload.get("sources"), list):
-            return {"verdict": "fail", "score": 2, "reason": "Docs grounder output must include a sources list."}
-        if not isinstance(payload.get("summary"), str):
-            return {"verdict": "fail", "score": 2, "reason": "Docs grounder output must include a summary string."}
-        if not str(payload.get("library") or "").strip():
-            return {"verdict": "fail", "score": 2, "reason": "Docs grounder output must include a library field."}
-        return {"verdict": "pass", "score": 8, "reason": "Docs grounder output is internally consistent."}
-
-    if agent_id == _SAST_SCANNER_AGENT_ID:
-        findings = payload.get("findings")
-        counts = payload.get("by_severity")
-        if not isinstance(findings, list) or not isinstance(counts, dict):
-            return {"verdict": "fail", "score": 2, "reason": "SAST scanner output must include findings and by_severity."}
-        try:
-            total = int(payload.get("total_findings"))
-        except (TypeError, ValueError):
-            return {"verdict": "fail", "score": 2, "reason": "SAST scanner output must include numeric total_findings."}
-        if total != len(findings):
-            return {"verdict": "fail", "score": 2, "reason": "SAST scanner output is inconsistent: total_findings does not match findings."}
-        return {"verdict": "pass", "score": 8, "reason": "Structured SAST scanner output is internally consistent."}
-
-    if agent_id == _STRIPE_WEBHOOK_DEBUGGER_AGENT_ID:
-        results = payload.get("results")
-        if not isinstance(results, list):
-            return {"verdict": "fail", "score": 2, "reason": "Stripe webhook debugger output must include a results list."}
-        try:
-            tests_run = int(payload.get("tests_run"))
-            passed = int(payload.get("passed"))
-            failed = int(payload.get("failed"))
-        except (TypeError, ValueError):
-            return {"verdict": "fail", "score": 2, "reason": "Stripe webhook debugger output must include numeric tests_run, passed, failed."}
-        if tests_run != passed + failed:
-            return {"verdict": "fail", "score": 2, "reason": "Stripe webhook debugger output is inconsistent: tests_run != passed + failed."}
-        return {"verdict": "pass", "score": 8, "reason": "Structured Stripe webhook debugger output is internally consistent."}
-
-    if agent_id == _LOAD_TESTER_AGENT_ID:
-        latency = payload.get("latency_ms")
-        if not isinstance(latency, dict):
-            return {"verdict": "fail", "score": 2, "reason": "Load tester output must include a latency_ms dict."}
-        try:
-            total = int(payload.get("total_requests"))
-            success = int(payload.get("success_count"))
-            errors = int(payload.get("error_count"))
-        except (TypeError, ValueError):
-            return {"verdict": "fail", "score": 2, "reason": "Load tester output must include numeric total_requests, success_count, error_count."}
-        if total != success + errors:
-            return {"verdict": "fail", "score": 2, "reason": "Load tester output is inconsistent: total_requests != success_count + error_count."}
-        return {"verdict": "pass", "score": 8, "reason": "Structured load tester output is internally consistent."}
-
-    if agent_id == _CI_FAILURE_REPRODUCER_AGENT_ID:
-        valid_types = {"code_error", "dependency_error", "env_error", "config_error", "flaky_test", "timeout", "unknown"}
-        if str(payload.get("failure_type") or "") not in valid_types:
-            return {"verdict": "fail", "score": 2, "reason": "CI failure reproducer output must include a valid failure_type."}
-        if not isinstance(payload.get("commands_tried"), list):
-            return {"verdict": "fail", "score": 2, "reason": "CI failure reproducer output must include commands_tried list."}
-        return {"verdict": "pass", "score": 8, "reason": "Structured CI failure reproducer output is internally consistent."}
-
-    if agent_id == _JWT_DEBUGGER_AGENT_ID:
-        for key in ["header", "payload", "algorithm", "decoded_at"]:
-            if key not in payload:
-                return {"verdict": "fail", "score": 2, "reason": f"JWT debugger output must include '{key}'."}
-        return {"verdict": "pass", "score": 8, "reason": "Structured JWT debugger output is internally consistent."}
-
-    if agent_id == _DOCKERFILE_ANALYZER_AGENT_ID:
-        for key in ["findings", "total_findings", "by_severity", "score"]:
-            if key not in payload:
-                return {"verdict": "fail", "score": 2, "reason": f"Dockerfile analyzer output must include '{key}'."}
-        return {"verdict": "pass", "score": 8, "reason": "Structured Dockerfile analyzer output is internally consistent."}
-
-    if agent_id == _OPENAPI_VALIDATOR_AGENT_ID:
-        for key in ["valid", "errors", "stats"]:
-            if key not in payload:
-                return {"verdict": "fail", "score": 2, "reason": f"OpenAPI validator output must include '{key}'."}
-        return {"verdict": "pass", "score": 8, "reason": "Structured OpenAPI validator output is internally consistent."}
-
-    if agent_id == _COVERAGE_RUNNER_AGENT_ID:
-        for key in ["overall_pct", "exit_code", "files"]:
-            if key not in payload:
-                return {"verdict": "fail", "score": 2, "reason": f"Coverage runner output must include '{key}'."}
-        return {"verdict": "pass", "score": 8, "reason": "Structured coverage runner output is internally consistent."}
-
-    if agent_id == _EMAIL_DELIVERABILITY_CHECKER_AGENT_ID:
-        for key in ["domain", "spf", "dkim", "dmarc", "score", "verdict"]:
-            if key not in payload:
-                return {"verdict": "fail", "score": 2, "reason": f"Email deliverability checker output must include '{key}'."}
-        return {"verdict": "pass", "score": 8, "reason": "Structured email deliverability checker output is internally consistent."}
-
-    if agent_id == _REGEX_TESTER_AGENT_ID:
-        for key in ["results", "total_matches", "patterns_tested", "strings_tested"]:
-            if key not in payload:
-                return {"verdict": "fail", "score": 2, "reason": f"Regex tester output must include '{key}'."}
-        return {"verdict": "pass", "score": 8, "reason": "Structured regex tester output is internally consistent."}
-
-    if agent_id == _CRON_EXPRESSION_PARSER_AGENT_ID:
-        for key in ["expression", "valid", "next_runs", "timezone"]:
-            if key not in payload:
-                return {"verdict": "fail", "score": 2, "reason": f"Cron expression parser output must include '{key}'."}
-        return {"verdict": "pass", "score": 8, "reason": "Structured cron expression parser output is internally consistent."}
-
-    if agent_id == _SSL_CERTIFICATE_DECODER_AGENT_ID:
-        # Single cert returns subject/valid_from; batch returns certificates list
-        has_single = "subject" in payload and "valid_from" in payload
-        has_batch = "certificates" in payload
-        if not has_single and not has_batch:
-            return {"verdict": "fail", "score": 2, "reason": "SSL certificate decoder output must include subject+valid_from or certificates list."}
-        return {"verdict": "pass", "score": 8, "reason": "Structured SSL certificate decoder output is internally consistent."}
-
-    if agent_id == _DIFF_ANALYZER_AGENT_ID:
-        for key in ["files_changed", "total_additions", "total_deletions", "risk_summary"]:
-            if key not in payload:
-                return {"verdict": "fail", "score": 2, "reason": f"Diff analyzer output must include '{key}'."}
-        return {"verdict": "pass", "score": 8, "reason": "Structured diff analyzer output is internally consistent."}
-
-    if agent_id == _K8S_MANIFEST_VALIDATOR_AGENT_ID:
-        for key in ["valid", "resources_parsed", "total_findings", "by_severity"]:
-            if key not in payload:
-                return {"verdict": "fail", "score": 2, "reason": f"K8s manifest validator output must include '{key}'."}
-        return {"verdict": "pass", "score": 8, "reason": "Structured k8s manifest validator output is internally consistent."}
-
-    if agent_id == _ARCHIVE_INSPECTOR_AGENT_ID:
-        for key in ["format", "total_entries", "total_uncompressed_bytes", "security"]:
-            if key not in payload:
-                return {"verdict": "fail", "score": 2, "reason": f"Archive inspector output must include '{key}'."}
-        return {"verdict": "pass", "score": 8, "reason": "Structured archive inspector output is internally consistent."}
-
-    if agent_id == _UNICODE_INSPECTOR_AGENT_ID:
-        has_single = "length_chars" in payload and "security" in payload
-        has_batch = "results" in payload and "texts_analyzed" in payload
-        if not has_single and not has_batch:
-            return {"verdict": "fail", "score": 2, "reason": "Unicode inspector output must include length_chars+security or results+texts_analyzed."}
-        return {"verdict": "pass", "score": 8, "reason": "Structured unicode inspector output is internally consistent."}
-
-    if agent_id == _TERRAFORM_PLAN_ANALYZER_AGENT_ID:
-        for key in ["summary", "changes", "risk_summary"]:
-            if key not in payload:
-                return {"verdict": "fail", "score": 2, "reason": f"Terraform plan analyzer output must include '{key}'."}
-        return {"verdict": "pass", "score": 8, "reason": "Structured terraform plan analyzer output is internally consistent."}
-
-    if agent_id == _COLOR_CONTRAST_CHECKER_AGENT_ID:
-        has_single = "contrast_ratio" in payload and "grade" in payload
-        has_batch = "results" in payload and "pairs_checked" in payload
-        if not has_single and not has_batch:
-            return {"verdict": "fail", "score": 2, "reason": "Color contrast checker output must include contrast_ratio+grade or results+pairs_checked."}
-        return {"verdict": "pass", "score": 8, "reason": "Structured color contrast checker output is internally consistent."}
-
-    return None
+    checker = _get_deterministic_quality_dispatch().get(agent_id)
+    if checker is None:
+        return None
+    return checker(payload)
 
 
 def _quality_hint_for_agent(agent: dict) -> str:
@@ -588,12 +461,18 @@ def _timeout_error_payload(job_payload: dict) -> dict:
     )
 
 
-def _run_quality_gate(job: dict, agent: dict, output_payload: dict) -> dict[str, Any]:
-    judge_agent_id = (
-        str(job.get("judge_agent_id") or _QUALITY_JUDGE_AGENT_ID).strip()
-        or _QUALITY_JUDGE_AGENT_ID
-    )
-    judge_job_id: str | None = None
+def _create_judge_child_job(
+    *,
+    job: dict,
+    agent: dict,
+    output_payload: dict,
+    judge_agent_id: str,
+) -> str | None:
+    """Create a zero-cost child job for the judge agent and return its job_id.
+
+    Returns ``None`` on any error (judge job is optional; failure must not
+    block the quality gate).
+    """
     try:
         judge_agent = registry.get_agent(judge_agent_id)
         platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
@@ -623,24 +502,36 @@ def _run_quality_gate(job: dict, agent: dict, output_payload: dict) -> dict[str,
             dispute_window_hours=1,
             judge_agent_id=None,
         )
-        judge_job_id = child["job_id"]
+        return child["job_id"]
     except Exception:
-        judge_job_id = None
+        return None
 
-    output_schema = agent.get("output_schema")
-    has_output_schema = output_schema is not None
-    live_quality_toggle = (
+
+def _is_live_quality_enabled() -> bool:
+    """Return True when the live LLM quality judge is toggled on and GROQ_API_KEY exists."""
+    toggle = (
         os.environ.get("AZTEA_ENABLE_LIVE_QUALITY_JUDGE")
         or os.environ.get("AGENTMARKET_ENABLE_LIVE_QUALITY_JUDGE")
         or ""
     )
-    live_quality_enabled = str(live_quality_toggle).strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    } and bool(str(os.environ.get("GROQ_API_KEY", "")).strip())
+    return str(toggle).strip().lower() in {"1", "true", "yes", "on"} and bool(
+        str(os.environ.get("GROQ_API_KEY", "")).strip()
+    )
 
+
+def _score_output_payload(
+    *,
+    job: dict,
+    agent: dict,
+    output_payload: dict,
+    live_quality_enabled: bool,
+) -> tuple[str, int, str, bool]:
+    """Apply structural, schema, deterministic, and optionally live checks.
+
+    Returns ``(verdict, score, reason, used_deterministic)``.
+    Verdict is always 'pass' or 'fail'.
+    """
+    output_schema = agent.get("output_schema")
     verdict = "pass"
     score = 5
     reason = "No output contract defined. Structural check passed."
@@ -648,35 +539,27 @@ def _run_quality_gate(job: dict, agent: dict, output_payload: dict) -> dict[str,
     try:
         parsed_output = json.loads(_stable_json_text(output_payload))
     except (TypeError, ValueError, json.JSONDecodeError):
-        parsed_output = None
-        verdict = "fail"
-        score = 0
-        reason = "Output payload was not valid JSON."
+        return "fail", 0, "Output payload was not valid JSON.", False
 
-    if verdict == "pass" and (parsed_output is None or parsed_output == {}):
-        verdict = "fail"
-        score = 0
-        reason = "Output payload must not be null or an empty object."
+    if parsed_output is None or parsed_output == {}:
+        return "fail", 0, "Output payload must not be null or an empty object.", False
 
-    if verdict == "pass" and has_output_schema and isinstance(output_schema, dict):
+    if isinstance(output_schema, dict) and output_schema:
         schema_errors = _validate_json_schema_subset(parsed_output, output_schema)
         if schema_errors:
-            verdict = "fail"
-            score = 0
-            reason = f"Output did not match declared schema: {schema_errors[0]}"
-        else:
-            reason = "Output matched declared schema and structural checks."
+            return "fail", 0, f"Output did not match declared schema: {schema_errors[0]}", False
+        reason = "Output matched declared schema and structural checks."
 
-    used_deterministic_quality = False
-    if verdict == "pass":
-        deterministic = _deterministic_quality_result(agent, output_payload)
-        if deterministic is not None:
-            verdict = str(deterministic["verdict"])
-            score = int(deterministic["score"])
-            reason = str(deterministic["reason"])
-            used_deterministic_quality = True
+    deterministic = _deterministic_quality_result(agent, output_payload)
+    if deterministic is not None:
+        return (
+            str(deterministic["verdict"]),
+            int(deterministic["score"]),
+            str(deterministic["reason"]),
+            True,
+        )
 
-    if verdict == "pass" and live_quality_enabled and not used_deterministic_quality:
+    if live_quality_enabled:
         try:
             judge_result = judges.run_quality_judgment(
                 input_payload=job.get("input_payload") or {},
@@ -686,23 +569,57 @@ def _run_quality_gate(job: dict, agent: dict, output_payload: dict) -> dict[str,
                 quality_hint=_quality_hint_for_agent(agent),
             )
             judge_verdict = str(judge_result.get("verdict") or "").strip().lower()
-            if judge_verdict in {"pass", "fail"}:
-                verdict = judge_verdict
-            else:
-                verdict = "fail"
+            verdict = judge_verdict if judge_verdict in {"pass", "fail"} else "fail"
             try:
-                score = int(judge_result.get("score"))
+                score = max(0, min(10, int(judge_result.get("score"))))
             except (TypeError, ValueError):
                 score = 1 if verdict == "fail" else 5
-            score = max(0, min(10, score))
             reason = (
                 str(judge_result.get("reason") or "").strip()
                 or "Quality judge returned no reason."
             )
         except Exception as exc:
-            verdict = "fail"
-            score = 0
-            reason = f"quality judge error: {exc}"
+            return "fail", 0, f"quality judge error: {exc}", False
+
+    return verdict, score, reason, False
+
+
+def _finalize_judge_child_job(
+    *,
+    judge_job_id: str | None,
+    verdict: str,
+    score: int,
+    reason: str,
+) -> None:
+    """Mark the judge child job complete and settled."""
+    if judge_job_id is None:
+        return
+    child_output = {"verdict": verdict, "score": score, "reason": reason}
+    child_complete = jobs.update_job_status(
+        judge_job_id, "complete", output_payload=child_output, completed=True
+    )
+    if child_complete is not None:
+        jobs.mark_settled(judge_job_id)
+
+
+def _run_quality_gate(job: dict, agent: dict, output_payload: dict) -> dict[str, Any]:
+    judge_agent_id = (
+        str(job.get("judge_agent_id") or _QUALITY_JUDGE_AGENT_ID).strip()
+        or _QUALITY_JUDGE_AGENT_ID
+    )
+    judge_job_id = _create_judge_child_job(
+        job=job,
+        agent=agent,
+        output_payload=output_payload,
+        judge_agent_id=judge_agent_id,
+    )
+    live_quality_enabled = _is_live_quality_enabled()
+    verdict, score, reason, _used_det = _score_output_payload(
+        job=job,
+        agent=agent,
+        output_payload=output_payload,
+        live_quality_enabled=live_quality_enabled,
+    )
 
     verifier_passed, verifier_reason = _run_output_verifier(
         agent.get("output_verifier_url"),
@@ -713,22 +630,17 @@ def _run_quality_gate(job: dict, agent: dict, output_payload: dict) -> dict[str,
         verdict = "fail"
         reason = f"{reason} External verifier: {verifier_reason}"
 
-    if judge_job_id is not None:
-        child_output = {"verdict": verdict, "score": score, "reason": reason}
-        child_complete = jobs.update_job_status(
-            judge_job_id, "complete", output_payload=child_output, completed=True
-        )
-        if child_complete is not None:
-            jobs.mark_settled(judge_job_id)
+    _finalize_judge_child_job(
+        judge_job_id=judge_job_id, verdict=verdict, score=score, reason=reason
+    )
 
-    passed = verdict == "pass"
     return {
         "judge_agent_id": judge_agent_id,
         "judge_job_id": judge_job_id,
         "judge_verdict": verdict,
         "quality_score": score,
         "reason": reason,
-        "passed": passed,
+        "passed": verdict == "pass",
         "verifier_reason": verifier_reason,
     }
 
