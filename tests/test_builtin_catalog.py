@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from server.builtin_agents.specs import builtin_agent_specs, builtin_catalog_metadata
+import os
+
+os.environ.setdefault("API_KEY", "test-master-key")
+
+from server.builtin_agents.specs import (  # noqa: E402
+    builtin_agent_specs,
+    builtin_catalog_metadata,
+)
 
 
 def test_builtin_specs_have_catalog_contract_fields():
@@ -33,3 +40,24 @@ def test_builtin_catalog_metadata_returns_none_for_removed_agents():
     removed_github_fetcher = "5896576f-bbe6-59e4-83c1-5106002e7d10"
     metadata = builtin_catalog_metadata(removed_github_fetcher)
     assert metadata is None
+
+
+def test_builtin_dispatch_table_covers_every_internal_endpoint():
+    """The 35-branch if-chain in part_004 was replaced with a dispatch dict.
+    Every agent that registers an ``internal://`` endpoint MUST have a
+    runner in BUILTIN_AGENT_RUNNERS, otherwise the call path raises
+    'Unsupported built-in agent' at runtime. This test catches the drift
+    at CI time so adding a new built-in can't regress production silently.
+    """
+    import server.application as server_app  # noqa: F401  (force shard load)
+
+    BUILTIN_AGENT_RUNNERS = getattr(server_app, "BUILTIN_AGENT_RUNNERS")
+    from server.builtin_agents.constants import BUILTIN_INTERNAL_ENDPOINTS
+
+    missing = set(BUILTIN_INTERNAL_ENDPOINTS) - set(BUILTIN_AGENT_RUNNERS)
+    extra = set(BUILTIN_AGENT_RUNNERS) - set(BUILTIN_INTERNAL_ENDPOINTS)
+    assert not missing, f"agents in BUILTIN_INTERNAL_ENDPOINTS without a runner: {missing}"
+    assert not extra, f"runners with no internal endpoint: {extra}"
+
+    for runner in BUILTIN_AGENT_RUNNERS.values():
+        assert callable(runner)

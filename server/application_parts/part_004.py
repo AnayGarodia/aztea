@@ -125,92 +125,75 @@ def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict
         sem.release()
 
 
+def _run_quality_judgment(payload: Any) -> dict:
+    """Adapter for the quality-judge agent: it takes named kwargs rather
+    than the standard ``run(payload)`` signature, so the dispatch table
+    needs a small wrapper to keep the call shape uniform."""
+    p = payload if isinstance(payload, dict) else {}
+    return judges.run_quality_judgment(
+        input_payload=p.get("input_payload") or {},
+        output_payload=p.get("output_payload") or {},
+        agent_description=str(p.get("agent_description") or ""),
+    )
+
+
+def _module_runner(module):
+    """Late-binding adapter so ``monkeypatch.setattr(module, 'run', ...)``
+    in tests still reaches the dispatch path. Capturing ``module.run``
+    directly into the dict would freeze the original function reference
+    at module-load time and bypass per-test patches."""
+    return lambda payload: module.run(payload)
+
+
+# Single source of truth for built-in agent execution. New built-ins must
+# add an entry here; tests/test_builtin_catalog.py asserts every curated
+# agent has a runner so a missing dispatch row fails CI immediately.
+BUILTIN_AGENT_RUNNERS: dict[str, Callable[[Any], dict]] = {
+    _QUALITY_JUDGE_AGENT_ID: _run_quality_judgment,
+    _CVELOOKUP_AGENT_ID: _module_runner(agent_cve_lookup),
+    _PYTHON_EXECUTOR_AGENT_ID: _module_runner(agent_python_executor),
+    _DNS_INSPECTOR_AGENT_ID: _module_runner(agent_dns_inspector),
+    _DEPENDENCY_AUDITOR_AGENT_ID: _module_runner(agent_dependency_auditor),
+    _DB_SANDBOX_AGENT_ID: _module_runner(agent_db_sandbox),
+    _VISUAL_REGRESSION_AGENT_ID: _module_runner(agent_visual_regression),
+    _BROWSER_AGENT_ID: _module_runner(agent_browser_agent),
+    _MULTI_LANGUAGE_EXECUTOR_AGENT_ID: _module_runner(agent_multi_language_executor),
+    _SECRET_SCANNER_AGENT_ID: _module_runner(agent_secret_scanner),
+    _LIGHTHOUSE_AUDITOR_AGENT_ID: _module_runner(agent_lighthouse_auditor),
+    _ACCESSIBILITY_AUDITOR_AGENT_ID: _module_runner(agent_accessibility_auditor),
+    _SECURITY_HEADERS_GRADER_AGENT_ID: _module_runner(agent_security_headers_grader),
+    _BROKEN_LINK_CRAWLER_AGENT_ID: _module_runner(agent_broken_link_crawler),
+    _PDF_DOCUMENT_PARSER_AGENT_ID: _module_runner(agent_pdf_document_parser),
+    _WEB_SEARCH_AGENT_ID: _module_runner(agent_web_search),
+    _DOCS_GROUNDER_AGENT_ID: _module_runner(agent_docs_grounder),
+    _SAST_SCANNER_AGENT_ID: _module_runner(agent_sast_scanner),
+    _STRIPE_WEBHOOK_DEBUGGER_AGENT_ID: _module_runner(agent_stripe_webhook_debugger),
+    _LOAD_TESTER_AGENT_ID: _module_runner(agent_load_tester),
+    _CI_FAILURE_REPRODUCER_AGENT_ID: _module_runner(agent_ci_failure_reproducer),
+    _JWT_DEBUGGER_AGENT_ID: _module_runner(agent_jwt_debugger),
+    _DOCKERFILE_ANALYZER_AGENT_ID: _module_runner(agent_dockerfile_analyzer),
+    _OPENAPI_VALIDATOR_AGENT_ID: _module_runner(agent_openapi_validator),
+    _COVERAGE_RUNNER_AGENT_ID: _module_runner(agent_coverage_runner),
+    _EMAIL_DELIVERABILITY_CHECKER_AGENT_ID: _module_runner(agent_email_deliverability_checker),
+    _REGEX_TESTER_AGENT_ID: _module_runner(agent_regex_tester),
+    _CRON_EXPRESSION_PARSER_AGENT_ID: _module_runner(agent_cron_expression_parser),
+    _SSL_CERTIFICATE_DECODER_AGENT_ID: _module_runner(agent_ssl_certificate_decoder),
+    _DIFF_ANALYZER_AGENT_ID: _module_runner(agent_diff_analyzer),
+    _K8S_MANIFEST_VALIDATOR_AGENT_ID: _module_runner(agent_k8s_manifest_validator),
+    _ARCHIVE_INSPECTOR_AGENT_ID: _module_runner(agent_archive_inspector),
+    _UNICODE_INSPECTOR_AGENT_ID: _module_runner(agent_unicode_inspector),
+    _TERRAFORM_PLAN_ANALYZER_AGENT_ID: _module_runner(agent_terraform_plan_analyzer),
+    _COLOR_CONTRAST_CHECKER_AGENT_ID: _module_runner(agent_color_contrast_checker),
+}
+
+
 def _execute_builtin_agent_inner(
     agent_id: str, payload: dict[str, Any], _finalize
 ) -> dict:
-    if agent_id == _QUALITY_JUDGE_AGENT_ID:
-        return _finalize(
-            judges.run_quality_judgment(
-                input_payload=payload.get("input_payload")
-                if isinstance(payload, dict)
-                else {},
-                output_payload=payload.get("output_payload")
-                if isinstance(payload, dict)
-                else {},
-                agent_description=str(payload.get("agent_description") or "")
-                if isinstance(payload, dict)
-                else "",
-            )
-        )
-    if agent_id == _CVELOOKUP_AGENT_ID:
-        return _finalize(agent_cve_lookup.run(payload))
-    if agent_id == _PYTHON_EXECUTOR_AGENT_ID:
-        return _finalize(agent_python_executor.run(payload))
-    if agent_id == _DNS_INSPECTOR_AGENT_ID:
-        return _finalize(agent_dns_inspector.run(payload))
-    if agent_id == _DEPENDENCY_AUDITOR_AGENT_ID:
-        return _finalize(agent_dependency_auditor.run(payload))
-    if agent_id == _DB_SANDBOX_AGENT_ID:
-        return _finalize(agent_db_sandbox.run(payload))
-    if agent_id == _VISUAL_REGRESSION_AGENT_ID:
-        return _finalize(agent_visual_regression.run(payload))
-    if agent_id == _BROWSER_AGENT_ID:
-        return _finalize(agent_browser_agent.run(payload))
-    if agent_id == _MULTI_LANGUAGE_EXECUTOR_AGENT_ID:
-        return _finalize(agent_multi_language_executor.run(payload))
-    if agent_id == _SECRET_SCANNER_AGENT_ID:
-        return _finalize(agent_secret_scanner.run(payload))
-    if agent_id == _LIGHTHOUSE_AUDITOR_AGENT_ID:
-        return _finalize(agent_lighthouse_auditor.run(payload))
-    if agent_id == _ACCESSIBILITY_AUDITOR_AGENT_ID:
-        return _finalize(agent_accessibility_auditor.run(payload))
-    if agent_id == _SECURITY_HEADERS_GRADER_AGENT_ID:
-        return _finalize(agent_security_headers_grader.run(payload))
-    if agent_id == _BROKEN_LINK_CRAWLER_AGENT_ID:
-        return _finalize(agent_broken_link_crawler.run(payload))
-    if agent_id == _PDF_DOCUMENT_PARSER_AGENT_ID:
-        return _finalize(agent_pdf_document_parser.run(payload))
-    if agent_id == _WEB_SEARCH_AGENT_ID:
-        return _finalize(agent_web_search.run(payload))
-    if agent_id == _DOCS_GROUNDER_AGENT_ID:
-        return _finalize(agent_docs_grounder.run(payload))
-    if agent_id == _SAST_SCANNER_AGENT_ID:
-        return _finalize(agent_sast_scanner.run(payload))
-    if agent_id == _STRIPE_WEBHOOK_DEBUGGER_AGENT_ID:
-        return _finalize(agent_stripe_webhook_debugger.run(payload))
-    if agent_id == _LOAD_TESTER_AGENT_ID:
-        return _finalize(agent_load_tester.run(payload))
-    if agent_id == _CI_FAILURE_REPRODUCER_AGENT_ID:
-        return _finalize(agent_ci_failure_reproducer.run(payload))
-    if agent_id == _JWT_DEBUGGER_AGENT_ID:
-        return _finalize(agent_jwt_debugger.run(payload))
-    if agent_id == _DOCKERFILE_ANALYZER_AGENT_ID:
-        return _finalize(agent_dockerfile_analyzer.run(payload))
-    if agent_id == _OPENAPI_VALIDATOR_AGENT_ID:
-        return _finalize(agent_openapi_validator.run(payload))
-    if agent_id == _COVERAGE_RUNNER_AGENT_ID:
-        return _finalize(agent_coverage_runner.run(payload))
-    if agent_id == _EMAIL_DELIVERABILITY_CHECKER_AGENT_ID:
-        return _finalize(agent_email_deliverability_checker.run(payload))
-    if agent_id == _REGEX_TESTER_AGENT_ID:
-        return _finalize(agent_regex_tester.run(payload))
-    if agent_id == _CRON_EXPRESSION_PARSER_AGENT_ID:
-        return _finalize(agent_cron_expression_parser.run(payload))
-    if agent_id == _SSL_CERTIFICATE_DECODER_AGENT_ID:
-        return _finalize(agent_ssl_certificate_decoder.run(payload))
-    if agent_id == _DIFF_ANALYZER_AGENT_ID:
-        return _finalize(agent_diff_analyzer.run(payload))
-    if agent_id == _K8S_MANIFEST_VALIDATOR_AGENT_ID:
-        return _finalize(agent_k8s_manifest_validator.run(payload))
-    if agent_id == _ARCHIVE_INSPECTOR_AGENT_ID:
-        return _finalize(agent_archive_inspector.run(payload))
-    if agent_id == _UNICODE_INSPECTOR_AGENT_ID:
-        return _finalize(agent_unicode_inspector.run(payload))
-    if agent_id == _TERRAFORM_PLAN_ANALYZER_AGENT_ID:
-        return _finalize(agent_terraform_plan_analyzer.run(payload))
-    if agent_id == _COLOR_CONTRAST_CHECKER_AGENT_ID:
-        return _finalize(agent_color_contrast_checker.run(payload))
-    raise ValueError(f"Unsupported built-in agent '{agent_id}'.")
+    runner = BUILTIN_AGENT_RUNNERS.get(agent_id)
+    if runner is None:
+        raise ValueError(f"Unsupported built-in agent '{agent_id}'.")
+    return _finalize(runner(payload))
 
 
 # No agents currently use the degraded-unchargeable path; keep the set
