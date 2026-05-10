@@ -1,6 +1,7 @@
 """Aztea CLI — single binary surface, branded output, scriptable JSON.
 
 Entry point: `aztea`. Commands:
+    aztea init                                  (one-command setup)
     aztea login | logout | whoami
     aztea publish <path>                        (SKILL.md, agent.md, or .py handler)
     aztea dispute [<job_id>] [--reason ...]   (top-level — also at jobs.dispute)
@@ -31,6 +32,7 @@ from . import status as _status
 from . import publish as _publish
 from . import unpublish as _unpublish
 from . import admin as _admin
+from . import init as _init
 from .splash import render_splash
 
 
@@ -68,6 +70,10 @@ def _root(
 
 
 # ── Top-level convenience commands (auth + hire are most-used) ─────────────
+app.command(
+    name="init",
+    help="One-command setup: register Aztea MCP + write CLAUDE.md snippet.",
+)(_init.init)
 app.command(name="login", help="Sign in.")(_auth.login)
 app.command(name="logout", help="Sign out.")(_auth.logout)
 app.command(name="whoami", help="Show the active account.")(_auth.whoami)

@@ -525,15 +525,60 @@ def _audit_one(
 
 
 def _audit_all(
-    raw_packages: list[tuple[str, str | None]], ecosystem: str, checks: list[str]
+    raw_packages: list[tuple[str, str | None]],
+    ecosystem: str,
+    checks: list[str],
+    emit_partial=None,
 ) -> list[dict[str, Any]]:
-    """Side-effect: parallel-audit every package, preserving input order."""
+    """Side-effect: parallel-audit every package, preserving input order.
+
+    When ``emit_partial`` is provided (co-pilot streaming jobs), each
+    completed package fires a ``partial_output`` event so ``stop_when``
+    predicates can abort the call mid-stream (e.g. ``stop on first
+    critical``). Emission is best-effort: a callback that raises is logged
+    and swallowed so a misbehaving emit channel can't sink the audit.
+    """
     workers = min(_AUDIT_WORKERS, max(1, len(raw_packages)))
+
+    def _audit_and_emit(item: tuple[str, str | None]) -> dict[str, Any]:
+        audit = _audit_one(item, ecosystem=ecosystem, checks=checks)
+        if emit_partial is not None:
+            try:
+                pkg = audit.get("package") or {}
+                cves = list(pkg.get("cves") or [])
+                severities = [str(c.get("severity") or "").lower() for c in cves]
+                top_severity = "info"
+                for s in ("critical", "high", "medium", "low"):
+                    if s in severities:
+                        top_severity = s
+                        break
+                # Shape: include the per-package finding plus a `findings`
+                # array so jmespath predicates like
+                # `output.findings[?severity=='critical']` match against
+                # the streaming partial just like they would the final output.
+                emit_partial(
+                    {
+                        "ecosystem": ecosystem,
+                        "package": pkg,
+                        "findings": [
+                            {
+                                "package": pkg.get("name"),
+                                "current_version": pkg.get("current_version"),
+                                "cve_id": c.get("id"),
+                                "severity": c.get("severity"),
+                                "cvss": c.get("cvss"),
+                            }
+                            for c in cves
+                        ],
+                        "severity": top_severity,
+                    }
+                )
+            except Exception:  # noqa: BLE001 — best-effort emit, never crash audit
+                _LOG.exception("dependency_auditor: emit_partial failed; continuing audit")
+        return audit
+
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        return list(pool.map(
-            lambda item: _audit_one(item, ecosystem=ecosystem, checks=checks),
-            raw_packages,
-        ))
+        return list(pool.map(_audit_and_emit, raw_packages))
 
 
 def _aggregate_audits(audits: list[dict]) -> dict[str, Any]:
@@ -579,12 +624,17 @@ def _summarise(total: int, vulnerable: int, critical: int, outdated: int) -> str
     return " ".join(parts)
 
 
-def run(payload: dict) -> dict:
+def run(payload: dict, *, emit_partial=None) -> dict:
     """Audit a dependency manifest for known CVEs, outdated packages, and license risk.
 
     Why: the agent fans out OSV / PyPI / npm registry calls in parallel and
     returns a stable shape regardless of ecosystem so renderers can pretty-
     print without sniffing the input format.
+
+    Co-pilot mode: when called from a streaming job, ``emit_partial`` is a
+    callable that publishes a ``partial_output`` event per package as soon
+    as that package's CVE check completes. Callers without streaming pass
+    ``None`` (the default) and the agent behaves like before.
     """
     manifest, ecosystem, checks = _normalize_run_inputs(payload)
     if ecosystem not in _SUPPORTED_ECOSYSTEMS:
@@ -594,7 +644,7 @@ def run(payload: dict) -> dict:
     raw_packages = _parse_manifest(ecosystem, manifest)
     if not raw_packages:
         return _invalid_manifest_error(ecosystem, manifest)
-    audits = _audit_all(raw_packages, ecosystem, checks)
+    audits = _audit_all(raw_packages, ecosystem, checks, emit_partial=emit_partial)
     agg = _aggregate_audits(audits)
     packages = _sort_packages(agg["packages"])
     total = len(packages)

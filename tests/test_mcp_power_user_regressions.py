@@ -1,4 +1,4 @@
-from scripts import aztea_mcp_meta_tools as meta_tools
+from aztea.mcp import meta_tools
 
 
 def test_hire_async_forwards_single_job_max_price_cap(monkeypatch):

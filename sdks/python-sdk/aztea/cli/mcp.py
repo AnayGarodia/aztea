@@ -296,37 +296,31 @@ def serve(
 ) -> None:
     """Run the stdio MCP server (called by editors, not humans).
 
-    The MCP server itself currently lives in the `aztea-cli` npm package, so
-    this command shells out to `npx -y aztea-cli mcp` under the hood. That
-    indirection lets the user-facing config say `command: aztea` (pip-only on
-    the surface) until the server is fully ported into the Python package.
-    Most users should not run this directly; `aztea mcp install` wires up
-    the editor to spawn it on demand.
+    1.6.2 consolidated the MCP server into the ``aztea`` SDK package
+    (``aztea.mcp.server``). Pre-1.6.2 this command shelled out to
+    ``npx -y aztea-cli mcp`` because the server lived in a separate JS
+    implementation on npm — that path drifted from the Python source and
+    caused the 1.6.1 co-pilot-mode P0 (broken steer). Now we call the
+    Python MCP server directly, in-process. Most users should not run this
+    directly; ``aztea mcp install`` wires up the editor to spawn it on
+    demand.
     """
-    import shutil
-    import subprocess
-
     cfg = load_config() or {}
     key = (api_key or cfg.get("api_key") or "").strip()
     url = (base_url or cfg.get("base_url") or "https://aztea.ai").rstrip("/")
 
-    npx = shutil.which("npx")
-    if not npx:
-        from .output import error
-        error(
-            "npx not found.",
-            hint="Install Node.js (≥18) so the MCP server can be launched.",
-            code="mcp.no_node",
-        )
-        raise typer.Exit(code=1)
-
-    env = os.environ.copy()
+    # Set env so the in-process server sees the right key/url even if
+    # the caller didn't export them. Mirrors what the old npx wrapper did.
     if key:
-        env["AZTEA_API_KEY"] = key
-    env["AZTEA_BASE_URL"] = url
-    info("Starting Aztea MCP server (Ctrl-C to stop)…")
+        os.environ["AZTEA_API_KEY"] = key
+    os.environ["AZTEA_BASE_URL"] = url
+
+    # Lazy-import so a busted MCP module never blocks `aztea --help` /
+    # `aztea login` / etc.
+    from aztea.mcp.server import main as _serve
+
     try:
-        subprocess.run([npx, "-y", "aztea-cli", "mcp"], env=env, check=False)
+        _serve()
     except KeyboardInterrupt:
         raise typer.Exit(code=130)
 

@@ -1,83 +1,37 @@
 #!/usr/bin/env node
 'use strict'
 
-// aztea-cli is a thin npm shim. It owns two responsibilities:
-//   1. `init`  — one-command setup that registers Aztea as an MCP server
-//                in Claude Code and writes portable MCP config for other
-//                coding-agent hosts.
-//   2. `mcp`   — runs the stdio MCP server process. Editors spawn this.
-// Everything else (hire, jobs, wallet, agents, mcp install/doctor/uninstall)
-// lives in the Python `aztea` CLI. We point users there.
+// 1.6.2: aztea-cli on npm is deprecated. The pip-installed `aztea` CLI now
+// owns every surface the npm package used to handle, including the MCP
+// stdio server (consolidated into `aztea.mcp.server`). Maintaining two
+// implementations drifted them — the 1.6.1 co-pilot-mode P0 (broken steer)
+// came directly from this JS server hardcoding the wrong request shape.
+// See sdks/aztea-cli/README.md for migration notes.
 
-const [,, cmd, ...rest] = process.argv
+const RED = '\x1b[31m'
+const YELLOW = '\x1b[33m'
+const CYAN = '\x1b[36m'
+const BOLD = '\x1b[1m'
+const RESET = '\x1b[0m'
 
-const PY_HINT = `
-The full Aztea CLI (hire, jobs, wallet, agents, pipelines, …) is the
-Python package:
+process.stderr.write(`
+${RED}${BOLD}aztea-cli on npm is deprecated.${RESET}
 
-  pip install aztea
-  aztea login
-  aztea --help
-`
+The full Aztea CLI is the Python package:
 
-// Await async commands so post-success steps (e.g. maybeInstallClaudeMdSnippet)
-// always finish before the process exits, and so unhandled rejections surface.
-function fail(err) {
-  console.error(err && err.stack ? err.stack : String(err))
-  process.exit(1)
-}
+  ${CYAN}${BOLD}pip install aztea${RESET}
+  ${CYAN}${BOLD}aztea login${RESET}
+  ${CYAN}${BOLD}aztea init${RESET}       # registers Aztea as an MCP server in Claude Code / Cursor
 
-switch (cmd) {
-  case 'init':
-    Promise.resolve(require('../src/init.js').run(rest)).catch(fail)
-    break
-  case 'login': {
-    // aztea login --api-key az_xxx  — non-interactive setup for Claude Code.
-    const keyFlag = rest.find(a => a.startsWith('--api-key=') || a === '--api-key')
-    let apiKey = ''
-    if (keyFlag && keyFlag.includes('=')) {
-      apiKey = keyFlag.split('=').slice(1).join('=').trim()
-    } else if (keyFlag) {
-      const keyIdx = rest.indexOf('--api-key')
-      apiKey = (rest[keyIdx + 1] || '').trim()
-    }
-    if (!apiKey) {
-      console.error('Usage: aztea login --api-key az_...')
-      process.exit(1)
-    }
-    Promise.resolve(require('../src/init.js').loginWithKey(apiKey)).catch(fail)
-    break
-  }
-  case 'mcp':
-    require('../src/mcp-server.js').run()
-    break
-  case 'whoami':
-    Promise.resolve(require('../src/init.js').whoami()).catch(fail)
-    break
-  case 'hire':
-  case 'jobs':
-  case 'wallet':
-  case 'agents':
-  case 'pipelines':
-  case 'logout':
-    console.log(PY_HINT.trim())
-    process.exit(0)
-    break
-  default:
-    console.log(`Aztea CLI (npm)
+The pip-installed ${BOLD}aztea${RESET} CLI ships the MCP server too — no Node required.
 
-This package is a thin shim. It exists to:
-  1. Set up Aztea as an MCP server for coding agents.
-  2. Run the stdio MCP server when an editor spawns it.
+${YELLOW}If you came here from a tutorial that still says \`npm i -g aztea-cli\`,
+that doc is out of date.${RESET}  The 1.6.1 co-pilot-mode breakage (silent
+422 on ${BOLD}aztea_steer${RESET}) was the npm-shipped MCP server drifting from
+the Python source. Consolidating to one implementation makes that whole
+class of bug impossible.
 
-Usage:
-  npx -y aztea-cli@latest init                     Set up Aztea for coding agents (creates account)
-  npx -y aztea-cli@latest login --api-key az_...   Configure with an existing API key
-  npx -y aztea-cli@latest whoami                   Show the current account
-  npx -y aztea-cli@latest mcp                      Start the MCP server (called by editors)
-${PY_HINT}`)
-    if (cmd && cmd !== '--help' && cmd !== '-h') {
-      console.error(`Unknown command: ${cmd}`)
-      process.exit(1)
-    }
-}
+The npm package will be removed in 30 days.
+`)
+
+process.exit(1)

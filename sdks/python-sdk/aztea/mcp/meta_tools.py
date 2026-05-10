@@ -2259,6 +2259,11 @@ def _list_agents(
                 "price_per_call_usd": agent.get("price_per_call_usd"),
                 "trust_score": agent.get("trust_score"),
                 "success_rate": agent.get("success_rate"),
+                # 1.6.2: distinguish "no data yet" from "0% success rate" so
+                # renderers don't show 0% for agents that simply haven't been
+                # called yet. The flag is computed upstream
+                # (core/registry/core_schema.py:962); we just forward it.
+                "has_call_history": bool(agent.get("has_call_history")),
                 "tags": agent.get("tags") or [],
                 "required_fields": input_hint["required_fields"],
                 "input_shape": input_hint["fields"],

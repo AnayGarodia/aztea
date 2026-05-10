@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from core import feature_flags
 
@@ -720,19 +720,56 @@ def _resolve_intent_only_payload(
     Why: a conversational question must not be force-fitted into a code /
     sql / manifest / diff field; without this gate, aztea_do would route
     "what is the capital of France" to python_code_executor as ``code``.
+
+    1.6.2: for fields where a conversational dump is never valid
+    (``expression``, ``pattern``, ``domain``, ``cve_id``, ``url``, …) we
+    consult a per-field extractor registry. If the extractor confidently
+    pulls a value out of the natural-language intent, we use it; otherwise
+    we refuse with ``missing_fields`` so the caller can resubmit with an
+    explicit ``input=``. This closes the 1.6.1 P1 where ``do_specialist_task
+    ("whats the cron for every weekday at 9am")`` auto-hired
+    ``cron_expression_parser`` with the entire 9-word sentence as the
+    ``expression`` field — the agent rejected with "Expected 5 or 6 fields,
+    got 9" and we burned a refund round-trip every time.
     """
-    if not all_required:
+    # No required fields AND no composite variants → free-form intent.
+    if not all_required and not composite_variants:
         return {"intent": intent}, []
     if len(all_required) == 1 and not composite_variants:
         field_name = all_required[0]
         field_spec = properties.get(field_name) or {}
         field_type = str(field_spec.get("type") or "").lower()
         if field_type in {"string", ""}:
+            # Try a strict-form extractor first. When the field has one and
+            # it matches confidently, use the extracted value; when it has
+            # one but doesn't match, refuse rather than dump the intent.
+            extractor = _FIELD_EXTRACTORS.get(field_name)
+            if extractor is not None:
+                extracted = extractor(intent)
+                if extracted:
+                    return {field_name: extracted}, []
+                return {}, [field_name]
             if _intent_unfit_for_field(intent, field_name):
                 return {}, [field_name]
             return {field_name: intent}, []
+    # Composite oneOf/anyOf — pick the first variant and try to extract
+    # each of its required fields. If we can fill them all, return the
+    # extracted payload; otherwise list the unfilled fields as missing.
     if composite_variants:
-        return {}, composite_variants[0]
+        variant = composite_variants[0]
+        extracted_payload: dict[str, Any] = {}
+        unfilled: list[str] = []
+        for fname in variant:
+            extractor = _FIELD_EXTRACTORS.get(fname)
+            if extractor is not None:
+                v = extractor(intent)
+                if v:
+                    extracted_payload[fname] = v
+                    continue
+            unfilled.append(fname)
+        if not unfilled and extracted_payload:
+            return extracted_payload, []
+        return {}, variant
     return {}, all_required
 
 
@@ -773,9 +810,213 @@ def _tokenize(text: str) -> list[str]:
 # and must be rejected at the auto-hire gate. Without this, aztea_do happily
 # routes "what is the capital of France" to python_code_executor as
 # ``code: "what is..."`` (caught in the 2026-05-07 eval).
+#
+# 1.6.2: expanded to include strict-form fields (expression, pattern, cron,
+# regex, jmespath, selector, url, domain) so the naive
+# `_resolve_intent_only_payload` 1-field path doesn't dump the entire
+# natural-language intent into `expression` and trigger
+# `cron_expression_parser.invalid_expression: Expected 5 or 6 fields, got 9`.
+# When the intent looks like the structured value an extractor pulls it out;
+# otherwise we refuse with `missing_fields` and let the caller resubmit with
+# an explicit input. Both outcomes preserve the auto-refund contract.
 _CODE_LIKE_FIELDS = frozenset(
-    {"code", "sql", "diff", "manifest", "schema_sql", "patch", "source"}
+    {
+        "code",
+        "sql",
+        "diff",
+        "manifest",
+        "schema_sql",
+        "patch",
+        "source",
+        # 1.6.2: strict-form fields where conversational dumps are never valid.
+        "expression",
+        "pattern",
+        "cron",
+        "regex",
+        "jmespath",
+        "selector",
+        "url",
+        "domain",
+    }
 )
+
+
+# ── per-field NL extractors (1.6.2) ───────────────────────────────────────
+#
+# Each extractor is a pure function: ``(intent: str) -> str | None``.
+# Returns the extracted value if the intent contains an unambiguous
+# match; returns ``None`` to refuse (caller falls back to missing_fields).
+# Never raises. Order matters — first match wins.
+
+# Cron: 5- or 6-field expression, or @macro.
+_CRON_LITERAL_RE = re.compile(
+    r"(?<![\w-])((?:\*|\d+|\*/\d+|\d+[/-]\d+|\d+(?:,\d+)+|[A-Z]{3})\s+){4,5}"
+    r"(?:\*|\d+|\*/\d+|\d+[/-]\d+|\d+(?:,\d+)+|[A-Z]{3}(?:-[A-Z]{3})?)(?![\w-])",
+)
+_CRON_MACRO_RE = re.compile(
+    r"@(?:hourly|daily|weekly|monthly|yearly|annually|midnight|reboot)\b",
+    re.IGNORECASE,
+)
+# Natural-language cron table — top-N phrasings translated to canonical cron.
+# Order: most-specific first. Each entry is (pattern, cron-expression).
+_CRON_NL_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\bevery\s+weekday\s+at\s+(\d{1,2})\s*am\b", re.IGNORECASE), "0 {h} * * 1-5"),
+    (re.compile(r"\bevery\s+weekday\s+at\s+(\d{1,2})\s*pm\b", re.IGNORECASE), "0 {h_pm} * * 1-5"),
+    (re.compile(r"\bevery\s+weekday\s+at\s+(\d{1,2}):(\d{2})\b", re.IGNORECASE), "{m_min} {h_hr} * * 1-5"),
+    (re.compile(r"\bevery\s+weekend\b", re.IGNORECASE), "0 0 * * 6,0"),
+    (re.compile(r"\bevery\s+day\s+at\s+(\d{1,2})\s*am\b", re.IGNORECASE), "0 {h} * * *"),
+    (re.compile(r"\bevery\s+day\s+at\s+(\d{1,2})\s*pm\b", re.IGNORECASE), "0 {h_pm} * * *"),
+    (re.compile(r"\bevery\s+day\s+at\s+(\d{1,2}):(\d{2})\b", re.IGNORECASE), "{m_min} {h_hr} * * *"),
+    (re.compile(r"\bevery\s+(\d+)\s+minutes?\b", re.IGNORECASE), "*/{n} * * * *"),
+    (re.compile(r"\bevery\s+(\d+)\s+hours?\b", re.IGNORECASE), "0 */{n} * * *"),
+    (re.compile(r"\bevery\s+hour\b", re.IGNORECASE), "0 * * * *"),
+    (re.compile(r"\bdaily\b", re.IGNORECASE), "0 0 * * *"),
+    (re.compile(r"\bhourly\b", re.IGNORECASE), "0 * * * *"),
+)
+
+
+def _extract_cron_expression(intent: str) -> str | None:
+    """Pull a cron expression out of natural-language intent. Returns the
+    canonical string, or None if extraction is not confident."""
+    text = intent or ""
+    if not text:
+        return None
+    # 1. Literal cron (5 or 6 fields).
+    m = _CRON_LITERAL_RE.search(text)
+    if m:
+        return m.group(0).strip()
+    # 2. @macro form.
+    m = _CRON_MACRO_RE.search(text)
+    if m:
+        return m.group(0).lower()
+    # 3. Natural-language patterns.
+    for pat, template in _CRON_NL_PATTERNS:
+        m = pat.search(text)
+        if not m:
+            continue
+        groups = m.groups()
+        if "{m_min}" in template and "{h_hr}" in template and len(groups) >= 2:
+            # H:M form — group 0 is the hour, group 1 is the minute.
+            try:
+                return template.format(h_hr=int(groups[0]), m_min=int(groups[1]))
+            except ValueError:
+                return None
+        if "{h_pm}" in template and groups:
+            try:
+                h = int(groups[0])
+                # 12pm -> 12, 1pm-11pm -> +12
+                return template.format(h_pm=12 if h == 12 else h + 12)
+            except ValueError:
+                return None
+        if "{h}" in template and groups:
+            try:
+                # 12am -> 0, 1am-11am -> as-is
+                h = int(groups[0])
+                return template.format(h=0 if h == 12 else h)
+            except ValueError:
+                return None
+        if "{n}" in template and groups:
+            try:
+                return template.format(n=int(groups[0]))
+            except ValueError:
+                return None
+        return template
+    return None
+
+
+# Regex pattern: between slashes, backticks, or after the literal word.
+_REGEX_SLASH_RE = re.compile(r"/([^/\n]{1,200})/")
+_REGEX_BACKTICK_RE = re.compile(r"`([^`\n]{1,200})`")
+_REGEX_QUOTED_RE = re.compile(r"(?:pattern|regex|match)\s+[\"']([^\"'\n]{1,200})[\"']", re.IGNORECASE)
+
+
+def _extract_regex_pattern(intent: str) -> str | None:
+    text = intent or ""
+    if not text:
+        return None
+    # Backticks first (commonly used to delimit code-y values in chat).
+    m = _REGEX_BACKTICK_RE.search(text)
+    if m:
+        return m.group(1)
+    # Slashes (literal /pattern/ form).
+    m = _REGEX_SLASH_RE.search(text)
+    if m:
+        return m.group(1)
+    # Quoted after "pattern"/"regex"/"match".
+    m = _REGEX_QUOTED_RE.search(text)
+    if m:
+        return m.group(1)
+    # Backslash-escape style: "\d+", "[a-z]+" — bare regex tokens are
+    # common in casual usage. Match if the intent contains *only*
+    # regex-shaped characters around it.
+    bare = re.search(r"(?<![\w/`])(\\[dDwWsSbBnrtv]\S*|\[[^\]\n]{1,80}\][?*+]?)", text)
+    if bare:
+        return bare.group(1)
+    return None
+
+
+_DOMAIN_RE = re.compile(
+    r"\b([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?){1,4})\b",
+    re.IGNORECASE,
+)
+_PRIVATE_IP_RE = re.compile(
+    r"\b(?:127\.|10\.|192\.168\.|169\.254\.|0\.0\.0\.0|localhost|::1)\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_domain(intent: str) -> str | None:
+    text = intent or ""
+    if not text:
+        return None
+    # Reject private/loopback intents outright — never auto-route into a
+    # live-network agent. SSRF guards exist downstream too, but failing
+    # here saves a charge round-trip.
+    if _PRIVATE_IP_RE.search(text):
+        return None
+    m = _DOMAIN_RE.search(text)
+    if not m:
+        return None
+    candidate = m.group(1)
+    # TLD must be alphabetic to avoid matching "foo.123" or version-like
+    # tokens. Slight false-negative cost but very low false-positive rate.
+    tld = candidate.rsplit(".", 1)[-1]
+    if not tld.isalpha() or len(tld) < 2:
+        return None
+    return candidate.lower()
+
+
+_CVE_ID_RE = re.compile(r"\bCVE-\d{4}-\d{4,7}\b", re.IGNORECASE)
+
+
+def _extract_cve_id(intent: str) -> str | None:
+    m = _CVE_ID_RE.search(intent or "")
+    return m.group(0).upper() if m else None
+
+
+_URL_RE = re.compile(r"\bhttps?://[^\s\"'<>]{4,2000}", re.IGNORECASE)
+
+
+def _extract_url(intent: str) -> str | None:
+    text = intent or ""
+    if not text or _PRIVATE_IP_RE.search(text):
+        return None
+    m = _URL_RE.search(text)
+    return m.group(0) if m else None
+
+
+# Registry: field-name → extractor. ``_resolve_intent_only_payload`` looks
+# up the field here before falling back to the legacy "dump intent into
+# field" behaviour. Returning None refuses with `missing_fields`.
+_FIELD_EXTRACTORS: dict[str, "Callable[[str], str | None]"] = {
+    "expression": _extract_cron_expression,
+    "cron": _extract_cron_expression,
+    "pattern": _extract_regex_pattern,
+    "regex": _extract_regex_pattern,
+    "domain": _extract_domain,
+    "cve_id": _extract_cve_id,
+    "url": _extract_url,
+}
 _QUESTION_PREFIXES = (
     "what ",
     "what's ",

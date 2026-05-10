@@ -68,6 +68,26 @@ for _key, _label in _REQUIRED_SECTIONS:
     _SECTION_ALIASES[_key].add(_normalize_heading(_label))
 
 
+_KIND_AGENT_FRONTMATTER_RE = re.compile(
+    r"\A---\s*\n(.*?\n)?\s*kind\s*:\s*agent\s*(\n.*?)?---",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _looks_like_kind_agent_frontmatter(content: str) -> bool:
+    """True when the file starts with a YAML frontmatter block declaring
+    ``kind: agent``. Used to upgrade the "no markdown headings" error into
+    a kind-specific helpful message — agents need ``## sections``, skills
+    don't.
+    """
+    if not content:
+        return False
+    text = content.lstrip()
+    if not text.startswith("---"):
+        return False
+    return bool(_KIND_AGENT_FRONTMATTER_RE.search(text[:4096]))
+
+
 def _parse_sections(manifest_content: str) -> list[dict]:
     matches = list(_HEADING_RE.finditer(manifest_content))
     sections = []
@@ -294,6 +314,17 @@ def validate_manifest_content(manifest_content: str, source: str = "agent.md") -
         raise ManifestValidationError(f"{source}: manifest content is empty.")
     sections = _parse_sections(manifest_content)
     if not sections:
+        # 1.6.2: kind-specific helpful error. When frontmatter declares
+        # `kind: agent` but the file has no `## ` sections, the generic
+        # "no markdown headings found" was confusing (eval P2-11).
+        # Point at the template command and the docs.
+        if _looks_like_kind_agent_frontmatter(manifest_content):
+            raise ManifestValidationError(
+                f"{source}: agent.md needs at least one '## section' below "
+                "the frontmatter (e.g. '## inputs', '## outputs'). Run "
+                "`aztea publish --template agent` to generate a starter, "
+                "or see https://aztea.ai/docs/agent-md."
+            )
         raise ManifestValidationError(f"{source}: no markdown headings found.")
     validated_sections = _collect_required_sections(sections, source)
     raw_metadata = _extract_metadata_object(

@@ -33,7 +33,11 @@ from __future__ import annotations
 from typing import Any
 
 from core import mcp_manifest
-from scripts import aztea_mcp_meta_tools as meta_tools
+# 1.6.3: meta_tools moved from scripts/ to the in-package
+# aztea.mcp.* tree (PR #38 consolidation). Import from the new location;
+# the old scripts/-rooted import doesn't resolve at server-startup time
+# because that path isn't on sys.path in production.
+from aztea.mcp import meta_tools
 
 
 def _catalog_entries(agents: list[dict[str, Any]]) -> list[dict[str, Any]]:

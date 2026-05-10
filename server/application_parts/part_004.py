@@ -89,7 +89,16 @@ def _agent_semaphore(agent_id: str) -> threading.BoundedSemaphore:
         return sem
 
 
-def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict:
+def _execute_builtin_agent(
+    agent_id: str,
+    input_payload: dict[str, Any],
+    *,
+    emit_partial=None,
+) -> dict:
+    """Dispatch a built-in agent. ``emit_partial`` is forwarded to agents
+    whose ``run`` signature accepts it (co-pilot streaming). Callers without
+    a job_id pass ``None`` (the default) and behaviour matches pre-1.6.2.
+    """
     def _finalize(output: Any) -> dict:
         if isinstance(output, dict) and isinstance(output.get("error"), dict):
             return output
@@ -120,7 +129,9 @@ def _execute_builtin_agent(agent_id: str, input_payload: dict[str, Any]) -> dict
             _AGENT_CONCURRENCY_LIMITS.get(agent_id, _AGENT_CONCURRENCY_DEFAULT),
         )
     try:
-        return _execute_builtin_agent_inner(agent_id, payload, _finalize)
+        return _execute_builtin_agent_inner(
+            agent_id, payload, _finalize, emit_partial=emit_partial,
+        )
     finally:
         sem.release()
 
@@ -141,8 +152,27 @@ def _module_runner(module):
     """Late-binding adapter so ``monkeypatch.setattr(module, 'run', ...)``
     in tests still reaches the dispatch path. Capturing ``module.run``
     directly into the dict would freeze the original function reference
-    at module-load time and bypass per-test patches."""
-    return lambda payload: module.run(payload)
+    at module-load time and bypass per-test patches.
+
+    Co-pilot mode: if ``module.run`` accepts an ``emit_partial`` kwarg,
+    forward it from the dispatcher; otherwise call the agent with just the
+    payload (preserves existing single-arg agents).
+    """
+    import inspect
+
+    def _invoke(payload, *, emit_partial=None):
+        if emit_partial is None:
+            return module.run(payload)
+        try:
+            sig = inspect.signature(module.run)
+            accepts = "emit_partial" in sig.parameters
+        except (TypeError, ValueError):
+            accepts = False
+        if accepts:
+            return module.run(payload, emit_partial=emit_partial)
+        return module.run(payload)
+
+    return _invoke
 
 
 # Single source of truth for built-in agent execution. New built-ins must
@@ -188,11 +218,24 @@ BUILTIN_AGENT_RUNNERS: dict[str, Callable[[Any], dict]] = {
 
 
 def _execute_builtin_agent_inner(
-    agent_id: str, payload: dict[str, Any], _finalize
+    agent_id: str,
+    payload: dict[str, Any],
+    _finalize,
+    *,
+    emit_partial=None,
 ) -> dict:
     runner = BUILTIN_AGENT_RUNNERS.get(agent_id)
     if runner is None:
         raise ValueError(f"Unsupported built-in agent '{agent_id}'.")
+    # Runners returned by _module_runner accept emit_partial; the few
+    # one-off runners (e.g. _run_quality_judgment) don't. Try the kwarg
+    # form first, fall back to single-arg for back-compat.
+    if emit_partial is not None:
+        try:
+            return _finalize(runner(payload, emit_partial=emit_partial))
+        except TypeError:
+            # Runner does not accept emit_partial; legacy single-arg form.
+            pass
     return _finalize(runner(payload))
 
 
@@ -309,9 +352,24 @@ def _process_pending_builtin_job(job: dict) -> bool:
                 heartbeat_cb=_heartbeat,
             )
         else:
+            # Co-pilot streaming: give the built-in a callback that fires
+            # `partial_output` events. The skill_executor.emit_partial helper
+            # raises SkillStoppedError once a stop_when predicate has
+            # terminalised the job — we swallow that here because further
+            # partials are no-ops and the worker still finishes the call.
+            _job_id = str(claimed["job_id"])
+            _agent_id = str(claimed["agent_id"])
+
+            def _emit_partial(payload):
+                try:
+                    _skill_executor.emit_partial(_job_id, _agent_id, payload)
+                except _skill_executor.SkillStoppedError:
+                    pass
+
             output = _execute_builtin_agent(
-                str(claimed["agent_id"]),
+                _agent_id,
                 claimed.get("input_payload") or {},
+                emit_partial=_emit_partial,
             )
         if _is_unchargeable_degraded_output(str(claimed["agent_id"]), output):
             output = _degraded_unchargeable_error(str(claimed["agent_id"]))

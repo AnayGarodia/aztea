@@ -363,6 +363,13 @@ def _md_git_diff(output: dict[str, Any]) -> str:
                 f"| `{f.get('path', '')}` | {f.get('change_type', '')} | "
                 f"+{f.get('added', 0)}/-{f.get('removed', 0)} | {tags} |"
             )
+    # 1.6.2: never return a heading-only document. The 1.6.1 power-user eval
+    # ran the diff_analyzer markdown renderer against an empty diff and got
+    # back just "## Diff Risk Profile" with no body — looks broken to a
+    # reader. When summary, risk chips, and files are all empty, surface a
+    # neutral one-liner so the output is self-contained.
+    if len(lines) == 1:
+        lines.append("\n_No changes detected._")
     return "\n".join(lines)
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from scripts import aztea_mcp_meta_tools as meta_tools
+from aztea.mcp import meta_tools
 
 
 class _FakeResponse:

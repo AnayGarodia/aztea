@@ -188,6 +188,28 @@ def jobs_message_create(
     raw_type = body.type
     raw_payload = dict(body.payload or {})
     raw_correlation_id = body.correlation_id
+
+    # Steer goes through the dedicated /jobs/{id}/steer route. Without this
+    # branch, the legacy JS aztea-cli (0.23.0 and older) — which posted
+    # `{msg_type: 'steer', ...}` here — hit a 500 in the normalize/dispatch
+    # path. After 1.6.2 the JS CLI is deprecated, but old installs in the
+    # wild will keep arriving here for a while; surface a clean 400 with the
+    # right redirect path so clients can migrate without an unhandled error.
+    if str(raw_type or "").strip().lower() == "steer":
+        raise HTTPException(
+            status_code=400,
+            detail=error_codes.make_error(
+                "jobs.messages.use_steer_endpoint",
+                (
+                    "Use POST /jobs/{job_id}/steer for steer messages. "
+                    "The /messages endpoint does not accept type='steer'. "
+                    "If you're seeing this from aztea-cli@npm, that package "
+                    "is deprecated — run `pip install aztea` instead."
+                ),
+                {"redirect_path": f"/jobs/{job_id}/steer"},
+            ),
+        )
+
     # from_id is always derived from the authenticated caller — no impersonation allowed.
     if str(raw_type or "").strip().lower() == "agent_message":
         if body.channel is not None and "channel" not in raw_payload:

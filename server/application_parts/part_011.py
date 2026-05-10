@@ -959,9 +959,57 @@ def wallet_me(
         page_size = 50
     txs = payments.get_wallet_transactions(wallet["wallet_id"], limit=page_size)
     caller_trust = payments.get_caller_trust(owner_id)
+
+    # 1.6.2: expose escrow_cents alongside balance_cents. The 1.6.1 power-
+    # user eval found the CLI showed escrow_cents from `aztea wallet
+    # balance --json` but REST `/wallets/me` and MCP `manage_budget(balance)`
+    # silently dropped the field. Compute as the sum of caller_charge_cents
+    # across the wallet's in-flight jobs — money the caller has authorized
+    # but not yet settled or refunded.
+    escrow_cents = _compute_escrow_cents(wallet["wallet_id"])
+
     return JSONResponse(
-        content={**wallet, "caller_trust": caller_trust, "transactions": txs}
+        content={
+            **wallet,
+            "escrow_cents": escrow_cents,
+            "caller_trust": caller_trust,
+            "transactions": txs,
+        }
     )
+
+
+_ESCROW_JOB_STATES: tuple[str, ...] = (
+    "pending",
+    "running",
+    "awaiting_clarification",
+)
+
+
+def _compute_escrow_cents(wallet_id: str) -> int:
+    """Sum of caller_charge_cents across in-flight jobs for ``wallet_id``.
+
+    Pure read — never mutates. Mirrors what the CLI's
+    ``aztea wallet balance --json`` has rendered since 1.6.1. Shared by
+    /wallets/me (REST) and manage_budget(action=balance) (MCP) so the two
+    surfaces agree on the field's meaning and value.
+    """
+    if not wallet_id:
+        return 0
+    placeholders = ",".join(["%s"] * len(_ESCROW_JOB_STATES))
+    with get_db_connection() as conn:
+        row = conn.execute(
+            f"""
+            SELECT COALESCE(SUM(caller_charge_cents), 0) AS escrow_cents
+              FROM jobs
+             WHERE caller_wallet_id = %s
+               AND status IN ({placeholders})
+            """,
+            (wallet_id, *_ESCROW_JOB_STATES),
+        ).fetchone()
+    if row is None:
+        return 0
+    # Postgres returns Decimal for SUM; SQLite returns int. Normalise.
+    return int(row["escrow_cents"] or 0)
 
 
 @app.post(
@@ -1798,6 +1846,134 @@ def watchers_list(
     owner_id = caller.get("owner_id") or ""
     rows = _watchers.crud.list_watchers_for_owner(owner_id, limit=int(limit))
     return JSONResponse(content={"watchers": rows, "count": len(rows)})
+
+
+# 1.6.2: POST /watchers — the GET shipped with PR #15/#16 but the create
+# verb returned "405 Method Not Allowed" in the 1.6.1 power-user eval.
+# Wire it up so the CLAUDE.md-documented contract is real.
+class _WatcherCreateRequest(BaseModel):
+    agent_id: str = Field(..., description="UUID of the registry agent to fire.")
+    target_kind: str = Field(
+        default="http",
+        description="Target type: 'http' | 'manifest' | 'git'. Defaults to 'http'.",
+    )
+    target_url: str = Field(..., description="URL or registry path the watcher polls for change.")
+    target_meta: dict | None = Field(
+        default=None,
+        description="Type-specific metadata (e.g. {'ecosystem':'npm','package':'react'}).",
+    )
+    on_change_policy: str = Field(
+        default="fire_once_per_change",
+        description="When to fire: 'fire_once_per_change' | 'fire_on_every_tick'.",
+    )
+    tick_interval_seconds: int = Field(
+        default=3600, ge=60, le=86400,
+        description="Poll cadence in seconds. Min 60s (anti-abuse), max 24h.",
+    )
+    budget_per_day_cents: int = Field(
+        default=100, ge=1, le=10000,
+        description="Hard cap on agent-call spend per 24h. Watcher pauses on overrun.",
+    )
+    delivery_webhook_url: str | None = Field(
+        default=None, description="Optional webhook URL to POST job results to.",
+    )
+    delivery_email: str | None = Field(
+        default=None, description="Optional email address to send job results to.",
+    )
+    payload: dict | None = Field(
+        default=None, description="Input payload passed to the agent on each fire.",
+    )
+
+
+@app.post(
+    "/watchers",
+    status_code=201,
+    responses=_error_responses(400, 401, 403, 422, 429, 500),
+    tags=["Watchers"],
+    summary="Create a watcher (poll + fire-on-change).",
+)
+@limiter.limit("30/minute")
+def watchers_create(
+    request: Request,
+    body: _WatcherCreateRequest,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    """Create a new watcher row owned by the calling user.
+
+    The watcher sweeper picks it up on the next tick, fingerprints the
+    target, and fires the agent when the fingerprint changes (subject to
+    the daily budget). Update / delete remain in the dedicated owner-
+    scoped routes alongside this one.
+    """
+    _require_any_scope(caller, "caller", "worker")
+    from core import watchers as _watchers
+
+    owner_id = str(caller.get("owner_id") or "").strip()
+    if not owner_id:
+        raise HTTPException(status_code=403, detail="Caller has no owner_id.")
+
+    # The watcher sweeper bills agent fires against the caller's primary
+    # wallet — same model as a direct hire — so the daily-budget enforcer
+    # and audit log roll up correctly.
+    wallet = payments.get_or_create_wallet(owner_id)
+    caller_wallet_id = str(wallet.get("wallet_id") or "")
+    if not caller_wallet_id:
+        raise HTTPException(
+            status_code=500,
+            detail="Could not resolve a wallet for the calling user.",
+        )
+
+    # SSRF check on the watcher target — the sweeper hits this URL directly
+    # when fingerprinting, so private/loopback targets must be blocked at
+    # create time, not deferred to the first tick.
+    if str(body.target_kind).strip().lower() == "http":
+        try:
+            _url_security.validate_outbound_url(body.target_url, "target_url")
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=error_codes.make_error(
+                    "watchers.target_url_blocked",
+                    str(exc),
+                    {"target_url": body.target_url},
+                ),
+            )
+
+    try:
+        watcher = _watchers.crud.create_watcher(
+            owner_user_id=owner_id,
+            caller_wallet_id=caller_wallet_id,
+            agent_id=body.agent_id,
+            target_kind=body.target_kind,
+            target_url=body.target_url,
+            target_meta=body.target_meta,
+            on_change_policy=body.on_change_policy,
+            tick_interval_seconds=int(body.tick_interval_seconds),
+            budget_per_day_cents=int(body.budget_per_day_cents),
+            delivery_webhook_url=body.delivery_webhook_url,
+            delivery_email=body.delivery_email,
+            payload=body.payload,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return JSONResponse(
+        status_code=201,
+        content={
+            "watcher_id": watcher.get("watcher_id"),
+            "agent_id": watcher.get("agent_id"),
+            "target_kind": watcher.get("target_kind"),
+            "target_url": watcher.get("target_url"),
+            "tick_interval_seconds": watcher.get("tick_interval_seconds"),
+            "budget_per_day_cents": watcher.get("budget_per_day_cents"),
+            "next_check_at": watcher.get("next_check_at"),
+            "status": watcher.get("status"),
+            "message": (
+                "Watcher created. The sweeper will fingerprint the target on "
+                "its next pass and fire the agent on observed change."
+            ),
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
