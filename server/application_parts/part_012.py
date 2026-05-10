@@ -87,22 +87,11 @@ _SKILL_DEFAULT_OUTPUT_SCHEMA = {
 }
 
 
-@app.post(
-    "/skills", status_code=201, responses=_error_responses(400, 401, 403, 409, 413, 429)
-)
-@limiter.limit("10/minute")
-def skills_create(
-    request: Request,
-    body: dict = Body(...),
-    caller: core_models.CallerContext = Depends(_require_api_key),
-) -> dict:
-    """Upload a SKILL.md, register an agent for it, and persist the skill row."""
-    _require_scope(caller, "worker")
-    if caller["type"] == "agent_key":
-        raise HTTPException(
-            status_code=403, detail="Agent-scoped keys cannot register hosted skills."
-        )
-    payload = body or {}
+def _skills_create_validate_body(payload: dict) -> tuple[str, float]:
+    """Validate skill_md presence/size and price_per_call_usd range.
+
+    Returns (raw_md, price_per_call_usd). Raises HTTPException on any failure.
+    """
     raw_md = str(payload.get("skill_md") or "")
     if not raw_md.strip():
         raise HTTPException(status_code=400, detail="skill_md is required.")
@@ -115,14 +104,20 @@ def skills_create(
             status_code=400,
             detail="price_per_call_usd is required and must be a number.",
         )
-    if not (price_per_call_usd >= 0.0 and price_per_call_usd <= 25.0):
+    if not (0.0 <= price_per_call_usd <= 25.0):
         raise HTTPException(
             status_code=400, detail="price_per_call_usd must be between 0 and 25."
         )
+    return raw_md, price_per_call_usd
 
-    # Server-side safety scan. CLI runs the same scanner pre-flight, but the
-    # /skills route is reachable directly so we re-enforce here. Any block
-    # finding refuses the upload before we even parse the SKILL.md body.
+
+def _skills_create_parse_and_scan(raw_md: str) -> Any:
+    """Run safety scan then parse the SKILL.md. Returns parsed skill object.
+
+    Server-side safety scan. CLI runs the same scanner pre-flight, but the
+    /skills route is reachable directly so we re-enforce here. Any block
+    finding refuses the upload before we even parse the SKILL.md body.
+    """
     safety_findings = _listing_safety.scan_skill_md(raw_md)
     if _listing_safety.has_block(safety_findings):
         first_block = next(
@@ -136,47 +131,27 @@ def skills_create(
                 {"code": first_block.code, "detail": first_block.detail},
             ),
         )
-
     try:
-        parsed = _skill_parser.parse_skill_md(raw_md, source="upload")
+        return _skill_parser.parse_skill_md(raw_md, source="upload")
     except _skill_parser.SkillParseError as exc:
         raise HTTPException(status_code=400, detail=f"SKILL.md is invalid: {exc}")
 
-    if caller["type"] != "master":
-        current_count = registry.count_owner_agents(caller["owner_id"])
-        if current_count >= 20:
-            raise HTTPException(
-                status_code=403,
-                detail=error_codes.make_error(
-                    error_codes.REGISTRY_AGENT_LIMIT,
-                    "You've reached the 20-agent limit. Delete or archive an existing listing.",
-                    {"current": current_count, "max": 20},
-                ),
-            )
 
-    base = parsed.to_aztea_registration()
-    display_name = str(base.get("name") or parsed.name).strip()
-    description = str(base.get("description") or parsed.description).strip()
-    if not display_name:
-        raise HTTPException(
-            status_code=400, detail="Skill name is empty after parsing."
-        )
-    if not description:
-        raise HTTPException(
-            status_code=400, detail="Skill description is empty after parsing."
-        )
+def _skills_create_register_agent(
+    *,
+    display_name: str,
+    description: str,
+    price_per_call_usd: float,
+    tags: list,
+    owner_id: str,
+) -> tuple[str, str]:
+    """Register an agent with a unique name, retrying on collision.
 
-    # Optional override fields the builder may set in the request body.
-    requested_temperature = payload.get("temperature")
-    requested_max_tokens = payload.get("max_output_tokens")
-    requested_chain = payload.get("model_chain")
-    if requested_chain is not None and not isinstance(requested_chain, list):
-        raise HTTPException(
-            status_code=400, detail="model_chain must be a list of strings."
-        )
+    Resolve a unique listing name. ``agents.name`` has a UNIQUE constraint,
+    so we retry with a numeric suffix when a collision occurs.
 
-    # Resolve a unique listing name. ``agents.name`` has a UNIQUE constraint,
-    # so we retry with a numeric suffix when a collision occurs.
+    Returns (agent_id, candidate_name).
+    """
     candidate_name = display_name
     agent_id: str | None = None
     last_error: Exception | None = None
@@ -185,12 +160,12 @@ def skills_create(
             agent_id = registry.register_agent(
                 name=candidate_name,
                 description=description,
-                endpoint_url="skill://placeholder",  # rewritten below to skill://{skill_id}
+                endpoint_url="skill://placeholder",  # rewritten after skill_id allocated
                 price_per_call_usd=price_per_call_usd,
-                tags=list(base.get("tags") or []),
+                tags=tags,
                 input_schema=_SKILL_DEFAULT_INPUT_SCHEMA,
                 output_schema=_SKILL_DEFAULT_OUTPUT_SCHEMA,
-                owner_id=caller["owner_id"],
+                owner_id=owner_id,
                 review_status="approved",
                 review_note="Auto-approved hosted skill.",
                 reviewed_at=_utc_now_iso(),
@@ -208,11 +183,28 @@ def skills_create(
             status_code=409,
             detail=f"Could not allocate a unique name (last: {last_error}).",
         )
+    return agent_id, candidate_name
 
+
+def _skills_create_persist(
+    *,
+    agent_id: str,
+    owner_id: str,
+    parsed: Any,
+    raw_md: str,
+    requested_chain: list | None,
+    requested_temperature: float | None,
+    requested_max_tokens: int | None,
+) -> dict:
+    """Insert the hosted_skills row and rewrite agent endpoint_url.
+
+    Returns skill_row. On DB failure, rolls back the agent registration
+    so we never leave a half-persisted skill.
+    """
     try:
         skill_row = _hosted_skills.create_hosted_skill(
             agent_id=agent_id,
-            owner_id=caller["owner_id"],
+            owner_id=owner_id,
             slug=parsed.name,
             raw_md=raw_md,
             system_prompt=parsed.body,
@@ -233,25 +225,18 @@ def skills_create(
                 },
             },
             model_chain=requested_chain,
-            temperature=float(requested_temperature)
-            if requested_temperature is not None
-            else 0.2,
-            max_output_tokens=int(requested_max_tokens)
-            if requested_max_tokens is not None
-            else 1500,
+            temperature=float(requested_temperature) if requested_temperature is not None else 0.2,
+            max_output_tokens=int(requested_max_tokens) if requested_max_tokens is not None else 1500,
         )
     except Exception:
-        # Roll back the agent registration so we never leave a half-persisted skill.
         try:
-            registry.delist_agent(agent_id, caller["owner_id"])
+            registry.delist_agent(agent_id, owner_id)
         except Exception:
             _LOG.exception(
-                "Failed to roll back agent %s after hosted_skills insert failure.",
-                agent_id,
+                "Failed to roll back agent %s after hosted_skills insert failure.", agent_id
             )
         raise
-
-    # Now rewrite the agent's endpoint_url to point at the just-created skill_id.
+    # Rewrite the agent's endpoint_url to point at the just-created skill_id.
     # ``update_agent`` doesn't expose ``endpoint_url`` because external agents
     # are forbidden from changing it after registration. For hosted skills we
     # write it once at creation time.
@@ -259,8 +244,72 @@ def skills_create(
     with get_db_connection() as _conn:
         _conn.execute(
             "UPDATE agents SET endpoint_url = %s WHERE agent_id = %s AND owner_id = %s",
-            (final_endpoint, agent_id, caller["owner_id"]),
+            (final_endpoint, agent_id, owner_id),
         )
+    return skill_row
+
+
+@app.post(
+    "/skills", status_code=201, responses=_error_responses(400, 401, 403, 409, 413, 429)
+)
+@limiter.limit("10/minute")
+def skills_create(
+    request: Request,
+    body: dict = Body(...),
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> dict:
+    """Upload a SKILL.md, register an agent for it, and persist the skill row."""
+    _require_scope(caller, "worker")
+    if caller["type"] == "agent_key":
+        raise HTTPException(
+            status_code=403, detail="Agent-scoped keys cannot register hosted skills."
+        )
+    payload = body or {}
+    raw_md, price_per_call_usd = _skills_create_validate_body(payload)
+    parsed = _skills_create_parse_and_scan(raw_md)
+
+    if caller["type"] != "master":
+        current_count = registry.count_owner_agents(caller["owner_id"])
+        if current_count >= 20:
+            raise HTTPException(
+                status_code=403,
+                detail=error_codes.make_error(
+                    error_codes.REGISTRY_AGENT_LIMIT,
+                    "You've reached the 20-agent limit. Delete or archive an existing listing.",
+                    {"current": current_count, "max": 20},
+                ),
+            )
+
+    base = parsed.to_aztea_registration()
+    display_name = str(base.get("name") or parsed.name).strip()
+    description = str(base.get("description") or parsed.description).strip()
+    if not display_name:
+        raise HTTPException(status_code=400, detail="Skill name is empty after parsing.")
+    if not description:
+        raise HTTPException(status_code=400, detail="Skill description is empty after parsing.")
+
+    # Optional override fields the builder may set in the request body.
+    requested_chain = payload.get("model_chain")
+    if requested_chain is not None and not isinstance(requested_chain, list):
+        raise HTTPException(status_code=400, detail="model_chain must be a list of strings.")
+
+    agent_id, candidate_name = _skills_create_register_agent(
+        display_name=display_name,
+        description=description,
+        price_per_call_usd=price_per_call_usd,
+        tags=list(base.get("tags") or []),
+        owner_id=caller["owner_id"],
+    )
+    skill_row = _skills_create_persist(
+        agent_id=agent_id,
+        owner_id=caller["owner_id"],
+        parsed=parsed,
+        raw_md=raw_md,
+        requested_chain=requested_chain,
+        requested_temperature=payload.get("temperature"),
+        requested_max_tokens=payload.get("max_output_tokens"),
+    )
+    final_endpoint = _hosted_skills.make_skill_endpoint_url(skill_row["skill_id"])
 
     try:
         _owner_email = _get_owner_email(caller["owner_id"])
@@ -275,9 +324,7 @@ def skills_create(
                 final_endpoint,
             )
     except Exception:
-        _LOG.warning(
-            "Failed to send skill-live email for skill %s", skill_row.get("skill_id")
-        )
+        _LOG.warning("Failed to send skill-live email for skill %s", skill_row.get("skill_id"))
 
     return JSONResponse(
         content={
@@ -468,6 +515,189 @@ def _merge_routing_overlay(
     return merged
 
 
+def _auto_hire_gated_response(
+    *,
+    decision: Any,
+    intent: str,
+) -> JSONResponse:
+    """Build the recommendation (gated) response when auto_invoked is False."""
+    top_candidate = decision.candidates[0] if decision.candidates else None
+    estimated_cost_usd = (
+        top_candidate.get("price_per_call_usd")
+        if isinstance(top_candidate, dict)
+        else None
+    )
+    estimated_cost_cents = (
+        _usd_to_cents(estimated_cost_usd) if estimated_cost_usd is not None else None
+    )
+    return JSONResponse(
+        content={
+            "auto_invoked": False,
+            "mode": "recommendation",
+            "charge_status": "not_charged",
+            "delegation": {
+                "status": "not_hired",
+                "reason": decision.reason,
+                "intent": intent,
+            },
+            "reason": decision.reason,
+            "confidence": decision.confidence,
+            "candidates": decision.candidates,
+            "missing_fields": decision.missing_fields,
+            "dry_run_cost_usd": estimated_cost_usd,
+            "estimated_cost_cents": estimated_cost_cents,
+            "next_step": decision.next_step,
+        }
+    )
+
+
+def _auto_hire_dry_run_response(
+    *,
+    chosen: Any,
+    decision: Any,
+    intent: str,
+    max_cost_usd: float,
+    payload: dict,
+) -> JSONResponse:
+    """Build the dry-run response: what would happen, no invocation."""
+    return JSONResponse(
+        content={
+            "auto_invoked": False,
+            "mode": "dry_run",
+            "charge_status": "not_charged",
+            "reason": "dry_run",
+            "would_invoke": True,
+            "agent": chosen.public_dict(),
+            "delegation": {
+                "status": "would_hire",
+                "intent": intent,
+                # `specialist` removed; agent identity is already at the
+                # top-level `agent` key. Was duplicated which made
+                # responses ~30% larger and confused buyers about which
+                # field to consume.
+                "spend_cap_usd": float(max_cost_usd),
+            },
+            "payload": payload,
+            "confidence": decision.confidence,
+            "estimated_cost_usd": chosen.price_per_call_usd,
+            "next_step": "Re-call with dry_run=false to execute.",
+        }
+    )
+
+
+def _auto_hire_failure_response(
+    *,
+    exc: HTTPException,
+    chosen: Any,
+    decision: Any,
+    intent: str,
+    max_cost_usd: float,
+) -> JSONResponse:
+    """Build the structured failure response when registry_call raises."""
+    detail = exc.detail if hasattr(exc, "detail") else str(exc)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "auto_invoked": True,
+            "mode": "hired_specialist",
+            "charge_status": "refunded_or_not_charged",
+            "agent": chosen.public_dict(),
+            "delegation": {
+                "status": "failed",
+                "intent": intent,
+                # `specialist` removed; agent identity is already at the
+                # top-level `agent` key. Was duplicated which made
+                # responses ~30% larger and confused buyers about which
+                # field to consume.
+                "spend_cap_usd": float(max_cost_usd),
+            },
+            "settlement": {
+                "status": "refunded_if_charged",
+                "refund_on_failure": True,
+            },
+            "confidence": decision.confidence,
+            "error": detail,
+            "next_step": (
+                "The agent failed. Charges were refunded automatically "
+                "if the platform initiated them."
+            ),
+        },
+    )
+
+
+def _auto_hire_success_response(
+    *,
+    chosen: Any,
+    decision: Any,
+    intent: str,
+    max_cost_usd: float,
+    delegated: Any,
+    output_format: str | None,
+) -> JSONResponse:
+    """Unwrap the delegated response and decorate with auto-hire metadata."""
+    inner: dict[str, Any]
+    if isinstance(delegated, JSONResponse):
+        inner = json.loads(delegated.body.decode("utf-8")) if delegated.body else {}
+    elif isinstance(delegated, dict):
+        inner = dict(delegated)
+    else:
+        # Belt-and-suspenders: registry_call always returns JSONResponse today.
+        inner = {}
+
+    job_id = inner.get("job_id")
+    cost_cents = inner.get("cost_cents")
+    response_body: dict[str, Any] = {
+        "auto_invoked": True,
+        "mode": "hired_specialist",
+        "agent": chosen.public_dict(),
+        "delegation": {
+            "status": "hired",
+            "intent": intent,
+            "specialist": chosen.public_dict(),
+            "spend_cap_usd": float(max_cost_usd),
+        },
+        "confidence": decision.confidence,
+        "cost_usd": (
+            int(cost_cents or 0) / 100
+            if cost_cents is not None
+            else chosen.price_per_call_usd
+        ),
+        "job_id": job_id,
+        "charge_status": (
+            "settled" if job_id and not inner.get("cached") else "cached_or_settled"
+        ),
+        "settlement": {
+            "status": (
+                "settled"
+                if job_id and not inner.get("cached")
+                else "cached_or_settled"
+            ),
+            "refund_on_failure": True,
+            "ledger": "pre_call_charge -> post_call_payout/refund",
+        },
+        "receipt": {
+            "status": "available" if job_id else "unavailable",
+            "job_id": job_id,
+            "signature_endpoint": f"/jobs/{job_id}/signature" if job_id else None,
+            "verify_with": "aztea_verify_job",
+        },
+        "output": inner.get("output"),
+        "latency_ms": inner.get("latency_ms"),
+        "cached": bool(inner.get("cached", False)),
+        "next_step": (
+            f"Verify the signed receipt with aztea_verify_job(job_id='{job_id}')."
+            if job_id
+            else "No new receipt was created for this response."
+        ),
+    }
+    if "rendered_output" in inner:
+        response_body["rendered_output"] = inner["rendered_output"]
+        response_body["rendered_output_format"] = inner.get(
+            "rendered_output_format", output_format
+        )
+    return JSONResponse(content=response_body)
+
+
 @app.post(
     "/registry/agents/auto-hire",
     response_model=core_models.DynamicObjectResponse,
@@ -514,7 +744,7 @@ def registry_auto_hire(
         if _caller_can_access_agent(caller, record)
     ]
 
-    # 2. Pure decision.
+    # 2. Pure decision. Gate order: confidence → price → trust → inputs.
     decision = _auto_hire.decide(
         intent=body.intent,
         explicit_input=body.input,
@@ -525,34 +755,7 @@ def registry_auto_hire(
 
     # 3. Gated path: short-circuit, no charge.
     if not decision.auto_invoked:
-        top_candidate = decision.candidates[0] if decision.candidates else None
-        estimated_cost_usd = (
-            top_candidate.get("price_per_call_usd")
-            if isinstance(top_candidate, dict)
-            else None
-        )
-        estimated_cost_cents = (
-            _usd_to_cents(estimated_cost_usd) if estimated_cost_usd is not None else None
-        )
-        return JSONResponse(
-            content={
-                "auto_invoked": False,
-                "mode": "recommendation",
-                "charge_status": "not_charged",
-                "delegation": {
-                    "status": "not_hired",
-                    "reason": decision.reason,
-                    "intent": body.intent,
-                },
-                "reason": decision.reason,
-                "confidence": decision.confidence,
-                "candidates": decision.candidates,
-                "missing_fields": decision.missing_fields,
-                "dry_run_cost_usd": estimated_cost_usd,
-                "estimated_cost_cents": estimated_cost_cents,
-                "next_step": decision.next_step,
-            }
-        )
+        return _auto_hire_gated_response(decision=decision, intent=body.intent)
 
     chosen = decision.chosen
     payload = decision.payload or {}
@@ -573,28 +776,12 @@ def registry_auto_hire(
 
     # 4. Dry-run: report what *would* happen, no invocation.
     if body.dry_run:
-        return JSONResponse(
-            content={
-                "auto_invoked": False,
-                "mode": "dry_run",
-                "charge_status": "not_charged",
-                "reason": "dry_run",
-                "would_invoke": True,
-                "agent": chosen.public_dict(),
-                "delegation": {
-                    "status": "would_hire",
-                    "intent": body.intent,
-                    # `specialist` removed; agent identity is already at the
-                    # top-level `agent` key. Was duplicated which made
-                    # responses ~30% larger and confused buyers about which
-                    # field to consume.
-                    "spend_cap_usd": float(body.max_cost_usd),
-                },
-                "payload": payload,
-                "confidence": decision.confidence,
-                "estimated_cost_usd": chosen.price_per_call_usd,
-                "next_step": "Re-call with dry_run=false to execute.",
-            }
+        return _auto_hire_dry_run_response(
+            chosen=chosen,
+            decision=decision,
+            intent=body.intent,
+            max_cost_usd=body.max_cost_usd,
+            payload=payload,
         )
 
     # 5. Real invocation. Delegate in-process to the existing call route so
@@ -611,98 +798,23 @@ def registry_auto_hire(
         # registry_call already refunds on failure paths it owns. Surface a
         # structured response so the LLM can recover gracefully without
         # confusing "auto_invoked=true but no output" semantics.
-        detail = exc.detail if hasattr(exc, "detail") else str(exc)
-        return JSONResponse(
-            status_code=exc.status_code,
-            content={
-                "auto_invoked": True,
-                "mode": "hired_specialist",
-                "charge_status": "refunded_or_not_charged",
-                "agent": chosen.public_dict(),
-                "delegation": {
-                    "status": "failed",
-                    "intent": body.intent,
-                    # `specialist` removed; agent identity is already at the
-                    # top-level `agent` key. Was duplicated which made
-                    # responses ~30% larger and confused buyers about which
-                    # field to consume.
-                    "spend_cap_usd": float(body.max_cost_usd),
-                },
-                "settlement": {
-                    "status": "refunded_if_charged",
-                    "refund_on_failure": True,
-                },
-                "confidence": decision.confidence,
-                "error": detail,
-                "next_step": (
-                    "The agent failed. Charges were refunded automatically "
-                    "if the platform initiated them."
-                ),
-            },
+        return _auto_hire_failure_response(
+            exc=exc,
+            chosen=chosen,
+            decision=decision,
+            intent=body.intent,
+            max_cost_usd=body.max_cost_usd,
         )
 
     # 6. Unwrap the delegated response and decorate with auto-hire metadata.
-    inner: dict[str, Any]
-    if isinstance(delegated, JSONResponse):
-        inner = json.loads(delegated.body.decode("utf-8")) if delegated.body else {}
-    elif isinstance(delegated, dict):
-        inner = dict(delegated)
-    else:
-        # Belt-and-suspenders: registry_call always returns JSONResponse today.
-        inner = {}
-
-    job_id = inner.get("job_id")
-    cost_cents = inner.get("cost_cents")
-    response_body: dict[str, Any] = {
-        "auto_invoked": True,
-        "mode": "hired_specialist",
-        "agent": chosen.public_dict(),
-        "delegation": {
-            "status": "hired",
-            "intent": body.intent,
-            "specialist": chosen.public_dict(),
-            "spend_cap_usd": float(body.max_cost_usd),
-        },
-        "confidence": decision.confidence,
-        "cost_usd": (
-            int(cost_cents or 0) / 100
-            if cost_cents is not None
-            else chosen.price_per_call_usd
-        ),
-        "job_id": job_id,
-        "charge_status": (
-            "settled" if job_id and not inner.get("cached") else "cached_or_settled"
-        ),
-        "settlement": {
-            "status": (
-                "settled"
-                if job_id and not inner.get("cached")
-                else "cached_or_settled"
-            ),
-            "refund_on_failure": True,
-            "ledger": "pre_call_charge -> post_call_payout/refund",
-        },
-        "receipt": {
-            "status": "available" if job_id else "unavailable",
-            "job_id": job_id,
-            "signature_endpoint": f"/jobs/{job_id}/signature" if job_id else None,
-            "verify_with": "aztea_verify_job",
-        },
-        "output": inner.get("output"),
-        "latency_ms": inner.get("latency_ms"),
-        "cached": bool(inner.get("cached", False)),
-        "next_step": (
-            f"Verify the signed receipt with aztea_verify_job(job_id='{job_id}')."
-            if job_id
-            else "No new receipt was created for this response."
-        ),
-    }
-    if "rendered_output" in inner:
-        response_body["rendered_output"] = inner["rendered_output"]
-        response_body["rendered_output_format"] = inner.get(
-            "rendered_output_format", body.output_format
-        )
-    return JSONResponse(content=response_body)
+    return _auto_hire_success_response(
+        chosen=chosen,
+        decision=decision,
+        intent=body.intent,
+        max_cost_usd=body.max_cost_usd,
+        delegated=delegated,
+        output_format=body.output_format,
+    )
 
 
 # ---------------------------------------------------------------------------
