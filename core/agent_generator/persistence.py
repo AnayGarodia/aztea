@@ -65,7 +65,7 @@ def create_or_get_generation_job(
     job_id = f"gen_{uuid.uuid4().hex[:24]}"
     now = _utc_now_iso()
     request_json = json.dumps(request_payload, default=str, sort_keys=True)
-    with get_db_connection() as conn:
+    with get_db_connection() as _raw_conn, _raw_conn as conn:
         existing = conn.execute(
             "SELECT * FROM agent_generation_jobs"
             " WHERE owner_id = %s AND idempotency_key = %s",
@@ -102,7 +102,7 @@ def create_or_get_generation_job(
 
 def get_generation_job(generation_job_id: str) -> dict[str, Any] | None:
     """Fetch one job row by id, or None if not found."""
-    with get_db_connection() as conn:
+    with get_db_connection() as _raw_conn, _raw_conn as conn:
         row = conn.execute(
             "SELECT * FROM agent_generation_jobs WHERE generation_job_id = %s",
             (generation_job_id,),
@@ -113,7 +113,7 @@ def get_generation_job(generation_job_id: str) -> dict[str, Any] | None:
 def list_recent_for_owner(owner_id: str, *, since_iso: str) -> list[dict[str, Any]]:
     """Rows for an owner created at or after ``since_iso``.  Used for the
     per-day rate-limit check (count rows in the last 24h)."""
-    with get_db_connection() as conn:
+    with get_db_connection() as _raw_conn, _raw_conn as conn:
         rows = conn.execute(
             "SELECT * FROM agent_generation_jobs"
             " WHERE owner_id = %s AND created_at >= %s"
@@ -167,7 +167,7 @@ def update_status(
         fields.append("error_message = %s")
         params.append(error_message)
     params.append(generation_job_id)
-    with get_db_connection() as conn:
+    with get_db_connection() as _raw_conn, _raw_conn as conn:
         conn.execute(
             "UPDATE agent_generation_jobs SET "
             + ", ".join(fields)

@@ -67,7 +67,7 @@ def _resolve_unique_name(display_name: str) -> str:
     candidate = display_name
     for attempt in range(1, 8):
         from core.db import get_db_connection
-        with get_db_connection() as conn:
+        with get_db_connection() as _raw_conn, _raw_conn as conn:
             row = conn.execute(
                 "SELECT 1 FROM agents WHERE name = %s LIMIT 1", (candidate,)
             ).fetchone()
@@ -221,7 +221,7 @@ def _mint_probation_agent(
         )
     final_endpoint = _hosted_skills.make_skill_endpoint_url(skill_row["skill_id"])
     from core.db import get_db_connection
-    with get_db_connection() as conn:
+    with get_db_connection() as _raw_conn, _raw_conn as conn:
         conn.execute(
             "UPDATE agents SET endpoint_url = %s WHERE agent_id = %s AND owner_id = %s",
             (final_endpoint, agent_id, owner_id),
