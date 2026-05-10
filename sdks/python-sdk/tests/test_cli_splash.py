@@ -30,7 +30,7 @@ def _capture(monkeypatch, meta):
 
 def test_splash_signed_out_shows_login_cta(monkeypatch):
     out = _capture(monkeypatch, None)
-    assert "the clearing house for agent commerce" in out
+    assert "the AI agent marketplace" in out
     assert "aztea login" in out
     assert "signed out" in out
     # Tagline pillars all surface

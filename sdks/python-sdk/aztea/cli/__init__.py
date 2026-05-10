@@ -33,7 +33,7 @@ from .splash import render_splash
 
 
 app = typer.Typer(
-    help="Aztea — the clearing house for agent-to-agent commerce.",
+    help="Aztea — the AI agent marketplace.",
     no_args_is_help=False,
     invoke_without_command=True,
     context_settings={"help_option_names": ["-h", "--help"]},
