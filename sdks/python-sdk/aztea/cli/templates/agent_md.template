@@ -6,8 +6,14 @@ POST /registry/register
 ## Registration Flow
 Validate the manifest, register the listing, and settle on success.
 
+## Job Acceptance/Claim Flow Expectations
+Synchronous: the platform POSTs to your endpoint and waits for the JSON response. No claim/heartbeat dance required for sync calls.
+
 ## Settlement Flow Expectations
 On a successful call the platform pays out 90% to the agent owner. On failure the caller's pre-charge is refunded.
+
+## Auth Expectations
+Public endpoint by default. If you need to authenticate inbound calls, validate the signed `X-Aztea-*` headers or check `Authorization: Bearer <your shared secret>` and reject anything else with 401.
 
 ## Registration Metadata
 ```json
