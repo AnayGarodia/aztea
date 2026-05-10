@@ -2755,20 +2755,69 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+_NO_API_KEY_BANNER_LINES: tuple[str, ...] = (
+    "",
+    "  ╔══════════════════════════════════════════════════════════════════╗",
+    "  ║  AZTEA MCP — NO API KEY                                          ║",
+    "  ╠══════════════════════════════════════════════════════════════════╣",
+    "  ║  Server will run in unauthenticated mode. The marketplace tool   ║",
+    "  ║  catalog will be EMPTY and Claude will fall back to its own      ║",
+    "  ║  knowledge instead of routing through Aztea specialists.         ║",
+    "  ║                                                                  ║",
+    "  ║  Fix: add an env block to ~/.claude.json under this server, e.g. ║",
+    "  ║    \"env\": {{                                                      ║",
+    "  ║      \"AZTEA_API_KEY\":   \"az_...\",                                ║",
+    "  ║      \"AZTEA_BASE_URL\":  \"{base_url}\"  ║",
+    "  ║    }}                                                             ║",
+    "  ║  Then restart the Claude Code session (the MCP process is        ║",
+    "  ║  spawned per-session and inherits env from the config file).     ║",
+    "  ║                                                                  ║",
+    "  ║  Set AZTEA_REQUIRE_API_KEY=1 to make this a hard startup error.  ║",
+    "  ╚══════════════════════════════════════════════════════════════════╝",
+    "",
+)
+
+
+def _emit_no_api_key_banner(base_url: str) -> None:
+    """Print an unmissable stderr banner when the MCP server has no API key.
+
+    Buyers debugging an empty tool list need a signal that survives Claude
+    Code's MCP log noise; a single warning line was being missed in practice.
+    """
+    # The base_url placeholder is padded to keep the box aligned for the
+    # common localhost / aztea.ai cases. Truncate / pad to a fixed width.
+    pad_target = 38
+    label = base_url if len(base_url) <= pad_target else base_url[: pad_target - 1] + "…"
+    label = label.ljust(pad_target)
+    for line in _NO_API_KEY_BANNER_LINES:
+        sys.stderr.write(line.format(base_url=label) + "\n")
+    sys.stderr.flush()
+
+
 def main() -> None:
     logging.basicConfig(
         level=logging.INFO, stream=sys.stderr, format="[aztea-mcp] %(message)s"
     )
     args = _parse_args()
     api_key = str(args.api_key or "").strip()
+    base_url = str(args.base_url or "").strip() or "http://localhost:8000"
     if not api_key:
-        _LOG.warning(
-            "No API key set. The MCP server will start in unauthenticated mode. "
-            "tool calls will return a sign-up link. Set AZTEA_API_KEY=az_... (or AZTEA_API_KEY) to enable full access."
-        )
+        # Loud, multi-line banner to stderr — Claude Code surfaces MCP stderr in
+        # `claude mcp list` and the session log, so this is the only signal a
+        # buyer-side debugger gets when wiring goes sideways. Single-line
+        # warnings were missed in practice; a banner is unmissable.
+        _emit_no_api_key_banner(base_url)
+        # Opt-in hard fail (default: 0). When set, the server exits non-zero
+        # instead of starting in unauthenticated mode — useful for CI and for
+        # buyer setups where a missing key is unambiguously a config bug.
+        if os.environ.get("AZTEA_REQUIRE_API_KEY", "").strip().lower() in ("1", "true", "yes"):
+            _LOG.error(
+                "AZTEA_REQUIRE_API_KEY is set; refusing to start without AZTEA_API_KEY."
+            )
+            sys.exit(2)
 
     bridge = RegistryBridge(
-        base_url=str(args.base_url or "").strip() or "http://localhost:8000",
+        base_url=base_url,
         api_key=api_key,
         timeout_seconds=args.timeout_seconds,
     )
