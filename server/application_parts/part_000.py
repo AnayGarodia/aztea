@@ -111,6 +111,7 @@ from agents import archive_inspector as agent_archive_inspector
 from agents import unicode_inspector as agent_unicode_inspector
 from agents import terraform_plan_analyzer as agent_terraform_plan_analyzer
 from agents import color_contrast_checker as agent_color_contrast_checker
+from core import agent_generator as _agent_generator
 from core import auth as _auth
 from core import cache as _cache
 from core import (

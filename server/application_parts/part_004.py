@@ -1549,3 +1549,9 @@ def _list_hook_deliveries(
             tuple(params),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+# Wire the in-process built-in dispatcher into the skill executor so that
+# vibe-an-agent compositions can call built-ins via aztea_call(slug, args)
+# without core/ taking a hard import on server/. See core/skill_executor.py.
+_skill_executor.register_builtin_dispatcher(_execute_builtin_agent)

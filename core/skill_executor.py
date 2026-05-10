@@ -155,86 +155,111 @@ def _check_payload_size(payload: dict[str, Any]) -> None:
         )
 
 
-_DEFAULT_TEMPERATURE = 0.2
-_DEFAULT_MAX_TOKENS = 1500
-_LLM_TIMEOUT_S = 60.0
-
-
-def _build_completion_request(
-    skill: dict[str, Any], payload: dict[str, Any],
-) -> tuple[CompletionRequest, list[str] | None]:
-    """Pure: shape a hosted-skill row + payload into ``(request, model_chain)``.
-
-    Why: the request shape is narrow and predictable; isolating it lets
-    ``execute_hosted_skill`` focus on side-effect orchestration.
-    """
-    body = str(skill.get("system_prompt") or "").strip()
-    if not body:
-        raise SkillExecutionError("Hosted skill has no system_prompt.")
-    raw_temp = skill.get("temperature")
-    temperature = float(raw_temp if raw_temp is not None else _DEFAULT_TEMPERATURE)
-    max_tokens = int(skill.get("max_output_tokens") or _DEFAULT_MAX_TOKENS)
-    chain = skill.get("model_chain") or None
-    if chain is not None and not isinstance(chain, list):
-        chain = None
-    req = CompletionRequest(
-        model="",  # filled in by run_with_fallback
-        messages=build_messages(body, payload),
-        temperature=temperature,
-        max_tokens=max_tokens,
-        json_mode=True,
-        timeout_seconds=_LLM_TIMEOUT_S,
-    )
-    return req, chain
-
-
-def _safe_heartbeat(heartbeat_cb: Callable[[], None] | None) -> None:
-    """Side-effect: call ``heartbeat_cb`` if provided; never aborts execution.
-
-    Why: the lease may still be valid even if the heartbeat call raises;
-    the supervisor will recover otherwise.
-    """
-    if heartbeat_cb is None:
-        return
-    try:
-        heartbeat_cb()
-    except Exception:
-        _LOG.warning("Heartbeat callback failed during skill execution", exc_info=True)
-
-
 def execute_hosted_skill(
     skill: dict[str, Any],
     payload: dict[str, Any],
     *,
     heartbeat_cb: Callable[[], None] | None = None,
+    caller_context: Any | None = None,
+    max_cost_cents: int = 100,
 ) -> dict[str, Any]:
-    """Side-effect: execute a hosted SKILL.md against the platform LLM chain.
+    """Execute a hosted SKILL.md against the platform LLM chain.
 
     Args:
-        skill: a row from ``hosted_skills`` with ``system_prompt``,
-            ``temperature``, ``max_output_tokens``, optional ``model_chain``.
-        payload: caller's input; size-checked at the boundary.
-        heartbeat_cb: optional zero-arg callable that async job workers use
-            to bump the job lease while the LLM call is in flight.
+        skill: A row from ``hosted_skills`` (dict). Must contain
+            ``system_prompt``, ``temperature``, ``max_output_tokens``,
+            and optionally ``model_chain``.
+        payload: The caller's input payload. Will be size-checked.
+        heartbeat_cb: Optional zero-arg callable invoked just before the LLM
+            call. Async job workers pass a callback that bumps the job lease.
+        caller_context: Optional CallerContext-shaped dict. When provided,
+            the executor will resolve any ``aztea_call(slug, {args})`` patterns
+            emitted by the skill body against the live registry and bill the
+            *caller* (not the platform) for those nested calls. Defaults to
+            ``None`` so existing callers behave exactly as before.
+        max_cost_cents: Hard ceiling on combined nested-call spend when
+            ``caller_context`` is set.  Ignored when caller_context is None.
 
-    Why: returns ``{"result": str, "_meta": {...}}``. Provider/model names
-    are intentionally not exposed in ``_meta`` — they are platform infra
-    details that may change without notice; only an opaque execution_id is
-    surfaced for support traceability.
+    Returns:
+        Dict shaped ``{"result": str, "_meta": {...}}``.
+
+    Raises:
+        SkillInputTooLargeError: payload exceeds 64 KB.
+        SkillExecutionError: every LLM provider in the chain failed.
     """
     payload = dict(payload or {})
     _check_payload_size(payload)
-    req, chain = _build_completion_request(skill, payload)
-    _safe_heartbeat(heartbeat_cb)
+
+    body = str(skill.get("system_prompt") or "").strip()
+    if not body:
+        raise SkillExecutionError("Hosted skill has no system_prompt.")
+
+    temperature = float(
+        skill.get("temperature") if skill.get("temperature") is not None else 0.2
+    )
+    max_tokens = int(skill.get("max_output_tokens") or 1500)
+    chain = skill.get("model_chain") or None
+    if chain is not None and not isinstance(chain, list):
+        chain = None
+
+    messages = build_messages(body, payload)
+
+    req = CompletionRequest(
+        model="",  # filled in by run_with_fallback
+        messages=messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        json_mode=True,
+        timeout_seconds=60.0,
+    )
+
+    if heartbeat_cb is not None:
+        try:
+            heartbeat_cb()
+        except Exception:
+            # Heartbeat failures must never abort skill execution. The lease
+            # may still be valid; if not the supervisor will recover.
+            _LOG.warning("Heartbeat callback failed during skill execution", exc_info=True)
+
     try:
         resp = run_with_fallback(req, model_chain=chain)
     except Exception as exc:
         raise SkillExecutionError(f"All LLM providers failed: {exc}") from exc
+
     parsed = _parse_llm_output(resp.text)
+    # Don't leak underlying LLM provider/model names to skill callers — those are
+    # platform infrastructure details that may change without notice. We keep an
+    # opaque execution_id for support traceability and the parse_path so the SDK
+    # can tell whether the response was JSON or coerced from raw text.
+    execution_id = uuid.uuid4().hex
+    parse_path = parsed.pop("__parse_path", "raw_text_fallback")
+    nested_meta: dict[str, Any] = {}
+    if caller_context is not None:
+        # Resolve any aztea_call(slug, {...}) markers the skill body emitted
+        # against the live registry; each resolved call settles against the
+        # caller's wallet, not the platform's.  See _resolve_nested_calls
+        # below for the dispatch contract and the ledger guarantees.
+        try:
+            new_result, nested_meta = _resolve_nested_calls(
+                parsed.get("result", ""),
+                caller_context=caller_context,
+                max_cost_cents=int(max_cost_cents),
+            )
+            parsed["result"] = _truncate(new_result)
+        except Exception as exc:
+            # Composition is best-effort: a registry lookup failure must not
+            # take down the outer skill response.
+            _LOG.warning(
+                "skill_executor.composition_failed reason=%s exec_id=%s",
+                exc, execution_id,
+            )
+            nested_meta = {"composition_error": str(exc)[:200]}
     parsed["_meta"] = {
-        "execution_id": uuid.uuid4().hex,
-        "parse_path": parsed.pop("__parse_path", "raw_text_fallback"),
+        "execution_id": execution_id,
+        "parse_path": parse_path,
     }
+    if nested_meta:
+        parsed["_meta"]["nested_calls"] = nested_meta
     return parsed
 
 
@@ -296,3 +321,261 @@ def _parse_llm_output(text: str) -> dict[str, Any]:
         "result": _truncate(stripped if stripped else (text or "")),
         "__parse_path": "raw_text_fallback",
     }
+
+
+# ---------------------------------------------------------------------------
+# Composition: aztea_call(slug, {...}) → in-process call against the registry
+#
+# When `execute_hosted_skill` is invoked with a caller_context, vibe-generated
+# skills can compose existing approved agents by emitting aztea_call markers
+# in their output. We resolve those markers here. Each resolved call goes
+# through pre_call_charge → execute → post_call_payout / refund so the
+# caller's wallet is debited and the inner agent's owner is credited — no
+# platform subsidy and no double-charge of the outer skill.
+# ---------------------------------------------------------------------------
+
+# Match `aztea_call("slug", {...json...})` or `aztea_call('slug', {...})` —
+# permissive about whitespace and quote style. The JSON body may span lines.
+# Group 1 = slug, Group 2 = JSON args (may be empty `{}`).
+_AZTEA_CALL_RE = re.compile(
+    r"aztea_call\(\s*['\"]([a-z0-9][a-z0-9_\-]{0,80})['\"]\s*,\s*(\{.*?\})\s*\)",
+    re.DOTALL,
+)
+
+# Per-resolution hard ceilings.  These bound runaway compositions even when
+# the caller granted a generous max_cost_cents.
+_MAX_NESTED_CALLS_PER_SKILL = 5
+_DEFAULT_NESTED_CALL_CAP_CENTS = 50  # $0.50 per inner call
+
+
+def _resolve_nested_calls(
+    result_text: str,
+    *,
+    caller_context: Any,
+    max_cost_cents: int,
+) -> tuple[str, dict[str, Any]]:
+    """Replace each aztea_call(...) marker with the resolved call output.
+
+    Returns ``(rewritten_text, meta)`` where meta has ``calls`` (list of
+    per-call records) and ``total_cost_cents``.  This function is the single
+    seam through which every nested call must flow; tests assert the ledger
+    side-effects against this code path.
+    """
+    if not result_text or "aztea_call(" not in result_text:
+        return result_text, {}
+    matches = list(_AZTEA_CALL_RE.finditer(result_text))
+    if not matches:
+        return result_text, {}
+    matches = matches[:_MAX_NESTED_CALLS_PER_SKILL]
+    remaining_budget = int(max_cost_cents)
+    call_records: list[dict[str, Any]] = []
+    total_cost = 0
+    rewritten = result_text
+    for match in matches:
+        slug = match.group(1)
+        try:
+            args = json.loads(match.group(2))
+            if not isinstance(args, dict):
+                args = {"input": args}
+        except (TypeError, ValueError):
+            args = {}
+        per_call_cap = min(remaining_budget, _DEFAULT_NESTED_CALL_CAP_CENTS)
+        if per_call_cap <= 0:
+            replacement = "[aztea_call skipped: composition budget exhausted]"
+            call_records.append({
+                "slug": slug, "skipped": True, "reason": "budget_exhausted",
+            })
+        else:
+            record = _dispatch_aztea_call(
+                slug=slug, args=args,
+                caller_context=caller_context,
+                max_cost_cents=per_call_cap,
+            )
+            call_records.append(record)
+            spent = int(record.get("cost_cents") or 0)
+            total_cost += spent
+            remaining_budget -= spent
+            replacement = str(record.get("result") or record.get("error") or "")
+        rewritten = rewritten.replace(match.group(0), replacement, 1)
+    meta = {"calls": call_records, "total_cost_cents": total_cost}
+    return rewritten, meta
+
+
+def _dispatch_aztea_call(
+    *,
+    slug: str,
+    args: dict[str, Any],
+    caller_context: Any,
+    max_cost_cents: int,
+) -> dict[str, Any]:
+    """Run one nested aztea_call: pre_call_charge → execute → settle.
+
+    Returns a record dict with at minimum ``slug``, ``agent_id``,
+    ``cost_cents``, and either ``result`` or ``error``. Never raises —
+    composition failures are recorded and surfaced inline.
+    """
+    # Imports are local to avoid pulling the registry / payments modules at
+    # module load time (skill_executor is imported very early).
+    from core import payments as _payments
+    from core.registry import agents_ops as _registry_ops
+    record: dict[str, Any] = {"slug": slug, "cost_cents": 0}
+    try:
+        agent = _resolve_callable_agent(slug, _registry_ops)
+    except _CompositionError as exc:
+        record["error"] = exc.message
+        return record
+    record["agent_id"] = agent["agent_id"]
+    price_cents = int(round(float(agent.get("price_per_call_usd") or 0) * 100))
+    if price_cents <= 0:
+        # Free agent — no settlement needed; just execute.
+        try:
+            output = _execute_inner(agent, args, caller_context=caller_context)
+        except Exception as exc:
+            _LOG.warning("aztea_call.exec_failed slug=%s reason=%s", slug, exc)
+            record["error"] = f"inner_call_failed: {exc}"[:200]
+            return record
+        record["result"] = _summarize_output(output)
+        return record
+    if price_cents > int(max_cost_cents):
+        record["error"] = (
+            f"price {price_cents}¢ exceeds composition budget {max_cost_cents}¢"
+        )
+        return record
+    caller_owner_id = _caller_owner_id_from_context(caller_context)
+    caller_wallet = _payments.get_or_create_wallet(caller_owner_id)
+    agent_payout_owner = f"agent:{agent['agent_id']}"
+    agent_wallet = _payments.get_or_create_wallet(agent_payout_owner)
+    platform_wallet = _payments.get_or_create_wallet(_payments.PLATFORM_OWNER_ID)
+    try:
+        charge_tx_id = _payments.pre_call_charge(
+            caller_wallet["wallet_id"],
+            price_cents,
+            agent["agent_id"],
+            charged_by_key_id=_caller_key_id_from_context(caller_context),
+        )
+    except _payments.InsufficientBalanceError as exc:
+        record["error"] = f"insufficient_funds: {exc}"[:200]
+        return record
+    try:
+        output = _execute_inner(agent, args, caller_context=caller_context)
+    except Exception as exc:
+        _payments.post_call_refund(
+            caller_wallet["wallet_id"], charge_tx_id, price_cents, agent["agent_id"],
+        )
+        _LOG.warning("aztea_call.exec_failed_refunded slug=%s reason=%s", slug, exc)
+        record["error"] = f"inner_call_failed: {exc}"[:200]
+        return record
+    _payments.post_call_payout(
+        agent_wallet["wallet_id"],
+        platform_wallet["wallet_id"],
+        charge_tx_id,
+        price_cents,
+        agent["agent_id"],
+    )
+    record["cost_cents"] = price_cents
+    record["charge_tx_id"] = charge_tx_id
+    record["result"] = _summarize_output(output)
+    return record
+
+
+class _CompositionError(Exception):
+    """Internal signal — recorded in the call record, never propagated."""
+
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.message = message
+
+
+def _resolve_callable_agent(slug: str, registry_ops: Any) -> dict[str, Any]:
+    """Look up an approved agent by name slug. Probation listings are not
+    callable from compositions to avoid probation-on-probation cascades."""
+    rows = registry_ops.get_agents(include_internal=False, include_banned=False)
+    for row in rows:
+        if str(row.get("name") or "").strip().lower() == slug.strip().lower():
+            if str(row.get("review_status") or "").lower() not in {"approved", ""}:
+                raise _CompositionError(
+                    f"Agent '{slug}' is not approved; only approved listings "
+                    "can be composed.")
+            return row
+    raise _CompositionError(f"No approved agent found with slug '{slug}'.")
+
+
+def _caller_owner_id_from_context(caller_context: Any) -> str:
+    if isinstance(caller_context, dict):
+        return str(caller_context.get("owner_id") or "")
+    return str(getattr(caller_context, "owner_id", "") or "")
+
+
+def _caller_key_id_from_context(caller_context: Any) -> str | None:
+    if isinstance(caller_context, dict):
+        return caller_context.get("key_id") or caller_context.get("api_key_id")
+    return getattr(caller_context, "key_id", None)
+
+
+def _execute_inner(
+    agent: dict[str, Any],
+    args: dict[str, Any],
+    *,
+    caller_context: Any,
+) -> Any:
+    """Dispatch the inner call to the right backend (built-in / hosted skill).
+
+    External HTTP-endpoint agents are not composable in v1 — they require the
+    full registry_call route's SSRF + endpoint validation. Only built-in
+    agents and hosted SKILL.md agents are exposed to composition.
+    """
+    endpoint = str(agent.get("endpoint_url") or "").strip()
+    if endpoint.startswith("internal://"):
+        # Built-in agent — dispatch through the in-process executor registry.
+        return _dispatch_builtin(agent["agent_id"], args)
+    from core import hosted_skills as _hosted_skills
+    if _hosted_skills.is_skill_endpoint(endpoint):
+        skill_id = _hosted_skills.parse_skill_id_from_endpoint(endpoint)
+        skill_row = _hosted_skills.get_hosted_skill(skill_id)
+        if skill_row is None:
+            raise _CompositionError(f"Hosted skill row missing for {skill_id}.")
+        # Disable nested composition one level deep — keeps recursion bounded.
+        return execute_hosted_skill(skill_row, args, caller_context=None)
+    raise _CompositionError(
+        f"Agent '{agent.get('name')}' has a non-composable endpoint type."
+    )
+
+
+# Built-in agent dispatch is owned by server.application_parts.part_004; we
+# can't import that from core/. The server shard sets this hook on import so
+# the executor can compose built-ins without a circular dependency. Tests
+# can monkeypatch this module-level binding directly.
+_BUILTIN_DISPATCHER: Callable[[str, dict[str, Any]], Any] | None = None
+
+
+def register_builtin_dispatcher(
+    fn: Callable[[str, dict[str, Any]], Any],
+) -> None:
+    """Wire the server-side built-in dispatcher into the executor.
+
+    Called once at server startup (part_004) so composition can route to
+    built-in agents without core importing server.
+    """
+    global _BUILTIN_DISPATCHER
+    _BUILTIN_DISPATCHER = fn
+
+
+def _dispatch_builtin(agent_id: str, args: dict[str, Any]) -> Any:
+    if _BUILTIN_DISPATCHER is None:
+        raise _CompositionError(
+            "Built-in agent composition is not wired in this process; "
+            "register_builtin_dispatcher() must be called at startup."
+        )
+    return _BUILTIN_DISPATCHER(agent_id, args)
+
+
+def _summarize_output(output: Any) -> str:
+    """Render an inner-call output into a string fragment for the outer skill."""
+    if isinstance(output, dict):
+        if "result" in output and isinstance(output["result"], str):
+            return output["result"]
+        try:
+            return json.dumps(output, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            return str(output)
+    return str(output)

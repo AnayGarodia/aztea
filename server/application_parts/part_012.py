@@ -952,3 +952,190 @@ def watcher_test(
             "error": err,
         }
     )
+# ── Vibe-an-agent (self-serve agent generation) ───────────────────────────
+# Users describe an agent in natural language with example I/O; the platform
+# writes a SKILL.md, validates → safety-scans → self-tests → mints a
+# probation-listed agent. Gated behind AZTEA_AGENT_GENERATION_ENABLED so OSS
+# self-hosters opt in explicitly.
+#
+# Money flow: pre-charge max_total_cost_cents on submit; on terminal failure
+# refund the full pre-charge; on success refund the unused remainder via a
+# compensating ledger entry. Idempotency: (owner_id, idempotency_key) is
+# UNIQUE so safe retries don't double-charge.
+
+
+def _vibe_disabled_error() -> HTTPException:
+    return HTTPException(
+        status_code=501,
+        detail=error_codes.make_error(
+            "agent_generation.disabled",
+            "Agent generation is disabled on this instance. Set "
+            "AZTEA_AGENT_GENERATION_ENABLED=1 to enable.",
+            {"docs": "docs/oss-vs-hosted.md"},
+        ),
+    )
+
+
+def _vibe_count_today(owner_id: str) -> int:
+    """Count this owner's generation attempts in the trailing 24h.
+
+    Cheap query because of idx_gen_jobs_owner_created. We use a moving 24h
+    window rather than calendar-day so a burst at 23:55 UTC doesn't reset
+    five minutes later.
+    """
+    from core.agent_generator import persistence as _gen_persist
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    rows = _gen_persist.list_recent_for_owner(owner_id, since_iso=cutoff)
+    return len(rows)
+
+
+def _vibe_result_from_row(row: dict) -> dict:
+    """Render the persisted job row as the public response payload."""
+    from core.agent_generator import persistence as _gen_persist
+    result = _gen_persist.deserialize_result(row) or {}
+    error = result.get("error") if isinstance(result, dict) else None
+    return {
+        "generation_job_id": row.get("generation_job_id"),
+        "status": row.get("status"),
+        "agent_id": row.get("agent_id") or (result.get("agent_id") if isinstance(result, dict) else None),
+        "handle": result.get("handle") if isinstance(result, dict) else None,
+        "skill_md": result.get("skill_md") if isinstance(result, dict) else None,
+        "iterations": int(row.get("iterations") or 0),
+        "qa_score": result.get("qa_score") if isinstance(result, dict) else None,
+        "cost_cents_charged": int(row.get("cost_cents") or 0),
+        "error": error,
+    }
+
+
+@app.post(
+    "/agents/generate",
+    status_code=202,
+    responses=_error_responses(400, 401, 402, 403, 429, 501),
+    tags=["Registry"],
+    summary="Self-serve agent generation from a natural-language description.",
+)
+@limiter.limit("5/minute")
+def agents_generate(
+    request: Request,
+    body: dict = Body(...),
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    """Submit a generation request. Returns 202 with the generation_job_id.
+
+    The pipeline runs synchronously inside this request — generation is
+    bounded to a few LLM calls plus a couple of skill self-test runs, well
+    within reasonable HTTP timeouts.  If we ever need true async kickoff,
+    the persistence + status fields are already shaped for it.
+    """
+    if not _feature_flags.agent_generation_enabled():
+        raise _vibe_disabled_error()
+    _require_scope(caller, "worker")
+    if caller["type"] == "agent_key":
+        raise HTTPException(
+            status_code=403,
+            detail="Agent-scoped keys cannot generate new agents.",
+        )
+    from core.models.agent_generation import GenerateAgentRequest
+    try:
+        req = GenerateAgentRequest.model_validate(body or {})
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=exc.errors())
+    owner_id = caller["owner_id"]
+    daily_cap = _feature_flags.agent_generation_max_per_day()
+    if _vibe_count_today(owner_id) >= daily_cap:
+        raise HTTPException(
+            status_code=429,
+            detail=error_codes.make_error(
+                "agent_generation.rate_limited",
+                f"Per-owner limit of {daily_cap} generations / 24h reached.",
+                {"limit": daily_cap},
+            ),
+        )
+
+    payload = req.model_dump()
+    job_row, created = _agent_generator.create_or_get_generation_job(
+        owner_id=owner_id,
+        idempotency_key=req.idempotency_key,
+        request_payload=payload,
+    )
+    if not created:
+        # Idempotent retry — return the existing row's status without charging.
+        return JSONResponse(
+            status_code=200, content=_vibe_result_from_row(job_row)
+        )
+
+    wallet = payments.get_or_create_wallet(owner_id)
+    charged_by_key_id = caller.get("api_key_id") if isinstance(caller, dict) else None
+    from core.agent_generator import ledger as _vibe_ledger
+    try:
+        charge_tx_id = _vibe_ledger.precharge_for_generation(
+            caller_wallet_id=wallet["wallet_id"],
+            max_cents=req.max_total_cost_cents,
+            charged_by_key_id=charged_by_key_id,
+        )
+    except payments.InsufficientBalanceError as exc:
+        from core.agent_generator import persistence as _gen_persist
+        _gen_persist.update_status(
+            job_row["generation_job_id"],
+            status="failed",
+            error_code="insufficient_funds",
+            error_message=str(exc),
+        )
+        raise HTTPException(
+            status_code=402,
+            detail=error_codes.make_error(
+                "wallet.insufficient_funds",
+                "Caller wallet cannot cover the generation budget.",
+                {"required_cents": req.max_total_cost_cents},
+            ),
+        )
+
+    from core.agent_generator import persistence as _gen_persist
+    _gen_persist.update_status(
+        job_row["generation_job_id"],
+        status="running",
+        charge_tx_id=charge_tx_id,
+    )
+    try:
+        _agent_generator.generate_agent(
+            generation_job_id=job_row["generation_job_id"],
+            request=payload,
+            owner_id=owner_id,
+            caller_wallet_id=wallet["wallet_id"],
+            charge_tx_id=charge_tx_id,
+            max_total_cost_cents=req.max_total_cost_cents,
+            charged_by_key_id=charged_by_key_id,
+        )
+    except Exception:
+        _LOG.exception(
+            "vibe.route.unexpected job=%s", job_row["generation_job_id"]
+        )
+    final_row = _gen_persist.get_generation_job(job_row["generation_job_id"])
+    return JSONResponse(
+        status_code=202, content=_vibe_result_from_row(final_row or job_row)
+    )
+
+
+@app.get(
+    "/agents/generate/{generation_job_id}",
+    responses=_error_responses(401, 403, 404, 501),
+    tags=["Registry"],
+    summary="Poll the status of a vibe-an-agent generation job.",
+)
+def agents_generate_status(
+    request: Request,
+    generation_job_id: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> dict:
+    if not _feature_flags.agent_generation_enabled():
+        raise _vibe_disabled_error()
+    _require_scope(caller, "worker")
+    from core.agent_generator import persistence as _gen_persist
+    row = _gen_persist.get_generation_job(generation_job_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Generation job not found.")
+    if caller["type"] != "master" and row.get("owner_id") != caller["owner_id"]:
+        raise HTTPException(
+            status_code=403, detail="Generation job belongs to a different owner."
+        )
+    return _vibe_result_from_row(row)

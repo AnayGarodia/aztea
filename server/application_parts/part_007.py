@@ -470,6 +470,22 @@ def agent_did_document(agent_id: str, request: Request) -> JSONResponse:
             status_code=404,
             detail=f"Agent '{agent_id}' has no published cryptographic identity yet.",
         )
+    # Probation agents (vibe-generated, community-published) only publish
+    # their DID document once they have a successful call on record. This
+    # avoids polluting the DID namespace with spam-generated identities.
+    # successful_calls_count comes from the agents row; treat NULL/missing
+    # as zero so brand-new probation agents are deferred. Approved agents
+    # always publish.
+    if str(agent.get("review_status") or "").strip().lower() == "probation":
+        successful = int(agent.get("successful_calls") or 0)
+        if successful <= 0:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"Agent '{agent_id}' is on probation; its DID document "
+                    "is published after the first successful paid call."
+                ),
+            )
     try:
         from core import crypto as _crypto
 
