@@ -275,6 +275,239 @@ def _validate_agent_scalar_params(
     )
 
 
+_VALID_AGENT_KINDS = frozenset({"aztea_built", "community_skill", "self_hosted"})
+_AGENT_DISPLAY_LABEL_CHARS = 80
+_AGENT_MODEL_ID_CHARS = 128
+
+_REGISTER_AGENT_INSERT_SQL = """
+    INSERT INTO agents
+        (agent_id, owner_id, name, description, endpoint_url, healthcheck_url,
+         price_per_call_usd, tags, input_schema, output_schema, output_verifier_url,
+         output_examples, verified, endpoint_health_status, endpoint_consecutive_failures,
+         endpoint_last_checked_at, endpoint_last_error,
+         internal_only, status, review_status, review_note, reviewed_at, reviewed_by,
+         trust_decay_multiplier, last_decay_at, created_at,
+         model_provider, model_id, pricing_model, pricing_config, kind,
+         pii_safe, outputs_not_stored, audit_logged, region_locked, payout_curve, cacheable)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, NULL, NULL,
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+"""
+
+_REGISTER_AGENT_SIGNING_UPDATE_SQL = """
+    UPDATE agents
+    SET did = %s,
+        signing_public_key = %s,
+        signing_private_key = %s,
+        signing_keys_created_at = %s
+    WHERE agent_id = %s
+"""
+
+
+def _normalize_register_scalars(
+    *, price_per_call_usd: float, endpoint_health_status: str,
+    status: str, review_status: str | None, is_internal: bool,
+    pricing_model: str | None, pricing_config: dict | None,
+) -> dict[str, Any]:
+    """Pure: validate scalar agent params at the boundary and return canonical values.
+
+    Why: every malformed input becomes a single ``ValueError``; the DB
+    insert never sees an inconsistent row.
+    """
+    _scalars = _validate_agent_scalar_params(
+        price_per_call_usd, endpoint_health_status, status,
+        review_status, is_internal, pricing_model, pricing_config,
+    )
+    _scalars.raise_on_err()
+    return _scalars.value
+
+
+def _normalize_register_optional_strings(
+    *, healthcheck_url: str | None, output_verifier_url: str | None,
+    review_note: str | None, reviewed_at: str | None,
+    reviewed_by: str | None, region_locked: str | None,
+    model_provider: str | None, model_id: str | None,
+) -> dict[str, str | None]:
+    """Pure: strip + collapse-empty for every optional string field on the agent row."""
+    return {
+        "healthcheck_url": str(healthcheck_url or "").strip() or None,
+        "verifier_url": str(output_verifier_url or "").strip() or None,
+        "review_note": str(review_note or "").strip() or None,
+        "reviewed_at": str(reviewed_at or "").strip() or None,
+        "reviewed_by": str(reviewed_by or "").strip() or None,
+        "region_locked": str(region_locked or "").strip().lower() or None,
+        "model_provider": str(model_provider).strip().lower() if model_provider else None,
+        "model_id": str(model_id).strip()[:_AGENT_MODEL_ID_CHARS] if model_id else None,
+    }
+
+
+def _normalize_examples_json(output_examples: list | None) -> str | None:
+    """Pure: filter to dict-only examples and serialise; empty list / non-list → None."""
+    if not isinstance(output_examples, list):
+        return None
+    encoded = json.dumps([ex for ex in output_examples if isinstance(ex, dict)])
+    return encoded or None
+
+
+def _coerce_decay_multiplier(trust_decay_multiplier: float) -> float:
+    """Pure: enforce decay > 0; coerce zero/negative to 1.0 (the no-decay default)."""
+    value = _to_non_negative_float(trust_decay_multiplier, default=1.0)
+    return value if value > 0 else 1.0
+
+
+def _normalize_agent_kind(kind: str) -> str:
+    """Pure: clamp ``kind`` to a known agent-kind value, defaulting to self_hosted."""
+    candidate = str(kind or "self_hosted").strip().lower()
+    return candidate if candidate in _VALID_AGENT_KINDS else "self_hosted"
+
+
+def _maybe_embed_listing(
+    *, embed_listing: bool, name: str, description: str,
+    normalized_tags: list, normalized_schema: dict,
+) -> tuple[str, list[float] | None]:
+    """Side-effect: compute embedding for new listings; ``("", None)`` when disabled."""
+    if not embed_listing:
+        return "", None
+    source_text = _build_embedding_source_text(
+        name, description, normalized_tags, normalized_schema,
+    )
+    return source_text, embeddings.embed_text(source_text)
+
+
+def _generate_signing_keypair_safe(
+    aid: str, created_at: str,
+) -> tuple[str | None, str | None, str | None, str | None]:
+    """Side-effect: best-effort keypair generation.
+
+    Why: missing ``cryptography`` lib in test envs must not block agent
+    registration; the agent simply has no signing key until the next
+    startup backfill recovers.
+    """
+    try:
+        from core import crypto as _crypto
+        from core.identity import build_agent_did as _build_agent_did
+
+        private_pem, public_pem = _crypto.generate_signing_keypair()
+        return _build_agent_did(aid), private_pem, public_pem, created_at
+    except Exception:
+        _logger.exception("Failed to generate signing keypair for agent %s", aid)
+        return None, None, None, None
+
+
+def _persist_signing_keypair(
+    conn: Any, *, aid: str, agent_did: str, public_pem: str,
+    private_pem: str, signing_keys_created_at: str,
+) -> None:
+    """Side-effect: write DID + keypair onto the agents row.
+
+    Why: tolerates schemas that pre-date migration 0015 — the column may
+    not exist yet, but the next startup backfill will retry.
+    """
+    try:
+        conn.execute(
+            _REGISTER_AGENT_SIGNING_UPDATE_SQL,
+            (agent_did, public_pem, private_pem, signing_keys_created_at, aid),
+        )
+    except _db.OperationalError as exc:
+        _logger.warning(
+            "Could not persist signing keypair for agent %s "
+            "(schema not yet migrated?): %s",
+            aid, exc,
+        )
+
+
+def _eagerly_create_agent_wallet(
+    aid: str, normalized_owner_id: str, name: str,
+) -> None:
+    """Side-effect: create the agent's payout sub-wallet linked to its human owner.
+
+    Why: best-effort — the job-creation path also calls
+    ``get_or_create_wallet`` and recovers if this eager step failed.
+    """
+    try:
+        from core import payments as _payments
+
+        parent_wallet_id: str | None = None
+        if normalized_owner_id and normalized_owner_id != f"agent:{aid}":
+            owner_wallet = _payments.get_or_create_wallet(normalized_owner_id)
+            parent_wallet_id = owner_wallet["wallet_id"]
+        _payments.get_or_create_wallet(
+            f"agent:{aid}",
+            parent_wallet_id=parent_wallet_id,
+            display_label=name[:_AGENT_DISPLAY_LABEL_CHARS] if name else None,
+        )
+    except Exception:
+        _logger.exception("failed to eagerly create agent sub-wallet for %s", aid)
+
+
+def _build_register_agent_params(
+    *, aid: str, normalized_owner_id: str, name: str, description: str,
+    endpoint_url: str, scalars: dict, optionals: dict,
+    tags_json: str, schema_json: str, output_schema_json: str,
+    examples_json: str | None, verified: bool, internal_only: bool,
+    pii_safe: bool, outputs_not_stored: bool, audit_logged: bool,
+    cacheable: bool | None, decay_multiplier: float,
+    payout_curve_json: str, kind: str, created_at: str,
+) -> tuple:
+    """Pure: positional args for ``_REGISTER_AGENT_INSERT_SQL``."""
+    return (
+        aid,
+        normalized_owner_id,
+        name,
+        description,
+        endpoint_url,
+        optionals["healthcheck_url"],
+        scalars["price"],
+        tags_json,
+        schema_json,
+        output_schema_json,
+        optionals["verifier_url"],
+        examples_json,
+        1 if verified else 0,
+        scalars["normalized_health_status"],
+        1 if internal_only else 0,
+        scalars["normalized_status"],
+        scalars["normalized_review_status"],
+        optionals["review_note"],
+        optionals["reviewed_at"],
+        optionals["reviewed_by"],
+        decay_multiplier,
+        created_at,
+        created_at,
+        optionals["model_provider"],
+        optionals["model_id"],
+        scalars["normalized_pricing_model"],
+        scalars["pricing_config_json"],
+        kind,
+        1 if pii_safe else 0,
+        1 if outputs_not_stored else 0,
+        1 if audit_logged else 0,
+        optionals["region_locked"],
+        payout_curve_json,
+        None if cacheable is None else (1 if cacheable else 0),
+    )
+
+
+def _execute_register_agent_insert(
+    conn: Any, *, params: tuple, embed_listing: bool, aid: str,
+    source_text: str, embedding_vector: list[float] | None,
+    agent_did: str | None, private_pem: str | None,
+    public_pem: str | None, signing_keys_created_at: str | None,
+) -> None:
+    """Side-effect: INSERT the agent row + optional embedding + optional signing keypair."""
+    conn.execute(_REGISTER_AGENT_INSERT_SQL, params)
+    if embed_listing and embedding_vector is not None:
+        _upsert_agent_embedding_row(
+            conn, agent_id=aid, source_text=source_text,
+            embedding_vector=embedding_vector,
+        )
+    if agent_did is not None and private_pem is not None:
+        _persist_signing_keypair(
+            conn, aid=aid, agent_did=agent_did, public_pem=public_pem,
+            private_pem=private_pem,
+            signing_keys_created_at=signing_keys_created_at,
+        )
+
+
 def register_agent(
     name: str,
     description: str,
@@ -310,220 +543,67 @@ def register_agent(
     payout_curve: dict | None = None,
     cacheable: bool | None = None,
 ) -> str:
-    """
-    Insert a new agent listing. Returns the agent_id.
-    Pass agent_id explicitly for deterministic IDs (e.g. self-registration).
-    By default this also writes an embedding row in the same request.
-    Raises _db.IntegrityError if agent_id already exists.
+    """Side-effect: insert a new agent listing; returns the agent_id.
+
+    Why: passing ``agent_id`` explicitly produces deterministic IDs (e.g.
+    self-registration); ``embed_listing=True`` writes an embedding row in
+    the same request so search ranking stays current. Raises
+    ``_db.IntegrityError`` if ``agent_id`` already exists.
     """
     aid = agent_id or str(uuid.uuid4())
     normalized_owner_id = (owner_id or f"agent:{aid}").strip()
     if not normalized_owner_id:
         raise ValueError("owner_id must be a non-empty string.")
-
-    is_internal = internal_only or str(endpoint_url or "").strip().startswith(
-        "internal://"
+    is_internal = internal_only or str(endpoint_url or "").strip().startswith("internal://")
+    scalars = _normalize_register_scalars(
+        price_per_call_usd=price_per_call_usd,
+        endpoint_health_status=endpoint_health_status,
+        status=status, review_status=review_status, is_internal=is_internal,
+        pricing_model=pricing_model, pricing_config=pricing_config,
     )
-
-    # Run all pure scalar validation before touching the DB.
-    _scalars = _validate_agent_scalar_params(
-        price_per_call_usd,
-        endpoint_health_status,
-        status,
-        review_status,
-        is_internal,
-        pricing_model,
-        pricing_config,
+    optionals = _normalize_register_optional_strings(
+        healthcheck_url=healthcheck_url, output_verifier_url=output_verifier_url,
+        review_note=review_note, reviewed_at=reviewed_at, reviewed_by=reviewed_by,
+        region_locked=region_locked, model_provider=model_provider, model_id=model_id,
     )
-    _scalars.raise_on_err()
-    price = _scalars.value["price"]
-    normalized_health_status = _scalars.value["normalized_health_status"]
-    normalized_status = _scalars.value["normalized_status"]
-    normalized_review_status = _scalars.value["normalized_review_status"]
-    normalized_pricing_model = _scalars.value["normalized_pricing_model"]
-    pricing_config_json = _scalars.value["pricing_config_json"]
-
     created_at = datetime.now(timezone.utc).isoformat()
     normalized_tags = _parse_tags(tags)
     normalized_schema = _parse_input_schema(input_schema)
     normalized_output_schema = _parse_output_schema(output_schema)
-    schema_json = json.dumps(normalized_schema, sort_keys=True)
-    output_schema_json = json.dumps(normalized_output_schema, sort_keys=True)
-    tags_json = json.dumps(normalized_tags)
-    normalized_healthcheck_url = str(healthcheck_url or "").strip() or None
-    normalized_verifier_url = str(output_verifier_url or "").strip() or None
-    if isinstance(output_examples, list):
-        normalized_examples: str | None = (
-            json.dumps([ex for ex in output_examples if isinstance(ex, dict)]) or None
-        )
-    else:
-        normalized_examples = None
-    normalized_verified = 1 if verified else 0
-    normalized_pii_safe = 1 if pii_safe else 0
-    normalized_outputs_not_stored = 1 if outputs_not_stored else 0
-    normalized_audit_logged = 1 if audit_logged else 0
-    normalized_region_locked = str(region_locked or "").strip().lower() or None
-    normalized_cacheable = None if cacheable is None else (1 if cacheable else 0)
     from core import payout_curve as _pc
-
-    try:
-        parsed_curve = _pc.parse_curve(payout_curve)
-    except ValueError as exc:
-        raise ValueError(str(exc))
-    payout_curve_json = _pc.curve_to_json(parsed_curve)
-    normalized_review_note = str(review_note or "").strip() or None
-    normalized_reviewed_at = str(reviewed_at or "").strip() or None
-    normalized_reviewed_by = str(reviewed_by or "").strip() or None
-    normalized_decay_multiplier = _to_non_negative_float(
-        trust_decay_multiplier, default=1.0
+    payout_curve_json = _pc.curve_to_json(_pc.parse_curve(payout_curve))
+    source_text, embedding_vector = _maybe_embed_listing(
+        embed_listing=embed_listing, name=name, description=description,
+        normalized_tags=normalized_tags, normalized_schema=normalized_schema,
     )
-    if normalized_decay_multiplier <= 0:
-        normalized_decay_multiplier = 1.0
-    internal_only_int = 1 if internal_only else 0
-    source_text = ""
-    embedding_vector: list[float] | None = None
-    if embed_listing:
-        source_text = _build_embedding_source_text(
-            name, description, normalized_tags, normalized_schema
-        )
-        embedding_vector = embeddings.embed_text(source_text)
-
-    # Cryptographic identity. Generated up front so the same row insert
-    # carries the DID, public key, and private key. We tolerate failures
-    # (missing ``cryptography`` lib in some test envs) by leaving the
-    # fields NULL — the agent still registers, just without a signing key.
-    agent_did_value: str | None = None
-    private_pem_value: str | None = None
-    public_pem_value: str | None = None
-    signing_keys_created_at: str | None = None
-    try:
-        from core import crypto as _crypto
-        from core.identity import build_agent_did as _build_agent_did
-
-        private_pem_value, public_pem_value = _crypto.generate_signing_keypair()
-        agent_did_value = _build_agent_did(aid)
-        signing_keys_created_at = created_at
-    except Exception:
-        _logger.exception("Failed to generate signing keypair for agent %s", aid)
-
+    agent_did, private_pem, public_pem, signing_keys_created_at = (
+        _generate_signing_keypair_safe(aid, created_at)
+    )
+    params = _build_register_agent_params(
+        aid=aid, normalized_owner_id=normalized_owner_id, name=name,
+        description=description, endpoint_url=endpoint_url, scalars=scalars,
+        optionals=optionals,
+        tags_json=json.dumps(normalized_tags),
+        schema_json=json.dumps(normalized_schema, sort_keys=True),
+        output_schema_json=json.dumps(normalized_output_schema, sort_keys=True),
+        examples_json=_normalize_examples_json(output_examples),
+        verified=verified, internal_only=internal_only, pii_safe=pii_safe,
+        outputs_not_stored=outputs_not_stored, audit_logged=audit_logged,
+        cacheable=cacheable,
+        decay_multiplier=_coerce_decay_multiplier(trust_decay_multiplier),
+        payout_curve_json=payout_curve_json, kind=_normalize_agent_kind(kind),
+        created_at=created_at,
+    )
     with _conn() as conn:
-        valid_kinds = {"aztea_built", "community_skill", "self_hosted"}
-        normalized_kind = str(kind or "self_hosted").strip().lower()
-        if normalized_kind not in valid_kinds:
-            normalized_kind = "self_hosted"
-
-        conn.execute(
-            """
-            INSERT INTO agents
-                (agent_id, owner_id, name, description, endpoint_url, healthcheck_url,
-                 price_per_call_usd, tags, input_schema, output_schema, output_verifier_url,
-                 output_examples, verified, endpoint_health_status, endpoint_consecutive_failures,
-                 endpoint_last_checked_at, endpoint_last_error,
-                 internal_only, status, review_status, review_note, reviewed_at, reviewed_by,
-                 trust_decay_multiplier, last_decay_at, created_at,
-                 model_provider, model_id, pricing_model, pricing_config, kind,
-                 pii_safe, outputs_not_stored, audit_logged, region_locked, payout_curve, cacheable)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                aid,
-                normalized_owner_id,
-                name,
-                description,
-                endpoint_url,
-                normalized_healthcheck_url,
-                price,
-                tags_json,
-                schema_json,
-                output_schema_json,
-                normalized_verifier_url,
-                normalized_examples,
-                normalized_verified,
-                normalized_health_status,
-                internal_only_int,
-                normalized_status,
-                normalized_review_status,
-                normalized_review_note,
-                normalized_reviewed_at,
-                normalized_reviewed_by,
-                normalized_decay_multiplier,
-                created_at,
-                created_at,
-                str(model_provider).strip().lower() if model_provider else None,
-                str(model_id).strip()[:128] if model_id else None,
-                normalized_pricing_model,
-                pricing_config_json,
-                normalized_kind,
-                normalized_pii_safe,
-                normalized_outputs_not_stored,
-                normalized_audit_logged,
-                normalized_region_locked,
-                payout_curve_json,
-                normalized_cacheable,
-            ),
+        _execute_register_agent_insert(
+            conn, params=params, embed_listing=embed_listing, aid=aid,
+            source_text=source_text, embedding_vector=embedding_vector,
+            agent_did=agent_did, private_pem=private_pem, public_pem=public_pem,
+            signing_keys_created_at=signing_keys_created_at,
         )
-        if embed_listing and embedding_vector is not None:
-            _upsert_agent_embedding_row(
-                conn,
-                agent_id=aid,
-                source_text=source_text,
-                embedding_vector=embedding_vector,
-            )
-        if agent_did_value is not None and private_pem_value is not None:
-            try:
-                conn.execute(
-                    """
-                    UPDATE agents
-                    SET did = %s,
-                        signing_public_key = %s,
-                        signing_private_key = %s,
-                        signing_keys_created_at = %s
-                    WHERE agent_id = %s
-                    """,
-                    (
-                        agent_did_value,
-                        public_pem_value,
-                        private_pem_value,
-                        signing_keys_created_at,
-                        aid,
-                    ),
-                )
-            except _db.OperationalError as exc:
-                # Column may not exist on a database that hasn't picked up
-                # migration 0015 yet — log and continue. Backfill on the
-                # next startup will retry.
-                _logger.warning(
-                    "Could not persist signing keypair for agent %s (schema not yet migrated?): %s",
-                    aid,
-                    exc,
-                )
     if embed_listing:
         _invalidate_embeddings_cache()
-
-    # Eagerly create the agent's sub-wallet, linked to its owner's wallet.
-    # ``owner_id`` here is the *human owner* of the agent (a "user:<id>" string
-    # for marketplace agents, or "agent:<id>" for self-owned built-ins). The
-    # agent's payout wallet is keyed by ``"agent:<aid>"``.
-    try:
-        from core import payments as _payments
-
-        parent_wallet_id: str | None = None
-        # Only link to a parent if the agent has a *different* owner than itself.
-        # A self-owned agent (owner_id == "agent:<aid>") has no human parent.
-        if normalized_owner_id and normalized_owner_id != f"agent:{aid}":
-            owner_wallet = _payments.get_or_create_wallet(normalized_owner_id)
-            parent_wallet_id = owner_wallet["wallet_id"]
-        _payments.get_or_create_wallet(
-            f"agent:{aid}",
-            parent_wallet_id=parent_wallet_id,
-            display_label=name[:80] if name else None,
-        )
-    except Exception:
-        # Wallet creation is best-effort at registration time. The job-creation
-        # path also calls ``get_or_create_wallet`` and will recover if this
-        # eager step failed.
-        _logger.exception("failed to eagerly create agent sub-wallet for %s", aid)
-
+    _eagerly_create_agent_wallet(aid, normalized_owner_id, name)
     return aid
 
 
@@ -1435,251 +1515,202 @@ def _agent_block_keywords(agent: dict) -> list[str]:
     return _ROUTING_OVERLAY_BLOCK.get(agent_id, [])
 
 
-def _intent_match_bonus(query: str, agent: dict) -> float:
-    terms = _query_terms(query)
-    if not terms:
-        return 0.0
+# Per-cohort term/agent-token sets. All sets are module-level so they're
+# never recreated per call.
+_SECURITY_TERMS = frozenset({
+    "security", "vulnerability", "vulnerabilities", "cve", "cves",
+    "secret", "secrets", "credential", "credentials", "password",
+    "passwords", "hardcoded", "npm", "package", "dependency",
+    "dependencies", "audit",
+})
+_SECRET_QUERY_TERMS = frozenset({
+    "secret", "secrets", "credential", "credentials",
+    "password", "passwords", "hardcoded",
+})
+_VULN_QUERY_TERMS = frozenset({
+    "vulnerability", "vulnerabilities", "audit", "dependency",
+    "dependencies", "package", "npm",
+})
+_VULN_AGENT_TOKENS = (
+    "dependency", "dependencies", "audit", "package", "npm", "license",
+)
+_REVIEW_TERMS = frozenset(
+    {"review", "reviewer", "diff", "patch", "bugs", "bug", "correctness"}
+)
+_BROWSER_TERMS = frozenset(
+    {"browser", "screenshot", "screenshots", "playwright", "render", "homepage"}
+)
+_VISUAL_COMPARE_TERMS = frozenset(
+    {"compare", "diff", "difference", "regression", "baseline", "before", "after"}
+)
+_IMAGE_TERMS = frozenset(
+    {"image", "generate", "generation", "dall", "replicate", "picture"}
+)
+# "render" lives ONLY in web-render terms — placing it under image_terms
+# inflated visual_regression on "render this webpage" since its description
+# contains "image". Web rendering and image generation share zero overlap
+# in this catalog.
+_WEB_RENDER_TERMS = frozenset({
+    "render", "renders", "rendered", "webpage", "web-page",
+    "site", "url", "scrape", "crawl",
+})
+_FINANCE_TERMS = frozenset(
+    {"edgar", "10-k", "10q", "10-q", "sec", "filing", "revenue"}
+)
+_RED_TEAM_TERMS = frozenset(
+    {"red", "redteam", "red-teamer", "adversarial", "jailbreak", "prompt"}
+)
+_SBOM_TERMS = frozenset({"sbom", "license", "licenses", "open", "source"})
+_EXECUTION_TERMS = frozenset(
+    {"run", "execute", "python", "sandbox", "disk", "write", "filesystem", "jwt", "decode"}
+)
+_PAGE_SCREENSHOT_TERMS = frozenset({"screenshot", "screenshots", "homepage"})
+_BROWSER_AGENT_TOKENS = ("browser", "playwright", "headless", "chromium")
+_VR_AGENT_TOKENS = ("visual regression", "pixel-level diff")
 
-    name = str(agent.get("name") or "").lower()
-    description = str(agent.get("description") or "").lower()
-    tags = {str(tag).strip().lower() for tag in _parse_tags(agent.get("tags"))}
-    combined = " ".join([name, description, " ".join(sorted(tags))])
-    lowered_query = str(query or "").lower()
+_INTENT_BONUS_MIN = -0.35
+_INTENT_BONUS_MAX = 0.70
+
+
+def _curated_keyword_bonus(agent: dict, lowered_query: str) -> float:
+    """Pure: curated match/block keyword bonuses — the strongest discovery signal."""
     bonus = 0.0
-
-    # Curated match_keywords are the single strongest discovery signal —
-    # they encode "if the query mentions X, this is the right agent" in
-    # plain language. Each hit adds 0.20 (capped at 0.60) to the bonus,
-    # which the blended score then weighs alongside lexical+semantic.
     match_kws = _agent_match_keywords(agent)
     if match_kws:
         kw_hits = sum(1 for kw in match_kws if kw in lowered_query)
         if kw_hits:
             bonus += min(0.60, kw_hits * 0.20)
-
-    # block_keywords pull the agent down so it doesn't grab the slot it
-    # shouldn't. Example: json_schema_validator must not match
-    # "package.json vulnerabilities" — the schema validator has no CVE data.
     block_kws = _agent_block_keywords(agent)
     if block_kws:
         block_hits = sum(1 for kw in block_kws if kw in lowered_query)
         if block_hits:
             bonus -= min(0.50, block_hits * 0.25)
+    return bonus
 
-    security_terms = {
-        "security",
-        "vulnerability",
-        "vulnerabilities",
-        "cve",
-        "cves",
-        "secret",
-        "secrets",
-        "credential",
-        "credentials",
-        "password",
-        "passwords",
-        "hardcoded",
-        "npm",
-        "package",
-        "dependency",
-        "dependencies",
-        "audit",
-    }
-    review_terms = {"review", "reviewer", "diff", "patch", "bugs", "bug", "correctness"}
-    browser_terms = {
-        "browser",
-        "screenshot",
-        "screenshots",
-        "playwright",
-        "render",
-        "homepage",
-    }
-    visual_compare_terms = {
-        "compare",
-        "diff",
-        "difference",
-        "regression",
-        "baseline",
-        "before",
-        "after",
-    }
-    image_terms = {
-        "image",
-        "generate",
-        "generation",
-        "dall",
-        "replicate",
-        "picture",
-    }
-    # "render" used to live in image_terms, but the 2026-05-08 eval found that
-    # "render this webpage" matched image_terms (visual_regression description
-    # contains "image"), inflating its blended score above browser_agent. Web
-    # rendering and image generation share zero overlap in this catalog, so
-    # bonus the browser path explicitly without overloading the image path.
-    web_render_terms = {
-        "render",
-        "renders",
-        "rendered",
-        "webpage",
-        "web-page",
-        "site",
-        "url",
-        "scrape",
-        "crawl",
-    }
-    finance_terms = {"edgar", "10-k", "10q", "10-q", "sec", "filing", "revenue"}
-    red_team_terms = {
-        "red",
-        "redteam",
-        "red-teamer",
-        "adversarial",
-        "jailbreak",
-        "prompt",
-    }
-    sbom_terms = {"sbom", "license", "licenses", "open", "source"}
-    execution_terms = {
-        "run",
-        "execute",
-        "python",
-        "sandbox",
-        "disk",
-        "write",
-        "filesystem",
-        "jwt",
-        "decode",
-    }
 
-    if security_terms & set(terms):
-        if {
-            "secret",
-            "secrets",
-            "credential",
-            "credentials",
-            "password",
-            "passwords",
-            "hardcoded",
-        } & set(terms):
-            if any(
-                token in combined
-                for token in ("secret", "credential", "password", "token")
-            ):
-                bonus += 0.40
-            elif any(token in combined for token in ("cve", "nvd", "osv")):
-                bonus -= 0.20
-        if {"cve", "cves"} & set(terms) and any(
-            token in combined for token in ("cve", "nvd", "osv")
+def _security_cohort_bonus(terms_set: set[str], combined: str) -> float:
+    """Pure: security/CVE/secret/dependency cohort bonuses."""
+    if not (_SECURITY_TERMS & terms_set):
+        return 0.0
+    bonus = 0.0
+    if _SECRET_QUERY_TERMS & terms_set:
+        if any(t in combined for t in ("secret", "credential", "password", "token")):
+            bonus += 0.40
+        elif any(t in combined for t in ("cve", "nvd", "osv")):
+            bonus -= 0.20
+    if {"cve", "cves"} & terms_set and any(
+        t in combined for t in ("cve", "nvd", "osv")
+    ):
+        bonus += 0.30
+    if _VULN_QUERY_TERMS & terms_set and any(t in combined for t in _VULN_AGENT_TOKENS):
+        bonus += 0.25
+    return bonus
+
+
+def _review_cohort_bonus(terms_set: set[str], combined: str) -> float:
+    """Pure: code-review cohort; mild penalty when query routes at lint/typecheck instead."""
+    if not (_REVIEW_TERMS & terms_set):
+        return 0.0
+    bonus = 0.0
+    if any(t in combined for t in
+           ("code review", "review", "diff", "correctness", "maintainability")):
+        bonus += 0.20
+    if any(t in combined for t in ("linter", "ruff", "eslint", "type checker", "mypy")):
+        bonus -= 0.05
+    return bonus
+
+
+def _browser_cohort_bonus(terms_set: set[str], combined: str) -> float:
+    """Pure: browser/web-render cohort. Page-screenshot or render intents must beat VR."""
+    if not (_BROWSER_TERMS & terms_set or _WEB_RENDER_TERMS & terms_set):
+        return 0.0
+    visual_compare = bool(_VISUAL_COMPARE_TERMS & terms_set)
+    wants_page_screenshot = bool(_PAGE_SCREENSHOT_TERMS & terms_set and not visual_compare)
+    wants_web_render = bool(_WEB_RENDER_TERMS & terms_set and not visual_compare)
+    if (wants_page_screenshot or wants_web_render) and any(
+        t in combined for t in _BROWSER_AGENT_TOKENS
+    ):
+        return 0.65  # Strong page-fetch signal: must dominate VR's "image" lexical hit.
+    if (wants_page_screenshot or wants_web_render) and any(
+        t in combined for t in _VR_AGENT_TOKENS
+    ):
+        return -0.35  # Same intent class routed at the wrong agent.
+    if any(t in combined for t in ("browser", "playwright", "screenshot", "headless")):
+        return 0.35
+    if "secret" in combined or "code review" in combined:
+        return -0.20
+    return 0.0
+
+
+def _visual_compare_cohort_bonus(terms_set: set[str], combined: str) -> float:
+    """Pure: pixel-diff / visual-regression cohort."""
+    if not (_VISUAL_COMPARE_TERMS & terms_set):
+        return 0.0
+    if any(t in combined for t in
+           ("visual regression", "pixel-level diff", "compare two screenshots")):
+        return 0.45
+    if "browser" in combined:
+        return -0.10
+    return 0.0
+
+
+def _other_cohort_bonuses(terms_set: set[str], combined: str) -> float:
+    """Pure: image / finance / red-team / SBOM / execution cohort bonuses."""
+    bonus = 0.0
+    if _IMAGE_TERMS & terms_set:
+        if any(t in combined for t in ("image", "generation", "replicate", "gpt-image")):
+            bonus += 0.35
+        elif any(t in combined for t in ("arxiv", "code review", "secret")):
+            bonus -= 0.20
+    if _FINANCE_TERMS & terms_set and any(
+        t in combined for t in ("edgar", "sec", "10-k", "financial")
+    ):
+        bonus += 0.35
+    if _RED_TEAM_TERMS & terms_set and any(
+        t in combined for t in ("red team", "adversarial", "jailbreak")
+    ):
+        bonus += 0.35
+    if _SBOM_TERMS & terms_set and any(
+        t in combined for t in ("dependency", "license", "audit", "package")
+    ):
+        bonus += 0.25
+    if _EXECUTION_TERMS & terms_set:
+        if {"jwt", "decode"} & terms_set and any(
+            t in combined for t in ("python", "execute", "sandbox")
+        ):
+            bonus += 0.35
+        if {"disk", "write", "filesystem"} & terms_set and any(
+            t in combined for t in ("python", "sandbox", "execute", "code")
         ):
             bonus += 0.30
-        if {
-            "vulnerability",
-            "vulnerabilities",
-            "audit",
-            "dependency",
-            "dependencies",
-            "package",
-            "npm",
-        } & set(terms):
-            if any(
-                token in combined
-                for token in (
-                    "dependency",
-                    "dependencies",
-                    "audit",
-                    "package",
-                    "npm",
-                    "license",
-                )
-            ):
-                bonus += 0.25
+    return bonus
 
-    if review_terms & set(terms):
-        if any(
-            token in combined
-            for token in (
-                "code review",
-                "review",
-                "diff",
-                "correctness",
-                "maintainability",
-            )
-        ):
-            bonus += 0.20
-        if any(
-            token in combined
-            for token in ("linter", "ruff", "eslint", "type checker", "mypy")
-        ):
-            bonus -= 0.05
 
-    if browser_terms & set(terms) or web_render_terms & set(terms):
-        wants_page_screenshot = bool(
-            {"screenshot", "screenshots", "homepage"} & set(terms)
-            and not (visual_compare_terms & set(terms))
-        )
-        wants_web_render = bool(
-            web_render_terms & set(terms)
-            and not (visual_compare_terms & set(terms))
-        )
-        if (wants_page_screenshot or wants_web_render) and any(
-            token in combined for token in ("browser", "playwright", "headless", "chromium")
-        ):
-            # Strong page-fetch signal: render/scrape/screenshot a real URL.
-            # Browser Agent must dominate Visual Regression here regardless of
-            # the "image" lexical match VR catches via "compare two images".
-            bonus += 0.65
-        elif (wants_page_screenshot or wants_web_render) and any(
-            token in combined for token in ("visual regression", "pixel-level diff")
-        ):
-            # Same intent class but routed at the wrong agent — push it down.
-            bonus -= 0.35
-        elif any(
-            token in combined
-            for token in ("browser", "playwright", "screenshot", "headless")
-        ):
-            bonus += 0.35
-        elif "secret" in combined or "code review" in combined:
-            bonus -= 0.20
-    if visual_compare_terms & set(terms):
-        if any(
-            token in combined
-            for token in (
-                "visual regression",
-                "pixel-level diff",
-                "compare two screenshots",
-            )
-        ):
-            bonus += 0.45
-        elif "browser" in combined:
-            bonus -= 0.10
-    if image_terms & set(terms):
-        if any(
-            token in combined
-            for token in ("image", "generation", "replicate", "gpt-image")
-        ):
-            bonus += 0.35
-        elif any(token in combined for token in ("arxiv", "code review", "secret")):
-            bonus -= 0.20
-    if finance_terms & set(terms):
-        if any(token in combined for token in ("edgar", "sec", "10-k", "financial")):
-            bonus += 0.35
-    if red_team_terms & set(terms):
-        if any(token in combined for token in ("red team", "adversarial", "jailbreak")):
-            bonus += 0.35
-    if sbom_terms & set(terms):
-        if any(
-            token in combined for token in ("dependency", "license", "audit", "package")
-        ):
-            bonus += 0.25
-    if execution_terms & set(terms):
-        if {"jwt", "decode"} & set(terms) and any(
-            token in combined for token in ("python", "execute", "sandbox")
-        ):
-            bonus += 0.35
-        if {"disk", "write", "filesystem"} & set(terms) and any(
-            token in combined for token in ("python", "sandbox", "execute", "code")
-        ):
-            bonus += 0.30
+def _intent_match_bonus(query: str, agent: dict) -> float:
+    """Pure: cohort-aware bonus on top of lexical/semantic search.
 
-    return max(-0.35, min(0.70, bonus))
+    Why: each cohort encodes "if the query is about X, this kind of agent
+    is the right answer" — bonuses are clamped so a single cohort can't
+    monopolise the blended score.
+    """
+    terms = _query_terms(query)
+    if not terms:
+        return 0.0
+    name = str(agent.get("name") or "").lower()
+    description = str(agent.get("description") or "").lower()
+    tags = {str(tag).strip().lower() for tag in _parse_tags(agent.get("tags"))}
+    combined = " ".join([name, description, " ".join(sorted(tags))])
+    lowered_query = str(query or "").lower()
+    terms_set = set(terms)
+    bonus = (
+        _curated_keyword_bonus(agent, lowered_query)
+        + _security_cohort_bonus(terms_set, combined)
+        + _review_cohort_bonus(terms_set, combined)
+        + _browser_cohort_bonus(terms_set, combined)
+        + _visual_compare_cohort_bonus(terms_set, combined)
+        + _other_cohort_bonuses(terms_set, combined)
+    )
+    return max(_INTENT_BONUS_MIN, min(_INTENT_BONUS_MAX, bonus))
 
 
 def _price_query_mode(query: str) -> str | None:
