@@ -1814,6 +1814,311 @@ def _llm_rerank_candidates(
     return candidates
 
 
+_SEARCH_AGENT_KINDS = frozenset({"aztea_built", "community_skill", "self_hosted"})
+
+# Price-mode blend weights (cheapest / most_expensive) — sum to 1.0; price
+# dominates because the caller's intent is "I want the cheapest agent".
+_PRICE_MODE_PRICE_WEIGHT = 0.62
+_PRICE_MODE_LEXICAL_WEIGHT = 0.16
+_PRICE_MODE_SEMANTIC_WEIGHT = 0.08
+_PRICE_MODE_TRUST_WEIGHT = 0.09
+_PRICE_MODE_INTENT_WEIGHT = 0.05
+
+
+def _validate_search_inputs(
+    query: str, limit: int, max_price_cents: int | None,
+) -> str:
+    """Pure: trim + expand the query and reject malformed numeric bounds."""
+    normalized_query = _expand_search_query(str(query or "").strip())
+    if not normalized_query:
+        raise ValueError("query must be a non-empty string.")
+    if limit < 1:
+        raise ValueError("limit must be >= 1.")
+    if max_price_cents is not None and max_price_cents < 0:
+        raise ValueError("max_price_cents must be >= 0 when provided.")
+    return normalized_query
+
+
+def _normalize_search_filters(
+    *, model_provider: str | None, kind: str | None,
+    region_locked: str | None, min_trust: float,
+    caller_trust: float | None, required_input_fields: list[str] | None,
+) -> dict[str, Any]:
+    """Pure: shape every search filter into its canonical form."""
+    normalized_kind = str(kind or "").strip().lower() or None
+    if normalized_kind and normalized_kind not in _SEARCH_AGENT_KINDS:
+        normalized_kind = None
+    return {
+        "model_provider": str(model_provider or "").strip().lower() or None,
+        "kind": normalized_kind,
+        "region_locked": str(region_locked or "").strip().lower() or None,
+        "trust_floor": _normalize_min_trust(min_trust),
+        "caller_trust": (
+            _normalize_min_trust(caller_trust) if caller_trust is not None else None
+        ),
+        "required_fields": _required_input_fields_set(required_input_fields),
+    }
+
+
+def _agent_matches_filters(
+    agent: dict, filters: dict[str, Any], *,
+    pii_safe: bool | None, outputs_not_stored: bool | None,
+    audit_logged: bool | None, max_price_cents: int | None,
+) -> tuple[bool, int, set[str], float | None]:
+    """Pure: True when ``agent`` clears every static filter; returns price/fields/trust-min for reuse."""
+    if filters["model_provider"] and agent.get("model_provider") != filters["model_provider"]:
+        return False, 0, set(), None
+    if filters["kind"] and agent.get("kind") != filters["kind"]:
+        return False, 0, set(), None
+    if pii_safe is not None and bool(agent.get("pii_safe")) != pii_safe:
+        return False, 0, set(), None
+    if outputs_not_stored is not None and bool(agent.get("outputs_not_stored")) != outputs_not_stored:
+        return False, 0, set(), None
+    if audit_logged is not None and bool(agent.get("audit_logged")) != audit_logged:
+        return False, 0, set(), None
+    if (
+        filters["region_locked"]
+        and str(agent.get("region_locked") or "").strip().lower() != filters["region_locked"]
+    ):
+        return False, 0, set(), None
+    price_cents = _price_usd_to_cents(agent.get("price_per_call_usd"))
+    if max_price_cents is not None and price_cents > max_price_cents:
+        return False, 0, set(), None
+    schema = _parse_input_schema(agent.get("input_schema"))
+    supported_fields = _input_schema_field_names(schema)
+    caller_trust_min = _input_schema_caller_trust_min(schema)
+    if filters["required_fields"] and not filters["required_fields"].issubset(supported_fields):
+        return False, 0, set(), None
+    if (
+        filters["caller_trust"] is not None
+        and caller_trust_min is not None
+        and filters["caller_trust"] < caller_trust_min
+    ):
+        return False, 0, set(), None
+    if _normalize_trust_score(agent.get("trust_score")) < filters["trust_floor"]:
+        return False, 0, set(), None
+    return True, price_cents, supported_fields, caller_trust_min
+
+
+def _semantic_similarity_for(
+    agent_id: str, agent: dict,
+    query_vector: np.ndarray | None,
+    vectors_by_agent: dict[str, np.ndarray],
+    missing_embeddings: list[tuple[str, str, list[float]]],
+) -> float:
+    """Side-effect: cosine sim against query; backfills the embeddings cache when missing."""
+    if query_vector is None:
+        return 0.0
+    vector = vectors_by_agent.get(agent_id)
+    if vector is None:
+        source_text = _embedding_source_from_agent(agent)
+        vector_list = embeddings.embed_text(source_text)
+        vector = np.asarray(vector_list, dtype=np.float32)
+        vectors_by_agent[agent_id] = vector
+        missing_embeddings.append((agent_id, source_text, vector_list))
+    similarity = float(embeddings.cosine(query_vector, vector))
+    return max(0.0, min(1.0, similarity))
+
+
+def _build_candidates(
+    agents: list[dict], normalized_query: str, filters: dict[str, Any], *,
+    pii_safe: bool | None, outputs_not_stored: bool | None,
+    audit_logged: bool | None, max_price_cents: int | None,
+    embeddings_enabled: bool, query_vector: np.ndarray | None,
+    vectors_by_agent: dict[str, np.ndarray],
+    missing_embeddings: list[tuple[str, str, list[float]]],
+) -> list[dict]:
+    """Side-effect: filter agents and score each as a search candidate."""
+    candidates: list[dict] = []
+    for agent in agents:
+        agent_id = str(agent.get("agent_id") or "").strip()
+        if not agent_id:
+            continue
+        ok, price_cents, supported_fields, caller_trust_min = _agent_matches_filters(
+            agent, filters,
+            pii_safe=pii_safe, outputs_not_stored=outputs_not_stored,
+            audit_logged=audit_logged, max_price_cents=max_price_cents,
+        )
+        if not ok:
+            continue
+        semantic_similarity = (
+            _semantic_similarity_for(
+                agent_id, agent, query_vector, vectors_by_agent, missing_embeddings,
+            ) if embeddings_enabled else 0.0
+        )
+        candidates.append({
+            "agent": agent,
+            "similarity": semantic_similarity,
+            "lexical_score": _lexical_match_score(normalized_query, agent, supported_fields),
+            "intent_bonus": _intent_match_bonus(normalized_query, agent),
+            "trust": _normalize_trust_score(agent.get("trust_score")),
+            "price_cents": price_cents,
+            "supported_fields": supported_fields,
+            "caller_trust_min": caller_trust_min,
+        })
+    return candidates
+
+
+def _persist_missing_embeddings(
+    missing_embeddings: list[tuple[str, str, list[float]]],
+) -> None:
+    """Side-effect: persist newly-computed embeddings; invalidate cache on any change."""
+    if not missing_embeddings:
+        return
+    with _conn() as conn:
+        changed = any(
+            _upsert_agent_embedding_row(
+                conn, agent_id=agent_id,
+                source_text=source_text, embedding_vector=vector_list,
+            )
+            for agent_id, source_text, vector_list in missing_embeddings
+        )
+    if changed:
+        _invalidate_embeddings_cache()
+
+
+def _compute_inverse_price(
+    candidate: dict, min_price: int, max_price: int,
+) -> float:
+    """Pure: 1.0 when only one price exists, otherwise normalised inverse in [0, 1]."""
+    if max_price == min_price:
+        return 1.0
+    normalized_price = (candidate["price_cents"] - min_price) / (max_price - min_price)
+    return 1.0 - normalized_price
+
+
+def _blend_score(
+    candidate: dict, *, inverse_price: float, price_query_mode: str | None,
+    embeddings_enabled: bool,
+) -> float:
+    """Pure: combine lexical/semantic/trust/price/intent into a single ranked score."""
+    if price_query_mode is not None:
+        price_intent_score = (
+            1.0 - inverse_price if price_query_mode == "most_expensive" else inverse_price
+        )
+        semantic_component = candidate["similarity"] if embeddings_enabled else 0.0
+        return (
+            _PRICE_MODE_PRICE_WEIGHT * price_intent_score
+            + _PRICE_MODE_LEXICAL_WEIGHT * candidate["lexical_score"]
+            + _PRICE_MODE_SEMANTIC_WEIGHT * semantic_component
+            + _PRICE_MODE_TRUST_WEIGHT * candidate["trust"]
+            + _PRICE_MODE_INTENT_WEIGHT * max(0.0, min(1.0, candidate["intent_bonus"]))
+        )
+    if embeddings_enabled:
+        return (
+            LEXICAL_SCORE_WEIGHT * candidate["lexical_score"]
+            + SEMANTIC_SCORE_WEIGHT * candidate["similarity"]
+            + TRUST_SCORE_WEIGHT_HYBRID * candidate["trust"]
+            + INVERSE_PRICE_WEIGHT_HYBRID * inverse_price
+            + candidate["intent_bonus"]
+        )
+    # Embeddings disabled: lexical match becomes the primary routing signal so
+    # trust/price don't dominate weak text search.
+    remaining_weight = 1.0 - LEXICAL_SCORE_WEIGHT
+    total_remaining = TRUST_SCORE_WEIGHT_HYBRID + INVERSE_PRICE_WEIGHT_HYBRID
+    return (
+        LEXICAL_SCORE_WEIGHT * candidate["lexical_score"]
+        + (remaining_weight * (TRUST_SCORE_WEIGHT_HYBRID / total_remaining)) * candidate["trust"]
+        + (remaining_weight * (INVERSE_PRICE_WEIGHT_HYBRID / total_remaining)) * inverse_price
+        + candidate["intent_bonus"]
+    )
+
+
+def _annotate_blended_scores(
+    candidates: list[dict], *, normalized_query: str,
+    price_query_mode: str | None, embeddings_enabled: bool,
+    required_fields: set[str], normalized_caller_trust: float | None,
+) -> None:
+    """Side-effect (mutating ``candidates``): write ``blended_score`` and ``match_reasons``."""
+    price_values = [c["price_cents"] for c in candidates]
+    min_price, max_price = min(price_values), max(price_values)
+    for candidate in candidates:
+        inverse_price = _compute_inverse_price(candidate, min_price, max_price)
+        candidate["blended_score"] = _blend_score(
+            candidate, inverse_price=inverse_price,
+            price_query_mode=price_query_mode, embeddings_enabled=embeddings_enabled,
+        )
+        candidate["match_reasons"] = _match_reasons(
+            candidate["agent"], normalized_query, candidate["trust"],
+            required_fields, candidate["supported_fields"],
+            normalized_caller_trust, candidate["caller_trust_min"],
+        )
+        if price_query_mode == "cheapest":
+            candidate["match_reasons"].append("ranked by lowest caller price")
+        elif price_query_mode == "most_expensive":
+            candidate["match_reasons"].append("ranked by highest caller price")
+
+
+def _sort_candidates(
+    candidates: list[dict], price_query_mode: str | None,
+) -> list[dict]:
+    """Pure: order candidates by mode-specific tie-breakers.
+
+    Why: in 'most_expensive' mode, every agent at the top price must be
+    a tied #1 — sorting by price first prevents lexical noise from
+    arbitrarily selecting one of three tied agents at $0.03.
+    """
+    if price_query_mode == "most_expensive":
+        return sorted(candidates, key=lambda i: (
+            -i["price_cents"], i["blended_score"], i["similarity"], i["trust"],
+        ))
+    if price_query_mode == "cheapest":
+        return sorted(candidates, key=lambda i: (
+            i["price_cents"], -i["blended_score"], -i["similarity"], -i["trust"],
+        ))
+    return sorted(candidates, key=lambda i: (
+        i["blended_score"], i["similarity"], i["trust"], -i["price_cents"],
+    ), reverse=True)
+
+
+def _is_off_catalog_query(normalized_query: str) -> bool:
+    """Pure: True when the query unambiguously asks for a capability we don't have."""
+    query_token_set = set(_query_terms(normalized_query))
+    if not query_token_set:
+        return False
+    for _description, predicate in _OFF_CATALOG_PATTERNS:
+        try:
+            if predicate(query_token_set):
+                return True
+        except Exception:  # noqa: BLE001 — predicates must never crash search
+            continue
+    return False
+
+
+def _maybe_llm_rerank(
+    ranked: list[dict], normalized_query: str, price_query_mode: str | None,
+) -> list[dict]:
+    """Side-effect: optional LLM re-rank stage; gated off by default and never blocks search."""
+    if not (ranked and price_query_mode is None
+            and _feature_flags.search_llm_rerank_enabled()):
+        return ranked
+    try:
+        return _llm_rerank_candidates(normalized_query, ranked)
+    except Exception:  # noqa: BLE001 — re-rank must never block search
+        return ranked
+
+
+def _apply_relevance_floor(ranked: list[dict]) -> list[dict]:
+    """Pure-ish: drop low-relevance candidates so callers don't get mediocre matches.
+
+    Why: returning weak distractors is worse than returning empty —
+    empty signals "use a different query" while distractors create
+    false confidence in low-relevance results.
+    """
+    if not ranked:
+        return ranked
+    top_score = ranked[0]["blended_score"]
+    floor = _feature_flags.search_relevance_floor()
+    keep = _feature_flags.search_keep_floor()
+    band = _feature_flags.search_dropoff_band()
+    if top_score < floor:
+        return []
+    return [
+        item for item in ranked
+        if item["blended_score"] >= keep or item["blended_score"] >= top_score - band
+    ]
+
+
 def search_agents(
     query: str,
     limit: int = 10,
@@ -1829,308 +2134,51 @@ def search_agents(
     audit_logged: bool | None = None,
     region_locked: str | None = None,
 ) -> list[dict]:
-    """Search the agent registry by keyword + embedding similarity with optional filters.
+    """Side-effect: search the agent registry by keyword + embedding similarity with optional filters.
 
-    Falls back to keyword-only search when no embedding model is available.
-    Filters: ``min_trust``, ``max_price_cents``, ``pii_safe``, ``kind``, etc.
-    Returns up to ``limit`` agents ranked by combined keyword + semantic score.
+    Why: blended scoring (lexical + semantic + trust + price + intent
+    bonuses) plus a relevance floor prevents weak distractors from
+    appearing as #1 when nothing in the catalog actually fits the query.
     """
-    normalized_query = _expand_search_query(str(query or "").strip())
-    if not normalized_query:
-        raise ValueError("query must be a non-empty string.")
-    if limit < 1:
-        raise ValueError("limit must be >= 1.")
-    if max_price_cents is not None and max_price_cents < 0:
-        raise ValueError("max_price_cents must be >= 0 when provided.")
-    normalized_model_provider = str(model_provider or "").strip().lower() or None
-    valid_kinds = {"aztea_built", "community_skill", "self_hosted"}
-    normalized_kind = str(kind or "").strip().lower() or None
-    if normalized_kind and normalized_kind not in valid_kinds:
-        normalized_kind = None
-    normalized_region_locked = str(region_locked or "").strip().lower() or None
-
-    trust_floor = _normalize_min_trust(min_trust)
-    normalized_caller_trust = None
-    if caller_trust is not None:
-        normalized_caller_trust = _normalize_min_trust(caller_trust)
-    required_fields = _required_input_fields_set(required_input_fields)
-    price_query_mode = _price_query_mode(normalized_query)
-    # Skip embedding computation when disabled; the semantic weight is
-    # redistributed to trust and price in the blending step below.
-    _embeddings_enabled = not _feature_flags.DISABLE_EMBEDDINGS
-    query_vector: np.ndarray | None = None
-    if _embeddings_enabled:
-        query_vector = np.asarray(
-            embeddings.embed_text(normalized_query), dtype=np.float32
-        )
-    agents = get_agents_with_reputation(include_unapproved=include_unapproved)
-    vectors_by_agent = _load_embeddings_for_agents(
-        {
-            str(agent.get("agent_id") or "").strip()
-            for agent in agents
-            if str(agent.get("agent_id") or "").strip()
-        }
+    normalized_query = _validate_search_inputs(query, limit, max_price_cents)
+    filters = _normalize_search_filters(
+        model_provider=model_provider, kind=kind, region_locked=region_locked,
+        min_trust=min_trust, caller_trust=caller_trust,
+        required_input_fields=required_input_fields,
     )
-
+    price_query_mode = _price_query_mode(normalized_query)
+    embeddings_enabled = not _feature_flags.DISABLE_EMBEDDINGS
+    query_vector: np.ndarray | None = (
+        np.asarray(embeddings.embed_text(normalized_query), dtype=np.float32)
+        if embeddings_enabled else None
+    )
+    agents = get_agents_with_reputation(include_unapproved=include_unapproved)
+    vectors_by_agent = _load_embeddings_for_agents({
+        str(a.get("agent_id") or "").strip()
+        for a in agents
+        if str(a.get("agent_id") or "").strip()
+    })
     missing_embeddings: list[tuple[str, str, list[float]]] = []
-    candidates: list[dict] = []
-
-    for agent in agents:
-        agent_id = str(agent.get("agent_id") or "").strip()
-        if not agent_id:
-            continue
-
-        if (
-            normalized_model_provider
-            and agent.get("model_provider") != normalized_model_provider
-        ):
-            continue
-
-        if normalized_kind and agent.get("kind") != normalized_kind:
-            continue
-        if pii_safe is not None and bool(agent.get("pii_safe")) != pii_safe:
-            continue
-        if (
-            outputs_not_stored is not None
-            and bool(agent.get("outputs_not_stored")) != outputs_not_stored
-        ):
-            continue
-        if audit_logged is not None and bool(agent.get("audit_logged")) != audit_logged:
-            continue
-        if (
-            normalized_region_locked
-            and str(agent.get("region_locked") or "").strip().lower()
-            != normalized_region_locked
-        ):
-            continue
-
-        price_cents = _price_usd_to_cents(agent.get("price_per_call_usd"))
-        if max_price_cents is not None and price_cents > max_price_cents:
-            continue
-
-        schema = _parse_input_schema(agent.get("input_schema"))
-        supported_fields = _input_schema_field_names(schema)
-        caller_trust_min = _input_schema_caller_trust_min(schema)
-        if required_fields and not required_fields.issubset(supported_fields):
-            continue
-        if (
-            normalized_caller_trust is not None
-            and caller_trust_min is not None
-            and normalized_caller_trust < caller_trust_min
-        ):
-            continue
-
-        trust = _normalize_trust_score(agent.get("trust_score"))
-        if trust < trust_floor:
-            continue
-
-        semantic_similarity = 0.0
-        if _embeddings_enabled and query_vector is not None:
-            vector = vectors_by_agent.get(agent_id)
-            if vector is None:
-                source_text = _embedding_source_from_agent(agent)
-                vector_list = embeddings.embed_text(source_text)
-                vector = np.asarray(vector_list, dtype=np.float32)
-                vectors_by_agent[agent_id] = vector
-                missing_embeddings.append((agent_id, source_text, vector_list))
-            similarity = float(embeddings.cosine(query_vector, vector))
-            semantic_similarity = max(0.0, min(1.0, similarity))
-        lexical_score = _lexical_match_score(
-            normalized_query,
-            agent,
-            supported_fields,
-        )
-        intent_bonus = _intent_match_bonus(normalized_query, agent)
-        candidates.append(
-            {
-                "agent": agent,
-                "similarity": semantic_similarity,  # 0.0 when embeddings disabled
-                "lexical_score": lexical_score,
-                "intent_bonus": intent_bonus,
-                "trust": trust,
-                "price_cents": price_cents,
-                "supported_fields": supported_fields,
-                "caller_trust_min": caller_trust_min,
-            }
-        )
-
-    if missing_embeddings:
-        with _conn() as conn:
-            changed = False
-            for agent_id, source_text, vector_list in missing_embeddings:
-                if _upsert_agent_embedding_row(
-                    conn,
-                    agent_id=agent_id,
-                    source_text=source_text,
-                    embedding_vector=vector_list,
-                ):
-                    changed = True
-        if changed:
-            _invalidate_embeddings_cache()
-
+    candidates = _build_candidates(
+        agents, normalized_query, filters,
+        pii_safe=pii_safe, outputs_not_stored=outputs_not_stored,
+        audit_logged=audit_logged, max_price_cents=max_price_cents,
+        embeddings_enabled=embeddings_enabled, query_vector=query_vector,
+        vectors_by_agent=vectors_by_agent, missing_embeddings=missing_embeddings,
+    )
+    _persist_missing_embeddings(missing_embeddings)
     if not candidates:
         return []
-
-    price_values = [c["price_cents"] for c in candidates]
-    min_price = min(price_values)
-    max_price = max(price_values)
-
-    for candidate in candidates:
-        if max_price == min_price:
-            inverse_price = 1.0
-        else:
-            normalized_price = (candidate["price_cents"] - min_price) / (
-                max_price - min_price
-            )
-            inverse_price = 1.0 - normalized_price
-
-        price_intent_score = inverse_price
-        if price_query_mode == "most_expensive":
-            price_intent_score = 1.0 - inverse_price
-
-        if price_query_mode is not None:
-            semantic_component = candidate["similarity"] if _embeddings_enabled else 0.0
-            blended_score = (
-                0.62 * price_intent_score
-                + 0.16 * candidate["lexical_score"]
-                + 0.08 * semantic_component
-                + 0.09 * candidate["trust"]
-                + 0.05 * max(0.0, min(1.0, candidate["intent_bonus"]))
-            )
-        elif _embeddings_enabled:
-            blended_score = (
-                LEXICAL_SCORE_WEIGHT * candidate["lexical_score"]
-                + SEMANTIC_SCORE_WEIGHT * candidate["similarity"]
-                + TRUST_SCORE_WEIGHT_HYBRID * candidate["trust"]
-                + INVERSE_PRICE_WEIGHT_HYBRID * inverse_price
-                + candidate["intent_bonus"]
-            )
-        else:
-            # Embeddings disabled: lexical matching becomes the primary routing
-            # signal instead of letting trust/price dominate weak text search.
-            remaining_weight = 1.0 - LEXICAL_SCORE_WEIGHT
-            total_remaining = TRUST_SCORE_WEIGHT_HYBRID + INVERSE_PRICE_WEIGHT_HYBRID
-            blended_score = (
-                LEXICAL_SCORE_WEIGHT * candidate["lexical_score"]
-                + (remaining_weight * (TRUST_SCORE_WEIGHT_HYBRID / total_remaining))
-                * candidate["trust"]
-                + (remaining_weight * (INVERSE_PRICE_WEIGHT_HYBRID / total_remaining))
-                * inverse_price
-                + candidate["intent_bonus"]
-            )
-        candidate["blended_score"] = blended_score
-        candidate["match_reasons"] = _match_reasons(
-            candidate["agent"],
-            normalized_query,
-            candidate["trust"],
-            required_fields,
-            candidate["supported_fields"],
-            normalized_caller_trust,
-            candidate["caller_trust_min"],
-        )
-        if price_query_mode == "cheapest":
-            candidate["match_reasons"].append("ranked by lowest caller price")
-        elif price_query_mode == "most_expensive":
-            candidate["match_reasons"].append("ranked by highest caller price")
-
-    if price_query_mode == "most_expensive":
-        # Sort by price first so every agent at the maximum price surfaces as
-        # a tied #1 — a single highest-price agent winning on lexical noise
-        # was the prior bug ("most expensive" returned only one of three
-        # agents at $0.03). Within a price tier, fall back to the existing
-        # blended-score tie-break so the most relevant of the tied agents
-        # leads the group.
-        ranked = sorted(
-            candidates,
-            key=lambda item: (
-                -item["price_cents"],
-                item["blended_score"],
-                item["similarity"],
-                item["trust"],
-            ),
-        )
-    elif price_query_mode == "cheapest":
-        ranked = sorted(
-            candidates,
-            key=lambda item: (
-                item["price_cents"],
-                -item["blended_score"],
-                -item["similarity"],
-                -item["trust"],
-            ),
-        )
-    else:
-        ranked = sorted(
-            candidates,
-            key=lambda item: (
-                item["blended_score"],
-                item["similarity"],
-                item["trust"],
-                -item["price_cents"],
-            ),
-            reverse=True,
-        )
-
-    # Off-catalog short-circuit: when the query unambiguously asks for a
-    # capability we don't have, return empty BEFORE the relevance-floor
-    # check so a weak lexical match can't sneak through. We keep this active
-    # in price-query mode too — "cheapest weather agent" still has nothing
-    # in the catalog, and we should not surface unrelated cheap agents just
-    # because the user expressed a price preference.
-    query_token_set = set(_query_terms(normalized_query))
-    if query_token_set:
-        for _description, predicate in _OFF_CATALOG_PATTERNS:
-            try:
-                if predicate(query_token_set):
-                    return []
-            except Exception:  # noqa: BLE001 — predicates must never crash search
-                continue
-
-    # Optional LLM re-rank seam (2026-05-09): when the catalog grows past
-    # ~30 agents, lexical+embedding can struggle to disambiguate among
-    # several semantically-overlapping candidates. The stage below is
-    # gated off by default and is a no-op until AZTEA_SEARCH_LLM_RERANK=1
-    # is set in the env. The implementation lives in
-    # `_llm_rerank_candidates` so this site stays small and the stub can
-    # be filled with a real Groq/llama call when needed without touching
-    # the surrounding ranking logic.
-    if (
-        ranked
-        and price_query_mode is None
-        and _feature_flags.search_llm_rerank_enabled()
-    ):
-        try:
-            ranked = _llm_rerank_candidates(normalized_query, ranked)
-        except Exception:  # noqa: BLE001 — re-rank must never block search
-            pass
-
-    # Confidence floor: drop low-relevance candidates so callers don't get
-    # five mediocre matches when nothing in the catalog is a real fit. The
-    # eval flagged "find recent papers", "image generator", "agents that
-    # take credit cards" all returning weak unrelated agents because there
-    # was no empty-result mode. We still keep at least the top hit if its
-    # score crosses the floor; otherwise the response signals "no match" to
-    # the caller via an empty list (callers branch on `count == 0`).
-    if ranked:
-        top_score = ranked[0]["blended_score"]
-        # Reload thresholds per-call: env-tunable without redeploy
-        # (see AZTEA_SEARCH_* in core/feature_flags.py).
-        _floor = _feature_flags.search_relevance_floor()
-        _keep = _feature_flags.search_keep_floor()
-        _band = _feature_flags.search_dropoff_band()
-        if top_score >= _floor:
-            ranked = [
-                item for item in ranked
-                if item["blended_score"] >= _keep
-                or item["blended_score"] >= top_score - _band
-            ]
-        else:
-            # No agent matches strongly. Returning weak distractors is worse
-            # than returning empty — empty signals "use a different query"
-            # while distractors create false confidence in low-relevance
-            # results.
-            ranked = []
-
+    _annotate_blended_scores(
+        candidates, normalized_query=normalized_query,
+        price_query_mode=price_query_mode, embeddings_enabled=embeddings_enabled,
+        required_fields=filters["required_fields"],
+        normalized_caller_trust=filters["caller_trust"],
+    )
+    ranked = _sort_candidates(candidates, price_query_mode)
+    if _is_off_catalog_query(normalized_query):
+        return []
+    ranked = _apply_relevance_floor(_maybe_llm_rerank(ranked, normalized_query, price_query_mode))
     return [
         {
             "agent": item["agent"],
