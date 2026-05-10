@@ -50,6 +50,54 @@ def is_skill_endpoint(endpoint_url: str | None) -> bool:
     return parse_skill_id_from_endpoint(endpoint_url or "") is not None
 
 
+_TEMPERATURE_MIN = 0.0
+_TEMPERATURE_MAX = 2.0
+
+
+def _validate_create_inputs(
+    *, agent_id: str, owner_id: str, slug: str, raw_md: str, system_prompt: str,
+    temperature: float,
+) -> None:
+    """Pure: enforce required-field + temperature constraints; raises ValueError otherwise."""
+    if not agent_id:
+        raise ValueError("agent_id is required.")
+    if not owner_id:
+        raise ValueError("owner_id is required.")
+    if not slug:
+        raise ValueError("slug is required.")
+    if not raw_md.strip():
+        raise ValueError("raw_md is required.")
+    if not system_prompt.strip():
+        raise ValueError("system_prompt is required.")
+    if temperature < _TEMPERATURE_MIN or temperature > _TEMPERATURE_MAX:
+        raise ValueError(f"temperature must be in [{_TEMPERATURE_MIN}, {_TEMPERATURE_MAX}].")
+
+
+def _insert_hosted_skill_row(
+    *, skill_id: str, agent_id: str, owner_id: str, slug: str, raw_md: str,
+    system_prompt: str, parsed_metadata: dict[str, Any] | None,
+    model_chain: list[str] | None, temperature: float, capped_tokens: int, now: str,
+) -> None:
+    """Side-effect: write the hosted_skills row inside a single connection."""
+    metadata_json = json.dumps(parsed_metadata or {}, sort_keys=True, default=str)
+    chain_json = json.dumps(list(model_chain)) if model_chain else None
+    with _conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO hosted_skills
+                (skill_id, agent_id, owner_id, slug, raw_md, system_prompt,
+                 parsed_metadata_json, model_chain, temperature, max_output_tokens,
+                 created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                skill_id, agent_id, owner_id, slug, raw_md, system_prompt,
+                metadata_json, chain_json, float(temperature), capped_tokens,
+                now, now,
+            ),
+        )
+
+
 def create_hosted_skill(
     *,
     agent_id: str,
@@ -62,56 +110,19 @@ def create_hosted_skill(
     temperature: float = _DEFAULT_TEMPERATURE,
     max_output_tokens: int = _DEFAULT_MAX_OUTPUT_TOKENS,
 ) -> dict[str, Any]:
-    """Persist a hosted SKILL.md and return the created skill row.
-
-    The backing agent must already be registered before calling this.
-    ``raw_md`` is the original SKILL.md text; ``system_prompt`` is the
-    extracted prompt that will be used at inference time.
-    """
-    if not agent_id:
-        raise ValueError("agent_id is required.")
-    if not owner_id:
-        raise ValueError("owner_id is required.")
-    if not slug:
-        raise ValueError("slug is required.")
-    if not raw_md.strip():
-        raise ValueError("raw_md is required.")
-    if not system_prompt.strip():
-        raise ValueError("system_prompt is required.")
-
-    if temperature < 0 or temperature > 2:
-        raise ValueError("temperature must be in [0, 2].")
+    """Side-effect: persist a hosted SKILL.md and return the created skill row."""
+    _validate_create_inputs(
+        agent_id=agent_id, owner_id=owner_id, slug=slug, raw_md=raw_md,
+        system_prompt=system_prompt, temperature=temperature,
+    )
     capped_tokens = max(1, min(int(max_output_tokens), _MAX_OUTPUT_TOKENS_HARD_CAP))
-
     skill_id = str(uuid.uuid4())
-    now = _now_iso()
-    metadata_json = json.dumps(parsed_metadata or {}, sort_keys=True, default=str)
-    chain_json = json.dumps(list(model_chain)) if model_chain else None
-
-    with _conn() as conn:
-        conn.execute(
-            """
-            INSERT INTO hosted_skills
-                (skill_id, agent_id, owner_id, slug, raw_md, system_prompt,
-                 parsed_metadata_json, model_chain, temperature, max_output_tokens,
-                 created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                skill_id,
-                agent_id,
-                owner_id,
-                slug,
-                raw_md,
-                system_prompt,
-                metadata_json,
-                chain_json,
-                float(temperature),
-                capped_tokens,
-                now,
-                now,
-            ),
-        )
+    _insert_hosted_skill_row(
+        skill_id=skill_id, agent_id=agent_id, owner_id=owner_id, slug=slug,
+        raw_md=raw_md, system_prompt=system_prompt, parsed_metadata=parsed_metadata,
+        model_chain=model_chain, temperature=temperature, capped_tokens=capped_tokens,
+        now=_now_iso(),
+    )
     return get_hosted_skill(skill_id) or {}
 
 

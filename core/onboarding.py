@@ -191,108 +191,111 @@ def _normalize_input_schema(raw_schema):
     return raw_schema
 
 
-def parse_registration_metadata(metadata: dict | str) -> dict:
-    """
-    Parse and normalize registration metadata for /registry/register ingestion.
-    """
-    if isinstance(metadata, str):
-        stripped = metadata.strip()
-        if not stripped:
-            raise MetadataValidationError("Registration metadata string is empty.")
-        try:
-            raw = json.loads(stripped)
-        except json.JSONDecodeError as exc:
-            raise MetadataValidationError(
-                f"Registration metadata JSON is malformed (line {exc.lineno}, column {exc.colno})."
-            ) from exc
-    elif isinstance(metadata, dict):
-        raw = metadata
-    else:
+def _decode_metadata_input(metadata: dict | str) -> dict:
+    """Pure: parse a JSON string or pass through a dict; raises MetadataValidationError otherwise."""
+    if isinstance(metadata, dict):
+        return metadata
+    if not isinstance(metadata, str):
         raise MetadataValidationError(
             "Registration metadata must be a dict or JSON string."
         )
-
+    stripped = metadata.strip()
+    if not stripped:
+        raise MetadataValidationError("Registration metadata string is empty.")
+    try:
+        raw = json.loads(stripped)
+    except json.JSONDecodeError as exc:
+        raise MetadataValidationError(
+            f"Registration metadata JSON is malformed (line {exc.lineno}, column {exc.colno})."
+        ) from exc
     if not isinstance(raw, dict):
         raise MetadataValidationError(
             "Registration metadata must decode to a JSON object."
         )
+    return raw
 
-    name = _require_non_empty_text(raw, ("name", "agent_name"), "name")
-    description = _require_non_empty_text(
-        raw, ("description", "summary"), "description"
-    )
-    endpoint_url = _normalize_endpoint_url(
-        _require_non_empty_text(raw, ("endpoint_url", "endpoint"), "endpoint_url")
-    )
 
+def _parse_price_per_call(raw: dict) -> float:
+    """Pure: extract and validate the ``price_per_call_usd`` (or legacy ``price_usd``) field."""
     raw_price = raw.get("price_per_call_usd", raw.get("price_usd"))
     if raw_price is None:
         raise MetadataValidationError("Missing required 'price_per_call_usd' field.")
     try:
-        price_per_call_usd = float(raw_price)
+        value = float(raw_price)
     except (TypeError, ValueError) as exc:
         raise MetadataValidationError(
             "price_per_call_usd must be a finite non-negative number."
         ) from exc
-    if not math.isfinite(price_per_call_usd) or price_per_call_usd < 0:
+    if not math.isfinite(value) or value < 0:
         raise MetadataValidationError(
             "price_per_call_usd must be a finite non-negative number."
         )
+    return value
 
-    tags = _normalize_tags(raw.get("tags", raw.get("capabilities")))
-    input_schema = _normalize_input_schema(raw.get("input_schema"))
-    output_schema = _normalize_input_schema(raw.get("output_schema"))
+
+def parse_registration_metadata(metadata: dict | str) -> dict:
+    """Pure: validate + normalize registration metadata for /registry/register ingestion."""
+    raw = _decode_metadata_input(metadata)
     output_verifier_url = raw.get("output_verifier_url")
     if output_verifier_url is not None:
         output_verifier_url = str(output_verifier_url).strip() or None
-
     return {
-        "name": name,
-        "description": description,
-        "endpoint_url": endpoint_url,
-        "price_per_call_usd": price_per_call_usd,
-        "tags": tags,
-        "input_schema": input_schema,
-        "output_schema": output_schema,
+        "name": _require_non_empty_text(raw, ("name", "agent_name"), "name"),
+        "description": _require_non_empty_text(
+            raw, ("description", "summary"), "description"
+        ),
+        "endpoint_url": _normalize_endpoint_url(
+            _require_non_empty_text(raw, ("endpoint_url", "endpoint"), "endpoint_url")
+        ),
+        "price_per_call_usd": _parse_price_per_call(raw),
+        "tags": _normalize_tags(raw.get("tags", raw.get("capabilities"))),
+        "input_schema": _normalize_input_schema(raw.get("input_schema")),
+        "output_schema": _normalize_input_schema(raw.get("output_schema")),
         "output_verifier_url": output_verifier_url,
     }
 
 
-def validate_manifest_content(manifest_content: str, source: str = "agent.md") -> dict:
-    """
-    Validate required sections and metadata in an agent.md-like manifest.
-    Returns validated sections plus normalized registration metadata.
-    """
-    if not isinstance(manifest_content, str):
-        raise ManifestValidationError(f"{source}: manifest content must be a string.")
-    if not manifest_content.strip():
-        raise ManifestValidationError(f"{source}: manifest content is empty.")
-
-    sections = _parse_sections(manifest_content)
-    if not sections:
-        raise ManifestValidationError(f"{source}: no markdown headings found.")
-
-    validated_sections = {}
-    missing_sections = []
+def _collect_required_sections(
+    sections: list[dict], source: str,
+) -> dict[str, dict[str, str]]:
+    """Pure: ensure every required section is present and non-empty; raises ManifestValidationError otherwise."""
+    validated: dict[str, dict[str, str]] = {}
+    missing: list[str] = []
     for section_key, label in _REQUIRED_SECTIONS:
         section = _find_section(sections, _SECTION_ALIASES[section_key])
         if section is None:
-            missing_sections.append(label)
+            missing.append(label)
             continue
         if not section["body"]:
             raise ManifestValidationError(
                 f"{source}: required section '{label}' is empty."
             )
-        validated_sections[section_key] = {
+        validated[section_key] = {
             "heading": section["heading"],
             "content": section["body"],
         }
-
-    if missing_sections:
+    if missing:
         raise ManifestValidationError(
-            f"{source}: missing required section(s): {', '.join(missing_sections)}."
+            f"{source}: missing required section(s): {', '.join(missing)}."
         )
+    return validated
 
+
+def validate_manifest_content(manifest_content: str, source: str = "agent.md") -> dict:
+    """Pure: validate required sections + metadata in an agent.md-like manifest.
+
+    Why: the manifest is the single onboarding source of truth — failing
+    fast on missing sections gives the agent author one clear error per
+    invocation instead of cascading downstream failures.
+    """
+    if not isinstance(manifest_content, str):
+        raise ManifestValidationError(f"{source}: manifest content must be a string.")
+    if not manifest_content.strip():
+        raise ManifestValidationError(f"{source}: manifest content is empty.")
+    sections = _parse_sections(manifest_content)
+    if not sections:
+        raise ManifestValidationError(f"{source}: no markdown headings found.")
+    validated_sections = _collect_required_sections(sections, source)
     raw_metadata = _extract_metadata_object(
         validated_sections["registration_metadata"]["content"],
         source=source,
@@ -303,7 +306,6 @@ def validate_manifest_content(manifest_content: str, source: str = "agent.md") -
         raise ManifestValidationError(
             f"{source}: invalid registration metadata: {exc}"
         ) from exc
-
     return {
         "source": source,
         "sections": validated_sections,

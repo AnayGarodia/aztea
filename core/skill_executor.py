@@ -155,76 +155,84 @@ def _check_payload_size(payload: dict[str, Any]) -> None:
         )
 
 
+_DEFAULT_TEMPERATURE = 0.2
+_DEFAULT_MAX_TOKENS = 1500
+_LLM_TIMEOUT_S = 60.0
+
+
+def _build_completion_request(
+    skill: dict[str, Any], payload: dict[str, Any],
+) -> tuple[CompletionRequest, list[str] | None]:
+    """Pure: shape a hosted-skill row + payload into ``(request, model_chain)``.
+
+    Why: the request shape is narrow and predictable; isolating it lets
+    ``execute_hosted_skill`` focus on side-effect orchestration.
+    """
+    body = str(skill.get("system_prompt") or "").strip()
+    if not body:
+        raise SkillExecutionError("Hosted skill has no system_prompt.")
+    raw_temp = skill.get("temperature")
+    temperature = float(raw_temp if raw_temp is not None else _DEFAULT_TEMPERATURE)
+    max_tokens = int(skill.get("max_output_tokens") or _DEFAULT_MAX_TOKENS)
+    chain = skill.get("model_chain") or None
+    if chain is not None and not isinstance(chain, list):
+        chain = None
+    req = CompletionRequest(
+        model="",  # filled in by run_with_fallback
+        messages=build_messages(body, payload),
+        temperature=temperature,
+        max_tokens=max_tokens,
+        json_mode=True,
+        timeout_seconds=_LLM_TIMEOUT_S,
+    )
+    return req, chain
+
+
+def _safe_heartbeat(heartbeat_cb: Callable[[], None] | None) -> None:
+    """Side-effect: call ``heartbeat_cb`` if provided; never aborts execution.
+
+    Why: the lease may still be valid even if the heartbeat call raises;
+    the supervisor will recover otherwise.
+    """
+    if heartbeat_cb is None:
+        return
+    try:
+        heartbeat_cb()
+    except Exception:
+        _LOG.warning("Heartbeat callback failed during skill execution", exc_info=True)
+
+
 def execute_hosted_skill(
     skill: dict[str, Any],
     payload: dict[str, Any],
     *,
     heartbeat_cb: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
-    """Execute a hosted SKILL.md against the platform LLM chain.
+    """Side-effect: execute a hosted SKILL.md against the platform LLM chain.
 
     Args:
-        skill: A row from ``hosted_skills`` (dict). Must contain
-            ``system_prompt``, ``temperature``, ``max_output_tokens``,
-            and optionally ``model_chain``.
-        payload: The caller's input payload. Will be size-checked.
-        heartbeat_cb: Optional zero-arg callable invoked just before the LLM
-            call. Async job workers pass a callback that bumps the job lease.
+        skill: a row from ``hosted_skills`` with ``system_prompt``,
+            ``temperature``, ``max_output_tokens``, optional ``model_chain``.
+        payload: caller's input; size-checked at the boundary.
+        heartbeat_cb: optional zero-arg callable that async job workers use
+            to bump the job lease while the LLM call is in flight.
 
-    Returns:
-        Dict shaped ``{"result": str, "_meta": {...}}``.
-
-    Raises:
-        SkillInputTooLargeError: payload exceeds 64 KB.
-        SkillExecutionError: every LLM provider in the chain failed.
+    Why: returns ``{"result": str, "_meta": {...}}``. Provider/model names
+    are intentionally not exposed in ``_meta`` — they are platform infra
+    details that may change without notice; only an opaque execution_id is
+    surfaced for support traceability.
     """
     payload = dict(payload or {})
     _check_payload_size(payload)
-
-    body = str(skill.get("system_prompt") or "").strip()
-    if not body:
-        raise SkillExecutionError("Hosted skill has no system_prompt.")
-
-    temperature = float(
-        skill.get("temperature") if skill.get("temperature") is not None else 0.2
-    )
-    max_tokens = int(skill.get("max_output_tokens") or 1500)
-    chain = skill.get("model_chain") or None
-    if chain is not None and not isinstance(chain, list):
-        chain = None
-
-    messages = build_messages(body, payload)
-
-    req = CompletionRequest(
-        model="",  # filled in by run_with_fallback
-        messages=messages,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        json_mode=True,
-        timeout_seconds=60.0,
-    )
-
-    if heartbeat_cb is not None:
-        try:
-            heartbeat_cb()
-        except Exception:
-            # Heartbeat failures must never abort skill execution. The lease
-            # may still be valid; if not the supervisor will recover.
-            _LOG.warning("Heartbeat callback failed during skill execution", exc_info=True)
-
+    req, chain = _build_completion_request(skill, payload)
+    _safe_heartbeat(heartbeat_cb)
     try:
         resp = run_with_fallback(req, model_chain=chain)
     except Exception as exc:
         raise SkillExecutionError(f"All LLM providers failed: {exc}") from exc
-
     parsed = _parse_llm_output(resp.text)
-    # Don't leak underlying LLM provider/model names to skill callers — those are
-    # platform infrastructure details that may change without notice. We keep an
-    # opaque execution_id for support traceability and the parse_path so the SDK
-    # can tell whether the response was JSON or coerced from raw text.
-    execution_id = uuid.uuid4().hex
     parsed["_meta"] = {
-        "execution_id": execution_id,
+        "execution_id": uuid.uuid4().hex,
         "parse_path": parsed.pop("__parse_path", "raw_text_fallback"),
     }
     return parsed

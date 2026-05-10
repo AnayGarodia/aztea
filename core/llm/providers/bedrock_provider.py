@@ -44,23 +44,15 @@ class BedrockProvider:
     def is_available(self) -> bool:
         return self._available
 
-    def complete(self, req: CompletionRequest) -> LLMResponse:
-        """Send a chat completion request to AWS Bedrock (Converse API) and return a normalised LLMResponse."""
-        if not self._available:
-            raise LLMBadResponseError(
-                self.name, req.model, "Bedrock provider not available.", None
-            )
-
-        import botocore.exceptions
-
-        messages = []
+    def _build_converse_kwargs(self, req: CompletionRequest) -> dict[str, Any]:
+        """Pure: shape ``CompletionRequest`` into Bedrock Converse-API kwargs."""
+        messages: list[dict] = []
         system_parts: list[dict] = []
         for m in req.messages:
             if m.role == "system":
                 system_parts.append({"text": m.content})
             else:
                 messages.append({"role": m.role, "content": [{"text": m.content}]})
-
         inference_config: dict[str, Any] = {}
         if req.max_tokens is not None:
             inference_config["maxTokens"] = req.max_tokens
@@ -70,18 +62,18 @@ class BedrockProvider:
             inference_config["stopSequences"] = (
                 req.stop if isinstance(req.stop, list) else [req.stop]
             )
-
-        converse_kwargs: dict[str, Any] = {
-            "modelId": req.model,
-            "messages": messages,
-        }
+        kwargs: dict[str, Any] = {"modelId": req.model, "messages": messages}
         if system_parts:
-            converse_kwargs["system"] = system_parts
+            kwargs["system"] = system_parts
         if inference_config:
-            converse_kwargs["inferenceConfig"] = inference_config
+            kwargs["inferenceConfig"] = inference_config
+        return kwargs
 
+    def _invoke_converse(self, req: CompletionRequest, kwargs: dict[str, Any]) -> Any:
+        """Side-effect: call ``client.converse`` and translate boto errors to our taxonomy."""
+        import botocore.exceptions
         try:
-            resp = self._client.converse(**converse_kwargs)
+            return self._client.converse(**kwargs)
         except botocore.exceptions.ClientError as exc:
             code = exc.response.get("Error", {}).get("Code", "")
             if code in ("ThrottlingException", "TooManyRequestsException"):
@@ -92,23 +84,27 @@ class BedrockProvider:
         except Exception as exc:
             raise LLMBadResponseError(self.name, req.model, str(exc), exc) from exc
 
+    def complete(self, req: CompletionRequest) -> LLMResponse:
+        """Side-effect: chat completion via AWS Bedrock's Converse API."""
+        if not self._available:
+            raise LLMBadResponseError(
+                self.name, req.model, "Bedrock provider not available.", None,
+            )
+        resp = self._invoke_converse(req, self._build_converse_kwargs(req))
         try:
             text = resp["output"]["message"]["content"][0]["text"]
         except Exception as exc:
             raise LLMBadResponseError(
-                self.name, req.model, "Unexpected Bedrock response shape.", exc
+                self.name, req.model, "Unexpected Bedrock response shape.", exc,
             ) from exc
-
         token_usage = resp.get("usage", {})
-        usage = Usage(
-            prompt_tokens=token_usage.get("inputTokens", 0),
-            completion_tokens=token_usage.get("outputTokens", 0),
-        )
-        finish_reason = resp.get("stopReason", "stop")
         return LLMResponse(
             text=text,
             model=req.model,
             provider=self.name,
-            usage=usage,
-            finish_reason=finish_reason,
+            usage=Usage(
+                prompt_tokens=token_usage.get("inputTokens", 0),
+                completion_tokens=token_usage.get("outputTokens", 0),
+            ),
+            finish_reason=resp.get("stopReason", "stop"),
         )

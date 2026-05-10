@@ -41,6 +41,11 @@ SUPPORTED_FORMATS: tuple[str, ...] = (
 _SLACK_BLOCK_CHAR_LIMIT = 2900
 _GENERIC_MD_MAX_CHARS = 4000
 _DEP_AUDIT_DESC_PREVIEW_CHARS = 400
+_CODE_REVIEW_ISSUE_CAP = 50
+_CODE_REVIEW_POSITIVE_CAP = 10
+# WHY: code_review_agent scores 1-10; some external agents return 1-100.
+# Disambiguate by magnitude — anything ≤ 10 takes the /10 denominator.
+_SCORE_TEN_BOUNDARY = 10
 
 
 def normalize_format(value: Any) -> str | None:
@@ -88,125 +93,135 @@ def render(
 # ── Markdown renderers (per output shape) ──────────────────────────────────
 
 
-def _render_markdown(output: Any, meta: dict[str, Any]) -> str:
-    if not isinstance(output, dict):
-        return _generic_md(output)
-    sections: list[str] = []
-    rendered = False
+def _looks_like_secret_scan(output: dict[str, Any]) -> bool:
+    """Pure: True when ``output`` matches the secret_scanner agent's shape.
 
-    # Code-review shape: {score, summary, issues, severity_counts, ...}
+    Why: detect this BEFORE the generic linter shape so secret-scan output
+    isn't mislabeled as "## Linter".
+    """
+    findings = output.get("findings")
+    if not isinstance(findings, list):
+        return False
+    if "findings_by_severity" in output or "total_findings" in output:
+        return True
+    return any(
+        isinstance(f, dict)
+        and ("redacted_preview" in f or "rule_id" in f or "entropy" in f)
+        for f in findings
+    )
+
+
+def _collect_known_sections(output: dict[str, Any]) -> list[str]:
+    """Pure: build the per-shape markdown sections in render order."""
+    sections: list[str] = []
     if "issues" in output and ("severity_counts" in output or "summary" in output):
         sections.append(_md_code_review(output))
-        rendered = True
-
-    # Secret-scanner shape: {findings:[{rule_id,redacted_preview,...}], total_findings, findings_by_severity}
-    # Detect this BEFORE the generic linter shape so secret-scan output isn't
-    # mislabeled as "## Linter" in markdown / slack rendering.
-    if isinstance(output.get("findings"), list) and (
-        "findings_by_severity" in output
-        or "total_findings" in output
-        or any(
-            isinstance(f, dict)
-            and ("redacted_preview" in f or "rule_id" in f or "entropy" in f)
-            for f in output.get("findings") or []
-        )
-    ):
+    if _looks_like_secret_scan(output):
         sections.append(_md_secret_scan(output))
-        rendered = True
-    # Linter shape: {findings | issues, total | issue_count, fixed_code?}
     elif isinstance(output.get("findings"), list):
         sections.append(_md_linter(output))
-        rendered = True
-
-    # Type-checker shape: {errors | diagnostics, total, passed}
     if isinstance(output.get("diagnostics"), list) or (
         isinstance(output.get("errors"), list) and "passed" in output
     ):
         sections.append(_md_type_check(output))
-        rendered = True
-
-    # Dependency auditor: {vulnerabilities | findings | packages, ...}
-    if isinstance(output.get("vulnerabilities"), list) or isinstance(output.get("packages"), list):
+    if (
+        isinstance(output.get("vulnerabilities"), list)
+        or isinstance(output.get("packages"), list)
+    ):
         sections.append(_md_dep_audit(output))
-        rendered = True
-
-    # Git-diff analyzer: {file_count, files, risk_summary, summary}
     if "risk_summary" in output and isinstance(output.get("files"), list):
         sections.append(_md_git_diff(output))
-        rendered = True
-
-    # Recipe / pipeline: {steps | step_results: {<id>: {output: {...}}}}
-    if isinstance(output.get("steps"), list) or isinstance(
-        output.get("step_results"), dict
-    ):
+    if isinstance(output.get("steps"), list) or isinstance(output.get("step_results"), dict):
         sections.append(_md_pipeline(output))
-        rendered = True
+    return sections
 
-    if not rendered:
+
+def _render_markdown(output: Any, meta: dict[str, Any]) -> str:
+    """Pure: dispatch to per-shape markdown renderers; falls back to generic JSON dump."""
+    if not isinstance(output, dict):
+        return _generic_md(output)
+    sections = _collect_known_sections(output)
+    if not sections:
         return _generic_md(output)
     return "\n\n".join(s for s in sections if s.strip())
 
 
+def _format_score_line(score: Any) -> str | None:
+    """Pure: ``**Score:** N/10`` or ``/100`` line, ``None`` if score isn't numeric."""
+    if not isinstance(score, (int, float)):
+        return None
+    denom = _SCORE_TEN_BOUNDARY if 0 <= score <= _SCORE_TEN_BOUNDARY else 100
+    return f"**Score:** {score}/{denom}"
+
+
+def _format_severity_chip(counts: dict[str, Any]) -> str | None:
+    """Pure: ``🔴 3 high · 🟠 2 medium`` chip, ``None`` if every count is zero."""
+    chip = " · ".join(
+        f"{_count_emoji(sev)} {count} {sev}"
+        for sev, count in counts.items()
+        if count
+    )
+    return f"\n{chip}" if chip else None
+
+
+def _format_issue_location(issue: dict[str, Any]) -> str:
+    """Pure: ``· `file:line`` chip, empty string when no file/line is set."""
+    file_ = issue.get("file") or issue.get("filename")
+    line = issue.get("line") or issue.get("line_hint")
+    if file_ and line:
+        return f" · `{file_}:{line}`"
+    if file_:
+        return f" · `{file_}`"
+    if line:
+        return f" · line `{line}`"
+    return ""
+
+
+def _format_issue_lines(issue: dict[str, Any]) -> list[str]:
+    """Pure: bullet line(s) for one code-review issue, including any nested fix line."""
+    sev = str(issue.get("severity") or "info").lower()
+    cat = issue.get("category") or ""
+    # Code-review agents use `description`; linters use `message`; generic uses `title`.
+    text = str(
+        issue.get("description") or issue.get("title") or issue.get("message") or ""
+    ).strip()
+    cwe = str(issue.get("cwe_id") or "").strip()
+    cwe_chip = f" [{cwe}]" if cwe else ""
+    location = _format_issue_location(issue)
+    head = (
+        f"- {_count_emoji(sev)} **{sev}** _{cat}_{cwe_chip}{location} — {text}"
+        if cat
+        else f"- {_count_emoji(sev)} **{sev}**{cwe_chip}{location} — {text}"
+    )
+    out = [head]
+    fix = str(issue.get("fix") or issue.get("suggestion") or "").strip()
+    if fix:
+        out.append(f"  - Fix: {fix}")
+    return out
+
+
 def _md_code_review(output: dict[str, Any]) -> str:
-    score = output.get("score")
+    """Pure: render the code-review output shape into GitHub-flavoured markdown."""
     summary = str(output.get("summary") or "").strip()
     issues = output.get("issues") or []
     counts = output.get("severity_counts") or {}
     lines: list[str] = ["## Code Review"]
-    if isinstance(score, (int, float)):
-        # code_review_agent scores 1-10; some external review agents
-        # score 1-100. Disambiguate by magnitude — anything ≤ 10 is the
-        # 1-10 scale and gets a /10 denominator.
-        denom = 10 if 0 <= score <= 10 else 100
-        lines.append(f"**Score:** {score}/{denom}")
+    score_line = _format_score_line(output.get("score"))
+    if score_line:
+        lines.append(score_line)
     if summary:
         lines.append(f"\n{summary}")
-    if counts:
-        chip = " · ".join(
-            f"{_count_emoji(sev)} {count} {sev}"
-            for sev, count in counts.items()
-            if count
-        )
-        if chip:
-            lines.append(f"\n{chip}")
+    chip = _format_severity_chip(counts)
+    if chip:
+        lines.append(chip)
     if issues:
         lines.append("\n### Issues")
-        for issue in issues[:50]:
-            sev = str(issue.get("severity") or "info").lower()
-            cat = issue.get("category") or ""
-            # Code-review agents use `description`; linters use `message`;
-            # generic shapes use `title`. Try all three before falling back.
-            text = str(
-                issue.get("description")
-                or issue.get("title")
-                or issue.get("message")
-                or ""
-            ).strip()
-            location = ""
-            file_ = issue.get("file") or issue.get("filename")
-            line = issue.get("line") or issue.get("line_hint")
-            if file_ and line:
-                location = f" · `{file_}:{line}`"
-            elif file_:
-                location = f" · `{file_}`"
-            elif line:
-                location = f" · line `{line}`"
-            cwe = str(issue.get("cwe_id") or "").strip()
-            cwe_chip = f" [{cwe}]" if cwe else ""
-            head = (
-                f"- {_count_emoji(sev)} **{sev}** _{cat}_{cwe_chip}{location} — {text}"
-                if cat
-                else f"- {_count_emoji(sev)} **{sev}**{cwe_chip}{location} — {text}"
-            )
-            lines.append(head)
-            fix = str(issue.get("fix") or issue.get("suggestion") or "").strip()
-            if fix:
-                lines.append(f"  - Fix: {fix}")
+        for issue in issues[:_CODE_REVIEW_ISSUE_CAP]:
+            lines.extend(_format_issue_lines(issue))
     positives = output.get("positive_aspects") or []
     if positives:
         lines.append("\n### What's good")
-        for p in positives[:10]:
-            lines.append(f"- {p}")
+        lines.extend(f"- {p}" for p in positives[:_CODE_REVIEW_POSITIVE_CAP])
     return "\n".join(lines).strip()
 
 
@@ -493,50 +508,60 @@ def _slack_context(md: str) -> dict:
     return {"type": "context", "elements": [{"type": "mrkdwn", "text": md[:_SLACK_BLOCK_CHAR_LIMIT]}]}
 
 
+_SLACK_CODE_REVIEW_ISSUE_CAP = 30
+
+
+def _slack_score_chip(score: Any) -> str | None:
+    """Pure: ``*Score:* N/10`` Slack-mrkdwn chip; ``None`` if non-numeric."""
+    if not isinstance(score, (int, float)):
+        return None
+    denom = _SCORE_TEN_BOUNDARY if 0 <= score <= _SCORE_TEN_BOUNDARY else 100
+    return f"*Score:* {score}/{denom}"
+
+
+def _slack_issue_block(issue: dict[str, Any]) -> dict:
+    """Pure: shape one code-review issue into a Slack mrkdwn section block."""
+    sev = str(issue.get("severity") or "info").lower()
+    cat = str(issue.get("category") or "")
+    text = str(
+        issue.get("description") or issue.get("title") or issue.get("message") or ""
+    ).strip()
+    line = issue.get("line") or issue.get("line_hint") or ""
+    cwe = str(issue.get("cwe_id") or "").strip()
+    fix = str(issue.get("fix") or issue.get("suggestion") or "").strip()
+    head = f"{_count_emoji(sev)} *{sev.upper()}*"
+    if cat:
+        head += f" · _{cat}_"
+    if cwe:
+        head += f" · `{cwe}`"
+    if line:
+        head += f" · line `{line}`"
+    body = f"{head}\n{text}"
+    if fix:
+        body += f"\n→ *Fix:* {fix}"
+    return _slack_section(body)
+
+
 def _slack_code_review_blocks(output: dict[str, Any]) -> list[dict]:
+    """Pure: render the code-review output shape as a list of Slack Block Kit blocks."""
     blocks: list[dict] = [_slack_header("Code Review")]
-    score = output.get("score")
+    head_bits: list[str] = []
+    score_chip = _slack_score_chip(output.get("score"))
+    if score_chip:
+        head_bits.append(score_chip)
     counts = output.get("severity_counts") or {}
-    summary = str(output.get("summary") or "").strip()
-    chips = " · ".join(
-        f"{_count_emoji(sev)} {n} {sev}" for sev, n in counts.items() if n
-    )
-    head_bits = []
-    if isinstance(score, (int, float)):
-        denom = 10 if 0 <= score <= 10 else 100
-        head_bits.append(f"*Score:* {score}/{denom}")
+    chips = " · ".join(f"{_count_emoji(sev)} {n} {sev}" for sev, n in counts.items() if n)
     if chips:
         head_bits.append(chips)
     if head_bits:
         blocks.append(_slack_context(" · ".join(head_bits)))
+    summary = str(output.get("summary") or "").strip()
     if summary:
         blocks.append(_slack_section(summary))
     issues = output.get("issues") or []
     if issues:
         blocks.append({"type": "divider"})
-        for issue in issues[:30]:
-            sev = str(issue.get("severity") or "info").lower()
-            cat = str(issue.get("category") or "")
-            text = str(
-                issue.get("description")
-                or issue.get("title")
-                or issue.get("message")
-                or ""
-            ).strip()
-            line = issue.get("line") or issue.get("line_hint") or ""
-            cwe = str(issue.get("cwe_id") or "").strip()
-            fix = str(issue.get("fix") or issue.get("suggestion") or "").strip()
-            head = f"{_count_emoji(sev)} *{sev.upper()}*"
-            if cat:
-                head += f" · _{cat}_"
-            if cwe:
-                head += f" · `{cwe}`"
-            if line:
-                head += f" · line `{line}`"
-            body = f"{head}\n{text}"
-            if fix:
-                body += f"\n→ *Fix:* {fix}"
-            blocks.append(_slack_section(body))
+        blocks.extend(_slack_issue_block(issue) for issue in issues[:_SLACK_CODE_REVIEW_ISSUE_CAP])
     return blocks
 
 
