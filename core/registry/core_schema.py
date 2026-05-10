@@ -35,6 +35,7 @@ import threading
 import time
 import uuid
 from datetime import datetime, timezone
+from typing import Any, Callable
 
 import numpy as np
 
@@ -139,53 +140,57 @@ def _conn() -> _db.DbConnection:
     return _db.get_raw_connection(_resolved_db_path())
 
 
+_AGENTS_DDL_TEMPLATE = f"""
+    CREATE TABLE IF NOT EXISTS {{table_name}} (
+        agent_id            TEXT PRIMARY KEY,
+        owner_id            TEXT NOT NULL,
+        name                TEXT NOT NULL UNIQUE,
+        description         TEXT NOT NULL,
+        endpoint_url        TEXT NOT NULL,
+        healthcheck_url     TEXT,
+        price_per_call_usd  REAL NOT NULL CHECK(price_per_call_usd >= 0),
+        call_latency_ring   TEXT NOT NULL DEFAULT '[]',
+        avg_latency_ms      REAL NOT NULL DEFAULT 0.0,
+        total_calls         INTEGER NOT NULL DEFAULT 0,
+        successful_calls    INTEGER NOT NULL DEFAULT 0,
+        tags                TEXT NOT NULL DEFAULT '[]',
+        input_schema        TEXT NOT NULL DEFAULT '{{{{}}}}',
+        output_schema       TEXT NOT NULL DEFAULT '{{{{}}}}',
+        output_verifier_url TEXT,
+        output_examples     TEXT,
+        verified            INTEGER NOT NULL DEFAULT 0,
+        endpoint_health_status TEXT NOT NULL DEFAULT 'unknown' CHECK(endpoint_health_status IN ('unknown','healthy','degraded')),
+        endpoint_consecutive_failures INTEGER NOT NULL DEFAULT 0,
+        endpoint_last_checked_at TEXT,
+        endpoint_last_error TEXT,
+        internal_only       INTEGER NOT NULL DEFAULT 0,
+        cacheable          INTEGER,
+        status              TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','suspended','banned')),
+        suspension_reason   TEXT,
+        review_status       TEXT NOT NULL DEFAULT 'approved',
+        review_note         TEXT,
+        reviewed_at         TEXT,
+        reviewed_by         TEXT,
+        trust_decay_multiplier REAL NOT NULL DEFAULT 1.0,
+        last_decay_at       TEXT NOT NULL DEFAULT '{_CANONICAL_CREATED_AT}',
+        created_at          TEXT NOT NULL,
+        model_provider      TEXT,
+        model_id            TEXT,
+        price_per_call_cents INTEGER,
+        pricing_model       TEXT NOT NULL DEFAULT 'fixed',
+        pricing_config      TEXT,
+        kind                TEXT NOT NULL DEFAULT 'self_hosted',
+        pii_safe            INTEGER NOT NULL DEFAULT 0,
+        outputs_not_stored  INTEGER NOT NULL DEFAULT 0,
+        audit_logged        INTEGER NOT NULL DEFAULT 0,
+        region_locked       TEXT
+    )
+"""
+
+
 def _create_agents_table(conn: _db.DbConnection, table_name: str = "agents") -> None:
-    conn.execute(f"""
-            CREATE TABLE IF NOT EXISTS {table_name} (
-                agent_id            TEXT PRIMARY KEY,
-                owner_id            TEXT NOT NULL,
-                name                TEXT NOT NULL UNIQUE,
-                description         TEXT NOT NULL,
-                endpoint_url        TEXT NOT NULL,
-                healthcheck_url     TEXT,
-                price_per_call_usd  REAL NOT NULL CHECK(price_per_call_usd >= 0),
-                call_latency_ring   TEXT NOT NULL DEFAULT '[]',
-                avg_latency_ms      REAL NOT NULL DEFAULT 0.0,
-                total_calls         INTEGER NOT NULL DEFAULT 0,
-                successful_calls    INTEGER NOT NULL DEFAULT 0,
-                tags                TEXT NOT NULL DEFAULT '[]',
-                input_schema        TEXT NOT NULL DEFAULT '{{}}',
-                output_schema       TEXT NOT NULL DEFAULT '{{}}',
-                output_verifier_url TEXT,
-                output_examples     TEXT,
-                verified            INTEGER NOT NULL DEFAULT 0,
-                endpoint_health_status TEXT NOT NULL DEFAULT 'unknown' CHECK(endpoint_health_status IN ('unknown','healthy','degraded')),
-                endpoint_consecutive_failures INTEGER NOT NULL DEFAULT 0,
-                endpoint_last_checked_at TEXT,
-                endpoint_last_error TEXT,
-                internal_only       INTEGER NOT NULL DEFAULT 0,
-                cacheable          INTEGER,
-                status              TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','suspended','banned')),
-                suspension_reason   TEXT,
-                review_status       TEXT NOT NULL DEFAULT 'approved',
-                review_note         TEXT,
-                reviewed_at         TEXT,
-                reviewed_by         TEXT,
-                trust_decay_multiplier REAL NOT NULL DEFAULT 1.0,
-                last_decay_at       TEXT NOT NULL DEFAULT '{_CANONICAL_CREATED_AT}',
-                created_at          TEXT NOT NULL,
-                model_provider      TEXT,
-                model_id            TEXT,
-                price_per_call_cents INTEGER,
-                pricing_model       TEXT NOT NULL DEFAULT 'fixed',
-                pricing_config      TEXT,
-                kind                TEXT NOT NULL DEFAULT 'self_hosted',
-                pii_safe            INTEGER NOT NULL DEFAULT 0,
-                outputs_not_stored  INTEGER NOT NULL DEFAULT 0,
-                audit_logged        INTEGER NOT NULL DEFAULT 0,
-                region_locked       TEXT
-            )
-        """)
+    """Side-effect: create the canonical agents table if absent. Single DDL statement."""
+    conn.execute(_AGENTS_DDL_TEMPLATE.format(table_name=table_name))
 
 
 def _create_agent_embeddings_table(conn: _db.DbConnection) -> None:
@@ -263,57 +268,54 @@ def _has_price_check_constraint(conn: _db.DbConnection) -> bool:
     return bool(_PRICE_CHECK_RE.search(table_sql))
 
 
-def _needs_agents_migration(conn: _db.DbConnection) -> bool:
-    # In Postgres mode, schema evolution is handled by SQL migration files.
-    if _db.IS_POSTGRES:
-        return False
-    cols = _agents_columns(conn)
+_FLAG_NOT_NULL_COLS = (
+    "owner_id", "name", "description", "endpoint_url", "price_per_call_usd",
+    "last_decay_at", "created_at",
+)
+_DEFAULT_VALUE_CHECKS: tuple[tuple[str, frozenset[str]], ...] = (
+    ("avg_latency_ms", frozenset({"0.0", "0", "0.00"})),
+    ("total_calls", frozenset({"0"})),
+    ("successful_calls", frozenset({"0"})),
+    ("tags", frozenset({"'[]'", '"[]"', "[]"})),
+    ("input_schema", frozenset({"'{}'", '"{}"', "{}"})),
+    ("output_schema", frozenset({"'{}'", '"{}"', "{}"})),
+    ("internal_only", frozenset({"0"})),
+    ("status", frozenset({"'active'", '"active"', "active"})),
+    ("review_status", frozenset({"'approved'", '"approved"', "approved"})),
+    ("trust_decay_multiplier", frozenset({"1", "1.0", "1.00"})),
+)
+
+
+def _agents_schema_drifted(cols: dict, conn: _db.DbConnection) -> bool:
+    """Pure-ish: True when the agents table has drifted from the canonical schema.
+
+    Why: split out so the actual migration check stays at one assertion
+    per invariant; SQLite ``PRAGMA table_info`` reports defaults as the
+    raw SQL token (with quotes), so we accept several encodings.
+    """
     if not _REQUIRED_COLUMNS.issubset(cols.keys()):
         return True
     if cols["agent_id"]["pk"] != 1:
         return True
-    if cols["owner_id"]["notnull"] != 1:
-        return True
-    if cols["name"]["notnull"] != 1 or cols["description"]["notnull"] != 1:
-        return True
-    if (
-        cols["endpoint_url"]["notnull"] != 1
-        or cols["price_per_call_usd"]["notnull"] != 1
-    ):
-        return True
-    if cols["avg_latency_ms"]["dflt_value"] not in {"0.0", "0", "0.00"}:
-        return True
-    if cols["total_calls"]["dflt_value"] != "0":
-        return True
-    if cols["successful_calls"]["dflt_value"] != "0":
-        return True
-    if cols["tags"]["dflt_value"] not in {"'[]'", '"[]"', "[]"}:
-        return True
-    if cols["input_schema"]["dflt_value"] not in {"'{}'", '"{}"', "{}"}:
-        return True
-    if cols["output_schema"]["dflt_value"] not in {"'{}'", '"{}"', "{}"}:
-        return True
-    if cols["internal_only"]["dflt_value"] != "0":
-        return True
-    if cols["status"]["dflt_value"] not in {"'active'", '"active"', "active"}:
-        return True
-    if cols["review_status"]["dflt_value"] not in {
-        "'approved'",
-        '"approved"',
-        "approved",
-    }:
-        return True
-    if cols["trust_decay_multiplier"]["dflt_value"] not in {"1", "1.0", "1.00"}:
-        return True
-    if cols["last_decay_at"]["notnull"] != 1:
-        return True
-    if cols["created_at"]["notnull"] != 1:
-        return True
-    if not _has_unique_name_constraint(conn):
-        return True
-    if not _has_price_check_constraint(conn):
-        return True
-    return False
+    for col_name in _FLAG_NOT_NULL_COLS:
+        if cols[col_name]["notnull"] != 1:
+            return True
+    for col_name, allowed in _DEFAULT_VALUE_CHECKS:
+        if cols[col_name]["dflt_value"] not in allowed:
+            return True
+    return not (_has_unique_name_constraint(conn) and _has_price_check_constraint(conn))
+
+
+def _needs_agents_migration(conn: _db.DbConnection) -> bool:
+    """Side-effect: introspect the agents table; True when an in-place migration is required.
+
+    Why: in Postgres mode, schema evolution is handled exclusively by SQL
+    migration files; this Python check is SQLite-only.
+    """
+    if _db.IS_POSTGRES:
+        return False
+    cols = _agents_columns(conn)
+    return _agents_schema_drifted(cols, conn)
 
 
 def _to_non_negative_float(value, default: float = 0.0) -> float:
@@ -489,37 +491,44 @@ def _invalidate_embeddings_cache() -> None:
         _embeddings_cache_expires_at = 0.0
 
 
-def _load_embeddings_for_agents(agent_ids: set[str]) -> dict[str, np.ndarray]:
+def _refresh_embedding_cache_if_expired(now: float) -> None:
+    """Side-effect (mutating module globals): drop and refresh the cache window past TTL."""
     global _embeddings_cache_expires_at, _embeddings_cache
+    if now >= _embeddings_cache_expires_at:
+        _embeddings_cache = {}
+        _embeddings_cache_expires_at = now + _EMBEDDING_CACHE_TTL_SECONDS
+
+
+def _fetch_missing_embeddings(missing: list[str]) -> dict[str, np.ndarray]:
+    """Side-effect: read missing embeddings from agent_embeddings; ``{}`` if input empty."""
+    if not missing:
+        return {}
+    placeholders = ",".join("%s" for _ in missing)
+    with _conn() as conn:
+        rows = conn.execute(
+            f"SELECT agent_id, embedding FROM agent_embeddings WHERE agent_id IN ({placeholders})",
+            tuple(missing),
+        ).fetchall()
+    return {str(row["agent_id"]): _unpack_embedding(row["embedding"]) for row in rows}
+
+
+def _load_embeddings_for_agents(agent_ids: set[str]) -> dict[str, np.ndarray]:
+    """Side-effect: thread-safe cache + DB load of agent embeddings.
+
+    Why: search ranking calls this on every query; the per-process cache
+    keeps p50 fast while the TTL prevents stale embeddings on long-lived
+    workers.
+    """
+    global _embeddings_cache_expires_at
     requested = {
         str(agent_id).strip() for agent_id in agent_ids if str(agent_id).strip()
     }
     if not requested:
         return {}
-
-    now = time.monotonic()
     with _embeddings_cache_lock:
-        if now >= _embeddings_cache_expires_at:
-            _embeddings_cache = {}
-            _embeddings_cache_expires_at = now + _EMBEDDING_CACHE_TTL_SECONDS
-        cached = {
-            agent_id: _embeddings_cache[agent_id]
-            for agent_id in requested
-            if agent_id in _embeddings_cache
-        }
-        missing = sorted(requested.difference(cached.keys()))
-
-    loaded: dict[str, np.ndarray] = {}
-    if missing:
-        placeholders = ",".join("%s" for _ in missing)
-        with _conn() as conn:
-            rows = conn.execute(
-                f"SELECT agent_id, embedding FROM agent_embeddings WHERE agent_id IN ({placeholders})",
-                tuple(missing),
-            ).fetchall()
-        for row in rows:
-            loaded[str(row["agent_id"])] = _unpack_embedding(row["embedding"])
-
+        _refresh_embedding_cache_if_expired(time.monotonic())
+        missing = sorted(requested.difference(_embeddings_cache.keys()))
+    loaded = _fetch_missing_embeddings(missing)
     with _embeddings_cache_lock:
         if loaded:
             _embeddings_cache.update(loaded)
@@ -547,79 +556,38 @@ def _dedupe_name(base_name: str, used_names: set) -> str:
         n += 1
 
 
-def _normalize_legacy_agent_row(
-    row: dict, used_agent_ids: set, used_names: set
-) -> tuple:
-    legacy_rowid = row.get("_legacy_rowid", 0)
-    raw_name = str(row.get("name") or "").strip()
-    name = _dedupe_name(raw_name or "Unnamed Agent", used_names)
+def _resolve_legacy_agent_id(
+    row: dict, name: str, legacy_rowid: int, used_agent_ids: set,
+) -> str:
+    """Pure: stable, dedup-safe agent_id for a legacy row.
 
+    Why: legacy tables may have rows without ``agent_id``; deriving one
+    from rowid+name+endpoint keeps the migration deterministic across re-runs.
+    """
     raw_agent_id = str(row.get("agent_id") or "").strip()
     if not raw_agent_id:
-        raw_agent_id = str(
-            uuid.uuid5(
-                uuid.NAMESPACE_URL,
-                f"legacy-agent:{legacy_rowid}:{name}:{row.get('endpoint_url') or ''}",
-            )
-        )
-
+        raw_agent_id = str(uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"legacy-agent:{legacy_rowid}:{name}:{row.get('endpoint_url') or ''}",
+        ))
     agent_id = raw_agent_id
     suffix = 2
     while agent_id in used_agent_ids:
-        agent_id = str(
-            uuid.uuid5(
-                uuid.NAMESPACE_URL,
-                f"{raw_agent_id}:{legacy_rowid}:{suffix}",
-            )
-        )
+        agent_id = str(uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"{raw_agent_id}:{legacy_rowid}:{suffix}",
+        ))
         suffix += 1
     used_agent_ids.add(agent_id)
+    return agent_id
 
-    description = (
-        str(row.get("description") or "").strip() or "No description provided."
-    )
-    owner_id = str(row.get("owner_id") or "").strip() or f"agent:{agent_id}"
-    endpoint_url = (
-        str(row.get("endpoint_url") or "").strip()
-        or f"legacy://missing-endpoint/{agent_id}"
-    )
-    healthcheck_url = str(row.get("healthcheck_url") or "").strip() or None
-    price_per_call_usd = _to_non_negative_float(
-        row.get("price_per_call_usd"), default=0.0
-    )
-    avg_latency_ms = _to_non_negative_float(row.get("avg_latency_ms"), default=0.0)
-    call_latency_ring = str(row.get("call_latency_ring") or "[]").strip() or "[]"
-    total_calls = _to_non_negative_int(row.get("total_calls"), default=0)
-    successful_calls = _to_non_negative_int(row.get("successful_calls"), default=0)
-    if successful_calls > total_calls:
-        successful_calls = total_calls
-    tags = _normalize_tags_json(row.get("tags"))
-    input_schema = _normalize_input_schema_json(row.get("input_schema"))
-    output_schema = _normalize_output_schema_json(row.get("output_schema"))
-    output_verifier_url = str(row.get("output_verifier_url") or "").strip() or None
-    try:
-        raw_examples = row.get("output_examples")
-        parsed_ex = json.loads(raw_examples) if raw_examples else None
-        output_examples = json.dumps(parsed_ex) if isinstance(parsed_ex, list) else None
-    except (json.JSONDecodeError, TypeError):
-        output_examples = None
+
+def _normalize_legacy_int_flags(row: dict) -> dict[str, int | None]:
+    """Pure: coerce 0/1 flag fields, preserving None for nullable ``cacheable``."""
     try:
         verified = 1 if int(row.get("verified") or 0) else 0
     except (TypeError, ValueError):
         verified = 0
-    endpoint_health_status = (
-        str(row.get("endpoint_health_status") or "unknown").strip().lower()
-    )
-    if endpoint_health_status not in {"unknown", "healthy", "degraded"}:
-        endpoint_health_status = "unknown"
-    endpoint_consecutive_failures = _to_non_negative_int(
-        row.get("endpoint_consecutive_failures"),
-        default=0,
-    )
-    endpoint_last_checked_at = (
-        str(row.get("endpoint_last_checked_at") or "").strip() or None
-    )
-    endpoint_last_error = str(row.get("endpoint_last_error") or "").strip() or None
     try:
         internal_only = 1 if int(row.get("internal_only") or 0) else 0
     except (TypeError, ValueError):
@@ -629,55 +597,110 @@ def _normalize_legacy_agent_row(
         cacheable = None if cacheable_raw is None else (1 if int(cacheable_raw) else 0)
     except (TypeError, ValueError):
         cacheable = None
-    status = str(row.get("status") or "active").strip().lower()
-    if status not in {"active", "suspended", "banned"}:
-        status = "active"
-    review_status = str(row.get("review_status") or "approved").strip().lower()
-    if review_status not in REVIEW_STATUSES:
-        review_status = "approved"
-    review_note = str(row.get("review_note") or "").strip() or None
-    reviewed_at = str(row.get("reviewed_at") or "").strip() or None
-    reviewed_by = str(row.get("reviewed_by") or "").strip() or None
-    trust_decay_multiplier = _to_non_negative_float(
-        row.get("trust_decay_multiplier"), default=1.0
-    )
-    if trust_decay_multiplier <= 0:
-        trust_decay_multiplier = 1.0
-    last_decay_at = str(row.get("last_decay_at") or "").strip() or _CANONICAL_CREATED_AT
-    created_at = str(row.get("created_at") or "").strip() or _CANONICAL_CREATED_AT
+    return {"verified": verified, "internal_only": internal_only, "cacheable": cacheable}
 
+
+def _normalize_legacy_status(row: dict) -> dict[str, str]:
+    """Pure: clamp status / review_status / endpoint_health_status to allowed values."""
+    health = str(row.get("endpoint_health_status") or "unknown").strip().lower()
+    status = str(row.get("status") or "active").strip().lower()
+    review_status = str(row.get("review_status") or "approved").strip().lower()
+    return {
+        "endpoint_health_status": health if health in _VALID_HEALTH_STATUSES else "unknown",
+        "status": status if status in _VALID_AGENT_STATUSES else "active",
+        "review_status": review_status if review_status in REVIEW_STATUSES else "approved",
+    }
+
+
+def _normalize_legacy_examples(row: dict) -> str | None:
+    """Pure: re-encode output_examples as a JSON string (or None) for safe storage."""
+    try:
+        raw_examples = row.get("output_examples")
+        parsed_ex = json.loads(raw_examples) if raw_examples else None
+        return json.dumps(parsed_ex) if isinstance(parsed_ex, list) else None
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def _normalize_legacy_call_counts(row: dict) -> tuple[int, int]:
+    """Pure: ``(total_calls, successful_calls)`` with successful clamped to ≤ total."""
+    total = _to_non_negative_int(row.get("total_calls"), default=0)
+    successful = _to_non_negative_int(row.get("successful_calls"), default=0)
+    return total, min(successful, total)
+
+
+def _build_legacy_agent_tuple(
+    *, agent_id: str, owner_id: str, name: str, description: str,
+    endpoint_url: str, row: dict, flags: dict[str, int | None],
+    statuses: dict[str, str], total_calls: int, successful_calls: int,
+    trust_decay_multiplier: float,
+) -> tuple:
+    """Pure: assemble the column-order tuple expected by the agents INSERT statement."""
     return (
         agent_id,
         owner_id,
         name,
         description,
         endpoint_url,
-        healthcheck_url,
-        price_per_call_usd,
-        call_latency_ring,
-        avg_latency_ms,
+        str(row.get("healthcheck_url") or "").strip() or None,
+        _to_non_negative_float(row.get("price_per_call_usd"), default=0.0),
+        str(row.get("call_latency_ring") or "[]").strip() or "[]",
+        _to_non_negative_float(row.get("avg_latency_ms"), default=0.0),
         total_calls,
         successful_calls,
-        tags,
-        input_schema,
-        output_schema,
-        output_verifier_url,
-        output_examples,
-        verified,
-        endpoint_health_status,
-        endpoint_consecutive_failures,
-        endpoint_last_checked_at,
-        endpoint_last_error,
-        internal_only,
-        cacheable,
-        status,
-        review_status,
-        review_note,
-        reviewed_at,
-        reviewed_by,
+        _normalize_tags_json(row.get("tags")),
+        _normalize_input_schema_json(row.get("input_schema")),
+        _normalize_output_schema_json(row.get("output_schema")),
+        str(row.get("output_verifier_url") or "").strip() or None,
+        _normalize_legacy_examples(row),
+        flags["verified"],
+        statuses["endpoint_health_status"],
+        _to_non_negative_int(row.get("endpoint_consecutive_failures"), default=0),
+        str(row.get("endpoint_last_checked_at") or "").strip() or None,
+        str(row.get("endpoint_last_error") or "").strip() or None,
+        flags["internal_only"],
+        flags["cacheable"],
+        statuses["status"],
+        statuses["review_status"],
+        str(row.get("review_note") or "").strip() or None,
+        str(row.get("reviewed_at") or "").strip() or None,
+        str(row.get("reviewed_by") or "").strip() or None,
         trust_decay_multiplier,
-        last_decay_at,
-        created_at,
+        str(row.get("last_decay_at") or "").strip() or _CANONICAL_CREATED_AT,
+        str(row.get("created_at") or "").strip() or _CANONICAL_CREATED_AT,
+    )
+
+
+def _normalize_legacy_agent_row(
+    row: dict, used_agent_ids: set, used_names: set,
+) -> tuple:
+    """Pure: shape a legacy agent row into the canonical INSERT tuple.
+
+    Why: the migration runs once per deploy; idempotent + dedup-aware
+    behaviour lets us re-run safely if a deploy aborts mid-migration.
+    """
+    legacy_rowid = row.get("_legacy_rowid", 0)
+    raw_name = str(row.get("name") or "").strip()
+    name = _dedupe_name(raw_name or "Unnamed Agent", used_names)
+    agent_id = _resolve_legacy_agent_id(row, name, legacy_rowid, used_agent_ids)
+    flags = _normalize_legacy_int_flags(row)
+    statuses = _normalize_legacy_status(row)
+    total_calls, successful_calls = _normalize_legacy_call_counts(row)
+    description = str(row.get("description") or "").strip() or "No description provided."
+    owner_id = str(row.get("owner_id") or "").strip() or f"agent:{agent_id}"
+    endpoint_url = (
+        str(row.get("endpoint_url") or "").strip()
+        or f"legacy://missing-endpoint/{agent_id}"
+    )
+    trust_decay_multiplier = _to_non_negative_float(
+        row.get("trust_decay_multiplier"), default=1.0,
+    ) or 1.0
+    return _build_legacy_agent_tuple(
+        agent_id=agent_id, owner_id=owner_id, name=name,
+        description=description, endpoint_url=endpoint_url,
+        row=row, flags=flags, statuses=statuses,
+        total_calls=total_calls, successful_calls=successful_calls,
+        trust_decay_multiplier=trust_decay_multiplier,
     )
 
 
@@ -811,59 +834,52 @@ def init_db() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _row_to_dict(row: dict) -> dict:
-    d = dict(row)
-    try:
-        parsed_tags = json.loads(d.get("tags") or "[]")
-        d["tags"] = parsed_tags if isinstance(parsed_tags, list) else []
-    except (json.JSONDecodeError, TypeError):
-        d["tags"] = []
+_VALID_HEALTH_STATUSES = frozenset({"unknown", "healthy", "degraded"})
+_VALID_AGENT_STATUSES = frozenset({"active", "suspended", "banned"})
+_VALID_PRICING_MODELS = frozenset({"fixed", "per_unit", "tiered"})
+_VALID_AGENT_KINDS = frozenset({"aztea_built", "community_skill", "self_hosted"})
 
+
+def _parse_json_field(raw: Any, default_factory: Callable[[], Any], expected_type: type) -> Any:
+    """Pure: decode a JSON-encoded scalar field; default-factory result on failure."""
     try:
-        parsed_call_ring = json.loads(d.get("call_latency_ring") or "[]")
-        d["call_latency_ring"] = (
-            parsed_call_ring if isinstance(parsed_call_ring, list) else []
-        )
+        parsed = json.loads(raw or ("[]" if expected_type is list else "{}"))
     except (json.JSONDecodeError, TypeError):
-        d["call_latency_ring"] = []
+        return default_factory()
+    return parsed if isinstance(parsed, expected_type) else default_factory()
+
+
+def _parse_json_blob_fields(d: dict) -> None:
+    """Side-effect (mutating ``d``): decode tags / call_latency_ring / schema fields."""
+    d["tags"] = _parse_json_field(d.get("tags"), list, list)
+    d["call_latency_ring"] = _parse_json_field(d.get("call_latency_ring"), list, list)
+    d["input_schema"] = _parse_json_field(d.get("input_schema"), dict, dict)
+    d["output_schema"] = _parse_json_field(d.get("output_schema"), dict, dict)
+    raw_examples = d.get("output_examples")
     try:
-        parsed_schema = json.loads(d.get("input_schema") or "{}")
-        d["input_schema"] = parsed_schema if isinstance(parsed_schema, dict) else {}
-    except (json.JSONDecodeError, TypeError):
-        d["input_schema"] = {}
-    try:
-        parsed_output_schema = json.loads(d.get("output_schema") or "{}")
-        d["output_schema"] = (
-            parsed_output_schema if isinstance(parsed_output_schema, dict) else {}
-        )
-    except (json.JSONDecodeError, TypeError):
-        d["output_schema"] = {}
-    d["healthcheck_url"] = str(d.get("healthcheck_url") or "").strip() or None
-    d["output_verifier_url"] = d.get("output_verifier_url") or None
-    try:
-        raw_examples = d.get("output_examples")
         parsed_examples = json.loads(raw_examples) if raw_examples else None
-        d["output_examples"] = (
-            parsed_examples if isinstance(parsed_examples, list) else None
-        )
     except (json.JSONDecodeError, TypeError):
-        d["output_examples"] = None
-    d["verified"] = bool(int(d.get("verified") or 0))
-    endpoint_health_status = (
-        str(d.get("endpoint_health_status") or "unknown").strip().lower()
+        parsed_examples = None
+    d["output_examples"] = parsed_examples if isinstance(parsed_examples, list) else None
+
+
+def _normalize_endpoint_health_fields(d: dict) -> None:
+    """Side-effect (mutating ``d``): clamp endpoint health/error fields to known shapes."""
+    health_status = str(d.get("endpoint_health_status") or "unknown").strip().lower()
+    d["endpoint_health_status"] = (
+        health_status if health_status in _VALID_HEALTH_STATUSES else "unknown"
     )
-    if endpoint_health_status not in {"unknown", "healthy", "degraded"}:
-        endpoint_health_status = "unknown"
-    d["endpoint_health_status"] = endpoint_health_status
     d["endpoint_consecutive_failures"] = _to_non_negative_int(
-        d.get("endpoint_consecutive_failures"),
-        default=0,
+        d.get("endpoint_consecutive_failures"), default=0,
     )
     d["endpoint_last_checked_at"] = (
         str(d.get("endpoint_last_checked_at") or "").strip() or None
     )
     d["endpoint_last_error"] = str(d.get("endpoint_last_error") or "").strip() or None
-    d["internal_only"] = bool(int(d.get("internal_only") or 0))
+
+
+def _normalize_status_fields(d: dict) -> None:
+    """Side-effect (mutating ``d``): clamp status / review_status / kind / cacheable fields."""
     cacheable_raw = d.get("cacheable")
     if cacheable_raw is None:
         d["cacheable"] = None
@@ -873,24 +889,19 @@ def _row_to_dict(row: dict) -> dict:
         except (TypeError, ValueError):
             d["cacheable"] = None
     status = str(d.get("status") or "active").strip().lower()
-    d["status"] = status if status in {"active", "suspended", "banned"} else "active"
+    d["status"] = status if status in _VALID_AGENT_STATUSES else "active"
     review_status = str(d.get("review_status") or "approved").strip().lower()
-    d["review_status"] = (
-        review_status if review_status in REVIEW_STATUSES else "approved"
-    )
-    d["review_note"] = str(d.get("review_note") or "").strip() or None
-    d["reviewed_at"] = str(d.get("reviewed_at") or "").strip() or None
-    d["reviewed_by"] = str(d.get("reviewed_by") or "").strip() or None
-    d["trust_decay_multiplier"] = (
-        _to_non_negative_float(d.get("trust_decay_multiplier"), default=1.0) or 1.0
-    )
-    d["last_decay_at"] = str(d.get("last_decay_at") or _CANONICAL_CREATED_AT)
-    d["model_provider"] = str(d.get("model_provider") or "").strip().lower() or None
-    d["model_id"] = str(d.get("model_id") or "").strip() or None
+    d["review_status"] = review_status if review_status in REVIEW_STATUSES else "approved"
+    raw_kind = str(d.get("kind") or "self_hosted").strip().lower()
+    d["kind"] = raw_kind if raw_kind in _VALID_AGENT_KINDS else "self_hosted"
+
+
+def _normalize_pricing_fields(d: dict) -> None:
+    """Side-effect (mutating ``d``): decode pricing_model + pricing_config + payout_curve."""
     raw_pricing_model = str(d.get("pricing_model") or "fixed").strip().lower()
-    if raw_pricing_model not in {"fixed", "per_unit", "tiered"}:
-        raw_pricing_model = "fixed"
-    d["pricing_model"] = raw_pricing_model
+    d["pricing_model"] = (
+        raw_pricing_model if raw_pricing_model in _VALID_PRICING_MODELS else "fixed"
+    )
     raw_pricing_config = d.get("pricing_config")
     parsed_pricing_config: dict | None = None
     if isinstance(raw_pricing_config, str) and raw_pricing_config.strip():
@@ -902,25 +913,45 @@ def _row_to_dict(row: dict) -> dict:
     elif isinstance(raw_pricing_config, dict):
         parsed_pricing_config = raw_pricing_config
     d["pricing_config"] = parsed_pricing_config
-
-    valid_kinds = {"aztea_built", "community_skill", "self_hosted"}
-    raw_kind = str(d.get("kind") or "self_hosted").strip().lower()
-    d["kind"] = raw_kind if raw_kind in valid_kinds else "self_hosted"
-    d["pii_safe"] = bool(int(d.get("pii_safe") or 0))
-    d["outputs_not_stored"] = bool(int(d.get("outputs_not_stored") or 0))
-    d["audit_logged"] = bool(int(d.get("audit_logged") or 0))
-    d["region_locked"] = str(d.get("region_locked") or "").strip().lower() or None
     raw_pc = d.get("payout_curve")
     if raw_pc:
         try:
-            d["payout_curve"] = (
-                json.loads(raw_pc) if isinstance(raw_pc, str) else raw_pc
-            )
+            d["payout_curve"] = json.loads(raw_pc) if isinstance(raw_pc, str) else raw_pc
         except (ValueError, TypeError):
             d["payout_curve"] = None
     else:
         d["payout_curve"] = None
 
+
+def _row_to_dict(row: dict) -> dict:
+    """Pure-ish: project a raw DB row into the agent's canonical dict shape.
+
+    Why: this is the boundary between SQL strings and the typed domain
+    dict; every consumer assumes the shape is normalised, so all coercion
+    happens exactly once here.
+    """
+    d = dict(row)
+    _parse_json_blob_fields(d)
+    d["healthcheck_url"] = str(d.get("healthcheck_url") or "").strip() or None
+    d["output_verifier_url"] = d.get("output_verifier_url") or None
+    d["verified"] = bool(int(d.get("verified") or 0))
+    _normalize_endpoint_health_fields(d)
+    d["internal_only"] = bool(int(d.get("internal_only") or 0))
+    _normalize_status_fields(d)
+    d["review_note"] = str(d.get("review_note") or "").strip() or None
+    d["reviewed_at"] = str(d.get("reviewed_at") or "").strip() or None
+    d["reviewed_by"] = str(d.get("reviewed_by") or "").strip() or None
+    d["trust_decay_multiplier"] = (
+        _to_non_negative_float(d.get("trust_decay_multiplier"), default=1.0) or 1.0
+    )
+    d["last_decay_at"] = str(d.get("last_decay_at") or _CANONICAL_CREATED_AT)
+    d["model_provider"] = str(d.get("model_provider") or "").strip().lower() or None
+    d["model_id"] = str(d.get("model_id") or "").strip() or None
+    _normalize_pricing_fields(d)
+    d["pii_safe"] = bool(int(d.get("pii_safe") or 0))
+    d["outputs_not_stored"] = bool(int(d.get("outputs_not_stored") or 0))
+    d["audit_logged"] = bool(int(d.get("audit_logged") or 0))
+    d["region_locked"] = str(d.get("region_locked") or "").strip().lower() or None
     total = d["total_calls"]
     successful = d.pop("successful_calls")
     d["success_rate"] = round(successful / total, 4) if total > 0 else 1.0

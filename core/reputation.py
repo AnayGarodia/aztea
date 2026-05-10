@@ -26,6 +26,7 @@ import os
 import threading
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 
 from core import db as _db
 
@@ -141,33 +142,37 @@ def _compute_confidence_score(total_calls: int, rating_count: int) -> float:
     return _clamp01(evidence / (evidence + _CONFIDENCE_DENOMINATOR))
 
 
-def _build_trust_metrics(
-    agent_id: str,
-    total_calls: int,
-    successful_calls: int,
-    avg_latency_ms: float,
-    rating_count: int,
-    average_quality_rating: float | None,
-    decay_multiplier: float = 1.0,
-) -> dict:
-    quality_score = _compute_quality_score(average_quality_rating, rating_count)
-    success_score = _compute_success_score(total_calls, successful_calls)
-    latency_score = _compute_latency_score(total_calls, avg_latency_ms)
-    confidence_score = _compute_confidence_score(total_calls, rating_count)
+def _compute_trust_raw(
+    quality_score: float, success_score: float, latency_score: float,
+    confidence_score: float, decay_multiplier: float,
+) -> float:
+    """Pure: blend the per-axis scores into one ``trust_raw`` value in [0, 1].
 
+    Why: confidence-weighted blend pulls new agents toward NEUTRAL until
+    they accumulate evidence; the decay multiplier shrinks toward NEUTRAL
+    on inactivity (never below the baseline floor) so silent agents do
+    not spiral to zero.
+    """
     base_score = (
         quality_score * _QUALITY_WEIGHT
         + success_score * _SUCCESS_WEIGHT
         + latency_score * _LATENCY_WEIGHT
     )
-    trust_raw = (_NEUTRAL_TRUST * (1.0 - confidence_score)) + (
-        base_score * confidence_score
-    )
-    multiplier = _normalize_decay_multiplier(decay_multiplier)
+    trust_raw = (_NEUTRAL_TRUST * (1.0 - confidence_score)) + (base_score * confidence_score)
     baseline = _NEUTRAL_TRUST * (1.0 - confidence_score)
-    trust_raw = max(baseline, trust_raw * multiplier)
-    success_rate = (successful_calls / total_calls) if total_calls > 0 else None
+    return max(baseline, trust_raw * decay_multiplier)
 
+
+def _shape_trust_metrics_dict(
+    *, agent_id: str, trust_raw: float,
+    quality_score: float, success_score: float, latency_score: float,
+    confidence_score: float, rating_count: int,
+    average_quality_rating: float | None,
+    total_calls: int, successful_calls: int, avg_latency_ms: float,
+    multiplier: float,
+) -> dict:
+    """Pure: shape the trust-metrics response dict; rounds for stable serialisation."""
+    success_rate = (successful_calls / total_calls) if total_calls > 0 else None
     return {
         "agent_id": agent_id,
         "trust_score": round(trust_raw * 100.0, 2),
@@ -187,6 +192,39 @@ def _build_trust_metrics(
         "avg_latency_ms": round(avg_latency_ms, 3),
         "decay_multiplier": round(multiplier, 6),
     }
+
+
+def _build_trust_metrics(
+    agent_id: str,
+    total_calls: int,
+    successful_calls: int,
+    avg_latency_ms: float,
+    rating_count: int,
+    average_quality_rating: float | None,
+    decay_multiplier: float = 1.0,
+) -> dict:
+    """Pure: trust score + per-axis sub-scores for one agent.
+
+    Why: every consumer of trust (search ranking, auto-hire gating, MCP
+    descriptions) reads from this single shape, so the score formula is
+    audited in exactly one place.
+    """
+    quality_score = _compute_quality_score(average_quality_rating, rating_count)
+    success_score = _compute_success_score(total_calls, successful_calls)
+    latency_score = _compute_latency_score(total_calls, avg_latency_ms)
+    confidence_score = _compute_confidence_score(total_calls, rating_count)
+    multiplier = _normalize_decay_multiplier(decay_multiplier)
+    trust_raw = _compute_trust_raw(
+        quality_score, success_score, latency_score, confidence_score, multiplier,
+    )
+    return _shape_trust_metrics_dict(
+        agent_id=agent_id, trust_raw=trust_raw,
+        quality_score=quality_score, success_score=success_score,
+        latency_score=latency_score, confidence_score=confidence_score,
+        rating_count=rating_count, average_quality_rating=average_quality_rating,
+        total_calls=total_calls, successful_calls=successful_calls,
+        avg_latency_ms=avg_latency_ms, multiplier=multiplier,
+    )
 
 
 def init_reputation_db() -> None:
@@ -250,56 +288,78 @@ def get_job_quality_rating(job_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+def _load_job_for_quality_rating(conn: Any, job_id: str) -> dict[str, Any]:
+    """Side-effect: fetch the job row used for quality-rating eligibility checks."""
+    try:
+        row = conn.execute(
+            """
+            SELECT job_id, agent_id, caller_owner_id, status
+            FROM jobs
+            WHERE job_id = %s
+            """,
+            (job_id,),
+        ).fetchone()
+    except _db.OperationalError as e:
+        raise RuntimeError(
+            "jobs table is not initialized. Call jobs.init_jobs_db() first."
+        ) from e
+    if row is None:
+        raise ValueError(f"Job '{job_id}' not found.")
+    return dict(row)
+
+
+def _check_quality_rating_eligible(
+    conn: Any, job: dict[str, Any], caller_owner_id: str, job_id: str,
+) -> None:
+    """Pure-ish: enforce caller-ownership + completion + no-active-dispute invariants."""
+    if job["status"] != "complete":
+        raise ValueError("Only completed jobs can be rated.")
+    if job["caller_owner_id"] != caller_owner_id:
+        raise ValueError("Only the job caller can submit a quality rating.")
+    if _job_has_dispute_conn(conn, job_id):
+        raise ValueError("Ratings are locked once a dispute is filed.")
+
+
+def _insert_quality_rating(
+    conn: Any, *, job_id: str, job: dict[str, Any],
+    caller_owner_id: str, rating: int,
+) -> None:
+    """Side-effect: write the job_quality_ratings row; raises ValueError on duplicate."""
+    try:
+        conn.execute(
+            """
+            INSERT INTO job_quality_ratings
+                (job_id, agent_id, caller_owner_id, rating, created_at)
+            VALUES (%s, %s, %s, %s, %s)
+            """,
+            (
+                job_id,
+                job["agent_id"],
+                caller_owner_id,
+                rating,
+                _now(),
+            ),
+        )
+    except _db.IntegrityError as e:
+        raise ValueError(f"Job '{job_id}' already has a quality rating.") from e
+
+
 def record_job_quality_rating(job_id: str, caller_owner_id: str, rating: int) -> dict:
-    """
-    Store a caller quality rating for one delivered job.
-    Enforces one rating per job and validates caller ownership.
+    """Side-effect: store a caller's quality rating for one delivered job.
+
+    Why: one rating per job is enforced via the database UNIQUE constraint;
+    duplicates surface as ``ValueError`` so the API layer can return 409
+    rather than a 500 from the integrity violation.
     """
     init_reputation_db()
     validated_rating = _validate_rating(rating)
-
     with _conn() as conn:
-        try:
-            job = conn.execute(
-                """
-                SELECT job_id, agent_id, caller_owner_id, status
-                FROM jobs
-                WHERE job_id = %s
-                """,
-                (job_id,),
-            ).fetchone()
-        except _db.OperationalError as e:
-            raise RuntimeError(
-                "jobs table is not initialized. Call jobs.init_jobs_db() first."
-            ) from e
-
-        if job is None:
-            raise ValueError(f"Job '{job_id}' not found.")
-        if job["status"] != "complete":
-            raise ValueError("Only completed jobs can be rated.")
-        if job["caller_owner_id"] != caller_owner_id:
-            raise ValueError("Only the job caller can submit a quality rating.")
-        if _job_has_dispute_conn(conn, job_id):
-            raise ValueError("Ratings are locked once a dispute is filed.")
-
-        try:
-            conn.execute(
-                """
-                INSERT INTO job_quality_ratings
-                    (job_id, agent_id, caller_owner_id, rating, created_at)
-                VALUES (%s, %s, %s, %s, %s)
-                """,
-                (
-                    job_id,
-                    job["agent_id"],
-                    caller_owner_id,
-                    validated_rating,
-                    _now(),
-                ),
-            )
-        except _db.IntegrityError as e:
-            raise ValueError(f"Job '{job_id}' already has a quality rating.") from e
-
+        job = _load_job_for_quality_rating(conn, job_id)
+        _check_quality_rating_eligible(conn, job, caller_owner_id, job_id)
+        _insert_quality_rating(
+            conn, job_id=job_id, job=job,
+            caller_owner_id=caller_owner_id, rating=validated_rating,
+        )
     created = get_job_quality_rating(job_id)
     if created:
         _push_rating_to_hosted_async(
@@ -322,64 +382,90 @@ def get_job_caller_rating(job_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+def _load_job_for_rating(conn: Any, job_id: str) -> dict[str, Any]:
+    """Side-effect: fetch the job row used for caller-rating eligibility checks."""
+    try:
+        row = conn.execute(
+            """
+            SELECT job_id, caller_owner_id, agent_owner_id, status
+            FROM jobs
+            WHERE job_id = %s
+            """,
+            (job_id,),
+        ).fetchone()
+    except _db.OperationalError as e:
+        raise RuntimeError(
+            "jobs table is not initialized. Call jobs.init_jobs_db() first."
+        ) from e
+    if row is None:
+        raise ValueError(f"Job '{job_id}' not found.")
+    return dict(row)
+
+
+def _check_caller_rating_eligible(
+    conn: Any, job: dict[str, Any], agent_owner_id: str, job_id: str,
+) -> None:
+    """Pure-ish: enforce the four invariants required to record a caller rating.
+
+    Why: ratings are locked once a dispute opens — this gate is the only
+    place that decision is made, so dispute integrity stays single-sourced.
+    """
+    if job["status"] != "complete":
+        raise ValueError("Only completed jobs can be rated.")
+    if job["agent_owner_id"] != agent_owner_id:
+        raise ValueError("Only the job's agent owner can rate this caller.")
+    if _job_has_dispute_conn(conn, job_id):
+        raise ValueError("Ratings are locked once a dispute is filed.")
+
+
+def _insert_caller_rating(
+    conn: Any, *, job_id: str, job: dict[str, Any],
+    rating: int, comment: str | None,
+) -> None:
+    """Side-effect: write the caller_ratings row; raises ValueError on duplicate."""
+    try:
+        conn.execute(
+            """
+            INSERT INTO caller_ratings
+                (rating_id, job_id, caller_owner_id, agent_owner_id, rating, comment, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                str(uuid.uuid4()),
+                job_id,
+                job["caller_owner_id"],
+                job["agent_owner_id"],
+                rating,
+                comment,
+                _now(),
+            ),
+        )
+    except _db.IntegrityError as e:
+        raise ValueError(f"Job '{job_id}' already has a caller rating.") from e
+
+
 def record_caller_rating(
     job_id: str,
     agent_owner_id: str,
     rating: int,
     comment: str | None = None,
 ) -> dict:
-    """
-    Store an agent's rating of the caller on one completed job.
-    Exactly one caller rating is allowed per job.
+    """Side-effect: record the agent's rating of the caller on one completed job.
+
+    Why: exactly one caller rating is allowed per job — the database
+    UNIQUE constraint enforces that, and we surface the violation as
+    ``ValueError`` so the API layer returns 409 instead of 500.
     """
     validated_rating = _validate_rating(rating)
     init_reputation_db()
     normalized_comment = str(comment or "").strip() or None
-
     with _conn() as conn:
-        try:
-            job = conn.execute(
-                """
-                SELECT job_id, caller_owner_id, agent_owner_id, status
-                FROM jobs
-                WHERE job_id = %s
-                """,
-                (job_id,),
-            ).fetchone()
-        except _db.OperationalError as e:
-            raise RuntimeError(
-                "jobs table is not initialized. Call jobs.init_jobs_db() first."
-            ) from e
-
-        if job is None:
-            raise ValueError(f"Job '{job_id}' not found.")
-        if job["status"] != "complete":
-            raise ValueError("Only completed jobs can be rated.")
-        if job["agent_owner_id"] != agent_owner_id:
-            raise ValueError("Only the job's agent owner can rate this caller.")
-        if _job_has_dispute_conn(conn, job_id):
-            raise ValueError("Ratings are locked once a dispute is filed.")
-
-        try:
-            conn.execute(
-                """
-                INSERT INTO caller_ratings
-                    (rating_id, job_id, caller_owner_id, agent_owner_id, rating, comment, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    str(uuid.uuid4()),
-                    job_id,
-                    job["caller_owner_id"],
-                    job["agent_owner_id"],
-                    validated_rating,
-                    normalized_comment,
-                    _now(),
-                ),
-            )
-        except _db.IntegrityError as e:
-            raise ValueError(f"Job '{job_id}' already has a caller rating.") from e
-
+        job = _load_job_for_rating(conn, job_id)
+        _check_caller_rating_eligible(conn, job, agent_owner_id, job_id)
+        _insert_caller_rating(
+            conn, job_id=job_id, job=job,
+            rating=validated_rating, comment=normalized_comment,
+        )
     created = get_job_caller_rating(job_id)
     if created:
         _push_rating_to_hosted_async(
@@ -587,40 +673,45 @@ def _load_client_quality_summary_map(
     }
 
 
-def _load_client_stats_map(
-    agent_ids: list[str],
-) -> dict[tuple[str, str], tuple[int, int, float]]:
-    if not agent_ids:
-        return {}
-    placeholders = ",".join(["%s"] * len(agent_ids))
+def _build_client_stats_query(placeholders: str) -> str:
+    """Pure: dialect-aware SQL for grouping job stats by (agent_id, client_id)."""
     latency_expr = (
         "EXTRACT(EPOCH FROM (completed_at::timestamptz - created_at::timestamptz)) * 1000.0"
         if _db.IS_POSTGRES
         else "(julianday(completed_at) - julianday(created_at)) * 86400000.0"
     )
+    return f"""
+        SELECT
+            agent_id,
+            client_id,
+            COUNT(*) AS total_calls,
+            SUM(CASE WHEN status = 'complete' THEN 1 ELSE 0 END) AS successful_calls,
+            AVG(
+                CASE
+                    WHEN completed_at IS NOT NULL
+                    THEN {latency_expr}
+                    ELSE NULL
+                END
+            ) AS avg_latency_ms
+        FROM jobs
+        WHERE agent_id IN ({placeholders})
+          AND client_id IS NOT NULL
+          AND TRIM(client_id) != ''
+        GROUP BY agent_id, client_id
+    """
+
+
+def _load_client_stats_map(
+    agent_ids: list[str],
+) -> dict[tuple[str, str], tuple[int, int, float]]:
+    """Side-effect: per-(agent_id, client_id) call/latency stats; ``{}`` if jobs table missing."""
+    if not agent_ids:
+        return {}
+    placeholders = ",".join(["%s"] * len(agent_ids))
     try:
         with _conn() as conn:
             rows = conn.execute(
-                f"""
-                SELECT
-                    agent_id,
-                    client_id,
-                    COUNT(*) AS total_calls,
-                    SUM(CASE WHEN status = 'complete' THEN 1 ELSE 0 END) AS successful_calls,
-                    AVG(
-                        CASE
-                            WHEN completed_at IS NOT NULL
-                            THEN {latency_expr}
-                            ELSE NULL
-                        END
-                    ) AS avg_latency_ms
-                FROM jobs
-                WHERE agent_id IN ({placeholders})
-                  AND client_id IS NOT NULL
-                  AND TRIM(client_id) != ''
-                GROUP BY agent_id, client_id
-                """,
-                agent_ids,
+                _build_client_stats_query(placeholders), agent_ids,
             ).fetchall()
     except _db.OperationalError:
         return {}
@@ -659,28 +750,47 @@ def _build_client_trust_map(
 
 
 def enrich_agent_record(agent: dict) -> dict:
-    """Attach trust/reputation fields to a single registry agent record."""
+    """Side-effect: attach trust/reputation fields to a single registry agent record.
+
+    Why: a thin wrapper around ``enrich_agent_records`` keeps the
+    single-agent and batch paths byte-identical, so a future change to
+    enrichment shape doesn't drift between the two.
+    """
     if "agent_id" not in agent:
         raise ValueError("agent record must include agent_id")
+    enriched = enrich_agent_records([agent])
+    return enriched[0] if enriched else dict(agent)
 
-    agent_id = agent["agent_id"]
-    summary_map = _get_agent_quality_summary_map([agent_id])
-    stats_map = _load_agent_stats_map([agent_id])
+
+def _resolve_agent_stats(
+    agent: dict, stats_map: dict[str, tuple[int, int, float | None]],
+) -> tuple[int, int, float | None]:
+    """Pure: prefer fresh stats; fall back to per-row counts when the map misses."""
+    stats = stats_map.get(agent["agent_id"])
+    if stats is not None:
+        return stats
+    return _normalize_agent_stats(
+        agent.get("total_calls"),
+        agent.get("successful_calls"),
+        agent.get("avg_latency_ms"),
+    )
+
+
+def _enrich_one_agent(
+    agent: dict, *,
+    summary_map: dict, stats_map: dict, dispute_counts: dict,
+    client_trust_map: dict,
+) -> dict:
+    """Pure: attach trust/quality/dispute fields to one agent record."""
+    if "agent_id" not in agent:
+        raise ValueError("agent record must include agent_id")
     summary = summary_map.get(
-        agent_id,
+        agent["agent_id"],
         {"rating_count": 0, "average_quality_rating": None},
     )
-    stats = stats_map.get(agent_id)
-    if stats is None:
-        stats = _normalize_agent_stats(
-            agent.get("total_calls"),
-            agent.get("successful_calls"),
-            agent.get("avg_latency_ms"),
-        )
-    total_calls, successful_calls, avg_latency_ms = stats
-
+    total_calls, successful_calls, avg_latency_ms = _resolve_agent_stats(agent, stats_map)
     metrics = _build_trust_metrics(
-        agent_id=agent_id,
+        agent_id=agent["agent_id"],
         total_calls=total_calls,
         successful_calls=successful_calls,
         avg_latency_ms=avg_latency_ms,
@@ -690,13 +800,7 @@ def enrich_agent_record(agent: dict) -> dict:
             agent.get("trust_decay_multiplier")
         ),
     )
-
-    dispute_counts = _load_dispute_rates_map([agent_id])
-    client_trust_map = _build_client_trust_map(
-        [agent_id],
-        {agent_id: _normalize_decay_multiplier(agent.get("trust_decay_multiplier"))},
-    )
-    dispute_count = dispute_counts.get(agent_id, 0)
+    dc = dispute_counts.get(agent["agent_id"], 0)
     return {
         **agent,
         "trust_score": metrics["trust_score"],
@@ -704,20 +808,22 @@ def enrich_agent_record(agent: dict) -> dict:
         "quality_rating_avg": metrics["average_quality_rating"],
         "confidence_score": metrics["confidence_score"],
         "reputation": metrics,
-        "dispute_rate": round(dispute_count / total_calls, 4) if total_calls > 0 else None,
-        "by_client": client_trust_map.get(agent_id, {}),
+        "dispute_rate": round(dc / total_calls, 4) if total_calls > 0 else None,
+        "by_client": client_trust_map.get(str(agent["agent_id"]), {}),
     }
 
 
 def enrich_agent_records(agents: list[dict]) -> list[dict]:
-    """Attach trust/reputation fields to every agent record in one batch."""
+    """Side-effect: attach trust/reputation fields to every agent record in one batch.
+
+    Why: a single batch keeps the N database lookups bounded by N agents
+    rather than N × per-row lookups in the caller.
+    """
     if not agents:
         return []
-
     agent_ids = [a["agent_id"] for a in agents if "agent_id" in a]
     summary_map = _get_agent_quality_summary_map(agent_ids)
     stats_map = _load_agent_stats_map(agent_ids)
-
     dispute_counts = _load_dispute_rates_map(agent_ids)
     decay_by_agent = {
         str(agent["agent_id"]): _normalize_decay_multiplier(
@@ -727,47 +833,14 @@ def enrich_agent_records(agents: list[dict]) -> list[dict]:
         if "agent_id" in agent
     }
     client_trust_map = _build_client_trust_map(agent_ids, decay_by_agent)
-    enriched_records = []
-    for agent in agents:
-        if "agent_id" not in agent:
-            raise ValueError("agent record must include agent_id")
-
-        summary = summary_map.get(
-            agent["agent_id"],
-            {"rating_count": 0, "average_quality_rating": None},
+    return [
+        _enrich_one_agent(
+            agent,
+            summary_map=summary_map, stats_map=stats_map,
+            dispute_counts=dispute_counts, client_trust_map=client_trust_map,
         )
-        stats = stats_map.get(agent["agent_id"])
-        if stats is None:
-            stats = _normalize_agent_stats(
-                agent.get("total_calls"),
-                agent.get("successful_calls"),
-                agent.get("avg_latency_ms"),
-            )
-        total_calls, successful_calls, avg_latency_ms = stats
-        metrics = _build_trust_metrics(
-            agent_id=agent["agent_id"],
-            total_calls=total_calls,
-            successful_calls=successful_calls,
-            avg_latency_ms=avg_latency_ms,
-            rating_count=summary["rating_count"],
-            average_quality_rating=summary["average_quality_rating"],
-            decay_multiplier=_normalize_decay_multiplier(
-                agent.get("trust_decay_multiplier")
-            ),
-        )
-
-        dc = dispute_counts.get(agent["agent_id"], 0)
-        enriched_records.append({
-            **agent,
-            "trust_score": metrics["trust_score"],
-            "quality_rating_count": metrics["rating_count"],
-            "quality_rating_avg": metrics["average_quality_rating"],
-            "confidence_score": metrics["confidence_score"],
-            "reputation": metrics,
-            "dispute_rate": round(dc / total_calls, 4) if total_calls > 0 else None,
-            "by_client": client_trust_map.get(str(agent["agent_id"]), {}),
-        })
-    return enriched_records
+        for agent in agents
+    ]
 
 
 def rank_agents_by_trust(agents: list[dict], descending: bool = True) -> list[dict]:

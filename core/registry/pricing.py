@@ -95,17 +95,8 @@ def _to_positive_decimal(value: Any, *, field: str) -> Decimal:
     return parsed
 
 
-def validate_pricing_config(
-    pricing_model: str, pricing_config: Any
-) -> dict[str, Any] | None:
-    """Return a canonicalised config dict, or ``None`` for ``fixed``.
-
-    Raises :class:`VariablePricingError` for invalid configurations.
-    """
-    model = normalize_pricing_model(pricing_model)
-    if model == "fixed":
-        return None
-
+def _parse_pricing_config_dict(model: str, pricing_config: Any) -> dict[str, Any]:
+    """Pure: decode pricing_config (dict or JSON string) into a dict; raises VariablePricingError otherwise."""
     if pricing_config is None or pricing_config == "":
         raise VariablePricingError(
             f"pricing_config is required when pricing_model is {model!r}."
@@ -121,51 +112,108 @@ def validate_pricing_config(
         parsed_raw = pricing_config
     if not isinstance(parsed_raw, dict):
         raise VariablePricingError("pricing_config must be an object.")
+    return parsed_raw
 
+
+def _parse_pricing_bounds(
+    parsed_raw: dict[str, Any],
+) -> tuple[str, str, int, int | None]:
+    """Pure: extract ``(input_field, unit, min_cents, max_cents)``; raises on missing field."""
     input_field = str(parsed_raw.get("input_field") or "").strip()
     if not input_field:
         raise VariablePricingError("pricing_config.input_field is required.")
     unit = str(parsed_raw.get("unit") or input_field).strip() or input_field
-
     min_cents = _to_int(
         parsed_raw.get("min_cents", 0), field="pricing_config.min_cents"
     )
     max_raw = parsed_raw.get("max_cents")
-    max_cents: int | None
-    if max_raw is None:
-        max_cents = None
-    else:
-        max_cents = _to_int(max_raw, field="pricing_config.max_cents", minimum=0)
+    max_cents = (
+        _to_int(max_raw, field="pricing_config.max_cents", minimum=0)
+        if max_raw is not None else None
+    )
     if max_cents is not None and max_cents < min_cents:
         raise VariablePricingError("pricing_config.max_cents must be >= min_cents.")
+    return input_field, unit, min_cents, max_cents
 
+
+def _parse_pricing_multipliers(parsed_raw: dict[str, Any]) -> dict[str, float] | None:
+    """Pure: validate ``multipliers`` and convert each entry to a positive float."""
+    multipliers_raw = parsed_raw.get("multipliers")
+    if multipliers_raw is None:
+        return None
+    if not isinstance(multipliers_raw, dict):
+        raise VariablePricingError("pricing_config.multipliers must be an object.")
+    canonical_mults: dict[str, float] = {}
+    for key, value in multipliers_raw.items():
+        try:
+            factor = float(value)
+        except (TypeError, ValueError):
+            raise VariablePricingError(
+                f"pricing_config.multipliers[{key!r}] must be numeric."
+            )
+        if not math.isfinite(factor) or factor <= 0:
+            raise VariablePricingError(
+                f"pricing_config.multipliers[{key!r}] must be a positive number."
+            )
+        canonical_mults[str(key)] = factor
+    return canonical_mults or None
+
+
+def _parse_pricing_tiers(parsed_raw: dict[str, Any]) -> list[dict[str, int]]:
+    """Pure: validate the ``tiers`` array; ascending by ``up_to_units``; raises otherwise."""
+    tiers_raw = parsed_raw.get("tiers")
+    if not isinstance(tiers_raw, list) or not tiers_raw:
+        raise VariablePricingError(
+            "pricing_config.tiers must be a non-empty list for tiered pricing."
+        )
+    tiers: list[dict[str, int]] = []
+    last_threshold: int | None = None
+    for idx, tier in enumerate(tiers_raw):
+        if not isinstance(tier, dict):
+            raise VariablePricingError(
+                f"pricing_config.tiers[{idx}] must be an object."
+            )
+        up_to = _to_int(
+            tier.get("up_to_units"),
+            field=f"pricing_config.tiers[{idx}].up_to_units",
+            minimum=1,
+        )
+        cents = _to_int(
+            tier.get("cents"),
+            field=f"pricing_config.tiers[{idx}].cents",
+            minimum=0,
+        )
+        if last_threshold is not None and up_to <= last_threshold:
+            raise VariablePricingError(
+                "pricing_config.tiers must be sorted ascending by up_to_units."
+            )
+        last_threshold = up_to
+        tiers.append({"up_to_units": up_to, "cents": cents})
+    return tiers
+
+
+def validate_pricing_config(
+    pricing_model: str, pricing_config: Any
+) -> dict[str, Any] | None:
+    """Pure: canonicalise a pricing_config dict, or return ``None`` for ``fixed``.
+
+    Why: surfaces every shape error as a typed ``VariablePricingError`` so
+    the registration boundary returns one actionable message per failure.
+    """
+    model = normalize_pricing_model(pricing_model)
+    if model == "fixed":
+        return None
+    parsed_raw = _parse_pricing_config_dict(model, pricing_config)
+    input_field, unit, min_cents, max_cents = _parse_pricing_bounds(parsed_raw)
     canonical: dict[str, Any] = {
         "input_field": input_field,
         "unit": unit,
         "min_cents": min_cents,
         "max_cents": max_cents,
     }
-
-    multipliers_raw = parsed_raw.get("multipliers")
-    if multipliers_raw is not None:
-        if not isinstance(multipliers_raw, dict):
-            raise VariablePricingError("pricing_config.multipliers must be an object.")
-        canonical_mults: dict[str, float] = {}
-        for key, value in multipliers_raw.items():
-            try:
-                factor = float(value)
-            except (TypeError, ValueError):
-                raise VariablePricingError(
-                    f"pricing_config.multipliers[{key!r}] must be numeric."
-                )
-            if not math.isfinite(factor) or factor <= 0:
-                raise VariablePricingError(
-                    f"pricing_config.multipliers[{key!r}] must be a positive number."
-                )
-            canonical_mults[str(key)] = factor
-        if canonical_mults:
-            canonical["multipliers"] = canonical_mults
-
+    multipliers = _parse_pricing_multipliers(parsed_raw)
+    if multipliers:
+        canonical["multipliers"] = multipliers
     if model == "per_unit":
         rate = _to_positive_decimal(
             parsed_raw.get("rate_cents_per_unit"),
@@ -173,35 +221,7 @@ def validate_pricing_config(
         )
         canonical["rate_cents_per_unit"] = float(rate)
     else:
-        tiers_raw = parsed_raw.get("tiers")
-        if not isinstance(tiers_raw, list) or not tiers_raw:
-            raise VariablePricingError(
-                "pricing_config.tiers must be a non-empty list for tiered pricing."
-            )
-        tiers: list[dict[str, int]] = []
-        last_threshold: int | None = None
-        for idx, tier in enumerate(tiers_raw):
-            if not isinstance(tier, dict):
-                raise VariablePricingError(
-                    f"pricing_config.tiers[{idx}] must be an object."
-                )
-            up_to = _to_int(
-                tier.get("up_to_units"),
-                field=f"pricing_config.tiers[{idx}].up_to_units",
-                minimum=1,
-            )
-            cents = _to_int(
-                tier.get("cents"),
-                field=f"pricing_config.tiers[{idx}].cents",
-                minimum=0,
-            )
-            if last_threshold is not None and up_to <= last_threshold:
-                raise VariablePricingError(
-                    "pricing_config.tiers must be sorted ascending by up_to_units."
-                )
-            last_threshold = up_to
-            tiers.append({"up_to_units": up_to, "cents": cents})
-        canonical["tiers"] = tiers
+        canonical["tiers"] = _parse_pricing_tiers(parsed_raw)
     canonical["pricing_model"] = model
     return canonical
 
@@ -235,39 +255,35 @@ def parse_pricing_config(raw: Any) -> dict[str, Any]:
     return {}
 
 
-def _quantity_from_payload(
-    payload: Mapping[str, Any] | None,
-    config: Mapping[str, Any],
-) -> int:
-    if not isinstance(payload, Mapping):
-        return 0
-    field_names = [str(config.get("input_field") or "").strip()]
+def _resolve_quantity_field_names(config: Mapping[str, Any]) -> list[str]:
+    """Pure: ordered ``input_field`` + fallback list with empty entries dropped."""
+    names = [str(config.get("input_field") or "").strip()]
     fallback_fields = config.get("fallback_input_fields")
     if isinstance(fallback_fields, list):
-        field_names.extend(str(item or "").strip() for item in fallback_fields)
-    field_names = [field for field in field_names if field]
-    if not field_names:
-        return 0
-    raw = None
-    selected_field = ""
+        names.extend(str(item or "").strip() for item in fallback_fields)
+    return [field for field in names if field]
+
+
+def _lookup_quantity_value(
+    payload: Mapping[str, Any], field_names: list[str],
+) -> tuple[Any, str]:
+    """Pure: walk payload + nested ``input`` block; returns ``(raw_value, field_used)``."""
     for field in field_names:
         if field in payload:
-            raw = payload.get(field)
-            selected_field = field
-            break
-    if raw is None:
-        # Try common fall-through: if the payload nests everything under
-        # "input", look one level deeper. This keeps API compatibility
-        # with clients that wrap their request under ``{"input": {...}}``.
-        inner = payload.get("input") if isinstance(payload, Mapping) else None
-        if isinstance(inner, Mapping):
-            for field in field_names:
-                if field in inner:
-                    raw = inner.get(field)
-                    selected_field = field
-                    break
-    if raw is None and selected_field == "" and "url" in payload and "request_count" in field_names:
-        raw = 1
+            return payload.get(field), field
+    inner = payload.get("input")
+    if isinstance(inner, Mapping):
+        for field in field_names:
+            if field in inner:
+                return inner.get(field), field
+    # WHY: a URL probe with no explicit count implies one request.
+    if "url" in payload and "request_count" in field_names:
+        return 1, ""
+    return None, ""
+
+
+def _coerce_quantity(raw: Any) -> int:
+    """Pure: coerce a quantity value (int / float / str / list) to a non-negative int; 0 otherwise."""
     if isinstance(raw, bool) or raw is None:
         return 0
     if isinstance(raw, (int, float)):
@@ -286,6 +302,20 @@ def _quantity_from_payload(
         except (TypeError, ValueError):
             return 0
     return 0
+
+
+def _quantity_from_payload(
+    payload: Mapping[str, Any] | None,
+    config: Mapping[str, Any],
+) -> int:
+    """Pure: derive billable quantity from ``payload`` per the pricing config."""
+    if not isinstance(payload, Mapping):
+        return 0
+    field_names = _resolve_quantity_field_names(config)
+    if not field_names:
+        return 0
+    raw, _ = _lookup_quantity_value(payload, field_names)
+    return _coerce_quantity(raw)
 
 
 def _apply_multipliers(
@@ -311,112 +341,8 @@ def _clamp(value: int, *, min_cents: int, max_cents: int | None) -> int:
     return max(0, int(value))
 
 
-def estimate_price_cents(
-    *,
-    pricing_model: str,
-    pricing_config: Any,
-    payload: Mapping[str, Any] | None,
-    fixed_price_cents: int,
-) -> dict[str, Any]:
-    """Compute the caller charge (in cents) for one invocation.
-
-    Always returns a dict with:
-
-        {
-            "price_cents": int,
-            "pricing_model": "fixed" | "per_unit" | "tiered",
-            "units": int,
-            "unit": str | None,
-            "detail": str,
-        }
-
-    ``fixed_price_cents`` is used when the pricing model is ``fixed`` or
-    when the config cannot be parsed. The function never raises on
-    malformed input — bad configs silently fall back to the fixed price
-    so in-flight calls are never blocked by a pricing regression.
-    """
-    model = str(pricing_model or "").strip().lower() or "fixed"
-    config = parse_pricing_config(pricing_config) if model != "fixed" else {}
-    if model == "fixed" or not config:
-        return {
-            "price_cents": max(0, int(fixed_price_cents)),
-            "pricing_model": "fixed",
-            "units": 1,
-            "unit": None,
-            "detail": "per-call price",
-        }
-
-    units = _quantity_from_payload(payload, config)
-    min_cents = int(config.get("min_cents") or 0)
-    max_cents_raw = config.get("max_cents")
-    max_cents = int(max_cents_raw) if max_cents_raw is not None else None
-    unit = str(config.get("unit") or config.get("input_field") or "unit")
-    multipliers = (
-        config.get("multipliers")
-        if isinstance(config.get("multipliers"), dict)
-        else None
-    )
-
-    if model == "per_unit":
-        rate = float(config.get("rate_cents_per_unit") or 0.0)
-        base = int(
-            Decimal(rate * max(0, units)).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
-        )
-        with_mults = _apply_multipliers(base, payload, multipliers)
-        price_cents = _clamp(with_mults, min_cents=min_cents, max_cents=max_cents)
-        # Build a human-readable detail. When the floor (min_cents) overrides
-        # a tiny computed amount, surface that explicitly so callers don't see
-        # confusing strings like "0 seconds @ 0¢/second" — a known QA P2-12.
-        natural_detail = (
-            f"{units} {unit}{'s' if units != 1 else ''} @ {rate:g}¢/{unit}"
-        )
-        if min_cents and price_cents == min_cents and base < min_cents:
-            detail = f"{natural_detail} (floor {min_cents}¢ applied)"
-        else:
-            detail = natural_detail
-        return {
-            "price_cents": price_cents,
-            "pricing_model": "per_unit",
-            "units": units,
-            "unit": unit,
-            "detail": detail,
-        }
-
-    if model == "tiered":
-        tiers = config.get("tiers") or []
-        chosen_cents: int | None = None
-        chosen_threshold: int | None = None
-        for tier in tiers:
-            if not isinstance(tier, Mapping):
-                continue
-            threshold = int(tier.get("up_to_units") or 0)
-            if units <= threshold:
-                chosen_cents = int(tier.get("cents") or 0)
-                chosen_threshold = threshold
-                break
-        if chosen_cents is None and tiers:
-            # exceeds top tier — use the last tier's cents as the ceiling.
-            last_tier = tiers[-1]
-            if isinstance(last_tier, Mapping):
-                chosen_cents = int(last_tier.get("cents") or 0)
-                chosen_threshold = int(last_tier.get("up_to_units") or 0)
-        if chosen_cents is None:
-            chosen_cents = int(fixed_price_cents)
-            chosen_threshold = None
-        with_mults = _apply_multipliers(chosen_cents, payload, multipliers)
-        price_cents = _clamp(with_mults, min_cents=min_cents, max_cents=max_cents)
-        detail = (
-            f"{units} {unit}{'s' if units != 1 else ''} · tier up to "
-            f"{chosen_threshold if chosen_threshold is not None else '∞'} {unit}"
-        )
-        return {
-            "price_cents": price_cents,
-            "pricing_model": "tiered",
-            "units": units,
-            "unit": unit,
-            "detail": detail,
-        }
-
+def _fixed_price_response(fixed_price_cents: int) -> dict[str, Any]:
+    """Pure: response shape for the fixed-pricing path."""
     return {
         "price_cents": max(0, int(fixed_price_cents)),
         "pricing_model": "fixed",
@@ -424,6 +350,124 @@ def estimate_price_cents(
         "unit": None,
         "detail": "per-call price",
     }
+
+
+def _estimate_per_unit(
+    config: dict[str, Any], payload: Mapping[str, Any] | None,
+    units: int, unit: str, min_cents: int, max_cents: int | None,
+    multipliers: dict[str, float] | None,
+) -> dict[str, Any]:
+    """Pure: shape per-unit pricing into the standard response dict.
+
+    Why: when min_cents floors a tiny computed amount we surface that
+    explicitly so callers never see confusing strings like "0 seconds @ 0¢/second".
+    """
+    rate = float(config.get("rate_cents_per_unit") or 0.0)
+    base = int(
+        Decimal(rate * max(0, units)).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    )
+    with_mults = _apply_multipliers(base, payload, multipliers)
+    price_cents = _clamp(with_mults, min_cents=min_cents, max_cents=max_cents)
+    natural_detail = f"{units} {unit}{'s' if units != 1 else ''} @ {rate:g}¢/{unit}"
+    detail = (
+        f"{natural_detail} (floor {min_cents}¢ applied)"
+        if min_cents and price_cents == min_cents and base < min_cents
+        else natural_detail
+    )
+    return {
+        "price_cents": price_cents,
+        "pricing_model": "per_unit",
+        "units": units,
+        "unit": unit,
+        "detail": detail,
+    }
+
+
+def _select_tier(
+    tiers: list, units: int, fixed_price_cents: int,
+) -> tuple[int, int | None]:
+    """Pure: pick the matching tier for ``units``. ``(cents, threshold_or_None)``.
+
+    Why: when ``units`` exceeds the top tier we cap at the last tier's price
+    rather than reverting to the fixed-fee path, which would be a stealth
+    overcharge for high-volume calls.
+    """
+    chosen_cents: int | None = None
+    chosen_threshold: int | None = None
+    for tier in tiers:
+        if not isinstance(tier, Mapping):
+            continue
+        threshold = int(tier.get("up_to_units") or 0)
+        if units <= threshold:
+            return int(tier.get("cents") or 0), threshold
+    if tiers:
+        last = tiers[-1]
+        if isinstance(last, Mapping):
+            chosen_cents = int(last.get("cents") or 0)
+            chosen_threshold = int(last.get("up_to_units") or 0)
+    if chosen_cents is None:
+        return int(fixed_price_cents), None
+    return chosen_cents, chosen_threshold
+
+
+def _estimate_tiered(
+    config: dict[str, Any], payload: Mapping[str, Any] | None,
+    units: int, unit: str, min_cents: int, max_cents: int | None,
+    multipliers: dict[str, float] | None, fixed_price_cents: int,
+) -> dict[str, Any]:
+    """Pure: shape tiered pricing into the standard response dict."""
+    chosen_cents, chosen_threshold = _select_tier(
+        config.get("tiers") or [], units, fixed_price_cents,
+    )
+    with_mults = _apply_multipliers(chosen_cents, payload, multipliers)
+    price_cents = _clamp(with_mults, min_cents=min_cents, max_cents=max_cents)
+    threshold_label = chosen_threshold if chosen_threshold is not None else "∞"
+    return {
+        "price_cents": price_cents,
+        "pricing_model": "tiered",
+        "units": units,
+        "unit": unit,
+        "detail": (
+            f"{units} {unit}{'s' if units != 1 else ''} · tier up to {threshold_label} {unit}"
+        ),
+    }
+
+
+def estimate_price_cents(
+    *,
+    pricing_model: str,
+    pricing_config: Any,
+    payload: Mapping[str, Any] | None,
+    fixed_price_cents: int,
+) -> dict[str, Any]:
+    """Pure: compute the caller charge (in cents) for one invocation.
+
+    Why: bad configs fall back to the fixed price so in-flight calls are
+    never blocked by a pricing regression. Returns ``{price_cents,
+    pricing_model, units, unit, detail}``.
+    """
+    model = str(pricing_model or "").strip().lower() or "fixed"
+    config = parse_pricing_config(pricing_config) if model != "fixed" else {}
+    if model == "fixed" or not config:
+        return _fixed_price_response(fixed_price_cents)
+    units = _quantity_from_payload(payload, config)
+    min_cents = int(config.get("min_cents") or 0)
+    max_cents_raw = config.get("max_cents")
+    max_cents = int(max_cents_raw) if max_cents_raw is not None else None
+    unit = str(config.get("unit") or config.get("input_field") or "unit")
+    multipliers = (
+        config.get("multipliers")
+        if isinstance(config.get("multipliers"), dict) else None
+    )
+    if model == "per_unit":
+        return _estimate_per_unit(
+            config, payload, units, unit, min_cents, max_cents, multipliers,
+        )
+    if model == "tiered":
+        return _estimate_tiered(
+            config, payload, units, unit, min_cents, max_cents, multipliers, fixed_price_cents,
+        )
+    return _fixed_price_response(fixed_price_cents)
 
 
 def price_usd_to_cents(value: Any) -> int:

@@ -152,83 +152,107 @@ _AZTEA_INTERNAL_PATH_RE = re.compile(
 )
 
 
-def scan_skill_md(skill_md: str) -> list[VerificationFinding]:
-    """Scan a SKILL.md body for prompt-injection / exfiltration markers.
+_API_KEY_PREFIX_PREVIEW_CHARS = 8
 
-    The skill body is interpreted by an LLM at call time. Anything in here is
-    effectively code with the agent's privilege; we treat it as such.
-    """
-    if not isinstance(skill_md, str):
-        raise TypeError("skill_md must be a str")
-    findings: list[VerificationFinding] = []
+
+def _scan_prompt_injection(skill_md: str) -> list[VerificationFinding]:
+    """Pure: every prompt-injection phrase that matches in ``skill_md``."""
     canonical = _normalize_for_phrase_scan(skill_md)
-
+    out: list[VerificationFinding] = []
     for phrase, pattern in zip(_PROMPT_INJECTION_PHRASES, _PROMPT_INJECTION_PATTERNS):
         if pattern.search(canonical):
-            findings.append(
-                VerificationFinding(
-                    code="skill.prompt_injection",
-                    level=LEVEL_BLOCK,
-                    message=(
-                        f"SKILL.md contains a prompt-injection phrase "
-                        f"('{phrase}'). Refusing to publish."
-                    ),
-                    detail={"phrase": phrase},
-                )
-            )
+            out.append(VerificationFinding(
+                code="skill.prompt_injection",
+                level=LEVEL_BLOCK,
+                message=(
+                    f"SKILL.md contains a prompt-injection phrase "
+                    f"('{phrase}'). Refusing to publish."
+                ),
+                detail={"phrase": phrase},
+            ))
+    return out
 
-    # Scan both the original text and a whitespace-stripped form so an
-    # attacker can't split a key across a newline to bypass the regex.
+
+def _scan_embedded_api_key(skill_md: str) -> VerificationFinding | None:
+    """Pure: first embedded-key match in either the original or whitespace-stripped form.
+
+    Why: scan a whitespace-stripped copy too so an attacker can't split a key
+    across a newline to bypass the regex.
+    """
     compact = re.sub(r"\s+", "", skill_md)
     for source in (skill_md, compact):
         for pattern in _API_KEY_PATTERNS:
             match = pattern.search(source)
             if match:
-                findings.append(
-                    VerificationFinding(
-                        code="skill.embedded_api_key",
-                        level=LEVEL_BLOCK,
-                        message=(
-                            "SKILL.md contains what looks like an embedded API "
-                            "key. Remove it and store secrets in caller-supplied "
-                            "input or your own backend."
-                        ),
-                        detail={"prefix": match.group(0)[:8] + "..."},
-                    )
+                return VerificationFinding(
+                    code="skill.embedded_api_key",
+                    level=LEVEL_BLOCK,
+                    message=(
+                        "SKILL.md contains what looks like an embedded API "
+                        "key. Remove it and store secrets in caller-supplied "
+                        "input or your own backend."
+                    ),
+                    detail={"prefix": match.group(0)[:_API_KEY_PREFIX_PREVIEW_CHARS] + "..."},
                 )
-                break  # one is enough to refuse
-        if any(f.code == "skill.embedded_api_key" for f in findings):
-            break
+    return None
 
+
+def _scan_base64_blob(skill_md: str) -> VerificationFinding | None:
+    """Pure: warn on long base64-shaped blobs (common exfiltration pattern)."""
     blob = _BASE64_RE.search(skill_md)
-    if blob:
-        findings.append(
-            VerificationFinding(
-                code="skill.base64_blob",
-                level=LEVEL_WARN,
-                message=(
-                    "SKILL.md contains a >200-char base64-shaped blob. "
-                    "Encoded payloads in prompts are a common exfiltration "
-                    "pattern; if this is a hash or example, ignore."
-                ),
-                detail={"length": len(blob.group(0))},
-            )
-        )
+    if not blob:
+        return None
+    return VerificationFinding(
+        code="skill.base64_blob",
+        level=LEVEL_WARN,
+        message=(
+            "SKILL.md contains a >200-char base64-shaped blob. "
+            "Encoded payloads in prompts are a common exfiltration "
+            "pattern; if this is a hash or example, ignore."
+        ),
+        detail={"length": len(blob.group(0))},
+    )
 
-    if _AZTEA_INTERNAL_PATH_RE.search(skill_md):
-        findings.append(
-            VerificationFinding(
-                code="skill.references_internal_path",
-                level=LEVEL_WARN,
-                message=(
-                    "SKILL.md references an Aztea-internal path "
-                    "(/wallet, /payments, /admin, /ops, /auth). Skills "
-                    "should not instruct the model to call platform "
-                    "endpoints directly."
-                ),
-            )
-        )
 
+def _scan_internal_path(skill_md: str) -> VerificationFinding | None:
+    """Pure: warn on references to Aztea-internal paths.
+
+    Why: skills should not instruct the model to call platform endpoints
+    (/wallet, /payments, /admin, /ops, /auth) directly.
+    """
+    if not _AZTEA_INTERNAL_PATH_RE.search(skill_md):
+        return None
+    return VerificationFinding(
+        code="skill.references_internal_path",
+        level=LEVEL_WARN,
+        message=(
+            "SKILL.md references an Aztea-internal path "
+            "(/wallet, /payments, /admin, /ops, /auth). Skills "
+            "should not instruct the model to call platform "
+            "endpoints directly."
+        ),
+    )
+
+
+def scan_skill_md(skill_md: str) -> list[VerificationFinding]:
+    """Pure: scan a SKILL.md body for prompt-injection / exfiltration markers.
+
+    Why: the skill body is interpreted by an LLM at call time, so anything
+    in here runs with the agent's privilege — we treat it as code.
+    """
+    if not isinstance(skill_md, str):
+        raise TypeError("skill_md must be a str")
+    findings: list[VerificationFinding] = []
+    findings.extend(_scan_prompt_injection(skill_md))
+    api_key = _scan_embedded_api_key(skill_md)
+    if api_key is not None:
+        findings.append(api_key)
+    blob = _scan_base64_blob(skill_md)
+    if blob is not None:
+        findings.append(blob)
+    internal = _scan_internal_path(skill_md)
+    if internal is not None:
+        findings.append(internal)
     return findings
 
 
@@ -263,142 +287,147 @@ _BLOCKED_OS_ATTRS: frozenset[str] = frozenset(
 )
 
 
-def scan_python_handler(source: str) -> list[VerificationFinding]:
-    """AST-walk a Python module for risky imports / calls.
+def _check_import_node(
+    node: ast.Import | ast.ImportFrom,
+) -> list[VerificationFinding]:
+    """Pure: emit one BLOCK finding per disallowed module referenced by an import."""
+    out: list[VerificationFinding] = []
+    if isinstance(node, ast.Import):
+        for alias in node.names:
+            root = (alias.name or "").split(".")[0]
+            if root in _BLOCKED_IMPORTS:
+                out.append(VerificationFinding(
+                    code="python.blocked_import",
+                    level=LEVEL_BLOCK,
+                    message=(
+                        f"Python handler imports '{alias.name}', "
+                        "which is not allowed for in-process listings."
+                    ),
+                    detail={"module": alias.name, "line": node.lineno},
+                ))
+        return out
+    root = (node.module or "").split(".")[0]
+    if root in _BLOCKED_IMPORTS:
+        out.append(VerificationFinding(
+            code="python.blocked_import",
+            level=LEVEL_BLOCK,
+            message=(
+                f"Python handler imports from '{node.module}', "
+                "which is not allowed for in-process listings."
+            ),
+            detail={"module": node.module, "line": node.lineno},
+        ))
+    return out
 
-    Reasonable handlers shouldn't need shells, raw sockets, or eval. If the
-    author's use case genuinely requires one of these, they can host their own
-    HTTP endpoint and skip the in-line publish flow — this scanner only fires
-    on the convenience path that auto-runs handler() under our worker.
+
+def _is_dynamic_blocked_import(call: ast.Call) -> str | None:
+    """Pure: ``importlib.import_module('blocked')`` target string, or None."""
+    func = call.func
+    if not (
+        isinstance(func, ast.Attribute)
+        and isinstance(func.value, ast.Name)
+        and func.value.id == "importlib"
+        and func.attr == "import_module"
+        and call.args
+        and isinstance(call.args[0], ast.Constant)
+        and isinstance(call.args[0].value, str)
+    ):
+        return None
+    target = call.args[0].value
+    return target if target.split(".")[0] in _BLOCKED_IMPORTS else None
+
+
+def _is_blocked_os_call(func: Any) -> bool:
+    """Pure: True for ``os.<blocked>`` attribute calls (system / popen / exec*)."""
+    return (
+        isinstance(func, ast.Attribute)
+        and isinstance(func.value, ast.Name)
+        and func.value.id == "os"
+        and func.attr in _BLOCKED_OS_ATTRS
+    )
+
+
+def _check_call_node(call: ast.Call) -> list[VerificationFinding]:
+    """Pure: BLOCK findings for risky calls — bare exec/eval, importlib bypass, os.*."""
+    func = call.func
+    if isinstance(func, ast.Name) and func.id in _BLOCKED_BUILTINS:
+        return [VerificationFinding(
+            code="python.blocked_builtin",
+            level=LEVEL_BLOCK,
+            message=(
+                f"Python handler calls '{func.id}(...)', which is "
+                "not allowed for in-process listings."
+            ),
+            detail={"name": func.id, "line": call.lineno},
+        )]
+    target = _is_dynamic_blocked_import(call)
+    if target:
+        return [VerificationFinding(
+            code="python.blocked_import",
+            level=LEVEL_BLOCK,
+            message=(
+                f"Python handler dynamically imports '{target}' "
+                "via importlib.import_module, which is not allowed "
+                "for in-process listings."
+            ),
+            detail={"module": target, "line": call.lineno},
+        )]
+    if _is_blocked_os_call(func):
+        return [VerificationFinding(
+            code="python.blocked_os_call",
+            level=LEVEL_BLOCK,
+            message=f"Python handler calls 'os.{func.attr}(...)'.",
+            detail={"attr": func.attr, "line": call.lineno},
+        )]
+    return []
+
+
+def _has_handler_definition(tree: ast.Module) -> bool:
+    """Pure: True when the module defines a top-level ``handler`` (def or assignment)."""
+    for n in tree.body:
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == "handler":
+            return True
+        if isinstance(n, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "handler" for t in n.targets
+        ):
+            return True
+    return False
+
+
+def scan_python_handler(source: str) -> list[VerificationFinding]:
+    """Pure: AST-walk a Python module for risky imports / calls.
+
+    Why: handlers don't need shells, raw sockets, or eval; an author with a
+    legitimate need can host their own HTTP endpoint and skip the in-line
+    publish flow that auto-runs ``handler()`` under our worker.
     """
     if not isinstance(source, str):
         raise TypeError("source must be a str")
-    findings: list[VerificationFinding] = []
     try:
         tree = ast.parse(source)
     except SyntaxError as exc:
-        return [
-            VerificationFinding(
-                code="python.syntax_error",
-                level=LEVEL_BLOCK,
-                message=f"Python file did not parse: {exc.msg} (line {exc.lineno}).",
-                detail={"line": exc.lineno, "offset": exc.offset},
-            )
-        ]
-
+        return [VerificationFinding(
+            code="python.syntax_error",
+            level=LEVEL_BLOCK,
+            message=f"Python file did not parse: {exc.msg} (line {exc.lineno}).",
+            detail={"line": exc.lineno, "offset": exc.offset},
+        )]
+    findings: list[VerificationFinding] = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                root = (alias.name or "").split(".")[0]
-                if root in _BLOCKED_IMPORTS:
-                    findings.append(
-                        VerificationFinding(
-                            code="python.blocked_import",
-                            level=LEVEL_BLOCK,
-                            message=(
-                                f"Python handler imports '{alias.name}', "
-                                "which is not allowed for in-process listings."
-                            ),
-                            detail={"module": alias.name, "line": node.lineno},
-                        )
-                    )
-        elif isinstance(node, ast.ImportFrom):
-            root = (node.module or "").split(".")[0]
-            if root in _BLOCKED_IMPORTS:
-                findings.append(
-                    VerificationFinding(
-                        code="python.blocked_import",
-                        level=LEVEL_BLOCK,
-                        message=(
-                            f"Python handler imports from '{node.module}', "
-                            "which is not allowed for in-process listings."
-                        ),
-                        detail={"module": node.module, "line": node.lineno},
-                    )
-                )
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            findings.extend(_check_import_node(node))
         elif isinstance(node, ast.Call):
-            func = node.func
-            # Bare-name calls like exec(...), eval(...).
-            if isinstance(func, ast.Name) and func.id in _BLOCKED_BUILTINS:
-                findings.append(
-                    VerificationFinding(
-                        code="python.blocked_builtin",
-                        level=LEVEL_BLOCK,
-                        message=(
-                            f"Python handler calls '{func.id}(...)', which is "
-                            "not allowed for in-process listings."
-                        ),
-                        detail={"name": func.id, "line": node.lineno},
-                    )
-                )
-            # importlib.import_module("subprocess") and friends — lazy
-            # import bypass for the static `import` rules above.
-            elif (
-                isinstance(func, ast.Attribute)
-                and isinstance(func.value, ast.Name)
-                and func.value.id == "importlib"
-                and func.attr == "import_module"
-                and node.args
-                and isinstance(node.args[0], ast.Constant)
-                and isinstance(node.args[0].value, str)
-                and node.args[0].value.split(".")[0] in _BLOCKED_IMPORTS
-            ):
-                target = node.args[0].value
-                findings.append(
-                    VerificationFinding(
-                        code="python.blocked_import",
-                        level=LEVEL_BLOCK,
-                        message=(
-                            f"Python handler dynamically imports '{target}' "
-                            "via importlib.import_module, which is not allowed "
-                            "for in-process listings."
-                        ),
-                        detail={"module": target, "line": node.lineno},
-                    )
-                )
-            # os.system / os.popen / os.exec* / os.spawn*.
-            elif (
-                isinstance(func, ast.Attribute)
-                and isinstance(func.value, ast.Name)
-                and func.value.id == "os"
-                and func.attr in _BLOCKED_OS_ATTRS
-            ):
-                findings.append(
-                    VerificationFinding(
-                        code="python.blocked_os_call",
-                        level=LEVEL_BLOCK,
-                        message=(
-                            f"Python handler calls 'os.{func.attr}(...)'."
-                        ),
-                        detail={"attr": func.attr, "line": node.lineno},
-                    )
-                )
-
-    # Cheap structural check: a usable handler must define `handler` at module
-    # level (or a class with .handle); warn if neither shows up.
-    has_handler = any(
-        (isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == "handler")
-        or (
-            isinstance(n, ast.Assign)
-            and any(
-                isinstance(t, ast.Name) and t.id == "handler" for t in n.targets
-            )
-        )
-        for n in tree.body
-    )
-    if not has_handler:
-        findings.append(
-            VerificationFinding(
-                code="python.no_handler",
-                level=LEVEL_WARN,
-                message=(
-                    "Python file does not define a top-level `handler(payload)` "
-                    "function. The CLI cannot auto-run it; you'll need to wire "
-                    "up `aztea.AgentServer` manually."
-                ),
-            )
-        )
-
+            findings.extend(_check_call_node(node))
+    if not _has_handler_definition(tree):
+        findings.append(VerificationFinding(
+            code="python.no_handler",
+            level=LEVEL_WARN,
+            message=(
+                "Python file does not define a top-level `handler(payload)` "
+                "function. The CLI cannot auto-run it; you'll need to wire "
+                "up `aztea.AgentServer` manually."
+            ),
+        ))
     return findings
 
 
@@ -516,6 +545,26 @@ def jaccard_similarity(a: str, b: str) -> float:
     return inter / union if union else 0.0
 
 
+def _format_clone_finding(
+    e_name: str, name_sim: float, desc_sim: float,
+) -> VerificationFinding:
+    """Pure: shape one near-duplicate match into a WARN finding."""
+    return VerificationFinding(
+        code="listing.near_duplicate",
+        level=LEVEL_WARN,
+        message=(
+            f"Listing closely resembles existing agent "
+            f"'{e_name}' (name {name_sim:.0%}, "
+            f"description {desc_sim:.0%})."
+        ),
+        detail={
+            "matched_name": e_name,
+            "name_similarity": round(name_sim, 3),
+            "description_similarity": round(desc_sim, 3),
+        },
+    )
+
+
 def scan_clone_against(
     candidate_name: str,
     candidate_description: str,
@@ -524,12 +573,12 @@ def scan_clone_against(
     name_threshold: float = 0.5,
     description_threshold: float = 0.5,
 ) -> list[VerificationFinding]:
-    """Compare candidate listing text against existing curated entries.
+    """Pure: compare candidate listing text against existing curated entries.
 
-    `existing` items must have at least 'name' and 'description' keys. Only
-    raises 'warn' findings — clone detection is signal, not gospel.
+    Why: clone detection is signal, not gospel — only WARN findings, and we
+    stop at the first match so the CLI receipt isn't overwhelmed by 50
+    near-builtins.
     """
-    findings: list[VerificationFinding] = []
     cand_name = (candidate_name or "").strip()
     cand_desc = (candidate_description or "").strip()
     for entry in existing or ():
@@ -540,26 +589,8 @@ def scan_clone_against(
         name_sim = jaccard_similarity(cand_name, e_name)
         desc_sim = jaccard_similarity(cand_desc, e_desc)
         if name_sim >= name_threshold or desc_sim >= description_threshold:
-            findings.append(
-                VerificationFinding(
-                    code="listing.near_duplicate",
-                    level=LEVEL_WARN,
-                    message=(
-                        f"Listing closely resembles existing agent "
-                        f"'{e_name}' (name {name_sim:.0%}, "
-                        f"description {desc_sim:.0%})."
-                    ),
-                    detail={
-                        "matched_name": e_name,
-                        "name_similarity": round(name_sim, 3),
-                        "description_similarity": round(desc_sim, 3),
-                    },
-                )
-            )
-            # One match is enough; we report against the first hit and stop
-            # so the CLI receipt isn't overwhelmed by 50 near-builtins.
-            break
-    return findings
+            return [_format_clone_finding(e_name, name_sim, desc_sim)]
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -618,58 +649,71 @@ def _example_for(spec: dict[str, Any]) -> Any:
     return ""
 
 
+def _check_leaked_api_key(
+    text: str, api_key_prefixes: tuple[str, ...],
+) -> VerificationFinding | None:
+    """Pure: BLOCK finding if any platform-key prefix appears in the response text."""
+    for prefix in api_key_prefixes:
+        if prefix in text:
+            return VerificationFinding(
+                code="probe.leaked_api_key",
+                level=LEVEL_BLOCK,
+                message=(
+                    f"Endpoint response contained an '{prefix}'-prefixed "
+                    "string under an adversarial probe; refusing to list."
+                ),
+            )
+    return None
+
+
+def _check_schema_shape_mismatch(
+    response_body: Any, output_schema: Any,
+) -> VerificationFinding | None:
+    """Pure: WARN finding when the response shares no keys with the declared schema."""
+    if not (
+        isinstance(response_body, dict)
+        and isinstance(output_schema, dict)
+        and output_schema.get("type") == "object"
+        and isinstance(output_schema.get("properties"), dict)
+    ):
+        return None
+    declared = set(output_schema["properties"].keys())
+    observed = set(response_body.keys())
+    if not declared or (observed & declared):
+        return None
+    return VerificationFinding(
+        code="probe.shape_mismatch",
+        level=LEVEL_WARN,
+        message=(
+            "Endpoint response shares no keys with the declared "
+            "output_schema. Listings with mismatched schemas hurt "
+            "discovery quality."
+        ),
+        detail={
+            "declared_keys": sorted(declared),
+            "observed_keys": sorted(observed),
+        },
+    )
+
+
 def evaluate_probe_response(
     response_body: dict[str, Any] | str | None,
     *,
     output_schema: dict[str, Any] | None,
     api_key_prefixes: tuple[str, ...] = ("azk_", "azac_", "sk-"),
 ) -> list[VerificationFinding]:
-    """Inspect a probe response for leakage / shape violations.
+    """Pure: inspect a probe response for leakage / shape violations.
 
-    This is split out so server tests can feed canned responses without
-    actually issuing HTTP. The HTTP-issuing wrapper lives in
-    `probe_endpoint()` below.
+    Why: split out so server tests can feed canned responses without HTTP;
+    the HTTP-issuing wrapper lives in ``probe_endpoint()``.
     """
     findings: list[VerificationFinding] = []
-    text = _stringify(response_body)
-    for prefix in api_key_prefixes:
-        if prefix in text:
-            findings.append(
-                VerificationFinding(
-                    code="probe.leaked_api_key",
-                    level=LEVEL_BLOCK,
-                    message=(
-                        f"Endpoint response contained an '{prefix}'-prefixed "
-                        "string under an adversarial probe; refusing to list."
-                    ),
-                )
-            )
-            break
-    # Schema shape check: only apply when we have something to compare to.
-    if (
-        isinstance(response_body, dict)
-        and isinstance(output_schema, dict)
-        and output_schema.get("type") == "object"
-        and isinstance(output_schema.get("properties"), dict)
-    ):
-        declared = set(output_schema["properties"].keys())
-        observed = set(response_body.keys())
-        if declared and not (observed & declared):
-            findings.append(
-                VerificationFinding(
-                    code="probe.shape_mismatch",
-                    level=LEVEL_WARN,
-                    message=(
-                        "Endpoint response shares no keys with the declared "
-                        "output_schema. Listings with mismatched schemas hurt "
-                        "discovery quality."
-                    ),
-                    detail={
-                        "declared_keys": sorted(declared),
-                        "observed_keys": sorted(observed),
-                    },
-                )
-            )
+    leaked = _check_leaked_api_key(_stringify(response_body), api_key_prefixes)
+    if leaked is not None:
+        findings.append(leaked)
+    mismatch = _check_schema_shape_mismatch(response_body, output_schema)
+    if mismatch is not None:
+        findings.append(mismatch)
     return findings
 
 

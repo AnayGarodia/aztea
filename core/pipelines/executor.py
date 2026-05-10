@@ -63,52 +63,40 @@ def _sign_pipeline_step_output(agent: dict, output: dict) -> dict[str, Any]:
     }
 
 
-def validate_definition(definition: dict) -> dict:
-    """Validate a pipeline definition dict and return the normalised form.
+def _normalize_pipeline_node(raw_node: Any, ids: set[str]) -> dict[str, Any]:
+    """Pure: validate + shape one pipeline-node dict; mutates ``ids`` to track collisions."""
+    if not isinstance(raw_node, dict):
+        raise ValueError("Each pipeline node must be an object.")
+    node_id = str(raw_node.get("id") or "").strip()
+    agent_id = str(raw_node.get("agent_id") or raw_node.get("agent") or "").strip()
+    if not node_id:
+        raise ValueError("Each pipeline node requires an id.")
+    if not agent_id:
+        raise ValueError(f"Pipeline node '{node_id}' requires agent_id.")
+    if node_id in ids:
+        raise ValueError(f"Duplicate pipeline node id '{node_id}'.")
+    ids.add(node_id)
+    input_map = raw_node.get("input_map") or {}
+    if not isinstance(input_map, dict):
+        raise ValueError(f"Pipeline node '{node_id}' input_map must be an object.")
+    depends_on_raw = raw_node.get("depends_on") or []
+    if not isinstance(depends_on_raw, list):
+        raise ValueError(f"Pipeline node '{node_id}' depends_on must be an array.")
+    depends_on = [
+        str(item or "").strip()
+        for item in depends_on_raw
+        if str(item or "").strip()
+    ]
+    return {
+        "id": node_id,
+        "agent_id": agent_id,
+        "input_map": input_map,
+        "depends_on": depends_on,
+    }
 
-    Checks that ``nodes`` is a non-empty list, each node has a unique ``id``
-    and a valid ``agent_id``, and that edges reference known node IDs.
-    Raises ``ValueError`` with a descriptive message on any violation.
-    """
-    normalized = dict(definition or {})
-    raw_nodes = normalized.get("nodes")
-    if not isinstance(raw_nodes, list) or not raw_nodes:
-        raise ValueError("definition.nodes must be a non-empty array.")
 
-    nodes: list[dict[str, Any]] = []
-    ids: set[str] = set()
-    for raw_node in raw_nodes:
-        if not isinstance(raw_node, dict):
-            raise ValueError("Each pipeline node must be an object.")
-        node_id = str(raw_node.get("id") or "").strip()
-        agent_id = str(raw_node.get("agent_id") or raw_node.get("agent") or "").strip()
-        if not node_id:
-            raise ValueError("Each pipeline node requires an id.")
-        if not agent_id:
-            raise ValueError(f"Pipeline node '{node_id}' requires agent_id.")
-        if node_id in ids:
-            raise ValueError(f"Duplicate pipeline node id '{node_id}'.")
-        ids.add(node_id)
-        input_map = raw_node.get("input_map") or {}
-        if not isinstance(input_map, dict):
-            raise ValueError(f"Pipeline node '{node_id}' input_map must be an object.")
-        depends_on_raw = raw_node.get("depends_on") or []
-        if not isinstance(depends_on_raw, list):
-            raise ValueError(f"Pipeline node '{node_id}' depends_on must be an array.")
-        depends_on = [
-            str(item or "").strip()
-            for item in depends_on_raw
-            if str(item or "").strip()
-        ]
-        nodes.append(
-            {
-                "id": node_id,
-                "agent_id": agent_id,
-                "input_map": input_map,
-                "depends_on": depends_on,
-            }
-        )
-
+def _check_dependencies_known(nodes: list[dict[str, Any]]) -> None:
+    """Pure: every ``depends_on`` entry must reference a node id from this graph."""
     known_ids = {node["id"] for node in nodes}
     for node in nodes:
         for dep in node["depends_on"]:
@@ -117,6 +105,13 @@ def validate_definition(definition: dict) -> dict:
                     f"Pipeline node '{node['id']}' depends on unknown node '{dep}'."
                 )
 
+
+def _topological_sort(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Pure: Kahn's algorithm, deterministic by sorted node id; raises on cycle.
+
+    Why: deterministic ordering keeps pipeline outputs stable across hosts
+    even when dependency graphs have parallel branches.
+    """
     indegree: dict[str, int] = {node["id"]: 0 for node in nodes}
     outgoing: dict[str, list[str]] = {node["id"]: [] for node in nodes}
     node_map = {node["id"]: node for node in nodes}
@@ -124,10 +119,7 @@ def validate_definition(definition: dict) -> dict:
         for dep in node["depends_on"]:
             indegree[node["id"]] += 1
             outgoing[dep].append(node["id"])
-
-    queue = deque(
-        sorted([node_id for node_id, degree in indegree.items() if degree == 0])
-    )
+    queue = deque(sorted(node_id for node_id, degree in indegree.items() if degree == 0))
     ordered: list[dict[str, Any]] = []
     while queue:
         node_id = queue.popleft()
@@ -136,11 +128,30 @@ def validate_definition(definition: dict) -> dict:
             indegree[child_id] -= 1
             if indegree[child_id] == 0:
                 queue.append(child_id)
-
     if len(ordered) != len(nodes):
         raise ValueError("Pipeline definition contains a cycle.")
+    return ordered
 
-    terminal_nodes = [node["id"] for node in nodes if not outgoing[node["id"]]]
+
+def validate_definition(definition: dict) -> dict:
+    """Pure: validate a pipeline definition and return the normalised form.
+
+    Why: returns ``{nodes, ordered_nodes, terminal_nodes}`` so the caller
+    has both raw nodes and a deterministic execution order; raises
+    ``ValueError`` with a descriptive message on any violation.
+    """
+    raw_nodes = (definition or {}).get("nodes")
+    if not isinstance(raw_nodes, list) or not raw_nodes:
+        raise ValueError("definition.nodes must be a non-empty array.")
+    ids: set[str] = set()
+    nodes = [_normalize_pipeline_node(raw, ids) for raw in raw_nodes]
+    _check_dependencies_known(nodes)
+    ordered = _topological_sort(nodes)
+    outgoing_ids: set[str] = set()
+    for node in nodes:
+        for dep in node["depends_on"]:
+            outgoing_ids.add(dep)
+    terminal_nodes = [node["id"] for node in nodes if node["id"] not in outgoing_ids]
     return {"nodes": nodes, "ordered_nodes": ordered, "terminal_nodes": terminal_nodes}
 
 
@@ -213,26 +224,88 @@ def _pipeline_contradiction(step_results: dict[str, Any]) -> str | None:
     return None
 
 
-def _invoke_agent(
-    *,
-    agent: dict,
-    payload: dict,
-    caller_owner_id: str,
-    caller_wallet_id: str,
-    client_id: str | None,
+_MAX_RESPONSE_BYTES = 8 * 1024 * 1024  # 8 MiB hard cap to keep a misbehaving agent from OOMing the pipeline
+_AGENT_REQUEST_TIMEOUT_S = 120
+_AGENT_STREAM_CHUNK_BYTES = 64 * 1024
+
+
+def _stream_remote_agent_response(safe_url: str, payload: dict) -> dict:
+    """Side-effect: POST to ``safe_url`` and stream the JSON response under the size cap.
+
+    Why: streaming + Content-Length check stops OOM if a downstream agent
+    returns a multi-GB body; redirects are disabled because pipelines must
+    not silently follow a hijacked Location header.
+    """
+    with requests.post(
+        safe_url,
+        json=payload,
+        headers={"Content-Type": "application/json"},
+        timeout=_AGENT_REQUEST_TIMEOUT_S,
+        allow_redirects=False,
+        stream=True,
+    ) as response:
+        if not response.ok:
+            raise RuntimeError(f"Agent endpoint returned HTTP {response.status_code}.")
+        declared = response.headers.get("Content-Length")
+        if declared and declared.isdigit() and int(declared) > _MAX_RESPONSE_BYTES:
+            raise RuntimeError("Agent response exceeds size limit.")
+        buf = bytearray()
+        for chunk in response.iter_content(chunk_size=_AGENT_STREAM_CHUNK_BYTES):
+            if not chunk:
+                continue
+            buf.extend(chunk)
+            if len(buf) > _MAX_RESPONSE_BYTES:
+                raise RuntimeError("Agent response exceeds size limit.")
+        try:
+            return json.loads(buf.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise RuntimeError("Agent returned malformed JSON.") from exc
+
+
+def _fetch_agent_output(
+    agent: dict, payload: dict,
     execute_builtin_agent: Callable[[str, dict[str, Any]], dict] | None,
 ) -> dict:
-    price_cents, estimate, distribution = _agent_price_and_distribution(agent, payload)
-    caller_charge_cents = int(distribution["caller_charge_cents"])
-    caller_wallet = payments.get_wallet(
-        caller_wallet_id
-    ) or payments.get_or_create_wallet(caller_owner_id)
-    agent_wallet = payments.get_or_create_wallet(f"agent:{agent['agent_id']}")
-    platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
-    charge_tx_id = payments.pre_call_charge(
-        caller_wallet["wallet_id"], caller_charge_cents, agent["agent_id"]
+    """Side-effect: dispatch to the local fast-path or stream from the remote endpoint."""
+    matched_local, local_output = fastpath.run_local_agent(
+        agent, payload, execute_builtin_agent=execute_builtin_agent,
     )
-    job = jobs.create_job(
+    if matched_local:
+        output = local_output
+    else:
+        endpoint_url = str(agent.get("endpoint_url") or "").strip()
+        safe_url = url_security.validate_outbound_url(endpoint_url, "endpoint_url")
+        output = _stream_remote_agent_response(safe_url, payload)
+    if not isinstance(output, dict):
+        output = {"output": output}
+    if _output_has_error(output):
+        raise RuntimeError("Agent returned an error envelope.")
+    if _is_unchargeable_degraded(agent, output):
+        raise RuntimeError("Agent returned unchargeable degraded fallback output.")
+    return output
+
+
+def _resolve_step_wallets(
+    caller_owner_id: str, caller_wallet_id: str, agent_id: str,
+) -> tuple[dict, dict, dict]:
+    """Side-effect: load/create caller, agent, and platform wallets in one go."""
+    caller_wallet = (
+        payments.get_wallet(caller_wallet_id)
+        or payments.get_or_create_wallet(caller_owner_id)
+    )
+    agent_wallet = payments.get_or_create_wallet(f"agent:{agent_id}")
+    platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
+    return caller_wallet, agent_wallet, platform_wallet
+
+
+def _create_pipeline_step_job(
+    agent: dict, payload: dict, *,
+    caller_owner_id: str, client_id: str | None,
+    caller_wallet: dict, agent_wallet: dict, platform_wallet: dict,
+    price_cents: int, caller_charge_cents: int, charge_tx_id: str,
+) -> dict:
+    """Side-effect: ``jobs.create_job`` shaped specifically for a pipeline step."""
+    return jobs.create_job(
         agent_id=agent["agent_id"],
         caller_owner_id=caller_owner_id,
         caller_wallet_id=caller_wallet["wallet_id"],
@@ -250,117 +323,187 @@ def _invoke_agent(
         dispute_window_hours=1,
         output_verification_window_seconds=0,
     )
+
+
+def _charge_pipeline_step(
+    agent: dict, payload: dict, *,
+    caller_owner_id: str, caller_wallet_id: str, client_id: str | None,
+) -> dict[str, Any]:
+    """Side-effect: pre-call charge + job creation. Returns the state needed to settle later.
+
+    Why: bundling charge/job creation into one helper keeps the
+    settlement-vs-charge symmetry obvious in ``_invoke_agent``.
+    """
+    price_cents, estimate, distribution = _agent_price_and_distribution(agent, payload)
+    caller_charge_cents = int(distribution["caller_charge_cents"])
+    caller_wallet, agent_wallet, platform_wallet = _resolve_step_wallets(
+        caller_owner_id, caller_wallet_id, agent["agent_id"],
+    )
+    charge_tx_id = payments.pre_call_charge(
+        caller_wallet["wallet_id"], caller_charge_cents, agent["agent_id"],
+    )
+    job = _create_pipeline_step_job(
+        agent, payload,
+        caller_owner_id=caller_owner_id, client_id=client_id,
+        caller_wallet=caller_wallet, agent_wallet=agent_wallet,
+        platform_wallet=platform_wallet,
+        price_cents=price_cents, caller_charge_cents=caller_charge_cents,
+        charge_tx_id=charge_tx_id,
+    )
+    return {
+        "price_cents": price_cents,
+        "estimate": estimate,
+        "distribution": distribution,
+        "caller_charge_cents": caller_charge_cents,
+        "caller_wallet": caller_wallet,
+        "agent_wallet": agent_wallet,
+        "platform_wallet": platform_wallet,
+        "charge_tx_id": charge_tx_id,
+        "job": job,
+    }
+
+
+def _refund_pricing_diff_for_step(
+    agent: dict, payload: dict, output: dict, state: dict[str, Any],
+) -> None:
+    """Side-effect: forward to ``pricing_helpers.maybe_refund_pricing_diff`` with the step's wallets."""
+    pricing_helpers.maybe_refund_pricing_diff(
+        agent=agent,
+        payload=payload,
+        output=output,
+        caller_wallet_id=state["caller_wallet"]["wallet_id"],
+        agent_wallet_id=state["agent_wallet"]["wallet_id"],
+        platform_wallet_id=state["platform_wallet"]["wallet_id"],
+        charge_tx_id=state["charge_tx_id"],
+        estimate=state["estimate"],
+        caller_charge_cents=state["caller_charge_cents"],
+        success_distribution=state["distribution"],
+        platform_fee_pct=int(payments.PLATFORM_FEE_PCT),
+        fee_bearer_policy="caller",
+    )
+
+
+def _settle_step_success(
+    agent: dict, payload: dict, output: dict, *, state: dict[str, Any], started_at: float,
+) -> None:
+    """Side-effect: success path — sign output, payout, settle, update stats, refund pricing diff."""
+    jobs.update_job_status(
+        state["job"]["job_id"],
+        "complete",
+        output_payload=output,
+        completed=True,
+        **_sign_pipeline_step_output(agent, output),
+    )
+    payments.post_call_payout(
+        state["agent_wallet"]["wallet_id"],
+        state["platform_wallet"]["wallet_id"],
+        state["charge_tx_id"],
+        state["price_cents"],
+        agent["agent_id"],
+        platform_fee_pct=int(payments.PLATFORM_FEE_PCT),
+        fee_bearer_policy="caller",
+    )
+    jobs.mark_settled(state["job"]["job_id"])
+    registry.update_call_stats(
+        agent["agent_id"],
+        latency_ms=(time.monotonic() - started_at) * 1000.0,
+        success=True,
+        price_cents=state["price_cents"],
+    )
+    _refund_pricing_diff_for_step(agent, payload, output, state)
+
+
+def _settle_step_failure(
+    agent: dict, *, state: dict[str, Any], started_at: float,
+) -> None:
+    """Side-effect: failure path — mark failed, refund the caller, update stats."""
+    jobs.update_job_status(
+        state["job"]["job_id"],
+        "failed",
+        error_message="Pipeline step failed.",
+        completed=True,
+    )
+    payments.post_call_refund(
+        state["caller_wallet"]["wallet_id"],
+        state["charge_tx_id"],
+        state["caller_charge_cents"],
+        agent["agent_id"],
+    )
+    jobs.mark_settled(state["job"]["job_id"])
+    registry.update_call_stats(
+        agent["agent_id"],
+        latency_ms=(time.monotonic() - started_at) * 1000.0,
+        success=False,
+        price_cents=state["price_cents"],
+    )
+
+
+def _invoke_agent(
+    *,
+    agent: dict,
+    payload: dict,
+    caller_owner_id: str,
+    caller_wallet_id: str,
+    client_id: str | None,
+    execute_builtin_agent: Callable[[str, dict[str, Any]], dict] | None,
+) -> dict:
+    """Side-effect: orchestrate one pipeline step — charge, fetch, settle (success or refund).
+
+    Why: split into charge/fetch/settle helpers so the money-flow ordering
+    stays auditable; the invariant is "charge before fetch, settle exactly
+    once after."
+    """
+    state = _charge_pipeline_step(
+        agent, payload,
+        caller_owner_id=caller_owner_id,
+        caller_wallet_id=caller_wallet_id,
+        client_id=client_id,
+    )
     started_at = time.monotonic()
     try:
-        matched_local, local_output = fastpath.run_local_agent(
-            agent,
-            payload,
-            execute_builtin_agent=execute_builtin_agent,
-        )
-        if matched_local:
-            output = local_output
-        else:
-            endpoint_url = str(agent.get("endpoint_url") or "").strip()
-            safe_url = url_security.validate_outbound_url(endpoint_url, "endpoint_url")
-            # Stream with a hard byte cap so a misbehaving downstream agent
-            # cannot OOM the pipeline. 8 MiB is well above legitimate JSON
-            # payloads we've seen in production.
-            _MAX_RESPONSE_BYTES = 8 * 1024 * 1024
-            with requests.post(
-                safe_url,
-                json=payload,
-                headers={"Content-Type": "application/json"},
-                timeout=120,
-                allow_redirects=False,
-                stream=True,
-            ) as response:
-                if not response.ok:
-                    raise RuntimeError(
-                        f"Agent endpoint returned HTTP {response.status_code}."
-                    )
-                declared = response.headers.get("Content-Length")
-                if (
-                    declared
-                    and declared.isdigit()
-                    and int(declared) > _MAX_RESPONSE_BYTES
-                ):
-                    raise RuntimeError("Agent response exceeds size limit.")
-                buf = bytearray()
-                for chunk in response.iter_content(chunk_size=64 * 1024):
-                    if not chunk:
-                        continue
-                    buf.extend(chunk)
-                    if len(buf) > _MAX_RESPONSE_BYTES:
-                        raise RuntimeError("Agent response exceeds size limit.")
-                try:
-                    output = json.loads(buf.decode("utf-8"))
-                except (ValueError, UnicodeDecodeError) as exc:
-                    raise RuntimeError("Agent returned malformed JSON.") from exc
-        if not isinstance(output, dict):
-            output = {"output": output}
-        if _output_has_error(output):
-            raise RuntimeError("Agent returned an error envelope.")
-        if _is_unchargeable_degraded(agent, output):
-            raise RuntimeError("Agent returned unchargeable degraded fallback output.")
-        jobs.update_job_status(
-            job["job_id"],
-            "complete",
-            output_payload=output,
-            completed=True,
-            **_sign_pipeline_step_output(agent, output),
-        )
-        payments.post_call_payout(
-            agent_wallet["wallet_id"],
-            platform_wallet["wallet_id"],
-            charge_tx_id,
-            price_cents,
-            agent["agent_id"],
-            platform_fee_pct=int(payments.PLATFORM_FEE_PCT),
-            fee_bearer_policy="caller",
-        )
-        jobs.mark_settled(job["job_id"])
-        registry.update_call_stats(
-            agent["agent_id"],
-            latency_ms=(time.monotonic() - started_at) * 1000.0,
-            success=True,
-            price_cents=price_cents,
-        )
-        pricing_helpers.maybe_refund_pricing_diff(
-            agent=agent,
-            payload=payload,
-            output=output,
-            caller_wallet_id=caller_wallet["wallet_id"],
-            agent_wallet_id=agent_wallet["wallet_id"],
-            platform_wallet_id=platform_wallet["wallet_id"],
-            charge_tx_id=charge_tx_id,
-            estimate=estimate,
-            caller_charge_cents=caller_charge_cents,
-            success_distribution=distribution,
-            platform_fee_pct=int(payments.PLATFORM_FEE_PCT),
-            fee_bearer_policy="caller",
-        )
+        output = _fetch_agent_output(agent, payload, execute_builtin_agent)
+        _settle_step_success(agent, payload, output, state=state, started_at=started_at)
         return output
     except Exception:
-        jobs.update_job_status(
-            job["job_id"],
-            "failed",
-            error_message="Pipeline step failed.",
-            completed=True,
-        )
-        payments.post_call_refund(
-            caller_wallet["wallet_id"],
-            charge_tx_id,
-            caller_charge_cents,
-            agent["agent_id"],
-        )
-        jobs.mark_settled(job["job_id"])
-        registry.update_call_stats(
-            agent["agent_id"],
-            latency_ms=(time.monotonic() - started_at) * 1000.0,
-            success=False,
-            price_cents=price_cents,
-        )
+        _settle_step_failure(agent, state=state, started_at=started_at)
         raise
+
+
+def _drive_pipeline_nodes(
+    validated: dict, input_payload: dict, *,
+    run_id: str, caller_owner_id: str, caller_wallet_id: str,
+    client_id: str | None,
+    execute_builtin_agent: Callable[[str, dict[str, Any]], dict] | None,
+) -> dict[str, Any]:
+    """Side-effect: invoke each pipeline node in topological order; returns ``step_results``."""
+    step_results: dict[str, Any] = {}
+    for node in validated["ordered_nodes"]:
+        payload = resolve_input_map(node["input_map"], input_payload, step_results)
+        agent = registry.get_agent(node["agent_id"], include_unapproved=True)
+        if agent is None:
+            raise ValueError(
+                f"Pipeline node '{node['id']}' agent '{node['agent_id']}' was not found."
+            )
+        output = _invoke_agent(
+            agent=agent,
+            payload=payload,
+            caller_owner_id=caller_owner_id,
+            caller_wallet_id=caller_wallet_id,
+            client_id=client_id,
+            execute_builtin_agent=execute_builtin_agent,
+        )
+        step_results[node["id"]] = output
+        db.update_run_step(run_id, node["id"], output)
+    return step_results
+
+
+def _build_final_output(
+    step_results: dict[str, Any], terminal_nodes: list[str],
+) -> Any:
+    """Pure: pick the single terminal output, or shape multi-terminal results into a dict."""
+    if len(terminal_nodes) == 1:
+        return step_results.get(terminal_nodes[0])
+    return {node_id: step_results.get(node_id) for node_id in terminal_nodes}
 
 
 def _execute_run(
@@ -373,40 +516,26 @@ def _execute_run(
     client_id: str | None,
     execute_builtin_agent: Callable[[str, dict[str, Any]], dict] | None,
 ) -> None:
+    """Side-effect: run a whole pipeline end-to-end; records final state on the run row.
+
+    Why: the run record's error_message includes the exception class so
+    operators can tell at a glance whether a failure was a ValueError
+    (definition issue) or a RuntimeError (a step's agent rejected).
+    """
     validated = validate_definition(pipeline.get("definition") or {})
-    step_results: dict[str, Any] = {}
     try:
-        for node in validated["ordered_nodes"]:
-            payload = resolve_input_map(node["input_map"], input_payload, step_results)
-            agent = registry.get_agent(node["agent_id"], include_unapproved=True)
-            if agent is None:
-                raise ValueError(
-                    f"Pipeline node '{node['id']}' agent '{node['agent_id']}' was not found."
-                )
-            output = _invoke_agent(
-                agent=agent,
-                payload=payload,
-                caller_owner_id=caller_owner_id,
-                caller_wallet_id=caller_wallet_id,
-                client_id=client_id,
-                execute_builtin_agent=execute_builtin_agent,
-            )
-            step_results[node["id"]] = output
-            db.update_run_step(run_id, node["id"], output)
+        step_results = _drive_pipeline_nodes(
+            validated, input_payload,
+            run_id=run_id, caller_owner_id=caller_owner_id,
+            caller_wallet_id=caller_wallet_id, client_id=client_id,
+            execute_builtin_agent=execute_builtin_agent,
+        )
         contradiction = _pipeline_contradiction(step_results)
         if contradiction:
             raise ValueError(contradiction)
-        terminal_nodes = validated["terminal_nodes"]
-        if len(terminal_nodes) == 1:
-            final_output = step_results.get(terminal_nodes[0])
-        else:
-            final_output = {
-                node_id: step_results.get(node_id) for node_id in terminal_nodes
-            }
+        final_output = _build_final_output(step_results, validated["terminal_nodes"])
         db.complete_run(run_id, final_output)
     except Exception as exc:
-        # Include the exception class so the error_message is self-explanatory
-        # in the run record (e.g. "ValueError: Pipeline node 'step1' ...").
         db.fail_run(run_id, f"{type(exc).__name__}: {exc}")
 
 
