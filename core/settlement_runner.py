@@ -102,8 +102,10 @@ def drain_one(job_id: str | None = None) -> bool:
     except Exception as exc:
         _record_failure(row["job_id"], str(exc))
         _LOG.warning(
-            "settlement_runner.failed",
-            extra={"job_id": row["job_id"], "error": str(exc)},
+            "settlement_runner.failed job=%s error=%s",
+            row["job_id"],
+            str(exc),
+            exc_info=True,
         )
         return True
 
@@ -204,6 +206,13 @@ def _settle_row(row: dict) -> None:
         # Job vanished (test cleanup, manual delete) — mark settled to drain.
         return
 
+    # Defensive commit: the lease + read path above may have left an
+    # implicit deferred transaction open on the thread-local SQLite
+    # connection. Existing payment primitives (post_call_payout etc.)
+    # issue BEGIN IMMEDIATE which fails inside an active tx. Forcing a
+    # commit here guarantees a clean slate. No-op when nothing is pending.
+    _force_commit_thread_local_conn()
+
     terminal_state = row["terminal_state"]
     if terminal_state == "stopped":
         _settle_stopped(job)
@@ -211,6 +220,25 @@ def _settle_row(row: dict) -> None:
     # here. See KNOWN DEBT in the module docstring.
 
     _build_receipt_if_available(job, terminal_state)
+
+
+def _force_commit_thread_local_conn() -> None:
+    """Force a commit on the thread-local connection if one is active.
+
+    SQLite's Python binding implicitly opens a deferred transaction on the
+    first DML statement. Our DbConnection wrapper commits on `with` exit,
+    but if any read path between the lease and the settlement primitive
+    leaves the connection in_transaction (e.g. a metadata SELECT that
+    happened to follow a DML on the same connection), the next
+    BEGIN IMMEDIATE will fail. A bare commit() is safe whether or not a
+    tx is open.
+    """
+    try:
+        with _db.get_db_connection() as conn:
+            conn.commit()
+    except Exception:
+        # Never block settlement on the defensive commit.
+        pass
 
 
 def _settle_stopped(job: dict) -> None:

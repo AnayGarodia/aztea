@@ -268,13 +268,26 @@ def jobs_message_create(
                 detail=f"Unknown tool_result correlation_id '{correlation_id}'.",
             )
 
-    msg = jobs.add_message(
-        job_id,
-        from_id,
-        msg_type,
-        payload,
-        lease_seconds=_DEFAULT_LEASE_SECONDS,
-    )
+    try:
+        msg = jobs.add_message(
+            job_id,
+            from_id,
+            msg_type,
+            payload,
+            lease_seconds=_DEFAULT_LEASE_SECONDS,
+        )
+    except jobs.messaging.JobAlreadyTerminal as exc:
+        # partial_output / steer racing a stop_when match. Surface as 409
+        # so the caller can distinguish "you raced terminal" from generic
+        # validation failures (400) and rate limits (429).
+        raise HTTPException(
+            status_code=409,
+            detail=error_codes.make_error(
+                "job.terminal",
+                str(exc),
+                {"job_id": job_id},
+            ),
+        ) from exc
     updated_job = jobs.get_job(job_id) or job
     _record_job_event(
         updated_job,

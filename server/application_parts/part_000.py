@@ -854,11 +854,13 @@ _TYPED_JOB_MESSAGE_TYPES = {
     "clarification_response",
     "progress",
     "partial_result",
+    "partial_output",
     "artifact",
     "agent_message",
     "note",
     "tool_call",
     "tool_result",
+    "steer",
 }
 _AGENT_WORK_EXAMPLES_MAX = _env_int(
     "AGENT_WORK_EXAMPLES_MAX",
