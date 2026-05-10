@@ -450,6 +450,69 @@ def a2a_agent_card(agent_id: str, request: Request) -> JSONResponse:
     )
 
 
+# Polite 410 Gone for the well-known slugs of agents that used to be public
+# but have since been removed from the catalog. The CLI/SDK now flags these
+# at hire-time (see SUNSET_AGENT_SLUGS in sdks/python-sdk/aztea/cli/common.py),
+# but raw curl callers hitting POST /agents/<slug>/call previously got a bare
+# 405 from FastAPI. Emit the structured `agent.sunset` envelope instead so
+# downstream agent-orchestration tools can branch correctly.
+_SUNSET_PUBLIC_SLUGS: frozenset[str] = frozenset({
+    "arxiv-research-agent",
+    "multi-file-executor",
+    "linter",
+    "shell-executor",
+    "type-checker",
+    "semantic-codebase-search",
+    "image-generator",
+    "financial-agent",
+    "live-endpoint-tester",
+    "sql-explainer",
+    "web-researcher",
+    "ai-red-teamer",
+    "codereview",
+    "code-review",
+    "json-schema-validator",
+    "git-diff-analyzer",
+    "wikipedia-research-agent",
+})
+
+
+def _sunset_410_response(slug: str) -> HTTPException:
+    return HTTPException(
+        status_code=410,
+        detail=error_codes.make_error(
+            error_codes.AGENT_SUNSET,
+            f"Agent '{slug}' was removed from the public catalog and is no longer callable.",
+            {"slug": slug, "deprecated": True},
+        ),
+    )
+
+
+@app.post(
+    "/agents/{slug}/call",
+    include_in_schema=False,  # internal courtesy route — the canonical hire path is /jobs
+    responses={410: {"description": "Agent sunset"}, 404: {"description": "Unknown slug"}},
+)
+def agent_call_by_slug_sunset(slug: str) -> JSONResponse:
+    """Catch sunset slugs hit via POST /agents/<slug>/call and return 410.
+
+    Why: pre-existing routing has /jobs and /registry/agents/{agent_id}/call but
+    no slug-keyed call route, so old README examples (`curl POST /agents/web-researcher/call`)
+    used to fall through to a bare HTTP 405. This handler gives those callers
+    the structured `agent.sunset` envelope they can match on.
+    """
+    if slug.lower() in _SUNSET_PUBLIC_SLUGS:
+        raise _sunset_410_response(slug)
+    raise HTTPException(
+        status_code=404,
+        detail=error_codes.make_error(
+            "agent.unknown_slug",
+            f"No agent with slug '{slug}'. Use POST /jobs (with agent_id) to hire.",
+            {"slug": slug},
+        ),
+    )
+
+
 @app.get(
     "/agents/{agent_id}/did.json",
     include_in_schema=True,

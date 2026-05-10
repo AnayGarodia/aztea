@@ -82,11 +82,14 @@ _PRIVATE_HOST_PATTERNS = (
 )
 _NETWORK_API_PATTERNS_RAW = {
     # JS/TS: top-level fetch + http/https/net/dns/dgram modules.
+    # Also block process/filesystem-escape modules (child_process, fs, worker_threads,
+    # cluster, vm). Without these the runtime crashes opaquely (HTTP 502) when the
+    # caller tries to shell out; rejecting up-front returns a structured error.
     ("javascript", "typescript"): (
         r"\bfetch\s*\(",
         r"\bXMLHttpRequest\b",
-        r"""require\s*\(\s*['"](?:http|https|net|dns|dgram|tls)['"]\s*\)""",
-        r"""(?:from|import)\s+['"](?:node:)?(?:http|https|net|dns|dgram|tls)['"]""",
+        r"""require\s*\(\s*['"](?:http|https|net|dns|dgram|tls|child_process|fs|fs/promises|worker_threads|cluster|vm|os|process)['"]\s*\)""",
+        r"""(?:from|import)\s+['"](?:node:)?(?:http|https|net|dns|dgram|tls|child_process|fs|fs/promises|worker_threads|cluster|vm|os|process)['"]""",
     ),
     # Go: net, net/http, net/url with Get/Dial/Post.
     ("go",): (
@@ -515,7 +518,13 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     if isinstance(parsed, dict):
         return parsed
     language, code, stdin, timeout = parsed
-    result = _RUNNERS[language](code, stdin, timeout)
+    # Last-resort envelope: any unanticipated runner crash (subprocess SIGKILL,
+    # binary stdout that breaks the parser, OOM) must surface as a structured
+    # error so the platform refunds rather than returning an opaque HTTP 502.
+    try:
+        result = _RUNNERS[language](code, stdin, timeout)
+    except Exception as exc:  # noqa: BLE001
+        return _err("multi_language_executor.runner_failed", f"{language} runner crashed: {exc}")
     if "error" in result and isinstance(result.get("error"), dict):
         return result
     if _is_runner_timeout(result):

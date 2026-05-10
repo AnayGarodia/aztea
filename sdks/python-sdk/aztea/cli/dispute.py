@@ -100,8 +100,8 @@ def dispute(
         "--evidence",
         help="Optional URL or text supporting your claim.",
     ),
-    status: Optional[str] = typer.Option(
-        None,
+    status: bool = typer.Option(
+        False,
         "--status",
         help="Show the current state of an existing dispute for <job_id>.",
     ),
@@ -130,10 +130,16 @@ def dispute(
     """Open a dispute on a recent job — pick from a list or pass a job_id."""
     # Status-check short-circuit — no filing, no confirm prompt.
     if status:
+        if not job_id:
+            console.print(
+                "[error]--status requires a job_id:[/error] "
+                "[code]aztea dispute <job_id> --status[/code]"
+            )
+            raise typer.Exit(code=2)
         try:
             with _open_client(api_key=api_key, base_url=base_url) as client:
                 with spinner("Loading dispute", json_mode=json_mode):
-                    record = client.get_dispute(status)
+                    record = client.get_dispute(job_id)
                 _emit_dispute_status(record, json_mode=json_mode)
         except typer.Exit:
             raise

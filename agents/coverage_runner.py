@@ -168,8 +168,11 @@ def _parse_coverage_json(path: str, user_file_names: set[str]) -> dict[str, Any]
             "uncovered_lines": sorted(int(ln) for ln in missing_lines),
         })
 
+    # Schema requires overall_pct as `number`. When coverage.json is absent we
+    # fall back to 0.0 (no covered lines observed) rather than None — preserves
+    # the contract while still being truthful.
     return {
-        "overall_pct": round(float(overall_pct), 2) if overall_pct is not None else None,
+        "overall_pct": round(float(overall_pct), 2) if overall_pct is not None else 0.0,
         "total_statements": int(total_statements),
         "total_missing": int(total_missing),
         "files": file_results,
@@ -337,7 +340,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
 
         # coverage.json absent — tests failed or coverage not available.
         return {
-            "overall_pct": None,
+            "overall_pct": 0.0,
             "passed_threshold": False,
             "files": [],
             "total_statements": 0,
