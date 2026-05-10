@@ -1021,6 +1021,65 @@ def count_owner_agents(owner_id: str) -> int:
     return int(row["n"]) if row else 0
 
 
+def _validate_price_for_update(price_per_call_usd: Any) -> float:
+    try:
+        price = float(price_per_call_usd)
+    except (TypeError, ValueError):
+        raise ValueError("price_per_call_usd must be a number.")
+    if not math.isfinite(price) or price < 0:
+        raise ValueError("price_per_call_usd must be a non-negative finite number.")
+    return price
+
+
+def _build_agent_update_columns(
+    *,
+    name: str | None,
+    description: str | None,
+    tags: list | None,
+    price_per_call_usd: float | None,
+    pii_safe: bool | None,
+    outputs_not_stored: bool | None,
+    audit_logged: bool | None,
+    region_locked: str | None,
+    cacheable: bool | None,
+    payout_curve: dict | str | None,
+    clear_payout_curve: bool,
+) -> dict[str, object]:
+    """Pure: turn update_agent kwargs into the {column: value} write set."""
+    updates: dict[str, object] = {}
+    if name is not None:
+        n = str(name).strip()
+        if not n:
+            raise ValueError("name must not be empty.")
+        updates["name"] = n
+    if description is not None:
+        updates["description"] = str(description).strip()
+    if tags is not None:
+        updates["tags"] = json.dumps(_parse_tags(tags))
+    if price_per_call_usd is not None:
+        updates["price_per_call_usd"] = _validate_price_for_update(price_per_call_usd)
+    if pii_safe is not None:
+        updates["pii_safe"] = 1 if pii_safe else 0
+    if outputs_not_stored is not None:
+        updates["outputs_not_stored"] = 1 if outputs_not_stored else 0
+    if audit_logged is not None:
+        updates["audit_logged"] = 1 if audit_logged else 0
+    if region_locked is not None:
+        updates["region_locked"] = str(region_locked).strip().lower() or None
+    if cacheable is not None:
+        updates["cacheable"] = 1 if cacheable else 0
+    if clear_payout_curve:
+        updates["payout_curve"] = None
+    elif payout_curve is not None:
+        from core import payout_curve as _pc
+        try:
+            parsed_curve = _pc.parse_curve(payout_curve)
+        except ValueError as exc:
+            raise ValueError(str(exc))
+        updates["payout_curve"] = _pc.curve_to_json(parsed_curve)
+    return updates
+
+
 def update_agent(
     agent_id: str,
     owner_id: str,
@@ -1041,6 +1100,14 @@ def update_agent(
     Update mutable fields on an agent. Only the owner can call this.
     Returns the updated agent dict, or None if not found / wrong owner.
     """
+    updates = _build_agent_update_columns(
+        name=name, description=description, tags=tags,
+        price_per_call_usd=price_per_call_usd,
+        pii_safe=pii_safe, outputs_not_stored=outputs_not_stored,
+        audit_logged=audit_logged, region_locked=region_locked,
+        cacheable=cacheable, payout_curve=payout_curve,
+        clear_payout_curve=clear_payout_curve,
+    )
     with _conn() as conn:
         row = conn.execute(
             "SELECT * FROM agents WHERE agent_id = %s AND owner_id = %s",
@@ -1048,52 +1115,8 @@ def update_agent(
         ).fetchone()
         if row is None:
             return None
-        agent = _row_to_dict(row)
-
-        updates: dict[str, object] = {}
-        if name is not None:
-            n = str(name).strip()
-            if not n:
-                raise ValueError("name must not be empty.")
-            updates["name"] = n
-        if description is not None:
-            updates["description"] = str(description).strip()
-        if tags is not None:
-            updates["tags"] = json.dumps(_parse_tags(tags))
-        if price_per_call_usd is not None:
-            try:
-                price = float(price_per_call_usd)
-            except (TypeError, ValueError):
-                raise ValueError("price_per_call_usd must be a number.")
-            if not math.isfinite(price) or price < 0:
-                raise ValueError(
-                    "price_per_call_usd must be a non-negative finite number."
-                )
-            updates["price_per_call_usd"] = price
-        if pii_safe is not None:
-            updates["pii_safe"] = 1 if pii_safe else 0
-        if outputs_not_stored is not None:
-            updates["outputs_not_stored"] = 1 if outputs_not_stored else 0
-        if audit_logged is not None:
-            updates["audit_logged"] = 1 if audit_logged else 0
-        if region_locked is not None:
-            updates["region_locked"] = str(region_locked).strip().lower() or None
-        if cacheable is not None:
-            updates["cacheable"] = 1 if cacheable else 0
-        if clear_payout_curve:
-            updates["payout_curve"] = None
-        elif payout_curve is not None:
-            from core import payout_curve as _pc
-
-            try:
-                parsed_curve = _pc.parse_curve(payout_curve)
-            except ValueError as exc:
-                raise ValueError(str(exc))
-            updates["payout_curve"] = _pc.curve_to_json(parsed_curve)
-
         if not updates:
-            return agent
-
+            return _row_to_dict(row)
         set_clause = ", ".join(f"{k} = %s" for k in updates)
         values = list(updates.values()) + [agent_id, owner_id]
         conn.execute(
