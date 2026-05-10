@@ -61,12 +61,14 @@ def test_r1_cve_empty_input_returns_structured_error():
 def test_r2_python_executor_skips_explainer_on_timeout():
     """The 2026-05-08 eval saw `while True: pass` time out at exit 124 and
     THEN spend ~300ms running an LLM 'explanation' that added zero insight.
-    The conditional that gates the explainer must include `not timed_out`.
+    The conditional that gates the explainer must skip when timed_out.
     """
     src = Path("agents/python_executor.py").read_text()
-    # Find the explainer-gating conditional. We assert it short-circuits
-    # on `timed_out` rather than the older form that only checked exit_code.
-    assert "if explain and not timed_out" in src, (
+    # Match the gating clause whether the timed_out flag is a local
+    # variable (`not timed_out`) or a dict field on the returned struct
+    # (`not raw["timed_out"]`) — both are equivalent. The semantic is what
+    # matters: the explainer call must short-circuit on timeout.
+    assert re.search(r"if\s+explain\s+and\s+not\s+(raw\[[\"']timed_out[\"']\]|timed_out)", src), (
         "Explainer must skip when timed_out is True (eval finding R2)."
     )
 
@@ -267,6 +269,85 @@ def test_r6e_is_disputable_rejects_after_rating():
     assert reason.status_code == 409
 
 
+def test_r6f_update_job_status_guard_blocks_post_completion_terminal_flip(
+    monkeypatch, tmp_path
+):
+    """Pin the invariant disputable.py DECISIONS #3 relies on.
+
+    `update_job_status(..., completed=True)` must be a no-op once
+    `completed_at` is set. If this guard ever weakens, the disputable
+    predicate's anchoring on `completed_at` becomes unsafe (a settled job
+    could flip from `complete` to `failed` post-payout, opening a window
+    for a partial clawback when the dispute path runs against fresh state).
+    """
+    import uuid as _uuid
+    from core import jobs as _jobs
+    from core import registry as _registry
+
+    db_path = tmp_path / f"r6f-{_uuid.uuid4().hex}.db"
+    for module in (_jobs, _registry):
+        conn = getattr(module._local, "conn", None)
+        if conn is not None:
+            conn.close()
+            try:
+                delattr(module._local, "conn")
+            except AttributeError:
+                pass
+        monkeypatch.setattr(module, "DB_PATH", str(db_path))
+
+    _registry.init_db()
+    _jobs.init_jobs_db()
+
+    agent_id = _registry.register_agent(
+        name="r6f agent",
+        description="guard test",
+        endpoint_url="https://example.com/r6f",
+        price_per_call_usd=0.01,
+        tags=["r6f"],
+    )
+    job = _jobs.create_job(
+        agent_id=agent_id,
+        caller_owner_id=f"user:{_uuid.uuid4().hex[:8]}",
+        caller_wallet_id=str(_uuid.uuid4()),
+        agent_wallet_id=str(_uuid.uuid4()),
+        platform_wallet_id=str(_uuid.uuid4()),
+        price_cents=10,
+        charge_tx_id=str(_uuid.uuid4()),
+        input_payload={"task": "guard"},
+    )
+
+    settled = _jobs.update_job_status(
+        job["job_id"], "complete", output_payload={"ok": True}, completed=True
+    )
+    assert settled["status"] == "complete"
+    assert settled["completed_at"] is not None
+    original_completed_at = settled["completed_at"]
+
+    # Attempt a post-completion terminal flip — this is what a misbehaving
+    # sweeper or buggy verification path might try. The SQL guard must
+    # silently no-op (status stays `complete`, `completed_at` stays put).
+    after = _jobs.update_job_status(
+        job["job_id"], "failed", error_message="late failure", completed=True
+    )
+    assert after is not None
+    assert after["status"] == "complete", (
+        "Post-completion terminal flip should be a no-op; the SQL guard in "
+        "core/jobs/leases.py is what makes disputable.py's completed_at "
+        "anchor safe."
+    )
+    assert after["completed_at"] == original_completed_at
+
+    # Cleanup so other tests don't inherit the tmp DB.
+    for module in (_jobs, _registry):
+        conn = getattr(module._local, "conn", None)
+        if conn is not None:
+            conn.close()
+            try:
+                delattr(module._local, "conn")
+            except AttributeError:
+                pass
+
+
 # ---------------------------------------------------------------------------
 # R7 — trust_breakdown on agent_response
 # ---------------------------------------------------------------------------
@@ -326,18 +407,32 @@ def test_r9_session_audit_verify_all_caps_per_receipt_timeout():
 # ---------------------------------------------------------------------------
 
 
-def test_r10_search_floors_are_feature_flagged():
+def test_r10_search_floors_are_feature_flagged(monkeypatch):
     """Search relevance/keep/dropoff thresholds must be tunable via env
     so the floor can be adjusted without redeploy. The plan called for
     AZTEA_SEARCH_RELEVANCE_FLOOR, AZTEA_SEARCH_KEEP_FLOOR, AZTEA_SEARCH_DROPOFF_BAND.
+
+    The default for relevance_floor was raised from 0.18 to 0.30 in the
+    2026-05-09 rails pass after live calibration: off-catalog queries
+    measured 0.23–0.26 in production with the real embedding model and
+    current catalog, so 0.18 was below the off-catalog distribution and
+    let "tell me a joke" return code-execution agents. 0.30 sits cleanly
+    between off-catalog (≤0.26) and legitimate (≥0.33) blended scores.
     """
     from core import feature_flags
 
-    # Defaults match the legacy literals.
+    monkeypatch.delenv("AZTEA_SEARCH_RELEVANCE_FLOOR", raising=False)
+    monkeypatch.delenv("AZTEA_SEARCH_KEEP_FLOOR", raising=False)
+    monkeypatch.delenv("AZTEA_SEARCH_DROPOFF_BAND", raising=False)
+
     assert callable(feature_flags.search_relevance_floor)
-    assert feature_flags.search_relevance_floor() == pytest.approx(0.18, abs=1e-6)
+    assert feature_flags.search_relevance_floor() == pytest.approx(0.30, abs=1e-6)
     assert feature_flags.search_keep_floor() == pytest.approx(0.20, abs=1e-6)
     assert feature_flags.search_dropoff_band() == pytest.approx(0.20, abs=1e-6)
+
+    # And the env override actually takes effect.
+    monkeypatch.setenv("AZTEA_SEARCH_RELEVANCE_FLOOR", "0.42")
+    assert feature_flags.search_relevance_floor() == pytest.approx(0.42, abs=1e-6)
 
     # And the call site reads them.
     src = Path("core/registry/agents_ops.py").read_text()

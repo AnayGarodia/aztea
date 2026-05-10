@@ -17,16 +17,24 @@ creates a tighter loop. Keep this module dependency-light.
 #   2026-05-08 power-user eval found a case where a settled job's status
 #   was something other than "complete" by the time the dispute route
 #   read it, even though the receipt had been issued and signed).
-# DECISIONS: we accept `status in {"complete", "failed"}` here as long as
-#   `completed_at` is set, because a job that completed-then-was-failed
-#   by a downstream sweeper (e.g. verification rejection) is still a job
-#   the caller paid for and may want to dispute. Pre-completion `failed`
-#   jobs (completed_at IS NULL) are refunded automatically and cannot be
-#   disputed — there is no payout to claw back.
-# KNOWN DEBT: ideally we'd accept any terminal state and let the dispute
-#   transaction itself decide whether there's an escrow to claw back.
-#   Today the dispute creation logic in core/disputes.py assumes a
-#   non-zero payout exists, so we gate at the predicate level instead.
+# DECISIONS:
+#   1. Eligibility anchors on `completed_at`, not `status`. Any status that
+#      is not pre-terminal is accepted as long as `completed_at` is set.
+#      A job that completed-then-was-failed by a downstream sweeper (e.g.
+#      verification rejection) is still a job the caller paid for and may
+#      want to dispute. Pre-completion `failed` jobs (completed_at IS NULL)
+#      are refunded automatically and cannot be disputed — no payout to
+#      claw back.
+#   2. We do NOT pre-check whether an escrow payout exists; we let the
+#      clawback transaction in core/payments/trust_disputes.py decide.
+#      That path is ledger-idempotent: `_lock_dispute_funds_conn` keys on
+#      `(dispute_id, tx_type="deposit")` so a no-payout job produces a
+#      dispute row with a zero-value escrow lock, which is correct.
+#   3. Trusting decision (1) is safe because update_job_status() in
+#      core/jobs/leases.py guards every status mutation with
+#      `WHERE ... (%s = 0 OR completed_at IS NULL)` — once `completed_at`
+#      is set, no caller can flip status to another terminal value, so the
+#      sweeper-races-settlement scenario cannot produce a partial clawback.
 """
 
 from __future__ import annotations

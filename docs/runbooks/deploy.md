@@ -16,7 +16,9 @@ The full operational reference: production deploy, nginx, env vars, packaging, S
 - **Stack:** two systemd services — no Docker in production
   - `aztea.service` — Python/FastAPI (uvicorn, HTTP API + payments + auth)
   - `aztea-elixir.service` — Elixir/OTP (job GenServers + lease sweeper + Phoenix.PubSub)
-- **Python process:** `/home/aztea/app/venv/bin/uvicorn server:app --host 127.0.0.1 --port 8000 --workers 3`
+- **Python process:** `/home/aztea/app/venv/bin/uvicorn server:app --host 127.0.0.1 --port 8000 --workers 2`
+  - **Worker count:** 2 on t3.micro (1GB RAM). Each worker holds its own copy of FastAPI + the lazily-loaded sentence-transformers model (~80MB once warmed). 3 workers thrashed swap hard enough to run swap usage at 1GB+ steady-state; dropping to 2 freed ~600MB of swap and stabilized memory at ~760MB used / 911MB. Move to 3+ only after upgrading to t3.small (2GB) or larger. Configured via the systemd drop-in at `/etc/systemd/system/aztea.service.d/override.conf` — verify with `sudo systemctl cat aztea | grep ExecStart`.
+  - **Embedding warmup:** **Disabled** on t3.micro. Tried `AZTEA_WARM_EMBEDDINGS=1` on 2026-05-09 — both workers race to load ~80MB simultaneously on startup and one always loses to OOM, producing a crashloop (15+ "Started server process" entries per minute). Tradeoff: first search per worker after a deploy lazy-loads the model and takes ~40s; subsequent searches are sub-second. The only safe way to enable warmup on this instance class is to drop to `--workers 1`, which serializes concurrent requests. Do not re-enable warmup until upgraded to t3.small or larger.
 - **Elixir process:** `/home/aztea/elixir-release/bin/aztea start` (beam.smp)
 - **Database:** PostgreSQL 16 (`aztea_prod`) — `DATABASE_URL=postgresql://aztea:...@localhost/aztea_prod` in `.env`
 - **Reverse proxy:** Caddy at `/etc/caddy/Caddyfile` is a thin reverse proxy to uvicorn on `127.0.0.1:8000`. It does NOT serve static files. **FastAPI owns SPA fallback** via the catch-all `@app.get("/{full_path:path}")` in `server/application_parts/part_013.py`: maps existing `frontend/dist/*` files to themselves, returns `index.html` for everything else, and 404s anything matching `_SPA_API_PREFIXES`.
@@ -37,8 +39,17 @@ sudo -u aztea git reset --hard origin/main
 # 2. Rebuild the React frontend
 cd frontend && npm ci && npm run build && cd ..
 
-# 3. Restart the API (migrations run automatically on startup)
-sudo systemctl kill -s SIGKILL aztea   # force-kill if stuck in shutdown
+# 3. Restart the API (migrations run automatically on startup).
+# Force-kill ALL uvicorn processes before starting — `systemctl restart`
+# alone leaves zombie workers from the old deploy because graceful
+# shutdown takes 60+ seconds while the embedding model lazy-loads.
+# Zombie workers serve a fraction of incoming requests with stale code,
+# producing inconsistent ranking results that look like "the deploy
+# half-took". Discovered 2026-05-09 — only 1 of 3 workers had the new
+# routing keyword overlay because the other 2 were still ~3 minutes old.
+sudo pkill -9 -f "uvicorn server:app" || true
+sudo pkill -9 -f "spawn_main" || true
+sleep 2
 sudo systemctl start aztea
 
 # 4. Verify
@@ -47,6 +58,62 @@ sudo journalctl -u aztea -n 50
 ```
 
 If the service stops cleanly: `sudo systemctl restart aztea`. Migrations run automatically on startup via `core/migrate.py`.
+
+## Post-deploy rails verification
+
+The 2026-05-09 rails-to-A pass moved every "rich" platform behavior — audit
+aggregation, search ranking, off-catalog detection, error envelope, worker-pool
+telemetry — to **server-side endpoints**. The `aztea-cli` package is now a dumb
+HTTP passthrough. This means the right place to check that a rails fix shipped
+is `https://aztea.ai` itself, **not** a local MCP. If you skip this check after
+a deploy you'll repeat the bug class that produced eight prior "fix the rails"
+commits without lifting any eval grades.
+
+After every deploy that touches rails code, run these four probes against
+production. Each one should return the new shape; if any returns the old shape,
+**the deploy didn't ship and you need to debug the deploy lane before celebrating**.
+
+```bash
+API_KEY="<a caller-scope key>"
+
+# 1. Audit endpoint exists with the rich shape (since/until/digest/bulk-verify).
+curl -s -H "Authorization: Bearer $API_KEY" \
+  "https://aztea.ai/wallets/audit?period=1d&verify_all=true" \
+  | jq '{has_digest: (.receipts_digest != null),
+         has_aggregates: (.receipts_aggregate != null),
+         has_options: (.available_options != null),
+         has_bulk_verify: (.bulk_verification != null)}'
+# Expect: every key true.
+
+# 2. Search empty-result mode fires for off-catalog queries.
+curl -s -H "Authorization: Bearer $API_KEY" -X POST https://aztea.ai/registry/search \
+  -H "Content-Type: application/json" -d '{"query":"tell me a joke","limit":5}' \
+  | jq '{count, off_catalog, has_note: (.note != null)}'
+# Expect: count == 0, off_catalog == true, has_note == true.
+
+# 3. Worker_pool snapshot has the collapsed shape (no in_flight_global_raw at top).
+# Replace <BATCH_ID> with any batch you can poll. ?debug=1 should still show the
+# diagnostic fields under a `debug` sub-dict.
+curl -s -H "Authorization: Bearer $API_KEY" \
+  "https://aztea.ai/jobs/batch/<BATCH_ID>" \
+  | jq '.parallel_hire_trace.worker_pool | keys'
+# Expect: ["capacity_remaining","configured_parallelism","in_flight_global",
+#          "interval_seconds","platform_queue_depth",
+#          "this_batch_pending","this_batch_running"]
+# Specifically: NO "in_flight_global_raw", NO "last_worker_summary", NO "hint".
+
+# 4. Failed batch jobs carry the structured error envelope alongside the legacy
+# error_message string. Submit any batch with one intentionally bad job, poll
+# batch_status, and inspect a failed entry.
+# Expect: jobs[].error to be a dict with {error, message, details};
+# jobs[].error_message to remain present as a string.
+```
+
+If any probe fails, do NOT bump the `aztea-cli` package — the CLI is a thin
+wrapper. The grades only move when the **server** ships the new shape, which
+happens via `git fetch origin main && git reset --hard origin/main` followed by
+`sudo systemctl restart aztea`. The CLI release exists for hygiene (smaller
+client codebase, less duplication), not for grade improvements.
 
 ## Recommended nginx config
 
@@ -138,6 +205,16 @@ AZTEA_LLM_DEFAULT_CHAIN=groq,openai,anthropic
 # Optional features
 AZTEA_ENABLE_LIVE_DISPUTE_JUDGES=1
 AZTEA_ENABLE_LIVE_QUALITY_JUDGE=1
+
+# Probation auto-graduation thresholds (sweeper-driven, defaults shown).
+# Listings clear probation when ALL gates pass: ≥5 successful calls, ≥80%
+# success rate, ≥3.5 avg quality rating, no open disputes, ≥24h since
+# created_at. Tighten in prod if abuse appears; loosen for friendlier onboarding.
+# AZTEA_PROBATION_MIN_SUCCESSES=5
+# AZTEA_PROBATION_MIN_SUCCESS_RATE=0.80
+# AZTEA_PROBATION_MIN_QUALITY=3.5
+# AZTEA_PROBATION_MIN_AGE_HOURS=24
+# AZTEA_PROBATION_SWEEP_INTERVAL_S=300
 
 # Email (if unset, all email silently no-ops)
 SMTP_HOST=

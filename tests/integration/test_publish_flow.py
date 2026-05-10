@@ -323,3 +323,230 @@ def test_auto_hire_ranks_probation_below_approved():
     s_ok = _score_candidate(approved, intent).score
     s_prob = _score_candidate(probation, intent).score
     assert s_ok > s_prob, f"approved {s_ok} should outrank probation {s_prob}"
+
+
+# ---------------------------------------------------------------------------
+# Probation auto-graduation
+#
+# CLAUDE.md advertises "auto-invoke is rank-penalised and price-capped at $1.00
+# until track record graduates them to 'approved'." These tests pin that the
+# graduation function actually graduates clean track records and skips agents
+# that fail any single gate.
+# ---------------------------------------------------------------------------
+
+
+def _make_probation_agent(suffix: str) -> str:
+    """Register a probation listing under the test isolated DB."""
+    return registry.register_agent(
+        name=f"prob-{suffix}",
+        description="probation graduation test",
+        endpoint_url=f"https://example.com/{suffix}",
+        price_per_call_usd=0.05,
+        tags=["probation-test"],
+        review_status="probation",
+    )
+
+
+def _force_agent_track_record(
+    db_path,
+    agent_id: str,
+    *,
+    total_calls: int,
+    successful_calls: int,
+    age_hours: float,
+) -> None:
+    """Backdate created_at and force call counters into the shape we need.
+
+    Going around the public API keeps each test independent of the rest of
+    the call-flow (which would otherwise need wallets, charges, settlement,
+    receipts, ratings…).
+    """
+    import sqlite3
+    from datetime import datetime, timedelta, timezone
+
+    backdated = (
+        datetime.now(timezone.utc) - timedelta(hours=age_hours)
+    ).isoformat()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE agents SET total_calls=?, successful_calls=?, created_at=? WHERE agent_id=?",
+            (total_calls, successful_calls, backdated, agent_id),
+        )
+
+
+def _insert_quality_rating(db_path, agent_id: str, rating: int) -> None:
+    """Insert a job_quality_rating row directly for graduation tests.
+
+    The graduation gate only reads agent_id + rating from this table, so a
+    minimal row is enough.
+    """
+    import sqlite3
+    import uuid as _uuid
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO job_quality_ratings
+                (job_id, agent_id, caller_owner_id, rating, created_at)
+            VALUES (?, ?, ?, ?, datetime('now'))
+            """,
+            (str(_uuid.uuid4()), agent_id, f"user:{_uuid.uuid4().hex[:8]}", rating),
+        )
+
+
+def _insert_open_dispute(db_path, agent_id: str) -> None:
+    """Insert a non-terminal dispute row for graduation gate testing."""
+    import sqlite3
+    import uuid as _uuid
+
+    job_id = str(_uuid.uuid4())
+    dispute_id = str(_uuid.uuid4())
+    with sqlite3.connect(db_path) as conn:
+        # Minimal job row that satisfies the FK + agent join.
+        conn.execute(
+            """
+            INSERT INTO jobs (job_id, agent_id, agent_owner_id, caller_owner_id,
+                              caller_wallet_id, agent_wallet_id, platform_wallet_id,
+                              price_cents, caller_charge_cents,
+                              charge_tx_id, input_payload, status,
+                              created_at, updated_at)
+            VALUES (?, ?, 'sys', 'sys', ?, ?, ?, 10, 10, ?, '{}', 'complete',
+                    datetime('now'), datetime('now'))
+            """,
+            (
+                job_id, agent_id,
+                str(_uuid.uuid4()), str(_uuid.uuid4()), str(_uuid.uuid4()),
+                str(_uuid.uuid4()),
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO disputes (dispute_id, job_id, filed_by_owner_id, side,
+                                  reason, status, filed_at)
+            VALUES (?, ?, 'sys', 'caller', 'test reason', 'pending',
+                    datetime('now'))
+            """,
+            (dispute_id, job_id),
+        )
+
+
+def test_graduate_promotes_eligible_probation_agent(isolated_db):
+    """All gates clear → probation transitions to approved with a system audit row."""
+    registry.init_db()
+    jobs.init_jobs_db()
+    reputation.init_reputation_db()
+    disputes.init_disputes_db()
+
+    agent_id = _make_probation_agent("clean")
+    _force_agent_track_record(
+        isolated_db, agent_id, total_calls=10, successful_calls=10, age_hours=72.0
+    )
+    for _ in range(3):
+        _insert_quality_rating(isolated_db, agent_id, 5)
+
+    graduated = registry.graduate_probation_listings()
+    assert agent_id in graduated
+
+    row = registry.get_agent(agent_id, include_unapproved=True)
+    assert row["review_status"] == "approved"
+    assert row["reviewed_by"] == "system"
+    assert "auto-graduated" in (row.get("review_note") or "")
+
+
+def test_graduate_skips_when_too_few_successes(isolated_db):
+    registry.init_db()
+    jobs.init_jobs_db()
+    reputation.init_reputation_db()
+    disputes.init_disputes_db()
+
+    agent_id = _make_probation_agent("low-count")
+    _force_agent_track_record(
+        isolated_db, agent_id, total_calls=2, successful_calls=2, age_hours=72.0
+    )
+    _insert_quality_rating(isolated_db, agent_id, 5)
+
+    graduated = registry.graduate_probation_listings()
+    assert agent_id not in graduated
+    assert registry.get_agent(agent_id, include_unapproved=True)["review_status"] == "probation"
+
+
+def test_graduate_skips_when_open_dispute(isolated_db):
+    registry.init_db()
+    jobs.init_jobs_db()
+    reputation.init_reputation_db()
+    disputes.init_disputes_db()
+
+    agent_id = _make_probation_agent("disputed")
+    _force_agent_track_record(
+        isolated_db, agent_id, total_calls=10, successful_calls=10, age_hours=72.0
+    )
+    for _ in range(3):
+        _insert_quality_rating(isolated_db, agent_id, 5)
+    _insert_open_dispute(isolated_db, agent_id)
+
+    graduated = registry.graduate_probation_listings()
+    assert agent_id not in graduated
+    assert registry.get_agent(agent_id, include_unapproved=True)["review_status"] == "probation"
+
+
+def test_graduate_skips_when_too_young(isolated_db):
+    registry.init_db()
+    jobs.init_jobs_db()
+    reputation.init_reputation_db()
+    disputes.init_disputes_db()
+
+    agent_id = _make_probation_agent("young")
+    # Age 0.5h < default 24h floor.
+    _force_agent_track_record(
+        isolated_db, agent_id, total_calls=10, successful_calls=10, age_hours=0.5
+    )
+    for _ in range(3):
+        _insert_quality_rating(isolated_db, agent_id, 5)
+
+    graduated = registry.graduate_probation_listings()
+    assert agent_id not in graduated
+
+
+def test_graduate_skips_when_quality_below_floor(isolated_db):
+    registry.init_db()
+    jobs.init_jobs_db()
+    reputation.init_reputation_db()
+    disputes.init_disputes_db()
+
+    agent_id = _make_probation_agent("lowq")
+    _force_agent_track_record(
+        isolated_db, agent_id, total_calls=10, successful_calls=10, age_hours=72.0
+    )
+    # Three 2-star ratings → avg 2.0, below default 3.5 floor.
+    for _ in range(3):
+        _insert_quality_rating(isolated_db, agent_id, 2)
+
+    graduated = registry.graduate_probation_listings()
+    assert agent_id not in graduated
+
+
+def test_graduate_does_not_touch_master_listings(isolated_db):
+    """Approved (master) listings must stay approved across a graduation pass."""
+    registry.init_db()
+    jobs.init_jobs_db()
+    reputation.init_reputation_db()
+    disputes.init_disputes_db()
+
+    master_id = registry.register_agent(
+        name="master-untouched",
+        description="approved listing",
+        endpoint_url="https://example.com/master",
+        price_per_call_usd=0.05,
+        tags=["master-test"],
+        review_status="approved",  # master-key path lands here
+    )
+    _force_agent_track_record(
+        isolated_db, master_id, total_calls=10, successful_calls=10, age_hours=72.0
+    )
+
+    graduated = registry.graduate_probation_listings()
+    assert master_id not in graduated
+    assert (
+        registry.get_agent(master_id, include_unapproved=True)["review_status"]
+        == "approved"
+    )

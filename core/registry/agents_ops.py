@@ -121,6 +121,31 @@ _OFF_CATALOG_PATTERNS = [
         lambda toks: ({"endpoint", "endpoints", "latency", "load"} & toks)
         and ({"fast", "slow", "test", "perf", "performance", "p99", "p95"} & toks),
     ),
+    # 2026-05-09 eval additions: queries that whack-a-mole through
+    # per-agent blocks because they share generic security/dev tokens
+    # with too many candidates. Catching them at the global gate is
+    # cleaner and stops the missing-block-on-agent-N pattern from
+    # leaking through.
+    (
+        "OWASP guidance / threat-model frameworks",
+        lambda toks: "owasp" in toks,
+    ),
+    (
+        "JWT / JOSE token decoding",
+        lambda toks: "jwt" in toks or "jose" in toks,
+    ),
+    (
+        "joke / chitchat",
+        lambda toks: bool({"joke", "jokes", "funny"} & toks),
+    ),
+    (
+        "cooking / food",
+        lambda toks: bool({"cook", "cooking", "dinner", "recipe", "recipes", "food"} & toks),
+    ),
+    (
+        "credit card / payment-card",
+        lambda toks: ("credit" in toks and "card" in toks) or ("credit" in toks and "cards" in toks),
+    ),
 ]
 
 # Typo + acronym → canonical-term expansions ONLY. Do not list "code
@@ -721,6 +746,136 @@ def set_agent_review_decision(
     return get_agent(agent_id, include_unapproved=True)
 
 
+_TERMINAL_DISPUTE_STATUSES = ("resolved", "final")
+
+
+def graduate_probation_listings() -> list[str]:
+    """Promote eligible probation agents to ``review_status='approved'``.
+
+    Returns the list of agent_ids graduated this run. Idempotent — safe to
+    call from a sweeper. Reads thresholds from :mod:`core.feature_flags`.
+
+    INVARIANTS:
+      - Only transitions ``probation`` → ``approved``. Never touches
+        ``rejected``, ``pending_review``, or already-``approved`` rows.
+      - Writes ``reviewed_by='system'`` and a ``review_note`` describing
+        the gates passed, so the audit trail makes the source obvious.
+
+    A row graduates when it clears ALL of:
+      1. ``successful_calls >= AZTEA_PROBATION_MIN_SUCCESSES``
+      2. ``successful_calls / total_calls >= AZTEA_PROBATION_MIN_SUCCESS_RATE``
+      3. average ``job_quality_ratings.rating >= AZTEA_PROBATION_MIN_QUALITY``
+      4. zero open disputes (status not in resolved/final)
+      5. ``now - created_at >= AZTEA_PROBATION_MIN_AGE_HOURS``
+    """
+    min_successes = _feature_flags.probation_min_successes()
+    min_success_rate = _feature_flags.probation_min_success_rate()
+    min_quality = _feature_flags.probation_min_quality()
+    min_age_seconds = _feature_flags.probation_min_age_hours() * 3600.0
+    now = datetime.now(timezone.utc)
+
+    with _conn() as conn:
+        candidates = conn.execute(
+            """
+            SELECT agent_id, total_calls, successful_calls, created_at
+            FROM agents
+            WHERE review_status = 'probation'
+            """
+        ).fetchall()
+
+    graduated: list[str] = []
+    for row in candidates:
+        agent_id = row["agent_id"]
+        try:
+            total_calls = int(row["total_calls"] or 0)
+            successful = int(row["successful_calls"] or 0)
+            if successful < min_successes:
+                continue
+            success_rate = (successful / total_calls) if total_calls > 0 else 0.0
+            if success_rate < min_success_rate:
+                continue
+
+            created_at = _parse_iso_to_utc(row["created_at"])
+            if created_at is None:
+                # Defensive: a row without created_at predates the column or
+                # is corrupt; skip rather than graduate blind.
+                continue
+            if (now - created_at).total_seconds() < min_age_seconds:
+                continue
+
+            with _conn() as conn:
+                open_disputes = conn.execute(
+                    """
+                    SELECT COUNT(*) AS n
+                    FROM disputes d
+                    JOIN jobs j ON j.job_id = d.job_id
+                    WHERE j.agent_id = %s
+                      AND d.status NOT IN ('resolved', 'final')
+                    """,
+                    (agent_id,),
+                ).fetchone()
+                if (open_disputes or {}).get("n", 0) > 0:
+                    continue
+
+                quality_row = conn.execute(
+                    """
+                    SELECT AVG(rating) AS avg_rating, COUNT(*) AS rating_count
+                    FROM job_quality_ratings
+                    WHERE agent_id = %s
+                    """,
+                    (agent_id,),
+                ).fetchone()
+            avg_rating = (quality_row or {}).get("avg_rating")
+            rating_count = int((quality_row or {}).get("rating_count") or 0)
+            # Require at least one rating; without ratings the quality gate
+            # is unverifiable. Publishers can still see calls succeed; they
+            # just need at least one caller to rate before graduation.
+            if rating_count == 0 or avg_rating is None:
+                continue
+            if float(avg_rating) < min_quality:
+                continue
+
+            note = (
+                f"auto-graduated: {successful}/{total_calls} successes, "
+                f"avg rating {float(avg_rating):.2f} over {rating_count}, "
+                f"no open disputes."
+            )
+            set_agent_review_decision(
+                agent_id,
+                decision="approve",
+                reviewed_by="system",
+                note=note,
+            )
+            graduated.append(agent_id)
+        except Exception:
+            # One bad row must not abort the batch. The exception path is
+            # rare (DB lock contention, malformed timestamp) and the next
+            # sweep will retry.
+            _logger.exception("auto-graduation failed for %s", agent_id)
+            continue
+
+    return graduated
+
+
+def _parse_iso_to_utc(value: Any) -> datetime | None:
+    """Best-effort ISO timestamp → UTC-aware datetime, mirroring helpers used
+    elsewhere in this package. Returns None on parse failure rather than
+    raising — callers treat None as "skip this row"."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    try:
+        text = str(value).strip().replace("Z", "+00:00")
+        # SQLite often stores `YYYY-MM-DD HH:MM:SS` without a T separator.
+        if "T" not in text and " " in text and len(text) >= 19:
+            text = text.replace(" ", "T", 1)
+        parsed = datetime.fromisoformat(text)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
 def set_agent_verified(agent_id: str, verified: bool) -> dict | None:
     with _conn() as conn:
         conn.execute(
@@ -1269,17 +1424,22 @@ def _lexical_match_score(query: str, agent: dict, supported_fields: set[str]) ->
     example_score = _lexical_overlap_score(query_terms, example_text)
 
     lowered_query = query.lower()
+    name_lower = name_text.lower()
+    desc_lower = desc_text.lower()
+    tag_lower = tag_text.lower()
+    example_lower = example_text.lower()
+
     phrase_bonus = 0.0
-    if lowered_query in name_text.lower():
+    if lowered_query in name_lower:
         phrase_bonus += 0.25
-    elif lowered_query in desc_text.lower():
+    elif lowered_query in desc_lower:
         phrase_bonus += 0.18
-    elif lowered_query in example_text.lower():
+    elif lowered_query in example_lower:
         phrase_bonus += 0.12
 
-    if query_terms and all(term in name_text.lower() for term in query_terms):
+    if query_terms and all(term in name_lower for term in query_terms):
         phrase_bonus += 0.12
-    if query_terms and any(term in tag_text.lower() for term in query_terms):
+    if query_terms and any(term in tag_lower for term in query_terms):
         phrase_bonus += 0.08
 
     score = (
@@ -1299,6 +1459,7 @@ def _lexical_match_score(query: str, agent: dict, supported_fields: set[str]) ->
 # server one-way import rule. Overlay is keyed by agent_id.
 _ROUTING_OVERLAY_MATCH: dict[str, list[str]] = {}
 _ROUTING_OVERLAY_BLOCK: dict[str, list[str]] = {}
+_ROUTING_OVERLAY_INSTALLED: bool = False
 
 
 def set_routing_overlay(
@@ -1307,12 +1468,12 @@ def set_routing_overlay(
 ) -> None:
     """Install the per-agent routing keyword overlay used by search ranking.
 
-    Called once at application startup from the FastAPI lifespan. The
-    server layer owns the spec definitions; core registers them here so
-    the search ranker (which lives in core) can use them without a
-    server → core → server import cycle.
+    Called from the FastAPI lifespan AND lazily on first search read so a
+    worker that missed the lifespan path (race, exception, lazy import
+    quirk) still routes correctly. Idempotent: calling multiple times
+    just refreshes the maps.
     """
-    global _ROUTING_OVERLAY_MATCH, _ROUTING_OVERLAY_BLOCK
+    global _ROUTING_OVERLAY_MATCH, _ROUTING_OVERLAY_BLOCK, _ROUTING_OVERLAY_INSTALLED
     _ROUTING_OVERLAY_MATCH = {
         str(k): [str(v).strip().lower() for v in (vs or []) if str(v).strip()]
         for k, vs in (match_keywords or {}).items()
@@ -1323,6 +1484,48 @@ def set_routing_overlay(
         for k, vs in (block_keywords or {}).items()
         if k
     }
+    _ROUTING_OVERLAY_INSTALLED = True
+
+
+def _ensure_routing_overlay_loaded() -> None:
+    """Self-heal the routing overlay if a worker missed the lifespan path.
+
+    The 2026-05-09 prod verification showed only 1 of 3 uvicorn workers
+    populated the overlay through the lifespan hook — the other two had
+    empty maps and silently degraded ranking, which made the eval's hit
+    rate look randomly variable. This function imports the built-in spec
+    catalog at first-read time and installs the overlay if it's still
+    empty. Cheap (one dict comprehension over ~10 specs); safe (set
+    exactly once per process — the global flag short-circuits subsequent
+    calls); robust (no dependency on lifespan ordering).
+    """
+    global _ROUTING_OVERLAY_INSTALLED
+    if _ROUTING_OVERLAY_INSTALLED:
+        return
+    try:
+        # Late import to keep the core → server one-way rule intact at
+        # module-load time. server.builtin_agents.specs has no
+        # back-import to core.registry, so this resolves cleanly.
+        from server.builtin_agents.specs import builtin_agent_specs
+
+        specs = builtin_agent_specs()
+        set_routing_overlay(
+            match_keywords={
+                str(spec.get("agent_id") or ""): list(spec.get("match_keywords") or [])
+                for spec in specs
+                if spec.get("match_keywords")
+            },
+            block_keywords={
+                str(spec.get("agent_id") or ""): list(spec.get("block_keywords") or [])
+                for spec in specs
+                if spec.get("block_keywords")
+            },
+        )
+    except Exception:  # noqa: BLE001 — search must never crash on overlay load
+        # Silent: keep the overlay flag False so a future call retries
+        # rather than caching the failure. Search degrades to lex+sim+
+        # trust+price without keyword bonus, which is still functional.
+        _ROUTING_OVERLAY_INSTALLED = False
 
 
 def _agent_match_keywords(agent: dict) -> list[str]:
@@ -1338,13 +1541,12 @@ def _agent_match_keywords(agent: dict) -> list[str]:
     raw = agent.get("match_keywords")
     if isinstance(raw, str):
         try:
-            import json as _json
-
-            raw = _json.loads(raw)
-        except Exception:
+            raw = json.loads(raw)
+        except (ValueError, TypeError):
             raw = [raw]
     if isinstance(raw, list) and raw:
         return [str(item).strip().lower() for item in raw if str(item).strip()]
+    _ensure_routing_overlay_loaded()
     agent_id = str(agent.get("agent_id") or "").strip()
     return _ROUTING_OVERLAY_MATCH.get(agent_id, [])
 
@@ -1353,13 +1555,12 @@ def _agent_block_keywords(agent: dict) -> list[str]:
     raw = agent.get("block_keywords")
     if isinstance(raw, str):
         try:
-            import json as _json
-
-            raw = _json.loads(raw)
-        except Exception:
+            raw = json.loads(raw)
+        except (ValueError, TypeError):
             raw = [raw]
     if isinstance(raw, list) and raw:
         return [str(item).strip().lower() for item in raw if str(item).strip()]
+    _ensure_routing_overlay_loaded()
     agent_id = str(agent.get("agent_id") or "").strip()
     return _ROUTING_OVERLAY_BLOCK.get(agent_id, [])
 
@@ -1613,14 +1814,19 @@ def _intent_match_bonus(query: str, agent: dict) -> float:
 
 def _price_query_mode(query: str) -> str | None:
     terms = set(_query_terms(query))
+    # Bare "price"/"cost" are too ambiguous to trigger price-intent ranking on
+    # their own (e.g. "apple stock price" is a stock lookup, not a request for
+    # the cheapest agent). Require an explicit cheap/low/expensive/highest
+    # intent term — "lowest price" and "cheapest cost" still work because
+    # those qualifiers carry the intent.
     if not (
-        {"cheap", "cheapest", "low", "lowest", "price", "cost", "expensive", "highest"}
+        {"cheap", "cheapest", "low", "lowest", "expensive", "highest", "costliest"}
         & terms
     ):
         return None
     if {"expensive", "highest", "costliest"} & terms:
         return "most_expensive"
-    if {"cheap", "cheapest", "low", "lowest", "price", "cost"} & terms:
+    if {"cheap", "cheapest", "low", "lowest"} & terms:
         return "cheapest"
     return None
 
@@ -1683,6 +1889,28 @@ def _match_reasons(
             f"caller trust {caller_trust:.2f} meets minimum {caller_trust_min:.2f}"
         )
     return reasons
+
+
+def _llm_rerank_candidates(
+    query: str,
+    candidates: list[dict],
+) -> list[dict]:
+    """Optional LLM re-rank stage. Default no-op until the catalog grows.
+
+    Activation policy (when AZTEA_SEARCH_LLM_RERANK=1):
+      * Skip when there's a clear winner — top score >= top2 + 0.15.
+      * Skip when there's clearly nothing — top score below content floor.
+      * Otherwise: send query + top-N (name, description, category) to a
+        small fast model via core.llm.run_with_fallback (Groq llama-3.1-8b
+        first in the default chain), with a 500ms timeout, and let it
+        re-order or signal "none of these match" → empty list.
+
+    Stub for now: returns the input unchanged. Filling in the body is a
+    one-function-touch when the catalog crosses ~30 agents and the
+    deterministic ranker starts losing to ambiguous-intent queries. The
+    seam is here so that change does not require restructuring search.
+    """
+    return candidates
 
 
 def search_agents(
@@ -1944,15 +2172,36 @@ def search_agents(
 
     # Off-catalog short-circuit: when the query unambiguously asks for a
     # capability we don't have, return empty BEFORE the relevance-floor
-    # check so a weak lexical match can't sneak through.
+    # check so a weak lexical match can't sneak through. We keep this active
+    # in price-query mode too — "cheapest weather agent" still has nothing
+    # in the catalog, and we should not surface unrelated cheap agents just
+    # because the user expressed a price preference.
     query_token_set = set(_query_terms(normalized_query))
-    if price_query_mode is None and query_token_set:
+    if query_token_set:
         for _description, predicate in _OFF_CATALOG_PATTERNS:
             try:
                 if predicate(query_token_set):
                     return []
             except Exception:  # noqa: BLE001 — predicates must never crash search
                 continue
+
+    # Optional LLM re-rank seam (2026-05-09): when the catalog grows past
+    # ~30 agents, lexical+embedding can struggle to disambiguate among
+    # several semantically-overlapping candidates. The stage below is
+    # gated off by default and is a no-op until AZTEA_SEARCH_LLM_RERANK=1
+    # is set in the env. The implementation lives in
+    # `_llm_rerank_candidates` so this site stays small and the stub can
+    # be filled with a real Groq/llama call when needed without touching
+    # the surrounding ranking logic.
+    if (
+        ranked
+        and price_query_mode is None
+        and _feature_flags.search_llm_rerank_enabled()
+    ):
+        try:
+            ranked = _llm_rerank_candidates(normalized_query, ranked)
+        except Exception:  # noqa: BLE001 — re-rank must never block search
+            pass
 
     # Confidence floor: drop low-relevance candidates so callers don't get
     # five mediocre matches when nothing in the catalog is a real fit. The
@@ -1961,7 +2210,7 @@ def search_agents(
     # was no empty-result mode. We still keep at least the top hit if its
     # score crosses the floor; otherwise the response signals "no match" to
     # the caller via an empty list (callers branch on `count == 0`).
-    if price_query_mode is None and ranked:
+    if ranked:
         top_score = ranked[0]["blended_score"]
         # Reload thresholds per-call: env-tunable without redeploy
         # (see AZTEA_SEARCH_* in core/feature_flags.py).
