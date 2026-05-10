@@ -87,6 +87,17 @@ def _fingerprint_http(url: str) -> tuple[str | None, str | None]:
         return None, f"http: {type(exc).__name__}"
 
     try:
+        # SSRF defense in depth: revalidate the final resolved URL after the
+        # redirect chain. The initial url_security check above guards the
+        # registered target; without this second check, a public URL that
+        # 30x's to 127.0.0.1 (or to a private/loopback host via a public
+        # DNS record) would silently bypass the gate.
+        final_url = str(getattr(resp, "url", "") or safe_url)
+        if final_url and final_url != safe_url:
+            try:
+                _url_security.validate_outbound_url(final_url, "target_url")
+            except ValueError as exc:
+                return None, f"http: redirect to private host: {exc}"
         if resp.status_code >= 400:
             return None, f"http: HTTP {resp.status_code}"
 

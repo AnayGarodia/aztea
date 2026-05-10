@@ -173,8 +173,12 @@ def test_T1_1_budget_exhausted_watcher_resumes_after_utc_rollover(
             "budget_exhausted rows (and let the rollover gate flip them), "
             "or reset_spend_window must run as its own sweep phase."
         )
+    # The rollover phase must have flipped budget_exhausted → active and
+    # advanced the spend window. Spend may be back above 0 if the same
+    # sweep then fired (fingerprint changed v3→v4); what matters is that
+    # the watcher is unstuck.
     assert row["status"] == "active"
-    assert row["spend_today_cents"] == 0
+    assert row["spend_window_date"] == datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
 def test_T1_2_fire_records_spend_and_run_atomically(
