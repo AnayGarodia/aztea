@@ -321,21 +321,15 @@ def test_wizard_existing_file_collision_refuses(runner, fake_tty, mock_build_cli
 
 
 def test_wizard_from_template_only(runner, fake_tty, mock_build_client, tmp_path):
+    """`--from-template <kind>` is non-interactive (1.5.1 fix): writes a
+    placeholder starter file with stand-in values, no prompts, no TTY needed.
+    User edits and re-runs `aztea publish <file>` to actually list.
+    """
     fake_client, _ = mock_build_client
-    stdin = (
-        "1\n"
-        "template-only\n"
-        "Just generate a starter and stop.\n"
-        "\n"
-        "n\n"
-        "body\n"
-        "EOF\n"
-        "\n"
-        "\n"
-    )
-    result = runner.invoke(app, ["publish", "--from-template", "skill"], input=stdin)
+    result = runner.invoke(app, ["publish", "--from-template", "skill"])
     assert result.exit_code == 0, result.output
-    assert (tmp_path / "template-only.skill.md").exists()
+    # The non-interactive path writes a fixed placeholder filename.
+    assert (tmp_path / "my_new_skill.skill.md").exists()
     # No registration calls
     posts = [
         c for c in fake_client._request_json.call_args_list
