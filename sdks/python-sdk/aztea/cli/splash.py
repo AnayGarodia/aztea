@@ -2,10 +2,23 @@
 
 Two modes:
     - Signed-out: hero wordmark + minimal "get started" call to action.
-    - Signed-in:  compact wordmark + live status pill (user) plus the four
-                  most-used shortcuts.
+    - Signed-in:  same hero plus a live status pill (user/host) and a
+                  quickstart card pinned to the top-five shortcuts.
 
-Both modes degrade gracefully when Rich is unavailable or stdout is not a TTY.
+# OWNS: the visual hero shown by `aztea` (no subcommand).
+# NOT OWNS: any subcommand body, network I/O, or persisted state.
+# INVARIANTS:
+#   - Pure layout: never makes a network call. Reads `load_config()` once.
+#   - Width-stable: hero must fit a 72-col terminal (we don't probe size).
+#   - Degrades cleanly when Rich is missing or stdout is not a TTY.
+# DECISIONS:
+#   - Hero wordmark uses ANSI Shadow glyphs. It's iconic, kerns predictably,
+#     and renders identically across iTerm2 / Terminal.app / Alacritty / kitty.
+#   - We render the wordmark with a vertical teal-gradient (mint → teal → ink)
+#     so it reads as 3D-shaded rather than a flat block.
+#   - The "ticker" strip below the wordmark mirrors the four product pillars
+#     (discovery / escrow / receipts / recourse) and replaces the older
+#     subtagline. It evokes a marketplace tape, fitting the brand promise.
 """
 from __future__ import annotations
 
@@ -25,14 +38,51 @@ from .output import (
 )
 
 
-# Refined wordmark — narrower glyphs, asymmetric weight, kerned for ~60-col
-# terminal. Tested in macOS Terminal, iTerm2, VS Code, Alacritty, kitty.
-_LOGO = """\
-      ▄▀█ ▀▀█ ▀█▀ █▀▀ ▄▀█
-      █▀█ ▄▀░ ░█░ ██▄ █▀█"""
+# ── Hero wordmark ──────────────────────────────────────────────────────────
+# ANSI-Shadow style. Six rows × 42 cols. We render each row in a slightly
+# different teal so the block reads as illuminated from above — the lightest
+# row is the highlight, the darkest is the cast shadow.
+
+_LOGO_ROWS: tuple[str, ...] = (
+    " █████╗ ███████╗████████╗███████╗ █████╗ ",
+    "██╔══██╗╚══███╔╝╚══██╔══╝██╔════╝██╔══██╗",
+    "███████║  ███╔╝    ██║   █████╗  ███████║",
+    "██╔══██║ ███╔╝     ██║   ██╔══╝  ██╔══██║",
+    "██║  ██║███████╗   ██║   ███████╗██║  ██║",
+    "╚═╝  ╚═╝╚══════╝   ╚═╝   ╚══════╝╚═╝  ╚═╝",
+)
+# Mint highlight → teal body → deep teal shadow. Index-aligned with _LOGO_ROWS.
+_LOGO_GRADIENT: tuple[str, ...] = (
+    "bold #99F6E4",
+    "bold #5EEAD4",
+    "bold #2DD4BF",
+    "bold #14B8A6",
+    "bold #0F766E",
+    "bold #115E59",
+)
+_LOGO_WIDTH = 41
 
 _TAGLINE = "the clearing house for agent commerce"
-_SUBTAGLINE = "discovery  ·  escrow  ·  signed receipts  ·  recourse"
+
+# Marketplace ticker — four product pillars separated by chevrons.
+_TICKER_PILLARS: tuple[str, ...] = ("discovery", "escrow", "signed receipts", "recourse")
+
+# Quickstart shortcuts. (cmd, description) tuples; cmd column is fixed-width.
+_SHORTCUTS_AUTHED: tuple[tuple[str, str], ...] = (
+    ("aztea status",         "balance + recent jobs at a glance"),
+    ("aztea agents list",    "browse the specialist marketplace"),
+    ("aztea hire <slug>",    "hire and stream the result"),
+    ("aztea publish",        "list a new agent (interactive wizard)"),
+    ("aztea wallet balance", "funds, escrow, Stripe payouts"),
+)
+_SHORTCUTS_GUEST: tuple[tuple[str, str], ...] = (
+    ("aztea login",       "sign in and set up MCP"),
+    ("aztea agents list", "browse the marketplace (no auth)"),
+    ("aztea --help",      "every command, every flag"),
+    ("aztea mcp doctor",  "verify your editor integration"),
+)
+_PANEL_WIDTH = 74
+_CMD_COL_WIDTH = 22
 
 
 def _is_tty() -> bool:
@@ -40,6 +90,7 @@ def _is_tty() -> bool:
 
 
 def _signed_in_meta() -> dict[str, Any] | None:
+    # Pulls just the display fields we need; never raises on a missing config.
     cfg = load_config() or {}
     if not cfg.get("api_key"):
         return None
@@ -49,32 +100,43 @@ def _signed_in_meta() -> dict[str, Any] | None:
     }
 
 
-def _render_rich(meta: dict[str, Any] | None) -> None:
+def _render_hero() -> None:
+    """Print the gradient-shaded ANSI-Shadow wordmark, centered."""
     from rich.text import Text
     from rich.align import Align
-    from rich.panel import Panel
-    from rich import box
-
     console.print()
-    console.print(Align.center(Text(_LOGO, style="bold #14B8A6")))
+    for row, style in zip(_LOGO_ROWS, _LOGO_GRADIENT):
+        console.print(Align.center(Text(row, style=style)))
     console.print()
 
-    tagline = Text(_TAGLINE, style="bold #5EEAD4")
-    console.print(Align.center(tagline))
-    console.print(Align.center(Text(_SUBTAGLINE, style="muted")))
+
+def _render_tagline() -> None:
+    """Print the tagline + a marketplace ticker of product pillars."""
+    from rich.text import Text
+    from rich.align import Align
+    console.print(Align.center(Text(_TAGLINE, style="bold #5EEAD4")))
+    ticker = Text()
+    for i, pillar in enumerate(_TICKER_PILLARS):
+        if i:
+            ticker.append(f"  {DIAMOND}  ", style="border_dim")
+        ticker.append(pillar, style="muted")
+    console.print(Align.center(ticker))
     console.print()
 
-    # Status strip — compact pill when signed in, ghost CTA when signed out.
+
+def _render_status_strip(meta: dict[str, Any] | None) -> None:
+    """Print the signed-in pill (or the signed-out CTA) below the tagline."""
+    from rich.text import Text
+    from rich.align import Align
+    strip = Text()
     if meta:
-        strip = Text()
         strip.append(f"  {BAR} ", style="success")
         strip.append("signed in", style="success")
         strip.append(f"   {DOT}   ", style="border")
-        strip.append((meta.get("username") or "user"), style="bold")
+        strip.append(meta.get("username") or "user", style="bold")
         strip.append(f"   {DOT}   ", style="border")
         strip.append(meta.get("base_url") or "", style="muted")
     else:
-        strip = Text()
         strip.append(f"  {BAR} ", style="warn")
         strip.append("signed out", style="warn")
         strip.append("   run ", style="muted")
@@ -83,27 +145,20 @@ def _render_rich(meta: dict[str, Any] | None) -> None:
     console.print(Align.center(strip))
     console.print()
 
-    # Action card — the highest-value shortcuts.
-    if meta:
-        rows = [
-            ("aztea status",         f"{ARROW} balance + recent jobs at a glance"),
-            ("aztea agents list",    f"{ARROW} browse the specialist marketplace"),
-            ("aztea hire <slug>",    f"{ARROW} hire and stream the result"),
-            ("aztea publish",        f"{ARROW} list a new agent (interactive wizard)"),
-            ("aztea wallet balance", f"{ARROW} funds, escrow, Stripe payouts"),
-        ]
-    else:
-        rows = [
-            ("aztea login",          f"{ARROW} sign in and set up MCP"),
-            ("aztea agents list",    f"{ARROW} browse the marketplace (no auth)"),
-            ("aztea --help",         f"{ARROW} every command, every flag"),
-            ("aztea mcp doctor",     f"{ARROW} verify your editor integration"),
-        ]
 
+def _render_quickstart(meta: dict[str, Any] | None) -> None:
+    """Print the bordered quickstart panel with code + description columns."""
+    from rich.text import Text
+    from rich.align import Align
+    from rich.panel import Panel
+    from rich import box
+    rows = _SHORTCUTS_AUTHED if meta else _SHORTCUTS_GUEST
     body = Text()
-    for cmd, desc in rows:
-        body.append(f"  {cmd:<22}", style="code")
-        body.append(f"  {desc}\n", style="muted")
+    for i, (cmd, desc) in enumerate(rows):
+        if i:
+            body.append("\n")
+        body.append(f"  {cmd:<{_CMD_COL_WIDTH}}", style="code")
+        body.append(f"  {ARROW} {desc}", style="muted")
     panel = Panel(
         body,
         title=Text(" quickstart ", style="bold #0F2A2D on #5EEAD4"),
@@ -111,11 +166,15 @@ def _render_rich(meta: dict[str, Any] | None) -> None:
         border_style="border_dim",
         box=box.ROUNDED,
         padding=(1, 2),
-        width=72,
+        width=_PANEL_WIDTH,
     )
     console.print(Align.center(panel))
 
-    # Footer — version + docs
+
+def _render_footer() -> None:
+    """Print the tape-style version + docs footer below the panel."""
+    from rich.text import Text
+    from rich.align import Align
     foot = Text()
     foot.append(f"  v{__version__}", style="muted")
     foot.append(f"   {DIAMOND}   ", style="border_dim")
@@ -126,25 +185,30 @@ def _render_rich(meta: dict[str, Any] | None) -> None:
     console.print()
 
 
+def _render_rich(meta: dict[str, Any] | None) -> None:
+    _render_hero()
+    _render_tagline()
+    _render_status_strip(meta)
+    _render_quickstart(meta)
+    _render_footer()
+
+
 def _render_plain(meta: dict[str, Any] | None) -> None:
-    console.print(_LOGO)
+    # Plain mode: no Rich, no colour, no centering. Used when piped or no TTY.
+    for row in _LOGO_ROWS:
+        console.print(row)
     console.print(_TAGLINE)
-    console.print(_SUBTAGLINE)
+    console.print("  ·  ".join(_TICKER_PILLARS))
     console.print()
+    shortcuts = _SHORTCUTS_AUTHED if meta else _SHORTCUTS_GUEST
     if meta:
         console.print(f"  {CHECK} signed in as {meta.get('username') or 'user'} ({meta.get('base_url')})")
-        console.print("  aztea agents list      browse the marketplace")
-        console.print("  aztea hire <slug>      hire a specialist")
-        console.print("  aztea publish          list a new agent (interactive wizard)")
-        console.print("  aztea wallet balance   inspect funds")
-        console.print("  aztea status           dashboard")
     else:
         console.print("  signed out — run `aztea login` to begin")
-        console.print("  aztea login            sign in and set up MCP")
-        console.print("  aztea agents list      browse the marketplace")
-        console.print("  aztea --help           every command")
+    for cmd, desc in shortcuts:
+        console.print(f"  {cmd:<{_CMD_COL_WIDTH}}  {desc}")
     console.print()
-    console.print(f"v{__version__}")
+    console.print(f"v{__version__}  ·  docs.aztea.ai  ·  aztea --help")
 
 
 def render_splash() -> None:
