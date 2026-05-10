@@ -60,6 +60,10 @@ CRON_EXPRESSION_PARSER_AGENT_ID = "b45063e4-ecbe-591d-b81a-5240c71cd5fd"
 SSL_CERTIFICATE_DECODER_AGENT_ID = "fefbff0b-8343-5a58-8aec-9d1579188919"
 DIFF_ANALYZER_AGENT_ID = "8b980edd-6583-51d2-b351-d2afe1d57ff2"
 K8S_MANIFEST_VALIDATOR_AGENT_ID = "6086b2ad-0a55-58e5-b504-49968379b623"
+ARCHIVE_INSPECTOR_AGENT_ID = "9713a29a-1817-5548-b439-0cd4f4efdcb1"
+UNICODE_INSPECTOR_AGENT_ID = "65fbf6ec-ff53-5f72-95e0-88ae2070c3d9"
+TERRAFORM_PLAN_ANALYZER_AGENT_ID = "989f2964-fadd-5ce0-9afc-2183c08fb9f9"
+COLOR_CONTRAST_CHECKER_AGENT_ID = "3da02ac3-bf02-5797-90c2-27e9dd67d66d"
 
 BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
     QUALITY_JUDGE_AGENT_ID: "internal://quality-judge",
@@ -93,6 +97,10 @@ BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
     SSL_CERTIFICATE_DECODER_AGENT_ID: "internal://ssl_certificate_decoder",
     DIFF_ANALYZER_AGENT_ID: "internal://diff_analyzer",
     K8S_MANIFEST_VALIDATOR_AGENT_ID: "internal://k8s_manifest_validator",
+    ARCHIVE_INSPECTOR_AGENT_ID: "internal://archive_inspector",
+    UNICODE_INSPECTOR_AGENT_ID: "internal://unicode_inspector",
+    TERRAFORM_PLAN_ANALYZER_AGENT_ID: "internal://terraform_plan_analyzer",
+    COLOR_CONTRAST_CHECKER_AGENT_ID: "internal://color_contrast_checker",
 }
 
 BUILTIN_LEGACY_ROUTE_ENDPOINTS: dict[str, str] = {
@@ -173,6 +181,10 @@ CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
         SSL_CERTIFICATE_DECODER_AGENT_ID,
         DIFF_ANALYZER_AGENT_ID,
         K8S_MANIFEST_VALIDATOR_AGENT_ID,
+        ARCHIVE_INSPECTOR_AGENT_ID,
+        UNICODE_INSPECTOR_AGENT_ID,
+        TERRAFORM_PLAN_ANALYZER_AGENT_ID,
+        COLOR_CONTRAST_CHECKER_AGENT_ID,
     }
 )
 # Sanity: a sunset agent must never accidentally re-appear in the public set.

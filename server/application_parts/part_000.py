@@ -107,6 +107,10 @@ from agents import cron_expression_parser as agent_cron_expression_parser
 from agents import ssl_certificate_decoder as agent_ssl_certificate_decoder
 from agents import diff_analyzer as agent_diff_analyzer
 from agents import k8s_manifest_validator as agent_k8s_manifest_validator
+from agents import archive_inspector as agent_archive_inspector
+from agents import unicode_inspector as agent_unicode_inspector
+from agents import terraform_plan_analyzer as agent_terraform_plan_analyzer
+from agents import color_contrast_checker as agent_color_contrast_checker
 from core import auth as _auth
 from core import cache as _cache
 from core import (
@@ -322,6 +326,10 @@ _CRON_EXPRESSION_PARSER_AGENT_ID = _builtin_constants.CRON_EXPRESSION_PARSER_AGE
 _SSL_CERTIFICATE_DECODER_AGENT_ID = _builtin_constants.SSL_CERTIFICATE_DECODER_AGENT_ID
 _DIFF_ANALYZER_AGENT_ID = _builtin_constants.DIFF_ANALYZER_AGENT_ID
 _K8S_MANIFEST_VALIDATOR_AGENT_ID = _builtin_constants.K8S_MANIFEST_VALIDATOR_AGENT_ID
+_ARCHIVE_INSPECTOR_AGENT_ID = _builtin_constants.ARCHIVE_INSPECTOR_AGENT_ID
+_UNICODE_INSPECTOR_AGENT_ID = _builtin_constants.UNICODE_INSPECTOR_AGENT_ID
+_TERRAFORM_PLAN_ANALYZER_AGENT_ID = _builtin_constants.TERRAFORM_PLAN_ANALYZER_AGENT_ID
+_COLOR_CONTRAST_CHECKER_AGENT_ID = _builtin_constants.COLOR_CONTRAST_CHECKER_AGENT_ID
 
 _normalize_endpoint_ref = _builtin_constants.normalize_endpoint_ref
 _BUILTIN_INTERNAL_ENDPOINTS = _builtin_constants.BUILTIN_INTERNAL_ENDPOINTS

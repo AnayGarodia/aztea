@@ -7,10 +7,12 @@ from typing import Any
 
 from server.builtin_agents.constants import (
     ACCESSIBILITY_AUDITOR_AGENT_ID,
+    ARCHIVE_INSPECTOR_AGENT_ID,
     ARXIV_RESEARCH_AGENT_ID,
     BROKEN_LINK_CRAWLER_AGENT_ID,
     BROWSER_AGENT_ID,
     CI_FAILURE_REPRODUCER_AGENT_ID,
+    COLOR_CONTRAST_CHECKER_AGENT_ID,
     COVERAGE_RUNNER_AGENT_ID,
     CRON_EXPRESSION_PARSER_AGENT_ID,
     CURATED_BUILTIN_AGENT_IDS,
@@ -46,8 +48,10 @@ from server.builtin_agents.constants import (
     SQL_EXPLAINER_AGENT_ID,
     SSL_CERTIFICATE_DECODER_AGENT_ID,
     STRIPE_WEBHOOK_DEBUGGER_AGENT_ID,
+    TERRAFORM_PLAN_ANALYZER_AGENT_ID,
     TYPE_CHECKER_AGENT_ID,
     VIDEO_STORYBOARD_AGENT_ID,
+    UNICODE_INSPECTOR_AGENT_ID,
     VISUAL_REGRESSION_AGENT_ID,
     WEB_SEARCH_AGENT_ID,
 )
@@ -59,6 +63,7 @@ from server.builtin_agents.specs_part5 import load_builtin_specs_part5
 from server.builtin_agents.specs_part6 import load_builtin_specs_part6
 from server.builtin_agents.specs_part7 import load_builtin_specs_part7
 from server.builtin_agents.specs_part8 import load_builtin_specs_part8
+from server.builtin_agents.specs_part9 import load_builtin_specs_part9
 
 _DEFAULT_CATEGORY_BY_AGENT_ID = {
     FINANCIAL_AGENT_ID: "Finance",
@@ -99,6 +104,10 @@ _DEFAULT_CATEGORY_BY_AGENT_ID = {
     SSL_CERTIFICATE_DECODER_AGENT_ID: "Security",
     DIFF_ANALYZER_AGENT_ID: "Code",
     K8S_MANIFEST_VALIDATOR_AGENT_ID: "Developer Tools",
+    ARCHIVE_INSPECTOR_AGENT_ID: "Security",
+    UNICODE_INSPECTOR_AGENT_ID: "Security",
+    TERRAFORM_PLAN_ANALYZER_AGENT_ID: "Developer Tools",
+    COLOR_CONTRAST_CHECKER_AGENT_ID: "Quality",
 }
 
 _DEFAULT_CACHEABLE_BY_AGENT_ID = {
@@ -139,6 +148,10 @@ _DEFAULT_CACHEABLE_BY_AGENT_ID = {
     SSL_CERTIFICATE_DECODER_AGENT_ID: True,
     DIFF_ANALYZER_AGENT_ID: True,
     K8S_MANIFEST_VALIDATOR_AGENT_ID: False,
+    ARCHIVE_INSPECTOR_AGENT_ID: True,
+    UNICODE_INSPECTOR_AGENT_ID: True,
+    TERRAFORM_PLAN_ANALYZER_AGENT_ID: True,
+    COLOR_CONTRAST_CHECKER_AGENT_ID: True,
 }
 
 _DEFAULT_RUNTIME_REQUIREMENTS_BY_AGENT_ID = {
@@ -179,6 +192,10 @@ _DEFAULT_RUNTIME_REQUIREMENTS_BY_AGENT_ID = {
     SSL_CERTIFICATE_DECODER_AGENT_ID: ["cryptography"],
     DIFF_ANALYZER_AGENT_ID: [],
     K8S_MANIFEST_VALIDATOR_AGENT_ID: ["kubectl (optional)", "PyYAML"],
+    ARCHIVE_INSPECTOR_AGENT_ID: [],
+    UNICODE_INSPECTOR_AGENT_ID: [],
+    TERRAFORM_PLAN_ANALYZER_AGENT_ID: [],
+    COLOR_CONTRAST_CHECKER_AGENT_ID: [],
 }
 
 _DEFAULT_TOOLING_KIND_BY_AGENT_ID = {
@@ -223,6 +240,10 @@ _DEFAULT_TOOLING_KIND_BY_AGENT_ID = {
     SSL_CERTIFICATE_DECODER_AGENT_ID: "tool_execution",
     DIFF_ANALYZER_AGENT_ID: "tool_execution",
     K8S_MANIFEST_VALIDATOR_AGENT_ID: "tool_execution",
+    ARCHIVE_INSPECTOR_AGENT_ID: "tool_execution",
+    UNICODE_INSPECTOR_AGENT_ID: "tool_execution",
+    TERRAFORM_PLAN_ANALYZER_AGENT_ID: "tool_execution",
+    COLOR_CONTRAST_CHECKER_AGENT_ID: "tool_execution",
 }
 
 _DEFAULT_STABILITY_TIER_BY_AGENT_ID = {
@@ -267,6 +288,10 @@ _DEFAULT_STABILITY_TIER_BY_AGENT_ID = {
     SSL_CERTIFICATE_DECODER_AGENT_ID: "stable",
     DIFF_ANALYZER_AGENT_ID: "stable",
     K8S_MANIFEST_VALIDATOR_AGENT_ID: "beta",
+    ARCHIVE_INSPECTOR_AGENT_ID: "stable",
+    UNICODE_INSPECTOR_AGENT_ID: "stable",
+    TERRAFORM_PLAN_ANALYZER_AGENT_ID: "stable",
+    COLOR_CONTRAST_CHECKER_AGENT_ID: "stable",
 }
 
 _DEFAULT_CODEX_RECOMMENDED_BY_AGENT_ID = {
@@ -311,6 +336,10 @@ _DEFAULT_CODEX_RECOMMENDED_BY_AGENT_ID = {
     SSL_CERTIFICATE_DECODER_AGENT_ID: True,
     DIFF_ANALYZER_AGENT_ID: True,
     K8S_MANIFEST_VALIDATOR_AGENT_ID: True,
+    ARCHIVE_INSPECTOR_AGENT_ID: True,
+    UNICODE_INSPECTOR_AGENT_ID: True,
+    TERRAFORM_PLAN_ANALYZER_AGENT_ID: True,
+    COLOR_CONTRAST_CHECKER_AGENT_ID: True,
 }
 
 _DEFAULT_SHORT_USE_CASES_BY_AGENT_ID = {
@@ -410,6 +439,10 @@ _DEFAULT_SHORT_USE_CASES_BY_AGENT_ID = {
     SSL_CERTIFICATE_DECODER_AGENT_ID: ["decode a PEM certificate", "extract SANs and expiry", "check certificate chain order"],
     DIFF_ANALYZER_AGENT_ID: ["analyze PR risk", "detect migration in diff", "find secret additions in diff"],
     K8S_MANIFEST_VALIDATOR_AGENT_ID: ["validate k8s YAML", "find unpinned images", "check resource limits"],
+    ARCHIVE_INSPECTOR_AGENT_ID: ["inspect zip contents", "detect zip bomb", "find path traversal in archive"],
+    UNICODE_INSPECTOR_AGENT_ID: ["detect homoglyphs", "find invisible chars", "check bidi attack"],
+    TERRAFORM_PLAN_ANALYZER_AGENT_ID: ["analyze terraform plan", "find risky destroys", "classify IaC changes"],
+    COLOR_CONTRAST_CHECKER_AGENT_ID: ["check WCAG contrast", "grade color accessibility", "audit color pairs"],
 }
 
 
@@ -483,6 +516,7 @@ def _all_builtin_specs() -> tuple[dict[str, Any], ...]:
     specs.extend(load_builtin_specs_part6())
     specs.extend(load_builtin_specs_part7())
     specs.extend(load_builtin_specs_part8())
+    specs.extend(load_builtin_specs_part9())
     normalized = [_normalize_builtin_spec(spec) for spec in specs]
     seen_ids: set[str] = set()
     seen_endpoints: set[str] = set()

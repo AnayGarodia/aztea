@@ -202,6 +202,14 @@ def _execute_builtin_agent_inner(
         return _finalize(agent_diff_analyzer.run(payload))
     if agent_id == _K8S_MANIFEST_VALIDATOR_AGENT_ID:
         return _finalize(agent_k8s_manifest_validator.run(payload))
+    if agent_id == _ARCHIVE_INSPECTOR_AGENT_ID:
+        return _finalize(agent_archive_inspector.run(payload))
+    if agent_id == _UNICODE_INSPECTOR_AGENT_ID:
+        return _finalize(agent_unicode_inspector.run(payload))
+    if agent_id == _TERRAFORM_PLAN_ANALYZER_AGENT_ID:
+        return _finalize(agent_terraform_plan_analyzer.run(payload))
+    if agent_id == _COLOR_CONTRAST_CHECKER_AGENT_ID:
+        return _finalize(agent_color_contrast_checker.run(payload))
     raise ValueError(f"Unsupported built-in agent '{agent_id}'.")
 
 

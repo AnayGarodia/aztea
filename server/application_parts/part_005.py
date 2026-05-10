@@ -547,6 +547,32 @@ def _deterministic_quality_result(
                 return {"verdict": "fail", "score": 2, "reason": f"K8s manifest validator output must include '{key}'."}
         return {"verdict": "pass", "score": 8, "reason": "Structured k8s manifest validator output is internally consistent."}
 
+    if agent_id == _ARCHIVE_INSPECTOR_AGENT_ID:
+        for key in ["format", "total_entries", "total_uncompressed_bytes", "security"]:
+            if key not in payload:
+                return {"verdict": "fail", "score": 2, "reason": f"Archive inspector output must include '{key}'."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured archive inspector output is internally consistent."}
+
+    if agent_id == _UNICODE_INSPECTOR_AGENT_ID:
+        has_single = "length_chars" in payload and "security" in payload
+        has_batch = "results" in payload and "texts_analyzed" in payload
+        if not has_single and not has_batch:
+            return {"verdict": "fail", "score": 2, "reason": "Unicode inspector output must include length_chars+security or results+texts_analyzed."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured unicode inspector output is internally consistent."}
+
+    if agent_id == _TERRAFORM_PLAN_ANALYZER_AGENT_ID:
+        for key in ["summary", "changes", "risk_summary"]:
+            if key not in payload:
+                return {"verdict": "fail", "score": 2, "reason": f"Terraform plan analyzer output must include '{key}'."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured terraform plan analyzer output is internally consistent."}
+
+    if agent_id == _COLOR_CONTRAST_CHECKER_AGENT_ID:
+        has_single = "contrast_ratio" in payload and "grade" in payload
+        has_batch = "results" in payload and "pairs_checked" in payload
+        if not has_single and not has_batch:
+            return {"verdict": "fail", "score": 2, "reason": "Color contrast checker output must include contrast_ratio+grade or results+pairs_checked."}
+        return {"verdict": "pass", "score": 8, "reason": "Structured color contrast checker output is internally consistent."}
+
     return None
 
 
