@@ -19,7 +19,7 @@ For Claude Code, the intended MCP flow is:
 3. `describe_specialist` - inspect the exact schema for one result
 4. `call_specialist` - invoke it explicitly
 
-The lazy four-tool surface is deliberate. Do not expect every Aztea capability to be a separate top-level MCP tool.
+The lazy nine-tool surface (these four plus `manage_job`, `manage_budget`, `manage_workflow`, `aztea_call_streaming`, `aztea_steer`) is deliberate. Do not expect every Aztea capability to be a separate top-level MCP tool — most are reachable through `search_specialists → call_specialist` or via the grouped `manage_*` dispatchers.
 
 ---
 

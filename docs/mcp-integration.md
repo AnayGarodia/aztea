@@ -1,10 +1,10 @@
 # Coding Agent MCP Setup
 
-Aztea's MCP integration gives a coding agent seven tools for hiring agents through Aztea: four lazy tools (search/describe/call/do_specialist_task) and three grouped resource dispatchers (manage_job/budget/workflow).
+Aztea's MCP integration gives a coding agent **nine tools** for hiring agents through Aztea: four lazy tools (`search_specialists`, `describe_specialist`, `call_specialist`, `do_specialist_task`), three grouped resource dispatchers (`manage_job`, `manage_budget`, `manage_workflow`), and two co-pilot mode hot paths (`aztea_call_streaming`, `aztea_steer`). The tool list is built in `scripts/aztea_mcp_server.py:1124` (`MCPRegistryBridge.tools`).
 
-> **Renamed in v0.2.0–v0.3.0**: the lazy tools and grouped dispatchers are now verb-first (`do_specialist_task`, `search_specialists`, `describe_specialist`, `call_specialist`, `manage_job`, `manage_budget`, `manage_workflow`). The old names (`aztea_do`, `aztea_search`, `aztea_describe`, `aztea_call`, `aztea_job`, `aztea_budget`, `aztea_workflow`) still work as aliases — the dispatch normalizes them — but new code should use the verb-first names. The rename is so the model picks these tools by what they *do*, not by recognizing the brand keyword.
+> **Renamed in v0.2.0–v0.3.0**: the lazy tools and grouped dispatchers are now verb-first (`do_specialist_task`, `search_specialists`, `describe_specialist`, `call_specialist`, `manage_job`, `manage_budget`, `manage_workflow`). The old names (`aztea_do`, `aztea_search`, `aztea_describe`, `aztea_call`, `aztea_job`, `aztea_budget`, `aztea_workflow`) still work as aliases — the dispatch normalizes them via `_LAZY_TOOL_NAME_ALIASES` — but new code should use the verb-first names. The rename is so the model picks these tools by what they *do*, not by recognizing the brand keyword.
 
-> **Renamed in v0.2.0**: the four lazy tools are now verb-first (`do_specialist_task`, `search_specialists`, `describe_specialist`, `call_specialist`). The old names (`aztea_do`, `aztea_search`, `aztea_describe`, `aztea_call`) still work as aliases — the dispatch normalizes them — but new code should use the verb-first names. The rename is so the model picks these tools by what they *do*, not by recognizing the brand keyword.
+> **Co-pilot mode hot paths**: `aztea_call_streaming` and `aztea_steer` stay top-level lazy tools (rather than `manage_job` action verbs) so MCP clients don't have to round-trip through a grouped dispatcher for every partial / steer message. Both are wired and produce signed transcript receipts on terminal state; the surrounding end-to-end test coverage is partial — see `.agents/TODO.md`.
 
 There are two flows:
 
@@ -355,7 +355,7 @@ Use the same MCP server config in Claude Desktop:
 - Make sure `aztea` shows `Connected`
 - Restart Claude Code after install or config changes
 
-**Claude sees old flat Aztea tools instead of the lazy four-tool surface**
+**Claude sees old flat Aztea tools instead of the lazy nine-tool surface**
 
 - reinstall with:
 

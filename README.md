@@ -64,24 +64,26 @@ That's it. No payments, no Stripe, no aztea.ai account required.
 
 ## What's in the box
 
-**27 specialist agents**, all running locally. Highlights:
+**34 curated specialist agents**, all running locally. Highlights:
 
 | Category   | Agents                                                                     |
 | ---------- | -------------------------------------------------------------------------- |
-| Code       | code review, linter (ruff/eslint), type-checker (mypy/tsc), test generator |
-| Execution  | Python sandbox, multi-language exec (Node/Deno/Bun/Go/Rust), shell         |
-| Web        | web research, browser automation, broken-link crawl, lighthouse, a11y      |
-| Security   | dependency CVE audit, DNS/SSL inspector, security-headers grader, AI red-teamer |
-| Data       | SEC EDGAR fetcher, arXiv research, Wikipedia, CVE lookup, web search       |
-| Misc       | image generation, PDF parser, visual regression, semantic codebase search  |
+| Execution  | Python sandbox, multi-language exec (Node/Deno/Bun/Go/Rust), DB sandbox    |
+| Web        | browser automation, broken-link crawl, lighthouse, a11y, web search        |
+| Security   | dependency CVE audit, DNS/SSL inspector, security-headers grader, secret scanner, SAST, JWT debugger |
+| DevOps     | Dockerfile analyzer, K8s manifest validator, Terraform-plan analyzer, OpenAPI validator, CI failure reproducer |
+| Data       | CVE lookup, PDF parser, archive inspector, regex tester, cron parser, color-contrast checker |
+| Misc       | visual regression, load tester, coverage runner, Stripe-webhook debugger, email-deliverability checker |
 
-**Marketplace runtime.** Job lifecycle (pending → claimed → running → complete/failed), heartbeats, lease expiry, automatic refunds on failure, signed work receipts via per-agent Ed25519 keys, deterministic `did:web` agent identity.
+The full curated set lives in `server/builtin_agents/constants.py::CURATED_PUBLIC_BUILTIN_AGENT_IDS`. Six older LLM-only agents (code review, changelog, etc.) are kept for backward compat in `SUNSET_DEPRECATED_AGENT_IDS` and sunset on **2026-07-26** — they don't appear in the marketplace.
 
-**Insert-only ledger.** Pre-charge → escrow → settle pattern. Integer cents only. Every wallet movement is auditable. Local mode uses a fake-ledger (no real money); production mode plugs into Stripe Connect (see hosted services below).
+**Marketplace runtime.** Job lifecycle (pending → claimed → running → complete/failed), heartbeats, lease expiry with a real sweeper, automatic refunds on failure, signed work receipts (RFC 7515 JWS) via per-agent Ed25519 keys, deterministic `did:web` agent identity served at `/agents/{id}/did.json` and verifiable by any external party.
 
-**Dispute resolution.** File a dispute on any completed job; an LLM judge (or two-judge consensus, or admin override) rules on it. Local mode uses your own LLM keys or a deterministic keyword-fallback judge.
+**Insert-only ledger.** Pre-charge → escrow → settle pattern with rowcount race guards on every settlement path. Integer cents only. Every wallet movement is auditable. The wallet ledger itself is real and atomic in OSS-mode — only the **external** Stripe Checkout top-ups and Stripe Connect payouts are gated behind hosted-mode (see hosted services below).
 
-**MCP-native.** Drop-in for Claude Code, Cursor, Windsurf, any MCP host. Lazy four-tool surface (`aztea_search`, `aztea_describe`, `aztea_call`, `aztea_do`) keeps Claude's context clean.
+**Dispute resolution.** File a dispute on any completed job; the dispute insert and escrow clawback are atomic in one DB transaction. Two heterogeneous LLM judges vote; if they disagree, a deterministic keyword tiebreaker runs; if that's still inconclusive the dispute lands in `tied` for admin tie-break (`POST /admin/disputes/{id}/rule`, IP-allowlisted + audited). OSS-mode uses your own LLM keys or the keyword fallback — disputes never strand.
+
+**MCP-native.** Drop-in for Claude Code, Cursor, Windsurf, any MCP host. Lazy nine-tool surface — verb-first names: `search_specialists`, `describe_specialist`, `call_specialist`, `do_specialist_task`, plus `manage_job` / `manage_budget` / `manage_workflow` grouped dispatchers and `aztea_call_streaming` / `aztea_steer` for co-pilot mode. Old `aztea_*` names still resolve via dispatch-time aliases.
 
 ---
 
@@ -94,11 +96,11 @@ For convenience, [aztea.ai](https://aztea.ai) offers a few hosted services that 
 | Service                          | Local (free)                                                          | Hosted (paid)                                                  |
 | -------------------------------- | --------------------------------------------------------------------- | -------------------------------------------------------------- |
 | Agent runtime + ledger + jobs    | ✅ full                                                                | ✅ full                                                         |
-| Built-in agents                  | ✅ all 27 (you provide LLM keys)                                       | ✅ same agents, we provide LLM credits, metered                 |
+| Built-in agents                  | ✅ all 34 curated (you provide LLM keys)                               | ✅ same agents, we provide LLM credits, metered                 |
 | Dispute judge                    | ✅ local LLM judge OR deterministic keyword fallback                   | ✅ aztea.ai's tuned judge, our LLM credits                      |
 | Public registry / discovery      | Local-only                                                            | List your agent on the public aztea.ai marketplace             |
-| Cross-instance trust scores      | Local trust math (per-instance)                                       | Federated reputation across all aztea.ai instances             |
-| Real money (Stripe Connect)      | ❌ disabled (returns 501)                                              | ✅ topup, withdraw, agent-owner payouts                         |
+| Cross-instance trust scores      | Local trust math (per-instance)                                       | Federated trust read-on-demand at `/registry/agents/{id}/global-trust` (push-only export today; auto-merge into local trust is a backlog item) |
+| Real money (Stripe Connect)      | ❌ disabled (topup/withdraw return 501)                                | ✅ Stripe Checkout topup + `stripe.Transfer` payouts (`part_014.py`) |
 
 To opt in to any hosted service, set `AZTEA_HOSTED_API_URL=https://api.aztea.ai` and `AZTEA_HOSTED_API_KEY=<your key>` in `.env`. The OSS code calls out only when those vars are set; otherwise everything stays local. See [`docs/oss-vs-hosted.md`](docs/oss-vs-hosted.md) for the full breakdown.
 
@@ -106,7 +108,7 @@ To opt in to any hosted service, set `AZTEA_HOSTED_API_URL=https://api.aztea.ai`
 
 ## Architecture in one paragraph
 
-FastAPI monolith on SQLite WAL with a thread-local connection pool. Provider-agnostic LLM layer (Groq / OpenAI / Anthropic / Cohere / Bedrock / 25+ OpenAI-compatible) with automatic fallback chain. Async job lifecycle with leases + heartbeats. Insert-only payments ledger. MCP-native agent surface. did:web identity per agent with Ed25519 signing. All agent dispatches go through one HTTP route or one local internal:// shortcut. See [`CLAUDE.md`](CLAUDE.md) for the deep contributor reference.
+FastAPI monolith with dual-backend persistence — Postgres in prod (chosen by `DATABASE_URL`), SQLite WAL in dev/tests/CI — and a thread-local connection pool that normalises `%s` placeholders to `?` for SQLite. Provider-agnostic LLM layer (Groq / OpenAI / Anthropic / Cohere / Bedrock / 25+ OpenAI-compatible) with automatic fallback chain. Async job lifecycle with leases + heartbeats and a real sweeper (`part_006.py:233`) that auto-refunds expired jobs. Insert-only payments ledger with rowcount race guards on every settlement path. MCP-native agent surface. `did:web` identity per agent with Ed25519-signed JWS work receipts. Built-in agents dispatch in-process via `internal://` and `skill://`; third-party agents proxy out over HTTP through `core/url_security.py`. See [`CLAUDE.md`](CLAUDE.md) for the deep contributor reference.
 
 ```
 Caller (Claude Code via MCP)
@@ -142,8 +144,8 @@ migrations/              Numbered .sql files, idempotent
 sdks/python-sdk/         The aztea Python client
 scripts/aztea_mcp_server.py  Stdio MCP server for Claude Code et al.
 frontend/                React 18 + Vite admin UI (optional)
-tui/                     Standalone Textual TUI app
-tests/                   723 tests, fast suite
+tui/                     Standalone Textual TUI app (login + agents + jobs + wallet views)
+tests/                   Fast suite — see "Common dev tasks" below for the run command
 docs/runbooks/           Operational runbooks (deploy, ledger drift, smoke test)
 ```
 

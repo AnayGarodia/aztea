@@ -61,6 +61,17 @@ Logging belongs at I/O entry/exit points, not scattered through computation. Log
 
 Full status table lives in `.agents/TODO.md`. Keep it updated when status changes. **Be honest about the gap when shipping.** Hiding the gap loses more trust than admitting it.
 
+Known gaps that aren't bugs but are worth knowing before you touch the surrounding code (move to TODO.md when you start working on them):
+
+- **Postgres charge race-guard** in `core/payments/base.py` uses `FOR UPDATE` under READ COMMITTED — the comment in `base.py:18` notes phantom-read risk. SQLite path uses `BEGIN IMMEDIATE` and is solid. Stress-test before high-concurrency Postgres prod.
+- **Payout-curve clawback failure path** (`core/payout_curve.py:227-247`): if the agent wallet can't absorb the clawback (already withdrawn, e.g.), the clawback is logged and skipped. Caller is not made whole and there is no operator alert.
+- **Worker disappearance has no fallback-worker reassign.** If the only worker for an agent dies mid-job, the lease times out and the caller is refunded rather than re-served.
+- **Reconciliation is detect-only.** `POST /ops/payments/reconcile` reports drift; `repair_wallet_balance_cache()` is a separate manual call. No auto-repair.
+- **Federated reputation is read-on-demand, not auto-merged.** `POST /jobs/{id}/rating` pushes anonymized ratings to the hosted endpoint, and `GET /registry/agents/{id}/global-trust` proxies the cross-instance score (hosted-mode only, 501 in OSS). Local `compute_trust_metrics()` does not currently blend the global score in.
+- **Co-pilot mode (PR #14) is half-shipped.** `stop_when` validation, `steer` message type, signed transcript receipts, and lease-behaviour side-effects are all wired. End-to-end steer-mid-job execution tests are missing — `tests/test_copilot_mode.py` covers validation only.
+- **TypeScript SDK is caller-shape only.** No polling/clarification helpers, no `AgentServer` equivalent. Use the Python SDK for worker-side code.
+- **Property-based tests** (`tests/property/`, `tests/test_listing_safety_fuzz_v2.py`) currently fail collection because Hypothesis isn't pinned in the dev requirements. Run the suite with `--ignore=tests/property --ignore=tests/test_listing_safety_fuzz_v2.py` until that's fixed.
+
 ---
 
 ## Engineering style — agents must follow
@@ -446,12 +457,13 @@ cd frontend && npm install && npm run dev
 cd frontend && npm run build && npx vite preview --port 4173
 # If `vite preview` works but prod doesn't, the bug is in the Caddy → uvicorn → SPA-fallback path or a route definition shadowing the SPA.
 
-# Tests (723 passed + 2 skipped on main suite as of 2026-05-07;
-# run the SDK contract suite separately — it can segfault under Python 3.14 on macOS)
-pytest -q tests --ignore=tests/test_sdk_contract.py
+# Tests — main suite (run the SDK contract suite separately — it can segfault
+# under Python 3.14 on macOS; property tests need Hypothesis pinned, see
+# .agents/TODO.md until that's fixed):
+pytest -q tests --ignore=tests/test_sdk_contract.py --ignore=tests/property --ignore=tests/test_listing_safety_fuzz_v2.py
 pytest -q tests/test_sdk_contract.py
 
-# Integration tests only (covered by the main suite as of 2026-05-07)
+# Integration tests only (covered by the main suite)
 pytest -q tests/integration
 
 # Line-budget enforcement (every Python source file < 1000 lines)
@@ -473,7 +485,7 @@ python scripts/aztea_mcp_server.py
 curl -H "Authorization: Bearer $API_KEY" -X POST http://localhost:8000/ops/payments/reconcile
 ```
 
-**Current test status:** `uv run pytest tests --ignore=tests/test_sdk_contract.py -q` → **723 passed, 2 skipped** on 2026-05-07.
+**Current test status:** `pytest --collect-only` reports **2275 tests collected** under `tests/` (excluding `tests/property/`, `tests/test_listing_safety_fuzz_v2.py`, and `tests/test_sdk_contract.py`) as of 2026-05-10. The previously-reported "723 passed" count from 2026-05-07 reflects a smaller subset and is stale — the suite has grown substantially since. Re-anchor this line (collected + passed + skipped + date) when you next run the suite end-to-end. Property tests fail collection without Hypothesis pinned in dev requirements; SDK contract suite can segfault on Python 3.14 macOS. Both are excluded by the canonical command above.
 
 ---
 
