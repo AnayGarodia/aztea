@@ -28,6 +28,31 @@ import shutil
 import subprocess
 import sys
 import tempfile
+
+# Resource limits for the sandboxed CI command. Defense-in-depth alongside
+# the regex command blocklist and wall-clock timeout. RLIMIT_NPROC is
+# intentionally NOT applied — macOS counts the user's total process count
+# against the limit, breaking shell→language-runtime→test chains in normal
+# dev sessions. RLIMIT_AS and RLIMIT_FSIZE provide the load-bearing guards.
+_SUBPROCESS_RLIMIT_AS_BYTES = 1024 * 1024 * 1024  # 1 GB
+_SUBPROCESS_RLIMIT_FSIZE_BYTES = 128 * 1024 * 1024  # 128 MB
+
+
+def _apply_subprocess_rlimits() -> None:
+    if os.name != "posix":
+        return
+    try:
+        import resource as _resource
+    except ImportError:
+        return
+    for kind, limit in (
+        (_resource.RLIMIT_AS, _SUBPROCESS_RLIMIT_AS_BYTES),
+        (_resource.RLIMIT_FSIZE, _SUBPROCESS_RLIMIT_FSIZE_BYTES),
+    ):
+        try:
+            _resource.setrlimit(kind, (limit, limit))
+        except (ValueError, OSError):
+            pass
 import time
 from typing import Any
 from agents._contracts import agent_error as _err
@@ -327,6 +352,7 @@ def _run_command(
             capture_output=True,
             text=True,
             timeout=timeout,
+            preexec_fn=_apply_subprocess_rlimits if os.name == "posix" else None,
         )
         stdout = result.stdout
         stderr = result.stderr
