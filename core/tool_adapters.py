@@ -33,11 +33,18 @@ from __future__ import annotations
 from typing import Any
 
 from core import mcp_manifest
-# 1.6.3: meta_tools moved from scripts/ to the in-package
-# aztea.mcp.* tree (PR #38 consolidation). Import from the new location;
-# the old scripts/-rooted import doesn't resolve at server-startup time
-# because that path isn't on sys.path in production.
-from aztea.mcp import meta_tools
+# 1.6.3: meta_tools moved from scripts/ to sdks/python-sdk/aztea/mcp/
+# (PR #38 consolidation). The prod uvicorn venv does NOT pip-install the
+# local SDK, so a bare `from aztea.mcp import ...` fails at boot. Add the
+# SDK directory to sys.path before importing — same trick used elsewhere
+# for vendored modules. Locally and in tests this is a no-op because
+# pytest's conftest already places sdks/python-sdk on the path.
+import sys as _sys
+from pathlib import Path as _Path
+_SDK_DIR = str(_Path(__file__).resolve().parents[1] / "sdks" / "python-sdk")
+if _SDK_DIR not in _sys.path:
+    _sys.path.insert(0, _SDK_DIR)
+from aztea.mcp import meta_tools  # noqa: E402 — sys.path mutation above
 
 
 def _catalog_entries(agents: list[dict[str, Any]]) -> list[dict[str, Any]]:
