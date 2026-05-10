@@ -74,20 +74,59 @@ def status_cmd(
         handle_error(exc)
 
 
+# The /jobs response uses `agent_id` (UUID) and `caller_charge_cents` /
+# `price_cents` (see core/models/responses.py:JobResponse). Earlier versions
+# of this summary read `agent_slug` / `cost_cents` etc. — keys the server
+# never emitted — so the SPECIALIST and CHARGED columns rendered as `—` for
+# every row. Fall back through historical key names so older / mock payloads
+# still work, but accept the canonical server fields first.
+def _agent_label(agent_slug, agent_name, agent_id) -> str | None:
+    if agent_slug:
+        return agent_slug
+    if agent_name:
+        return agent_name
+    if agent_id:
+        return f"{agent_id[:8]}…"
+    return None
+
+
+def _charge_cents(*candidates) -> int | None:
+    for value in candidates:
+        if value is not None:
+            return value
+    return None
+
+
 def _job_summary(j) -> dict:
     if isinstance(j, dict):
         return {
             "job_id": j.get("job_id"),
-            "agent_slug": j.get("agent_slug") or j.get("agent_name"),
+            "agent_slug": _agent_label(
+                j.get("agent_slug"), j.get("agent_name"), j.get("agent_id")
+            ),
             "status": j.get("status"),
-            "cost_cents": j.get("cost_cents") or j.get("total_charge_cents"),
+            "cost_cents": _charge_cents(
+                j.get("caller_charge_cents"),
+                j.get("price_cents"),
+                j.get("cost_cents"),
+                j.get("total_charge_cents"),
+            ),
             "updated_at": j.get("updated_at") or j.get("created_at"),
         }
     return {
         "job_id": getattr(j, "job_id", None),
-        "agent_slug": getattr(j, "agent_slug", None) or getattr(j, "agent_name", None),
+        "agent_slug": _agent_label(
+            getattr(j, "agent_slug", None),
+            getattr(j, "agent_name", None),
+            getattr(j, "agent_id", None),
+        ),
         "status": getattr(j, "status", None),
-        "cost_cents": getattr(j, "cost_cents", None),
+        "cost_cents": _charge_cents(
+            getattr(j, "caller_charge_cents", None),
+            getattr(j, "price_cents", None),
+            getattr(j, "cost_cents", None),
+            getattr(j, "total_charge_cents", None),
+        ),
         "updated_at": getattr(j, "updated_at", None) or getattr(j, "created_at", None),
     }
 
