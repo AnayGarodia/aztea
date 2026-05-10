@@ -1,0 +1,16 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers --timeout=60"
+markers = [
+    "slow: long-running tests (deselect with -m 'not slow')",
+    "property: hypothesis-driven property tests",
+    "fuzz: corpus / RNG-driven fuzz tests",
+    "surface: parametrized buyer-surface coverage tests",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning:pydantic.*",
+    "ignore::pytest.PytestUnraisableExceptionWarning",
+    # Hypothesis health checks fire when fixtures touch a shared DB; the
+    # property suites use isolated_db per example which Hypothesis can't see.
+    "ignore::hypothesis.errors.NonInteractiveExampleWarning",
+]
