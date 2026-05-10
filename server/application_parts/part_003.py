@@ -600,6 +600,24 @@ def _stable_json_text(payload: Any) -> str:
         )
 
 
+# An ``in_progress`` idempotency row is normally cleaned by ``_idempotency_abort``
+# when a request raises an exception, but if the Python process itself dies
+# (SIGKILL, OOM, crash) the row is stranded forever and every retry hits 409.
+# After this many seconds we treat the row as abandoned: a new retry can
+# replace it. 5 minutes is generous — well past any realistic operation
+# timeout in this codebase but short enough that a real user retry succeeds.
+_IDEMPOTENCY_INPROGRESS_TTL_SECONDS = 300
+
+
+def _idempotency_inprogress_is_stale(created_at_iso: str, now_iso: str) -> bool:
+    try:
+        created_dt = datetime.fromisoformat(created_at_iso)
+        now_dt = datetime.fromisoformat(now_iso)
+    except (TypeError, ValueError):
+        return False
+    return (now_dt - created_dt).total_seconds() > _IDEMPOTENCY_INPROGRESS_TTL_SECONDS
+
+
 def _idempotency_begin(
     request: Request,
     caller: core_models.CallerContext,
@@ -620,51 +638,87 @@ def _idempotency_begin(
     ).hexdigest()
     now = _utc_now_iso()
 
-    with jobs._conn() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute(
+    def _select_row(conn) -> dict | None:
+        return conn.execute(
             """
-            SELECT request_hash, status, response_status, response_body
+            SELECT request_hash, status, response_status, response_body, created_at
             FROM idempotency_requests
             WHERE owner_id = %s AND scope = %s AND idempotency_key = %s
             """,
             (owner_id, scope, idempotency_key),
         ).fetchone()
-        if row is not None:
-            if row["request_hash"] != request_hash:
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        f"{_IDEMPOTENCY_KEY_HEADER} was already used for a different request payload."
-                    ),
+
+    def _interpret_row(row: dict) -> dict | None:
+        """Return a replay dict for completed rows, raise on payload mismatch
+        or live in_progress, or return ``None`` if the row is a stale
+        in_progress that the caller should overwrite."""
+        if row["request_hash"] != request_hash:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"{_IDEMPOTENCY_KEY_HEADER} was already used for a different request payload."
+                ),
+            )
+        if row["status"] == "completed":
+            try:
+                replay_body = json.loads(row["response_body"] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                replay_body = error_codes.make_error(
+                    error_codes.INVALID_INPUT,
+                    "Stored idempotent response is invalid.",
                 )
-            if row["status"] == "completed":
-                try:
-                    replay_body = json.loads(row["response_body"] or "{}")
-                except (TypeError, json.JSONDecodeError):
-                    replay_body = error_codes.make_error(
-                        error_codes.INVALID_INPUT,
-                        "Stored idempotent response is invalid.",
-                    )
-                replay_status = int(row["response_status"] or 200)
-                return {
-                    "replay": True,
-                    "status_code": replay_status,
-                    "body": replay_body,
-                }
+            return {
+                "replay": True,
+                "status_code": int(row["response_status"] or 200),
+                "body": replay_body,
+            }
+        if _idempotency_inprogress_is_stale(str(row["created_at"] or ""), now):
+            return None  # caller may overwrite the stale row
+        raise HTTPException(
+            status_code=409,
+            detail=f"A request with this {_IDEMPOTENCY_KEY_HEADER} is still in progress.",
+        )
+
+    with jobs._conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = _select_row(conn)
+        if row is not None:
+            replay = _interpret_row(row)
+            if replay is not None:
+                return replay
+            # Stale in_progress: delete and fall through to INSERT.
+            conn.execute(
+                """
+                DELETE FROM idempotency_requests
+                WHERE owner_id = %s AND scope = %s AND idempotency_key = %s
+                """,
+                (owner_id, scope, idempotency_key),
+            )
+        try:
+            conn.execute(
+                """
+                INSERT INTO idempotency_requests
+                    (owner_id, scope, idempotency_key, request_hash, status, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, 'in_progress', %s, %s)
+                """,
+                (owner_id, scope, idempotency_key, request_hash, now, now),
+            )
+        except _db.IntegrityError:
+            # Race: another request inserted the same key after our SELECT
+            # (BEGIN IMMEDIATE serializes on SQLite, but Postgres READ COMMITTED
+            # does not). Re-SELECT and treat the winner's state as authoritative.
+            winner = _select_row(conn)
+            if winner is None:
+                raise
+            replay = _interpret_row(winner)
+            if replay is not None:
+                return replay
+            # Winner is also stale — extremely unlikely (would mean both rows
+            # are >5min old). Surface as 409 rather than retrying forever.
             raise HTTPException(
                 status_code=409,
                 detail=f"A request with this {_IDEMPOTENCY_KEY_HEADER} is still in progress.",
             )
-
-        conn.execute(
-            """
-            INSERT INTO idempotency_requests
-                (owner_id, scope, idempotency_key, request_hash, status, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, 'in_progress', %s, %s)
-            """,
-            (owner_id, scope, idempotency_key, request_hash, now, now),
-        )
 
     return {
         "replay": False,

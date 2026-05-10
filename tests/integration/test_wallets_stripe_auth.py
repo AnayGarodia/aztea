@@ -319,6 +319,52 @@ def test_topup_session_enforces_daily_limit(client, monkeypatch):
     assert allowed.json()["session_id"] == "cs_test_123"
 
 
+def test_topup_session_passes_deterministic_idempotency_key(client, monkeypatch):
+    """A double-click on top-up within the same ~60s window must collapse to
+    the same Stripe session via a deterministic idempotency_key, so the user
+    can't accidentally create two billable checkout rows."""
+    user = _register_user()
+    wallet = payments.get_or_create_wallet(f"user:{user['user_id']}")
+
+    captured_kwargs: list[dict] = []
+
+    def _fake_create(**kwargs):
+        captured_kwargs.append(kwargs)
+        return SimpleNamespace(
+            url="https://checkout.example/session", id="cs_test_idem"
+        )
+
+    fake_checkout = SimpleNamespace(Session=SimpleNamespace(create=_fake_create))
+    monkeypatch.setattr(server, "_STRIPE_AVAILABLE", True)
+    monkeypatch.setattr(server, "_STRIPE_SECRET_KEY", "sk_test_123")
+    monkeypatch.setattr(
+        server, "_stripe_lib", SimpleNamespace(api_key=None, checkout=fake_checkout)
+    )
+
+    body = {"wallet_id": wallet["wallet_id"], "amount_cents": 1500}
+    headers = _auth_headers(user["raw_api_key"])
+
+    first = client.post("/wallets/topup/session", headers=headers, json=body)
+    assert first.status_code == 200, first.text
+    second = client.post("/wallets/topup/session", headers=headers, json=body)
+    assert second.status_code == 200, second.text
+
+    assert len(captured_kwargs) == 2
+    keys = [kw.get("idempotency_key") for kw in captured_kwargs]
+    assert all(isinstance(k, str) and k.startswith("aztea-topup-") for k in keys), keys
+    assert keys[0] == keys[1], "idempotency_key must be deterministic within a minute"
+
+    # A different amount must produce a different key (otherwise Stripe would
+    # collapse legitimately distinct top-ups).
+    other = client.post(
+        "/wallets/topup/session",
+        headers=headers,
+        json={"wallet_id": wallet["wallet_id"], "amount_cents": 1600},
+    )
+    assert other.status_code == 200, other.text
+    assert captured_kwargs[-1].get("idempotency_key") != keys[0]
+
+
 def test_wallet_deposit_enforces_minimum_amount(client):
     user = _register_user()
     wallet = payments.get_or_create_wallet(f"user:{user['user_id']}")
@@ -437,6 +483,85 @@ def test_stripe_webhook_retries_after_transient_deposit_failure(client, monkeypa
     refreshed_wallet = payments.get_wallet(wallet["wallet_id"])
     assert refreshed_wallet is not None
     assert refreshed_wallet["balance_cents"] == amount_cents
+
+
+def test_stripe_webhook_rejects_bad_signature(client, monkeypatch):
+    """Stripe.Webhook.construct_event raises on signature mismatch; the
+    webhook route must convert that to a 400 instead of letting the raw
+    exception bubble to a 500. Pin the contract so a future refactor
+    can't accidentally swallow signature errors."""
+
+    class _FakeWebhook:
+        @staticmethod
+        def construct_event(_payload, _sig, _secret):
+            raise ValueError("Signature mismatch")
+
+    monkeypatch.setattr(server, "_STRIPE_AVAILABLE", True)
+    monkeypatch.setattr(server, "_STRIPE_SECRET_KEY", "sk_test_123")
+    monkeypatch.setattr(server, "_STRIPE_WEBHOOK_SECRET", "whsec_test_123")
+    monkeypatch.setattr(
+        server, "_stripe_lib", SimpleNamespace(api_key=None, Webhook=_FakeWebhook)
+    )
+
+    response = client.post(
+        "/stripe/webhook",
+        headers={"stripe-signature": "wrong-sig"},
+        content=b"{}",
+    )
+    assert response.status_code == 400, response.text
+    assert "Stripe webhook signature" in response.json().get("message", "")
+
+
+def test_stripe_webhook_replay_does_not_double_credit_wallet(client, monkeypatch):
+    """Stripe will retry webhook delivery on transient failures, and a
+    malicious caller could replay an old signed event. The webhook
+    handler dedupes via session_id so the wallet must be credited
+    exactly once across N replays of the same event id."""
+    user = _register_user()
+    wallet = payments.get_or_create_wallet(f"user:{user['user_id']}")
+    starting_balance = payments.get_wallet(wallet["wallet_id"])["balance_cents"]
+
+    session_id = f"cs_{uuid.uuid4().hex[:10]}"
+    amount_cents = 2500
+    fake_event = {
+        "type": "checkout.session.completed",
+        "data": {
+            "object": SimpleNamespace(
+                id=session_id,
+                client_reference_id=wallet["wallet_id"],
+                amount_total=amount_cents,
+                metadata={},
+            )
+        },
+    }
+
+    class _FakeWebhook:
+        @staticmethod
+        def construct_event(_payload, _sig, _secret):
+            return fake_event
+
+    monkeypatch.setattr(server, "_STRIPE_AVAILABLE", True)
+    monkeypatch.setattr(server, "_STRIPE_SECRET_KEY", "sk_test_123")
+    monkeypatch.setattr(server, "_STRIPE_WEBHOOK_SECRET", "whsec_test_123")
+    monkeypatch.setattr(
+        server, "_stripe_lib", SimpleNamespace(api_key=None, Webhook=_FakeWebhook)
+    )
+
+    # Three replays of the same event. The first credits the wallet; the
+    # other two must short-circuit on the 'already_processed' branch.
+    for attempt in range(3):
+        response = client.post(
+            "/stripe/webhook",
+            headers={"stripe-signature": "sig_test"},
+            content=b"{}",
+        )
+        assert response.status_code == 200, f"replay {attempt}: {response.text}"
+
+    final_balance = payments.get_wallet(wallet["wallet_id"])["balance_cents"]
+    assert final_balance - starting_balance == amount_cents, (
+        f"replay double-credited the wallet: starting={starting_balance}, "
+        f"final={final_balance}, expected delta={amount_cents}"
+    )
 
 
 def test_wallet_withdrawals_returns_only_caller_wallet_history(client):

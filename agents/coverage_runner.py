@@ -18,9 +18,10 @@
 #   * overall_pct is None (not 0) when coverage.json is absent — the distinction matters:
 #     0 means tests ran and nothing was covered; None means we don't know.
 #   * Max 50 files / 500 KB total keeps the tempdir bounded without a separate ulimit.
-# KNOWN DEBT: no rlimit on the subprocess (RLIMIT_AS, RLIMIT_CPU). Defense-in-depth
-#             against a caller-supplied file that spawns an infinite loop or forks a bomb.
-#             Add resource limits once core.executor_sandbox exposes them for shell=True paths.
+# KNOWN DEBT: shell=True is preserved because the composed command uses '&&' to chain
+#             coverage run + coverage json. Argv conversion would require splitting
+#             into two sequential subprocess calls and merging exit codes — out of
+#             scope for a minimal-diff hardening pass.
 
 from __future__ import annotations
 
@@ -61,6 +62,32 @@ _SHELL_DANGEROUS_RE = re.compile(r"[;&|><$`\\]")
 
 # Artefacts written by `coverage` that must not appear in per-file results.
 _COVERAGE_ARTEFACTS = {"coverage.json", ".coverage"}
+
+# Resource limits for the test-runner child. Belt-and-braces over the wall
+# clock: a runaway test that allocates wildly or writes a huge file hits the
+# kernel ceiling first. RLIMIT_NPROC is intentionally NOT applied here —
+# macOS counts the user's *total* process count against the limit, not just
+# descendants of this subprocess, so a sane value (64–128) breaks any
+# shell→coverage→pytest chain in normal dev sessions.
+_SUBPROCESS_RLIMIT_AS_BYTES = 512 * 1024 * 1024
+_SUBPROCESS_RLIMIT_FSIZE_BYTES = 64 * 1024 * 1024
+
+
+def _apply_subprocess_rlimits() -> None:
+    if os.name != "posix":
+        return
+    try:
+        import resource as _resource
+    except ImportError:
+        return
+    for kind, limit in (
+        (_resource.RLIMIT_AS, _SUBPROCESS_RLIMIT_AS_BYTES),
+        (_resource.RLIMIT_FSIZE, _SUBPROCESS_RLIMIT_FSIZE_BYTES),
+    ):
+        try:
+            _resource.setrlimit(kind, (limit, limit))
+        except (ValueError, OSError):
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +312,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
                 timeout=timeout,
                 cwd=tmpdir,
                 env=_build_subprocess_env(),
+                preexec_fn=_apply_subprocess_rlimits if os.name == "posix" else None,
             )
             timed_out = False
             exit_code = proc.returncode

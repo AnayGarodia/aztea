@@ -446,6 +446,35 @@ _DEFAULT_SHORT_USE_CASES_BY_AGENT_ID = {
 }
 
 
+def _validate_jsonschema_shape(schema: Any, *, field: str, agent_id: str) -> None:
+    """Catch malformed input/output schemas at module load instead of letting
+    a typo silently break the MCP manifest. We only enforce the shape we
+    actually depend on: a dict with type='object' and a dict 'properties'
+    if present. Stricter JSON Schema validation lives in the runtime
+    request validators, not here."""
+    if not isinstance(schema, dict):
+        raise ValueError(
+            f"Built-in spec {agent_id}: {field} must be a dict, got {type(schema).__name__}."
+        )
+    declared_type = schema.get("type")
+    if declared_type is not None and declared_type != "object":
+        raise ValueError(
+            f"Built-in spec {agent_id}: {field}.type must be 'object', got {declared_type!r}."
+        )
+    properties = schema.get("properties")
+    if properties is not None and not isinstance(properties, dict):
+        raise ValueError(
+            f"Built-in spec {agent_id}: {field}.properties must be a dict, got {type(properties).__name__}."
+        )
+    required = schema.get("required")
+    if required is not None and not (
+        isinstance(required, list) and all(isinstance(r, str) for r in required)
+    ):
+        raise ValueError(
+            f"Built-in spec {agent_id}: {field}.required must be a list of strings."
+        )
+
+
 def _normalize_builtin_spec(spec: dict[str, Any]) -> dict[str, Any]:
     agent_id = str(spec.get("agent_id") or "").strip()
     if not agent_id:
@@ -458,6 +487,8 @@ def _normalize_builtin_spec(spec: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(
             f"Built-in spec {agent_id} must include at least one output example."
         )
+    _validate_jsonschema_shape(spec.get("input_schema"), field="input_schema", agent_id=agent_id)
+    _validate_jsonschema_shape(spec.get("output_schema"), field="output_schema", agent_id=agent_id)
     if agent_id in CURATED_BUILTIN_AGENT_IDS:
         category = str(
             spec.get("category") or _DEFAULT_CATEGORY_BY_AGENT_ID.get(agent_id) or ""

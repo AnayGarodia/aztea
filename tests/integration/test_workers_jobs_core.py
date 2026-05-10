@@ -862,3 +862,80 @@ def test_idempotency_key_rejects_payload_mismatch(client):
     assert "different request payload" in mismatch.json()["message"]
 
 
+def test_idempotency_inprogress_row_expires_after_ttl(client):
+    """A stranded ``in_progress`` row (process crashed before completing)
+    must not block the same caller's retry forever. Past the TTL, a retry
+    overwrites the stale row and proceeds."""
+    import sqlite3 as _sqlite3
+
+    worker = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 200)
+
+    agent_id = _register_agent_via_api(
+        client,
+        worker["raw_api_key"],
+        name=f"Idempotent TTL Agent {uuid.uuid4().hex[:6]}",
+        price=0.10,
+        tags=["idempotency-ttl"],
+    )
+    job = _create_job_via_api(client, caller["raw_api_key"], agent_id=agent_id, max_attempts=2)
+    job_id = job["job_id"]
+
+    claim = client.post(
+        f"/jobs/{job_id}/claim",
+        headers=_auth_headers(worker["raw_api_key"]),
+        json={"lease_seconds": 120},
+    )
+    assert claim.status_code == 200
+    claim_token = claim.json()["claim_token"]
+
+    # Inject a stranded in_progress row with a created_at well past the TTL.
+    # In production this would happen when the Python worker process is
+    # SIGKILL'd between the INSERT and _idempotency_complete.
+    stale_when = (datetime.now(timezone.utc) - timedelta(seconds=600)).isoformat()
+    # Hash must mirror exactly what _run_idempotent_json_response sees for
+    # POST /jobs/{id}/complete (see part_009.py): all five fields, defaults
+    # filled in by Pydantic. _stable_json_text uses sort_keys + tight separators.
+    payload_for_hash = {
+        "output_payload": {"ok": True},
+        "output_artifacts": [],
+        "output_format": None,
+        "protocol_metadata": {},
+        "claim_token": claim_token,
+    }
+    request_hash = hashlib.sha256(
+        json.dumps(payload_for_hash, separators=(",", ":"), sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+    with _sqlite3.connect(jobs.DB_PATH) as _db_conn:
+        _db_conn.execute(
+            """
+            INSERT INTO idempotency_requests
+                (owner_id, scope, idempotency_key, request_hash, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 'in_progress', ?, ?)
+            """,
+            (
+                f"user:{worker['user_id']}",
+                f"jobs.complete:{job_id}",
+                "stale-idem-1",
+                request_hash,
+                stale_when,
+                stale_when,
+            ),
+        )
+        _db_conn.commit()
+
+    # Without the TTL fix this would 409 forever; with it, the stale row is
+    # reaped in-place and the retry proceeds normally. Body matches
+    # payload_for_hash so the request_hash check passes too.
+    retry = client.post(
+        f"/jobs/{job_id}/complete",
+        headers={
+            **_auth_headers(worker["raw_api_key"]),
+            "Idempotency-Key": "stale-idem-1",
+        },
+        json={"output_payload": {"ok": True}, "claim_token": claim_token},
+    )
+    assert retry.status_code == 200, retry.text
+
+

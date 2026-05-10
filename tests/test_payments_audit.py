@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+import threading
 import uuid
 
 import pytest
@@ -169,4 +170,89 @@ def test_variable_pricing_and_payout_curve_paths_stay_reconciled(payments_db):
     summary = payments.compute_ledger_invariants()
     assert summary["invariant_ok"] is True, summary
     assert summary["wallet_total_cents"] == 500
+
+
+def test_no_double_payout_under_concurrent_settlement(payments_db):
+    """Verifies the existing ledger-level idempotency: BEGIN IMMEDIATE + UNIQUE
+    INDEX on (related_tx_id, type, wallet_id) ensures two concurrent
+    post_call_payout calls for the same charge_tx_id produce exactly one
+    payout row and one fee row, not two of each."""
+    payments = payments_db
+    caller_wallet = payments.get_or_create_wallet("user:caller-concurrent")
+    agent_wallet = payments.get_or_create_wallet("agent:concurrent-agent")
+    platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
+
+    payments.deposit(caller_wallet["wallet_id"], 1000, memo="seed")
+    charge_tx_id = _direct_charge(payments, caller_wallet["wallet_id"], 100, "concurrent-agent")
+
+    barrier = threading.Barrier(2)
+    errors: list[BaseException] = []
+
+    def _payout_once() -> None:
+        barrier.wait(timeout=5)
+        try:
+            payments.post_call_payout(
+                agent_wallet["wallet_id"],
+                platform_wallet["wallet_id"],
+                charge_tx_id,
+                100,
+                "concurrent-agent",
+                platform_fee_pct=10,
+                fee_bearer_policy="caller",
+            )
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_payout_once) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert not errors, f"post_call_payout raised under concurrency: {errors}"
+
+    with sqlite3.connect(payments._resolved_db_path()) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT type, COUNT(*) AS n FROM transactions WHERE related_tx_id = ? GROUP BY type",
+            (charge_tx_id,),
+        ).fetchall()
+    counts = {r["type"]: r["n"] for r in rows}
+    assert counts.get("payout", 0) == 1, f"expected exactly one payout row, got {counts}"
+    assert counts.get("fee", 0) == 1, f"expected exactly one fee row, got {counts}"
+
+    assert payments.compute_ledger_invariants()["invariant_ok"] is True
+
+
+def test_no_double_charge_under_concurrent_withdraw(payments_db):
+    """Verifies the atomic-debit guard on payments.charge: two concurrent
+    charge calls for an exactly-once-affordable amount produce exactly one
+    successful charge and one InsufficientBalanceError."""
+    payments = payments_db
+    wallet = payments.get_or_create_wallet("user:concurrent-withdraw")
+    payments.deposit(wallet["wallet_id"], 100, memo="seed")  # exactly one charge of 100c is affordable
+
+    barrier = threading.Barrier(2)
+    successes: list[str] = []
+    errors: list[BaseException] = []
+
+    def _charge_once() -> None:
+        barrier.wait(timeout=5)
+        try:
+            tx_id = payments.charge(wallet["wallet_id"], 100, memo="concurrent-withdraw-test")
+            successes.append(tx_id)
+        except payments.InsufficientBalanceError as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_charge_once) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert len(successes) == 1, f"expected exactly one successful charge, got {len(successes)}"
+    assert len(errors) == 1, f"expected exactly one InsufficientBalanceError, got {len(errors)}"
+
+    final = payments.get_wallet(wallet["wallet_id"])
+    assert final is not None and final["balance_cents"] == 0
 

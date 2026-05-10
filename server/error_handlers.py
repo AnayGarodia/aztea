@@ -38,7 +38,7 @@ regardless of how the request reached FastAPI.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -46,6 +46,125 @@ from fastapi.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
 
 from core import error_codes, logging_utils
+
+
+# Helpers for the ERROR_CODE_PATTERNS table below. Each pattern is a small
+# predicate over the lowercased message. Keeping these as named factories
+# (instead of inlining lambdas) lets the patterns table read top-to-bottom
+# the same way the old if-chain did, while eliminating the typo risk of a
+# 50-branch ladder.
+def _eq(literal: str) -> Callable[[str], bool]:
+    return lambda m: m == literal
+
+
+def _starts(prefix: str) -> Callable[[str], bool]:
+    return lambda m: m.startswith(prefix)
+
+
+def _starts_any(*prefixes: str) -> Callable[[str], bool]:
+    return lambda m: any(m.startswith(p) for p in prefixes)
+
+
+def _contains(needle: str) -> Callable[[str], bool]:
+    return lambda m: needle in m
+
+
+# Order is preserved from the original if/elif chain so behavior is
+# identical: the first matching predicate wins. New patterns must be
+# inserted at the position where their specificity demands.
+ERROR_CODE_PATTERNS: list[tuple[Callable[[str], bool], str]] = [
+    (_starts("authorization header missing"), "auth.missing_authorization"),
+    (_eq("invalid api key."), "auth.invalid_key"),
+    (_eq("invalid email or password."), "auth.invalid_credentials"),
+    (_starts("agent-scoped keys cannot"), "auth.insufficient_scope"),
+    (_starts("this endpoint requires"), "auth.insufficient_scope"),
+    (_starts("not available for master key"), "auth.insufficient_scope"),
+    (_starts("not authorized"), "auth.forbidden"),
+    (_starts("tool '"), "mcp.tool_not_found"),
+    (_starts("agent '"), "agent.not_found"),
+    (_starts("job '"), "job.not_found"),
+    (_starts("dispute '"), "dispute.not_found"),
+    (_starts("wallet '"), "wallet.not_found"),
+    (_starts("invalid status:"), "request.invalid_status"),
+    (_contains("idempotency-key is too long"), "request.idempotency_key_too_long"),
+    (
+        _starts("a request with this idempotency-key is still in progress"),
+        "request.idempotency_conflict",
+    ),
+    (_starts("failed to fetch manifest_url"), "onboarding.manifest_fetch_failed"),
+    (_starts("manifest too large"), "request.payload_too_large"),
+    (_starts("fetched manifest is empty"), "onboarding.manifest_empty"),
+    (_starts("failed to create job"), "job.create_failed"),
+    (_starts("job is not claimable"), "job.not_claimable"),
+    (_starts("job is not currently claimed by this worker"), "job.claim_missing"),
+    (
+        _starts_any("invalid or missing claim_token", "invalid or stale claim_token"),
+        "job.invalid_claim_token",
+    ),
+    (_starts("unable to heartbeat this job claim"), "job.heartbeat_failed"),
+    (_starts("unable to release this job claim"), "job.release_failed"),
+    (_starts("unable to update job status"), "job.transition_failed"),
+    (_starts("unable to schedule retry for this job"), "job.retry_failed"),
+    (_starts("upstream agent unreachable"), "agent.upstream_unreachable"),
+    (_starts("agent endpoint is misconfigured"), "agent.endpoint_misconfigured"),
+    (_starts("agent execution failed"), "agent.execution_failed"),
+    (_starts("all llm models rate-limited"), "agent.upstream_rate_limited"),
+    (_starts("hook not found"), "hook.not_found"),
+    (_starts("key not found or already revoked"), "auth.key_not_found"),
+    (
+        _starts("disputes can only be filed for completed jobs"),
+        "dispute.invalid_state",
+    ),
+    (
+        _starts("disputes must be filed before the caller submits a rating"),
+        "dispute.rating_locked",
+    ),
+    (_starts("a dispute already exists for this job"), "dispute.already_exists"),
+    (_starts("dispute window has expired for this job"), "dispute.window_closed"),
+    (
+        _starts("job completion timestamp is invalid"),
+        "job.invalid_completion_timestamp",
+    ),
+    (_starts("failed to resolve dispute"), "dispute.resolve_failed"),
+    (
+        _starts_any(
+            "tool_result payload.correlation_id is required",
+            "unknown tool_result correlation_id",
+        ),
+        "job.invalid_tool_result",
+    ),
+    (_starts("unsupported job message type"), "job.invalid_message_type"),
+    (_starts("agent.md spec not found"), "onboarding.spec_not_found"),
+    (
+        _starts_any("cursor must not be empty", "invalid cursor"),
+        "request.invalid_cursor",
+    ),
+    (_starts("limit must be > 0"), "request.invalid_limit"),
+    (_starts("sla_seconds must be > 0"), "request.invalid_sla_seconds"),
+    (_starts("max_mismatches must be > 0"), "request.invalid_max_mismatches"),
+    (_starts("rank_by must be one of"), "request.invalid_rank_by"),
+    (
+        _starts("authentication service is temporarily unavailable"),
+        "auth.service_unavailable",
+    ),
+    (_starts("master key cannot"), "auth.master_forbidden"),
+    (
+        _starts("only the original caller can rate this job"),
+        "job.rating_forbidden",
+    ),
+    (
+        _starts("only the job's agent owner can rate the caller"),
+        "job.rating_forbidden",
+    ),
+    (
+        _starts("ratings are locked once a dispute is filed"),
+        "dispute.rating_locked",
+    ),
+    (
+        _starts("this endpoint requires caller or worker scope"),
+        "auth.insufficient_scope",
+    ),
+]
 
 
 def _default_error_code_for_request(status_code: int, path: str, message: str) -> str:
@@ -66,123 +185,9 @@ def _default_error_code_for_request(status_code: int, path: str, message: str) -
 
 def _error_code_from_message(status_code: int, path: str, message: str) -> str:
     lowered_message = str(message or "").strip().lower()
-
-    if lowered_message.startswith("authorization header missing"):
-        return "auth.missing_authorization"
-    if lowered_message == "invalid api key.":
-        return "auth.invalid_key"
-    if lowered_message == "invalid email or password.":
-        return "auth.invalid_credentials"
-    if lowered_message.startswith("agent-scoped keys cannot"):
-        return "auth.insufficient_scope"
-    if lowered_message.startswith("this endpoint requires"):
-        return "auth.insufficient_scope"
-    if lowered_message.startswith("not available for master key"):
-        return "auth.insufficient_scope"
-    if lowered_message == "not authorized." or lowered_message.startswith(
-        "not authorized"
-    ):
-        return "auth.forbidden"
-    if lowered_message.startswith("tool '"):
-        return "mcp.tool_not_found"
-    if lowered_message.startswith("agent '"):
-        return "agent.not_found"
-    if lowered_message.startswith("job '"):
-        return "job.not_found"
-    if lowered_message.startswith("dispute '"):
-        return "dispute.not_found"
-    if lowered_message.startswith("wallet '"):
-        return "wallet.not_found"
-    if lowered_message.startswith("invalid status:"):
-        return "request.invalid_status"
-    if "idempotency-key is too long" in lowered_message:
-        return "request.idempotency_key_too_long"
-    if lowered_message.startswith(
-        "a request with this idempotency-key is still in progress"
-    ):
-        return "request.idempotency_conflict"
-    if lowered_message.startswith("failed to fetch manifest_url"):
-        return "onboarding.manifest_fetch_failed"
-    if lowered_message.startswith("manifest too large"):
-        return "request.payload_too_large"
-    if lowered_message.startswith("fetched manifest is empty"):
-        return "onboarding.manifest_empty"
-    if lowered_message.startswith("failed to create job"):
-        return "job.create_failed"
-    if lowered_message.startswith("job is not claimable"):
-        return "job.not_claimable"
-    if lowered_message.startswith("job is not currently claimed by this worker"):
-        return "job.claim_missing"
-    if lowered_message.startswith(
-        "invalid or missing claim_token"
-    ) or lowered_message.startswith("invalid or stale claim_token"):
-        return "job.invalid_claim_token"
-    if lowered_message.startswith("unable to heartbeat this job claim"):
-        return "job.heartbeat_failed"
-    if lowered_message.startswith("unable to release this job claim"):
-        return "job.release_failed"
-    if lowered_message.startswith("unable to update job status"):
-        return "job.transition_failed"
-    if lowered_message.startswith("unable to schedule retry for this job"):
-        return "job.retry_failed"
-    if lowered_message.startswith("upstream agent unreachable"):
-        return "agent.upstream_unreachable"
-    if lowered_message.startswith("agent endpoint is misconfigured"):
-        return "agent.endpoint_misconfigured"
-    if lowered_message.startswith("agent execution failed"):
-        return "agent.execution_failed"
-    if lowered_message.startswith("all llm models rate-limited"):
-        return "agent.upstream_rate_limited"
-    if lowered_message.startswith("hook not found"):
-        return "hook.not_found"
-    if lowered_message.startswith("key not found or already revoked"):
-        return "auth.key_not_found"
-    if lowered_message.startswith("disputes can only be filed for completed jobs"):
-        return "dispute.invalid_state"
-    if lowered_message.startswith(
-        "disputes must be filed before the caller submits a rating"
-    ):
-        return "dispute.rating_locked"
-    if lowered_message.startswith("a dispute already exists for this job"):
-        return "dispute.already_exists"
-    if lowered_message.startswith("dispute window has expired for this job"):
-        return "dispute.window_closed"
-    if lowered_message.startswith("job completion timestamp is invalid"):
-        return "job.invalid_completion_timestamp"
-    if lowered_message.startswith("failed to resolve dispute"):
-        return "dispute.resolve_failed"
-    if lowered_message.startswith("tool_result payload.correlation_id is required"):
-        return "job.invalid_tool_result"
-    if lowered_message.startswith("unknown tool_result correlation_id"):
-        return "job.invalid_tool_result"
-    if lowered_message.startswith("unsupported job message type"):
-        return "job.invalid_message_type"
-    if lowered_message.startswith("agent.md spec not found"):
-        return "onboarding.spec_not_found"
-    if lowered_message.startswith(
-        "cursor must not be empty"
-    ) or lowered_message.startswith("invalid cursor"):
-        return "request.invalid_cursor"
-    if lowered_message.startswith("limit must be > 0"):
-        return "request.invalid_limit"
-    if lowered_message.startswith("sla_seconds must be > 0"):
-        return "request.invalid_sla_seconds"
-    if lowered_message.startswith("max_mismatches must be > 0"):
-        return "request.invalid_max_mismatches"
-    if lowered_message.startswith("rank_by must be one of"):
-        return "request.invalid_rank_by"
-    if lowered_message.startswith("authentication service is temporarily unavailable"):
-        return "auth.service_unavailable"
-    if lowered_message.startswith("master key cannot"):
-        return "auth.master_forbidden"
-    if lowered_message.startswith("only the original caller can rate this job"):
-        return "job.rating_forbidden"
-    if lowered_message.startswith("only the job's agent owner can rate the caller"):
-        return "job.rating_forbidden"
-    if lowered_message.startswith("ratings are locked once a dispute is filed"):
-        return "dispute.rating_locked"
-    if lowered_message.startswith("this endpoint requires caller or worker scope"):
-        return "auth.insufficient_scope"
+    for predicate, code in ERROR_CODE_PATTERNS:
+        if predicate(lowered_message):
+            return code
     return _default_error_code_for_request(status_code, path, lowered_message)
 
 

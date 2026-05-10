@@ -84,6 +84,17 @@ def create_topup_session(
             )
 
     _stripe_lib.api_key = _STRIPE_SECRET_KEY
+    # Deterministic Stripe idempotency key: a double-click (or retry within
+    # the same ~60s window) collapses to the same checkout session instead
+    # of producing two billable rows. Distinct intentional topups still
+    # succeed because the minute bucket rolls over.
+    topup_minute_window = int(datetime.now(timezone.utc).timestamp()) // 60
+    topup_idempotency_basis = (
+        f"{caller['owner_id']}:{body.wallet_id}:{int(body.amount_cents)}:{topup_minute_window}"
+    ).encode("utf-8")
+    stripe_idempotency_key = (
+        "aztea-topup-" + hashlib.sha256(topup_idempotency_basis).hexdigest()
+    )
     try:
         session = _stripe_lib.checkout.Session.create(
             payment_method_types=["card"],
@@ -108,6 +119,7 @@ def create_topup_session(
             },
             success_url=f"{_FRONTEND_BASE_URL}/wallet?payment=success&session_id={{CHECKOUT_SESSION_ID}}",
             cancel_url=f"{_FRONTEND_BASE_URL}/wallet?payment=cancelled",
+            idempotency_key=stripe_idempotency_key,
         )
     except Exception as exc:
         status_code, payload = _stripe_http_error("topup_session", exc)
