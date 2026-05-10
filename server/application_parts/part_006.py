@@ -157,6 +157,7 @@ def _sweep_jobs(
     suspension_summary = _auto_suspend_low_performing_agents(actor_owner_id)
     decay_summary = _apply_reputation_decay()
     cache_evicted_count = _cache.evict_expired()
+    probation_summary = _maybe_sweep_probation(actor_owner_id=actor_owner_id)
     return {
         "expired_leases_scanned": len(expired),
         "due_retry_count": len(due_retry),
@@ -178,7 +179,50 @@ def _sweep_jobs(
         "auto_suspended_agent_ids": suspension_summary["auto_suspended_agent_ids"],
         "reputation_decay": decay_summary,
         "cache_evicted_count": cache_evicted_count,
+        "probation_graduated_count": probation_summary["count"],
+        "probation_graduated_agent_ids": probation_summary["agent_ids"],
     }
+
+
+# Probation graduation is much cheaper to skip than to run on every sweep
+# tick; the job sweeper fires every ~2s and graduation only changes state
+# at human timescales. Throttle to feature_flags.probation_sweep_interval.
+_LAST_PROBATION_SWEEP_AT_MONO: float = 0.0
+
+
+def _maybe_sweep_probation(*, actor_owner_id: str) -> dict[str, Any]:
+    """Run the probation graduation pass at most once per configured interval.
+
+    Returns ``{"count": int, "agent_ids": list[str]}``. On any failure the
+    graduation function logs the exception and returns an empty list — a
+    failed graduation must never break the broader job sweep.
+    """
+    global _LAST_PROBATION_SWEEP_AT_MONO
+    now_mono = time.monotonic()
+    interval = _feature_flags.probation_sweep_interval_seconds()
+    if (now_mono - _LAST_PROBATION_SWEEP_AT_MONO) < interval:
+        return {"count": 0, "agent_ids": []}
+    _LAST_PROBATION_SWEEP_AT_MONO = now_mono
+
+    # `actor_owner_id` is accepted for symmetry with the rest of the sweeper
+    # surface but isn't used here: graduation lands an audit row in
+    # `agents.review_note` + `reviewed_by='system'` already, and the
+    # `job_events` table is keyed on `job_id` (graduation is agent-scoped,
+    # not job-scoped).
+    del actor_owner_id
+
+    try:
+        graduated = registry.graduate_probation_listings()
+    except Exception:
+        _LOG.exception("probation graduation sweep failed")
+        return {"count": 0, "agent_ids": []}
+
+    if graduated:
+        _LOG.info(
+            "probation_graduation",
+            extra={"agent_ids": graduated, "count": len(graduated)},
+        )
+    return {"count": len(graduated), "agent_ids": graduated}
 
 
 def _set_sweeper_state(**updates: Any) -> None:

@@ -213,6 +213,9 @@ class DbConnection:
             try:
                 self._conn.rollback()
             except Exception:
+                # Swallow after logging: re-raising would mask the original
+                # exception that triggered __exit__, which is the one callers
+                # actually need to debug.
                 _LOG.exception("Rollback failed during exception handling.")
 
     # ------------------------------------------------------------------
@@ -264,16 +267,22 @@ def _get_sqlite_connection(db_path: str) -> DbConnection:
         try:
             wrapper._conn.execute("SELECT 1")
             return wrapper
-        except sqlite3.ProgrammingError:
-            # Connection was closed — release semaphore and reopen.
+        except sqlite3.ProgrammingError as exc:
+            # Connection was closed out-of-band (e.g. close_all_connections()
+            # ran on shutdown then a thread reused the wrapper). Drop it and
+            # reopen — recoverable, but worth a debug breadcrumb.
+            _LOG.debug("dropping closed sqlite connection from pool: %s", exc)
             with _sqlite_open_connections_lock:
                 try:
                     _sqlite_open_connections.remove(wrapper._conn)
                 except ValueError:
+                    # Already removed by close_all_connections(); idempotent.
                     pass
             try:
                 _conn_semaphore.release()
             except ValueError:
+                # BoundedSemaphore.release() raises if released past initial
+                # value; safe to ignore — semaphore was already balanced.
                 pass
             _local.conn = None
     wrapper = _open_sqlite_connection(db_path)
@@ -297,11 +306,17 @@ def _get_postgres_connection() -> DbConnection:
             wrapper._conn.rollback()
             wrapper._conn.cursor().execute("SELECT 1")
             return wrapper
-        except Exception:
+        except Exception as exc:
+            # Liveness check failed — recycle the connection. This is a
+            # routine recoverable event (idle-disconnect, server restart),
+            # so warn rather than exception. Operators watching logs need
+            # to know recycling is happening if it spikes.
+            _LOG.warning("postgres liveness check failed; recycling connection: %s", exc)
             _local.conn = None
             try:
                 _conn_semaphore.release()
             except ValueError:
+                # Idempotent release — see _get_sqlite_connection comment.
                 pass
 
     _conn_semaphore.acquire()
@@ -368,6 +383,7 @@ def close_all_connections() -> None:
             try:
                 _conn_semaphore.release()
             except ValueError:
+                # Idempotent release — see _get_sqlite_connection comment.
                 pass
             _local.conn = None
         return
@@ -379,8 +395,11 @@ def close_all_connections() -> None:
     for raw in conns:
         try:
             raw.execute("PRAGMA wal_checkpoint(PASSIVE)")
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort during shutdown — checkpoint failure leaves the
+            # WAL on disk but the next process startup will replay it.
+            # Don't re-raise; shutdown must continue closing connections.
+            _LOG.warning("sqlite WAL checkpoint failed during shutdown: %s", exc)
         try:
             raw.close()
         except Exception:
@@ -388,4 +407,5 @@ def close_all_connections() -> None:
         try:
             _conn_semaphore.release()
         except ValueError:
+            # Idempotent release — see _get_sqlite_connection comment.
             pass

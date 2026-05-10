@@ -194,6 +194,57 @@ def auto_invoke_trust_floor() -> float:
     return flag_float("AZTEA_AUTO_INVOKE_TRUST_FLOOR", default=30.0)
 
 
+# ---------------------------------------------------------------------------
+# Probation auto-graduation thresholds (read at call time so an operator can
+# loosen / tighten without restarting the server). Probation listings stay
+# rank-penalised and price-capped (core/registry/auto_hire.py) until they
+# clear ALL of these gates, at which point the sweeper transitions them to
+# 'approved'. CLAUDE.md §"Adding a third-party agent" advertises this.
+# ---------------------------------------------------------------------------
+
+
+def probation_min_successes() -> int:
+    """Minimum `successful_calls` to be eligible for graduation.
+
+    Default 5: enough signal to distinguish a working agent from a one-shot
+    fluke without forcing publishers to grind through dozens of paid calls
+    before their listing escapes the rank penalty.
+    """
+    raw = os.environ.get("AZTEA_PROBATION_MIN_SUCCESSES", "").strip()
+    try:
+        return max(1, int(raw)) if raw else 5
+    except (TypeError, ValueError):
+        return 5
+
+
+def probation_min_success_rate() -> float:
+    """Minimum success rate (successful_calls / total_calls)."""
+    return flag_float("AZTEA_PROBATION_MIN_SUCCESS_RATE", default=0.80)
+
+
+def probation_min_quality() -> float:
+    """Minimum average quality rating (1.0–5.0) on rated jobs."""
+    return flag_float("AZTEA_PROBATION_MIN_QUALITY", default=3.5)
+
+
+def probation_min_age_hours() -> float:
+    """Minimum age (hours since `created_at`) before graduation is considered.
+
+    Guards against a publisher gaming the gate with a burst of self-calls
+    in the first hour. Default 24h.
+    """
+    return flag_float("AZTEA_PROBATION_MIN_AGE_HOURS", default=24.0)
+
+
+def probation_sweep_interval_seconds() -> float:
+    """How often the job sweeper runs the graduation pass.
+
+    The job sweeper itself ticks every ~2s; a per-tick graduation query
+    would be wasteful. Default 5 minutes.
+    """
+    return flag_float("AZTEA_PROBATION_SWEEP_INTERVAL_S", default=300.0)
+
+
 def auto_invoke_success_floor() -> float:
     """Minimum success rate (0.0–1.0) to be eligible for auto-invoke.
 

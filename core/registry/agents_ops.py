@@ -826,6 +826,136 @@ def set_agent_review_decision(
     return get_agent(agent_id, include_unapproved=True)
 
 
+_TERMINAL_DISPUTE_STATUSES = ("resolved", "final")
+
+
+def graduate_probation_listings() -> list[str]:
+    """Promote eligible probation agents to ``review_status='approved'``.
+
+    Returns the list of agent_ids graduated this run. Idempotent — safe to
+    call from a sweeper. Reads thresholds from :mod:`core.feature_flags`.
+
+    INVARIANTS:
+      - Only transitions ``probation`` → ``approved``. Never touches
+        ``rejected``, ``pending_review``, or already-``approved`` rows.
+      - Writes ``reviewed_by='system'`` and a ``review_note`` describing
+        the gates passed, so the audit trail makes the source obvious.
+
+    A row graduates when it clears ALL of:
+      1. ``successful_calls >= AZTEA_PROBATION_MIN_SUCCESSES``
+      2. ``successful_calls / total_calls >= AZTEA_PROBATION_MIN_SUCCESS_RATE``
+      3. average ``job_quality_ratings.rating >= AZTEA_PROBATION_MIN_QUALITY``
+      4. zero open disputes (status not in resolved/final)
+      5. ``now - created_at >= AZTEA_PROBATION_MIN_AGE_HOURS``
+    """
+    min_successes = _feature_flags.probation_min_successes()
+    min_success_rate = _feature_flags.probation_min_success_rate()
+    min_quality = _feature_flags.probation_min_quality()
+    min_age_seconds = _feature_flags.probation_min_age_hours() * 3600.0
+    now = datetime.now(timezone.utc)
+
+    with _conn() as conn:
+        candidates = conn.execute(
+            """
+            SELECT agent_id, total_calls, successful_calls, created_at
+            FROM agents
+            WHERE review_status = 'probation'
+            """
+        ).fetchall()
+
+    graduated: list[str] = []
+    for row in candidates:
+        agent_id = row["agent_id"]
+        try:
+            total_calls = int(row["total_calls"] or 0)
+            successful = int(row["successful_calls"] or 0)
+            if successful < min_successes:
+                continue
+            success_rate = (successful / total_calls) if total_calls > 0 else 0.0
+            if success_rate < min_success_rate:
+                continue
+
+            created_at = _parse_iso_to_utc(row["created_at"])
+            if created_at is None:
+                # Defensive: a row without created_at predates the column or
+                # is corrupt; skip rather than graduate blind.
+                continue
+            if (now - created_at).total_seconds() < min_age_seconds:
+                continue
+
+            with _conn() as conn:
+                open_disputes = conn.execute(
+                    """
+                    SELECT COUNT(*) AS n
+                    FROM disputes d
+                    JOIN jobs j ON j.job_id = d.job_id
+                    WHERE j.agent_id = %s
+                      AND d.status NOT IN ('resolved', 'final')
+                    """,
+                    (agent_id,),
+                ).fetchone()
+                if (open_disputes or {}).get("n", 0) > 0:
+                    continue
+
+                quality_row = conn.execute(
+                    """
+                    SELECT AVG(rating) AS avg_rating, COUNT(*) AS rating_count
+                    FROM job_quality_ratings
+                    WHERE agent_id = %s
+                    """,
+                    (agent_id,),
+                ).fetchone()
+            avg_rating = (quality_row or {}).get("avg_rating")
+            rating_count = int((quality_row or {}).get("rating_count") or 0)
+            # Require at least one rating; without ratings the quality gate
+            # is unverifiable. Publishers can still see calls succeed; they
+            # just need at least one caller to rate before graduation.
+            if rating_count == 0 or avg_rating is None:
+                continue
+            if float(avg_rating) < min_quality:
+                continue
+
+            note = (
+                f"auto-graduated: {successful}/{total_calls} successes, "
+                f"avg rating {float(avg_rating):.2f} over {rating_count}, "
+                f"no open disputes."
+            )
+            set_agent_review_decision(
+                agent_id,
+                decision="approve",
+                reviewed_by="system",
+                note=note,
+            )
+            graduated.append(agent_id)
+        except Exception:
+            # One bad row must not abort the batch. The exception path is
+            # rare (DB lock contention, malformed timestamp) and the next
+            # sweep will retry.
+            _logger.exception("auto-graduation failed for %s", agent_id)
+            continue
+
+    return graduated
+
+
+def _parse_iso_to_utc(value: Any) -> datetime | None:
+    """Best-effort ISO timestamp → UTC-aware datetime, mirroring helpers used
+    elsewhere in this package. Returns None on parse failure rather than
+    raising — callers treat None as "skip this row"."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    try:
+        text = str(value).strip().replace("Z", "+00:00")
+        # SQLite often stores `YYYY-MM-DD HH:MM:SS` without a T separator.
+        if "T" not in text and " " in text and len(text) >= 19:
+            text = text.replace(" ", "T", 1)
+        parsed = datetime.fromisoformat(text)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
 def set_agent_verified(agent_id: str, verified: bool) -> dict | None:
     with _conn() as conn:
         conn.execute(

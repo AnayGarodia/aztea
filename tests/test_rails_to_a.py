@@ -269,6 +269,85 @@ def test_r6e_is_disputable_rejects_after_rating():
     assert reason.status_code == 409
 
 
+def test_r6f_update_job_status_guard_blocks_post_completion_terminal_flip(
+    monkeypatch, tmp_path
+):
+    """Pin the invariant disputable.py DECISIONS #3 relies on.
+
+    `update_job_status(..., completed=True)` must be a no-op once
+    `completed_at` is set. If this guard ever weakens, the disputable
+    predicate's anchoring on `completed_at` becomes unsafe (a settled job
+    could flip from `complete` to `failed` post-payout, opening a window
+    for a partial clawback when the dispute path runs against fresh state).
+    """
+    import uuid as _uuid
+    from core import jobs as _jobs
+    from core import registry as _registry
+
+    db_path = tmp_path / f"r6f-{_uuid.uuid4().hex}.db"
+    for module in (_jobs, _registry):
+        conn = getattr(module._local, "conn", None)
+        if conn is not None:
+            conn.close()
+            try:
+                delattr(module._local, "conn")
+            except AttributeError:
+                pass
+        monkeypatch.setattr(module, "DB_PATH", str(db_path))
+
+    _registry.init_db()
+    _jobs.init_jobs_db()
+
+    agent_id = _registry.register_agent(
+        name="r6f agent",
+        description="guard test",
+        endpoint_url="https://example.com/r6f",
+        price_per_call_usd=0.01,
+        tags=["r6f"],
+    )
+    job = _jobs.create_job(
+        agent_id=agent_id,
+        caller_owner_id=f"user:{_uuid.uuid4().hex[:8]}",
+        caller_wallet_id=str(_uuid.uuid4()),
+        agent_wallet_id=str(_uuid.uuid4()),
+        platform_wallet_id=str(_uuid.uuid4()),
+        price_cents=10,
+        charge_tx_id=str(_uuid.uuid4()),
+        input_payload={"task": "guard"},
+    )
+
+    settled = _jobs.update_job_status(
+        job["job_id"], "complete", output_payload={"ok": True}, completed=True
+    )
+    assert settled["status"] == "complete"
+    assert settled["completed_at"] is not None
+    original_completed_at = settled["completed_at"]
+
+    # Attempt a post-completion terminal flip — this is what a misbehaving
+    # sweeper or buggy verification path might try. The SQL guard must
+    # silently no-op (status stays `complete`, `completed_at` stays put).
+    after = _jobs.update_job_status(
+        job["job_id"], "failed", error_message="late failure", completed=True
+    )
+    assert after is not None
+    assert after["status"] == "complete", (
+        "Post-completion terminal flip should be a no-op; the SQL guard in "
+        "core/jobs/leases.py is what makes disputable.py's completed_at "
+        "anchor safe."
+    )
+    assert after["completed_at"] == original_completed_at
+
+    # Cleanup so other tests don't inherit the tmp DB.
+    for module in (_jobs, _registry):
+        conn = getattr(module._local, "conn", None)
+        if conn is not None:
+            conn.close()
+            try:
+                delattr(module._local, "conn")
+            except AttributeError:
+                pass
+
+
 # ---------------------------------------------------------------------------
 # R7 — trust_breakdown on agent_response
 # ---------------------------------------------------------------------------

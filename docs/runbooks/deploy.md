@@ -206,6 +206,16 @@ AZTEA_LLM_DEFAULT_CHAIN=groq,openai,anthropic
 AZTEA_ENABLE_LIVE_DISPUTE_JUDGES=1
 AZTEA_ENABLE_LIVE_QUALITY_JUDGE=1
 
+# Probation auto-graduation thresholds (sweeper-driven, defaults shown).
+# Listings clear probation when ALL gates pass: ≥5 successful calls, ≥80%
+# success rate, ≥3.5 avg quality rating, no open disputes, ≥24h since
+# created_at. Tighten in prod if abuse appears; loosen for friendlier onboarding.
+# AZTEA_PROBATION_MIN_SUCCESSES=5
+# AZTEA_PROBATION_MIN_SUCCESS_RATE=0.80
+# AZTEA_PROBATION_MIN_QUALITY=3.5
+# AZTEA_PROBATION_MIN_AGE_HOURS=24
+# AZTEA_PROBATION_SWEEP_INTERVAL_S=300
+
 # Email (if unset, all email silently no-ops)
 SMTP_HOST=
 SMTP_PORT=587
