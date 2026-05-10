@@ -778,6 +778,12 @@ class MCPInvokeRequest(BaseModel):
     tool_name: str
     input: JSONObject = Field(default_factory=dict)
     api_key: str
+    # Optional, MCP-attached workspace summary for the caller's local cwd.
+    # Forwarded into the agent payload by mcp_invoke; never persisted.
+    # See core/workspace_bundle.py for the shape and core/workspace_helpers.py
+    # for the consumer contract.
+    workspace_context: dict | None = None
+    workspace_context_fingerprint: str | None = None
 
     @field_validator("tool_name")
     @classmethod

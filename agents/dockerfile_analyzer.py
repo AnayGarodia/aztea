@@ -339,10 +339,21 @@ def run(payload: dict) -> dict:
 
     dockerfile = payload.get("dockerfile")
     if not dockerfile or not isinstance(dockerfile, str) or not dockerfile.strip():
-        return _err(
-            "dockerfile_analyzer.missing_dockerfile",
-            "'dockerfile' is required and must be a non-empty string",
-        )
+        # Fall back to MCP-attached workspace context when Claude Code is
+        # running in a project that contains a Dockerfile and the user has
+        # approved sharing. Avoids forcing the caller to re-paste the file.
+        from core.workspace_helpers import extract_workspace_context
+
+        bundle = extract_workspace_context(payload)
+        if bundle is not None:
+            ws_dockerfile = bundle.manifests.get("Dockerfile")
+            if ws_dockerfile and ws_dockerfile.strip():
+                dockerfile = ws_dockerfile
+        if not dockerfile or not isinstance(dockerfile, str) or not dockerfile.strip():
+            return _err(
+                "dockerfile_analyzer.missing_dockerfile",
+                "'dockerfile' is required and must be a non-empty string",
+            )
 
     filename = str(payload.get("filename") or "Dockerfile")
 

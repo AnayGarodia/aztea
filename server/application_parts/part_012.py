@@ -425,6 +425,10 @@ class _AutoHireRequestBody(BaseModel):
     # output stays canonical; if set, `rendered_output` (string or dict
     # for slack_blocks) is attached alongside.
     output_format: str | None = None
+    # MCP-attached workspace summary (file tree + manifests + README) for
+    # the caller's local cwd. Forwarded into the agent payload; never
+    # persisted. See core/workspace_bundle.py for the shape.
+    workspace_context: dict[str, Any] | None = None
 
 
 @lru_cache(maxsize=1)
@@ -560,6 +564,12 @@ def registry_auto_hire(
     if body.output_format:
         payload = dict(payload)
         payload["output_format"] = body.output_format
+
+    # Forward MCP-attached workspace context into the agent payload. Stays
+    # in the in-memory call envelope only; stripped before public examples.
+    if body.workspace_context:
+        payload = dict(payload)
+        payload["workspace_context"] = body.workspace_context
 
     # 4. Dry-run: report what *would* happen, no invocation.
     if body.dry_run:

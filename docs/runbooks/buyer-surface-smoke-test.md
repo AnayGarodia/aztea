@@ -197,3 +197,49 @@ When you add a new buyer surface (new SDK language, new adapter, new integration
 1. Add a numbered section to this runbook describing the smoke test steps.
 2. Ensure the smoke test covers the full hire-and-get-result loop, not just authentication.
 3. Note any prerequisites (installed packages, environment variables) in the header.
+
+---
+
+## Workspace context (MCP-only)
+
+Verifies that auto-detected workspace context flows from a project directory,
+through the MCP server, to a consuming agent without leaking secrets.
+
+### Steps
+
+1. **Plant a fake secret in a test project:**
+   ```bash
+   mkdir -p /tmp/aztea-ws-smoke && cd /tmp/aztea-ws-smoke
+   echo "API_TOKEN=should_never_leak" > .env
+   echo '{"name":"smoke-test","dependencies":{"react":"18.0.0"}}' > package.json
+   echo "# Smoke test project" > README.md
+   ```
+
+2. **From inside the test project, call an agent that uses workspace_context.**
+   Example: `aztea call dependency_auditor` with no `manifest` field.
+
+3. **Expect:**
+   - First call: response contains `workspace_consent_notice` instructing the
+     user to run `aztea workspace approve`. No `workspace_context` is sent.
+   - After running `python scripts/workspace_cli.py workspace approve`, the
+     next call attaches the bundle. The dependency_auditor returns a result
+     scanning `react` from `package.json`.
+   - In neither case does any response, log line, or recorded work-example
+     contain the string `should_never_leak`.
+
+4. **Cleanup:**
+   ```bash
+   python scripts/workspace_cli.py workspace forget
+   rm -rf /tmp/aztea-ws-smoke
+   ```
+
+### Privacy invariant to spot-check
+
+After the smoke test, query the agent's recent work examples and confirm
+that no example payload contains a `workspace_context` key:
+
+```bash
+curl -s "$BASE/registry/agents/<dependency_auditor_id>/output-examples" \
+  -H "Authorization: Bearer $API_KEY" | jq '.examples[].input | keys'
+# Expected: lists of fields, none of them "workspace_context".
+```

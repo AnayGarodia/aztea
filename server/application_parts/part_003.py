@@ -190,6 +190,12 @@ def _record_public_work_example(
         return
     if not isinstance(input_payload, dict) or not isinstance(output_payload, dict):
         return
+    # Strip workspace_context from the input we are about to persist as a
+    # public example. The bundle is per-call, MCP-attached, and must never
+    # appear in the registry's example ring buffer.
+    from core.workspace_helpers import strip_workspace_context
+
+    input_payload = strip_workspace_context(input_payload)
     agent_id = str(agent.get("agent_id") or "").strip()
     if not agent_id:
         return

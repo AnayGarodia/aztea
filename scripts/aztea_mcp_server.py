@@ -947,6 +947,58 @@ def _workflow_hints(query: str) -> list[str]:
     return hints[:4]
 
 
+_WORKSPACE_DISABLE_ENV = "AZTEA_DISABLE_WORKSPACE_CONTEXT"
+
+
+def _attach_workspace_context(
+    body: dict[str, Any], inner_input: dict[str, Any] | None = None
+) -> str | None:
+    """Attach the local workspace context to an outbound MCP-call body.
+
+    Resolves the caller's cwd, looks up consent, and either:
+      - approved → bundles ~5KB of file tree + manifests + README into
+        `body["workspace_context"]` (and into `inner_input` when given so
+        `call_specialist` payloads also carry it).
+      - denied   → no-op.
+      - unknown  → attaches a `_WORKSPACE_CONSENT_KEY` summary explaining
+        what *would* be shared so the user can approve via CLI.
+
+    Returns a one-line user-facing notice (or None when nothing changed).
+    Mutates `body` and `inner_input` in place — documented side effect.
+    """
+    if os.environ.get(_WORKSPACE_DISABLE_ENV, "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    ):
+        return None
+    try:
+        from core import workspace_bundle as _wb
+        from core import workspace_consent as _wc
+    except ImportError:
+        return None
+    cwd = os.getcwd()
+    state = _wc.get_state(cwd)
+    if state == "denied":
+        return None
+    try:
+        bundle = _wb.build_light_bundle(cwd)
+    except (ValueError, OSError):
+        return None
+    if state == "approved":
+        payload = bundle.to_payload()
+        body["workspace_context"] = payload
+        if isinstance(inner_input, dict):
+            inner_input["workspace_context"] = payload
+        return None
+    return (
+        f"Aztea detected a workspace at {cwd}. To share its context with "
+        f"agents (file tree, manifests, README — secrets are excluded), run "
+        f"`aztea workspace approve` from this directory. To suppress this "
+        f"notice, run `aztea workspace deny`."
+    )
+
+
 class RegistryBridge:
     def __init__(
         self, *, base_url: str, api_key: str, timeout_seconds: float = 10.0
@@ -2146,6 +2198,9 @@ class RegistryBridge:
             output_format = str(arguments.get("output_format") or "").strip()
             if output_format:
                 body["output_format"] = output_format
+            workspace_notice = _attach_workspace_context(
+                body, body.get("input") if isinstance(body.get("input"), dict) else None
+            )
             # Pre-flight session-budget check (mirrors aztea_call gate).
             budget_cents = self._session_state.get("budget_cents")
             if budget_cents is not None:
@@ -2185,6 +2240,8 @@ class RegistryBridge:
                     self._session_state["spent_cents"] = int(
                         self._session_state.get("spent_cents") or 0
                     ) + int(round(float(cost_usd) * 100))
+            if workspace_notice and isinstance(payload, dict):
+                payload.setdefault("workspace_consent_notice", workspace_notice)
             return ok, payload
 
         if tool_name == _LAZY_CALL_TOOL["name"]:
@@ -2231,7 +2288,14 @@ class RegistryBridge:
             if output_format and "output_format" not in tool_arguments:
                 tool_arguments = dict(tool_arguments)
                 tool_arguments["output_format"] = output_format
-            return self.call_tool(slug, tool_arguments)
+            # Workspace context — same logic as do_specialist_task. Mutates
+            # tool_arguments in place to surface the bundle in the agent payload.
+            tool_arguments = dict(tool_arguments)
+            workspace_notice = _attach_workspace_context(tool_arguments)
+            ok, payload = self.call_tool(slug, tool_arguments)
+            if workspace_notice and isinstance(payload, dict):
+                payload.setdefault("workspace_consent_notice", workspace_notice)
+            return ok, payload
 
         resolved_entry = self._catalog_entry(tool_name)
         resolved_tool_name = (

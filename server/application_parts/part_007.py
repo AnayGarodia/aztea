@@ -177,6 +177,54 @@ def _mcp_tools_and_lookup() -> tuple[list[dict[str, Any]], dict[str, dict[str, A
     }
 
 
+def _merge_workspace_context_into_payload(
+    payload: dict[str, Any],
+    body: MCPInvokeRequest,
+) -> bool:
+    """Merge MCP-attached workspace context into the agent payload.
+
+    Two ingest modes: (a) full bundle dict on `body.workspace_context` — cache
+    it under its fingerprint and merge into payload; (b) fingerprint-only on
+    `body.workspace_context_fingerprint` — look up cached bundle, merge if
+    found, silently skip otherwise. Returns True when context was attached.
+
+    Privacy: the bundle content lives only in the in-memory cache; it is never
+    persisted to the database, never written to the audit log, and never
+    forwarded to `_record_public_work_example` (see registry_call's strip).
+    """
+    from core import workspace_bundle_cache as _wb_cache
+
+    bundle = body.workspace_context
+    if isinstance(bundle, dict) and bundle:
+        fingerprint = str(bundle.get("fingerprint") or "").strip()
+        if fingerprint:
+            _wb_cache.cache_workspace_bundle(fingerprint, bundle)
+        payload["workspace_context"] = bundle
+        _LOG.info(
+            "mcp.workspace_context attached tool=%s mode=full fingerprint=%s",
+            body.tool_name,
+            fingerprint or "-",
+        )
+        return True
+    fingerprint = str(body.workspace_context_fingerprint or "").strip()
+    if not fingerprint:
+        return False
+    cached = _wb_cache.get_workspace_bundle(fingerprint)
+    if cached is None:
+        _LOG.info(
+            "mcp.workspace_context fingerprint miss tool=%s fingerprint=%s",
+            body.tool_name,
+            fingerprint,
+        )
+        return False
+    payload["workspace_context"] = cached
+    _LOG.info(
+        "mcp.workspace_context attached tool=%s mode=fingerprint hit=true",
+        body.tool_name,
+    )
+    return True
+
+
 def _mcp_invoke_lookup() -> dict[str, dict[str, Any]]:
     """Tool-name → agent map for /mcp/invoke. Includes sunset agents so existing
     integrations that call them by exact slug keep working, even though the
@@ -947,13 +995,19 @@ def mcp_invoke(
     # 4. Dispatch. registry_call owns pre-call charge, payout, and refund-on-failure.
     agent_id = str(agent["agent_id"])
     request.state._caller = caller
+    # Workspace context (optional): MCP-attached summary of caller's local cwd.
+    # Two ingest modes — full bundle (first call from a directory) or just a
+    # fingerprint (subsequent calls). Fingerprint mode looks up the cached
+    # bundle and rehydrates it; cache miss silently degrades to no-context.
+    merged_input = dict(body.input or {})
+    _merge_workspace_context_into_payload(merged_input, body)
     t0 = time.monotonic()
     success = False
     try:
         delegated = registry_call(
             request=request,
             agent_id=agent_id,
-            body=core_models.RegistryCallRequest(root=body.input),
+            body=core_models.RegistryCallRequest(root=merged_input),
             caller=caller,
         )
         success = True

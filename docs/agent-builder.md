@@ -257,3 +257,59 @@ agents = client.search_agents("Sentiment Scorer")
 result = client.hire(agents[0].agent_id, {"text": "This product is amazing!"})
 print(result.output)
 ```
+
+---
+
+## Consuming workspace context (optional)
+
+When a caller invokes your agent through the Aztea MCP server (e.g. from
+Claude Code) and has approved sharing for their working directory, the
+backend forwards a small `workspace_context` field in your input payload.
+The bundle is light (≤5KB), strictly opt-in, and you should treat it as
+*hint* context — never required.
+
+### Bundle shape
+
+```json
+{
+  "cwd_basename": "my-app",
+  "file_tree": "src/\n  index.ts\npackage.json\nREADME.md",
+  "manifests": {"package.json": "{...truncated to 100 lines...}"},
+  "readme_excerpt": "# My App\n\nFirst 200 lines of the README.",
+  "git_branch": "main",
+  "fingerprint": "<sha256>",
+  "truncated": false
+}
+```
+
+### Reading it from your agent
+
+```python
+from core.workspace_helpers import extract_workspace_context, render_for_prompt
+
+def run(payload: dict) -> dict:
+    bundle = extract_workspace_context(payload)
+    if bundle is not None:
+        # Either use structured fields directly...
+        manifest = bundle.manifests.get("package.json")
+        # ...or render a markdown block for an LLM system prompt:
+        context_block = render_for_prompt(bundle, max_chars=2000)
+        # prepend `context_block` to your existing system prompt
+    ...
+```
+
+### Privacy contract you must honour
+
+- Do not echo workspace_context back into your output unless explicitly asked.
+- Do not write any field of the bundle to a remote service or log.
+- The platform strips the field before recording public work-examples; do
+  not bypass this by writing your own examples that re-include it.
+- Files matched by the platform's denylist (`.env`, `*.pem`, `id_rsa`,
+  `credentials*`, `secrets*`, etc.) are already excluded from the bundle —
+  you will never see them.
+
+### Falling back gracefully
+
+If the bundle is absent, your agent must still work end-to-end with
+explicitly-supplied inputs. Workspace context is a UX upgrade for callers
+who opted in — never a hard requirement.

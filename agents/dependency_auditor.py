@@ -406,6 +406,30 @@ def _invalid_manifest_error(ecosystem: str, manifest: str) -> dict:
     )
 
 
+_WORKSPACE_MANIFEST_PRIORITY = ("requirements.txt", "pyproject.toml", "package.json")
+
+
+def _manifest_from_workspace(payload: dict) -> tuple[str, str]:
+    """Look for a manifest in MCP-attached workspace_context. Returns (text, ecosystem)
+    with empty strings if no usable manifest is present. Never raises.
+
+    Why: when Claude Code runs in a project directory and the user has approved
+    workspace sharing, the manifest is right there — making the agent demand
+    a re-paste defeats the purpose of auto-context.
+    """
+    from core.workspace_helpers import extract_workspace_context
+
+    bundle = extract_workspace_context(payload)
+    if bundle is None:
+        return "", ""
+    for name in _WORKSPACE_MANIFEST_PRIORITY:
+        body = bundle.manifests.get(name)
+        if body and body.strip():
+            ecosystem = "pypi" if name in ("requirements.txt", "pyproject.toml") else "npm"
+            return body, ecosystem
+    return "", ""
+
+
 def _normalize_run_inputs(payload: dict) -> tuple[str, str, list[str]]:
     """Pure: validate + normalize ``run`` inputs. Raises ValueError for missing manifest.
 
@@ -415,11 +439,17 @@ def _normalize_run_inputs(payload: dict) -> tuple[str, str, list[str]]:
     if not isinstance(payload, dict):
         raise TypeError(f"payload must be dict, got {type(payload).__name__}")
     manifest = str(payload.get("manifest") or "").strip()
+    ecosystem = str(payload.get("ecosystem") or "auto").strip().lower()
+    if not manifest:
+        ws_manifest, ws_ecosystem = _manifest_from_workspace(payload)
+        if ws_manifest:
+            manifest = ws_manifest
+            if ecosystem == "auto":
+                ecosystem = ws_ecosystem
     if not manifest:
         raise ValueError(
             "'manifest' is required (contents of package.json or requirements.txt)."
         )
-    ecosystem = str(payload.get("ecosystem") or "auto").strip().lower()
     raw_checks = payload.get("checks")
     checks = list(raw_checks) if isinstance(raw_checks, list) and raw_checks else list(_DEFAULT_CHECKS)
     return manifest[:_MAX_MANIFEST_CHARS], ecosystem, checks
