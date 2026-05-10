@@ -15,11 +15,21 @@ class AuthNamespace(_NamespaceBase):
             require_api_key=False,
         )
 
-    def login(self, email: str, password: str) -> JSONObject:
+    def login(
+        self,
+        email: str,
+        password: str,
+        *,
+        rotate: bool = False,
+        username: str | None = None,
+    ) -> JSONObject:
+        body: JSONObject = {"email": email, "password": password, "rotate": rotate}
+        if username is not None:
+            body["username"] = username
         return self._client._request_json(
             "POST",
             "/auth/login",
-            json_body={"email": email, "password": password},
+            json_body=body,
             require_api_key=False,
         )
 
