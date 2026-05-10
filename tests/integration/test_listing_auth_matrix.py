@@ -44,9 +44,12 @@ def test_skills_master_succeeds(client):
     assert resp.status_code == 201, resp.text
 
 
-def test_skills_default_user_key_succeeds_with_approval(client):
-    # Default user keys carry both caller + worker scopes; SKILL.md auto-
-    # approves regardless of caller type.
+def test_skills_default_user_key_succeeds_with_probation(client):
+    # 1.6.1: non-master callers land their hosted skills in
+    # `review_status='probation'`. Auto-invoke is rank-penalised + price-
+    # capped at $1.00 until graduate_probation_listings() promotes the
+    # listing on track record. The 1.6.0 hard-coded `approved` was a
+    # security regression closed in part_012.py.
     user = _register_user()
     resp = client.post(
         "/skills",
@@ -54,7 +57,7 @@ def test_skills_default_user_key_succeeds_with_approval(client):
         json={"skill_md": _CLEAN_SKILL_MD, "price_per_call_usd": 0.02},
     )
     assert resp.status_code == 201, resp.text
-    assert resp.json()["review_status"] == "approved"
+    assert resp.json()["review_status"] == "probation"
 
 
 def test_skills_caller_only_key_rejected_with_403(client):
