@@ -125,6 +125,70 @@ def _batch_job_trace_item(
     return item
 
 
+def _batch_count_statuses(batch_jobs: list[dict]) -> dict:
+    """Count jobs by status for a batch."""
+    counts: dict[str, int] = {
+        "pending": 0, "running": 0, "awaiting_clarification": 0,
+        "complete": 0, "failed": 0,
+    }
+    for job in batch_jobs:
+        status = str(job.get("status") or "")
+        if status in counts:
+            counts[status] += 1
+    return counts
+
+
+def _batch_build_worker_pool_block(*, counts: dict, debug: bool) -> dict:
+    """Build the worker_pool diagnostic block for a batch trace."""
+    try:
+        queue_total = jobs.count_pending_jobs()
+    except Exception:
+        queue_total = None
+    worker_state_summary = (
+        _BUILTIN_WORKER_STATE.get("last_summary") or {}
+        if isinstance(_BUILTIN_WORKER_STATE, dict)
+        else {}
+    )
+    try:
+        _inflight_raw = int(globals().get("_BUILTIN_WORKER_INFLIGHT_COUNT", 0) or 0)
+        _parallelism = int(
+            globals().get("_BUILTIN_JOB_WORKER_PARALLELISM")
+            or _BUILTIN_JOB_WORKER_PARALLELISM
+        )
+        in_flight_now = max(_inflight_raw, counts["running"])
+        capacity_remaining_now = max(0, _parallelism - in_flight_now)
+    except Exception:
+        _inflight_raw = None
+        in_flight_now = None
+        capacity_remaining_now = None
+    worker_pool: dict = {
+        "configured_parallelism": _BUILTIN_JOB_WORKER_PARALLELISM,
+        "interval_seconds": _BUILTIN_JOB_WORKER_INTERVAL_SECONDS,
+        "platform_queue_depth": queue_total,
+        "this_batch_pending": counts["pending"],
+        "this_batch_running": counts["running"],
+        "in_flight_global": in_flight_now,
+        "capacity_remaining": capacity_remaining_now,
+    }
+    if debug:
+        worker_pool["debug"] = {
+            "in_flight_global_raw": _inflight_raw,
+            "last_worker_summary": worker_state_summary,
+            "hint": (
+                "Jobs run on a shared worker pool with persistent threads. "
+                "platform_queue_depth = total pending across all callers; "
+                "capacity_remaining = free worker slots right now. "
+                "in_flight_global is the floor MAX(live counter, this batch's "
+                "running count); in_flight_global_raw is the unadjusted counter "
+                "(may briefly lag the DB while fast jobs settle). If "
+                "platform_queue_depth > capacity_remaining + in_flight, "
+                "your jobs are queued behind other callers and will start "
+                "as soon as a slot frees."
+            ),
+        }
+    return worker_pool
+
+
 def _batch_parallel_trace(
     *,
     batch_id: str,
@@ -141,17 +205,7 @@ def _batch_parallel_trace(
         _batch_job_trace_item(job, caller, include_detail=include_detail)
         for job in batch_jobs
     ]
-    counts = {
-        "pending": 0,
-        "running": 0,
-        "awaiting_clarification": 0,
-        "complete": 0,
-        "failed": 0,
-    }
-    for job in batch_jobs:
-        status = str(job.get("status") or "")
-        if status in counts:
-            counts[status] += 1
+    counts = _batch_count_statuses(batch_jobs)
     total_charged_cents = sum(int(item.get("charge_cents") or 0) for item in trace_jobs)
     terminal_count = counts["complete"] + counts["failed"]
 
@@ -168,81 +222,7 @@ def _batch_parallel_trace(
     # plan a follow-up batch, to confirm capacity hasn't been throttled,
     # or simply because "{} for terminal batches" was a confusing UX hole
     # in the rails-to-A audit.
-    worker_pool: dict | None = None
-    if True:
-        try:
-            queue_total = jobs.count_pending_jobs()
-        except Exception:
-            queue_total = None
-        worker_state_summary = (
-            _BUILTIN_WORKER_STATE.get("last_summary") or {}
-            if isinstance(_BUILTIN_WORKER_STATE, dict)
-            else {}
-        )
-        # Live snapshot of pool occupancy. All shards execute in the same
-        # globals() namespace (server.application), so reading the counter
-        # directly avoids the cross-module-import-wrong-namespace bug where
-        # importing part_004 as a separate module gave us its own zero-init
-        # counter instead of the mutable one shared by all shards.
-        #
-        # Race correction (2026-05-08 eval): the raw counter can lag behind
-        # the DB snapshot. `counts["running"]` was computed from a SELECT
-        # that ran tens of milliseconds before this read, while inflight is
-        # decremented at the END of each worker thread (after the DB row
-        # transitions running → complete). For fast jobs (DB sandbox @ 42ms)
-        # the worker can finish + decrement BEFORE the trace reads, leaving
-        # a contradictory `in_flight_global: 0` while `this_batch_running`
-        # still reports the older snapshot. We therefore report the maximum
-        # of the live counter and the DB running-count for THIS batch, so
-        # the two fields cannot disagree in a way that destroys caller trust.
-        try:
-            _inflight_raw = int(
-                globals().get("_BUILTIN_WORKER_INFLIGHT_COUNT", 0) or 0
-            )
-            _parallelism = int(
-                globals().get("_BUILTIN_JOB_WORKER_PARALLELISM")
-                or _BUILTIN_JOB_WORKER_PARALLELISM
-            )
-            in_flight_now = max(_inflight_raw, counts["running"])
-            capacity_remaining_now = max(0, _parallelism - in_flight_now)
-        except Exception:
-            _inflight_raw = None
-            in_flight_now = None
-            capacity_remaining_now = None
-        # Default response is the operator-friendly view: one in_flight
-        # number that's already MAX-corrected, no internal counter noise,
-        # no multi-paragraph documentation in the wire response. The
-        # 2026-05-09 power-user eval flagged the prior shape's confusing
-        # _raw vs in_flight_global mismatch and the verbose hint as
-        # diagnostic clutter that leaked internal correctness concerns
-        # into normal callers' polling responses. Operators who actually
-        # need the diagnostic detail pass ?debug=1 through batch_status
-        # and get the legacy shape back.
-        worker_pool = {
-            "configured_parallelism": _BUILTIN_JOB_WORKER_PARALLELISM,
-            "interval_seconds": _BUILTIN_JOB_WORKER_INTERVAL_SECONDS,
-            "platform_queue_depth": queue_total,
-            "this_batch_pending": counts["pending"],
-            "this_batch_running": counts["running"],
-            "in_flight_global": in_flight_now,
-            "capacity_remaining": capacity_remaining_now,
-        }
-        if debug:
-            worker_pool["debug"] = {
-                "in_flight_global_raw": _inflight_raw,
-                "last_worker_summary": worker_state_summary,
-                "hint": (
-                    "Jobs run on a shared worker pool with persistent threads. "
-                    "platform_queue_depth = total pending across all callers; "
-                    "capacity_remaining = free worker slots right now. "
-                    "in_flight_global is the floor MAX(live counter, this batch's "
-                    "running count); in_flight_global_raw is the unadjusted counter "
-                    "(may briefly lag the DB while fast jobs settle). If "
-                    "platform_queue_depth > capacity_remaining + in_flight, "
-                    "your jobs are queued behind other callers and will start "
-                    "as soon as a slot frees."
-                ),
-            }
+    worker_pool: dict | None = _batch_build_worker_pool_block(counts=counts, debug=debug)
     return {
         "batch_id": batch_id,
         "phase": phase,
@@ -340,6 +320,76 @@ def _compare_parse_input_payload(body: dict) -> dict:
         merged.update(input_payload)
         input_payload = merged
     return input_payload or {}
+
+
+def _compare_settle_winner_job(
+    *,
+    job: dict,
+    compare_id: str,
+    actor_owner_id: str,
+) -> None:
+    """Accept verification and settle the winning job in a compare session."""
+    initialized = jobs.initialize_output_verification_state(job["job_id"]) or job
+    if initialized.get("settled_at"):
+        return
+    if str(initialized.get("output_verification_status") or "") == "pending":
+        initialized = (
+            jobs.set_output_verification_decision(
+                job["job_id"],
+                decision="accept",
+                decision_owner_id=actor_owner_id,
+                reason=f"Compare winner for session {compare_id}.",
+            )
+            or initialized
+        )
+    settled = _settle_successful_job(
+        initialized,
+        actor_owner_id=actor_owner_id,
+        require_dispute_window_expiry=False,
+    )
+    _record_job_event(
+        settled,
+        "job.compare_winner_selected",
+        actor_owner_id=actor_owner_id,
+        payload={"compare_id": compare_id},
+    )
+
+
+def _compare_refund_non_winner_job(
+    *,
+    job: dict,
+    compare_id: str,
+    actor_owner_id: str,
+) -> str | None:
+    """Reject verification and refund the non-winning job. Returns job_id if refunded."""
+    initialized = jobs.initialize_output_verification_state(job["job_id"]) or job
+    if initialized.get("settled_at"):
+        return None
+    if str(initialized.get("output_verification_status") or "") == "pending":
+        initialized = (
+            jobs.set_output_verification_decision(
+                job["job_id"],
+                decision="reject",
+                decision_owner_id=actor_owner_id,
+                reason=f"Non-winning compare result for session {compare_id}.",
+            )
+            or initialized
+        )
+    payments.post_call_refund(
+        initialized["caller_wallet_id"],
+        initialized["charge_tx_id"],
+        int(initialized.get("caller_charge_cents") or initialized.get("price_cents") or 0),
+        initialized["agent_id"],
+    )
+    jobs.mark_settled(initialized["job_id"])
+    refreshed = jobs.get_job(initialized["job_id"]) or initialized
+    _record_job_event(
+        refreshed,
+        "job.compare_non_winner_refunded",
+        actor_owner_id=actor_owner_id,
+        payload={"compare_id": compare_id},
+    )
+    return refreshed["job_id"]
 
 
 def _compare_refund_all(
@@ -585,69 +635,17 @@ def jobs_compare_select(
         if job is None:
             continue
         if agent_id == winner_agent_id:
-            initialized = (
-                jobs.initialize_output_verification_state(job["job_id"]) or job
+            _compare_settle_winner_job(
+                job=job, compare_id=compare_id, actor_owner_id=caller["owner_id"]
             )
-            if not initialized.get("settled_at"):
-                if (
-                    str(initialized.get("output_verification_status") or "")
-                    == "pending"
-                ):
-                    initialized = (
-                        jobs.set_output_verification_decision(
-                            job["job_id"],
-                            decision="accept",
-                            decision_owner_id=caller["owner_id"],
-                            reason=f"Compare winner for session {compare_id}.",
-                        )
-                        or initialized
-                    )
-                settled = _settle_successful_job(
-                    initialized,
-                    actor_owner_id=caller["owner_id"],
-                    require_dispute_window_expiry=False,
-                )
-                _record_job_event(
-                    settled,
-                    "job.compare_winner_selected",
-                    actor_owner_id=caller["owner_id"],
-                    payload={"compare_id": compare_id},
-                )
             continue
         if str(job.get("status") or "") != "complete":
             continue
-        initialized = jobs.initialize_output_verification_state(job["job_id"]) or job
-        if initialized.get("settled_at"):
-            continue
-        if str(initialized.get("output_verification_status") or "") == "pending":
-            initialized = (
-                jobs.set_output_verification_decision(
-                    job["job_id"],
-                    decision="reject",
-                    decision_owner_id=caller["owner_id"],
-                    reason=f"Non-winning compare result for session {compare_id}.",
-                )
-                or initialized
-            )
-        payments.post_call_refund(
-            initialized["caller_wallet_id"],
-            initialized["charge_tx_id"],
-            int(
-                initialized.get("caller_charge_cents")
-                or initialized.get("price_cents")
-                or 0
-            ),
-            initialized["agent_id"],
+        refunded_id = _compare_refund_non_winner_job(
+            job=job, compare_id=compare_id, actor_owner_id=caller["owner_id"]
         )
-        jobs.mark_settled(initialized["job_id"])
-        refreshed = jobs.get_job(initialized["job_id"]) or initialized
-        _record_job_event(
-            refreshed,
-            "job.compare_non_winner_refunded",
-            actor_owner_id=caller["owner_id"],
-            payload={"compare_id": compare_id},
-        )
-        refunded_job_ids.append(refreshed["job_id"])
+        if refunded_id:
+            refunded_job_ids.append(refunded_id)
 
     response = _compare_response(selected, caller)
     response["winner_agent_id"] = winner_agent_id
@@ -797,6 +795,317 @@ def _batch_refund_all_charges(
     return refunded_count, refunded_cents
 
 
+def _batch_all_invalid_response(
+    *,
+    body: Any,
+    invalid_jobs: list[dict],
+) -> JSONResponse:
+    """Return a 422 when no valid jobs could be resolved in the batch."""
+    return JSONResponse(
+        status_code=422,
+        content={
+            "batch_id": None,
+            "jobs": [],
+            "job_ids": [],
+            "count": 0,
+            "submitted_count": len(body.jobs),
+            "invalid_job_count": len(invalid_jobs),
+            "invalid_jobs": invalid_jobs,
+            "total_price_cents": 0,
+            "total_charged_cents": 0,
+            "mode": "parallel_marketplace_hire",
+            "intent": body.intent,
+            "max_total_cents": body.max_total_cents,
+            "marketplace_transaction": {
+                "status": "rejected",
+                "rail": "jobs.batch",
+                "escrow": "not_opened",
+                "settlement": "not_applicable",
+                "receipt": "not_applicable",
+            },
+            "error": error_codes.make_error(
+                error_codes.INPUT_SCHEMA_VIOLATION,
+                "No valid jobs in batch; no charge was applied.",
+                {"submitted_count": len(body.jobs)},
+            ),
+        },
+    )
+
+
+def _batch_dry_run_response(
+    *,
+    body: Any,
+    resolved: list[dict],
+    invalid_jobs: list[dict],
+    total_price_cents: int,
+) -> JSONResponse:
+    """Return a dry-run estimate response for the batch without charging."""
+    planned_jobs: list[dict[str, Any]] = []
+    for item in resolved:
+        agent = item["agent"]
+        distribution = item["success_distribution"]
+        planned_jobs.append(
+            {
+                "index": item["index"],
+                "agent_id": agent["agent_id"],
+                "agent_slug": agent.get("slug") or agent.get("agent_slug"),
+                "agent_name": agent.get("name"),
+                "price_cents": int(item["price_cents"]),
+                "caller_charge_cents": int(item["caller_charge_cents"]),
+                "fee_split": {
+                    "fee_bearer_policy": item["fee_bearer_policy"],
+                    "platform_fee_pct": int(item["platform_fee_pct_at_create"]),
+                    "agent_payout_cents": int(distribution["agent_payout_cents"]),
+                    "platform_fee_cents": int(distribution["platform_fee_cents"]),
+                },
+            }
+        )
+    within_cap = (
+        True
+        if body.max_total_cents is None
+        else total_price_cents <= body.max_total_cents
+    )
+    return JSONResponse(
+        content={
+            "mode": "parallel_marketplace_hire_estimate",
+            "charge_status": "not_charged",
+            "batch_id": None,
+            "intent": body.intent,
+            "job_count": len(planned_jobs),
+            "invalid_job_count": len(invalid_jobs),
+            "invalid_jobs": invalid_jobs,
+            "estimated_total_charged_cents": total_price_cents,
+            "max_total_cents": body.max_total_cents,
+            "within_cap": within_cap,
+            "planned_jobs": planned_jobs,
+            "marketplace_summary": {
+                "rail": "jobs.batch",
+                "escrow": "would_open_per_job",
+                "settlement": "would_settle_or_refund_per_job",
+                "receipt": "signed_per_completed_job",
+                "charge_status": "not_charged",
+            },
+            "next_step": (
+                "Re-call with dry_run=false to submit this batch."
+                if within_cap
+                else "Raise max_total_cents or remove jobs before submitting."
+            ),
+        }
+    )
+
+
+def _batch_create_one_job(
+    *,
+    item: dict,
+    caller: Any,
+    caller_owner_id: str,
+    caller_wallet: dict,
+    batch_id: str,
+) -> tuple[dict, tuple[str, str, int, str]]:
+    """Charge and create a single job within a batch. Returns (job_response, charge_tuple)."""
+    agent = item["agent"]
+    price_cents = item["price_cents"]
+    caller_charge_cents = item["caller_charge_cents"]
+    platform_fee_pct_at_create = item["platform_fee_pct_at_create"]
+    fee_bearer_policy = item["fee_bearer_policy"]
+    client_id = item["client_id"]
+    spec = item["spec"]
+    input_payload = item["input_payload"]
+    parent_job_id = item["parent_job_id"]
+    tree_depth = item["tree_depth"]
+    agent_wallet = payments.get_or_create_wallet(f"agent:{agent['agent_id']}")
+    platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
+    charge_tx_id = _pre_call_charge_or_402(
+        caller=caller,
+        caller_wallet_id=caller_wallet["wallet_id"],
+        charge_cents=caller_charge_cents,
+        agent_id=agent["agent_id"],
+    )
+    charge_tuple = (caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent["agent_id"])
+    job = jobs.create_job(
+        agent_id=agent["agent_id"],
+        caller_owner_id=caller_owner_id,
+        caller_wallet_id=caller_wallet["wallet_id"],
+        agent_wallet_id=agent_wallet["wallet_id"],
+        platform_wallet_id=platform_wallet["wallet_id"],
+        price_cents=price_cents,
+        caller_charge_cents=caller_charge_cents,
+        platform_fee_pct_at_create=platform_fee_pct_at_create,
+        fee_bearer_policy=fee_bearer_policy,
+        client_id=client_id,
+        charge_tx_id=charge_tx_id,
+        input_payload=input_payload,
+        agent_owner_id=agent.get("owner_id"),
+        max_attempts=spec.max_attempts,
+        parent_job_id=parent_job_id,
+        tree_depth=tree_depth,
+        parent_cascade_policy=spec.parent_cascade_policy,
+        clarification_timeout_seconds=spec.clarification_timeout_seconds,
+        clarification_timeout_policy=spec.clarification_timeout_policy,
+        dispute_window_hours=spec.dispute_window_hours or _DEFAULT_JOB_DISPUTE_WINDOW_HOURS,
+        judge_agent_id=_extract_judge_agent_id(agent.get("input_schema")) or _QUALITY_JUDGE_AGENT_ID,
+        callback_url=spec.callback_url or None,
+        callback_secret=spec.callback_secret or None,
+        output_verification_window_seconds=(
+            86400
+            if spec.output_verification_window_seconds is None
+            else spec.output_verification_window_seconds
+        ),
+        batch_id=batch_id,
+    )
+    _record_job_event(job, "job.created", actor_owner_id=caller["owner_id"])
+    return _job_response(job, caller), charge_tuple
+
+
+def _batch_wrap_http_exc(
+    *,
+    exc: "HTTPException",
+    batch_id: str,
+    resolved: list[dict],
+    created_jobs: list[dict],
+    charge_tx_ids: list[tuple],
+) -> "HTTPException":
+    """Wrap a handled HTTPException from within batch creation with structured context."""
+    refunded_count, refunded_cents = _batch_refund_all_charges(charge_tx_ids=charge_tx_ids, label="handled")
+    batch_failure_code = (
+        error_codes.JOB_BATCH_PARTIAL_FAILURE
+        if hasattr(error_codes, "JOB_BATCH_PARTIAL_FAILURE")
+        else "job.batch.partial_failure"
+    )
+    wrapped = error_codes.make_error(
+        batch_failure_code,
+        "Batch creation failed before all jobs were created.",
+        {
+            "batch_id": batch_id,
+            "submitted_count": len(resolved),
+            "created_count": len(created_jobs),
+            "failed_at_index": len(created_jobs),
+            "refunded_count": refunded_count,
+            "refunded_cents": refunded_cents,
+            "created_job_ids": [j.get("job_id") for j in created_jobs if isinstance(j, dict)],
+            "inner_error": exc.detail,
+        },
+    )
+    return HTTPException(status_code=exc.status_code, detail=wrapped)
+
+
+def _batch_wrap_unhandled_exc(
+    *,
+    exc: Exception,
+    batch_id: str,
+    resolved: list[dict],
+    created_jobs: list[dict],
+    charge_tx_ids: list[tuple],
+) -> "HTTPException":
+    """Wrap an unhandled exception from within batch creation."""
+    refunded_count, refunded_cents = _batch_refund_all_charges(charge_tx_ids=charge_tx_ids, label="unhandled")
+    batch_failure_code = (
+        error_codes.JOB_BATCH_PARTIAL_FAILURE
+        if hasattr(error_codes, "JOB_BATCH_PARTIAL_FAILURE")
+        else "job.batch.partial_failure"
+    )
+    return HTTPException(
+        status_code=500,
+        detail=error_codes.make_error(
+            batch_failure_code,
+            "Batch creation failed; all charges refunded.",
+            {
+                "batch_id": batch_id,
+                "submitted_count": len(resolved),
+                "created_count": len(created_jobs),
+                "failed_at_index": len(created_jobs),
+                "refunded_count": refunded_count,
+                "refunded_cents": refunded_cents,
+                "created_job_ids": [j.get("job_id") for j in created_jobs if isinstance(j, dict)],
+                "inner_error": str(exc)[:500],
+            },
+        ),
+    )
+
+
+def _batch_success_response(
+    *,
+    request: Request,
+    batch_id: str,
+    body: Any,
+    created_jobs: list[dict],
+    invalid_jobs: list[dict],
+    total_price_cents: int,
+    caller: Any,
+) -> JSONResponse:
+    """Build the final 201 success response after all batch jobs are created."""
+    compact_submission = len(created_jobs) > 10 or str(
+        request.query_params.get("include") or ""
+    ).strip().lower() in {"compact", "minimal"}
+    submission_debug = str(
+        request.query_params.get("debug") or ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    trace = _batch_parallel_trace(
+        batch_id=batch_id,
+        batch_jobs=[
+            jobs.get_job(job["job_id"]) or job
+            for job in created_jobs
+            if isinstance(job, dict) and job.get("job_id")
+        ],
+        caller=caller,
+        phase="submitted",
+        intent=body.intent,
+        max_total_cents=body.max_total_cents,
+        include_detail=not compact_submission,
+        debug=submission_debug,
+    )
+    response_jobs = (
+        [
+            {
+                "job_id": job.get("job_id"),
+                "agent_id": job.get("agent_id"),
+                "status": job.get("status"),
+                "caller_charge_cents": int(
+                    job.get("caller_charge_cents") or job.get("price_cents") or 0
+                ),
+            }
+            for job in created_jobs
+            if isinstance(job, dict)
+        ]
+        if compact_submission
+        else created_jobs
+    )
+    return JSONResponse(
+        content={
+            "batch_id": batch_id,
+            "jobs": response_jobs,
+            "count": len(created_jobs),
+            "submitted_count": len(body.jobs),
+            "invalid_job_count": len(invalid_jobs),
+            "invalid_jobs": invalid_jobs,
+            "total_price_cents": total_price_cents,
+            "total_charged_cents": total_price_cents,
+            "job_ids": [
+                job.get("job_id")
+                for job in created_jobs
+                if isinstance(job, dict) and job.get("job_id")
+            ],
+            "mode": "parallel_marketplace_hire",
+            "intent": body.intent,
+            "max_total_cents": body.max_total_cents,
+            "marketplace_transaction": {
+                "status": "escrow_opened",
+                "rail": "jobs.batch",
+                "escrow": "opened_per_job",
+                "settlement": "per_job_on_completion_or_refund",
+                "receipt": "signed_per_completed_job",
+            },
+            "parallel_hire_trace": trace,
+            "include_mode": "compact" if compact_submission else "full",
+            "next_step": (
+                f"Poll /jobs/batch/{batch_id} or aztea_workflow(action='batch_status', "
+                f"batch_id='{batch_id}') to watch the parallel specialist hires settle."
+            ),
+        },
+        status_code=201,
+    )
+
+
 @app.post(
     "/jobs/batch",
     status_code=201,
@@ -852,88 +1161,12 @@ def jobs_batch_create(
         # one parser regardless of how many jobs survived. Status stays 422
         # because no work was enqueued; the structured detail tells the
         # client exactly which specs were rejected and why.
-        return JSONResponse(
-            status_code=422,
-            content={
-                "batch_id": None,
-                "jobs": [],
-                "job_ids": [],
-                "count": 0,
-                "submitted_count": len(body.jobs),
-                "invalid_job_count": len(invalid_jobs),
-                "invalid_jobs": invalid_jobs,
-                "total_price_cents": 0,
-                "total_charged_cents": 0,
-                "mode": "parallel_marketplace_hire",
-                "intent": body.intent,
-                "max_total_cents": body.max_total_cents,
-                "marketplace_transaction": {
-                    "status": "rejected",
-                    "rail": "jobs.batch",
-                    "escrow": "not_opened",
-                    "settlement": "not_applicable",
-                    "receipt": "not_applicable",
-                },
-                "error": error_codes.make_error(
-                    error_codes.INPUT_SCHEMA_VIOLATION,
-                    "No valid jobs in batch; no charge was applied.",
-                    {"submitted_count": len(body.jobs)},
-                ),
-            },
-        )
+        return _batch_all_invalid_response(body=body, invalid_jobs=invalid_jobs)
 
     if body.dry_run:
-        planned_jobs: list[dict[str, Any]] = []
-        for item in resolved:
-            agent = item["agent"]
-            distribution = item["success_distribution"]
-            planned_jobs.append(
-                {
-                    "index": item["index"],
-                    "agent_id": agent["agent_id"],
-                    "agent_slug": agent.get("slug") or agent.get("agent_slug"),
-                    "agent_name": agent.get("name"),
-                    "price_cents": int(item["price_cents"]),
-                    "caller_charge_cents": int(item["caller_charge_cents"]),
-                    "fee_split": {
-                        "fee_bearer_policy": item["fee_bearer_policy"],
-                        "platform_fee_pct": int(item["platform_fee_pct_at_create"]),
-                        "agent_payout_cents": int(distribution["agent_payout_cents"]),
-                        "platform_fee_cents": int(distribution["platform_fee_cents"]),
-                    },
-                }
-            )
-        within_cap = (
-            True
-            if body.max_total_cents is None
-            else total_price_cents <= body.max_total_cents
-        )
-        return JSONResponse(
-            content={
-                "mode": "parallel_marketplace_hire_estimate",
-                "charge_status": "not_charged",
-                "batch_id": None,
-                "intent": body.intent,
-                "job_count": len(planned_jobs),
-                "invalid_job_count": len(invalid_jobs),
-                "invalid_jobs": invalid_jobs,
-                "estimated_total_charged_cents": total_price_cents,
-                "max_total_cents": body.max_total_cents,
-                "within_cap": within_cap,
-                "planned_jobs": planned_jobs,
-                "marketplace_summary": {
-                    "rail": "jobs.batch",
-                    "escrow": "would_open_per_job",
-                    "settlement": "would_settle_or_refund_per_job",
-                    "receipt": "signed_per_completed_job",
-                    "charge_status": "not_charged",
-                },
-                "next_step": (
-                    "Re-call with dry_run=false to submit this batch."
-                    if within_cap
-                    else "Raise max_total_cents or remove jobs before submitting."
-                ),
-            }
+        return _batch_dry_run_response(
+            body=body, resolved=resolved, invalid_jobs=invalid_jobs,
+            total_price_cents=total_price_cents,
         )
 
     caller_wallet = payments.get_or_create_wallet(caller_owner_id)
@@ -965,193 +1198,100 @@ def jobs_batch_create(
             ),
         )
 
-    created_jobs = []
-    charge_tx_ids = []
+    created_jobs: list[dict] = []
+    charge_tx_ids: list[tuple] = []
     try:
         for item in resolved:
-            agent = item["agent"]
-            price_cents = item["price_cents"]
-            caller_charge_cents = item["caller_charge_cents"]
-            platform_fee_pct_at_create = item["platform_fee_pct_at_create"]
-            fee_bearer_policy = item["fee_bearer_policy"]
-            client_id = item["client_id"]
-            spec = item["spec"]
-            input_payload = item["input_payload"]
-            parent_job_id = item["parent_job_id"]
-            tree_depth = item["tree_depth"]
-            agent_wallet = payments.get_or_create_wallet(f"agent:{agent['agent_id']}")
-            platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
-            charge_tx_id = _pre_call_charge_or_402(
+            job_resp, charge_tuple = _batch_create_one_job(
+                item=item,
                 caller=caller,
-                caller_wallet_id=caller_wallet["wallet_id"],
-                charge_cents=caller_charge_cents,
-                agent_id=agent["agent_id"],
-            )
-            charge_tx_ids.append(
-                (
-                    caller_wallet["wallet_id"],
-                    charge_tx_id,
-                    caller_charge_cents,
-                    agent["agent_id"],
-                )
-            )
-            job = jobs.create_job(
-                agent_id=agent["agent_id"],
                 caller_owner_id=caller_owner_id,
-                caller_wallet_id=caller_wallet["wallet_id"],
-                agent_wallet_id=agent_wallet["wallet_id"],
-                platform_wallet_id=platform_wallet["wallet_id"],
-                price_cents=price_cents,
-                caller_charge_cents=caller_charge_cents,
-                platform_fee_pct_at_create=platform_fee_pct_at_create,
-                fee_bearer_policy=fee_bearer_policy,
-                client_id=client_id,
-                charge_tx_id=charge_tx_id,
-                input_payload=input_payload,
-                agent_owner_id=agent.get("owner_id"),
-                max_attempts=spec.max_attempts,
-                parent_job_id=parent_job_id,
-                tree_depth=tree_depth,
-                parent_cascade_policy=spec.parent_cascade_policy,
-                clarification_timeout_seconds=spec.clarification_timeout_seconds,
-                clarification_timeout_policy=spec.clarification_timeout_policy,
-                dispute_window_hours=spec.dispute_window_hours
-                or _DEFAULT_JOB_DISPUTE_WINDOW_HOURS,
-                judge_agent_id=_extract_judge_agent_id(agent.get("input_schema"))
-                or _QUALITY_JUDGE_AGENT_ID,
-                callback_url=spec.callback_url or None,
-                callback_secret=spec.callback_secret or None,
-                output_verification_window_seconds=(
-                    86400
-                    if spec.output_verification_window_seconds is None
-                    else spec.output_verification_window_seconds
-                ),
+                caller_wallet=caller_wallet,
                 batch_id=batch_id,
             )
-            _record_job_event(job, "job.created", actor_owner_id=caller["owner_id"])
-            created_jobs.append(_job_response(job, caller))
+            charge_tx_ids.append(charge_tuple)
+            created_jobs.append(job_resp)
     except HTTPException as exc:
         # Refund every charge taken so far AND surface a structured error so
         # the caller has an actionable recovery handle (batch_id, refunded
         # count, which job_index failed).
-        refunded_count, refunded_cents = _batch_refund_all_charges(
-            charge_tx_ids=charge_tx_ids, label="handled"
-        )
-        batch_failure_code = (
-            error_codes.JOB_BATCH_PARTIAL_FAILURE
-            if hasattr(error_codes, "JOB_BATCH_PARTIAL_FAILURE")
-            else "job.batch.partial_failure"
-        )
-        wrapped = error_codes.make_error(
-            batch_failure_code, "Batch creation failed before all jobs were created.",
-            {
-                "batch_id": batch_id, "submitted_count": len(resolved),
-                "created_count": len(created_jobs), "failed_at_index": len(created_jobs),
-                "refunded_count": refunded_count, "refunded_cents": refunded_cents,
-                "created_job_ids": [j.get("job_id") for j in created_jobs if isinstance(j, dict)],
-                "inner_error": exc.detail,
-            },
-        )
-        raise HTTPException(status_code=exc.status_code, detail=wrapped) from exc
+        raise _batch_wrap_http_exc(
+            exc=exc, batch_id=batch_id, resolved=resolved,
+            created_jobs=created_jobs, charge_tx_ids=charge_tx_ids,
+        ) from exc
     except Exception as exc:
-        refunded_count, refunded_cents = _batch_refund_all_charges(
-            charge_tx_ids=charge_tx_ids, label="unhandled"
-        )
-        batch_failure_code = (
-            error_codes.JOB_BATCH_PARTIAL_FAILURE
-            if hasattr(error_codes, "JOB_BATCH_PARTIAL_FAILURE")
-            else "job.batch.partial_failure"
-        )
-        raise HTTPException(
-            status_code=500,
-            detail=error_codes.make_error(
-                batch_failure_code, "Batch creation failed; all charges refunded.",
-                {
-                    "batch_id": batch_id, "submitted_count": len(resolved),
-                    "created_count": len(created_jobs), "failed_at_index": len(created_jobs),
-                    "refunded_count": refunded_count, "refunded_cents": refunded_cents,
-                    "created_job_ids": [j.get("job_id") for j in created_jobs if isinstance(j, dict)],
-                    "inner_error": str(exc)[:500],
-                },
-            ),
+        raise _batch_wrap_unhandled_exc(
+            exc=exc, batch_id=batch_id, resolved=resolved,
+            created_jobs=created_jobs, charge_tx_ids=charge_tx_ids,
         ) from exc
 
-    compact_submission = len(created_jobs) > 10 or str(
-        request.query_params.get("include") or ""
-    ).strip().lower() in {"compact", "minimal"}
-    submission_debug = str(
-        request.query_params.get("debug") or ""
-    ).strip().lower() in {"1", "true", "yes", "on"}
-    trace = _batch_parallel_trace(
-        batch_id=batch_id,
-        batch_jobs=[
-            jobs.get_job(job["job_id"]) or job
-            for job in created_jobs
-            if isinstance(job, dict) and job.get("job_id")
-        ],
-        caller=caller,
-        phase="submitted",
-        intent=body.intent,
-        max_total_cents=body.max_total_cents,
-        include_detail=not compact_submission,
-        debug=submission_debug,
-    )
-    response_jobs = (
-        [
-            {
-                "job_id": job.get("job_id"),
-                "agent_id": job.get("agent_id"),
-                "status": job.get("status"),
-                "caller_charge_cents": int(
-                    job.get("caller_charge_cents") or job.get("price_cents") or 0
-                ),
-            }
-            for job in created_jobs
-            if isinstance(job, dict)
-        ]
-        if compact_submission
-        else created_jobs
-    )
     # Wake the builtin worker pool so queued jobs start draining immediately
     # instead of waiting up to BUILTIN_JOB_WORKER_INTERVAL_SECONDS.
     try:
         _wake_builtin_worker()
     except Exception:
         pass
-    return JSONResponse(
-        content={
-            "batch_id": batch_id,
-            "jobs": response_jobs,
-            "count": len(created_jobs),
-            "submitted_count": len(body.jobs),
-            "invalid_job_count": len(invalid_jobs),
-            "invalid_jobs": invalid_jobs,
-            "total_price_cents": total_price_cents,
-            "total_charged_cents": total_price_cents,
-            "job_ids": [
-                job.get("job_id")
-                for job in created_jobs
-                if isinstance(job, dict) and job.get("job_id")
-            ],
-            "mode": "parallel_marketplace_hire",
-            "intent": body.intent,
-            "max_total_cents": body.max_total_cents,
-            "marketplace_transaction": {
-                "status": "escrow_opened",
-                "rail": "jobs.batch",
-                "escrow": "opened_per_job",
-                "settlement": "per_job_on_completion_or_refund",
-                "receipt": "signed_per_completed_job",
-            },
-            "parallel_hire_trace": trace,
-            "include_mode": "compact" if compact_submission else "full",
-            "next_step": (
-                f"Poll /jobs/batch/{batch_id} or aztea_workflow(action='batch_status', "
-                f"batch_id='{batch_id}') to watch the parallel specialist hires settle."
-            ),
-        },
-        status_code=201,
+    return _batch_success_response(
+        request=request,
+        batch_id=batch_id,
+        body=body,
+        created_jobs=created_jobs,
+        invalid_jobs=invalid_jobs,
+        total_price_cents=total_price_cents,
+        caller=caller,
     )
+
+
+def _batch_status_nudge_worker(batch_jobs: list[dict]) -> None:
+    """If any jobs are still active, wake or rescue the builtin worker."""
+    if not any(
+        str(job.get("status") or "") in {"pending", "running"} for job in batch_jobs
+    ):
+        return
+    with _BUILTIN_WORKER_STATE_LOCK:
+        worker_state = dict(_BUILTIN_WORKER_STATE)
+    last_summary = worker_state.get("last_summary")
+    should_rescue = (
+        not worker_state.get("running")
+        or not isinstance(last_summary, dict)
+        or (
+            int((last_summary or {}).get("processed") or 0) == 0
+            and not (last_summary or {}).get("queue_depth")
+        )
+        or bool(worker_state.get("last_error"))
+    )
+    if should_rescue:
+        try:
+            _run_builtin_worker_rescue_async("batch_status_rescue")
+        except Exception as exc:
+            _LOG.exception("Batch-status builtin worker rescue scheduling failed.")
+            _set_builtin_worker_state(last_error=str(exc))
+    else:
+        try:
+            _wake_builtin_worker()
+        except Exception:
+            pass
+
+
+def _batch_aggregate_counts(batch_jobs: list[dict]) -> tuple[int, int, int, int, int, int]:
+    """Return (n_pending, n_running, n_awaiting_clarification, n_complete, n_failed, total_cost_cents)."""
+    n_pending = n_running = n_awaiting_clarification = n_complete = n_failed = total_cost_cents = 0
+    for job in batch_jobs:
+        total_cost_cents += int(job.get("price_cents") or 0)
+        status = str(job.get("status") or "")
+        if status == "pending":
+            n_pending += 1
+        elif status == "running":
+            n_running += 1
+            n_pending += 1
+        elif status == "awaiting_clarification":
+            n_awaiting_clarification += 1
+            n_pending += 1
+        elif status == "complete":
+            n_complete += 1
+        elif status == "failed":
+            n_failed += 1
+    return n_pending, n_running, n_awaiting_clarification, n_complete, n_failed, total_cost_cents
 
 
 @app.get(
@@ -1173,55 +1313,10 @@ def jobs_batch_status(
         raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found.")
     include_mode = str(request.query_params.get("include") or "full").strip().lower()
     compact = include_mode in {"minimal", "compact"}
-    if any(
-        str(job.get("status") or "") in {"pending", "running"} for job in batch_jobs
-    ):
-        with _BUILTIN_WORKER_STATE_LOCK:
-            worker_state = dict(_BUILTIN_WORKER_STATE)
-        last_summary = worker_state.get("last_summary")
-        should_rescue = (
-            not worker_state.get("running")
-            or not isinstance(last_summary, dict)
-            or (
-                int((last_summary or {}).get("processed") or 0) == 0
-                and not (last_summary or {}).get("queue_depth")
-            )
-            or bool(worker_state.get("last_error"))
-        )
-        if should_rescue:
-            try:
-                _run_builtin_worker_rescue_async("batch_status_rescue")
-            except Exception as exc:
-                _LOG.exception("Batch-status builtin worker rescue scheduling failed.")
-                _set_builtin_worker_state(last_error=str(exc))
-        else:
-            try:
-                _wake_builtin_worker()
-            except Exception:
-                pass
-
-    n_pending = 0
-    n_running = 0
-    n_awaiting_clarification = 0
-    n_complete = 0
-    n_failed = 0
-    total_cost_cents = 0
-    for job in batch_jobs:
-        total_cost_cents += int(job.get("price_cents") or 0)
-        status = str(job.get("status") or "")
-        if status == "pending":
-            n_pending += 1
-        elif status == "running":
-            n_running += 1
-            n_pending += 1
-        elif status == "awaiting_clarification":
-            n_awaiting_clarification += 1
-            n_pending += 1
-        elif status == "complete":
-            n_complete += 1
-        elif status == "failed":
-            n_failed += 1
-
+    _batch_status_nudge_worker(batch_jobs)
+    (
+        n_pending, n_running, n_awaiting_clarification, n_complete, n_failed, total_cost_cents
+    ) = _batch_aggregate_counts(batch_jobs)
     status_debug = str(
         request.query_params.get("debug") or ""
     ).strip().lower() in {"1", "true", "yes", "on"}
