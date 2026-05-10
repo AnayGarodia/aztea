@@ -390,12 +390,16 @@ def payments_reconcile_preview(
 @limiter.limit("30/minute")
 def payments_reconcile_run(
     request: Request,
-    body: ReconciliationRunRequest,
+    body: ReconciliationRunRequest | None = Body(default=None),
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.DynamicObjectResponse:
+    # Body is optional: an empty POST defaults to a no-op-shaped request so
+    # ops smoke checks (`curl -X POST .../reconcile`) don't trip pydantic
+    # "Field required" errors before the admin gate even runs.
     _require_scope(caller, "admin", detail="This endpoint requires admin scope.")
     _require_admin_ip_allowlist(request)
-    summary = payments.record_reconciliation_run(max_mismatches=body.max_mismatches)
+    effective = body or ReconciliationRunRequest()
+    summary = payments.record_reconciliation_run(max_mismatches=effective.max_mismatches)
     return JSONResponse(content=summary, status_code=201)
 
 

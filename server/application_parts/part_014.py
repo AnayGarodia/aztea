@@ -1297,8 +1297,25 @@ def spa_root() -> _SpaFileResponse:
     )
 
 
+# Common SPA-only routes that an API client might hit by mistake (e.g.
+# `curl /wallet` instead of the actual API endpoint `/wallets/me`). When an
+# obvious API client (Bearer auth or `Accept: application/json`) lands on
+# one of these, we return a structured JSON 404 with a pointer instead of
+# the SPA HTML shell — much friendlier for CLI users poking around.
+_SPA_API_HINTS: dict[str, str] = {
+    "wallet": "/wallets/me",
+}
+
+
+def _looks_like_api_client(request: Request) -> bool:
+    if request.headers.get("authorization", "").lower().startswith("bearer "):
+        return True
+    accept = request.headers.get("accept", "").lower()
+    return "application/json" in accept and "text/html" not in accept
+
+
 @app.get("/{full_path:path}", include_in_schema=False)
-def spa_fallback(full_path: str) -> _SpaFileResponse:
+def spa_fallback(full_path: str, request: Request) -> _SpaFileResponse:
     """Serve static assets or the React SPA shell for any non-API path.
 
     Because this route is registered last, every concrete API route (``/auth``,
@@ -1309,16 +1326,34 @@ def spa_fallback(full_path: str) -> _SpaFileResponse:
     1. If the fragment looks like an API prefix (see ``_SPA_API_PREFIXES``),
        return a structured 404 so clients do not receive an HTML page when
        they meant to hit JSON.
-    2. If ``frontend/dist`` is missing (frontend not yet built), return a
+    2. If the fragment is a known SPA-only path that an API client likely
+       meant to hit instead (see ``_SPA_API_HINTS``), return a JSON 404 with
+       a pointer so curl users don't get an HTML page.
+    3. If ``frontend/dist`` is missing (frontend not yet built), return a
        human-readable 404 telling the operator how to build the SPA.
-    3. If the fragment maps to an existing file inside ``frontend/dist`` (and
+    4. If the fragment maps to an existing file inside ``frontend/dist`` (and
        path traversal is blocked by ``_resolved_under``), stream that file —
        this is how hashed assets under ``/assets/...`` are served.
-    4. Otherwise fall back to ``index.html`` so React Router can resolve the
+    5. Otherwise fall back to ``index.html`` so React Router can resolve the
        URL on the client.
     """
     if _path_is_api(full_path):
         raise HTTPException(status_code=404, detail=f"Not Found: /{full_path}")
+
+    head_segment = full_path.lstrip("/").split("/", 1)[0].lower()
+    hint_target = _SPA_API_HINTS.get(head_segment)
+    if hint_target is not None and _looks_like_api_client(request):
+        raise HTTPException(
+            status_code=404,
+            detail=error_codes.make_error(
+                "route.not_found",
+                (
+                    f"/{full_path} is a frontend route. The API endpoint is "
+                    f"{hint_target}."
+                ),
+                {"requested": f"/{full_path}", "api_endpoint": hint_target},
+            ),
+        )
 
     if not _FRONTEND_DIST_DIR.is_dir():
         raise HTTPException(

@@ -52,6 +52,42 @@ def test_scan_skill_md_blocks_aztea_internal_key():
     assert any(f.code == "skill.embedded_api_key" for f in findings)
 
 
+def test_scan_skill_md_blocks_openai_scoped_key_formats():
+    # OpenAI's modern scoped keys (sk-proj-/sk-svcacct-/sk-admin-) include
+    # internal hyphens that the legacy `sk-[A-Za-z0-9]+` pattern rejected,
+    # so they used to slip past the scanner. Cover all three explicitly.
+    samples = (
+        "OPENAI_API_KEY=sk-proj-aBcDeFgH1234567890aBcDeFgH1234567890aBcDeFgH123456",
+        "OPENAI_API_KEY=sk-svcacct-12_34-56-78aBcDeFgH1234567890aBcDeFgH",
+        "OPENAI_API_KEY=sk-admin-aBcDeFgH1234567890aBcDeFgH1234567890",
+    )
+    for sample in samples:
+        findings = scan_skill_md(sample)
+        assert has_block(findings), f"missing block for {sample!r}"
+        assert any(f.code == "skill.embedded_api_key" for f in findings), sample
+
+
+def test_scan_skill_md_blocks_groq_and_github_keys():
+    samples = (
+        "Set GROQ_API_KEY=gsk_aBcDeFgH1234567890aBcDeFgH12",
+        "GITHUB_TOKEN=ghp_aBcDeFgH1234567890aBcDeFgH1234567890",
+        "GITHUB_PAT=github_pat_aBcDeFgH1234567890aBcDeFgH123456_XYZ",
+    )
+    for sample in samples:
+        findings = scan_skill_md(sample)
+        assert has_block(findings), f"missing block for {sample!r}"
+        assert any(f.code == "skill.embedded_api_key" for f in findings), sample
+
+
+def test_scan_skill_md_blocks_aztea_user_master_key():
+    # Real Aztea user/master keys are "az_<64-hex>" — pure alphanumeric body.
+    findings = scan_skill_md(
+        "Set AZTEA_API_KEY=az_0902a548bb99c8fe6c5ba7dd4eed4436f9ad17f6375cdf119d960993c78f6197"
+    )
+    assert has_block(findings)
+    assert any(f.code == "skill.embedded_api_key" for f in findings)
+
+
 def test_scan_skill_md_warns_on_long_base64():
     blob = "A" * 220
     findings = scan_skill_md(f"Helpful skill\n\nencoded payload: {blob}")

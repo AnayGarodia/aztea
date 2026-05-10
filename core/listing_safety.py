@@ -135,12 +135,22 @@ def _normalize_for_phrase_scan(text: str) -> str:
 # API-key-shaped substrings we never want hardcoded inside a published skill.
 # Live keys here are an obvious leak; placeholder ones are a smell.
 _API_KEY_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\bsk-[A-Za-z0-9]{20,}\b"),         # OpenAI-style
+    # OpenAI legacy "sk-..." (alphanumeric body, no internal hyphens).
+    re.compile(r"\bsk-[A-Za-z0-9]{20,}\b"),
+    # OpenAI modern scoped formats: sk-proj-..., sk-svcacct-..., sk-admin-...
+    # The body uses base64url-ish chars including '-' and '_', so the legacy
+    # pattern above fails on the very first internal '-'. Cover them
+    # explicitly so embedded keys can't slip past the static scanner.
+    re.compile(r"\bsk-(?:proj|svcacct|admin)-[A-Za-z0-9_\-]{20,}\b"),
     re.compile(r"\bsk-ant-[A-Za-z0-9_\-]{20,}\b"),  # Anthropic-style
+    re.compile(r"\bgsk_[A-Za-z0-9]{20,}\b"),        # Groq
     re.compile(r"\bazk_[A-Za-z0-9]{20,}\b"),        # Aztea worker
     re.compile(r"\bazac_[A-Za-z0-9]{20,}\b"),       # Aztea agent-caller
+    re.compile(r"\baz_[A-Za-z0-9]{32,}\b"),         # Aztea user/master
     re.compile(r"\bxoxb-[A-Za-z0-9\-]{20,}\b"),     # Slack bot
     re.compile(r"\bAKIA[A-Z0-9]{16}\b"),            # AWS access key
+    re.compile(r"\bghp_[A-Za-z0-9]{30,}\b"),        # GitHub personal access
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{30,}\b"),# GitHub fine-grained
 )
 
 # Long base64 blobs in instructions are a classic encoded-payload smell. 200
