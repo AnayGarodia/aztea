@@ -22,7 +22,6 @@ from .output import (
     money,
     spinner,
     trust_gauge,
-    price_tier,
 )
 
 
@@ -183,7 +182,6 @@ def _render_agent_table(agents, *, query: Optional[str] = None) -> None:
     table.add_column("SLUG",      style="code", no_wrap=True)
     table.add_column("NAME",      style="default", no_wrap=False, max_width=32)
     table.add_column("PRICE",     justify="right", no_wrap=True)
-    table.add_column("",          width=4, no_wrap=True)  # price tier marker
     table.add_column("TRUST",     justify="left", no_wrap=True)
     table.add_column("SUCCESS",   justify="right", style="muted", no_wrap=True)
 
@@ -211,7 +209,6 @@ def _render_agent_table(agents, *, query: Optional[str] = None) -> None:
             slugify(agent.name),
             agent.name,
             money(round(price_usd * 100)),
-            price_tier(price_usd),
             trust_gauge(trust),
             f"{success:.0%}",
         )

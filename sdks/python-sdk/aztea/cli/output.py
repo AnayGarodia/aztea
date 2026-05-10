@@ -446,13 +446,17 @@ def status_pill(status: str | None):
 
 
 def trust_gauge(score: float | int | None, *, segments: int = 5):
-    """Render a 5-segment ▰▱ gauge sized to the trust score (0–100)."""
+    """Render trust as `NN / 100` with a colour cue from the score band.
+
+    `segments` is retained for backwards compat with the public symbol but
+    no longer affects rendering — the column now reads as a numeric score
+    instead of a block gauge that callers found hard to parse.
+    """
     if score is None:
         score = 0.0
     pct = max(0.0, min(100.0, float(score)))
-    filled = int(round(pct / (100.0 / segments)))
     if not _HAS_RICH:
-        return ("█" * filled) + ("░" * (segments - filled))
+        return f"{pct:>3.0f} / 100"
     if pct >= 80:
         style = "success"
     elif pct >= 50:
@@ -462,12 +466,8 @@ def trust_gauge(score: float | int | None, *, segments: int = 5):
     else:
         style = "muted"
     out = Text()
-    for i in range(segments):
-        if i < filled:
-            out.append(SPARK_FULL, style=style)
-        else:
-            out.append(SPARK_EMPTY, style="border_dim")
-    out.append(f" {pct:>3.0f}", style="muted")
+    out.append(f"{pct:>3.0f}", style=style)
+    out.append(" / 100", style="border_dim")
     return out
 
 
