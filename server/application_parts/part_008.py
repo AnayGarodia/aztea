@@ -1188,34 +1188,17 @@ def admin_review_agent(
     )
 
 
-@app.post(
-    "/registry/agents/{agent_id}/call",
-    response_model=core_models.DynamicObjectResponse,
-    responses=_error_responses(400, 401, 402, 403, 404, 429, 500, 502, 503),
-)
-@limiter.limit("10/minute")
-def registry_call(
+def _sync_call_resolve_agent(
+    *,
     request: Request,
     agent_id: str,
-    body: core_models.RegistryCallRequest | None = Body(default=None),
-    caller: core_models.CallerContext = Depends(_require_api_key),
-) -> Response:
+    caller: Any,
+) -> tuple[dict, str | None, dict | None, str]:
+    """Fetch agent, validate it's callable, and resolve dispatch mode.
+
+    Returns (agent, builtin_agent_id, hosted_skill_row, safe_endpoint_url).
+    Raises HTTPException on any validation failure.
     """
-    Invoke a registered agent with full payment lifecycle:
-      1. Deduct price (402 if broke).
-      2. Dispatch call (internal handler for internal:// endpoints, HTTP otherwise).
-      3a. Success → payout 90% agent / 10% platform.
-      3b. Failure → full refund to caller.
-    """
-    _require_scope(caller, "caller")
-    idempotency_key = request.headers.get("X-Idempotency-Key", "").strip()
-    caller_owner_id_early = _caller_owner_id(request)
-    if idempotency_key:
-        cached = _idempotency_lookup(caller_owner_id_early, agent_id, idempotency_key)
-        if cached is not None:
-            return JSONResponse(
-                content=cached, headers={"X-Idempotency-Replayed": "true"}
-            )
     agent = registry.get_agent(agent_id, include_unapproved=True)
     if agent is None:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
@@ -1252,12 +1235,22 @@ def registry_call(
             raise HTTPException(
                 status_code=502, detail="Agent endpoint is misconfigured."
             )
+    return agent, builtin_agent_id, hosted_skill_row, safe_endpoint_url
 
-    caller_owner_id = _caller_owner_id(request)
-    client_id = _request_client_id(request)
-    fee_bearer_policy = "caller"
-    platform_fee_pct_at_create = int(payments.PLATFORM_FEE_PCT)
-    raw_body = dict(body.root) if body is not None else {}
+
+def _sync_call_validate_payload(
+    *,
+    agent: dict,
+    agent_id: str,
+    builtin_agent_id: str | None,
+    request: Request,
+    raw_body: dict,
+) -> tuple[dict, list[str], str | None, bool | None, int]:
+    """Parse, normalize, and validate the request payload.
+
+    Returns (payload, requested_output_formats, requested_output_format, use_cache, cache_ttl_hours).
+    Raises HTTPException on validation failures.
+    """
     requested_output_format = _extract_output_format(raw_body)
     payload, use_cache, cache_ttl_hours = _extract_sync_cache_controls(raw_body)
     requested_output_formats: list[str] = []
@@ -1306,490 +1299,262 @@ def registry_call(
                     },
                 ),
             )
+    return payload, requested_output_formats, requested_output_format, use_cache, cache_ttl_hours
 
-    pricing_estimate = _estimate_variable_charge(
-        agent=agent,
-        payload=payload,
-        per_job_cap_cents=_caller_key_per_job_cap(caller),
-    )
-    if pricing_estimate.get("cap_violated"):
-        violation = pricing_estimate["cap_violated"]
-        raise HTTPException(
-            status_code=402,
-            detail=error_codes.make_error(
-                error_codes.SPEND_LIMIT_EXCEEDED,
-                "Variable-price estimate exceeds your API key's per-job cap.",
-                {
-                    "scope": "api_key_per_job",
-                    "limit_cents": violation["limit_cents"],
-                    "attempted_cents": violation["price_cents"],
-                    "pricing_model": pricing_estimate["pricing_model"],
-                    "detail": pricing_estimate.get("detail"),
-                },
-            ),
-        )
-    price_cents = int(pricing_estimate["price_cents"])
-    private_task = _is_private_task_payload(payload)
+
+def _sync_call_check_cache(
+    *,
+    agent: dict,
+    agent_id: str,
+    payload: dict,
+    use_cache: bool | None,
+    request: Request,
+    requested_output_format: str | None,
+) -> tuple[bool, str | None, str | None, Any]:
+    """Check the result cache and compute singleflight key.
+
+    Returns (cache_enabled, singleflight_key, cache_version_token, cached_response).
+    cached_response is a JSONResponse if there's a cache hit, else None.
+    """
     from core import feature_flags as _feature_flags
 
+    private_task = _is_private_task_payload(payload)
     cache_version_token = _cache.cache_identity(agent, agent_id)
     cache_enabled = (
         _feature_flags.RESULT_CACHE_V2
         and _cache.agent_cacheable(agent)
         and not private_task
     )
-    # Default: cache reads/writes are on whenever the agent is cacheable. Caller
-    # can still opt out explicitly with use_cache=False. The previous opt-in
-    # default left the cache dormant — even repeated CVE lookups never hit.
     if use_cache is None:
         use_cache = cache_enabled
     singleflight_key: str | None = None
-    if use_cache and cache_enabled:
-        cached_output = _cache.get_cached(
+    if not (use_cache and cache_enabled):
+        return cache_enabled, singleflight_key, cache_version_token, None
+
+    def _build_cache_json_response(cached_output: Any) -> JSONResponse:
+        cache_response = _cache_hit_response_payload(cached_output)
+        shaped_output, extra = _shape_sync_output_for_response(
+            request,
+            job_id=cache_response.get("job_id"),
+            payload=cache_response.get("output"),
+        )
+        cache_response["output"] = shaped_output
+        cache_response.update(extra)
+        cache_response = _decorate_with_rendered_output(
+            cache_response, output_format=requested_output_format
+        )
+        return JSONResponse(content=cache_response)
+
+    cached_output = _cache.get_cached(
+        agent_id, payload, version_token=cache_version_token
+    )
+    if cached_output is not None:
+        return cache_enabled, singleflight_key, cache_version_token, _build_cache_json_response(cached_output)
+    # Singleflight: collapse concurrent identical-input calls
+    try:
+        singleflight_key = _cache.cache_key(
             agent_id, payload, version_token=cache_version_token
         )
-        if cached_output is not None:
-            cache_response = _cache_hit_response_payload(cached_output)
-            shaped_output, extra = _shape_sync_output_for_response(
-                request,
-                job_id=cache_response.get("job_id"),
-                payload=cache_response.get("output"),
-            )
-            cache_response["output"] = shaped_output
-            cache_response.update(extra)
-            cache_response = _decorate_with_rendered_output(
-                cache_response, output_format=requested_output_format
-            )
-            return JSONResponse(content=cache_response)
-        # Singleflight: collapse concurrent identical-input calls so a fan-out
-        # of N doesn't all miss + all charge. Followers wait for the leader's
-        # cache write and re-check.
-        try:
-            singleflight_key = _cache.cache_key(
+    except Exception:
+        singleflight_key = None
+    if singleflight_key:
+        existing_event = _cache_singleflight_acquire(singleflight_key)
+        if existing_event is not None:
+            existing_event.wait(_CACHE_SINGLEFLIGHT_WAIT_SECONDS)
+            cached_output = _cache.get_cached(
                 agent_id, payload, version_token=cache_version_token
             )
-        except Exception:
-            singleflight_key = None
-        if singleflight_key:
-            existing_event = _cache_singleflight_acquire(singleflight_key)
-            if existing_event is not None:
-                # Another caller is already executing this exact input. Wait
-                # briefly, then re-check the cache. If the leader produced a
-                # result, return it; otherwise fall through to fresh execution.
-                existing_event.wait(_CACHE_SINGLEFLIGHT_WAIT_SECONDS)
-                cached_output = _cache.get_cached(
-                    agent_id, payload, version_token=cache_version_token
-                )
-                if cached_output is not None:
-                    cache_response = _cache_hit_response_payload(cached_output)
-                    shaped_output, extra = _shape_sync_output_for_response(
-                        request,
-                        job_id=cache_response.get("job_id"),
-                        payload=cache_response.get("output"),
-                    )
-                    cache_response["output"] = shaped_output
-                    cache_response.update(extra)
-                    cache_response = _decorate_with_rendered_output(
-                        cache_response, output_format=requested_output_format
-                    )
-                    return JSONResponse(content=cache_response)
-                # Leader timed out / failed without writing — claim leadership
-                # ourselves so subsequent followers wait on the right event.
-                _cache_singleflight_acquire(singleflight_key)
-    success_distribution = payments.compute_success_distribution(
-        price_cents,
+            if cached_output is not None:
+                return cache_enabled, singleflight_key, cache_version_token, _build_cache_json_response(cached_output)
+            # Leader timed out / failed — re-claim leadership
+            _cache_singleflight_acquire(singleflight_key)
+    return cache_enabled, singleflight_key, cache_version_token, None
+
+
+def _sync_call_sign_output(
+    *,
+    agent: dict,
+    output: Any,
+    job_id: str,
+) -> tuple[str | None, str | None, str | None, str | None]:
+    """Sign agent output. Returns (sig_b64, sig_alg, sig_did, sig_at)."""
+    sig_b64: str | None = None
+    sig_alg: str | None = None
+    sig_did: str | None = None
+    sig_at: str | None = None
+    try:
+        from core import crypto as _crypto
+
+        private_pem = agent.get("signing_private_key")
+        agent_did_value = agent.get("did")
+        if not private_pem or not agent_did_value:
+            private_pem, _public_pem, agent_did_value = (
+                registry.ensure_agent_signing_keys(agent["agent_id"])
+            )
+        if private_pem and agent_did_value:
+            sig_b64 = _crypto.sign_payload(private_pem, output)
+            sig_alg = str(agent.get("signing_alg") or "ed25519")
+            sig_did = agent_did_value
+            sig_at = datetime.now(timezone.utc).isoformat()
+    except Exception:
+        _LOG.exception("Failed to sign sync output for job %s", job_id)
+    return sig_b64, sig_alg, sig_did, sig_at
+
+
+def _sync_call_handle_failure_envelope(
+    *,
+    output: Any,
+    job: dict,
+    agent_id: str,
+    caller_owner_id: str,
+) -> None:
+    """If output is a structured failure envelope, settle the job and raise 502/422."""
+    agent_failed, failure_code, failure_message = _is_agent_failure_envelope(output)
+    if not agent_failed:
+        return
+    failed = jobs.update_job_status(
+        job["job_id"],
+        "failed",
+        output_payload=output,
+        error_message=(failure_message or f"Agent reported {failure_code}; no charge."),
+        completed=True,
+    )
+    if failed is not None:
+        _settle_failed_job(failed, actor_owner_id=caller_owner_id, event_type="job.failed_dependency")
+    input_failure_markers = (
+        ".invalid_input", ".invalid_payload", ".missing_", ".invalid_",
+        ".unsupported_", ".query_too_long", ".code_too_long", ".stdin_too_long",
+        ".url_too_long", ".too_many_", ".url_blocked", ".dimension_mismatch",
+    )
+    lowered_code = (failure_code or "").lower()
+    http_status = 502
+    if any(marker in lowered_code for marker in input_failure_markers):
+        http_status = 422
+    envelope_code = (
+        error_codes.AGENT_INVALID_INPUT if http_status == 422
+        else error_codes.AGENT_INTERNAL_ERROR
+    )
+    raise HTTPException(
+        status_code=http_status,
+        detail=error_codes.make_error(
+            envelope_code,
+            failure_message or f"Agent unavailable ({failure_code}). You were not charged.",
+            {"agent_id": agent_id, "error_code": failure_code,
+             "refunded_cents": int(job.get("caller_charge_cents") or 0)},
+        ),
+    )
+
+
+def _sync_call_finalize_response(
+    *,
+    request: Request,
+    job: dict,
+    completed: dict,
+    output: Any,
+    agent: dict,
+    pricing_estimate: dict,
+    caller_charge_cents: int,
+    success_distribution: dict,
+    platform_fee_pct_at_create: int,
+    fee_bearer_policy: str,
+    cache_enabled: bool,
+    singleflight_key: str | None,
+    cache_version_token: str | None,
+    cache_ttl_hours: int,
+    requested_output_format: str | None,
+    caller_owner_id_early: str,
+    agent_id: str,
+    idempotency_key: str,
+    caller_wallet: dict,
+    agent_wallet: dict,
+    platform_wallet: dict,
+    charge_tx_id: str,
+    payload: dict,
+) -> JSONResponse:
+    """Build, decorate, cache, and return the final sync success response."""
+    _maybe_refund_pricing_diff(
+        agent=agent,
+        payload=payload,
+        output=output,
+        caller_wallet_id=caller_wallet["wallet_id"],
+        agent_wallet_id=agent_wallet["wallet_id"],
+        platform_wallet_id=platform_wallet["wallet_id"],
+        charge_tx_id=charge_tx_id,
+        estimate=pricing_estimate,
+        caller_charge_cents=caller_charge_cents,
+        success_distribution=success_distribution,
         platform_fee_pct=platform_fee_pct_at_create,
         fee_bearer_policy=fee_bearer_policy,
     )
-    caller_charge_cents = int(success_distribution["caller_charge_cents"])
-    caller_wallet = payments.get_or_create_wallet(caller_owner_id)
-    # Payouts settle to the canonical agent wallet keyed by agent_id.
-    _agent_payout_owner = f"agent:{agent['agent_id']}"
-    agent_wallet = payments.get_or_create_wallet(_agent_payout_owner)
-    platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
-
-    charge_tx_id = _pre_call_charge_or_402(
-        caller=caller,
-        caller_wallet_id=caller_wallet["wallet_id"],
-        charge_cents=caller_charge_cents,
-        agent_id=agent_id,
+    _record_public_work_example(
+        agent, payload, output, job_id=job["job_id"], latency_ms=_job_latency_ms(completed)
     )
-    if builtin_agent_id is not None or hosted_skill_row is not None:
-        try:
-            job = jobs.create_job(
-                agent_id=agent["agent_id"],
-                caller_owner_id=caller_owner_id,
-                caller_wallet_id=caller_wallet["wallet_id"],
-                agent_wallet_id=agent_wallet["wallet_id"],
-                platform_wallet_id=platform_wallet["wallet_id"],
-                price_cents=price_cents,
-                caller_charge_cents=caller_charge_cents,
-                platform_fee_pct_at_create=platform_fee_pct_at_create,
-                fee_bearer_policy=fee_bearer_policy,
-                client_id=client_id,
-                charge_tx_id=charge_tx_id,
-                input_payload=payload,
-                agent_owner_id=agent.get("owner_id"),
-                max_attempts=1,
-                dispute_window_hours=_DEFAULT_JOB_DISPUTE_WINDOW_HOURS,
-                judge_agent_id=_extract_judge_agent_id(agent.get("input_schema"))
-                or _QUALITY_JUDGE_AGENT_ID,
-            )
-        except Exception:
-            payments.post_call_refund(
-                caller_wallet["wallet_id"],
-                charge_tx_id,
-                caller_charge_cents,
-                agent["agent_id"],
-            )
-            _LOG.exception(
-                "Failed to create sync job for built-in agent %s.", agent["agent_id"]
-            )
-            raise HTTPException(status_code=500, detail="Failed to create job.")
-        _record_job_event(
-            job,
-            "job.created",
-            actor_owner_id=caller["owner_id"],
-            payload={"source": "registry_call_sync", "max_attempts": 1},
+    response_payload = _sync_success_response_payload(
+        job_id=job["job_id"],
+        output=output,
+        latency_ms=_job_latency_ms(completed),
+        cached=False,
+        pricing_units=_build_pricing_units_block(
+            pricing_estimate=pricing_estimate,
+            output=output if isinstance(output, dict) else None,
+            caller_charge_cents=caller_charge_cents,
+            success_distribution=success_distribution,
+            platform_fee_pct=platform_fee_pct_at_create,
+            fee_bearer_policy=fee_bearer_policy,
+        ),
+        receipt=_build_inline_receipt(job=completed, agent=agent, output_payload=output),
+    )
+    shaped_output, extra = _shape_sync_output_for_response(
+        request, job_id=job["job_id"], payload=output
+    )
+    response_payload["output"] = shaped_output
+    response_payload.update(extra)
+    if idempotency_key:
+        _idempotency_store(caller_owner_id_early, agent_id, idempotency_key, response_payload)
+    if cache_enabled:
+        _cache.set_cached(
+            agent["agent_id"], payload, output, job["job_id"],
+            ttl_hours=cache_ttl_hours, version_token=cache_version_token,
         )
-        try:
-            if hosted_skill_row is not None:
-                output = _skill_executor.execute_hosted_skill(hosted_skill_row, payload)
-            else:
-                try:
-                    output = _execute_builtin_agent(builtin_agent_id, payload)
-                except _AgentSlotUnavailable as slot_exc:
-                    # Per-agent concurrency cap saturated. Refund the caller,
-                    # mark the job failed, and surface 429 — was previously a
-                    # 502 cascade from downstream-pool exhaustion.
-                    failed = jobs.update_job_status(
-                        job["job_id"],
-                        "failed",
-                        error_message=(
-                            f"Agent '{slot_exc.agent_id}' is at capacity "
-                            f"({slot_exc.limit} in flight). Refunded; retry shortly."
-                        ),
-                        completed=True,
-                    )
-                    if failed is not None:
-                        _settle_failed_job(
-                            failed,
-                            actor_owner_id=caller["owner_id"],
-                            event_type="job.failed_rate_limited",
-                        )
-                    raise HTTPException(
-                        status_code=429,
-                        headers={"Retry-After": "1"},
-                        detail=error_codes.make_error(
-                            error_codes.AGENT_UPSTREAM_TIMEOUT,
-                            (
-                                f"Agent is at capacity ({slot_exc.limit} concurrent "
-                                "in flight). You were not charged. Retry in ~1s."
-                            ),
-                            {
-                                "agent_id": slot_exc.agent_id,
-                                "concurrency_limit": slot_exc.limit,
-                                "refunded_cents": int(
-                                    job.get("caller_charge_cents") or 0
-                                ),
-                            },
-                        ),
-                    )
-            output = _normalize_output_protocol_for_response(
-                output,
-                requested_output_formats=requested_output_formats,
-            )
-            if _is_unchargeable_degraded_output(str(builtin_agent_id), output):
-                output = _degraded_unchargeable_error(str(builtin_agent_id))
-            # If the agent reported a structured *.tool_unavailable / .not_configured
-            # error, treat the job as a failure: refund the caller, mark the job
-            # failed, and surface a 502 so the SDK can react. This closes the
-            # charge-on-broken-tool gap reported in the 2026-04-28 audit (Browser,
-            # Visual Regression, Linter, Type Checker, Image Generator all billed
-            # users despite producing no usable output).
-            agent_failed, failure_code, failure_message = _is_agent_failure_envelope(
-                output
-            )
-            if agent_failed:
-                failed = jobs.update_job_status(
-                    job["job_id"],
-                    "failed",
-                    output_payload=output,
-                    error_message=(
-                        failure_message or f"Agent reported {failure_code}; no charge."
-                    ),
-                    completed=True,
-                )
-                if failed is not None:
-                    _settle_failed_job(
-                        failed,
-                        actor_owner_id=caller["owner_id"],
-                        event_type="job.failed_dependency",
-                    )
-                # 502 for genuine infra failures; 422 for caller-input validation
-                # failures so the SDK can act on the distinction without parsing
-                # error_code strings. Refund happened either way.
-                input_failure_markers = (
-                    ".invalid_input",
-                    ".invalid_payload",
-                    ".missing_",
-                    ".invalid_",
-                    ".unsupported_",
-                    ".query_too_long",
-                    ".code_too_long",
-                    ".stdin_too_long",
-                    ".url_too_long",
-                    ".too_many_",
-                    ".url_blocked",
-                    # Dimension mismatch is a caller-input error (caller provided
-                    # two images with different sizes) — should be 422, not 502.
-                    ".dimension_mismatch",
-                )
-                lowered_code = (failure_code or "").lower()
-                http_status = 502
-                if any(marker in lowered_code for marker in input_failure_markers):
-                    http_status = 422
-                # Don't tag caller-input validation failures with a code from
-                # the 5xx-class taxonomy — monitors paging on `agent.internal_error`
-                # would fire on every malformed URL the user types. Use the
-                # 4xx-class `agent.invalid_input` for 422 paths.
-                envelope_code = (
-                    error_codes.AGENT_INVALID_INPUT
-                    if http_status == 422
-                    else error_codes.AGENT_INTERNAL_ERROR
-                )
-                raise HTTPException(
-                    status_code=http_status,
-                    detail=error_codes.make_error(
-                        envelope_code,
-                        failure_message
-                        or f"Agent unavailable ({failure_code}). You were not charged.",
-                        {
-                            "agent_id": agent_id,
-                            "error_code": failure_code,
-                            "refunded_cents": int(job.get("caller_charge_cents") or 0),
-                        },
-                    ),
-                )
-            sig_b64: str | None = None
-            sig_alg: str | None = None
-            sig_did: str | None = None
-            sig_at: str | None = None
-            try:
-                from core import crypto as _crypto
+        _cache_singleflight_release(singleflight_key or "")
+    response_payload = _decorate_with_rendered_output(
+        response_payload, output_format=requested_output_format
+    )
+    response_payload = _attach_post_call_actions(response_payload, job=completed)
+    return JSONResponse(content=response_payload)
 
-                private_pem = agent.get("signing_private_key")
-                agent_did_value = agent.get("did")
-                # Lazy-provision keys when the lifespan backfill missed this
-                # agent (e.g. older deploys, or new builtins added between
-                # restarts). Without this, a missing key permanently breaks
-                # receipts for the affected agent.
-                if not private_pem or not agent_did_value:
-                    private_pem, _public_pem, agent_did_value = (
-                        registry.ensure_agent_signing_keys(agent["agent_id"])
-                    )
-                if private_pem and agent_did_value:
-                    sig_b64 = _crypto.sign_payload(private_pem, output)
-                    sig_alg = str(agent.get("signing_alg") or "ed25519")
-                    sig_did = agent_did_value
-                    sig_at = datetime.now(timezone.utc).isoformat()
-            except Exception:
-                _LOG.exception("Failed to sign sync output for job %s", job["job_id"])
-                sig_b64 = sig_alg = sig_did = sig_at = None
 
-            completed = jobs.update_job_status(
-                job["job_id"],
-                "complete",
-                output_payload=output,
-                completed=True,
-                output_signature=sig_b64,
-                output_signature_alg=sig_alg,
-                output_signed_by_did=sig_did,
-                output_signed_at=sig_at,
-            )
-            if completed is None:
-                raise RuntimeError("Failed to mark built-in sync job complete.")
-            _record_job_event(
-                completed,
-                "job.completed",
-                actor_owner_id=caller["owner_id"],
-                payload={"status": completed["status"], "source": "registry_call_sync"},
-            )
-            _settle_successful_job(completed, actor_owner_id=caller["owner_id"])
-            _maybe_refund_pricing_diff(
-                agent=agent,
-                payload=payload,
-                output=output,
-                caller_wallet_id=caller_wallet["wallet_id"],
-                agent_wallet_id=agent_wallet["wallet_id"],
-                platform_wallet_id=platform_wallet["wallet_id"],
-                charge_tx_id=charge_tx_id,
-                estimate=pricing_estimate,
-                caller_charge_cents=caller_charge_cents,
-                success_distribution=success_distribution,
-                platform_fee_pct=platform_fee_pct_at_create,
-                fee_bearer_policy=fee_bearer_policy,
-            )
-            _record_public_work_example(
-                agent,
-                payload,
-                output,
-                job_id=job["job_id"],
-                latency_ms=_job_latency_ms(completed),
-            )
-            response_payload = _sync_success_response_payload(
-                job_id=job["job_id"],
-                output=output,
-                latency_ms=_job_latency_ms(completed),
-                cached=False,
-                pricing_units=_build_pricing_units_block(
-                    pricing_estimate=pricing_estimate,
-                    output=output if isinstance(output, dict) else None,
-                    caller_charge_cents=caller_charge_cents,
-                    success_distribution=success_distribution,
-                    platform_fee_pct=platform_fee_pct_at_create,
-                    fee_bearer_policy=fee_bearer_policy,
-                ),
-                receipt=_build_inline_receipt(
-                    job=completed, agent=agent, output_payload=output
-                ),
-            )
-            shaped_output, extra = _shape_sync_output_for_response(
-                request,
-                job_id=job["job_id"],
-                payload=output,
-            )
-            response_payload["output"] = shaped_output
-            response_payload.update(extra)
-            if idempotency_key:
-                _idempotency_store(
-                    caller_owner_id_early, agent_id, idempotency_key, response_payload
-                )
-            if cache_enabled:
-                _cache.set_cached(
-                    agent["agent_id"],
-                    payload,
-                    output,
-                    job["job_id"],
-                    ttl_hours=cache_ttl_hours,
-                    version_token=cache_version_token,
-                )
-                _cache_singleflight_release(singleflight_key or "")
-            response_payload = _decorate_with_rendered_output(
-                response_payload, output_format=requested_output_format
-            )
-            response_payload = _attach_post_call_actions(
-                response_payload, job=completed
-            )
-            # Always wrap in a consistent envelope so callers can reliably
-            # read job_id, status, and output without sniffing the shape.
-            return JSONResponse(content=response_payload)
-        except ValidationError as exc:
-            failed = jobs.update_job_status(
-                job["job_id"],
-                "failed",
-                error_message="Request validation failed.",
-                completed=True,
-            )
-            if failed is not None:
-                _settle_failed_job(
-                    failed,
-                    actor_owner_id=caller["owner_id"],
-                    event_type="job.failed_validation",
-                )
-
-            def _sanitize_errors(errors):
-                clean = []
-                for e in errors:
-                    entry = {k: v for k, v in e.items() if k != "ctx"}
-                    ctx = e.get("ctx")
-                    if ctx:
-                        entry["ctx"] = {k: str(v) for k, v in ctx.items()}
-                    clean.append(entry)
-                return clean
-
-            raise HTTPException(
-                status_code=422,
-                detail=error_codes.make_error(
-                    error_codes.INVALID_INPUT,
-                    "Request validation failed.",
-                    {"errors": _sanitize_errors(exc.errors())},
-                ),
-            )
-        except ValueError as exc:
-            failed = jobs.update_job_status(
-                job["job_id"],
-                "failed",
-                error_message=str(exc),
-                completed=True,
-            )
-            if failed is not None:
-                _settle_failed_job(
-                    failed,
-                    actor_owner_id=caller["owner_id"],
-                    event_type="job.failed_input",
-                )
-            message = str(exc)
-            status = 422 if message.startswith("Invalid ticker symbol:") else 400
-            raise HTTPException(status_code=status, detail=message)
-        except _groq.RateLimitError as exc:
-            failed = jobs.update_job_status(
-                job["job_id"],
-                "failed",
-                error_message=f"All LLM models rate-limited. ({exc})",
-                completed=True,
-            )
-            if failed is not None:
-                _settle_failed_job(
-                    failed,
-                    actor_owner_id=caller["owner_id"],
-                    event_type="job.failed_rate_limit",
-                )
-            raise HTTPException(
-                status_code=503, detail=f"All LLM models rate-limited. ({exc})"
-            )
-        except HTTPException:
-            # Already a structured HTTP error (e.g. our tool_unavailable 502
-            # with a refund). Pass it through untouched — the broad Exception
-            # handler below would otherwise downgrade it to a 500 with no
-            # structured detail and re-bill the caller via _settle_failed_job
-            # even though we already refunded.
-            raise
-        except Exception:
-            _LOG.exception("Built-in agent execution failed for %s.", builtin_agent_id)
-            failed = jobs.update_job_status(
-                job["job_id"],
-                "failed",
-                error_message="Agent execution failed.",
-                completed=True,
-            )
-            if failed is not None:
-                _settle_failed_job(
-                    failed,
-                    actor_owner_id=caller["owner_id"],
-                    event_type="job.failed_builtin",
-                )
-            raise HTTPException(status_code=500, detail="Agent execution failed.")
-
-    # --- Input payload size cap (256 KB) ---
-    try:
-        payload_bytes = len(json.dumps(payload).encode("utf-8"))
-    except Exception:
-        payload_bytes = 0
-    if payload_bytes > 256 * 1024:
-        payments.post_call_refund(
-            caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent_id
-        )
-        raise HTTPException(
-            status_code=413,
-            detail=error_codes.make_error(
-                error_codes.PAYLOAD_TOO_LARGE,
-                "Input payload exceeds the 256 KB limit. Agents cannot process payloads this large. "
-                "try summarizing or splitting into multiple calls.",
-                {"size_bytes": payload_bytes, "limit_bytes": 256 * 1024},
-            ),
-        )
-
+def _sync_call_execute_builtin(
+    *,
+    builtin_agent_id: str | None,
+    hosted_skill_row: dict | None,
+    agent: dict,
+    agent_id: str,
+    caller: Any,
+    caller_wallet: dict,
+    caller_owner_id: str,
+    caller_owner_id_early: str,
+    caller_charge_cents: int,
+    charge_tx_id: str,
+    payload: dict,
+    requested_output_formats: list[str],
+    pricing_estimate: dict,
+    success_distribution: dict,
+    platform_fee_pct_at_create: int,
+    fee_bearer_policy: str,
+    agent_wallet: dict,
+    platform_wallet: dict,
+    cache_enabled: bool,
+    singleflight_key: str | None,
+    cache_version_token: str | None,
+    cache_ttl_hours: int,
+    requested_output_format: str | None,
+    request: Request,
+    idempotency_key: str,
+    price_cents: int,
+    client_id: str,
+) -> JSONResponse:
+    """Create job, execute builtin/hosted-skill, settle, and return response."""
     try:
         job = jobs.create_job(
             agent_id=agent["agent_id"],
@@ -1812,22 +1577,207 @@ def registry_call(
         )
     except Exception:
         payments.post_call_refund(
-            caller_wallet["wallet_id"],
-            charge_tx_id,
-            caller_charge_cents,
-            agent["agent_id"],
+            caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent["agent_id"]
         )
-        _LOG.exception(
-            "Failed to create sync job for remote agent %s.", agent["agent_id"]
-        )
+        _LOG.exception("Failed to create sync job for built-in agent %s.", agent["agent_id"])
         raise HTTPException(status_code=500, detail="Failed to create job.")
+
     _record_job_event(
-        job,
-        "job.created",
-        actor_owner_id=caller["owner_id"],
-        payload={"source": "registry_call_sync_http", "max_attempts": 1},
+        job, "job.created", actor_owner_id=caller["owner_id"],
+        payload={"source": "registry_call_sync", "max_attempts": 1},
     )
 
+    def _sanitize_validation_errors(errors: list) -> list:
+        clean = []
+        for e in errors:
+            entry = {k: v for k, v in e.items() if k != "ctx"}
+            ctx = e.get("ctx")
+            if ctx:
+                entry["ctx"] = {k: str(v) for k, v in ctx.items()}
+            clean.append(entry)
+        return clean
+
+    try:
+        if hosted_skill_row is not None:
+            output = _skill_executor.execute_hosted_skill(hosted_skill_row, payload)
+        else:
+            try:
+                output = _execute_builtin_agent(builtin_agent_id, payload)
+            except _AgentSlotUnavailable as slot_exc:
+                failed = jobs.update_job_status(
+                    job["job_id"], "failed",
+                    error_message=(
+                        f"Agent '{slot_exc.agent_id}' is at capacity "
+                        f"({slot_exc.limit} in flight). Refunded; retry shortly."
+                    ),
+                    completed=True,
+                )
+                if failed is not None:
+                    _settle_failed_job(failed, actor_owner_id=caller["owner_id"], event_type="job.failed_rate_limited")
+                raise HTTPException(
+                    status_code=429,
+                    headers={"Retry-After": "1"},
+                    detail=error_codes.make_error(
+                        error_codes.AGENT_UPSTREAM_TIMEOUT,
+                        f"Agent is at capacity ({slot_exc.limit} concurrent in flight). You were not charged. Retry in ~1s.",
+                        {"agent_id": slot_exc.agent_id, "concurrency_limit": slot_exc.limit,
+                         "refunded_cents": int(job.get("caller_charge_cents") or 0)},
+                    ),
+                )
+        output = _normalize_output_protocol_for_response(output, requested_output_formats=requested_output_formats)
+        if _is_unchargeable_degraded_output(str(builtin_agent_id), output):
+            output = _degraded_unchargeable_error(str(builtin_agent_id))
+        _sync_call_handle_failure_envelope(
+            output=output, job=job, agent_id=agent_id, caller_owner_id=caller["owner_id"]
+        )
+        sig_b64, sig_alg, sig_did, sig_at = _sync_call_sign_output(
+            agent=agent, output=output, job_id=job["job_id"]
+        )
+        completed = jobs.update_job_status(
+            job["job_id"], "complete", output_payload=output, completed=True,
+            output_signature=sig_b64, output_signature_alg=sig_alg,
+            output_signed_by_did=sig_did, output_signed_at=sig_at,
+        )
+        if completed is None:
+            raise RuntimeError("Failed to mark built-in sync job complete.")
+        _record_job_event(
+            completed, "job.completed", actor_owner_id=caller["owner_id"],
+            payload={"status": completed["status"], "source": "registry_call_sync"},
+        )
+        _settle_successful_job(completed, actor_owner_id=caller["owner_id"])
+        return _sync_call_finalize_response(
+            request=request, job=job, completed=completed, output=output,
+            agent=agent, pricing_estimate=pricing_estimate,
+            caller_charge_cents=caller_charge_cents, success_distribution=success_distribution,
+            platform_fee_pct_at_create=platform_fee_pct_at_create, fee_bearer_policy=fee_bearer_policy,
+            cache_enabled=cache_enabled, singleflight_key=singleflight_key,
+            cache_version_token=cache_version_token, cache_ttl_hours=cache_ttl_hours,
+            requested_output_format=requested_output_format,
+            caller_owner_id_early=caller_owner_id_early, agent_id=agent_id,
+            idempotency_key=idempotency_key, caller_wallet=caller_wallet,
+            agent_wallet=agent_wallet, platform_wallet=platform_wallet,
+            charge_tx_id=charge_tx_id, payload=payload,
+        )
+    except ValidationError as exc:
+        failed = jobs.update_job_status(
+            job["job_id"], "failed", error_message="Request validation failed.", completed=True
+        )
+        if failed is not None:
+            _settle_failed_job(failed, actor_owner_id=caller["owner_id"], event_type="job.failed_validation")
+        raise HTTPException(
+            status_code=422,
+            detail=error_codes.make_error(
+                error_codes.INVALID_INPUT, "Request validation failed.",
+                {"errors": _sanitize_validation_errors(exc.errors())},
+            ),
+        )
+    except ValueError as exc:
+        failed = jobs.update_job_status(
+            job["job_id"], "failed", error_message=str(exc), completed=True
+        )
+        if failed is not None:
+            _settle_failed_job(failed, actor_owner_id=caller["owner_id"], event_type="job.failed_input")
+        message = str(exc)
+        status = 422 if message.startswith("Invalid ticker symbol:") else 400
+        raise HTTPException(status_code=status, detail=message)
+    except _groq.RateLimitError as exc:
+        failed = jobs.update_job_status(
+            job["job_id"], "failed", error_message=f"All LLM models rate-limited. ({exc})", completed=True
+        )
+        if failed is not None:
+            _settle_failed_job(failed, actor_owner_id=caller["owner_id"], event_type="job.failed_rate_limit")
+        raise HTTPException(status_code=503, detail=f"All LLM models rate-limited. ({exc})")
+    except HTTPException:
+        raise
+    except Exception:
+        _LOG.exception("Built-in agent execution failed for %s.", builtin_agent_id)
+        failed = jobs.update_job_status(
+            job["job_id"], "failed", error_message="Agent execution failed.", completed=True
+        )
+        if failed is not None:
+            _settle_failed_job(failed, actor_owner_id=caller["owner_id"], event_type="job.failed_builtin")
+        raise HTTPException(status_code=500, detail="Agent execution failed.")
+
+
+def _sync_call_execute_http(
+    *,
+    agent: dict,
+    agent_id: str,
+    caller: Any,
+    caller_wallet: dict,
+    caller_owner_id: str,
+    caller_owner_id_early: str,
+    caller_charge_cents: int,
+    charge_tx_id: str,
+    payload: dict,
+    requested_output_formats: list[str],
+    safe_endpoint_url: str,
+    pricing_estimate: dict,
+    success_distribution: dict,
+    platform_fee_pct_at_create: int,
+    fee_bearer_policy: str,
+    agent_wallet: dict,
+    platform_wallet: dict,
+    cache_enabled: bool,
+    singleflight_key: str | None,
+    cache_version_token: str | None,
+    cache_ttl_hours: int,
+    requested_output_format: str | None,
+    request: Request,
+    idempotency_key: str,
+    price_cents: int,
+    client_id: str,
+) -> JSONResponse:
+    """Enforce payload size cap, create job, dispatch HTTP, and settle."""
+    # --- Input payload size cap (256 KB) ---
+    try:
+        payload_bytes = len(json.dumps(payload).encode("utf-8"))
+    except Exception:
+        payload_bytes = 0
+    if payload_bytes > 256 * 1024:
+        payments.post_call_refund(
+            caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent_id
+        )
+        raise HTTPException(
+            status_code=413,
+            detail=error_codes.make_error(
+                error_codes.PAYLOAD_TOO_LARGE,
+                "Input payload exceeds the 256 KB limit. Agents cannot process payloads this large. "
+                "try summarizing or splitting into multiple calls.",
+                {"size_bytes": payload_bytes, "limit_bytes": 256 * 1024},
+            ),
+        )
+    try:
+        job = jobs.create_job(
+            agent_id=agent["agent_id"],
+            caller_owner_id=caller_owner_id,
+            caller_wallet_id=caller_wallet["wallet_id"],
+            agent_wallet_id=agent_wallet["wallet_id"],
+            platform_wallet_id=platform_wallet["wallet_id"],
+            price_cents=price_cents,
+            caller_charge_cents=caller_charge_cents,
+            platform_fee_pct_at_create=platform_fee_pct_at_create,
+            fee_bearer_policy=fee_bearer_policy,
+            client_id=client_id,
+            charge_tx_id=charge_tx_id,
+            input_payload=payload,
+            agent_owner_id=agent.get("owner_id"),
+            max_attempts=1,
+            dispute_window_hours=_DEFAULT_JOB_DISPUTE_WINDOW_HOURS,
+            judge_agent_id=_extract_judge_agent_id(agent.get("input_schema"))
+            or _QUALITY_JUDGE_AGENT_ID,
+        )
+    except Exception:
+        payments.post_call_refund(
+            caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent["agent_id"]
+        )
+        _LOG.exception("Failed to create sync job for remote agent %s.", agent["agent_id"])
+        raise HTTPException(status_code=500, detail="Failed to create job.")
+    _record_job_event(
+        job, "job.created", actor_owner_id=caller["owner_id"],
+        payload={"source": "registry_call_sync_http", "max_attempts": 1},
+    )
+    # --- HTTP dispatch ---
     try:
         proxy_agent = dict(agent)
         proxy_agent["endpoint_url"] = safe_endpoint_url
@@ -1839,18 +1789,9 @@ def registry_call(
             allow_redirects=False,
         )
     except http.exceptions.Timeout:
-        failed = jobs.update_job_status(
-            job["job_id"],
-            "failed",
-            error_message="Agent timed out.",
-            completed=True,
-        )
+        failed = jobs.update_job_status(job["job_id"], "failed", error_message="Agent timed out.", completed=True)
         if failed is not None:
-            _settle_failed_job(
-                failed,
-                actor_owner_id=caller["owner_id"],
-                event_type="job.failed_timeout",
-            )
+            _settle_failed_job(failed, actor_owner_id=caller["owner_id"], event_type="job.failed_timeout")
         _LOG.warning("Agent call timed out for %s", agent_id)
         raise HTTPException(
             status_code=504,
@@ -1862,20 +1803,13 @@ def registry_call(
         )
     except http.RequestException as e:
         failed = jobs.update_job_status(
-            job["job_id"],
-            "failed",
+            job["job_id"], "failed",
             error_message=f"Agent endpoint unreachable ({type(e).__name__}).",
             completed=True,
         )
         if failed is not None:
-            _settle_failed_job(
-                failed,
-                actor_owner_id=caller["owner_id"],
-                event_type="job.failed_endpoint_offline",
-            )
-        _LOG.warning(
-            "Upstream agent unreachable for %s: %s", agent_id, type(e).__name__
-        )
+            _settle_failed_job(failed, actor_owner_id=caller["owner_id"], event_type="job.failed_endpoint_offline")
+        _LOG.warning("Upstream agent unreachable for %s: %s", agent_id, type(e).__name__)
         raise HTTPException(
             status_code=502,
             detail=error_codes.make_error(
@@ -1884,34 +1818,24 @@ def registry_call(
                 {"agent_id": agent_id},
             ),
         )
-
+    # --- HTTP response validation ---
     status_code = int(resp.status_code)
     success = 200 <= status_code < 300
-
     if not success:
         failed = jobs.update_job_status(
-            job["job_id"],
-            "failed",
-            error_message=f"Agent returned HTTP {status_code}.",
-            completed=True,
+            job["job_id"], "failed", error_message=f"Agent returned HTTP {status_code}.", completed=True
         )
         if failed is not None:
             _settle_failed_job(
                 failed,
                 actor_owner_id=caller["owner_id"],
-                event_type="job.failed_rejected_request"
-                if 400 <= status_code < 500
-                else "job.failed_internal_error",
+                event_type="job.failed_rejected_request" if 400 <= status_code < 500 else "job.failed_internal_error",
             )
         if 400 <= status_code < 500:
-            # Surface agent's own error message (truncated) but never expose internals
             try:
                 agent_err = resp.json()
                 agent_msg = str(
-                    agent_err.get("error")
-                    or agent_err.get("message")
-                    or agent_err.get("detail")
-                    or ""
+                    agent_err.get("error") or agent_err.get("message") or agent_err.get("detail") or ""
                 )[:500]
             except Exception:
                 agent_msg = ""
@@ -1921,8 +1845,7 @@ def registry_call(
             raise HTTPException(
                 status_code=status_code,
                 detail=error_codes.make_error(
-                    error_codes.AGENT_REJECTED_REQUEST,
-                    msg,
+                    error_codes.AGENT_REJECTED_REQUEST, msg,
                     {"agent_id": agent_id, "agent_status": status_code},
                 ),
             )
@@ -1934,22 +1857,14 @@ def registry_call(
                 {"agent_id": agent_id, "agent_status": status_code},
             ),
         )
-
     # --- Output size cap (1 MB) ---
     raw_content = resp.content
     if len(raw_content) > 1_048_576:
         failed = jobs.update_job_status(
-            job["job_id"],
-            "failed",
-            error_message="Agent returned a response larger than 1 MB.",
-            completed=True,
+            job["job_id"], "failed", error_message="Agent returned a response larger than 1 MB.", completed=True
         )
         if failed is not None:
-            _settle_failed_job(
-                failed,
-                actor_owner_id=caller["owner_id"],
-                event_type="job.failed_response_too_large",
-            )
+            _settle_failed_job(failed, actor_owner_id=caller["owner_id"], event_type="job.failed_response_too_large")
         raise HTTPException(
             status_code=502,
             detail=error_codes.make_error(
@@ -1958,7 +1873,6 @@ def registry_call(
                 {"agent_id": agent_id, "size_bytes": len(raw_content)},
             ),
         )
-
     # --- Non-JSON response handling ---
     content_type = resp.headers.get("content-type", "").lower()
     if "application/json" not in content_type and "text/json" not in content_type:
@@ -1966,17 +1880,10 @@ def registry_call(
             json.loads(raw_content)
         except Exception:
             failed = jobs.update_job_status(
-                job["job_id"],
-                "failed",
-                error_message="Agent returned malformed JSON.",
-                completed=True,
+                job["job_id"], "failed", error_message="Agent returned malformed JSON.", completed=True
             )
             if failed is not None:
-                _settle_failed_job(
-                    failed,
-                    actor_owner_id=caller["owner_id"],
-                    event_type="job.failed_invalid_response",
-                )
+                _settle_failed_job(failed, actor_owner_id=caller["owner_id"], event_type="job.failed_invalid_response")
             raise HTTPException(
                 status_code=502,
                 detail=error_codes.make_error(
@@ -1985,91 +1892,145 @@ def registry_call(
                     {"agent_id": agent_id},
                 ),
             )
-
     result_payload = json.loads(raw_content)
     result_payload = _normalize_output_protocol_for_response(
-        result_payload,
-        requested_output_formats=requested_output_formats,
+        result_payload, requested_output_formats=requested_output_formats
     )
     completed = jobs.update_job_status(
-        job["job_id"],
-        "complete",
-        output_payload=result_payload,
-        completed=True,
+        job["job_id"], "complete", output_payload=result_payload, completed=True
     )
     if completed is None:
         raise HTTPException(status_code=500, detail="Failed to mark sync job complete.")
     _record_job_event(
-        completed,
-        "job.completed",
-        actor_owner_id=caller["owner_id"],
+        completed, "job.completed", actor_owner_id=caller["owner_id"],
         payload={"status": completed["status"], "source": "registry_call_sync_http"},
     )
     settled = _settle_successful_job(completed, actor_owner_id=caller["owner_id"])
-    _maybe_refund_pricing_diff(
-        agent=agent,
-        payload=payload,
-        output=result_payload,
-        caller_wallet_id=caller_wallet["wallet_id"],
-        agent_wallet_id=agent_wallet["wallet_id"],
-        platform_wallet_id=platform_wallet["wallet_id"],
-        charge_tx_id=charge_tx_id,
-        estimate=pricing_estimate,
-        caller_charge_cents=caller_charge_cents,
-        success_distribution=success_distribution,
-        platform_fee_pct=platform_fee_pct_at_create,
-        fee_bearer_policy=fee_bearer_policy,
+    response_json = _sync_call_finalize_response(
+        request=request, job=job, completed=settled, output=result_payload,
+        agent=agent, pricing_estimate=pricing_estimate,
+        caller_charge_cents=caller_charge_cents, success_distribution=success_distribution,
+        platform_fee_pct_at_create=platform_fee_pct_at_create, fee_bearer_policy=fee_bearer_policy,
+        cache_enabled=cache_enabled, singleflight_key=singleflight_key,
+        cache_version_token=cache_version_token, cache_ttl_hours=cache_ttl_hours,
+        requested_output_format=requested_output_format,
+        caller_owner_id_early=caller_owner_id_early, agent_id=agent_id,
+        idempotency_key=idempotency_key, caller_wallet=caller_wallet,
+        agent_wallet=agent_wallet, platform_wallet=platform_wallet,
+        charge_tx_id=charge_tx_id, payload=payload,
     )
-    _record_public_work_example(
-        agent,
-        payload,
-        result_payload,
-        job_id=job["job_id"],
-        latency_ms=_job_latency_ms(settled),
-    )
-    if cache_enabled:
-        _cache.set_cached(
-            agent["agent_id"],
-            payload,
-            result_payload,
-            job["job_id"],
-            ttl_hours=cache_ttl_hours,
-            version_token=cache_version_token,
-        )
-        _cache_singleflight_release(singleflight_key or "")
-    response_payload = _sync_success_response_payload(
-        job_id=job["job_id"],
-        output=result_payload,
-        latency_ms=_job_latency_ms(settled),
-        cached=False,
-        pricing_units=_build_pricing_units_block(
-            pricing_estimate=pricing_estimate,
-            output=result_payload if isinstance(result_payload, dict) else None,
-            caller_charge_cents=caller_charge_cents,
-            success_distribution=success_distribution,
-            platform_fee_pct=platform_fee_pct_at_create,
-            fee_bearer_policy=fee_bearer_policy,
-        ),
-        receipt=_build_inline_receipt(
-            job=settled, agent=agent, output_payload=result_payload
-        ),
-    )
-    shaped_output, extra = _shape_sync_output_for_response(
-        request,
-        job_id=job["job_id"],
-        payload=result_payload,
-    )
-    response_payload["output"] = shaped_output
-    response_payload.update(extra)
-    response_payload = _decorate_with_rendered_output(
-        response_payload, output_format=requested_output_format
-    )
-    response_payload = _attach_post_call_actions(response_payload, job=settled)
+    return JSONResponse(content=response_json.body if hasattr(response_json, "body") else json.loads(response_json.body), status_code=200) if False else response_json
+
+
+@app.post(
+    "/registry/agents/{agent_id}/call",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(400, 401, 402, 403, 404, 429, 500, 502, 503),
+)
+@limiter.limit("10/minute")
+def registry_call(
+    request: Request,
+    agent_id: str,
+    body: core_models.RegistryCallRequest | None = Body(default=None),
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> Response:
+    """
+    Invoke a registered agent with full payment lifecycle:
+      1. Deduct price (402 if broke).
+      2. Dispatch call (internal handler for internal:// endpoints, HTTP otherwise).
+      3a. Success → payout 90% agent / 10% platform.
+      3b. Failure → full refund to caller.
+    """
+    _require_scope(caller, "caller")
+    idempotency_key = request.headers.get("X-Idempotency-Key", "").strip()
+    caller_owner_id_early = _caller_owner_id(request)
     if idempotency_key:
-        _idempotency_store(
-            caller_owner_id_early, agent_id, idempotency_key, response_payload
+        cached = _idempotency_lookup(caller_owner_id_early, agent_id, idempotency_key)
+        if cached is not None:
+            return JSONResponse(content=cached, headers={"X-Idempotency-Replayed": "true"})
+
+    agent, builtin_agent_id, hosted_skill_row, safe_endpoint_url = _sync_call_resolve_agent(
+        request=request, agent_id=agent_id, caller=caller
+    )
+    caller_owner_id = _caller_owner_id(request)
+    client_id = _request_client_id(request)
+    fee_bearer_policy = "caller"
+    platform_fee_pct_at_create = int(payments.PLATFORM_FEE_PCT)
+    raw_body = dict(body.root) if body is not None else {}
+
+    payload, requested_output_formats, requested_output_format, use_cache, cache_ttl_hours = (
+        _sync_call_validate_payload(
+            agent=agent, agent_id=agent_id, builtin_agent_id=builtin_agent_id,
+            request=request, raw_body=raw_body,
         )
-    return JSONResponse(content=response_payload, status_code=200)
+    )
+
+    pricing_estimate = _estimate_variable_charge(
+        agent=agent, payload=payload, per_job_cap_cents=_caller_key_per_job_cap(caller)
+    )
+    if pricing_estimate.get("cap_violated"):
+        violation = pricing_estimate["cap_violated"]
+        raise HTTPException(
+            status_code=402,
+            detail=error_codes.make_error(
+                error_codes.SPEND_LIMIT_EXCEEDED,
+                "Variable-price estimate exceeds your API key's per-job cap.",
+                {
+                    "scope": "api_key_per_job",
+                    "limit_cents": violation["limit_cents"],
+                    "attempted_cents": violation["price_cents"],
+                    "pricing_model": pricing_estimate["pricing_model"],
+                    "detail": pricing_estimate.get("detail"),
+                },
+            ),
+        )
+    price_cents = int(pricing_estimate["price_cents"])
+
+    cache_enabled, singleflight_key, cache_version_token, cached_response = (
+        _sync_call_check_cache(
+            agent=agent, agent_id=agent_id, payload=payload, use_cache=use_cache,
+            request=request, requested_output_format=requested_output_format,
+        )
+    )
+    if cached_response is not None:
+        return cached_response
+
+    success_distribution = payments.compute_success_distribution(
+        price_cents, platform_fee_pct=platform_fee_pct_at_create, fee_bearer_policy=fee_bearer_policy
+    )
+    caller_charge_cents = int(success_distribution["caller_charge_cents"])
+    caller_wallet = payments.get_or_create_wallet(caller_owner_id)
+    agent_wallet = payments.get_or_create_wallet(f"agent:{agent['agent_id']}")
+    platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
+    charge_tx_id = _pre_call_charge_or_402(
+        caller=caller, caller_wallet_id=caller_wallet["wallet_id"],
+        charge_cents=caller_charge_cents, agent_id=agent_id,
+    )
+
+    _common_kwargs = dict(
+        agent=agent, agent_id=agent_id, caller=caller,
+        caller_wallet=caller_wallet, caller_owner_id=caller_owner_id,
+        caller_owner_id_early=caller_owner_id_early, caller_charge_cents=caller_charge_cents,
+        charge_tx_id=charge_tx_id, payload=payload, requested_output_formats=requested_output_formats,
+        pricing_estimate=pricing_estimate, success_distribution=success_distribution,
+        platform_fee_pct_at_create=platform_fee_pct_at_create, fee_bearer_policy=fee_bearer_policy,
+        agent_wallet=agent_wallet, platform_wallet=platform_wallet,
+        cache_enabled=cache_enabled, singleflight_key=singleflight_key,
+        cache_version_token=cache_version_token, cache_ttl_hours=cache_ttl_hours,
+        requested_output_format=requested_output_format, request=request,
+        idempotency_key=idempotency_key, price_cents=price_cents, client_id=client_id,
+    )
+
+    if builtin_agent_id is not None or hosted_skill_row is not None:
+        return _sync_call_execute_builtin(
+            builtin_agent_id=builtin_agent_id, hosted_skill_row=hosted_skill_row,
+            **_common_kwargs,
+        )
+
+    return _sync_call_execute_http(
+        safe_endpoint_url=safe_endpoint_url,
+        **_common_kwargs,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2077,27 +2038,21 @@ def registry_call(
 # ---------------------------------------------------------------------------
 
 
-@app.post(
-    "/jobs",
-    status_code=201,
-    response_model=core_models.JobResponse,
-    responses=_error_responses(400, 401, 402, 403, 404, 422, 429, 500, 503),
-)
-@limiter.limit(_JOBS_CREATE_RATE_LIMIT)
-def jobs_create(
+def _jobs_create_validate(
+    *,
     request: Request,
-    body: JobCreateRequest,
-    caller: core_models.CallerContext = Depends(_require_api_key),
-) -> core_models.JobResponse:
-    _require_scope(caller, "caller")
+    body: Any,
+    caller: Any,
+) -> tuple[dict, dict, int, int]:
+    """Validate agent, trust, schema, pricing for jobs_create.
+
+    Returns (agent, parent_job_or_empty, tree_depth, effective_budget_cents).
+    Raises HTTPException on any validation failure.
+    """
     parent_job = _resolve_parent_job_for_creation(
-        caller,
-        body.parent_job_id,
-        parent_cascade_policy=body.parent_cascade_policy,
+        caller, body.parent_job_id, parent_cascade_policy=body.parent_cascade_policy
     )
-    parent_tree_depth = _to_non_negative_int(
-        (parent_job or {}).get("tree_depth"), default=0
-    )
+    parent_tree_depth = _to_non_negative_int((parent_job or {}).get("tree_depth"), default=0)
     tree_depth = parent_tree_depth + 1 if parent_job is not None else 0
     if tree_depth >= 10:
         raise HTTPException(
@@ -2110,12 +2065,8 @@ def jobs_create(
         )
     agent = registry.get_agent(body.agent_id, include_unapproved=True)
     if agent is None or not _caller_can_access_agent(caller, agent):
-        raise HTTPException(
-            status_code=404, detail=f"Agent '{body.agent_id}' not found."
-        )
+        raise HTTPException(status_code=404, detail=f"Agent '{body.agent_id}' not found.")
     _assert_agent_callable(body.agent_id, agent)
-
-    # Validate callback_url at creation time (not just at delivery)
     if body.callback_url:
         try:
             _validate_hook_url(str(body.callback_url))
@@ -2123,14 +2074,10 @@ def jobs_create(
             raise HTTPException(
                 status_code=400,
                 detail=error_codes.make_error(
-                    error_codes.INVALID_INPUT,
-                    f"callback_url is invalid: {exc}",
-                    {"field": "callback_url"},
+                    error_codes.INVALID_INPUT, f"callback_url is invalid: {exc}", {"field": "callback_url"}
                 ),
             )
-
     caller_owner_id = _caller_owner_id(request)
-    client_id = _request_client_id(request, body.client_id)
     min_caller_trust = _extract_caller_trust_min(agent.get("input_schema"))
     if min_caller_trust is not None and caller["type"] != "master":
         caller_trust = _caller_trust_score(caller_owner_id)
@@ -2161,26 +2108,33 @@ def jobs_create(
                 detail=error_codes.make_error(
                     error_codes.INPUT_SCHEMA_VIOLATION,
                     f"Input validation failed: {_schema_exc.message if hasattr(_schema_exc, 'message') else str(_schema_exc)}",
-                    {
-                        "path": list(getattr(_schema_exc, "absolute_path", [])),
-                        "agent_id": agent["agent_id"],
-                    },
+                    {"path": list(getattr(_schema_exc, "absolute_path", [])), "agent_id": agent["agent_id"]},
                 ),
             )
-
     effective_budget_cents = body.budget_cents
     if body.max_price_cents is not None:
         effective_budget_cents = (
-            body.max_price_cents
-            if effective_budget_cents is None
+            body.max_price_cents if effective_budget_cents is None
             else min(effective_budget_cents, body.max_price_cents)
         )
+    return agent, parent_job or {}, tree_depth, effective_budget_cents
 
+
+def _jobs_create_compute_pricing(
+    *,
+    agent: dict,
+    body: Any,
+    caller: Any,
+    effective_budget_cents: int | None,
+) -> tuple[int, str, int, dict, int]:
+    """Compute and validate pricing for jobs_create.
+
+    Returns (price_cents, fee_bearer_policy, platform_fee_pct_at_create, success_distribution, caller_charge_cents).
+    Raises HTTPException on cap/budget violations.
+    """
     pricing_estimate = _estimate_variable_charge(
-        agent=agent,
-        payload=body.input_payload,
-        budget_cents=effective_budget_cents,
-        per_job_cap_cents=_caller_key_per_job_cap(caller),
+        agent=agent, payload=body.input_payload,
+        budget_cents=effective_budget_cents, per_job_cap_cents=_caller_key_per_job_cap(caller),
     )
     if pricing_estimate.get("cap_violated"):
         violation = pricing_estimate["cap_violated"]
@@ -2189,11 +2143,7 @@ def jobs_create(
                 status_code=400,
                 detail=error_codes.make_error(
                     error_codes.BUDGET_EXCEEDED,
-                    (
-                        f"Variable-price estimate "
-                        f"({violation['price_cents']}¢) exceeds your budget "
-                        f"({violation['limit_cents']}¢)."
-                    ),
+                    f"Variable-price estimate ({violation['price_cents']}¢) exceeds your budget ({violation['limit_cents']}¢).",
                     {
                         "price_cents": violation["price_cents"],
                         "budget_cents": violation["limit_cents"],
@@ -2222,33 +2172,23 @@ def jobs_create(
     fee_bearer_policy = payments.normalize_fee_bearer_policy(body.fee_bearer_policy)
     platform_fee_pct_at_create = int(payments.PLATFORM_FEE_PCT)
     success_distribution = payments.compute_success_distribution(
-        price_cents,
-        platform_fee_pct=platform_fee_pct_at_create,
-        fee_bearer_policy=fee_bearer_policy,
+        price_cents, platform_fee_pct=platform_fee_pct_at_create, fee_bearer_policy=fee_bearer_policy
     )
     caller_charge_cents = int(success_distribution["caller_charge_cents"])
     if caller_charge_cents <= 0 and price_cents > 0:
         raise HTTPException(
             status_code=422,
             detail=error_codes.make_error(
-                error_codes.INVALID_CHARGE_AMOUNT,
-                "Computed caller charge is non-positive.",
-                {
-                    "caller_charge_cents": caller_charge_cents,
-                    "price_cents": price_cents,
-                },
+                error_codes.INVALID_CHARGE_AMOUNT, "Computed caller charge is non-positive.",
+                {"caller_charge_cents": caller_charge_cents, "price_cents": price_cents},
             ),
         )
     if caller_charge_cents > price_cents * 2:
         raise HTTPException(
             status_code=422,
             detail=error_codes.make_error(
-                error_codes.CHARGE_EXCEEDS_LISTED_PRICE,
-                "Caller charge must not exceed twice the listed price.",
-                {
-                    "caller_charge_cents": caller_charge_cents,
-                    "price_cents": price_cents,
-                },
+                error_codes.CHARGE_EXCEEDS_LISTED_PRICE, "Caller charge must not exceed twice the listed price.",
+                {"caller_charge_cents": caller_charge_cents, "price_cents": price_cents},
             ),
         )
     if effective_budget_cents is not None and price_cents > effective_budget_cents:
@@ -2257,12 +2197,8 @@ def jobs_create(
             detail=error_codes.make_error(
                 error_codes.BUDGET_EXCEEDED,
                 f"Agent price ({price_cents}¢) exceeds your budget ({effective_budget_cents}¢).",
-                {
-                    "price_cents": price_cents,
-                    "budget_cents": effective_budget_cents,
-                    "max_price_cents": body.max_price_cents,
-                    "agent_id": agent["agent_id"],
-                },
+                {"price_cents": price_cents, "budget_cents": effective_budget_cents,
+                 "max_price_cents": body.max_price_cents, "agent_id": agent["agent_id"]},
             ),
         )
     if price_cents > 2000 and not _agent_has_verified_contract(agent):
@@ -2279,8 +2215,7 @@ def jobs_create(
         raise HTTPException(
             status_code=402,
             detail=error_codes.make_error(
-                error_codes.SPEND_LIMIT_EXCEEDED,
-                "API key per-job cap exceeded.",
+                error_codes.SPEND_LIMIT_EXCEEDED, "API key per-job cap exceeded.",
                 {
                     "scope": "api_key_per_job",
                     "key_id": str(caller.get("key_id") or "").strip() or None,
@@ -2289,50 +2224,60 @@ def jobs_create(
                 },
             ),
         )
-    output_verification_window_seconds = (
-        86400
-        if body.output_verification_window_seconds is None
-        else body.output_verification_window_seconds
-    )
+    return price_cents, fee_bearer_policy, platform_fee_pct_at_create, success_distribution, caller_charge_cents
+
+
+def _jobs_create_build_payload(*, body: Any) -> dict:
+    """Merge protocol envelope fields into input_payload for jobs_create."""
     try:
-        input_payload = _merge_protocol_input_envelope(
+        return _merge_protocol_input_envelope(
             body.input_payload,
-            input_artifacts=_normalize_protocol_artifact_list(
-                body.input_artifacts,
-                field_name="input_artifacts",
-            ),
-            preferred_input_formats=_normalize_format_preferences(
-                body.preferred_input_formats,
-                field_name="preferred_input_formats",
-            ),
-            preferred_output_formats=_normalize_format_preferences(
-                body.preferred_output_formats,
-                field_name="preferred_output_formats",
-            ),
-            communication_channel=_normalize_protocol_channel(
-                body.communication_channel,
-                field_name="communication_channel",
-            ),
-            protocol_metadata=_normalize_protocol_metadata(
-                body.protocol_metadata,
-                field_name="protocol_metadata",
-            ),
+            input_artifacts=_normalize_protocol_artifact_list(body.input_artifacts, field_name="input_artifacts"),
+            preferred_input_formats=_normalize_format_preferences(body.preferred_input_formats, field_name="preferred_input_formats"),
+            preferred_output_formats=_normalize_format_preferences(body.preferred_output_formats, field_name="preferred_output_formats"),
+            communication_channel=_normalize_protocol_channel(body.communication_channel, field_name="communication_channel"),
+            protocol_metadata=_normalize_protocol_metadata(body.protocol_metadata, field_name="protocol_metadata"),
             private_task=bool(body.private_task),
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
-    caller_wallet = payments.get_or_create_wallet(caller_owner_id)
-    _agent_payout_owner2 = f"agent:{agent['agent_id']}"
-    agent_wallet = payments.get_or_create_wallet(_agent_payout_owner2)
-    platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
 
-    charge_tx_id = _pre_call_charge_or_402(
-        caller=caller,
-        caller_wallet_id=caller_wallet["wallet_id"],
-        charge_cents=caller_charge_cents,
-        agent_id=agent["agent_id"],
+
+@app.post(
+    "/jobs",
+    status_code=201,
+    response_model=core_models.JobResponse,
+    responses=_error_responses(400, 401, 402, 403, 404, 422, 429, 500, 503),
+)
+@limiter.limit(_JOBS_CREATE_RATE_LIMIT)
+def jobs_create(
+    request: Request,
+    body: JobCreateRequest,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.JobResponse:
+    _require_scope(caller, "caller")
+    agent, parent_job, tree_depth, effective_budget_cents = _jobs_create_validate(
+        request=request, body=body, caller=caller
     )
-
+    price_cents, fee_bearer_policy, platform_fee_pct_at_create, success_distribution, caller_charge_cents = (
+        _jobs_create_compute_pricing(
+            agent=agent, body=body, caller=caller, effective_budget_cents=effective_budget_cents
+        )
+    )
+    input_payload = _jobs_create_build_payload(body=body)
+    caller_owner_id = _caller_owner_id(request)
+    client_id = _request_client_id(request, body.client_id)
+    caller_wallet = payments.get_or_create_wallet(caller_owner_id)
+    agent_wallet = payments.get_or_create_wallet(f"agent:{agent['agent_id']}")
+    platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
+    output_verification_window_seconds = (
+        86400 if body.output_verification_window_seconds is None
+        else body.output_verification_window_seconds
+    )
+    charge_tx_id = _pre_call_charge_or_402(
+        caller=caller, caller_wallet_id=caller_wallet["wallet_id"],
+        charge_cents=caller_charge_cents, agent_id=agent["agent_id"],
+    )
     try:
         job = jobs.create_job(
             agent_id=agent["agent_id"],
@@ -2349,36 +2294,28 @@ def jobs_create(
             input_payload=input_payload,
             agent_owner_id=agent.get("owner_id"),
             max_attempts=body.max_attempts,
-            parent_job_id=(parent_job or {}).get("job_id"),
+            parent_job_id=parent_job.get("job_id"),
             tree_depth=tree_depth,
             parent_cascade_policy=body.parent_cascade_policy,
             clarification_timeout_seconds=body.clarification_timeout_seconds,
             clarification_timeout_policy=body.clarification_timeout_policy,
-            dispute_window_hours=body.dispute_window_hours
-            or _DEFAULT_JOB_DISPUTE_WINDOW_HOURS,
-            judge_agent_id=_extract_judge_agent_id(agent.get("input_schema"))
-            or _QUALITY_JUDGE_AGENT_ID,
+            dispute_window_hours=body.dispute_window_hours or _DEFAULT_JOB_DISPUTE_WINDOW_HOURS,
+            judge_agent_id=_extract_judge_agent_id(agent.get("input_schema")) or _QUALITY_JUDGE_AGENT_ID,
             callback_url=body.callback_url or None,
             callback_secret=body.callback_secret or None,
             output_verification_window_seconds=output_verification_window_seconds,
         )
     except Exception:
         payments.post_call_refund(
-            caller_wallet["wallet_id"],
-            charge_tx_id,
-            caller_charge_cents,
-            agent["agent_id"],
+            caller_wallet["wallet_id"], charge_tx_id, caller_charge_cents, agent["agent_id"]
         )
         _LOG.exception("Failed to create job for agent %s.", agent["agent_id"])
         raise HTTPException(status_code=500, detail="Failed to create job.")
-
     _record_job_event(
-        job,
-        "job.created",
-        actor_owner_id=caller["owner_id"],
+        job, "job.created", actor_owner_id=caller["owner_id"],
         payload={
             "max_attempts": body.max_attempts,
-            "parent_job_id": (parent_job or {}).get("job_id"),
+            "parent_job_id": parent_job.get("job_id"),
             "parent_cascade_policy": body.parent_cascade_policy,
             "tree_depth": tree_depth,
         },
