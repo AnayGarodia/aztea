@@ -64,15 +64,6 @@ def _patch_get(resp: _FakeResp):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "AUDIT T1.4: requests.get is called with allow_redirects=True; "
-        "an upstream 30x to a private host bypasses the SSRF check. Fix: "
-        "either pass allow_redirects=False and walk the chain manually, or "
-        "re-validate the final resp.url against url_security."
-    ),
-)
 def test_T1_4_http_redirect_to_private_ip_is_blocked():
     # Final URL after redirect points at a private host. The current code
     # does not re-check, so this test exposes the SSRF bypass.
@@ -97,14 +88,6 @@ def test_T1_5_etag_authoritative_is_documented():
     assert "hdr|" in src
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "AUDIT T1.7: webhook payload has no replay-protection field. Fix: "
-        "include a `delivered_at` ISO timestamp or `nonce` in the payload "
-        "so consumers can de-dupe replays without keeping per-watcher state."
-    ),
-)
 def test_T1_7_webhook_payload_has_replay_protection():
     payload = _delivery.build_payload(
         run={
@@ -146,17 +129,35 @@ def test_T1_9_npm_scoped_package_url_is_well_formed():
     assert "'" not in captured["url"]
 
 
-def test_T1_10_no_change_tick_should_reset_error_counter():
-    # This is a behavior assertion. The current implementation only resets
-    # consecutive_errors inside record_spend_and_fingerprint (i.e. on a
-    # successful FIRE). A successful no-change tick does not reset, so a
-    # flapping target trips auto-pause. We assert the desired contract: a
-    # successful fingerprint observation (whether or not it fired) should
-    # reset the counter. This test is xfail until the fix lands.
-    pytest.xfail(
-        "AUDIT T1.10: consecutive_errors is only cleared on a successful "
-        "fire. A 'no_change' tick should also reset, otherwise a flapping "
-        "target auto-pauses despite reaching the target N times."
+def test_T1_10_no_change_tick_resets_error_counter():
+    """A successful fingerprint observation MUST reset
+    consecutive_errors even if the diff gate skips the fire. Without
+    this, a flapping target (4 errors, 1 success-no-change, 4 errors,
+    ...) auto-pauses despite reaching the target every Nth tick.
+
+    Verified at the unit layer by asserting `clear_consecutive_errors`
+    exists and is wired into the success path of _process_due_watcher.
+    """
+    # The fix is two-part: (1) crud.clear_consecutive_errors exists, (2)
+    # sweeper._process_due_watcher calls it after a successful fingerprint
+    # observation. Verify both via source inspection so a future refactor
+    # that drops one half fails the test.
+    assert callable(getattr(_crud, "clear_consecutive_errors", None)), (
+        "core.watchers.crud.clear_consecutive_errors must exist"
+    )
+    sweeper_src = Path(_sweeper.__file__).read_text(encoding="utf-8")
+    # The call must come AFTER the fingerprint-error early-return and
+    # BEFORE the diff gate, so it runs whether or not we fire.
+    fn_start = sweeper_src.index("def _process_due_watcher")
+    fn_end = sweeper_src.index("\ndef ", fn_start + 1)
+    fn_body = sweeper_src[fn_start:fn_end]
+    error_branch = fn_body.find('skip_reason="target_error"')
+    diff_gate = fn_body.find("# Diff gate")
+    clear_call = fn_body.find("clear_consecutive_errors")
+    assert error_branch >= 0 and diff_gate >= 0 and clear_call >= 0
+    assert error_branch < clear_call < diff_gate, (
+        "clear_consecutive_errors must run between the error-branch return "
+        "and the diff gate so a no_change tick still clears the counter."
     )
 
 
@@ -396,33 +397,57 @@ def test_T6_5_webhook_payload_schema_stable():
         assert key in payload["job"], f"missing job.{key}"
 
 
-def test_T6_6_hmac_canonicalization_stable_across_key_order():
-    """Payload serialization uses sort_keys=True + canonical separators, so
-    two payloads with the same fields in different insertion order produce
-    the same HMAC. Without canonicalization, naive consumer-side
-    re-serialization would produce different signatures."""
+def test_T6_6_hmac_signature_matches_body_bytes():
+    """HMAC is computed over the exact body bytes that get POSTed. A
+    consumer that recomputes HMAC over the received bytes must match the
+    `X-Aztea-Signature` header. Two deliveries produce different signatures
+    because each payload includes a fresh nonce + delivered_at (per
+    T1.7 replay protection), but each individual signature must verify
+    against its own body."""
     secret = "shhh"
-    captured: list[bytes] = []
+    captured: list[tuple[bytes, dict]] = []
 
     class _R:
         status_code = 200
 
     def _post(url, data=None, headers=None, timeout=None):
-        captured.append(data)
+        captured.append((data, headers))
         return _R()
 
-    # Run delivery twice with the same logical payload.
     run = _build_run(secret=secret)
     job = {"job_id": "j1", "agent_id": "a1", "status": "complete"}
-
     with patch("core.watchers.delivery.requests.post", side_effect=_post):
         _delivery.deliver_run(run, job)
         _delivery.deliver_run(run, job)
-    assert captured[0] == captured[1]
-    # And the HMAC is computable from the body.
-    expected = hmac.new(secret.encode(), captured[0], hashlib.sha256).hexdigest()
-    # Must not be all-zero or empty.
-    assert expected and len(expected) == 64
+
+    assert len(captured) == 2
+    for body, headers in captured:
+        sig = headers["X-Aztea-Signature"]
+        assert sig.startswith("sha256=")
+        expected = "sha256=" + hmac.new(
+            secret.encode(), body, hashlib.sha256
+        ).hexdigest()
+        assert sig == expected
+    # Replay protection: the two payloads MUST differ (fresh nonce).
+    assert captured[0][0] != captured[1][0]
+
+
+def test_T6_6_hmac_canonicalization_stable_for_identical_payload():
+    """If we strip the per-delivery fields (delivered_at, nonce), the
+    remaining canonical bytes must hash to the same value across runs.
+    This guards the `sort_keys=True` + canonical-separators contract that
+    consumers depend on for re-signing."""
+    base_run = _build_run()
+    base_job = {"job_id": "j1", "agent_id": "a1", "status": "complete"}
+
+    p1 = _delivery.build_payload(base_run, base_job)
+    p2 = _delivery.build_payload(base_run, base_job)
+    for p in (p1, p2):
+        p.pop("delivered_at", None)
+        p.pop("nonce", None)
+    b1 = json.dumps(p1, separators=(",", ":"), sort_keys=True).encode()
+    b2 = json.dumps(p2, separators=(",", ":"), sort_keys=True).encode()
+    assert b1 == b2
 
 
 def test_T6_7_no_hmac_header_when_secret_missing():

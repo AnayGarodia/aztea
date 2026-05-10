@@ -158,6 +158,28 @@ def list_watchers_for_owner(owner_user_id: str, *, limit: int = 100) -> list[dic
     return [_row_to_dict(r) for r in rows]
 
 
+def list_watchers_needing_rollover(today_utc: str, *, limit: int = 200) -> list[dict]:
+    """Watchers whose spend_window_date is older than today_utc, regardless
+    of status. Used by the sweeper's rollover phase to flip
+    ``budget_exhausted`` rows back to ``active`` after UTC midnight.
+
+    Without this, a budget_exhausted watcher is never picked up by
+    list_due_watchers (which filters status='active') and would stay
+    stuck across UTC rollover indefinitely.
+    """
+    with _conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM watchers
+            WHERE spend_window_date < %s
+            ORDER BY spend_window_date ASC
+            LIMIT %s
+            """,
+            (today_utc, max(1, min(int(limit), 1000))),
+        ).fetchall()
+    return [_row_to_dict(r) for r in rows]
+
+
 def list_due_watchers(now_iso: str, *, limit: int = 50) -> list[dict]:
     with _conn() as conn:
         rows = conn.execute(
@@ -228,6 +250,71 @@ def update_status(watcher_id: str, status: str, last_error: str | None = None) -
         )
 
 
+def record_fire_atomic(
+    watcher_id: str,
+    *,
+    fingerprint: str,
+    fired_job_id: str,
+    spend_increment_cents: int,
+    spend_window_date: str,
+) -> str:
+    """Atomic write: spend bump + fingerprint + watcher_runs row in one
+    transaction. Returns the new run_id.
+
+    Splitting this into two `_conn()` blocks (the previous shape) means a
+    crash between the run insert and the spend update leaves an
+    inconsistent row pair: a fire is recorded but the budget tracker
+    didn't move, and the next sweep would re-fire on the same change. The
+    single transaction here guarantees either both rows or neither.
+    """
+    run_id = f"wrun_{uuid.uuid4().hex[:24]}"
+    now = _now_iso()
+    with _conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO watcher_runs (
+                run_id, watcher_id, started_at, finished_at,
+                fingerprint, fingerprint_changed, fired_job_id, skip_reason, error
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                run_id,
+                watcher_id,
+                now,
+                None,  # finished_at populated when delivery completes
+                fingerprint,
+                1,
+                fired_job_id,
+                None,
+                None,
+            ),
+        )
+        conn.execute(
+            """
+            UPDATE watchers
+            SET last_fingerprint = %s,
+                last_fingerprint_at = %s,
+                last_fired_job_id = %s,
+                spend_today_cents = spend_today_cents + %s,
+                spend_window_date = %s,
+                consecutive_errors = 0,
+                last_error = NULL,
+                updated_at = %s
+            WHERE watcher_id = %s
+            """,
+            (
+                fingerprint,
+                now,
+                fired_job_id,
+                int(spend_increment_cents),
+                spend_window_date,
+                now,
+                watcher_id,
+            ),
+        )
+    return run_id
+
+
 def record_spend_and_fingerprint(
     watcher_id: str,
     *,
@@ -236,7 +323,9 @@ def record_spend_and_fingerprint(
     spend_increment_cents: int,
     spend_window_date: str,
 ) -> None:
-    """Persist the result of a successful fire: bump spend, store fingerprint, link job."""
+    """Deprecated: kept only for tests that monkeypatch this function. New
+    code must use ``record_fire_atomic`` so the spend bump and run row are
+    written in the same transaction."""
     with _conn() as conn:
         conn.execute(
             """
@@ -276,6 +365,25 @@ def reset_spend_window(watcher_id: str, today_utc: str) -> None:
             WHERE watcher_id = %s
             """,
             (today_utc, STATUS_BUDGET_EXHAUSTED, STATUS_ACTIVE, _now_iso(), watcher_id),
+        )
+
+
+def clear_consecutive_errors(watcher_id: str) -> None:
+    """Reset the consecutive-error counter on a successful fingerprint
+    observation, regardless of whether the tick fired. Without this, a
+    flapping target (4 errors, 1 success-no-change, 4 errors, ...) still
+    auto-pauses despite reaching the target N times. Idempotent: a no-op
+    when consecutive_errors is already 0."""
+    with _conn() as conn:
+        conn.execute(
+            """
+            UPDATE watchers
+            SET consecutive_errors = 0,
+                last_error = NULL,
+                updated_at = %s
+            WHERE watcher_id = %s AND consecutive_errors > 0
+            """,
+            (_now_iso(), watcher_id),
         )
 
 
@@ -380,6 +488,13 @@ def update_watcher(watcher_id: str, **fields: Any) -> dict | None:
         values.append(value)
     if not set_clauses:
         return get_watcher(watcher_id)
+    # Reactivating a watcher (active after a pause/budget_exhausted) should
+    # clear last_error and the consecutive-error counter. Otherwise the
+    # stale error message and counter persist into the next pass and a
+    # single new error re-trips the auto-pause threshold immediately.
+    if fields.get("status") == STATUS_ACTIVE:
+        set_clauses.append("last_error = NULL")
+        set_clauses.append("consecutive_errors = 0")
     set_clauses.append("updated_at = %s")
     values.append(_now_iso())
     values.append(watcher_id)

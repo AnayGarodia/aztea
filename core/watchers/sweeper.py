@@ -65,7 +65,8 @@ def _iso_after(seconds: int) -> str:
 
 
 def sweep_watchers(*, limit: int = WATCHER_BATCH_LIMIT) -> dict[str, int]:
-    """One sweeper pass: deliver pending runs, then process due watchers.
+    """One sweeper pass: rollover spend windows, deliver pending runs, then
+    process due watchers.
 
     Returns a small summary dict for sweeper-state telemetry.
     """
@@ -74,6 +75,16 @@ def sweep_watchers(*, limit: int = WATCHER_BATCH_LIMIT) -> dict[str, int]:
     skipped_no_change = 0
     skipped_budget = 0
     errored = 0
+    rolled_over = 0
+
+    # Phase 0: roll over spend windows for any watcher whose window date is
+    # behind today_utc, regardless of status. This MUST run before
+    # list_due_watchers because that query filters status='active' and
+    # would otherwise leave budget_exhausted rows stuck across UTC midnight.
+    try:
+        rolled_over = _rollover_spend_windows(limit=limit * 4)
+    except Exception:
+        _LOG.exception("Watcher rollover phase failed.")
 
     # Phase 1: drive delivery for runs whose fired job has settled.
     try:
@@ -113,7 +124,25 @@ def sweep_watchers(*, limit: int = WATCHER_BATCH_LIMIT) -> dict[str, int]:
         "skipped_no_change": skipped_no_change,
         "skipped_budget_exhausted": skipped_budget,
         "errored": errored,
+        "rolled_over": rolled_over,
     }
+
+
+def _rollover_spend_windows(*, limit: int) -> int:
+    """Reset spend_today + status=active for every watcher whose
+    spend_window_date is behind today_utc. Returns the row count rolled.
+
+    This runs as a separate sweep phase rather than inline in
+    _process_due_watcher because the list_due_watchers query filters
+    status='active' — so a budget_exhausted watcher would never reach
+    the inline rollover branch.
+    """
+    today = _today_utc()
+    rolled = 0
+    for row in _crud.list_watchers_needing_rollover(today, limit=limit):
+        _crud.reset_spend_window(row["watcher_id"], today)
+        rolled += 1
+    return rolled
 
 
 def watchers_sweeper_loop(stop_event: threading.Event) -> None:
@@ -176,6 +205,11 @@ def _process_due_watcher(row: dict) -> str:
             error=error,
         )
         return "error"
+
+    # Successful fingerprint observation — reset the error counter even
+    # if we're about to skip the diff gate. A flapping target that reaches
+    # us 1-in-5 ticks should NOT auto-pause.
+    _crud.clear_consecutive_errors(watcher_id)
 
     # Diff gate.
     policy = row.get("on_change_policy") or "on_change"
@@ -352,15 +386,9 @@ def _fire(
         return None
 
     job_id = job["job_id"]
-    run_id = _crud.insert_watcher_run(
-        watcher_id=watcher_id,
-        fingerprint=fingerprint,
-        fingerprint_changed=True,
-        fired_job_id=job_id,
-        skip_reason=None,
-        error=None,
-    )
-    _crud.record_spend_and_fingerprint(
+    # Atomic: insert watcher_runs row + bump spend in one transaction so a
+    # crash between them cannot produce inconsistent state.
+    run_id = _crud.record_fire_atomic(
         watcher_id,
         fingerprint=fingerprint,
         fired_job_id=job_id,

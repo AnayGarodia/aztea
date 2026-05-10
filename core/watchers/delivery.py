@@ -16,6 +16,8 @@ import hashlib
 import hmac
 import json
 import logging
+import secrets
+from datetime import datetime, timezone
 from typing import Any
 
 import requests
@@ -43,8 +45,15 @@ def deliver_run(run: dict, job: dict) -> None:
 
 
 def build_payload(run: dict, job: dict) -> dict[str, Any]:
+    # delivered_at and nonce give consumers replay protection without forcing
+    # them to track per-watcher state. Two replays of the same wire-bytes
+    # share the same nonce, so a consumer's idempotency key (run_id + nonce)
+    # rejects duplicates; a fresh delivery (e.g. retry after a 5xx) produces
+    # a new nonce because we re-call build_payload at delivery time.
     return {
         "event": "watcher.fired",
+        "delivered_at": datetime.now(timezone.utc).isoformat(),
+        "nonce": secrets.token_urlsafe(16),
         "watcher_id": run.get("watcher_id"),
         "run_id": run.get("run_id"),
         "fired_at": run.get("started_at"),
