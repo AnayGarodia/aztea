@@ -273,29 +273,20 @@ _bulk_stats_cache_at: float = 0.0
 _BULK_STATS_TTL = 30.0  # seconds
 
 
-def _compute_bulk_agent_stats(agent_ids: list[str]) -> dict:
-    """
-    Returns {agent_id: {jobs_last_30_days, job_completion_rate, median_latency_seconds}}
-    for all supplied agent IDs in a single pass.
-    Results are cached for 30 seconds to avoid re-scanning the jobs table on every page load.
-    """
-    global _bulk_stats_cache, _bulk_stats_cache_at
-    import time as _time
+_LATENCY_EXPR_POSTGRES = (
+    "EXTRACT(EPOCH FROM (completed_at::timestamptz - claimed_at::timestamptz))"
+)
+_LATENCY_EXPR_SQLITE = "(julianday(completed_at) - julianday(claimed_at)) * 86400"
 
-    now = _time.monotonic()
-    if _bulk_stats_cache is not None and (now - _bulk_stats_cache_at) < _BULK_STATS_TTL:
-        cached = _bulk_stats_cache
-        # Return only the requested IDs from the cache (may be a subset)
-        return {aid: cached[aid] for aid in agent_ids if aid in cached}
 
-    if not agent_ids:
-        return {}
-    from datetime import datetime, timedelta, timezone
-
-    since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+def _query_bulk_agent_stats_from_db(
+    agent_ids: list[str], since: str
+) -> tuple[list, list]:
+    """Run the two stats queries and return (count_rows, latency_rows)."""
     placeholders = ",".join(["%s"] * len(agent_ids))
+    latency_expr = _LATENCY_EXPR_POSTGRES if _db.IS_POSTGRES else _LATENCY_EXPR_SQLITE
     with jobs._conn() as conn:
-        rows = conn.execute(
+        count_rows = conn.execute(
             f"""
             SELECT agent_id,
                    COUNT(*) AS total,
@@ -307,11 +298,6 @@ def _compute_bulk_agent_stats(agent_ids: list[str]) -> dict:
             """,
             (*agent_ids, since),
         ).fetchall()
-        latency_expr = (
-            "EXTRACT(EPOCH FROM (completed_at::timestamptz - claimed_at::timestamptz))"
-            if _db.IS_POSTGRES
-            else "(julianday(completed_at) - julianday(claimed_at)) * 86400"
-        )
         latency_rows = conn.execute(
             f"""
             SELECT agent_id,
@@ -326,15 +312,18 @@ def _compute_bulk_agent_stats(agent_ids: list[str]) -> dict:
             """,
             (*agent_ids, since),
         ).fetchall()
+    return count_rows, latency_rows
+
+
+def _aggregate_bulk_stats(
+    agent_ids: list[str], count_rows: list, latency_rows: list
+) -> dict:
+    """Combine raw DB rows into the stats dict keyed by agent_id."""
     stats: dict[str, dict] = {
-        aid: {
-            "jobs_last_30_days": 0,
-            "job_completion_rate": None,
-            "median_latency_seconds": None,
-        }
+        aid: {"jobs_last_30_days": 0, "job_completion_rate": None, "median_latency_seconds": None}
         for aid in agent_ids
     }
-    for r in rows:
+    for r in count_rows:
         aid = r["agent_id"]
         total = int(r["total"] or 0)
         completed = int(r["completed"] or 0)
@@ -353,6 +342,29 @@ def _compute_bulk_agent_stats(agent_ids: list[str]) -> dict:
             stats[aid]["median_latency_seconds"] = round(
                 lats[mid] if len(lats) % 2 else (lats[mid - 1] + lats[mid]) / 2, 2
             )
+    return stats
+
+
+def _compute_bulk_agent_stats(agent_ids: list[str]) -> dict:
+    """Return {agent_id: {jobs_last_30_days, job_completion_rate, median_latency_seconds}}.
+
+    Cached for 30 s to avoid re-scanning the jobs table on every page load.
+    """
+    global _bulk_stats_cache, _bulk_stats_cache_at
+    import time as _time
+
+    now = _time.monotonic()
+    if _bulk_stats_cache is not None and (now - _bulk_stats_cache_at) < _BULK_STATS_TTL:
+        cached = _bulk_stats_cache
+        return {aid: cached[aid] for aid in agent_ids if aid in cached}
+
+    if not agent_ids:
+        return {}
+    from datetime import datetime, timedelta, timezone
+
+    since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    count_rows, latency_rows = _query_bulk_agent_stats_from_db(agent_ids, since)
+    stats = _aggregate_bulk_stats(agent_ids, count_rows, latency_rows)
     _bulk_stats_cache = stats
     _bulk_stats_cache_at = _time.monotonic()
     return stats
