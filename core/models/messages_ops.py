@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from core.functional import Err, Ok, Result
 
@@ -304,141 +304,259 @@ def canonical_job_message_type(msg_type: str, *, allow_legacy: bool = True) -> s
     return LEGACY_JOB_MESSAGE_TYPE_ALIASES.get(normalized_type, normalized_type)
 
 
-def _normalize_typed_payload_for_compat(
-    msg_type: str, payload: JSONObject
-) -> JSONObject:
-    normalized = dict(payload)
+_PROGRESS_PERCENT_MIN = 0
+_PROGRESS_PERCENT_MAX = 100
 
-    if msg_type == "clarification_request":
-        question = str(normalized.get("question") or "").strip()
-        if not question:
-            raise ValueError("clarification_request payload.question is required.")
-        normalized["question"] = question
-        schema = normalized.get("input_schema") or normalized.get("schema")
-        if schema is not None and not isinstance(schema, dict):
-            raise ValueError(
-                "clarification_request payload.input_schema must be an object."
-            )
-        if schema is not None:
-            normalized["input_schema"] = schema
-            normalized.pop("schema", None)
-        return normalized
 
-    if msg_type == "clarification_response":
-        answer = normalized.get("answer")
-        if isinstance(answer, str):
-            answer = answer.strip()
-        if answer in (None, ""):
-            raise ValueError("clarification_response payload.answer is required.")
-        normalized["answer"] = answer
-        return normalized
-
-    if msg_type == "progress":
-        percent_raw = normalized.get("percent")
-        if percent_raw is None:
-            raise ValueError("progress payload.percent is required.")
-        try:
-            percent = int(percent_raw)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(
-                "progress payload.percent must be an integer between 0 and 100."
-            ) from exc
-        if percent < 0 or percent > 100:
-            raise ValueError(
-                "progress payload.percent must be an integer between 0 and 100."
-            )
-        normalized["percent"] = percent
-        note = str(normalized.get("note") or normalized.get("message") or "").strip()
-        if note:
-            normalized["note"] = note
-        return normalized
-
-    if msg_type == "partial_result":
-        partial_payload = normalized.get("payload")
-        if partial_payload is None:
-            normalized["payload"] = {}
-        elif not isinstance(partial_payload, dict):
-            raise ValueError("partial_result payload.payload must be an object.")
-        if "is_final" not in normalized:
-            normalized["is_final"] = False
-        return normalized
-
-    if msg_type == "note":
-        text = str(
-            normalized.get("text")
-            or normalized.get("note")
-            or normalized.get("message")
-            or ""
-        ).strip()
-        if not text:
-            raise ValueError("note payload.text is required.")
-        normalized["text"] = text
-        return normalized
-
-    if msg_type == "agent_message":
-        channel = str(normalized.get("channel") or "").strip()
-        if not channel:
-            raise ValueError("agent_message payload.channel is required.")
-        normalized["channel"] = channel
-        body = normalized.get("body")
-        if isinstance(body, str):
-            body_text = body.strip()
-            if not body_text:
-                raise ValueError("agent_message payload.body must not be empty.")
-            normalized["body"] = body_text
-        elif body is None:
-            raise ValueError("agent_message payload.body is required.")
-        elif not isinstance(body, dict):
-            raise ValueError(
-                "agent_message payload.body must be an object or non-empty string."
-            )
-        to_id = _normalize_optional_text(normalized.get("to_id"))
-        if to_id is None:
-            normalized.pop("to_id", None)
-        else:
-            normalized["to_id"] = to_id
-        return normalized
-
-    if msg_type == "tool_call":
-        tool_name = str(
-            normalized.get("tool_name") or normalized.get("name") or ""
-        ).strip()
-        if not tool_name:
-            raise ValueError("tool_call payload.tool_name is required.")
-        normalized["tool_name"] = tool_name
-        args = normalized.get("args")
-        if args is None:
-            args = normalized.get("arguments")
-        if args is None:
-            normalized["args"] = {}
-        elif not isinstance(args, dict):
-            raise ValueError("tool_call payload.args must be an object.")
-        else:
-            normalized["args"] = args
-        corr = _normalize_optional_text(normalized.get("correlation_id"))
-        if corr is None:
-            normalized.pop("correlation_id", None)
-        else:
-            normalized["correlation_id"] = corr
-        return normalized
-
-    if msg_type == "tool_result":
-        corr = _normalize_optional_text(normalized.get("correlation_id"))
-        if corr is None:
-            raise ValueError("tool_result payload.correlation_id is required.")
-        normalized["correlation_id"] = corr
-        tool_payload = normalized.get("payload")
-        if tool_payload is None:
-            tool_payload = normalized.get("result")
-        if tool_payload is None:
-            normalized["payload"] = {}
-        elif not isinstance(tool_payload, dict):
-            raise ValueError("tool_result payload.payload must be an object.")
-        else:
-            normalized["payload"] = tool_payload
-        return normalized
-
+def _normalize_clarification_request_payload(normalized: JSONObject) -> JSONObject:
+    """Pure: enforce ``question`` required and ``input_schema`` object-typed."""
+    question = str(normalized.get("question") or "").strip()
+    if not question:
+        raise ValueError("clarification_request payload.question is required.")
+    normalized["question"] = question
+    schema = normalized.get("input_schema") or normalized.get("schema")
+    if schema is not None and not isinstance(schema, dict):
+        raise ValueError(
+            "clarification_request payload.input_schema must be an object."
+        )
+    if schema is not None:
+        normalized["input_schema"] = schema
+        normalized.pop("schema", None)
     return normalized
+
+
+def _normalize_clarification_response_payload(normalized: JSONObject) -> JSONObject:
+    """Pure: ``answer`` required and stripped if string."""
+    answer = normalized.get("answer")
+    if isinstance(answer, str):
+        answer = answer.strip()
+    if answer in (None, ""):
+        raise ValueError("clarification_response payload.answer is required.")
+    normalized["answer"] = answer
+    return normalized
+
+
+def _normalize_progress_payload(normalized: JSONObject) -> JSONObject:
+    """Pure: ``percent`` integer in [0, 100]; optional ``note`` collapsed from aliases."""
+    percent_raw = normalized.get("percent")
+    if percent_raw is None:
+        raise ValueError("progress payload.percent is required.")
+    try:
+        percent = int(percent_raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "progress payload.percent must be an integer between 0 and 100."
+        ) from exc
+    if percent < _PROGRESS_PERCENT_MIN or percent > _PROGRESS_PERCENT_MAX:
+        raise ValueError(
+            "progress payload.percent must be an integer between 0 and 100."
+        )
+    normalized["percent"] = percent
+    note = str(normalized.get("note") or normalized.get("message") or "").strip()
+    if note:
+        normalized["note"] = note
+    return normalized
+
+
+def _normalize_partial_result_payload(normalized: JSONObject) -> JSONObject:
+    """Pure: nested ``payload`` defaults to {}; ``is_final`` defaults to False."""
+    partial_payload = normalized.get("payload")
+    if partial_payload is None:
+        normalized["payload"] = {}
+    elif not isinstance(partial_payload, dict):
+        raise ValueError("partial_result payload.payload must be an object.")
+    if "is_final" not in normalized:
+        normalized["is_final"] = False
+    return normalized
+
+
+def _normalize_note_payload(normalized: JSONObject) -> JSONObject:
+    """Pure: ``text`` required; collapsed from text/note/message aliases."""
+    text = str(
+        normalized.get("text")
+        or normalized.get("note")
+        or normalized.get("message")
+        or ""
+    ).strip()
+    if not text:
+        raise ValueError("note payload.text is required.")
+    normalized["text"] = text
+    return normalized
+
+
+def _normalize_agent_message_body(normalized: JSONObject) -> None:
+    """Side-effect (mutating ``normalized``): enforce body shape (object or non-empty str)."""
+    body = normalized.get("body")
+    if isinstance(body, str):
+        body_text = body.strip()
+        if not body_text:
+            raise ValueError("agent_message payload.body must not be empty.")
+        normalized["body"] = body_text
+        return
+    if body is None:
+        raise ValueError("agent_message payload.body is required.")
+    if not isinstance(body, dict):
+        raise ValueError(
+            "agent_message payload.body must be an object or non-empty string."
+        )
+
+
+def _normalize_agent_message_payload(normalized: JSONObject) -> JSONObject:
+    """Pure-ish: enforce channel + body, normalise optional ``to_id``."""
+    channel = str(normalized.get("channel") or "").strip()
+    if not channel:
+        raise ValueError("agent_message payload.channel is required.")
+    normalized["channel"] = channel
+    _normalize_agent_message_body(normalized)
+    to_id = _normalize_optional_text(normalized.get("to_id"))
+    if to_id is None:
+        normalized.pop("to_id", None)
+    else:
+        normalized["to_id"] = to_id
+    return normalized
+
+
+def _normalize_tool_call_payload(normalized: JSONObject) -> JSONObject:
+    """Pure-ish: ``tool_name`` required, ``args`` defaulted to {}, optional correlation_id."""
+    tool_name = str(
+        normalized.get("tool_name") or normalized.get("name") or ""
+    ).strip()
+    if not tool_name:
+        raise ValueError("tool_call payload.tool_name is required.")
+    normalized["tool_name"] = tool_name
+    args = normalized.get("args")
+    if args is None:
+        args = normalized.get("arguments")
+    if args is None:
+        normalized["args"] = {}
+    elif not isinstance(args, dict):
+        raise ValueError("tool_call payload.args must be an object.")
+    else:
+        normalized["args"] = args
+    corr = _normalize_optional_text(normalized.get("correlation_id"))
+    if corr is None:
+        normalized.pop("correlation_id", None)
+    else:
+        normalized["correlation_id"] = corr
+    return normalized
+
+
+def _normalize_tool_result_payload(normalized: JSONObject) -> JSONObject:
+    """Pure-ish: ``correlation_id`` required, nested ``payload`` defaulted to {}."""
+    corr = _normalize_optional_text(normalized.get("correlation_id"))
+    if corr is None:
+        raise ValueError("tool_result payload.correlation_id is required.")
+    normalized["correlation_id"] = corr
+    tool_payload = normalized.get("payload")
+    if tool_payload is None:
+        tool_payload = normalized.get("result")
+    if tool_payload is None:
+        normalized["payload"] = {}
+    elif not isinstance(tool_payload, dict):
+        raise ValueError("tool_result payload.payload must be an object.")
+    else:
+        normalized["payload"] = tool_payload
+    return normalized
+
+
+_TYPED_PAYLOAD_NORMALIZERS = {
+    "clarification_request": _normalize_clarification_request_payload,
+    "clarification_response": _normalize_clarification_response_payload,
+    "progress": _normalize_progress_payload,
+    "partial_result": _normalize_partial_result_payload,
+    "note": _normalize_note_payload,
+    "agent_message": _normalize_agent_message_payload,
+    "tool_call": _normalize_tool_call_payload,
+    "tool_result": _normalize_tool_result_payload,
+}
+
+
+def _normalize_typed_payload_for_compat(
+    msg_type: str, payload: JSONObject,
+) -> JSONObject:
+    """Pure: dispatch to the per-type normaliser; unknown types are returned unchanged.
+
+    Why: each typed message has its own validation rules; a dispatch
+    table replaces the if/elif chain so adding a new type touches only
+    one helper plus the table.
+    """
+    normalized = dict(payload)
+    handler = _TYPED_PAYLOAD_NORMALIZERS.get(msg_type)
+    if handler is None:
+        return normalized
+    return handler(normalized)
+
+
+def _legacy_clarification_request_body(
+    normalized_type: str, canonical_type: str,
+    normalized_payload: dict, normalized_correlation: str | None,
+) -> dict:
+    """Pure: shape a legacy ``clarification_needed`` payload via the request schema."""
+    payload_model = ClarificationRequestPayload.model_validate(normalized_payload)
+    return {
+        "type": normalized_type,
+        "canonical_type": canonical_type,
+        "payload": payload_model.model_dump(),
+        "correlation_id": normalized_correlation,
+    }
+
+
+def _legacy_clarification_response_body(
+    normalized_type: str, canonical_type: str,
+    normalized_payload: dict, normalized_correlation: str | None,
+) -> dict:
+    """Pure: shape a legacy ``clarification`` payload via the response schema.
+
+    Why: when ``request_message_id`` is present we use the canonical schema;
+    older clients omit it, so we fall back to the legacy schema and drop
+    null fields so the resulting payload remains schema-valid downstream.
+    """
+    if "request_message_id" in normalized_payload:
+        payload_model = ClarificationResponsePayload.model_validate(normalized_payload)
+        normalized_data = payload_model.model_dump()
+    else:
+        payload_model = LegacyClarificationResponsePayload.model_validate(normalized_payload)
+        normalized_data = payload_model.model_dump(exclude_none=True)
+    return {
+        "type": normalized_type,
+        "canonical_type": canonical_type,
+        "payload": normalized_data,
+        "correlation_id": normalized_correlation,
+    }
+
+
+def _typed_message_body(
+    normalized_type: str, canonical_type: str,
+    normalized_payload: dict, normalized_correlation: str | None,
+) -> dict:
+    """Pure: validate a canonical typed payload against its pydantic model."""
+    typed_payload = _normalize_typed_payload_for_compat(canonical_type, normalized_payload)
+    try:
+        parsed = parse_typed_job_message({
+            "type": canonical_type,
+            "payload": typed_payload,
+            "correlation_id": normalized_correlation,
+        })
+    except ValidationError as exc:
+        raise ValueError(str(exc)) from exc
+    dumped = parsed.model_dump()
+    return {
+        "type": normalized_type,
+        "canonical_type": dumped["type"],
+        "payload": dumped["payload"],
+        "correlation_id": dumped.get("correlation_id"),
+    }
+
+
+def _validate_normalize_inputs(
+    msg_type: str, payload: JSONObject | None, correlation_id: str | None,
+) -> tuple[str, dict, str | None]:
+    """Pure: lower-case + strip msg_type, ensure payload is a dict, normalise correlation."""
+    normalized_type = _normalize_message_type(msg_type)
+    normalized_payload = payload if payload is not None else {}
+    if not isinstance(normalized_payload, dict):
+        raise ValueError("payload must be an object.")
+    return normalized_type, dict(normalized_payload), _normalize_optional_text(correlation_id)
 
 
 def normalize_job_message_body(
@@ -448,74 +566,33 @@ def normalize_job_message_body(
     correlation_id: str | None = None,
     allow_legacy: bool = True,
 ) -> dict:
-    """Validate and normalise the body for an outgoing job message.
+    """Pure: validate + normalise the body for an outgoing job message.
 
-    Resolves legacy msg_type aliases, ensures the payload matches the expected
-    shape for the given ``msg_type``, and injects defaults. Raises ``ValueError``
-    for unknown types or structurally invalid payloads.
+    Why: resolves legacy ``msg_type`` aliases, dispatches to the right
+    schema-validating helper, and shapes the result into the same dict
+    shape regardless of input legacy/canonical form. ``ValueError`` on
+    unknown types or structurally invalid payloads.
     """
-    normalized_type = _normalize_message_type(msg_type)
-    normalized_payload = payload if payload is not None else {}
-    if not isinstance(normalized_payload, dict):
-        raise ValueError("payload must be an object.")
-
-    normalized_correlation = _normalize_optional_text(correlation_id)
-    canonical_type = canonical_job_message_type(
-        normalized_type, allow_legacy=allow_legacy
+    normalized_type, normalized_payload, normalized_correlation = (
+        _validate_normalize_inputs(msg_type, payload, correlation_id)
     )
-
+    canonical_type = canonical_job_message_type(
+        normalized_type, allow_legacy=allow_legacy,
+    )
     if normalized_type == "clarification_needed" and allow_legacy:
-        payload_model = ClarificationRequestPayload.model_validate(normalized_payload)
-        return {
-            "type": normalized_type,
-            "canonical_type": canonical_type,
-            "payload": payload_model.model_dump(),
-            "correlation_id": normalized_correlation,
-        }
-
-    if normalized_type == "clarification" and allow_legacy:
-        if "request_message_id" in normalized_payload:
-            payload_model = ClarificationResponsePayload.model_validate(
-                normalized_payload
-            )
-            normalized_data = payload_model.model_dump()
-        else:
-            payload_model = LegacyClarificationResponsePayload.model_validate(
-                normalized_payload
-            )
-            normalized_data = payload_model.model_dump(exclude_none=True)
-        return {
-            "type": normalized_type,
-            "canonical_type": canonical_type,
-            "payload": normalized_data,
-            "correlation_id": normalized_correlation,
-        }
-
-    if canonical_type in TYPED_JOB_MESSAGE_TYPES:
-        typed_payload = _normalize_typed_payload_for_compat(
-            canonical_type, normalized_payload
+        return _legacy_clarification_request_body(
+            normalized_type, canonical_type, normalized_payload, normalized_correlation,
         )
-        try:
-            parsed = parse_typed_job_message(
-                {
-                    "type": canonical_type,
-                    "payload": typed_payload,
-                    "correlation_id": normalized_correlation,
-                }
-            )
-        except ValidationError as exc:
-            raise ValueError(str(exc)) from exc
-        dumped = parsed.model_dump()
-        return {
-            "type": normalized_type,
-            "canonical_type": dumped["type"],
-            "payload": dumped["payload"],
-            "correlation_id": dumped.get("correlation_id"),
-        }
-
+    if normalized_type == "clarification" and allow_legacy:
+        return _legacy_clarification_response_body(
+            normalized_type, canonical_type, normalized_payload, normalized_correlation,
+        )
+    if canonical_type in TYPED_JOB_MESSAGE_TYPES:
+        return _typed_message_body(
+            normalized_type, canonical_type, normalized_payload, normalized_correlation,
+        )
     if not allow_legacy:
         raise ValueError(f"Unsupported job message type: {normalized_type}")
-
     return {
         "type": normalized_type,
         "canonical_type": canonical_type,
@@ -601,70 +678,89 @@ class ReconciliationRunRequest(BaseModel):
     max_mismatches: int = Field(default=100, ge=1, le=1000)
 
 
+_PAYLOAD_MAX_BYTES = 64 * 1024
+_PAYLOAD_MAX_DEPTH = 8
+_PAYLOAD_MAX_KEYS = 120
+_PAYLOAD_MAX_ARRAY_ITEMS = 200
+# WHY: legitimate uses (multi-file Python executor, shell executors) ship
+# source code that easily exceeds 4 KB. The 64 KB total cap still bounds
+# the request; this per-string cap exists to prevent a single oversized
+# text field from skewing storage.
+_PAYLOAD_MAX_STRING_LEN = 50_000
+_PAYLOAD_MAX_KEY_LEN = 100
+
+
+def _check_dict_shape(value: dict, state: dict[str, int]) -> None:
+    """Pure: enforce key-count + per-key length constraints inside a dict node."""
+    state["keys"] += len(value)
+    if state["keys"] > _PAYLOAD_MAX_KEYS:
+        raise ValueError(
+            f"Input payload has too many fields (max {_PAYLOAD_MAX_KEYS} total keys)."
+        )
+    for raw_key in value.keys():
+        key = str(raw_key).strip()
+        if not key:
+            raise ValueError("Input payload contains an empty field name.")
+        if len(key) > _PAYLOAD_MAX_KEY_LEN:
+            raise ValueError(
+                f"Input field names must be {_PAYLOAD_MAX_KEY_LEN} characters or fewer."
+            )
+
+
+def _walk_payload_shape(payload: Any) -> None:
+    """Pure: recursive depth/keys/array/string-length guard.
+
+    Why: shared between every RegistryCallRequest validator so limits are
+    single-sourced; bails out at the first violation with one actionable
+    message.
+    """
+    state = {"keys": 0}
+
+    def _walk(value: Any, depth: int) -> None:
+        if depth > _PAYLOAD_MAX_DEPTH:
+            raise ValueError(
+                f"Input payload is too deeply nested (max depth {_PAYLOAD_MAX_DEPTH})."
+            )
+        if isinstance(value, str):
+            if len(value) > _PAYLOAD_MAX_STRING_LEN:
+                raise ValueError(
+                    f"Input text is too long (max {_PAYLOAD_MAX_STRING_LEN} chars per field)."
+                )
+            return
+        if isinstance(value, list):
+            if len(value) > _PAYLOAD_MAX_ARRAY_ITEMS:
+                raise ValueError(
+                    f"Input array has too many items (max {_PAYLOAD_MAX_ARRAY_ITEMS} per array)."
+                )
+            for item in value:
+                _walk(item, depth + 1)
+            return
+        if isinstance(value, dict):
+            _check_dict_shape(value, state)
+            for nested in value.values():
+                _walk(nested, depth + 1)
+
+    _walk(payload, depth=0)
+
+
 class RegistryCallRequest(RootModel[JSONObject]):
     model_config = ConfigDict(json_schema_extra={"example": {"ticker": "AAPL"}})
 
     @model_validator(mode="after")
     def guard_payload_shape(self):
-        """Raise ValueError if the invoke payload exceeds 64 KB or violates structural constraints."""
-        payload = self.root
-        encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(
-            "utf-8"
-        )
-        if len(encoded) > 64 * 1024:
+        """Pure: raise ValueError if the invoke payload exceeds size or structural caps.
+
+        Why: a single ``_walk`` recursion enforces depth/array/key/string
+        caps in one pass, bailing out at the first violation so callers
+        get one actionable message per call.
+        """
+        encoded = json.dumps(self.root, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        if len(encoded) > _PAYLOAD_MAX_BYTES:
             raise ValueError(
-                "Input payload is too large (max 64KB). Reduce field count or text size."
+                f"Input payload is too large (max {_PAYLOAD_MAX_BYTES // 1024}KB). "
+                "Reduce field count or text size."
             )
-
-        max_depth = 8
-        max_keys = 120
-        max_array_items = 200
-        # The per-string cap used to be 4000 chars, but legitimate uses (the
-        # multi-file Python executor and shell/multi-language executors) ship
-        # source code that easily exceeds 4 KB. The total payload cap above
-        # (64 KB) still bounds the request as a whole; this cap exists to
-        # prevent a single oversize text field from skewing storage. Lift to
-        # 50 000 so 50 KB-per-file source bundles work as documented.
-        max_string_len = 50_000
-
-        state = {"keys": 0}
-
-        def _walk(value, depth: int) -> None:
-            if depth > max_depth:
-                raise ValueError(
-                    f"Input payload is too deeply nested (max depth {max_depth})."
-                )
-            if isinstance(value, str):
-                if len(value) > max_string_len:
-                    raise ValueError(
-                        f"Input text is too long (max {max_string_len} chars per field)."
-                    )
-                return
-            if isinstance(value, list):
-                if len(value) > max_array_items:
-                    raise ValueError(
-                        f"Input array has too many items (max {max_array_items} per array)."
-                    )
-                for item in value:
-                    _walk(item, depth + 1)
-                return
-            if isinstance(value, dict):
-                state["keys"] += len(value)
-                if state["keys"] > max_keys:
-                    raise ValueError(
-                        f"Input payload has too many fields (max {max_keys} total keys)."
-                    )
-                for raw_key, nested in value.items():
-                    key = str(raw_key).strip()
-                    if not key:
-                        raise ValueError("Input payload contains an empty field name.")
-                    if len(key) > 100:
-                        raise ValueError(
-                            "Input field names must be 100 characters or fewer."
-                        )
-                    _walk(nested, depth + 1)
-
-        _walk(payload, depth=0)
+        _walk_payload_shape(self.root)
         return self
 
 

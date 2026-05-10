@@ -146,129 +146,151 @@ class Decision:
 # ── Public entrypoint ──────────────────────────────────────────────────────
 
 
-def decide(
-    *,
-    intent: str,
-    explicit_input: dict[str, Any] | None,
-    max_cost_usd: float,
-    candidates: list[CandidateAgent],
-    aggressive: bool = False,
-) -> Decision:
-    """Run every auto-invoke gate; return a Decision the caller can act on.
+_AGGRESSIVE_CONFIDENCE_FLOOR = 0.20
+_HISTORY_THRESHOLD_CALL_COUNT = 5  # below this, treat as 'too new to penalise'
+_TOP_CANDIDATES_PREVIEW = 3
 
-    aggressive=True lowers the confidence floor to 0.20 (vs the env-tuned
-    default 0.30). Trust, price, and stability gates are unchanged. Used by
-    callers who want aztea_do to fire on shorter intents.
+
+def _check_disabled_or_empty(
+    candidates: list[CandidateAgent], intent_text: str,
+) -> Decision | None:
+    """Pure-ish: gate on the no-side-effect cases (feature flag, empty inputs).
+
+    Why: separating these from the scoring loop lets ``decide`` keep its
+    invariant chain — "score → confidence → stability → trust → success →
+    price → fields" — readable in one frame.
     """
-
     if not feature_flags.auto_invoke_enabled():
         return Decision(
             auto_invoked=False,
             reason="disabled",
             next_step="Use search_specialists + call_specialist directly.",
         )
-
     if not candidates:
         return Decision(
             auto_invoked=False,
             reason="no_match",
             next_step="No agent matched. Try a broader query.",
         )
-
-    intent_text = (intent or "").strip()
     if not intent_text:
         return Decision(
             auto_invoked=False,
             reason="empty_intent",
             next_step="Provide a natural-language intent describing the task.",
         )
+    return None
 
+
+def _rank_candidates(
+    candidates: list[CandidateAgent], intent_text: str,
+    explicit_input: dict[str, Any] | None,
+) -> list:
+    """Pure: score every candidate and return non-zero matches sorted by descending score."""
     ranked = sorted(
         (_score_candidate(c, intent_text, explicit_input) for c in candidates),
         key=lambda r: r.score,
         reverse=True,
     )
-    ranked = [r for r in ranked if r.score > 0]
-    if not ranked:
-        return Decision(
-            auto_invoked=False,
-            reason="no_match",
-            next_step="No agent matched. Try a broader query.",
-        )
+    return [r for r in ranked if r.score > 0]
 
-    top = ranked[0]
-    rest = ranked[1:]
 
-    # ── Gate: confidence ───────────────────────────────────────────────
+def _check_confidence_gate(
+    top: Any, rest: list, ranked: list, *, aggressive: bool,
+) -> tuple[float, Decision | None]:
+    """Pure-ish: returns ``(confidence, decision_or_None)``.
+
+    Why: ``aggressive=True`` lowers the floor to 0.20 (vs the env-tuned
+    default) so callers who want aztea_do to fire on shorter intents can
+    opt in without lowering the floor for everyone else.
+    """
     confidence = _confidence(top, rest)
-    confidence_floor = (
-        0.20 if aggressive else feature_flags.auto_invoke_confidence_floor()
+    floor = (
+        _AGGRESSIVE_CONFIDENCE_FLOOR
+        if aggressive
+        else feature_flags.auto_invoke_confidence_floor()
     )
-    if confidence < confidence_floor:
-        return Decision(
+    if confidence < floor:
+        return confidence, Decision(
             auto_invoked=False,
             reason="low_confidence",
             confidence=round(confidence, 3),
-            candidates=[r.candidate.public_dict() for r in ranked[:3]],
+            candidates=[r.candidate.public_dict() for r in ranked[:_TOP_CANDIDATES_PREVIEW]],
             next_step=(
                 "Multiple agents could fit. Call describe_specialist on a candidate, "
                 "then call_specialist to run it."
             ),
         )
+    return confidence, None
 
-    # ── Gate: stability tier (no auto-invoke for beta agents) ──────────
-    if top.candidate.stability_tier == "beta":
-        return Decision(
-            auto_invoked=False,
-            reason="beta_agent",
-            confidence=round(confidence, 3),
-            candidates=[top.candidate.public_dict()],
-            next_step=(
-                f"Top match {top.candidate.slug!r} is in beta. Call call_specialist "
-                "explicitly if you want to use it."
-            ),
-        )
 
-    # ── Gate: trust floor ──────────────────────────────────────────────
+def _check_stability_gate(top: Any, confidence: float) -> Decision | None:
+    """Pure: refuse beta agents — direct call_specialist still works."""
+    if top.candidate.stability_tier != "beta":
+        return None
+    return Decision(
+        auto_invoked=False,
+        reason="beta_agent",
+        confidence=round(confidence, 3),
+        candidates=[top.candidate.public_dict()],
+        next_step=(
+            f"Top match {top.candidate.slug!r} is in beta. Call call_specialist "
+            "explicitly if you want to use it."
+        ),
+    )
+
+
+def _check_trust_gate(top: Any, confidence: float) -> Decision | None:
+    """Pure: enforce the env-tunable trust floor against the top candidate's score."""
     trust_floor = feature_flags.auto_invoke_trust_floor()
-    if top.candidate.trust_score < trust_floor:
-        return Decision(
-            auto_invoked=False,
-            reason="low_trust",
-            confidence=round(confidence, 3),
-            candidates=[top.candidate.public_dict()],
-            next_step=(
-                f"Top match has trust score {top.candidate.trust_score:.0f}, "
-                f"below the auto-invoke floor of {trust_floor:.0f}."
-            ),
-        )
+    if top.candidate.trust_score >= trust_floor:
+        return None
+    return Decision(
+        auto_invoked=False,
+        reason="low_trust",
+        confidence=round(confidence, 3),
+        candidates=[top.candidate.public_dict()],
+        next_step=(
+            f"Top match has trust score {top.candidate.trust_score:.0f}, "
+            f"below the auto-invoke floor of {trust_floor:.0f}."
+        ),
+    )
 
-    # ── Gate: success-rate floor ───────────────────────────────────────
+
+def _check_success_gate(top: Any, confidence: float) -> Decision | None:
+    """Pure: only block agents with a real track record falling below the floor.
+
+    Why: brand-new agents (call_count under the history threshold) are
+    not penalised, otherwise they could never auto-invoke.
+    """
+    has_history = top.candidate.raw.get("call_count", 0) >= _HISTORY_THRESHOLD_CALL_COUNT
     success_floor = feature_flags.auto_invoke_success_floor()
-    # Treat agents with no completed calls (success_rate==0) as eligible —
-    # otherwise brand-new agents can never auto-invoke. Only block agents
-    # that have a track record AND fall below the floor.
-    has_history = top.candidate.raw.get("call_count", 0) >= 5
-    if has_history and top.candidate.success_rate < success_floor:
-        return Decision(
-            auto_invoked=False,
-            reason="low_success_rate",
-            confidence=round(confidence, 3),
-            candidates=[top.candidate.public_dict()],
-            next_step=(
-                f"Top match has {top.candidate.success_rate:.0%} success rate, "
-                f"below the auto-invoke floor of {success_floor:.0%}."
-            ),
-        )
+    if not (has_history and top.candidate.success_rate < success_floor):
+        return None
+    return Decision(
+        auto_invoked=False,
+        reason="low_success_rate",
+        confidence=round(confidence, 3),
+        candidates=[top.candidate.public_dict()],
+        next_step=(
+            f"Top match has {top.candidate.success_rate:.0%} success rate, "
+            f"below the auto-invoke floor of {success_floor:.0%}."
+        ),
+    )
 
-    # ── Gate: price ────────────────────────────────────────────────────
+
+def _check_quality_gates(top: Any, confidence: float) -> Decision | None:
+    """Pure: chain stability + trust + success-rate gates."""
+    return (
+        _check_stability_gate(top, confidence)
+        or _check_trust_gate(top, confidence)
+        or _check_success_gate(top, confidence)
+    )
+
+
+def _check_price_gate(top: Any, max_cost_usd: float, confidence: float) -> Decision | None:
+    """Pure-ish: per-call price ceiling. Probation listings have a hard cap regardless of caller intent."""
     price = top.candidate.price_per_call_usd
-    server_cap = feature_flags.auto_invoke_server_cap_usd()
-    effective_cap = min(max_cost_usd, server_cap)
-    # Probation listings get a hard $1.00 cap regardless of the caller's
-    # max_cost_usd, until they accumulate a track record and graduate to
-    # 'approved'. Direct aztea_call by slug still works — this gate only
-    # affects unsolicited auto-invoke routing.
+    effective_cap = min(max_cost_usd, feature_flags.auto_invoke_server_cap_usd())
     if str(top.candidate.raw.get("review_status") or "").strip() == "probation":
         effective_cap = min(effective_cap, _PROBATION_PRICE_CAP_USD)
     if price > effective_cap:
@@ -283,23 +305,53 @@ def decide(
                 "explicitly."
             ),
         )
+    return None
 
-    # ── Gate: required input fields ────────────────────────────────────
+
+def _missing_fields_decision(top: Any, missing: list[str], confidence: float) -> Decision:
+    """Pure: refusal Decision for the 'top candidate is missing required fields' case."""
+    return Decision(
+        auto_invoked=False,
+        reason="missing_fields",
+        confidence=round(confidence, 3),
+        candidates=[top.candidate.public_dict()],
+        missing_fields=missing,
+        next_step=(
+            f"Top match {top.candidate.slug!r} needs structured input. "
+            f"Re-call with input={{...}} including: {', '.join(missing)}."
+        ),
+    )
+
+
+def _no_match_decision() -> Decision:
+    """Pure: refusal Decision for the 'no candidate scored above zero' case."""
+    return Decision(
+        auto_invoked=False,
+        reason="no_match",
+        next_step="No agent matched. Try a broader query.",
+    )
+
+
+def _attempt_auto_invoke(
+    top: Any, ranked: list, intent_text: str,
+    explicit_input: dict[str, Any] | None,
+    max_cost_usd: float, aggressive: bool,
+) -> Decision:
+    """Pure-ish: run every gate against the top candidate; produce a Decision."""
+    confidence, low_conf = _check_confidence_gate(
+        top, ranked[1:], ranked, aggressive=aggressive,
+    )
+    if low_conf is not None:
+        return low_conf
+    blocked = (
+        _check_quality_gates(top, confidence)
+        or _check_price_gate(top, max_cost_usd, confidence)
+    )
+    if blocked is not None:
+        return blocked
     payload, missing = _resolve_payload(top.candidate, intent_text, explicit_input)
     if missing:
-        return Decision(
-            auto_invoked=False,
-            reason="missing_fields",
-            confidence=round(confidence, 3),
-            candidates=[top.candidate.public_dict()],
-            missing_fields=missing,
-            next_step=(
-                f"Top match {top.candidate.slug!r} needs structured input. "
-                f"Re-call with input={{...}} including: {', '.join(missing)}."
-            ),
-        )
-
-    # All gates passed — caller proceeds to invoke.
+        return _missing_fields_decision(top, missing, confidence)
     return Decision(
         auto_invoked=True,
         chosen=top.candidate,
@@ -308,7 +360,260 @@ def decide(
     )
 
 
+def decide(
+    *,
+    intent: str,
+    explicit_input: dict[str, Any] | None,
+    max_cost_usd: float,
+    candidates: list[CandidateAgent],
+    aggressive: bool = False,
+) -> Decision:
+    """Pure-ish: run every auto-invoke gate; return a ``Decision`` the caller can act on.
+
+    Why: gates run in a fixed order — score → confidence → stability →
+    trust → success → price → fields — so callers get a deterministic
+    refusal reason rather than a non-deterministic union of failures.
+    """
+    intent_text = (intent or "").strip()
+    early = _check_disabled_or_empty(candidates, intent_text)
+    if early is not None:
+        return early
+    ranked = _rank_candidates(candidates, intent_text, explicit_input)
+    if not ranked:
+        return _no_match_decision()
+    return _attempt_auto_invoke(
+        ranked[0], ranked, intent_text, explicit_input, max_cost_usd, aggressive,
+    )
+
+
 # ── Ranking ────────────────────────────────────────────────────────────────
+
+
+_SLUG_FULL_BONUS = 50
+_SLUG_FRAGMENT_BONUS = 25
+_NAME_OVERLAP_BONUS = 12
+_NAME_OVERLAP_LABEL_CHARS = 60
+_DESC_OVERLAP_PER_TOKEN = 3
+_DESC_OVERLAP_CAP = 24
+_TAG_OVERLAP_PER_TOKEN = 6
+_TAG_OVERLAP_CAP = 18
+_CATEGORY_BONUS = 6
+_QUALITY_TRACK_RECORD_CALLS = 5
+_QUALITY_SUCCESS_BONUS_CAP = 10
+_QUALITY_TRUST_BONUS_CAP = 5
+_TRUST_BONUS_DIVISOR = 20.0
+_CODEX_RECOMMENDED_BONUS = 5
+_INTENT_INTERLOCK_BONUS = 45
+_DEPENDENCY_AUDIT_BONUS = 70
+_KEYWORD_MATCH_PER = 20
+_KEYWORD_MATCH_CAP = 60
+_BLOCK_KEYWORD_PER = 30
+_BLOCK_KEYWORD_CAP = 60
+_SCHEMA_SHAPE_FULL_BONUS = 35
+_SCHEMA_SHAPE_PARTIAL_BONUS = 15
+_KEYWORD_PREVIEW_LIMIT = 3
+
+_AUDIT_TOKEN_SET = frozenset({
+    "audit", "audits", "auditing", "vulnerability",
+    "vulnerabilities", "cve", "cves", "supply",
+})
+_DEPENDENCY_AGENT_HINTS = ("dependency_auditor", "dependency auditor", "dep-audit")
+_EXEC_VERBS = frozenset({"run", "execute", "evaluate", "repl", "interpreter", "compute"})
+_PYTHON_TOKENS = frozenset({"python", "py3", "python3"})
+_CODEY_HINTS = ("def ", "class ", "import ", "print(", "lambda ")
+_LINT_TOKENS = frozenset({"lint", "linter", "ruff", "eslint"})
+_BROWSER_TOKENS = frozenset({"browser", "screenshot", "playwright", "homepage"})
+_BROWSER_AGENT_HINTS = ("browser", "playwright", "screenshot")
+_IMAGE_TOKENS = frozenset({"image", "generate", "generation", "dall", "replicate"})
+_IMAGE_AGENT_HINTS = ("image", "generation", "replicate", "gpt-image")
+_FINANCIAL_TOKENS = frozenset({"edgar", "10-k", "sec", "revenue"})
+_FINANCIAL_AGENT_HINTS = ("edgar", "sec", "financial")
+
+
+def _score_string_signals(c: CandidateAgent, intent_lower: str, tokens: set[str]) -> tuple[float, list[str]]:
+    """Pure: slug / name / description / tag / category bonuses."""
+    score = 0.0
+    reasons: list[str] = []
+    slug = c.slug.lower()
+    if slug and slug in intent_lower:
+        score += _SLUG_FULL_BONUS
+        reasons.append(f"slug match: {slug}")
+    elif slug and any(part in tokens for part in slug.split("_")):
+        score += _SLUG_FRAGMENT_BONUS
+        reasons.append("slug-fragment match")
+    name_overlap = tokens & set(_tokenize(c.name.lower()))
+    if name_overlap:
+        score += _NAME_OVERLAP_BONUS
+        reasons.append(f"name match: {','.join(sorted(name_overlap))[:_NAME_OVERLAP_LABEL_CHARS]}")
+    desc_overlap = tokens & set(_tokenize(c.description.lower()))
+    if desc_overlap:
+        score += min(_DESC_OVERLAP_CAP, len(desc_overlap) * _DESC_OVERLAP_PER_TOKEN)
+        reasons.append(f"desc match: {len(desc_overlap)} tokens")
+    tag_overlap = tokens & {t.lower() for t in c.tags}
+    if tag_overlap:
+        score += min(_TAG_OVERLAP_CAP, len(tag_overlap) * _TAG_OVERLAP_PER_TOKEN)
+        reasons.append(f"tag match: {','.join(sorted(tag_overlap))}")
+    if c.category and c.category.lower() in tokens:
+        score += _CATEGORY_BONUS
+        reasons.append(f"category match: {c.category}")
+    return score, reasons
+
+
+def _score_quality_signals(c: CandidateAgent) -> tuple[float, list[str]]:
+    """Pure: success-rate + trust + recommended bonuses for agents with a track record."""
+    score = 0.0
+    reasons: list[str] = []
+    if c.raw.get("call_count", 0) >= _QUALITY_TRACK_RECORD_CALLS:
+        score += min(_QUALITY_SUCCESS_BONUS_CAP, c.success_rate * 10)
+        score += min(_QUALITY_TRUST_BONUS_CAP, c.trust_score / _TRUST_BONUS_DIVISOR)
+    if c.raw.get("codex_recommended"):
+        score += _CODEX_RECOMMENDED_BONUS
+        reasons.append("recommended")
+    return score, reasons
+
+
+def _detect_audit_signal(intent_lower: str, tokens: set[str]) -> bool:
+    """Pure: True if the intent reads like a dependency-audit / CVE check.
+
+    Why: audit/vulnerability intents must dominate over the generic Python
+    execution rule — "Check vulnerabilities in my Python project" mentions
+    Python but is asking for a dependency audit, not code execution.
+    """
+    return (
+        bool(_AUDIT_TOKEN_SET & tokens)
+        or "package.json" in intent_lower
+        or "requirements.txt" in intent_lower
+        or _looks_like_package_pinning(intent_lower)
+    )
+
+
+def _score_intent_interlocks(
+    c: CandidateAgent, intent: str, intent_lower: str,
+    tokens: set[str], combined: str, audit_signal: bool,
+) -> tuple[float, list[str]]:
+    """Pure: cohort-specific bonuses (audit, python-exec, lint, browser, image, financial)."""
+    score = 0.0
+    reasons: list[str] = []
+    is_dependency_agent = (
+        any(tok in combined for tok in _DEPENDENCY_AGENT_HINTS)
+        or ("dependency" in combined and "audit" in combined)
+    )
+    if audit_signal and is_dependency_agent:
+        score += _DEPENDENCY_AUDIT_BONUS
+        reasons.append("dependency audit intent")
+    has_strong_exec_verb = bool(_EXEC_VERBS & tokens)
+    has_python_token = bool(_PYTHON_TOKENS & tokens)
+    looks_codey = ("\n" in intent) or any(token in intent for token in _CODEY_HINTS)
+    if (
+        ("python" in combined and "executor" in combined)
+        and not audit_signal
+        and ((has_strong_exec_verb and has_python_token) or looks_codey)
+    ):
+        score += _INTENT_INTERLOCK_BONUS
+        reasons.append("python execution intent")
+    if _LINT_TOKENS & tokens and "linter" in combined:
+        score += _INTENT_INTERLOCK_BONUS
+        reasons.append("lint intent")
+    if _BROWSER_TOKENS & tokens and any(t in combined for t in _BROWSER_AGENT_HINTS):
+        score += _INTENT_INTERLOCK_BONUS
+        reasons.append("browser/screenshot intent")
+    if _IMAGE_TOKENS & tokens and any(t in combined for t in _IMAGE_AGENT_HINTS):
+        score += _INTENT_INTERLOCK_BONUS
+        reasons.append("image generation intent")
+    if _FINANCIAL_TOKENS & tokens and any(t in combined for t in _FINANCIAL_AGENT_HINTS):
+        score += _INTENT_INTERLOCK_BONUS
+        reasons.append("financial filing intent")
+    return score, reasons
+
+
+def _score_keyword_overrides(
+    c: CandidateAgent, intent_lower: str,
+) -> tuple[float, list[str]]:
+    """Pure: curated match/block keyword adjustments — the strongest natural-language signal."""
+    score = 0.0
+    reasons: list[str] = []
+    if c.match_keywords:
+        hits = [kw for kw in c.match_keywords if kw and kw in intent_lower]
+        if hits:
+            score += min(_KEYWORD_MATCH_CAP, len(hits) * _KEYWORD_MATCH_PER)
+            reasons.append(f"keyword match: {','.join(hits[:_KEYWORD_PREVIEW_LIMIT])}")
+    if c.block_keywords:
+        blocks = [kw for kw in c.block_keywords if kw and kw in intent_lower]
+        if blocks:
+            score -= min(_BLOCK_KEYWORD_CAP, len(blocks) * _BLOCK_KEYWORD_PER)
+            reasons.append(f"blocked by: {','.join(blocks[:_KEYWORD_PREVIEW_LIMIT])}")
+    return score, reasons
+
+
+def _collect_composite_required(schema: dict[str, Any]) -> list[list[str]]:
+    """Pure: extract per-variant ``required`` lists from oneOf / anyOf composites."""
+    out: list[list[str]] = []
+    for keyword in ("oneOf", "anyOf"):
+        variants = schema.get(keyword)
+        if not isinstance(variants, list):
+            continue
+        for v in variants:
+            if not isinstance(v, dict):
+                continue
+            vreq = list(v.get("required") or [])
+            if vreq:
+                out.append(vreq)
+    return out
+
+
+def _score_schema_shape(
+    c: CandidateAgent, explicit_input: dict[str, Any] | None,
+) -> tuple[float, list[str]]:
+    """Pure: schema-shape disambiguator — highest-signal when caller passes structured input.
+
+    Why: intent-string-only routing can't tell "lint this Python" → linter
+    from python_code_executor; presence of all required keys gives a
+    deterministic +35 bump that breaks ties.
+    """
+    if not isinstance(explicit_input, dict) or not c.input_schema:
+        return 0.0, []
+    required = list(c.input_schema.get("required") or [])
+    if required:
+        present = [f for f in required if f in explicit_input]
+        if len(present) == len(required):
+            return _SCHEMA_SHAPE_FULL_BONUS, ["schema-shape match (all required)"]
+        if present:
+            return _SCHEMA_SHAPE_PARTIAL_BONUS, [
+                f"schema-shape partial ({len(present)}/{len(required)})"
+            ]
+        return 0.0, []
+    composite = _collect_composite_required(c.input_schema)
+    if not composite:
+        return 0.0, []
+    if any(all(f in explicit_input for f in vreq) for vreq in composite):
+        return _SCHEMA_SHAPE_FULL_BONUS, ["schema-shape match (composite variant)"]
+    best = max(composite, key=lambda vr: sum(1 for f in vr if f in explicit_input))
+    n_present = sum(1 for f in best if f in explicit_input)
+    if not n_present:
+        return 0.0, []
+    return _SCHEMA_SHAPE_PARTIAL_BONUS, [
+        f"schema-shape partial (composite {n_present}/{len(best)})"
+    ]
+
+
+def _apply_probation_penalty(c: CandidateAgent) -> tuple[float, list[str]]:
+    """Pure: probation listings get a fixed rank penalty so they never top generic intents.
+
+    Why: the penalty never zeroes the score, so explicit slug/keyword
+    matches still surface a probation listing when a caller asks for it
+    by name. Graduates to no penalty once review_status is 'approved'.
+    """
+    if str(c.raw.get("review_status") or "").strip() != "probation":
+        return 0.0, []
+    return -_PROBATION_RANK_PENALTY, ["probation: ranked last"]
+
+
+def _candidate_combined_text(c: CandidateAgent) -> str:
+    """Pure: lowercased haystack across slug/name/description/tags for substring checks."""
+    return " ".join([
+        c.slug.lower(), c.name.lower(), c.description.lower(),
+        " ".join(c.tags).lower(),
+    ])
 
 
 def _score_candidate(
@@ -316,206 +621,30 @@ def _score_candidate(
     intent: str,
     explicit_input: dict[str, Any] | None = None,
 ) -> Ranked:
-    """Lean confidence-oriented scorer.
+    """Pure: lean confidence-oriented scorer; sums independent signal helpers.
 
-    Signals (additive):
-      - exact slug match in intent          +50
-      - slug substring in intent            +25
-      - name match (any token)              +12
-      - description-token overlap           +3 per token (cap 24)
-      - tag/category match                  +6 per match (cap 18)
-      - quality (success * 10 + trust/20)   up to ~14
-      - codex_recommended flag              +5
-      - schema-shape match (explicit input  +35
-        keys cover ALL required fields)
-      - schema-shape partial match          +15
-        (≥1 required field present)
-
-    The schema-shape signal exists because intent-string-only routing
-    cannot disambiguate "lint this Python" → linter_agent vs
-    python_code_executor. When the caller passes input={"code":"..."},
-    only agents whose required fields fit that shape get the +35 bump,
-    so the decision becomes deterministic.
+    Why: each helper covers one signal class (string overlap, quality,
+    intent interlocks, curated keywords, schema-shape, probation) so the
+    score can be tuned per-class without touching the orchestrator.
     """
     intent_lower = intent.lower()
     tokens = set(_tokenize(intent_lower))
     if not tokens:
         return Ranked(candidate=c, score=0.0)
-
+    combined = _candidate_combined_text(c)
+    audit_signal = _detect_audit_signal(intent_lower, tokens)
     score = 0.0
     reasons: list[str] = []
-
-    slug = c.slug.lower()
-    if slug and slug in intent_lower:
-        score += 50
-        reasons.append(f"slug match: {slug}")
-    elif slug and any(part in tokens for part in slug.split("_")):
-        score += 25
-        reasons.append("slug-fragment match")
-
-    name_tokens = set(_tokenize(c.name.lower()))
-    name_overlap = tokens & name_tokens
-    if name_overlap:
-        score += 12
-        reasons.append(f"name match: {','.join(sorted(name_overlap))[:60]}")
-
-    desc_tokens = set(_tokenize(c.description.lower()))
-    desc_overlap = tokens & desc_tokens
-    if desc_overlap:
-        # cap so a long description doesn't crowd out short matches
-        score += min(24, len(desc_overlap) * 3)
-        reasons.append(f"desc match: {len(desc_overlap)} tokens")
-
-    tag_tokens = {t.lower() for t in c.tags}
-    tag_overlap = tokens & tag_tokens
-    if tag_overlap:
-        score += min(18, len(tag_overlap) * 6)
-        reasons.append(f"tag match: {','.join(sorted(tag_overlap))}")
-
-    if c.category and c.category.lower() in tokens:
-        score += 6
-        reasons.append(f"category match: {c.category}")
-
-    # Quality signal — small boost only when an agent has a real track record.
-    if c.raw.get("call_count", 0) >= 5:
-        score += min(10, c.success_rate * 10)
-        score += min(5, c.trust_score / 20.0)
-
-    if c.raw.get("codex_recommended"):
-        score += 5
-        reasons.append("recommended")
-
-    combined = " ".join([c.slug.lower(), c.name.lower(), c.description.lower(), " ".join(c.tags).lower()])
-    intent_lower_full = intent.lower()
-    # Audit/vulnerability/dependency intents must dominate over the generic
-    # python-execution rule. A user saying "Check vulnerabilities in my Python
-    # project, requests==2.25.0 pyyaml==5.3.1" mentions the word "python" but
-    # is NOT asking us to execute code — they want a dependency audit. Caught
-    # in the 2026-05-08 eval where aztea_do routed this exact intent to
-    # python_code_executor with confidence 0.97 and passed the natural-
-    # language string as `code`, producing a $0.01 SyntaxError.
-    audit_signal = (
-        bool({"audit", "audits", "auditing", "vulnerability", "vulnerabilities", "cve", "cves", "supply"} & tokens)
-        or "package.json" in intent_lower_full
-        or "requirements.txt" in intent_lower_full
-        or _looks_like_package_pinning(intent_lower_full)
-    )
-    is_dependency_agent = any(
-        tok in combined for tok in ("dependency_auditor", "dependency auditor", "dep-audit")
-    ) or ("dependency" in combined and "audit" in combined)
-    if audit_signal and is_dependency_agent:
-        score += 70
-        reasons.append("dependency audit intent")
-
-    # Python execution intent: require a strong execution verb AND no audit
-    # signal. The verb-only check ("python" in tokens) was too loose — every
-    # mention of Python the language fired the +45 bonus, including the user
-    # describing what stack their PROJECT is in.
-    has_strong_exec_verb = bool(
-        {"run", "execute", "evaluate", "repl", "interpreter", "compute"} & tokens
-    )
-    has_python_token = bool({"python", "py3", "python3"} & tokens)
-    looks_codey = ("\n" in intent) or any(
-        token in intent for token in ("def ", "class ", "import ", "print(", "lambda ")
-    )
-    python_exec_match = (
-        "python" in combined and "executor" in combined
-    )
-    if python_exec_match and not audit_signal and (
-        (has_strong_exec_verb and has_python_token) or looks_codey
+    for delta, why in (
+        _score_string_signals(c, intent_lower, tokens),
+        _score_quality_signals(c),
+        _score_intent_interlocks(c, intent, intent_lower, tokens, combined, audit_signal),
+        _score_keyword_overrides(c, intent_lower),
+        _score_schema_shape(c, explicit_input),
+        _apply_probation_penalty(c),
     ):
-        score += 45
-        reasons.append("python execution intent")
-    if {"lint", "linter", "ruff", "eslint"} & tokens and "linter" in combined:
-        score += 45
-        reasons.append("lint intent")
-    if {"browser", "screenshot", "playwright", "homepage"} & tokens and any(
-        token in combined for token in ("browser", "playwright", "screenshot")
-    ):
-        score += 45
-        reasons.append("browser/screenshot intent")
-    if {"image", "generate", "generation", "dall", "replicate"} & tokens and any(
-        token in combined for token in ("image", "generation", "replicate", "gpt-image")
-    ):
-        score += 45
-        reasons.append("image generation intent")
-    if {"edgar", "10-k", "sec", "revenue"} & tokens and any(
-        token in combined for token in ("edgar", "sec", "financial")
-    ):
-        score += 45
-        reasons.append("financial filing intent")
-
-    # Curated routing vocabulary — strongest natural-language signal.
-    # match_keywords push the agent toward intents it should serve; block_keywords
-    # push it away from intents it should NOT serve (e.g. json_schema_validator
-    # should not match "package.json vulnerabilities").
-    if c.match_keywords:
-        hits = [kw for kw in c.match_keywords if kw and kw in intent_lower]
-        if hits:
-            score += min(60, len(hits) * 20)
-            reasons.append(f"keyword match: {','.join(hits[:3])}")
-    if c.block_keywords:
-        blocks = [kw for kw in c.block_keywords if kw and kw in intent_lower]
-        if blocks:
-            score -= min(60, len(blocks) * 30)
-            reasons.append(f"blocked by: {','.join(blocks[:3])}")
-
-    # Schema-shape match — the strongest disambiguator when the caller
-    # provides an explicit input payload. We don't validate types
-    # rigorously; presence of every required key is enough signal.
-    # Also checks oneOf/anyOf composite variants so agents like CVE Lookup
-    # (no top-level required, only oneOf) receive the bonus when their
-    # variant fields are fully provided.
-    if isinstance(explicit_input, dict) and c.input_schema:
-        required = list((c.input_schema.get("required") or []))
-        # Collect composite variants for oneOf/anyOf (same semantics as _resolve_payload).
-        schema_for_score = c.input_schema if isinstance(c.input_schema, dict) else {}
-        composite_score_variants: list[list[str]] = []
-        for _kw in ("oneOf", "anyOf"):
-            _variants = schema_for_score.get(_kw)
-            if isinstance(_variants, list):
-                for _v in _variants:
-                    if isinstance(_v, dict):
-                        _vreq = list(_v.get("required") or [])
-                        if _vreq:
-                            composite_score_variants.append(_vreq)
-        if required:
-            present = [f for f in required if f in explicit_input]
-            if len(present) == len(required):
-                score += 35
-                reasons.append("schema-shape match (all required)")
-            elif present:
-                score += 15
-                reasons.append(f"schema-shape partial ({len(present)}/{len(required)})")
-        elif composite_score_variants:
-            # No top-level required — check if any composite variant is fully satisfied.
-            if any(
-                all(f in explicit_input for f in vreq)
-                for vreq in composite_score_variants
-            ):
-                score += 35
-                reasons.append("schema-shape match (composite variant)")
-            else:
-                # Partial credit: find the best-matching variant.
-                best = max(
-                    composite_score_variants,
-                    key=lambda vr: sum(1 for f in vr if f in explicit_input),
-                )
-                n_present = sum(1 for f in best if f in explicit_input)
-                if n_present:
-                    score += 15
-                    reasons.append(
-                        f"schema-shape partial (composite {n_present}/{len(best)})"
-                    )
-
-    # Probation penalty — keeps brand-new listings out of the top spot for
-    # generic intents but never zeroes the score, so explicit slug/keyword
-    # matches still surface them. Graduates to no penalty once review_status
-    # transitions to 'approved'.
-    if str(c.raw.get("review_status") or "").strip() == "probation":
-        score -= _PROBATION_RANK_PENALTY
-        reasons.append("probation: ranked last")
-
+        score += delta
+        reasons.extend(why)
     return Ranked(candidate=c, score=round(score, 3), reasons=reasons)
 
 
@@ -544,60 +673,56 @@ def _confidence(top: Ranked, rest: list[Ranked]) -> float:
 # ── Field extraction ───────────────────────────────────────────────────────
 
 
-def _resolve_payload(
-    agent: CandidateAgent,
-    intent: str,
-    explicit_input: dict[str, Any] | None,
-) -> tuple[dict[str, Any], list[str]]:
-    """Build the payload or list missing required fields.
+def _collect_composite_variants(schema: dict) -> list[list[str]]:
+    """Pure: per-variant ``required`` lists from ``oneOf``/``anyOf``.
 
-    Handles both top-level ``required`` and composite ``oneOf``/``anyOf``/``allOf``
-    variants so agents like CVE lookup (which use oneOf instead of a flat required
-    list) are correctly gated.
+    Why: ``allOf`` is intentionally excluded — its semantics require *all*
+    sub-schemas simultaneously, not one variant. No built-in uses it for
+    input gating.
     """
-    schema = agent.input_schema if isinstance(agent.input_schema, dict) else {}
-    required = list(schema.get("required") or [])
-    properties = dict(schema.get("properties") or {})
-
-    # Collect required fields from composite schema keywords (oneOf/anyOf).
-    # oneOf/anyOf: any one variant being satisfied is sufficient.
-    # allOf is intentionally excluded — it means ALL sub-schemas must be satisfied
-    # simultaneously, not just one, so it requires different handling. No current
-    # built-in agent uses allOf for input gating.
-    composite_variants: list[list[str]] = []
+    variants_out: list[list[str]] = []
     for keyword in ("oneOf", "anyOf"):
         variants = schema.get(keyword)
-        if isinstance(variants, list):
-            for variant in variants:
-                if isinstance(variant, dict):
-                    vreq = list(variant.get("required") or [])
-                    if vreq:
-                        composite_variants.append(vreq)
+        if not isinstance(variants, list):
+            continue
+        for variant in variants:
+            if isinstance(variant, dict):
+                vreq = list(variant.get("required") or [])
+                if vreq:
+                    variants_out.append(vreq)
+    return variants_out
 
-    if explicit_input is not None:
-        missing = [f for f in required if f not in explicit_input]
-        if missing:
-            return explicit_input, missing
-        if composite_variants:
-            for variant_required in composite_variants:
-                if all(f in explicit_input for f in variant_required):
-                    return explicit_input, []
-            return explicit_input, [
-                f for f in composite_variants[0] if f not in explicit_input
-            ]
+
+def _resolve_explicit_input(
+    explicit_input: dict[str, Any], required: list[str],
+    composite_variants: list[list[str]],
+) -> tuple[dict[str, Any], list[str]]:
+    """Pure: validate caller-supplied payload against top-level + composite required fields."""
+    missing = [f for f in required if f not in explicit_input]
+    if missing:
         return explicit_input, missing
+    if composite_variants:
+        for variant_required in composite_variants:
+            if all(f in explicit_input for f in variant_required):
+                return explicit_input, []
+        return explicit_input, [
+            f for f in composite_variants[0] if f not in explicit_input
+        ]
+    return explicit_input, []
 
-    # No explicit_input. Determine all required fields.
-    all_required = required or (composite_variants[0] if composite_variants else [])
+
+def _resolve_intent_only_payload(
+    intent: str, all_required: list[str],
+    properties: dict, composite_variants: list[list[str]],
+) -> tuple[dict[str, Any], list[str]]:
+    """Pure: auto-fill from intent when safe; refuse to force-fit chat into code/sql/etc.
+
+    Why: a conversational question must not be force-fitted into a code /
+    sql / manifest / diff field; without this gate, aztea_do would route
+    "what is the capital of France" to python_code_executor as ``code``.
+    """
     if not all_required:
         return {"intent": intent}, []
-
-    # Single top-level string field: auto-fill from intent — but only when
-    # the intent looks like the kind of input the agent expects. A
-    # conversational question like "what is the capital of France" must
-    # never be force-fitted into a `code`, `sql`, `manifest`, or `diff`
-    # field; that produced obvious garbage in the 2026-05-07 eval where
-    # python_code_executor was hired with the question as its `code`.
     if len(all_required) == 1 and not composite_variants:
         field_name = all_required[0]
         field_spec = properties.get(field_name) or {}
@@ -606,12 +731,32 @@ def _resolve_payload(
             if _intent_unfit_for_field(intent, field_name):
                 return {}, [field_name]
             return {field_name: intent}, []
-
-    # Composite schema without explicit_input: cannot auto-fill structured fields.
     if composite_variants:
         return {}, composite_variants[0]
-
     return {}, all_required
+
+
+def _resolve_payload(
+    agent: CandidateAgent,
+    intent: str,
+    explicit_input: dict[str, Any] | None,
+) -> tuple[dict[str, Any], list[str]]:
+    """Pure: build the payload or list missing required fields.
+
+    Why: handles both top-level ``required`` and composite
+    ``oneOf``/``anyOf`` variants so agents like CVE lookup are gated
+    correctly.
+    """
+    schema = agent.input_schema if isinstance(agent.input_schema, dict) else {}
+    required = list(schema.get("required") or [])
+    properties = dict(schema.get("properties") or {})
+    composite_variants = _collect_composite_variants(schema)
+    if explicit_input is not None:
+        return _resolve_explicit_input(explicit_input, required, composite_variants)
+    all_required = required or (composite_variants[0] if composite_variants else [])
+    return _resolve_intent_only_payload(
+        intent, all_required, properties, composite_variants,
+    )
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────

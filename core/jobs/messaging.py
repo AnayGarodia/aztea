@@ -23,6 +23,8 @@ have been removed and this module is the single source of truth.
 
 from __future__ import annotations
 
+from typing import Any
+
 from core import models as _models
 
 from .crud import get_job
@@ -54,6 +56,247 @@ from .leases import (
 )
 
 
+_LEASE_EXTENDING_BEHAVIORS = frozenset({
+    _LEASE_BEHAVIOR_EXTEND,
+    _LEASE_BEHAVIOR_EXTEND_AND_MARK_AWAITING,
+    _LEASE_BEHAVIOR_EXTEND_AND_RESUME_RUNNING,
+})
+
+# Single transactional UPDATE so lease + status + clarification deadlines
+# all commit atomically; a partial application would corrupt lease state.
+_JOB_MESSAGE_SIDE_EFFECT_SQL = """
+    UPDATE jobs
+    SET status = CASE WHEN %s = 1 THEN %s ELSE status END,
+        lease_expires_at = CASE WHEN %s = 1 THEN %s ELSE lease_expires_at END,
+        last_heartbeat_at = CASE WHEN %s = 1 THEN %s ELSE last_heartbeat_at END,
+        clarification_requested_at = CASE
+            WHEN %s = 1 THEN %s
+            WHEN %s = 1 THEN NULL
+            ELSE clarification_requested_at
+        END,
+        clarification_deadline_at = CASE
+            WHEN %s = 1 THEN %s
+            WHEN %s = 1 THEN NULL
+            ELSE clarification_deadline_at
+        END,
+        updated_at = %s
+    WHERE job_id = %s
+"""
+
+
+def _resolve_status_target(lease_behavior: str) -> str | None:
+    """Pure: status to transition to for clarification-related lease behaviours."""
+    if lease_behavior == _LEASE_BEHAVIOR_EXTEND_AND_MARK_AWAITING:
+        return "awaiting_clarification"
+    if lease_behavior == _LEASE_BEHAVIOR_EXTEND_AND_RESUME_RUNNING:
+        return "running"
+    return None
+
+
+def _validate_tool_result_correlation(
+    conn: Any, *, job_id: str, canonical_type: str,
+    normalized_correlation_id: str | None,
+) -> None:
+    """Side-effect: enforce tool_result invariant — must reference an existing tool_call."""
+    if canonical_type != "tool_result":
+        return
+    if normalized_correlation_id is None:
+        raise ValueError("tool_result messages require a correlation_id.")
+    if not _message_correlation_exists_conn(
+        conn,
+        job_id=job_id,
+        correlation_id=normalized_correlation_id,
+        msg_type="tool_call",
+    ):
+        raise ValueError(
+            f"tool_result correlation_id '{normalized_correlation_id}' has no matching tool_call."
+        )
+
+
+def _next_lease_expiry(
+    raw: dict, *, lease_seconds: int, now_dt: Any,
+) -> str:
+    """Pure: compute the new ``lease_expires_at`` ISO string from current state."""
+    existing_expiry = _parse_ts(_clean_optional_text(raw.get("lease_expires_at")))
+    base_dt = (
+        existing_expiry
+        if existing_expiry and existing_expiry > now_dt
+        else now_dt
+    )
+    return (base_dt + timedelta(seconds=lease_seconds)).isoformat()
+
+
+def _clarification_deadline_at(
+    raw: dict, *, now_dt: Any, mark_clarification_requested: bool,
+) -> str | None:
+    """Pure: deadline ISO string when a clarification request opens, else None."""
+    if not mark_clarification_requested:
+        return None
+    timeout_seconds = _to_non_negative_int(
+        raw.get("clarification_timeout_seconds"), default=0,
+    )
+    if timeout_seconds <= 0:
+        return None
+    return (now_dt + timedelta(seconds=timeout_seconds)).isoformat()
+
+
+def _compute_side_effect_flags(
+    raw: dict, *, canonical_type: str, status_target: str | None,
+    should_extend_lease: bool,
+) -> dict[str, Any]:
+    """Pure: derive the boolean flags that drive ``_JOB_MESSAGE_SIDE_EFFECT_SQL``."""
+    completed = _clean_optional_text(raw.get("completed_at")) is not None
+    settled = _clean_optional_text(raw.get("settled_at")) is not None
+    claim_owner_id = _clean_optional_text(raw.get("claim_owner_id"))
+    claim_token = _clean_optional_text(raw.get("claim_token"))
+    return {
+        "should_update_status": (
+            status_target is not None and not completed and not settled
+        ),
+        "mark_clarification_requested": canonical_type == "clarification_request",
+        "clear_clarification_tracking": canonical_type == "clarification_response",
+        "lease_extended": bool(
+            should_extend_lease
+            and claim_owner_id is not None
+            and claim_token is not None
+        ),
+        "claim_owner_id": claim_owner_id,
+        "claim_token": claim_token,
+    }
+
+
+def _build_side_effect_params(
+    flags: dict[str, Any], *, status_target: str | None, now: str,
+    next_lease_expires_at: str | None, deadline_at: str | None, job_id: str,
+) -> tuple:
+    """Pure: positional args matching ``_JOB_MESSAGE_SIDE_EFFECT_SQL`` placeholders."""
+    return (
+        1 if flags["should_update_status"] else 0, status_target,
+        1 if flags["lease_extended"] else 0, next_lease_expires_at,
+        1 if flags["lease_extended"] else 0, now,
+        1 if flags["mark_clarification_requested"] else 0, now,
+        1 if flags["clear_clarification_tracking"] else 0,
+        1 if flags["mark_clarification_requested"] else 0, deadline_at,
+        1 if flags["clear_clarification_tracking"] else 0,
+        now, job_id,
+    )
+
+
+def _apply_message_side_effects_to_job(
+    conn: Any, *, job_id: str, raw: dict, now: str,
+    canonical_type: str, status_target: str | None,
+    should_extend_lease: bool, lease_seconds: int, now_dt: Any,
+) -> tuple[bool, str | None, str | None, str | None]:
+    """Side-effect: atomically apply lease/status/deadline updates for a message."""
+    flags = _compute_side_effect_flags(
+        raw, canonical_type=canonical_type, status_target=status_target,
+        should_extend_lease=should_extend_lease,
+    )
+    next_lease_expires_at = (
+        _next_lease_expiry(raw, lease_seconds=lease_seconds, now_dt=now_dt)
+        if flags["lease_extended"] else None
+    )
+    deadline_at = _clarification_deadline_at(
+        raw, now_dt=now_dt,
+        mark_clarification_requested=flags["mark_clarification_requested"],
+    )
+    has_change = (
+        flags["should_update_status"] or flags["lease_extended"]
+        or flags["mark_clarification_requested"]
+        or flags["clear_clarification_tracking"]
+    )
+    if has_change:
+        conn.execute(_JOB_MESSAGE_SIDE_EFFECT_SQL, _build_side_effect_params(
+            flags, status_target=status_target, now=now,
+            next_lease_expires_at=next_lease_expires_at,
+            deadline_at=deadline_at, job_id=job_id,
+        ))
+    return (
+        flags["lease_extended"], next_lease_expires_at,
+        flags["claim_owner_id"], flags["claim_token"],
+    )
+
+
+def _apply_lease_effects_within_txn(
+    conn: Any, *, job_id: str, row: Any, now: str, now_dt: Any,
+    canonical_type: str, normalized_type: str, from_id: str,
+    status_target: str | None, should_extend_lease: bool,
+    lease_seconds: int,
+) -> None:
+    """Side-effect: mutate jobs row + log claim event when message has lease/status side-effects."""
+    raw = dict(row)
+    lease_extended, next_lease_expires_at, claim_owner_id, claim_token = (
+        _apply_message_side_effects_to_job(
+            conn, job_id=job_id, raw=raw, now=now,
+            canonical_type=canonical_type, status_target=status_target,
+            should_extend_lease=should_extend_lease,
+            lease_seconds=lease_seconds, now_dt=now_dt,
+        )
+    )
+    if not lease_extended:
+        return
+    _insert_claim_event_row(
+        conn, job_id, event_type="claim_lease_extended",
+        claim_owner_id=claim_owner_id, claim_token=claim_token,
+        lease_started_at=now, lease_expires_at=next_lease_expires_at,
+        actor_id=from_id,
+        metadata={
+            "message_type": normalized_type,
+            "canonical_message_type": canonical_type,
+            "status_after": status_target if status_target else raw.get("status"),
+        },
+        created_at=now,
+    )
+
+
+def _normalize_message_for_insert(
+    msg_type: str, payload: dict, correlation_id: str | None,
+) -> dict[str, Any]:
+    """Pure: shape caller inputs into the normalised form ``add_message`` writes to DB."""
+    normalized = _models.normalize_job_message_body(
+        msg_type=msg_type, payload=payload,
+        correlation_id=correlation_id, allow_legacy=True,
+    )
+    normalized_type = normalized["type"]
+    canonical_type = normalized["canonical_type"]
+    lease_behavior = _resolve_message_lease_behavior(normalized_type, canonical_type)
+    return {
+        "normalized_type": normalized_type,
+        "canonical_type": canonical_type,
+        "normalized_payload": normalized["payload"],
+        "normalized_correlation_id": _clean_optional_text(normalized.get("correlation_id")),
+        "should_extend_lease": lease_behavior in _LEASE_EXTENDING_BEHAVIORS,
+        "status_target": _resolve_status_target(lease_behavior),
+    }
+
+
+def _insert_message_within_txn(
+    conn: Any, *, job_id: str, from_id: str, n: dict[str, Any], now: str, now_dt: Any,
+    lease_seconds: int,
+) -> int:
+    """Side-effect: validate + insert + apply side-effects for one message; returns message_id."""
+    _validate_tool_result_correlation(
+        conn, job_id=job_id, canonical_type=n["canonical_type"],
+        normalized_correlation_id=n["normalized_correlation_id"],
+    )
+    row = conn.execute(
+        "SELECT * FROM jobs WHERE job_id = %s", (job_id,),
+    ).fetchone()
+    message_id = _insert_job_message_row(
+        conn, job_id=job_id, from_id=from_id,
+        msg_type=n["normalized_type"], payload=n["normalized_payload"],
+        correlation_id=n["normalized_correlation_id"], created_at=now,
+    )
+    if row is not None and (n["should_extend_lease"] or n["status_target"] is not None):
+        _apply_lease_effects_within_txn(
+            conn, job_id=job_id, row=row, now=now, now_dt=now_dt,
+            canonical_type=n["canonical_type"], normalized_type=n["normalized_type"],
+            from_id=from_id, status_target=n["status_target"],
+            should_extend_lease=n["should_extend_lease"], lease_seconds=lease_seconds,
+        )
+    return message_id
+
+
 def add_message(
     job_id: str,
     from_id: str,
@@ -62,174 +305,23 @@ def add_message(
     lease_seconds: int = DEFAULT_LEASE_SECONDS,
     correlation_id: str | None = None,
 ) -> dict:
-    """Insert a typed job message and apply any lease side-effects for the message type.
+    """Side-effect: insert a typed job message and apply any lease/status side-effects.
 
-    Side-effects: 'progress' extends the lease; 'clarification_request' transitions to
-    awaiting_clarification; 'clarification_response' resumes running. Returns the inserted message dict.
+    Why: 'progress' extends the lease; 'clarification_request' transitions
+    to awaiting_clarification; 'clarification_response' resumes running.
+    Lease, status, and deadline updates commit atomically with the insert.
     """
     if lease_seconds <= 0:
         raise ValueError("lease_seconds must be > 0.")
-
-    normalized = _models.normalize_job_message_body(
-        msg_type=msg_type,
-        payload=payload,
-        correlation_id=correlation_id,
-        allow_legacy=True,
-    )
-    normalized_type = normalized["type"]
-    canonical_type = normalized["canonical_type"]
-    normalized_payload = normalized["payload"]
-    normalized_correlation_id = _clean_optional_text(normalized.get("correlation_id"))
-    lease_behavior = _resolve_message_lease_behavior(normalized_type, canonical_type)
-
-    should_extend_lease = lease_behavior in {
-        _LEASE_BEHAVIOR_EXTEND,
-        _LEASE_BEHAVIOR_EXTEND_AND_MARK_AWAITING,
-        _LEASE_BEHAVIOR_EXTEND_AND_RESUME_RUNNING,
-    }
-    status_target: str | None = None
-    if lease_behavior == _LEASE_BEHAVIOR_EXTEND_AND_MARK_AWAITING:
-        status_target = "awaiting_clarification"
-    elif lease_behavior == _LEASE_BEHAVIOR_EXTEND_AND_RESUME_RUNNING:
-        status_target = "running"
-
+    n = _normalize_message_for_insert(msg_type, payload, correlation_id)
     now_dt = _now_dt()
     now = now_dt.isoformat()
-
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        if canonical_type == "tool_result":
-            if normalized_correlation_id is None:
-                raise ValueError("tool_result messages require a correlation_id.")
-            if not _message_correlation_exists_conn(
-                conn,
-                job_id=job_id,
-                correlation_id=normalized_correlation_id,
-                msg_type="tool_call",
-            ):
-                raise ValueError(
-                    f"tool_result correlation_id '{normalized_correlation_id}' has no matching tool_call."
-                )
-
-        row = conn.execute(
-            "SELECT * FROM jobs WHERE job_id = %s",
-            (job_id,),
-        ).fetchone()
-        message_id = _insert_job_message_row(
-            conn,
-            job_id=job_id,
-            from_id=from_id,
-            msg_type=normalized_type,
-            payload=normalized_payload,
-            correlation_id=normalized_correlation_id,
-            created_at=now,
+        message_id = _insert_message_within_txn(
+            conn, job_id=job_id, from_id=from_id, n=n,
+            now=now, now_dt=now_dt, lease_seconds=lease_seconds,
         )
-
-        if row is not None and (should_extend_lease or status_target is not None):
-            raw = dict(row)
-            completed = _clean_optional_text(raw.get("completed_at")) is not None
-            settled = _clean_optional_text(raw.get("settled_at")) is not None
-            should_update_status = (
-                status_target is not None and not completed and not settled
-            )
-            mark_clarification_requested = canonical_type == "clarification_request"
-            clear_clarification_tracking = canonical_type == "clarification_response"
-
-            claim_owner_id = _clean_optional_text(raw.get("claim_owner_id"))
-            claim_token = _clean_optional_text(raw.get("claim_token"))
-            lease_extended = (
-                should_extend_lease
-                and claim_owner_id is not None
-                and claim_token is not None
-            )
-            next_lease_expires_at = None
-            if lease_extended:
-                existing_expiry = _parse_ts(
-                    _clean_optional_text(raw.get("lease_expires_at"))
-                )
-                base_dt = (
-                    existing_expiry
-                    if existing_expiry and existing_expiry > now_dt
-                    else now_dt
-                )
-                next_lease_expires_at = (
-                    base_dt + timedelta(seconds=lease_seconds)
-                ).isoformat()
-
-            clarification_deadline_at = None
-            if mark_clarification_requested:
-                timeout_seconds = _to_non_negative_int(
-                    raw.get("clarification_timeout_seconds"),
-                    default=0,
-                )
-                if timeout_seconds > 0:
-                    clarification_deadline_at = (
-                        now_dt + timedelta(seconds=timeout_seconds)
-                    ).isoformat()
-
-            if (
-                should_update_status
-                or lease_extended
-                or mark_clarification_requested
-                or clear_clarification_tracking
-            ):
-                conn.execute(
-                    """
-                    UPDATE jobs
-                    SET status = CASE WHEN %s = 1 THEN %s ELSE status END,
-                        lease_expires_at = CASE WHEN %s = 1 THEN %s ELSE lease_expires_at END,
-                        last_heartbeat_at = CASE WHEN %s = 1 THEN %s ELSE last_heartbeat_at END,
-                        clarification_requested_at = CASE
-                            WHEN %s = 1 THEN %s
-                            WHEN %s = 1 THEN NULL
-                            ELSE clarification_requested_at
-                        END,
-                        clarification_deadline_at = CASE
-                            WHEN %s = 1 THEN %s
-                            WHEN %s = 1 THEN NULL
-                            ELSE clarification_deadline_at
-                        END,
-                        updated_at = %s
-                    WHERE job_id = %s
-                    """,
-                    (
-                        1 if should_update_status else 0,
-                        status_target,
-                        1 if lease_extended else 0,
-                        next_lease_expires_at,
-                        1 if lease_extended else 0,
-                        now,
-                        1 if mark_clarification_requested else 0,
-                        now,
-                        1 if clear_clarification_tracking else 0,
-                        1 if mark_clarification_requested else 0,
-                        clarification_deadline_at,
-                        1 if clear_clarification_tracking else 0,
-                        now,
-                        job_id,
-                    ),
-                )
-
-            if lease_extended:
-                _insert_claim_event_row(
-                    conn,
-                    job_id,
-                    event_type="claim_lease_extended",
-                    claim_owner_id=claim_owner_id,
-                    claim_token=claim_token,
-                    lease_started_at=now,
-                    lease_expires_at=next_lease_expires_at,
-                    actor_id=from_id,
-                    metadata={
-                        "message_type": normalized_type,
-                        "canonical_message_type": canonical_type,
-                        "status_after": status_target
-                        if should_update_status
-                        else raw.get("status"),
-                    },
-                    created_at=now,
-                )
-
     message = get_message(job_id, message_id)
     _publish_job_message(job_id, message)
     return message
@@ -272,18 +364,36 @@ def add_claim_event(
     return message
 
 
+_CLAIM_EVENT_LOOKBACK_LIMIT = 500
+
+
+def _claim_event_matches_active_token(
+    payload: Any, *, owner_id: str, token_hash: str, cutoff: Any,
+) -> bool:
+    """Pure: True when ``payload`` is an active-claim event for this owner+token within ``cutoff``."""
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("event_type") not in _ACTIVE_CLAIM_EVENT_TYPES:
+        return False
+    if payload.get("claim_token_sha256") != token_hash:
+        return False
+    if _clean_optional_text(payload.get("claim_owner_id")) != owner_id:
+        return False
+    lease_expires_at = _parse_ts(_clean_optional_text(payload.get("lease_expires_at")))
+    return lease_expires_at is not None and lease_expires_at >= cutoff
+
+
 def claim_token_was_recently_active(
     job_id: str,
     claim_owner_id: str,
     claim_token: str,
     within_seconds: int = DEFAULT_LEASE_SECONDS,
 ) -> bool:
-    """Return True if the given claim token sent a heartbeat event within ``within_seconds``."""
+    """Side-effect: True if the claim token sent a lease-extending event within ``within_seconds``."""
     owner_id = _clean_optional_text(claim_owner_id)
     token_hash = _claim_token_sha256(claim_token)
     if owner_id is None or token_hash is None or within_seconds <= 0:
         return False
-
     cutoff = _now_dt() - timedelta(seconds=within_seconds)
     with _conn() as conn:
         rows = conn.execute(
@@ -293,27 +403,15 @@ def claim_token_was_recently_active(
             WHERE job_id = %s
               AND type = %s
             ORDER BY message_id DESC
-            LIMIT 500
+            LIMIT %s
             """,
-            (job_id, _CLAIM_EVENT_MSG_TYPE),
+            (job_id, _CLAIM_EVENT_MSG_TYPE, _CLAIM_EVENT_LOOKBACK_LIMIT),
         ).fetchall()
-
     for row in rows:
         payload = _decode_json(row["payload"], default={})
-        if not isinstance(payload, dict):
-            continue
-        if payload.get("event_type") not in _ACTIVE_CLAIM_EVENT_TYPES:
-            continue
-        if payload.get("claim_token_sha256") != token_hash:
-            continue
-        if _clean_optional_text(payload.get("claim_owner_id")) != owner_id:
-            continue
-        lease_expires_at = _parse_ts(
-            _clean_optional_text(payload.get("lease_expires_at"))
-        )
-        if lease_expires_at is None:
-            continue
-        if lease_expires_at >= cutoff:
+        if _claim_event_matches_active_token(
+            payload, owner_id=owner_id, token_hash=token_hash, cutoff=cutoff,
+        ):
             return True
     return False
 
@@ -331,23 +429,16 @@ def get_message(job_id: str, message_id: int) -> dict | None:
     return _msg_to_dict(row) if row else None
 
 
-def get_messages(
-    job_id: str,
-    since_id: int | None = None,
-    limit: int = 100,
-    msg_type: str | None = None,
-    from_id: str | None = None,
-    channel: str | None = None,
-    to_id: str | None = None,
-) -> list:
-    """Return a paginated, ascending list of messages for a job, with optional filters.
+_MAX_MESSAGES_PER_PAGE = 200
 
-    Filters: ``since_id`` (cursor), ``msg_type``, ``from_id``, ``channel``, ``to_id``.
-    Max 200 results per call.
-    """
-    limit = min(max(1, limit), 200)
+
+def _build_messages_query(
+    job_id: str, since_id: int | None, msg_type: str | None,
+    from_id: str | None,
+) -> tuple[str, list[Any]]:
+    """Pure: assemble the ``WHERE``-clause SQL + params for ``get_messages``."""
     filters: list[str] = ["job_id = %s"]
-    params: list[object] = [job_id]
+    params: list[Any] = [job_id]
     if since_id is not None:
         filters.append("message_id > %s")
         params.append(since_id)
@@ -359,7 +450,42 @@ def get_messages(
     if normalized_from_id:
         filters.append("from_id = %s")
         params.append(normalized_from_id)
-    where_sql = " AND ".join(filters)
+    return " AND ".join(filters), params
+
+
+def _filter_messages_by_channel(
+    messages: list[dict], channel: str | None, to_id: str | None,
+) -> list[dict]:
+    """Pure: post-fetch payload filtering on ``channel`` / ``to_id`` (not indexed in SQL)."""
+    normalized_channel = (channel or "").strip().lower()
+    normalized_to_id = (to_id or "").strip()
+    if not normalized_channel and not normalized_to_id:
+        return messages
+    out: list[dict] = []
+    for message in messages:
+        payload = message.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        if normalized_channel and str(payload.get("channel") or "").strip().lower() != normalized_channel:
+            continue
+        if normalized_to_id and str(payload.get("to_id") or "").strip() != normalized_to_id:
+            continue
+        out.append(message)
+    return out
+
+
+def get_messages(
+    job_id: str,
+    since_id: int | None = None,
+    limit: int = 100,
+    msg_type: str | None = None,
+    from_id: str | None = None,
+    channel: str | None = None,
+    to_id: str | None = None,
+) -> list:
+    """Side-effect: paginated, ascending list of messages for a job; max 200 per page."""
+    limit = min(max(1, limit), _MAX_MESSAGES_PER_PAGE)
+    where_sql, params = _build_messages_query(job_id, since_id, msg_type, from_id)
     params.append(limit)
     with _conn() as conn:
         rows = conn.execute(
@@ -372,26 +498,7 @@ def get_messages(
             tuple(params),
         ).fetchall()
     messages = [_msg_to_dict(r) for r in rows]
-    normalized_channel = (channel or "").strip().lower()
-    normalized_to_id = (to_id or "").strip()
-    if not normalized_channel and not normalized_to_id:
-        return messages
-
-    filtered: list[dict] = []
-    for message in messages:
-        payload = message.get("payload")
-        if not isinstance(payload, dict):
-            continue
-        if normalized_channel:
-            payload_channel = str(payload.get("channel") or "").strip().lower()
-            if payload_channel != normalized_channel:
-                continue
-        if normalized_to_id:
-            payload_to_id = str(payload.get("to_id") or "").strip()
-            if payload_to_id != normalized_to_id:
-                continue
-        filtered.append(message)
-    return filtered
+    return _filter_messages_by_channel(messages, channel, to_id)
 
 
 def count_job_messages(job_id: str) -> int:

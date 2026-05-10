@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from typing import Any
 
 from core.functional import Err, pipe, validate
 
@@ -36,6 +37,151 @@ DEFAULT_DISPUTE_WINDOW_HOURS = 72
 DEFAULT_PLATFORM_FEE_PCT = 10
 # Max caller_charge is 2x price (covers 100% fee) plus a $10 buffer for rounding.
 _MAX_CALLER_CHARGE_BUFFER_CENTS = 1000
+
+_CREATE_JOB_INSERT_SQL = """
+    INSERT INTO jobs
+      (job_id, agent_id, agent_owner_id, caller_owner_id, caller_wallet_id,
+       agent_wallet_id, platform_wallet_id, status, price_cents, caller_charge_cents,
+       platform_fee_pct_at_create, fee_bearer_policy, client_id, charge_tx_id,
+       input_payload, created_at, updated_at, max_attempts, parent_job_id, tree_depth,
+       parent_cascade_policy, clarification_timeout_seconds, clarification_timeout_policy,
+       dispute_window_hours, judge_agent_id, callback_url, callback_secret,
+       output_verification_window_seconds, output_verification_status, batch_id)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+"""
+
+
+def _validate_create_job_pricing(
+    price_cents: int, parsed_caller_charge_cents: int,
+) -> None:
+    """Pure: enforce price/charge invariants — non-negative, mutually consistent, capped.
+
+    Why: rejects malformed money inputs at the boundary so the ledger
+    never sees a charge that produces a negative net payout.
+    """
+    _price_check = (
+        validate(price_cents, lambda p: p >= 0, "price_cents must be non-negative.")
+        .and_then(lambda p: validate(
+            p,
+            lambda x: not (parsed_caller_charge_cents <= 0 and x > 0),
+            "invalid_charge_amount: caller_charge_cents must be positive when price is non-zero.",
+        ))
+        .and_then(lambda p: validate(
+            p,
+            lambda x: parsed_caller_charge_cents >= x,
+            "caller_charge_cents must be >= price_cents.",
+        ))
+        .and_then(lambda p: validate(
+            p,
+            lambda x: parsed_caller_charge_cents
+            <= max(x * 2, x + _MAX_CALLER_CHARGE_BUFFER_CENTS),
+            "charge_exceeds_listed_price: caller_charge_cents must not exceed 2x price_cents.",
+        ))
+    )
+    _price_check.raise_on_err()
+
+
+def _normalize_create_job_inputs(
+    *, caller_charge_cents: int | None, price_cents: int,
+    platform_fee_pct_at_create: int, fee_bearer_policy: str,
+    max_attempts: int, tree_depth: int, parent_cascade_policy: str,
+    clarification_timeout_seconds: int | None, clarification_timeout_policy: str,
+    dispute_window_hours: int, output_verification_window_seconds: int | None,
+    agent_owner_id: str | None, agent_id: str,
+) -> dict[str, Any]:
+    """Pure: validate + coerce every job-shape parameter; raises ValueError on bad input."""
+    parsed_caller_charge_cents = _to_non_negative_int(
+        caller_charge_cents, default=price_cents,
+    )
+    _validate_create_job_pricing(price_cents, parsed_caller_charge_cents)
+    parsed_platform_fee_pct = _to_non_negative_int(
+        platform_fee_pct_at_create, default=DEFAULT_PLATFORM_FEE_PCT,
+    )
+    if parsed_platform_fee_pct > 100:
+        raise ValueError("platform_fee_pct_at_create must be <= 100.")
+    parsed_max_attempts = _to_non_negative_int(max_attempts, default=0)
+    if parsed_max_attempts < 1:
+        raise ValueError("max_attempts must be >= 1.")
+    parsed_dispute_window_hours = _to_non_negative_int(dispute_window_hours, default=0)
+    if parsed_dispute_window_hours < 1:
+        raise ValueError("dispute_window_hours must be >= 1.")
+    owner_id = (agent_owner_id or f"agent:{agent_id}").strip()
+    if not owner_id:
+        raise ValueError("agent_owner_id must be a non-empty string.")
+    return {
+        "parsed_caller_charge_cents": parsed_caller_charge_cents,
+        "parsed_platform_fee_pct": parsed_platform_fee_pct,
+        "normalized_fee_bearer_policy": _normalize_fee_bearer_policy(fee_bearer_policy),
+        "parsed_max_attempts": parsed_max_attempts,
+        "parsed_tree_depth": _to_non_negative_int(tree_depth, default=0),
+        "normalized_parent_cascade_policy": _normalize_parent_cascade_policy(
+            parent_cascade_policy,
+        ),
+        "parsed_clarification_timeout_seconds": _to_non_negative_int(
+            clarification_timeout_seconds, default=0,
+        ),
+        "normalized_clarification_timeout_policy": _normalize_clarification_timeout_policy(
+            clarification_timeout_policy,
+        ),
+        "parsed_dispute_window_hours": parsed_dispute_window_hours,
+        "parsed_output_verification_window_seconds": _to_non_negative_int(
+            output_verification_window_seconds, default=0,
+        ),
+        "owner_id": owner_id,
+    }
+
+
+def _build_create_job_insert_params(
+    *, job_id: str, agent_id: str, caller_owner_id: str, caller_wallet_id: str,
+    agent_wallet_id: str, platform_wallet_id: str, price_cents: int,
+    charge_tx_id: str, input_payload: dict, parent_job_id: str | None,
+    client_id: str | None, judge_agent_id: str | None,
+    callback_url: str | None, callback_secret: str | None,
+    batch_id: str | None, now: str, normalised: dict[str, Any],
+) -> tuple:
+    """Pure: positional args for ``_CREATE_JOB_INSERT_SQL`` placeholders.
+
+    Why: ``output_verification_status`` is set to ``armed`` when a window
+    is configured so the contract is visible from the moment the job is
+    queued; ``arm_output_verification_window`` later transitions it to
+    ``pending`` after completion.
+    """
+    has_verification_window = (
+        normalised["parsed_output_verification_window_seconds"] > 0
+    )
+    return (
+        job_id,
+        agent_id,
+        normalised["owner_id"],
+        caller_owner_id,
+        caller_wallet_id,
+        agent_wallet_id,
+        platform_wallet_id,
+        "pending",
+        price_cents,
+        normalised["parsed_caller_charge_cents"],
+        normalised["parsed_platform_fee_pct"],
+        normalised["normalized_fee_bearer_policy"],
+        _clean_optional_text(client_id),
+        charge_tx_id,
+        json.dumps(input_payload),
+        now,
+        now,
+        normalised["parsed_max_attempts"],
+        _clean_optional_text(parent_job_id),
+        normalised["parsed_tree_depth"],
+        normalised["normalized_parent_cascade_policy"],
+        normalised["parsed_clarification_timeout_seconds"],
+        normalised["normalized_clarification_timeout_policy"],
+        normalised["parsed_dispute_window_hours"],
+        _clean_optional_text(judge_agent_id),
+        _clean_optional_text(callback_url),
+        _clean_optional_text(callback_secret),
+        normalised["parsed_output_verification_window_seconds"],
+        "armed" if has_verification_window else "not_required",
+        _clean_optional_text(batch_id),
+    )
 
 
 def create_job(
@@ -65,142 +211,38 @@ def create_job(
     output_verification_window_seconds: int | None = None,
     batch_id: str | None = None,
 ) -> dict:
-    """Insert a new job row and its initial ``pending`` claim event.
+    """Side-effect: insert a new job row and its initial ``pending`` claim event.
 
-    The caller wallet must already have been debited (``charge_tx_id``) before
-    calling this — job creation records the charge but does NOT perform it.
-    All integer amounts must be in cents; floats are rejected.
-
-    Key fields stored on the job:
-    - ``price_cents`` — the agent's listed price (what the agent earns on success).
-    - ``caller_charge_cents`` — what was actually debited from the caller
-      (may include platform fee depending on ``fee_bearer_policy``).
-    - ``platform_fee_pct_at_create`` — snapshot of the fee rate at the time of
-      creation; used for settlement even if the platform rate changes later.
-    - ``max_attempts`` — how many times the sweeper will re-queue on lease expiry.
-    - ``dispute_window_hours`` — how long after settlement callers may file a dispute.
-
-    Returns the newly created job as a dict.
-    Raises ``ValueError`` for invalid money amounts.
+    Why: the caller wallet must already have been debited (``charge_tx_id``) before
+    calling this — job creation records the charge but does NOT perform it. All
+    integer amounts must be in cents; floats are rejected. ``ValueError`` on bad
+    money amounts.
     """
-    parsed_caller_charge_cents = _to_non_negative_int(
-        caller_charge_cents, default=price_cents
+    normalised = _normalize_create_job_inputs(
+        caller_charge_cents=caller_charge_cents, price_cents=price_cents,
+        platform_fee_pct_at_create=platform_fee_pct_at_create,
+        fee_bearer_policy=fee_bearer_policy, max_attempts=max_attempts,
+        tree_depth=tree_depth, parent_cascade_policy=parent_cascade_policy,
+        clarification_timeout_seconds=clarification_timeout_seconds,
+        clarification_timeout_policy=clarification_timeout_policy,
+        dispute_window_hours=dispute_window_hours,
+        output_verification_window_seconds=output_verification_window_seconds,
+        agent_owner_id=agent_owner_id, agent_id=agent_id,
     )
-    # Chain price/charge invariants with and_then: each step receives the unwrapped
-    # integer and returns Ok(price_cents) or Err(message). Short-circuits on first Err.
-    _price_check = (
-        validate(price_cents, lambda p: p >= 0, "price_cents must be non-negative.")
-        .and_then(lambda p: validate(
-            p,
-            lambda x: not (parsed_caller_charge_cents <= 0 and x > 0),
-            "invalid_charge_amount: caller_charge_cents must be positive when price is non-zero.",
-        ))
-        .and_then(lambda p: validate(
-            p,
-            lambda x: parsed_caller_charge_cents >= x,
-            "caller_charge_cents must be >= price_cents.",
-        ))
-        # Hard cap: caller_charge_cents must not exceed price_cents * 2 (room for 100% fee)
-        # to prevent inflated charges that would produce a negative net payout on partial refund.
-        .and_then(lambda p: validate(
-            p,
-            lambda x: parsed_caller_charge_cents
-            <= max(x * 2, x + _MAX_CALLER_CHARGE_BUFFER_CENTS),
-            "charge_exceeds_listed_price: caller_charge_cents must not exceed 2x price_cents.",
-        ))
-    )
-    _price_check.raise_on_err()
-    parsed_platform_fee_pct = _to_non_negative_int(
-        platform_fee_pct_at_create, default=DEFAULT_PLATFORM_FEE_PCT
-    )
-    if parsed_platform_fee_pct > 100:
-        raise ValueError("platform_fee_pct_at_create must be <= 100.")
-    normalized_fee_bearer_policy = _normalize_fee_bearer_policy(fee_bearer_policy)
-
-    parsed_max_attempts = _to_non_negative_int(max_attempts, default=0)
-    if parsed_max_attempts < 1:
-        raise ValueError("max_attempts must be >= 1.")
-    parsed_tree_depth = _to_non_negative_int(tree_depth, default=0)
-    normalized_parent_cascade_policy = _normalize_parent_cascade_policy(
-        parent_cascade_policy
-    )
-    parsed_clarification_timeout_seconds = _to_non_negative_int(
-        clarification_timeout_seconds,
-        default=0,
-    )
-    normalized_clarification_timeout_policy = _normalize_clarification_timeout_policy(
-        clarification_timeout_policy
-    )
-    parsed_dispute_window_hours = _to_non_negative_int(dispute_window_hours, default=0)
-    if parsed_dispute_window_hours < 1:
-        raise ValueError("dispute_window_hours must be >= 1.")
-    parsed_output_verification_window_seconds = _to_non_negative_int(
-        output_verification_window_seconds,
-        default=0,
-    )
-
-    owner_id = (agent_owner_id or f"agent:{agent_id}").strip()
-    if not owner_id:
-        raise ValueError("agent_owner_id must be a non-empty string.")
-
     job_id = str(uuid.uuid4())
     now = _now()
-
+    params = _build_create_job_insert_params(
+        job_id=job_id, agent_id=agent_id, caller_owner_id=caller_owner_id,
+        caller_wallet_id=caller_wallet_id, agent_wallet_id=agent_wallet_id,
+        platform_wallet_id=platform_wallet_id, price_cents=price_cents,
+        charge_tx_id=charge_tx_id, input_payload=input_payload,
+        parent_job_id=parent_job_id, client_id=client_id,
+        judge_agent_id=judge_agent_id, callback_url=callback_url,
+        callback_secret=callback_secret, batch_id=batch_id, now=now,
+        normalised=normalised,
+    )
     with _conn() as conn:
-        conn.execute(
-            """
-            INSERT INTO jobs
-              (job_id, agent_id, agent_owner_id, caller_owner_id, caller_wallet_id,
-               agent_wallet_id, platform_wallet_id, status, price_cents, caller_charge_cents,
-               platform_fee_pct_at_create, fee_bearer_policy, client_id, charge_tx_id,
-               input_payload, created_at, updated_at, max_attempts, parent_job_id, tree_depth, parent_cascade_policy,
-               clarification_timeout_seconds, clarification_timeout_policy, dispute_window_hours, judge_agent_id,
-               callback_url, callback_secret, output_verification_window_seconds, output_verification_status, batch_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                job_id,
-                agent_id,
-                owner_id,
-                caller_owner_id,
-                caller_wallet_id,
-                agent_wallet_id,
-                platform_wallet_id,
-                "pending",
-                price_cents,
-                parsed_caller_charge_cents,
-                parsed_platform_fee_pct,
-                normalized_fee_bearer_policy,
-                _clean_optional_text(client_id),
-                charge_tx_id,
-                json.dumps(input_payload),
-                now,
-                now,
-                parsed_max_attempts,
-                _clean_optional_text(parent_job_id),
-                parsed_tree_depth,
-                normalized_parent_cascade_policy,
-                parsed_clarification_timeout_seconds,
-                normalized_clarification_timeout_policy,
-                parsed_dispute_window_hours,
-                _clean_optional_text(judge_agent_id),
-                _clean_optional_text(callback_url),
-                _clean_optional_text(callback_secret),
-                parsed_output_verification_window_seconds,
-                # When the caller asked for an explicit verification window
-                # we arm the verification state at insert. Previously this
-                # column was always written as "not_required" regardless of
-                # the window arg, leaving the field "plumbed but unused" —
-                # exactly what the eval flagged. arm_output_verification_window
-                # would later transition this to "pending" once the job
-                # completes; setting "armed" here makes the contract visible
-                # from the moment the job is queued.
-                "armed"
-                if parsed_output_verification_window_seconds > 0
-                else "not_required",
-                _clean_optional_text(batch_id),
-            ),
-        )
+        conn.execute(_CREATE_JOB_INSERT_SQL, params)
     return get_job(job_id)
 
 

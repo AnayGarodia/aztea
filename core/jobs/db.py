@@ -29,6 +29,7 @@ import sys
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from core import models as _models  # noqa: F401 — re-exported; messaging.py imports from here
 
@@ -448,65 +449,69 @@ def _jobs_columns(conn: _db.DbConnection) -> dict:
     }
 
 
+_JOBS_DDL_TEMPLATE = """
+    CREATE TABLE IF NOT EXISTS {table_name} (
+        job_id              TEXT PRIMARY KEY,
+        agent_id            TEXT NOT NULL,
+        agent_owner_id      TEXT NOT NULL,
+        caller_owner_id     TEXT NOT NULL,
+        caller_wallet_id    TEXT NOT NULL,
+        agent_wallet_id     TEXT NOT NULL,
+        platform_wallet_id  TEXT NOT NULL,
+        status              TEXT NOT NULL,
+        price_cents         INTEGER NOT NULL CHECK(price_cents >= 0),
+        caller_charge_cents INTEGER NOT NULL CHECK(caller_charge_cents >= 0),
+        platform_fee_pct_at_create INTEGER NOT NULL DEFAULT 10 CHECK(platform_fee_pct_at_create >= 0 AND platform_fee_pct_at_create <= 100),
+        fee_bearer_policy   TEXT NOT NULL DEFAULT 'caller',
+        client_id           TEXT,
+        charge_tx_id        TEXT NOT NULL,
+        input_payload       TEXT NOT NULL,
+        output_payload      TEXT,
+        error_message       TEXT,
+        created_at          TEXT NOT NULL,
+        updated_at          TEXT NOT NULL,
+        completed_at        TEXT,
+        settled_at          TEXT,
+        claim_owner_id      TEXT,
+        claim_token         TEXT,
+        claimed_at          TEXT,
+        lease_expires_at    TEXT,
+        last_heartbeat_at   TEXT,
+        attempt_count       INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
+        max_attempts        INTEGER NOT NULL DEFAULT 3 CHECK(max_attempts >= 1),
+        parent_job_id       TEXT,
+        tree_depth          INTEGER NOT NULL DEFAULT 0 CHECK(tree_depth >= 0),
+        parent_cascade_policy TEXT NOT NULL DEFAULT 'detach',
+        retry_count         INTEGER NOT NULL DEFAULT 0 CHECK(retry_count >= 0),
+        next_retry_at       TEXT,
+        last_retry_at       TEXT,
+        timeout_count       INTEGER NOT NULL DEFAULT 0 CHECK(timeout_count >= 0),
+        last_timeout_at     TEXT,
+        clarification_timeout_seconds INTEGER NOT NULL DEFAULT 0 CHECK(clarification_timeout_seconds >= 0),
+        clarification_timeout_policy  TEXT NOT NULL DEFAULT 'fail',
+        clarification_requested_at    TEXT,
+        clarification_deadline_at     TEXT,
+        dispute_window_hours INTEGER NOT NULL DEFAULT 72 CHECK(dispute_window_hours >= 1),
+        dispute_outcome      TEXT,
+        judge_agent_id       TEXT,
+        judge_verdict        TEXT,
+        quality_score        INTEGER,
+        callback_url         TEXT,
+        callback_secret      TEXT,
+        output_verification_window_seconds INTEGER NOT NULL DEFAULT 0 CHECK(output_verification_window_seconds >= 0),
+        output_verification_status         TEXT NOT NULL DEFAULT 'not_required',
+        output_verification_deadline_at    TEXT,
+        output_verification_decided_at     TEXT,
+        output_verification_decision_owner_id TEXT,
+        output_verification_reason         TEXT,
+        batch_id             TEXT
+    )
+"""
+
+
 def _create_jobs_table(conn: _db.DbConnection, table_name: str = "jobs") -> None:
-    conn.execute(f"""
-        CREATE TABLE IF NOT EXISTS {table_name} (
-            job_id              TEXT PRIMARY KEY,
-            agent_id            TEXT NOT NULL,
-            agent_owner_id      TEXT NOT NULL,
-            caller_owner_id     TEXT NOT NULL,
-            caller_wallet_id    TEXT NOT NULL,
-            agent_wallet_id     TEXT NOT NULL,
-            platform_wallet_id  TEXT NOT NULL,
-            status              TEXT NOT NULL,
-            price_cents         INTEGER NOT NULL CHECK(price_cents >= 0),
-            caller_charge_cents INTEGER NOT NULL CHECK(caller_charge_cents >= 0),
-            platform_fee_pct_at_create INTEGER NOT NULL DEFAULT 10 CHECK(platform_fee_pct_at_create >= 0 AND platform_fee_pct_at_create <= 100),
-            fee_bearer_policy   TEXT NOT NULL DEFAULT 'caller',
-            client_id           TEXT,
-            charge_tx_id        TEXT NOT NULL,
-            input_payload       TEXT NOT NULL,
-            output_payload      TEXT,
-            error_message       TEXT,
-            created_at          TEXT NOT NULL,
-            updated_at          TEXT NOT NULL,
-            completed_at        TEXT,
-            settled_at          TEXT,
-            claim_owner_id      TEXT,
-            claim_token         TEXT,
-            claimed_at          TEXT,
-            lease_expires_at    TEXT,
-            last_heartbeat_at   TEXT,
-            attempt_count       INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
-            max_attempts        INTEGER NOT NULL DEFAULT 3 CHECK(max_attempts >= 1),
-            parent_job_id       TEXT,
-            tree_depth          INTEGER NOT NULL DEFAULT 0 CHECK(tree_depth >= 0),
-            parent_cascade_policy TEXT NOT NULL DEFAULT 'detach',
-            retry_count         INTEGER NOT NULL DEFAULT 0 CHECK(retry_count >= 0),
-            next_retry_at       TEXT,
-            last_retry_at       TEXT,
-            timeout_count       INTEGER NOT NULL DEFAULT 0 CHECK(timeout_count >= 0),
-            last_timeout_at     TEXT,
-            clarification_timeout_seconds INTEGER NOT NULL DEFAULT 0 CHECK(clarification_timeout_seconds >= 0),
-            clarification_timeout_policy  TEXT NOT NULL DEFAULT 'fail',
-            clarification_requested_at    TEXT,
-            clarification_deadline_at     TEXT,
-            dispute_window_hours INTEGER NOT NULL DEFAULT 72 CHECK(dispute_window_hours >= 1),
-            dispute_outcome      TEXT,
-            judge_agent_id       TEXT,
-            judge_verdict        TEXT,
-            quality_score        INTEGER,
-            callback_url         TEXT,
-            callback_secret      TEXT,
-            output_verification_window_seconds INTEGER NOT NULL DEFAULT 0 CHECK(output_verification_window_seconds >= 0),
-            output_verification_status         TEXT NOT NULL DEFAULT 'not_required',
-            output_verification_deadline_at    TEXT,
-            output_verification_decided_at     TEXT,
-            output_verification_decision_owner_id TEXT,
-            output_verification_reason         TEXT,
-            batch_id             TEXT
-        )
-    """)
+    """Side-effect: create the canonical jobs table if absent. Single DDL statement."""
+    conn.execute(_JOBS_DDL_TEMPLATE.format(table_name=table_name))
 
 
 def _create_job_messages_table(conn: _db.DbConnection) -> None:
@@ -547,55 +552,34 @@ def _ensure_job_messages_schema(conn: _db.DbConnection) -> None:
                 raise
 
 
+_JOBS_INDEX_DEFINITIONS: tuple[str, ...] = (
+    "CREATE INDEX IF NOT EXISTS idx_jobs_caller ON jobs(caller_owner_id, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_jobs_agent ON jobs(agent_id, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_jobs_agent_owner ON jobs(agent_owner_id, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_jobs_retry_due ON jobs(next_retry_at, status)",
+    "CREATE INDEX IF NOT EXISTS idx_jobs_lease_due ON jobs(lease_expires_at, status)",
+    "CREATE INDEX IF NOT EXISTS idx_jobs_claim_owner ON jobs(claim_owner_id, updated_at DESC)",
+    """
+    CREATE INDEX IF NOT EXISTS idx_jobs_caller_status_created_job
+    ON jobs(caller_owner_id, status, created_at DESC, job_id DESC)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_jobs_agent_status_created_job
+    ON jobs(agent_id, status, created_at DESC, job_id DESC)
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_jobs_batch_created ON jobs(batch_id, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_jobs_client_created ON jobs(client_id, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_jobs_parent_created ON jobs(parent_job_id, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_jobs_clarification_deadline ON jobs(status, clarification_deadline_at)",
+    "CREATE INDEX IF NOT EXISTS idx_jobs_output_verification_deadline ON jobs(output_verification_status, output_verification_deadline_at)",
+)
+
+
 def _ensure_jobs_indexes(conn: _db.DbConnection) -> None:
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_jobs_caller ON jobs(caller_owner_id, created_at DESC)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_jobs_agent ON jobs(agent_id, created_at DESC)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_jobs_agent_owner ON jobs(agent_owner_id, created_at DESC)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_jobs_retry_due ON jobs(next_retry_at, status)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_jobs_lease_due ON jobs(lease_expires_at, status)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_jobs_claim_owner ON jobs(claim_owner_id, updated_at DESC)"
-    )
-    conn.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_jobs_caller_status_created_job
-        ON jobs(caller_owner_id, status, created_at DESC, job_id DESC)
-        """
-    )
-    conn.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_jobs_agent_status_created_job
-        ON jobs(agent_id, status, created_at DESC, job_id DESC)
-        """
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created_at DESC)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_jobs_batch_created ON jobs(batch_id, created_at DESC)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_jobs_client_created ON jobs(client_id, created_at DESC)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_jobs_parent_created ON jobs(parent_job_id, created_at DESC)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_jobs_clarification_deadline ON jobs(status, clarification_deadline_at)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_jobs_output_verification_deadline ON jobs(output_verification_status, output_verification_deadline_at)"
-    )
+    """Side-effect: ensure every supporting index on the jobs table exists."""
+    for stmt in _JOBS_INDEX_DEFINITIONS:
+        conn.execute(stmt)
 
 
 def _needs_jobs_migration(conn: _db.DbConnection) -> bool:
@@ -620,224 +604,310 @@ def _needs_jobs_migration(conn: _db.DbConnection) -> bool:
     return False
 
 
-def _normalize_legacy_job_row(row: dict, used_job_ids: set[str]) -> tuple:
-    legacy_rowid = row.get("_legacy_rowid", 0)
+_DEFAULT_LEGACY_PLATFORM_FEE_PCT = 10
+_DEFAULT_LEGACY_DISPUTE_WINDOW_HOURS = 72
+_DEFAULT_LEGACY_MAX_ATTEMPTS = 3
 
+
+def _resolve_legacy_job_id(row: dict, used_job_ids: set[str]) -> str:
+    """Pure: dedup-safe stable job_id derived from rowid + agent + created_at when missing.
+
+    Why: legacy job rows may have null or duplicate ids; uuid5 keeps the
+    derived id deterministic across re-runs of the migration.
+    """
+    legacy_rowid = row.get("_legacy_rowid", 0)
     raw_job_id = _clean_optional_text(row.get("job_id"))
     if not raw_job_id:
-        raw_job_id = str(
-            uuid.uuid5(
-                uuid.NAMESPACE_URL,
-                f"legacy-job:{legacy_rowid}:{row.get('agent_id') or ''}:{row.get('created_at') or ''}",
-            )
-        )
-
+        raw_job_id = str(uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"legacy-job:{legacy_rowid}:{row.get('agent_id') or ''}:{row.get('created_at') or ''}",
+        ))
     job_id = raw_job_id
     suffix = 2
     while job_id in used_job_ids:
-        job_id = str(
-            uuid.uuid5(
-                uuid.NAMESPACE_URL,
-                f"{raw_job_id}:{legacy_rowid}:{suffix}",
-            )
-        )
+        job_id = str(uuid.uuid5(
+            uuid.NAMESPACE_URL, f"{raw_job_id}:{legacy_rowid}:{suffix}",
+        ))
         suffix += 1
     used_job_ids.add(job_id)
+    return job_id
 
+
+def _resolve_legacy_job_owners(row: dict, job_id: str) -> dict[str, str]:
+    """Pure: backfill missing owner / wallet ids with deterministic placeholders."""
     agent_id = _clean_optional_text(row.get("agent_id")) or "legacy-agent"
-    agent_owner_id = (
-        _clean_optional_text(row.get("agent_owner_id")) or f"agent:{agent_id}"
-    )
-    caller_owner_id = (
-        _clean_optional_text(row.get("caller_owner_id")) or f"legacy-caller:{job_id}"
-    )
-    caller_wallet_id = (
-        _clean_optional_text(row.get("caller_wallet_id"))
-        or f"legacy-caller-wallet:{job_id}"
-    )
-    agent_wallet_id = (
-        _clean_optional_text(row.get("agent_wallet_id"))
-        or f"legacy-agent-wallet:{job_id}"
-    )
-    platform_wallet_id = (
-        _clean_optional_text(row.get("platform_wallet_id"))
-        or f"legacy-platform-wallet:{job_id}"
-    )
+    return {
+        "agent_id": agent_id,
+        "agent_owner_id": (
+            _clean_optional_text(row.get("agent_owner_id")) or f"agent:{agent_id}"
+        ),
+        "caller_owner_id": (
+            _clean_optional_text(row.get("caller_owner_id"))
+            or f"legacy-caller:{job_id}"
+        ),
+        "caller_wallet_id": (
+            _clean_optional_text(row.get("caller_wallet_id"))
+            or f"legacy-caller-wallet:{job_id}"
+        ),
+        "agent_wallet_id": (
+            _clean_optional_text(row.get("agent_wallet_id"))
+            or f"legacy-agent-wallet:{job_id}"
+        ),
+        "platform_wallet_id": (
+            _clean_optional_text(row.get("platform_wallet_id"))
+            or f"legacy-platform-wallet:{job_id}"
+        ),
+    }
 
+
+def _resolve_legacy_money_fields(row: dict, job_id: str) -> dict[str, Any]:
+    """Pure: clamp ledger values and synthesise a deterministic charge_tx_id when missing."""
+    price_cents = _to_non_negative_int(row.get("price_cents"), default=0)
+    caller_charge_cents = max(
+        price_cents,
+        _to_non_negative_int(row.get("caller_charge_cents"), default=price_cents),
+    )
+    fee_pct = _to_non_negative_int(
+        row.get("platform_fee_pct_at_create"),
+        default=_DEFAULT_LEGACY_PLATFORM_FEE_PCT,
+    )
+    return {
+        "price_cents": price_cents,
+        "caller_charge_cents": caller_charge_cents,
+        "platform_fee_pct_at_create": min(100, fee_pct),
+        "fee_bearer_policy": _normalize_fee_bearer_policy(row.get("fee_bearer_policy")),
+        "charge_tx_id": (
+            _clean_optional_text(row.get("charge_tx_id"))
+            or str(uuid.uuid5(uuid.NAMESPACE_URL, f"legacy-charge:{job_id}"))
+        ),
+    }
+
+
+def _resolve_legacy_lifecycle_fields(row: dict) -> dict[str, Any]:
+    """Pure: status, timestamps, attempt/retry/timeout counters."""
     status = _clean_optional_text(row.get("status")) or "pending"
     if status not in VALID_STATUSES:
         status = "pending"
-
-    price_cents = _to_non_negative_int(row.get("price_cents"), default=0)
-    caller_charge_cents = _to_non_negative_int(
-        row.get("caller_charge_cents"), default=price_cents
+    max_attempts = max(
+        1,
+        _to_non_negative_int(row.get("max_attempts"), default=_DEFAULT_LEGACY_MAX_ATTEMPTS),
     )
-    if caller_charge_cents < price_cents:
-        caller_charge_cents = price_cents
-    platform_fee_pct_at_create = _to_non_negative_int(
-        row.get("platform_fee_pct_at_create"),
-        default=10,
+    retry_count = min(
+        max_attempts,
+        _to_non_negative_int(row.get("retry_count"), default=0),
     )
-    if platform_fee_pct_at_create > 100:
-        platform_fee_pct_at_create = 100
-    fee_bearer_policy = _normalize_fee_bearer_policy(row.get("fee_bearer_policy"))
-    client_id = _clean_optional_text(row.get("client_id"))
-    charge_tx_id = _clean_optional_text(row.get("charge_tx_id")) or str(
-        uuid.uuid5(uuid.NAMESPACE_URL, f"legacy-charge:{job_id}")
-    )
-
-    input_payload = _normalize_required_json(row.get("input_payload"), default={})
-    output_payload = _normalize_optional_json(row.get("output_payload"))
-
-    error_message = _clean_optional_text(row.get("error_message"))
     created_at = _clean_optional_text(row.get("created_at")) or _CANONICAL_CREATED_AT
-    updated_at = _clean_optional_text(row.get("updated_at")) or created_at
-    completed_at = _clean_optional_text(row.get("completed_at"))
-    settled_at = _clean_optional_text(row.get("settled_at"))
+    return {
+        "status": status,
+        "created_at": created_at,
+        "updated_at": _clean_optional_text(row.get("updated_at")) or created_at,
+        "completed_at": _clean_optional_text(row.get("completed_at")),
+        "settled_at": _clean_optional_text(row.get("settled_at")),
+        "attempt_count": _to_non_negative_int(row.get("attempt_count"), default=0),
+        "max_attempts": max_attempts,
+        "retry_count": retry_count,
+        "next_retry_at": _clean_optional_text(row.get("next_retry_at")),
+        "last_retry_at": _clean_optional_text(row.get("last_retry_at")),
+        "timeout_count": _to_non_negative_int(row.get("timeout_count"), default=0),
+        "last_timeout_at": _clean_optional_text(row.get("last_timeout_at")),
+    }
 
-    claim_owner_id = _clean_optional_text(row.get("claim_owner_id"))
-    claim_token = _clean_optional_text(row.get("claim_token"))
-    claimed_at = _clean_optional_text(row.get("claimed_at"))
-    lease_expires_at = _clean_optional_text(row.get("lease_expires_at"))
-    last_heartbeat_at = _clean_optional_text(row.get("last_heartbeat_at"))
 
-    attempt_count = _to_non_negative_int(row.get("attempt_count"), default=0)
-    max_attempts = max(1, _to_non_negative_int(row.get("max_attempts"), default=3))
-    parent_job_id = _clean_optional_text(row.get("parent_job_id"))
-    tree_depth = _to_non_negative_int(row.get("tree_depth"), default=0)
-    parent_cascade_policy = _normalize_parent_cascade_policy(
-        row.get("parent_cascade_policy")
-    )
-    retry_count = _to_non_negative_int(row.get("retry_count"), default=0)
-    if retry_count > max_attempts:
-        retry_count = max_attempts
+def _resolve_legacy_lease_fields(row: dict) -> dict[str, Any]:
+    """Pure: claim/lease columns; ``None`` when no claim has been recorded."""
+    return {
+        "claim_owner_id": _clean_optional_text(row.get("claim_owner_id")),
+        "claim_token": _clean_optional_text(row.get("claim_token")),
+        "claimed_at": _clean_optional_text(row.get("claimed_at")),
+        "lease_expires_at": _clean_optional_text(row.get("lease_expires_at")),
+        "last_heartbeat_at": _clean_optional_text(row.get("last_heartbeat_at")),
+    }
 
-    next_retry_at = _clean_optional_text(row.get("next_retry_at"))
-    last_retry_at = _clean_optional_text(row.get("last_retry_at"))
 
-    timeout_count = _to_non_negative_int(row.get("timeout_count"), default=0)
-    last_timeout_at = _clean_optional_text(row.get("last_timeout_at"))
-    clarification_timeout_seconds = _to_non_negative_int(
-        row.get("clarification_timeout_seconds"), default=0
-    )
-    clarification_timeout_policy = _normalize_clarification_timeout_policy(
-        row.get("clarification_timeout_policy")
-    )
-    clarification_requested_at = _clean_optional_text(
-        row.get("clarification_requested_at")
-    )
-    clarification_deadline_at = _clean_optional_text(
-        row.get("clarification_deadline_at")
-    )
-    dispute_window_hours = max(
-        1, _to_non_negative_int(row.get("dispute_window_hours"), default=72)
-    )
-    dispute_outcome = _clean_optional_text(row.get("dispute_outcome"))
-    judge_agent_id = _clean_optional_text(row.get("judge_agent_id"))
-    judge_verdict = _clean_optional_text(row.get("judge_verdict"))
-    quality_score = row.get("quality_score")
+def _resolve_legacy_clarification_fields(row: dict) -> dict[str, Any]:
+    """Pure: clarification timeout + deadline tracking columns."""
+    return {
+        "clarification_timeout_seconds": _to_non_negative_int(
+            row.get("clarification_timeout_seconds"), default=0,
+        ),
+        "clarification_timeout_policy": _normalize_clarification_timeout_policy(
+            row.get("clarification_timeout_policy"),
+        ),
+        "clarification_requested_at": _clean_optional_text(
+            row.get("clarification_requested_at"),
+        ),
+        "clarification_deadline_at": _clean_optional_text(
+            row.get("clarification_deadline_at"),
+        ),
+    }
+
+
+def _resolve_legacy_dispute_and_verification(row: dict) -> dict[str, Any]:
+    """Pure: dispute window, verdict, and output-verification columns."""
+    quality_raw = row.get("quality_score")
     try:
-        parsed_quality_score = int(quality_score) if quality_score is not None else None
+        parsed_quality_score = int(quality_raw) if quality_raw is not None else None
     except (TypeError, ValueError):
         parsed_quality_score = None
-    callback_url = _clean_optional_text(row.get("callback_url"))
-    callback_secret = _clean_optional_text(row.get("callback_secret"))
-    output_verification_window_seconds = _to_non_negative_int(
-        row.get("output_verification_window_seconds"),
-        default=0,
-    )
-    output_verification_status = _normalize_output_verification_status(
-        row.get("output_verification_status")
-    )
-    output_verification_deadline_at = _clean_optional_text(
-        row.get("output_verification_deadline_at")
-    )
-    output_verification_decided_at = _clean_optional_text(
-        row.get("output_verification_decided_at")
-    )
-    output_verification_decision_owner_id = _clean_optional_text(
-        row.get("output_verification_decision_owner_id")
-    )
-    output_verification_reason = _clean_optional_text(
-        row.get("output_verification_reason")
-    )
-    batch_id = _clean_optional_text(row.get("batch_id"))
+    return {
+        "dispute_window_hours": max(
+            1,
+            _to_non_negative_int(
+                row.get("dispute_window_hours"),
+                default=_DEFAULT_LEGACY_DISPUTE_WINDOW_HOURS,
+            ),
+        ),
+        "dispute_outcome": _clean_optional_text(row.get("dispute_outcome")),
+        "judge_agent_id": _clean_optional_text(row.get("judge_agent_id")),
+        "judge_verdict": _clean_optional_text(row.get("judge_verdict")),
+        "quality_score": parsed_quality_score,
+        "callback_url": _clean_optional_text(row.get("callback_url")),
+        "callback_secret": _clean_optional_text(row.get("callback_secret")),
+        "output_verification_window_seconds": _to_non_negative_int(
+            row.get("output_verification_window_seconds"), default=0,
+        ),
+        "output_verification_status": _normalize_output_verification_status(
+            row.get("output_verification_status"),
+        ),
+        "output_verification_deadline_at": _clean_optional_text(
+            row.get("output_verification_deadline_at"),
+        ),
+        "output_verification_decided_at": _clean_optional_text(
+            row.get("output_verification_decided_at"),
+        ),
+        "output_verification_decision_owner_id": _clean_optional_text(
+            row.get("output_verification_decision_owner_id"),
+        ),
+        "output_verification_reason": _clean_optional_text(
+            row.get("output_verification_reason"),
+        ),
+    }
 
-    if claim_owner_id is None:
-        claim_token = None
-        claimed_at = None
-        lease_expires_at = None
-        last_heartbeat_at = None
 
-    if completed_at or settled_at:
-        claim_owner_id = None
-        claim_token = None
-        claimed_at = None
-        lease_expires_at = None
-        last_heartbeat_at = None
-        next_retry_at = None
+def _scrub_lease_fields_when_terminal(
+    lifecycle: dict[str, Any], lease: dict[str, Any], clarification: dict[str, Any],
+) -> None:
+    """Side-effect (mutating ``lease`` + ``clarification``): zero out lease/deadline state.
 
-    if status != "awaiting_clarification":
-        clarification_requested_at = None
-        clarification_deadline_at = None
-    elif clarification_timeout_seconds <= 0:
-        clarification_deadline_at = None
+    Why: completed/settled jobs cannot hold a lease; status changes must
+    invalidate stale clarification deadlines. Mutating in place keeps the
+    invariant single-sourced.
+    """
+    if lease["claim_owner_id"] is None:
+        lease["claim_token"] = None
+        lease["claimed_at"] = None
+        lease["lease_expires_at"] = None
+        lease["last_heartbeat_at"] = None
+    if lifecycle["completed_at"] or lifecycle["settled_at"]:
+        lease["claim_owner_id"] = None
+        lease["claim_token"] = None
+        lease["claimed_at"] = None
+        lease["lease_expires_at"] = None
+        lease["last_heartbeat_at"] = None
+        lifecycle["next_retry_at"] = None
+    if lifecycle["status"] != "awaiting_clarification":
+        clarification["clarification_requested_at"] = None
+        clarification["clarification_deadline_at"] = None
+    elif clarification["clarification_timeout_seconds"] <= 0:
+        clarification["clarification_deadline_at"] = None
 
+
+def _build_legacy_job_tuple(
+    *, job_id: str, owners: dict[str, str], money: dict[str, Any],
+    lifecycle: dict[str, Any], lease: dict[str, Any],
+    clarification: dict[str, Any], dispute: dict[str, Any],
+    input_payload: Any, output_payload: Any, error_message: str | None,
+    client_id: str | None, parent_job_id: str | None,
+    parent_cascade_policy: str, tree_depth: int, batch_id: str | None,
+) -> tuple:
+    """Pure: column-order tuple matching the jobs INSERT statement."""
     return (
         job_id,
-        agent_id,
-        agent_owner_id,
-        caller_owner_id,
-        caller_wallet_id,
-        agent_wallet_id,
-        platform_wallet_id,
-        status,
-        price_cents,
-        caller_charge_cents,
-        platform_fee_pct_at_create,
-        fee_bearer_policy,
+        owners["agent_id"],
+        owners["agent_owner_id"],
+        owners["caller_owner_id"],
+        owners["caller_wallet_id"],
+        owners["agent_wallet_id"],
+        owners["platform_wallet_id"],
+        lifecycle["status"],
+        money["price_cents"],
+        money["caller_charge_cents"],
+        money["platform_fee_pct_at_create"],
+        money["fee_bearer_policy"],
         client_id,
-        charge_tx_id,
+        money["charge_tx_id"],
         input_payload,
         output_payload,
         error_message,
-        created_at,
-        updated_at,
-        completed_at,
-        settled_at,
-        claim_owner_id,
-        claim_token,
-        claimed_at,
-        lease_expires_at,
-        last_heartbeat_at,
-        attempt_count,
-        max_attempts,
+        lifecycle["created_at"],
+        lifecycle["updated_at"],
+        lifecycle["completed_at"],
+        lifecycle["settled_at"],
+        lease["claim_owner_id"],
+        lease["claim_token"],
+        lease["claimed_at"],
+        lease["lease_expires_at"],
+        lease["last_heartbeat_at"],
+        lifecycle["attempt_count"],
+        lifecycle["max_attempts"],
         parent_job_id,
         tree_depth,
         parent_cascade_policy,
-        retry_count,
-        next_retry_at,
-        last_retry_at,
-        timeout_count,
-        last_timeout_at,
-        clarification_timeout_seconds,
-        clarification_timeout_policy,
-        clarification_requested_at,
-        clarification_deadline_at,
-        dispute_window_hours,
-        dispute_outcome,
-        judge_agent_id,
-        judge_verdict,
-        parsed_quality_score,
-        callback_url,
-        callback_secret,
-        output_verification_window_seconds,
-        output_verification_status,
-        output_verification_deadline_at,
-        output_verification_decided_at,
-        output_verification_decision_owner_id,
-        output_verification_reason,
+        lifecycle["retry_count"],
+        lifecycle["next_retry_at"],
+        lifecycle["last_retry_at"],
+        lifecycle["timeout_count"],
+        lifecycle["last_timeout_at"],
+        clarification["clarification_timeout_seconds"],
+        clarification["clarification_timeout_policy"],
+        clarification["clarification_requested_at"],
+        clarification["clarification_deadline_at"],
+        dispute["dispute_window_hours"],
+        dispute["dispute_outcome"],
+        dispute["judge_agent_id"],
+        dispute["judge_verdict"],
+        dispute["quality_score"],
+        dispute["callback_url"],
+        dispute["callback_secret"],
+        dispute["output_verification_window_seconds"],
+        dispute["output_verification_status"],
+        dispute["output_verification_deadline_at"],
+        dispute["output_verification_decided_at"],
+        dispute["output_verification_decision_owner_id"],
+        dispute["output_verification_reason"],
         batch_id,
+    )
+
+
+def _normalize_legacy_job_row(row: dict, used_job_ids: set[str]) -> tuple:
+    """Pure: project a legacy job row into the canonical jobs INSERT tuple.
+
+    Why: legacy SQLite rows may pre-date many schema additions; the
+    migration is idempotent and dedup-safe so retries never produce
+    duplicate job_ids.
+    """
+    job_id = _resolve_legacy_job_id(row, used_job_ids)
+    owners = _resolve_legacy_job_owners(row, job_id)
+    money = _resolve_legacy_money_fields(row, job_id)
+    lifecycle = _resolve_legacy_lifecycle_fields(row)
+    lease = _resolve_legacy_lease_fields(row)
+    clarification = _resolve_legacy_clarification_fields(row)
+    dispute = _resolve_legacy_dispute_and_verification(row)
+    _scrub_lease_fields_when_terminal(lifecycle, lease, clarification)
+    return _build_legacy_job_tuple(
+        job_id=job_id, owners=owners, money=money,
+        lifecycle=lifecycle, lease=lease, clarification=clarification,
+        dispute=dispute,
+        input_payload=_normalize_required_json(row.get("input_payload"), default={}),
+        output_payload=_normalize_optional_json(row.get("output_payload")),
+        error_message=_clean_optional_text(row.get("error_message")),
+        client_id=_clean_optional_text(row.get("client_id")),
+        parent_job_id=_clean_optional_text(row.get("parent_job_id")),
+        parent_cascade_policy=_normalize_parent_cascade_policy(
+            row.get("parent_cascade_policy"),
+        ),
+        tree_depth=_to_non_negative_int(row.get("tree_depth"), default=0),
+        batch_id=_clean_optional_text(row.get("batch_id")),
     )
 
 

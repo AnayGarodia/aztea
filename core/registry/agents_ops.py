@@ -275,6 +275,239 @@ def _validate_agent_scalar_params(
     )
 
 
+_VALID_AGENT_KINDS = frozenset({"aztea_built", "community_skill", "self_hosted"})
+_AGENT_DISPLAY_LABEL_CHARS = 80
+_AGENT_MODEL_ID_CHARS = 128
+
+_REGISTER_AGENT_INSERT_SQL = """
+    INSERT INTO agents
+        (agent_id, owner_id, name, description, endpoint_url, healthcheck_url,
+         price_per_call_usd, tags, input_schema, output_schema, output_verifier_url,
+         output_examples, verified, endpoint_health_status, endpoint_consecutive_failures,
+         endpoint_last_checked_at, endpoint_last_error,
+         internal_only, status, review_status, review_note, reviewed_at, reviewed_by,
+         trust_decay_multiplier, last_decay_at, created_at,
+         model_provider, model_id, pricing_model, pricing_config, kind,
+         pii_safe, outputs_not_stored, audit_logged, region_locked, payout_curve, cacheable)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, NULL, NULL,
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+"""
+
+_REGISTER_AGENT_SIGNING_UPDATE_SQL = """
+    UPDATE agents
+    SET did = %s,
+        signing_public_key = %s,
+        signing_private_key = %s,
+        signing_keys_created_at = %s
+    WHERE agent_id = %s
+"""
+
+
+def _normalize_register_scalars(
+    *, price_per_call_usd: float, endpoint_health_status: str,
+    status: str, review_status: str | None, is_internal: bool,
+    pricing_model: str | None, pricing_config: dict | None,
+) -> dict[str, Any]:
+    """Pure: validate scalar agent params at the boundary and return canonical values.
+
+    Why: every malformed input becomes a single ``ValueError``; the DB
+    insert never sees an inconsistent row.
+    """
+    _scalars = _validate_agent_scalar_params(
+        price_per_call_usd, endpoint_health_status, status,
+        review_status, is_internal, pricing_model, pricing_config,
+    )
+    _scalars.raise_on_err()
+    return _scalars.value
+
+
+def _normalize_register_optional_strings(
+    *, healthcheck_url: str | None, output_verifier_url: str | None,
+    review_note: str | None, reviewed_at: str | None,
+    reviewed_by: str | None, region_locked: str | None,
+    model_provider: str | None, model_id: str | None,
+) -> dict[str, str | None]:
+    """Pure: strip + collapse-empty for every optional string field on the agent row."""
+    return {
+        "healthcheck_url": str(healthcheck_url or "").strip() or None,
+        "verifier_url": str(output_verifier_url or "").strip() or None,
+        "review_note": str(review_note or "").strip() or None,
+        "reviewed_at": str(reviewed_at or "").strip() or None,
+        "reviewed_by": str(reviewed_by or "").strip() or None,
+        "region_locked": str(region_locked or "").strip().lower() or None,
+        "model_provider": str(model_provider).strip().lower() if model_provider else None,
+        "model_id": str(model_id).strip()[:_AGENT_MODEL_ID_CHARS] if model_id else None,
+    }
+
+
+def _normalize_examples_json(output_examples: list | None) -> str | None:
+    """Pure: filter to dict-only examples and serialise; empty list / non-list → None."""
+    if not isinstance(output_examples, list):
+        return None
+    encoded = json.dumps([ex for ex in output_examples if isinstance(ex, dict)])
+    return encoded or None
+
+
+def _coerce_decay_multiplier(trust_decay_multiplier: float) -> float:
+    """Pure: enforce decay > 0; coerce zero/negative to 1.0 (the no-decay default)."""
+    value = _to_non_negative_float(trust_decay_multiplier, default=1.0)
+    return value if value > 0 else 1.0
+
+
+def _normalize_agent_kind(kind: str) -> str:
+    """Pure: clamp ``kind`` to a known agent-kind value, defaulting to self_hosted."""
+    candidate = str(kind or "self_hosted").strip().lower()
+    return candidate if candidate in _VALID_AGENT_KINDS else "self_hosted"
+
+
+def _maybe_embed_listing(
+    *, embed_listing: bool, name: str, description: str,
+    normalized_tags: list, normalized_schema: dict,
+) -> tuple[str, list[float] | None]:
+    """Side-effect: compute embedding for new listings; ``("", None)`` when disabled."""
+    if not embed_listing:
+        return "", None
+    source_text = _build_embedding_source_text(
+        name, description, normalized_tags, normalized_schema,
+    )
+    return source_text, embeddings.embed_text(source_text)
+
+
+def _generate_signing_keypair_safe(
+    aid: str, created_at: str,
+) -> tuple[str | None, str | None, str | None, str | None]:
+    """Side-effect: best-effort keypair generation.
+
+    Why: missing ``cryptography`` lib in test envs must not block agent
+    registration; the agent simply has no signing key until the next
+    startup backfill recovers.
+    """
+    try:
+        from core import crypto as _crypto
+        from core.identity import build_agent_did as _build_agent_did
+
+        private_pem, public_pem = _crypto.generate_signing_keypair()
+        return _build_agent_did(aid), private_pem, public_pem, created_at
+    except Exception:
+        _logger.exception("Failed to generate signing keypair for agent %s", aid)
+        return None, None, None, None
+
+
+def _persist_signing_keypair(
+    conn: Any, *, aid: str, agent_did: str, public_pem: str,
+    private_pem: str, signing_keys_created_at: str,
+) -> None:
+    """Side-effect: write DID + keypair onto the agents row.
+
+    Why: tolerates schemas that pre-date migration 0015 — the column may
+    not exist yet, but the next startup backfill will retry.
+    """
+    try:
+        conn.execute(
+            _REGISTER_AGENT_SIGNING_UPDATE_SQL,
+            (agent_did, public_pem, private_pem, signing_keys_created_at, aid),
+        )
+    except _db.OperationalError as exc:
+        _logger.warning(
+            "Could not persist signing keypair for agent %s "
+            "(schema not yet migrated?): %s",
+            aid, exc,
+        )
+
+
+def _eagerly_create_agent_wallet(
+    aid: str, normalized_owner_id: str, name: str,
+) -> None:
+    """Side-effect: create the agent's payout sub-wallet linked to its human owner.
+
+    Why: best-effort — the job-creation path also calls
+    ``get_or_create_wallet`` and recovers if this eager step failed.
+    """
+    try:
+        from core import payments as _payments
+
+        parent_wallet_id: str | None = None
+        if normalized_owner_id and normalized_owner_id != f"agent:{aid}":
+            owner_wallet = _payments.get_or_create_wallet(normalized_owner_id)
+            parent_wallet_id = owner_wallet["wallet_id"]
+        _payments.get_or_create_wallet(
+            f"agent:{aid}",
+            parent_wallet_id=parent_wallet_id,
+            display_label=name[:_AGENT_DISPLAY_LABEL_CHARS] if name else None,
+        )
+    except Exception:
+        _logger.exception("failed to eagerly create agent sub-wallet for %s", aid)
+
+
+def _build_register_agent_params(
+    *, aid: str, normalized_owner_id: str, name: str, description: str,
+    endpoint_url: str, scalars: dict, optionals: dict,
+    tags_json: str, schema_json: str, output_schema_json: str,
+    examples_json: str | None, verified: bool, internal_only: bool,
+    pii_safe: bool, outputs_not_stored: bool, audit_logged: bool,
+    cacheable: bool | None, decay_multiplier: float,
+    payout_curve_json: str, kind: str, created_at: str,
+) -> tuple:
+    """Pure: positional args for ``_REGISTER_AGENT_INSERT_SQL``."""
+    return (
+        aid,
+        normalized_owner_id,
+        name,
+        description,
+        endpoint_url,
+        optionals["healthcheck_url"],
+        scalars["price"],
+        tags_json,
+        schema_json,
+        output_schema_json,
+        optionals["verifier_url"],
+        examples_json,
+        1 if verified else 0,
+        scalars["normalized_health_status"],
+        1 if internal_only else 0,
+        scalars["normalized_status"],
+        scalars["normalized_review_status"],
+        optionals["review_note"],
+        optionals["reviewed_at"],
+        optionals["reviewed_by"],
+        decay_multiplier,
+        created_at,
+        created_at,
+        optionals["model_provider"],
+        optionals["model_id"],
+        scalars["normalized_pricing_model"],
+        scalars["pricing_config_json"],
+        kind,
+        1 if pii_safe else 0,
+        1 if outputs_not_stored else 0,
+        1 if audit_logged else 0,
+        optionals["region_locked"],
+        payout_curve_json,
+        None if cacheable is None else (1 if cacheable else 0),
+    )
+
+
+def _execute_register_agent_insert(
+    conn: Any, *, params: tuple, embed_listing: bool, aid: str,
+    source_text: str, embedding_vector: list[float] | None,
+    agent_did: str | None, private_pem: str | None,
+    public_pem: str | None, signing_keys_created_at: str | None,
+) -> None:
+    """Side-effect: INSERT the agent row + optional embedding + optional signing keypair."""
+    conn.execute(_REGISTER_AGENT_INSERT_SQL, params)
+    if embed_listing and embedding_vector is not None:
+        _upsert_agent_embedding_row(
+            conn, agent_id=aid, source_text=source_text,
+            embedding_vector=embedding_vector,
+        )
+    if agent_did is not None and private_pem is not None:
+        _persist_signing_keypair(
+            conn, aid=aid, agent_did=agent_did, public_pem=public_pem,
+            private_pem=private_pem,
+            signing_keys_created_at=signing_keys_created_at,
+        )
+
+
 def register_agent(
     name: str,
     description: str,
@@ -310,220 +543,67 @@ def register_agent(
     payout_curve: dict | None = None,
     cacheable: bool | None = None,
 ) -> str:
-    """
-    Insert a new agent listing. Returns the agent_id.
-    Pass agent_id explicitly for deterministic IDs (e.g. self-registration).
-    By default this also writes an embedding row in the same request.
-    Raises _db.IntegrityError if agent_id already exists.
+    """Side-effect: insert a new agent listing; returns the agent_id.
+
+    Why: passing ``agent_id`` explicitly produces deterministic IDs (e.g.
+    self-registration); ``embed_listing=True`` writes an embedding row in
+    the same request so search ranking stays current. Raises
+    ``_db.IntegrityError`` if ``agent_id`` already exists.
     """
     aid = agent_id or str(uuid.uuid4())
     normalized_owner_id = (owner_id or f"agent:{aid}").strip()
     if not normalized_owner_id:
         raise ValueError("owner_id must be a non-empty string.")
-
-    is_internal = internal_only or str(endpoint_url or "").strip().startswith(
-        "internal://"
+    is_internal = internal_only or str(endpoint_url or "").strip().startswith("internal://")
+    scalars = _normalize_register_scalars(
+        price_per_call_usd=price_per_call_usd,
+        endpoint_health_status=endpoint_health_status,
+        status=status, review_status=review_status, is_internal=is_internal,
+        pricing_model=pricing_model, pricing_config=pricing_config,
     )
-
-    # Run all pure scalar validation before touching the DB.
-    _scalars = _validate_agent_scalar_params(
-        price_per_call_usd,
-        endpoint_health_status,
-        status,
-        review_status,
-        is_internal,
-        pricing_model,
-        pricing_config,
+    optionals = _normalize_register_optional_strings(
+        healthcheck_url=healthcheck_url, output_verifier_url=output_verifier_url,
+        review_note=review_note, reviewed_at=reviewed_at, reviewed_by=reviewed_by,
+        region_locked=region_locked, model_provider=model_provider, model_id=model_id,
     )
-    _scalars.raise_on_err()
-    price = _scalars.value["price"]
-    normalized_health_status = _scalars.value["normalized_health_status"]
-    normalized_status = _scalars.value["normalized_status"]
-    normalized_review_status = _scalars.value["normalized_review_status"]
-    normalized_pricing_model = _scalars.value["normalized_pricing_model"]
-    pricing_config_json = _scalars.value["pricing_config_json"]
-
     created_at = datetime.now(timezone.utc).isoformat()
     normalized_tags = _parse_tags(tags)
     normalized_schema = _parse_input_schema(input_schema)
     normalized_output_schema = _parse_output_schema(output_schema)
-    schema_json = json.dumps(normalized_schema, sort_keys=True)
-    output_schema_json = json.dumps(normalized_output_schema, sort_keys=True)
-    tags_json = json.dumps(normalized_tags)
-    normalized_healthcheck_url = str(healthcheck_url or "").strip() or None
-    normalized_verifier_url = str(output_verifier_url or "").strip() or None
-    if isinstance(output_examples, list):
-        normalized_examples: str | None = (
-            json.dumps([ex for ex in output_examples if isinstance(ex, dict)]) or None
-        )
-    else:
-        normalized_examples = None
-    normalized_verified = 1 if verified else 0
-    normalized_pii_safe = 1 if pii_safe else 0
-    normalized_outputs_not_stored = 1 if outputs_not_stored else 0
-    normalized_audit_logged = 1 if audit_logged else 0
-    normalized_region_locked = str(region_locked or "").strip().lower() or None
-    normalized_cacheable = None if cacheable is None else (1 if cacheable else 0)
     from core import payout_curve as _pc
-
-    try:
-        parsed_curve = _pc.parse_curve(payout_curve)
-    except ValueError as exc:
-        raise ValueError(str(exc))
-    payout_curve_json = _pc.curve_to_json(parsed_curve)
-    normalized_review_note = str(review_note or "").strip() or None
-    normalized_reviewed_at = str(reviewed_at or "").strip() or None
-    normalized_reviewed_by = str(reviewed_by or "").strip() or None
-    normalized_decay_multiplier = _to_non_negative_float(
-        trust_decay_multiplier, default=1.0
+    payout_curve_json = _pc.curve_to_json(_pc.parse_curve(payout_curve))
+    source_text, embedding_vector = _maybe_embed_listing(
+        embed_listing=embed_listing, name=name, description=description,
+        normalized_tags=normalized_tags, normalized_schema=normalized_schema,
     )
-    if normalized_decay_multiplier <= 0:
-        normalized_decay_multiplier = 1.0
-    internal_only_int = 1 if internal_only else 0
-    source_text = ""
-    embedding_vector: list[float] | None = None
-    if embed_listing:
-        source_text = _build_embedding_source_text(
-            name, description, normalized_tags, normalized_schema
-        )
-        embedding_vector = embeddings.embed_text(source_text)
-
-    # Cryptographic identity. Generated up front so the same row insert
-    # carries the DID, public key, and private key. We tolerate failures
-    # (missing ``cryptography`` lib in some test envs) by leaving the
-    # fields NULL — the agent still registers, just without a signing key.
-    agent_did_value: str | None = None
-    private_pem_value: str | None = None
-    public_pem_value: str | None = None
-    signing_keys_created_at: str | None = None
-    try:
-        from core import crypto as _crypto
-        from core.identity import build_agent_did as _build_agent_did
-
-        private_pem_value, public_pem_value = _crypto.generate_signing_keypair()
-        agent_did_value = _build_agent_did(aid)
-        signing_keys_created_at = created_at
-    except Exception:
-        _logger.exception("Failed to generate signing keypair for agent %s", aid)
-
+    agent_did, private_pem, public_pem, signing_keys_created_at = (
+        _generate_signing_keypair_safe(aid, created_at)
+    )
+    params = _build_register_agent_params(
+        aid=aid, normalized_owner_id=normalized_owner_id, name=name,
+        description=description, endpoint_url=endpoint_url, scalars=scalars,
+        optionals=optionals,
+        tags_json=json.dumps(normalized_tags),
+        schema_json=json.dumps(normalized_schema, sort_keys=True),
+        output_schema_json=json.dumps(normalized_output_schema, sort_keys=True),
+        examples_json=_normalize_examples_json(output_examples),
+        verified=verified, internal_only=internal_only, pii_safe=pii_safe,
+        outputs_not_stored=outputs_not_stored, audit_logged=audit_logged,
+        cacheable=cacheable,
+        decay_multiplier=_coerce_decay_multiplier(trust_decay_multiplier),
+        payout_curve_json=payout_curve_json, kind=_normalize_agent_kind(kind),
+        created_at=created_at,
+    )
     with _conn() as conn:
-        valid_kinds = {"aztea_built", "community_skill", "self_hosted"}
-        normalized_kind = str(kind or "self_hosted").strip().lower()
-        if normalized_kind not in valid_kinds:
-            normalized_kind = "self_hosted"
-
-        conn.execute(
-            """
-            INSERT INTO agents
-                (agent_id, owner_id, name, description, endpoint_url, healthcheck_url,
-                 price_per_call_usd, tags, input_schema, output_schema, output_verifier_url,
-                 output_examples, verified, endpoint_health_status, endpoint_consecutive_failures,
-                 endpoint_last_checked_at, endpoint_last_error,
-                 internal_only, status, review_status, review_note, reviewed_at, reviewed_by,
-                 trust_decay_multiplier, last_decay_at, created_at,
-                 model_provider, model_id, pricing_model, pricing_config, kind,
-                 pii_safe, outputs_not_stored, audit_logged, region_locked, payout_curve, cacheable)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                aid,
-                normalized_owner_id,
-                name,
-                description,
-                endpoint_url,
-                normalized_healthcheck_url,
-                price,
-                tags_json,
-                schema_json,
-                output_schema_json,
-                normalized_verifier_url,
-                normalized_examples,
-                normalized_verified,
-                normalized_health_status,
-                internal_only_int,
-                normalized_status,
-                normalized_review_status,
-                normalized_review_note,
-                normalized_reviewed_at,
-                normalized_reviewed_by,
-                normalized_decay_multiplier,
-                created_at,
-                created_at,
-                str(model_provider).strip().lower() if model_provider else None,
-                str(model_id).strip()[:128] if model_id else None,
-                normalized_pricing_model,
-                pricing_config_json,
-                normalized_kind,
-                normalized_pii_safe,
-                normalized_outputs_not_stored,
-                normalized_audit_logged,
-                normalized_region_locked,
-                payout_curve_json,
-                normalized_cacheable,
-            ),
+        _execute_register_agent_insert(
+            conn, params=params, embed_listing=embed_listing, aid=aid,
+            source_text=source_text, embedding_vector=embedding_vector,
+            agent_did=agent_did, private_pem=private_pem, public_pem=public_pem,
+            signing_keys_created_at=signing_keys_created_at,
         )
-        if embed_listing and embedding_vector is not None:
-            _upsert_agent_embedding_row(
-                conn,
-                agent_id=aid,
-                source_text=source_text,
-                embedding_vector=embedding_vector,
-            )
-        if agent_did_value is not None and private_pem_value is not None:
-            try:
-                conn.execute(
-                    """
-                    UPDATE agents
-                    SET did = %s,
-                        signing_public_key = %s,
-                        signing_private_key = %s,
-                        signing_keys_created_at = %s
-                    WHERE agent_id = %s
-                    """,
-                    (
-                        agent_did_value,
-                        public_pem_value,
-                        private_pem_value,
-                        signing_keys_created_at,
-                        aid,
-                    ),
-                )
-            except _db.OperationalError as exc:
-                # Column may not exist on a database that hasn't picked up
-                # migration 0015 yet — log and continue. Backfill on the
-                # next startup will retry.
-                _logger.warning(
-                    "Could not persist signing keypair for agent %s (schema not yet migrated?): %s",
-                    aid,
-                    exc,
-                )
     if embed_listing:
         _invalidate_embeddings_cache()
-
-    # Eagerly create the agent's sub-wallet, linked to its owner's wallet.
-    # ``owner_id`` here is the *human owner* of the agent (a "user:<id>" string
-    # for marketplace agents, or "agent:<id>" for self-owned built-ins). The
-    # agent's payout wallet is keyed by ``"agent:<aid>"``.
-    try:
-        from core import payments as _payments
-
-        parent_wallet_id: str | None = None
-        # Only link to a parent if the agent has a *different* owner than itself.
-        # A self-owned agent (owner_id == "agent:<aid>") has no human parent.
-        if normalized_owner_id and normalized_owner_id != f"agent:{aid}":
-            owner_wallet = _payments.get_or_create_wallet(normalized_owner_id)
-            parent_wallet_id = owner_wallet["wallet_id"]
-        _payments.get_or_create_wallet(
-            f"agent:{aid}",
-            parent_wallet_id=parent_wallet_id,
-            display_label=name[:80] if name else None,
-        )
-    except Exception:
-        # Wallet creation is best-effort at registration time. The job-creation
-        # path also calls ``get_or_create_wallet`` and will recover if this
-        # eager step failed.
-        _logger.exception("failed to eagerly create agent sub-wallet for %s", aid)
-
+    _eagerly_create_agent_wallet(aid, normalized_owner_id, name)
     return aid
 
 
@@ -1435,251 +1515,202 @@ def _agent_block_keywords(agent: dict) -> list[str]:
     return _ROUTING_OVERLAY_BLOCK.get(agent_id, [])
 
 
-def _intent_match_bonus(query: str, agent: dict) -> float:
-    terms = _query_terms(query)
-    if not terms:
-        return 0.0
+# Per-cohort term/agent-token sets. All sets are module-level so they're
+# never recreated per call.
+_SECURITY_TERMS = frozenset({
+    "security", "vulnerability", "vulnerabilities", "cve", "cves",
+    "secret", "secrets", "credential", "credentials", "password",
+    "passwords", "hardcoded", "npm", "package", "dependency",
+    "dependencies", "audit",
+})
+_SECRET_QUERY_TERMS = frozenset({
+    "secret", "secrets", "credential", "credentials",
+    "password", "passwords", "hardcoded",
+})
+_VULN_QUERY_TERMS = frozenset({
+    "vulnerability", "vulnerabilities", "audit", "dependency",
+    "dependencies", "package", "npm",
+})
+_VULN_AGENT_TOKENS = (
+    "dependency", "dependencies", "audit", "package", "npm", "license",
+)
+_REVIEW_TERMS = frozenset(
+    {"review", "reviewer", "diff", "patch", "bugs", "bug", "correctness"}
+)
+_BROWSER_TERMS = frozenset(
+    {"browser", "screenshot", "screenshots", "playwright", "render", "homepage"}
+)
+_VISUAL_COMPARE_TERMS = frozenset(
+    {"compare", "diff", "difference", "regression", "baseline", "before", "after"}
+)
+_IMAGE_TERMS = frozenset(
+    {"image", "generate", "generation", "dall", "replicate", "picture"}
+)
+# "render" lives ONLY in web-render terms — placing it under image_terms
+# inflated visual_regression on "render this webpage" since its description
+# contains "image". Web rendering and image generation share zero overlap
+# in this catalog.
+_WEB_RENDER_TERMS = frozenset({
+    "render", "renders", "rendered", "webpage", "web-page",
+    "site", "url", "scrape", "crawl",
+})
+_FINANCE_TERMS = frozenset(
+    {"edgar", "10-k", "10q", "10-q", "sec", "filing", "revenue"}
+)
+_RED_TEAM_TERMS = frozenset(
+    {"red", "redteam", "red-teamer", "adversarial", "jailbreak", "prompt"}
+)
+_SBOM_TERMS = frozenset({"sbom", "license", "licenses", "open", "source"})
+_EXECUTION_TERMS = frozenset(
+    {"run", "execute", "python", "sandbox", "disk", "write", "filesystem", "jwt", "decode"}
+)
+_PAGE_SCREENSHOT_TERMS = frozenset({"screenshot", "screenshots", "homepage"})
+_BROWSER_AGENT_TOKENS = ("browser", "playwright", "headless", "chromium")
+_VR_AGENT_TOKENS = ("visual regression", "pixel-level diff")
 
-    name = str(agent.get("name") or "").lower()
-    description = str(agent.get("description") or "").lower()
-    tags = {str(tag).strip().lower() for tag in _parse_tags(agent.get("tags"))}
-    combined = " ".join([name, description, " ".join(sorted(tags))])
-    lowered_query = str(query or "").lower()
+_INTENT_BONUS_MIN = -0.35
+_INTENT_BONUS_MAX = 0.70
+
+
+def _curated_keyword_bonus(agent: dict, lowered_query: str) -> float:
+    """Pure: curated match/block keyword bonuses — the strongest discovery signal."""
     bonus = 0.0
-
-    # Curated match_keywords are the single strongest discovery signal —
-    # they encode "if the query mentions X, this is the right agent" in
-    # plain language. Each hit adds 0.20 (capped at 0.60) to the bonus,
-    # which the blended score then weighs alongside lexical+semantic.
     match_kws = _agent_match_keywords(agent)
     if match_kws:
         kw_hits = sum(1 for kw in match_kws if kw in lowered_query)
         if kw_hits:
             bonus += min(0.60, kw_hits * 0.20)
-
-    # block_keywords pull the agent down so it doesn't grab the slot it
-    # shouldn't. Example: json_schema_validator must not match
-    # "package.json vulnerabilities" — the schema validator has no CVE data.
     block_kws = _agent_block_keywords(agent)
     if block_kws:
         block_hits = sum(1 for kw in block_kws if kw in lowered_query)
         if block_hits:
             bonus -= min(0.50, block_hits * 0.25)
+    return bonus
 
-    security_terms = {
-        "security",
-        "vulnerability",
-        "vulnerabilities",
-        "cve",
-        "cves",
-        "secret",
-        "secrets",
-        "credential",
-        "credentials",
-        "password",
-        "passwords",
-        "hardcoded",
-        "npm",
-        "package",
-        "dependency",
-        "dependencies",
-        "audit",
-    }
-    review_terms = {"review", "reviewer", "diff", "patch", "bugs", "bug", "correctness"}
-    browser_terms = {
-        "browser",
-        "screenshot",
-        "screenshots",
-        "playwright",
-        "render",
-        "homepage",
-    }
-    visual_compare_terms = {
-        "compare",
-        "diff",
-        "difference",
-        "regression",
-        "baseline",
-        "before",
-        "after",
-    }
-    image_terms = {
-        "image",
-        "generate",
-        "generation",
-        "dall",
-        "replicate",
-        "picture",
-    }
-    # "render" used to live in image_terms, but the 2026-05-08 eval found that
-    # "render this webpage" matched image_terms (visual_regression description
-    # contains "image"), inflating its blended score above browser_agent. Web
-    # rendering and image generation share zero overlap in this catalog, so
-    # bonus the browser path explicitly without overloading the image path.
-    web_render_terms = {
-        "render",
-        "renders",
-        "rendered",
-        "webpage",
-        "web-page",
-        "site",
-        "url",
-        "scrape",
-        "crawl",
-    }
-    finance_terms = {"edgar", "10-k", "10q", "10-q", "sec", "filing", "revenue"}
-    red_team_terms = {
-        "red",
-        "redteam",
-        "red-teamer",
-        "adversarial",
-        "jailbreak",
-        "prompt",
-    }
-    sbom_terms = {"sbom", "license", "licenses", "open", "source"}
-    execution_terms = {
-        "run",
-        "execute",
-        "python",
-        "sandbox",
-        "disk",
-        "write",
-        "filesystem",
-        "jwt",
-        "decode",
-    }
 
-    if security_terms & set(terms):
-        if {
-            "secret",
-            "secrets",
-            "credential",
-            "credentials",
-            "password",
-            "passwords",
-            "hardcoded",
-        } & set(terms):
-            if any(
-                token in combined
-                for token in ("secret", "credential", "password", "token")
-            ):
-                bonus += 0.40
-            elif any(token in combined for token in ("cve", "nvd", "osv")):
-                bonus -= 0.20
-        if {"cve", "cves"} & set(terms) and any(
-            token in combined for token in ("cve", "nvd", "osv")
+def _security_cohort_bonus(terms_set: set[str], combined: str) -> float:
+    """Pure: security/CVE/secret/dependency cohort bonuses."""
+    if not (_SECURITY_TERMS & terms_set):
+        return 0.0
+    bonus = 0.0
+    if _SECRET_QUERY_TERMS & terms_set:
+        if any(t in combined for t in ("secret", "credential", "password", "token")):
+            bonus += 0.40
+        elif any(t in combined for t in ("cve", "nvd", "osv")):
+            bonus -= 0.20
+    if {"cve", "cves"} & terms_set and any(
+        t in combined for t in ("cve", "nvd", "osv")
+    ):
+        bonus += 0.30
+    if _VULN_QUERY_TERMS & terms_set and any(t in combined for t in _VULN_AGENT_TOKENS):
+        bonus += 0.25
+    return bonus
+
+
+def _review_cohort_bonus(terms_set: set[str], combined: str) -> float:
+    """Pure: code-review cohort; mild penalty when query routes at lint/typecheck instead."""
+    if not (_REVIEW_TERMS & terms_set):
+        return 0.0
+    bonus = 0.0
+    if any(t in combined for t in
+           ("code review", "review", "diff", "correctness", "maintainability")):
+        bonus += 0.20
+    if any(t in combined for t in ("linter", "ruff", "eslint", "type checker", "mypy")):
+        bonus -= 0.05
+    return bonus
+
+
+def _browser_cohort_bonus(terms_set: set[str], combined: str) -> float:
+    """Pure: browser/web-render cohort. Page-screenshot or render intents must beat VR."""
+    if not (_BROWSER_TERMS & terms_set or _WEB_RENDER_TERMS & terms_set):
+        return 0.0
+    visual_compare = bool(_VISUAL_COMPARE_TERMS & terms_set)
+    wants_page_screenshot = bool(_PAGE_SCREENSHOT_TERMS & terms_set and not visual_compare)
+    wants_web_render = bool(_WEB_RENDER_TERMS & terms_set and not visual_compare)
+    if (wants_page_screenshot or wants_web_render) and any(
+        t in combined for t in _BROWSER_AGENT_TOKENS
+    ):
+        return 0.65  # Strong page-fetch signal: must dominate VR's "image" lexical hit.
+    if (wants_page_screenshot or wants_web_render) and any(
+        t in combined for t in _VR_AGENT_TOKENS
+    ):
+        return -0.35  # Same intent class routed at the wrong agent.
+    if any(t in combined for t in ("browser", "playwright", "screenshot", "headless")):
+        return 0.35
+    if "secret" in combined or "code review" in combined:
+        return -0.20
+    return 0.0
+
+
+def _visual_compare_cohort_bonus(terms_set: set[str], combined: str) -> float:
+    """Pure: pixel-diff / visual-regression cohort."""
+    if not (_VISUAL_COMPARE_TERMS & terms_set):
+        return 0.0
+    if any(t in combined for t in
+           ("visual regression", "pixel-level diff", "compare two screenshots")):
+        return 0.45
+    if "browser" in combined:
+        return -0.10
+    return 0.0
+
+
+def _other_cohort_bonuses(terms_set: set[str], combined: str) -> float:
+    """Pure: image / finance / red-team / SBOM / execution cohort bonuses."""
+    bonus = 0.0
+    if _IMAGE_TERMS & terms_set:
+        if any(t in combined for t in ("image", "generation", "replicate", "gpt-image")):
+            bonus += 0.35
+        elif any(t in combined for t in ("arxiv", "code review", "secret")):
+            bonus -= 0.20
+    if _FINANCE_TERMS & terms_set and any(
+        t in combined for t in ("edgar", "sec", "10-k", "financial")
+    ):
+        bonus += 0.35
+    if _RED_TEAM_TERMS & terms_set and any(
+        t in combined for t in ("red team", "adversarial", "jailbreak")
+    ):
+        bonus += 0.35
+    if _SBOM_TERMS & terms_set and any(
+        t in combined for t in ("dependency", "license", "audit", "package")
+    ):
+        bonus += 0.25
+    if _EXECUTION_TERMS & terms_set:
+        if {"jwt", "decode"} & terms_set and any(
+            t in combined for t in ("python", "execute", "sandbox")
+        ):
+            bonus += 0.35
+        if {"disk", "write", "filesystem"} & terms_set and any(
+            t in combined for t in ("python", "sandbox", "execute", "code")
         ):
             bonus += 0.30
-        if {
-            "vulnerability",
-            "vulnerabilities",
-            "audit",
-            "dependency",
-            "dependencies",
-            "package",
-            "npm",
-        } & set(terms):
-            if any(
-                token in combined
-                for token in (
-                    "dependency",
-                    "dependencies",
-                    "audit",
-                    "package",
-                    "npm",
-                    "license",
-                )
-            ):
-                bonus += 0.25
+    return bonus
 
-    if review_terms & set(terms):
-        if any(
-            token in combined
-            for token in (
-                "code review",
-                "review",
-                "diff",
-                "correctness",
-                "maintainability",
-            )
-        ):
-            bonus += 0.20
-        if any(
-            token in combined
-            for token in ("linter", "ruff", "eslint", "type checker", "mypy")
-        ):
-            bonus -= 0.05
 
-    if browser_terms & set(terms) or web_render_terms & set(terms):
-        wants_page_screenshot = bool(
-            {"screenshot", "screenshots", "homepage"} & set(terms)
-            and not (visual_compare_terms & set(terms))
-        )
-        wants_web_render = bool(
-            web_render_terms & set(terms)
-            and not (visual_compare_terms & set(terms))
-        )
-        if (wants_page_screenshot or wants_web_render) and any(
-            token in combined for token in ("browser", "playwright", "headless", "chromium")
-        ):
-            # Strong page-fetch signal: render/scrape/screenshot a real URL.
-            # Browser Agent must dominate Visual Regression here regardless of
-            # the "image" lexical match VR catches via "compare two images".
-            bonus += 0.65
-        elif (wants_page_screenshot or wants_web_render) and any(
-            token in combined for token in ("visual regression", "pixel-level diff")
-        ):
-            # Same intent class but routed at the wrong agent — push it down.
-            bonus -= 0.35
-        elif any(
-            token in combined
-            for token in ("browser", "playwright", "screenshot", "headless")
-        ):
-            bonus += 0.35
-        elif "secret" in combined or "code review" in combined:
-            bonus -= 0.20
-    if visual_compare_terms & set(terms):
-        if any(
-            token in combined
-            for token in (
-                "visual regression",
-                "pixel-level diff",
-                "compare two screenshots",
-            )
-        ):
-            bonus += 0.45
-        elif "browser" in combined:
-            bonus -= 0.10
-    if image_terms & set(terms):
-        if any(
-            token in combined
-            for token in ("image", "generation", "replicate", "gpt-image")
-        ):
-            bonus += 0.35
-        elif any(token in combined for token in ("arxiv", "code review", "secret")):
-            bonus -= 0.20
-    if finance_terms & set(terms):
-        if any(token in combined for token in ("edgar", "sec", "10-k", "financial")):
-            bonus += 0.35
-    if red_team_terms & set(terms):
-        if any(token in combined for token in ("red team", "adversarial", "jailbreak")):
-            bonus += 0.35
-    if sbom_terms & set(terms):
-        if any(
-            token in combined for token in ("dependency", "license", "audit", "package")
-        ):
-            bonus += 0.25
-    if execution_terms & set(terms):
-        if {"jwt", "decode"} & set(terms) and any(
-            token in combined for token in ("python", "execute", "sandbox")
-        ):
-            bonus += 0.35
-        if {"disk", "write", "filesystem"} & set(terms) and any(
-            token in combined for token in ("python", "sandbox", "execute", "code")
-        ):
-            bonus += 0.30
+def _intent_match_bonus(query: str, agent: dict) -> float:
+    """Pure: cohort-aware bonus on top of lexical/semantic search.
 
-    return max(-0.35, min(0.70, bonus))
+    Why: each cohort encodes "if the query is about X, this kind of agent
+    is the right answer" — bonuses are clamped so a single cohort can't
+    monopolise the blended score.
+    """
+    terms = _query_terms(query)
+    if not terms:
+        return 0.0
+    name = str(agent.get("name") or "").lower()
+    description = str(agent.get("description") or "").lower()
+    tags = {str(tag).strip().lower() for tag in _parse_tags(agent.get("tags"))}
+    combined = " ".join([name, description, " ".join(sorted(tags))])
+    lowered_query = str(query or "").lower()
+    terms_set = set(terms)
+    bonus = (
+        _curated_keyword_bonus(agent, lowered_query)
+        + _security_cohort_bonus(terms_set, combined)
+        + _review_cohort_bonus(terms_set, combined)
+        + _browser_cohort_bonus(terms_set, combined)
+        + _visual_compare_cohort_bonus(terms_set, combined)
+        + _other_cohort_bonuses(terms_set, combined)
+    )
+    return max(_INTENT_BONUS_MIN, min(_INTENT_BONUS_MAX, bonus))
 
 
 def _price_query_mode(query: str) -> str | None:
@@ -1783,6 +1814,311 @@ def _llm_rerank_candidates(
     return candidates
 
 
+_SEARCH_AGENT_KINDS = frozenset({"aztea_built", "community_skill", "self_hosted"})
+
+# Price-mode blend weights (cheapest / most_expensive) — sum to 1.0; price
+# dominates because the caller's intent is "I want the cheapest agent".
+_PRICE_MODE_PRICE_WEIGHT = 0.62
+_PRICE_MODE_LEXICAL_WEIGHT = 0.16
+_PRICE_MODE_SEMANTIC_WEIGHT = 0.08
+_PRICE_MODE_TRUST_WEIGHT = 0.09
+_PRICE_MODE_INTENT_WEIGHT = 0.05
+
+
+def _validate_search_inputs(
+    query: str, limit: int, max_price_cents: int | None,
+) -> str:
+    """Pure: trim + expand the query and reject malformed numeric bounds."""
+    normalized_query = _expand_search_query(str(query or "").strip())
+    if not normalized_query:
+        raise ValueError("query must be a non-empty string.")
+    if limit < 1:
+        raise ValueError("limit must be >= 1.")
+    if max_price_cents is not None and max_price_cents < 0:
+        raise ValueError("max_price_cents must be >= 0 when provided.")
+    return normalized_query
+
+
+def _normalize_search_filters(
+    *, model_provider: str | None, kind: str | None,
+    region_locked: str | None, min_trust: float,
+    caller_trust: float | None, required_input_fields: list[str] | None,
+) -> dict[str, Any]:
+    """Pure: shape every search filter into its canonical form."""
+    normalized_kind = str(kind or "").strip().lower() or None
+    if normalized_kind and normalized_kind not in _SEARCH_AGENT_KINDS:
+        normalized_kind = None
+    return {
+        "model_provider": str(model_provider or "").strip().lower() or None,
+        "kind": normalized_kind,
+        "region_locked": str(region_locked or "").strip().lower() or None,
+        "trust_floor": _normalize_min_trust(min_trust),
+        "caller_trust": (
+            _normalize_min_trust(caller_trust) if caller_trust is not None else None
+        ),
+        "required_fields": _required_input_fields_set(required_input_fields),
+    }
+
+
+def _agent_matches_filters(
+    agent: dict, filters: dict[str, Any], *,
+    pii_safe: bool | None, outputs_not_stored: bool | None,
+    audit_logged: bool | None, max_price_cents: int | None,
+) -> tuple[bool, int, set[str], float | None]:
+    """Pure: True when ``agent`` clears every static filter; returns price/fields/trust-min for reuse."""
+    if filters["model_provider"] and agent.get("model_provider") != filters["model_provider"]:
+        return False, 0, set(), None
+    if filters["kind"] and agent.get("kind") != filters["kind"]:
+        return False, 0, set(), None
+    if pii_safe is not None and bool(agent.get("pii_safe")) != pii_safe:
+        return False, 0, set(), None
+    if outputs_not_stored is not None and bool(agent.get("outputs_not_stored")) != outputs_not_stored:
+        return False, 0, set(), None
+    if audit_logged is not None and bool(agent.get("audit_logged")) != audit_logged:
+        return False, 0, set(), None
+    if (
+        filters["region_locked"]
+        and str(agent.get("region_locked") or "").strip().lower() != filters["region_locked"]
+    ):
+        return False, 0, set(), None
+    price_cents = _price_usd_to_cents(agent.get("price_per_call_usd"))
+    if max_price_cents is not None and price_cents > max_price_cents:
+        return False, 0, set(), None
+    schema = _parse_input_schema(agent.get("input_schema"))
+    supported_fields = _input_schema_field_names(schema)
+    caller_trust_min = _input_schema_caller_trust_min(schema)
+    if filters["required_fields"] and not filters["required_fields"].issubset(supported_fields):
+        return False, 0, set(), None
+    if (
+        filters["caller_trust"] is not None
+        and caller_trust_min is not None
+        and filters["caller_trust"] < caller_trust_min
+    ):
+        return False, 0, set(), None
+    if _normalize_trust_score(agent.get("trust_score")) < filters["trust_floor"]:
+        return False, 0, set(), None
+    return True, price_cents, supported_fields, caller_trust_min
+
+
+def _semantic_similarity_for(
+    agent_id: str, agent: dict,
+    query_vector: np.ndarray | None,
+    vectors_by_agent: dict[str, np.ndarray],
+    missing_embeddings: list[tuple[str, str, list[float]]],
+) -> float:
+    """Side-effect: cosine sim against query; backfills the embeddings cache when missing."""
+    if query_vector is None:
+        return 0.0
+    vector = vectors_by_agent.get(agent_id)
+    if vector is None:
+        source_text = _embedding_source_from_agent(agent)
+        vector_list = embeddings.embed_text(source_text)
+        vector = np.asarray(vector_list, dtype=np.float32)
+        vectors_by_agent[agent_id] = vector
+        missing_embeddings.append((agent_id, source_text, vector_list))
+    similarity = float(embeddings.cosine(query_vector, vector))
+    return max(0.0, min(1.0, similarity))
+
+
+def _build_candidates(
+    agents: list[dict], normalized_query: str, filters: dict[str, Any], *,
+    pii_safe: bool | None, outputs_not_stored: bool | None,
+    audit_logged: bool | None, max_price_cents: int | None,
+    embeddings_enabled: bool, query_vector: np.ndarray | None,
+    vectors_by_agent: dict[str, np.ndarray],
+    missing_embeddings: list[tuple[str, str, list[float]]],
+) -> list[dict]:
+    """Side-effect: filter agents and score each as a search candidate."""
+    candidates: list[dict] = []
+    for agent in agents:
+        agent_id = str(agent.get("agent_id") or "").strip()
+        if not agent_id:
+            continue
+        ok, price_cents, supported_fields, caller_trust_min = _agent_matches_filters(
+            agent, filters,
+            pii_safe=pii_safe, outputs_not_stored=outputs_not_stored,
+            audit_logged=audit_logged, max_price_cents=max_price_cents,
+        )
+        if not ok:
+            continue
+        semantic_similarity = (
+            _semantic_similarity_for(
+                agent_id, agent, query_vector, vectors_by_agent, missing_embeddings,
+            ) if embeddings_enabled else 0.0
+        )
+        candidates.append({
+            "agent": agent,
+            "similarity": semantic_similarity,
+            "lexical_score": _lexical_match_score(normalized_query, agent, supported_fields),
+            "intent_bonus": _intent_match_bonus(normalized_query, agent),
+            "trust": _normalize_trust_score(agent.get("trust_score")),
+            "price_cents": price_cents,
+            "supported_fields": supported_fields,
+            "caller_trust_min": caller_trust_min,
+        })
+    return candidates
+
+
+def _persist_missing_embeddings(
+    missing_embeddings: list[tuple[str, str, list[float]]],
+) -> None:
+    """Side-effect: persist newly-computed embeddings; invalidate cache on any change."""
+    if not missing_embeddings:
+        return
+    with _conn() as conn:
+        changed = any(
+            _upsert_agent_embedding_row(
+                conn, agent_id=agent_id,
+                source_text=source_text, embedding_vector=vector_list,
+            )
+            for agent_id, source_text, vector_list in missing_embeddings
+        )
+    if changed:
+        _invalidate_embeddings_cache()
+
+
+def _compute_inverse_price(
+    candidate: dict, min_price: int, max_price: int,
+) -> float:
+    """Pure: 1.0 when only one price exists, otherwise normalised inverse in [0, 1]."""
+    if max_price == min_price:
+        return 1.0
+    normalized_price = (candidate["price_cents"] - min_price) / (max_price - min_price)
+    return 1.0 - normalized_price
+
+
+def _blend_score(
+    candidate: dict, *, inverse_price: float, price_query_mode: str | None,
+    embeddings_enabled: bool,
+) -> float:
+    """Pure: combine lexical/semantic/trust/price/intent into a single ranked score."""
+    if price_query_mode is not None:
+        price_intent_score = (
+            1.0 - inverse_price if price_query_mode == "most_expensive" else inverse_price
+        )
+        semantic_component = candidate["similarity"] if embeddings_enabled else 0.0
+        return (
+            _PRICE_MODE_PRICE_WEIGHT * price_intent_score
+            + _PRICE_MODE_LEXICAL_WEIGHT * candidate["lexical_score"]
+            + _PRICE_MODE_SEMANTIC_WEIGHT * semantic_component
+            + _PRICE_MODE_TRUST_WEIGHT * candidate["trust"]
+            + _PRICE_MODE_INTENT_WEIGHT * max(0.0, min(1.0, candidate["intent_bonus"]))
+        )
+    if embeddings_enabled:
+        return (
+            LEXICAL_SCORE_WEIGHT * candidate["lexical_score"]
+            + SEMANTIC_SCORE_WEIGHT * candidate["similarity"]
+            + TRUST_SCORE_WEIGHT_HYBRID * candidate["trust"]
+            + INVERSE_PRICE_WEIGHT_HYBRID * inverse_price
+            + candidate["intent_bonus"]
+        )
+    # Embeddings disabled: lexical match becomes the primary routing signal so
+    # trust/price don't dominate weak text search.
+    remaining_weight = 1.0 - LEXICAL_SCORE_WEIGHT
+    total_remaining = TRUST_SCORE_WEIGHT_HYBRID + INVERSE_PRICE_WEIGHT_HYBRID
+    return (
+        LEXICAL_SCORE_WEIGHT * candidate["lexical_score"]
+        + (remaining_weight * (TRUST_SCORE_WEIGHT_HYBRID / total_remaining)) * candidate["trust"]
+        + (remaining_weight * (INVERSE_PRICE_WEIGHT_HYBRID / total_remaining)) * inverse_price
+        + candidate["intent_bonus"]
+    )
+
+
+def _annotate_blended_scores(
+    candidates: list[dict], *, normalized_query: str,
+    price_query_mode: str | None, embeddings_enabled: bool,
+    required_fields: set[str], normalized_caller_trust: float | None,
+) -> None:
+    """Side-effect (mutating ``candidates``): write ``blended_score`` and ``match_reasons``."""
+    price_values = [c["price_cents"] for c in candidates]
+    min_price, max_price = min(price_values), max(price_values)
+    for candidate in candidates:
+        inverse_price = _compute_inverse_price(candidate, min_price, max_price)
+        candidate["blended_score"] = _blend_score(
+            candidate, inverse_price=inverse_price,
+            price_query_mode=price_query_mode, embeddings_enabled=embeddings_enabled,
+        )
+        candidate["match_reasons"] = _match_reasons(
+            candidate["agent"], normalized_query, candidate["trust"],
+            required_fields, candidate["supported_fields"],
+            normalized_caller_trust, candidate["caller_trust_min"],
+        )
+        if price_query_mode == "cheapest":
+            candidate["match_reasons"].append("ranked by lowest caller price")
+        elif price_query_mode == "most_expensive":
+            candidate["match_reasons"].append("ranked by highest caller price")
+
+
+def _sort_candidates(
+    candidates: list[dict], price_query_mode: str | None,
+) -> list[dict]:
+    """Pure: order candidates by mode-specific tie-breakers.
+
+    Why: in 'most_expensive' mode, every agent at the top price must be
+    a tied #1 — sorting by price first prevents lexical noise from
+    arbitrarily selecting one of three tied agents at $0.03.
+    """
+    if price_query_mode == "most_expensive":
+        return sorted(candidates, key=lambda i: (
+            -i["price_cents"], i["blended_score"], i["similarity"], i["trust"],
+        ))
+    if price_query_mode == "cheapest":
+        return sorted(candidates, key=lambda i: (
+            i["price_cents"], -i["blended_score"], -i["similarity"], -i["trust"],
+        ))
+    return sorted(candidates, key=lambda i: (
+        i["blended_score"], i["similarity"], i["trust"], -i["price_cents"],
+    ), reverse=True)
+
+
+def _is_off_catalog_query(normalized_query: str) -> bool:
+    """Pure: True when the query unambiguously asks for a capability we don't have."""
+    query_token_set = set(_query_terms(normalized_query))
+    if not query_token_set:
+        return False
+    for _description, predicate in _OFF_CATALOG_PATTERNS:
+        try:
+            if predicate(query_token_set):
+                return True
+        except Exception:  # noqa: BLE001 — predicates must never crash search
+            continue
+    return False
+
+
+def _maybe_llm_rerank(
+    ranked: list[dict], normalized_query: str, price_query_mode: str | None,
+) -> list[dict]:
+    """Side-effect: optional LLM re-rank stage; gated off by default and never blocks search."""
+    if not (ranked and price_query_mode is None
+            and _feature_flags.search_llm_rerank_enabled()):
+        return ranked
+    try:
+        return _llm_rerank_candidates(normalized_query, ranked)
+    except Exception:  # noqa: BLE001 — re-rank must never block search
+        return ranked
+
+
+def _apply_relevance_floor(ranked: list[dict]) -> list[dict]:
+    """Pure-ish: drop low-relevance candidates so callers don't get mediocre matches.
+
+    Why: returning weak distractors is worse than returning empty —
+    empty signals "use a different query" while distractors create
+    false confidence in low-relevance results.
+    """
+    if not ranked:
+        return ranked
+    top_score = ranked[0]["blended_score"]
+    floor = _feature_flags.search_relevance_floor()
+    keep = _feature_flags.search_keep_floor()
+    band = _feature_flags.search_dropoff_band()
+    if top_score < floor:
+        return []
+    return [
+        item for item in ranked
+        if item["blended_score"] >= keep or item["blended_score"] >= top_score - band
+    ]
+
+
 def search_agents(
     query: str,
     limit: int = 10,
@@ -1798,308 +2134,51 @@ def search_agents(
     audit_logged: bool | None = None,
     region_locked: str | None = None,
 ) -> list[dict]:
-    """Search the agent registry by keyword + embedding similarity with optional filters.
+    """Side-effect: search the agent registry by keyword + embedding similarity with optional filters.
 
-    Falls back to keyword-only search when no embedding model is available.
-    Filters: ``min_trust``, ``max_price_cents``, ``pii_safe``, ``kind``, etc.
-    Returns up to ``limit`` agents ranked by combined keyword + semantic score.
+    Why: blended scoring (lexical + semantic + trust + price + intent
+    bonuses) plus a relevance floor prevents weak distractors from
+    appearing as #1 when nothing in the catalog actually fits the query.
     """
-    normalized_query = _expand_search_query(str(query or "").strip())
-    if not normalized_query:
-        raise ValueError("query must be a non-empty string.")
-    if limit < 1:
-        raise ValueError("limit must be >= 1.")
-    if max_price_cents is not None and max_price_cents < 0:
-        raise ValueError("max_price_cents must be >= 0 when provided.")
-    normalized_model_provider = str(model_provider or "").strip().lower() or None
-    valid_kinds = {"aztea_built", "community_skill", "self_hosted"}
-    normalized_kind = str(kind or "").strip().lower() or None
-    if normalized_kind and normalized_kind not in valid_kinds:
-        normalized_kind = None
-    normalized_region_locked = str(region_locked or "").strip().lower() or None
-
-    trust_floor = _normalize_min_trust(min_trust)
-    normalized_caller_trust = None
-    if caller_trust is not None:
-        normalized_caller_trust = _normalize_min_trust(caller_trust)
-    required_fields = _required_input_fields_set(required_input_fields)
-    price_query_mode = _price_query_mode(normalized_query)
-    # Skip embedding computation when disabled; the semantic weight is
-    # redistributed to trust and price in the blending step below.
-    _embeddings_enabled = not _feature_flags.DISABLE_EMBEDDINGS
-    query_vector: np.ndarray | None = None
-    if _embeddings_enabled:
-        query_vector = np.asarray(
-            embeddings.embed_text(normalized_query), dtype=np.float32
-        )
-    agents = get_agents_with_reputation(include_unapproved=include_unapproved)
-    vectors_by_agent = _load_embeddings_for_agents(
-        {
-            str(agent.get("agent_id") or "").strip()
-            for agent in agents
-            if str(agent.get("agent_id") or "").strip()
-        }
+    normalized_query = _validate_search_inputs(query, limit, max_price_cents)
+    filters = _normalize_search_filters(
+        model_provider=model_provider, kind=kind, region_locked=region_locked,
+        min_trust=min_trust, caller_trust=caller_trust,
+        required_input_fields=required_input_fields,
     )
-
+    price_query_mode = _price_query_mode(normalized_query)
+    embeddings_enabled = not _feature_flags.DISABLE_EMBEDDINGS
+    query_vector: np.ndarray | None = (
+        np.asarray(embeddings.embed_text(normalized_query), dtype=np.float32)
+        if embeddings_enabled else None
+    )
+    agents = get_agents_with_reputation(include_unapproved=include_unapproved)
+    vectors_by_agent = _load_embeddings_for_agents({
+        str(a.get("agent_id") or "").strip()
+        for a in agents
+        if str(a.get("agent_id") or "").strip()
+    })
     missing_embeddings: list[tuple[str, str, list[float]]] = []
-    candidates: list[dict] = []
-
-    for agent in agents:
-        agent_id = str(agent.get("agent_id") or "").strip()
-        if not agent_id:
-            continue
-
-        if (
-            normalized_model_provider
-            and agent.get("model_provider") != normalized_model_provider
-        ):
-            continue
-
-        if normalized_kind and agent.get("kind") != normalized_kind:
-            continue
-        if pii_safe is not None and bool(agent.get("pii_safe")) != pii_safe:
-            continue
-        if (
-            outputs_not_stored is not None
-            and bool(agent.get("outputs_not_stored")) != outputs_not_stored
-        ):
-            continue
-        if audit_logged is not None and bool(agent.get("audit_logged")) != audit_logged:
-            continue
-        if (
-            normalized_region_locked
-            and str(agent.get("region_locked") or "").strip().lower()
-            != normalized_region_locked
-        ):
-            continue
-
-        price_cents = _price_usd_to_cents(agent.get("price_per_call_usd"))
-        if max_price_cents is not None and price_cents > max_price_cents:
-            continue
-
-        schema = _parse_input_schema(agent.get("input_schema"))
-        supported_fields = _input_schema_field_names(schema)
-        caller_trust_min = _input_schema_caller_trust_min(schema)
-        if required_fields and not required_fields.issubset(supported_fields):
-            continue
-        if (
-            normalized_caller_trust is not None
-            and caller_trust_min is not None
-            and normalized_caller_trust < caller_trust_min
-        ):
-            continue
-
-        trust = _normalize_trust_score(agent.get("trust_score"))
-        if trust < trust_floor:
-            continue
-
-        semantic_similarity = 0.0
-        if _embeddings_enabled and query_vector is not None:
-            vector = vectors_by_agent.get(agent_id)
-            if vector is None:
-                source_text = _embedding_source_from_agent(agent)
-                vector_list = embeddings.embed_text(source_text)
-                vector = np.asarray(vector_list, dtype=np.float32)
-                vectors_by_agent[agent_id] = vector
-                missing_embeddings.append((agent_id, source_text, vector_list))
-            similarity = float(embeddings.cosine(query_vector, vector))
-            semantic_similarity = max(0.0, min(1.0, similarity))
-        lexical_score = _lexical_match_score(
-            normalized_query,
-            agent,
-            supported_fields,
-        )
-        intent_bonus = _intent_match_bonus(normalized_query, agent)
-        candidates.append(
-            {
-                "agent": agent,
-                "similarity": semantic_similarity,  # 0.0 when embeddings disabled
-                "lexical_score": lexical_score,
-                "intent_bonus": intent_bonus,
-                "trust": trust,
-                "price_cents": price_cents,
-                "supported_fields": supported_fields,
-                "caller_trust_min": caller_trust_min,
-            }
-        )
-
-    if missing_embeddings:
-        with _conn() as conn:
-            changed = False
-            for agent_id, source_text, vector_list in missing_embeddings:
-                if _upsert_agent_embedding_row(
-                    conn,
-                    agent_id=agent_id,
-                    source_text=source_text,
-                    embedding_vector=vector_list,
-                ):
-                    changed = True
-        if changed:
-            _invalidate_embeddings_cache()
-
+    candidates = _build_candidates(
+        agents, normalized_query, filters,
+        pii_safe=pii_safe, outputs_not_stored=outputs_not_stored,
+        audit_logged=audit_logged, max_price_cents=max_price_cents,
+        embeddings_enabled=embeddings_enabled, query_vector=query_vector,
+        vectors_by_agent=vectors_by_agent, missing_embeddings=missing_embeddings,
+    )
+    _persist_missing_embeddings(missing_embeddings)
     if not candidates:
         return []
-
-    price_values = [c["price_cents"] for c in candidates]
-    min_price = min(price_values)
-    max_price = max(price_values)
-
-    for candidate in candidates:
-        if max_price == min_price:
-            inverse_price = 1.0
-        else:
-            normalized_price = (candidate["price_cents"] - min_price) / (
-                max_price - min_price
-            )
-            inverse_price = 1.0 - normalized_price
-
-        price_intent_score = inverse_price
-        if price_query_mode == "most_expensive":
-            price_intent_score = 1.0 - inverse_price
-
-        if price_query_mode is not None:
-            semantic_component = candidate["similarity"] if _embeddings_enabled else 0.0
-            blended_score = (
-                0.62 * price_intent_score
-                + 0.16 * candidate["lexical_score"]
-                + 0.08 * semantic_component
-                + 0.09 * candidate["trust"]
-                + 0.05 * max(0.0, min(1.0, candidate["intent_bonus"]))
-            )
-        elif _embeddings_enabled:
-            blended_score = (
-                LEXICAL_SCORE_WEIGHT * candidate["lexical_score"]
-                + SEMANTIC_SCORE_WEIGHT * candidate["similarity"]
-                + TRUST_SCORE_WEIGHT_HYBRID * candidate["trust"]
-                + INVERSE_PRICE_WEIGHT_HYBRID * inverse_price
-                + candidate["intent_bonus"]
-            )
-        else:
-            # Embeddings disabled: lexical matching becomes the primary routing
-            # signal instead of letting trust/price dominate weak text search.
-            remaining_weight = 1.0 - LEXICAL_SCORE_WEIGHT
-            total_remaining = TRUST_SCORE_WEIGHT_HYBRID + INVERSE_PRICE_WEIGHT_HYBRID
-            blended_score = (
-                LEXICAL_SCORE_WEIGHT * candidate["lexical_score"]
-                + (remaining_weight * (TRUST_SCORE_WEIGHT_HYBRID / total_remaining))
-                * candidate["trust"]
-                + (remaining_weight * (INVERSE_PRICE_WEIGHT_HYBRID / total_remaining))
-                * inverse_price
-                + candidate["intent_bonus"]
-            )
-        candidate["blended_score"] = blended_score
-        candidate["match_reasons"] = _match_reasons(
-            candidate["agent"],
-            normalized_query,
-            candidate["trust"],
-            required_fields,
-            candidate["supported_fields"],
-            normalized_caller_trust,
-            candidate["caller_trust_min"],
-        )
-        if price_query_mode == "cheapest":
-            candidate["match_reasons"].append("ranked by lowest caller price")
-        elif price_query_mode == "most_expensive":
-            candidate["match_reasons"].append("ranked by highest caller price")
-
-    if price_query_mode == "most_expensive":
-        # Sort by price first so every agent at the maximum price surfaces as
-        # a tied #1 — a single highest-price agent winning on lexical noise
-        # was the prior bug ("most expensive" returned only one of three
-        # agents at $0.03). Within a price tier, fall back to the existing
-        # blended-score tie-break so the most relevant of the tied agents
-        # leads the group.
-        ranked = sorted(
-            candidates,
-            key=lambda item: (
-                -item["price_cents"],
-                item["blended_score"],
-                item["similarity"],
-                item["trust"],
-            ),
-        )
-    elif price_query_mode == "cheapest":
-        ranked = sorted(
-            candidates,
-            key=lambda item: (
-                item["price_cents"],
-                -item["blended_score"],
-                -item["similarity"],
-                -item["trust"],
-            ),
-        )
-    else:
-        ranked = sorted(
-            candidates,
-            key=lambda item: (
-                item["blended_score"],
-                item["similarity"],
-                item["trust"],
-                -item["price_cents"],
-            ),
-            reverse=True,
-        )
-
-    # Off-catalog short-circuit: when the query unambiguously asks for a
-    # capability we don't have, return empty BEFORE the relevance-floor
-    # check so a weak lexical match can't sneak through. We keep this active
-    # in price-query mode too — "cheapest weather agent" still has nothing
-    # in the catalog, and we should not surface unrelated cheap agents just
-    # because the user expressed a price preference.
-    query_token_set = set(_query_terms(normalized_query))
-    if query_token_set:
-        for _description, predicate in _OFF_CATALOG_PATTERNS:
-            try:
-                if predicate(query_token_set):
-                    return []
-            except Exception:  # noqa: BLE001 — predicates must never crash search
-                continue
-
-    # Optional LLM re-rank seam (2026-05-09): when the catalog grows past
-    # ~30 agents, lexical+embedding can struggle to disambiguate among
-    # several semantically-overlapping candidates. The stage below is
-    # gated off by default and is a no-op until AZTEA_SEARCH_LLM_RERANK=1
-    # is set in the env. The implementation lives in
-    # `_llm_rerank_candidates` so this site stays small and the stub can
-    # be filled with a real Groq/llama call when needed without touching
-    # the surrounding ranking logic.
-    if (
-        ranked
-        and price_query_mode is None
-        and _feature_flags.search_llm_rerank_enabled()
-    ):
-        try:
-            ranked = _llm_rerank_candidates(normalized_query, ranked)
-        except Exception:  # noqa: BLE001 — re-rank must never block search
-            pass
-
-    # Confidence floor: drop low-relevance candidates so callers don't get
-    # five mediocre matches when nothing in the catalog is a real fit. The
-    # eval flagged "find recent papers", "image generator", "agents that
-    # take credit cards" all returning weak unrelated agents because there
-    # was no empty-result mode. We still keep at least the top hit if its
-    # score crosses the floor; otherwise the response signals "no match" to
-    # the caller via an empty list (callers branch on `count == 0`).
-    if ranked:
-        top_score = ranked[0]["blended_score"]
-        # Reload thresholds per-call: env-tunable without redeploy
-        # (see AZTEA_SEARCH_* in core/feature_flags.py).
-        _floor = _feature_flags.search_relevance_floor()
-        _keep = _feature_flags.search_keep_floor()
-        _band = _feature_flags.search_dropoff_band()
-        if top_score >= _floor:
-            ranked = [
-                item for item in ranked
-                if item["blended_score"] >= _keep
-                or item["blended_score"] >= top_score - _band
-            ]
-        else:
-            # No agent matches strongly. Returning weak distractors is worse
-            # than returning empty — empty signals "use a different query"
-            # while distractors create false confidence in low-relevance
-            # results.
-            ranked = []
-
+    _annotate_blended_scores(
+        candidates, normalized_query=normalized_query,
+        price_query_mode=price_query_mode, embeddings_enabled=embeddings_enabled,
+        required_fields=filters["required_fields"],
+        normalized_caller_trust=filters["caller_trust"],
+    )
+    ranked = _sort_candidates(candidates, price_query_mode)
+    if _is_off_catalog_query(normalized_query):
+        return []
+    ranked = _apply_relevance_floor(_maybe_llm_rerank(ranked, normalized_query, price_query_mode))
     return [
         {
             "agent": item["agent"],
