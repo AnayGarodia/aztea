@@ -107,21 +107,19 @@ def health() -> core_models.HealthResponse:
             all_ok = False
             checks["memory"] = core_models.HealthCheckDetail(ok=False, error=str(exc))
 
-    # Count only what search_specialists / list_agents will actually surface, so
-    # /health agrees with every other discovery surface. Pre-2026-05-07 this
-    # returned the raw row count (live + sunset + internal) which made the
-    # public-catalog count look 2-3x bigger than reality.
+    # 1.7.3 — count must match /registry/agents (the canonical discovery
+    # surface). Pre-1.7.3 /health applied a stricter filter (active OR
+    # curated_public) than /registry/agents (sunset-only), which let the
+    # 1.7.1 eval observe an 8-row drift (38 vs 46). Apply the same filter
+    # /registry/agents uses: exclude sunset, include everything else
+    # public, no status='active' gate (probation agents are still publicly
+    # listed and are counted by every other surface).
     sunset_ids = set(_builtin_constants.SUNSET_DEPRECATED_AGENT_IDS)
-    curated_public = set(_builtin_constants.CURATED_PUBLIC_BUILTIN_AGENT_IDS)
     public_agents = [
         agent
         for agent in registry.get_agents(include_internal=False)
         if str(agent.get("agent_id") or "") not in sunset_ids
         and str(agent.get("review_status") or "").strip().lower() != "sunset"
-        and (
-            str(agent.get("status") or "").strip().lower() == "active"
-            or str(agent.get("agent_id") or "") in curated_public
-        )
     ]
     agent_count = len(public_agents)
     status = "ok" if all_ok else "degraded"

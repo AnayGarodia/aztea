@@ -90,6 +90,13 @@ VALID_STATUSES = {
     "complete",
     "failed",
     "stopped",
+    # 1.7.3 — added "cancelled" as a distinct terminal status. Previously
+    # caller-initiated cancellation set status="failed" with
+    # error_message="Cancelled by caller", which conflated buyer-side
+    # cancel with agent-side failure. "cancelled" is treated as a
+    # failure for payout (100% refund) but surfaces honestly to the
+    # caller, frontend, and analytics.
+    "cancelled",
 }
 
 # Terminal states — used by sweepers, rating windows, dispute deadlines, SDK

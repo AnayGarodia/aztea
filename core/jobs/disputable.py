@@ -109,6 +109,28 @@ def is_disputable(
             message=f"Job is still in '{status}'; wait for it to finish.",
         )
 
+    # 1.7.3 — refuse disputes on caller-cancelled jobs. The cancel route
+    # already 100%-refunded the caller, so there is no agent payout to
+    # claw back. Pre-1.7.3 the dispute route accepted these calls and
+    # locked the 5¢ filing deposit anyway, costing the caller money for
+    # no reason. Cancelled jobs surface as status="cancelled" (1.7.3+);
+    # legacy "failed" jobs with the "Cancelled by caller" error_message
+    # are also caught here.
+    if status == "cancelled" or (
+        status == "failed"
+        and str(job.get("error_message") or "").startswith("Cancelled by caller")
+    ):
+        return DisputeReason(
+            code="dispute.job_cancelled",
+            message=(
+                "Cancelled jobs are not disputable. The caller-initiated "
+                "cancel already refunded 100%; there is no payout to claw "
+                "back. Filing a dispute on a cancelled job would lock your "
+                "5¢ filing deposit for nothing."
+            ),
+            status_code=409,
+        )
+
     if deadline is None:
         return DisputeReason(
             code="dispute.invalid_window",

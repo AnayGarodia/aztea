@@ -845,7 +845,7 @@ _SHUTDOWN_THREAD_JOIN_TIMEOUT_SECONDS = _env_int(
     maximum=120,
 )
 _JOB_STREAM_HEARTBEAT_SECONDS = 15
-_JOB_TERMINAL_STATUSES = {"complete", "failed", "stopped"}
+_JOB_TERMINAL_STATUSES = {"complete", "failed", "stopped", "cancelled"}
 _LEGACY_JOB_MESSAGE_TYPES = {
     "question",
     "partial_result",

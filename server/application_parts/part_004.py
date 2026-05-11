@@ -64,6 +64,30 @@ _AGENT_SEMAPHORE_WAIT_SECONDS = float(
     os.environ.get("AZTEA_AGENT_SEMAPHORE_WAIT_SECONDS", "0.5")
 )
 
+# 1.7.3 — per-agent wall-clock budget. The 1.7.1 eval reproduced regex
+# ReDoS (`(a+)+b` against 30 a's) and a 32 KB diff producing Caddy 502s
+# with empty body and NO refund. The agent process was alive but blocked;
+# Caddy timed out at ~30s; the call route never reached the refund path.
+# This budget kills the agent call before Caddy gives up so the refund
+# path always runs. Default 25s leaves margin under the 30s gateway.
+_AGENT_WALL_BUDGET_DEFAULT_SECONDS = float(
+    os.environ.get("AZTEA_AGENT_WALL_BUDGET_DEFAULT_SECONDS", "25.0")
+)
+_AGENT_WALL_BUDGET_OVERRIDES: dict[str, float] = {
+    # Regex catastrophic backtracking should die fast — anything past 5s
+    # on this agent is almost certainly ReDoS, never legitimate.
+    _REGEX_TESTER_AGENT_ID: 5.0,
+    # Cron parser is pure math; anything past 2s is a runaway iteration.
+    _CRON_EXPRESSION_PARSER_AGENT_ID: 5.0,
+    # JWT debugger is base64 + json; sub-second normally.
+    _JWT_DEBUGGER_AGENT_ID: 5.0,
+    # SAST / dep-auditor invoke real subprocess tools (semgrep, npm-audit)
+    # and can legitimately take 20s on a 1k-LOC fixture.
+    _SAST_SCANNER_AGENT_ID: 25.0,
+    _DEPENDENCY_AUDITOR_AGENT_ID: 25.0,
+    _DIFF_ANALYZER_AGENT_ID: 20.0,
+}
+
 
 class _AgentSlotUnavailable(Exception):
     """Raised when an agent's concurrency cap is saturated. Caller must
@@ -74,6 +98,25 @@ class _AgentSlotUnavailable(Exception):
         self.limit = limit
         super().__init__(
             f"Agent '{agent_id}' is at its concurrency cap ({limit} in flight)."
+        )
+
+
+class _AgentWallClockTimeout(Exception):
+    """Raised when an agent exceeds its per-call wall-clock budget.
+
+    1.7.3 — caller must surface as a structured agent.timeout envelope
+    with refunded_cents populated. Both the regex ReDoS path and the
+    SAST-on-complex-fixture path produced Caddy 502s with empty body
+    and no refund pre-1.7.3 — this exception ensures the refund path
+    always runs.
+    """
+
+    def __init__(self, agent_id: str, budget_seconds: float):
+        self.agent_id = agent_id
+        self.budget_seconds = budget_seconds
+        super().__init__(
+            f"Agent '{agent_id}' exceeded its {budget_seconds:.1f}s wall-clock "
+            "budget; the call was killed and the caller will be refunded."
         )
 
 
@@ -132,11 +175,35 @@ def _execute_builtin_agent(
             agent_id,
             _AGENT_CONCURRENCY_LIMITS.get(agent_id, _AGENT_CONCURRENCY_DEFAULT),
         )
+    # 1.7.3 — wrap the agent call in a wall-clock budget. Pre-1.7.3 a
+    # regex ReDoS or a slow SAST scan would block past Caddy's 30s
+    # gateway timeout — Caddy 502'd with empty body and the call route
+    # never reached the refund path, so the caller paid for nothing.
+    # This timeout fires BEFORE Caddy gives up so the refund path always
+    # runs. Note: Python can't safely kill a thread mid-execution, so the
+    # underlying agent thread leaks until it finishes; the user-visible
+    # behavior is correct (timeout envelope + refund), and the leaked
+    # work releases the semaphore on natural completion.
+    import concurrent.futures as _cf
+    budget = _AGENT_WALL_BUDGET_OVERRIDES.get(
+        agent_id, _AGENT_WALL_BUDGET_DEFAULT_SECONDS,
+    )
     try:
-        return _execute_builtin_agent_inner(
-            agent_id, payload, _finalize, emit_partial=emit_partial,
-        )
+        with _cf.ThreadPoolExecutor(max_workers=1) as _ex:
+            _fut = _ex.submit(
+                _execute_builtin_agent_inner,
+                agent_id, payload, _finalize, emit_partial=emit_partial,
+            )
+            try:
+                return _fut.result(timeout=budget)
+            except _cf.TimeoutError:
+                raise _AgentWallClockTimeout(agent_id, budget)
     finally:
+        # Release the semaphore even if the inner call is still running
+        # in the background. The leaked thread will not re-release on its
+        # own (we already released here), so the inner call must NOT also
+        # release. _execute_builtin_agent_inner doesn't touch the sem,
+        # so this is safe.
         sem.release()
 
 

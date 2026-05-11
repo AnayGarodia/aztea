@@ -1617,6 +1617,29 @@ def jobs_get_full_output(
     return JSONResponse(content=body)
 
 
+# 1.7.3 — alias /jobs/{id}/full_output → /jobs/{id}/full. Docs, MCP tool
+# descriptions, and SDK helpers advertise `full_output` (the verbose name);
+# the route was only mounted at `/full`. The eval saw 404 for the
+# documented path; this alias makes the documented name actually work.
+@app.get(
+    "/jobs/{job_id}/full_output",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(401, 403, 404, 429, 500),
+    include_in_schema=False,
+)
+@limiter.limit("60/minute")
+def jobs_get_full_output_alias(
+    request: Request,
+    job_id: str,
+    offset: int = 0,
+    limit: int | None = None,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
+    return jobs_get_full_output(
+        request=request, job_id=job_id, offset=offset, limit=limit, caller=caller,
+    )
+
+
 @app.get(
     "/jobs/{job_id}/signature",
     include_in_schema=True,

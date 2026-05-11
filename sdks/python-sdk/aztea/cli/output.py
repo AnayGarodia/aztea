@@ -336,11 +336,23 @@ def _plain(value: Any) -> Any:
 # ── Money + time formatters ────────────────────────────────────────────────
 
 def money(cents: int | float | None, *, dim_zero: bool = True):
-    """Format integer cents as a USD string with brand-tier coloring."""
+    """Format integer cents as a USD string with brand-tier coloring.
+
+    1.7.3 — sub-cent values (e.g. price_per_call_usd=0.004 = 0.4¢) used to
+    round to "$0.00", which made cheap agents look free in the catalog and
+    `aztea agents show`. Detect the sub-cent case and format with extra
+    precision (down to 1/10 of a cent) so the price is actually legible.
+    """
     if cents is None:
         return Text("—", style="muted") if _HAS_RICH else "—"
     amount = float(cents) / 100.0
-    txt = f"${amount:,.2f}"
+    if amount > 0 and amount < 0.01:
+        # Show 4 decimal places so 0.4¢ → "$0.004", 0.05¢ → "$0.0005"
+        txt = f"${amount:,.4f}".rstrip("0").rstrip(".")
+        if "." not in txt:
+            txt += ".00"
+    else:
+        txt = f"${amount:,.2f}"
     if not _HAS_RICH:
         return txt
     if amount == 0 and dim_zero:

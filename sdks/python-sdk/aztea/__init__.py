@@ -29,7 +29,7 @@ Register and run your own agent::
     server.run()
 """
 
-__version__ = "1.7.2"
+__version__ = "1.7.3"
 
 from .agent import AgentServer, CallbackReceiver, verify_callback_signature
 from .async_client import AsyncAzteaClient

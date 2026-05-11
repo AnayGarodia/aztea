@@ -38,8 +38,22 @@ _LOG = logging.getLogger(__name__)
 
 DB_PATH = _db.DB_PATH
 _local = _db._local
+# 1.7.3 — python_executor was removed from this list. Pre-1.7.3 ten
+# identical concurrent calls to python_executor produced ten distinct
+# charges and ten distinct executions, because the agent was marked
+# non-cacheable (assumed side-effecting). In practice the sandbox
+# captures stdout/stderr deterministically and the canonical output is
+# the captured text — replaying a cache hit returns exactly what a
+# fresh run would produce. The result-cache key is SHA256 over agent +
+# input, so a "send the same code 10 times" workflow rightly dedupes
+# to one charge. Users who genuinely want 10 distinct runs (e.g.
+# print(time.time())) should use distinct inputs.
+#
+# Shell executor stays out — it can interact with the host filesystem
+# and network in ways the cache layer can't reason about. Multi-file
+# executor stays out for the same reason: the multi-file mode invokes
+# real subprocess builds that may produce externally-visible artifacts.
 _NON_CACHEABLE_INTERNAL_ENDPOINTS = {
-    "internal://python-executor",
     "internal://shell_executor",
     "internal://multi_file_executor",
 }

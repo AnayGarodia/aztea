@@ -33,6 +33,7 @@ from . import publish as _publish
 from . import unpublish as _unpublish
 from . import admin as _admin
 from . import init as _init
+from . import watchers as _watchers
 from .splash import render_splash
 
 
@@ -97,6 +98,7 @@ app.add_typer(_wallet.app,    name="wallet")
 app.add_typer(_pipelines.app, name="pipelines")
 app.add_typer(_mcp.app,       name="mcp")
 app.add_typer(_admin.app,     name="admin")
+app.add_typer(_watchers.app,  name="watchers")
 app.command(name="status", help="At-a-glance dashboard: wallet + recent jobs.")(_status.status_cmd)
 
 

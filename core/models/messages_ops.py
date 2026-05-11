@@ -757,15 +757,22 @@ class ReconciliationRunRequest(BaseModel):
     max_mismatches: int = Field(default=100, ge=1, le=1000)
 
 
-_PAYLOAD_MAX_BYTES = 64 * 1024
+# 1.7.3 — bump request cap from 64KB → 256KB. Several agents declare
+# input_schema.properties.content.maxLength up to 200_000 (secret_scanner,
+# multi_file_executor, codereview). Pre-1.7.3 the global 64KB request
+# cap rejected those payloads before the per-field cap could honor them,
+# producing the 1.7.1 eval's B-13 contradiction. 256KB is enough margin
+# for one max-sized content field plus envelope overhead, and is still
+# bounded so a runaway client can't flood with multi-MB payloads.
+_PAYLOAD_MAX_BYTES = 256 * 1024
 _PAYLOAD_MAX_DEPTH = 8
 _PAYLOAD_MAX_KEYS = 120
 _PAYLOAD_MAX_ARRAY_ITEMS = 200
-# WHY: legitimate uses (multi-file Python executor, shell executors) ship
-# source code that easily exceeds 4 KB. The 64 KB total cap still bounds
-# the request; this per-string cap exists to prevent a single oversized
-# text field from skewing storage.
-_PAYLOAD_MAX_STRING_LEN = 50_000
+# 1.7.3 — bump per-string cap from 50_000 → 200_000 to match the biggest
+# input_schema declarations on shipping agents (secret_scanner content,
+# multi_file_executor file content). Per-field cap still bounded so any
+# one oversized text doesn't blow the 256KB request budget alone.
+_PAYLOAD_MAX_STRING_LEN = 200_000
 _PAYLOAD_MAX_KEY_LEN = 100
 
 

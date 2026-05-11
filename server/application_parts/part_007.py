@@ -857,10 +857,14 @@ def jobs_cancel(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> core_models.JobResponse:
     job = jobs.get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
-    if not _caller_can_view_job(caller, job):
-        raise HTTPException(status_code=403, detail="Job not found or not authorized.")
+    # 1.7.3 — collapse "not found" and "not yours" into a single 403 so
+    # this route matches GET /jobs/{job_id} and the eval's noted
+    # inconsistency disappears. Probing for valid UUIDs by status code
+    # is harder when both branches return identical responses.
+    if job is None or not _caller_can_view_job(caller, job):
+        raise HTTPException(
+            status_code=403, detail="Job not found or not authorized."
+        )
     current_status = str(job.get("status") or "").strip().lower()
     if current_status not in _CANCELLABLE_JOB_STATUSES:
         raise HTTPException(
@@ -876,9 +880,13 @@ def jobs_cancel(
         )
     reason = (body.reason or "").strip() or "Cancelled by caller."
     error_message = f"Cancelled by caller: {reason[:160]}"
+    # 1.7.3 — status="cancelled" (was "failed") so callers can distinguish
+    # caller-initiated cancellation from agent-side failure. _settle_failed_job
+    # still refunds 100% because "cancelled" is treated as a failure for
+    # payout purposes, but the surface-level status is honest.
     cancelled = jobs.update_job_status(
         job_id,
-        "failed",
+        "cancelled",
         error_message=error_message,
         completed=True,
     )

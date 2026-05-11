@@ -1756,6 +1756,46 @@ def registry_call(
                             },
                         ),
                     )
+                except _AgentWallClockTimeout as to_exc:
+                    # 1.7.3 — agent exceeded its wall-clock budget. Refund
+                    # the caller, mark failed, surface a structured 504.
+                    # Pre-1.7.3 this scenario produced a Caddy 502 with
+                    # empty body and no refund (B-3, B-4 in the 1.7.1 eval).
+                    failed = jobs.update_job_status(
+                        job["job_id"],
+                        "failed",
+                        error_message=(
+                            f"Agent '{to_exc.agent_id}' exceeded its "
+                            f"{to_exc.budget_seconds:.1f}s wall-clock budget. "
+                            "Refunded."
+                        ),
+                        completed=True,
+                    )
+                    if failed is not None:
+                        _settle_failed_job(
+                            failed,
+                            actor_owner_id=caller["owner_id"],
+                            event_type="job.failed_timeout",
+                        )
+                    raise HTTPException(
+                        status_code=504,
+                        detail=error_codes.make_error(
+                            error_codes.AGENT_CALL_TIMEOUT,
+                            (
+                                f"Agent took longer than the {to_exc.budget_seconds:.1f}s "
+                                "wall-clock budget. You were refunded. Common causes: "
+                                "regex catastrophic backtracking, unbounded loops, "
+                                "pathological input shapes."
+                            ),
+                            {
+                                "agent_id": to_exc.agent_id,
+                                "budget_seconds": to_exc.budget_seconds,
+                                "refunded_cents": int(
+                                    job.get("caller_charge_cents") or 0
+                                ),
+                            },
+                        ),
+                    )
             output = _normalize_output_protocol_for_response(
                 output,
                 requested_output_formats=requested_output_formats,

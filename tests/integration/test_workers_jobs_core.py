@@ -100,8 +100,10 @@ def test_worker_complete_after_expired_lease_returns_410_with_timeout_state(clie
 
 
 def test_caller_cancel_pending_job_refunds_charge(client):
-    """Buyer-side cancel of a pending job: route returns 200 + status flipped to failed,
-    pre-call charge is refunded to the caller's wallet (audit P0 #3, 2026-05-01).
+    """Buyer-side cancel of a pending job: route returns 200 + status flipped
+    to "cancelled" (1.7.3+; "failed" pre-1.7.3 conflated cancel with agent
+    failure), pre-call charge is refunded to the caller's wallet
+    (audit P0 #3, 2026-05-01).
     """
     worker = _register_user()
     caller = _register_user()
@@ -127,7 +129,7 @@ def test_caller_cancel_pending_job_refunds_charge(client):
     )
     assert cancel.status_code == 200, cancel.text
     body = cancel.json()
-    assert body["status"] == "failed"
+    assert body["status"] == "cancelled"
     assert "Cancelled by caller" in (body.get("error_message") or "")
 
     # Post-cancel: full refund — caller wallet returns to its pre-job state.

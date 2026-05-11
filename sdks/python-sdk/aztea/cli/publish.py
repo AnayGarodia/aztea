@@ -471,7 +471,14 @@ def _register(
             "skill_md": detection.raw,
             "price_per_call_usd": float(effective_price),
         }
-        return client._request_json("POST", "/skills", json_body=body)
+        # 1.7.3 — listing-safety scan + AST + clone-detection can run
+        # 60+ seconds on the server. The SDK default 30s read timeout
+        # was less than the server budget, so users saw ReadTimeout
+        # + a phantom listing (the server completed but the client
+        # gave up). 90s leaves margin even on a busy host.
+        return client._request_json(
+            "POST", "/skills", json_body=body, timeout=90.0,
+        )
 
     if detection.kind == "agent_md":
         body: dict[str, Any] = {"manifest_content": detection.raw}
@@ -479,7 +486,9 @@ def _register(
             body["price_per_call_usd"] = float(price)
         if tags:
             body["tags"] = tags
-        return client._request_json("POST", "/onboarding/ingest", json_body=body)
+        return client._request_json(
+            "POST", "/onboarding/ingest", json_body=body, timeout=90.0,
+        )
 
     if detection.kind == "python_handler":
         if not endpoint:

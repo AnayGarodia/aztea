@@ -136,7 +136,16 @@ def create_topup_session(
                 "data": {"session_id_prefix": "cs_test"},
             },
         )
-    return JSONResponse({"checkout_url": session.url, "session_id": session_id})
+    # 1.7.3 — always surface the Stripe mode so callers see whether the
+    # checkout will move real money or not. The 1.7.1 eval flagged
+    # cs_test_... URLs landing in production responses without any signal
+    # to the caller — silent test-mode is worse than failure.
+    stripe_mode = "test" if session_id.startswith("cs_test_") else "live"
+    return JSONResponse({
+        "checkout_url": session.url,
+        "session_id": session_id,
+        "stripe_mode": stripe_mode,
+    })
 
 
 @app.post(
@@ -706,10 +715,14 @@ def create_billing_setup_session(
     except Exception as exc:
         status_code, payload = _stripe_http_error("billing_setup_session", exc)
         raise HTTPException(status_code=status_code, detail=payload)
+    # 1.7.3 — surface stripe_mode so callers can detect test-mode in prod.
+    session_id_str = str(_stripe_obj_id(session) or "").strip()
+    stripe_mode = "test" if session_id_str.startswith("cs_test_") else "live"
     return JSONResponse(
         {
             "checkout_url": _stripe_obj_get(session, "url", None),
-            "session_id": _stripe_obj_id(session),
+            "session_id": session_id_str,
+            "stripe_mode": stripe_mode,
         }
     )
 

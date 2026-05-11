@@ -476,6 +476,15 @@ def _render_slack(output: Any, meta: dict[str, Any]) -> dict:
     if isinstance(output, dict):
         if "issues" in output and ("severity_counts" in output or "summary" in output):
             return {"blocks": _slack_code_review_blocks(output)}
+        # 1.7.3 — k8s_manifest_validator emits resources[*].findings, not a
+        # top-level findings array. Detect it before the generic findings
+        # branch so it gets its own renderer (severity totals + per-resource
+        # blocks + path) instead of falling through to the JSON code-fence
+        # fallback the 1.7.1 eval flagged.
+        if isinstance(output.get("resources"), list) and (
+            "by_severity" in output or "total_findings" in output
+        ):
+            return {"blocks": _slack_k8s_blocks(output, meta)}
         # Secret scanner before linter so we don't mislabel "Linter" on a
         # leaked-credentials report.
         # Secret-scan and linter findings share the same `findings` list
@@ -641,6 +650,60 @@ def _slack_dep_audit_blocks(output: dict[str, Any]) -> list[dict]:
             if desc:
                 body += f"\n{desc[:_DEP_AUDIT_DESC_PREVIEW_CHARS]}"
             blocks.append(_slack_section(body))
+    return blocks
+
+
+def _slack_k8s_blocks(output: dict[str, Any], meta: dict[str, Any]) -> list[dict]:
+    """Slack Block Kit for k8s_manifest_validator output.
+
+    1.7.3 — k8s findings nest under `resources[*].findings`, not at the
+    top level, so before this renderer existed the output fell through
+    to a raw JSON code-fence in Slack (eval B-14). Now: one block per
+    resource with its findings + per-severity emoji + path.
+    """
+    agent_name = (meta or {}).get("agent_name") or "Kubernetes Manifest Validator"
+    blocks: list[dict] = [_slack_header(str(agent_name))]
+    by_severity = output.get("by_severity") or {}
+    total = int(output.get("total_findings") or 0)
+    valid = bool(output.get("valid"))
+    parsed = int(output.get("resources_parsed") or 0)
+    kubectl_available = bool(output.get("kubectl_available"))
+    summary_parts: list[str] = []
+    if valid:
+        summary_parts.append("✅ Manifests *valid*")
+    else:
+        summary_parts.append("❌ Manifests *invalid*")
+    summary_parts.append(f"{parsed} resource{'s' if parsed != 1 else ''} parsed")
+    if total:
+        sev_chips = []
+        for sev_name, label in (("error", "errors"), ("warning", "warnings"), ("info", "info")):
+            count = int(by_severity.get(sev_name) or 0)
+            if count:
+                sev_chips.append(f"{_count_emoji(sev_name)} {count} {label}")
+        if sev_chips:
+            summary_parts.append("·".join(sev_chips))
+    else:
+        summary_parts.append("no findings")
+    if not kubectl_available:
+        summary_parts.append("_(kubectl not available — local rules only)_")
+    blocks.append(_slack_context(" · ".join(summary_parts)))
+    resources = output.get("resources") or []
+    for res in resources[:30]:
+        findings = res.get("findings") or []
+        if not findings:
+            continue
+        kind = str(res.get("kind") or "Resource")
+        name = str(res.get("name") or "—")
+        rows: list[str] = [f"*{kind}/{name}*"]
+        for f in findings[:20]:
+            sev = str(f.get("severity") or "info").lower()
+            rule = str(f.get("rule") or "")
+            msg = str(f.get("message") or "").strip()
+            path = str(f.get("path") or "")
+            rule_chip = f"`{rule}` " if rule else ""
+            loc = f" · `{path}`" if path else ""
+            rows.append(f"{_count_emoji(sev)} {rule_chip}{msg}{loc}")
+        blocks.append(_slack_section("\n".join(rows)))
     return blocks
 
 

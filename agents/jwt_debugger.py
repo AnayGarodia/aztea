@@ -61,16 +61,39 @@ def _b64url_decode(segment: str) -> bytes:
 
 
 def _decode_json_segment(segment: str, label: str) -> tuple[dict | None, str | None]:
+    # 1.7.3 — sanitize error wording. Previously surfaced raw Python errors
+    # like "'utf-8' codec can't decode byte 0x9e in position 0" or
+    # "Expecting value: line 1 column 1 (char 0)". Now produces caller-
+    # friendly messages that say what's actually wrong with the JWT.
     try:
         raw_bytes = _b64url_decode(segment)
-    except Exception as exc:
-        return None, f"base64url decode failed for {label}: {exc}"
+    except Exception:
+        return None, (
+            f"JWT {label} segment isn't valid base64url. "
+            "JWT parts are base64url-encoded JSON joined with '.'; check "
+            "the token for whitespace, line breaks, or stripped padding."
+        )
     try:
-        decoded = json.loads(raw_bytes.decode("utf-8"))
-    except Exception as exc:
-        return None, f"JSON parse failed for {label}: {exc}"
+        text = raw_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        return None, (
+            f"JWT {label} segment decoded to non-UTF-8 bytes. "
+            "Either the token is corrupted or it isn't a JWT at all "
+            "(JWS-compact requires UTF-8 JSON in header and payload)."
+        )
+    try:
+        decoded = json.loads(text)
+    except json.JSONDecodeError:
+        return None, (
+            f"JWT {label} segment isn't valid JSON. "
+            "JWT header and payload must be JSON objects encoded as "
+            "base64url. The token may be malformed or truncated."
+        )
     if not isinstance(decoded, dict):
-        return None, f"{label} is not a JSON object"
+        return None, (
+            f"JWT {label} segment is JSON but not an object — "
+            "a JWT header/payload must be a JSON object ({...})."
+        )
     return decoded, None
 
 
@@ -264,8 +287,14 @@ def run(payload: dict) -> dict:
 
     try:
         sig_bytes = _b64url_decode(sig_seg)
-    except Exception as exc:
-        return _err("jwt_debugger.malformed", f"Signature base64url decode failed: {exc}")
+    except Exception:
+        # 1.7.3 — friendly wording; no raw Python error text.
+        return _err(
+            "jwt_debugger.malformed",
+            "JWT signature segment isn't valid base64url. JWTs are "
+            "three base64url parts joined by '.' — header.payload.sig. "
+            "Check for whitespace, line breaks, or stripped padding.",
+        )
 
     alg: str = str(header.get("alg", "")).upper()
     key_id: str | None = header.get("kid")

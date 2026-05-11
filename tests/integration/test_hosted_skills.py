@@ -281,7 +281,10 @@ def test_sync_call_with_oversized_payload_refunds_caller(client):
     agent_id = client.post("/skills", headers=_auth_headers(key),
                            json={"skill_md": SKILL_MD_NOTION, "price_per_call_usd": 0.05}).json()["agent_id"]
 
-    big = "x" * (70 * 1024)  # > 64 KB skill input cap
+    # 1.7.3 — payload cap raised from 64KB → 256KB to honor agent
+    # input_schema maxLength declarations up to 200_000. Push past 256KB
+    # to still exercise the oversized-rejection + refund path.
+    big = "x" * (260 * 1024)  # > 256 KB skill input cap
     with patch("core.skill_executor.run_with_fallback") as mock_llm:
         # Should never even reach the LLM
         mock_llm.return_value = _stub_llm('{"result": "ok"}')

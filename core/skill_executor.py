@@ -87,7 +87,7 @@ _FENCE_RE = re.compile(r"^```(?:json)?\s*([\s\S]*?)\s*```$", re.MULTILINE)
 # Limits
 # ---------------------------------------------------------------------------
 
-MAX_INPUT_PAYLOAD_BYTES = 64 * 1024  # 64 KB
+MAX_INPUT_PAYLOAD_BYTES = 256 * 1024  # 1.7.3: matches the global request cap
 RESULT_TRUNCATION_CHARS = 32_000  # final string clamp before returning
 
 
