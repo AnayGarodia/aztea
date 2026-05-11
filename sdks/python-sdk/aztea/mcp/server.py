@@ -2228,12 +2228,19 @@ class RegistryBridge:
             return self._auth_required_response()
 
         if tool_name == copilot_tools.CALL_STREAMING_TOOL["name"]:
+            # Pass the bridge's cached catalog so call_streaming can
+            # resolve slug → agent_id (the server's POST /jobs needs the
+            # UUID, not the slug). Pre-1.6.9 every streaming call 422'd
+            # with "Field required: agent_id".
+            with self._lock:
+                catalog_snapshot = list(self._entries)
             return copilot_tools.call_streaming(
                 session=self._session,
                 base_url=self.base_url,
                 headers=self._headers(),
                 timeout_seconds=self.timeout_seconds,
                 arguments=arguments,
+                catalog=catalog_snapshot,
             )
         if tool_name == copilot_tools.STEER_TOOL["name"]:
             return copilot_tools.steer(

@@ -821,6 +821,7 @@ def wallet_audit(
         # N. Each verify is sub-50ms; we still cap the call by the receipt
         # window via `limit`, so the worst case is bounded.
         from core import crypto as _crypto
+        from core.jobs.db import _decode_json as _decode_payload
 
         verified = 0
         failed = 0
@@ -849,9 +850,21 @@ def wallet_audit(
                     }
                 continue
             try:
+                # Pre-1.6.9: passed raw `row.get("output_payload")` to
+                # verify. On Postgres this is a TEXT column — `crypto`'s
+                # `canonical_json` was re-encoding the JSON STRING (escaped
+                # quotes, backslashes) instead of the original dict, so
+                # the bytes never matched the original signed bytes and
+                # every verify returned signature_mismatch. Manual verifies
+                # via the public API path worked because that path went
+                # through `_row_to_dict` which decoded the JSON. Decode
+                # explicitly here so the bytes round-trip cleanly.
+                decoded_payload = _decode_payload(
+                    row.get("output_payload"), default=None,
+                )
                 ok = _crypto.verify_signature(
                     public_pem,
-                    row.get("output_payload"),
+                    decoded_payload,
                     row.get("output_signature") or "",
                 )
             except Exception as exc:

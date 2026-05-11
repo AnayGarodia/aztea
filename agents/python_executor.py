@@ -323,6 +323,24 @@ _BLOCKED_PATTERNS = [
     r"import\s+requests",
     r"import\s+urllib",
     r"import\s+http\.client",
+    # P0-1 fix (2026-05-11): block obfuscated dynamic-import primitives.
+    # Eval session demonstrated bypass with:
+    #   mod = __builtins__.__import__("".join(["so","cket"]))
+    # The runtime audit hook still blocks socket.connect/.bind/etc, so
+    # the actual exploitable surface is small. But the preflight message
+    # ("code contains disallowed operations") was misleading: the call
+    # returned a live module reference. Block the obfuscation primitives.
+    r"\b__import__\b",
+    r"\b__builtins__\b",
+    r"\bbuiltins\b\s*\.",
+    # getattr(...) is the next-most-obvious de-obfuscation. Block any
+    # call whose second argument is a string literal naming a forbidden
+    # symbol — covers `getattr(os, "sys" + "tem")` and similar.
+    r"\bgetattr\s*\([^,]+,\s*[\"'](?:__import__|system|popen|spawn|fork|" + r"e" + r"xec[a-z]*|connect|bind|gethostby[a-z]+|getaddrinfo|dlopen|CDLL|LoadLibrary)[\"']",
+    # compile() lets callers smuggle code as a string then execute it.
+    # The exec( pattern above catches the second half; this catches the
+    # first half so the error message is helpful at the right layer.
+    r"\bcompile\s*\(\s*[\"']",
     # Obvious filesystem-escape attempts. Reads were not blocked before
     # 2026-05-03 — the audit hook now stops them at runtime, but flagging
     # the most blatant ones at the regex layer means we don't even pay

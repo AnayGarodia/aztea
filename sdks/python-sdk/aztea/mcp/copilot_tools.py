@@ -63,15 +63,25 @@ def call_streaming(
     headers: dict[str, str],
     timeout_seconds: float,
     arguments: dict[str, Any],
+    catalog: list[dict[str, Any]] | None = None,
 ) -> tuple[bool, dict[str, Any]]:
     """Submit an async job, poll for partials, return final result + receipt.
 
     See module docstring for the progress-notification fallback rationale.
+
+    1.6.9: ``catalog`` (the bridge's cached registry entries) is required
+    so this tool can resolve ``slug`` → ``agent_id`` for the POST /jobs
+    body. The server's JobCreateRequest needs ``agent_id``; pre-1.6.9 this
+    function shipped the slug directly and every call returned 422
+    "Field required: agent_id" — the entire streaming surface was broken
+    in production.
     """
     slug = str(arguments.get("slug") or "").strip()
     if not slug:
         return False, {"error": "INVALID_INPUT", "message": "slug is required."}
     raw_input = arguments.get("input")
+    if raw_input is None:
+        raw_input = arguments.get("arguments")  # accept both names
     if raw_input is None:
         raw_input = {}
     if not isinstance(raw_input, dict):
@@ -93,7 +103,20 @@ def call_streaming(
         }
     timeout_s = _coerce_timeout(arguments.get("timeout_s"))
 
-    body = _build_jobs_body(slug, raw_input, stop_when, billing_unit)
+    # Resolve slug → agent_id from the bridge's catalog. Accept exact slug
+    # match, canonical slug match, or display-name match (consistent with
+    # how aztea_call resolves slugs in 1.6.7+).
+    agent_id = _resolve_agent_id(slug, catalog or [])
+    if agent_id is None:
+        return False, {
+            "error": "TOOL_NOT_FOUND",
+            "message": (
+                f"Unknown specialist slug '{slug}'. Use search_specialists "
+                "to discover the canonical slug, then retry."
+            ),
+        }
+
+    body = _build_jobs_body(agent_id, raw_input, stop_when, billing_unit)
     job_url = f"{base_url}/jobs"
     try:
         resp = session.post(job_url, headers=headers, json=body, timeout=timeout_seconds)
@@ -176,18 +199,52 @@ def steer(
 
 
 def _build_jobs_body(
-    slug: str,
+    agent_id: str,
     input_payload: dict[str, Any],
     stop_when: list[Any] | None,
     billing_unit: str | None,
 ) -> dict[str, Any]:
-    """Build the POST /jobs body. Pure function — no I/O."""
-    body: dict[str, Any] = {"slug": slug, "input_payload": input_payload}
+    """Build the POST /jobs body. Pure function — no I/O.
+
+    Server's ``JobCreateRequest`` requires ``agent_id`` (UUID). Pre-1.6.9
+    this function shipped raw slug, which the server rejected with 422
+    "Field required: agent_id".
+    """
+    body: dict[str, Any] = {"agent_id": agent_id, "input_payload": input_payload}
     if stop_when:
         body["stop_when"] = stop_when
     if billing_unit:
         body["billing_unit"] = billing_unit
     return body
+
+
+def _resolve_agent_id(slug: str, catalog: list[dict[str, Any]]) -> str | None:
+    """Pure: find an agent_id in ``catalog`` matching ``slug``.
+
+    Accepts exact slug, canonical-slug (snake_case from display name), or
+    display-name match. Returns None when no match — caller should surface
+    a TOOL_NOT_FOUND error.
+    """
+    import re as _re
+    needle = (slug or "").strip()
+    if not needle:
+        return None
+
+    def _canonicalize(s: str) -> str:
+        return _re.sub(r"[^a-z0-9]+", "_", s.lower()).strip("_")
+
+    canon_needle = _canonicalize(needle)
+    for entry in catalog:
+        entry_slug = str(entry.get("slug") or entry.get("tool_name") or "").strip()
+        entry_name = str(entry.get("name") or "").strip()
+        agent_id = str(entry.get("agent_id") or "").strip()
+        if not agent_id:
+            continue
+        if needle in (entry_slug, entry_name):
+            return agent_id
+        if canon_needle in (_canonicalize(entry_slug), _canonicalize(entry_name)):
+            return agent_id
+    return None
 
 
 def _coerce_timeout(raw: Any) -> float:

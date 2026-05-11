@@ -2643,12 +2643,22 @@ def jobs_create(
             if validated_stop_when
             else None
         )
+        # IMPORTANT: get_db_connection() yields the thread-local connection
+        # but does NOT commit on context exit (per core/db.py:368, "Transaction
+        # management (commit/rollback) is handled by `with conn:` blocks").
+        # Pre-1.6.9 we relied on the bare context exit to commit — on Postgres
+        # this UPDATE was rolled back when the connection returned to the pool,
+        # so stop_when_json + billing_unit were silently dropped end-to-end
+        # (the entire 1.6.0 co-pilot mode was non-functional in prod).
+        # Use the connection AS a context manager — that triggers commit on
+        # success / rollback on exception, matching the pattern in core/jobs/.
         with get_db_connection() as _conn:
-            _conn.execute(
-                "UPDATE jobs SET stop_when_json = %s, billing_unit = %s "
-                "WHERE job_id = %s",
-                (_stop_when_json, body.billing_unit, job["job_id"]),
-            )
+            with _conn:
+                _conn.execute(
+                    "UPDATE jobs SET stop_when_json = %s, billing_unit = %s "
+                    "WHERE job_id = %s",
+                    (_stop_when_json, body.billing_unit, job["job_id"]),
+                )
         # Re-fetch so the response surfaces the persisted stop_when /
         # billing_unit. Without this the caller saw stop_when_json: null on
         # both the create response and any subsequent GET racing the writer
