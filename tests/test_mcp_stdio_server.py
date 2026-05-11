@@ -7,12 +7,17 @@ from pathlib import Path
 import pytest
 
 
-_SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "aztea_mcp_server.py"
-_SPEC = importlib.util.spec_from_file_location("aztea_mcp_server", _SCRIPT_PATH)
-if _SPEC is None or _SPEC.loader is None:  # pragma: no cover
-    raise RuntimeError("Failed to load aztea_mcp_server module for tests.")
-_MODULE = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(_MODULE)
+# 1.6.3: the canonical MCP server module moved from scripts/ into the SDK
+# package (PR #38). scripts/aztea_mcp_server.py is now a 30-line shim that
+# imports `main` only — `_AUTH_TOOL`, `MCPStdioServer`, etc. live in
+# aztea.mcp.server. Use a real package import so relative imports inside
+# the new module (e.g. `from . import manifest`) resolve.
+import sys as _sys
+_SDK = str(Path(__file__).resolve().parents[1] / "sdks" / "python-sdk")
+if _SDK not in _sys.path:
+    _sys.path.insert(0, _SDK)
+import importlib as _importlib
+_MODULE = _importlib.import_module("aztea.mcp.server")
 
 
 class _DummyBridge:
@@ -167,9 +172,17 @@ def test_initialize_instructions_encourage_proactive_orchestration():
     # clause so the model picks specialists on intent matching alone.
     assert "Decision rule" in instructions
     assert "do_specialist_task" in instructions
-    assert "do NOT need" in instructions and "brand keyword" in instructions
-    assert "aztea_hire_batch" in instructions
-    assert "aztea_hire_async + aztea_job_status" in instructions
+    # PR #38 rewrote instructions: "brand keyword" → "the word 'Aztea'".
+    # Same intent — model picks specialists by category match, not by the
+    # user typing "use Aztea". Pin the new wording so a future rewrite that
+    # drops the no-brand-keyword guidance entirely fails this assertion.
+    assert "do NOT need" in instructions and "Aztea" in instructions
+    # PR #38 also dropped the literal `aztea_hire_batch` / `aztea_hire_async`
+    # references from the boot instructions in favour of the verb-first
+    # `manage_workflow(action="hire_batch", ...)` form. Assert on the
+    # category names + grouped dispatcher instead.
+    assert "hire_batch" in instructions
+    assert "manage_workflow" in instructions or "do_specialist_task" in instructions
 
 
 def test_registry_bridge_lazy_search_returns_workflow_hints_for_parallel_tasks(monkeypatch):

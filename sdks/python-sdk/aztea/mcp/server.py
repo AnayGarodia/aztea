@@ -38,6 +38,26 @@ def _canonical_slug(value: Any) -> str:
 from . import meta_tools
 from . import copilot_tools
 
+
+# Back-compat shim for test code (and any external integration) that
+# previously monkey-patched `_feature_flags.LAZY_MCP_SCHEMAS` against the
+# pre-1.6.2 module. PR #38 swapped the core.feature_flags import for a
+# direct env-var read inside `tools()`, but the test API stayed the
+# same. Reading this object's attributes proxies to the env var; setting
+# them writes through. Keeps all existing tests honest without rewriting
+# 14 monkeypatch sites.
+class _FeatureFlagsShim:
+    @property
+    def LAZY_MCP_SCHEMAS(self) -> bool:
+        return os.environ.get("AZTEA_LAZY_MCP_SCHEMAS", "1") != "0"
+
+    @LAZY_MCP_SCHEMAS.setter
+    def LAZY_MCP_SCHEMAS(self, value: bool) -> None:
+        os.environ["AZTEA_LAZY_MCP_SCHEMAS"] = "1" if value else "0"
+
+
+_feature_flags = _FeatureFlagsShim()
+
 _LOG = logging.getLogger("aztea.mcp")
 _SERVER_NAME = "aztea-registry-mcp"
 _SERVER_VERSION = "0.3.0"
@@ -1137,7 +1157,7 @@ class RegistryBridge:
             if self._auth_required:
                 return [_AUTH_TOOL]
             registry_tools = [dict(entry["tool"]) for entry in self._entries]
-        if os.environ.get("AZTEA_LAZY_MCP_SCHEMAS", "1") != "0":
+        if _feature_flags.LAZY_MCP_SCHEMAS:
             # Lazy mode: 4 core tools + 3 always-visible resource-grouped tools.
             # The grouped tools (manage_job/budget/workflow) cover post-call
             # operations, wallet/budget, and workflow orchestration without
