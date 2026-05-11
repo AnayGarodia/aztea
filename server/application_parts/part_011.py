@@ -1865,13 +1865,25 @@ def watchers_list(
 # verb returned "405 Method Not Allowed" in the 1.6.1 power-user eval.
 # Wire it up so the CLAUDE.md-documented contract is real.
 class _WatcherCreateRequest(BaseModel):
-    """Watchers poll a URL/manifest/repo and fire ``agent_id`` when the
-    fingerprint changes. ``target_url`` is the resource being watched, NOT
-    the agent endpoint. Pre-1.7.0 the missing-target_url 422 confused
-    buyers who expected a "fire-this-agent-on-cron" shape; the field
-    descriptions now spell out the polling model + give a concrete example.
+    """Watchers poll a URL/manifest/repo (or just tick on a cron) and fire
+    ``agent_id``. ``target_url`` is the resource being watched, NOT the agent
+    endpoint. 1.7.9 — added 'cron' kind for tick-driven watchers (no external
+    resource to fingerprint); previously the inline ``target_url=Field(...)``
+    rejected every cron-only create with 422 even though core/watchers/models.py
+    accepted it (eval B-17, four releases).
 
-    Example::
+    Example (cron — fires every tick)::
+
+        {
+          "agent_id": "<uuid>",
+          "target_kind": "cron",
+          "tick_interval_seconds": 3600,
+          "budget_per_day_cents": 100,
+          "delivery_email": "you@example.com",
+          "payload": {"task": "fetch overnight news"}
+        }
+
+    Example (http — fires on body change)::
 
         {
           "agent_id": "<uuid>",
@@ -1883,6 +1895,7 @@ class _WatcherCreateRequest(BaseModel):
         }
     """
     model_config = ConfigDict(
+        extra="forbid",
         json_schema_extra={
             "example": {
                 "agent_id": "00000000-0000-0000-0000-000000000001",
@@ -1892,21 +1905,28 @@ class _WatcherCreateRequest(BaseModel):
                 "budget_per_day_cents": 50,
                 "payload": {"task": "summarize new HN front-page items"},
             }
-        }
+        },
     )
 
     agent_id: str = Field(..., description="UUID of the registry agent to fire on change.")
-    target_kind: str = Field(
+    target_kind: Literal["http", "manifest", "git", "cron"] = Field(
         default="http",
-        description="Target type: 'http' | 'manifest' | 'git'. Defaults to 'http'.",
-    )
-    target_url: str = Field(
-        ...,
         description=(
-            "REQUIRED — URL or registry path the watcher polls for change "
-            "fingerprinting. NOT the agent endpoint. For 'http' kind: any "
-            "URL whose body change should trigger a fire. For 'manifest': "
-            "an npm/pypi package URL or registry path."
+            "Target type. 'http' | 'manifest' | 'git' poll a resource and "
+            "fire on fingerprint change. 'cron' fires every tick with no "
+            "fingerprint comparison (target_url is not used)."
+        ),
+    )
+    # 1.7.9 — optional. Conditional validation in the model_validator below
+    # mirrors core/watchers/models.py: required for http/git/manifest, ignored
+    # for cron. Pre-1.7.9 this was Field(...) which 422'd every cron-only
+    # create regardless of what the conditional check downstream said.
+    target_url: str | None = Field(
+        default=None,
+        description=(
+            "URL or registry path the watcher polls for change fingerprinting. "
+            "Required for kind in {'http','git','manifest'}. Ignored for "
+            "kind='cron' (cron watchers fire every tick — no resource to poll)."
         ),
     )
     target_meta: dict | None = Field(
@@ -1915,7 +1935,10 @@ class _WatcherCreateRequest(BaseModel):
     )
     on_change_policy: str = Field(
         default="fire_once_per_change",
-        description="When to fire: 'fire_once_per_change' | 'fire_on_every_tick'.",
+        description=(
+            "When to fire: 'fire_once_per_change' | 'fire_on_every_tick'. "
+            "For target_kind='cron' this is auto-corrected to 'fire_on_every_tick'."
+        ),
     )
     tick_interval_seconds: int = Field(
         default=3600, ge=60, le=86400,
@@ -1934,6 +1957,23 @@ class _WatcherCreateRequest(BaseModel):
     payload: dict | None = Field(
         default=None, description="Input payload passed to the agent on each fire.",
     )
+
+    @model_validator(mode="after")
+    def _check_target_url(self) -> "_WatcherCreateRequest":
+        """Conditional target_url requirement (1.7.9 fix for B-17).
+
+        Mirrors the validation in core/watchers/models.py::WatcherCreate so
+        the wire-level model and the persistence-level model agree. Only
+        http / git / manifest kinds need a polled resource; cron is a pure
+        tick driver.
+        """
+        if self.target_kind in ("http", "git", "manifest"):
+            if not (self.target_url and self.target_url.strip()):
+                raise ValueError(
+                    f"target_url is required when target_kind is "
+                    f"'{self.target_kind}'."
+                )
+        return self
 
 
 @app.post(

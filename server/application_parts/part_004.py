@@ -668,6 +668,15 @@ def _process_pending_builtin_job(job: dict) -> bool:
         settled = _settle_successful_job(
             completed, actor_owner_id=_BUILTIN_WORKER_OWNER_ID
         )
+        # 1.7.9 — B-7: build the signed-transcript JWS at completion time.
+        # The other two completion paths (sync POST /call success in part_008
+        # and worker POST /jobs/{id}/complete in part_009) already do this;
+        # the in-process built-in worker (this function) was the missing
+        # third call site, so async hires of built-in agents had a populated
+        # output_signature but receipt_jws stayed null forever — GET
+        # /jobs/{id}/receipt 425'd indefinitely (eval B-7, four releases).
+        # Best-effort: receipt build never blocks settlement.
+        _build_job_receipt_best_effort(completed["job_id"])
         if agent is not None:
             distribution = payments.compute_success_distribution(
                 int(completed.get("price_cents") or 0),

@@ -995,6 +995,39 @@ def jobs_dispute(
     # job_id returns the same status across status/cancel/dispute — the
     # prior /jobs/<bogus>/dispute → 403 while /jobs/<bogus>/status → 404
     # was the inconsistency the 2026-05-07 power-user eval flagged.
+    # 1.7.9 — B-24 defense-in-depth. core/jobs/disputable.py rejects
+    # status='cancelled' and the cancel-by-caller flavour of 'failed',
+    # but the 1.7.7→1.7.8 evals kept reporting users filing disputes on
+    # cancelled jobs and losing the 5¢ deposit. Add an explicit gate at
+    # the top of the route so a dispute on a status-terminal-failure-or-
+    # cancellation NEVER reaches the deposit-collection transaction, even
+    # if disputable.is_disputable() drifts. The check is a strict superset
+    # of the disputable check: any 'cancelled' or 'failed' job is rejected
+    # before any deposit is touched. Failed jobs were already 100% refunded
+    # via _settle_failed_job; filing a dispute would only lock 5¢ for the
+    # judge run with nothing to claw back, which is the exact recourse-
+    # trust violation the eval flagged.
+    _current_status = str(job.get("status") or "").strip().lower()
+    if _current_status in {"cancelled", "failed"}:
+        raise HTTPException(
+            status_code=409,
+            detail=error_codes.make_error(
+                "dispute.invalid_state",
+                (
+                    f"Cannot dispute a job in status '{_current_status}'. "
+                    "Cancelled and failed jobs are already 100% refunded — "
+                    "filing a dispute would lock your 5¢ deposit during the "
+                    "judge run with no payout to claw back. If the agent's "
+                    "output was actually wrong but the job ended up "
+                    "cancelled-by-race, contact support@aztea.ai with the "
+                    "job_id and we'll review manually."
+                ),
+                {
+                    "current_status": _current_status,
+                    "completed_at": job.get("completed_at"),
+                },
+            ),
+        )
     # Single eligibility predicate (core/jobs/disputable.py). The 2026-05-08
     # eval found that the prior strict `status == "complete"` check rejected
     # disputes on receipts whose status had churned post-completion (sweepers,

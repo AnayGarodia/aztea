@@ -44,6 +44,18 @@ except ImportError:  # pragma: no cover — covered by requirements.txt
 # first and produces a structured per-result error, never an outer 504.
 _REGEX_EXECUTION_TIMEOUT_SECONDS = 2.0
 
+# 1.7.9 — surface the engine name + supported-feature notes in the output
+# so callers can tell "this pattern produced 0 matches because the engine
+# doesn't support backref syntax X" apart from "this pattern legitimately
+# produced 0 matches". B-4 follow-up from the 1.7.8 eval.
+_REGEX_ENGINE_NAME = "regex"  # 3rd-party `regex` library, PCRE-compatible
+_REGEX_ENGINE_NOTES = (
+    "Uses the 3rd-party `regex` library, an NFA engine with per-call timeout. "
+    "Supports atomic groups (?>...), possessive quantifiers, named backrefs "
+    "(?P=name), Unicode property escapes \\p{L}. Does NOT support raw "
+    "backrefs-by-position the way some PCRE flavors do — use named groups."
+)
+
 MAX_PATTERNS = 10
 MAX_STRINGS = 20
 MAX_STRING_LEN = 10_000
@@ -274,6 +286,7 @@ def run(payload: dict) -> dict:
                     "pattern": patterns[0],
                     "patterns_tested": len(patterns),
                     "strings_tested": len(strings),
+                    "engine_used": _REGEX_ENGINE_NAME,
                 },
             }
         }
@@ -284,4 +297,9 @@ def run(payload: dict) -> dict:
         "total_matches": total_matches,
         "results": results,
         "flags_applied": applied_names,
+        # 1.7.9 — surface the engine for output honesty. Callers can tell
+        # "this 0-match result came from an engine that supports my pattern"
+        # vs "0 matches because the engine silently doesn't support feature X".
+        "engine_used": _REGEX_ENGINE_NAME,
+        "engine_notes": _REGEX_ENGINE_NOTES,
     }

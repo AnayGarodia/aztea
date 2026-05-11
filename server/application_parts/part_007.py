@@ -907,7 +907,21 @@ def jobs_cancel(
         # above and the UPDATE. UPDATE didn't apply because completed_at
         # is already set. Honest 409 so the caller knows the cancel was
         # a no-op and the job's current terminal state is what stands.
+        # 1.7.9 — structured log so prod journalctl can confirm the race
+        # path is firing when the eval reproduces (the 1.7.7 → 1.7.8 →
+        # 1.7.9 cycle has been blocked by ambiguity about whether the
+        # race actually fires in prod or the eval is misreading a 409).
         latest = cancelled or jobs.get_job(job_id) or job
+        _LOG.warning(
+            "job_cancel_race_lost",
+            extra={
+                "job_id": job_id,
+                "expected_status": "cancelled",
+                "actual_status": latest.get("status"),
+                "completed_at": latest.get("completed_at"),
+                "caller_owner_id": caller.get("owner_id"),
+            },
+        )
         raise HTTPException(
             status_code=409,
             detail=error_codes.make_error(
@@ -923,12 +937,22 @@ def jobs_cancel(
                 {
                     "current_status": latest.get("status"),
                     "completed_at": latest.get("completed_at"),
+                    "cancel_race_lost": True,
                 },
             ),
         )
     settled = _settle_failed_job(cancelled, actor_owner_id=caller["owner_id"])
     final_job = settled or cancelled
-    return JSONResponse(content=_job_response(final_job, caller))
+    # 1.7.9 — the response JSON returned 200 with `status: null` in the
+    # 1.7.7/1.7.8 eval traces. The exact shape coming out of _job_response
+    # for a freshly-cancelled job should always have status="cancelled" by
+    # construction (the UPDATE we just ran set it), but defense-in-depth:
+    # if the response dict somehow lost the field, fix it from the
+    # update_job_status return rather than emitting null on the wire.
+    response_body = _job_response(final_job, caller)
+    if not response_body.get("status"):
+        response_body["status"] = "cancelled"
+    return JSONResponse(content=response_body)
 
 
 @app.get(
