@@ -205,12 +205,78 @@ def login(
         help="Use an existing az_ API key instead of password login.",
     ),
     base_url: str = typer.Option("https://aztea.ai", help="Aztea server base URL."),
+    rotate: bool = typer.Option(
+        False,
+        "--rotate",
+        help=(
+            "Force-mint a new API key. Revokes the previously-active one. "
+            "Use only when you know the existing key is compromised; running "
+            "this from two terminals against the same account creates a "
+            "key-revocation race."
+        ),
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Skip the saved-session check and re-prompt for credentials.",
+    ),
     json_mode: bool = JsonOpt,
 ) -> None:
-    """Sign in, save credentials, and set up MCP + CLAUDE.md."""
+    """Sign in, save credentials, and set up MCP + CLAUDE.md.
+
+    Idempotent: if a saved key is already valid, this is a no-op (prints
+    the already-signed-in account and returns 0). Pre-1.6.5 every call
+    hard-coded ``rotate=True`` which revoked the previous key — running
+    ``aztea login`` from two parallel sessions against the same account
+    locked both into a perpetual revocation race. Pass ``--rotate`` to
+    request that behaviour explicitly.
+    """
     if not json_mode:
         login_intro()
     try:
+        # Fast path: a saved key that still authenticates is the most
+        # common case after the first login. Skip the round-trip + DB
+        # rotation that the password path triggers. Bypass with --force.
+        cfg = load_config() or {}
+        saved_key = str(cfg.get("api_key") or "").strip()
+        if (
+            saved_key and not api_key and not force
+            and not (email or password)
+        ):
+            try:
+                with _new_client(
+                    base_url=cfg.get("base_url") or base_url,
+                    api_key=saved_key,
+                    client_id="aztea-cli-login-check",
+                ) as _check_client:
+                    profile = _check_client.auth.me()
+                username = str(profile.get("username") or cfg.get("username") or "")
+                if json_mode:
+                    emit(
+                        {
+                            "username": username,
+                            "base_url": cfg.get("base_url") or base_url,
+                            "already_signed_in": True,
+                        },
+                        json_mode=True,
+                    )
+                    return
+                success(
+                    f"Already signed in as {username or 'user'}",
+                    detail=cfg.get("base_url") or base_url,
+                )
+                from .output import info as _info
+                _info(
+                    "Pass --rotate to mint a new key, or --force to re-prompt for "
+                    "credentials. (Most users should not need either.)"
+                )
+                return
+            except Exception:
+                # Saved key is invalid (revoked, expired, network) — fall
+                # through to the normal login path. Don't surface the auth
+                # error here; it would mask the legitimate password prompt.
+                pass
+
         with _new_client(base_url=base_url, api_key=api_key, client_id="aztea-cli-login") as client:
             if api_key:
                 with spinner("Verifying key", json_mode=json_mode):
@@ -234,14 +300,23 @@ def login(
             )
             console.print()
             with spinner("Signing in", json_mode=json_mode):
-                data = client.auth.login(login_email, login_password, rotate=True)
+                data = client.auth.login(login_email, login_password, rotate=rotate)
             raw_key = str(data.get("raw_api_key") or "")
             if not raw_key:
-                # Server didn't return a key even with rotate=True — bail loudly
-                # so the user doesn't end up with empty credentials silently.
+                # Server returns null raw_api_key when reusing an active session
+                # without rotation. The user explicitly bypassed the saved-key
+                # check (via --force / fresh email+password), so transparently
+                # retry with rotate=True rather than failing.
+                if not rotate:
+                    with spinner("Re-minting key", json_mode=json_mode):
+                        data = client.auth.login(
+                            login_email, login_password, rotate=True,
+                        )
+                    raw_key = str(data.get("raw_api_key") or "")
+            if not raw_key:
                 raise RuntimeError(
                     "Login succeeded but no API key was returned. "
-                    "Try `aztea login` again, or report this issue."
+                    "Try `aztea login --rotate` to force-mint a fresh key."
                 )
             username = str(data.get("username") or "")
             save_config(api_key=raw_key, base_url=base_url, username=username)
