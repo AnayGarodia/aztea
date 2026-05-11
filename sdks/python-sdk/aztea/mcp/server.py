@@ -1870,6 +1870,15 @@ class RegistryBridge:
             from difflib import SequenceMatcher
 
             for entry in self._catalog_entries():
+                # 1.7.1 — never surface platform meta-tools (manage_job /
+                # manage_workflow / aztea_*) as fuzzy matches for off-catalog
+                # queries. The eval reproduced "tell me a joke" returning
+                # `manage_job` as best match because difflib happened to land
+                # above 0.78 on slug-similarity. Meta-tools earn their place
+                # via the explicit keyword scorer above; if they didn't score
+                # there, they don't belong in the result.
+                if entry.get("kind") != "registry_agent":
+                    continue
                 if intent is not None and not _entry_matches_intent(entry, intent):
                     continue
                 if max_price_usd is not None:

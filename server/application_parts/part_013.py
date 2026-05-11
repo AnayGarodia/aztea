@@ -179,8 +179,53 @@ def jobs_steer(
         raise HTTPException(
             status_code=409,
             detail=error_codes.make_error(
-                "job.terminal",
+                "job.invalid_state",
                 str(exc) or "Job is already terminal; steer was rejected.",
+            ),
+        )
+    except ValueError as exc:
+        # 1.7.1 — bare ValueErrors (payload validation, correlation problems)
+        # were surfacing as a generic FastAPI 500. Translate to 422 so
+        # SDKs can branch on caller-input vs server-side fault.
+        _LOG.warning(
+            "steer.value_error", extra={"job_id": job_id, "error": str(exc)},
+        )
+        raise HTTPException(
+            status_code=422,
+            detail=error_codes.make_error(
+                "steer.invalid_payload", str(exc) or "Steer payload was rejected.",
+            ),
+        )
+    except Exception as exc:
+        # 1.7.1 — eval B-2 found steer 500'ing deterministically on running
+        # async jobs without a discoverable cause. Log the full exception so
+        # the next eval round can pinpoint the path; surface a structured
+        # 500 envelope rather than FastAPI's bare HTML error.
+        _LOG.exception(
+            "steer.unexpected_error",
+            extra={"job_id": job_id, "caller_owner_id": caller_owner_id},
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=error_codes.make_error(
+                "steer.internal_error",
+                f"Steer failed: {type(exc).__name__}: {exc!s}",
+                {"exception_type": type(exc).__name__},
+            ),
+        )
+    if msg is None:
+        # add_message returned None — the messaging tx silently rolled back,
+        # likely because the inner SELECT saw the job vanish between
+        # guard-check and INSERT. Surface as 409 (state-changed-under-us)
+        # rather than letting `msg["message_id"]` KeyError into a 500.
+        _LOG.warning(
+            "steer.message_missing_after_insert", extra={"job_id": job_id},
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=error_codes.make_error(
+                "job.invalid_state",
+                "Steer could not be persisted; job state may have changed.",
             ),
         )
 

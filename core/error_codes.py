@@ -46,6 +46,10 @@ AGENT_INTERNAL_ERROR = "agent.internal_error"
 AGENT_REJECTED_REQUEST = "agent.rejected_request"
 AGENT_INVALID_RESPONSE = "agent.invalid_response"
 AGENT_RESPONSE_TOO_LARGE = "agent.response_too_large"
+# 1.7.1 — distinct envelope for "agent ran fine but the URL/domain you gave
+# can't be reached." Lets SDKs surface 'fix the input' vs 'retry later' vs
+# 'page oncall'. 422-class.
+AGENT_TARGET_UNREACHABLE = "agent.target_unreachable"
 
 # Input / payload errors
 PAYLOAD_TOO_LARGE = "request.payload_too_large"

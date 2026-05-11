@@ -830,6 +830,11 @@ _SPA_API_PREFIXES: tuple[str, ...] = (
     "stripe/",
     "wallets/",
     "webhooks/",
+    # 1.7.1 — well-known paths must 404 as JSON, never resolve to the SPA
+    # index page. Otherwise tools that check /.well-known/jwks.json or any
+    # other RFC-defined location for verification get the React app and
+    # treat the HTML as a JWKS body.
+    ".well-known/",
 )
 
 

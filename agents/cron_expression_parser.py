@@ -210,10 +210,16 @@ def _builtin_next_runs(
 
     while len(results) < n and iterations < max_iter:
         iterations += 1
+        # Python: cursor.weekday() = Mon..Sun (0..6).
+        # Cron:   day-of-week = Sun..Sat (0..6).
+        # Truth table: Mon→1, Tue→2, ..., Sat→6, Sun→0.
+        # 1.7.0 fixed this in _runs_per_day but missed _compute_next_runs;
+        # 1.7.1 reuses the same conversion here.
+        cron_dow = (cursor.weekday() + 1) % 7
         if (
             cursor.month in valid_months
             and cursor.day in valid_doms
-            and cursor.weekday() % 7 in valid_dows  # Python weekday: Mon=0; cron: Sun=0
+            and cron_dow in valid_dows
             and cursor.hour in valid_hours
             and cursor.minute in valid_minutes
         ):

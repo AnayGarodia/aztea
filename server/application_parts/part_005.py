@@ -1122,6 +1122,21 @@ def _settle_successful_job(
             _LOG.warning(
                 "Failed to send payout email for job %s: %s", settled.get("job_id"), exc
             )
+        # 1.7.1 — receipt build was previously only invoked from the
+        # settlement_runner stop_when path. Normal-completion jobs never
+        # got a signed receipt, so /jobs/{id}/receipt returned 425
+        # forever and `receipt_jws` stayed null on every job in the
+        # marketplace. Build it now, best-effort: a failure here logs
+        # but does not roll back the ledger settlement above (the
+        # sweeper can pick it up later if we wire one).
+        try:
+            from core import receipts as _receipts
+            _receipts.sign_and_store_receipt(settled["job_id"])
+        except Exception as exc:
+            _LOG.warning(
+                "receipt_build_failed_post_settle",
+                extra={"job_id": settled.get("job_id"), "error": str(exc)},
+            )
     return settled
 
 

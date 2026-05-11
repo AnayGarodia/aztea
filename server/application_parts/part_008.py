@@ -274,21 +274,46 @@ def registry_search(
         caller_trust = None
         if body.respect_caller_trust_min and caller["type"] != "master":
             caller_trust = _caller_trust_score(caller["owner_id"])
-        ranked = registry.search_agents(
-            query=body.query,
-            limit=body.limit,
-            min_trust=body.min_trust,
-            max_price_cents=body.max_price_cents,
-            required_input_fields=body.required_input_fields,
-            caller_trust=caller_trust,
-            include_unapproved=include_unapproved,
-            model_provider=body.model_provider,
-            kind=body.kind,
-            pii_safe=body.pii_safe,
-            outputs_not_stored=body.outputs_not_stored,
-            audit_logged=body.audit_logged,
-            region_locked=body.region_locked,
-        )
+        # 1.7.1 — wrap the search in a per-request budget so cold-start of
+        # the embedding model (or any future hang) returns a structured 503
+        # instead of letting the upstream gateway time out and 502 with an
+        # empty body. The MCP server's "search 502" fallback then surfaces
+        # platform meta-tools as best matches, which the eval correctly
+        # called the worst-kind failure mode.
+        import concurrent.futures as _cf
+        _SEARCH_BUDGET_S = 25.0
+        with _cf.ThreadPoolExecutor(max_workers=1) as _ex:
+            _fut = _ex.submit(
+                registry.search_agents,
+                query=body.query,
+                limit=body.limit,
+                min_trust=body.min_trust,
+                max_price_cents=body.max_price_cents,
+                required_input_fields=body.required_input_fields,
+                caller_trust=caller_trust,
+                include_unapproved=include_unapproved,
+                model_provider=body.model_provider,
+                kind=body.kind,
+                pii_safe=body.pii_safe,
+                outputs_not_stored=body.outputs_not_stored,
+                audit_logged=body.audit_logged,
+                region_locked=body.region_locked,
+            )
+            try:
+                ranked = _fut.result(timeout=_SEARCH_BUDGET_S)
+            except _cf.TimeoutError:
+                raise HTTPException(
+                    status_code=503,
+                    detail=error_codes.make_error(
+                        "registry.search_unavailable",
+                        (
+                            f"Search exceeded the {_SEARCH_BUDGET_S:.0f}s budget. "
+                            "The embedding model may be cold-loading; retry in 30s, "
+                            "or use GET /registry/agents?tag=... to browse."
+                        ),
+                        {"retry_after_seconds": 30},
+                    ),
+                )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -1774,20 +1799,39 @@ def registry_call(
                     # Dimension mismatch is a caller-input error (caller provided
                     # two images with different sizes) — should be 422, not 502.
                     ".dimension_mismatch",
+                    # 1.7.1 — eight agents previously surfaced as agent.internal_error
+                    # for what is plainly user input. JWT/openapi/ssl decode paths
+                    # that fail are 4xx-class; same for terraform's "this isn't a
+                    # plan file" detection and image/cert too-large rejections.
+                    ".malformed",
+                    ".parse_error",
+                    ".parse_failed",
+                    ".decode_failed",
+                    ".ambiguous_input",
+                    ".plan_too_large",
+                    ".invalid_json",
+                    ".private_domain",
+                    ".redirect_blocked",
+                    "not_a_",  # terraform_plan_analyzer.not_a_terraform_plan
+                )
+                # Target-unreachable: caller gave a domain/URL that doesn't
+                # resolve, doesn't answer, or returns no useful data. Distinct
+                # from "agent crashed" — the agent ran fine; the target is the
+                # problem. Surface as 422 with a dedicated envelope code so
+                # SDKs can branch on retry vs fix-input vs page-oncall.
+                target_unreachable_markers = (
+                    ".fetch_failed",
+                    ".no_results",
                 )
                 lowered_code = (failure_code or "").lower()
                 http_status = 502
-                if any(marker in lowered_code for marker in input_failure_markers):
+                envelope_code = error_codes.AGENT_INTERNAL_ERROR
+                if any(m in lowered_code for m in input_failure_markers):
                     http_status = 422
-                # Don't tag caller-input validation failures with a code from
-                # the 5xx-class taxonomy — monitors paging on `agent.internal_error`
-                # would fire on every malformed URL the user types. Use the
-                # 4xx-class `agent.invalid_input` for 422 paths.
-                envelope_code = (
-                    error_codes.AGENT_INVALID_INPUT
-                    if http_status == 422
-                    else error_codes.AGENT_INTERNAL_ERROR
-                )
+                    envelope_code = error_codes.AGENT_INVALID_INPUT
+                elif any(m in lowered_code for m in target_unreachable_markers):
+                    http_status = 422
+                    envelope_code = error_codes.AGENT_TARGET_UNREACHABLE
                 raise HTTPException(
                     status_code=http_status,
                     detail=error_codes.make_error(

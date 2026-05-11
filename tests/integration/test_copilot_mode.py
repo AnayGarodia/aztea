@@ -248,7 +248,7 @@ def test_partial_after_terminal_rejected(client):
     assert r.status_code == 409, r.text
     body = r.json()
     err = body.get("error") or body.get("detail", {}).get("error")
-    assert err == "job.terminal", body
+    assert err == "job.invalid_state", body
 
 
 def test_steer_after_terminal_rejected(client):
@@ -272,7 +272,7 @@ def test_steer_after_terminal_rejected(client):
     assert r.status_code == 409, r.text
     body = r.json()
     err = body.get("error") or body.get("detail", {}).get("error")
-    assert err == "job.terminal", body
+    assert err == "job.invalid_state", body
 
 
 # ---------------------------------------------------------------------------

@@ -305,11 +305,13 @@ def jobs_message_create(
     except jobs.messaging.JobAlreadyTerminal as exc:
         # partial_output / steer racing a stop_when match. Surface as 409
         # so the caller can distinguish "you raced terminal" from generic
-        # validation failures (400) and rate limits (429).
+        # validation failures (400) and rate limits (429). 1.7.1 — error
+        # code aligned to public spec (`job.invalid_state`); the prior
+        # `job.terminal` slug doesn't appear in docs/errors.md.
         raise HTTPException(
             status_code=409,
             detail=error_codes.make_error(
-                "job.terminal",
+                "job.invalid_state",
                 str(exc),
                 {"job_id": job_id},
             ),
