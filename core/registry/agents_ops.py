@@ -97,42 +97,37 @@ INVERSE_PRICE_WEIGHT_HYBRID = 0.08
 # "test if my endpoint is fast enough" → Visual Regression as confidence-
 # destroying. Each entry is (description, predicate-on-tokens).
 _OFF_CATALOG_PATTERNS = [
+    # NOTE: Adding a pattern here BLOCKS THE QUERY ENTIRELY — even when
+    # a matching agent exists. Audit checklist before adding:
+    #   1. Confirm NO current agent's input_schema can serve the query.
+    #   2. Re-confirm whenever the catalog grows (every PR adding an
+    #      agent should grep this list for collisions).
+    #   3. Prefer per-agent block_keywords over a global pattern when
+    #      the intent is "rank this agent down for this query"
+    #      (rather than "no agent should win this query").
+    # 2026-05-11 audit removed: "JWT / JOSE token decoding" (we have
+    # jwt_debugger), "endpoint latency / load testing" (we have
+    # load_tester + lighthouse_auditor), "TypeScript / mypy type-
+    # checking" (we have type_checker). Each had been blocking direct
+    # hits since the matching agent was added, and an eval session
+    # hit them within the first 5 search queries.
     (
         "research papers / academic literature",
         lambda toks: bool(
-            {"papers", "paper", "arxiv", "academic", "preprint", "preprints", "research"}
+            {"papers", "paper", "arxiv", "academic", "preprint", "preprints"}
             & toks
         ),
     ),
     (
-        "TypeScript / mypy type-checking",
-        lambda toks: ({"type", "typecheck", "type-check", "typecheck", "tsc", "mypy"} & toks)
-        and ("typescript" in toks or "ts" in toks or "python" in toks),
-    ),
-    (
         "image generation",
         lambda toks: bool(
-            {"dall", "midjourney", "stable", "diffusion", "generator"} & toks
+            {"dall", "midjourney", "stable", "diffusion"} & toks
         )
         and ("image" in toks or "picture" in toks),
     ),
     (
-        "endpoint latency / load testing",
-        lambda toks: ({"endpoint", "endpoints", "latency", "load"} & toks)
-        and ({"fast", "slow", "test", "perf", "performance", "p99", "p95"} & toks),
-    ),
-    # 2026-05-09 eval additions: queries that whack-a-mole through
-    # per-agent blocks because they share generic security/dev tokens
-    # with too many candidates. Catching them at the global gate is
-    # cleaner and stops the missing-block-on-agent-N pattern from
-    # leaking through.
-    (
-        "OWASP guidance / threat-model frameworks",
+        "OWASP guidance / threat-model frameworks (no agent maps OWASP top-10 → finding)",
         lambda toks: "owasp" in toks,
-    ),
-    (
-        "JWT / JOSE token decoding",
-        lambda toks: "jwt" in toks or "jose" in toks,
     ),
     (
         "joke / chitchat",
@@ -2188,16 +2183,32 @@ def _semantic_similarity_for(
     vectors_by_agent: dict[str, np.ndarray],
     missing_embeddings: list[tuple[str, str, list[float]]],
 ) -> float:
-    """Side-effect: cosine sim against query; backfills the embeddings cache when missing."""
+    """Pure-ish: cosine sim against query.
+
+    1.6.7 fix: when an agent's embedding is missing from the cache, this
+    function used to call ``embeddings.embed_text()`` synchronously per
+    agent — that's ~1s of sentence-transformers inference each. With 37
+    agents in the catalog and a cold cache (post-deploy or after a new
+    agent registers), a single search took 37+ seconds and triggered the
+    MCP client's emergency-fallback path. Now: if the embedding is
+    missing, skip semantic similarity for that agent (return 0.0) and
+    queue the backfill so the next search is fast. Lexical scoring
+    still runs, so the agent isn't dropped from results — it just
+    doesn't get the semantic-bonus on this query.
+    """
     if query_vector is None:
         return 0.0
     vector = vectors_by_agent.get(agent_id)
     if vector is None:
-        source_text = _embedding_source_from_agent(agent)
-        vector_list = embeddings.embed_text(source_text)
-        vector = np.asarray(vector_list, dtype=np.float32)
-        vectors_by_agent[agent_id] = vector
-        missing_embeddings.append((agent_id, source_text, vector_list))
+        # Queue the embedding for background persistence, but do not
+        # block the search loop on inference. The next search will
+        # pick up the cached vector via _load_embeddings_for_agents.
+        try:
+            source_text = _embedding_source_from_agent(agent)
+            missing_embeddings.append((agent_id, source_text, None))
+        except Exception:  # noqa: BLE001 — embedding-source bugs must not 500 the search
+            pass
+        return 0.0
     similarity = float(embeddings.cosine(query_vector, vector))
     return max(0.0, min(1.0, similarity))
 
@@ -2242,21 +2253,81 @@ def _build_candidates(
 
 
 def _persist_missing_embeddings(
-    missing_embeddings: list[tuple[str, str, list[float]]],
+    missing_embeddings: list[tuple[str, str, list[float] | None]],
 ) -> None:
-    """Side-effect: persist newly-computed embeddings; invalidate cache on any change."""
+    """Side-effect: persist newly-computed embeddings; invalidate cache on any change.
+
+    1.6.7 fix: entries with ``vector_list is None`` mean the search loop
+    skipped inference (would have blocked ~1s per agent). Spawn a daemon
+    thread to compute + persist those out-of-band so the next search
+    sees a warm cache. Pre-computed entries (vector_list not None) are
+    written inline as before — fast and safe.
+    """
     if not missing_embeddings:
         return
-    with _conn() as conn:
-        changed = any(
-            _upsert_agent_embedding_row(
-                conn, agent_id=agent_id,
-                source_text=source_text, embedding_vector=vector_list,
+    precomputed = [
+        (aid, src, vec) for aid, src, vec in missing_embeddings if vec is not None
+    ]
+    deferred = [
+        (aid, src) for aid, src, vec in missing_embeddings if vec is None
+    ]
+
+    if precomputed:
+        with _conn() as conn:
+            changed = any(
+                _upsert_agent_embedding_row(
+                    conn, agent_id=aid,
+                    source_text=src, embedding_vector=vec,
+                )
+                for aid, src, vec in precomputed
             )
-            for agent_id, source_text, vector_list in missing_embeddings
-        )
-    if changed:
-        _invalidate_embeddings_cache()
+        if changed:
+            _invalidate_embeddings_cache()
+
+    if deferred:
+        # Daemon thread — must not block the search response. The next
+        # search picks up the cached vectors via _load_embeddings_for_agents.
+        import threading as _threading
+        _threading.Thread(
+            target=_backfill_embeddings_async,
+            args=(deferred,),
+            daemon=True,
+            name="aztea-embedding-backfill",
+        ).start()
+
+
+def _backfill_embeddings_async(deferred: list[tuple[str, str]]) -> None:
+    """Side-effect: compute + persist embeddings for ``deferred`` agents.
+
+    Runs in a daemon thread spawned by ``_persist_missing_embeddings``
+    so a cold-cache search doesn't block on per-agent inference.
+    Failures are logged but never raised — backfill is best-effort.
+    """
+    try:
+        computed: list[tuple[str, str, list[float]]] = []
+        for agent_id, source_text in deferred:
+            try:
+                vector_list = embeddings.embed_text(source_text)
+            except Exception:  # noqa: BLE001 — inference can fail for many reasons
+                _logger.warning(
+                    "embedding backfill: embed_text failed for %s", agent_id
+                )
+                continue
+            computed.append((agent_id, source_text, vector_list))
+        if not computed:
+            return
+        with _conn() as conn:
+            changed = any(
+                _upsert_agent_embedding_row(
+                    conn, agent_id=aid,
+                    source_text=src, embedding_vector=vec,
+                )
+                for aid, src, vec in computed
+            )
+        if changed:
+            _invalidate_embeddings_cache()
+    except Exception:  # noqa: BLE001 — daemon thread must never crash the runtime
+        _logger.exception("embedding backfill: unexpected failure")
 
 
 def _compute_inverse_price(
