@@ -521,6 +521,37 @@ async def lifespan(app: FastAPI):
     ensure_builtin_agents_registered()
     recipes.ensure_builtin_recipes()
 
+    # 1.7.7 — clear stale claim-state on pending jobs FIRST. Pre-1.7.7
+    # debugging found ~7 jobs stuck in pending with `claim_owner_id` and
+    # `claim_token` still populated from a previous claim that didn't
+    # clean up. lease_expires_at was None so the lease was technically
+    # expired, but downstream code paths still saw the dirty claim
+    # fields and quietly refused to re-claim. Reset them.
+    try:
+        with registry._conn() as conn:
+            res = conn.execute(
+                """
+                UPDATE jobs
+                SET claim_owner_id = NULL,
+                    claim_token = NULL,
+                    claimed_at = NULL,
+                    lease_expires_at = NULL,
+                    last_heartbeat_at = NULL,
+                    updated_at = updated_at
+                WHERE status = 'pending'
+                  AND (claim_owner_id IS NOT NULL OR claim_token IS NOT NULL)
+                """,
+            )
+            cleared = int(getattr(res, "rowcount", 0) or 0)
+        if cleared:
+            _LOG.warning(
+                "startup_pending_claim_clear: reset claim_owner/token on "
+                "%d pending jobs (legacy 1.7.4 wedge leftover)",
+                cleared,
+            )
+    except Exception:
+        _LOG.exception("startup_pending_claim_clear: top-level failure (ignored)")
+
     # 1.7.5.1 — startup cleanup: fail any pending job older than 1 hour.
     # The 1.7.4 ThreadPoolExecutor bug left a wedge of regex/SAST/diff
     # jobs cycling claim → timeout → re-pending forever, starving worker
