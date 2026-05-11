@@ -2549,23 +2549,60 @@ class MCPStdioServer:
         self.bridge = bridge
         self.refresh_seconds = max(5, int(refresh_seconds))
         self._write_lock = threading.Lock()
+        # Sticky framing — set by the first message we read. Defaults to
+        # the LSP-style framing used by older MCP clients; a single NDJSON
+        # message flips this so all replies thereafter are newline-delimited.
+        self._use_ndjson_framing: bool = False
 
     def _read_message(self) -> dict[str, Any] | None:
+        """Read one MCP message from stdin.
+
+        Auto-detects between two MCP stdio framings:
+          1. **NDJSON** — single-line JSON terminated by ``\\n`` (Claude
+             Code 2.x and other newer clients).
+          2. **LSP-style** — ``Content-Length: N\\r\\n\\r\\n<body>`` (older
+             MCP impls + LSP-derived clients).
+
+        The first non-empty line decides. A line starting with ``{`` is
+        treated as NDJSON; anything else falls through to header parsing.
+        Pre-1.6.6 the server only spoke LSP-style, so any NDJSON client
+        deadlocked on the 30s connection timeout — server kept reading
+        the JSON line as a malformed header and waited for ``\\r\\n``.
+        """
+        line = sys.stdin.buffer.readline()
+        if line == b"":
+            return None
+        # Skip leading blank lines (newline-only) — protocol-tolerant.
+        while line in (b"\r\n", b"\n"):
+            line = sys.stdin.buffer.readline()
+            if line == b"":
+                return None
+
+        stripped = line.strip()
+        if stripped.startswith(b"{"):
+            # NDJSON path — the whole message is on this one line. Remember
+            # the framing so subsequent replies match what the client sends.
+            self._use_ndjson_framing = True
+            try:
+                return json.loads(stripped.decode("utf-8"))
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"Invalid NDJSON message: {exc}") from exc
+
+        # LSP-style path — `line` is the first header. Continue reading
+        # headers until the blank-line separator, then read the body.
         headers: dict[str, str] = {}
         while True:
+            decoded = line.decode("utf-8", errors="ignore").strip()
+            if ":" in decoded:
+                key, value = decoded.split(":", 1)
+                header_name = key.strip().lower()
+                if header_name:
+                    headers[header_name] = value.strip()
             line = sys.stdin.buffer.readline()
             if line == b"":
                 return None
             if line in (b"\r\n", b"\n"):
                 break
-            decoded = line.decode("utf-8", errors="ignore").strip()
-            if ":" not in decoded:
-                continue
-            key, value = decoded.split(":", 1)
-            header_name = key.strip().lower()
-            if not header_name:
-                continue
-            headers[header_name] = value.strip()
 
         content_length = headers.get("content-length")
         if content_length is None:
@@ -2585,10 +2622,16 @@ class MCPStdioServer:
         encoded = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode(
             "utf-8"
         )
-        header = f"Content-Length: {len(encoded)}\r\n\r\n".encode("ascii")
         with self._write_lock:
-            sys.stdout.buffer.write(header)
-            sys.stdout.buffer.write(encoded)
+            if self._use_ndjson_framing:
+                # Newline-delimited JSON — Claude Code 2.x default.
+                sys.stdout.buffer.write(encoded)
+                sys.stdout.buffer.write(b"\n")
+            else:
+                # LSP-style Content-Length framing — older MCP clients.
+                header = f"Content-Length: {len(encoded)}\r\n\r\n".encode("ascii")
+                sys.stdout.buffer.write(header)
+                sys.stdout.buffer.write(encoded)
             sys.stdout.buffer.flush()
 
     def _jsonrpc_result(
