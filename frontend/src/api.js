@@ -358,11 +358,11 @@ export async function deleteBillingPaymentMethod(key, paymentMethodId) {
 export async function authLogin(email, password) {
   const { body } = await request('/auth/login', {
     method: 'POST',
-    // Do NOT pass rotate=true. Rotating revokes every other live session for
-    // this user (terminal/MCP/CLI), and the cascade reverses next time those
-    // clients re-auth. Caller (AuthPanel) handles the null raw_api_key case
-    // by reusing the locally-cached key.
-    body: { email, password },
+    // rotate=true asks the server to mint and return a fresh session key
+    // without revoking the user's other live sessions (see login_user in
+    // core/auth/users.py). The web app needs a real raw_api_key on sign-in
+    // because a fresh browser has nothing cached locally.
+    body: { email, password, rotate: true },
   })
   return body
 }

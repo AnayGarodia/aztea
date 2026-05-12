@@ -217,12 +217,12 @@ def login_user(
             # raw_key is intentionally None — caller already has it client-side.
 
     if rotate or raw_key is None and key_id is None:
-        # Either explicit rotation or no existing key: revoke prior sessions and mint.
-        with _conn() as conn:
-            conn.execute(
-                "UPDATE api_keys SET is_active = 0 WHERE user_id = %s AND name = 'Session key' AND is_active = 1",
-                (user["user_id"],),
-            )
+        # Mint a fresh session key. We deliberately do NOT revoke the prior
+        # sessions here — multiple concurrent session keys must coexist so
+        # that signing in on the web doesn't invalidate the user's MCP /
+        # CLI / SDK session (and vice versa). Callers who want a true
+        # rotation (suspected key leak) should call /auth/keys/revoke for
+        # the specific key id.
         result = _create_key_for_user(user["user_id"], "Session key")
         raw_key = result["raw_key"]
         key_id = result["key_id"]
