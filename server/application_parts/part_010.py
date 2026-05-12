@@ -559,15 +559,23 @@ def jobs_user_event_stream(
     proxies don't close the connection.
     """
     owner_id: str = caller["owner_id"]
+    owner_ids: list[str] = [owner_id, *_fold_in_master_owner_ids(caller)]
 
     def _iter_user_events():
-        subscriber = jobs.subscribe_user_job_events(owner_id)
+        subscribers = [jobs.subscribe_user_job_events(oid) for oid in owner_ids]
         try:
             yield ": heartbeat\n\n"
             while True:
-                try:
-                    event = subscriber.get(timeout=_USER_EVENTS_HEARTBEAT_SECONDS)
-                except Empty:
+                event = None
+                # Round-robin across all subscribed channels so master-folded
+                # callers see events from both their own owner_id and master.
+                for sub in subscribers:
+                    try:
+                        event = sub.get(timeout=_USER_EVENTS_HEARTBEAT_SECONDS / max(1, len(subscribers)))
+                        break
+                    except Empty:
+                        continue
+                if event is None:
                     yield ": heartbeat\n\n"
                     continue
                 try:
@@ -576,7 +584,8 @@ def jobs_user_event_stream(
                     continue
                 yield f"data: {data}\n\n"
         finally:
-            jobs.unsubscribe_user_job_events(owner_id, subscriber)
+            for oid, sub in zip(owner_ids, subscribers):
+                jobs.unsubscribe_user_job_events(oid, sub)
 
     headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
     return StreamingResponse(

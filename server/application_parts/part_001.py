@@ -1494,6 +1494,31 @@ def _optional_api_key(request: Request) -> core_models.CallerContext | None:
     return _resolve_caller(request)
 
 
+def _fold_in_master_owner_ids(caller: core_models.CallerContext) -> list[str]:
+    """Extra caller_owner_ids whose jobs should appear under this caller.
+
+    The master/ops key writes jobs with caller_owner_id="master". Operators
+    who run MCP / CLI with the master key still want to see those jobs in
+    their website dashboard. When the authenticated email matches
+    AZTEA_MASTER_OWNER_EMAIL we fold master-owned jobs into their view.
+    """
+    # Default to the deployment-owner email so the demo "just works" without
+    # an extra env-var on the server. Override with AZTEA_MASTER_OWNER_EMAIL.
+    target = (
+        os.environ.get("AZTEA_MASTER_OWNER_EMAIL")
+        or "founders@aztea.ai"
+    ).strip().lower()
+    if not target:
+        return []
+    if caller.get("type") != "user":
+        return []
+    user = caller.get("user") or {}
+    if not isinstance(user, dict):
+        return []
+    email = str(user.get("email") or "").strip().lower()
+    return ["master"] if email == target else []
+
+
 def _caller_owner_id(request: Request) -> str:
     caller = _resolve_caller(request)
     if caller is None:
