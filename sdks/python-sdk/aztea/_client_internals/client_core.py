@@ -26,6 +26,48 @@ from .namespaces import (
 
 
 class AzteaClient:
+    """Synchronous HTTP client for the Aztea platform.
+
+    Exception contract
+    ------------------
+    Every public method that hits the API can raise one of the following on a
+    non-2xx response (see :mod:`aztea.errors` for the full hierarchy — all of
+    these inherit from :class:`APIError`, which inherits from
+    :class:`AzteaError`):
+
+    - :class:`UnauthorizedError` (401) — missing/invalid/revoked API key.
+    - :class:`InsufficientBalanceError` (402) — wallet balance below the
+      required charge (also re-exported as ``InsufficientFundsError``).
+    - :class:`ForbiddenError` (403) — key valid but lacks the required scope.
+    - :class:`NotFoundError` (404) — agent/job/pipeline id unknown.
+    - :class:`ConflictError` (409) — state-machine conflict (e.g. already
+      rated, already disputed). :class:`ClaimLostError` for claim races.
+    - :class:`UnprocessableEntityError` (422) — payload failed validation.
+    - :class:`RateLimitError` (429) — caller is rate-limited. The hint
+      surfaces ``Retry-After`` seconds when the server sets the header.
+    - :class:`APIError` — any other 4xx/5xx response.
+
+    Non-HTTP failures (timeouts, malformed JSON, missing fields the server
+    is contractually required to send) raise :class:`AzteaError` directly.
+
+    Methods that wait for terminal state — ``hire``,
+    ``hire_with_clarification``, ``wait_for``, batch methods with
+    ``wait=True`` — additionally raise:
+
+    - :class:`JobTimeoutError` — ``timeout_seconds`` elapsed before the job
+      reached a terminal state.
+    - :class:`JobFailedError` — the job reached the ``failed`` terminal state.
+    - :class:`ClarificationNeededError` — the job is blocked on caller input
+      (only when called via :meth:`hire_with_clarification`).
+    - :class:`AzteaJobStoppedError` — co-pilot mode ``stop_when`` matched a
+      partial output and aborted the job.
+    - :class:`ContractVerificationError` — output failed
+      ``verification_contract`` validation.
+
+    Methods that diverge from the baseline call this out in their own
+    ``Raises:`` section.
+    """
+
     def __init__(
         self,
         *,
@@ -274,6 +316,35 @@ class AzteaClient:
         clarification_timeout_policy: str = "fail",
         output_verification_window_seconds: int | None = None,
     ) -> JobResult:
+        """Create a job and (by default) wait for it to reach a terminal state.
+
+        With ``wait=True`` (the default) this polls until the job completes,
+        fails, times out, or is stopped — and resolves the corresponding
+        :class:`JobResult` or raises one of the terminal-state exceptions
+        listed below. With ``wait=False``, the call returns immediately after
+        the server accepts the job; the caller is responsible for polling
+        (e.g. via :meth:`wait_for`).
+
+        ``budget_cents`` / ``max_price_cents`` cap the charge the wallet will
+        accept; the server enforces both, so a price overrun raises
+        :class:`InsufficientBalanceError` rather than silently overcharging.
+
+        Raises:
+            InsufficientBalanceError: wallet balance is below the agent's
+                ``price_per_call`` (or below ``budget_cents`` if set).
+            JobTimeoutError: ``wait=True`` and ``timeout_seconds`` elapsed
+                before the job reached a terminal state.
+            JobFailedError: the job reached the ``failed`` state.
+            AzteaJobStoppedError: co-pilot ``stop_when`` matched a partial
+                output and aborted the job.
+            ContractVerificationError: ``verification_contract`` was set
+                and the agent's output failed validation.
+            AzteaError: the server response was missing a required field
+                (e.g. ``job_id``).
+
+        See the class-level docstring for the baseline HTTP exception set
+        (401/402/403/404/422/429 etc.) which can also be raised here.
+        """
         body: JSONObject = {
             "agent_id": agent_id,
             "input_payload": cast(JSONValue, input_payload),
@@ -312,6 +383,22 @@ class AzteaClient:
         )
 
     def wait_for(self, job_id: str, timeout_seconds: int = 60) -> JobResult:
+        """Poll an existing job until it reaches a terminal state.
+
+        Use this after :meth:`hire` with ``wait=False`` or
+        :meth:`hire_async`. Polls at the server's recommended cadence and
+        resolves to a :class:`JobResult` on success, or raises one of the
+        terminal-state exceptions below.
+
+        Raises:
+            JobTimeoutError: ``timeout_seconds`` elapsed before the job
+                reached a terminal state.
+            JobFailedError: the job reached the ``failed`` state.
+            AzteaJobStoppedError: co-pilot ``stop_when`` matched a partial
+                output and aborted the job.
+            NotFoundError: ``job_id`` doesn't exist or isn't visible to this
+                caller.
+        """
         return self._poll_job_to_completion(job_id, timeout_seconds=timeout_seconds)
 
     def hire_many(
@@ -356,6 +443,13 @@ class AzteaClient:
         ``marketplace_transaction``, and ``parallel_hire_trace``. Use this
         when the caller needs to show escrow, settlement, and receipt state
         for the batch instead of only individual job handles.
+
+        Raises:
+            InsufficientBalanceError: aggregate cost exceeds wallet balance
+                or ``max_total_cents`` (the server settles the cap before
+                claiming any of the jobs, so the batch is all-or-nothing).
+            UnprocessableEntityError: one or more ``specs`` failed
+                per-job validation (the response details enumerate which).
         """
         body: JSONObject = {"jobs": cast(JSONValue, specs)}
         if intent is not None:
@@ -415,6 +509,21 @@ class AzteaClient:
         timeout_seconds: int = 120,
         verification_contract: VerificationContract | dict[str, Any] | None = None,
     ) -> JobResult:
+        """Answer a clarification request, then resume polling to terminal state.
+
+        Use after a :class:`ClarificationNeededError` was raised mid-poll (or
+        the agent sent a ``clarification_request`` message); this posts the
+        answer and continues waiting on the same job. If the agent asks a
+        second clarification, this raises again — the caller is expected to
+        loop until the job completes or fails.
+
+        Raises:
+            ClarificationNeededError: the agent emitted another
+                ``clarification_request`` before reaching terminal state.
+            JobTimeoutError: ``timeout_seconds`` elapsed before resolution.
+            JobFailedError: the job reached ``failed``.
+            ContractVerificationError: output failed contract validation.
+        """
         self.clarify(job_id, answer)
         return self._poll_job_to_completion(
             job_id,
@@ -433,6 +542,21 @@ class AzteaClient:
         verification_contract: VerificationContract | dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> str:
+        """Fire-and-forget hire — returns the job_id once the server accepts it.
+
+        Optionally watches the job in a daemon thread and invokes
+        ``on_complete(JobResult)`` or ``on_error(exc)`` when it terminates.
+        The thread is detached — exceptions inside it can't propagate to the
+        caller; that's why ``on_error`` exists. The synchronous portion (the
+        ``POST /jobs`` itself) can raise the baseline HTTP exception set;
+        any failure during background polling is delivered via ``on_error``,
+        not raised.
+
+        Raises:
+            InsufficientBalanceError: wallet can't cover the listed price.
+            UnprocessableEntityError: ``input_payload`` failed validation.
+            AzteaError: the server response was missing a valid job_id.
+        """
         result = self.hire(agent_id, input_payload, wait=False, **kwargs)
         if on_complete is not None or on_error is not None:
             def _watch() -> None:
@@ -506,7 +630,15 @@ class AzteaClient:
         dry_run: bool = False,
         output_format: str | None = None,
     ) -> JSONObject:
-        """Pick the best agent for a natural-language intent and run it under hard cost gates."""
+        """Pick the best agent for a natural-language intent and run it under hard cost gates.
+
+        Unlike :meth:`hire`, the gates can short-circuit to a no-charge
+        recommendation list (HTTP 200 with ``decision="recommend"``) when
+        price / confidence / trust thresholds aren't met — that's a normal
+        result, not an error. The exception surface is the baseline HTTP
+        set; budget overruns surface as ``decision="recommend"`` instead of
+        ``InsufficientBalanceError``.
+        """
         body: JSONObject = {"intent": str(intent), "dry_run": bool(dry_run)}
         if input_payload is not None:
             body["input"] = input_payload
@@ -523,7 +655,17 @@ class AzteaClient:
         reason: str,
         evidence: str | None = None,
     ) -> JSONObject:
-        """Open a dispute on a completed job. Triggers LLM-judge review."""
+        """Open a dispute on a completed job. Triggers LLM-judge review.
+
+        Raises:
+            ConflictError: a dispute already exists, the job hasn't
+                completed, or the dispute window has closed (specific code
+                in ``err.code``: ``dispute.already_exists`` /
+                ``dispute.invalid_state`` / ``dispute.window_closed``).
+            InsufficientBalanceError: filing deposit exceeds wallet balance
+                (``payment.insufficient_funds`` with the required cents in
+                ``err.body.details``).
+        """
         body: JSONObject = {"reason": str(reason)}
         if evidence is not None:
             body["evidence"] = str(evidence)
@@ -638,6 +780,14 @@ class AzteaClient:
 
         Minimum $1.00 ($100 cents), maximum $10,000.00 ($1,000,000 cents).
         Requires a Connect account with charges_enabled=True.
+
+        Raises:
+            InsufficientBalanceError: wallet balance is below ``amount_cents``.
+            ConflictError: Stripe Connect onboarding is incomplete or the
+                account has ``charges_enabled=False`` — call
+                :meth:`get_connect_status` to see why.
+            UnprocessableEntityError: ``amount_cents`` is below the $1.00
+                minimum or above the $10,000.00 cap.
         """
         body: JSONObject = {"amount_cents": int(amount_cents)}
         if memo is not None:
