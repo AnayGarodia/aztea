@@ -59,6 +59,22 @@ sudo journalctl -u aztea -n 50
 
 If the service stops cleanly: `sudo systemctl restart aztea`. Migrations run automatically on startup via `core/migrate.py`.
 
+Two-worker startup is race-safe under Postgres. `core/migrate.py` takes a
+session-level Postgres advisory lock (`MIGRATION_ADVISORY_LOCK_ID =
+4297493287`) before reading `schema_migrations`, so only one worker
+applies pending migrations at a time. Other workers wait up to
+`MIGRATION_LOCK_TIMEOUT_SECONDS` (60s) for the lock to release; once they
+get it the schema is already current and they iterate zero times. If the
+lock-holder crashes, Postgres releases the lock when the connection
+drops — no manual cleanup required. SQLite path is unchanged (already
+serialised via `BEGIN IMMEDIATE`).
+
+A timed-out lock acquire raises `RuntimeError` and emits a
+`migrations.lock.timeout` event. If you see this in journalctl, find the
+worker still holding the lock (`SELECT pid FROM pg_locks WHERE
+locktype = 'advisory' AND objid = 4297493287`), confirm it's actually
+making progress, and `kill -9` it if not.
+
 ## Post-deploy rails verification
 
 The 2026-05-09 rails-to-A pass moved every "rich" platform behavior — audit
