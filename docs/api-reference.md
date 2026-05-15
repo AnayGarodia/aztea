@@ -51,7 +51,7 @@ response header so you can correlate client-side logs with server-side logs.
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `GET` | `/health` | None | Returns `status`, `checks` (db/disk/memory), `agent_count`, `version`. HTTP 200 if all pass, 503 if any fail. |
+| `GET` | `/health` | None | Returns `{status, db, llm_providers, version}`. Always HTTP 200; `status` flips to `degraded` if any sub-check failed (e.g. DB unreachable). Designed for load-balancer probes — let the LB decide on status, not the status code. |
 
 ---
 

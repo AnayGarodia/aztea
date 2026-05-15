@@ -211,7 +211,10 @@ core/
   crypto.py                      Signing primitives used by identity.py
   cache.py                       Result cache for deduplication (TTL-based)
   output_shaping.py              Response normalisation / truncation
-  observability.py               Prometheus metrics helpers, Sentry breadcrumb helpers
+  observability.py               Prometheus metrics helpers (incl. `job_duration_seconds`
+                                 histogram, `builtin_agent_calls_total` counter), Sentry
+                                 breadcrumb helpers. `GET /health` lives in `part_001.py`
+                                 and returns {status, db, llm_providers, version}.
   fastpath.py                    Short-circuit for cache-hit and zero-price calls
   email.py                       SMTP email dispatch (no-ops silently if SMTP_HOST unset)
   llm/

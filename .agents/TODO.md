@@ -13,11 +13,11 @@
 - [ ] **Rate-limit middleware** (`feat/rate-limit-middleware`) — per-key sliding window in `part_001.py`
 - [ ] **Payout-curve clawback alert** (`feat/payout-curve-clawback-alert`) — partial clawback + metric on underflow
 - [ ] **Reconciliation auto-repair** (`feat/reconciliation-auto-repair`) — `?auto_repair=true` on `/ops/payments/reconcile`
-- [ ] **Observability upgrade** (`feat/observability-upgrade`) — job latency histogram + per-agent counter + `/health`
 - [ ] **Pipeline discoverability** (`feat/pipeline-discoverability`) — API + MCP + frontend surface for recipes
 
 ## Done — recent
 <!-- Last 5–10 shipped items with date and commit short sha. Trim aggressively. -->
+- 2026-05-15 — Observability upgrade: `job_duration_seconds` histogram + `builtin_agent_calls_total` counter + `GET /health` returning `{status, db, llm_providers, version}` (commit `476da23`)
 - 2026-05-15 — TypeScript SDK parity: `AgentServer`, `poll_job_to_completion`, clarification handling (commit `53052b4`)
 - 2026-05-15 — Co-pilot mode end-to-end integration tests (6 tests covering steer/progress/stop_when full flow) (commit `ff214a6`)
 - 2026-05-15 — Federated reputation blend: hosted global trust auto-merged into `compute_trust_metrics()` with evidence-weighted blend (commit `2ef464d`)
