@@ -513,6 +513,15 @@ def append_audit_event(
             try:
                 log: list = json.loads(existing) if existing else []
             except (json.JSONDecodeError, TypeError):
+                # Reset rather than abort so the dispute can still accept new
+                # audit entries. The prior log bytes are lost, but the
+                # alternative — refusing all future audit writes — is worse.
+                # WARN so the corruption is visible without flooding logs.
+                _LOG.warning(
+                    "dispute.audit_log_corrupted dispute_id=%s prefix=%r — resetting to []",
+                    dispute_id,
+                    existing[:128] if isinstance(existing, str) else existing,
+                )
                 log = []
             log.append(entry)
             conn.execute(

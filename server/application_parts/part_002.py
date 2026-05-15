@@ -697,7 +697,14 @@ def _assert_worker_claim(
         raise HTTPException(status_code=409, detail="Job claim token is missing.")
     # Constant-time comparison to avoid leaking the token via timing.
     if not claim_token or not hmac.compare_digest(claim_token, stored_token):
-        raise HTTPException(status_code=403, detail="Invalid or missing claim_token.")
+        raise HTTPException(
+            status_code=403,
+            detail=error_codes.make_error(
+                error_codes.JOB_INVALID_CLAIM_TOKEN,
+                "claim_token is invalid or missing. Re-claim the job to mint a fresh token — POST /jobs/{job_id}/claim.",
+                {"job_id": job["job_id"]},
+            ),
+        )
 
 
 def _to_non_negative_int(value: Any, default: int = 0) -> int:
@@ -774,7 +781,14 @@ def _assert_settlement_claim_or_grace(
             status_code=409, detail="Job is not currently claimed by this worker."
         )
     if not claim_token:
-        raise HTTPException(status_code=403, detail="Invalid or missing claim_token.")
+        raise HTTPException(
+            status_code=403,
+            detail=error_codes.make_error(
+                error_codes.JOB_INVALID_CLAIM_TOKEN,
+                "claim_token is invalid or missing. Re-claim the job to mint a fresh token — POST /jobs/{job_id}/claim.",
+                {"job_id": job["job_id"]},
+            ),
+        )
     if not jobs.claim_token_was_recently_active(
         job["job_id"],
         claim_owner_id=actor_owner_id,

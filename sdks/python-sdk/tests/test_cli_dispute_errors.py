@@ -269,7 +269,7 @@ def test_unexpected_500_during_filing_surfaces_cleanly(monkeypatch) -> None:
         message="internal",
         detail=None,
         body=None,
-        code="DISPUTE_FILING_FAILED",
+        code="dispute.filing_failed",
     )
     fake = FakeDisputeClient(dispute_raises=err)
     patch_client(monkeypatch, fake)

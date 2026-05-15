@@ -25,6 +25,7 @@ import logging
 from typing import Any
 
 from core import db as _db
+from core import observability as _obs
 from core.functional import Ok, Err, Result, compute_clawback_cents  # noqa: F401 — re-exported
 
 _LOG = logging.getLogger(__name__)
@@ -201,6 +202,7 @@ def apply_curve_clawback(
             (idempotency_key,),
         ).fetchone()
         if existing is not None:
+            _obs.payout_curve_clawback_total.labels(outcome="already_applied").inc()
             return {
                 "clawback_cents": clawback_cents,
                 "payout_fraction": payout_fraction,
@@ -231,11 +233,16 @@ def apply_curve_clawback(
                 if isinstance(exc, LookupError)
                 else "insufficient_balance"
             )
-            _LOG.warning(
-                "payout_curve.clawback_skipped job=%s agent=%s reason=%s error=%s",
+            # The caller's rating-driven refund is being skipped — they have
+            # not been made whole. Operator must reconcile manually. The counter
+            # is the alert signal (operator dashboards read counters).
+            _obs.payout_curve_clawback_total.labels(outcome=reason).inc()
+            _LOG.error(
+                "payout_curve.clawback_skipped job=%s agent=%s reason=%s clawback_cents=%d error=%s",
                 job_id,
                 agent_id,
                 reason,
+                clawback_cents,
                 exc,
             )
             return {
@@ -244,8 +251,10 @@ def apply_curve_clawback(
                 "applied": False,
                 "reason": reason,
                 "error": str(exc),
+                "requires_operator_review": True,
             }
 
+    _obs.payout_curve_clawback_total.labels(outcome="applied").inc()
     _LOG.info(
         "payout_curve.clawback job=%s agent=%s fraction=%.2f clawback_cents=%d",
         job_id,

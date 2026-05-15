@@ -185,34 +185,85 @@ def _extract_code(body: Any) -> str | None:
     return None
 
 
+def _retry_after_seconds(response: requests.Response | None) -> int | None:
+    """Pure-ish: parse a Retry-After header into an integer second count.
+
+    Server may send either a bare integer or an HTTP-date — only the int form
+    is supported here (the hint is a soft signal; a parsed date adds no value
+    over telling the user to retry shortly).
+    """
+    if response is None:
+        return None
+    raw = response.headers.get("Retry-After") if response.headers else None
+    if not raw:
+        return None
+    try:
+        seconds = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    return seconds if seconds > 0 else None
+
+
+def _extract_request_id(body: Any, response: requests.Response | None) -> str | None:
+    """Side-effect-free: pluck a request_id from body details or response headers."""
+    if isinstance(body, dict):
+        for key in ("request_id", "requestId"):
+            value = body.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        details = body.get("details")
+        if isinstance(details, dict):
+            for key in ("request_id", "requestId"):
+                value = details.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+    if response is not None and response.headers:
+        for header in ("x-request-id", "X-Request-Id"):
+            value = response.headers.get(header)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
+
+
 def _extract_hint(
-    body: Any, detail: Any, status_code: int, code_name: str | None = None,
+    body: Any,
+    detail: Any,
+    status_code: int,
+    code_name: str | None = None,
+    response: requests.Response | None = None,
 ) -> str | None:
     if isinstance(body, dict):
         raw = body.get("hint")
         if isinstance(raw, str) and raw.strip():
             return raw.strip()
     if status_code == 401:
-        return "Check your API key or run `aztea login` again."
-    if status_code == 402:
-        return "Top up your wallet or lower the job budget."
-    if status_code == 403:
-        # The generic "lacks scope" hint is wrong for revoked keys — the server
-        # message already explains the situation, so return no hint to avoid
-        # contradicting it (e.g. "key revoked ... your key is valid but ...").
+        # 401 with a known revoked-key code reads cleaner with a fresh-key CTA.
+        # The legacy "Check your API key" advice conflated 'never had one' with
+        # 'had one, now revoked' — the latter needs a different next step.
         if code_name and code_name.upper() in {
             "API_KEY_REVOKED", "AUTH.API_KEY_REVOKED",
         }:
-            return "Run `aztea login` to mint a fresh key, or `aztea mcp install` to refresh the MCP-side key."
+            return "Your API key was revoked. Run `aztea login` to mint a new one."
+        return "Your API key is not recognized. Run `aztea login` to mint a new one."
+    if status_code == 402:
+        return "Top up your wallet or lower the job budget."
+    if status_code == 403:
         return "Your key is valid but lacks the required scope."
     if status_code == 404:
         return "Confirm the agent, job, or pipeline id is correct."
     if status_code == 422:
         return "Review the request payload and try again."
     if status_code == 429:
-        return "Wait briefly, then retry."
+        retry_after = _retry_after_seconds(response)
+        if retry_after is not None:
+            return f"Rate-limited. Retry after {retry_after}s."
+        return "Rate-limited. Retry in a moment."
     if status_code >= 500:
-        return "The server failed while handling the request. Retry shortly."
+        request_id = _extract_request_id(body, response)
+        base = "Server error (likely temporary). Retry in a moment."
+        if request_id:
+            return f"{base} request_id={request_id}"
+        return base
     if isinstance(detail, str) and detail.strip():
         return detail.strip()
     return None
@@ -230,7 +281,7 @@ def raise_for_error_response(response: requests.Response) -> None:
     else:
         message = str(detail)
     code = response.status_code
-    hint = _extract_hint(body, detail, code, code_name=code_name)
+    hint = _extract_hint(body, detail, code, code_name=code_name, response=response)
 
     if code == 401:
         raise UnauthorizedError(code, message, detail, body, code=code_name, hint=hint)

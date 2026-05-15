@@ -172,6 +172,42 @@ def test_variable_pricing_and_payout_curve_paths_stay_reconciled(payments_db):
     assert summary["wallet_total_cents"] == 500
 
 
+def test_payout_curve_clawback_skip_flags_operator_review(payments_db):
+    """When the agent wallet can't absorb the rating-driven clawback, the caller
+    is NOT made whole — so the return shape must carry
+    ``requires_operator_review`` and the Prometheus counter must increment with
+    the typed reason. Without these, a real money-loss event is invisible to
+    operators (CLAUDE.md honest-status item: payout-curve clawback failure path)."""
+    from core import observability as _obs
+    from core import payout_curve
+
+    payments = payments_db
+    caller_wallet = payments.get_or_create_wallet("user:caller-clawback-skip")
+    agent_wallet = payments.get_or_create_wallet("agent:empty-pocket-agent")
+    # Agent wallet stays at 0 — debit must raise InsufficientBalanceError.
+
+    counter = _obs.payout_curve_clawback_total.labels(outcome="insufficient_balance")
+    before = counter._value.get() if hasattr(counter, "_value") else None
+
+    result = payout_curve.apply_curve_clawback(
+        job_id="job-clawback-skip-1",
+        agent_id="empty-pocket-agent",
+        agent_wallet_id=agent_wallet["wallet_id"],
+        caller_wallet_id=caller_wallet["wallet_id"],
+        agent_payout_cents=50,
+        payout_fraction=0.5,
+    )
+
+    assert result["applied"] is False
+    assert result["reason"] == "insufficient_balance"
+    assert result["requires_operator_review"] is True
+    assert result["clawback_cents"] == 25
+
+    if before is not None:
+        after = counter._value.get()
+        assert after == before + 1, (before, after)
+
+
 def test_no_double_payout_under_concurrent_settlement(payments_db):
     """Verifies the existing ledger-level idempotency: BEGIN IMMEDIATE + UNIQUE
     INDEX on (related_tx_id, type, wallet_id) ensures two concurrent
