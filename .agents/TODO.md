@@ -6,7 +6,7 @@
 ## Launch Blockers
 <!-- Things that must ship before broader launch. Owner + target date required.
      Format: - [ ] (owner: ___, target: YYYY-MM-DD) <blocker> -->
-- [ ] (owner: ___, target: ___) Pin `hypothesis` in `requirements-dev.txt`. `tests/property/` and `tests/test_listing_safety_fuzz_v2.py` currently fail collection on a fresh dev install. Until pinned, the canonical pytest command must `--ignore` both paths (already updated in `CLAUDE.md`).
+_None at present._
 
 ## In Progress
 <!-- Active work. One line per item: branch, what's left. -->
@@ -18,6 +18,8 @@
 
 ## Done — recent
 <!-- Last 5–10 shipped items with date and commit short sha. Trim aggressively. -->
+- 2026-05-15 — Warm copy sweep: `frontend/src/utils/errorCopy.js` + `docs/voice.md` + 12 catch-site migrations; surfaces `retry_after_seconds` on 429 and `request_id` on 5xx (commit `97efdfa`)
+- 2026-05-15 — SDK exception contracts + 8 Hypothesis property tests for `make_error` envelope shape; pinned `hypothesis>=6.100` already in `requirements-dev.txt` (commit `f8676fc`)
 - 2026-05-15 — Step 1 strangle-fig migration: Phoenix.PubSub + Channels for realtime job events, feature-flagged off (commit `bd58a2a`)
 - 2026-05-15 — Silent-failure sweep: payout-curve counter + 3 structured error envelopes + dispute/manifest/claim-token taxonomy codes + SDK hints (commit `f139a73`)
 - 2026-05-15 — Observability upgrade: `job_duration_seconds` histogram + `builtin_agent_calls_total` counter + `GET /health` returning `{status, db, llm_providers, version}` (commit `476da23`)

@@ -68,7 +68,7 @@ Known gaps that aren't bugs but are worth knowing before you touch the surroundi
 - **Worker disappearance has no fallback-worker reassign.** If the only worker for an agent dies mid-job, the lease times out and the caller is refunded rather than re-served.
 - **Reconciliation is detect-only.** `POST /ops/payments/reconcile` reports drift; `repair_wallet_balance_cache()` is a separate manual call. No auto-repair.
 - **MCP tool count drift is not CI-checked.** Lazy mode advertises 9 tools (`scripts/aztea_mcp_server.py`). No automated assertion guards against rename or count drift — docs have already silently drifted once.
-- **Property-based tests** (`tests/property/`, `tests/test_listing_safety_fuzz_v2.py`) currently fail collection because Hypothesis isn't pinned in the dev requirements. Run the suite with `--ignore=tests/property --ignore=tests/test_listing_safety_fuzz_v2.py` until that's fixed.
+- **SDK contract suite can segfault on Python 3.14 macOS** — run `tests/test_sdk_contract.py` in a separate `pytest` invocation. CI Linux runs it cleanly.
 
 ---
 
@@ -472,9 +472,9 @@ cd frontend && npm run build && npx vite preview --port 4173
 # If `vite preview` works but prod doesn't, the bug is in the Caddy → uvicorn → SPA-fallback path or a route definition shadowing the SPA.
 
 # Tests — main suite (run the SDK contract suite separately — it can segfault
-# under Python 3.14 on macOS; property tests need Hypothesis pinned, see
-# .agents/TODO.md until that's fixed):
-pytest -q tests --ignore=tests/test_sdk_contract.py --ignore=tests/property --ignore=tests/test_listing_safety_fuzz_v2.py
+# under Python 3.14 on macOS). Hypothesis is pinned (requirements-dev.txt) so
+# the property suite collects cleanly:
+pytest -q tests --ignore=tests/test_sdk_contract.py
 pytest -q tests/test_sdk_contract.py
 
 # Integration tests only (covered by the main suite)
@@ -499,7 +499,7 @@ python scripts/aztea_mcp_server.py
 curl -H "Authorization: Bearer $API_KEY" -X POST http://localhost:8000/ops/payments/reconcile
 ```
 
-**Current test status:** `pytest --collect-only` reports **2275 tests collected** under `tests/` (excluding `tests/property/`, `tests/test_listing_safety_fuzz_v2.py`, and `tests/test_sdk_contract.py`) as of 2026-05-10. The previously-reported "723 passed" count from 2026-05-07 reflects a smaller subset and is stale — the suite has grown substantially since. Re-anchor this line (collected + passed + skipped + date) when you next run the suite end-to-end. Property tests fail collection without Hypothesis pinned in dev requirements; SDK contract suite can segfault on Python 3.14 macOS. Both are excluded by the canonical command above.
+**Current test status:** `pytest --collect-only` reports **2275 tests collected** under `tests/` (excluding `tests/test_sdk_contract.py`) as of 2026-05-10. Property tests (`tests/property/`) collect cleanly now that Hypothesis is pinned (PR #47, 2026-05-15). The SDK contract suite can still segfault on Python 3.14 macOS and is excluded by the canonical command above. Re-anchor this line (collected + passed + skipped + date) when you next run the suite end-to-end.
 
 ---
 
