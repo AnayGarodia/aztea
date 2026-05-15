@@ -624,6 +624,203 @@ class TestPayoutCurveClawbackConsumesHold:
         agent_after = payments.get_wallet(ctx["agent_wallet"]["wallet_id"])
         assert agent_after["held_cents"] == 1000  # untouched
 
+
+# ---------------------------------------------------------------------------
+# 5. Concurrency
+# ---------------------------------------------------------------------------
+
+
+class TestHoldConcurrency:
+    def test_concurrent_settlements_have_consistent_held_cents(self, isolated_db):
+        """Five parallel settlements for the same agent must produce
+        held_cents == sum of individual holds, with no double counting.
+        """
+        agent = _agent_with_curve(None)
+        agent_wallet = payments.get_or_create_wallet(f"agent:{agent['agent_id']}")
+        platform_wallet = payments.get_or_create_wallet(payments.PLATFORM_OWNER_ID)
+
+        def _settle_one(idx: int) -> None:
+            caller_owner = f"user:caller-{uuid.uuid4().hex[:8]}-{idx}"
+            _fund_caller_wallet(caller_owner, 5000)
+            caller_wallet = payments.get_wallet_by_owner(caller_owner)
+            distribution = payments.compute_success_distribution(
+                1000, platform_fee_pct=10, fee_bearer_policy="caller",
+            )
+            charge_tx_id = payments.pre_call_charge(
+                caller_wallet["wallet_id"],
+                int(distribution["caller_charge_cents"]),
+                agent["agent_id"],
+            )
+            payments.post_call_payout(
+                agent_wallet["wallet_id"],
+                platform_wallet["wallet_id"],
+                charge_tx_id,
+                1000,
+                agent["agent_id"],
+                platform_fee_pct=10,
+                fee_bearer_policy="caller",
+                job_id=f"job-conc-{idx}",
+                dispute_window_hours=72,
+                payout_curve=None,
+            )
+
+        threads = [threading.Thread(target=_settle_one, args=(i,)) for i in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        agent_final = payments.get_wallet(agent_wallet["wallet_id"])
+        # Five jobs, payout 1000 each, no curve -> hold = 1000 each.
+        assert agent_final["balance_cents"] == 5000
+        assert agent_final["held_cents"] == 5000
+        with db.get_db_connection() as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) AS c FROM wallet_holds WHERE wallet_id = %s AND status = 'active'",
+                (agent_wallet["wallet_id"],),
+            ).fetchone()
+        assert int(count["c"]) == 5
+
+
+# ---------------------------------------------------------------------------
+# 6. Full-lifecycle invariant (settle -> rate -> assert)
+# ---------------------------------------------------------------------------
+
+
+class TestHoldLifecycleInvariant:
+    def test_held_cents_invariant_after_full_clawback_lifecycle(self, isolated_db):
+        """After settle + low-rating clawback, held_cents=0 AND
+        SUM(active wallet_holds)=0 for the wallet.
+        """
+        ctx = _settle_with_curve('{"1": 0.0, "5": 1.0}')
+        from core import payout_curve as _pc
+        _pc.apply_curve_clawback(
+            job_id=ctx["job_id"],
+            agent_id=ctx["agent"]["agent_id"],
+            agent_wallet_id=ctx["agent_wallet"]["wallet_id"],
+            caller_wallet_id=ctx["caller_wallet"]["wallet_id"],
+            agent_payout_cents=1000,
+            payout_fraction=0.0,
+        )
+        agent_after = payments.get_wallet(ctx["agent_wallet"]["wallet_id"])
+        assert agent_after["held_cents"] == 0
+        from core.payments import holds as _holds
+        assert _holds.sum_active_held_cents_for_wallet(
+            ctx["agent_wallet"]["wallet_id"]
+        ) == 0
+
+    def test_held_cents_invariant_after_window_expiry_lifecycle(self, isolated_db):
+        """After settle + sweeper release with no rating, held_cents=0 AND
+        SUM(active wallet_holds)=0 for the wallet.
+        """
+        ctx = _settle_with_curve(None)
+        with db.get_db_connection() as conn:
+            with conn:
+                conn.execute(
+                    "UPDATE wallet_holds SET hold_until = %s WHERE job_id = %s",
+                    ("2000-01-01T00:00:00+00:00", ctx["job_id"]),
+                )
+        from core.payments import holds as _holds
+        _holds.release_expired_holds(limit=10)
+        agent_after = payments.get_wallet(ctx["agent_wallet"]["wallet_id"])
+        assert agent_after["held_cents"] == 0
+        assert agent_after["balance_cents"] == 1000  # full payout retained
+        assert _holds.sum_active_held_cents_for_wallet(
+            ctx["agent_wallet"]["wallet_id"]
+        ) == 0
+
+
+# ---------------------------------------------------------------------------
+# 7. Defense-in-depth: pre-deploy / late-rating fallthrough
+# ---------------------------------------------------------------------------
+
+
+class TestPayoutCurveDefenseInDepth:
+    def test_late_rating_with_no_active_hold_emits_canary(self, isolated_db):
+        """When apply_curve_clawback runs on a job with no active hold
+        (e.g. window expired before the rating arrived), the defense-in-
+        depth path runs and the canary metric increments.
+        """
+        ctx = _settle_with_curve('{"1": 0.5, "5": 1.0}')
+        # Simulate "rating arrived after window" by releasing the hold first.
+        from core.payments import holds as _holds
+        with db.get_db_connection() as conn:
+            with conn:
+                conn.execute(
+                    "UPDATE wallet_holds SET hold_until = %s WHERE job_id = %s",
+                    ("2000-01-01T00:00:00+00:00", ctx["job_id"]),
+                )
+        released = _holds.release_expired_holds(limit=10)
+        assert released == 1
+
+        from core import payout_curve as _pc
+        from core import observability as _obs
+
+        # Read the metric counter sample-list before/after to confirm it ticks.
+        def _no_active_hold_count() -> float:
+            metric = _obs.payout_curve_clawback_skipped_total
+            samples = []
+            try:
+                for sample in metric.collect()[0].samples:
+                    if sample.labels.get("reason") == "no_active_hold":
+                        samples.append(sample.value)
+            except Exception:
+                return 0.0
+            return float(samples[-1]) if samples else 0.0
+
+        before = _no_active_hold_count()
+        result = _pc.apply_curve_clawback(
+            job_id=ctx["job_id"],
+            agent_id=ctx["agent"]["agent_id"],
+            agent_wallet_id=ctx["agent_wallet"]["wallet_id"],
+            caller_wallet_id=ctx["caller_wallet"]["wallet_id"],
+            agent_payout_cents=1000,
+            payout_fraction=0.5,
+        )
+        after = _no_active_hold_count()
+        # Defense-in-depth: the clawback still applied because the agent's
+        # general balance covers it (we held the full payout, sweeper just
+        # released it back to balance).
+        assert result["applied"] is True
+        # And the canary metric incremented to reflect the missing hold.
+        assert after > before
+
+    def test_underflow_emits_canary_metric(self, isolated_db):
+        """Agent wallet at 0 with no hold -> canary metric increments
+        with reason='underflow' AND the structured log fires.
+        """
+        # Build a wallet with no balance and no hold.
+        agent_wallet = payments.get_or_create_wallet("agent:underflow-test")
+        caller_wallet = payments.get_or_create_wallet("user:underflow-caller")
+
+        from core import payout_curve as _pc
+        from core import observability as _obs
+
+        def _underflow_count() -> float:
+            metric = _obs.payout_curve_clawback_skipped_total
+            samples = []
+            try:
+                for sample in metric.collect()[0].samples:
+                    if sample.labels.get("reason") == "underflow":
+                        samples.append(sample.value)
+            except Exception:
+                return 0.0
+            return float(samples[-1]) if samples else 0.0
+
+        before = _underflow_count()
+        result = _pc.apply_curve_clawback(
+            job_id="job-underflow-canary",
+            agent_id="underflow-test",
+            agent_wallet_id=agent_wallet["wallet_id"],
+            caller_wallet_id=caller_wallet["wallet_id"],
+            agent_payout_cents=100,
+            payout_fraction=0.5,
+        )
+        after = _underflow_count()
+        assert result["applied"] is False
+        assert result["reason"] == "underflow"
+        assert after > before
+
     def test_clawback_is_idempotent(self, isolated_db):
         ctx = _settle_with_curve('{"1": 0.5, "5": 1.0}')
         from core import payout_curve as _pc
