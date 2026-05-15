@@ -132,6 +132,7 @@ from core.jobs import disputable
 from core import hosted_skills as _hosted_skills
 from core import listing_safety as _listing_safety
 from core import models as core_models
+from core import observability as _observability
 from core import skill_executor as _skill_executor
 from core import skill_parser as _skill_parser
 from core import url_security as _url_security
@@ -383,6 +384,20 @@ _DEFAULT_ENDPOINT_MONITOR_TIMEOUT_SECONDS = 3
 _DEFAULT_ENDPOINT_MONITOR_FAILURE_THRESHOLD = 3
 MINIMUM_DEPOSIT_CENTS = int(os.getenv("MINIMUM_DEPOSIT_CENTS", "500"))
 _PROTOCOL_VERSION = "1.0"
+
+
+def _read_server_version() -> str:
+    """Read the deployable application version from the repo VERSION file."""
+    candidate = os.path.join(_REPO_ROOT, "VERSION")
+    try:
+        with open(candidate, "r", encoding="utf-8") as fh:
+            value = fh.read().strip()
+            return value or "0.0.0"
+    except OSError:
+        return "0.0.0"
+
+
+SERVER_VERSION = _read_server_version()
 _PROTOCOL_VERSION_HEADER = "X-Aztea-Version"
 _LEGACY_PROTOCOL_VERSION_HEADER = "X-AgentMarket-Version"
 _CLIENT_ID_HEADER = "X-Aztea-Client"

@@ -178,6 +178,13 @@ def _execute_builtin_agent(
 
     payload = input_payload or {}
 
+    agent_slug = _builtin_constants.agent_id_to_slug(agent_id) or agent_id
+
+    def _result_status(result: dict) -> str:
+        if isinstance(result, dict) and isinstance(result.get("error"), dict):
+            return "failure"
+        return "success"
+
     sem = _agent_semaphore(agent_id)
     if not sem.acquire(timeout=_AGENT_SEMAPHORE_WAIT_SECONDS):
         raise _AgentSlotUnavailable(
@@ -209,13 +216,19 @@ def _execute_builtin_agent(
             agent_id, payload, _finalize, emit_partial=emit_partial,
         )
         try:
-            return fut.result(timeout=budget)
+            result = fut.result(timeout=budget)
         except _cf.TimeoutError:
             # Cancel if still PENDING; no-op if already running.
             # The running thread is abandoned — Python can't kill it
             # safely. It releases its pool slot on natural completion.
             fut.cancel()
+            _observability.record_builtin_agent_call(agent_slug, "failure")
             raise _AgentWallClockTimeout(agent_id, budget)
+        except Exception:
+            _observability.record_builtin_agent_call(agent_slug, "failure")
+            raise
+        _observability.record_builtin_agent_call(agent_slug, _result_status(result))
+        return result
     finally:
         # Release the semaphore even if the inner call is still running
         # in the background. _execute_builtin_agent_inner doesn't touch

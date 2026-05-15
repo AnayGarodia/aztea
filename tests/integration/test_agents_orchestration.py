@@ -736,19 +736,22 @@ def test_request_id_echoed_on_response_and_in_error_payload(client):
     assert body.get("request_id") == rid
 
 
-def test_health_returns_503_when_memory_probe_fails(client, monkeypatch):
-    import psutil
+def test_health_returns_200_with_db_and_version_contract(client):
+    """Observability /health (part_001 shard) always returns HTTP 200.
 
-    class _BrokenProcess:
-        def memory_info(self):
-            raise RuntimeError("memory probe failed")
-
-    monkeypatch.setattr(psutil, "Process", lambda: _BrokenProcess())
+    Replaces an earlier 503-on-memory-probe test that asserted the legacy
+    system-router shape. The endpoint now exposes {status, db, llm_providers,
+    version} and lets monitors react on the JSON body rather than the HTTP
+    code, so this test pins the new contract.
+    """
     response = client.get("/health", headers=_auth_headers(TEST_MASTER_KEY))
-    assert response.status_code == 503
+    assert response.status_code == 200, response.text
     body = response.json()
-    assert body["status"] == "degraded"
-    assert body["checks"]["memory"]["ok"] is False
+    assert set(body.keys()) >= {"status", "db", "llm_providers", "version"}
+    assert body["status"] in {"ok", "degraded"}
+    assert body["db"] in {"ok", "error"}
+    assert isinstance(body["llm_providers"], list)
+    assert isinstance(body["version"], str) and body["version"]
 
 
 def test_dispute_window_respects_global_cap_seconds(client, monkeypatch):

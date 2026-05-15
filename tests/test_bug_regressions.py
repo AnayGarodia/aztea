@@ -806,3 +806,35 @@ def test_fix12_search_security_includes_secret_scanner():
     assert "secret_scanner" in slugs, (
         f"secret_scanner not in top-10 security results. Got: {slugs}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Observability upgrade — /health endpoint
+# ---------------------------------------------------------------------------
+
+def test_health_endpoint_returns_ok_with_db_and_version(monkeypatch):
+    """GET /health returns HTTP 200 with status, db, llm_providers, version."""
+    import os
+
+    os.environ.setdefault("API_KEY", "test-master-key")
+    os.environ.setdefault("SERVER_BASE_URL", "http://localhost:8000")
+
+    from fastapi.testclient import TestClient
+
+    import server.application as server
+
+    with TestClient(server.app) as client:
+        resp = client.get("/health")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    assert set(body.keys()) >= {"status", "db", "llm_providers", "version"}
+    assert body["status"] in {"ok", "degraded"}
+    assert body["db"] in {"ok", "error"}
+    assert isinstance(body["llm_providers"], list)
+    assert isinstance(body["version"], str) and body["version"]
+
+    # When the DB probe succeeds, overall status should be ok.
+    if body["db"] == "ok":
+        assert body["status"] == "ok"

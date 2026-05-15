@@ -866,6 +866,59 @@ app.add_middleware(
     max_age=600,
 )
 
+def _health_check_db() -> str:
+    """Run a tiny SELECT 1 against the configured DB. Returns 'ok' or 'error'."""
+    try:
+        with _db.get_db_connection() as conn:
+            row = conn.execute("SELECT 1").fetchone()
+        if row is None:
+            return "error"
+        return "ok"
+    except Exception as exc:
+        _LOG.warning("health: DB probe failed: %s", exc)
+        return "error"
+
+
+def _health_available_llm_providers() -> list[str]:
+    """Return the names of registered LLM providers that are currently usable.
+
+    Pure read of the in-memory registry — no network calls.
+    """
+    try:
+        from core.llm import registry as _llm_registry
+
+        return [
+            entry["name"]
+            for entry in _llm_registry.list_providers()
+            if entry.get("available")
+        ]
+    except Exception as exc:
+        _LOG.warning("health: llm registry probe failed: %s", exc)
+        return []
+
+
+@app.get("/health", include_in_schema=False)
+def health_endpoint():
+    """Liveness + dependency-status probe. Always returns HTTP 200.
+
+    The body's ``status`` field flips to ``degraded`` if any sub-check failed,
+    so external monitors can alert on the JSON without parsing HTTP codes.
+    Registered before the legacy system-router /health so this lighter,
+    SDK-friendly contract takes precedence on FastAPI's first-match resolution.
+    """
+    db_status = _health_check_db()
+    providers = _health_available_llm_providers()
+    overall = "ok" if db_status == "ok" else "degraded"
+    return JSONResponse(
+        {
+            "status": overall,
+            "db": db_status,
+            "llm_providers": providers,
+            "version": SERVER_VERSION,
+        }
+    )
+
+
 app.include_router(_system_routes.router)
 
 # Trust X-Forwarded-For only from explicitly trusted proxy networks.
