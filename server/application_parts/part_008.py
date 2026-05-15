@@ -4,6 +4,51 @@
 # Variable-pricing helpers (_estimate_variable_charge,
 # _resolve_agent_pricing, _maybe_refund_pricing_diff) live in part_004.
 
+def _settle_successful_with_metric(job: dict, *args, **kwargs) -> dict:
+    """Thin wrapper so every successful settle in this shard observes the
+    job_duration_seconds histogram without scattering metric calls across the
+    file. The wrapped function ``_settle_successful_job`` is defined in
+    part_005; we only need the call-site interception here.
+    """
+    # Resolve at call time — the wrapped function lives in a later shard
+    # (part_005) and isn't bound when this shard is compiled.
+    fn = globals()["_settle_successful_job"]
+    settled = fn(job, *args, **kwargs)
+    _record_job_duration_metric(settled if isinstance(settled, dict) else job, "complete")
+    return settled
+
+
+def _settle_failed_with_metric(job: dict, *args, **kwargs) -> dict:
+    """Failed-path counterpart to ``_settle_successful_with_metric``."""
+    fn = globals()["_settle_failed_job"]
+    settled = fn(job, *args, **kwargs)
+    _record_job_duration_metric(settled if isinstance(settled, dict) else job, "failed")
+    return settled
+
+
+def _record_job_duration_metric(job: dict | None, status: str) -> None:
+    """Observe job latency on terminal-state transitions. Never raises.
+
+    Reads ``created_at`` and ``completed_at`` from the job row to derive a
+    wall-clock duration in seconds. Jobs without those timestamps are skipped
+    silently so this helper is safe to call even when the row hasn't been
+    re-fetched after settlement.
+    """
+    if not isinstance(job, dict):
+        return
+    try:
+        latency_ms = _job_latency_ms(job)
+        if latency_ms <= 0:
+            return
+        _observability.record_job_duration(
+            job.get("agent_id"),
+            status,
+            latency_ms / 1000.0,
+        )
+    except Exception:  # pragma: no cover — metric path must never raise
+        pass
+
+
 # --- Idempotency cache for sync calls ---
 # Key: (caller_owner_id, agent_id, idempotency_key), Value: (response_body, created_at)
 _IDEMPOTENCY_CACHE: dict[tuple, tuple] = {}
@@ -643,7 +688,7 @@ def admin_agent_delete(
             )
             if cancelled is None:
                 continue
-            settled = _settle_failed_job(cancelled, actor_owner_id=actor)
+            settled = _settle_failed_with_metric(cancelled, actor_owner_id=actor)
             cancelled_count += 1
             refunded_cents += int(
                 (settled or cancelled).get("caller_charge_cents") or 0
@@ -1733,7 +1778,7 @@ def registry_call(
                         completed=True,
                     )
                     if failed is not None:
-                        _settle_failed_job(
+                        _settle_failed_with_metric(
                             failed,
                             actor_owner_id=caller["owner_id"],
                             event_type="job.failed_rate_limited",
@@ -1775,7 +1820,7 @@ def registry_call(
                         completed=True,
                     )
                     if failed is not None:
-                        _settle_failed_job(
+                        _settle_failed_with_metric(
                             failed,
                             actor_owner_id=caller["owner_id"],
                             event_type="job.failed_timeout",
@@ -1831,7 +1876,7 @@ def registry_call(
                     completed=True,
                 )
                 if failed is not None:
-                    _settle_failed_job(
+                    _settle_failed_with_metric(
                         failed,
                         actor_owner_id=caller["owner_id"],
                         event_type="job.failed_dependency",
@@ -1944,7 +1989,7 @@ def registry_call(
                 actor_owner_id=caller["owner_id"],
                 payload={"status": completed["status"], "source": "registry_call_sync"},
             )
-            _settle_successful_job(completed, actor_owner_id=caller["owner_id"])
+            _settle_successful_with_metric(completed, actor_owner_id=caller["owner_id"])
             # 1.7.2 — receipt build is now unconditional at completion
             # (decoupled from settlement). Sync /call already worked in
             # 1.7.1 because settlement fires inline; we still pull the
@@ -2029,7 +2074,7 @@ def registry_call(
                 completed=True,
             )
             if failed is not None:
-                _settle_failed_job(
+                _settle_failed_with_metric(
                     failed,
                     actor_owner_id=caller["owner_id"],
                     event_type="job.failed_validation",
@@ -2061,7 +2106,7 @@ def registry_call(
                 completed=True,
             )
             if failed is not None:
-                _settle_failed_job(
+                _settle_failed_with_metric(
                     failed,
                     actor_owner_id=caller["owner_id"],
                     event_type="job.failed_input",
@@ -2077,7 +2122,7 @@ def registry_call(
                 completed=True,
             )
             if failed is not None:
-                _settle_failed_job(
+                _settle_failed_with_metric(
                     failed,
                     actor_owner_id=caller["owner_id"],
                     event_type="job.failed_rate_limit",
@@ -2101,7 +2146,7 @@ def registry_call(
                 completed=True,
             )
             if failed is not None:
-                _settle_failed_job(
+                _settle_failed_with_metric(
                     failed,
                     actor_owner_id=caller["owner_id"],
                     event_type="job.failed_builtin",
@@ -2183,7 +2228,7 @@ def registry_call(
             completed=True,
         )
         if failed is not None:
-            _settle_failed_job(
+            _settle_failed_with_metric(
                 failed,
                 actor_owner_id=caller["owner_id"],
                 event_type="job.failed_timeout",
@@ -2205,7 +2250,7 @@ def registry_call(
             completed=True,
         )
         if failed is not None:
-            _settle_failed_job(
+            _settle_failed_with_metric(
                 failed,
                 actor_owner_id=caller["owner_id"],
                 event_type="job.failed_endpoint_offline",
@@ -2233,7 +2278,7 @@ def registry_call(
             completed=True,
         )
         if failed is not None:
-            _settle_failed_job(
+            _settle_failed_with_metric(
                 failed,
                 actor_owner_id=caller["owner_id"],
                 event_type="job.failed_rejected_request"
@@ -2282,7 +2327,7 @@ def registry_call(
             completed=True,
         )
         if failed is not None:
-            _settle_failed_job(
+            _settle_failed_with_metric(
                 failed,
                 actor_owner_id=caller["owner_id"],
                 event_type="job.failed_response_too_large",
@@ -2309,7 +2354,7 @@ def registry_call(
                 completed=True,
             )
             if failed is not None:
-                _settle_failed_job(
+                _settle_failed_with_metric(
                     failed,
                     actor_owner_id=caller["owner_id"],
                     event_type="job.failed_invalid_response",
@@ -2342,7 +2387,7 @@ def registry_call(
         actor_owner_id=caller["owner_id"],
         payload={"status": completed["status"], "source": "registry_call_sync_http"},
     )
-    settled = _settle_successful_job(completed, actor_owner_id=caller["owner_id"])
+    settled = _settle_successful_with_metric(completed, actor_owner_id=caller["owner_id"])
     _build_job_receipt_best_effort(completed["job_id"])  # 1.7.2 B-7
     settled = jobs.get_job(completed["job_id"]) or settled  # re-read receipt_jws
     _maybe_refund_pricing_diff(

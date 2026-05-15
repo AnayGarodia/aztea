@@ -92,6 +92,7 @@ def record_call(
 
 try:
     from prometheus_client import Counter as _PCounter
+    from prometheus_client import Histogram as _PHistogram
 
     payment_charges_total = _PCounter(
         "aztea_payment_charges_total",
@@ -108,16 +109,65 @@ try:
         "Post-call refund outcomes",
         ["outcome"],  # success | skipped_payout_exists
     )
+    job_duration_seconds = _PHistogram(
+        "job_duration_seconds",
+        "End-to-end job latency from creation to terminal state",
+        ["agent_id", "status"],  # status: complete | failed
+        buckets=[0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0],
+    )
+    builtin_agent_calls_total = _PCounter(
+        "builtin_agent_calls_total",
+        "Built-in agent dispatch outcomes",
+        ["agent_slug", "status"],  # status: success | failure
+    )
 except ImportError:
     # prometheus_client not installed — use no-op stubs so callers never need IS_PROM guards.
     class _NoopLabels:
         def inc(self, amount: int = 1) -> None:
             pass
 
-    class _NoopCounter:
+        def observe(self, _value: float) -> None:
+            pass
+
+    class _NoopMetric:
         def labels(self, **_kwargs) -> "_NoopLabels":
             return _NoopLabels()
 
-    payment_charges_total = _NoopCounter()  # type: ignore[assignment]
-    payment_payouts_total = _NoopCounter()  # type: ignore[assignment]
-    payment_refunds_total = _NoopCounter()  # type: ignore[assignment]
+    payment_charges_total = _NoopMetric()  # type: ignore[assignment]
+    payment_payouts_total = _NoopMetric()  # type: ignore[assignment]
+    payment_refunds_total = _NoopMetric()  # type: ignore[assignment]
+    job_duration_seconds = _NoopMetric()  # type: ignore[assignment]
+    builtin_agent_calls_total = _NoopMetric()  # type: ignore[assignment]
+
+
+_JOB_TERMINAL_STATUSES = ("complete", "failed")
+
+
+def record_job_duration(
+    agent_id: str | None,
+    status: str,
+    duration_seconds: float,
+) -> None:
+    """Observe job latency. Never raises — failures are silent."""
+    if status not in _JOB_TERMINAL_STATUSES:
+        return
+    if duration_seconds < 0:
+        return
+    try:
+        job_duration_seconds.labels(
+            agent_id=str(agent_id or "unknown"),
+            status=status,
+        ).observe(duration_seconds)
+    except Exception as exc:  # pragma: no cover
+        logger.debug("observability: job duration metric failed: %s", exc)
+
+
+def record_builtin_agent_call(agent_slug: str | None, status: str) -> None:
+    """Increment the per-builtin-agent call counter. Never raises."""
+    try:
+        builtin_agent_calls_total.labels(
+            agent_slug=str(agent_slug or "unknown"),
+            status=status,
+        ).inc()
+    except Exception as exc:  # pragma: no cover
+        logger.debug("observability: builtin agent counter failed: %s", exc)
