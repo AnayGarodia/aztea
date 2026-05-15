@@ -49,6 +49,7 @@ import {
 } from 'lucide-react'
 import './WalletPage.css'
 import { fmtDate, fmtUsd } from '../utils/format.js'
+import { formatApiError } from '../utils/errorCopy.js'
 
 const CREDIT_TYPES = new Set(['deposit', 'refund', 'payout'])
 const MIN_DEPOSIT_CENTS = 500
@@ -242,7 +243,7 @@ export default function WalletPage() {
       const session = await createTopupSession(apiKey, wallet.wallet_id, cents)
       window.location.href = session.checkout_url
     } catch (err) {
-      setTopupError(err?.message ?? 'Could not start payment session.')
+      setTopupError(formatApiError(err, { action: 'start payment session' }).title)
     } finally {
       setStripeLoading(false)
     }
@@ -254,7 +255,7 @@ export default function WalletPage() {
       const data = await connectOnboard(apiKey)
       if (data?.onboarding_url) window.location.href = data.onboarding_url
     } catch (err) {
-      showToast?.(err?.message ?? 'Could not start Stripe onboarding.', 'error')
+      showToast?.(formatApiError(err, { action: 'start Stripe onboarding' }).title, 'error')
     } finally {
       setConnectLoading(false)
     }
@@ -281,7 +282,7 @@ export default function WalletPage() {
       showToast?.(`Withdrawal of ${fmtUsd(cents)} initiated.`, 'success')
       setWithdrawAmount('10')
     } catch (err) {
-      showToast?.(err?.message ?? 'Withdrawal failed.', 'error')
+      showToast?.(formatApiError(err, { action: 'process withdrawal' }).title, 'error')
     } finally {
       setWithdrawLoading(false)
     }
@@ -300,10 +301,10 @@ export default function WalletPage() {
     try {
       await depositToWallet(apiKey, wallet.wallet_id, cents, 'Manual deposit')
       await refreshWallet?.()
-      showToast?.('Funds added to wallet.', 'success')
+      showToast?.('Funds deposited.', 'success')
       setAmount('10')
     } catch (err) {
-      setTopupError(err?.message ?? 'Deposit failed.')
+      setTopupError(formatApiError(err, { action: 'deposit funds' }).title)
     } finally {
       setDemoLoading(false)
     }

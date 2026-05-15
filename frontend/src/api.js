@@ -114,7 +114,9 @@ const HTTP_STATUS_MESSAGES = {
 
 // Friendly fallbacks used ONLY when the server returns a generic/missing message.
 // Specific server messages (e.g. pydantic validation errors) always take priority.
-const API_ERROR_MESSAGE_BY_CODE = {
+// Exported so `frontend/src/utils/errorCopy.js` can reuse the same code → copy
+// lookup without re-declaring it; api.js stays the single source of truth.
+export const API_ERROR_MESSAGE_BY_CODE = {
   'registry.url_forbidden': 'That URL is blocked for safety. Use a public HTTPS endpoint.',
   'registry.url_invalid': 'Endpoint URL is invalid. Use a public HTTPS URL.',
   'registry.agent_limit': 'You reached your agent limit. Delete/archive an existing agent or use another account.',

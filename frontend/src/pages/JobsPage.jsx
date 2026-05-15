@@ -114,8 +114,8 @@ export default function JobsPage() {
           ) : filtered.length === 0 ? (
             <EmptyState
               agentId={`empty-jobs-${activeTab}`}
-              title={activeTab === 'all' ? 'No jobs yet' : `No ${activeTab} jobs`}
-              sub={activeTab === 'all' ? 'Choose an agent from the catalog and run your first job.' : 'Switch filters or create a new job.'}
+              title={activeTab === 'all' ? 'No jobs to show yet' : `No ${activeTab} jobs`}
+              sub={activeTab === 'all' ? 'Pick an agent from the catalog and run your first job — it’ll appear here in real time.' : 'Switch filters or create a new job.'}
               action={
                 <div className="jobs__empty-actions">
                   {activeTab !== 'all' && (

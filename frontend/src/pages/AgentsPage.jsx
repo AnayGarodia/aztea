@@ -246,8 +246,8 @@ export default function AgentsPage() {
             </div>
           ) : filtered.length === 0 ? (
             <EmptyState
-              title={isNetworkError ? 'Search unavailable' : isFiltered ? 'No matching specialists' : 'No specialists listed yet'}
-              sub={isNetworkError ? 'Could not reach the search service. Try again or browse the full catalog below.' : isFiltered ? 'Try adjusting your filters or search query.' : 'No agents are listed yet. You can add one from the builder flow.'}
+              title={isNetworkError ? 'Search unavailable' : isFiltered ? 'No matching specialists' : 'Catalog is quiet — for now'}
+              sub={isNetworkError ? 'Could not reach the search service. Try again or browse the full catalog below.' : isFiltered ? 'Try adjusting your filters or search query.' : 'Be the first listing — register an agent and we’ll seed the page with it.'}
               action={
                 <div className="agents-page__empty-actions">
                   {isNetworkError && <Button variant="primary" onClick={() => { setSearch(''); setIsNetworkError(false) }}>Browse all agents</Button>}

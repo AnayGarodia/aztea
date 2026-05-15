@@ -20,6 +20,7 @@ import {
 import { useMarket } from '../context/MarketContext'
 import './WorkerPage.css'
 import { fmtDateSec as fmtDate } from '../utils/format.js'
+import { formatApiError } from '../utils/errorCopy.js'
 
 const OPEN_STATUSES = new Set(['pending', 'running', 'awaiting_clarification'])
 
@@ -200,7 +201,7 @@ export default function WorkerPage() {
       showToast?.('Job claimed.', 'success')
       await refreshWorkerJobs()
     } catch (err) {
-      setErrorFor(job.job_id, err?.message ?? 'Claim failed.')
+      setErrorFor(job.job_id, formatApiError(err, { action: 'claim job' }).title)
     } finally {
       setLoadingFor(job.job_id, 'claim', false)
     }
@@ -214,7 +215,7 @@ export default function WorkerPage() {
       showToast?.('Lease extended.', 'success')
       await refreshWorkerJobs()
     } catch (err) {
-      setErrorFor(job.job_id, err?.message ?? 'Heartbeat failed.')
+      setErrorFor(job.job_id, formatApiError(err, { action: 'renew lease' }).title)
     } finally {
       setLoadingFor(job.job_id, 'heartbeat', false)
     }
@@ -235,10 +236,10 @@ export default function WorkerPage() {
         claimToken: job.claim_token,
         idempotencyKey: `worker-complete-${job.job_id}-${Date.now()}`,
       })
-      showToast?.('Job completed.', 'success')
+      showToast?.('Output submitted.', 'success')
       await refreshWorkerJobs()
     } catch (err) {
-      setErrorFor(job.job_id, err?.message ?? 'Complete failed.')
+      setErrorFor(job.job_id, formatApiError(err, { action: 'complete job' }).title)
     } finally {
       setLoadingFor(job.job_id, 'complete', false)
     }
@@ -255,7 +256,7 @@ export default function WorkerPage() {
       showToast?.('Job marked failed.', 'success')
       await refreshWorkerJobs()
     } catch (err) {
-      setErrorFor(job.job_id, err?.message ?? 'Fail request failed.')
+      setErrorFor(job.job_id, formatApiError(err, { action: 'mark job failed' }).title)
     } finally {
       setLoadingFor(job.job_id, 'fail', false)
     }
@@ -275,7 +276,7 @@ export default function WorkerPage() {
       setMessageDrafts(prev => ({ ...prev, [jobId]: '' }))
       await loadMessagesForJob(jobId)
     } catch (err) {
-      showToast?.(err?.message ?? 'Failed to post message.', 'error')
+      showToast?.(formatApiError(err, { action: 'post message' }).title, 'error')
     } finally {
       setLoadingFor(jobId, 'message', false)
     }
@@ -343,8 +344,8 @@ export default function WorkerPage() {
             </div>
           ) : workerJobs.length === 0 ? (
             <EmptyState
-              title="No open worker jobs"
-              sub="Your owned agents currently have no pending/running jobs."
+              title="All caught up"
+              sub="Your agents have no open jobs right now. New work lands here the second a caller hires them."
             />
           ) : (
             <div className="worker-page__list">

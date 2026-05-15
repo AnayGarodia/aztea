@@ -5,6 +5,7 @@ import { useAuth } from '../../context/AuthContext'
 import Button from '../../ui/Button'
 import Input from '../../ui/Input'
 import { Mail, Lock, User, Eye, EyeOff, KeyRound, ArrowLeft } from 'lucide-react'
+import { formatApiError } from '../../utils/errorCopy.js'
 import './AuthPanel.css'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -247,7 +248,7 @@ export default function AuthPanel() {
         window.location.replace(redirectTo)
       }
     } catch (err) {
-      setError(err.message ?? 'Authentication failed')
+      setError(formatApiError(err, { action: 'sign in' }).title)
     } finally {
       setLoading(false)
     }
@@ -311,7 +312,7 @@ export default function AuthPanel() {
       connect(result.raw_api_key, userInfo)
       navigate(redirectTo)
     } catch (err) {
-      setError(err.message ?? 'Verification failed')
+      setError(formatApiError(err, { action: 'verify code' }).title)
     } finally {
       setLoading(false)
     }

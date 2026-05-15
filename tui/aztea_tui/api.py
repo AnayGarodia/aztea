@@ -48,6 +48,38 @@ def _extract_status_code(error_text: str) -> int:
     return int(match.group(1)) if match else 0
 
 
+def _retry_after_hint(exc: Exception) -> str | None:
+    """Return ``"Retry after Ns."`` when the body/headers expose a wait time.
+
+    Pure-ish: only reads from already-deserialized fields on the exception
+    (``.body`` for the structured envelope, ``.response`` for raw headers).
+    Never raises — a missing or malformed field falls through to ``None``.
+    """
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        details = body.get("details")
+        if isinstance(details, dict):
+            for key in ("retry_after_seconds", "retry_after"):
+                candidate = details.get(key)
+                try:
+                    parsed = int(candidate)
+                except (TypeError, ValueError):
+                    parsed = 0
+                if parsed > 0:
+                    return f"Retry after {parsed}s."
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None) if response is not None else None
+    if headers:
+        raw = headers.get("Retry-After")
+        try:
+            parsed = int(str(raw).strip()) if raw else 0
+        except (TypeError, ValueError):
+            parsed = 0
+        if parsed > 0:
+            return f"Retry after {parsed}s."
+    return None
+
+
 def _normalize_api_error(exc: Exception, *, action: str, base_url: str) -> AzteaAPIError:
     status_code = int(getattr(exc, "status_code", 0) or 0)
     raw = str(exc).strip() or f"Unknown error while trying to {action}."
@@ -105,10 +137,18 @@ def _normalize_api_error(exc: Exception, *, action: str, base_url: str) -> Aztea
             technical_details=raw,
         )
     if status_code == 429 or "rate limit" in lower:
+        # If the SDK already extracted Retry-After (see
+        # sdks/python-sdk/aztea/errors.py:_retry_after_seconds), surface its
+        # second-count hint verbatim — it's more specific than "Wait a moment".
+        sdk_hint = getattr(exc, "hint", None)
+        if isinstance(sdk_hint, str) and "retry after" in sdk_hint.lower():
+            hint_text: str = sdk_hint
+        else:
+            hint_text = _retry_after_hint(exc) or "Wait a moment and retry."
         return AzteaAPIError(
             "Rate limit reached.",
             status_code=status_code,
-            hint="Wait a moment and retry.",
+            hint=hint_text,
             technical_details=raw,
             retryable=True,
         )

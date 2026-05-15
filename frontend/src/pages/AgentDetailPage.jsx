@@ -412,7 +412,7 @@ export default function AgentDetailPage() {
                     </BarChart>
                   </ResponsiveContainer>
                 ) : (
-                  <EmptyState title="No volume yet" sub="Job data appears after the first call." />
+                  <EmptyState title="No volume yet" sub="This agent’s first call will draw the first bar." />
                 )}
               </div>
             </Reveal>

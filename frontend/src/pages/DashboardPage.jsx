@@ -185,7 +185,7 @@ export default function DashboardPage() {
                 </Card.Header>
                 <Card.Body>
                   {reconRuns === null ? (
-                    <p className="dashboard__kpi-hint">Loading reconciliation runs…</p>
+                    <p className="dashboard__kpi-hint">Reconciling the ledger…</p>
                   ) : reconRuns.length === 0 ? (
                     <p className="dashboard__kpi-hint">No reconciliation runs found yet.</p>
                   ) : (

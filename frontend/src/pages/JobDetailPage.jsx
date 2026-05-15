@@ -35,6 +35,7 @@ import '../features/jobs/JobReceipt.css'
 import { ArrowLeft, RefreshCw, Star, AlertTriangle, CheckCircle, Clock, RotateCcw, ShieldCheck } from 'lucide-react'
 import './JobDetailPage.css'
 import { fmtDateSec as fmtDate, fmtUsd } from '../utils/format.js'
+import { formatApiError } from '../utils/errorCopy.js'
 
 function fmtCountdown(isoDeadline) {
   if (!isoDeadline) return null
@@ -289,7 +290,7 @@ export default function JobDetailPage() {
       setRatingDone(true)
       showToast?.('Rating submitted.', 'success')
     } catch (e) {
-      showToast?.(e?.message || 'Could not submit rating.', 'error')
+      showToast?.(formatApiError(e, { action: 'submit rating' }).title, 'error')
       setRating(null)
     } finally {
       setRatingSubmitting(false)
@@ -306,7 +307,7 @@ export default function JobDetailPage() {
       setShowDisputeForm(false)
       showToast?.('Dispute filed. Our judges will review it shortly.', 'success')
     } catch (err) {
-      showToast?.(err?.message || 'Could not file dispute.', 'error')
+      showToast?.(formatApiError(err, { action: 'file dispute' }).title, 'error')
     } finally {
       setFilingDispute(false)
     }
@@ -348,7 +349,7 @@ export default function JobDetailPage() {
       await Promise.all([loadMessages(), pollJob()])
       showToast?.('Clarification sent.', 'success')
     } catch (err) {
-      showToast?.(err?.message || 'Could not send clarification response.', 'error')
+      showToast?.(formatApiError(err, { action: 'send clarification' }).title, 'error')
     } finally {
       setClarificationSubmitting(false)
     }
@@ -377,7 +378,7 @@ export default function JobDetailPage() {
       }
       await Promise.all([refreshJobs?.(), pollJob(), loadMessages()])
     } catch (err) {
-      showToast?.(err?.message || 'Verification action failed.', 'error')
+      showToast?.(formatApiError(err, { action: decision === 'accept' ? 'release payment' : 'open dispute' }).title, 'error')
     } finally {
       setVerifyLoading(false)
     }

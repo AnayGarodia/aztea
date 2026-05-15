@@ -56,7 +56,7 @@ function AccountForm({ user, apiKey, refreshProfile, showToast }) {
     try {
       await authUpdateProfile(apiKey, fields)
       await refreshProfile?.()
-      showToast?.('Profile updated', 'success')
+      showToast?.('Changes saved to your profile.', 'success')
     } catch (err) {
       setError(err?.message || 'Could not update profile.')
     } finally {

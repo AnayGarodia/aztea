@@ -49,10 +49,10 @@ export default class ErrorBoundary extends React.Component {
             Unexpected error
           </p>
           <h1 style={{ fontSize: '1.125rem', marginBottom: 'var(--sp-2)' }}>
-            Something went wrong while loading this page.
+            This page didn’t load.
           </h1>
           <p style={{ color: 'var(--ink-soft)', marginBottom: 'var(--sp-4)' }}>
-            Refresh to recover. If this keeps happening, try again in a moment.
+            Refresh to try again. If it keeps happening, the error below is what our team needs.
           </p>
           <Button variant="primary" onClick={() => window.location.reload()}>
             Reload app
