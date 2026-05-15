@@ -11,34 +11,20 @@ def normalize_endpoint_ref(value: str | None) -> str:
     return str(value or "").strip().rstrip("/")
 
 
-FINANCIAL_AGENT_ID = "b7741251-d7ac-5423-b57d-8e12cd80885f"
 CODEREVIEW_AGENT_ID = "8cea848f-a165-5d6c-b1a0-7d14fff77d14"
-WIKI_AGENT_ID = "9a175aa2-8ffd-52f7-aae0-5a33fc88db83"
 CVELOOKUP_AGENT_ID = "a3e239dd-ea92-556b-9c95-0a213a3daf59"
 QUALITY_JUDGE_AGENT_ID = "9cf0d9d0-4a10-58c9-b97a-6b5f81b1cf33"
-IMAGE_GENERATOR_AGENT_ID = "4fb167bd-b474-5ea5-bd5c-8976dfe799ae"
 VIDEO_STORYBOARD_AGENT_ID = "c12994de-cde9-514a-9c07-a3833b25bb1f"
-ARXIV_RESEARCH_AGENT_ID = "9e673f6e-9115-516f-b41b-5af8bcbf15bd"
 PYTHON_EXECUTOR_AGENT_ID = "040dc3f5-afe7-5db7-b253-4936090cc7af"
-WEB_RESEARCHER_AGENT_ID = "32cd7b5c-44d0-5259-bb02-1bbc612e92d7"
 HN_DIGEST_AGENT_ID = "31cc3a99-eca6-5202-96d4-8366f426ae1d"
 DNS_INSPECTOR_AGENT_ID = "3d677381-791c-5e83-8e66-5b77d0e43e2e"
 DEPENDENCY_AUDITOR_AGENT_ID = "11fab82a-426e-513e-abf3-528d99ef2b87"
-MULTI_FILE_EXECUTOR_AGENT_ID = "ea95cdec-32c1-5a2b-a032-3e7061abf3a4"
-LINTER_AGENT_ID = "7ec4c987-9a7e-5af8-984f-7b8ad0ad0536"
-SHELL_EXECUTOR_AGENT_ID = "6bd98167-e010-5604-8c76-6ed1b92698f1"
-TYPE_CHECKER_AGENT_ID = "5b140628-52a8-565b-8599-b1c3e402b02d"
 DB_SANDBOX_AGENT_ID = "be4d6c18-629d-5b1c-8c46-f82c00db4995"
 VISUAL_REGRESSION_AGENT_ID = "20a74467-d633-5016-b210-adf769b2df9c"
-LIVE_ENDPOINT_TESTER_AGENT_ID = "8af9fc34-ec0c-5732-b0e0-4e4efdff749c"
 BROWSER_AGENT_ID = "c3a1b2d4-e5f6-5a7b-8c9d-0e1f2a3b4c5d"
 MULTI_LANGUAGE_EXECUTOR_AGENT_ID = "d4b2c3e5-f6a7-5b8c-9d0e-1f2a3b4c5d6e"
-SEMANTIC_CODEBASE_SEARCH_AGENT_ID = "e5c3d4f6-a7b8-5c9d-0e1f-2a3b4c5d6e7f"
-AI_RED_TEAMER_AGENT_ID = "f6d4e5a7-b8c9-5d0e-1f2a-3b4c5d6e7f8a"
 SECRET_SCANNER_AGENT_ID = "1021c65c-d2bf-54ff-823a-897f9deb1029"
 JSON_SCHEMA_VALIDATOR_AGENT_ID = "1b0b5820-b796-53cc-8d31-5e336d86d875"
-REGEX_TESTER_AGENT_ID = "36ae44b0-895b-5ef7-bc1f-1ecf08fce3ee"
-SQL_EXPLAINER_AGENT_ID = "91258740-dd32-51b6-be91-a7638fae190f"
 GIT_DIFF_ANALYZER_AGENT_ID = "8ac84144-4fd1-5883-bfad-e7b64d729b8f"
 LIGHTHOUSE_AUDITOR_AGENT_ID = "6047127b-e49a-51c0-81d7-7934c0be424d"
 ACCESSIBILITY_AUDITOR_AGENT_ID = "41e95324-2480-5e53-9414-302d55673d50"
@@ -51,19 +37,15 @@ SAST_SCANNER_AGENT_ID = "91d229dc-1f37-5044-aaa2-f157e9425159"
 STRIPE_WEBHOOK_DEBUGGER_AGENT_ID = "0dd11350-0307-5900-ac19-71105117a9c9"
 LOAD_TESTER_AGENT_ID = "38143c50-4484-595c-827f-629d3c877f7e"
 CI_FAILURE_REPRODUCER_AGENT_ID = "fec9fdac-4685-579f-b26f-82119124c73e"
-JWT_DEBUGGER_AGENT_ID = "e4aa9794-c37a-5e2f-992e-b325fabb2caf"
 DOCKERFILE_ANALYZER_AGENT_ID = "e91f9b2f-f695-5890-b1f5-a9156c1b9a54"
 OPENAPI_VALIDATOR_AGENT_ID = "ce4230c8-1f16-5820-9852-7511b34603d7"
 COVERAGE_RUNNER_AGENT_ID = "20e5454b-5953-5b20-a993-1dfc92c20cfb"
-EMAIL_DELIVERABILITY_CHECKER_AGENT_ID = "37d58c2f-7624-529c-9bcd-f0f5e44f1e12"
-CRON_EXPRESSION_PARSER_AGENT_ID = "b45063e4-ecbe-591d-b81a-5240c71cd5fd"
 SSL_CERTIFICATE_DECODER_AGENT_ID = "fefbff0b-8343-5a58-8aec-9d1579188919"
 DIFF_ANALYZER_AGENT_ID = "8b980edd-6583-51d2-b351-d2afe1d57ff2"
 K8S_MANIFEST_VALIDATOR_AGENT_ID = "6086b2ad-0a55-58e5-b504-49968379b623"
 ARCHIVE_INSPECTOR_AGENT_ID = "9713a29a-1817-5548-b439-0cd4f4efdcb1"
 UNICODE_INSPECTOR_AGENT_ID = "65fbf6ec-ff53-5f72-95e0-88ae2070c3d9"
 TERRAFORM_PLAN_ANALYZER_AGENT_ID = "989f2964-fadd-5ce0-9afc-2183c08fb9f9"
-COLOR_CONTRAST_CHECKER_AGENT_ID = "3da02ac3-bf02-5797-90c2-27e9dd67d66d"
 
 BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
     QUALITY_JUDGE_AGENT_ID: "internal://quality-judge",
@@ -87,20 +69,15 @@ BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
     STRIPE_WEBHOOK_DEBUGGER_AGENT_ID: "internal://stripe_webhook_debugger",
     LOAD_TESTER_AGENT_ID: "internal://load_tester",
     CI_FAILURE_REPRODUCER_AGENT_ID: "internal://ci_failure_reproducer",
-    JWT_DEBUGGER_AGENT_ID: "internal://jwt_debugger",
     DOCKERFILE_ANALYZER_AGENT_ID: "internal://dockerfile_analyzer",
     OPENAPI_VALIDATOR_AGENT_ID: "internal://openapi_validator",
     COVERAGE_RUNNER_AGENT_ID: "internal://coverage_runner",
-    EMAIL_DELIVERABILITY_CHECKER_AGENT_ID: "internal://email_deliverability_checker",
-    REGEX_TESTER_AGENT_ID: "internal://regex_tester",
-    CRON_EXPRESSION_PARSER_AGENT_ID: "internal://cron_expression_parser",
     SSL_CERTIFICATE_DECODER_AGENT_ID: "internal://ssl_certificate_decoder",
     DIFF_ANALYZER_AGENT_ID: "internal://diff_analyzer",
     K8S_MANIFEST_VALIDATOR_AGENT_ID: "internal://k8s_manifest_validator",
     ARCHIVE_INSPECTOR_AGENT_ID: "internal://archive_inspector",
     UNICODE_INSPECTOR_AGENT_ID: "internal://unicode_inspector",
     TERRAFORM_PLAN_ANALYZER_AGENT_ID: "internal://terraform_plan_analyzer",
-    COLOR_CONTRAST_CHECKER_AGENT_ID: "internal://color_contrast_checker",
 }
 
 BUILTIN_LEGACY_ROUTE_ENDPOINTS: dict[str, str] = {
@@ -118,33 +95,10 @@ for _agent_id, _endpoint in BUILTIN_INTERNAL_ENDPOINTS.items():
 
 BUILTIN_AGENT_IDS = frozenset(BUILTIN_INTERNAL_ENDPOINTS.keys())
 
-# Agents demoted from the public catalog after the 2026-05-07 power-user eval.
-# They remain resolvable through historical job and receipt endpoints, but
-# non-admin callers can no longer discover or hire them. Hard-delete after the
-# platform-wide sunset window:
-#   - Pure code wrappers (linter / type_checker / regex_tester /
-#     json_schema_validator / git_diff_analyzer / shell_executor /
-#     multi_file_executor): a coding agent runs these locally in 1-20 lines.
-#   - LLM-only wrappers (code_review / arxiv / wiki / web_researcher / financial /
-#     ai_red_teamer): no live data Claude can't reach via WebFetch+training.
-#   - Wrong surface for a coding marketplace (image_generator / semantic_search:
-#     the latter is dominated by Grep/Glob/Read).
-SUNSET_DEPRECATED_AGENT_IDS = frozenset(
-    {
-        ARXIV_RESEARCH_AGENT_ID,
-        MULTI_FILE_EXECUTOR_AGENT_ID,
-        LINTER_AGENT_ID,
-        SHELL_EXECUTOR_AGENT_ID,
-        TYPE_CHECKER_AGENT_ID,
-        SEMANTIC_CODEBASE_SEARCH_AGENT_ID,
-        IMAGE_GENERATOR_AGENT_ID,
-        FINANCIAL_AGENT_ID,
-        # Suspended in prod DB; treated as sunset so every surface
-        # (list_agents, /health, session_audit, search) agrees.
-        LIVE_ENDPOINT_TESTER_AGENT_ID,
-        SQL_EXPLAINER_AGENT_ID,
-    }
-)
+# Sunset agents have been fully purged (constants, endpoints, specs, modules).
+# The frozenset is kept as an empty stub so downstream code that iterates
+# SUNSET_DEPRECATED_AGENT_IDS still compiles without change.
+SUNSET_DEPRECATED_AGENT_IDS: frozenset[str] = frozenset()
 
 # The public catalog: agents that give a coding-agent integrator a primitive
 # they cannot trivially build themselves — isolation (sandboxes), live
@@ -171,20 +125,15 @@ CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
         STRIPE_WEBHOOK_DEBUGGER_AGENT_ID,
         LOAD_TESTER_AGENT_ID,
         CI_FAILURE_REPRODUCER_AGENT_ID,
-        JWT_DEBUGGER_AGENT_ID,
         DOCKERFILE_ANALYZER_AGENT_ID,
         OPENAPI_VALIDATOR_AGENT_ID,
         COVERAGE_RUNNER_AGENT_ID,
-        EMAIL_DELIVERABILITY_CHECKER_AGENT_ID,
-        REGEX_TESTER_AGENT_ID,
-        CRON_EXPRESSION_PARSER_AGENT_ID,
         SSL_CERTIFICATE_DECODER_AGENT_ID,
         DIFF_ANALYZER_AGENT_ID,
         K8S_MANIFEST_VALIDATOR_AGENT_ID,
         ARCHIVE_INSPECTOR_AGENT_ID,
         UNICODE_INSPECTOR_AGENT_ID,
         TERRAFORM_PLAN_ANALYZER_AGENT_ID,
-        COLOR_CONTRAST_CHECKER_AGENT_ID,
     }
 )
 # Sanity: a sunset agent must never accidentally re-appear in the public set.

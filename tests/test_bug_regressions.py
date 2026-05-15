@@ -41,19 +41,15 @@ def test_auto_invoke_default_trust_floor_matches_sparse_catalog_reality(monkeypa
     assert feature_flags.auto_invoke_trust_floor() == 30.0
 
 
-def test_variable_pricing_overlay_covers_cve_and_endpoint_batches():
+def test_variable_pricing_overlay_covers_cve_tiered():
+    # LIVE_ENDPOINT_TESTER_AGENT_ID was removed in the 2026-05-15 agent prune,
+    # so this test now only exercises the CVE tiered path.
     from server import pricing_helpers
-    from server.builtin_agents.constants import CVELOOKUP_AGENT_ID, LIVE_ENDPOINT_TESTER_AGENT_ID
+    from server.builtin_agents.constants import CVELOOKUP_AGENT_ID
 
     cve_agent = {
         "agent_id": CVELOOKUP_AGENT_ID,
         "price_per_call_usd": 0.01,
-        "pricing_model": "fixed",
-        "pricing_config": None,
-    }
-    endpoint_agent = {
-        "agent_id": LIVE_ENDPOINT_TESTER_AGENT_ID,
-        "price_per_call_usd": 0.03,
         "pricing_model": "fixed",
         "pricing_config": None,
     }
@@ -62,15 +58,9 @@ def test_variable_pricing_overlay_covers_cve_and_endpoint_batches():
         agent=cve_agent,
         payload={"cve_ids": ["CVE-1", "CVE-2", "CVE-3", "CVE-4", "CVE-5"]},
     )
-    endpoint_estimate = pricing_helpers.estimate_variable_charge(
-        agent=endpoint_agent,
-        payload={"url": "https://example.com", "requests": 50},
-    )
 
     assert cve_estimate["price_cents"] == 3
     assert cve_estimate["pricing_model"] == "tiered"
-    assert endpoint_estimate["price_cents"] == 48
-    assert endpoint_estimate["units"] == 50
 
 
 def test_cve_not_found_returns_error_envelope_not_billable_success(monkeypatch):

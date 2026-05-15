@@ -24,17 +24,11 @@ from __future__ import annotations
 from typing import Any
 
 from server.builtin_agents.constants import (
-    ARXIV_RESEARCH_AGENT_ID,
     CVELOOKUP_AGENT_ID,
     DNS_INSPECTOR_AGENT_ID,
     HN_DIGEST_AGENT_ID,
-    IMAGE_GENERATOR_AGENT_ID,
-    LIVE_ENDPOINT_TESTER_AGENT_ID,
     PYTHON_EXECUTOR_AGENT_ID,
-    SHELL_EXECUTOR_AGENT_ID,
-    TYPE_CHECKER_AGENT_ID,
     VIDEO_STORYBOARD_AGENT_ID,
-    WEB_RESEARCHER_AGENT_ID,
 )
 
 _OVERLAY: dict[str, dict[str, Any]] = {
@@ -50,33 +44,6 @@ _OVERLAY: dict[str, dict[str, Any]] = {
             "max_cents": 800,
         },
     },
-    # Image Generator: model-backed image generation is priced above local
-    # deterministic tools and scales with image count.
-    IMAGE_GENERATOR_AGENT_ID: {
-        "pricing_model": "tiered",
-        "pricing_config": {
-            "input_field": "image_count",
-            "unit": "image",
-            "min_cents": 10,
-            "max_cents": 600,
-            "tiers": [
-                {"up_to_units": 1, "cents": 10},
-                {"up_to_units": 3, "cents": 25},
-                {"up_to_units": 6, "cents": 45},
-            ],
-            "multipliers": {"high_res": 1.5},
-        },
-    },
-    # arXiv Research: 3¢ per paper returned, floor 5¢.
-    ARXIV_RESEARCH_AGENT_ID: {
-        "pricing_model": "per_unit",
-        "pricing_config": {
-            "input_field": "max_results",
-            "unit": "paper",
-            "rate_cents_per_unit": 3,
-            "min_cents": 5,
-        },
-    },
     # Python Executor: deterministic local sandboxing; keep it at the 1¢ floor.
     PYTHON_EXECUTOR_AGENT_ID: {
         "pricing_model": "per_unit",
@@ -87,21 +54,6 @@ _OVERLAY: dict[str, dict[str, Any]] = {
             "min_cents": 1,
         },
     },
-    # Web Researcher: tiered by URL count.
-    WEB_RESEARCHER_AGENT_ID: {
-        "pricing_model": "tiered",
-        "pricing_config": {
-            "input_field": "urls",
-            "unit": "url",
-            "min_cents": 2,
-            "tiers": [
-                {"up_to_units": 1, "cents": 2},
-                {"up_to_units": 3, "cents": 5},
-                {"up_to_units": 6, "cents": 9},
-                {"up_to_units": 10, "cents": 15},
-            ],
-        },
-    },
     # HN Digest: 2¢ per story returned, floor 5¢.
     HN_DIGEST_AGENT_ID: {
         "pricing_model": "per_unit",
@@ -110,27 +62,6 @@ _OVERLAY: dict[str, dict[str, Any]] = {
             "unit": "story",
             "rate_cents_per_unit": 2,
             "min_cents": 5,
-        },
-    },
-    # Shell Executor: 1¢ flat per call (fixed, not variable).
-    # Stored here so display_min_price_usd() can report the correct floor.
-    SHELL_EXECUTOR_AGENT_ID: {
-        "pricing_model": "per_unit",
-        "pricing_config": {
-            "input_field": "timeout",
-            "unit": "second",
-            "rate_cents_per_unit": 0,
-            "min_cents": 1,
-        },
-    },
-    # Type Checker: 1¢ flat per call.
-    TYPE_CHECKER_AGENT_ID: {
-        "pricing_model": "per_unit",
-        "pricing_config": {
-            "input_field": "timeout",
-            "unit": "second",
-            "rate_cents_per_unit": 0,
-            "min_cents": 1,
         },
     },
     # DNS Inspector: tiered by domain count.
@@ -161,22 +92,6 @@ _OVERLAY: dict[str, dict[str, Any]] = {
                 {"up_to_units": 1, "cents": 1},
                 {"up_to_units": 5, "cents": 3},
                 {"up_to_units": 10, "cents": 6},
-            ],
-        },
-    },
-    LIVE_ENDPOINT_TESTER_AGENT_ID: {
-        "pricing_model": "tiered",
-        "pricing_config": {
-            "input_field": "requests",
-            "fallback_input_fields": ["urls"],
-            "unit": "request",
-            "min_cents": 3,
-            "tiers": [
-                {"up_to_units": 1, "cents": 3},
-                {"up_to_units": 5, "cents": 5},
-                {"up_to_units": 10, "cents": 9},
-                {"up_to_units": 50, "cents": 48},
-                {"up_to_units": 100, "cents": 90},
             ],
         },
     },

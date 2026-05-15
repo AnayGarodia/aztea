@@ -12,8 +12,6 @@ from server.builtin_agents.constants import (
     COVERAGE_RUNNER_AGENT_ID,
     DOCKERFILE_ANALYZER_AGENT_ID,
     DOCS_GROUNDER_AGENT_ID,
-    EMAIL_DELIVERABILITY_CHECKER_AGENT_ID,
-    JWT_DEBUGGER_AGENT_ID,
     LOAD_TESTER_AGENT_ID,
     OPENAPI_VALIDATOR_AGENT_ID,
     SAST_SCANNER_AGENT_ID,
@@ -508,83 +506,6 @@ def load_builtin_specs_part7() -> list[dict]:
             ],
         },
         # ------------------------------------------------------------------ #
-        # JWT Debugger — decode and verify JSON Web Tokens                    #
-        # ------------------------------------------------------------------ #
-        {
-            "agent_id": JWT_DEBUGGER_AGENT_ID,
-            "name": "JWT Debugger",
-            "slug": "jwt-debugger",
-            "description": (
-                "Decodes and verifies JSON Web Tokens. Detects alg:none attacks, "
-                "RS256→HS256 confusion, expired claims, and invalid signatures — "
-                "with or without a key."
-            ),
-            "endpoint_url": BUILTIN_INTERNAL_ENDPOINTS[JWT_DEBUGGER_AGENT_ID],
-            "price_per_call_usd": 0.005,
-            "tags": ["security", "authentication", "jwt", "debugging"],
-            "is_featured": True,
-            "cacheable": False,
-            "category": "Security",
-            "runtime_requirements": ["cryptography"],
-            "tooling_kind": "tool_execution",
-            "stability_tier": "stable",
-            "codex_recommended": True,
-            "short_use_cases": [
-                "debug a JWT",
-                "detect alg confusion attack",
-                "verify token signature",
-            ],
-            "match_keywords": [
-                "jwt", "json web token", "bearer token", "token expired",
-                "alg none", "signature", "auth token", "decode jwt",
-            ],
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "token": {
-                        "type": "string",
-                        "description": "The JWT string to decode and analyze.",
-                    },
-                    "secret": {
-                        "type": "string",
-                        "description": "Optional signing secret or public key for signature verification.",
-                    },
-                },
-                "required": ["token"],
-            },
-            "output_schema": {
-                "type": "object",
-                "properties": {
-                    "header": {"type": "object"},
-                    "payload": {"type": "object"},
-                    "algorithm": {"type": "string"},
-                    "signature_valid": {"type": "boolean"},
-                    "alg_confusion_risk": {"type": "boolean"},
-                    "expired": {"type": "boolean"},
-                    "claims_issues": {"type": "array", "items": {"type": "string"}},
-                    "verified": {"type": "boolean"},
-                    "decoded_at": {"type": "string"},
-                },
-                "required": ["header", "payload", "algorithm", "decoded_at"],
-            },
-            "output_examples": [
-                {
-                    "input": {"token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0IiwiZXhwIjo5OTk5OTk5OTk5fQ.abc"},
-                    "output": {
-                        "header": {"alg": "HS256", "typ": "JWT"},
-                        "payload": {"sub": "1234", "exp": 9999999999},
-                        "signature_valid": True,
-                        "algorithm": "HS256",
-                        "alg_confusion_risk": False,
-                        "expired": False,
-                        "claims_issues": [],
-                        "verified": False,
-                        "decoded_at": "2026-05-09T12:00:00Z",
-                    },
-                }
-            ],
-        },
-        # ------------------------------------------------------------------ #
         # Dockerfile Analyzer — security and best-practice linting            #
         # ------------------------------------------------------------------ #
         {
@@ -816,81 +737,6 @@ def load_builtin_specs_part7() -> list[dict]:
                         "total_statements": 40,
                         "total_missing": 8,
                         "exit_code": 0,
-                    },
-                }
-            ],
-        },
-        # ------------------------------------------------------------------ #
-        # Email Deliverability Checker — MX/SPF/DKIM/DMARC DNS audit         #
-        # ------------------------------------------------------------------ #
-        {
-            "agent_id": EMAIL_DELIVERABILITY_CHECKER_AGENT_ID,
-            "name": "Email Deliverability Checker",
-            "slug": "email-deliverability-checker",
-            "description": (
-                "Checks MX records, SPF, DKIM, and DMARC DNS configuration for a domain. "
-                "Returns a scored verdict and actionable recommendations to improve email "
-                "deliverability."
-            ),
-            "endpoint_url": BUILTIN_INTERNAL_ENDPOINTS[EMAIL_DELIVERABILITY_CHECKER_AGENT_ID],
-            "price_per_call_usd": 0.01,
-            "tags": ["email", "dns", "spf", "dkim", "dmarc", "deliverability"],
-            "is_featured": True,
-            "cacheable": False,
-            "category": "Developer Tools",
-            "runtime_requirements": ["dnspython"],
-            "tooling_kind": "live_network_checks",
-            "stability_tier": "stable",
-            "codex_recommended": True,
-            "short_use_cases": [
-                "check SPF/DKIM/DMARC",
-                "debug email deliverability",
-                "pre-launch email config audit",
-            ],
-            "match_keywords": [
-                "spf", "dkim", "dmarc", "email deliverability",
-                "mx record", "email dns", "spam", "email configuration",
-            ],
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "domain": {
-                        "type": "string",
-                        "description": "Domain name to check, e.g. 'example.com'.",
-                    },
-                    "dkim_selector": {
-                        "type": "string",
-                        "description": "Optional DKIM selector to look up (default: 'default').",
-                    },
-                },
-                "required": ["domain"],
-            },
-            "output_schema": {
-                "type": "object",
-                "properties": {
-                    "domain": {"type": "string"},
-                    "mx_found": {"type": "boolean"},
-                    "spf": {"type": "object"},
-                    "dkim": {"type": "object"},
-                    "dmarc": {"type": "object"},
-                    "score": {"type": "integer"},
-                    "verdict": {"type": "string"},
-                    "recommendations": {"type": "array", "items": {"type": "string"}},
-                },
-                "required": ["domain", "spf", "dkim", "dmarc", "score", "verdict"],
-            },
-            "output_examples": [
-                {
-                    "input": {"domain": "example.com"},
-                    "output": {
-                        "domain": "example.com",
-                        "mx_found": True,
-                        "spf": {"found": True, "valid": True, "policy": "softfail", "issues": []},
-                        "dkim": {"found": True, "has_public_key": True, "issues": []},
-                        "dmarc": {"found": True, "policy": "reject", "pct": 100, "issues": []},
-                        "score": 95,
-                        "verdict": "pass",
-                        "recommendations": [],
                     },
                 }
             ],

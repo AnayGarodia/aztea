@@ -90,13 +90,6 @@ _AGENT_WALL_BUDGET_DEFAULT_SECONDS = float(
     os.environ.get("AZTEA_AGENT_WALL_BUDGET_DEFAULT_SECONDS", "8.0")
 )
 _AGENT_WALL_BUDGET_OVERRIDES: dict[str, float] = {
-    # Regex catastrophic backtracking should die fast — anything past 3s
-    # on this agent is almost certainly ReDoS, never legitimate.
-    _REGEX_TESTER_AGENT_ID: 3.0,
-    # Cron parser is pure math; anything past 3s is a runaway iteration.
-    _CRON_EXPRESSION_PARSER_AGENT_ID: 3.0,
-    # JWT debugger is base64 + json; sub-second normally.
-    _JWT_DEBUGGER_AGENT_ID: 3.0,
     # SAST / dep-auditor / diff-analyzer invoke real subprocess tools
     # (semgrep, npm-audit) and can legitimately take 20s+ on a 1k-LOC
     # fixture. We keep the SYNC budget at the default 8s and surface a
@@ -294,20 +287,15 @@ BUILTIN_AGENT_RUNNERS: dict[str, Callable[[Any], dict]] = {
     _STRIPE_WEBHOOK_DEBUGGER_AGENT_ID: _module_runner(agent_stripe_webhook_debugger),
     _LOAD_TESTER_AGENT_ID: _module_runner(agent_load_tester),
     _CI_FAILURE_REPRODUCER_AGENT_ID: _module_runner(agent_ci_failure_reproducer),
-    _JWT_DEBUGGER_AGENT_ID: _module_runner(agent_jwt_debugger),
     _DOCKERFILE_ANALYZER_AGENT_ID: _module_runner(agent_dockerfile_analyzer),
     _OPENAPI_VALIDATOR_AGENT_ID: _module_runner(agent_openapi_validator),
     _COVERAGE_RUNNER_AGENT_ID: _module_runner(agent_coverage_runner),
-    _EMAIL_DELIVERABILITY_CHECKER_AGENT_ID: _module_runner(agent_email_deliverability_checker),
-    _REGEX_TESTER_AGENT_ID: _module_runner(agent_regex_tester),
-    _CRON_EXPRESSION_PARSER_AGENT_ID: _module_runner(agent_cron_expression_parser),
     _SSL_CERTIFICATE_DECODER_AGENT_ID: _module_runner(agent_ssl_certificate_decoder),
     _DIFF_ANALYZER_AGENT_ID: _module_runner(agent_diff_analyzer),
     _K8S_MANIFEST_VALIDATOR_AGENT_ID: _module_runner(agent_k8s_manifest_validator),
     _ARCHIVE_INSPECTOR_AGENT_ID: _module_runner(agent_archive_inspector),
     _UNICODE_INSPECTOR_AGENT_ID: _module_runner(agent_unicode_inspector),
     _TERRAFORM_PLAN_ANALYZER_AGENT_ID: _module_runner(agent_terraform_plan_analyzer),
-    _COLOR_CONTRAST_CHECKER_AGENT_ID: _module_runner(agent_color_contrast_checker),
 }
 
 

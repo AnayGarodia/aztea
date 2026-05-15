@@ -485,12 +485,6 @@ def _deterministic_quality_result(
             return {"verdict": "fail", "score": 2, "reason": "CI failure reproducer output must include commands_tried list."}
         return {"verdict": "pass", "score": 8, "reason": "Structured CI failure reproducer output is internally consistent."}
 
-    if agent_id == _JWT_DEBUGGER_AGENT_ID:
-        for key in ["header", "payload", "algorithm", "decoded_at"]:
-            if key not in payload:
-                return {"verdict": "fail", "score": 2, "reason": f"JWT debugger output must include '{key}'."}
-        return {"verdict": "pass", "score": 8, "reason": "Structured JWT debugger output is internally consistent."}
-
     if agent_id == _DOCKERFILE_ANALYZER_AGENT_ID:
         for key in ["findings", "total_findings", "by_severity", "score"]:
             if key not in payload:
@@ -508,24 +502,6 @@ def _deterministic_quality_result(
             if key not in payload:
                 return {"verdict": "fail", "score": 2, "reason": f"Coverage runner output must include '{key}'."}
         return {"verdict": "pass", "score": 8, "reason": "Structured coverage runner output is internally consistent."}
-
-    if agent_id == _EMAIL_DELIVERABILITY_CHECKER_AGENT_ID:
-        for key in ["domain", "spf", "dkim", "dmarc", "score", "verdict"]:
-            if key not in payload:
-                return {"verdict": "fail", "score": 2, "reason": f"Email deliverability checker output must include '{key}'."}
-        return {"verdict": "pass", "score": 8, "reason": "Structured email deliverability checker output is internally consistent."}
-
-    if agent_id == _REGEX_TESTER_AGENT_ID:
-        for key in ["results", "total_matches", "patterns_tested", "strings_tested"]:
-            if key not in payload:
-                return {"verdict": "fail", "score": 2, "reason": f"Regex tester output must include '{key}'."}
-        return {"verdict": "pass", "score": 8, "reason": "Structured regex tester output is internally consistent."}
-
-    if agent_id == _CRON_EXPRESSION_PARSER_AGENT_ID:
-        for key in ["expression", "valid", "next_runs", "timezone"]:
-            if key not in payload:
-                return {"verdict": "fail", "score": 2, "reason": f"Cron expression parser output must include '{key}'."}
-        return {"verdict": "pass", "score": 8, "reason": "Structured cron expression parser output is internally consistent."}
 
     if agent_id == _SSL_CERTIFICATE_DECODER_AGENT_ID:
         # Single cert returns subject/valid_from; batch returns certificates list
@@ -565,13 +541,6 @@ def _deterministic_quality_result(
             if key not in payload:
                 return {"verdict": "fail", "score": 2, "reason": f"Terraform plan analyzer output must include '{key}'."}
         return {"verdict": "pass", "score": 8, "reason": "Structured terraform plan analyzer output is internally consistent."}
-
-    if agent_id == _COLOR_CONTRAST_CHECKER_AGENT_ID:
-        has_single = "contrast_ratio" in payload and "grade" in payload
-        has_batch = "results" in payload and "pairs_checked" in payload
-        if not has_single and not has_batch:
-            return {"verdict": "fail", "score": 2, "reason": "Color contrast checker output must include contrast_ratio+grade or results+pairs_checked."}
-        return {"verdict": "pass", "score": 8, "reason": "Structured color contrast checker output is internally consistent."}
 
     return None
 

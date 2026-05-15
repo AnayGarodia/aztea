@@ -1,11 +1,10 @@
 """Built-in agent specs — batch 4 (archive_inspector, unicode_inspector,
-terraform_plan_analyzer, color_contrast_checker)."""
+terraform_plan_analyzer)."""
 
 from __future__ import annotations
 
 from server.builtin_agents.constants import (
     ARCHIVE_INSPECTOR_AGENT_ID,
-    COLOR_CONTRAST_CHECKER_AGENT_ID,
     TERRAFORM_PLAN_ANALYZER_AGENT_ID,
     UNICODE_INSPECTOR_AGENT_ID,
 )
@@ -297,101 +296,6 @@ def load_builtin_specs_part9() -> list[dict]:
                         },
                         "by_provider": {"registry.terraform.io/hashicorp/aws": 1},
                         "by_resource_type": {"aws_db_instance": 1},
-                    },
-                }
-            ],
-        },
-        {
-            "agent_id": COLOR_CONTRAST_CHECKER_AGENT_ID,
-            "name": "Color Contrast Checker",
-            "description": (
-                "Calculate WCAG 2.1 contrast ratios between foreground and background color "
-                "pairs and grade them against AA and AAA accessibility standards. Accepts "
-                "CSS hex (#RRGGBB, #RGB), rgb()/rgba() functions, and 20 common named colors. "
-                "Returns relative luminance values, contrast ratio, per-level pass/fail for "
-                "normal text, large text, and UI components, and actionable recommendations "
-                "for failing pairs. Supports batch mode for auditing multiple pairs at once. "
-                "Pure math — zero external dependencies."
-            ),
-            "endpoint_url": "internal://color_contrast_checker",
-            "price_per_call_usd": 0.002,
-            "tags": ["wcag", "accessibility", "color", "contrast", "a11y"],
-            "is_featured": True,
-            "match_keywords": [
-                "contrast ratio", "wcag", "color contrast", "accessibility",
-                "a11y color", "foreground background contrast",
-                "wcag aa", "wcag aaa", "color accessibility",
-            ],
-            "block_keywords": [],
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "foreground": {
-                        "type": "string",
-                        "description": "Foreground color: #RRGGBB, #RGB, rgb(R,G,B), or named color.",
-                    },
-                    "background": {
-                        "type": "string",
-                        "description": "Background color in the same formats.",
-                    },
-                    "pairs": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "foreground": {"type": "string"},
-                                "background": {"type": "string"},
-                                "label": {"type": "string"},
-                            },
-                            "required": ["foreground", "background"],
-                        },
-                        "description": "Batch of color pairs to check (max 50).",
-                    },
-                },
-            },
-            "output_schema": {
-                "type": "object",
-                "properties": {
-                    "foreground": {"type": "string"},
-                    "background": {"type": "string"},
-                    "foreground_luminance": {"type": "number"},
-                    "background_luminance": {"type": "number"},
-                    "contrast_ratio": {"type": "number"},
-                    "contrast_ratio_str": {"type": "string"},
-                    "wcag_aa": {
-                        "type": "object",
-                        "properties": {
-                            "normal_text": {"type": "boolean"},
-                            "large_text": {"type": "boolean"},
-                            "ui_components": {"type": "boolean"},
-                        },
-                    },
-                    "wcag_aaa": {
-                        "type": "object",
-                        "properties": {
-                            "normal_text": {"type": "boolean"},
-                            "large_text": {"type": "boolean"},
-                        },
-                    },
-                    "grade": {"type": "string", "enum": ["AAA", "AA", "AA Large", "Fail"]},
-                    "recommendations": {"type": "array", "items": {"type": "string"}},
-                },
-                "required": ["contrast_ratio", "contrast_ratio_str", "grade", "wcag_aa", "wcag_aaa"],
-            },
-            "output_examples": [
-                {
-                    "input": {"foreground": "#767676", "background": "#ffffff"},
-                    "output": {
-                        "foreground": "#767676",
-                        "background": "#ffffff",
-                        "foreground_luminance": 0.2126,
-                        "background_luminance": 1.0,
-                        "contrast_ratio": 4.54,
-                        "contrast_ratio_str": "4.54:1",
-                        "wcag_aa": {"normal_text": True, "large_text": True, "ui_components": True},
-                        "wcag_aaa": {"normal_text": False, "large_text": True},
-                        "grade": "AA",
-                        "recommendations": ["Increase contrast to 7.0:1 for WCAG AAA compliance on normal text."],
                     },
                 }
             ],
