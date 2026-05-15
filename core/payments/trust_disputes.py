@@ -926,7 +926,7 @@ def get_settlement_transactions(charge_tx_id: str) -> list:
 
 
 def compute_ledger_invariants(max_mismatches: int = 100) -> dict:
-    """Verify the two key ledger invariants and return a reconciliation report.
+    """Verify the three key ledger invariants and return a reconciliation report.
 
     Invariant 1 — Global balance sum:
         ``SUM(wallets.balance_cents)`` must equal ``SUM(transactions.amount_cents)``.
@@ -938,8 +938,16 @@ def compute_ledger_invariants(max_mismatches: int = 100) -> dict:
         amounts. Up to ``max_mismatches`` (capped at 1000) drifted wallets are
         returned with the cached vs. computed values.
 
-    Returns ``{wallet_total, ledger_total, global_drift, mismatch_count,
-    mismatches: [{wallet_id, owner_id, cached, computed, drift}]}``.
+    Invariant 3 — Per-wallet held cache:
+        For each wallet, ``held_cents`` must equal
+        ``SUM(wallet_holds.amount_cents WHERE status='active')``. This catches
+        bugs in the hold lifecycle (settlement that bumped held without
+        inserting the row, missed sweeper release, manual UPDATE bypass).
+        Drifted wallets surface in ``held_mismatches`` with the cached vs.
+        active sum and the drift.
+
+    Returns ``{wallet_total, ledger_total, drift_cents, mismatch_count,
+    mismatches, held_drift_cents, held_mismatch_count, held_mismatches}``.
 
     Called by ``POST /ops/payments/reconcile``; results are also persisted via
     ``record_reconciliation_run`` for audit history.
@@ -952,6 +960,35 @@ def compute_ledger_invariants(max_mismatches: int = 100) -> dict:
         ledger_total = conn.execute(
             "SELECT COALESCE(SUM(amount_cents), 0) AS total FROM transactions"
         ).fetchone()["total"]
+        held_cache_total = conn.execute(
+            "SELECT COALESCE(SUM(held_cents), 0) AS total FROM wallets"
+        ).fetchone()["total"]
+        held_active_total = conn.execute(
+            """
+            SELECT COALESCE(SUM(amount_cents), 0) AS total
+            FROM wallet_holds
+            WHERE status = 'active'
+            """
+        ).fetchone()["total"]
+        held_mismatches = conn.execute(
+            """
+            SELECT * FROM (
+                SELECT
+                    w.wallet_id,
+                    w.owner_id,
+                    COALESCE(w.held_cents, 0) AS held_cents,
+                    COALESCE(SUM(h.amount_cents), 0) AS active_held_cents
+                FROM wallets w
+                LEFT JOIN wallet_holds h
+                  ON h.wallet_id = w.wallet_id AND h.status = 'active'
+                GROUP BY w.wallet_id, w.owner_id, w.held_cents
+            ) sub
+            WHERE held_cents != active_held_cents
+            ORDER BY ABS(held_cents - active_held_cents) DESC, wallet_id ASC
+            LIMIT %s
+            """,
+            (capped,),
+        ).fetchall()
         # Postgres doesn't allow referencing GROUP BY aggregate aliases in
         # HAVING/ORDER BY by name (only by expression). Wrap in a subquery so
         # the same SQL works on both backends; the SQLite execution plan is
@@ -984,7 +1021,14 @@ def compute_ledger_invariants(max_mismatches: int = 100) -> dict:
 
     drift_cents = int(wallet_total) - int(ledger_total)
     mismatch_rows = [dict(row) for row in mismatches]
-    invariant_ok = (drift_cents == 0) and (len(mismatch_rows) == 0)
+    held_mismatch_rows = [dict(row) for row in held_mismatches]
+    held_drift_cents = int(held_cache_total) - int(held_active_total)
+    invariant_ok = (
+        drift_cents == 0
+        and len(mismatch_rows) == 0
+        and held_drift_cents == 0
+        and len(held_mismatch_rows) == 0
+    )
     return {
         "invariant_ok": invariant_ok,
         "wallet_total_cents": int(wallet_total),
@@ -994,6 +1038,15 @@ def compute_ledger_invariants(max_mismatches: int = 100) -> dict:
         "transaction_count": int(tx_count),
         "mismatch_count": len(mismatch_rows),
         "mismatches": mismatch_rows,
+        # Reserve-hold pattern (PR #wallet_holds): the held_cents cache
+        # mirrors SUM(wallet_holds.amount_cents WHERE status='active').
+        # Non-zero drift here indicates a hold lifecycle bug — read
+        # docs/runbooks/ledger-drift.md for the diagnosis flow.
+        "held_cache_total_cents": int(held_cache_total),
+        "held_active_total_cents": int(held_active_total),
+        "held_drift_cents": held_drift_cents,
+        "held_mismatch_count": len(held_mismatch_rows),
+        "held_mismatches": held_mismatch_rows,
     }
 
 

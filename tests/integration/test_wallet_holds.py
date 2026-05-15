@@ -560,6 +560,31 @@ class TestPayoutCurveClawbackConsumesHold:
         # Balance untouched — no clawback.
         assert agent_after["balance_cents"] == 1000
 
+    def test_reconciliation_detects_held_cents_drift(self, isolated_db):
+        """compute_ledger_invariants flags wallets where held_cents diverges
+        from the SUM of active wallet_holds amounts.
+        """
+        ctx = _settle_with_curve(None)
+        # Steady state: invariant should hold.
+        from core.payments import trust_disputes as _td
+        clean = _td.compute_ledger_invariants()
+        assert clean["held_drift_cents"] == 0
+        assert clean["held_mismatch_count"] == 0
+
+        # Manually corrupt held_cents on the agent wallet and reconcile.
+        with db.get_db_connection() as conn:
+            with conn:
+                conn.execute(
+                    "UPDATE wallets SET held_cents = held_cents + 17 WHERE wallet_id = %s",
+                    (ctx["agent_wallet"]["wallet_id"],),
+                )
+        drifted = _td.compute_ledger_invariants()
+        assert drifted["invariant_ok"] is False
+        assert drifted["held_drift_cents"] == 17
+        assert drifted["held_mismatch_count"] >= 1
+        target_ids = {row["wallet_id"] for row in drifted["held_mismatches"]}
+        assert ctx["agent_wallet"]["wallet_id"] in target_ids
+
     def test_wallets_me_exposes_held_available_holds(self, isolated_db):
         """GET /wallets/me returns held_cents + available_cents + holds[]."""
         from fastapi.testclient import TestClient
