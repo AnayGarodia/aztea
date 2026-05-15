@@ -1330,7 +1330,6 @@ _PUBLIC_DOCS_PRIORITY = {
     "verification-contracts.md": 8,
     "reputation.md": 9,
     "cli.md": 20,  # demoted — developer add-on
-    "aztea-tui.md": 21,  # demoted — developer add-on
     "stripe-setup.md": 22,
     "terms-of-service.md": 90,
     "privacy-policy.md": 91,
@@ -1340,7 +1339,6 @@ _PUBLIC_DOCS_CATEGORY = {
     "quickstart.md": "Get Started",
     "mcp-integration.md": "Get Started",
     "cli.md": "Interfaces",
-    "aztea-tui.md": "Interfaces",
     "api-reference.md": "Reference",
     "errors.md": "Reference",
     "skill-md-reference.md": "Reference",

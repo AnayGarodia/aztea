@@ -16,8 +16,6 @@ This package now ships:
 - `aztea` CLI
 - shared token/config store at `~/.aztea/config.json`
 
-The old `sdks/python/` tree is now a compatibility shim and should not receive new features.
-
 ## CLI
 
 ```bash

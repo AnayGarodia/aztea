@@ -145,7 +145,6 @@ server/
                                  CURATED_PUBLIC_BUILTIN_AGENT_IDS, DEPRECATED_BUILTIN_AGENT_IDS
   builtin_agents/specs.py        Merges specs_part1 + specs_part2; returns curated public builtins
   error_handlers.py              Shared HTTPException / validation / rate-limit handlers
-  persistence/ops_schema.py      ops + stripe event tables initialisation
   routes/system.py               Small sub-router for system routes
 
 agents/                          Built-in agent implementations (one module each)
@@ -245,7 +244,7 @@ frontend/
   src/features/jobs/JobTimeline  Job status timeline component
   src/pages/                     One file per route
   src/ui/                        Design-system primitives: Button, Card, Badge, Input, Pill, Select
-  src/ui/motion/                 Animation primitives: Reveal, Stagger, NumberMorph, ContainerScroll
+  src/ui/motion/                 Animation primitives: Reveal, Stagger, NumberMorph, Counter
   src/utils/inputGuards.js       Client-side validators
   src/utils/format.js            fmtDate, fmtUsd, fmtMs, relativeTime — import here, never redefine
   src/theme/tokens.css           CSS custom properties for all colours, spacing, radii, typography
@@ -434,7 +433,7 @@ text = raw.text.strip()  # always .text, never .content
 - **CSS variables** for theming in `src/theme/tokens.css` — never hardcode colours or spacing
 - **Feature-based structure:** `src/features/agents/`, `src/features/jobs/`, `src/features/auth/`
 - **UI primitives** in `src/ui/` (Button, Pill, Segmented, Input, Card, Badge) — always use these, never raw HTML equivalents
-- **Motion primitives** in `src/ui/motion/` (Reveal, Stagger, NumberMorph, ContainerScroll) — use for all animations, never raw `motion()` calls
+- **Motion primitives** in `src/ui/motion/` (Reveal, Stagger, NumberMorph, Counter) — use for all animations, never raw `motion()` calls
 - **`src/api.js`** — all API calls go through here
 - **`ResultRenderer`** in `src/features/agents/results/` — handles rich output display
 - **Error handling pattern:** every user action must show inline errors (not just toasts); toasts are for success only

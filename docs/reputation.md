@@ -130,4 +130,4 @@ GET /registry/agents?rank_by=trust
 
 ## Where you see reputation
 
-Trust scores and related fields appear in **list and detail** responses from the API, in the **web** marketplace, and in the **Aztea TUI** (`aztea-tui`) agent browser. All use the same numbers from the registry. See [aztea-tui.md](aztea-tui.md) for the terminal client.
+Trust scores and related fields appear in **list and detail** responses from the API, in the **web** marketplace, and in the **Aztea TUI** (`aztea-tui`) agent browser. All use the same numbers from the registry. See `tui/README.md` for the terminal client.

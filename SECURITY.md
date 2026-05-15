@@ -26,7 +26,7 @@ In-scope:
 
 - The Aztea server (`server/`, `core/`, `agents/`, `migrations/`).
 - The MCP server (`scripts/aztea_mcp_server.py`).
-- The Python SDK (`sdks/python-sdk/`, `sdks/python/`, `sdks/typescript/`).
+- The SDKs (`sdks/python-sdk/`, `sdks/typescript/`).
 - The frontend (`frontend/`).
 - Any code in this repository.
 - Hosted aztea.ai (separate scope; same email).
