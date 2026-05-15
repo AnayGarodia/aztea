@@ -1741,7 +1741,7 @@ def registry_call(
                 judge_agent_id=_extract_judge_agent_id(agent.get("input_schema"))
                 or _QUALITY_JUDGE_AGENT_ID,
             )
-        except Exception:
+        except Exception as exc:
             payments.post_call_refund(
                 caller_wallet["wallet_id"],
                 charge_tx_id,
@@ -1751,7 +1751,19 @@ def registry_call(
             _LOG.exception(
                 "Failed to create sync job for built-in agent %s.", agent["agent_id"]
             )
-            raise HTTPException(status_code=500, detail="Failed to create job.")
+            raise HTTPException(
+                status_code=500,
+                detail=error_codes.make_error(
+                    error_codes.JOB_CREATE_FAILED,
+                    "Job could not be created. Your charge was refunded. Retry shortly.",
+                    {
+                        "agent_id": agent["agent_id"],
+                        "refunded_cents": int(caller_charge_cents),
+                        "source": "registry_call_sync",
+                        "underlying": type(exc).__name__,
+                    },
+                ),
+            )
         _record_job_event(
             job,
             "job.created",
@@ -1982,7 +1994,11 @@ def registry_call(
                 output_signed_at=sig_at,
             )
             if completed is None:
-                raise RuntimeError("Failed to mark built-in sync job complete.")
+                raise RuntimeError(
+                    f"jobs.update_job_status returned None for job_id={job['job_id']} "
+                    f"(expected transition: running → complete); row may have been "
+                    f"deleted or status mutated by a concurrent writer."
+                )
             _record_job_event(
                 completed,
                 "job.completed",
@@ -2192,7 +2208,7 @@ def registry_call(
             judge_agent_id=_extract_judge_agent_id(agent.get("input_schema"))
             or _QUALITY_JUDGE_AGENT_ID,
         )
-    except Exception:
+    except Exception as exc:
         payments.post_call_refund(
             caller_wallet["wallet_id"],
             charge_tx_id,
@@ -2202,7 +2218,19 @@ def registry_call(
         _LOG.exception(
             "Failed to create sync job for remote agent %s.", agent["agent_id"]
         )
-        raise HTTPException(status_code=500, detail="Failed to create job.")
+        raise HTTPException(
+            status_code=500,
+            detail=error_codes.make_error(
+                error_codes.JOB_CREATE_FAILED,
+                "Job could not be created. Your charge was refunded. Retry shortly.",
+                {
+                    "agent_id": agent["agent_id"],
+                    "refunded_cents": int(caller_charge_cents),
+                    "source": "registry_call_sync_http",
+                    "underlying": type(exc).__name__,
+                },
+            ),
+        )
     _record_job_event(
         job,
         "job.created",
@@ -2774,7 +2802,7 @@ def jobs_create(
             callback_secret=body.callback_secret or None,
             output_verification_window_seconds=output_verification_window_seconds,
         )
-    except Exception:
+    except Exception as exc:
         payments.post_call_refund(
             caller_wallet["wallet_id"],
             charge_tx_id,
@@ -2782,7 +2810,19 @@ def jobs_create(
             agent["agent_id"],
         )
         _LOG.exception("Failed to create job for agent %s.", agent["agent_id"])
-        raise HTTPException(status_code=500, detail="Failed to create job.")
+        raise HTTPException(
+            status_code=500,
+            detail=error_codes.make_error(
+                error_codes.JOB_CREATE_FAILED,
+                "Job could not be created. Your charge was refunded. Retry shortly.",
+                {
+                    "agent_id": agent["agent_id"],
+                    "refunded_cents": int(caller_charge_cents),
+                    "source": "jobs_async_create",
+                    "underlying": type(exc).__name__,
+                },
+            ),
+        )
 
     # Co-pilot mode: persist stop_when + billing_unit on the freshly created
     # job row. Done as a separate UPDATE rather than threading new kwargs

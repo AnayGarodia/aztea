@@ -109,6 +109,14 @@ try:
         "Post-call refund outcomes",
         ["outcome"],  # success | skipped_payout_exists
     )
+    # Surfaces a real money-loss event: the agent wallet couldn't absorb a
+    # rating-driven clawback (already withdrawn / missing). Operator must
+    # reconcile manually — see core/payout_curve.py.
+    payout_curve_clawback_total = _PCounter(
+        "aztea_payout_curve_clawback_total",
+        "Payout-curve clawback outcomes (rating-driven refunds)",
+        ["outcome"],  # applied | insufficient_balance | wallet_missing | already_applied
+    )
     job_duration_seconds = _PHistogram(
         "job_duration_seconds",
         "End-to-end job latency from creation to terminal state",
@@ -136,6 +144,7 @@ except ImportError:
     payment_charges_total = _NoopMetric()  # type: ignore[assignment]
     payment_payouts_total = _NoopMetric()  # type: ignore[assignment]
     payment_refunds_total = _NoopMetric()  # type: ignore[assignment]
+    payout_curve_clawback_total = _NoopMetric()  # type: ignore[assignment]
     job_duration_seconds = _NoopMetric()  # type: ignore[assignment]
     builtin_agent_calls_total = _NoopMetric()  # type: ignore[assignment]
 

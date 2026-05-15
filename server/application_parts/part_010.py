@@ -1157,14 +1157,19 @@ def jobs_dispute(
         # and there's no way for the client to distinguish a transient problem
         # (retry) from a permanent one (give up). Money flows are at stake here —
         # opaque errors are a recourse-trust violation.
-        detail = {
-            "error": "DISPUTE_FILING_FAILED",
-            "phase": insufficient_phase,
-            "exception_type": type(exc).__name__,
-            "message": str(exc) or "Failed to file dispute.",
-            "job_id": job_id,
-            "next_step": "Retry once. If it persists, contact support with this request_id.",
-        }
+        # Machine-readable taxonomy code (lowercase, dot-namespaced) so the
+        # SDK + frontend table can map this to a warm sentence; the legacy
+        # SCREAMING_CASE constant was free-form text, not an error code.
+        detail = error_codes.make_error(
+            error_codes.DISPUTE_FILING_FAILED,
+            str(exc) or "Dispute could not be filed. Retry once; if it persists, contact support.",
+            {
+                "phase": insufficient_phase,
+                "exception_type": type(exc).__name__,
+                "job_id": job_id,
+                "next_step": "Retry once. If it persists, contact support with this request_id.",
+            },
+        )
         raise HTTPException(status_code=500, detail=detail)
     _record_job_event(
         job,

@@ -648,9 +648,16 @@ def list_connect_withdrawals(wallet_id: str, limit: int = 20) -> list[dict]:
                 """,
                 (wallet_id, capped),
             ).fetchall()
-        except _db.OperationalError:
-            # Older databases without the Stripe Connect migration should
-            # degrade to an empty history instead of failing wallet views.
+        except _db.OperationalError as exc:
+            # Older databases without the Stripe Connect migration (pre-0020)
+            # don't have stripe_connect_transfers — degrade to an empty
+            # history rather than failing wallet views. WARN so a misconfigured
+            # prod (which *should* have the table) is visible in the logs.
+            _LOG.warning(
+                "stripe_connect_transfers query failed for wallet=%s (%s); returning empty list",
+                wallet_id,
+                type(exc).__name__,
+            )
             return []
 
     items: list[dict] = []

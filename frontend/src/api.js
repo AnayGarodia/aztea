@@ -126,6 +126,9 @@ const API_ERROR_MESSAGE_BY_CODE = {
   'payment.stripe_upstream_error': 'Stripe is temporarily unavailable. Please try again.',
   'payment.stripe_error': 'Payment processor error. Please try again.',
   'payment.topup_daily_limit_exceeded': 'Daily top-up limit reached. Try a smaller amount or wait until the rolling 24h window resets.',
+  'job.create_failed': 'Job could not be created. Your charge was refunded. Retry shortly.',
+  'dispute.filing_failed': 'Dispute could not be filed. Your evidence is still here — retry, or check the dispute window.',
+  'registry.manifest_unreachable': 'We couldn’t reach that manifest URL. Confirm it’s publicly fetchable and retry.',
 }
 
 // Server messages that are too generic to show to users as-is.

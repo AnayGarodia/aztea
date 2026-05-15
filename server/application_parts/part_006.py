@@ -474,7 +474,18 @@ def _load_manifest_content(
         resp.raise_for_status()
     except http.RequestException as exc:
         _LOG.warning("Failed to fetch manifest_url %s: %s", safe_url, exc)
-        raise HTTPException(status_code=502, detail="Failed to fetch manifest_url.")
+        raise HTTPException(
+            status_code=502,
+            detail=error_codes.make_error(
+                error_codes.REGISTRY_MANIFEST_UNREACHABLE,
+                f"Could not reach {safe_url}. Confirm the URL is publicly fetchable and try again.",
+                {
+                    "url": safe_url,
+                    "timeout_seconds": 15,
+                    "underlying": type(exc).__name__,
+                },
+            ),
+        )
     if len(resp.content) > _MAX_BODY_BYTES:
         raise HTTPException(
             status_code=413,

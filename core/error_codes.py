@@ -38,6 +38,7 @@ CHARGE_EXCEEDS_LISTED_PRICE = "job.charge_exceeds_listed_price"
 INVALID_CHARGE_AMOUNT = "job.invalid_charge_amount"
 INVALID_OR_EXPIRED_TOKEN = "auth.invalid_or_expired_token"
 REGISTRY_ENDPOINT_UNREACHABLE = "registry.endpoint_unreachable"
+REGISTRY_MANIFEST_UNREACHABLE = "registry.manifest_unreachable"
 
 # Agent proxy errors — all result in automatic refund
 AGENT_CALL_TIMEOUT = "agent.call_timeout"
@@ -67,6 +68,11 @@ JOB_FAIL_FAILED = "job.fail_failed"
 JOB_INVALID_STATE = "job.invalid_state"
 JOB_BATCH_PARTIAL_FAILURE = "job.batch.partial_failure"
 JOB_NOT_FOUND_404 = "job.not_found"  # alias used for explicit 404 returns
+JOB_CREATE_FAILED = "job.create_failed"
+JOB_INVALID_CLAIM_TOKEN = "job.invalid_claim_token"
+
+# Dispute lifecycle structured errors
+DISPUTE_FILING_FAILED = "dispute.filing_failed"
 
 # Auth / account limits
 AUTH_KEY_LIMIT = "auth.key_limit_reached"
