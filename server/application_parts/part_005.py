@@ -1033,6 +1033,18 @@ def _settle_successful_job(
         if require_dispute_window_expiry and _is_dispute_window_open(job):
             return jobs.get_job(job["job_id"]) or job
     if not job["settled_at"]:
+        # Pull the agent's payout_curve so post_call_payout can size the
+        # reserve hold correctly. A missing/unparseable curve falls back to
+        # holding the full payout (worst-case clawback assumption); see
+        # core/payments/holds.compute_hold_cents.
+        from core import payout_curve as _pc
+        _agent_for_curve = registry.get_agent(
+            str(job.get("agent_id") or ""), include_unapproved=True
+        )
+        _payout_curve = (
+            _pc.parse_curve(_agent_for_curve.get("payout_curve"))
+            if _agent_for_curve else None
+        )
         payments.post_call_payout(
             job["agent_wallet_id"],
             job["platform_wallet_id"],
@@ -1041,6 +1053,9 @@ def _settle_successful_job(
             job["agent_id"],
             platform_fee_pct=job.get("platform_fee_pct_at_create"),
             fee_bearer_policy=job.get("fee_bearer_policy"),
+            job_id=str(job["job_id"]),
+            dispute_window_hours=int(job.get("dispute_window_hours") or 0),
+            payout_curve=_payout_curve,
         )
         newly_settled = jobs.mark_settled(job["job_id"])
         if newly_settled:

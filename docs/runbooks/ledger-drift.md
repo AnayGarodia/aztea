@@ -10,15 +10,29 @@
 
 ## Background
 
-`wallets.balance_cents` is a **cached mirror** of the insert-only `transactions` ledger. The invariant is:
+The reconciliation endpoint enforces **two cache invariants**:
 
-```
-wallets.balance_cents == SUM(transactions.amount_cents) WHERE wallet_id = X
-```
+1. **Balance cache.** `wallets.balance_cents` is a cached mirror of the
+   insert-only `transactions` ledger:
+   ```
+   wallets.balance_cents == SUM(transactions.amount_cents) WHERE wallet_id = X
+   ```
+2. **Held cache.** `wallets.held_cents` is a cached mirror of active
+   `wallet_holds` rows:
+   ```
+   wallets.held_cents == SUM(wallet_holds.amount_cents)
+                          WHERE wallet_id = X AND status = 'active'
+   ```
 
-Every code path that writes a transaction row must update the wallet balance in the **same SQL transaction**. Drift means at least one path failed to do this atomically, or wrote a transaction row without a corresponding wallet update (or vice versa).
+Every code path that writes a transaction row must update the wallet
+balance in the **same SQL transaction** as the ledger insert. Every code
+path that flips a `wallet_holds.status` (create / consume / release) must
+likewise move `held_cents` in the same transaction. Drift on either axis
+means at least one path failed to do this atomically.
 
-The reconciliation endpoint computes the authoritative balance from the ledger and flags any wallet where the cached value diverges.
+The reconciliation endpoint computes the authoritative balance from the
+ledger and the authoritative held total from `wallet_holds`, then flags
+any wallet where either cached value diverges.
 
 ---
 
@@ -31,14 +45,21 @@ curl -s -H "Authorization: Bearer $API_KEY" \
 
 Key fields in the response:
 
-| Field             | Meaning                                                      |
-| ----------------- | ------------------------------------------------------------ |
-| `drift_cents`     | Sum of all per-wallet deltas (positive = wallets over-reported, negative = under) |
-| `mismatch_count`  | Number of wallets where cached balance ≠ ledger total         |
-| `invariant_ok`    | `true` only when both fields above are 0                     |
-| `wallets`         | Per-wallet breakdown (only included when drift is present)   |
+| Field                       | Meaning                                                      |
+| --------------------------- | ------------------------------------------------------------ |
+| `drift_cents`               | Sum of all per-wallet balance deltas (positive = wallets over-reported, negative = under) |
+| `mismatch_count`            | Number of wallets where cached balance ≠ ledger total         |
+| `mismatches`                | Per-wallet balance breakdown (only when drift is present)    |
+| `held_drift_cents`          | Sum of all per-wallet held deltas (positive = wallet `held_cents` over-reports active holds) |
+| `held_mismatch_count`       | Number of wallets where cached `held_cents` ≠ SUM active wallet_holds |
+| `held_mismatches`           | Per-wallet held breakdown (only when drift is present)       |
+| `invariant_ok`              | `true` only when both axes are clean                          |
 
 If `invariant_ok: true` — no action needed. The alert was a false positive.
+
+If `held_drift_cents != 0` or `held_mismatch_count > 0`, jump to
+[Step 8 — Held-cache drift](#step-8--held-cache-drift) instead of the
+balance-cache flow below.
 
 ---
 
@@ -191,6 +212,74 @@ curl -s -H "Authorization: Bearer $API_KEY" \
 
 1. Write a brief note in `docs/runbooks/ledger-drift.md` (this file) under "Historical incidents" describing what caused the drift and how it was fixed.
 2. If the root cause was a code path that bypassed the ledger invariant, add a regression test to `tests/test_bug_regressions.py`.
+
+---
+
+## Step 8 — Held-cache drift
+
+Triggered when the reconciliation report shows `held_drift_cents != 0` or
+`held_mismatch_count > 0`. Most common root causes:
+
+- **Sweeper miss.** A `wallet_holds` row remained `active` past its
+  `hold_until` because the holds sweeper never picked it up (server crash,
+  feature-flag toggle, partial deploy). `held_cents` is correct;
+  `wallet_holds` is the source of truth.
+- **Manual UPDATE bypass.** Someone ran `UPDATE wallets SET held_cents = ...`
+  from psql/sqlite without inserting a corresponding `wallet_holds` row.
+  Always use `core.payments.holds` helpers (`create_hold_conn`,
+  `consume_hold_conn`, `release_hold_conn`).
+- **Hold-create + balance-update split across transactions.** Settlement
+  bumped `held_cents` but the `wallet_holds` insert rolled back, or vice
+  versa. Look for `payment.settlement` events without a corresponding
+  `wallet_holds` row.
+
+### Diagnose the affected wallets
+
+```python
+import sqlite3, os
+conn = sqlite3.connect(os.environ["DB_PATH"])
+conn.row_factory = sqlite3.Row
+
+rows = conn.execute("""
+    SELECT
+        w.wallet_id,
+        w.owner_id,
+        w.held_cents AS cached,
+        COALESCE(SUM(h.amount_cents), 0) AS active_total,
+        COALESCE(SUM(h.amount_cents), 0) - w.held_cents AS delta
+    FROM wallets w
+    LEFT JOIN wallet_holds h
+      ON h.wallet_id = w.wallet_id AND h.status = 'active'
+    GROUP BY w.wallet_id
+    HAVING delta != 0
+    ORDER BY ABS(delta) DESC
+""").fetchall()
+
+for r in rows:
+    print(dict(r))
+```
+
+### Inspect the holds for one wallet
+
+```python
+holds = conn.execute("""
+    SELECT hold_id, job_id, amount_cents, status, release_reason,
+           created_at, hold_until, released_at, clawback_cents
+    FROM wallet_holds
+    WHERE wallet_id = ?
+    ORDER BY created_at DESC
+    LIMIT 100
+""", (wallet_id,)).fetchall()
+for h in holds:
+    print(dict(h))
+```
+
+### Repair (only after root cause is understood)
+
+Right now there is no `repair_wallet_held_cache(...)` helper — write one
+in the same shape as `repair_wallet_balance_cache` if you confirm the
+sweeper is the right source of truth. Until then, fix the root cause
+(missing sweeper tick, partial transaction) and re-run reconciliation.
 
 ---
 

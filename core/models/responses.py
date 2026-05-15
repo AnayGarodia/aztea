@@ -454,10 +454,26 @@ class WalletDepositResponse(BaseModel):
     balance_cents: int
 
 
+class WalletHoldResponse(BaseModel):
+    """One reserve-hold row; surfaces in WalletResponse.holds."""
+
+    hold_id: str
+    job_id: str
+    amount_cents: int
+    hold_until: str
+
+
 class WalletResponse(BaseModel):
     wallet_id: str
     owner_id: str
     balance_cents: int
+    # Reserve-hold pattern: held_cents is the sum of active wallet_holds
+    # rows for this wallet; available_cents is balance_cents - held_cents.
+    # Both default to 0 so existing consumers that don't know about holds
+    # continue to read balance_cents unchanged.
+    held_cents: int = 0
+    available_cents: int = 0
+    holds: list[WalletHoldResponse] = Field(default_factory=list)
     caller_trust: float | None = None
     daily_spend_limit_cents: int | None = None
     transactions: list[JSONObject] = Field(default_factory=list)

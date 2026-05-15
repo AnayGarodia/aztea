@@ -158,6 +158,26 @@ def _sweep_jobs(
     decay_summary = _apply_reputation_decay()
     cache_evicted_count = _cache.evict_expired()
     probation_summary = _maybe_sweep_probation(actor_owner_id=actor_owner_id)
+    # Hold-window expiration release: any wallet_holds row whose hold_until
+    # has passed without a rating/dispute clawback is released cleanly so
+    # the agent can withdraw the previously-reserved cents. Bounded per
+    # tick to keep the write window short.
+    try:
+        from core.payments import holds as _wallet_holds
+        from core import observability as _obs
+
+        released_count = _wallet_holds.release_expired_holds(limit=limit)
+        if released_count:
+            _obs.wallet_hold_released_total.labels(
+                reason=_wallet_holds.RELEASE_REASON_WINDOW_EXPIRED
+            ).inc(released_count)
+    except Exception:
+        # Hold release failures must not block the rest of the sweep.
+        # release_expired_holds() already logs and isolates per-row errors;
+        # this catch only protects against import-time / table-missing
+        # bootstrap failures during partial deploys.
+        _LOG.exception("wallet_holds.release_expired_holds failed during sweep")
+        released_count = 0
     return {
         "expired_leases_scanned": len(expired),
         "due_retry_count": len(due_retry),
@@ -181,6 +201,7 @@ def _sweep_jobs(
         "cache_evicted_count": cache_evicted_count,
         "probation_graduated_count": probation_summary["count"],
         "probation_graduated_agent_ids": probation_summary["agent_ids"],
+        "wallet_holds_released_count": released_count,
     }
 
 

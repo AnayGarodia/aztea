@@ -108,6 +108,19 @@ export default function WalletPage() {
 
   const transactions = wallet?.transactions ?? []
   const lowBalance = (wallet?.balance_cents ?? 0) < 500
+  // Reserve-hold pattern (PR #wallet_holds): the API now exposes
+  // available_cents (= balance - held) and the active hold list. Old
+  // backends without these fields fall back to balance_cents so the
+  // frontend keeps working during a partial deploy.
+  const reservedHeldCents = wallet?.held_cents ?? 0
+  const availableCents = wallet?.available_cents ?? wallet?.balance_cents ?? 0
+  const activeHolds = Array.isArray(wallet?.holds) ? wallet.holds : []
+  const nextHoldRelease = activeHolds.length
+    ? activeHolds.reduce(
+        (earliest, h) => (!earliest || h.hold_until < earliest ? h.hold_until : earliest),
+        null,
+      )
+    : null
 
   useEffect(() => {
     fetchPublicConfig().then(cfg => setStripeEnabled(!!cfg?.stripe_enabled)).catch(() => {})
@@ -343,7 +356,22 @@ export default function WalletPage() {
           <section className="wallet__hero">
             <div className="wallet__hero-balance">
               <p className="wallet__hero-label">Available balance · integer cents</p>
-              <p className="wallet__balance">{fmtUsd(wallet?.balance_cents)}</p>
+              <p className="wallet__balance">{fmtUsd(availableCents)}</p>
+              {reservedHeldCents > 0 && (
+                <p className="wallet__hero-earned wallet__hero-reserved">
+                  <span title="Reserved during the dispute window for jobs you've completed. Released automatically when the window closes.">
+                    {fmtUsd(reservedHeldCents)} held during dispute window
+                  </span>
+                  {nextHoldRelease && (
+                    <> · next release {fmtDate(nextHoldRelease)}</>
+                  )}
+                </p>
+              )}
+              {reservedHeldCents > 0 && (
+                <p className="wallet__hero-earned" style={{ opacity: 0.7 }}>
+                  Total: {fmtUsd(wallet?.balance_cents)}
+                </p>
+              )}
               {lowBalance && (
                 <p className="wallet__low-warn">We recommend adding funds before your next call.</p>
               )}
@@ -452,13 +480,17 @@ export default function WalletPage() {
                         label="Amount (USD)"
                         type="number"
                         min="1"
-                        max={((wallet?.balance_cents ?? 0) / 100).toFixed(2)}
+                        max={(availableCents / 100).toFixed(2)}
                         step="1"
                         value={withdrawAmount}
                         onChange={e => setWithdrawAmount(e.target.value)}
                         required
                         mono
-                        hint={`Available: ${fmtUsd(wallet?.balance_cents ?? 0)}`}
+                        hint={
+                          reservedHeldCents > 0
+                            ? `Available: ${fmtUsd(availableCents)} (${fmtUsd(reservedHeldCents)} held during dispute window)`
+                            : `Available: ${fmtUsd(availableCents)}`
+                        }
                       />
                       {(() => {
                         const gross = Math.round((Number(withdrawAmount) || 0) * 100)

@@ -453,10 +453,32 @@ def withdraw(
                 detail="Your Stripe Connect account is not yet active. Complete onboarding first.",
             )
 
-        if wallet["balance_cents"] < body.amount_cents:
+        # available = balance - held. Held funds are reserved for the
+        # dispute window and must NOT leave the wallet until the hold
+        # releases (sweeper) or is consumed (rating/dispute clawback).
+        # Reading balance and held in one snapshot is fine: a concurrent
+        # settlement only ever increases held alongside balance, never
+        # leaves an inflated balance with stale held.
+        held_cents = int(wallet.get("held_cents") or 0)
+        available_cents = max(0, int(wallet["balance_cents"]) - held_cents)
+        if available_cents < body.amount_cents:
             raise HTTPException(
                 status_code=400,
-                detail=f"Insufficient balance: have {wallet['balance_cents']}¢, need {body.amount_cents}¢.",
+                detail=error_codes.make_error(
+                    error_codes.WALLET_INSUFFICIENT_AVAILABLE,
+                    (
+                        f"Available balance is {available_cents}¢ "
+                        f"({wallet['balance_cents']}¢ balance minus {held_cents}¢ "
+                        f"reserved during the dispute window). Requested: "
+                        f"{body.amount_cents}¢."
+                    ),
+                    {
+                        "balance_cents": int(wallet["balance_cents"]),
+                        "held_cents": held_cents,
+                        "available_cents": available_cents,
+                        "requested_cents": int(body.amount_cents),
+                    },
+                ),
             )
 
         _stripe_lib.api_key = _STRIPE_SECRET_KEY

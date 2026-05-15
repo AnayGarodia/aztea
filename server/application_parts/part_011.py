@@ -981,14 +981,56 @@ def wallet_me(
     # but not yet settled or refunded.
     escrow_cents = _compute_escrow_cents(wallet["wallet_id"])
 
+    # Reserve-hold pattern (PR #wallet_holds): expose held_cents +
+    # available_cents + the active hold rows. Old consumers continue to
+    # read balance_cents unchanged; new SDK / UI consumers should use
+    # available_cents for "what can the user spend or withdraw".
+    held_cents = int(wallet.get("held_cents") or 0)
+    available_cents = max(0, int(wallet["balance_cents"]) - held_cents)
+    holds_payload = _list_active_holds_for_wallet(wallet["wallet_id"])
+
     return JSONResponse(
         content={
             **wallet,
+            "held_cents": held_cents,
+            "available_cents": available_cents,
+            "holds": holds_payload,
             "escrow_cents": escrow_cents,
             "caller_trust": caller_trust,
             "transactions": txs,
         }
     )
+
+
+def _list_active_holds_for_wallet(wallet_id: str) -> list[dict]:
+    """Return the active wallet_holds rows for a wallet, sorted by hold_until.
+
+    Pure read helper for /wallets/me. Returns [] for wallets with no
+    holds — including pre-deploy wallets where the column was added but
+    never populated.
+    """
+    if not wallet_id:
+        return []
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT hold_id, job_id, amount_cents, hold_until
+            FROM wallet_holds
+            WHERE wallet_id = %s AND status = 'active'
+            ORDER BY hold_until ASC
+            LIMIT 200
+            """,
+            (wallet_id,),
+        ).fetchall()
+    return [
+        {
+            "hold_id": str(row["hold_id"]),
+            "job_id": str(row["job_id"]),
+            "amount_cents": int(row["amount_cents"]),
+            "hold_until": str(row["hold_until"]),
+        }
+        for row in rows
+    ]
 
 
 _ESCROW_JOB_STATES: tuple[str, ...] = (

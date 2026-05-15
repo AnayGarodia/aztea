@@ -178,10 +178,36 @@ def apply_curve_clawback(
 ) -> dict[str, Any]:
     """Issue a compensating clawback from agent→caller when payout_fraction < 1.
 
+    Reads the active wallet_holds row for the job and consumes it before
+    debiting the agent. When a hold exists the clawback is guaranteed to
+    succeed because the funds were reserved at settlement. When no hold
+    exists (rating arrived after the dispute window OR pre-deploy job)
+    the original defense-in-depth path runs and emits the
+    payout_curve_clawback_skipped_total canary metric.
+
     Returns a summary dict describing what was done. Idempotent: if a clawback
     transaction for this job already exists, returns without double-charging.
     """
     if payout_fraction >= 1.0:
+        # Caller gave a top rating (or curve says no clawback at any rating).
+        # Release the hold cleanly so the agent can withdraw the reserved
+        # cents immediately rather than waiting for the sweeper.
+        from core.payments import base as _payments_base
+        from core.payments import holds as _holds
+
+        with _payments_base._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            released = _holds.release_hold_conn(
+                conn,
+                job_id=job_id,
+                reason=_holds.RELEASE_REASON_RATING_RELEASE,
+            )
+        if released is not None:
+            from core import observability as _obs
+
+            _obs.wallet_hold_released_total.labels(
+                reason=_holds.RELEASE_REASON_RATING_RELEASE
+            ).inc()
         return {"clawback_cents": 0, "payout_fraction": 1.0, "applied": False}
 
     clawback_cents = compute_clawback_cents(agent_payout_cents, payout_fraction)
@@ -193,7 +219,9 @@ def apply_curve_clawback(
         }
 
     idempotency_key = f"payout_curve:{job_id}"
+    from core import observability as _obs
     from core.payments import base as _payments_base
+    from core.payments import holds as _holds
 
     with _payments_base._conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -209,6 +237,15 @@ def apply_curve_clawback(
                 "applied": False,
                 "reason": "already_applied",
             }
+        # Consume the active hold first. The hold was sized at settlement to
+        # cover the worst-case clawback for this job's curve, so the debit
+        # below is guaranteed to succeed when the hold exists.
+        consumed_hold = _holds.consume_hold_conn(
+            conn,
+            job_id=job_id,
+            clawback_cents=clawback_cents,
+            reason=_holds.RELEASE_REASON_RATING_CLAWBACK,
+        )
         try:
             _debit_wallet_conn(
                 conn,
@@ -231,12 +268,15 @@ def apply_curve_clawback(
             reason = (
                 "wallet_missing"
                 if isinstance(exc, LookupError)
-                else "insufficient_balance"
+                else "underflow"
             )
             # The caller's rating-driven refund is being skipped — they have
-            # not been made whole. Operator must reconcile manually. The counter
-            # is the alert signal (operator dashboards read counters).
+            # not been made whole. Operator must reconcile manually. Both
+            # counters fire: payout_curve_clawback_total is the broad outcome
+            # rollup (PR #44); payout_curve_clawback_skipped_total is the
+            # narrow defense-in-depth canary (PR #48 reserve-hold pattern).
             _obs.payout_curve_clawback_total.labels(outcome=reason).inc()
+            _obs.payout_curve_clawback_skipped_total.labels(reason=reason).inc()
             _LOG.error(
                 "payout_curve.clawback_skipped job=%s agent=%s reason=%s clawback_cents=%d error=%s",
                 job_id,
@@ -255,6 +295,22 @@ def apply_curve_clawback(
             }
 
     _obs.payout_curve_clawback_total.labels(outcome="applied").inc()
+    if consumed_hold is None:
+        # Defense-in-depth canary: hold should have existed at settlement.
+        # Either the rating arrived after the dispute window (sweeper already
+        # released it) or the job pre-dates this deploy. Track for alerting.
+        _obs.payout_curve_clawback_skipped_total.labels(
+            reason="no_active_hold"
+        ).inc()
+    else:
+        _obs.wallet_hold_released_total.labels(
+            reason=_holds.RELEASE_REASON_RATING_CLAWBACK
+        ).inc()
+        _obs.wallet_hold_clawed_total.labels(
+            reason=_holds.RELEASE_REASON_RATING_CLAWBACK
+        ).inc()
+
+
     _LOG.info(
         "payout_curve.clawback job=%s agent=%s fraction=%.2f clawback_cents=%d",
         job_id,

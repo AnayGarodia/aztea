@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from typing import Any
 
 INSUFFICIENT_FUNDS = "payment.insufficient_funds"
+WALLET_INSUFFICIENT_AVAILABLE = "wallet.insufficient_available"
 AGENT_TIMEOUT = "job.lease_expired"
 SCHEMA_MISMATCH = "schema.mismatch"
 JOB_NOT_FOUND = "job.not_found"

@@ -317,6 +317,12 @@ def init_payments_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_caller_trust_events_owner_created ON caller_trust_events(owner_id, created_at DESC)"
         )
+    # Wallet-holds schema (mirrors migrations/0046_wallet_holds.sql for the
+    # SQLite path that bypasses the migration runner).
+    from .holds import init_wallet_holds_db
+    with _conn() as conn:
+        init_wallet_holds_db(conn)
+
     get_or_create_wallet(PLATFORM_OWNER_ID)
 
 
@@ -987,11 +993,20 @@ def post_call_payout(
     *,
     platform_fee_pct: int | None = None,
     fee_bearer_policy: str | None = None,
+    job_id: str | None = None,
+    dispute_window_hours: int | None = None,
+    payout_curve: dict[str, float] | None = None,
 ) -> None:
     """
-    Transaction 2a (success): credit 90% to agent, 10% to platform.
-    Both inserts happen in one atomic transaction.
+    Transaction 2a (success): credit 90% to agent, 10% to platform, and
+    reserve the at-risk slice of the agent payout in a wallet_holds row.
+    Ledger inserts + held-cents bump happen in one atomic transaction.
     Fee rounds down; agent gets the remainder to avoid creating or destroying cents.
+
+    The ``job_id``, ``dispute_window_hours``, and ``payout_curve`` kwargs are
+    optional for legacy callers (settlement_runner shims, tests) — when any
+    are missing the hold step is skipped and the legacy defense-in-depth
+    path catches a late clawback. New code paths should pass all three.
     """
     distribution = compute_success_distribution(
         price_cents,
@@ -1002,6 +1017,12 @@ def post_call_payout(
     agent_cents = int(distribution["agent_payout_cents"])
 
     applied = False
+    hold_amount_cents = 0
+    if job_id and dispute_window_hours and agent_cents > 0:
+        from .holds import compute_hold_cents
+
+        hold_amount_cents = compute_hold_cents(agent_cents, payout_curve)
+
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
         refund_exists = conn.execute(
@@ -1055,6 +1076,36 @@ def post_call_payout(
                 applied = True
         except _db.IntegrityError:
             pass  # idempotency: fee already recorded
+        # Reserve the at-risk slice of the agent's payout. The hold lives
+        # for dispute_window_hours and is consumed by rating/dispute
+        # clawbacks or released by the sweeper. Skipped silently when the
+        # legacy call site didn't supply the new kwargs (see docstring).
+        if hold_amount_cents > 0:
+            from .holds import create_hold_conn
+
+            try:
+                created = create_hold_conn(
+                    conn,
+                    wallet_id=agent_wallet_id,
+                    job_id=str(job_id),
+                    amount_cents=hold_amount_cents,
+                    dispute_window_hours=int(dispute_window_hours or 0),
+                )
+                if created is not None and created.get("created_at") is not None:
+                    _obs.wallet_hold_created_total.inc()
+            except LookupError as exc:
+                # The agent wallet vanished between the payout insert and
+                # the hold creation. Roll back the whole transaction so we
+                # don't ship a payout without its hold. Loud-fail: this is
+                # a structural bug, not a normal path.
+                conn.rollback()
+                _LOG.error(
+                    "post_call_payout: hold creation failed for job=%s wallet=%s: %s",
+                    job_id,
+                    agent_wallet_id,
+                    exc,
+                )
+                raise
     _obs.payment_payouts_total.labels(outcome="success").inc()
     logging_utils.log_event(
         _LOG,

@@ -128,6 +128,27 @@ try:
         "Built-in agent dispatch outcomes",
         ["agent_slug", "status"],  # status: success | failure
     )
+    wallet_hold_created_total = _PCounter(
+        "aztea_wallet_hold_created_total",
+        "Reserve-hold rows created on agent payout",
+    )
+    wallet_hold_released_total = _PCounter(
+        "aztea_wallet_hold_released_total",
+        "Reserve-hold lifecycle exits",
+        ["reason"],  # window_expired | rating_release | rating_clawback | dispute_clawback
+    )
+    wallet_hold_clawed_total = _PCounter(
+        "aztea_wallet_hold_clawed_total",
+        "Reserve-hold consumption events (subset of released_total)",
+        ["reason"],  # rating_clawback | dispute_clawback
+    )
+    payout_curve_clawback_skipped_total = _PCounter(
+        "aztea_payout_curve_clawback_skipped_total",
+        "Payout-curve clawback that fell through to defense-in-depth path. "
+        "Should sit at ~0 in steady state — every increment indicates a hold "
+        "lifecycle bug or a pre-deploy job rated post-deploy.",
+        ["reason"],  # underflow | wallet_missing | no_active_hold
+    )
 except ImportError:
     # prometheus_client not installed — use no-op stubs so callers never need IS_PROM guards.
     class _NoopLabels:
@@ -141,12 +162,22 @@ except ImportError:
         def labels(self, **_kwargs) -> "_NoopLabels":
             return _NoopLabels()
 
+        def inc(self, amount: int = 1) -> None:
+            pass
+
+        def observe(self, _value: float) -> None:
+            pass
+
     payment_charges_total = _NoopMetric()  # type: ignore[assignment]
     payment_payouts_total = _NoopMetric()  # type: ignore[assignment]
     payment_refunds_total = _NoopMetric()  # type: ignore[assignment]
     payout_curve_clawback_total = _NoopMetric()  # type: ignore[assignment]
     job_duration_seconds = _NoopMetric()  # type: ignore[assignment]
     builtin_agent_calls_total = _NoopMetric()  # type: ignore[assignment]
+    wallet_hold_created_total = _NoopMetric()  # type: ignore[assignment]
+    wallet_hold_released_total = _NoopMetric()  # type: ignore[assignment]
+    wallet_hold_clawed_total = _NoopMetric()  # type: ignore[assignment]
+    payout_curve_clawback_skipped_total = _NoopMetric()  # type: ignore[assignment]
 
 
 _JOB_TERMINAL_STATUSES = ("complete", "failed")

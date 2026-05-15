@@ -114,6 +114,14 @@
   color: var(--text-muted);
   margin: 12px 0 0;
 }
+/* Reserve-hold pattern (PR #wallet_holds): show the at-risk slice that's
+   held during the dispute window so the user understands why the
+   "Available" number sits below "Total". Use a slightly stronger weight
+   to draw the eye without competing with the hero balance. */
+.wallet__hero-reserved {
+  font-weight: 500;
+  color: var(--text-secondary, var(--text-muted));
+}
 
 /* Action tabbed panel */
 .wallet__action-panel {

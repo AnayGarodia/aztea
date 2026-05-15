@@ -702,7 +702,12 @@ def test_fix10_payout_curve_clawback_skips_cleanly_on_insufficient_balance(payme
         payout_fraction=0.5,
     )
     assert result["applied"] is False
-    assert result["reason"] == "insufficient_balance"
+    # The reserve-hold pattern renamed the defense-in-depth signal from
+    # 'insufficient_balance' to 'underflow' to match the canary metric
+    # label (payout_curve_clawback_skipped_total{reason='underflow'}).
+    # The semantic is identical: agent had no funds to claw and no hold
+    # was available to absorb the clawback.
+    assert result["reason"] == "underflow"
     assert _wallet_balance(payments, caller_wallet["wallet_id"]) == 0
     assert _wallet_balance(payments, agent_wallet["wallet_id"]) == 0
 
