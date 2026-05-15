@@ -64,7 +64,6 @@ Full status table lives in `.agents/TODO.md`. Keep it updated when status change
 Known gaps that aren't bugs but are worth knowing before you touch the surrounding code (move to TODO.md when you start working on them):
 
 - **Postgres charge race-guard** in `core/payments/base.py` uses `FOR UPDATE` under READ COMMITTED — the comment in `base.py:18` notes phantom-read risk. SQLite path uses `BEGIN IMMEDIATE` and is solid. Stress-test before high-concurrency Postgres prod.
-- **Migration runner race under `--workers 2`** (Postgres only): both uvicorn workers attempt to apply pending migrations on startup; the slower worker crashes with `UniqueViolation` on `schema_migrations_pkey`. SQLite path serialises via `BEGIN IMMEDIATE` and is unaffected. Bit us on 2026-05-15 deploying migration 0046 (one of two workers died, clean restart recovered). Mitigation: restart cleanly once the migration has applied; permanent fix needs an advisory lock — see backlog.
 - **Worker disappearance has no fallback-worker reassign.** If the only worker for an agent dies mid-job, the lease times out and the caller is refunded rather than re-served.
 - **Reconciliation is detect-only.** `POST /ops/payments/reconcile` reports drift; `repair_wallet_balance_cache()` is a separate manual call. No auto-repair.
 - **MCP tool count drift is not CI-checked.** Lazy mode advertises 9 tools (`scripts/aztea_mcp_server.py`). No automated assertion guards against rename or count drift — docs have already silently drifted once.

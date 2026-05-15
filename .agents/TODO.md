@@ -14,6 +14,7 @@ _None at present._
 
 ## Done — recent
 <!-- Last 5–10 shipped items with date and commit short sha. Trim aggressively. -->
+- 2026-05-15 — Migration runner race fix: `_apply_migrations_postgres` now takes a session-level advisory lock (`MIGRATION_ADVISORY_LOCK_ID = 4297493287`, 60s timeout) so two uvicorn workers can't both apply the same pending migration. Closes the 2026-05-15 deploy-of-0046 incident where one worker died on `UniqueViolation`. SQLite path unchanged.
 - 2026-05-15 — Pipeline discoverability: extended `GET /recipes` with `steps[]` + `estimated_total_cost_usd` + `missing_agents[]`; new `/workflows` frontend page with Run-workflow dialog; `manage_workflow(action="list_recipes")` MCP action inherits the same shape. Recon found `/recipes` already existed at `part_014.py:1183` so this is field-extension + UI rather than new routes. (commit `8a6e4fe`)
 - 2026-05-15 — Reconciliation auto-repair: `?auto_repair=true` on `/ops/payments/reconcile` rewrites below-threshold `balance_cents` + `held_cents` drift in place; above-threshold drift still surfaced for human review; new `repair_wallet_held_cache` helper + `AUTO_REPAIR_THRESHOLD_CENTS` flag ($100 default, env-overridable) (commit `b0e696d`)
 - 2026-05-15 — Reserve-hold pattern for agent payouts: `wallet_holds` table + `held_cents` cache + sweeper + Stripe withdrawal enforcement + dual-counter defense-in-depth; replaces silent-skip clawback (commit `9d9776e`)
@@ -31,7 +32,6 @@ _None at present._
 
 ## Backlog
 <!-- Known gaps, not yet scheduled. -->
-- [ ] **Migration runner race between uvicorn workers.** When migrations apply on uvicorn startup with `--workers 2`, both workers race-apply migrations against Postgres. If one worker is slower, the second crashes with `UniqueViolation` on `schema_migrations_pkey`. Bit us on 2026-05-15 deploying migration 0046 (one of two workers died; clean restart recovered). Fix: serialise the migration apply behind an advisory lock (`SELECT pg_try_advisory_lock(...)`) so only one worker runs it; others wait or skip. SQLite path already serialises via `BEGIN IMMEDIATE`.
 - [ ] **Postgres charge race-guard hardening.** `core/payments/base.py:18` notes phantom-read risk under READ COMMITTED. SQLite path uses `BEGIN IMMEDIATE` and is solid. Add a Postgres concurrency stress test before high-load prod traffic.
 - [ ] **Worker disappearance reassign.** Today the lease times out and the caller is refunded rather than re-served. For built-in agents this is fine because the in-process worker pool is N-of-N. For third-party agents, decide whether a fallback retry to a different worker is in scope.
 - [ ] **MCP tool count drift CI check.** Lazy mode advertises **9 tools** (`scripts/aztea_mcp_server.py`). Several docs previously said "four-tool surface" or "seven tools". Add a CI check or doctest that asserts the published tool list against the code so the next rename doesn't silently drift.

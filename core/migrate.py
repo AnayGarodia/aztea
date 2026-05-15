@@ -17,9 +17,16 @@ Backends:
 from __future__ import annotations
 
 import argparse
+import contextlib
+import logging
 import os
 import re
+import time
 from datetime import datetime, timezone
+
+from core import logging_utils
+
+_LOG = logging.getLogger(__name__)
 
 _MIGRATIONS_DIR = os.path.join(os.path.dirname(__file__), "..", "migrations")
 _MIGRATION_FILENAME_RE = re.compile(r"^(\d{4})_.+\.sql$")
@@ -27,6 +34,26 @@ _MIGRATION_FILENAME_RE = re.compile(r"^(\d{4})_.+\.sql$")
 # Detect backend at import time the same way core/db.py does.
 _DATABASE_URL = os.environ.get("DATABASE_URL", "")
 _IS_POSTGRES: bool = _DATABASE_URL.startswith("postgresql://")
+
+# Postgres advisory-lock identity used to serialise concurrent migration
+# applies across uvicorn workers. The specific value is arbitrary; what
+# matters is that it stays stable across deploys (so two workers booting
+# the same release agree on which lock to take) and doesn't collide with
+# other application-level advisory locks (today: none). Derived
+# deterministically from the ASCII bytes of "aztea-mg" so the choice is
+# self-documenting from the constant alone.
+MIGRATION_ADVISORY_LOCK_ID: int = 4297493287
+
+# Healthy migrations apply in milliseconds; even an unusually large schema
+# change should fit comfortably under a minute. Time out at 60s so a
+# stuck lock-holder fails the second worker fast (operator-visible) rather
+# than wedging systemd indefinitely waiting on a hung deploy.
+MIGRATION_LOCK_TIMEOUT_SECONDS: int = 60
+
+# Polling interval for the non-blocking pg_try_advisory_lock loop. Short
+# enough that the second worker picks up the lock the moment the first
+# releases; long enough that two workers don't burn CPU spinning.
+_MIGRATION_LOCK_POLL_INTERVAL_SECONDS: float = 0.5
 
 
 def _migration_files() -> list[tuple[int, str]]:
@@ -226,6 +253,139 @@ def _is_idempotent_postgres(statement: str, exc: Exception) -> bool:
     ))
 
 
+@contextlib.contextmanager
+def _postgres_migration_lock(conn):
+    """Hold a session-level Postgres advisory lock for the migration window.
+
+    Polls ``pg_try_advisory_lock`` every
+    ``_MIGRATION_LOCK_POLL_INTERVAL_SECONDS`` until acquired or the
+    ``MIGRATION_LOCK_TIMEOUT_SECONDS`` deadline trips. Session-level rather
+    than transaction-level so a worker that crashes mid-migration releases
+    the lock automatically when the connection drops — no manual cleanup
+    required, and no risk of a wedged lock surviving a process death.
+
+    The matching ``pg_advisory_unlock`` in the finally block is
+    belt-and-suspenders: connection close already releases, but the
+    explicit unlock keeps pool-reuse safe and makes failures observable
+    in tests.
+    """
+    deadline = time.monotonic() + MIGRATION_LOCK_TIMEOUT_SECONDS
+    wait_started = time.monotonic()
+    acquired = False
+    while True:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pg_try_advisory_lock(%s)",
+                (MIGRATION_ADVISORY_LOCK_ID,),
+            )
+            acquired = bool(cur.fetchone()[0])
+        conn.commit()
+        if acquired:
+            break
+        if time.monotonic() >= deadline:
+            logging_utils.log_event(
+                _LOG,
+                logging.ERROR,
+                "migrations.lock.timeout",
+                {
+                    "lock_id": MIGRATION_ADVISORY_LOCK_ID,
+                    "timeout_seconds": MIGRATION_LOCK_TIMEOUT_SECONDS,
+                    "worker_pid": os.getpid(),
+                },
+            )
+            raise RuntimeError(
+                "Failed to acquire migration advisory lock "
+                f"({MIGRATION_ADVISORY_LOCK_ID}) within "
+                f"{MIGRATION_LOCK_TIMEOUT_SECONDS}s — another worker may "
+                "be stuck applying migrations."
+            )
+        time.sleep(_MIGRATION_LOCK_POLL_INTERVAL_SECONDS)
+    wait_seconds = round(time.monotonic() - wait_started, 3)
+    logging_utils.log_event(
+        _LOG,
+        logging.INFO,
+        "migrations.lock.acquired",
+        {
+            "lock_id": MIGRATION_ADVISORY_LOCK_ID,
+            "worker_pid": os.getpid(),
+            "wait_seconds": wait_seconds,
+        },
+    )
+    try:
+        yield
+    finally:
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT pg_advisory_unlock(%s)",
+                    (MIGRATION_ADVISORY_LOCK_ID,),
+                )
+            conn.commit()
+        except Exception:
+            # Connection close releases the lock too; log and move on.
+            _LOG.debug(
+                "advisory unlock failed; connection close will release",
+                exc_info=True,
+            )
+        logging_utils.log_event(
+            _LOG,
+            logging.INFO,
+            "migrations.lock.released",
+            {
+                "lock_id": MIGRATION_ADVISORY_LOCK_ID,
+                "worker_pid": os.getpid(),
+            },
+        )
+
+
+def _apply_pending_postgres_migrations(conn) -> list[int]:
+    """Read pending migrations and apply each in its own transaction.
+
+    Caller is responsible for holding the migration advisory lock so two
+    workers don't race to insert the same ``schema_migrations`` row. With
+    the lock held, a slow worker that arrives after another finished will
+    see an empty pending list and iterate zero times.
+    """
+    _ensure_migrations_table_postgres(conn)
+    applied = _applied_versions_postgres(conn)
+    newly_applied: list[int] = []
+
+    for version, filepath in _migration_files():
+        if version in applied:
+            continue
+
+        sql = open(filepath, encoding="utf-8").read()
+        adapted_sql = _adapt_for_postgres(sql)
+        statements = _split_statements(adapted_sql)
+
+        try:
+            with conn:
+                cur = conn.cursor()
+                for statement in statements:
+                    try:
+                        cur.execute(statement)
+                    except Exception as exc:
+                        if _is_idempotent_postgres(statement, exc):
+                            conn.rollback()
+                            continue
+                        raise
+                cur.execute(
+                    "INSERT INTO schema_migrations (version, filename, applied_at) VALUES (%s, %s, %s)",
+                    (
+                        version,
+                        os.path.basename(filepath),
+                        datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    ),
+                )
+        except Exception:
+            conn.rollback()
+            raise
+
+        newly_applied.append(version)
+
+    return newly_applied
+
+
 def _apply_migrations_postgres(database_url: str) -> list[int]:
     import psycopg2
 
@@ -233,44 +393,8 @@ def _apply_migrations_postgres(database_url: str) -> list[int]:
     conn.autocommit = False
 
     try:
-        _ensure_migrations_table_postgres(conn)
-        applied = _applied_versions_postgres(conn)
-        newly_applied: list[int] = []
-
-        for version, filepath in _migration_files():
-            if version in applied:
-                continue
-
-            sql = open(filepath, encoding="utf-8").read()
-            adapted_sql = _adapt_for_postgres(sql)
-            statements = _split_statements(adapted_sql)
-
-            try:
-                with conn:
-                    cur = conn.cursor()
-                    for statement in statements:
-                        try:
-                            cur.execute(statement)
-                        except Exception as exc:
-                            if _is_idempotent_postgres(statement, exc):
-                                conn.rollback()
-                                continue
-                            raise
-                    cur.execute(
-                        "INSERT INTO schema_migrations (version, filename, applied_at) VALUES (%s, %s, %s)",
-                        (
-                            version,
-                            os.path.basename(filepath),
-                            datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        ),
-                    )
-            except Exception:
-                conn.rollback()
-                raise
-
-            newly_applied.append(version)
-
-        return newly_applied
+        with _postgres_migration_lock(conn):
+            return _apply_pending_postgres_migrations(conn)
     finally:
         conn.close()
 
