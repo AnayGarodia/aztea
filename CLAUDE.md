@@ -67,9 +67,7 @@ Known gaps that aren't bugs but are worth knowing before you touch the surroundi
 - **Payout-curve clawback failure path** (`core/payout_curve.py:227-247`): if the agent wallet can't absorb the clawback (already withdrawn, e.g.), the clawback is logged and skipped. Caller is not made whole and there is no operator alert.
 - **Worker disappearance has no fallback-worker reassign.** If the only worker for an agent dies mid-job, the lease times out and the caller is refunded rather than re-served.
 - **Reconciliation is detect-only.** `POST /ops/payments/reconcile` reports drift; `repair_wallet_balance_cache()` is a separate manual call. No auto-repair.
-- **Federated reputation is read-on-demand, not auto-merged.** `POST /jobs/{id}/rating` pushes anonymized ratings to the hosted endpoint, and `GET /registry/agents/{id}/global-trust` proxies the cross-instance score (hosted-mode only, 501 in OSS). Local `compute_trust_metrics()` does not currently blend the global score in.
-- **Co-pilot mode (PR #14) is half-shipped.** `stop_when` validation, `steer` message type, signed transcript receipts, and lease-behaviour side-effects are all wired. End-to-end steer-mid-job execution tests are missing — `tests/test_copilot_mode.py` covers validation only.
-- **TypeScript SDK is caller-shape only.** No polling/clarification helpers, no `AgentServer` equivalent. Use the Python SDK for worker-side code.
+- **MCP tool count drift is not CI-checked.** Lazy mode advertises 9 tools (`scripts/aztea_mcp_server.py`). No automated assertion guards against rename or count drift — docs have already silently drifted once.
 - **Property-based tests** (`tests/property/`, `tests/test_listing_safety_fuzz_v2.py`) currently fail collection because Hypothesis isn't pinned in the dev requirements. Run the suite with `--ignore=tests/property --ignore=tests/test_listing_safety_fuzz_v2.py` until that's fixed.
 
 ---
@@ -151,31 +149,35 @@ server/
   routes/system.py               Small sub-router for system routes
 
 agents/                          Built-in agent implementations (one module each)
-  financial/                     SEC EDGAR fetcher + synthesizer
-  wiki.py                        Wikipedia API
-  codereview.py                  LLM-based structured code review
   cve_lookup.py                  NIST NVD live API
-  arxiv_research.py              arXiv live API + LLM synthesis
   python_executor.py             Subprocess sandbox (real Python execution)
-  web_researcher.py              HTTP fetch + HTML strip + LLM analysis
-  image_generator.py             OpenAI / Replicate image gen
-  media_generation.py            Shared media helpers
-  db_sandbox.py                  SQLite sandbox (isolated tempfile DB)
-  visual_regression.py           Screenshot diff via Playwright (requires chromium)
-  live_endpoint_tester.py        Live HTTP probe + latency histogram + assertion engine
-  browser_agent.py               Playwright-based headless browsing
-  linter_agent.py                ruff / eslint linter — no LLM
-  type_checker.py                mypy / tsc static type checking — no LLM
-  shell_executor.py              Bounded subprocess shell execution
-  multi_file_executor.py         Multi-file Python sandbox in isolated tempdir
   multi_language_executor.py     Polyglot code execution (Node/Deno/Bun/Go/Rust)
-  semantic_codebase_search.py    Embedding-based code search over local or git-cloned repo
-  ai_red_teamer.py               Adversarial prompt / security testing
+  db_sandbox.py                  SQLite sandbox (isolated tempfile DB)
+  browser_agent.py               Playwright-based headless browsing
+  visual_regression.py           Screenshot diff via Playwright (requires chromium)
   dependency_auditor.py          Package CVE + license audit via live NVD data
   dns_inspector.py               DNS record, SSL cert, HTTP metadata live lookup
-  (sunset — demoted from public catalog 2026-05-07: see SUNSET_DEPRECATED_AGENT_IDS
-   in server/builtin_agents/constants.py for the full list. Modules remain for
-   historical job resolution; do not add new work here.)
+  secret_scanner.py              Repo / file secret detection
+  sast_scanner.py                Static security analysis
+  ssl_certificate_decoder.py     Live SSL certificate fetch + decode
+  security_headers_grader.py     HTTP security header live grade
+  lighthouse_auditor.py          Lighthouse audit via Playwright
+  accessibility_auditor.py       axe-core accessibility audit
+  broken_link_crawler.py         Live HTTP crawl + status check
+  pdf_document_parser.py         PDF extraction + structured output
+  web_search.py                  Live web search
+  docs_grounder.py               Live doc retrieval + citation
+  stripe_webhook_debugger.py     Stripe webhook signature + payload debug
+  load_tester.py                 Bounded HTTP load test
+  ci_failure_reproducer.py       CI log fetch + minimal reproduction
+  dockerfile_analyzer.py         Dockerfile lint + best-practices grade
+  openapi_validator.py           OpenAPI spec validation
+  coverage_runner.py             Python coverage run in sandbox
+  archive_inspector.py           tar/zip safe inspect (zip-slip guarded)
+  k8s_manifest_validator.py      Kubernetes YAML schema + policy lint
+  terraform_plan_analyzer.py     Terraform plan parse + risk surface
+  diff_analyzer.py               Git diff summarisation
+  unicode_inspector.py           Confusable / homoglyph / BiDi inspection
 
 core/
   db.py                          Dual-backend connection manager (Postgres + SQLite); thread-local pool;
@@ -246,7 +248,7 @@ frontend/
   src/theme/tokens.css           CSS custom properties for all colours, spacing, radii, typography
 
 scripts/
-  aztea_mcp_server.py            Compat shim — real MCP server in sdks/python-sdk/aztea/mcp/server.py
+  aztea_mcp_server.py            stdio MCP server — refreshes tools every 60s via HTTP registry
   client_cli.py                  CLI shim over Python SDK
   check_file_line_budget.py      CI enforcement for the 1000-line rule
 
@@ -295,7 +297,7 @@ Makefile                         Dev shortcuts: make dev / test / docker / migra
 
 ### Auth & security
 
-- **Scoped keys:** `caller`, `worker`, `admin`, plus two agent-scoped key types: `azk_...` (worker keys — valid for claim/heartbeat/complete only) and `azac_...` (agent caller keys — can hire other agents as itself). Every mutation route checks scope and ownership.
+- **Scoped keys:** `caller`, `worker`, `admin`, plus agent-scoped worker keys (`azac_...`). Every mutation route checks scope and ownership.
 - **API key values are never logged.** Log only the prefix (`az_xxx...`). Automatic redaction is in `logging_utils.py`.
 - **All outbound URLs go through `url_security.py`** (agent endpoints, verifiers, webhooks, onboarding URLs, git clone paths). Private IPs, loopback, IPv6, and URL-encoded bypass chars are blocked. Dev override: `ALLOW_PRIVATE_OUTBOUND_URLS=1`.
 
@@ -331,7 +333,7 @@ See `docs/oss-vs-hosted.md` for the full local-vs-hosted matrix.
 ### Built-in agents
 
 - Agent IDs are **deterministic UUID v5** from namespace `6ba7b810-9dad-11d1-80b4-00c04fd430c8` + `aztea.builtin.{slug}`. Constants live in `server/builtin_agents/constants.py` (single source of truth).
-- **Only agents with real tool use go in `CURATED_PUBLIC_BUILTIN_AGENT_IDS`.** LLM wrappers that add no value over a direct chat session must not be in the curated set. Sunset agents are in `SUNSET_DEPRECATED_AGENT_IDS` — do not add new LLM-only agents.
+- **Only agents with real tool use go in `CURATED_PUBLIC_BUILTIN_AGENT_IDS`.** LLM wrappers that add no value over a direct chat session must not be in the curated set. Current count: **29 curated public agents**. `SUNSET_DEPRECATED_AGENT_IDS` is empty (the 2026-05-15 cleanup removed all 15 thin-wrapper / LLM-only agents). Do not add LLM-only agents.
 - Each new built-in agent needs: module in `agents/`, entry in `BUILTIN_INTERNAL_ENDPOINTS`, spec in `specs_part1.py` or `specs_part2.py`, case in `_execute_builtin_agent()`, and a structured error envelope.
 - **Work examples** are stored via `_record_public_work_example()`. Pass `private_task=True` to skip recording. Ring buffer capped at `_AGENT_WORK_EXAMPLES_MAX`.
 
@@ -340,10 +342,10 @@ See `docs/oss-vs-hosted.md` for the full local-vs-hosted matrix.
 - Tool names are plain `snake_case` from the agent name — no prefix.
 - All manifest keys use `snake_case` (`input_schema`, `output_schema`, `price_per_call_usd`).
 - `/mcp/invoke` authenticates via `auth.verify_agent_api_key` or a caller-scoped user key.
-- The MCP server (`aztea mcp serve` / `python scripts/aztea_mcp_server.py`) refreshes tools every 60s via the HTTP registry. `scripts/aztea_mcp_server.py` is a compat shim; the real server lives in `sdks/python-sdk/aztea/mcp/server.py`. Alias map: `sdks/python-sdk/aztea/mcp/server.py:_LAZY_TOOL_NAME_ALIASES`.
-- **Lazy tool surface is nine tools** (verb-first; legacy `aztea_*` names work via dispatch-time aliases): `search_specialists`, `describe_specialist`, `call_specialist`, **`do_specialist_task`** (auto-invoke fast path), three grouped resource dispatchers `manage_job`, `manage_budget`, `manage_workflow`, plus `aztea_call_streaming` and `aztea_steer` (co-pilot mode hot paths — kept as top-level lazy tools so MCP clients don't have to hop through `manage_job` action verbs for every partial / steer). `do_specialist_task` picks the best agent for an intent and runs it under hard cost/confidence/quality gates. All gates live in the backend at `POST /registry/agents/auto-hire` (`server/application_parts/part_012.py`); both MCP server frontends are thin proxies. Decision logic lives in `core/registry/auto_hire.py`; thresholds are env-tunable via `AZTEA_AUTO_INVOKE_*` flags.
+- `scripts/aztea_mcp_server.py` refreshes tools every 60s via the HTTP registry.
+- **Lazy tool surface is nine tools** (verb-first; legacy `aztea_*` names work via dispatch-time aliases): `search_specialists`, `describe_specialist`, `call_specialist`, **`do_specialist_task`** (auto-invoke fast path), three grouped resource dispatchers `manage_job`, `manage_budget`, `manage_workflow`, plus `aztea_call_streaming` and `aztea_steer` (co-pilot mode hot paths — kept as top-level lazy tools so MCP clients don't have to hop through `manage_job` action verbs for every partial / steer). `do_specialist_task` picks the best agent for an intent and runs it under hard cost/confidence/quality gates. All gates live in the backend at `POST /registry/agents/auto-hire` (`server/application_parts/part_012.py`); both MCP server frontends are thin proxies. Decision logic lives in `core/registry/auto_hire.py`; thresholds are env-tunable via `AZTEA_AUTO_INVOKE_*` flags. Alias map: `scripts/aztea_mcp_server.py:_LAZY_TOOL_NAME_ALIASES`.
 - **Output formats**: Both `call_specialist` and `do_specialist_task` accept `output_format` (`json | markdown | github_pr_comment | slack_blocks | text`). Renderer at `core/output_formats.py` dispatches by sniffing well-known output shapes (CodeReview, Linter, TypeChecker, DepAuditor, GitDiffAnalyzer, pipeline) — NOT by `agent_id` — so external agents inherit pretty rendering for free. Renderers must never raise; unknown shapes fall back to a generic JSON code-fence. The canonical `output` dict is left intact; the rendered string lands under `rendered_output` + `rendered_output_format`. Hooked in via `_decorate_with_rendered_output` in `part_008.py`.
-- **Built-in recipes** (`core/recipes.py`): current curated recipes are `audit-deps`, `secret-scan-and-audit`, and `domain-health`. Recipes are useful workflow primitives, but they are not the product story. Do not frame Aztea around a single code-review demo; frame it as the trust, payment, identity, and recourse layer that lets agents hire specialist agents.
+- **Built-in recipes** (`core/recipes.py`): current curated recipes are `modernize-python`, `audit-deps`, `review-and-lint`, and `review-and-test`. Recipes are useful workflow primitives, but they are not the product story. Do not frame Aztea around a single code-review demo; frame it as the trust, payment, identity, and recourse layer that lets agents hire specialist agents.
 
 ---
 
@@ -574,7 +576,7 @@ Production env vars and Stripe webhook config: see `docs/runbooks/deploy.md`.
 
 ## Public agent IDs
 
-Source of truth: `server/builtin_agents/constants.py`. Curated public set (agents that do real external work) is in `CURATED_PUBLIC_BUILTIN_AGENT_IDS`. Internal/hidden agents are in the same file. Deprecated agents (sunset 2026-07-26) are listed in `SUNSET_DEPRECATED_AGENT_IDS` — kept for backward compat, excluded from the marketplace. Always read constants directly; do not duplicate IDs anywhere else.
+Source of truth: `server/builtin_agents/constants.py`. Curated public set (agents that do real external work) is in `CURATED_PUBLIC_BUILTIN_AGENT_IDS` — currently **29 agents**. Internal/hidden agents are in the same file. `SUNSET_DEPRECATED_AGENT_IDS` is currently an empty frozenset (kept as a stub for callers that iterate it). Always read constants directly; do not duplicate IDs anywhere else.
 
 ## Aztea
 

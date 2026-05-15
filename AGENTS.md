@@ -83,7 +83,7 @@ migrations/                  SQL migrations — never delete, always add new
 | Build a frontend component or page | `.agents/DESIGN.md` — product feeling, design system, copy voice |
 | Pick what to work on | `.agents/TODO.md` |
 | Understand the product direction | `.agents/VISION.md` |
-| Check what's been shipped | `.agents/TODO.md` → "Done — recent" section |
+| Check what's been shipped | `.agents/TODO.md` or `.agents/SESSIONS.md` |
 | Change a migration | `CLAUDE.md` → migrations are idempotent, never deleted |
 | Change an auth or MCP route | `CLAUDE.md` → auth & MCP surface invariants |
 
@@ -115,9 +115,9 @@ Design and copy direction live in `.agents/DESIGN.md`.
 2. Match existing style: 4-space Python, type hints, ES modules, PascalCase components, camelCase helpers, kebab-case CSS classes.
 3. Every module with business logic needs an OWNS / NOT OWNS / INVARIANTS / DECISIONS / KNOWN DEBT block at the top. No narrative prose.
 4. Test the full failure path. Refunds must fire on agent failures. If you change a money path without a test, the PR is incomplete.
-5. **Before ending your session:** move completed items in `.agents/TODO.md`, update the status table in `CLAUDE.md` if something shipped.
+5. **Before ending your session:** move completed items in `.agents/TODO.md` and update the status table in `CLAUDE.md` if something shipped.
 
-Don't ship features that tie to neither the local nor the global goal. Don't add third-party deps without strong reason. Don't touch the deprecated agent set (sunset 2026-07-26).
+Don't ship features that tie to neither the local nor the global goal. Don't add third-party deps without strong reason. Don't add LLM-only wrapper agents — the 2026-05-15 cleanup removed all of those and `SUNSET_DEPRECATED_AGENT_IDS` is intentionally empty now.
 
 ---
 

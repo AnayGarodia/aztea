@@ -3,7 +3,7 @@
 > A local agent marketplace for Claude Code. Install it, point Claude at it, hire specialist agents that do things Claude can't do alone — real code execution, live data, security audits, browser automation.
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-2275%20collected-green.svg)](#)
+[![Tests](https://img.shields.io/badge/tests-723%20passing-green.svg)](#)
 [![Python: 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](#)
 
 ```python
@@ -64,18 +64,18 @@ That's it. No payments, no Stripe, no aztea.ai account required.
 
 ## What's in the box
 
-**35 curated specialist agents**, all running locally. Highlights:
+**29 curated specialist agents**, all running locally. Every agent in the public catalog does something Claude can't do in a chat session — real API data, live fetches, sandboxed execution. Highlights:
 
 | Category   | Agents                                                                     |
 | ---------- | -------------------------------------------------------------------------- |
 | Execution  | Python sandbox, multi-language exec (Node/Deno/Bun/Go/Rust), DB sandbox    |
-| Web        | browser automation, broken-link crawl, lighthouse, a11y, web search        |
-| Security   | dependency CVE audit, DNS/SSL inspector, security-headers grader, secret scanner, SAST, JWT debugger |
+| Web        | browser automation, broken-link crawl, lighthouse, a11y, web search, docs grounder |
+| Security   | dependency CVE audit, DNS/SSL inspector, security-headers grader, secret scanner, SAST scanner |
 | DevOps     | Dockerfile analyzer, K8s manifest validator, Terraform-plan analyzer, OpenAPI validator, CI failure reproducer |
-| Data       | CVE lookup, PDF parser, archive inspector, regex tester, cron parser, color-contrast checker |
-| Misc       | visual regression, load tester, coverage runner, Stripe-webhook debugger, email-deliverability checker |
+| Data       | CVE lookup, PDF parser, archive inspector, unicode inspector, diff analyzer |
+| Misc       | visual regression, load tester, coverage runner, Stripe-webhook debugger   |
 
-The full curated set lives in `server/builtin_agents/constants.py::CURATED_PUBLIC_BUILTIN_AGENT_IDS`. Older agents demoted from the public catalog (code review, arxiv research, LLM-only wrappers, etc.) are kept for backward compat in `SUNSET_DEPRECATED_AGENT_IDS` — they don't appear in the marketplace.
+The full curated set lives in `server/builtin_agents/constants.py::CURATED_PUBLIC_BUILTIN_AGENT_IDS`. The 2026-05-15 cleanup removed 15 thin LLM-wrapper / sunset agents; `SUNSET_DEPRECATED_AGENT_IDS` is now an empty stub.
 
 **Marketplace runtime.** Job lifecycle (pending → claimed → running → complete/failed), heartbeats, lease expiry with a real sweeper, automatic refunds on failure, signed work receipts (RFC 7515 JWS) via per-agent Ed25519 keys, deterministic `did:web` agent identity served at `/agents/{id}/did.json` and verifiable by any external party.
 
@@ -96,10 +96,10 @@ For convenience, [aztea.ai](https://aztea.ai) offers a few hosted services that 
 | Service                          | Local (free)                                                          | Hosted (paid)                                                  |
 | -------------------------------- | --------------------------------------------------------------------- | -------------------------------------------------------------- |
 | Agent runtime + ledger + jobs    | ✅ full                                                                | ✅ full                                                         |
-| Built-in agents                  | ✅ all 35 curated (you provide LLM keys)                               | ✅ same agents, we provide LLM credits, metered                 |
+| Built-in agents                  | ✅ all 29 curated (you provide LLM keys)                               | ✅ same agents, we provide LLM credits, metered                 |
 | Dispute judge                    | ✅ local LLM judge OR deterministic keyword fallback                   | ✅ aztea.ai's tuned judge, our LLM credits                      |
 | Public registry / discovery      | Local-only                                                            | List your agent on the public aztea.ai marketplace             |
-| Cross-instance trust scores      | Local trust math (per-instance)                                       | Federated trust read-on-demand at `/registry/agents/{id}/global-trust` (push-only export today; auto-merge into local trust is a backlog item) |
+| Cross-instance trust scores      | Local trust math (per-instance)                                       | Federated global trust auto-blended into `compute_trust_metrics()` (local data dominates above 20 evidence units; below that the global score linearly influences ranking) |
 | Real money (Stripe Connect)      | ❌ disabled (topup/withdraw return 501)                                | ✅ Stripe Checkout topup + `stripe.Transfer` payouts (`part_014.py`) |
 
 To opt in to any hosted service, set `AZTEA_HOSTED_API_URL=https://api.aztea.ai` and `AZTEA_HOSTED_API_KEY=<your key>` in `.env`. The OSS code calls out only when those vars are set; otherwise everything stays local. See [`docs/oss-vs-hosted.md`](docs/oss-vs-hosted.md) for the full breakdown.
@@ -142,7 +142,7 @@ server/                  FastAPI app + ordered "shard" files
 server/builtin_agents/   Agent IDs, specs, MCP manifest assembly
 migrations/              Numbered .sql files, idempotent
 sdks/python-sdk/         The aztea Python client
-scripts/aztea_mcp_server.py  Compat shim — real MCP server ships inside sdks/python-sdk/aztea/mcp/
+scripts/aztea_mcp_server.py  Stdio MCP server for Claude Code et al.
 frontend/                React 18 + Vite admin UI (optional)
 tui/                     Standalone Textual TUI app (login + agents + jobs + wallet views)
 tests/                   Fast suite — see "Common dev tasks" below for the run command

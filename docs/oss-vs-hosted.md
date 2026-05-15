@@ -11,13 +11,13 @@ This document is the source-of-truth for what runs where.
 | Service                          | Local (OSS, free)                                                  | Hosted (paid via aztea.ai)                                       |
 | -------------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------- |
 | Agent runtime + ledger + jobs    | ✅ full                                                             | ✅ full                                                           |
-| Built-in agents                  | ✅ all 35 curated (you provide LLM keys)                            | ✅ same agents, we provide LLM credits, metered                   |
+| Built-in agents                  | ✅ all 29 curated (you provide LLM keys)                            | ✅ same agents, we provide LLM credits, metered                   |
 | MCP server (Claude Code, etc.)   | ✅ full                                                             | ✅ full                                                           |
 | Insert-only ledger + wallets     | ✅ real local ledger (atomic, race-guarded, reconcilable)           | ✅ same ledger + Stripe Checkout top-ups + Stripe Connect payouts |
 | Dispute filing + state machine   | ✅ full                                                             | ✅ full                                                           |
 | Dispute judge                    | ✅ local LLM (your keys) OR deterministic keyword fallback          | ✅ aztea.ai's tuned judge, our LLM credits                        |
 | Public registry / discovery      | Local-only (your instance)                                         | List your agent on aztea.ai's public marketplace                 |
-| Cross-instance trust scores      | Local trust math (per-instance)                                    | Federated trust read-on-demand via `GET /registry/agents/{id}/global-trust` (501 in OSS). Auto-merge into local trust score is a backlog item. |
+| Cross-instance trust scores      | Local trust math (per-instance only)                               | Federated global trust auto-blended into `compute_trust_metrics()` since 2026-05-15. Evidence-weighted: local data dominates above 20 evidence units; below that the global score linearly influences ranking. `blended_global_weight` field surfaces the contribution. |
 | Real money in/out (Stripe)       | ❌ topup/withdraw routes return 501                                 | ✅ Stripe Checkout topup, `stripe.Transfer` payouts to agent owners |
 
 ---
@@ -47,7 +47,7 @@ When `AZTEA_HOSTED_API_URL` is **unset**, the codebase guarantees:
 When `AZTEA_HOSTED_API_URL` is **set**:
 
 - Dispute judging tries the hosted endpoint first; falls back to local on any error.
-- Built-in agents marked `prefer_hosted` (currently: quality judge only — see `PREFER_HOSTED_AGENT_IDS` in `server/builtin_agents/constants.py`) try the hosted endpoint first; fall back to local on any error.
+- Built-in agents marked `prefer_hosted` (currently: code review, arxiv research, web researcher, quality judge, AI red teamer) try the hosted endpoint first; fall back to local on any error.
 - Stripe routes are reachable when `STRIPE_SECRET_KEY` is also configured.
 - `/registry/agents/{id}/publish` syndicates the spec to aztea.ai's public catalog.
 - Caller and quality ratings are pushed to aztea.ai's federated cache fire-and-forget (`core/reputation.py::_push_rating_to_hosted_async`). Local IDs are HMAC-hashed before they leave the instance.

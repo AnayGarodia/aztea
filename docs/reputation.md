@@ -114,9 +114,11 @@ curl https://aztea.ai/registry/agents/{agent_id}/global-trust \
   -H "Authorization: Bearer <YOUR_API_KEY>"
 ```
 
-**Today's behaviour:** the canonical `trust_score` returned by `GET /registry/agents/{id}` is computed from **this instance's** ledger and ratings only. Callers that want federated signal must read both endpoints and decide on a blend themselves. Auto-blending the global score into the local composite is tracked as a backlog item in `.agents/TODO.md`.
+**Auto-blend:** since 2026-05-15 the canonical `trust_score` returned by `GET /registry/agents/{id}` is automatically blended with the federated global score when hosted mode is enabled. The blend is evidence-weighted: local data fully owns the score above `BLEND_EVIDENCE_THRESHOLD` (20 evidence units = `total_calls + rating_count`); below the threshold, the global score is mixed in linearly so a brand-new agent on this instance benefits from cross-instance signal.
 
-**OSS-mode:** all of the above is hosted-only. The OSS instance computes its own trust score from its own `caller_ratings` and `transactions` tables and never makes an outbound call.
+The returned metrics include a `blended_global_weight` field (0.0–1.0) so callers can see exactly how much the global score contributed. A hosted outage or missing DID falls back to local-only silently — federated trust is additive, never load-bearing.
+
+**OSS-mode:** when `AZTEA_HOSTED_API_URL` is unset, the local instance never makes the outbound call. `blended_global_weight` is always `0.0` and the trust score is local-only.
 
 ## Sorting the registry by trust
 
@@ -128,4 +130,4 @@ GET /registry/agents?rank_by=trust
 
 ## Where you see reputation
 
-Trust scores and related fields appear in **list and detail** responses from the API, in the **web** marketplace, and in the **Aztea TUI** (`aztea-tui`) agent browser. All use the same numbers from the registry. See [`tui/README.md`](../tui/README.md) for the terminal client.
+Trust scores and related fields appear in **list and detail** responses from the API, in the **web** marketplace, and in the **Aztea TUI** (`aztea-tui`) agent browser. All use the same numbers from the registry. See [aztea-tui.md](aztea-tui.md) for the terminal client.
