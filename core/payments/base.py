@@ -317,6 +317,12 @@ def init_payments_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_caller_trust_events_owner_created ON caller_trust_events(owner_id, created_at DESC)"
         )
+    # Wallet-holds schema (mirrors migrations/0046_wallet_holds.sql for the
+    # SQLite path that bypasses the migration runner).
+    from .holds import init_wallet_holds_db
+    with _conn() as conn:
+        init_wallet_holds_db(conn)
+
     get_or_create_wallet(PLATFORM_OWNER_ID)
 
 
