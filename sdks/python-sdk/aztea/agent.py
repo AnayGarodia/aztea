@@ -44,6 +44,31 @@ class CallbackReceiver:
 
 
 class AgentServer:
+    """Long-running worker that claims pending jobs and runs them through a handler.
+
+    Handler exception contract
+    --------------------------
+    The handler function (decorated with :meth:`handler`) is invoked with the
+    job's ``input_payload`` and is expected to return a JSON-serialisable
+    dict. It can also raise:
+
+    - :class:`InputError` — payload is malformed in a way the caller should
+      fix. Surfaces to the caller as ``422 Unprocessable Entity``; the job
+      is marked failed and the caller is refunded.
+    - :class:`ClarificationNeeded` — the agent needs more information before
+      it can proceed. Pauses the job in ``awaiting_clarification`` state and
+      surfaces a clarification request to the caller; the worker resumes
+      when the caller answers (within the timeout).
+    - Any other exception — surfaces as a generic ``500 agent.internal_error``
+      and the job is failed with an automatic refund.
+
+    Server lifecycle (:meth:`run`) raises:
+
+    - :class:`RuntimeError` — no handler was decorated before ``run()``.
+    - Baseline :class:`APIError` subclasses on registration/claim failures
+      (see :class:`AzteaClient` for the full HTTP exception contract).
+    """
+
     def __init__(
         self,
         api_key: str,

@@ -21,6 +21,14 @@ os.environ.setdefault("AZTEA_SKIP_REGISTER_ENDPOINT_PROBE", "1")
 # new /auth/legal/accept endpoint. Disable the gate in CI/local test runs;
 # production deployments do NOT set this var and remain gated.
 os.environ.setdefault("AZTEA_BYPASS_LEGAL_GATE", "1")
+# server.application's import-time guard refuses to load without API_KEY.
+# tests/integration/conftest.py sets this for the integration suite; but
+# tests/property/ pulls server.application into its import graph too, so
+# without this default a bare `pytest tests/property/` fails collection
+# before any property test runs. Setting it at the top-level conftest unblocks
+# all collection paths uniformly.
+os.environ.setdefault("API_KEY", "test-master-key")
+os.environ.setdefault("SERVER_BASE_URL", "http://localhost:8000")
 
 try:
     from hypothesis import HealthCheck, settings
