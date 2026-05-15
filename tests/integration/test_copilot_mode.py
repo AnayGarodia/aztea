@@ -363,6 +363,185 @@ def test_receipt_built_and_signature_verifies(client):
 
 
 # ---------------------------------------------------------------------------
+# End-to-end caller / worker visibility
+# ---------------------------------------------------------------------------
+
+
+def _list_messages(client, raw_api_key: str, job_id: str, msg_type: str | None = None) -> list[dict]:
+    """Fetch the message log for a job; optionally filtered by type."""
+    params = {"type": msg_type} if msg_type else None
+    resp = client.get(
+        f"/jobs/{job_id}/messages",
+        headers=_auth_headers(raw_api_key),
+        params=params,
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["messages"]
+
+
+def test_caller_polls_and_sees_worker_progress_message(client):
+    """Worker emits progress; caller polls /jobs/{id}/messages and observes it.
+
+    Progress is the simplest worker→caller channel and the one a co-pilot UI
+    renders first — so it gets an explicit end-to-end pin, not just an
+    add_message unit test.
+    """
+    worker, caller, agent_id = _setup_caller_and_agent(client)
+    job = _create_job_via_api(client, caller["raw_api_key"], agent_id=agent_id)
+    job_id = job["job_id"]
+    _claim(client, worker["raw_api_key"], job_id)
+
+    # Caller polling before the worker emits anything: no progress yet.
+    assert _list_messages(client, caller["raw_api_key"], job_id, "progress") == []
+
+    post = client.post(
+        f"/jobs/{job_id}/messages",
+        headers=_auth_headers(worker["raw_api_key"]),
+        json={"type": "progress", "payload": {"percent": 42, "note": "halfway"}},
+    )
+    assert post.status_code == 201, post.text
+
+    seen = _list_messages(client, caller["raw_api_key"], job_id, "progress")
+    assert len(seen) == 1
+    assert seen[0]["type"] == "progress"
+    assert seen[0]["payload"]["percent"] == 42
+    assert seen[0]["payload"]["note"] == "halfway"
+
+
+def test_worker_polls_and_sees_caller_steer(client):
+    """Caller posts steer; worker reads it through the same message channel.
+
+    The worker has no privileged read path — the spec is that it polls
+    /jobs/{id}/messages?type=steer with its own bearer key. This guards
+    against any future refactor that accidentally scopes steers to the
+    caller's view only.
+    """
+    worker, caller, agent_id = _setup_caller_and_agent(client)
+    job = _create_job_via_api(client, caller["raw_api_key"], agent_id=agent_id)
+    job_id = job["job_id"]
+    _claim(client, worker["raw_api_key"], job_id)
+
+    r = _post_steer(client, caller["raw_api_key"], job_id, "switch to python")
+    assert r.status_code in (200, 201), r.text
+
+    worker_view = _list_messages(client, worker["raw_api_key"], job_id, "steer")
+    assert len(worker_view) == 1
+    assert worker_view[0]["payload"]["message"] == "switch to python"
+    # The worker's owner_id must NOT be on the message — it's caller-authored.
+    assert worker_view[0]["from_id"] != f"user:{worker['user_id']}"
+
+
+def test_stop_when_never_matches_runs_to_normal_completion(client):
+    """When no partial matches stop_when, the worker reaches /complete normally.
+
+    Confirms stop_when is a filter, not a hard termination clock — and that
+    a job with declared predicates can still settle through the standard
+    success path with status='complete', not 'stopped'.
+    """
+    worker, caller, agent_id = _setup_caller_and_agent(client)
+    resp = client.post(
+        "/jobs",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={
+            "agent_id": agent_id,
+            "input_payload": {"task": "scan"},
+            "stop_when": [{"label": "boom", "expr": "severity == `critical`"}],
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    job_id = resp.json()["job_id"]
+    claim_token = _claim(client, worker["raw_api_key"], job_id)
+
+    # Two partials, neither matches the predicate.
+    assert _emit_partial(client, worker["raw_api_key"], job_id, {"severity": "low"}).status_code == 201
+    assert _emit_partial(client, worker["raw_api_key"], job_id, {"severity": "med"}).status_code == 201
+
+    mid = jobs.get_job(job_id)
+    assert mid["status"] != "stopped"
+    assert mid["partials_count"] == 2
+
+    completed = client.post(
+        f"/jobs/{job_id}/complete",
+        headers=_auth_headers(worker["raw_api_key"]),
+        json={
+            "claim_token": claim_token,
+            "output_payload": {"summary": "no critical findings"},
+        },
+    )
+    assert completed.status_code == 200, completed.text
+
+    final = jobs.get_job(job_id)
+    assert final["status"] == "complete"
+    assert final["stop_reason_json"] is None
+    assert final["terminal_at"] is None
+
+
+def test_multiple_steers_latest_wins(client):
+    """Two steers are both persisted; the latest message_id is the live one.
+
+    "Latest wins" is a worker-side reading convention, not a server-side
+    override. The contract the server must hold is: both steers are
+    appended in monotonic message_id order, and the latest is identifiable
+    by the highest id. That is what this test pins.
+    """
+    worker, caller, agent_id = _setup_caller_and_agent(client)
+    job = _create_job_via_api(client, caller["raw_api_key"], agent_id=agent_id)
+    job_id = job["job_id"]
+    _claim(client, worker["raw_api_key"], job_id)
+
+    first = _post_steer(client, caller["raw_api_key"], job_id, "use rust")
+    assert first.status_code in (200, 201), first.text
+    second = _post_steer(client, caller["raw_api_key"], job_id, "actually use python")
+    assert second.status_code in (200, 201), second.text
+
+    assert second.json()["message_id"] > first.json()["message_id"]
+    assert jobs.get_job(job_id)["steer_count"] == 2
+
+    steers = _list_messages(client, worker["raw_api_key"], job_id, "steer")
+    assert [s["payload"]["message"] for s in steers] == [
+        "use rust",
+        "actually use python",
+    ]
+    # message_ids must be monotonically increasing — workers rely on this to
+    # find "the steer to honor" by max(id).
+    ids = [s["message_id"] for s in steers]
+    assert ids == sorted(ids)
+    latest = max(steers, key=lambda m: m["message_id"])
+    assert latest["payload"]["message"] == "actually use python"
+
+
+def test_steer_on_completed_job_returns_409(client):
+    """A normally-completed (not stopped) job must also reject steers with 409.
+
+    The terminal guard at core/jobs/messaging.py:_guard_terminal_for_copilot
+    explicitly notes that earlier versions only checked terminal_at and
+    let a steer slip through on `complete`. Pin the broader contract:
+    every terminal status returns 409 job.invalid_state, not 500.
+    """
+    worker, caller, agent_id = _setup_caller_and_agent(client)
+    job = _create_job_via_api(client, caller["raw_api_key"], agent_id=agent_id)
+    job_id = job["job_id"]
+    claim_token = _claim(client, worker["raw_api_key"], job_id)
+
+    completed = client.post(
+        f"/jobs/{job_id}/complete",
+        headers=_auth_headers(worker["raw_api_key"]),
+        json={
+            "claim_token": claim_token,
+            "output_payload": {"summary": "done"},
+        },
+    )
+    assert completed.status_code == 200, completed.text
+    assert jobs.get_job(job_id)["status"] == "complete"
+
+    r = _post_steer(client, caller["raw_api_key"], job_id, "too late")
+    assert r.status_code == 409, r.text
+    body = r.json()
+    err = body.get("error") or body.get("detail", {}).get("error")
+    assert err == "job.invalid_state", body
+
+
+# ---------------------------------------------------------------------------
 # Partial-unit settlement
 # ---------------------------------------------------------------------------
 
