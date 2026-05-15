@@ -133,6 +133,7 @@ from core import hosted_skills as _hosted_skills
 from core import listing_safety as _listing_safety
 from core import models as core_models
 from core import observability as _observability
+from core import rate_limit as _rate_limit
 from core import skill_executor as _skill_executor
 from core import skill_parser as _skill_parser
 from core import url_security as _url_security
