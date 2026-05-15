@@ -570,9 +570,6 @@ def _process_pending_builtin_job(job: dict) -> bool:
         # of capacity for fresh jobs (1.7.5 prod symptom). A timeout is
         # NEVER going to succeed on retry — same input, same agent,
         # same outcome. Mark terminal-failed once and stop.
-        max_attempt_to_set = max(
-            int(claimed.get("attempt_count") or 1), 1,
-        )
         updated = jobs.update_job_status(
             claimed["job_id"],
             "failed",

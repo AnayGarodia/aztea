@@ -590,16 +590,9 @@ class TestPayoutCurveClawbackConsumesHold:
         from fastapi.testclient import TestClient
         import server.application as srv
 
-        ctx = _settle_with_curve(None)
-        # The hold lives on agent:<agent_id>; auth as the agent owner so
-        # /wallets/me targets that wallet.
-        owner_id = ctx["agent"]["owner_id"]
-        with srv._db.get_db_connection() as conn:
-            with conn:
-                key_id = "test-agent-owner-key"
-                # Find the agent owner's wallet.
-                # We auth as master and impersonate via the master key.
-                pass
+        _settle_with_curve(None)
+        # Master key reads the master wallet, which has no holds, so this
+        # test asserts shape + types only — not that holds appear here.
         with TestClient(srv.app) as c:
             r = c.get("/wallets/me", headers={"Authorization": "Bearer test-master-key"})
         # Master key reads the master wallet. The master wallet has no holds
