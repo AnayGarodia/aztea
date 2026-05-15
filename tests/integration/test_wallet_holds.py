@@ -533,6 +533,42 @@ class TestPayoutCurveClawbackConsumesHold:
         assert agent_after["held_cents"] == 0
         assert agent_after["balance_cents"] == 0
 
+    def test_release_sweeper_releases_expired_holds(self, isolated_db):
+        """release_expired_holds picks up any wallet_holds row whose
+        hold_until has passed and marks it released, dropping held_cents.
+        """
+        ctx = _settle_with_curve(None)
+        # Backdate the hold so it appears expired.
+        with db.get_db_connection() as conn:
+            with conn:
+                conn.execute(
+                    "UPDATE wallet_holds SET hold_until = %s WHERE job_id = %s",
+                    ("2000-01-01T00:00:00+00:00", ctx["job_id"]),
+                )
+        from core.payments import holds as _holds
+        released = _holds.release_expired_holds(limit=10)
+        assert released == 1
+        with db.get_db_connection() as conn:
+            hold = conn.execute(
+                "SELECT status, release_reason FROM wallet_holds WHERE job_id = %s",
+                (ctx["job_id"],),
+            ).fetchone()
+        assert hold["status"] == "released"
+        assert hold["release_reason"] == _holds.RELEASE_REASON_WINDOW_EXPIRED
+        agent_after = payments.get_wallet(ctx["agent_wallet"]["wallet_id"])
+        assert agent_after["held_cents"] == 0
+        # Balance untouched — no clawback.
+        assert agent_after["balance_cents"] == 1000
+
+    def test_release_sweeper_skips_active_holds(self, isolated_db):
+        ctx = _settle_with_curve(None)
+        # Default hold_until is 72h in the future.
+        from core.payments import holds as _holds
+        released = _holds.release_expired_holds(limit=10)
+        assert released == 0
+        agent_after = payments.get_wallet(ctx["agent_wallet"]["wallet_id"])
+        assert agent_after["held_cents"] == 1000  # untouched
+
     def test_clawback_is_idempotent(self, isolated_db):
         ctx = _settle_with_curve('{"1": 0.5, "5": 1.0}')
         from core import payout_curve as _pc
