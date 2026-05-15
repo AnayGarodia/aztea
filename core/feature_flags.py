@@ -94,6 +94,21 @@ OUTPUT_TRUNCATION: bool = flag("AZTEA_OUTPUT_TRUNCATION", default=True)
 # Off by default — warm pools consume memory even when idle.
 PYTHON_WARM_POOL: bool = flag("AZTEA_PYTHON_WARM_POOL", default=False)
 
+# Per-key sliding-window rate limits, evaluated as transport-layer middleware.
+# Read at module import — no env hot-reload — because middleware is registered
+# once at startup and the request hot path must not pay an env lookup. Tune via
+# AZTEA_RATE_LIMIT_* and restart to roll out new limits.
+RATE_LIMIT_DEFAULT_RPM: int = flag_int("AZTEA_RATE_LIMIT_DEFAULT_RPM", default=120)
+RATE_LIMIT_BURST_RPS: int = flag_int("AZTEA_RATE_LIMIT_BURST_RPS", default=10)
+RATE_LIMIT_WORKER_RPM: int = flag_int("AZTEA_RATE_LIMIT_WORKER_RPM", default=600)
+RATE_LIMIT_ANON_RPM: int = flag_int("AZTEA_RATE_LIMIT_ANON_RPM", default=60)
+# Memory bound on the per-key sliding-window store. Above this many distinct
+# keys the oldest-touched entries are LRU-evicted so an attacker cannot OOM
+# the worker by cycling through unique synthetic keys.
+RATE_LIMIT_MAX_TRACKED_KEYS: int = flag_int(
+    "AZTEA_RATE_LIMIT_MAX_TRACKED_KEYS", default=50_000,
+)
+
 # Result-cache v2 (SHA-keyed, per-agent opt-out).
 # Default: on.
 RESULT_CACHE_V2: bool = flag("AZTEA_RESULT_CACHE_V2", default=True)

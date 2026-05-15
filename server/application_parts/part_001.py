@@ -1202,6 +1202,86 @@ def _parse_incoming_request_id(raw: str | None) -> str | None:
     return s
 
 
+# ---------------------------------------------------------------------------
+# Transport-layer rate limiting (per-key sliding window + 1s burst gate).
+# Runs INSIDE request_tracing so 429 responses still get an X-Request-ID,
+# and BEFORE any auth-dependent route handler so an exhausted-quota client
+# never triggers a DB lookup it can't afford anyway.
+# ---------------------------------------------------------------------------
+
+
+def _rate_limit_key(request: Request, bearer_key: str | None) -> str:
+    """Pure-ish: return the accounting key — the bearer if present, else IP.
+
+    Anonymous traffic keys by client IP so a single bad actor cannot hide
+    behind dropping the Authorization header. Falls back to the literal
+    ``ip:unknown`` token only when the client address cannot be parsed,
+    which the middleware logs at warning level.
+    """
+    if bearer_key:
+        return f"key:{bearer_key}"
+    client_ip = _request_client_ip(request)
+    return f"ip:{client_ip}" if client_ip is not None else "ip:unknown"
+
+
+def _rate_limit_response(decision: _rate_limit.Decision) -> JSONResponse:
+    """Pure: build the documented 429 JSON body + Retry-After header."""
+    retry = max(1, int(decision.retry_after_seconds))
+    return JSONResponse(
+        status_code=429,
+        content={
+            "error": "rate_limit_exceeded",
+            "message": f"Too many requests. Retry after {retry} seconds.",
+            "details": {
+                "limit_per_minute": decision.limit_per_minute,
+                "burst_limit_per_second": decision.burst_limit_per_second,
+                "retry_after_seconds": retry,
+            },
+        },
+        headers={"Retry-After": str(retry)},
+    )
+
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    """Fail-open per-key sliding-window rate limiter.
+
+    Why: any exception in this path must never block legitimate traffic — a
+    broken rate limiter is much less harmful than a rate limiter that 500s
+    every request. The outer try/except logs a structured warning and
+    passes the request through unchanged.
+    """
+    try:
+        path = request.url.path or ""
+        if _rate_limit.is_path_exempt(path):
+            return await call_next(request)
+        bearer_key = _rate_limit.extract_bearer_key(
+            request.headers.get("Authorization")
+        )
+        scope = _rate_limit.classify(bearer_key, _MASTER_KEY)
+        if scope == _rate_limit.SCOPE_ADMIN:
+            return await call_next(request)
+        if request.headers.get("Authorization") and bearer_key is None:
+            logging_utils.log_event(
+                _LOG,
+                logging.WARNING,
+                "ratelimit.bearer_malformed",
+                {"path": path, "method": request.method},
+            )
+        key = _rate_limit_key(request, bearer_key)
+        decision = _rate_limit.check_and_record(key, scope)
+        if not decision.allowed:
+            return _rate_limit_response(decision)
+    except Exception as exc:  # noqa: BLE001 — middleware must fail open
+        logging_utils.log_event(
+            _LOG,
+            logging.WARNING,
+            "ratelimit.fail_open",
+            {"error": str(exc), "path": request.url.path},
+        )
+    return await call_next(request)
+
+
 @app.middleware("http")
 async def request_tracing(request: Request, call_next):
     incoming = _parse_incoming_request_id(request.headers.get("X-Request-ID"))

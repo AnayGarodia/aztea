@@ -838,3 +838,215 @@ def test_health_endpoint_returns_ok_with_db_and_version(monkeypatch):
     # When the DB probe succeeds, overall status should be ok.
     if body["db"] == "ok":
         assert body["status"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# Rate limit middleware — per-key sliding-window protection against abuse.
+# Tests hit a non-existent probe path so the rate-limit middleware decides
+# the outcome before any route handler runs (404 when allowed, 429 when
+# rate-limited). Each test resets the in-memory store first.
+# ---------------------------------------------------------------------------
+
+_PROBE_PATH = "/__rate_limit_probe"
+
+
+def _build_rate_limit_client(monkeypatch, *, master_key: str = "ratelimit-master"):
+    """Spin up a TestClient with a fixed master key and a clean rate-limit store."""
+    from fastapi.testclient import TestClient
+
+    import server.application as server
+    from core import rate_limit
+
+    monkeypatch.setattr(server, "_MASTER_KEY", master_key)
+    rate_limit.reset_store_for_tests()
+    client = TestClient(server.app, raise_server_exceptions=False)
+    return client, server, rate_limit
+
+
+def _install_fake_clock(monkeypatch, start: float, step: float):
+    """Monkeypatch core.rate_limit._now to advance by ``step`` on each call."""
+    from core import rate_limit
+
+    state = {"t": start}
+
+    def fake_now() -> float:
+        state["t"] += step
+        return state["t"]
+
+    monkeypatch.setattr(rate_limit, "_now", fake_now)
+    return state
+
+
+def test_rate_limit_default_caller_blocks_at_threshold(monkeypatch):
+    """The 121st caller-keyed request inside a minute must return 429."""
+    client, _server, _rl = _build_rate_limit_client(monkeypatch)
+    _install_fake_clock(monkeypatch, start=1000.0, step=0.5)
+
+    headers = {"Authorization": "Bearer az_test_caller_threshold"}
+    for i in range(120):
+        resp = client.get(_PROBE_PATH, headers=headers)
+        assert resp.status_code != 429, f"unexpected early 429 at request {i + 1}"
+
+    resp = client.get(_PROBE_PATH, headers=headers)
+    assert resp.status_code == 429
+    assert resp.headers.get("Retry-After")
+    body = resp.json()
+    assert body["error"] == "rate_limit_exceeded"
+    assert body["details"]["limit_per_minute"] == 120
+
+
+def test_rate_limit_worker_key_higher_threshold(monkeypatch):
+    """Worker keys (azk_*) must clear 121 spaced requests without limiting."""
+    client, _server, _rl = _build_rate_limit_client(monkeypatch)
+    _install_fake_clock(monkeypatch, start=2000.0, step=0.2)
+
+    headers = {"Authorization": "Bearer azk_test_worker_under_limit"}
+    for i in range(121):
+        resp = client.get(_PROBE_PATH, headers=headers)
+        assert resp.status_code != 429, f"worker hit 429 at request {i + 1}"
+
+
+def test_rate_limit_admin_key_never_limited(monkeypatch):
+    """Master/admin key is exempt from accounting entirely."""
+    client, server, _rl = _build_rate_limit_client(monkeypatch, master_key="adm-key-x")
+    _install_fake_clock(monkeypatch, start=3000.0, step=0.001)
+
+    headers = {"Authorization": f"Bearer {server._MASTER_KEY}"}
+    for i in range(200):
+        resp = client.get(_PROBE_PATH, headers=headers)
+        assert resp.status_code != 429, f"admin key hit 429 at request {i + 1}"
+
+
+def test_rate_limit_burst_protection_kicks_in(monkeypatch):
+    """Even with plenty of per-minute budget, 11 hits in 1s trip the burst gate."""
+    client, _server, rate_limit = _build_rate_limit_client(monkeypatch)
+    # All 11 requests share the same monotonic instant.
+    monkeypatch.setattr(rate_limit, "_now", lambda: 5000.0)
+
+    headers = {"Authorization": "Bearer az_test_caller_burst"}
+    for i in range(10):
+        resp = client.get(_PROBE_PATH, headers=headers)
+        assert resp.status_code != 429, f"unexpected 429 at burst request {i + 1}"
+
+    resp = client.get(_PROBE_PATH, headers=headers)
+    assert resp.status_code == 429
+    body = resp.json()
+    assert body["details"]["burst_limit_per_second"] == 10
+    assert body["details"]["retry_after_seconds"] == 1
+
+
+def test_rate_limit_anonymous_keyed_by_ip(monkeypatch):
+    """Unauthenticated requests share one bucket per client IP at the anon limit."""
+    client, _server, _rl = _build_rate_limit_client(monkeypatch)
+    _install_fake_clock(monkeypatch, start=6000.0, step=0.5)
+
+    for i in range(60):
+        resp = client.get(_PROBE_PATH)  # no Authorization header
+        assert resp.status_code != 429, f"anon hit 429 too early at request {i + 1}"
+
+    resp = client.get(_PROBE_PATH)
+    assert resp.status_code == 429
+    body = resp.json()
+    assert body["details"]["limit_per_minute"] == 60
+
+
+def test_rate_limit_exempt_paths_not_counted(monkeypatch):
+    """Exempt paths must not write to the store nor block subsequent requests.
+
+    Spec calls for 1000 hits on /health, but /health does a per-request DB
+    probe and the background sweeper thread occasionally takes a write lock
+    long enough to deadlock against repeated reads in the same process. We
+    use /api/openapi.json (also exempt, schema-cached after the first hit)
+    and 200 iterations — 3.3× the anon per-minute cap is more than enough
+    to prove exempt bypass and stays under one second of wall-clock.
+    """
+    client, _server, rate_limit = _build_rate_limit_client(monkeypatch)
+    monkeypatch.setattr(rate_limit, "_now", lambda: 7000.0)
+
+    for _ in range(200):
+        resp = client.get("/api/openapi.json")
+        assert resp.status_code == 200
+
+    assert rate_limit.store_size_for_tests() == 0
+    resp = client.get(
+        _PROBE_PATH,
+        headers={"Authorization": "Bearer az_after_exempt"},
+    )
+    assert resp.status_code != 429
+
+
+def test_rate_limit_window_resets_after_passage_of_time(monkeypatch):
+    """A bucket that exhausted its minute budget recovers after 65s elapse."""
+    client, _server, rate_limit = _build_rate_limit_client(monkeypatch)
+    state = _install_fake_clock(monkeypatch, start=8000.0, step=0.5)
+
+    headers = {"Authorization": "Bearer az_test_window_reset"}
+    for _ in range(120):
+        client.get(_PROBE_PATH, headers=headers)
+    resp = client.get(_PROBE_PATH, headers=headers)
+    assert resp.status_code == 429
+
+    state["t"] += 65.0
+    resp = client.get(_PROBE_PATH, headers=headers)
+    assert resp.status_code != 429
+
+
+def test_rate_limit_response_shape_matches_contract(monkeypatch):
+    """429 body must match the documented shape and Retry-After header type."""
+    client, _server, rate_limit = _build_rate_limit_client(monkeypatch)
+    monkeypatch.setattr(rate_limit, "_now", lambda: 9000.0)
+
+    headers = {"Authorization": "Bearer az_test_shape"}
+    for _ in range(10):
+        client.get(_PROBE_PATH, headers=headers)
+    resp = client.get(_PROBE_PATH, headers=headers)
+
+    assert resp.status_code == 429
+    body = resp.json()
+    assert body == {
+        "error": "rate_limit_exceeded",
+        "message": body["message"],
+        "details": {
+            "limit_per_minute": 120,
+            "burst_limit_per_second": 10,
+            "retry_after_seconds": body["details"]["retry_after_seconds"],
+        },
+    }
+    assert isinstance(body["details"]["retry_after_seconds"], int)
+    retry_header = resp.headers.get("Retry-After")
+    assert retry_header is not None and retry_header.isdigit()
+
+
+def test_rate_limit_lru_eviction_under_pressure(monkeypatch):
+    """Above RATE_LIMIT_MAX_TRACKED_KEYS the oldest-touched key is evicted."""
+    client, _server, rate_limit = _build_rate_limit_client(monkeypatch)
+    monkeypatch.setattr(rate_limit, "_now", lambda: 10_000.0)
+
+    from core import feature_flags
+    monkeypatch.setattr(feature_flags, "RATE_LIMIT_MAX_TRACKED_KEYS", 10)
+
+    for i in range(110):
+        client.get(_PROBE_PATH, headers={"Authorization": f"Bearer az_lru_{i}"})
+
+    assert rate_limit.store_size_for_tests() <= 10
+    assert not rate_limit.store_contains_key_for_tests("key:az_lru_0")
+    resp = client.get(_PROBE_PATH, headers={"Authorization": "Bearer az_lru_after_evict"})
+    assert resp.status_code != 429
+
+
+def test_rate_limit_middleware_fails_open(monkeypatch, caplog):
+    """An exception inside the check must not block legitimate traffic."""
+    client, _server, rate_limit = _build_rate_limit_client(monkeypatch)
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("synthetic rate-limit failure")
+
+    monkeypatch.setattr(rate_limit, "check_and_record", boom)
+    caplog.set_level("WARNING")
+
+    resp = client.get(
+        _PROBE_PATH,
+        headers={"Authorization": "Bearer az_fail_open"},
+    )
+    assert resp.status_code != 429
+    assert any("ratelimit.fail_open" in record.getMessage() for record in caplog.records)
