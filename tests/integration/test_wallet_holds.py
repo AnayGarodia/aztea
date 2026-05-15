@@ -601,7 +601,7 @@ class TestPayoutCurveClawbackConsumesHold:
                 # We auth as master and impersonate via the master key.
                 pass
         with TestClient(srv.app) as c:
-            r = c.get("/wallets/me", headers={"Authorization": "Bearer test"})
+            r = c.get("/wallets/me", headers={"Authorization": "Bearer test-master-key"})
         # Master key reads the master wallet. The master wallet has no holds
         # so we just assert the keys/shape are present and types are right.
         assert r.status_code == 200, r.text

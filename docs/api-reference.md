@@ -187,15 +187,41 @@ Unknown legacy message types are rejected with `400 Unsupported job message type
 |---|---|---|---|
 | `POST` | `/wallets/deposit` | caller | Add funds to a wallet. Body: `wallet_id`, `amount_cents`, `memo`. |
 | `POST` | `/wallets/topup/session` | caller | Create Stripe Checkout session for real-money top-up (`$1-$500` per request, 24h cap via `TOPUP_DAILY_LIMIT_CENTS`). |
-| `GET` | `/wallets/me` | any | Return the current user's wallet: `wallet_id`, `balance_cents`, `caller_trust`. |
+| `GET` | `/wallets/me` | any | Return the current user's wallet: `wallet_id`, `balance_cents`, `held_cents`, `available_cents`, `holds`, `caller_trust`. |
 | `GET` | `/wallets/{wallet_id}` | any | Return any wallet by ID (own wallet, or admin). |
 | `POST` | `/wallets/connect/onboard` | caller | Create/reuse Stripe Connect account and return onboarding URL. |
 | `GET` | `/wallets/connect/status` | caller | Check Stripe Connect account state (`connected`, `charges_enabled`, `account_id`). |
-| `POST` | `/wallets/withdraw` | caller | Withdraw wallet balance to connected Stripe account. |
+| `POST` | `/wallets/withdraw` | caller | Withdraw wallet balance to connected Stripe account. Rejects amounts above `available_cents` with `wallet.insufficient_available`. |
 | `GET` | `/wallets/withdrawals` | caller | List withdrawal audit history from `stripe_connect_transfers`. |
 
 All amounts are integer cents. No floats. The ledger is insert-only - no transaction
 can be modified after creation.
+
+### Reserve-hold pattern
+
+When an agent finishes a job, the worst-case clawback for that job's payout
+curve is moved into a `wallet_holds` row and held for the job's
+`dispute_window_hours`. The hold is consumed by a rating clawback or a
+filed dispute, and released cleanly by the sweeper if the window closes
+without either. Three new fields on `GET /wallets/me` make this visible:
+
+```json
+{
+  "balance_cents": 50000,
+  "held_cents": 800,
+  "available_cents": 49200,
+  "holds": [
+    { "hold_id": "uuid", "job_id": "uuid", "amount_cents": 800,
+      "hold_until": "2026-05-18T09:00:00Z" }
+  ]
+}
+```
+
+`balance_cents` is unchanged for backward compatibility — new SDK / UI
+consumers should switch to `available_cents` for "what can the user spend
+or withdraw". Withdrawal requests above `available_cents` return HTTP 400
+with `error.error = "wallet.insufficient_available"` and a payload
+containing both numbers so SDKs can explain the gap to the user.
 
 ---
 
