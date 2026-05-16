@@ -33,9 +33,40 @@ class _FakeStdin:
         self.buffer = io.BytesIO(raw)
 
 
+class _FakeJsonResponse:
+    def __init__(self, *, status_code: int, payload: dict) -> None:
+        self.status_code = status_code
+        self.ok = 200 <= status_code < 300
+        self._payload = payload
+        self.text = str(payload)
+        self.headers = {"content-type": "application/json"}
+
+    def json(self):
+        return self._payload
+
+
+class _FakePostSession:
+    def __init__(self, response: _FakeJsonResponse) -> None:
+        self.response = response
+
+    def post(self, *_args, **_kwargs):
+        return self.response
+
+
 def test_auth_tool_uses_snake_case_input_schema_key():
     assert "input_schema" in _MODULE._AUTH_TOOL
     assert "inputSchema" not in _MODULE._AUTH_TOOL
+
+
+def test_auth_required_response_is_unambiguously_error():
+    bridge = _MODULE.RegistryBridge(base_url="https://aztea.test", api_key="")
+    ok, payload = bridge.call_tool("aztea_setup", {})
+    assert ok is False
+    assert payload["error"] == "AUTHENTICATION_REQUIRED"
+    assert payload["message"] == "Authentication required."
+    assert payload["human_hint"]
+    assert payload["is_error"] is True
+    assert payload["wallet_balance_cents"] is None
 
 
 def test_read_message_rejects_invalid_content_length(monkeypatch):
@@ -354,6 +385,38 @@ def test_aztea_call_forwards_output_format_into_underlying_call(monkeypatch):
     assert captured["slug"] == "linter_agent"
     assert captured["tool_arguments"]["output_format"] == "markdown"
     assert captured["tool_arguments"]["code"] == "x = 1"
+
+
+def test_failed_tool_call_marks_error_wallet_balance_as_stale():
+    bridge = _MODULE.RegistryBridge(base_url="https://aztea.test", api_key="az_test")
+    bridge._entries = [
+        {
+            "agent_id": "agent-1",
+            "tool_name": "linter_agent",
+            "tool": {
+                "name": "linter_agent",
+                "description": "lint",
+                "input_schema": {"type": "object"},
+                "output_schema": {"type": "object"},
+            },
+        }
+    ]
+    bridge._session = _FakePostSession(
+        _FakeJsonResponse(
+            status_code=402,
+            payload={
+                "wallet_balance_cents": 144,
+                "job_id": "job_123",
+                "message": "Wallet underfunded.",
+            },
+        )
+    )
+    ok, payload = bridge.call_tool("linter_agent", {})
+    assert ok is False
+    assert payload["error"] == "TOOL_CALL_FAILED"
+    assert payload["wallet_balance_cents"] == 144
+    assert payload["wallet_balance_is_stale_on_error"] is True
+    assert payload["wallet_balance_as_of_call_id"] == "job_123"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

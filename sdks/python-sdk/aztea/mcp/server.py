@@ -765,6 +765,21 @@ def _clean_error_text(value: Any) -> Any:
     return value
 
 
+def _copy_stale_wallet_balance(target: dict[str, Any], source: dict[str, Any]) -> None:
+    """Mark wallet balances from failed calls as stale diagnostic context."""
+    if "wallet_balance_cents" not in source:
+        return
+    target["wallet_balance_cents"] = source["wallet_balance_cents"]
+    target["wallet_balance_is_stale_on_error"] = True
+    call_id = (
+        source.get("job_id")
+        or source.get("call_id")
+        or source.get("request_id")
+    )
+    if call_id:
+        target["wallet_balance_as_of_call_id"] = str(call_id)
+
+
 def _mcp_media_content_from_artifacts(
     artifacts: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -2214,10 +2229,13 @@ class RegistryBridge:
     def _auth_required_response(self) -> tuple[bool, dict[str, Any]]:
         return False, {
             "error": "AUTHENTICATION_REQUIRED",
-            "message": (
+            "message": "Authentication required.",
+            "human_hint": (
                 "You need an Aztea API key to call agents. "
                 "Sign up: it is free and you get $1 credit instantly; no card required."
             ),
+            "is_error": True,
+            "wallet_balance_cents": None,
             "signup_url": self._signup_url,
             "docs_url": "https://github.com/AnayGarodia/aztea/blob/main/docs/quickstart.md",
             "next_step": "Set AZTEA_API_KEY=az_... in your environment and restart the MCP server.",
@@ -2566,10 +2584,10 @@ class RegistryBridge:
                 "refunded",
                 "refund_amount_cents",
                 "cost_usd",
-                "wallet_balance_cents",
             ):
                 if key in parsed_body:
                     error_payload[key] = parsed_body[key]
+            _copy_stale_wallet_balance(error_payload, parsed_body)
             # HTTPException: detail is {"detail": {"code": ..., "message": ..., "data": {...}}}
             detail = parsed_body.get("detail")
             if isinstance(detail, dict):
@@ -2580,6 +2598,8 @@ class RegistryBridge:
                 for key in ("refunded", "refund_amount_cents", "cost_usd"):
                     if key in inner_data:
                         error_payload[key] = inner_data[key]
+                if isinstance(inner_data, dict):
+                    _copy_stale_wallet_balance(error_payload, inner_data)
             elif isinstance(detail, str) and detail:
                 error_payload["charge_message"] = detail
         if bool(error_payload.get("refunded")):

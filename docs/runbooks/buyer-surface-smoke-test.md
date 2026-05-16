@@ -92,6 +92,16 @@ Use Aztea to run this Python snippet and show the output: print("mcp ok")
 
 Expected: Claude uses the Aztea MCP flow, the result contains `mcp ok`, and the call was billed (check wallet balance decreased).
 
+Auth-negative check:
+
+- Temporarily remove or mangle `AZTEA_API_KEY` in the Aztea MCP config, then restart Claude Code.
+- Call `aztea_wallet_balance` or `do_specialist_task`.
+- Expected: the tool result is marked as an error, `structuredContent.error`
+  is `AUTHENTICATION_REQUIRED`, `message` is `Authentication required.`,
+  `human_hint` contains the setup guidance, and `wallet_balance_cents` is
+  `null`.
+- Restore the real key and fully restart Claude Code before continuing.
+
 If the tool does not appear:
 
 ```bash

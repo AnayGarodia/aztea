@@ -17,6 +17,7 @@ from .output import (
     console,
     divider,
     emit,
+    error,
     kv_table,
     login_intro,
     setup_complete,
@@ -25,6 +26,14 @@ from .output import (
     styled_prompt,
     success,
     warn,
+)
+
+_SESSION_KEY_REUSED_WITHOUT_RAW = (
+    "Login succeeded, but the server reused an existing Session key whose raw "
+    "value is not available to this CLI."
+)
+_SESSION_KEY_REUSED_NEXT_STEP = (
+    "Run `aztea login --rotate` to mint a fresh key for this machine."
 )
 
 _CLAUDE_MD_SNIPPET = """\
@@ -303,21 +312,22 @@ def login(
                 data = client.auth.login(login_email, login_password, rotate=rotate)
             raw_key = str(data.get("raw_api_key") or "")
             if not raw_key:
-                # Server returns null raw_api_key when reusing an active session
-                # without rotation. The user explicitly bypassed the saved-key
-                # check (via --force / fresh email+password), so transparently
-                # retry with rotate=True rather than failing.
-                if not rotate:
-                    with spinner("Re-minting key", json_mode=json_mode):
-                        data = client.auth.login(
-                            login_email, login_password, rotate=True,
-                        )
-                    raw_key = str(data.get("raw_api_key") or "")
-            if not raw_key:
-                raise RuntimeError(
-                    "Login succeeded but no API key was returned. "
-                    "Try `aztea login --rotate` to force-mint a fresh key."
-                )
+                if json_mode:
+                    emit(
+                        {
+                            "error": "SESSION_KEY_RAW_VALUE_UNAVAILABLE",
+                            "message": _SESSION_KEY_REUSED_WITHOUT_RAW,
+                            "next_step": _SESSION_KEY_REUSED_NEXT_STEP,
+                        },
+                        json_mode=True,
+                    )
+                else:
+                    error(
+                        _SESSION_KEY_REUSED_WITHOUT_RAW,
+                        hint=_SESSION_KEY_REUSED_NEXT_STEP,
+                        code="auth.session_key_reused",
+                    )
+                raise typer.Exit(code=1)
             username = str(data.get("username") or "")
             save_config(api_key=raw_key, base_url=base_url, username=username)
             if json_mode:

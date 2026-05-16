@@ -27,6 +27,7 @@ def test_parse_surfaces_nested_refund_metadata():
                         "refund_amount_cents": 5,
                         "cost_usd": 0,
                         "wallet_balance_cents": 95,
+                        "job_id": "job_123",
                     },
                 }
             },
@@ -39,6 +40,8 @@ def test_parse_surfaces_nested_refund_metadata():
     assert result["refund_amount_cents"] == 5
     assert result["cost_usd"] == 0
     assert result["wallet_balance_cents"] == 95
+    assert result["wallet_balance_is_stale_on_error"] is True
+    assert result["wallet_balance_as_of_call_id"] == "job_123"
 
 
 def test_parse_strips_pydantic_help_urls():

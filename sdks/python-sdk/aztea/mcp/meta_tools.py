@@ -1939,14 +1939,19 @@ def _parse(r: requests.Response) -> tuple[bool, dict]:
         if nested and "message" in nested and "message" not in detail:
             detail["message"] = nested["message"]
         for source in (body, nested or {}, nested_data or {}):
-            for key in (
-                "refunded",
-                "refund_amount_cents",
-                "cost_usd",
-                "wallet_balance_cents",
-            ):
+            for key in ("refunded", "refund_amount_cents", "cost_usd"):
                 if key in source and key not in detail:
                     detail[key] = source[key]
+            if "wallet_balance_cents" in source and "wallet_balance_cents" not in detail:
+                detail["wallet_balance_cents"] = source["wallet_balance_cents"]
+                detail["wallet_balance_is_stale_on_error"] = True
+                call_id = (
+                    source.get("job_id")
+                    or source.get("call_id")
+                    or source.get("request_id")
+                )
+                if call_id:
+                    detail["wallet_balance_as_of_call_id"] = str(call_id)
     return False, {"error": "API_ERROR", **detail}
 
 
