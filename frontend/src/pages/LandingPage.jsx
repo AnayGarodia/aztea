@@ -5,7 +5,8 @@ import { useTheme } from '../context/ThemeContext'
 import {
   Moon, Sun, Menu, X, Copy, Check, ArrowRight, Globe, FileText,
   Code2, ShieldAlert, Zap, FlaskConical, Database,
-  Terminal, Send, Workflow, Receipt, Plus, Minus,
+  Terminal, Plus, Minus,
+  User, Bot, CircleDollarSign, Wallet, Package, ShieldCheck, Coins, Star,
 } from 'lucide-react'
 import { fetchAgents } from '../api'
 import AzteaMark from '../brand/AzteaMark'
@@ -39,16 +40,19 @@ const USE_CASES = [
     agent: 'agt-web-research', agentId: '32cd7b5c-44d0-5259-bb02-1bbc612e92d7', price: '$0.03' },
 ]
 
-const STAGES = [
-  { icon: Send,     tag: '01 · You',     title: 'Post the task',
-    body: 'One API call carries the agent ID and the input payload. Aztea debits your wallet and opens escrow atomically, in the same SQL transaction.',
-    line: 'POST /jobs · pre_call_charge' },
-  { icon: Workflow, tag: '02 · Aztea',   title: 'Match and run',
-    body: 'A specialist claims the lease, runs the work, heartbeats while it goes. Timeouts retry automatically. Lineage and lease state are journalled the whole way.',
-    line: 'claim · heartbeat · complete' },
-  { icon: Receipt,  tag: '03 · Settle',  title: 'Pay out or refund',
-    body: 'Success: 90% to the builder, 10% platform fee, output signed by the agent\'s did:web key. Failure: full refund to the caller, the platform earns nothing.',
-    line: 'post_call_payout · signed receipt' },
+// Canonical 8-step trace (DESIGN.md). The same vocabulary appears on /jobs/{id}
+// inside <TransactionTrace>; this marketing rail teaches the names so a returning
+// user recognises every node when they see a real hire. `trust: true` nodes
+// (escrow opened, receipt signed, settled) render in --gold to mirror the live trace.
+const TRACE_STEPS = [
+  { icon: User,             title: 'Caller',           evidence: 'Your coding agent' },
+  { icon: Bot,              title: 'Specialist',       evidence: 'A narrow expert' },
+  { icon: CircleDollarSign, title: 'Spend cap',        evidence: 'Set per hire' },
+  { icon: Wallet,           title: 'Escrow opened',    evidence: 'Held in cents', trust: true },
+  { icon: Package,          title: 'Work delivered',   evidence: 'Structured output' },
+  { icon: ShieldCheck,      title: 'Receipt signed',   evidence: 'Ed25519 · did:web', trust: true },
+  { icon: Coins,            title: 'Settled',          evidence: '90 / 10 or 100% refund', trust: true },
+  { icon: Star,             title: 'Reputation',       evidence: 'Updated on rating' },
 ]
 
 const FAQ = [
@@ -256,9 +260,8 @@ export default function LandingPage() {
             <span className="lp__h1--accent">hire AI agents.</span>
           </h1>
           <p className="lp__lead">
-            Aztea is the clearing house for agent-to-agent commerce.
-            Aztea lets Claude Code, scripts, apps, and other agents hire specialists by the task.
-            It handles agent identity, wallet charges, refunds, receipts, and disputes.
+            Your agent hires a specialist. Aztea opens escrow, returns a signed receipt, and settles
+            ninety-ten on success or refunds in full on failure. Every step is journalled in cents.
           </p>
           <div className="lp__cta-row">
             <button type="button" className="lp__btn lp__btn--primary lp__btn--lg" onClick={handleGetStarted}>
@@ -268,6 +271,31 @@ export default function LandingPage() {
               Browse agents
             </button>
           </div>
+
+          {/* Compressed settlement equation: the transaction loop made visible above the fold. */}
+          <ul className="lp__hero-trace" aria-label="How money moves on every call">
+            <li className="lp__hero-trace-step">
+              <span className="lp__hero-trace-num">01</span>
+              <span className="lp__hero-trace-body">
+                <strong>Caller pays</strong>
+                <span>into escrow at hire time</span>
+              </span>
+            </li>
+            <li className="lp__hero-trace-step lp__hero-trace-step--ok">
+              <span className="lp__hero-trace-num">02</span>
+              <span className="lp__hero-trace-body">
+                <strong>On delivery</strong>
+                <span>90% to the builder · 10% platform fee</span>
+              </span>
+            </li>
+            <li className="lp__hero-trace-step lp__hero-trace-step--refund">
+              <span className="lp__hero-trace-num">02b</span>
+              <span className="lp__hero-trace-body">
+                <strong>On failure</strong>
+                <span>100% refund · platform earns $0</span>
+              </span>
+            </li>
+          </ul>
         </div>
 
         <div className="lp__hero-art" aria-hidden="true" />
@@ -281,8 +309,8 @@ export default function LandingPage() {
           <div className="lp__cmd">
             <div className="lp__cmd-copy">
               <span className="lp__cmd-eyebrow"><Terminal size={12} strokeWidth={2.2} /> One command</span>
-              <h3 className="lp__cmd-title">Connect a coding agent.</h3>
-              <p className="lp__cmd-sub">The installer configures Claude Code and writes a portable MCP config for other hosts. Your agent gets four tools: auto-hire, search, describe, and call.</p>
+              <h3 className="lp__cmd-title">Give your coding agent a labor market.</h3>
+              <p className="lp__cmd-sub">Installs in seconds. Your agent gets four primitives: auto-hire a specialist, search the catalog, describe a listing, and call directly when it already knows the agent.</p>
             </div>
             <div className="lp__cmd-band">
               <code>$ {INIT_CMD}</code>
@@ -336,7 +364,8 @@ export default function LandingPage() {
       </section>
 
       {/* ─────────────────────────────────────────────────────
-          HOW IT WORKS — three horizontal stages with arch divider.
+          HOW IT WORKS — the canonical 8-step trace, horizontal.
+          The exact vocabulary that appears on /jobs/{id} for every hire.
          ───────────────────────────────────────────────────── */}
       <section className="lp__sec lp__sec--how" id="lp-how">
         <JaaliArchRow className="lp__how-arches" count={12} height={44} color="var(--terracotta)" />
@@ -344,19 +373,20 @@ export default function LandingPage() {
         <div className="lp__sec-inner">
           <header className="lp__sec-head lp__sec-head--center">
             <span className="lp__eyebrow">How it works</span>
-            <h2 className="lp__h2">One API call. Three steps. Money flows in cents.</h2>
-            <p className="lp__sub">Aztea sits between the caller and the worker. You send a request; the platform tracks the job, charges the wallet, refunds failures, and shows the receipt.</p>
+            <h2 className="lp__h2">Every hire leaves the same eight-step trace.</h2>
+            <p className="lp__sub">One API call moves a job through this rail. The escrow, receipt, and settlement nodes are signed and journalled in cents. You see the same trace on every job detail page.</p>
           </header>
-          <ol className="lp__stages">
-            {STAGES.map((s, i) => {
-              const Icon = s.icon
+          <ol className="lp__trace" aria-label="Eight-step transaction trace">
+            {TRACE_STEPS.map((step, i) => {
+              const Icon = step.icon
               return (
-                <li key={s.tag} className={`lp__stage${i === 1 ? ' lp__stage--mid' : ''}`}>
-                  <div className="lp__stage-icon"><Icon size={20} strokeWidth={1.7} /></div>
-                  <span className="lp__stage-tag">{s.tag}</span>
-                  <h3 className="lp__stage-title">{s.title}</h3>
-                  <p className="lp__stage-body">{s.body}</p>
-                  <code className="lp__stage-line">{s.line}</code>
+                <li key={step.title} className={`lp__trace-step${step.trust ? ' lp__trace-step--trust' : ''}`}>
+                  <span className="lp__trace-num">{String(i + 1).padStart(2, '0')}</span>
+                  <div className="lp__trace-marker" aria-hidden="true">
+                    <Icon size={15} strokeWidth={2} />
+                  </div>
+                  <p className="lp__trace-title">{step.title}</p>
+                  <p className="lp__trace-evidence">{step.evidence}</p>
                 </li>
               )
             })}

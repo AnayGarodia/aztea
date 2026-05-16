@@ -183,8 +183,9 @@
 }
 
 .workflows__dialog-error {
-  background: var(--surface-2);
-  border-left: 3px solid var(--danger, var(--accent));
+  background: var(--negative-bg);
+  border: 1px solid var(--negative-border);
+  color: var(--negative);
   padding: 10px 14px;
   border-radius: var(--r-sm);
 }

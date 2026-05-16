@@ -173,8 +173,10 @@
 }
 
 .markdown-doc blockquote {
-  border-left: 3px solid color-mix(in srgb, var(--copper) 55%, var(--accent-border));
-  padding-left: 1rem;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  border-radius: var(--r-sm);
+  padding: 0.75rem 1rem;
   color: var(--text-muted);
   font-style: italic;
   margin-left: 0;

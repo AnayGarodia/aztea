@@ -407,7 +407,7 @@
 }
 .ob-visual__glow--violet {
   width: 140px; height: 140px;
-  background: rgba(99, 102, 241, 0.15);
+  background: var(--terracotta-bg);
   bottom: -30px; left: -20px;
 }
 .ob-visual__glow--amber {

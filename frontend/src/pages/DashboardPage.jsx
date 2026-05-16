@@ -1,4 +1,12 @@
-import { useEffect, useState } from 'react'
+// OWNS: logged-in landing page. One statement-of-intent + KPIs + recent jobs + collapsed setup checklist.
+// NOT OWNS: catalog, job detail, listing flow.
+//
+// DECISIONS:
+// - One primary CTA + one secondary CTA above the fold (was 5-6 equal-weight buttons before the distill).
+//   Critique P1: a new buyer must see exactly one next step, not seven.
+// - The setup checklist is collapsed by default. New users with zero jobs and zero balance see it open.
+// - Builder branch reads "callers hired you" framing in JobRow so a publisher doesn't see buyer-shaped rows.
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import Topbar from '../layout/Topbar'
 import Card from '../ui/Card'
@@ -11,18 +19,24 @@ import Stagger from '../ui/motion/Stagger'
 import { useMarket } from '../context/MarketContext'
 import { useAuth } from '../context/AuthContext'
 import { fetchReconciliationRuns } from '../api'
-import { Wallet, Hammer, Bot, Briefcase, CheckCircle2 } from 'lucide-react'
+import { Wallet, Bot, Briefcase, CheckCircle2, ChevronDown, Terminal } from 'lucide-react'
 import './DashboardPage.css'
 import { fmtDate, fmtUsd } from '../utils/format.js'
 
-function JobRow({ job, agents }) {
+const STARTER_CREDIT_LABEL = '$2.00'
+
+function JobRow({ job, agents, role }) {
   const agent = agents.find(a => a.agent_id === job.agent_id)
-  const isLive = job.status === 'running' || job.status === 'pending'
+  const builderFraming = role === 'builder'
+  const partyLabel = builderFraming ? 'Caller hire' : agent?.name ?? 'Unknown agent'
+  const detail = builderFraming
+    ? (agent?.name ? `via ${agent.name}` : job.job_id.slice(0, 12) + '…')
+    : job.job_id.slice(0, 12) + '…'
   return (
     <Link to={`/jobs/${job.job_id}`} className="dashboard__job-row">
       <div>
-        <p className="dashboard__job-name">{agent?.name ?? 'Unknown agent'}</p>
-        <p className="dashboard__job-id t-mono">{job.job_id.slice(0, 12)}…</p>
+        <p className="dashboard__job-name">{partyLabel}</p>
+        <p className="dashboard__job-id t-mono">{detail}</p>
       </div>
       <Badge label={job.status} dot />
       <p className="dashboard__job-date">{fmtDate(job.created_at)}</p>
@@ -30,48 +44,53 @@ function JobRow({ job, agents }) {
   )
 }
 
-function ActionStep({ done, title, copy, actionTo, actionLabel }) {
-  const inner = (
-    <>
-      <div>
-        <p className="dashboard__step-title">{title}</p>
-        <p className="dashboard__step-copy">{copy}</p>
-      </div>
-      {actionLabel && (
-        <span className={`btn btn--${done ? 'ghost' : 'primary'} btn--sm dashboard__step-action`} aria-hidden="true">
-          {actionLabel}
-        </span>
-      )}
-    </>
+function SetupChecklist({ role, agents, jobs, hasBalance }) {
+  const items = role === 'builder'
+    ? [
+        { done: false, title: 'List your first agent', copy: 'Register an HTTP endpoint or upload a SKILL.md. Aztea handles billing and delivery.', to: '/list-skill', label: 'List an agent' },
+        { done: false, title: 'Connect Stripe to withdraw', copy: 'Payouts land in your Aztea wallet after every successful call. Connect a bank account to cash out.', to: '/wallet', label: 'Connect Stripe' },
+        { done: false, title: 'Create a scoped API key', copy: 'One key per integration so a leak only affects one surface, not your whole account.', to: '/keys', label: 'Manage keys' },
+      ]
+    : [
+        { done: agents.length > 0, title: 'Browse the catalog', copy: 'Each listing shows what the specialist does, what it costs, and example outputs.', to: '/agents', label: agents.length > 0 ? 'Open catalog' : 'Start here' },
+        { done: jobs.length > 0,   title: 'Hire your first specialist', copy: 'Pending, running, and settled jobs appear in one timeline with signed receipts.', to: '/jobs', label: 'Open jobs' },
+        { done: hasBalance,        title: 'Fund the wallet', copy: 'Charges debit at hire time, refund automatically on failure. Every cent is journalled.', to: '/wallet', label: hasBalance ? 'View wallet' : 'Add funds' },
+      ]
+
+  return (
+    <ul className="dashboard__steps">
+      {items.map((step) => (
+        <li key={step.title}>
+          <Link to={step.to} className="dashboard__step">
+            <div>
+              <p className="dashboard__step-title">{step.title}</p>
+              <p className="dashboard__step-copy">{step.copy}</p>
+            </div>
+            <span className={`btn btn--${step.done ? 'ghost' : 'primary'} btn--sm`} aria-hidden="true">
+              {step.label}
+            </span>
+          </Link>
+        </li>
+      ))}
+    </ul>
   )
-  if (actionTo) {
-    return <Link to={actionTo} className="dashboard__step dashboard__step--link">{inner}</Link>
-  }
-  return <div className="dashboard__step">{inner}</div>
 }
 
-function NewUserBanner({ icon, title, sub, primaryTo, primaryLabel, secondaryTo, secondaryLabel }) {
-  return (
-    <div className="dashboard__new-user-banner">
-      <div className="dashboard__new-user-banner__body">
-        <div className="dashboard__new-user-banner__icon">{icon}</div>
-        <div>
-          <p className="dashboard__new-user-banner__title">{title}</p>
-          <p className="dashboard__new-user-banner__sub">{sub}</p>
-        </div>
-      </div>
-      <div className="dashboard__new-user-banner__actions">
-        <Link to={primaryTo}><Button variant="primary" size="sm">{primaryLabel}</Button></Link>
-        <Link to={secondaryTo}><Button variant="secondary" size="sm">{secondaryLabel}</Button></Link>
-      </div>
-    </div>
-  )
+function buildPrimaryCta({ role, isNewUser, postAuthAgent }) {
+  if (postAuthAgent) {
+    return { to: `/agents/${postAuthAgent.agent_id}`, label: `Continue to ${postAuthAgent.name}`, onClick: () => { try { sessionStorage.removeItem('aztea_post_auth_agent') } catch {} } }
+  }
+  if (role === 'builder') {
+    return { to: '/list-skill', label: isNewUser ? 'List your first agent' : 'List an agent' }
+  }
+  return { to: '/agents', label: isNewUser ? 'Hire your first specialist' : 'Browse the catalog' }
 }
 
 export default function DashboardPage() {
   const { agents, jobs, wallet, loading, apiKey } = useMarket()
   const { user } = useAuth()
   const [reconRuns, setReconRuns] = useState(null)
+  const [setupOpen, setSetupOpen] = useState(false)
 
   const role = user?.role ?? 'both'
   const completedJobs = jobs.filter(j => j.status === 'complete').length
@@ -80,14 +99,18 @@ export default function DashboardPage() {
   const recentJobs = jobs.slice(0, 8)
   const hasBalance = (wallet?.balance_cents ?? 0) > 0
   const isNewUser = !loading && jobs.length === 0 && !hasBalance
-
-  // Surface the agent the user was looking at before auth
-  const postAuthAgentId = (() => { try { return sessionStorage.getItem('aztea_post_auth_agent') } catch { return null } })()
-  const postAuthAgent = postAuthAgentId ? agents.find(a => a.agent_id === postAuthAgentId) : null
-  const balance = loading ? '…' : fmtUsd(wallet?.balance_cents ?? 0)
   const isAdmin = (user?.scopes ?? []).includes('admin')
-  const creditLabel = '$2.00'
-  const creditSubtext = 'Use it for your first specialist hire: dependency audit, endpoint check, sandbox run, or receipt verification. No card needed.'
+  const balance = loading ? '…' : fmtUsd(wallet?.balance_cents ?? 0)
+
+  const postAuthAgentId = useMemo(() => {
+    try { return sessionStorage.getItem('aztea_post_auth_agent') } catch { return null }
+  }, [])
+  const postAuthAgent = postAuthAgentId ? agents.find(a => a.agent_id === postAuthAgentId) : null
+  const primaryCta = buildPrimaryCta({ role, isNewUser, postAuthAgent })
+
+  useEffect(() => {
+    if (isNewUser) setSetupOpen(true)
+  }, [isNewUser])
 
   useEffect(() => {
     if (!isAdmin || !apiKey) {
@@ -96,16 +119,23 @@ export default function DashboardPage() {
     }
     let active = true
     fetchReconciliationRuns(apiKey, 5)
-      .then(data => {
-        if (!active) return
-        setReconRuns(data?.runs ?? [])
-      })
-      .catch(() => {
-        if (!active) return
-        setReconRuns([])
-      })
+      .then(data => { if (active) setReconRuns(data?.runs ?? []) })
+      .catch(() => { if (active) setReconRuns([]) })
     return () => { active = false }
   }, [isAdmin, apiKey])
+
+  const balanceHint = role === 'builder'
+    ? 'Earnings · withdraw via Stripe Connect'
+    : isNewUser
+      ? `${STARTER_CREDIT_LABEL} starter credit`
+      : 'Spend in cents · refunds on failure'
+
+  const kpis = [
+    { label: role === 'builder' ? 'Earnings balance' : 'Wallet balance', value: balance, hint: balanceHint, icon: Wallet, primary: true },
+    { label: 'Specialists online', value: loading ? '…' : agents.length, hint: 'In the catalog', icon: Bot },
+    { label: 'Active jobs',  value: loading ? '…' : activeJobs, hint: 'In flight or claimed', icon: Briefcase },
+    { label: 'Success rate', value: loading ? '…' : `${successRate}%`, hint: jobs.length > 0 ? 'Across all your hires' : 'No jobs yet', icon: CheckCircle2 },
+  ]
 
   return (
     <main className="dashboard">
@@ -114,62 +144,40 @@ export default function DashboardPage() {
       <div className="dashboard__scroll">
         <div className="dashboard__content">
 
-          {/* New-user welcome banner */}
-          {isNewUser && (
-            <Reveal>
-              {role === 'builder' ? (
-                <NewUserBanner
-                  icon={<Hammer size={20} color="#fff" />}
-                  title={`Welcome${user?.username ? `, ${user.username}` : ''}. List your first skill and start earning.`}
-                  sub="Upload a SKILL.md, set a price, and Aztea handles billing and execution for you."
-                  primaryTo="/list-skill" primaryLabel="List a skill"
-                  secondaryTo="/wallet" secondaryLabel="View earnings"
-                />
-              ) : (
-                <NewUserBanner
-                  icon={<Wallet size={20} color="#fff" />}
-                  title={`Welcome${user?.username ? `, ${user.username}` : ''}. You have ${creditLabel} of starter credit.`}
-                  sub={creditSubtext}
-                  primaryTo="/agents" primaryLabel="Browse agents"
-                  secondaryTo="/wallet" secondaryLabel="View wallet"
-                />
-              )}
-            </Reveal>
-          )}
-
-          {/* Welcome */}
+          {/* Statement of intent — one block, one primary, one secondary. */}
           <Reveal>
-            <div className="dashboard__welcome">
-              <div>
-                <p className="dashboard__welcome-eyebrow t-micro">Overview</p>
-                <h1>Welcome{user?.username ? `, ${user.username}` : ''}</h1>
-                <p>Hire specialists, track jobs, and read every charge, refund, and payout from one ledger.</p>
+            <section className="dashboard__intent">
+              <div className="dashboard__intent-copy">
+                <p className="dashboard__intent-eyebrow t-micro">Overview</p>
+                <h1 className="dashboard__intent-title">
+                  {isNewUser
+                    ? <>Welcome{user?.username ? `, ${user.username}` : ''}. Your agent can hire its first specialist.</>
+                    : <>Welcome back{user?.username ? `, ${user.username}` : ''}.</>}
+                </h1>
+                <p className="dashboard__intent-sub">
+                  {isNewUser && role !== 'builder'
+                    ? `You have ${STARTER_CREDIT_LABEL} of starter credit. Spend it on a dependency audit, a sandboxed code run, or a live endpoint check — escrow refunds automatically on failure.`
+                    : role === 'builder'
+                      ? 'Publish a specialist, watch callers hire you, and read every charge, payout, and refund from one ledger.'
+                      : 'Hire specialists, track jobs, and read every charge, refund, and payout from one ledger.'}
+                </p>
               </div>
-              <div className="dashboard__welcome-actions">
-                {postAuthAgent ? (
-                  <Link to={`/agents/${postAuthAgent.agent_id}`} onClick={() => { try { sessionStorage.removeItem('aztea_post_auth_agent') } catch {} }}>
-                    <Button variant="primary">Continue to {postAuthAgent.name}</Button>
-                  </Link>
-                ) : (
-                  <Link to="/agents"><Button variant="primary">Browse the catalog</Button></Link>
-                )}
-                <Link to="/jobs"><Button variant="secondary">My jobs</Button></Link>
+              <div className="dashboard__intent-actions">
+                <Link to={primaryCta.to} onClick={primaryCta.onClick}>
+                  <Button variant="primary">{primaryCta.label}</Button>
+                </Link>
+                <Link to="/docs/quickstart">
+                  <Button variant="secondary" icon={<Terminal size={14} />}>Connect a coding agent</Button>
+                </Link>
               </div>
-            </div>
+            </section>
           </Reveal>
 
-          {/* KPIs */}
+          {/* KPI strip */}
           <Stagger className="dashboard__kpi-grid" staggerDelay={0.07}>
-            {[
-              { label: role === 'builder' ? 'Earnings balance' : 'Wallet balance', value: balance, hint: role === 'builder' ? 'Withdraw via Stripe Connect' : 'Spend in cents · refunds on failure', icon: Wallet, accent: 'var(--accent)' },
-              { label: 'Specialists online', value: loading ? '…' : agents.length, hint: role === 'builder' ? 'In the catalog' : 'Across every category', icon: Bot, accent: 'var(--sage-strong)' },
-              { label: 'Active jobs',  value: loading ? '…' : activeJobs, hint: 'In flight or claimed', icon: Briefcase, accent: 'var(--copper)' },
-              { label: 'Success rate', value: loading ? '…' : `${successRate}%`, hint: jobs.length > 0 ? 'Across all your hires' : 'No jobs yet', icon: CheckCircle2, accent: 'var(--positive)' },
-            ].filter(Boolean).map((s, i) => (
-              <div key={s.label} className={`dashboard__kpi${i === 0 ? ' dashboard__kpi--primary' : ''}`}>
-                <div className="dashboard__kpi-icon">
-                  <s.icon size={16} />
-                </div>
+            {kpis.map(s => (
+              <div key={s.label} className={`dashboard__kpi${s.primary ? ' dashboard__kpi--primary' : ''}`}>
+                <div className="dashboard__kpi-icon"><s.icon size={16} /></div>
                 <p className="dashboard__kpi-value">{s.value}</p>
                 <p className="dashboard__kpi-label">{s.label}</p>
                 {s.hint && <p className="dashboard__kpi-hint">{s.hint}</p>}
@@ -177,61 +185,40 @@ export default function DashboardPage() {
             ))}
           </Stagger>
 
-          {isAdmin && (
+          {isAdmin && reconRuns && reconRuns.length > 0 && (
             <Reveal delay={0.08}>
               <Card>
-                <Card.Header>
-                  <span className="dashboard__section-title">Ledger reconciliation</span>
-                </Card.Header>
+                <Card.Header><span className="dashboard__section-title">Ledger reconciliation</span></Card.Header>
                 <Card.Body>
-                  {reconRuns === null ? (
-                    <p className="dashboard__kpi-hint">Reconciling the ledger…</p>
-                  ) : reconRuns.length === 0 ? (
-                    <p className="dashboard__kpi-hint">No reconciliation runs found yet.</p>
-                  ) : (
-                    <div>
-                      <p className="dashboard__kpi-hint">
-                        Latest: {fmtDate(reconRuns[0]?.created_at)} · drift {(reconRuns[0]?.drift_cents ?? 0)}¢ · mismatches {(reconRuns[0]?.mismatch_count ?? 0)}
-                      </p>
-                      <div className="dashboard__trust-pills" style={{ marginTop: 'var(--sp-2)' }}>
-                        <Badge label={reconRuns[0]?.invariant_ok ? 'invariant_ok' : 'invariant_failed'} dot />
-                      </div>
-                    </div>
-                  )}
+                  <p className="dashboard__kpi-hint">
+                    Latest: {fmtDate(reconRuns[0]?.created_at)} · drift {(reconRuns[0]?.drift_cents ?? 0)}¢ · mismatches {(reconRuns[0]?.mismatch_count ?? 0)}
+                  </p>
+                  <div className="dashboard__trust-pills">
+                    <Badge label={reconRuns[0]?.invariant_ok ? 'invariant_ok' : 'invariant_failed'} dot />
+                  </div>
                 </Card.Body>
               </Card>
             </Reveal>
           )}
 
-          {/* Checklist */}
+          {/* Setup — collapsed by default unless new user */}
           <Reveal delay={0.1}>
-            <Card>
-              <Card.Header>
-                <span className="dashboard__section-title">Getting started</span>
-              </Card.Header>
-              <Card.Body className="dashboard__steps">
-                {role === 'builder' ? (
-                  <>
-                    <ActionStep done={false} title="List your first agent" copy="Register an HTTP endpoint or upload a SKILL.md. Set a price per call. Aztea handles billing and delivery." actionTo="/list-skill" actionLabel="List an agent" />
-                    <ActionStep done={false} title="Connect Stripe to withdraw earnings" copy="Payouts land in your Aztea wallet after every successful call. Connect a bank account to cash out." actionTo="/wallet" actionLabel="Connect Stripe" />
-                    <ActionStep done={false} title="Create a scoped API key" copy="One key per integration so a leak only affects one surface, not your whole account." actionTo="/keys" actionLabel="Manage keys" />
-                  </>
-                ) : (
-                  <>
-                    <ActionStep done={agents.length > 0} title="Browse the catalog" copy="Each listing shows what the specialist does, what it costs per call, and example outputs." actionTo="/agents" actionLabel={agents.length > 0 ? 'Open catalog' : 'Start here'} />
-                    <ActionStep done={jobs.length > 0} title="Track your hires" copy="Pending, running, and settled jobs appear in one timeline with signed receipts." actionTo="/jobs" actionLabel="Open jobs" />
-                    <ActionStep done={hasBalance} title="Fund the wallet" copy="Charges debit at hire time, refund automatically on failure. Every cent is journalled." actionTo="/wallet" actionLabel={hasBalance ? 'View wallet' : 'Add funds'} />
-                  </>
-                )}
-              </Card.Body>
-            </Card>
+            <details className="dashboard__setup" open={setupOpen} onToggle={(e) => setSetupOpen(e.currentTarget.open)}>
+              <summary className="dashboard__setup-summary">
+                <span className="dashboard__section-title">Setup</span>
+                <ChevronDown size={14} className="dashboard__setup-chev" />
+              </summary>
+              <div className="dashboard__setup-body">
+                <SetupChecklist role={role} agents={agents} jobs={jobs} hasBalance={hasBalance} />
+              </div>
+            </details>
           </Reveal>
 
-          {/* Recent jobs (full width) */}
+          {/* Recent jobs */}
           <Reveal delay={0.15}>
             <Card>
               <Card.Header className="dashboard__panel-head">
-                <span className="dashboard__section-title">Recent jobs</span>
+                <span className="dashboard__section-title">{role === 'builder' ? 'Recent caller hires' : 'Recent jobs'}</span>
                 <Link to="/jobs"><Button variant="ghost" size="sm">View all</Button></Link>
               </Card.Header>
               <Card.Body>
@@ -242,13 +229,13 @@ export default function DashboardPage() {
                 ) : recentJobs.length === 0 ? (
                   <EmptyState
                     agentId="empty-jobs"
-                    title="No jobs yet"
-                    sub="Choose an agent from the catalog and run your first job."
-                    action={<Link to="/agents"><Button variant="primary">Browse agents</Button></Link>}
+                    title={role === 'builder' ? 'No caller hires yet' : 'No jobs yet'}
+                    sub={role === 'builder' ? 'List a specialist and your first hire will appear here.' : 'Choose an agent from the catalog and run your first job.'}
+                    action={<Link to={primaryCta.to}><Button variant="primary">{primaryCta.label}</Button></Link>}
                   />
                 ) : (
                   <div className="dashboard__jobs">
-                    {recentJobs.map(job => <JobRow key={job.job_id} job={job} agents={agents} />)}
+                    {recentJobs.map(job => <JobRow key={job.job_id} job={job} agents={agents} role={role} />)}
                   </div>
                 )}
               </Card.Body>

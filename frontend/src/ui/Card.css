@@ -23,12 +23,6 @@
   box-shadow: var(--shadow-md);
 }
 
-.card--glass {
-  background: var(--overlay);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-}
-
 .card--accent {
   border-color: var(--accent-border);
   background: var(--accent-bg);

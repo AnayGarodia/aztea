@@ -29,7 +29,7 @@ import AgentSigil from '../brand/AgentSigil'
 import ResultRenderer from '../features/agents/results/ResultRenderer'
 import { getJob, getJobMessages, postJobMessage, rateJob, getJobDispute, fileDispute, verifyJob } from '../api'
 import { useMarket } from '../context/MarketContext'
-import JobTimeline from '../features/jobs/JobTimeline'
+import TransactionTrace from '../features/jobs/TransactionTrace'
 import JobReceipt from '../features/jobs/JobReceipt'
 import '../features/jobs/JobReceipt.css'
 import { ArrowLeft, RefreshCw, Star, AlertTriangle, CheckCircle, Clock, RotateCcw, ShieldCheck } from 'lucide-react'
@@ -472,21 +472,26 @@ export default function JobDetailPage() {
             </Reveal>
           )}
 
-          {/* Timeline */}
+          {/* Transaction trace — the canonical 8-step primitive (DESIGN.md). */}
           <Reveal delay={0.05}>
-            <div className="job-detail__timeline">
-              <JobTimeline
-                status={job.status}
-                timestamps={{
-                  pending: job.created_at,
-                  running: job.claimed_at,
-                  awaiting_clarification: job.clarification_requested_at,
-                  complete: job.completed_at,
-                  failed: job.completed_at,
-                }}
-              />
-            </div>
+            <Card>
+              <Card.Header>
+                <span className="job-detail__section-title">Transaction trace</span>
+              </Card.Header>
+              <Card.Body>
+                <TransactionTrace job={job} agent={agent} />
+              </Card.Body>
+            </Card>
           </Reveal>
+
+          {/* Cryptographic receipt sits directly under the trace whose
+              "Receipt signed" node points at it. Adjacency is the contract;
+              don't separate them with intermediate cards. */}
+          {job.status === 'complete' && (
+            <Reveal delay={0.07}>
+              <JobReceipt jobId={id} agentId={agent?.agent_id || job.agent_id} />
+            </Reveal>
+          )}
 
           {/* Job metadata */}
           <Reveal delay={0.1}>
@@ -601,13 +606,17 @@ export default function JobDetailPage() {
             </Reveal>
           )}
 
-          {/* Verification panel */}
-          {job.status === 'complete' && !verifyDone && job.output_verification_status === 'pending' && (
+          {/* Verification follow-up: only renders once the user has acted on the
+              banner (Accept → confirm step, or Reject → reject form). The banner
+              is the sole start-state surface — never duplicate the primary action. */}
+          {job.status === 'complete' && !verifyDone && job.output_verification_status === 'pending' && (verifyConfirming || showRejectForm) && (
             <Reveal delay={0.22}>
               <Card className="job-detail__verify-card">
                 <Card.Header>
-                  <span className="job-detail__section-title">Verify Output</span>
-                  {countdown && (
+                  <span className="job-detail__section-title">
+                    {showRejectForm ? 'Reject & dispute' : 'Confirm release'}
+                  </span>
+                  {countdown && !showRejectForm && (
                     <span className="job-detail__verify-countdown">
                       <Clock size={12} />
                       Auto-accepts in {countdown}
@@ -615,57 +624,33 @@ export default function JobDetailPage() {
                   )}
                 </Card.Header>
                 <Card.Body>
-                  {!showRejectForm ? (
-                    <div className="job-detail__verify-actions">
-                      {verifyConfirming ? (
-                        <div className="job-detail__verify-confirm">
-                          <p className="job-detail__verify-confirm-msg">
-                            Release payment to the agent? This is irreversible.
-                          </p>
-                          <div className="job-detail__verify-confirm-row">
-                            <Button
-                              variant="primary"
-                              size="sm"
-                              icon={<CheckCircle size={14} />}
-                              onClick={() => handleVerify('accept')}
-                              loading={verifyLoading}
-                            >
-                              Yes, release payment
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              disabled={verifyLoading}
-                              onClick={() => setVerifyConfirming(false)}
-                            >
-                              Cancel
-                            </Button>
-                          </div>
-                        </div>
-                      ) : (
-                        <>
-                          <Button
-                            variant="primary"
-                            size="sm"
-                            icon={<CheckCircle size={14} />}
-                            onClick={() => setVerifyConfirming(true)}
-                            disabled={verifyLoading}
-                          >
-                            Accept &amp; Release Payment
-                          </Button>
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            icon={<AlertTriangle size={13} />}
-                            onClick={() => setShowRejectForm(true)}
-                            disabled={verifyLoading}
-                          >
-                            Reject &amp; Dispute
-                          </Button>
-                        </>
-                      )}
+                  {verifyConfirming && !showRejectForm && (
+                    <div className="job-detail__verify-confirm">
+                      <p className="job-detail__verify-confirm-msg">
+                        Release payment to the agent? This is irreversible.
+                      </p>
+                      <div className="job-detail__verify-confirm-row">
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          icon={<CheckCircle size={14} />}
+                          onClick={() => handleVerify('accept')}
+                          loading={verifyLoading}
+                        >
+                          Yes, release payment
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={verifyLoading}
+                          onClick={() => setVerifyConfirming(false)}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
                     </div>
-                  ) : (
+                  )}
+                  {showRejectForm && (
                     <form onSubmit={e => { e.preventDefault(); handleVerify('reject') }} className="job-detail__verify-reject-form">
                       <label className="job-detail__verify-label">
                         Reason <span className="job-detail__verify-required">*</span>
@@ -770,13 +755,6 @@ export default function JobDetailPage() {
               </Card.Body>
             </Card>
           </Reveal>
-
-          {/* Cryptographic receipt — visible whenever the job is complete. */}
-          {job.status === 'complete' && (
-            <Reveal delay={0.28}>
-              <JobReceipt jobId={id} agentId={agent?.agent_id || job.agent_id} />
-            </Reveal>
-          )}
 
           {/* Rating + Dispute - only for completed jobs */}
           {job.status === 'complete' && (

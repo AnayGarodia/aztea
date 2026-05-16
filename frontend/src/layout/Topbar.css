@@ -1,7 +1,7 @@
 .topbar {
   height: var(--topbar-h);
   border-bottom: 1px solid color-mix(in srgb, var(--accent) 10%, var(--border));
-  background: color-mix(in srgb, var(--surface) 88%, var(--parchment));
+  background: var(--surface);
   display: flex;
   align-items: center;
   gap: 16px;
@@ -10,8 +10,6 @@
   position: sticky;
   top: 0;
   z-index: 12;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
 }
 
 .topbar__breadcrumb {

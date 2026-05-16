@@ -15,11 +15,11 @@
   font-size: 0.8125rem;
 }
 
-/* Vivid left-border signal stripe */
-.toast--success { border-left: 3px solid var(--positive); }
-.toast--error   { border-left: 3px solid var(--negative); }
-.toast--warn    { border-left: 3px solid var(--warn); }
-.toast--info    { border-left: 3px solid var(--info); }
+/* Tonal signal: full coloured border + tinted background. No side-stripe. */
+.toast--success { border-color: var(--positive-border); background: var(--positive-bg); }
+.toast--error   { border-color: var(--negative-border); background: var(--negative-bg); }
+.toast--warn    { border-color: var(--warn-border);     background: var(--warn-bg); }
+.toast--info    { border-color: var(--info-border);     background: var(--info-bg); }
 
 /* Icon bubble */
 .toast__icon {

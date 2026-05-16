@@ -69,12 +69,9 @@
   gap: 24px;
   padding: 10px 10px 10px 28px;
   border-radius: 34px;
-  background: color-mix(in srgb, var(--canvas) 55%, transparent);
-  border: 1px solid color-mix(in srgb, var(--border-soft) 80%, transparent);
-  backdrop-filter: blur(24px) saturate(1.3) brightness(1.04);
-  -webkit-backdrop-filter: blur(24px) saturate(1.3) brightness(1.04);
-  box-shadow: 0 2px 24px rgba(0, 0, 0, 0.04),
-              inset 0 1px 3px rgba(255, 255, 255, 0.4);
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  box-shadow: var(--shadow-sm);
 }
 @media (max-width: 760px) {
   .lp__nav { padding: 10px 12px 0; }
@@ -311,6 +308,67 @@
   margin-bottom: 22px;
   flex-wrap: wrap;
   justify-content: center;
+}
+
+/* Hero transaction trace — three-step settlement equation above the fold. */
+.lp__hero-trace {
+  list-style: none;
+  margin: 0 auto;
+  padding: 0;
+  max-width: 720px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  text-align: left;
+}
+.lp__hero-trace-step {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+.lp__hero-trace-step--ok {
+  border-color: var(--positive-border);
+  background: color-mix(in srgb, var(--positive-bg) 55%, var(--surface));
+}
+.lp__hero-trace-step--refund {
+  border-color: var(--accent-border);
+  background: color-mix(in srgb, var(--accent-bg) 55%, var(--surface));
+}
+.lp__hero-trace-num {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  align-self: center;
+}
+.lp__hero-trace-step--ok .lp__hero-trace-num     { color: var(--positive); }
+.lp__hero-trace-step--refund .lp__hero-trace-num { color: var(--accent); }
+.lp__hero-trace-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.lp__hero-trace-body strong {
+  font-family: var(--font-sans);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.005em;
+}
+.lp__hero-trace-body span {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+@media (max-width: 760px) {
+  .lp__hero-trace { grid-template-columns: 1fr; max-width: 480px; }
 }
 
 /* ── SECTION SHELL ─────────────────────────────────────────── */
@@ -572,89 +630,86 @@
   pointer-events: none;
 }
 
-.lp__stages {
+/* Horizontal 8-step trace — the canonical marketing rail.
+   Mirrors the JSX vocabulary in features/jobs/TransactionTrace.{jsx,css}; trust
+   nodes (escrow, receipt, settle) render in --gold to match the live trace. */
+.lp__trace {
   list-style: none;
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(8, 1fr);
   gap: 0;
-  border: 1px solid var(--border);
-  border-radius: 18px;
-  background: var(--surface);
-  box-shadow: var(--shadow-sm);
   position: relative;
-  overflow: hidden;
 }
-.lp__stages::before {
-  /* center dotted line connecting the 3 stages */
+
+/* Continuous connector rail behind the markers. */
+.lp__trace::before {
   content: '';
   position: absolute;
-  top: 64px; bottom: 64px;
-  left: 33.333%;
-  right: 33.333%;
-  border-top: 1px dashed var(--border-bright);
-  pointer-events: none;
-  z-index: 0;
+  left: calc(100% / 16);
+  right: calc(100% / 16);
+  top: 56px;
   height: 1px;
-  top: 64px;
+  background: var(--border);
+  z-index: 0;
 }
-.lp__stage {
+
+.lp__trace-step {
   position: relative;
-  padding: 36px 32px 32px;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 12px;
-  border-right: 1px solid var(--border);
-  background: var(--surface);
   z-index: 1;
+  display: grid;
+  grid-template-rows: auto 44px auto auto;
+  align-items: center;
+  justify-items: center;
+  padding: 0 8px;
+  text-align: center;
+  gap: 6px;
 }
-.lp__stage:last-child { border-right: none; }
-.lp__stage--mid {
-  background: color-mix(in srgb, var(--terracotta) 6%, var(--surface));
-}
-.lp__stage-icon {
-  width: 44px; height: 44px;
-  border-radius: 12px;
-  display: grid; place-items: center;
-  background: color-mix(in srgb, var(--terracotta) 12%, transparent);
-  color: var(--terracotta);
-  margin-bottom: 4px;
-}
-.lp__stage-tag {
+
+.lp__trace-num {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 10px;
+  font-weight: 600;
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--text-muted);
 }
-.lp__stage-title {
-  font-family: var(--font-display);
-  font-size: 26px;
-  font-weight: 500;
-  letter-spacing: -0.005em;
-  color: var(--text-primary);
-  margin: 0;
-  line-height: 1.15;
+
+.lp__trace-marker {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  display: grid;
+  place-items: center;
 }
-.lp__stage-body {
+.lp__trace-step--trust .lp__trace-marker {
+  background: var(--gold-bg);
+  border-color: color-mix(in srgb, var(--gold) 50%, transparent);
+  color: var(--gold);
+}
+
+.lp__trace-title {
   font-family: var(--font-sans);
-  font-size: 14.5px;
-  line-height: 1.6;
-  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.005em;
   margin: 0;
+  line-height: 1.2;
 }
-.lp__stage-line {
-  margin-top: auto;
-  padding: 8px 12px;
-  font-family: var(--font-mono);
+.lp__trace-step--trust .lp__trace-title { color: var(--gold); }
+
+.lp__trace-evidence {
+  font-family: var(--font-sans);
   font-size: 12px;
-  color: var(--terracotta);
-  background: color-mix(in srgb, var(--terracotta) 8%, transparent);
-  border: 1px dashed color-mix(in srgb, var(--terracotta) 35%, transparent);
-  border-radius: 8px;
-  align-self: stretch;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  margin: 0;
+  max-width: 14ch;
 }
 
 /* ── CATALOG — 2-up cards, breathing room ─────────────────── */
@@ -1269,10 +1324,9 @@
 /* ── RESPONSIVE ────────────────────────────────────────────── */
 @media (max-width: 1080px) {
   .lp__hero-inner { padding: clamp(48px, 7vw, 96px) 40px 0; }
-  .lp__stages { grid-template-columns: 1fr; }
-  .lp__stage { border-right: none; border-bottom: 1px solid var(--border); }
-  .lp__stage:last-child { border-bottom: none; }
-  .lp__stages::before { display: none; }
+  .lp__trace { grid-template-columns: repeat(2, 1fr); gap: 28px 12px; }
+  .lp__trace::before { display: none; }
+  .lp__trace-evidence { max-width: none; }
   .lp__settle { grid-template-columns: 1fr; }
   .lp__bento { grid-template-columns: 1fr; grid-auto-rows: auto; }
   .lp__bento-cell { grid-column: span 1 !important; grid-row: span 1 !important; }

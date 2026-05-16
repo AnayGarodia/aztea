@@ -224,7 +224,7 @@ export default function JobReceipt({ jobId, agentId }) {
       <Card.Header>
         <div className="job-receipt__header">
           <span className="job-detail__section-title">Cryptographic receipt</span>
-          <Badge variant={ui.tone === 'positive' ? 'success' : ui.tone === 'negative' ? 'error' : ui.tone === 'warn' ? 'warning' : 'neutral'}>
+          <Badge variant={ui.tone === 'positive' ? 'gold' : ui.tone === 'negative' ? 'negative' : ui.tone === 'warn' ? 'warn' : 'default'}>
             {ui.title}
           </Badge>
         </div>

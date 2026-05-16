@@ -42,10 +42,12 @@
   --r-pill: 9999px;
 
   /* ── Easing ──────────────────────────────────────────────── */
-  --ease:        cubic-bezier(0.16, 1, 0.3, 1);
-  --ease-in:     cubic-bezier(0.4, 0, 1, 1);
-  --ease-out:    cubic-bezier(0, 0, 0.2, 1);
-  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  /* Bounce / elastic curves (y > 1 in cubic-bezier) banned by impeccable.
+     Use --ease-out-expo for "snappy" emphasis instead of overshoot. */
+  --ease:          cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in:       cubic-bezier(0.4, 0, 1, 1);
+  --ease-out:      cubic-bezier(0, 0, 0.2, 1);
+  --ease-out-expo: cubic-bezier(0.19, 1, 0.22, 1);
 
   /* ── Durations ───────────────────────────────────────────── */
   --duration-xs: 80ms;

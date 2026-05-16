@@ -385,9 +385,9 @@
 
 .result-nested {
   padding: 8px 10px;
-  border-left: 2px solid var(--accent-border);
+  border: 1px solid var(--accent-border);
   background: color-mix(in oklab, var(--surface-2) 80%, transparent);
-  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  border-radius: var(--r-sm);
 }
 
 .result-code-block {

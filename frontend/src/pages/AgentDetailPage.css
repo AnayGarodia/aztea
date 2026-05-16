@@ -37,18 +37,6 @@
   pointer-events: none;
 }
 
-.agent-detail__hero::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 3px;
-  background: var(--ad-accent, var(--accent));
-  opacity: 0.8;
-  border-radius: var(--r-xl) 0 0 var(--r-xl);
-}
-
 .agent-detail__hero > * { position: relative; z-index: 1; }
 
 .agent-detail__hero-row {
@@ -95,9 +83,9 @@
   gap: 4px;
   font-size: 0.6875rem;
   font-weight: 700;
-  color: var(--accent);
-  background: var(--accent-bg);
-  border: 1px solid var(--accent-border);
+  color: var(--gold);
+  background: var(--gold-bg);
+  border: 1px solid color-mix(in srgb, var(--gold) 45%, transparent);
   padding: 2px 8px;
   border-radius: var(--r-pill);
 }

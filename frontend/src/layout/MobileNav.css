@@ -12,8 +12,6 @@
   align-items: stretch;
   padding: 0 8px;
   gap: 0;
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
 }
 
 .mobile-nav__item {

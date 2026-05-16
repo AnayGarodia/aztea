@@ -1,0 +1,143 @@
+/* TransactionTrace — the canonical 8-step trace on JobDetailPage.
+   Trust nodes (escrow opened, receipt signed, settled) render with --gold.
+   General positive (work delivered, reputation) stays --positive / sage. */
+
+.tt {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.tt__row {
+  display: grid;
+  grid-template-columns: 32px 1fr auto;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: var(--sp-3) 0;
+}
+
+.tt__rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+  min-height: 44px;
+}
+
+.tt__marker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  flex-shrink: 0;
+  transition: background var(--dur-md) var(--ease),
+              border-color var(--dur-md) var(--ease),
+              color var(--dur-md) var(--ease);
+}
+
+.tt__marker--future  { color: var(--text-muted); }
+.tt__marker--active  {
+  background: var(--terracotta-bg);
+  border-color: var(--terracotta-border);
+  color: var(--terracotta);
+}
+.tt__marker--done {
+  background: var(--positive-bg);
+  border-color: var(--positive-border);
+  color: var(--positive);
+}
+.tt__marker--trust {
+  background: var(--gold-bg);
+  border-color: color-mix(in srgb, var(--gold) 50%, transparent);
+  color: var(--gold);
+}
+.tt__marker--failed {
+  background: var(--negative-bg);
+  border-color: var(--negative-border);
+  color: var(--negative);
+}
+.tt__marker--refunded {
+  background: var(--positive-bg);
+  border-color: var(--positive-border);
+  color: var(--positive);
+}
+.tt__marker--skipped {
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+
+.tt__line {
+  flex: 1;
+  width: 1px;
+  background: var(--border);
+  margin-top: var(--sp-1);
+}
+.tt__row--done   + .tt__row .tt__line,
+.tt__row--done   .tt__line { background: color-mix(in srgb, var(--positive) 40%, var(--border)); }
+
+.tt__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tt__title {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.005em;
+}
+
+.tt__evidence {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.tt__evidence--trust {
+  color: var(--gold);
+  font-weight: 500;
+  font-feature-settings: 'tnum';
+}
+
+.tt__row--future .tt__title,
+.tt__row--future .tt__evidence,
+.tt__row--skipped .tt__title,
+.tt__row--skipped .tt__evidence {
+  color: var(--text-muted);
+}
+
+.tt__row--failed .tt__evidence {
+  color: var(--negative);
+}
+
+.tt__state-label {
+  align-self: center;
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.tt__row--active .tt__state-label    { color: var(--terracotta); }
+.tt__row--done .tt__state-label      { color: var(--positive); }
+.tt__row--failed .tt__state-label    { color: var(--negative); }
+.tt__row--refunded .tt__state-label  { color: var(--positive); }
+
+@media (max-width: 600px) {
+  .tt__row { grid-template-columns: 32px 1fr; }
+  .tt__state-label { grid-column: 2; justify-self: start; margin-top: 4px; }
+}

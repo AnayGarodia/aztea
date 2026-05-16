@@ -46,9 +46,7 @@
   height: 52px;
   padding: 0 20px;
   border-bottom: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border));
-  background: color-mix(in oklab, var(--surface) 92%, var(--parchment));
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  background: var(--surface);
 }
 
 .docs-page__topbar-left {
@@ -916,9 +914,7 @@
   padding-bottom: 0;
 }
 .docs-hub--chatting .docs-hub__askbar {
-  background: color-mix(in srgb, var(--surface) 96%, var(--canvas));
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  background: var(--surface);
   box-shadow: 0 22px 48px -20px rgba(0, 0, 0, 0.32), 0 4px 12px rgba(0, 0, 0, 0.06);
 }
 /* Soft fade so the thread visually blends behind the sticky bar. */

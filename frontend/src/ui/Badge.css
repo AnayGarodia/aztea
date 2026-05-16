@@ -28,6 +28,7 @@
 .badge--info     { background: var(--info-bg);     color: var(--info);     border-color: var(--info-border); }
 .badge--accent   { background: var(--accent-bg);   color: var(--accent);   border-color: var(--accent-border); }
 .badge--violet   { background: var(--accent-bg);   color: var(--accent);   border-color: var(--accent-border); }
+.badge--gold     { background: var(--gold-bg);     color: var(--gold);     border-color: color-mix(in srgb, var(--gold) 45%, transparent); }
 
 .badge--pulse .badge__dot {
   animation: badge-pulse 1.4s ease-in-out infinite;
