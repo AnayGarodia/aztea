@@ -248,7 +248,7 @@ def test_r6d_is_disputable_rejects_after_window():
         now=now,
     )
     assert reason is not None
-    assert reason.code == "dispute.window_expired"
+    assert reason.code == "dispute.window_closed"
 
 
 def test_r6e_is_disputable_rejects_after_rating():

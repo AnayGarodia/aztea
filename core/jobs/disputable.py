@@ -46,6 +46,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from core import error_codes
+
 
 @dataclass(frozen=True)
 class DisputeReason:
@@ -140,8 +142,12 @@ def is_disputable(
 
     current = now or datetime.now(timezone.utc)
     if current > deadline:
+        # Use the canonical taxonomy code (error_codes.DISPUTE_WINDOW_CLOSED)
+        # so SDK error-class dispatch matches across all paths. The string-
+        # match converter in server/error_handlers.py also targets this
+        # value, so direct callers and HTTP callers agree.
         return DisputeReason(
-            code="dispute.window_expired",
+            code=error_codes.DISPUTE_WINDOW_CLOSED,
             message="Dispute window has expired for this job.",
         )
 

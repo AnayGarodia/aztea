@@ -269,7 +269,7 @@ def test_window_expired_job_marked_ineligible(client, setup, monkeypatch) -> Non
     )
     body = resp.json()
     assert body["disputable"] is False
-    assert body["disputable_code"] == "dispute.window_expired"
+    assert body["disputable_code"] == "dispute.window_closed"
 
 
 def test_master_caller_response_excludes_disputable_fields(client, setup) -> None:
