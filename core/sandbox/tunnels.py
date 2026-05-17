@@ -35,6 +35,16 @@ _CLOUDFLARED_URL_RE = re.compile(r"(https://[a-z0-9-]+\.trycloudflare\.com)")
 _NGROK_URL_RE = re.compile(r"(https://[a-z0-9-]+\.ngrok-free\.app|https://[a-z0-9-]+\.ngrok\.io)")
 _TUNNEL_BOOT_TIMEOUT_S = 25
 _TUNNEL_POLL_INTERVAL_S = 0.5
+# Substrings that signal a Cloudflare rate-limit / quota error in the
+# cloudflared CLI output. Surfaces back to the caller as a structured
+# refusal so they know to switch to a named tunnel.
+_CLOUDFLARED_RATE_LIMIT_HINTS = (
+    "429",
+    "Too many requests",
+    "rate limit",
+    "exceeded",
+)
+_NAMED_TUNNEL_TOKEN_ENV = "AZTEA_CLOUDFLARE_TUNNEL_TOKEN"
 
 # (sandbox_id, tunnel_id) → {Popen, kind, public_url, service, port, created_at}
 _TUNNELS: dict[str, dict[str, Any]] = {}
@@ -137,18 +147,34 @@ def evict_for_sandbox(sandbox_id: str) -> int:
 
 
 def _open_with_best_available_tool(host_port: int, hostname_hint: str) -> dict[str, Any]:
-    """Side-effect: launch the actual tunneling subprocess; return its state."""
-    if shutil.which("cloudflared"):
-        return _open_cloudflared(host_port, hostname_hint)
+    """Side-effect: launch the actual tunneling subprocess; return its state.
+
+    Selection order:
+      1. cloudflared + AZTEA_CLOUDFLARE_TUNNEL_TOKEN  → production-grade
+         named tunnel (no rate limit, stable hostname per account).
+      2. cloudflared → quick tunnel (free, rate-limited per IP).
+      3. ngrok + AZTEA_NGROK_TOKEN → ngrok-managed tunnel.
+      4. Degraded localhost URL (always available, never public).
+    """
     import os
 
+    cloudflared_path = shutil.which("cloudflared")
+    if cloudflared_path and os.environ.get(_NAMED_TUNNEL_TOKEN_ENV):
+        return _open_cloudflared_named(host_port, hostname_hint)
+    if cloudflared_path:
+        return _open_cloudflared_quick(host_port, hostname_hint)
     if shutil.which("ngrok") and os.environ.get("AZTEA_NGROK_TOKEN"):
         return _open_ngrok(host_port, hostname_hint)
     return _degraded_local_tunnel(host_port)
 
 
-def _open_cloudflared(host_port: int, hostname_hint: str) -> dict[str, Any]:
-    """Side-effect: spawn ``cloudflared tunnel --url http://localhost:<port>``."""
+def _open_cloudflared_quick(host_port: int, hostname_hint: str) -> dict[str, Any]:
+    """Side-effect: spawn ``cloudflared tunnel --url http://localhost:<port>`` (quick).
+
+    Quick tunnels are rate-limited per host IP — we surface a structured
+    refusal when cloudflared reports the rate limit so the caller knows
+    to configure a named tunnel via AZTEA_CLOUDFLARE_TUNNEL_TOKEN.
+    """
     proc = subprocess.Popen(  # noqa: S603
         [
             "cloudflared", "tunnel",
@@ -160,15 +186,61 @@ def _open_cloudflared(host_port: int, hostname_hint: str) -> dict[str, Any]:
         stderr=subprocess.STDOUT,
         text=True,
     )
-    url = _wait_for_url(proc, _CLOUDFLARED_URL_RE, "cloudflared")
+    url = _wait_for_url_or_rate_limit(
+        proc, _CLOUDFLARED_URL_RE, "cloudflared quick tunnel",
+    )
     return {
-        "kind": "cloudflared",
+        "kind": "cloudflared_quick",
         "public_url": url,
         "process": proc,
         "note": (
-            "Quick tunnel; no auth on the URL itself. Set auth='bearer' on "
-            "the request to obtain a bearer token your service should "
-            "validate at the application layer."
+            "Quick tunnel — Cloudflare rate-limits these per host IP "
+            "(roughly a handful per hour). For production set "
+            f"{_NAMED_TUNNEL_TOKEN_ENV} in the server env to use a "
+            "named tunnel against your Cloudflare account."
+        ),
+    }
+
+
+def _open_cloudflared_named(host_port: int, hostname_hint: str) -> dict[str, Any]:
+    """Side-effect: spawn a named cloudflared tunnel via the configured token.
+
+    Why: named tunnels are not rate-limited, expose a stable hostname per
+    account, and authenticate at Cloudflare's edge. The token holds the
+    routing config; we just run ``cloudflared tunnel run --token <T>``
+    pointed at the local host port.
+    """
+    import os
+
+    token = os.environ.get(_NAMED_TUNNEL_TOKEN_ENV, "")
+    proc = subprocess.Popen(  # noqa: S603
+        [
+            "cloudflared", "tunnel", "run",
+            "--token", token,
+            "--no-autoupdate",
+            "--url", f"http://localhost:{host_port}",
+            "--metrics", "127.0.0.1:0",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    # Named tunnels emit the configured hostname via their dashboard
+    # rather than stdout. We block briefly to confirm cloudflared came up
+    # cleanly, then return the configured hostname if it appears, or a
+    # generic "managed" URL hint otherwise.
+    detected_url = _wait_for_url_or_rate_limit(
+        proc, _CLOUDFLARED_URL_RE, "cloudflared named tunnel",
+        accept_no_url=True,
+    )
+    return {
+        "kind": "cloudflared_named",
+        "public_url": detected_url or "managed:cloudflare-named-tunnel",
+        "process": proc,
+        "note": (
+            "Named tunnel running. Public hostname is whatever's configured "
+            "in your Cloudflare Zero Trust dashboard for this tunnel "
+            "token; the local cloudflared CLI doesn't echo it."
         ),
     }
 
@@ -211,12 +283,22 @@ def _degraded_local_tunnel(host_port: int) -> dict[str, Any]:
     }
 
 
-def _wait_for_url(
+def _wait_for_url_or_rate_limit(
     proc: subprocess.Popen[str],
     pattern: re.Pattern[str],
     kind: str,
-) -> str:
-    """Side-effect: read the subprocess's combined stdout until the URL appears."""
+    *,
+    accept_no_url: bool = False,
+) -> str | None:
+    """Read tunneling subprocess stdout until URL appears or a rate-limit error fires.
+
+    Why: cloudflared quick tunnels emit a Cloudflare error message on
+    rate limit instead of a URL. Pre-fix we just timed out with a
+    generic message; now we surface the specific cause so the caller
+    knows to switch to a named tunnel. ``accept_no_url`` lets the named-
+    tunnel path return None gracefully — the tunnel can run cleanly
+    without ever printing a trycloudflare URL.
+    """
     deadline = time.time() + _TUNNEL_BOOT_TIMEOUT_S
     buffer: list[str] = []
     assert proc.stdout is not None
@@ -234,16 +316,44 @@ def _wait_for_url(
         buffer.append(line)
         match = pattern.search(line)
         if match:
-            # Drain any remaining buffered output asynchronously so the
-            # pipe doesn't fill and stall the tunnel process.
             threading.Thread(
                 target=_drain_pipe, args=(proc,), daemon=True,
             ).start()
             return match.group(1)
+        if _looks_rate_limited(line):
+            _terminate_process(proc)
+            raise SandboxInvalidInput(
+                f"{kind} was rate-limited by Cloudflare. Quick tunnels "
+                f"are throttled per host IP. Set {_NAMED_TUNNEL_TOKEN_ENV} "
+                "in the server env to use a named tunnel against your "
+                "Cloudflare account instead. cloudflared said: "
+                f"{line.strip()[:200]}"
+            )
+    if accept_no_url:
+        threading.Thread(
+            target=_drain_pipe, args=(proc,), daemon=True,
+        ).start()
+        return None
     _terminate_process(proc)
     raise SandboxInvalidInput(
         f"{kind} did not publish a URL within {_TUNNEL_BOOT_TIMEOUT_S}s"
     )
+
+
+def _looks_rate_limited(line: str) -> bool:
+    """Pure: True iff a line looks like a Cloudflare rate-limit error."""
+    lowered = line.lower()
+    return any(hint.lower() in lowered for hint in _CLOUDFLARED_RATE_LIMIT_HINTS)
+
+
+# Back-compat shim so the rest of the module's call sites still resolve.
+def _wait_for_url(
+    proc: subprocess.Popen[str], pattern: re.Pattern[str], kind: str,
+) -> str:
+    """Pre-fix call-site shim: now delegates to the rate-limit-aware variant."""
+    result = _wait_for_url_or_rate_limit(proc, pattern, kind)
+    assert result is not None, "non-accept_no_url path must return a URL"
+    return result
 
 
 def _drain_pipe(proc: subprocess.Popen[str]) -> None:

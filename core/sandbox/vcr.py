@@ -37,12 +37,11 @@ _DEFAULT_CASSETTE = "default"
 def outbound_record(payload: dict[str, Any]) -> dict[str, Any]:
     """Switch this sandbox's HTTP-recorder into ``record`` mode.
 
-    The mode is persisted on disk so the sandbox's helper containers
-    (and the in-network ``sandbox_http_request`` path) can read it on
-    each call. Sandbox containers that opt into recording set their
-    ``HTTPS_PROXY``/``HTTP_PROXY`` env to the proxy URL the operator
-    configured; the proxy reads ``AZTEA_VCR_MODE`` from the same disk
-    location to decide whether to record, replay, or pass through.
+    Auto-starts the in-process VCR proxy so HTTP traffic from sandbox
+    containers actually flows through the cassette write path. The
+    proxy URL is returned so callers can pass it as HTTP_PROXY to
+    compose. Without this auto-start (pre-fix) the cassette engine
+    existed but nothing intercepted traffic — recording was inert.
     """
     state, cassette = _require_with_cassette(payload)
     cassette_path = _cassette_path(state.sandbox_id, cassette)
@@ -52,6 +51,7 @@ def outbound_record(payload: dict[str, Any]) -> dict[str, Any]:
         # without having to retry a fresh record cycle.
         _write_cassette(cassette_path, [])
     _write_mode(state.sandbox_id, mode="record", cassette=cassette)
+    proxy_record = _ensure_proxy(state.sandbox_id)
     state.touch()
     return {
         "sandbox_id": state.sandbox_id,
@@ -59,19 +59,26 @@ def outbound_record(payload: dict[str, Any]) -> dict[str, Any]:
         "cassette": cassette,
         "cassette_path": str(cassette_path),
         "interactions": _interaction_count(cassette_path),
-        "proxy_url_env": _proxy_env_hint(),
+        "proxy_url": proxy_record.get("proxy_url"),
+        "proxy_env": _proxy_env_block(state.sandbox_id),
         "note": (
-            "Containers in this sandbox should set HTTPS_PROXY / HTTP_PROXY "
-            "to the recorder proxy and ALL outbound HTTPS requests will be "
-            "captured. Switch to replay mode with sandbox_outbound_replay; "
-            "MISS in replay mode returns a structured error (no live "
-            "fallback) so tests stay deterministic."
+            "VCR proxy is now running. Pass proxy_env into compose at "
+            "boot (or add to env.vars on sandbox_start) so containers "
+            "route outbound HTTP through the recorder. Switch to replay "
+            "mode with sandbox_outbound_replay; MISS in replay mode "
+            "returns 502 with a structured envelope so tests stay "
+            "deterministic."
         ),
     }
 
 
 def outbound_replay(payload: dict[str, Any]) -> dict[str, Any]:
-    """Switch this sandbox's HTTP-recorder into ``replay`` mode."""
+    """Switch this sandbox's HTTP-recorder into ``replay`` mode.
+
+    Auto-starts the proxy so the very next outbound HTTP call from a
+    sandbox container is served from the cassette (or returns a
+    cassette_miss 502 — never a silent live call).
+    """
     state, cassette = _require_with_cassette(payload)
     cassette_path = _cassette_path(state.sandbox_id, cassette)
     if not cassette_path.is_file():
@@ -80,6 +87,7 @@ def outbound_replay(payload: dict[str, Any]) -> dict[str, Any]:
             f"sandbox_outbound_record first."
         )
     _write_mode(state.sandbox_id, mode="replay", cassette=cassette)
+    proxy_record = _ensure_proxy(state.sandbox_id)
     state.touch()
     interactions = _interaction_count(cassette_path)
     return {
@@ -88,10 +96,12 @@ def outbound_replay(payload: dict[str, Any]) -> dict[str, Any]:
         "cassette": cassette,
         "interactions": interactions,
         "deterministic": True,
+        "proxy_url": proxy_record.get("proxy_url"),
+        "proxy_env": _proxy_env_block(state.sandbox_id),
         "note": (
             f"Replay mode is now active over {interactions} recorded "
-            "interactions. A miss returns a structured error to keep the "
-            "deterministic guarantee."
+            "interactions. A miss returns 502 vcr.cassette_miss — never "
+            "a silent live fall-through."
         ),
     }
 
@@ -334,3 +344,22 @@ def _build_interaction(
 def _proxy_env_hint() -> str:
     """Pure: hint for operators on which env to expose to the proxy."""
     return "AZTEA_VCR_PROXY_URL"
+
+
+def _ensure_proxy(sandbox_id: str) -> dict[str, Any]:
+    """Side-effect: lazy-import + start the VCR proxy for this sandbox.
+
+    Why: import is lazy because not every install needs the proxy
+    (e.g. operators who only want the cassette engine for documentation).
+    Calling it on every mode flip is idempotent.
+    """
+    from core.sandbox import vcr_proxy
+
+    return vcr_proxy.ensure_proxy(sandbox_id)
+
+
+def _proxy_env_block(sandbox_id: str) -> dict[str, str]:
+    """Pure-ish: return ``HTTP_PROXY``/``HTTPS_PROXY`` env that compose can use."""
+    from core.sandbox import vcr_proxy
+
+    return vcr_proxy.env_for_compose(sandbox_id)

@@ -50,22 +50,28 @@ def stop_sweeper() -> None:
 
 
 def cost_summary(state: SandboxState) -> dict[str, Any]:
-    """Pure: rough cost-so-far estimate used by sandbox_cost responses.
+    """Pure-ish: cost-so-far for ``state``, including the per-sandbox cap snapshot.
 
-    Why: per-second compute billing is a v1+ thing — for v0 we surface
-    minutes-of-use and snapshot count so callers can sanity-check before
-    we wire the ledger.
+    Audit 2026-05-17 gap #5: pre-fix this returned only minutes-used +
+    a placeholder billing_notice. Now we also surface the per-sandbox
+    spending cap and the cents accumulated so a caller can spot a
+    runaway sandbox before it hits the cap.
     """
+    from core.sandbox import spending as _spending
+
     minutes_used = max(0, (now_unix() - state.created_at) // 60)
+    snapshot = _spending.snapshot(state.sandbox_id)
     return {
         "sandbox_id": state.sandbox_id,
         "minutes_used": minutes_used,
         "minutes_remaining": max(0, state.lifetime.max_minutes - minutes_used),
         "snapshot_count": len(state.snapshot_chain),
         "size": state.size,
+        "spending": snapshot,
         "billing_notice": (
-            "v0 ships uniform $0.00/min — wallet integration tracked in "
-            "follow-up issue (see PR description)."
+            "Per-sandbox soft cap is enforced at the engine boundary (gap "
+            "#5). Wallet-backed atomic billing arrives with the "
+            "caller_api_keys table follow-up."
         ),
     }
 

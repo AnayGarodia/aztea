@@ -30,7 +30,13 @@ from core.sandbox.models import (
     SandboxNotFound,
     now_unix,
 )
+from core.sandbox.isolation import (
+    normalise_backend as _normalise_isolation,
+    runtime_argv as _isolation_runtime_argv,
+    status_block as _isolation_status,
+)
 from core.sandbox.network import build_network_argv, compose_network_env, stop_orphan_containers
+from core.sandbox import spending as _spending
 from core.sandbox.secrets_store import resolve_secret_refs
 from core.sandbox.source import materialise_source
 from core.sandbox.state import (
@@ -76,13 +82,19 @@ def start(payload: dict[str, Any]) -> dict[str, Any]:
     compose_env = compose_network_env(network_cfg)
     env_vars: dict[str, str] = {**compose_env, **inline_env, **secret_env, **det_env}
     network_argv, network_resolved = build_network_argv(sandbox_id, network_cfg)
+    # Resolve isolation backend BEFORE boot so a refused backend (e.g.
+    # firecracker on a docker-only host) surfaces an immediate error
+    # instead of partially provisioned state.
+    isolation_backend = _normalise_isolation(payload.get("isolation_backend"))
+    isolation_runtime_argv = _isolation_runtime_argv(isolation_backend)
+    isolation_status_block = _isolation_status(isolation_backend)
     try:
         boot_info = boot_strategy(
             sandbox_id=sandbox_id,
             repo_path=repo_path,
             boot_cfg=boot_cfg,
             env_vars=env_vars,
-            network_argv=network_argv,
+            network_argv=network_argv + isolation_runtime_argv,
             project_name_override=project_name_for(sandbox_id),
         )
     except SandboxBootFailed:
@@ -111,9 +123,20 @@ def start(payload: dict[str, Any]) -> dict[str, Any]:
         filesystem_root=repo_path,
     )
     register(state)
+    # Audit 2026-05-17 gap #5: install the per-sandbox spending cap. The
+    # caller can override via spending_cap_cents in the start payload;
+    # we clamp at HARD_SANDBOX_CAP_CENTS as a safety stop.
+    cap_cents = _spending.register_cap(
+        state.sandbox_id, payload.get("spending_cap_cents"),
+    )
     total = round(time.time() - t0, 2)
     boot_info.boot_timing["total"] = total
-    return _start_response(state, det_status, unresolved_secrets)
+    response = _start_response(
+        state, det_status, unresolved_secrets, isolation_status_block,
+    )
+    response["spending"] = _spending.snapshot(state.sandbox_id)
+    response["spending"]["installed_cap_cents"] = cap_cents
+    return response
 
 
 def status(payload: dict[str, Any]) -> dict[str, Any]:
@@ -140,6 +163,7 @@ def stop(payload: dict[str, Any]) -> dict[str, Any]:
         "core.sandbox.tunnels",
         "core.sandbox.webhook_inbox",
         "core.sandbox.share",
+        "core.sandbox.vcr_proxy",
     ):
         try:
             import importlib
@@ -149,6 +173,7 @@ def stop(payload: dict[str, Any]) -> dict[str, Any]:
         except Exception:  # noqa: BLE001 — best-effort cleanup
             _LOG.exception("%s eviction failed for %s", module_name, state.sandbox_id)
     _teardown(state)
+    _spending.evict(state.sandbox_id)
     remove(state.sandbox_id)
     return {
         "sandbox_id": state.sandbox_id,
@@ -215,6 +240,14 @@ def batch_start(payload: dict[str, Any]) -> dict[str, Any]:
             f"batch_start matrix produced {len(cells)} cells; hard cap is "
             f"{_BATCH_HARD_MAX} to protect host resources"
         )
+    # Audit 2026-05-17 gap #5: pre-hold the batch budget before any cell
+    # starts. Refuses fast if the matrix would exceed the host's batch
+    # ceiling — pre-fix each cell billed independently and a 10-cell run
+    # could quietly cross the ceiling.
+    per_cell_cap = int(
+        base.get("spending_cap_cents") or _spending.DEFAULT_SANDBOX_CAP_CENTS
+    )
+    batch_reservation = _spending.reserve_batch(per_cell_cap, len(cells))
     results: list[dict[str, Any]] = []
     for cell_env in cells:
         cell_payload = _merge_matrix_cell(base, cell_env)
@@ -239,10 +272,12 @@ def batch_start(payload: dict[str, Any]) -> dict[str, Any]:
         "failed": len(results) - len(successful),
         "sandbox_ids": [r["sandbox_id"] for r in successful],
         "results": results,
+        "batch_reservation": batch_reservation,
         "billing_notice": (
-            "Each matrix cell charges independently via the per-call wallet "
-            "path. Wallet pre-hold for the full batch is tracked in the "
-            "follow-up issue paired with sandbox_export_snapshot."
+            "Soft pre-hold installed before any cell booted (gap #5). "
+            "Each cell still charges independently via the per-call "
+            "path; wallet-backed atomic hold across the batch lands "
+            "with the caller_api_keys table follow-up."
         ),
     }
 
@@ -443,6 +478,7 @@ def _start_response(
     state: SandboxState,
     determinism_status: dict[str, Any],
     unresolved_secrets: list[str],
+    isolation_status: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "sandbox_id": state.sandbox_id,
@@ -458,6 +494,7 @@ def _start_response(
             "egress_allowlist": state.network.egress_allowlist,
         },
         "determinism": determinism_status,
+        "isolation": isolation_status or {"requested": "docker", "applied": "docker"},
         "unresolved_secrets": unresolved_secrets,
         "workspace_id": state.workspace_id,
     }
