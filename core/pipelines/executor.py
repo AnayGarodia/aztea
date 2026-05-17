@@ -469,29 +469,81 @@ def _invoke_agent(
         raise
 
 
+def _reset_thread_db_state() -> None:
+    """Best-effort rollback of any aborted transaction on the thread-local DB
+    connection.
+
+    Why: a step's DB-touching helper (charge, registry lookup, settlement)
+    might raise after Postgres has started a transaction. The connection
+    is then in ``InFailedSqlTransaction`` state and every subsequent
+    DB call on the same thread fails with the canonical Postgres
+    "current transaction is aborted, commands ignored until end of
+    transaction block" message — *including* the next pipeline step's
+    perfectly innocent ``registry.get_agent`` call. The 2026-05-17 test
+    report observed this leaking out of the domain-health recipe.
+
+    The Postgres pool in core.db already rolls back when it hands the
+    connection out fresh, but in-flight pipeline code reuses the same
+    connection across many calls. Calling rollback() between steps closes
+    the gap. Safe on a clean connection (no-op).
+    """
+    try:
+        from core import db as _db_module
+        # core/db.py exposes a private _local for the thread-local connection.
+        local = getattr(_db_module, "_local", None)
+        wrapper = getattr(local, "conn", None) if local is not None else None
+        if wrapper is None:
+            return
+        try:
+            wrapper.rollback()
+        except Exception as roll_exc:  # noqa: BLE001
+            _LOG.warning(
+                "pipelines.rollback_between_steps_failed: %s", roll_exc
+            )
+    except Exception as exc:  # noqa: BLE001 — never let cleanup raise
+        _LOG.warning("pipelines.reset_thread_db_state_failed: %s", exc)
+
+
 def _drive_pipeline_nodes(
     validated: dict, input_payload: dict, *,
     run_id: str, caller_owner_id: str, caller_wallet_id: str,
     client_id: str | None,
     execute_builtin_agent: Callable[[str, dict[str, Any]], dict] | None,
 ) -> dict[str, Any]:
-    """Side-effect: invoke each pipeline node in topological order; returns ``step_results``."""
+    """Side-effect: invoke each pipeline node in topological order; returns ``step_results``.
+
+    Each step's DB state is reset (rollback any aborted transaction) before
+    the next step starts, so a single step's failure can't poison the
+    thread's connection for the rest of the recipe. Closes the
+    ``InFailedSqlTransaction`` leak observed in domain-health on
+    2026-05-17.
+    """
     step_results: dict[str, Any] = {}
     for node in validated["ordered_nodes"]:
+        # Defensive: clear any aborted transaction from the prior step
+        # before we read the next node's agent row. Pure no-op on a
+        # clean connection.
+        _reset_thread_db_state()
         payload = resolve_input_map(node["input_map"], input_payload, step_results)
         agent = registry.get_agent(node["agent_id"], include_unapproved=True)
         if agent is None:
             raise ValueError(
                 f"Pipeline node '{node['id']}' agent '{node['agent_id']}' was not found."
             )
-        output = _invoke_agent(
-            agent=agent,
-            payload=payload,
-            caller_owner_id=caller_owner_id,
-            caller_wallet_id=caller_wallet_id,
-            client_id=client_id,
-            execute_builtin_agent=execute_builtin_agent,
-        )
+        try:
+            output = _invoke_agent(
+                agent=agent,
+                payload=payload,
+                caller_owner_id=caller_owner_id,
+                caller_wallet_id=caller_wallet_id,
+                client_id=client_id,
+                execute_builtin_agent=execute_builtin_agent,
+            )
+        except Exception:
+            # Roll back before bubbling so fail_run() in _execute_run can
+            # write the run row without hitting InFailedSqlTransaction.
+            _reset_thread_db_state()
+            raise
         step_results[node["id"]] = output
         db.update_run_step(run_id, node["id"], output)
     return step_results

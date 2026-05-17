@@ -791,6 +791,14 @@ def jobs_batch_create(
     invalid_jobs: list[dict[str, Any]] = []
     total_price_cents = 0
     key_per_job_cap_cents = _caller_key_per_job_cap(caller)
+    # 2026-05-17: hoist the per-row registry.get_agent into one bulk query.
+    # Previously each spec triggered a single-row SELECT, which serialised
+    # 250 round-trips inside the gateway's 60s read budget; the 2026-05-17
+    # test report saw batches > ~25 jobs reliably time out for this reason.
+    # One IN-list query handles the whole batch; missing IDs fall through
+    # to the existing per-row 404 envelope below.
+    _batch_agent_ids = [str(s.agent_id) for s in body.jobs if getattr(s, "agent_id", None)]
+    _batch_agents = registry.get_agents_by_ids(_batch_agent_ids, include_unapproved=True)
     for index, spec in enumerate(body.jobs):
         parent_job = _resolve_parent_job_for_creation(
             caller,
@@ -815,7 +823,7 @@ def jobs_batch_create(
                 }
             )
             continue
-        agent = registry.get_agent(spec.agent_id, include_unapproved=True)
+        agent = _batch_agents.get(str(spec.agent_id))
         if agent is None or not _caller_can_access_agent(caller, agent):
             invalid_jobs.append(
                 {

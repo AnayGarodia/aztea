@@ -95,10 +95,20 @@ for _agent_id, _endpoint in BUILTIN_INTERNAL_ENDPOINTS.items():
 
 BUILTIN_AGENT_IDS = frozenset(BUILTIN_INTERNAL_ENDPOINTS.keys())
 
-# Sunset agents have been fully purged (constants, endpoints, specs, modules).
-# The frozenset is kept as an empty stub so downstream code that iterates
-# SUNSET_DEPRECATED_AGENT_IDS still compiles without change.
-SUNSET_DEPRECATED_AGENT_IDS: frozenset[str] = frozenset()
+# Sunset agents: returned in catalog listings (so callers see a clear
+# "sunsetted" status instead of a silent disappearance) but excluded from
+# CURATED_PUBLIC_BUILTIN_AGENT_IDS so they aren't recommended by
+# auto-invoke / search. New IDs added here MUST also be removed from
+# CURATED_PUBLIC_BUILTIN_AGENT_IDS (the sanity assert below catches drift).
+#
+# 2026-05-17: docs_grounder sunsetted — the 2026-05-17 extensive test
+# report observed persistent 502 agent.endpoint_misconfigured / live-data
+# errors. The internal endpoint remains wired so existing callers don't
+# 410, but the agent is hidden from the curated catalog. Re-list once the
+# upstream docs source is restored.
+SUNSET_DEPRECATED_AGENT_IDS: frozenset[str] = frozenset({
+    DOCS_GROUNDER_AGENT_ID,
+})
 
 # The public catalog: agents that give a coding-agent integrator a primitive
 # they cannot trivially build themselves — isolation (sandboxes), live
@@ -120,7 +130,8 @@ CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
         BROKEN_LINK_CRAWLER_AGENT_ID,
         PDF_DOCUMENT_PARSER_AGENT_ID,
         WEB_SEARCH_AGENT_ID,
-        DOCS_GROUNDER_AGENT_ID,
+        # DOCS_GROUNDER_AGENT_ID — sunsetted 2026-05-17 (see
+        # SUNSET_DEPRECATED_AGENT_IDS above and the 2026-05-17 test report).
         SAST_SCANNER_AGENT_ID,
         STRIPE_WEBHOOK_DEBUGGER_AGENT_ID,
         LOAD_TESTER_AGENT_ID,

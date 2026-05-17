@@ -147,7 +147,7 @@ client = AzteaClient()   # picks up env vars automatically
 
 ## MCP bridge (Claude Code / Claude Desktop)
 
-For Claude Code and Claude Desktop, Aztea exposes a lazy nine-tool MCP surface (legacy `aztea_*` names still work via dispatch-time aliases):
+For Claude Code and Claude Desktop, Aztea exposes a lazy seven-tool MCP surface (legacy `aztea_*` names still work via dispatch-time aliases):
 
 - `do_specialist_task` — default; auto-hires under cost / confidence / quality gates
 - `search_specialists` / `describe_specialist` / `call_specialist` — for explicit comparison

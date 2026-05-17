@@ -25,8 +25,6 @@ _EXPECTED_LAZY_TOOL_NAMES: frozenset[str] = frozenset({
     "describe_specialist",
     "call_specialist",
     "do_specialist_task",
-    "aztea_call_streaming",
-    "aztea_steer",
     "manage_job",
     "manage_budget",
     "manage_workflow",
@@ -41,8 +39,13 @@ def _build_lazy_tool_list() -> list[dict]:
     ``LAZY_MCP_SCHEMAS`` block). Kept in sync by reading the same
     constants — a rename of any of these symbols breaks this import
     immediately, which is the intended early-warning signal.
+
+    aztea_call_streaming + aztea_steer were dropped from the public surface
+    2026-05-17 (broken streaming pipeline; see CLAUDE.md). The constants
+    still exist in copilot_tools so dispatch can return tool_not_supported
+    cleanly, but they are NOT in the lazy tools() list anymore.
     """
-    from aztea.mcp import copilot_tools, meta_tools
+    from aztea.mcp import meta_tools
     from aztea.mcp.server import (
         _LAZY_CALL_TOOL,
         _LAZY_DESCRIBE_TOOL,
@@ -55,16 +58,14 @@ def _build_lazy_tool_list() -> list[dict]:
         _LAZY_DESCRIBE_TOOL,
         _LAZY_CALL_TOOL,
         _LAZY_DO_TOOL,
-        copilot_tools.CALL_STREAMING_TOOL,
-        copilot_tools.STEER_TOOL,
         *meta_tools.always_visible_tools(),
     ]
 
 
-def test_lazy_tool_surface_is_exactly_nine_tools():
+def test_lazy_tool_surface_is_exactly_seven_tools():
     tools = _build_lazy_tool_list()
-    assert len(tools) == 9, (
-        f"Lazy MCP tool surface drifted: expected 9 tools, found {len(tools)}.\n"
+    assert len(tools) == 7, (
+        f"Lazy MCP tool surface drifted: expected 7 tools, found {len(tools)}.\n"
         f"  Names: {[t['name'] for t in tools]}\n"
         "If this change is intentional, update CLAUDE.md, AGENTS.md, and "
         "this test's _EXPECTED_LAZY_TOOL_NAMES in the same PR."

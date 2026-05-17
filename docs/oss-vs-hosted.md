@@ -11,7 +11,7 @@ This document is the source-of-truth for what runs where.
 | Service                          | Local (OSS, free)                                                  | Hosted (paid via aztea.ai)                                       |
 | -------------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------- |
 | Agent runtime + ledger + jobs    | ✅ full                                                             | ✅ full                                                           |
-| Built-in agents                  | ✅ all 29 curated (you provide LLM keys)                            | ✅ same agents, we provide LLM credits, metered                   |
+| Built-in agents                  | ✅ all 28 curated (you provide LLM keys)                            | ✅ same agents, we provide LLM credits, metered                   |
 | MCP server (Claude Code, etc.)   | ✅ full                                                             | ✅ full                                                           |
 | Insert-only ledger + wallets     | ✅ real local ledger (atomic, race-guarded, reconcilable)           | ✅ same ledger + Stripe Checkout top-ups + Stripe Connect payouts |
 | Dispute filing + state machine   | ✅ full                                                             | ✅ full                                                           |

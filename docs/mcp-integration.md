@@ -1,10 +1,10 @@
 # Coding Agent MCP Setup
 
-Aztea's MCP integration gives a coding agent **nine tools** for hiring agents through Aztea: four lazy tools (`search_specialists`, `describe_specialist`, `call_specialist`, `do_specialist_task`), three grouped resource dispatchers (`manage_job`, `manage_budget`, `manage_workflow`), and two co-pilot mode hot paths (`aztea_call_streaming`, `aztea_steer`). The tool list is built in `sdks/python-sdk/aztea/mcp/server.py` (`MCPRegistryBridge.tools`). `scripts/aztea_mcp_server.py` is a compat shim that calls into the SDK.
+Aztea's MCP integration gives a coding agent **seven tools** for hiring agents through Aztea: four lazy tools (`search_specialists`, `describe_specialist`, `call_specialist`, `do_specialist_task`) and three grouped resource dispatchers (`manage_job`, `manage_budget`, `manage_workflow`). The tool list is built in `sdks/python-sdk/aztea/mcp/server.py` (`MCPRegistryBridge.tools`). `scripts/aztea_mcp_server.py` is a compat shim that calls into the SDK.
 
 > **Renamed in v0.2.0–v0.3.0**: the lazy tools and grouped dispatchers are now verb-first (`do_specialist_task`, `search_specialists`, `describe_specialist`, `call_specialist`, `manage_job`, `manage_budget`, `manage_workflow`). The old names (`aztea_do`, `aztea_search`, `aztea_describe`, `aztea_call`, `aztea_job`, `aztea_budget`, `aztea_workflow`) still work as aliases — the dispatch normalizes them via `_LAZY_TOOL_NAME_ALIASES` — but new code should use the verb-first names. The rename is so the model picks these tools by what they *do*, not by recognizing the brand keyword.
 
-> **Co-pilot mode hot paths**: `aztea_call_streaming` and `aztea_steer` stay top-level lazy tools (rather than `manage_job` action verbs) so MCP clients don't have to round-trip through a grouped dispatcher for every partial / steer message. Both are wired and produce signed transcript receipts on terminal state; the surrounding end-to-end test coverage is partial — see `.agents/TODO.md`.
+> **Co-pilot mode dropped 2026-05-17**: `aztea_call_streaming` and `aztea_steer` were removed from the lazy surface. The 2026-05-17 extensive test report showed RECEIPT_NOT_BUILT (HTTP 425) on streaming, 12 duplicated "started" partials, and `stop_when` never evaluating real partials. Refunds were honest (no money lost) but UX was misleading. Dispatch still recognises the names and returns `tool_not_supported`. The backend mechanics (`/jobs` with `stop_when_predicates`, `/jobs/{id}/messages` with `msg_type="steer"`) still work and are reachable via `manage_job` action verbs — the public MCP path is just disabled until the streaming runtime is rewritten.
 
 There are two flows:
 
@@ -174,7 +174,7 @@ Inside your coding agent, ask:
 List the exact Aztea MCP tool names available in this session.
 ```
 
-You should see the nine tools above.
+You should see the seven tools above.
 
 ---
 
@@ -390,7 +390,7 @@ Use the same MCP server config in Claude Desktop:
 - Make sure `aztea` shows `Connected`
 - Restart Claude Code after install or config changes
 
-**Claude sees old flat Aztea tools instead of the lazy nine-tool surface**
+**Claude sees old flat Aztea tools instead of the lazy seven-tool surface**
 
 - reinstall with:
 

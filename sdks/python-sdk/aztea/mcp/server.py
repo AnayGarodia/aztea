@@ -1246,20 +1246,22 @@ class RegistryBridge:
             # The grouped tools (manage_job/budget/workflow) cover post-call
             # operations, wallet/budget, and workflow orchestration without
             # bloating the tool list with 22 separate names.
+            #
+            # aztea_call_streaming + aztea_steer were dropped from the public
+            # MCP surface 2026-05-17: the 2026-05-17 extensive test report
+            # showed RECEIPT_NOT_BUILT (HTTP 425) on streaming, 12 duplicated
+            # "started" partials, and stop_when never evaluating real partials.
+            # Refunds worked (no money lost) but UX was misleading. Code is
+            # retained in copilot_tools.py for a future rewrite; dispatch
+            # path returns tool_not_supported.
             return [
                 _LAZY_SEARCH_TOOL,
                 _LAZY_DESCRIBE_TOOL,
                 _LAZY_CALL_TOOL,
                 _LAZY_DO_TOOL,
-                copilot_tools.CALL_STREAMING_TOOL,
-                copilot_tools.STEER_TOOL,
                 *meta_tools.always_visible_tools(),
             ]
-        return (
-            meta_tools.get_meta_tools()
-            + [copilot_tools.CALL_STREAMING_TOOL, copilot_tools.STEER_TOOL]
-            + registry_tools
-        )
+        return meta_tools.get_meta_tools() + registry_tools
 
     def _catalog_entries(self) -> list[dict[str, Any]]:
         with self._lock:
@@ -2314,29 +2316,26 @@ class RegistryBridge:
         if auth_required or tool_name == _AUTH_TOOL_NAME:
             return self._auth_required_response()
 
-        if tool_name == copilot_tools.CALL_STREAMING_TOOL["name"]:
-            # Pass the bridge's cached catalog so call_streaming can
-            # resolve slug → agent_id (the server's POST /jobs needs the
-            # UUID, not the slug). Pre-1.6.9 every streaming call 422'd
-            # with "Field required: agent_id".
-            with self._lock:
-                catalog_snapshot = list(self._entries)
-            return copilot_tools.call_streaming(
-                session=self._session,
-                base_url=self.base_url,
-                headers=self._headers(),
-                timeout_seconds=self.timeout_seconds,
-                arguments=arguments,
-                catalog=catalog_snapshot,
-            )
-        if tool_name == copilot_tools.STEER_TOOL["name"]:
-            return copilot_tools.steer(
-                session=self._session,
-                base_url=self.base_url,
-                headers=self._headers(),
-                timeout_seconds=self.timeout_seconds,
-                arguments=arguments,
-            )
+        # aztea_call_streaming + aztea_steer were dropped from the public MCP
+        # surface 2026-05-17. If a stale client still calls them by name (or
+        # by alias), return a deterministic tool_not_supported envelope so
+        # the caller can fall back to call_specialist / manage_job actions.
+        # Refunds aren't a concern here — nothing is charged.
+        if tool_name in {
+            copilot_tools.CALL_STREAMING_TOOL["name"],
+            copilot_tools.STEER_TOOL["name"],
+        }:
+            return False, {
+                "error": "tool_not_supported",
+                "message": (
+                    f"`{tool_name}` was removed from the MCP surface on "
+                    "2026-05-17. Use `call_specialist` for one-shot calls "
+                    "or `manage_job` (action=follow / progress) for "
+                    "long-running work — the underlying streaming runtime "
+                    "had RECEIPT_NOT_BUILT and duplicate-partial bugs and "
+                    "is being rewritten."
+                ),
+            }
 
         if tool_name == _LAZY_SEARCH_TOOL["name"]:
             query = str(arguments.get("query") or "").strip()
@@ -2842,9 +2841,6 @@ class MCPStdioServer:
                 "'list_pipelines')\n"
                 "- Pre-spend control → manage_budget(action='estimate' | "
                 "'set_session_budget')\n"
-                "- Co-pilot streaming → aztea_call_streaming (stop_when predicates "
-                "abort early; partial outputs surface mid-flight) + aztea_steer (inject "
-                "guidance into the running call)\n"
                 "\nPRICING: Charges are typically $0.03–$0.10/call. Failures refund. "
                 "Routing is dynamic — new specialists added to the marketplace become "
                 "reachable through `do_specialist_task` with no description rewrite.\n"

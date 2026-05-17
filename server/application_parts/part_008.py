@@ -1858,7 +1858,20 @@ def registry_call(
                                 "refunded_cents": int(
                                     job.get("caller_charge_cents") or 0
                                 ),
+                                # 2026-05-17: caller-facing retry hint. The
+                                # SDK auto-retries on /jobs when it sees these
+                                # fields, so a typo or slow agent no longer
+                                # forces the caller to read docs. Endpoint is
+                                # always relative to the server base URL the
+                                # client connected to.
                                 "retry_via": "POST /jobs",
+                                "retry_async_path": "/jobs",
+                                "retry_payload": {
+                                    "agent_id": to_exc.agent_id,
+                                    # Caller resupplies their own input_payload
+                                    # when retrying; we don't re-emit it (avoids
+                                    # leaking it back through the error path).
+                                },
                             },
                         ),
                     )
@@ -2266,8 +2279,16 @@ def registry_call(
             status_code=504,
             detail=error_codes.make_error(
                 error_codes.AGENT_CALL_TIMEOUT,
-                "Agent didn't respond within 120 seconds. You were not charged.",
-                {"agent_id": agent_id},
+                "Agent didn't respond within 120 seconds. You were not charged. "
+                "For agents that legitimately take >120s (load tests, large "
+                "scans), POST /jobs is the async route and has no gateway "
+                "timeout.",
+                {
+                    "agent_id": agent_id,
+                    "retry_via": "POST /jobs",
+                    "retry_async_path": "/jobs",
+                    "retry_payload": {"agent_id": agent_id},
+                },
             ),
         )
     except http.RequestException as e:

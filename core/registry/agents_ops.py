@@ -1248,6 +1248,43 @@ def get_agent(agent_id: str, *, include_unapproved: bool = True) -> dict | None:
     return _row_to_dict(row) if row else None
 
 
+def get_agents_by_ids(
+    agent_ids: list[str], *, include_unapproved: bool = True
+) -> dict[str, dict]:
+    """Bulk lookup: return ``{agent_id: row_dict}`` for the requested IDs.
+
+    One DB round-trip instead of N. Callers that iterate a batch of
+    requests against the registry (e.g. ``POST /jobs/batch``) used to
+    do ``registry.get_agent`` per row, which was the dominant cost
+    behind the 60s gateway timeout on batches >25 jobs observed in the
+    2026-05-17 test report. This helper closes that bottleneck.
+
+    Missing agents are simply absent from the returned dict — callers
+    decide how to handle the gap (the batch path emits a per-row 404).
+    """
+    if not agent_ids:
+        return {}
+    # Deduplicate to keep the placeholder list short when callers
+    # accidentally request the same agent twice.
+    unique_ids = list({str(a) for a in agent_ids if a})
+    if not unique_ids:
+        return {}
+    placeholders = ",".join(["%s"] * len(unique_ids))
+    where_sql = f"agent_id IN ({placeholders})"
+    if not include_unapproved:
+        where_sql += " AND review_status IN ('approved', 'probation')"
+    with _conn() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM agents WHERE {where_sql}",
+            tuple(unique_ids),
+        ).fetchall()
+    out: dict[str, dict] = {}
+    for row in rows:
+        row_dict = _row_to_dict(row)
+        out[str(row_dict.get("agent_id"))] = row_dict
+    return out
+
+
 def get_agents_by_owner(owner_id: str) -> list:
     """Return all agents owned by the given owner_id."""
     with _conn() as conn:

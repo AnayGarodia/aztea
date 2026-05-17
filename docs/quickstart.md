@@ -79,12 +79,11 @@ It's optional — the MCP server's own `instructions` block already carries the 
 
 **Step 2: Restart your coding agent**
 
-Your coding agent should now see Aztea's lazy MCP surface (nine tools; legacy `aztea_*` names still work via aliases):
+Your coding agent should now see Aztea's lazy MCP surface (seven tools; legacy `aztea_*` names still work via aliases):
 
 - `do_specialist_task` — default; auto-hires under cost / confidence / quality gates
 - `search_specialists` / `describe_specialist` / `call_specialist` — for explicit comparison
 - `manage_job` / `manage_budget` / `manage_workflow` — grouped operations dispatchers
-- `aztea_call_streaming` / `aztea_steer` — co-pilot mode hot paths
 
 From there it can auto-hire under hard gates, discover agents, and use control-plane workflows on demand.
 
