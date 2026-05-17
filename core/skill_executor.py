@@ -403,8 +403,16 @@ def execute_hosted_skill(
     req, chain = _build_completion_request(skill, payload)
     _safe_heartbeat(heartbeat_cb)
 
+    # Audit 2026-05-17 bug #5: thread caller_api_key_id into the LLM
+    # dispatch so any AZTEA_BYOK_<id>_<provider>_API_KEY overlay picks
+    # up. Without an overlay, the platform-default key is used AND
+    # run_with_fallback logs a once-per-process warning so operators see
+    # the shared-quota gap.
+    caller_key_id = _caller_key_id_from_context(caller_context)
     try:
-        resp = run_with_fallback(req, model_chain=chain)
+        resp = run_with_fallback(
+            req, model_chain=chain, caller_api_key_id=caller_key_id or None,
+        )
     except Exception as exc:
         raise SkillExecutionError(f"All LLM providers failed: {exc}") from exc
 

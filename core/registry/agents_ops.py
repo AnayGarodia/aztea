@@ -1155,6 +1155,67 @@ def set_agent_endpoint_health(
     return get_agent(agent_id, include_unapproved=True)
 
 
+def record_call_endpoint_failure(
+    agent_id: str,
+    *,
+    error_message: str | None = None,
+    checked_at: str | None = None,
+) -> dict | None:
+    """Increment endpoint_consecutive_failures from a LIVE call, not a probe.
+
+    Why: pre-fix the only path that bumped the consecutive-failures counter
+    was the background health probe. A misconfigured agent that returned
+    ``agent.endpoint_misconfigured`` on real traffic stayed live until the
+    probe noticed, while real callers were silently auto-refunded and the
+    agent's trust score still tanked under the old call-stats path (see
+    audit 2026-05-17 bug #4). This helper closes the loop: a live-call
+    infra failure increments the same counter and reuses the existing
+    HEALTH_SUSPENSION_THRESHOLD so auto-suspension fires at parity.
+    """
+    from datetime import datetime, timezone
+
+    ts = (checked_at or datetime.now(timezone.utc).isoformat()).strip()
+    normalized_error = (str(error_message or "").strip() or None) and str(
+        error_message or ""
+    ).strip()[:500]
+    with _conn() as conn:
+        conn.execute(
+            """
+            UPDATE agents
+            SET endpoint_consecutive_failures = COALESCE(endpoint_consecutive_failures, 0) + 1,
+                endpoint_health_status = 'degraded',
+                endpoint_last_checked_at = %s,
+                endpoint_last_error = %s
+            WHERE agent_id = %s
+            """,
+            (ts, normalized_error, agent_id),
+        )
+        row = conn.execute(
+            "SELECT endpoint_consecutive_failures FROM agents WHERE agent_id = %s",
+            (agent_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        normalized_failures = int(row["endpoint_consecutive_failures"] or 0)
+        if normalized_failures >= HEALTH_SUSPENSION_THRESHOLD:
+            suspend_result = conn.execute(
+                """
+                UPDATE agents
+                SET status = 'suspended', suspension_reason = 'health_check'
+                WHERE agent_id = %s AND status = 'active'
+                """,
+                (agent_id,),
+            )
+            if suspend_result.rowcount:
+                _logger.warning(
+                    "agent %s auto-suspended after %d consecutive live-call "
+                    "infra failures (call-driven circuit breaker)",
+                    agent_id,
+                    normalized_failures,
+                )
+    return get_agent(agent_id, include_unapproved=True)
+
+
 def set_agent_output_examples(
     agent_id: str, output_examples: list[dict] | None
 ) -> dict | None:
@@ -2584,6 +2645,72 @@ def search_agents(
         }
         for item in ranked[:limit]
     ]
+
+
+_SLUG_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
+
+
+def canonical_slug(value: object) -> str:
+    """Pure: snake_case slug derived from an agent's display name (or raw slug).
+
+    Why: agents table has no ``slug`` column (audit 2026-05-17 bug #2);
+    the canonical resolution rule across SDK + server is "lowercase the
+    name, collapse non-alphanumerics into '_', trim leading/trailing
+    '_'". Centralising the function here means the bulk-resolve endpoint
+    and the per-call resolver can't drift.
+    """
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    return _SLUG_NON_ALNUM_RE.sub("_", text).strip("_")
+
+
+def bulk_resolve_slugs(
+    slugs: list[str],
+    *,
+    include_unapproved: bool = False,
+) -> dict[str, str | None]:
+    """Resolve many slugs to agent_ids in ONE pass over the registry.
+
+    Why: pre-fix every slug in a hire_batch triggered a full semantic
+    search (18s budget, 30/min rate limit). 20 slugs ≈ guaranteed
+    throttle (audit 2026-05-17 bug #2). One in-memory pass over
+    get_agents() with the canonical_slug() rule resolves the whole
+    batch in ~100ms.
+
+    Slugs are compared case-insensitively. Each input slug maps to the
+    matching agent_id or None when unresolved (caller decides how to
+    surface the gap). Skips agents with ``review_status='suspended'``
+    so a misconfigured-and-suspended agent can never silently route a
+    batch's traffic.
+    """
+    if not isinstance(slugs, list):
+        raise ValueError("bulk_resolve_slugs: slugs must be a list")
+    normalised = [canonical_slug(s) for s in slugs]
+    unique_targets = {s for s in normalised if s}
+    if not unique_targets:
+        return {raw: None for raw in slugs}
+    # Single query, single result set. Reputation enrichment is
+    # intentionally omitted here — slug → agent_id is purely identity
+    # work and the join is the slowest part of the existing search path.
+    rows = get_agents(include_unapproved=include_unapproved)
+    resolved: dict[str, str] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("status") or "").strip().lower() == "suspended":
+            continue
+        candidate = (
+            canonical_slug(row.get("slug"))
+            or canonical_slug(row.get("agent_slug"))
+            or canonical_slug(row.get("name"))
+        )
+        if candidate and candidate in unique_targets and candidate not in resolved:
+            resolved[candidate] = str(row.get("agent_id") or "").strip()
+    return {
+        raw: (resolved.get(canonical) if canonical else None)
+        for raw, canonical in zip(slugs, normalised, strict=True)
+    }
 
 
 def get_agents_with_reputation(

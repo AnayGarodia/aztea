@@ -28,6 +28,8 @@ from .errors import LLMError, LLMRateLimitError, LLMTimeoutError
 def run_with_fallback(
     req_template: CompletionRequest,
     model_chain: list[str] | None = None,
+    *,
+    caller_api_key_id: str | None = None,
 ) -> LLMResponse:
     """Dispatch a completion request through the provider chain.
 
@@ -39,18 +41,30 @@ def run_with_fallback(
     Any other ``LLMError`` also causes the chain to advance, so a single
     bad-key or bad-response error on one provider does not block the rest.
 
+    When ``caller_api_key_id`` is provided AND an
+    ``AZTEA_BYOK_<id>_<provider>_API_KEY`` env override exists, the
+    per-caller provider is used in place of the platform default for that
+    spec (audit 2026-05-17 bug #5). Without an override, the platform
+    default is used and a once-per-process warning is logged so operators
+    can spot the shared-quota gap.
+
     Raises the last encountered ``LLMError`` if every provider fails, or a
     plain ``LLMError`` with provider="none" if the chain is empty / all
     providers are unavailable.
     """
-    from .registry import DEFAULT_CHAIN, resolve
+    from .registry import DEFAULT_CHAIN, resolve, resolve_for_caller
 
     chain = model_chain if model_chain is not None else DEFAULT_CHAIN
     last_error: LLMError | None = None
 
     for spec in chain:
         try:
-            provider, model = resolve(spec)
+            if caller_api_key_id:
+                provider, model = resolve_for_caller(
+                    spec, caller_api_key_id=caller_api_key_id,
+                )
+            else:
+                provider, model = resolve(spec)
         except ValueError:
             continue
 

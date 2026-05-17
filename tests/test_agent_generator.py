@@ -130,7 +130,7 @@ def app_client(isolated_db, monkeypatch):
 def _stub_llm_factory(text: str):
     """Return a run_with_fallback stand-in that always emits ``text``."""
 
-    def _stub(req, model_chain=None):
+    def _stub(req, model_chain=None, caller_api_key_id=None):
         return LLMResponse(
             text=text,
             model="stub",
@@ -559,7 +559,7 @@ def test_generate_token_budget_cap(isolated_db, monkeypatch):
     user, wallet = _make_user_with_wallet()
 
     # Force a huge per-iter cost so the second pass trips the budget guard.
-    def _expensive_stub(req, model_chain=None):
+    def _expensive_stub(req, model_chain=None, caller_api_key_id=None):
         return LLMResponse(
             text=_FAKE_SKILL_MD,
             model="stub",
@@ -667,7 +667,7 @@ def test_composition_no_double_charge(isolated_db, monkeypatch):
         "model_chain": None,
     }
     # Override outer LLM output to emit the aztea_call marker.
-    def _outer_then_inner(req, model_chain=None):
+    def _outer_then_inner(req, model_chain=None, caller_api_key_id=None):
         joined = "\n".join(m.content for m in req.messages)
         if "Outer skill" in joined:
             return LLMResponse(
@@ -739,7 +739,7 @@ def test_composition_caller_key_propagated(isolated_db, monkeypatch):
     caller_user, caller_wallet = _make_user_with_wallet(amount_cents=1000)
     caller_owner_id = f"user:{caller_user['user_id']}"
 
-    def _outer_then_inner(req, model_chain=None):
+    def _outer_then_inner(req, model_chain=None, caller_api_key_id=None):
         if "Outer skill" in (req.messages[0].content or ""):
             return LLMResponse(
                 text='{"result": "x aztea_call(\\"inner-key-test\\", {}) y"}',

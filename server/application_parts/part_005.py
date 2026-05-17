@@ -1135,6 +1135,43 @@ def _build_job_receipt_best_effort(job_id: str) -> None:
         )
 
 
+# Failure codes that signal a PLATFORM-detected infrastructure problem on
+# the agent's side (endpoint dead, runtime missing, tool not configured).
+# These are auto-refunded and must NOT be counted as the agent producing
+# bad output — distinguishing infra faults from real failures is the
+# reputation system's core invariant (audit 2026-05-17 bug #4).
+_INFRA_FAILURE_CODES: frozenset[str] = frozenset(
+    {
+        "agent.endpoint_misconfigured",
+        "agent.endpoint_unreachable",
+        "agent.tool_unavailable",
+        "agent.not_configured",
+        "agent.upstream_timeout",
+        "agent.runtime_unavailable",
+    }
+)
+
+
+def _is_infra_failure(job: dict) -> bool:
+    """Pure: True iff the job's recorded failure code is a platform infra fault.
+
+    Looks for the code in two places:
+      * ``job["output_payload"]["error"]["code"]`` — the canonical envelope.
+      * ``job["error_message"]`` for codes we previously logged as raw strings.
+    Both checks are best-effort; an unrecognised shape returns False
+    (defaults to counting as a real failure — that's the safe direction).
+    """
+    output = job.get("output_payload")
+    if isinstance(output, dict):
+        err = output.get("error")
+        if isinstance(err, dict):
+            code = str(err.get("code") or "").strip()
+            if code in _INFRA_FAILURE_CODES:
+                return True
+    msg = str(job.get("error_message") or "")
+    return any(token in msg for token in _INFRA_FAILURE_CODES)
+
+
 def _settle_failed_job(
     job: dict,
     actor_owner_id: str,
@@ -1168,12 +1205,34 @@ def _settle_failed_job(
             )
         newly_settled = jobs.mark_settled(job["job_id"])
         if newly_settled:
-            registry.update_call_stats(
-                job["agent_id"],
-                latency_ms=_job_latency_ms(job),
-                success=False,
-                price_cents=int(job.get("price_cents") or 0),
-            )
+            if _is_infra_failure(job):
+                # Audit 2026-05-17 bug #4: don't ding the agent's trust
+                # score for platform-side infra failures. Auto-refund
+                # already saved the caller; tanking the agent's reputation
+                # for a misconfigured endpoint or unavailable runtime
+                # punishes the agent owner for something the platform
+                # classified as not-their-output. Instead, flip on the
+                # live-call circuit breaker so the existing endpoint
+                # health auto-suspension fires after threshold (5)
+                # consecutive infra failures — without waiting for the
+                # background probe to notice.
+                try:
+                    registry.record_call_endpoint_failure(
+                        job["agent_id"],
+                        error_message=str(job.get("error_message") or ""),
+                    )
+                except Exception:  # noqa: BLE001 — best-effort breaker
+                    _LOG.exception(
+                        "record_call_endpoint_failure failed for %s",
+                        job.get("agent_id"),
+                    )
+            else:
+                registry.update_call_stats(
+                    job["agent_id"],
+                    latency_ms=_job_latency_ms(job),
+                    success=False,
+                    price_cents=int(job.get("price_cents") or 0),
+                )
     settled = jobs.get_job(job["job_id"]) or job
     if newly_settled:
         _record_job_event(
