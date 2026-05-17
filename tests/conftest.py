@@ -41,6 +41,14 @@ os.environ.setdefault("AZTEA_RATE_LIMIT_DEFAULT_RPM", "1000000")
 os.environ.setdefault("AZTEA_RATE_LIMIT_WORKER_RPM", "1000000")
 os.environ.setdefault("AZTEA_RATE_LIMIT_ANON_RPM", "1000000")
 os.environ.setdefault("AZTEA_RATE_LIMIT_BURST_RPS", "1000000")
+# Also disable slowapi's per-endpoint caps (e.g. POST /skills
+# @limiter.limit("10/minute")). These are independent of the per-key
+# middleware above and were the source of the 429s the publish-flow +
+# listing-safety-parity + agent-generator tests collectively bursted
+# into after the 2026-05-17 master-only SKILL.md cut pushed all those
+# tests onto one key bucket. tests/integration/test_auth_rate_limits.py
+# drives slowapi directly with its own client and isn't affected.
+os.environ.setdefault("AZTEA_LIMITER_DISABLED", "1")
 
 try:
     from hypothesis import HealthCheck, settings

@@ -23,6 +23,7 @@ from server.builtin_agents.constants import (
     HN_DIGEST_AGENT_ID,
     K8S_MANIFEST_VALIDATOR_AGENT_ID,
     LIGHTHOUSE_AUDITOR_AGENT_ID,
+    LIVE_SANDBOX_AGENT_ID,
     LOAD_TESTER_AGENT_ID,
     MULTI_LANGUAGE_EXECUTOR_AGENT_ID,
     OPENAPI_VALIDATOR_AGENT_ID,
@@ -49,6 +50,7 @@ from server.builtin_agents.specs_part6 import load_builtin_specs_part6
 from server.builtin_agents.specs_part7 import load_builtin_specs_part7
 from server.builtin_agents.specs_part8 import load_builtin_specs_part8
 from server.builtin_agents.specs_part9 import load_builtin_specs_part9
+from server.builtin_agents.specs_part10 import load_builtin_specs_part10
 
 _DEFAULT_CATEGORY_BY_AGENT_ID = {
     QUALITY_JUDGE_AGENT_ID: "Internal",
@@ -80,6 +82,7 @@ _DEFAULT_CATEGORY_BY_AGENT_ID = {
     ARCHIVE_INSPECTOR_AGENT_ID: "Security",
     UNICODE_INSPECTOR_AGENT_ID: "Security",
     TERRAFORM_PLAN_ANALYZER_AGENT_ID: "Developer Tools",
+    LIVE_SANDBOX_AGENT_ID: "Developer Tools",
 }
 
 _DEFAULT_CACHEABLE_BY_AGENT_ID = {
@@ -119,6 +122,7 @@ _DEFAULT_CACHEABLE_BY_AGENT_ID = {
     ARCHIVE_INSPECTOR_AGENT_ID: True,
     UNICODE_INSPECTOR_AGENT_ID: True,
     TERRAFORM_PLAN_ANALYZER_AGENT_ID: True,
+    LIVE_SANDBOX_AGENT_ID: False,
 }
 
 _DEFAULT_RUNTIME_REQUIREMENTS_BY_AGENT_ID = {
@@ -150,6 +154,12 @@ _DEFAULT_RUNTIME_REQUIREMENTS_BY_AGENT_ID = {
     ARCHIVE_INSPECTOR_AGENT_ID: [],
     UNICODE_INSPECTOR_AGENT_ID: [],
     TERRAFORM_PLAN_ANALYZER_AGENT_ID: [],
+    LIVE_SANDBOX_AGENT_ID: [
+        "docker (daemon reachable from server)",
+        "git",
+        "libfaketime (optional)",
+        "rsync (optional)",
+    ],
 }
 
 _DEFAULT_TOOLING_KIND_BY_AGENT_ID = {
@@ -183,6 +193,7 @@ _DEFAULT_TOOLING_KIND_BY_AGENT_ID = {
     ARCHIVE_INSPECTOR_AGENT_ID: "tool_execution",
     UNICODE_INSPECTOR_AGENT_ID: "tool_execution",
     TERRAFORM_PLAN_ANALYZER_AGENT_ID: "tool_execution",
+    LIVE_SANDBOX_AGENT_ID: "sandbox_orchestration",
 }
 
 _DEFAULT_STABILITY_TIER_BY_AGENT_ID = {
@@ -216,6 +227,7 @@ _DEFAULT_STABILITY_TIER_BY_AGENT_ID = {
     ARCHIVE_INSPECTOR_AGENT_ID: "stable",
     UNICODE_INSPECTOR_AGENT_ID: "stable",
     TERRAFORM_PLAN_ANALYZER_AGENT_ID: "stable",
+    LIVE_SANDBOX_AGENT_ID: "beta",
 }
 
 _DEFAULT_CODEX_RECOMMENDED_BY_AGENT_ID = {
@@ -249,6 +261,7 @@ _DEFAULT_CODEX_RECOMMENDED_BY_AGENT_ID = {
     ARCHIVE_INSPECTOR_AGENT_ID: True,
     UNICODE_INSPECTOR_AGENT_ID: True,
     TERRAFORM_PLAN_ANALYZER_AGENT_ID: True,
+    LIVE_SANDBOX_AGENT_ID: True,
 }
 
 _DEFAULT_SHORT_USE_CASES_BY_AGENT_ID = {
@@ -329,6 +342,12 @@ _DEFAULT_SHORT_USE_CASES_BY_AGENT_ID = {
     ARCHIVE_INSPECTOR_AGENT_ID: ["inspect zip contents", "detect zip bomb", "find path traversal in archive"],
     UNICODE_INSPECTOR_AGENT_ID: ["detect homoglyphs", "find invisible chars", "check bidi attack"],
     TERRAFORM_PLAN_ANALYZER_AGENT_ID: ["analyze terraform plan", "find risky destroys", "classify IaC changes"],
+    LIVE_SANDBOX_AGENT_ID: [
+        "spin up the user's repo and run the test suite",
+        "reproduce a bug in a clone of production",
+        "snapshot then test a risky migration",
+        "fork a sandbox to try multiple fixes in parallel",
+    ],
 }
 
 
@@ -434,6 +453,7 @@ def _all_builtin_specs() -> tuple[dict[str, Any], ...]:
     specs.extend(load_builtin_specs_part7())
     specs.extend(load_builtin_specs_part8())
     specs.extend(load_builtin_specs_part9())
+    specs.extend(load_builtin_specs_part10())
     normalized = [_normalize_builtin_spec(spec) for spec in specs]
     seen_ids: set[str] = set()
     seen_endpoints: set[str] = set()

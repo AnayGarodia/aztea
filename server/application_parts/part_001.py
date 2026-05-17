@@ -817,7 +817,26 @@ def _key_from_request(request: Request) -> str:
     return str(client_ip) if client_ip is not None else "unknown"
 
 
-limiter = Limiter(key_func=_key_from_request, default_limits=[_DEFAULT_RATE_LIMIT])
+def _slowapi_enabled() -> bool:
+    """Honour the AZTEA_LIMITER_DISABLED env flag set by tests/conftest.py.
+
+    The slowapi `Limiter` has per-endpoint caps (e.g. `@limiter.limit("10/minute")`
+    on POST /skills) that aren't influenced by the AZTEA_RATE_LIMIT_*_RPM
+    overrides — those drive the per-key middleware in core/rate_limit.py.
+    Test runs that exercise the same route many times under one master key
+    (publish-flow + listing-safety parity + agent-generator) collectively
+    burst past 10/minute and reliably 429. Letting the test suite opt out
+    of slowapi's per-route caps removes that flake without weakening prod.
+    """
+    raw = os.environ.get("AZTEA_LIMITER_DISABLED", "").strip().lower()
+    return raw not in {"1", "true", "yes"}
+
+
+limiter = Limiter(
+    key_func=_key_from_request,
+    default_limits=[_DEFAULT_RATE_LIMIT],
+    enabled=_slowapi_enabled(),
+)
 app = FastAPI(
     title="aztea v1",
     lifespan=lifespan,
