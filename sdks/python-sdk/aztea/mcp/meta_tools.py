@@ -1294,7 +1294,7 @@ _GROUPED_TOOLS: list[dict[str, Any]] = [
             "re-verify every signature server-side and quote the green-check count.\n"
             "  • run_pipeline / pipeline_status — execute / track a saved DAG of agents.\n"
             "  • run_recipe / list_recipes / list_pipelines — curated multi-step workflows.\n"
-            "  • compare(intent, slugs[]) — same task on multiple specialists, side-by-side.\n"
+            "  • compare(slugs[]|agent_ids[], input_payload) — same task on multiple specialists, side-by-side.\n"
             "  • compare_status / compare_select — track / finalize a compare run.\n\n"
             "Decision rule: if the user's task touches MORE than one independent unit, "
             "default to `hire_batch`. Reserve serial single calls for one-shot questions."
@@ -1325,9 +1325,30 @@ _GROUPED_TOOLS: list[dict[str, Any]] = [
                 "slugs": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "compare: agent slugs to compare.",
+                    "description": (
+                        "compare: agent slugs to compare. Provide EITHER slugs[] "
+                        "(human-readable tool names, resolved server-side) OR "
+                        "agent_ids[] (UUIDs). At least one is required for compare."
+                    ),
                 },
-                "intent": {"type": "string", "description": "compare: natural-language intent."},
+                "agent_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "compare: agent UUIDs to compare. Alternative to slugs[] — "
+                        "skip slug resolution when you already know the IDs. "
+                        "2-3 IDs required; must be unique."
+                    ),
+                },
+                "intent": {
+                    "type": "string",
+                    "description": (
+                        "Reserved for future single-arg routing. compare currently "
+                        "IGNORES this field — supply slugs[] or agent_ids[] plus "
+                        "input_payload instead. For intent-only invocation, use "
+                        "the top-level do_specialist_task tool."
+                    ),
+                },
                 "input": {
                     "type": "object",
                     "description": "hire_async: input payload.",
@@ -2103,18 +2124,22 @@ def _session_summary(
         result["today_sunset_by_agent"] = spend.get("sunset_by_agent") or []
         result["today_live_catalog_spend_cents"] = spend.get("live_catalog_total_cents")
         result["today_sunset_spend_cents"] = spend.get("sunset_total_cents")
-    # MCP-session-local spend tracking. NOTE (1.7.0): this counter only
-    # accrues spend that flows THROUGH this MCP server process. Direct
-    # HTTP calls to /registry/agents/{id}/call (outside the MCP path) do
-    # NOT increment it. For an authoritative across-all-surfaces total
-    # over a window, use ``today_spend_cents`` above (it queries the
-    # ledger directly via /wallets/spend-summary). The session counter
-    # is the right number for "have I exceeded the soft cap I set this
-    # MCP session" — not for "how much have I spent today."
+    # MCP-session-local spend tracking. This counter accrues every spend
+    # that flows through THIS MCP server process: sync hires, async hires,
+    # batch hires, compare runs, AND pipeline + recipe runs (the latter
+    # via the total_charged_cents rollup added in migration 0047 — see
+    # audit 2026-05-17 bug #6). Direct HTTP calls to
+    # /registry/agents/{id}/call from outside this MCP path still do NOT
+    # increment it; for an authoritative across-all-surfaces total over a
+    # window, use ``today_spend_cents`` above (queries the wallet ledger
+    # directly via /wallets/spend-summary). The session counter is the
+    # right number for "have I exceeded the soft cap I set this MCP
+    # session" — not for "how much have I spent today."
     result["session_spent_cents"] = int(session_state.get("spent_cents") or 0)
     result["session_spent_usd"] = round(float(result["session_spent_cents"]) / 100, 4)
     result["session_spent_scope"] = (
-        "mcp_session_only — direct HTTP calls excluded; "
+        "mcp_session_only — covers sync/async hires + batch + compare + "
+        "pipeline + recipe; direct HTTP calls outside MCP are excluded — "
         "use today_spend_cents for the wallet-ledger total"
     )
     budget = session_state.get("budget_cents")
@@ -2882,6 +2907,7 @@ def _verify_job_signature(
     agent_did = str(signature_payload.get("agent_did") or "").strip()
     signature_b64 = str(signature_payload.get("signature") or "").strip()
     output_hash = str(signature_payload.get("output_hash") or "").strip()
+    alg = str(signature_payload.get("alg") or "ed25519").strip()
     if not (agent_did and signature_b64 and output_hash):
         return False, {
             "verified": False,
@@ -2894,6 +2920,25 @@ def _verify_job_signature(
             "verified": False,
             "verification_error": f"could not parse agent_id from did {agent_did!r}",
         }
+    # Audit 2026-05-17 bug #1: when the server signed with v2 (binding
+    # job_id + agent_id + output_hash into a sigil so a signature can't
+    # be replayed across jobs that hash to the same bytes), the verifier
+    # must reconstruct the same sigil — NOT hash raw output. Pre-fix this
+    # function silently returned verified=false on every v2-signed job
+    # while session_audit verify_all (which IS v2-aware) returned true.
+    v2_sigil_bytes: bytes | None = None
+    if alg.startswith("Ed25519+aztea-output-sig/2"):
+        import json as _json
+
+        sigil = {
+            "v": "aztea/output-sig/2",
+            "job_id": job_id,
+            "agent_id": str(agent_id),
+            "output_hash": output_hash,
+        }
+        v2_sigil_bytes = _json.dumps(
+            sigil, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        ).encode("utf-8")
     # Prefer the canonical signed bytes embedded in the signature response —
     # they are the exact bytes the agent signed and are unaffected by the
     # /jobs/{id} truncation that previously caused verified=false. Fall back
@@ -3007,7 +3052,13 @@ def _verify_job_signature(
             signature_bytes = base64.urlsafe_b64decode(signature_b64 + sig_pad)
         except Exception:
             signature_bytes = base64.b64decode(signature_b64 + sig_pad)
-        if canonical_signed_bytes is not None:
+        if v2_sigil_bytes is not None:
+            # v2 binds (job_id, agent_id, output_hash); the server's
+            # signed_payload_b64 is the raw output bytes (a convenience for
+            # v1 verifiers) and would fail v2 verify. Use the locally
+            # reconstructed sigil bytes instead.
+            signed_bytes = v2_sigil_bytes
+        elif canonical_signed_bytes is not None:
             signed_bytes = canonical_signed_bytes
         else:
             signed_bytes = json.dumps(
@@ -3031,6 +3082,8 @@ def _verify_job_signature(
         "output_hash": output_hash,
         "signed_at": signature_payload.get("signed_at"),
         "verification_method": verification_method,
+        "alg": alg,
+        "scheme": "v2" if v2_sigil_bytes is not None else "v1",
         "note": (
             "Signature verified locally against the agent's Ed25519 public key. "
             "Aztea cannot alter this output without breaking the signature."
@@ -3445,6 +3498,58 @@ def _get_examples(
     }
 
 
+def _bulk_resolve_slugs_or_empty(
+    session: requests.Session,
+    base: str,
+    hdrs: dict,
+    timeout: float,
+    raw_jobs: list,
+) -> dict[str, str]:
+    """One-call bulk slug → agent_id map; empty dict on any failure.
+
+    Why: ``/registry/resolve-slugs`` is the v2 entry point for this work.
+    A 404 (older server), 5xx, or schema mismatch must NOT block hire_batch
+    — the per-slug fallback in ``_hire_batch`` still works. Returning an
+    empty dict lets the caller treat the bulk call as best-effort.
+    """
+    slugs: list[str] = []
+    for spec in raw_jobs:
+        if isinstance(spec, dict) and not str(spec.get("agent_id") or "").strip():
+            slug = str(spec.get("slug") or "").strip()
+            if slug:
+                slugs.append(slug)
+    if not slugs:
+        return {}
+    ok, payload = _post(
+        session,
+        f"{base}/registry/resolve-slugs",
+        hdrs,
+        timeout,
+        {"slugs": slugs},
+    )
+    if not ok:
+        return {}
+    resolved = payload.get("resolved") if isinstance(payload, dict) else None
+    if not isinstance(resolved, dict):
+        return {}
+    return {
+        str(k): str(v).strip()
+        for k, v in resolved.items()
+        if isinstance(k, str) and isinstance(v, str) and v.strip()
+    }
+
+
+def _agent_id_from_bulk(spec: dict, slug_to_agent_id: dict[str, str]) -> str:
+    """Pure: prefer the explicit agent_id on the spec; otherwise bulk-lookup the slug."""
+    direct = str(spec.get("agent_id") or "").strip()
+    if direct:
+        return direct
+    slug = str(spec.get("slug") or "").strip()
+    if not slug:
+        return ""
+    return slug_to_agent_id.get(slug, "")
+
+
 def _hire_batch(
     session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
 ) -> tuple[bool, dict]:
@@ -3459,6 +3564,12 @@ def _hire_batch(
             "error": "INVALID_INPUT",
             "message": "Batch size is limited to 250 jobs.",
         }
+    # Audit 2026-05-17 bug #2: resolve EVERY slug in one bulk call before
+    # the per-job loop. Pre-fix each slug triggered the full semantic
+    # search pipeline (18s budget, 30/min rate limit); 20 slugs ≈ guaranteed
+    # throttle. Bulk endpoint added in the same change set; this client
+    # falls back to per-slug for backwards compatibility with older servers.
+    slug_to_agent_id = _bulk_resolve_slugs_or_empty(session, base, hdrs, timeout, raw_jobs)
     jobs_body = []
     for spec in raw_jobs:
         if not isinstance(spec, dict):
@@ -3466,9 +3577,13 @@ def _hire_batch(
                 "error": "INVALID_INPUT",
                 "message": "Each job spec must be an object.",
             }
-        agent_id, err = _resolve_agent_id(session, base, hdrs, timeout, spec)
-        if err is not None:
-            return False, err
+        bulk_hit = _agent_id_from_bulk(spec, slug_to_agent_id)
+        if bulk_hit:
+            agent_id = bulk_hit
+        else:
+            agent_id, err = _resolve_agent_id(session, base, hdrs, timeout, spec)
+            if err is not None:
+                return False, err
         job: dict[str, Any] = {
             "agent_id": agent_id,
             "input_payload": _input_arg(spec) or {},

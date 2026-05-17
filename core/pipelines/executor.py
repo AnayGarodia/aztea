@@ -446,8 +446,12 @@ def _invoke_agent(
     caller_wallet_id: str,
     client_id: str | None,
     execute_builtin_agent: Callable[[str, dict[str, Any]], dict] | None,
-) -> dict:
+) -> tuple[dict, int]:
     """Side-effect: orchestrate one pipeline step — charge, fetch, settle (success or refund).
+
+    Returns ``(output, caller_charge_cents)``. The caller threads the charge
+    delta into ``update_run_step`` so the run's ``total_charged_cents``
+    rollup stays accurate (audit 2026-05-17 bug #6).
 
     Why: split into charge/fetch/settle helpers so the money-flow ordering
     stays auditable; the invariant is "charge before fetch, settle exactly
@@ -459,11 +463,12 @@ def _invoke_agent(
         caller_wallet_id=caller_wallet_id,
         client_id=client_id,
     )
+    charged = int(state.get("caller_charge_cents") or 0)
     started_at = time.monotonic()
     try:
         output = _fetch_agent_output(agent, payload, execute_builtin_agent)
         _settle_step_success(agent, payload, output, state=state, started_at=started_at)
-        return output
+        return output, charged
     except Exception:
         _settle_step_failure(agent, state=state, started_at=started_at)
         raise
@@ -531,7 +536,7 @@ def _drive_pipeline_nodes(
                 f"Pipeline node '{node['id']}' agent '{node['agent_id']}' was not found."
             )
         try:
-            output = _invoke_agent(
+            output, charge_cents = _invoke_agent(
                 agent=agent,
                 payload=payload,
                 caller_owner_id=caller_owner_id,
@@ -542,10 +547,14 @@ def _drive_pipeline_nodes(
         except Exception:
             # Roll back before bubbling so fail_run() in _execute_run can
             # write the run row without hitting InFailedSqlTransaction.
+            # (Combines the 2026-05-17 transaction-discipline fix with the
+            # charge-delta tuple return from the same-day audit pass.)
             _reset_thread_db_state()
             raise
         step_results[node["id"]] = output
-        db.update_run_step(run_id, node["id"], output)
+        db.update_run_step(
+            run_id, node["id"], output, charge_delta_cents=charge_cents,
+        )
     return step_results
 
 

@@ -300,12 +300,26 @@ def get_run(run_id: str) -> dict | None:
     return _run_row_to_dict(row)
 
 
-def update_run_step(run_id: str, node_id: str, output_payload) -> dict | None:
-    """Record the output of a completed pipeline step and advance to the next node."""
+def update_run_step(
+    run_id: str,
+    node_id: str,
+    output_payload,
+    *,
+    charge_delta_cents: int = 0,
+) -> dict | None:
+    """Record the output of a completed pipeline step and advance to the next node.
+
+    ``charge_delta_cents`` is summed into the run's ``total_charged_cents``
+    rollup so the read endpoint can surface a single cumulative figure
+    without having to re-aggregate the underlying jobs at read time.
+    Pre-0047 audit (bug #6) — the rollup did not exist and the MCP
+    session_spent_cents accumulator silently dropped every pipeline run.
+    """
     init_db()
     now = _now()
     normalized_run_id = str(run_id).strip()
     normalized_node_id = str(node_id).strip()
+    delta = max(0, int(charge_delta_cents))
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
@@ -321,7 +335,9 @@ def update_run_step(run_id: str, node_id: str, output_payload) -> dict | None:
         conn.execute(
             """
             UPDATE pipeline_runs
-            SET step_results = %s, updated_at = COALESCE(updated_at, %s)
+            SET step_results = %s,
+                total_charged_cents = total_charged_cents + %s,
+                updated_at = COALESCE(updated_at, %s)
             WHERE run_id = %s
             """,
             (
@@ -331,6 +347,7 @@ def update_run_step(run_id: str, node_id: str, output_payload) -> dict | None:
                     sort_keys=True,
                     separators=(",", ":"),
                 ),
+                delta,
                 now,
                 normalized_run_id,
             ),

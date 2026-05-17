@@ -82,43 +82,14 @@ def _simple_stub(
 
 _STUB_TEMPLATES: dict[str, dict[str, Any]] = {}
 
-_STUB_TEMPLATES["sandbox_browser_session"] = {
-    "planned_input_schema": {
-        "type": "object",
-        "required": ["sandbox_id"],
-        "properties": {
-            "sandbox_id": {"type": "string"},
-            "viewport": {
-                "type": "object",
-                "properties": {
-                    "width": {"type": "integer"},
-                    "height": {"type": "integer"},
-                },
-            },
-            "headless": {"type": "boolean", "default": True},
-        },
-        "additionalProperties": False,
-    },
-    "planned_output_schema": {
-        "type": "object",
-        "properties": {
-            "session_id": {"type": "string"},
-            "cdp_url": {"type": "string"},
-        },
-    },
-    "tracking_issue": "live-sandbox: Playwright/CDP browser session pool",
-    "reason": (
-        "Managed Playwright pool with per-session eviction. Decoupled from "
-        "the engine PR so browser infra can ship on its own cadence."
-    ),
-}
+#  sandbox_browser_session / _navigate / _screenshot / _console_logs landed
+# as real implementations in this change set — see core.sandbox.browser.
+# The remaining browser verbs below still stub against the same Playwright
+# pool follow-up issue so callers see a consistent surface.
 
 for verb, desc in {
-    "sandbox_browser_navigate": "Navigate the session to URL",
     "sandbox_browser_click": "Click selector",
     "sandbox_browser_fill": "Fill selector with value",
-    "sandbox_browser_screenshot": "Take a full-page screenshot",
-    "sandbox_browser_console_logs": "Read console logs",
     "sandbox_browser_network": "Read network captures",
     "sandbox_browser_a11y_tree": "Return the a11y tree",
     "sandbox_browser_eval": "Evaluate JS in the page",
@@ -167,16 +138,10 @@ _STUB_TEMPLATES["sandbox_webhook_inbox"] = _simple_stub(
     ),
     out_props={"events": {"type": "array"}, "count": {"type": "integer"}},
 )
-_STUB_TEMPLATES["sandbox_outbound_record"] = _simple_stub(
-    issue="live-sandbox: outbound HTTP record/replay (VCR layer)",
-    reason=(
-        "Deterministic record/replay of outbound HTTP belongs as its own "
-        "layer next to the upcoming Aztea outbound recorder."
-    ),
-    in_props={"mode": {"type": "string", "enum": ["record", "replay", "off"]}},
-    out_props={"cassettes": {"type": "array"}},
-)
-_STUB_TEMPLATES["sandbox_outbound_replay"] = _STUB_TEMPLATES["sandbox_outbound_record"]
+# sandbox_outbound_record / _replay landed as real engine actions in this
+# change set (see core.sandbox.vcr). The recorder PROXY itself — the
+# in-network HTTP middleware that captures requests — is still a follow-up;
+# the cassette format and the record/replay flip are now stable.
 _STUB_TEMPLATES["sandbox_inject_failure"] = _simple_stub(
     issue="live-sandbox: chaos/failure injection",
     reason=(
@@ -212,15 +177,9 @@ _STUB_TEMPLATES["sandbox_link"] = _simple_stub(
     ),
     in_props={"other_sandbox_id": {"type": "string"}},
 )
-_STUB_TEMPLATES["sandbox_batch_start"] = _simple_stub(
-    issue="live-sandbox: matrix batch start",
-    reason=(
-        "N-way matrix boots compose with the wallet hold layer; tracked "
-        "separately to avoid blocking the engine PR on wallet integration."
-    ),
-    in_props={"matrix": {"type": "object"}},
-    out_props={"sandbox_ids": {"type": "array"}},
-)
+# sandbox_batch_start landed as a real implementation in this change set —
+# see core.sandbox.lifecycle.batch_start. The wallet-hold integration is
+# still tracked separately (see batch_start's billing_notice).
 _STUB_TEMPLATES["sandbox_share"] = _simple_stub(
     issue="live-sandbox: shared read-only / collab sessions",
     reason="Edge multiplexer required for terminal-share; v0 stays single-actor.",

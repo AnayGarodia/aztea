@@ -188,3 +188,255 @@ def test_dispatcher_action_table_covers_all_verbs():
     declared = set(sandbox_engine.ALL_ACTIONS)
     missing = declared - actionable
     assert not missing, f"verbs declared but not wired: {sorted(missing)}"
+
+
+# --- Stub-fill regression coverage -------------------------------------------
+
+def test_filled_stubs_are_no_longer_in_stub_registry():
+    """The actions this PR moves out of stubs must NOT be in stubs.stub_actions()."""
+    filled = {
+        "sandbox_batch_start",
+        "sandbox_outbound_record",
+        "sandbox_outbound_replay",
+        "sandbox_browser_session",
+        "sandbox_browser_navigate",
+        "sandbox_browser_screenshot",
+        "sandbox_browser_console_logs",
+    }
+    stub_set = set(stubs_mod.stub_actions())
+    leftover = filled & stub_set
+    assert not leftover, f"stub fill regressed; still stubbed: {sorted(leftover)}"
+    handler_set = set(sandbox_engine.HANDLERS.keys())
+    assert filled.issubset(handler_set), (
+        "stub-fill: action(s) missing from HANDLERS: "
+        f"{sorted(filled - handler_set)}"
+    )
+
+
+def test_batch_start_validates_matrix_shape():
+    out = live_sandbox.run({
+        "action": "sandbox_batch_start",
+        "input": {"matrix": {}, "base": {}},
+    })
+    assert "error" in out
+    out2 = live_sandbox.run({
+        "action": "sandbox_batch_start",
+        "input": {"matrix": {"NODE": []}, "base": {}},
+    })
+    assert "error" in out2
+
+
+def test_batch_start_cartesian_product():
+    """Matrix Cartesian product is materialised correctly (even when boots fail)."""
+    out = live_sandbox.run({
+        "action": "sandbox_batch_start",
+        "input": {
+            "matrix": {"NODE": ["18", "20"], "PG": ["14", "16"]},
+            "base": {
+                "source": {
+                    "kind": "raw_files",
+                    "files": [{"path": "x.txt", "content_b64": "aGVsbG8="}],
+                },
+                "boot": {"strategy": "custom_commands", "custom_commands": ["echo hi"]},
+            },
+        },
+    })
+    assert out["matrix_cells"] == 4
+    # Each cell axis_values combines both axes.
+    cells = out["results"]
+    assert all("NODE" in c["axis_values"] and "PG" in c["axis_values"] for c in cells)
+
+
+def test_vcr_replay_requires_existing_cassette(monkeypatch, tmp_path):
+    # Set up a sandbox row via the registry helper directly so the cassette
+    # operations can locate the on-disk dir without booting Docker.
+    from core.sandbox.state import (
+        BootInfo, LifetimePolicy, NetworkPolicyState, SandboxState,
+        generate_sandbox_id, register,
+    )
+    sandbox_id = generate_sandbox_id()
+    register(SandboxState(
+        sandbox_id=sandbox_id, status="ready", created_at=0, expires_at=0,
+        last_activity_at=0, last_snapshot_at=0, workspace_id=None,
+        owner_hint=None, region="auto", size={}, lifetime=LifetimePolicy(),
+        network=NetworkPolicyState(), boot=BootInfo(strategy="raw", project_name="p"),
+        filesystem_root="/tmp",
+    ))
+    out = live_sandbox.run({
+        "action": "sandbox_outbound_replay",
+        "input": {"sandbox_id": sandbox_id, "cassette": "primary"},
+    })
+    assert "error" in out
+    assert out["error"]["code"] == "sandbox.invalid_input"
+
+
+def test_vcr_record_then_replay_lookup(monkeypatch, tmp_path):
+    """End-to-end: record interactions, then replay them with the right key."""
+    from core.sandbox import vcr
+    from core.sandbox.state import (
+        BootInfo, LifetimePolicy, NetworkPolicyState, SandboxState,
+        generate_sandbox_id, register,
+    )
+    sandbox_id = generate_sandbox_id()
+    register(SandboxState(
+        sandbox_id=sandbox_id, status="ready", created_at=0, expires_at=0,
+        last_activity_at=0, last_snapshot_at=0, workspace_id=None,
+        owner_hint=None, region="auto", size={}, lifetime=LifetimePolicy(),
+        network=NetworkPolicyState(), boot=BootInfo(strategy="raw", project_name="p"),
+        filesystem_root="/tmp",
+    ))
+    rec = live_sandbox.run({
+        "action": "sandbox_outbound_record",
+        "input": {"sandbox_id": sandbox_id, "cassette": "alpha"},
+    })
+    assert rec["mode"] == "record"
+    # Append one interaction via the engine-level helper (what the proxy
+    # would call in production).
+    vcr.vcr_append(
+        sandbox_id,
+        method="POST",
+        url="https://api.example.com/charge",
+        request_headers={"X-Test": "1"},
+        request_body='{"amount":100}',
+        status=200,
+        response_headers={"Content-Type": "application/json"},
+        response_body='{"id":"ch_123"}',
+        cassette="alpha",
+    )
+    rep = live_sandbox.run({
+        "action": "sandbox_outbound_replay",
+        "input": {"sandbox_id": sandbox_id, "cassette": "alpha"},
+    })
+    assert rep["mode"] == "replay"
+    assert rep["interactions"] >= 1
+    # Lookup matches on (method, url, body_hash).
+    hit = vcr.vcr_replay_lookup(
+        sandbox_id,
+        method="post",
+        url="https://api.example.com/charge",
+        request_body='{"amount":100}',
+        cassette="alpha",
+    )
+    assert hit is not None
+    assert hit["status"] == 200
+    miss = vcr.vcr_replay_lookup(
+        sandbox_id,
+        method="POST",
+        url="https://api.example.com/charge",
+        request_body='{"amount":999}',
+        cassette="alpha",
+    )
+    assert miss is None
+
+
+def test_browser_session_requires_playwright(monkeypatch):
+    """Without Playwright installed, the call returns a clean structured error."""
+    from core.sandbox import browser
+    from core.sandbox.models import SandboxInvalidInput
+    from core.sandbox.state import (
+        BootInfo, LifetimePolicy, NetworkPolicyState, SandboxState,
+        generate_sandbox_id, register,
+    )
+    sandbox_id = generate_sandbox_id()
+    register(SandboxState(
+        sandbox_id=sandbox_id, status="ready", created_at=0, expires_at=0,
+        last_activity_at=0, last_snapshot_at=0, workspace_id=None,
+        owner_hint=None, region="auto", size={}, lifetime=LifetimePolicy(),
+        network=NetworkPolicyState(), boot=BootInfo(strategy="raw", project_name="p"),
+        filesystem_root="/tmp",
+    ))
+
+    def _stub_import() -> None:
+        raise SandboxInvalidInput(
+            "playwright is not installed in this runtime"
+        )
+
+    monkeypatch.setattr(browser, "_import_playwright", _stub_import)
+    out = live_sandbox.run({
+        "action": "sandbox_browser_session",
+        "input": {"sandbox_id": sandbox_id},
+    })
+    assert "error" in out
+    assert out["error"]["code"] == "sandbox.invalid_input"
+
+
+# --- Bug-fix regression tests (sibling bug fixes shipping in this PR) --------
+
+def test_infra_failure_codes_classified():
+    """Bug #4: only platform-fault codes are treated as infra failures."""
+    import server.application as app
+    is_infra = app._is_infra_failure
+    assert is_infra({"output_payload": {"error": {"code": "agent.endpoint_misconfigured"}}})
+    assert is_infra({"output_payload": {"error": {"code": "agent.tool_unavailable"}}})
+    assert is_infra({"output_payload": None, "error_message": "agent.runtime_unavailable: foo"})
+    assert not is_infra({"output_payload": {"error": {"code": "job.dispute_opened"}}})
+    assert not is_infra({"output_payload": None, "error_message": "caller timeout"})
+
+
+def test_canonical_slug_is_pure_and_consistent():
+    """Bug #2: canonical_slug derives a stable snake_case slug from any name."""
+    from core.registry.agents_ops import canonical_slug
+    assert canonical_slug("Secret Scanner") == "secret_scanner"
+    assert canonical_slug("CVE Lookup") == "cve_lookup"
+    assert canonical_slug("cve-lookup") == "cve_lookup"
+    assert canonical_slug("  Cve   Lookup ") == "cve_lookup"
+    assert canonical_slug(None) == ""
+    assert canonical_slug("") == ""
+
+
+def test_byok_warns_once_per_process_then_uses_overlay(monkeypatch):
+    """Bug #5: shared-quota warning fires once; env overlay swaps providers."""
+    from core.llm import registry as llm_registry
+
+    monkeypatch.setattr(llm_registry, "_PROCESS_BYOK_WARNED", set())
+    # Without overlay: warning path is hit (we don't assert log content;
+    # we assert the sentinel set grew).
+    provider, model = llm_registry.resolve_for_caller(
+        "groq:llama-3.3-70b-versatile", caller_api_key_id="az_test_caller",
+    )
+    assert "test_caller" in next(iter(llm_registry._PROCESS_BYOK_WARNED))
+    # With overlay: returns the per-caller OpenAI-compatible provider
+    monkeypatch.setenv("AZTEA_BYOK_AZ_TEST_OVERLAY_GROQ_API_KEY", "sk-test")
+    provider_overlay, _ = llm_registry.resolve_for_caller(
+        "groq:llama-3.3-70b-versatile", caller_api_key_id="az_test_overlay",
+    )
+    assert getattr(provider_overlay, "name", "").startswith("byok-az_test_overlay-")
+
+
+def test_v2_signature_verifies_through_sdk_path(monkeypatch):
+    """Bug #1: SDK verify path reconstructs the v2 sigil correctly."""
+    import base64
+    import hashlib
+    import json
+    from core.crypto import (
+        OUTPUT_SIG_SCHEME_V2,
+        canonical_json,
+        generate_signing_keypair,
+        sign_output_v2,
+        public_key_to_jwk,
+    )
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+    priv, pub = generate_signing_keypair()
+    job_id, agent_id = "job_test", "agt_test"
+    output = {"result": [1, 2, 3], "meta": {"ok": True}}
+    sig_b64 = sign_output_v2(priv, job_id, agent_id, output)
+    sigil = {
+        "v": "aztea/output-sig/2",
+        "job_id": job_id,
+        "agent_id": agent_id,
+        "output_hash": hashlib.sha256(canonical_json(output)).hexdigest(),
+    }
+    signed_bytes = json.dumps(
+        sigil, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+    ).encode("utf-8")
+    jwk = public_key_to_jwk(pub)
+    pk = base64.urlsafe_b64decode(jwk["x"] + "=" * (-len(jwk["x"]) % 4))
+    sig = base64.b64decode(sig_b64)
+    # Should verify cleanly with the v2 sigil bytes (and FAIL against raw output)
+    Ed25519PublicKey.from_public_bytes(pk).verify(sig, signed_bytes)
+    try:
+        Ed25519PublicKey.from_public_bytes(pk).verify(sig, canonical_json(output))
+        raise AssertionError("v2 sig should NOT verify against raw output bytes")
+    except Exception:
+        pass

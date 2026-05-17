@@ -1755,15 +1755,25 @@ def jobs_signature(request: Request, job_id: str) -> JSONResponse:
         _LOG.exception("Failed to render signed output metadata for job %s", job_id)
     # Embed the FULL canonical signed bytes alongside the signature so verifiers
     # don't have to fetch /jobs/{id} (which is wire-truncated by _job_response).
-    # Without this, MCP verifiers re-hash a truncated payload and report
-    # verified=false against a perfectly valid signature. The canonical_json
-    # bytes here are exactly what was signed, so a verifier can verify in one
-    # round-trip with no truncation race.
+    # For v1 signatures the signed bytes are the canonical raw output; for v2
+    # the bytes are the canonical sigil dict {v, job_id, agent_id, output_hash}.
+    # Audit 2026-05-17 bug #1: pre-fix, v2-signed jobs surfaced raw-output bytes
+    # here even though the signature covered the sigil — verifiers that trusted
+    # the embedded bytes silently returned verified=false. Now we surface the
+    # exact bytes the signature covers, matching the alg field.
     signed_payload_b64: str | None = None
+    sigil_payload: dict | None = None
     try:
         from core import crypto as _crypto
 
-        signed_bytes = _crypto.canonical_json(output_payload)
+        alg_value = job.get("output_signature_alg") or ""
+        if str(alg_value) == _crypto.OUTPUT_SIG_SCHEME_V2 and agent_id:
+            sigil_payload = _crypto.build_output_sigil(
+                str(job_id), str(agent_id), output_payload,
+            )
+            signed_bytes = _crypto.canonical_json(sigil_payload)
+        else:
+            signed_bytes = _crypto.canonical_json(output_payload)
         import base64 as _b64
 
         signed_payload_b64 = _b64.b64encode(signed_bytes).decode("ascii")
@@ -1785,6 +1795,10 @@ def jobs_signature(request: Request, job_id: str) -> JSONResponse:
             "verify_url": verify_url,
             "signed_payload_b64": signed_payload_b64,
             "signed_payload_encoding": "base64-canonical-json",
+            # When v2 is in play, expose the sigil so SDK verifiers can
+            # cross-check the (job_id, agent_id, output_hash) binding
+            # independently of the embedded bytes. None for v1 receipts.
+            "signed_sigil": sigil_payload,
             "output_payload": output_payload,
         }
     )

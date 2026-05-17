@@ -413,6 +413,83 @@ def registry_search(
     return JSONResponse(content=payload)
 
 
+_BULK_RESOLVE_SLUG_LIMIT = 250
+
+
+@app.post(
+    "/registry/resolve-slugs",
+    response_model=core_models.DynamicObjectResponse,
+    responses=_error_responses(400, 401, 403, 422, 429, 500),
+)
+@limiter.limit("120/minute")
+def registry_resolve_slugs(
+    request: Request,
+    body: dict[str, Any] = Body(...),
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.DynamicObjectResponse:
+    """Bulk slug → agent_id resolution.
+
+    Audit 2026-05-17 bug #2: pre-fix each slug in a hire_batch hit the
+    full semantic-search pipeline (18s budget, 30/min rate limit) — 20
+    slugs guaranteed a throttle. One in-memory pass over the registry
+    with the canonical slug rule resolves 250 slugs in ~100ms.
+
+    Request: ``{"slugs": ["secret_scanner", "cve_lookup", ...]}``
+    Response: ``{"resolved": {slug: agent_id|null, ...}, "unresolved": [slug, ...]}``
+    """
+    _require_any_scope(caller, "caller", "worker")
+    raw_slugs = body.get("slugs") if isinstance(body, dict) else None
+    if not isinstance(raw_slugs, list) or not raw_slugs:
+        raise HTTPException(
+            status_code=400,
+            detail=error_codes.make_error(
+                error_codes.INVALID_INPUT,
+                "slugs must be a non-empty array of strings.",
+            ),
+        )
+    if len(raw_slugs) > _BULK_RESOLVE_SLUG_LIMIT:
+        raise HTTPException(
+            status_code=422,
+            detail=error_codes.make_error(
+                error_codes.INVALID_INPUT,
+                f"slugs is limited to {_BULK_RESOLVE_SLUG_LIMIT} entries per call; "
+                f"got {len(raw_slugs)}.",
+            ),
+        )
+    cleaned: list[str] = []
+    for entry in raw_slugs:
+        if not isinstance(entry, str):
+            raise HTTPException(
+                status_code=400,
+                detail=error_codes.make_error(
+                    error_codes.INVALID_INPUT,
+                    "slugs entries must be strings.",
+                ),
+            )
+        text = entry.strip()
+        if text:
+            cleaned.append(text)
+    include_unapproved = _caller_is_admin(caller)
+    resolved = registry.bulk_resolve_slugs(
+        cleaned, include_unapproved=include_unapproved,
+    )
+    unresolved = [slug for slug, agent_id in resolved.items() if not agent_id]
+    return JSONResponse(
+        content={
+            "resolved": resolved,
+            "unresolved": unresolved,
+            "count": len(resolved),
+            "note": (
+                "Slug matching is case-insensitive and exact (no fuzzy "
+                "fallback) to prevent money-routing to a similarly-named "
+                "agent. Unresolved slugs return null; the caller decides "
+                "how to surface the gap (e.g. /registry/search for "
+                "candidates)."
+            ),
+        }
+    )
+
+
 @app.get(
     "/registry/agents/{agent_id}",
     response_model=core_models.AgentResponse,

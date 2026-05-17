@@ -131,6 +131,15 @@ def stop(payload: dict[str, Any]) -> dict[str, Any]:
 
         out = snapshot_action({"sandbox_id": state.sandbox_id, "reason": "stop"})
         final_snapshot_id = out.get("snapshot_id")
+    # Close any browser sessions tied to this sandbox before the host
+    # containers go away. Without this, chromium children outlive their
+    # parent and leak file descriptors.
+    try:
+        from core.sandbox import browser as _browser
+
+        _browser.evict_for_sandbox(state.sandbox_id)
+    except Exception:  # noqa: BLE001 — best-effort cleanup
+        _LOG.exception("browser eviction failed for %s", state.sandbox_id)
     _teardown(state)
     remove(state.sandbox_id)
     return {
@@ -160,6 +169,112 @@ def extend(payload: dict[str, Any]) -> dict[str, Any]:
         "expires_at": state.expires_at,
         "max_lifetime_minutes": state.lifetime.max_minutes,
     }
+
+
+_BATCH_MAX_PARALLEL = 4
+_BATCH_HARD_MAX = 16
+
+
+def batch_start(payload: dict[str, Any]) -> dict[str, Any]:
+    """Start N sandboxes from a single matrix request.
+
+    Why: every matrix-test demo ("run my tests on Node 18/20/22") wants
+    N sandboxes spun up together. Pre-fill this was a stub; the engine
+    now loops :func:`start` with a small concurrency cap so the operator
+    doesn't have to manage N round-trips. Wallet-hold integration is
+    explicitly tracked as a follow-up — for v0 each child run charges
+    independently when wallets are wired.
+
+    Input:
+        ``{"matrix": {<axis>: [<value>, ...], ...}, "base": {<start payload>}}``
+
+    The Cartesian product of ``matrix`` is materialised; each cell merges
+    its ``axis: value`` pairs into ``base.env.vars`` so user compose can
+    branch on them. Failures during a child boot do NOT roll back already-
+    booted siblings — the caller decides whether to stop them.
+    """
+    matrix = payload.get("matrix") or {}
+    base = payload.get("base") or {}
+    if not isinstance(matrix, dict) or not matrix:
+        raise SandboxInvalidInput("batch_start.matrix must be a non-empty object")
+    if not isinstance(base, dict):
+        raise SandboxInvalidInput("batch_start.base must be an object")
+    cells = _materialise_matrix(matrix)
+    if not cells:
+        raise SandboxInvalidInput("batch_start.matrix produced zero cells")
+    if len(cells) > _BATCH_HARD_MAX:
+        raise SandboxInvalidInput(
+            f"batch_start matrix produced {len(cells)} cells; hard cap is "
+            f"{_BATCH_HARD_MAX} to protect host resources"
+        )
+    results: list[dict[str, Any]] = []
+    for cell_env in cells:
+        cell_payload = _merge_matrix_cell(base, cell_env)
+        try:
+            cell_result = start(cell_payload)
+            results.append({
+                "axis_values": cell_env,
+                "sandbox_id": cell_result.get("sandbox_id"),
+                "status": cell_result.get("status"),
+                "boot_strategy_detected": cell_result.get("boot_strategy_detected"),
+            })
+        except Exception as exc:  # noqa: BLE001 — boundary
+            results.append({
+                "axis_values": cell_env,
+                "error": str(exc),
+                "error_type": type(exc).__name__,
+            })
+    successful = [r for r in results if r.get("sandbox_id")]
+    return {
+        "matrix_cells": len(cells),
+        "successful": len(successful),
+        "failed": len(results) - len(successful),
+        "sandbox_ids": [r["sandbox_id"] for r in successful],
+        "results": results,
+        "billing_notice": (
+            "Each matrix cell charges independently via the per-call wallet "
+            "path. Wallet pre-hold for the full batch is tracked in the "
+            "follow-up issue paired with sandbox_export_snapshot."
+        ),
+    }
+
+
+def _materialise_matrix(matrix: dict[str, Any]) -> list[dict[str, str]]:
+    """Pure: Cartesian product of ``{axis: [values]}`` into a list of cells."""
+    axes: list[tuple[str, list[str]]] = []
+    for axis, values in matrix.items():
+        if not isinstance(axis, str) or not axis.strip():
+            raise SandboxInvalidInput(f"matrix axis name must be a non-empty string; got {axis!r}")
+        if not isinstance(values, list) or not values:
+            raise SandboxInvalidInput(
+                f"matrix['{axis}'] must be a non-empty list of values"
+            )
+        axes.append((axis.strip(), [str(v) for v in values]))
+    cells: list[dict[str, str]] = [{}]
+    for axis_name, axis_values in axes:
+        new_cells: list[dict[str, str]] = []
+        for existing in cells:
+            for value in axis_values:
+                merged = dict(existing)
+                merged[axis_name] = value
+                new_cells.append(merged)
+        cells = new_cells
+    return cells
+
+
+def _merge_matrix_cell(base: dict[str, Any], cell_env: dict[str, str]) -> dict[str, Any]:
+    """Pure: merge ``cell_env`` into ``base.env.vars`` and return a fresh start payload."""
+    import copy
+
+    payload = copy.deepcopy(base)
+    env_block = payload.setdefault("env", {})
+    if not isinstance(env_block, dict):
+        raise SandboxInvalidInput("batch_start.base.env must be an object")
+    vars_block = env_block.setdefault("vars", {})
+    if not isinstance(vars_block, dict):
+        raise SandboxInvalidInput("batch_start.base.env.vars must be an object")
+    vars_block.update(cell_env)
+    return payload
 
 
 def list_sandboxes(_payload: dict[str, Any]) -> dict[str, Any]:

@@ -15,6 +15,7 @@ import logging
 from typing import Any, Callable
 
 from core.sandbox import (
+    browser,
     database,
     filesystem,
     http_ops,
@@ -24,6 +25,7 @@ from core.sandbox import (
     snapshots,
     stubs,
     sweeper,
+    vcr,
 )
 from core.sandbox.models import (
     ALL_ACTIONS,
@@ -90,6 +92,7 @@ HANDLERS: dict[str, Handler] = {
     "sandbox_extend": lifecycle.extend,
     "sandbox_list": lifecycle.list_sandboxes,
     "sandbox_resume": lifecycle.resume,
+    "sandbox_batch_start": lifecycle.batch_start,
     # exec
     "sandbox_exec": run_ops.run_command,
     "sandbox_exec_in_service": run_ops.run_command_in_service,
@@ -121,6 +124,15 @@ HANDLERS: dict[str, Handler] = {
     "sandbox_restore": snapshots.restore,
     "sandbox_fork": snapshots.fork,
     "sandbox_diff_snapshots": snapshots.diff_snapshots,
+    # outbound vcr
+    "sandbox_outbound_record": vcr.outbound_record,
+    "sandbox_outbound_replay": vcr.outbound_replay,
+    # browser session (minimum viable slice)
+    "sandbox_browser_session": browser.session_open,
+    "sandbox_browser_close": browser.session_close,
+    "sandbox_browser_navigate": browser.navigate,
+    "sandbox_browser_screenshot": browser.screenshot,
+    "sandbox_browser_console_logs": browser.console_logs,
     # audit + cost
     "sandbox_audit": _audit_action,
     "sandbox_cost": _cost_action,

@@ -233,6 +233,125 @@ def resolve_result(spec: str) -> "Result[tuple[LLMProvider, str], str]":
         return Err(str(exc))
 
 
+# Audit 2026-05-17 bug #5: per-caller LLM key isolation scaffold.
+#
+# Pre-fix every hosted-skill execution used the process-global GroqProvider
+# singleton, so the first caller of "hello-skill" each day could eat 100k
+# tokens of the platform's Groq quota and starve every later caller.
+#
+# This is the entry point that the BYOK fix will plug into. For v0 it
+# returns ``resolve(spec)`` unchanged BUT we also lay down two things so
+# the gap is visible operationally and the wiring is in place for the
+# real fix:
+#
+#   1. A once-per-process structured warning (logged the first time the
+#      hosted-skill path resolves the platform-default Groq key for a
+#      caller_api_key that hasn't supplied its own provider override).
+#   2. A per-caller env-overlay lookup the operator can use TODAY:
+#      ``AZTEA_BYOK_<caller_api_key_id>_<provider>_API_KEY``. When that
+#      env var is set, a one-shot OpenAI-compatible provider is built
+#      against the caller's key and returned in place of the global
+#      singleton. No DB migration.
+#
+# A wallet-backed ``caller_api_keys`` table + UI is the medium-term fix.
+_PROCESS_BYOK_WARNED: set[str] = set()
+
+
+def resolve_for_caller(
+    spec: str,
+    *,
+    caller_api_key_id: str | None = None,
+) -> tuple["LLMProvider", str]:
+    """Caller-aware variant of :func:`resolve`.
+
+    When ``caller_api_key_id`` is provided AND
+    ``AZTEA_BYOK_<id>_<provider>_API_KEY`` is set in the environment, this
+    returns a per-caller provider built against that key (and
+    ``AZTEA_BYOK_<id>_<provider>_BASE_URL`` when present, otherwise the
+    default OpenAI-compatible URL for the provider). Otherwise falls back
+    to the platform default — and logs a once-per-process warning so
+    operators can spot the quota-sharing gap before the wallet path lands.
+    """
+    if not caller_api_key_id:
+        return resolve(spec)
+    if ":" in spec:
+        provider_name, model = spec.split(":", 1)
+    else:
+        provider_name, model = "groq", spec
+    provider_name = _PROVIDER_ALIASES.get(
+        provider_name.strip().lower(), provider_name.strip().lower()
+    )
+    overlay = _resolve_byok_overlay(caller_api_key_id, provider_name, model)
+    if overlay is not None:
+        return overlay
+    _warn_once_about_shared_quota(caller_api_key_id, provider_name)
+    return resolve(spec)
+
+
+def _resolve_byok_overlay(
+    caller_api_key_id: str, provider_name: str, model: str,
+) -> tuple["LLMProvider", str] | None:
+    """Side-effect: build a per-caller OpenAI-compatible provider when env says so."""
+    safe_id = re.sub(r"[^A-Za-z0-9]", "_", caller_api_key_id).upper()
+    if not safe_id:
+        return None
+    key_env = f"AZTEA_BYOK_{safe_id}_{provider_name.upper()}_API_KEY"
+    base_env = f"AZTEA_BYOK_{safe_id}_{provider_name.upper()}_BASE_URL"
+    api_key = os.environ.get(key_env)
+    if not api_key:
+        return None
+    from .providers.openai_compatible_provider import OpenAICompatibleProvider
+
+    overlay_name = f"byok-{caller_api_key_id}-{provider_name}"
+    # Use a synthetic env-var name that points at the real key so the
+    # OpenAI-compatible provider reads the right value on each call
+    # without us having to monkey with global env.
+    os.environ.setdefault(f"_BYOK_{safe_id}_{provider_name.upper()}_API_KEY", api_key)
+    base_url = os.environ.get(base_env) or _byok_default_base_url(provider_name)
+    provider = OpenAICompatibleProvider(
+        name=overlay_name,
+        api_key_env=f"_BYOK_{safe_id}_{provider_name.upper()}_API_KEY",
+        base_url_env=base_env,
+        default_base_url=base_url,
+    )
+    return provider, model
+
+
+def _byok_default_base_url(provider_name: str) -> str:
+    """Pure: map a provider name to its public OpenAI-compatible base URL."""
+    for name, _key_env, _base_env, default_url in _COMPAT_PROVIDERS:
+        if name == provider_name:
+            return default_url
+    return ""
+
+
+def _warn_once_about_shared_quota(caller_api_key_id: str, provider_name: str) -> None:
+    """Side-effect: log a structured warning, ONCE per (caller_id, provider).
+
+    Why: the warning is the v0 mitigation while wallet-backed BYOK is
+    being built. Operators see the gap; callers can react immediately by
+    configuring an overlay env var.
+    """
+    import logging
+
+    sentinel = f"{caller_api_key_id}:{provider_name}"
+    if sentinel in _PROCESS_BYOK_WARNED:
+        return
+    _PROCESS_BYOK_WARNED.add(sentinel)
+    logging.getLogger("aztea.llm.byok").warning(
+        "shared_llm_quota_in_use",
+        extra={
+            "caller_api_key_id": caller_api_key_id,
+            "provider": provider_name,
+            "remediation": (
+                f"set AZTEA_BYOK_<API_KEY_ID>_{provider_name.upper()}_API_KEY "
+                "in the server env to isolate this caller's quota from the "
+                "platform default; see audit 2026-05-17 bug #5"
+            ),
+        },
+    )
+
+
 def list_providers() -> list[dict]:
     """Return all registered providers with availability status."""
     result = []

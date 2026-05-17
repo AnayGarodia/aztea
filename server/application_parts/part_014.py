@@ -1177,6 +1177,7 @@ def pipelines_run_get_by_id(
         and (pipeline_row is None or caller["owner_id"] != pipeline_row.get("owner_id"))
     ):
         raise HTTPException(status_code=403, detail="Not authorized to view this pipeline run.")
+    total_charged_cents = int(run.get("total_charged_cents") or 0)
     return JSONResponse(
         content={
             "run_id": run["run_id"],
@@ -1187,6 +1188,11 @@ def pipelines_run_get_by_id(
             "output_payload": run.get("output_payload"),
             "error_message": run.get("error_message"),
             "step_results": run.get("step_results") or {},
+            # Audit 2026-05-17 bug #6: rollup so MCP session_spent_cents
+            # accrues pipeline + recipe charges. Pre-0047 the run response
+            # had no charge field and the MCP accumulator dropped the run.
+            "total_charged_cents": total_charged_cents,
+            "caller_charge_cents": total_charged_cents,
             "created_at": run.get("created_at"),
             "updated_at": run.get("updated_at"),
             "completed_at": run.get("completed_at"),
@@ -1231,6 +1237,7 @@ def pipelines_run_get(
         raise HTTPException(
             status_code=403, detail="Not authorized to view this pipeline run."
         )
+    total_charged_cents = int(run.get("total_charged_cents") or 0)
     return JSONResponse(
         content={
             "run_id": run["run_id"],
@@ -1241,6 +1248,11 @@ def pipelines_run_get(
             "output_payload": run.get("output_payload"),
             "error_message": run.get("error_message"),
             "step_results": run.get("step_results") or {},
+            # Audit 2026-05-17 bug #6: rollup so MCP session_spent_cents
+            # accrues pipeline + recipe charges. Pre-0047 the run response
+            # had no charge field and the MCP accumulator dropped the run.
+            "total_charged_cents": total_charged_cents,
+            "caller_charge_cents": total_charged_cents,
             "created_at": run.get("created_at"),
             "updated_at": run.get("updated_at"),
             "completed_at": run.get("completed_at"),
