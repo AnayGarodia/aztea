@@ -1817,6 +1817,7 @@ def registry_call(
                 dispute_window_hours=_DEFAULT_JOB_DISPUTE_WINDOW_HOURS,
                 judge_agent_id=_extract_judge_agent_id(agent.get("input_schema"))
                 or _QUALITY_JUDGE_AGENT_ID,
+                origin=_origin_context.current_origin() or "direct",
             )
         except Exception as exc:
             payments.post_call_refund(
@@ -2297,6 +2298,7 @@ def registry_call(
             dispute_window_hours=_DEFAULT_JOB_DISPUTE_WINDOW_HOURS,
             judge_agent_id=_extract_judge_agent_id(agent.get("input_schema"))
             or _QUALITY_JUDGE_AGENT_ID,
+            origin=_origin_context.current_origin() or "direct",
         )
     except Exception as exc:
         payments.post_call_refund(
@@ -2899,6 +2901,7 @@ def jobs_create(
             callback_url=body.callback_url or None,
             callback_secret=body.callback_secret or None,
             output_verification_window_seconds=output_verification_window_seconds,
+            origin=_origin_context.current_origin() or "direct",
         )
     except Exception as exc:
         payments.post_call_refund(

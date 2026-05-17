@@ -598,6 +598,112 @@ _LAZY_CALL_TOOL: dict[str, Any] = {
     },
 }
 
+# ─── Observability surface (admin-scope) ───────────────────────────────────
+#
+# Thin wrappers around the /admin/usage/* HTTP endpoints. Useful only when the
+# configured API key has admin scope; otherwise the server returns 403 and the
+# tool surfaces the error verbatim. Kept short on purpose — these are grep,
+# not a sales pitch.
+
+_LAZY_STATUS_TOOL: dict[str, Any] = {
+    "name": "aztea_status",
+    "description": (
+        "aztea_status(window) → /admin/usage/digest. Snapshot of calls, "
+        "spend, top/failing agents, user churn, and auto-hire stats over "
+        "the window (24h | 7d | 30d) with trend deltas vs the prior bucket."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "window": {
+                "type": "string",
+                "enum": ["24h", "7d", "30d"],
+                "default": "24h",
+                "description": "Time window for the digest.",
+            },
+        },
+        "required": [],
+    },
+    "annotations": {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "openWorldHint": False,
+        "idempotentHint": True,
+    },
+}
+
+_LAZY_INSPECT_TOOL: dict[str, Any] = {
+    "name": "aztea_inspect",
+    "description": (
+        "aztea_inspect(entity, id) → /admin/usage/inspect. Drill-down on one "
+        "row. entity ∈ {agent, user, job, decision}."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "entity": {
+                "type": "string",
+                "enum": ["agent", "user", "job", "decision"],
+                "description": "What kind of row to inspect.",
+            },
+            "id": {
+                "type": "string",
+                "description": "Primary identifier for the entity (agent_id / user_id / job_id / decision_id).",
+            },
+        },
+        "required": ["entity", "id"],
+    },
+    "annotations": {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "openWorldHint": False,
+        "idempotentHint": True,
+    },
+}
+
+_LAZY_QUERY_TOOL: dict[str, Any] = {
+    "name": "aztea_query",
+    "description": (
+        "aztea_query(view, window, limit) → /admin/usage/query. Pre-canned "
+        "view of recent activity. view ∈ {no_match, failures, agent_health, "
+        "user_activity, top_agents, dormant_users, spend_by_user, "
+        "spend_by_agent, latency_outliers, recent_decisions}."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "view": {
+                "type": "string",
+                "enum": [
+                    "no_match", "failures", "agent_health", "user_activity",
+                    "top_agents", "dormant_users", "spend_by_user",
+                    "spend_by_agent", "latency_outliers", "recent_decisions",
+                ],
+                "description": "Pre-canned query view.",
+            },
+            "window": {
+                "type": "string",
+                "enum": ["24h", "7d", "30d"],
+                "default": "7d",
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50,
+            },
+        },
+        "required": ["view"],
+    },
+    "annotations": {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "openWorldHint": False,
+        "idempotentHint": True,
+    },
+}
+
+
 # Old → new lazy-tool name aliases. Old clients (cached tool lists, hardcoded
 # SDK examples, third-party docs) keep calling `aztea_do` etc.; we normalize
 # at dispatch so both names resolve to the same handler. The published
@@ -1119,6 +1225,31 @@ class RegistryBridge:
             "Content-Type": "application/json",
         }
 
+    def _usage_get(
+        self, path: str, params: dict[str, Any],
+    ) -> tuple[bool, dict[str, Any]]:
+        """Thin GET wrapper for the /admin/usage/* observability endpoints.
+
+        Why: aztea_status / aztea_inspect / aztea_query each map to one HTTP
+        GET with no body; centralising the request/error shape keeps the
+        dispatcher readable. 403 surfaces verbatim — the configured API key
+        likely lacks admin scope, and the user should see that directly.
+        """
+        try:
+            response = self._session.get(
+                f"{self.base_url}{path}",
+                headers=self._headers(),
+                params=params,
+                timeout=self.timeout_seconds,
+            )
+        except requests.RequestException as exc:
+            return False, {"error": "UPSTREAM_UNREACHABLE", "message": str(exc)}
+        try:
+            body = response.json()
+        except ValueError:
+            return False, {"error": "BAD_RESPONSE", "message": response.text[:500]}
+        return (200 <= response.status_code < 300), body
+
     def refresh(self) -> dict[str, Any]:
         if self._auth_required:
             return self._manifest
@@ -1234,6 +1365,9 @@ class RegistryBridge:
                 _LAZY_DESCRIBE_TOOL,
                 _LAZY_CALL_TOOL,
                 _LAZY_DO_TOOL,
+                _LAZY_STATUS_TOOL,
+                _LAZY_INSPECT_TOOL,
+                _LAZY_QUERY_TOOL,
                 *meta_tools.always_visible_tools(),
             ]
         return meta_tools.get_meta_tools() + registry_tools
@@ -2410,6 +2544,38 @@ class RegistryBridge:
             if workspace_notice and isinstance(payload, dict):
                 payload.setdefault("workspace_consent_notice", workspace_notice)
             return ok, payload
+
+        if tool_name == _LAZY_STATUS_TOOL["name"]:
+            return self._usage_get(
+                "/admin/usage/digest",
+                {"window": str(arguments.get("window") or "24h")},
+            )
+
+        if tool_name == _LAZY_INSPECT_TOOL["name"]:
+            entity = str(arguments.get("entity") or "").strip()
+            rid = str(arguments.get("id") or "").strip()
+            if not entity or not rid:
+                return False, {
+                    "error": "INVALID_INPUT",
+                    "message": "entity and id are required.",
+                }
+            return self._usage_get(
+                "/admin/usage/inspect", {"entity": entity, "id": rid},
+            )
+
+        if tool_name == _LAZY_QUERY_TOOL["name"]:
+            view = str(arguments.get("view") or "").strip()
+            if not view:
+                return False, {
+                    "error": "INVALID_INPUT",
+                    "message": "view is required.",
+                }
+            params: dict[str, Any] = {"view": view}
+            if arguments.get("window"):
+                params["window"] = str(arguments["window"])
+            if arguments.get("limit") is not None:
+                params["limit"] = int(arguments["limit"])
+            return self._usage_get("/admin/usage/query", params)
 
         if tool_name == _LAZY_CALL_TOOL["name"]:
             slug = str(arguments.get("slug") or "").strip()

@@ -25,6 +25,9 @@ _EXPECTED_LAZY_TOOL_NAMES: frozenset[str] = frozenset({
     "describe_specialist",
     "call_specialist",
     "do_specialist_task",
+    "aztea_status",
+    "aztea_inspect",
+    "aztea_query",
     "manage_job",
     "manage_budget",
     "manage_workflow",
@@ -50,7 +53,10 @@ def _build_lazy_tool_list() -> list[dict]:
         _LAZY_CALL_TOOL,
         _LAZY_DESCRIBE_TOOL,
         _LAZY_DO_TOOL,
+        _LAZY_INSPECT_TOOL,
+        _LAZY_QUERY_TOOL,
         _LAZY_SEARCH_TOOL,
+        _LAZY_STATUS_TOOL,
     )
 
     return [
@@ -58,14 +64,17 @@ def _build_lazy_tool_list() -> list[dict]:
         _LAZY_DESCRIBE_TOOL,
         _LAZY_CALL_TOOL,
         _LAZY_DO_TOOL,
+        _LAZY_STATUS_TOOL,
+        _LAZY_INSPECT_TOOL,
+        _LAZY_QUERY_TOOL,
         *meta_tools.always_visible_tools(),
     ]
 
 
-def test_lazy_tool_surface_is_exactly_seven_tools():
+def test_lazy_tool_surface_is_exactly_ten_tools():
     tools = _build_lazy_tool_list()
-    assert len(tools) == 7, (
-        f"Lazy MCP tool surface drifted: expected 7 tools, found {len(tools)}.\n"
+    assert len(tools) == 10, (
+        f"Lazy MCP tool surface drifted: expected 10 tools, found {len(tools)}.\n"
         f"  Names: {[t['name'] for t in tools]}\n"
         "If this change is intentional, update CLAUDE.md, AGENTS.md, and "
         "this test's _EXPECTED_LAZY_TOOL_NAMES in the same PR."

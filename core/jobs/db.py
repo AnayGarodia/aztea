@@ -548,7 +548,8 @@ _JOBS_DDL_TEMPLATE = """
         output_verification_decided_at     TEXT,
         output_verification_decision_owner_id TEXT,
         output_verification_reason         TEXT,
-        batch_id             TEXT
+        batch_id             TEXT,
+        origin               TEXT
     )
 """
 

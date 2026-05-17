@@ -610,6 +610,18 @@ def registry_auto_hire(
             "gated", str(decision.reason or "unknown"),
             time.perf_counter() - _route_started_at,
         )
+        _decision_audit.record_decision(
+            intent_text=body.intent,
+            auto_invoked=False,
+            dry_run=bool(body.dry_run),
+            reason=decision.reason,
+            chosen_agent_id=None,
+            confidence=decision.confidence,
+            candidates=decision.candidates,
+            caller_owner_id=caller.get("owner_id"),
+            caller_key_id=caller.get("key_id"),
+            resulting_job_id=None,
+        )
         return JSONResponse(
             content={
                 "auto_invoked": False,
@@ -660,6 +672,18 @@ def registry_auto_hire(
             "dry_run", "dry_run",
             time.perf_counter() - _route_started_at,
         )
+        _decision_audit.record_decision(
+            intent_text=body.intent,
+            auto_invoked=True,
+            dry_run=True,
+            reason="dry_run",
+            chosen_agent_id=chosen.agent_id,
+            confidence=decision.confidence,
+            candidates=decision.candidates,
+            caller_owner_id=caller.get("owner_id"),
+            caller_key_id=caller.get("key_id"),
+            resulting_job_id=None,
+        )
         return JSONResponse(
             content={
                 "auto_invoked": False,
@@ -675,14 +699,17 @@ def registry_auto_hire(
 
     # 5. Real invocation. Delegate in-process to the existing call route so
     #    the money path stays canonical (single source of truth for
-    #    pre_call_charge → dispatch → settle/refund).
+    #    pre_call_charge → dispatch → settle/refund). The ``use_origin``
+    #    wrapper tells the downstream ``jobs.create_job`` site to stamp the
+    #    job row with ``origin='auto_hire'`` instead of the default 'direct'.
     try:
-        delegated = registry_call(
-            request=request,
-            agent_id=chosen.agent_id,
-            body=core_models.RegistryCallRequest(root=payload),
-            caller=caller,
-        )
+        with _origin_context.use_origin("auto_hire"):
+            delegated = registry_call(
+                request=request,
+                agent_id=chosen.agent_id,
+                body=core_models.RegistryCallRequest(root=payload),
+                caller=caller,
+            )
     except HTTPException as exc:
         # registry_call already refunds on failure paths it owns. Surface a
         # structured response so the LLM can recover gracefully without
@@ -691,6 +718,18 @@ def registry_auto_hire(
         _observability.record_route_decision(
             "delegation_failed", "delegation_exception",
             time.perf_counter() - _route_started_at,
+        )
+        _decision_audit.record_decision(
+            intent_text=body.intent,
+            auto_invoked=True,
+            dry_run=False,
+            reason="invocation_failed",
+            chosen_agent_id=chosen.agent_id,
+            confidence=decision.confidence,
+            candidates=decision.candidates,
+            caller_owner_id=caller.get("owner_id"),
+            caller_key_id=caller.get("key_id"),
+            resulting_job_id=None,
         )
         return JSONResponse(
             status_code=exc.status_code,
@@ -733,6 +772,18 @@ def registry_auto_hire(
 
     job_id = inner.get("job_id")
     cost_cents = inner.get("cost_cents")
+    _decision_audit.record_decision(
+        intent_text=body.intent,
+        auto_invoked=True,
+        dry_run=False,
+        reason=None,
+        chosen_agent_id=chosen.agent_id,
+        confidence=decision.confidence,
+        candidates=decision.candidates,
+        caller_owner_id=caller.get("owner_id"),
+        caller_key_id=caller.get("key_id"),
+        resulting_job_id=str(job_id) if job_id else None,
+    )
     response_body: dict[str, Any] = {
         "auto_invoked": True,
         "mode": "hired_specialist",

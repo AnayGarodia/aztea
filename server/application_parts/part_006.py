@@ -297,6 +297,32 @@ def _emit_pending_starvation_signal() -> None:
         )
 
 
+# How often the sweeper runs the auto-hire decision retention pass. 24h is
+# fine because the rollup itself is idempotent and the raw retention window
+# is 90 days — missing a tick by an hour costs nothing.
+_DECISION_RETENTION_INTERVAL_SECONDS: int = 24 * 60 * 60
+_decision_retention_last_run_at: float = 0.0
+
+
+def _maybe_run_decision_retention() -> None:
+    """Side-effect: invoke ``observability.run_decision_retention`` at most once per day.
+
+    Why: the retention sweep is cheap when the table is small and bounded
+    by a single index scan when large. Gating it inside the existing
+    sweeper avoids spinning up a new background thread for one daily job.
+    """
+    global _decision_retention_last_run_at
+    now = time.monotonic()
+    if now - _decision_retention_last_run_at < _DECISION_RETENTION_INTERVAL_SECONDS:
+        return
+    _decision_retention_last_run_at = now
+    summary = _observability.run_decision_retention()
+    if summary.get("raw_rows_deleted"):
+        logging_utils.log_event(
+            _LOG, logging.INFO, "decision_retention.swept", summary,
+        )
+
+
 def _jobs_sweeper_loop(stop_event: threading.Event) -> None:
     _set_sweeper_state(running=True, started_at=_utc_now_iso())
     while not stop_event.wait(_SWEEPER_INTERVAL_SECONDS):
@@ -309,6 +335,7 @@ def _jobs_sweeper_loop(stop_event: threading.Event) -> None:
                 actor_owner_id="system:scheduler",
             )
             _emit_pending_starvation_signal()
+            _maybe_run_decision_retention()
             _set_sweeper_state(
                 last_run_at=started,
                 last_summary=summary,

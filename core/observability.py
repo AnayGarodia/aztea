@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 import time
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Generator
 
 from core import db as _db
@@ -256,3 +256,121 @@ def record_route_decision(
             ).observe(elapsed_seconds)
     except Exception as exc:  # pragma: no cover
         logger.debug("observability: route decision metric failed: %s", exc)
+
+
+
+# ---------------------------------------------------------------------------
+# Auto-hire decision retention
+# ---------------------------------------------------------------------------
+# Why: ``auto_hire_decisions`` grows unbounded under real traffic. The
+# retention policy (declared in migration 0050) is: aggregate rows older
+# than 90 days into ``auto_hire_decisions_daily``, then DELETE the raw rows.
+# The daily rollup is kept indefinitely so trend questions past 90 days
+# remain answerable, just at lower granularity.
+
+# Cap on the number of intent_hashes stored per (day, reason, auto_invoked)
+# bucket. Picked so a year of rollups stays comfortably under a megabyte
+# even for the no_match category.
+_ROLLUP_INTENT_HASH_CAP = 50
+
+_DECISION_RETENTION_DAYS = 90
+
+
+def _decision_rollup_cutoff(now_utc: datetime | None = None) -> str:
+    """Pure: ISO timestamp ``_DECISION_RETENTION_DAYS`` ago. Rows at or before this go to the rollup."""
+    base = now_utc or datetime.now(timezone.utc)
+    cutoff = base - timedelta(days=_DECISION_RETENTION_DAYS)
+    return cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _build_rollup_rows(raw_rows: list[dict]) -> list[tuple]:
+    """Pure: group raw decision rows by (day, reason, auto_invoked) and return INSERT params.
+
+    Why: SQLite has no per-key array aggregation function, so we read the
+    rows back and bucket in Python. Keeps the SQL surface minimal at the
+    cost of one extra pass — fine for a once-a-day job.
+    """
+    import json as _json
+    buckets: dict[tuple[str, str | None, int], dict] = {}
+    for r in raw_rows:
+        day = (r.get("created_at") or "")[:10]
+        reason = r.get("reason")
+        auto = int(r.get("auto_invoked") or 0)
+        key = (day, reason, auto)
+        bucket = buckets.setdefault(key, {
+            "count": 0, "callers": set(), "hashes": set(),
+        })
+        bucket["count"] += 1
+        caller = r.get("caller_owner_id")
+        if caller:
+            bucket["callers"].add(caller)
+        h = r.get("intent_hash")
+        if h and len(bucket["hashes"]) < _ROLLUP_INTENT_HASH_CAP:
+            bucket["hashes"].add(h)
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return [
+        (
+            day, reason, auto, bucket["count"], len(bucket["callers"]),
+            _json.dumps(sorted(bucket["hashes"])), now_iso,
+        )
+        for (day, reason, auto), bucket in buckets.items()
+    ]
+
+
+def run_decision_retention() -> dict[str, int]:
+    """Side-effect: roll up + delete auto_hire_decisions older than 90 days.
+
+    Returns a small summary dict so callers can log it. Never raises — a
+    failure here must not knock the sweeper over. Idempotent: running twice
+    in a row is a no-op because the second call finds no eligible rows.
+    """
+    summary = {"raw_rows_rolled": 0, "rollup_rows_written": 0, "raw_rows_deleted": 0}
+    try:
+        conn: _db.DbConnection = _db.get_raw_connection(_db.DB_PATH)
+        cutoff = _decision_rollup_cutoff()
+        rows = conn.execute(
+            """
+            SELECT created_at, reason, auto_invoked, caller_owner_id, intent_hash
+            FROM auto_hire_decisions
+            WHERE created_at < %s
+            """,
+            (cutoff,),
+        ).fetchall()
+        raw_rows = [dict(r) for r in rows]
+        if not raw_rows:
+            return summary
+        params = _build_rollup_rows(raw_rows)
+        for p in params:
+            # INSERT OR REPLACE — the (day, reason, auto_invoked) PK means a
+            # re-run aggregates new same-day rows on top of an existing entry.
+            conn.execute(
+                """
+                INSERT INTO auto_hire_decisions_daily (
+                    day, reason, auto_invoked, decision_count,
+                    unique_callers, intent_hashes, rolled_up_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT(day, reason, auto_invoked) DO UPDATE SET
+                    decision_count = decision_count + excluded.decision_count,
+                    unique_callers = MAX(unique_callers, excluded.unique_callers),
+                    intent_hashes  = excluded.intent_hashes,
+                    rolled_up_at   = excluded.rolled_up_at
+                """,
+                p,
+            )
+        conn.execute(
+            "DELETE FROM auto_hire_decisions WHERE created_at < %s",
+            (cutoff,),
+        )
+        conn.commit()
+        summary["raw_rows_rolled"] = len(raw_rows)
+        summary["rollup_rows_written"] = len(params)
+        summary["raw_rows_deleted"] = len(raw_rows)
+        return summary
+    except _db.OperationalError as exc:
+        # Tables missing pre-migration — silent.
+        if "no such table" not in str(exc).lower():
+            logger.warning("decision retention failed: %s", exc)
+        return summary
+    except Exception as exc:  # noqa: BLE001 — must not crash the sweeper
+        logger.warning("decision retention failed: %s", exc)
+        return summary

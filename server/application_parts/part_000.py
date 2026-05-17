@@ -180,8 +180,11 @@ from core.models import (
 )
 from core.openapi_responses import pick_error_responses as _error_responses
 from core.registry import auto_hire as _auto_hire
+from core.registry import decision_audit as _decision_audit
+from core.registry import origin_context as _origin_context
 from server.builtin_agents import specs as _builtin_specs
 from server.error_handlers import register_exception_handlers
+from server.routes import admin_usage as _admin_usage_routes
 from server.routes import system as _system_routes
 
 _LOG_LEVEL_NAME = (os.environ.get("LOG_LEVEL", "INFO") or "INFO").strip().upper()
@@ -443,7 +446,15 @@ def _mcp_log_invocation(
     input_json: str,
     duration_ms: int,
     success: bool,
+    error_code: str | None = None,
 ) -> None:
+    """Side-effect: append a row to ``mcp_invocation_log``. Never raises.
+
+    ``error_code`` is the structured ``error.code`` returned by the dispatch
+    path (e.g. ``budget.insufficient_funds``, ``agent.timeout``). NULL on
+    success. Failures without a structured code log NULL so a missing column
+    value is unambiguous.
+    """
     input_hash = hashlib.sha256(
         input_json.encode("utf-8", errors="replace")
     ).hexdigest()
@@ -454,8 +465,9 @@ def _mcp_log_invocation(
             conn.execute(
                 """
                 INSERT INTO mcp_invocation_log
-                    (id, agent_id, caller_key_id, tool_name, input_hash, invoked_at, duration_ms, success)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    (id, agent_id, caller_key_id, tool_name, input_hash, invoked_at,
+                     duration_ms, success, error_code)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     row_id,
@@ -466,10 +478,26 @@ def _mcp_log_invocation(
                     now,
                     duration_ms,
                     int(success),
+                    error_code,
                 ),
             )
     except Exception:
         _LOG.warning("Failed to write MCP invocation log for tool '%s'", tool_name)
+
+
+def _extract_mcp_error_code(exc: BaseException) -> str | None:
+    """Pure: pull a structured error code out of an HTTPException detail, if present.
+
+    Why: ``error_codes.make_error()`` emits ``{"code": str, "message": str, ...}``.
+    Anything that isn't a dict with a ``code`` key returns None so the column
+    stays unambiguous.
+    """
+    detail = getattr(exc, "detail", None)
+    if isinstance(detail, dict):
+        code = detail.get("code")
+        if isinstance(code, str) and code:
+            return code
+    return None
 
 
 def _env_int(

@@ -112,7 +112,12 @@ def test_registry_bridge_uses_lazy_tool_list_when_flag_enabled(monkeypatch):
     # lazy MCP surface — the streaming runtime had RECEIPT_NOT_BUILT and
     # duplicate-partial bugs (see CLAUDE.md + the 2026-05-17 test report).
     # Dispatch still recognises the names and returns tool_not_supported.
+    # Three observability tools (aztea_status / aztea_inspect / aztea_query)
+    # join the lazy surface in this set, wired to /admin/usage/*.
     assert set(names[4:]) == {
+        "aztea_status",
+        "aztea_inspect",
+        "aztea_query",
         "manage_job",
         "manage_budget",
         "manage_workflow",

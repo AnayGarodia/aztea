@@ -750,6 +750,7 @@ def a2a_tasks_send(
             dispute_window_hours=_DEFAULT_JOB_DISPUTE_WINDOW_HOURS,
             judge_agent_id=_QUALITY_JUDGE_AGENT_ID,
             callback_url=body.callback_url or None,
+            origin="direct",
         )
     except Exception:
         payments.post_call_refund(
@@ -1171,6 +1172,9 @@ def mcp_invoke(
     _merge_workspace_context_into_payload(merged_input, body)
     t0 = time.monotonic()
     success = False
+    error_code: str | None = None
+    delegated = None
+    raised: BaseException | None = None
     try:
         delegated = registry_call(
             request=request,
@@ -1179,15 +1183,22 @@ def mcp_invoke(
             caller=caller,
         )
         success = True
-    except Exception:
-        raise
+    except BaseException as exc:
+        raised = exc
+        error_code = _extract_mcp_error_code(exc)
     duration_ms = int((time.monotonic() - t0) * 1000)
 
-    # 6. Audit log (non-blocking; failure does not abort the response).
+    # 6. Audit log (non-blocking; failure does not abort the response). The
+    # log MUST happen on the failure path too — otherwise mcp_invocation_log
+    # silently misses every failure and the /admin/usage failures view
+    # returns empty.
     input_json = json.dumps(body.input, default=str) if body.input is not None else "{}"
     _mcp_log_invocation(
-        agent_id, caller_key_id, body.tool_name, input_json, duration_ms, success
+        agent_id, caller_key_id, body.tool_name, input_json,
+        duration_ms, success, error_code=error_code,
     )
+    if raised is not None:
+        raise raised
 
     payload = _mcp_payload_from_response(delegated)
     response_body: dict[str, Any] = {

@@ -46,10 +46,29 @@ _CREATE_JOB_INSERT_SQL = """
        input_payload, created_at, updated_at, max_attempts, parent_job_id, tree_depth,
        parent_cascade_policy, clarification_timeout_seconds, clarification_timeout_policy,
        dispute_window_hours, judge_agent_id, callback_url, callback_secret,
-       output_verification_window_seconds, output_verification_status, batch_id)
+       output_verification_window_seconds, output_verification_status, batch_id, origin)
     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 """
+
+# Allowed values for jobs.origin. NULL is treated as "unknown / pre-migration"
+# by readers; the backfill script promotes NULL to 'direct' for rows with no
+# pipeline/compare/recipe/watcher join match. See migration 0049.
+_ALLOWED_JOB_ORIGINS: frozenset[str] = frozenset({
+    "direct", "auto_hire", "pipeline", "compare", "recipe", "watcher",
+})
+
+
+def _validate_origin(origin: str | None) -> str | None:
+    """Pure: accept None or an allowed taxonomy value. Raise on unknowns so a typo fails loud."""
+    if origin is None:
+        return None
+    if origin not in _ALLOWED_JOB_ORIGINS:
+        raise ValueError(
+            f"invalid job origin {origin!r}; allowed values: "
+            f"{sorted(_ALLOWED_JOB_ORIGINS)}"
+        )
+    return origin
 
 
 def _validate_create_job_pricing(
@@ -138,7 +157,8 @@ def _build_create_job_insert_params(
     charge_tx_id: str, input_payload: dict, parent_job_id: str | None,
     client_id: str | None, judge_agent_id: str | None,
     callback_url: str | None, callback_secret: str | None,
-    batch_id: str | None, now: str, normalised: dict[str, Any],
+    batch_id: str | None, origin: str | None, now: str,
+    normalised: dict[str, Any],
 ) -> tuple:
     """Pure: positional args for ``_CREATE_JOB_INSERT_SQL`` placeholders.
 
@@ -181,6 +201,7 @@ def _build_create_job_insert_params(
         normalised["parsed_output_verification_window_seconds"],
         "armed" if has_verification_window else "not_required",
         _clean_optional_text(batch_id),
+        origin,
     )
 
 
@@ -210,14 +231,17 @@ def create_job(
     callback_secret: str | None = None,
     output_verification_window_seconds: int | None = None,
     batch_id: str | None = None,
+    origin: str | None = None,
 ) -> dict:
     """Side-effect: insert a new job row and its initial ``pending`` claim event.
 
     Why: the caller wallet must already have been debited (``charge_tx_id``) before
     calling this — job creation records the charge but does NOT perform it. All
     integer amounts must be in cents; floats are rejected. ``ValueError`` on bad
-    money amounts.
+    money amounts. ``origin`` (when set) tags the row with the surface that
+    created it; see ``_ALLOWED_JOB_ORIGINS`` and migration 0049.
     """
+    normalised_origin = _validate_origin(origin)
     normalised = _normalize_create_job_inputs(
         caller_charge_cents=caller_charge_cents, price_cents=price_cents,
         platform_fee_pct_at_create=platform_fee_pct_at_create,
@@ -238,7 +262,8 @@ def create_job(
         charge_tx_id=charge_tx_id, input_payload=input_payload,
         parent_job_id=parent_job_id, client_id=client_id,
         judge_agent_id=judge_agent_id, callback_url=callback_url,
-        callback_secret=callback_secret, batch_id=batch_id, now=now,
+        callback_secret=callback_secret, batch_id=batch_id,
+        origin=normalised_origin, now=now,
         normalised=normalised,
     )
     with _conn() as conn:

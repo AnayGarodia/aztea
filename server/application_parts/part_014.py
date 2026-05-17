@@ -1372,14 +1372,15 @@ def recipes_run(
         raise HTTPException(status_code=422, detail="input_payload must be an object.")
     caller_wallet = payments.get_or_create_wallet(caller["owner_id"])
     try:
-        run_id = pipelines.run_pipeline(
-            recipe_id,
-            input_payload,
-            caller["owner_id"],
-            caller_wallet["wallet_id"],
-            client_id=_request_client_id(request, body.get("client_id")),
-            execute_builtin_agent=_execute_builtin_agent,
-        )
+        with _origin_context.use_origin("recipe"):
+            run_id = pipelines.run_pipeline(
+                recipe_id,
+                input_payload,
+                caller["owner_id"],
+                caller_wallet["wallet_id"],
+                client_id=_request_client_id(request, body.get("client_id")),
+                execute_builtin_agent=_execute_builtin_agent,
+            )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     run = pipelines.get_run(run_id)

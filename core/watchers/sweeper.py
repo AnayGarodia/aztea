@@ -361,6 +361,7 @@ def _fire(
             charge_tx_id=charge_tx_id,
             input_payload=payload,
             agent_owner_id=agent.get("owner_id"),
+            origin="watcher",
         )
     except Exception as exc:
         try:

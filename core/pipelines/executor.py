@@ -14,6 +14,7 @@ import requests
 
 from core import crypto, fastpath, jobs, payments, registry, url_security
 from core.functional import Err, Ok, Result
+from core.registry import origin_context as _origin_context
 from server import pricing_helpers
 
 from . import db
@@ -322,6 +323,7 @@ def _create_pipeline_step_job(
         max_attempts=1,
         dispute_window_hours=1,
         output_verification_window_seconds=0,
+        origin=_origin_context.current_origin() or "pipeline",
     )
 
 

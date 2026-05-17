@@ -512,6 +512,7 @@ def jobs_compare_create(
                 judge_agent_id=_extract_judge_agent_id(agent.get("input_schema"))
                 or _QUALITY_JUDGE_AGENT_ID,
                 output_verification_window_seconds=_COMPARE_SELECTION_WINDOW_SECONDS,
+                origin="compare",
             )
             _record_job_event(
                 job,
@@ -1184,6 +1185,7 @@ def jobs_batch_create(
                     else spec.output_verification_window_seconds
                 ),
                 batch_id=batch_id,
+                origin=_origin_context.current_origin() or "direct",
             )
             _record_job_event(job, "job.created", actor_owner_id=caller["owner_id"])
             created_jobs.append(_job_response(job, caller))

@@ -2205,3 +2205,17 @@ def wallet_self_reconcile(
             "invariant_ok": drift == 0,
         }
     )
+
+
+# Mount the scannable observability surface (/admin/usage/*). Done here at
+# the end of part_011 so every auth helper this router needs is already in
+# scope — ``_require_api_key`` (part_001), ``_require_scope`` (part_002),
+# ``_require_admin_ip_allowlist`` (part_002). The router itself lives in
+# ``server/routes/admin_usage.py``.
+app.include_router(
+    _admin_usage_routes.create_router(
+        require_api_key=_require_api_key,
+        require_scope=_require_scope,
+        require_admin_ip_allowlist=_require_admin_ip_allowlist,
+    )
+)
