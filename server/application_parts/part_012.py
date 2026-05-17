@@ -551,10 +551,11 @@ def registry_auto_hire(
     """Resolve `intent` to a single agent and invoke it, gated by:
 
     - feature flag         (AZTEA_AUTO_INVOKE_ENABLED)
-    - confidence floor     (AZTEA_AUTO_INVOKE_CONFIDENCE, default 0.55)
+    - confidence floor     (AZTEA_AUTO_INVOKE_CONFIDENCE, default 0.30;
+                            0.20 when the caller passes aggressive=True)
     - stability tier       (no auto-invoke for beta agents)
     - trust score          (AZTEA_AUTO_INVOKE_TRUST_FLOOR, default 30)
-    - success rate         (AZTEA_AUTO_INVOKE_SUCCESS_FLOOR, default 0.50)
+    - success rate         (AZTEA_AUTO_INVOKE_SUCCESS_FLOOR, default 0.80)
     - per-call price       (min(caller.max_cost_usd, AZTEA_AUTO_INVOKE_SERVER_CAP_USD))
     - required-input fields present in caller-supplied `input` or extractable
 
@@ -566,6 +567,10 @@ def registry_auto_hire(
     receipts, and refund-on-failure stay identical to the manual path.
     """
     _require_scope(caller, "caller")
+    # Auto-hire latency is the SLI for the do_specialist_task reflex. The
+    # model only calls speculatively when the wall-clock cost feels like
+    # grep, not like a search. Capture wall time at every return path.
+    _route_started_at = time.perf_counter()
 
     # 1. Build candidate set from the live, public agent registry.
     raw_agents = _mcp_active_agents()
@@ -600,6 +605,10 @@ def registry_auto_hire(
         )
         estimated_cost_cents = (
             _usd_to_cents(estimated_cost_usd) if estimated_cost_usd is not None else None
+        )
+        _observability.record_route_decision(
+            "gated", str(decision.reason or "unknown"),
+            time.perf_counter() - _route_started_at,
         )
         return JSONResponse(
             content={
@@ -639,27 +648,27 @@ def registry_auto_hire(
         payload["workspace_context"] = body.workspace_context
 
     # 4. Dry-run: report what *would* happen, no invocation.
+    #
+    # Compact shape: dry_run is called speculatively per-turn as a routing
+    # reflex, so the response is intentionally tight. The full payload,
+    # 240-char description, and duplicated delegation/mode/charge_status
+    # fields are omitted to defuse context-window pollution across long
+    # sessions. Callers needing the full schema still have call_specialist +
+    # describe_specialist.
     if body.dry_run:
+        _observability.record_route_decision(
+            "dry_run", "dry_run",
+            time.perf_counter() - _route_started_at,
+        )
         return JSONResponse(
             content={
                 "auto_invoked": False,
-                "mode": "dry_run",
-                "charge_status": "not_charged",
                 "reason": "dry_run",
                 "would_invoke": True,
-                "agent": chosen.public_dict(),
-                "delegation": {
-                    "status": "would_hire",
-                    "intent": body.intent,
-                    # `specialist` removed; agent identity is already at the
-                    # top-level `agent` key. Was duplicated which made
-                    # responses ~30% larger and confused buyers about which
-                    # field to consume.
-                    "spend_cap_usd": float(body.max_cost_usd),
-                },
-                "payload": payload,
+                "agent": {"slug": chosen.slug, "name": chosen.name},
                 "confidence": decision.confidence,
                 "estimated_cost_usd": chosen.price_per_call_usd,
+                "estimated_cost_cents": _usd_to_cents(chosen.price_per_call_usd),
                 "next_step": "Re-call with dry_run=false to execute.",
             }
         )
@@ -679,6 +688,10 @@ def registry_auto_hire(
         # structured response so the LLM can recover gracefully without
         # confusing "auto_invoked=true but no output" semantics.
         detail = exc.detail if hasattr(exc, "detail") else str(exc)
+        _observability.record_route_decision(
+            "delegation_failed", "delegation_exception",
+            time.perf_counter() - _route_started_at,
+        )
         return JSONResponse(
             status_code=exc.status_code,
             content={
@@ -769,6 +782,10 @@ def registry_auto_hire(
         response_body["rendered_output_format"] = inner.get(
             "rendered_output_format", body.output_format
         )
+    _observability.record_route_decision(
+        "auto_invoked", "ok",
+        time.perf_counter() - _route_started_at,
+    )
     return JSONResponse(content=response_body)
 
 

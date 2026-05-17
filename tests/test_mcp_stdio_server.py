@@ -569,18 +569,41 @@ def test_lazy_tool_alias_map_is_exhaustive_and_consistent():
 
 
 def test_do_specialist_task_description_disclaims_brand_keyword_dependency():
-    """The description must explicitly say the user does NOT need to say
-    'Aztea'. Regression guard against re-introducing brand-keyword
-    dependency in a future edit."""
+    """The description must not assume the user said the brand name 'Aztea'.
+
+    Regression guard. Older versions of the description leaned on the
+    trigger taxonomy "EXECUTION / LIVE DATA / INDEPENDENT VERDICT /
+    MULTI-STEP" but those labels never fired the tool reliably, so 2026-05-17
+    replaced them with plain category language (code, config, infra,
+    security, live data) and a two-step dry_run-first contract. What must
+    survive every rewrite: the description tells the model it can call
+    do_specialist_task without the user ever typing 'Aztea'.
+    """
     desc = _MODULE._LAZY_DO_TOOL["description"]
-    # The disclaimer can read "do NOT need" or "does NOT need" depending on
-    # subject conjugation. Both are acceptable; the load-bearing tokens are
-    # the negation + the word "brand".
-    assert "NOT need" in desc and "brand" in desc.lower()
-    # All four category labels also appear in the tool description, not
-    # just in the server-level instructions.
-    for category in ("EXECUTION", "LIVE DATA", "INDEPENDENT VERDICT", "MULTI-STEP WORKFLOW"):
-        assert category in desc, f"missing category in do_specialist_task: {category}"
+    desc_lower = desc.lower()
+    # The disclaimer flexes across phrasings: "do NOT need to say Aztea",
+    # "didn't say 'Aztea'", "without saying Aztea". All express the same
+    # contract — the model picks this tool from intent shape, not from a
+    # keyword the user is required to utter.
+    assert "aztea" in desc_lower, (
+        "description must reference the brand name explicitly to disclaim it"
+    )
+    disclaimer_tokens = (
+        "didn't say", "didnt say", "do not need", "does not need",
+        "not need", "without saying",
+    )
+    assert any(tok in desc_lower for tok in disclaimer_tokens), (
+        "description must signal that the user does NOT need to invoke "
+        "'Aztea' explicitly. Current text head: " + desc[:200]
+    )
+    # Trigger framing — at least one of the new category words must appear
+    # so the model has a concrete pattern to match against incoming
+    # prompts. The legacy taxonomy ("EXECUTION", "LIVE DATA", ...) was
+    # intentionally dropped on 2026-05-17; do not re-assert it here.
+    assert any(
+        cat in desc_lower
+        for cat in ("code", "config", "infra", "security", "live data", "live-data")
+    ), "description must list at least one trigger category for the model"
 
 
 def test_aztea_nudge_hook_outputs_valid_json_with_routing_rule():

@@ -28,6 +28,7 @@ def load_builtin_specs_part5() -> list[dict[str, Any]]:
             "agent_id": _SECRET_SCANNER_AGENT_ID,
             "name": "Secret Scanner",
             "description": (
+                "Free — platform-subsidized gateway agent. "
                 "Use to scan source code, env files, or arbitrary text for leaked credentials "
                 "and high-entropy tokens. Runs a curated regex catalog (AWS, GCP, Stripe, GitHub, "
                 "Slack, OpenAI, Anthropic, Google, Twilio, SendGrid, JWTs, PEM private keys) plus "
@@ -35,7 +36,7 @@ def load_builtin_specs_part5() -> list[dict[str, Any]]:
                 "matches are never returned. No LLM, deterministic results."
             ),
             "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_SECRET_SCANNER_AGENT_ID],
-            "price_per_call_usd": 0.01,
+            "price_per_call_usd": 0.0,
             "tags": [
                 "security",
                 "secrets",

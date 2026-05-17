@@ -376,6 +376,9 @@ def test_builtin_agents_registered_to_system_owner_with_internal_endpoints(clien
     assert str(system_row["status"]).lower() == "suspended"
     system_owner = f"user:{system_row['user_id']}"
 
+    # CVE Lookup became a gateway free-tier agent on 2026-05-17 — its spec
+    # price is $0.00. The other builtins in this loop still ship priced.
+    from server.builtin_agents.constants import GATEWAY_FREE_TIER_AGENT_IDS
     for builtin_id in (
         server._CVELOOKUP_AGENT_ID,
         server._PYTHON_EXECUTOR_AGENT_ID,
@@ -385,7 +388,10 @@ def test_builtin_agents_registered_to_system_owner_with_internal_endpoints(clien
         assert agent is not None
         assert agent["owner_id"] == system_owner
         assert str(agent["endpoint_url"]).startswith("internal://")
-        assert float(agent["price_per_call_usd"]) > 0
+        if builtin_id in GATEWAY_FREE_TIER_AGENT_IDS:
+            assert float(agent["price_per_call_usd"]) == 0.0
+        else:
+            assert float(agent["price_per_call_usd"]) > 0
         assert isinstance(agent.get("output_examples"), list)
         assert len(agent["output_examples"]) >= 1
 
@@ -438,9 +444,12 @@ def test_registry_call_routes_internal_builtin_without_http_and_records_job(clie
 
     caller_wallet = payments.get_or_create_wallet(caller_owner)
     agent_wallet = payments.get_or_create_wallet(f"agent:{server._CVELOOKUP_AGENT_ID}")
-    # CVE Lookup is priced at $0.06 + $0.01 platform fee = $0.07 total
-    assert payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"] < 100
-    assert payments.get_wallet(agent_wallet["wallet_id"])["balance_cents"] >= 1
+    # CVE Lookup became a gateway free-tier agent on 2026-05-17 — its
+    # spec price is $0.00, so neither wallet moves. The job + settlement
+    # rows above are what this test cares about; pre-2026-05-17 it also
+    # asserted balance_cents < 100 / >= 1 when the call charged $0.07.
+    assert payments.get_wallet(caller_wallet["wallet_id"])["balance_cents"] == 100
+    assert payments.get_wallet(agent_wallet["wallet_id"])["balance_cents"] == 0
 
 
 def test_registry_call_normalizes_protocol_envelope_for_builtin_responses(client, monkeypatch):

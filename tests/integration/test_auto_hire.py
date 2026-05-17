@@ -146,6 +146,15 @@ def test_auto_hire_dry_run_does_not_invoke(client, monkeypatch):
     assert body.get("agent", {}).get("slug") == "stub_agent"
     assert isinstance(body.get("confidence"), (int, float))
     assert invoked["called"] is False
+    # Compact shape: the dry_run payload is intentionally tight so the
+    # model can call it speculatively per turn without polluting the
+    # context window. Verbose fields (`payload`, `mode`, `delegation`,
+    # `charge_status`) live on the gated and hired response shapes only.
+    assert "payload" not in body, "dry_run must not return the full agent payload"
+    assert "mode" not in body
+    assert "charge_status" not in body
+    assert "delegation" not in body
+    assert "estimated_cost_cents" in body
 
 
 def test_auto_hire_gates_when_price_exceeds_max(client, monkeypatch):

@@ -78,20 +78,21 @@ _OVERLAY: dict[str, dict[str, Any]] = {
             ],
         },
     },
+    # CVE Lookup is a free, platform-subsidized gateway agent. The tiered
+    # structure is preserved so the variable-pricing code path stays
+    # exercised; rates are zeroed out across every tier. Flip back to non-
+    # zero rates if the gateway-tier policy ever changes.
     CVELOOKUP_AGENT_ID: {
         "pricing_model": "tiered",
         "pricing_config": {
             "input_field": "cve_ids",
-            # Count packages and single-cve_id calls against the same tier
-            # curve. Without these fallbacks a packages=[...] call extracted
-            # 0 units and silently underbilled (caught in 2026-05-07 eval).
             "fallback_input_fields": ["packages", "cve_id"],
             "unit": "CVE",
-            "min_cents": 1,
+            "min_cents": 0,
             "tiers": [
-                {"up_to_units": 1, "cents": 1},
-                {"up_to_units": 5, "cents": 3},
-                {"up_to_units": 10, "cents": 6},
+                {"up_to_units": 1, "cents": 0},
+                {"up_to_units": 5, "cents": 0},
+                {"up_to_units": 10, "cents": 0},
             ],
         },
     },

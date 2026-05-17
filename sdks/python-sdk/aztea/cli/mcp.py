@@ -120,6 +120,155 @@ def _server_entry(api_key: str, base_url: str) -> dict[str, Any]:
     }
 
 
+# ── Reflex rule + PostToolUse hook (Claude target only) ────────────────────
+
+_CLAUDE_MD_PATH = Path.home() / ".claude" / "CLAUDE.md"
+_CLAUDE_SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
+_REFLEX_RULE_BEGIN = "<!-- aztea:auto-invoke-rule:begin -->"
+_REFLEX_RULE_END = "<!-- aztea:auto-invoke-rule:end -->"
+_REFLEX_RULE_BODY = (
+    "## Aztea reflex routing\n\n"
+    "When responding to prompts about code, config, infrastructure, security, "
+    "or live data, call `do_specialist_task(intent=..., dry_run=true)` first. "
+    "It's free and returns in under a second. If `would_invoke=true`, re-call "
+    "with `dry_run=false` to execute (capped at `max_cost_usd`, default $0.10, "
+    "failures refund automatically).\n"
+)
+# Marker token embedded in the hook command so we can find and remove it
+# idempotently in uninstall without parsing every other PostToolUse hook the
+# user may have configured.
+_HOOK_MARKER = "aztea-auto-invoke-hint"
+_HOOK_COMMAND = (
+    f"echo '[{_HOOK_MARKER}] Aztea: consider do_specialist_task(dry_run=true)"
+    " for security/dep/lint review of this change.' >&2"
+)
+_HOOK_MATCHER = "Edit|Write|MultiEdit"
+
+
+def _claude_md_block() -> str:
+    """Return the marker-fenced reflex rule block written to CLAUDE.md."""
+    return f"{_REFLEX_RULE_BEGIN}\n{_REFLEX_RULE_BODY}{_REFLEX_RULE_END}\n"
+
+
+def _write_reflex_rule() -> bool:
+    """Append the reflex rule to ~/.claude/CLAUDE.md if not already present.
+
+    Idempotent: the marker fence makes second writes a no-op. Returns True
+    when the file was modified, False when the rule was already there.
+    """
+    path = _CLAUDE_MD_PATH
+    existing = path.read_text(encoding="utf-8") if path.exists() else ""
+    if _REFLEX_RULE_BEGIN in existing:
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    separator = "" if existing.endswith("\n") or not existing else "\n"
+    path.write_text(existing + separator + _claude_md_block(), encoding="utf-8")
+    return True
+
+
+def _remove_reflex_rule() -> bool:
+    """Remove the marker-fenced reflex rule from CLAUDE.md. Idempotent."""
+    path = _CLAUDE_MD_PATH
+    if not path.exists():
+        return False
+    existing = path.read_text(encoding="utf-8")
+    if _REFLEX_RULE_BEGIN not in existing:
+        return False
+    start = existing.find(_REFLEX_RULE_BEGIN)
+    end_marker_idx = existing.find(_REFLEX_RULE_END, start)
+    if end_marker_idx < 0:
+        return False
+    end = end_marker_idx + len(_REFLEX_RULE_END)
+    # Strip a trailing newline immediately after the end marker so we don't
+    # leave a blank-line scar where the block used to live.
+    if end < len(existing) and existing[end] == "\n":
+        end += 1
+    cleaned = existing[:start] + existing[end:]
+    path.write_text(cleaned, encoding="utf-8")
+    return True
+
+
+def _post_tool_hook_entry() -> dict[str, Any]:
+    """One PostToolUse hook entry matching Edit/Write/MultiEdit."""
+    return {
+        "matcher": _HOOK_MATCHER,
+        "hooks": [{"type": "command", "command": _HOOK_COMMAND}],
+    }
+
+
+def _settings_has_aztea_hook(settings: dict[str, Any]) -> bool:
+    """Return True if our marker command is already wired as a PostToolUse hook."""
+    hooks_root = settings.get("hooks") if isinstance(settings, dict) else None
+    if not isinstance(hooks_root, dict):
+        return False
+    post_tool = hooks_root.get("PostToolUse")
+    if not isinstance(post_tool, list):
+        return False
+    for entry in post_tool:
+        if not isinstance(entry, dict):
+            continue
+        for hook in entry.get("hooks") or []:
+            if isinstance(hook, dict) and _HOOK_MARKER in str(hook.get("command") or ""):
+                return True
+    return False
+
+
+def _write_post_tool_hook() -> bool:
+    """Append our reflex-hint PostToolUse hook to ~/.claude/settings.json.
+
+    Idempotent via the marker check. Returns True on modification.
+    """
+    settings = _read_config(_CLAUDE_SETTINGS_PATH)
+    if _settings_has_aztea_hook(settings):
+        return False
+    hooks_root = settings.setdefault("hooks", {})
+    if not isinstance(hooks_root, dict):
+        # Existing settings have a non-dict at "hooks" — refuse to clobber.
+        return False
+    post_tool = hooks_root.setdefault("PostToolUse", [])
+    if not isinstance(post_tool, list):
+        return False
+    post_tool.append(_post_tool_hook_entry())
+    _write_config(_CLAUDE_SETTINGS_PATH, settings)
+    return True
+
+
+def _remove_post_tool_hook() -> bool:
+    """Remove any PostToolUse entry whose command carries our marker. Idempotent."""
+    if not _CLAUDE_SETTINGS_PATH.exists():
+        return False
+    settings = _read_config(_CLAUDE_SETTINGS_PATH)
+    if not _settings_has_aztea_hook(settings):
+        return False
+    hooks_root = settings.get("hooks")
+    if not isinstance(hooks_root, dict):
+        return False
+    post_tool = hooks_root.get("PostToolUse")
+    if not isinstance(post_tool, list):
+        return False
+    pruned: list[Any] = []
+    for entry in post_tool:
+        if not isinstance(entry, dict):
+            pruned.append(entry)
+            continue
+        kept_hooks = [
+            h for h in (entry.get("hooks") or [])
+            if not (isinstance(h, dict) and _HOOK_MARKER in str(h.get("command") or ""))
+        ]
+        if not kept_hooks:
+            # Drop the whole matcher entry when nothing else lives under it.
+            continue
+        pruned.append({**entry, "hooks": kept_hooks})
+    if pruned:
+        hooks_root["PostToolUse"] = pruned
+    else:
+        hooks_root.pop("PostToolUse", None)
+        if not hooks_root:
+            settings.pop("hooks", None)
+    _write_config(_CLAUDE_SETTINGS_PATH, settings)
+    return True
+
+
 # ── install ────────────────────────────────────────────────────────────────
 
 @app.command()
@@ -127,6 +276,25 @@ def install(
     client: str = typer.Option("claude", "--client", help="Editor: claude | cursor."),
     api_key: Optional[str] = ApiKeyOpt,
     base_url: Optional[str] = BaseUrlOpt,
+    with_rule: bool = typer.Option(
+        True,
+        "--with-rule/--no-with-rule",
+        help=(
+            "Append the Aztea reflex-routing rule to ~/.claude/CLAUDE.md so the "
+            "model calls do_specialist_task(dry_run=true) before responding to "
+            "code/config/infra/security/live-data prompts. Claude target only."
+        ),
+    ),
+    with_hook: bool = typer.Option(
+        True,
+        "--with-hook/--no-with-hook",
+        help=(
+            "Wire a PostToolUse hook into ~/.claude/settings.json that nudges the "
+            "model toward do_specialist_task after Edit/Write/MultiEdit. Claude "
+            "target only. Output goes to stderr — does not consume the model's "
+            "tool budget."
+        ),
+    ),
     json_mode: bool = JsonOpt,
 ) -> None:
     """Register the Aztea MCP server in the chosen editor."""
@@ -164,9 +332,25 @@ def install(
         servers["aztea"] = _server_entry(key, url)
         _write_config(target.config_path, data)
 
+        # Reflex rule + PostToolUse hook are Claude-only — Cursor uses its
+        # own rules / settings format and we don't write into it from here.
+        rule_written = False
+        hook_written = False
+        if target.name == "Claude Code":
+            if with_rule:
+                rule_written = _write_reflex_rule()
+            if with_hook:
+                hook_written = _write_post_tool_hook()
+
         if json_mode:
             emit(
-                {"installed": True, "client": target.name, "path": str(target.config_path)},
+                {
+                    "installed": True,
+                    "client": target.name,
+                    "path": str(target.config_path),
+                    "reflex_rule_written": rule_written,
+                    "post_tool_hook_written": hook_written,
+                },
                 json_mode=True,
             )
             return
@@ -175,6 +359,10 @@ def install(
             f"Installed Aztea MCP server in {target.label}",
             detail=str(target.config_path),
         )
+        if rule_written:
+            info(f"Added reflex rule to {_CLAUDE_MD_PATH}")
+        if hook_written:
+            info(f"Added PostToolUse hook to {_CLAUDE_SETTINGS_PATH}")
         info("Restart your editor to activate.")
     except typer.Exit:
         raise
@@ -281,10 +469,31 @@ def uninstall(
         data.pop("mcpServers", None)
     _write_config(target.config_path, data)
 
+    # Reverse the install-time CLAUDE.md + hook writes when removing the
+    # claude integration. Cursor target leaves nothing to clean up because
+    # the rule + hook are never written for it.
+    rule_removed = False
+    hook_removed = False
+    if target.name == "Claude Code":
+        rule_removed = _remove_reflex_rule()
+        hook_removed = _remove_post_tool_hook()
+
     if json_mode:
-        emit({"removed": True, "path": str(target.config_path)}, json_mode=True)
+        emit(
+            {
+                "removed": True,
+                "path": str(target.config_path),
+                "reflex_rule_removed": rule_removed,
+                "post_tool_hook_removed": hook_removed,
+            },
+            json_mode=True,
+        )
         return
     success(f"Removed Aztea from {target.label}", detail=str(target.config_path))
+    if rule_removed:
+        info(f"Removed reflex rule from {_CLAUDE_MD_PATH}")
+    if hook_removed:
+        info(f"Removed PostToolUse hook from {_CLAUDE_SETTINGS_PATH}")
 
 
 # ── serve ──────────────────────────────────────────────────────────────────

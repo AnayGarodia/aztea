@@ -149,6 +149,26 @@ try:
         "lifecycle bug or a pre-deploy job rated post-deploy.",
         ["reason"],  # underflow | wallet_missing | no_active_hold
     )
+    # Auto-hire routing decisions — labels measure the gap between calls
+    # reaching the router and calls actually firing an agent. Outcomes:
+    #   auto_invoked    — gate passed; agent ran (or would-run on dry_run path)
+    #   gated           — gate failed; refusal returned, no charge
+    #   dry_run         — dry_run=true short-circuit; no charge by design
+    #   delegation_failed — downstream HTTPException from registry_call
+    route_decisions_total = _PCounter(
+        "aztea_route_decisions_total",
+        "Auto-hire routing decision outcomes (does the model's dry_run reflex "
+        "actually fire an agent or short-circuit).",
+        ["outcome", "reason"],
+    )
+    route_latency_seconds = _PHistogram(
+        "aztea_route_latency_seconds",
+        "Wall-clock time inside the /registry/agents/auto-hire handler. "
+        "dry_run latency is the relevant SLI for the reflex-tool framing — "
+        "if the p99 climbs above ~0.4s the model stops calling speculatively.",
+        ["outcome"],
+        buckets=[0.01, 0.025, 0.05, 0.1, 0.2, 0.4, 1.0, 2.5, 5.0],
+    )
 except ImportError:
     # prometheus_client not installed — use no-op stubs so callers never need IS_PROM guards.
     class _NoopLabels:
@@ -178,6 +198,8 @@ except ImportError:
     wallet_hold_released_total = _NoopMetric()  # type: ignore[assignment]
     wallet_hold_clawed_total = _NoopMetric()  # type: ignore[assignment]
     payout_curve_clawback_skipped_total = _NoopMetric()  # type: ignore[assignment]
+    route_decisions_total = _NoopMetric()  # type: ignore[assignment]
+    route_latency_seconds = _NoopMetric()  # type: ignore[assignment]
 
 
 _JOB_TERMINAL_STATUSES = ("complete", "failed")
@@ -211,3 +233,26 @@ def record_builtin_agent_call(agent_slug: str | None, status: str) -> None:
         ).inc()
     except Exception as exc:  # pragma: no cover
         logger.debug("observability: builtin agent counter failed: %s", exc)
+
+
+def record_route_decision(
+    outcome: str, reason: str, elapsed_seconds: float,
+) -> None:
+    """Record one auto-hire routing decision + latency. Never raises.
+
+    Called from the /registry/agents/auto-hire handler on every return path
+    so we can tell whether the do_specialist_task reflex actually fires an
+    agent or short-circuits. Without this counter we ship the reflex-tool
+    rewrite blind to whether attach rate moved.
+    """
+    try:
+        route_decisions_total.labels(
+            outcome=str(outcome or "unknown"),
+            reason=str(reason or "unknown"),
+        ).inc()
+        if elapsed_seconds >= 0:
+            route_latency_seconds.labels(
+                outcome=str(outcome or "unknown"),
+            ).observe(elapsed_seconds)
+    except Exception as exc:  # pragma: no cover
+        logger.debug("observability: route decision metric failed: %s", exc)

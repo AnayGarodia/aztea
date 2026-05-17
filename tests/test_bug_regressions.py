@@ -43,13 +43,16 @@ def test_auto_invoke_default_trust_floor_matches_sparse_catalog_reality(monkeypa
 
 def test_variable_pricing_overlay_covers_cve_tiered():
     # LIVE_ENDPOINT_TESTER_AGENT_ID was removed in the 2026-05-15 agent prune,
-    # so this test now only exercises the CVE tiered path.
+    # so this test now only exercises the CVE tiered path. CVE Lookup
+    # became a gateway free-tier agent in 2026-05-17 — every tier rate is
+    # 0¢, but the overlay must still report the "tiered" model so the
+    # variable-pricing code path stays wired up if rates ever come back.
     from server import pricing_helpers
     from server.builtin_agents.constants import CVELOOKUP_AGENT_ID
 
     cve_agent = {
         "agent_id": CVELOOKUP_AGENT_ID,
-        "price_per_call_usd": 0.01,
+        "price_per_call_usd": 0.0,
         "pricing_model": "fixed",
         "pricing_config": None,
     }
@@ -59,7 +62,7 @@ def test_variable_pricing_overlay_covers_cve_tiered():
         payload={"cve_ids": ["CVE-1", "CVE-2", "CVE-3", "CVE-4", "CVE-5"]},
     )
 
-    assert cve_estimate["price_cents"] == 3
+    assert cve_estimate["price_cents"] == 0
     assert cve_estimate["pricing_model"] == "tiered"
 
 

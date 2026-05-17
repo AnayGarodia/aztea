@@ -513,12 +513,13 @@ def load_builtin_specs_part7() -> list[dict]:
             "name": "Dockerfile Analyzer",
             "slug": "dockerfile-analyzer",
             "description": (
+                "Free — platform-subsidized gateway agent. "
                 "Runs hadolint and custom security checks on Dockerfiles. "
                 "Finds unpinned images, secrets in ENV, root-user risks, and "
                 "pipe-to-shell patterns. Returns scored findings."
             ),
             "endpoint_url": BUILTIN_INTERNAL_ENDPOINTS[DOCKERFILE_ANALYZER_AGENT_ID],
-            "price_per_call_usd": 0.005,
+            "price_per_call_usd": 0.0,
             "tags": ["security", "docker", "containers", "devops", "static-analysis"],
             "is_featured": True,
             "cacheable": True,

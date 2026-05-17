@@ -70,9 +70,9 @@ def load_builtin_specs_part1() -> list[dict[str, Any]]:
         {
             "agent_id": _CVELOOKUP_AGENT_ID,
             "name": "CVE Lookup Agent",
-            "description": "Use when the user wants live CVE data for a package or specific CVE ID. Queries OSV.dev for ecosystem-aware package lookups (npm, PyPI) and NIST NVD for direct CVE-ID lookups — not LLM memory. Returns CVSS score, exploit availability, affected version range, and recommended fix for each CVE. VARIABLE BILLING: $0.01 for 1 CVE ID, $0.03 for up to 5 CVE IDs, $0.06 for up to 10 CVE IDs (batch ID mode). Package scans are flat $0.01/call.",
+            "description": "Free — platform-subsidized gateway agent. Use when the user wants live CVE data for a package or specific CVE ID. Queries OSV.dev for ecosystem-aware package lookups (npm, PyPI) and NIST NVD for direct CVE-ID lookups — not LLM memory. Returns CVSS score, exploit availability, affected version range, and recommended fix for each CVE.",
             "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_CVELOOKUP_AGENT_ID],
-            "price_per_call_usd": 0.01,
+            "price_per_call_usd": 0.0,
             "tags": ["security", "cve", "vulnerability-intel", "nvd", "packages"],
             "match_keywords": [
                 "cve",

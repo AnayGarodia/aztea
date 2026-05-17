@@ -271,6 +271,18 @@ def auto_invoke_success_floor() -> float:
     return flag_float("AZTEA_AUTO_INVOKE_SUCCESS_FLOOR", default=0.80)
 
 
+def auto_invoke_embeddings_enabled() -> bool:
+    """Enable the semantic-similarity term in auto-hire routing.
+
+    Default ON. Lexical signals (slug, name, description tokens, curated
+    keywords) continue to score regardless; the embedding term is additive
+    and capped, so a misfiring backend cannot starve the lexical winner.
+    Flip OFF (`AZTEA_AUTO_INVOKE_EMBEDDINGS=0`) if a specific catalog finds
+    semantic scores dominating clearly-keyword-matched intents.
+    """
+    return flag("AZTEA_AUTO_INVOKE_EMBEDDINGS", default=True)
+
+
 # ---------------------------------------------------------------------------
 # OSS / hosted boundary
 #

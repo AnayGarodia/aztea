@@ -163,6 +163,24 @@ CURATED_BUILTIN_AGENT_IDS = frozenset(
 # CURATED_PUBLIC. Registry seeding + spec generation use CURATED_BUILTIN so old
 # job IDs and receipts still resolve cleanly.
 
+
+# Platform-subsidized gateway agents — exposed at $0.00 so a first-time
+# Aztea caller can see one finding before any decision about whether to
+# trust the rest of the catalog. The pricing knob lives in each spec file
+# (price_per_call_usd = 0.0) and, for variable-priced CVE Lookup, in
+# pricing_overlay.py. This set is informational so future readers can
+# locate every member by id without grepping spec text. Adding an agent
+# here without zeroing its spec price is a documentation bug, not a
+# behavior change — the spec price is authoritative.
+GATEWAY_FREE_TIER_AGENT_IDS = frozenset(
+    {
+        SECRET_SCANNER_AGENT_ID,
+        DOCKERFILE_ANALYZER_AGENT_ID,
+        CVELOOKUP_AGENT_ID,
+    }
+)
+
+
 BUILTIN_WORKER_OWNER_ID = "system:builtin-worker"
 SYSTEM_USERNAME = "system"
 SYSTEM_USER_EMAIL = "system@aztea.internal"

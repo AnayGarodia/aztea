@@ -32,11 +32,15 @@
 #     fallback list.
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Any, Callable
 
 from core import feature_flags
+
+logger = logging.getLogger(__name__)
 
 # Probation gates — applied to agents whose review_status is 'probation'
 # (set automatically by /registry/register and /onboarding/ingest for non-
@@ -412,6 +416,12 @@ _BLOCK_KEYWORD_CAP = 60
 _SCHEMA_SHAPE_FULL_BONUS = 35
 _SCHEMA_SHAPE_PARTIAL_BONUS = 15
 _KEYWORD_PREVIEW_LIMIT = 3
+# Embedding-based semantic similarity caps. Sized to match a strong
+# tag-overlap cluster (~18 pts) so a clean synonym match can compete with
+# an exact lexical match but never starve curated keyword overrides
+# (which top out at +60).
+_SEMANTIC_BONUS_MAX = 24
+_SEMANTIC_THRESHOLD = 0.20
 
 _AUDIT_TOKEN_SET = frozenset({
     "audit", "audits", "auditing", "vulnerability",
@@ -653,6 +663,88 @@ def _candidate_combined_text(c: CandidateAgent) -> str:
     ])
 
 
+@lru_cache(maxsize=128)
+def _embed_intent_cached(intent_text: str) -> tuple[float, ...] | None:
+    """Embed an intent string once per process. None when no backend is available.
+
+    Why: lru_cache because the same intent strings repeat across MCP
+    sessions ("audit this requirements.txt …") and the embedding call is
+    the only non-trivially-priced part of the routing scorer.
+    """
+    if feature_flags.DISABLE_EMBEDDINGS:
+        return None
+    try:
+        from core import embeddings as _emb
+        vec = _emb.embed_text(intent_text)
+    except Exception as exc:
+        logger.debug("auto_hire: intent embed failed: %s", exc)
+        return None
+    if not any(v != 0.0 for v in vec):
+        # All-zero vector means sentence-transformers wasn't loadable and
+        # the fallback returned the zero vector. Don't contribute to scoring.
+        return None
+    return tuple(vec)
+
+
+@lru_cache(maxsize=512)
+def _embed_agent_cached(slug: str, corpus: str) -> tuple[float, ...] | None:
+    """Embed an agent's text once per (slug, corpus). None when unavailable.
+
+    Why: keyed by both slug and corpus so a description change in the spec
+    invalidates the cache without an explicit hook — production deploys
+    bounce the process anyway, but tests that mutate the same slug across
+    fixtures stay deterministic.
+    """
+    if feature_flags.DISABLE_EMBEDDINGS:
+        return None
+    try:
+        from core import embeddings as _emb
+        vec = _emb.embed_text(corpus)
+    except Exception as exc:
+        logger.debug("auto_hire: agent embed failed: %s", exc)
+        return None
+    if not any(v != 0.0 for v in vec):
+        return None
+    return tuple(vec)
+
+
+def _score_semantic_similarity(
+    c: CandidateAgent, intent_text: str,
+) -> tuple[float, list[str]]:
+    """Pure-ish: embedding-cosine bonus capped at ``_SEMANTIC_BONUS_MAX``.
+
+    Why: lexical scoring misses synonym pairs ("audit dependencies" vs
+    "vulnerability scan") the model tends to phrase differently from the
+    agent metadata. The bonus is additive on top of every lexical signal
+    and capped so a strong keyword override (+60) always beats a strong
+    semantic match (+24) — embeddings break ties, they do not invert wins.
+
+    Returns (0.0, []) when embeddings are disabled, the backend is
+    unavailable, or cosine sits below the noise floor.
+    """
+    if not feature_flags.auto_invoke_embeddings_enabled():
+        return 0.0, []
+    if not intent_text or not c.description:
+        return 0.0, []
+    intent_vec = _embed_intent_cached(intent_text)
+    if intent_vec is None:
+        return 0.0, []
+    corpus_parts = [c.name, c.description]
+    if c.tags:
+        corpus_parts.append(" ".join(c.tags))
+    corpus = "\n".join(p for p in corpus_parts if p)
+    if not corpus:
+        return 0.0, []
+    agent_vec = _embed_agent_cached(c.slug, corpus)
+    if agent_vec is None:
+        return 0.0, []
+    from core.embeddings import cosine as _cosine
+    sim = _cosine(list(intent_vec), list(agent_vec))
+    if sim < _SEMANTIC_THRESHOLD:
+        return 0.0, []
+    return sim * _SEMANTIC_BONUS_MAX, [f"semantic match: {sim:.2f}"]
+
+
 def _score_candidate(
     c: CandidateAgent,
     intent: str,
@@ -678,6 +770,7 @@ def _score_candidate(
         _score_intent_interlocks(c, intent, intent_lower, tokens, combined, audit_signal),
         _score_keyword_overrides(c, intent_lower),
         _score_schema_shape(c, explicit_input),
+        _score_semantic_similarity(c, intent),
         _apply_probation_penalty(c),
     ):
         score += delta
@@ -694,8 +787,11 @@ def _confidence(top: Ranked, rest: list[Ranked]) -> float:
     - confidence = 0.5 * raw + 0.5 * margin_w
 
     A single 90-score result with no rivals scores ~0.95. Two near-tied
-    80-score results score ~0.40. The 0.55 default floor lets confident
-    singletons through and gates ambiguous ties.
+    80-score results score ~0.40. The 0.30 default floor (env-tunable via
+    AZTEA_AUTO_INVOKE_CONFIDENCE; 0.20 when the caller passes
+    ``aggressive=True``) lets confident singletons and clear majority
+    matches through, while ambiguous ties still gate to the recommendation
+    path.
     """
     if top.score <= 0:
         return 0.0
