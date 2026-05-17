@@ -148,7 +148,7 @@ def _build_curl_command(
         parts.extend(
             [
                 "--data-binary",
-                _shell_quote(f"@/dev/stdin"),
+                _shell_quote("@/dev/stdin"),
             ]
         )
         # We can't pipe stdin from this scope safely with shell quoting;

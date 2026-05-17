@@ -28,7 +28,6 @@ from core.sandbox.models import (
     SandboxDockerUnavailable,
     SandboxInvalidInput,
     SandboxNotFound,
-    error_envelope,
     now_unix,
 )
 from core.sandbox.network import build_network_argv, compose_network_env, stop_orphan_containers
@@ -45,7 +44,6 @@ from core.sandbox.state import (
     project_name_for,
     register,
     remove,
-    sandbox_dir,
 )
 
 _LOG = logging.getLogger("aztea.sandbox.lifecycle")

@@ -12,9 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
-import shutil
 import time
-from pathlib import Path
 from typing import Any
 
 from core.sandbox.docker_cli import run_docker

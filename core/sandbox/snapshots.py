@@ -25,7 +25,7 @@ from typing import Any
 
 from core.sandbox.boot import _collect_compose_services  # type: ignore[reportPrivateUsage]
 from core.sandbox.database import db_snapshot
-from core.sandbox.docker_cli import run_compose, run_docker
+from core.sandbox.docker_cli import run_docker
 from core.sandbox.models import (
     SNAPSHOT_ID_PREFIX,
     SandboxInvalidInput,
