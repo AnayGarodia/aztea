@@ -309,6 +309,7 @@ BUILTIN_AGENT_RUNNERS: dict[str, Callable[[Any], dict]] = {
     _ARCHIVE_INSPECTOR_AGENT_ID: _module_runner(agent_archive_inspector),
     _UNICODE_INSPECTOR_AGENT_ID: _module_runner(agent_unicode_inspector),
     _TERRAFORM_PLAN_ANALYZER_AGENT_ID: _module_runner(agent_terraform_plan_analyzer),
+    _LIVE_SANDBOX_AGENT_ID: _module_runner(agent_live_sandbox),
 }
 
 

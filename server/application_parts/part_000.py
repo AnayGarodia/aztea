@@ -106,6 +106,7 @@ from agents import k8s_manifest_validator as agent_k8s_manifest_validator
 from agents import archive_inspector as agent_archive_inspector
 from agents import unicode_inspector as agent_unicode_inspector
 from agents import terraform_plan_analyzer as agent_terraform_plan_analyzer
+from agents import live_sandbox as agent_live_sandbox
 from core import agent_generator as _agent_generator
 from core import auth as _auth
 from core import cache as _cache
@@ -326,6 +327,7 @@ _K8S_MANIFEST_VALIDATOR_AGENT_ID = _builtin_constants.K8S_MANIFEST_VALIDATOR_AGE
 _ARCHIVE_INSPECTOR_AGENT_ID = _builtin_constants.ARCHIVE_INSPECTOR_AGENT_ID
 _UNICODE_INSPECTOR_AGENT_ID = _builtin_constants.UNICODE_INSPECTOR_AGENT_ID
 _TERRAFORM_PLAN_ANALYZER_AGENT_ID = _builtin_constants.TERRAFORM_PLAN_ANALYZER_AGENT_ID
+_LIVE_SANDBOX_AGENT_ID = _builtin_constants.LIVE_SANDBOX_AGENT_ID
 
 _normalize_endpoint_ref = _builtin_constants.normalize_endpoint_ref
 _BUILTIN_INTERNAL_ENDPOINTS = _builtin_constants.BUILTIN_INTERNAL_ENDPOINTS

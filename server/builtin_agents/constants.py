@@ -46,6 +46,7 @@ K8S_MANIFEST_VALIDATOR_AGENT_ID = "6086b2ad-0a55-58e5-b504-49968379b623"
 ARCHIVE_INSPECTOR_AGENT_ID = "9713a29a-1817-5548-b439-0cd4f4efdcb1"
 UNICODE_INSPECTOR_AGENT_ID = "65fbf6ec-ff53-5f72-95e0-88ae2070c3d9"
 TERRAFORM_PLAN_ANALYZER_AGENT_ID = "989f2964-fadd-5ce0-9afc-2183c08fb9f9"
+LIVE_SANDBOX_AGENT_ID = "3354f7c4-bb9d-55e2-8e8c-df67a64f57a2"
 
 BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
     QUALITY_JUDGE_AGENT_ID: "internal://quality-judge",
@@ -78,6 +79,7 @@ BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
     ARCHIVE_INSPECTOR_AGENT_ID: "internal://archive_inspector",
     UNICODE_INSPECTOR_AGENT_ID: "internal://unicode_inspector",
     TERRAFORM_PLAN_ANALYZER_AGENT_ID: "internal://terraform_plan_analyzer",
+    LIVE_SANDBOX_AGENT_ID: "internal://live_sandbox",
 }
 
 BUILTIN_LEGACY_ROUTE_ENDPOINTS: dict[str, str] = {
@@ -134,6 +136,7 @@ CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
         ARCHIVE_INSPECTOR_AGENT_ID,
         UNICODE_INSPECTOR_AGENT_ID,
         TERRAFORM_PLAN_ANALYZER_AGENT_ID,
+        LIVE_SANDBOX_AGENT_ID,
     }
 )
 # Sanity: a sunset agent must never accidentally re-appear in the public set.
