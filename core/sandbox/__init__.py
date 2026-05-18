@@ -21,14 +21,20 @@ from core.sandbox import (
     export,
     filesystem,
     http_ops,
+    idempotency,
     lifecycle,
     link,
+    network_capture as net_capture_mod,
     observability,
     run_ops,
+    share as share_mod,
     snapshots,
     stubs,
     sweeper,
+    trace as trace_mod,
+    tunnels,
     vcr,
+    webhook_inbox as webhook_mod,
 )
 from core.sandbox.models import (
     ALL_ACTIONS,
@@ -149,6 +155,13 @@ HANDLERS: dict[str, Handler] = {
     "sandbox_link": link.link,
     "sandbox_export_snapshot": export.export_snapshot,
     "sandbox_inject_failure": chaos.inject_failure,
+    # tunnels + webhooks + privileged sidecars + share
+    "sandbox_tunnel_open": tunnels.tunnel_open,
+    "sandbox_tunnel_close": tunnels.tunnel_close,
+    "sandbox_webhook_inbox": webhook_mod.webhook_inbox,
+    "sandbox_network_capture": net_capture_mod.network_capture,
+    "sandbox_trace": trace_mod.trace,
+    "sandbox_share": share_mod.share,
     # audit + cost
     "sandbox_audit": _audit_action,
     "sandbox_cost": _cost_action,
@@ -181,9 +194,15 @@ def dispatch(payload: dict[str, Any]) -> dict[str, Any]:
             "input/payload must be an object",
         )
     sandbox_id = _resolve_sandbox_id(action, payload, inner_payload)
+    # Audit 2026-05-17 gap #11: dedup retry of mutating actions. If the
+    # same idempotency_key has a cached successful response, return it
+    # verbatim (with replayed=true) instead of re-executing.
+    cached = idempotency.lookup(action, idempotency_key)
+    if cached is not None:
+        return cached
     handler = HANDLERS.get(action)
     if handler is not None:
-        return _run_handler(
+        response = _run_handler(
             action=action,
             handler=handler,
             inner_payload=inner_payload,
@@ -191,6 +210,8 @@ def dispatch(payload: dict[str, Any]) -> dict[str, Any]:
             workspace_id=workspace_id,
             idempotency_key=idempotency_key,
         )
+        idempotency.store(action, idempotency_key, response)
+        return response
     if action in stubs.stub_actions():
         response = stubs.stub_for(action)
         return _wrap_with_receipt(action, inner_payload, response, sandbox_id, workspace_id, idempotency_key)

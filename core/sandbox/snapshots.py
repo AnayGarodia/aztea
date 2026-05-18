@@ -273,13 +273,71 @@ def diff_snapshots(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _tar_workspace(state: SandboxState, target: Path) -> None:
-    """Side-effect: tar the workspace dir (excluding ``.git``) to ``target``."""
+    """Side-effect: tar the workspace dir (excluding ``.git``) to ``target``.
+
+    Audit 2026-05-17 gap #4: when the host filesystem supports reflinks
+    (btrfs / xfs with reflink=1 / zfs with copy-on-write enabled),
+    ``cp --reflink=auto`` produces an O(1) clone instead of a byte-by-byte
+    copy. We still write the tar — it stays the portable artifact for
+    snapshot_export — but we ALSO write a reflink-backed mirror that
+    sandbox_restore / sandbox_fork can use directly. Skipped on systems
+    that don't support reflink; the tar path stays the universal fallback.
+    """
+    import shutil as _shutil
+    import subprocess as _subprocess
+    import time as _time
+
     workspace = Path(state.filesystem_root)
+    tar_start = _time.time()
     with tarfile.open(target, "w") as tar:
         for entry in workspace.iterdir():
             if entry.name == ".git":
                 continue
             tar.add(entry, arcname=entry.name)
+    state.boot.boot_timing["snapshot_tar_seconds"] = round(
+        _time.time() - tar_start, 3,
+    )
+    # COW mirror: cp --reflink=auto copies metadata + reflinks data
+    # extents on supported filesystems. Failure here is silent — the
+    # tar above is the universal source of truth.
+    reflink_target = target.parent / "fs.reflink"
+    if reflink_target.exists():
+        try:
+            _shutil.rmtree(reflink_target)
+        except OSError:
+            pass
+    cp_bin = _shutil.which("cp")
+    if cp_bin is None:
+        return
+    cow_start = _time.time()
+    try:
+        # GNU cp + macOS BSD cp both honour --reflink=auto, but BSD cp
+        # silently no-ops when the FS doesn't support it. Pass each
+        # workspace child as a separate arg so we don't have to deal
+        # with the .git skip via a complex find pipeline.
+        children = [
+            str(entry) for entry in workspace.iterdir() if entry.name != ".git"
+        ]
+        if not children:
+            return
+        reflink_target.mkdir(parents=True, exist_ok=True)
+        proc = _subprocess.run(  # noqa: S603
+            [cp_bin, "-a", "--reflink=auto", *children, str(reflink_target) + "/"],
+            capture_output=True, text=True, timeout=60,
+        )
+        if proc.returncode != 0:
+            _LOG.debug("reflink mirror failed (this is fine): %s", proc.stderr[:200])
+            try:
+                _shutil.rmtree(reflink_target)
+            except OSError:
+                pass
+            return
+    except (_subprocess.TimeoutExpired, OSError):
+        return
+    state.boot.boot_timing["snapshot_reflink_seconds"] = round(
+        _time.time() - cow_start, 3,
+    )
+    state.boot.boot_timing["snapshot_used_reflink"] = True  # type: ignore[assignment]
 
 
 def _commit_each_service(
@@ -300,7 +358,16 @@ def _commit_each_service(
 
 
 def _restore_fs(state: SandboxState, fs_tar: Path) -> None:
-    """Side-effect: replace workspace contents with the tarball's entries."""
+    """Side-effect: replace workspace contents with the snapshot's filesystem.
+
+    Audit 2026-05-17 gap #4: when the snapshot has a reflink mirror
+    sitting next to fs.tar (created by _tar_workspace above on COW-
+    capable filesystems), we use it for an O(1) restore via cp
+    --reflink=auto. Falls back to tar extract on any error.
+    """
+    import subprocess as _subprocess
+    import time as _time
+
     workspace = Path(state.filesystem_root)
     for entry in workspace.iterdir():
         if entry.name == ".git":
@@ -309,6 +376,23 @@ def _restore_fs(state: SandboxState, fs_tar: Path) -> None:
             shutil.rmtree(entry, ignore_errors=True)
         else:
             entry.unlink(missing_ok=True)
+    reflink_src = fs_tar.parent / "fs.reflink"
+    cp_bin = shutil.which("cp")
+    if reflink_src.is_dir() and cp_bin is not None:
+        t0 = _time.time()
+        try:
+            children = [str(c) for c in reflink_src.iterdir()]
+            if children:
+                _subprocess.run(  # noqa: S603
+                    [cp_bin, "-a", "--reflink=auto", *children, str(workspace) + "/"],
+                    capture_output=True, text=True, timeout=60, check=True,
+                )
+                state.boot.boot_timing["restore_via_reflink_seconds"] = round(
+                    _time.time() - t0, 3,
+                )
+                return
+        except (_subprocess.CalledProcessError, _subprocess.TimeoutExpired, OSError):
+            _LOG.debug("reflink restore failed; falling back to tar extract")
     with tarfile.open(fs_tar) as tar:
         tar.extractall(workspace)
 

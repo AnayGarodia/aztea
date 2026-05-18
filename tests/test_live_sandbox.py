@@ -64,24 +64,22 @@ def test_quota_returns_billing_notice_and_receipt():
     assert out["receipt"]["payload"]["action"] == "sandbox_quota"
 
 
-@pytest.mark.parametrize("action", sorted(stubs_mod.stub_actions()))
-def test_every_stub_has_valid_jsonschema(action: str) -> None:
-    envelope = stubs_mod.stub_for(action)
-    in_schema = envelope["planned_input_schema"]
-    out_schema = envelope["planned_output_schema"]
-    # Both schemas must validate as JSON Schema (Draft 2020-12 by default).
-    jsonschema.Draft202012Validator.check_schema(in_schema)
-    jsonschema.Draft202012Validator.check_schema(out_schema)
-    assert envelope.get("tracking_issue"), f"stub {action} missing tracking_issue"
-    assert envelope.get("reason"), f"stub {action} missing reason"
+def test_stub_template_helpers_still_produce_valid_jsonschema():
+    """Template helpers (_browser_stub / _simple_stub) remain valid for future use.
 
-
-@pytest.mark.parametrize("action", sorted(stubs_mod.stub_actions()))
-def test_stub_dispatch_attaches_receipt(action: str) -> None:
-    out = live_sandbox.run({"action": action, "input": {"sandbox_id": "sbx_aaaaaaaaaaaaaaaa"}})
-    assert out["stubbed"] is True
-    assert "receipt" in out
-    assert out["receipt"]["payload"]["action"] == action
+    Why: the registry is empty today, but the helpers are kept so any
+    new sandbox verb can adopt the same envelope shape callers already
+    expect. This test fires the helpers directly to guard against
+    regressions in their schema shape.
+    """
+    for envelope in (
+        stubs_mod._browser_stub("Test description"),
+        stubs_mod._simple_stub(issue="test/issue", reason="test reason"),
+    ):
+        jsonschema.Draft202012Validator.check_schema(envelope["planned_input_schema"])
+        jsonschema.Draft202012Validator.check_schema(envelope["planned_output_schema"])
+        assert envelope.get("tracking_issue")
+        assert envelope.get("reason")
 
 
 def test_receipt_signature_verifies_against_local_pubkey(tmp_path, monkeypatch):
@@ -134,19 +132,30 @@ _DOCKER_AVAILABLE = shutil.which("docker") is not None and os.environ.get("AZTEA
 def test_full_lifecycle_against_public_compose_repo():
     """Integration: boot → exec → db_query → snapshot → restore → fork → stop.
 
-    Uses a small Node+Postgres compose project as the source. The test
-    skips by default; export AZTEA_RUN_DOCKER_TESTS=1 to opt in.
+    Uses the canonical ``docker/awesome-compose`` Node + Postgres
+    fixture (public, MIT-licensed, stable URL). Skips when Docker
+    isn't reachable; opt in with ``AZTEA_RUN_DOCKER_TESTS=1``. Override
+    the repo via ``AZTEA_TEST_COMPOSE_REPO_URL`` if you want to point
+    it at your own fixture.
     """
     source_url = os.environ.get(
         "AZTEA_TEST_COMPOSE_REPO_URL",
-        "https://github.com/aztea/node-pg-fixture.git",
+        # docker's own canonical Node + Postgres compose example.
+        # MIT-licensed, intentionally minimal, kept up to date.
+        "https://github.com/docker/awesome-compose.git",
+    )
+    sub_path = os.environ.get(
+        "AZTEA_TEST_COMPOSE_SUBPATH", "nginx-nodejs-postgres",
     )
     start = live_sandbox.run(
         {
             "action": "sandbox_start",
             "input": {
                 "source": {"kind": "git", "url": source_url, "shallow": True},
-                "boot": {"strategy": "auto"},
+                "boot": {
+                    "strategy": "docker_compose",
+                    "compose_files": [f"{sub_path}/docker-compose.yml"],
+                },
                 "lifetime": {"max_minutes": 10},
                 "network": {"egress": "isolated"},
             },
@@ -156,18 +165,76 @@ def test_full_lifecycle_against_public_compose_repo():
     sandbox_id = start["sandbox_id"]
     assert start["status"] == "ready"
     try:
-        out = live_sandbox.run(
-            {
-                "action": "sandbox_exec",
-                "input": {"sandbox_id": sandbox_id, "cmd": "echo hello && env | wc -l"},
-            }
-        )
+        # exec a deterministic command
+        out = live_sandbox.run({
+            "action": "sandbox_exec",
+            "input": {"sandbox_id": sandbox_id, "cmd": "echo hello && env | wc -l"},
+        })
         assert out["exit_code"] == 0
         assert "hello" in out["stdout"]
-        snap = live_sandbox.run({"action": "sandbox_snapshot", "input": {"sandbox_id": sandbox_id}})
+        # snapshot
+        snap = live_sandbox.run({
+            "action": "sandbox_snapshot",
+            "input": {"sandbox_id": sandbox_id},
+        })
         assert "snapshot_id" in snap
+        # fork off the snapshot, exec inside the fork, then stop the fork
+        forked = live_sandbox.run({
+            "action": "sandbox_fork",
+            "input": {
+                "source_sandbox_id": sandbox_id,
+                "snapshot_id": snap["snapshot_id"],
+            },
+        })
+        assert "sandbox_id" in forked
+        live_sandbox.run({
+            "action": "sandbox_stop",
+            "input": {"sandbox_id": forked["sandbox_id"]},
+        })
     finally:
         live_sandbox.run({"action": "sandbox_stop", "input": {"sandbox_id": sandbox_id}})
+
+
+def test_contract_e2e_without_docker():
+    """A no-Docker contract walk: every lifecycle verb dispatches and chains receipts.
+
+    Why: even when AZTEA_RUN_DOCKER_TESTS=1 isn't set, we want a single
+    test that walks the full intended user journey through the engine
+    surface. We register a stub state directly so docker_available()
+    can fail and we still exercise dispatch + receipt + audit-chain.
+    """
+    sandbox_id = _register_stub_sandbox(services={
+        "app": {"container": "p-app", "image": "alpine:3",
+                "ports": [{"internal_port": "3000/tcp", "host_port": "12345"}]},
+    })
+    # quota → cost → audit cycle that exercises receipts and chain
+    quota = live_sandbox.run({"action": "sandbox_quota"})
+    assert quota["receipt"]["alg"] == "Ed25519"
+    cost = live_sandbox.run({"action": "sandbox_cost", "input": {"sandbox_id": sandbox_id}})
+    assert cost["spending"]["cap_cents"] >= 1
+    audit = live_sandbox.run({
+        "action": "sandbox_audit", "input": {"sandbox_id": sandbox_id},
+    })
+    assert audit["count"] >= 1
+    assert audit["merkle_root"]
+    # Status reflects the stub state we registered
+    status = live_sandbox.run({"action": "sandbox_status", "input": {"sandbox_id": sandbox_id}})
+    assert status["sandbox_id"] == sandbox_id
+    # Idempotency: same key + same start action returns the cached
+    # response with replayed=true.
+    first = live_sandbox.run({
+        "action": "sandbox_inject_failure",
+        "input": {"sandbox_id": sandbox_id, "kind": "abort", "target": "demo"},
+        "idempotency_key": "abc-123",
+    })
+    second = live_sandbox.run({
+        "action": "sandbox_inject_failure",
+        "input": {"sandbox_id": sandbox_id, "kind": "abort", "target": "demo"},
+        "idempotency_key": "abc-123",
+    })
+    assert "error" not in first
+    assert second.get("idempotency_replayed") is True
+    assert second["rule"]["rule_id"] == first["rule"]["rule_id"]
 
 
 # --- Spec / catalog wiring ---------------------------------------------------
@@ -443,14 +510,17 @@ def test_every_new_fill_is_in_handlers_not_stubs():
     )
 
 
-def test_remaining_stubs_are_only_infra_blocked():
-    """The 6 remaining stubs are exactly the truly-infra-blocked verbs."""
-    expected = {
-        "sandbox_network_capture", "sandbox_share", "sandbox_trace",
-        "sandbox_tunnel_close", "sandbox_tunnel_open", "sandbox_webhook_inbox",
-    }
-    actual = set(stubs_mod.stub_actions())
-    assert actual == expected, f"unexpected stub set: {sorted(actual ^ expected)}"
+def test_stub_registry_is_empty():
+    """Every spec-declared verb now has a real handler — zero stubs remain."""
+    assert set(stubs_mod.stub_actions()) == set(), (
+        f"unexpected stubs still present: {sorted(stubs_mod.stub_actions())}"
+    )
+    # And ALL_ACTIONS must be fully covered by HANDLERS.
+    declared = set(sandbox_engine.ALL_ACTIONS)
+    handlers = set(sandbox_engine.HANDLERS.keys())
+    assert declared.issubset(handlers), (
+        f"verbs missing from HANDLERS: {sorted(declared - handlers)}"
+    )
 
 
 def test_chaos_off_rule_clears_existing(monkeypatch):
@@ -746,3 +816,513 @@ def test_v2_signature_verifies_through_sdk_path(monkeypatch):
         raise AssertionError("v2 sig should NOT verify against raw output bytes")
     except Exception:
         pass
+
+
+# --- The last 6 fills (this PR) ----------------------------------------------
+
+def test_tunnel_open_requires_published_service_port():
+    """Tunnel against a service with no published host port surfaces a clean error."""
+    sandbox_id = _register_stub_sandbox(
+        services={"web": {"container": "p-web", "ports": []}},
+    )
+    out = live_sandbox.run({
+        "action": "sandbox_tunnel_open",
+        "input": {"sandbox_id": sandbox_id, "service": "web", "port": 3000},
+    })
+    assert "error" in out
+    assert out["error"]["code"] == "sandbox.invalid_input"
+
+
+def test_tunnel_open_degraded_local_when_no_tool(monkeypatch):
+    """With no cloudflared/ngrok installed, returns a localhost URL."""
+    from core.sandbox import tunnels
+    sandbox_id = _register_stub_sandbox(services={
+        "web": {
+            "container": "p-web",
+            "ports": [{"internal_port": "3000/tcp", "host_port": "12345"}],
+        },
+    })
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    out = live_sandbox.run({
+        "action": "sandbox_tunnel_open",
+        "input": {"sandbox_id": sandbox_id, "service": "web", "port": 3000},
+    })
+    assert "error" not in out, out
+    assert out["kind"] == "local"
+    assert out["public_url"] == "http://localhost:12345"
+    assert out["host_port"] == 12345
+    # Idempotent — same triple returns the same record.
+    out2 = live_sandbox.run({
+        "action": "sandbox_tunnel_open",
+        "input": {"sandbox_id": sandbox_id, "service": "web", "port": 3000},
+    })
+    assert out2["tunnel_id"] == out["tunnel_id"]
+    # Close it
+    close = live_sandbox.run({
+        "action": "sandbox_tunnel_close",
+        "input": {"sandbox_id": sandbox_id, "tunnel_id": out["tunnel_id"]},
+    })
+    assert close["closed"] is True
+    # Closing twice returns sandbox.not_found
+    again = live_sandbox.run({
+        "action": "sandbox_tunnel_close",
+        "input": {"sandbox_id": sandbox_id, "tunnel_id": out["tunnel_id"]},
+    })
+    assert again.get("error", {}).get("code") == "sandbox.not_found"
+
+
+def test_tunnel_validates_port_range():
+    sandbox_id = _register_stub_sandbox()
+    out = live_sandbox.run({
+        "action": "sandbox_tunnel_open",
+        "input": {"sandbox_id": sandbox_id, "service": "app", "port": 0},
+    })
+    assert "error" in out
+    out2 = live_sandbox.run({
+        "action": "sandbox_tunnel_open",
+        "input": {"sandbox_id": sandbox_id, "service": "app", "port": 99999},
+    })
+    assert "error" in out2
+
+
+def test_webhook_inbox_capture_and_list():
+    """Sidecar starts on first call; subsequent POST is captured + listed."""
+    import urllib.request
+
+    sandbox_id = _register_stub_sandbox()
+    first = live_sandbox.run({
+        "action": "sandbox_webhook_inbox",
+        "input": {"sandbox_id": sandbox_id},
+    })
+    assert "error" not in first, first
+    capture_url = first["capture_url"]
+    # Fire a POST at the capture URL
+    req = urllib.request.Request(
+        f"{capture_url}/stripe/webhook",
+        data=b'{"event":"checkout.session.completed"}',
+        headers={
+            "Content-Type": "application/json",
+            "Stripe-Signature": "test",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        body = resp.read().decode("utf-8")
+    import json as _json
+    received = _json.loads(body)
+    assert received["received"] is True
+    event_id = received["event_id"]
+    # List captured events
+    listing = live_sandbox.run({
+        "action": "sandbox_webhook_inbox",
+        "input": {"sandbox_id": sandbox_id},
+    })
+    assert listing["count"] >= 1
+    assert any(e.get("event_id") == event_id for e in listing["events"])
+    # Each event carries a receipt
+    captured = next(e for e in listing["events"] if e["event_id"] == event_id)
+    assert "receipt" in captured
+    # Cleanup
+    from core.sandbox import webhook_inbox as _wh
+    assert _wh.evict_for_sandbox(sandbox_id) is True
+
+
+def test_webhook_replay_requires_target_service():
+    sandbox_id = _register_stub_sandbox()
+    out = live_sandbox.run({
+        "action": "sandbox_webhook_inbox",
+        "input": {"sandbox_id": sandbox_id, "replay_event_id": "evt_missing"},
+    })
+    assert "error" in out
+    assert out["error"]["code"] == "sandbox.invalid_input"
+
+
+def test_network_capture_refuses_without_env_flag(monkeypatch):
+    """NET_RAW gating: action returns a structured refusal when the env is off."""
+    monkeypatch.delenv("AZTEA_SANDBOX_ALLOW_NET_RAW", raising=False)
+    sandbox_id = _register_stub_sandbox()
+    out = live_sandbox.run({
+        "action": "sandbox_network_capture",
+        "input": {"sandbox_id": sandbox_id, "duration_seconds": 5},
+    })
+    assert "error" not in out, out
+    assert out["refused"] is True
+    assert out["elevated"] is False
+    assert "AZTEA_SANDBOX_ALLOW_NET_RAW" in out["reason"]
+    assert "next_step" in out
+
+
+def test_trace_refuses_without_env_flag(monkeypatch):
+    """PTRACE gating: action returns a structured refusal when the env is off."""
+    monkeypatch.delenv("AZTEA_SANDBOX_ALLOW_PTRACE", raising=False)
+    sandbox_id = _register_stub_sandbox()
+    out = live_sandbox.run({
+        "action": "sandbox_trace",
+        "input": {
+            "sandbox_id": sandbox_id, "service": "app", "pid": 1, "tool": "py-spy",
+        },
+    })
+    assert "error" not in out, out
+    assert out["refused"] is True
+    assert out["elevated"] is False
+    assert "AZTEA_SANDBOX_ALLOW_PTRACE" in out["reason"]
+
+
+def test_trace_validates_input_when_gated_on(monkeypatch):
+    """With the env flag set, input validation kicks in before any sidecar runs."""
+    monkeypatch.setenv("AZTEA_SANDBOX_ALLOW_PTRACE", "1")
+    sandbox_id = _register_stub_sandbox()
+    # Bad tool
+    out = live_sandbox.run({
+        "action": "sandbox_trace",
+        "input": {"sandbox_id": sandbox_id, "service": "app", "pid": 100, "tool": "bogus"},
+    })
+    assert "error" in out
+    # Bad pid
+    out2 = live_sandbox.run({
+        "action": "sandbox_trace",
+        "input": {"sandbox_id": sandbox_id, "service": "app", "pid": 0, "tool": "py-spy"},
+    })
+    assert "error" in out2
+    # Missing service
+    out3 = live_sandbox.run({
+        "action": "sandbox_trace",
+        "input": {"sandbox_id": sandbox_id, "pid": 100, "tool": "py-spy"},
+    })
+    assert "error" in out3
+
+
+def test_share_grants_token_and_viewer_serves_it():
+    """share() mints a token; the viewer accepts it and returns the audit chain."""
+    import urllib.request
+    import urllib.error
+
+    sandbox_id = _register_stub_sandbox()
+    # Drop one audit entry so the response has something to show
+    live_sandbox.run({"action": "sandbox_quota", "input": {"sandbox_id": sandbox_id}})
+    out = live_sandbox.run({
+        "action": "sandbox_share",
+        "input": {"sandbox_id": sandbox_id, "access": "read", "ttl_minutes": 5},
+    })
+    assert "error" not in out, out
+    assert out["share_id"]
+    assert out["join_token"]
+    assert out["access"] == "read"
+    assert out["share_url"].startswith("http://127.0.0.1:")
+    # Hit the viewer with the right token
+    with urllib.request.urlopen(out["share_url"], timeout=5) as resp:
+        body = resp.read().decode("utf-8")
+    import json as _json
+    payload = _json.loads(body)
+    assert payload["sandbox_id"] == sandbox_id
+    assert payload["share_id"] == out["share_id"]
+    assert "audit" in payload
+    # Wrong token → 401
+    bad_url = out["share_url"].split("?")[0] + "?token=wrong"
+    try:
+        urllib.request.urlopen(bad_url, timeout=5)
+        raise AssertionError("expected 401")
+    except urllib.error.HTTPError as exc:
+        assert exc.code == 401
+    # Revoke
+    from core.sandbox import share as _share
+    assert _share.revoke(out["share_id"]) is True
+
+
+def test_share_refuses_full_access():
+    """v0 only grants read; full access is the wallet-table follow-up."""
+    sandbox_id = _register_stub_sandbox()
+    out = live_sandbox.run({
+        "action": "sandbox_share",
+        "input": {"sandbox_id": sandbox_id, "access": "full"},
+    })
+    assert "error" in out
+    assert out["error"]["code"] == "sandbox.invalid_input"
+
+
+def test_share_validates_ttl():
+    sandbox_id = _register_stub_sandbox()
+    out = live_sandbox.run({
+        "action": "sandbox_share",
+        "input": {"sandbox_id": sandbox_id, "ttl_minutes": 99999},
+    })
+    assert "error" in out
+
+
+# --- Gap closers (this PR) ---------------------------------------------------
+
+def test_isolation_backend_default_is_docker():
+    """When the caller doesn't ask for an isolation backend, default to docker."""
+    from core.sandbox import isolation
+
+    assert isolation.normalise_backend(None) == "docker"
+    assert isolation.runtime_argv("docker") == []
+
+
+def test_isolation_backend_refuses_firecracker_with_clear_envelope():
+    """firecracker / kata loudly refuse — never silently downgrade."""
+    from core.sandbox import isolation
+    from core.sandbox.models import SandboxInvalidInput
+
+    for backend in ("firecracker", "kata"):
+        try:
+            isolation.runtime_argv(backend)
+            raise AssertionError(f"{backend} should have raised")
+        except SandboxInvalidInput as exc:
+            assert backend in str(exc).lower() or "not implemented" in str(exc).lower()
+
+
+def test_isolation_backend_rejects_unknown_value():
+    from core.sandbox import isolation
+    from core.sandbox.models import SandboxInvalidInput
+
+    try:
+        isolation.normalise_backend("bogus")
+        raise AssertionError("expected SandboxInvalidInput for bogus backend")
+    except SandboxInvalidInput:
+        pass
+
+
+def test_isolation_status_reports_supported_backends():
+    from core.sandbox import isolation
+
+    status = isolation.status_block("docker")
+    assert "docker" in status["supported_backends"]
+    assert "gvisor" in status["supported_backends"]
+    assert isinstance(status["runsc_available"], bool)
+
+
+def test_spending_cap_register_and_charge():
+    from core.sandbox import spending
+    from core.sandbox.models import SandboxQuotaExceeded
+
+    sandbox_id = _register_stub_sandbox()
+    cap = spending.register_cap(sandbox_id, 1000)
+    assert cap == 1000
+    spending.charge(sandbox_id, 600, action="exec")
+    snap = spending.snapshot(sandbox_id)
+    assert snap["spent_cents"] == 600
+    assert snap["remaining_cents"] == 400
+    # Second charge would exceed the cap — refuse loudly.
+    try:
+        spending.charge(sandbox_id, 500, action="exec")
+        raise AssertionError("expected SandboxQuotaExceeded")
+    except SandboxQuotaExceeded as exc:
+        assert exc.code == "sandbox.quota_exceeded"
+    # Snapshot didn't change (no partial spend).
+    snap2 = spending.snapshot(sandbox_id)
+    assert snap2["spent_cents"] == 600
+    spending.evict(sandbox_id)
+
+
+def test_spending_cap_clamps_to_hard_ceiling():
+    """Asking for $1000 (10x ceiling) gets clamped to ceiling, not refused."""
+    from core.sandbox import spending
+
+    sandbox_id = _register_stub_sandbox()
+    cap = spending.register_cap(sandbox_id, 999_999_999)
+    assert cap == spending.HARD_SANDBOX_CAP_CENTS
+    spending.evict(sandbox_id)
+
+
+def test_reserve_batch_refuses_over_ceiling():
+    from core.sandbox import spending
+    from core.sandbox.models import SandboxQuotaExceeded
+
+    try:
+        spending.reserve_batch(per_cell_cap_cents=5000, cells=10)
+        raise AssertionError("expected quota refusal")
+    except SandboxQuotaExceeded as exc:
+        assert "ceiling" in str(exc).lower() or "total" in str(exc).lower()
+
+
+def test_reserve_batch_succeeds_under_ceiling():
+    from core.sandbox import spending
+
+    out = spending.reserve_batch(per_cell_cap_cents=1000, cells=3)
+    assert out["total_reserved_cents"] == 3000
+    assert out["cells"] == 3
+
+
+def test_tunnel_rate_limit_detection():
+    """Cloudflared rate-limit output is recognised and surfaced."""
+    from core.sandbox import tunnels
+
+    assert tunnels._looks_rate_limited(
+        "ERR Rate limit exceeded for quick tunnels"
+    )
+    assert tunnels._looks_rate_limited(
+        "Got 429 from cloudflare"
+    )
+    assert not tunnels._looks_rate_limited("INFO connection ready")
+
+
+def test_named_tunnel_selected_when_token_set(monkeypatch):
+    """Named-tunnel path is chosen when AZTEA_CLOUDFLARE_TUNNEL_TOKEN is present.
+
+    Why: we don't actually shell out (it'd block on the cloudflared
+    subprocess) — we patch the launcher to capture which kind it
+    would have used.
+    """
+    from core.sandbox import tunnels
+
+    monkeypatch.setenv("AZTEA_CLOUDFLARE_TUNNEL_TOKEN", "test-token")
+    monkeypatch.setattr("shutil.which", lambda name: f"/fake/{name}")
+    chosen: list[str] = []
+    monkeypatch.setattr(
+        tunnels, "_open_cloudflared_named",
+        lambda port, hint: chosen.append("named") or {
+            "kind": "cloudflared_named", "public_url": "https://stub", "process": None,
+        },
+    )
+    monkeypatch.setattr(
+        tunnels, "_open_cloudflared_quick",
+        lambda port, hint: chosen.append("quick") or {
+            "kind": "cloudflared_quick", "public_url": "https://q", "process": None,
+        },
+    )
+    tunnels._open_with_best_available_tool(12345, "")
+    assert chosen == ["named"]
+
+
+def test_cow_snapshot_falls_back_silently_on_unsupported_fs(tmp_path, monkeypatch):
+    """When reflink isn't supported, snapshot still produces a working tar."""
+    from core.sandbox import snapshots
+    from core.sandbox.state import (
+        BootInfo, LifetimePolicy, NetworkPolicyState, SandboxState,
+        generate_sandbox_id, register, sandbox_dir,
+    )
+
+    sandbox_id = generate_sandbox_id()
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "file.txt").write_text("hello", encoding="utf-8")
+    register(SandboxState(
+        sandbox_id=sandbox_id, status="ready", created_at=0, expires_at=0,
+        last_activity_at=0, last_snapshot_at=0, workspace_id=None,
+        owner_hint=None, region="auto", size={}, lifetime=LifetimePolicy(),
+        network=NetworkPolicyState(),
+        boot=BootInfo(strategy="raw", project_name="p"),
+        filesystem_root=str(workspace),
+    ))
+    state = __import__("core.sandbox.state", fromlist=["get"]).get(sandbox_id)
+    target = sandbox_dir(sandbox_id) / "snapshots" / "snap_t" / "fs.tar"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    # Force cp to fail so the reflink mirror path errors out (covers the
+    # "filesystem doesn't support reflink" branch).
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    snapshots._tar_workspace(state, target)
+    # Tar still exists + has content
+    assert target.is_file()
+    assert target.stat().st_size > 0
+    assert "snapshot_tar_seconds" in state.boot.boot_timing
+    # No reflink mirror was created (cp absent)
+    assert not (target.parent / "fs.reflink").exists()
+
+
+def test_sdk_sandbox_client_methods_match_handlers():
+    """Every typed SDK method maps to an action that exists in HANDLERS.
+
+    Why: keeps the SDK from drifting away from the engine surface. If a
+    handler is renamed or removed, this test catches the gap.
+    """
+    import sys
+    sdk_path = "/Users/aakritigarodia/conductor/workspaces/agentmarket/santo-domingo/sdks/python-sdk"
+    if sdk_path not in sys.path:
+        sys.path.insert(0, sdk_path)
+    from aztea.sandbox import SandboxClient
+
+    # Every method whose name starts with a verb we recognise should
+    # match an action in HANDLERS (modulo the SDK rename rules).
+    sdk_to_action = {
+        "start": "sandbox_start",
+        "status": "sandbox_status",
+        "stop": "sandbox_stop",
+        "extend": "sandbox_extend",
+        "resume": "sandbox_resume",
+        "batch_start": "sandbox_batch_start",
+        "run_command": "sandbox_exec",
+        "run_command_in_service": "sandbox_exec_in_service",
+        "read_file": "sandbox_read_file",
+        "write_file": "sandbox_write_file",
+        "delete_file": "sandbox_delete_file",
+        "apply_patch": "sandbox_apply_patch",
+        "glob": "sandbox_glob",
+        "grep": "sandbox_grep",
+        "sync_from_local": "sandbox_sync_from_local",
+        "db_query": "sandbox_db_query",
+        "db_snapshot": "sandbox_db_snapshot",
+        "db_restore": "sandbox_db_restore",
+        "db_introspect": "sandbox_db_introspect",
+        "db_seed": "sandbox_db_seed",
+        "snapshot": "sandbox_snapshot",
+        "restore": "sandbox_restore",
+        "fork": "sandbox_fork",
+        "diff_snapshots": "sandbox_diff_snapshots",
+        "http": "sandbox_http_request",
+        "logs": "sandbox_logs",
+        "metrics": "sandbox_metrics",
+        "inspect_process": "sandbox_inspect_process",
+        "outbound_record": "sandbox_outbound_record",
+        "outbound_replay": "sandbox_outbound_replay",
+        "inject_failure": "sandbox_inject_failure",
+        "audit": "sandbox_audit",
+        "cost": "sandbox_cost",
+        "tunnel_open": "sandbox_tunnel_open",
+        "tunnel_close": "sandbox_tunnel_close",
+        "webhook_inbox": "sandbox_webhook_inbox",
+        "share": "sandbox_share",
+        "link": "sandbox_link",
+        "export_snapshot": "sandbox_export_snapshot",
+        "network_capture": "sandbox_network_capture",
+        "trace": "sandbox_trace",
+        "browser_session": "sandbox_browser_session",
+        "browser_navigate": "sandbox_browser_navigate",
+        "browser_screenshot": "sandbox_browser_screenshot",
+        "browser_click": "sandbox_browser_click",
+        "browser_fill": "sandbox_browser_fill",
+        "browser_evaluate": "sandbox_browser_eval",
+        "browser_close": "sandbox_browser_close",
+    }
+    sdk_methods = {m for m in dir(SandboxClient) if not m.startswith("_")}
+    sdk_methods -= {"list_sandboxes"}  # Maps to sandbox_list but renamed for Python clarity
+    missing_in_table = sdk_methods - set(sdk_to_action.keys())
+    assert not missing_in_table, (
+        f"SDK methods missing from sdk_to_action table: {sorted(missing_in_table)}"
+    )
+    for sdk_name, action in sdk_to_action.items():
+        assert action in sandbox_engine.HANDLERS, (
+            f"SDK method {sdk_name} maps to action {action} which is NOT in HANDLERS"
+        )
+
+
+def test_sdk_invocation_routes_through_registry_call():
+    """The SDK wraps the client's registry.call(); each method builds the right payload."""
+    import sys
+    sdk_path = "/Users/aakritigarodia/conductor/workspaces/agentmarket/santo-domingo/sdks/python-sdk"
+    if sdk_path not in sys.path:
+        sys.path.insert(0, sdk_path)
+    from aztea.sandbox import SandboxClient
+
+    captured: list[dict] = []
+
+    class _FakeRegistry:
+        def call(self, agent_id, payload):
+            captured.append({"agent_id": agent_id, "payload": payload})
+            return {"echo": True, **payload}
+
+    class _FakeClient:
+        registry = _FakeRegistry()
+
+    sandbox = SandboxClient(_FakeClient())
+    out = sandbox.run_command("sbx_test", "echo hi", cwd="/repo")
+    assert out["echo"] is True
+    assert captured[-1]["payload"]["action"] == "sandbox_exec"
+    assert captured[-1]["payload"]["input"]["cmd"] == "echo hi"
+    assert captured[-1]["payload"]["input"]["cwd"] == "/repo"
+    # idempotency_key wiring
+    sandbox.start(source={"kind": "git", "url": "https://x/y"}, idempotency_key="key-1")
+    assert captured[-1]["payload"]["idempotency_key"] == "key-1"
+    # browser_evaluate maps to sandbox_browser_eval
+    sandbox.browser_evaluate("sbx", "sess", "1+1")
+    assert captured[-1]["payload"]["action"] == "sandbox_browser_eval"

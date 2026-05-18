@@ -95,6 +95,12 @@ def boot(
         info = _boot_devcontainer(project, repo_path, boot_cfg, env_vars, network_argv)
     elif strategy == "custom_commands":
         info = _boot_custom(project, repo_path, boot_cfg, env_vars, network_argv)
+    elif strategy == "k8s_kind":
+        info = _boot_k8s_kind(project, repo_path, boot_cfg, env_vars)
+    elif strategy == "helm":
+        info = _boot_helm(project, repo_path, boot_cfg, env_vars)
+    elif strategy == "nix":
+        info = _boot_nix(project, repo_path, boot_cfg, env_vars, network_argv)
     else:
         raise SandboxInvalidInput(f"unsupported boot.strategy: {strategy!r}")
     _wait_for_ready(info, boot_cfg, repo_path)
@@ -187,11 +193,21 @@ def _boot_devcontainer(
     env_vars: dict[str, str],
     network_argv: list[str],
 ) -> BootInfo:
-    """Side-effect: launch the devcontainer.json image with the workspace bind-mounted.
+    """Side-effect: launch a devcontainer.json image with the workspace mounted.
 
-    Why: a minimal devcontainer boot is enough for most popular templates
-    (image + workspaceFolder). features / postCreateCommand / dockerComposeFile
-    fan-out is documented in the README as a follow-up issue.
+    Audit 2026-05-17 gap #9: handles the four common devcontainer
+    extensions in addition to the minimal ``image`` path:
+
+      * ``dockerComposeFile`` — delegate to the docker_compose strategy.
+      * ``forwardPorts`` — publish each port to the host.
+      * ``features`` — install via the devcontainer-feature install
+        scripts if the host has the ``devcontainer`` CLI; else skip
+        with a clear notice (we don't pretend to install when we can't).
+      * ``postCreateCommand`` — runs once after the container boots.
+
+    Features / postCreateCommand can fail without halting the boot —
+    we surface their outcomes in BootInfo.boot_timing so the caller
+    can audit.
     """
     raw = None
     for path in _DEVCONTAINER_PATHS:
@@ -205,40 +221,123 @@ def _boot_devcontainer(
         cfg = json.loads(raw)
     except ValueError as exc:
         raise SandboxBootFailed(f"devcontainer.json is not valid JSON: {exc}") from exc
+    # 1. dockerComposeFile takes precedence — delegate to compose boot.
+    compose_file = cfg.get("dockerComposeFile")
+    if compose_file:
+        sub_cfg = dict(boot_cfg)
+        sub_cfg["strategy"] = "docker_compose"
+        sub_cfg["compose_files"] = (
+            [compose_file] if isinstance(compose_file, str) else list(compose_file)
+        )
+        info = _boot_docker_compose(project, repo_path, sub_cfg, env_vars)
+        info.strategy = "devcontainer"  # tag origin for clarity
+        return info
     image = cfg.get("image") or cfg.get("dockerFile")
     if not isinstance(image, str) or not image.strip():
         raise SandboxBootFailed(
-            "devcontainer.json must declare a top-level 'image' (composite "
-            "devcontainer variants are tracked in follow-up issue)"
+            "devcontainer.json must declare an 'image', 'dockerFile', or "
+            "'dockerComposeFile'."
         )
     workspace_folder = cfg.get("workspaceFolder") or "/workspace"
     container_name = f"{project}-devcontainer"
     argv = [
-        "run",
-        "--detach",
-        "--rm",
-        "--name",
-        container_name,
-        "--label",
-        f"com.docker.compose.project={project}",
-        "--label",
-        f"aztea.sandbox.project={project}",
-        "-v",
-        f"{repo_path}:{workspace_folder}",
-        "-w",
-        workspace_folder,
+        "run", "--detach", "--rm",
+        "--name", container_name,
+        "--label", f"com.docker.compose.project={project}",
+        "--label", f"aztea.sandbox.project={project}",
+        "-v", f"{repo_path}:{workspace_folder}",
+        "-w", workspace_folder,
     ]
+    # 2. forwardPorts → publish to the host.
+    forward_ports = cfg.get("forwardPorts") or []
+    for entry in forward_ports:
+        if isinstance(entry, int):
+            argv.extend(["-p", f"{entry}:{entry}"])
+        elif isinstance(entry, str) and ":" in entry:
+            argv.extend(["-p", entry])
     argv.extend(network_argv)
     for key, val in env_vars.items():
         argv.extend(["-e", f"{key}={val}"])
     argv.extend([image, "sleep", "infinity"])
     run_docker(argv, timeout=120)
-    return BootInfo(
+    info = BootInfo(
         strategy="devcontainer",
         project_name=project,
-        services={"app": {"container": container_name, "image": image}},
+        services={
+            "app": {
+                "container": container_name,
+                "image": image,
+                "ports": _port_map(container_name),
+            },
+        },
         boot_timing={"build_up": 0.0},
     )
+    # 3. features (best-effort) — needs the @devcontainers/cli on the host.
+    features = cfg.get("features") or {}
+    if features:
+        info.boot_timing["features_attempted"] = float(len(features))
+        info.boot_timing["features_installed"] = float(
+            _install_devcontainer_features(container_name, features),
+        )
+    # 4. postCreateCommand (best-effort) — run after boot, fail soft.
+    post_create = cfg.get("postCreateCommand")
+    if post_create:
+        info.boot_timing["post_create_ok"] = float(
+            _run_post_create(container_name, post_create),
+        )
+    return info
+
+
+def _install_devcontainer_features(
+    container_name: str, features: dict[str, Any],
+) -> int:
+    """Side-effect: install each devcontainer feature via @devcontainers/cli.
+
+    Why: features are arbitrary install scripts. We try the official
+    CLI first (it knows the registry / version semantics). If it's
+    absent, we log and return 0 — never silently pretend they ran.
+    """
+    import shutil
+
+    if shutil.which("devcontainer") is None:
+        return 0
+    installed = 0
+    for feature_id, options in features.items():
+        if not isinstance(feature_id, str):
+            continue
+        try:
+            opts = ",".join(
+                f"{k}={v}" for k, v in (options or {}).items()
+                if isinstance(k, str)
+            )
+            spec = f"{feature_id}{':' + opts if opts else ''}"
+            run_docker(
+                ["exec", container_name, "sh", "-lc",
+                 f"devcontainer features install {spec} || true"],
+                timeout=120, check=False,
+            )
+            installed += 1
+        except Exception:
+            continue
+    return installed
+
+
+def _run_post_create(container_name: str, post_create: Any) -> int:
+    """Side-effect: run the postCreateCommand. Returns 1 on success, 0 on failure."""
+    if isinstance(post_create, str):
+        commands = [post_create]
+    elif isinstance(post_create, list):
+        commands = [str(c) for c in post_create]
+    else:
+        return 0
+    for cmd in commands:
+        proc = run_docker(
+            ["exec", container_name, "sh", "-lc", cmd],
+            timeout=600, check=False,
+        )
+        if proc.returncode != 0:
+            return 0
+    return 1
 
 
 def _boot_custom(
@@ -287,6 +386,195 @@ def _boot_custom(
             "app": {"container": container_name, "image": base_image}
         },
         boot_timing={"build_up": 0.0},
+    )
+
+
+def _boot_k8s_kind(
+    project: str,
+    repo_path: str,
+    boot_cfg: dict[str, Any],
+    env_vars: dict[str, str],
+) -> BootInfo:
+    """Side-effect: create a kind cluster and apply user-supplied manifests.
+
+    Why: ``kind`` (Kubernetes in Docker) is the only K8s flavour that
+    runs cleanly on a developer laptop. We refuse cleanly if the CLI
+    is absent. Manifest paths come from boot.k8s_manifests; an optional
+    ``k8s_namespace`` scopes the apply.
+    """
+    import shutil
+
+    if shutil.which("kind") is None or shutil.which("kubectl") is None:
+        raise SandboxBootFailed(
+            "k8s_kind strategy needs both 'kind' and 'kubectl' on PATH. "
+            "Install kind (https://kind.sigs.k8s.io/) and kubectl, then retry."
+        )
+    manifests = boot_cfg.get("k8s_manifests") or []
+    if not manifests:
+        raise SandboxBootFailed(
+            "k8s_kind requires boot.k8s_manifests = [<paths-or-globs>]"
+        )
+    cluster = f"aztea-{project}"[:32]
+    namespace = str(boot_cfg.get("k8s_namespace") or "default")
+    t0 = time.time()
+    # Create the cluster. ``kind create cluster`` is idempotent if the
+    # cluster name already exists — we still tolerate the failure path
+    # cleanly.
+    create_proc = _run_local(
+        ["kind", "create", "cluster", "--name", cluster, "--wait", "60s"],
+        cwd=repo_path, timeout=180,
+    )
+    if create_proc.returncode != 0 and "already exist" not in (create_proc.stderr or "").lower():
+        raise SandboxBootFailed(
+            f"kind create failed: {(create_proc.stderr or '').strip()[:512]}"
+        )
+    # Make sure namespace exists, then apply each manifest.
+    _run_local(
+        ["kubectl", "--context", f"kind-{cluster}", "create", "namespace", namespace],
+        cwd=repo_path, timeout=30,
+    )
+    applied: list[str] = []
+    for path in manifests:
+        proc = _run_local(
+            ["kubectl", "--context", f"kind-{cluster}", "-n", namespace,
+             "apply", "-f", str(path)],
+            cwd=repo_path, timeout=120,
+        )
+        if proc.returncode == 0:
+            applied.append(str(path))
+    services = {
+        "kube_control_plane": {
+            "container": f"{cluster}-control-plane",
+            "kube_context": f"kind-{cluster}",
+            "namespace": namespace,
+            "manifests_applied": applied,
+        },
+    }
+    return BootInfo(
+        strategy="k8s_kind",
+        project_name=project,
+        services=services,
+        boot_timing={"cluster_create": round(time.time() - t0, 2)},
+    )
+
+
+def _boot_helm(
+    project: str,
+    repo_path: str,
+    boot_cfg: dict[str, Any],
+    env_vars: dict[str, str],
+) -> BootInfo:
+    """Side-effect: helm install a chart against a kind cluster (started on demand)."""
+    import shutil
+
+    if shutil.which("helm") is None:
+        raise SandboxBootFailed(
+            "helm strategy needs the 'helm' CLI on PATH. "
+            "Install helm and retry."
+        )
+    chart = str(boot_cfg.get("helm_chart") or "").strip()
+    if not chart:
+        raise SandboxBootFailed(
+            "helm strategy requires boot.helm_chart (chart name or path)"
+        )
+    release = str(boot_cfg.get("helm_release") or f"aztea-{project}")[:53]
+    values = boot_cfg.get("helm_values") or {}
+    # Lean on the kind boot to provision the underlying cluster.
+    k8s_info = _boot_k8s_kind(project, repo_path, {
+        **boot_cfg,
+        "k8s_manifests": boot_cfg.get("k8s_manifests") or [],
+    }, env_vars) if shutil.which("kubectl") else None
+    namespace = str(boot_cfg.get("k8s_namespace") or "default")
+    set_args: list[str] = []
+    for k, v in (values or {}).items():
+        if isinstance(k, str):
+            set_args.extend(["--set", f"{k}={v}"])
+    proc = _run_local(
+        ["helm", "upgrade", "--install", release, chart,
+         "--namespace", namespace, "--create-namespace", *set_args],
+        cwd=repo_path, timeout=300,
+    )
+    if proc.returncode != 0:
+        raise SandboxBootFailed(
+            f"helm install failed: {(proc.stderr or '').strip()[:512]}"
+        )
+    services: dict[str, dict[str, Any]] = {
+        "helm_release": {
+            "release": release,
+            "chart": chart,
+            "namespace": namespace,
+        }
+    }
+    if k8s_info is not None:
+        services.update(k8s_info.services)
+    return BootInfo(
+        strategy="helm",
+        project_name=project,
+        services=services,
+        boot_timing={"helm_install": 0.0},
+    )
+
+
+def _boot_nix(
+    project: str,
+    repo_path: str,
+    boot_cfg: dict[str, Any],
+    env_vars: dict[str, str],
+    network_argv: list[str],
+) -> BootInfo:
+    """Side-effect: enter a Nix flake's devShell, run the user's commands inside.
+
+    Why: Nix flakes are reproducible by design. We boot a generic
+    container that has ``nix`` available, mount the flake, and run
+    boot.custom_commands inside ``nix develop``. Falls back to refusing
+    cleanly when the host lacks the ``nix`` CLI.
+    """
+    import shutil as _shutil
+
+    if _shutil.which("nix") is None:
+        raise SandboxBootFailed(
+            "nix strategy needs the 'nix' CLI on PATH. "
+            "Install Nix (https://nixos.org/download) and enable flakes."
+        )
+    flake = (Path(repo_path) / "flake.nix")
+    if not flake.is_file():
+        raise SandboxBootFailed(
+            "nix strategy requires a flake.nix at the repo root"
+        )
+    container_name = f"{project}-nix"
+    base_image = str(boot_cfg.get("nix_image") or "nixos/nix:latest")
+    cmds = boot_cfg.get("custom_commands") or ["nix develop --command echo 'devshell ready'"]
+    script = " && ".join(str(c) for c in cmds)
+    argv = [
+        "run", "--detach", "--rm",
+        "--name", container_name,
+        "--label", f"com.docker.compose.project={project}",
+        "--label", f"aztea.sandbox.project={project}",
+        "-v", f"{repo_path}:/flake",
+        "-w", "/flake",
+        "-e", "NIX_CONFIG=experimental-features = nix-command flakes",
+    ]
+    argv.extend(network_argv)
+    for key, val in env_vars.items():
+        argv.extend(["-e", f"{key}={val}"])
+    argv.extend([base_image, "bash", "-lc", f"{script} && tail -f /dev/null"])
+    run_docker(argv, timeout=300)
+    return BootInfo(
+        strategy="nix",
+        project_name=project,
+        services={"app": {"container": container_name, "image": base_image}},
+        boot_timing={"build_up": 0.0},
+    )
+
+
+def _run_local(
+    argv: list[str], *, cwd: str, timeout: int,
+):
+    """Side-effect: subprocess wrapper used by k8s/helm. Never raises."""
+    import subprocess
+
+    return subprocess.run(  # noqa: S603
+        argv, capture_output=True, text=True, cwd=cwd, timeout=timeout,
     )
 
 

@@ -145,6 +145,16 @@ def _run_in_container(
     stdin = opts.get("stdin")
     timeout = int(opts.get("timeout_seconds") or DEFAULT_EXEC_TIMEOUT_S)
     timeout = max(1, min(timeout, HARD_EXEC_TIMEOUT_S))
+    stop_when = opts.get("stop_when") if isinstance(opts.get("stop_when"), str) else None
+    stream = bool(opts.get("stream"))
+    # Audit 2026-05-17 gap #10: streaming + stop_when. When the caller
+    # asks for line-level capture or an early-terminate predicate, drive
+    # the subprocess directly so we can read each line as it lands.
+    if stream or stop_when:
+        return _stream_in_container(
+            state, argv, stdin=stdin, timeout=timeout, started_at=start,
+            stop_when=stop_when,
+        )
     timed_out = False
     try:
         proc = run_docker(argv, stdin=stdin, timeout=timeout, check=False)
@@ -169,6 +179,90 @@ def _run_in_container(
     }
 
 
+def _stream_in_container(
+    state: SandboxState,
+    argv: list[str],
+    *,
+    stdin: str | None,
+    timeout: int,
+    started_at: float,
+    stop_when: str | None,
+) -> dict[str, Any]:
+    """Side-effect: stream stdout line-by-line; honour stop_when early-terminate.
+
+    Why: the synchronous run_docker waits for the subprocess to exit
+    before returning. For long test runs the agent wants to early-
+    terminate the moment a failure line appears. We Popen directly,
+    iterate stdout, match each line against stop_when, and kill on hit.
+    """
+    import re
+    import subprocess
+
+    from core.sandbox.docker_cli import docker_binary
+
+    pattern: re.Pattern[str] | None = None
+    if stop_when:
+        try:
+            pattern = re.compile(stop_when)
+        except re.error as exc:
+            raise SandboxInvalidInput(f"invalid stop_when regex: {exc}") from exc
+    full = [docker_binary(), *argv]
+    events: list[dict[str, Any]] = []
+    stdout_lines: list[str] = []
+    stop_hit_line: str | None = None
+    proc = subprocess.Popen(  # noqa: S603
+        full,
+        stdin=subprocess.PIPE if stdin is not None else None,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,  # merge so the line stream is one channel
+        text=True,
+    )
+    if stdin is not None and proc.stdin is not None:
+        try:
+            proc.stdin.write(stdin)
+            proc.stdin.close()
+        except Exception:
+            pass
+    deadline = started_at + timeout
+    timed_out = False
+    early_terminated = False
+    try:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            if time.time() > deadline:
+                timed_out = True
+                proc.kill()
+                break
+            line = line.rstrip("\n")
+            stdout_lines.append(line)
+            events.append({"ts": int(time.time() * 1000), "line": line[:2000]})
+            if pattern is not None and pattern.search(line):
+                stop_hit_line = line
+                early_terminated = True
+                proc.kill()
+                break
+        rc = proc.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        rc = proc.wait()
+        timed_out = True
+    duration_ms = int((time.time() - started_at) * 1000)
+    state.touch()
+    secret_values = all_secret_values(state.sandbox_id)
+    stdout_text = "\n".join(stdout_lines)
+    return {
+        "sandbox_id": state.sandbox_id,
+        "stdout": redact(stdout_text, secret_values)[:64_000],
+        "stderr": "",
+        "exit_code": 124 if timed_out else (int(rc or 0)),
+        "timed_out": timed_out,
+        "duration_ms": duration_ms,
+        "events": events[-500:],
+        "stop_when_matched": stop_hit_line,
+        "early_terminated": early_terminated,
+    }
+
+
 def _validate_run(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     """Pure-ish: validate the Bash-shape input; returns (cmd, opts)."""
     cmd = str(payload.get("cmd") or "").strip()
@@ -180,9 +274,13 @@ def _validate_run(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         "env": payload.get("env") or {},
         "user": payload.get("user"),
         "timeout_seconds": payload.get("timeout_seconds"),
+        "stream": payload.get("stream"),
+        "stop_when": payload.get("stop_when"),
     }
     if opts["env"] and not isinstance(opts["env"], dict):
         raise SandboxInvalidInput("exec.env must be an object")
+    if opts["stop_when"] is not None and not isinstance(opts["stop_when"], str):
+        raise SandboxInvalidInput("stop_when must be a regex string")
     return cmd, opts
 
 
