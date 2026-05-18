@@ -337,12 +337,25 @@ def _check_quality_rating_eligible(
         raise ValueError("Ratings are locked once a dispute is filed.")
 
 
-def _insert_quality_rating(
+def _upsert_quality_rating(
     conn: Any, *, job_id: str, job: dict[str, Any],
     caller_owner_id: str, rating: int,
-) -> None:
-    """Side-effect: write the job_quality_ratings row; raises ValueError on duplicate."""
-    try:
+) -> int | None:
+    """Side-effect: write/replace the job_quality_ratings row; returns prior rating (or None).
+
+    Why upsert rather than insert: until 1.7.20 a caller who fat-fingered a 5 instead of a 1
+    (or wanted to revise after re-reading the output) had no recovery — the unique
+    constraint forced them to file a dispute or open a support ticket. Trust math is
+    recomputed from the latest rating, so revisions are safe; the only thing we
+    surface upstream is whether this was a fresh write or an edit, so audit logging
+    can distinguish them.
+    """
+    existing = conn.execute(
+        "SELECT rating FROM job_quality_ratings WHERE job_id = %s",
+        (job_id,),
+    ).fetchone()
+    previous_rating = int(existing["rating"]) if existing else None
+    if previous_rating is None:
         conn.execute(
             """
             INSERT INTO job_quality_ratings
@@ -357,23 +370,42 @@ def _insert_quality_rating(
                 _now(),
             ),
         )
-    except _db.IntegrityError as e:
-        raise ValueError(f"Job '{job_id}' already has a quality rating.") from e
+    else:
+        # Defence: only the original rater can revise (the endpoint already
+        # checks `job.caller_owner_id == caller_owner_id`, but reaffirming here
+        # keeps direct callers of this helper honest).
+        existing_owner = conn.execute(
+            "SELECT caller_owner_id FROM job_quality_ratings WHERE job_id = %s",
+            (job_id,),
+        ).fetchone()
+        if existing_owner and str(existing_owner["caller_owner_id"]) != caller_owner_id:
+            raise ValueError(
+                f"Job '{job_id}' already rated by a different caller."
+            )
+        conn.execute(
+            """
+            UPDATE job_quality_ratings
+            SET rating = %s, created_at = %s
+            WHERE job_id = %s
+            """,
+            (rating, _now(), job_id),
+        )
+    return previous_rating
 
 
 def record_job_quality_rating(job_id: str, caller_owner_id: str, rating: int) -> dict:
     """Side-effect: store a caller's quality rating for one delivered job.
 
-    Why: one rating per job is enforced via the database UNIQUE constraint;
-    duplicates surface as ``ValueError`` so the API layer can return 409
-    rather than a 500 from the integrity violation.
+    Returns the persisted rating dict augmented with ``previous_rating`` (the prior
+    value when this call replaced an existing rating, otherwise ``None``) and
+    ``revised`` (True when this was an edit).
     """
     init_reputation_db()
     validated_rating = _validate_rating(rating)
     with _conn() as conn:
         job = _load_job_for_quality_rating(conn, job_id)
         _check_quality_rating_eligible(conn, job, caller_owner_id, job_id)
-        _insert_quality_rating(
+        previous_rating = _upsert_quality_rating(
             conn, job_id=job_id, job=job,
             caller_owner_id=caller_owner_id, rating=validated_rating,
         )
@@ -386,7 +418,10 @@ def record_job_quality_rating(job_id: str, caller_owner_id: str, rating: int) ->
             caller_owner_id=caller_owner_id,
             rating=validated_rating,
         )
-    return created if created else {}
+    result = dict(created) if created else {}
+    result["previous_rating"] = previous_rating
+    result["revised"] = previous_rating is not None
+    return result
 
 
 def get_job_caller_rating(job_id: str) -> dict | None:

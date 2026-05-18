@@ -750,15 +750,16 @@ def jobs_rate(
             )
         except ValueError as exc:
             message = str(exc)
-            if "already has a quality rating" in message:
-                # Was: 409 with bare-string detail, which downstream serializers
-                # pattern-matched into a misleading `job.not_found` code. Surface
-                # the dedicated `job.already_rated` envelope instead.
+            if "already rated by a different caller" in message:
+                # Defence-in-depth: should not be reachable from this endpoint
+                # because the prior ownership check already returns 403, but a
+                # direct call to the reputation helper from an admin path could
+                # land here. Map to 403 with a precise envelope.
                 raise HTTPException(
-                    status_code=409,
+                    status_code=403,
                     detail=error_codes.make_error(
                         error_codes.JOB_ALREADY_RATED,
-                        "This job already has a quality rating from this caller.",
+                        "This job was rated by a different caller.",
                         {"job_id": job_id},
                     ),
                 )
@@ -770,6 +771,13 @@ def jobs_rate(
                     {"job_id": job_id},
                 ),
             )
+        # Trust scores feed the agents-list cache (TTL 15s, see part_007.py).
+        # Without explicit invalidation, list_agents/search_specialists could
+        # show a stale trust_score for up to 15s after a rating, while
+        # `manage_job action=examples` (which hits the single-agent endpoint
+        # and bypasses the list cache) would show the fresh value — exactly
+        # the discrepancy reported in the 2026-05-18 audit.
+        _invalidate_agents_list_cache()
 
         metrics = reputation.compute_trust_metrics(job["agent_id"])
         if body.rating == 5:

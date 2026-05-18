@@ -627,6 +627,13 @@ def agent_did_document(agent_id: str, request: Request) -> JSONResponse:
             detail="Failed to render the agent's public key.",
         )
     key_id = f"{did}#key-1"
+    # `service[]` carries an Aztea-specific pointer to the human-readable
+    # signature-scheme documentation so an offline verifier can resolve
+    # the difference between `ed25519` (v1) and `Ed25519+aztea-output-sig/2`
+    # (v2) without having to read the source. The W3C DID spec explicitly
+    # allows arbitrary service endpoints — this is the standard way to
+    # publish protocol-specific metadata alongside the verification keys.
+    server_base = str(request.base_url).rstrip("/")
     document = {
         "@context": [
             "https://www.w3.org/ns/did/v1",
@@ -643,6 +650,17 @@ def agent_did_document(agent_id: str, request: Request) -> JSONResponse:
         ],
         "authentication": [key_id],
         "assertionMethod": [key_id],
+        "service": [
+            {
+                "id": f"{did}#output-signature-scheme",
+                "type": "AzteaOutputSignatureScheme",
+                "serviceEndpoint": f"{server_base}/docs/api-reference#output-signature-schemes",
+                "supportedSchemes": [
+                    "ed25519",
+                    "Ed25519+aztea-output-sig/2",
+                ],
+            }
+        ],
     }
     return JSONResponse(
         content=document,
@@ -752,14 +770,35 @@ def a2a_tasks_send(
             callback_url=body.callback_url or None,
             origin="direct",
         )
-    except Exception:
+    except Exception as exc:
         payments.post_call_refund(
             caller_wallet["wallet_id"],
             charge_tx_id,
             caller_charge_cents,
             agent["agent_id"],
         )
-        raise HTTPException(status_code=500, detail="Failed to create task.")
+        _LOG.exception(
+            "A2A task creation failed for agent %s (caller=%s); charge refunded.",
+            agent["agent_id"], caller["owner_id"],
+        )
+        # 2026-05-18 (E15): the refund path previously emitted a bare-string
+        # 500 detail, which downstream serialisers dropped into `error_code:
+        # null` envelopes. Use the same JOB_CREATE_FAILED code that the
+        # sync /registry/agents/{id}/call refund path uses so clients can
+        # branch consistently on a refunded-create failure.
+        raise HTTPException(
+            status_code=500,
+            detail=error_codes.make_error(
+                error_codes.JOB_CREATE_FAILED,
+                "Task could not be created. Your charge was refunded. Retry shortly.",
+                {
+                    "agent_id": agent["agent_id"],
+                    "refunded_cents": int(caller_charge_cents),
+                    "source": "a2a_tasks_create",
+                    "underlying": type(exc).__name__,
+                },
+            ),
+        )
 
     _record_job_event(job, "job.created", actor_owner_id=caller["owner_id"])
     return JSONResponse(

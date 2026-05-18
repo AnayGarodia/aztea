@@ -141,7 +141,7 @@ def _enforce_hostname_safety(host: str, field_name: str) -> None:
         )
     if host == "localhost" or host.endswith(".localhost"):
         raise ValueError(
-            f"{field_name} cannot target localhost unless ALLOW_PRIVATE_OUTBOUND_URLS=1."
+            f"{field_name} blocked by network policy (localhost target)."
         )
 
 
@@ -168,8 +168,7 @@ def _check_resolved_ips(host: str, field_name: str) -> None:
             continue
         if _is_disallowed_ip(resolved_ip):
             raise ValueError(
-                f"{field_name} cannot target hostnames resolving to private/loopback/reserved IPs "
-                "unless ALLOW_PRIVATE_OUTBOUND_URLS=1."
+                f"{field_name} blocked by network policy (resolves to a non-public IP)."
             )
 
 
@@ -202,8 +201,7 @@ def validate_outbound_url(
         return normalized
     if _is_disallowed_ip(direct_ip):
         raise ValueError(
-            f"{field_name} cannot target private/loopback/reserved IPs unless "
-            "ALLOW_PRIVATE_OUTBOUND_URLS=1."
+            f"{field_name} blocked by network policy (non-public IP)."
         )
     return normalized
 

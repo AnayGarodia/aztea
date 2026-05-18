@@ -138,8 +138,13 @@ class JobCreateRequest(BaseModel):
         ge=0,
         le=7 * 24 * 3600,
         description=(
-            "Optional caller acceptance window after worker completion. "
-            "During this window, settlement is held until caller accepts/rejects or window expires."
+            "Caller acceptance window between worker completion and settle. "
+            "During this window, settlement is HELD until the caller calls "
+            "POST /jobs/{job_id}/verify_output (accept | reject) or the window "
+            "expires. NOTE: the window CLOSES on settle — once funds release "
+            "to the agent, the verify_output endpoint returns 409 "
+            "`job.already_settled`. After settle the only recourse for a bad "
+            "output is POST /jobs/{job_id}/dispute within `dispute_window_hours`."
         ),
     )
     callback_url: str | None = Field(

@@ -508,18 +508,30 @@ def get_wallet_by_owner(owner_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+# Mirrors the MCP `set_daily_limit` JSON schema maximum (1_000_000 cents = $10 000).
+# Defence-in-depth: the Pydantic request model also enforces this, but internal callers
+# that bypass the HTTP layer must not be able to set an effectively-unbounded cap.
+_DAILY_SPEND_LIMIT_MAX_CENTS = 1_000_000
+
+
 def set_wallet_daily_spend_limit(
     wallet_id: str, daily_spend_limit_cents: int | None
 ) -> dict:
     """Update the caller wallet's daily spend cap. Pass None to remove the limit.
 
-    Returns the updated wallet dict. Raises ``ValueError`` for negative values.
+    Returns the updated wallet dict. Raises ``ValueError`` for negative values or
+    values above ``_DAILY_SPEND_LIMIT_MAX_CENTS``.
     """
     normalized_limit = None
     if daily_spend_limit_cents is not None:
         normalized_limit = int(daily_spend_limit_cents)
         if normalized_limit < 0:
             raise ValueError("daily_spend_limit_cents must be >= 0.")
+        if normalized_limit > _DAILY_SPEND_LIMIT_MAX_CENTS:
+            raise ValueError(
+                f"daily_spend_limit_cents must be <= {_DAILY_SPEND_LIMIT_MAX_CENTS} "
+                f"(${_DAILY_SPEND_LIMIT_MAX_CENTS // 100:,})."
+            )
     with _conn() as conn:
         updated = conn.execute(
             """

@@ -82,12 +82,21 @@ def _word_truncate(text: str, max_len: int, suffix: str = "…") -> str:
 
 
 def _schema_input_hint(input_schema: dict[str, Any] | None) -> dict[str, Any]:
-    """Compact schema guide for coding agents before they assemble arguments."""
+    """Compact schema guide for coding agents before they assemble arguments.
+
+    Returns ``required_fields``, ``fields`` (per-field type + description),
+    ``example_arguments`` (a working-shaped example or a placeholder), and
+    ``example_is_placeholder`` — set True when any required field falls back
+    to a ``<field>`` placeholder (no default/enum/examples on the schema).
+    Callers that show the example to humans should warn when this flag is
+    set, since a placeholder is NOT a valid input.
+    """
     schema = input_schema if isinstance(input_schema, dict) else {}
     props = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
     required = [str(item) for item in (schema.get("required") or [])]
     fields: dict[str, Any] = {}
     example: dict[str, Any] = {}
+    is_placeholder = False
     for name, spec in list(props.items())[:16]:
         if not isinstance(spec, dict):
             spec = {}
@@ -101,7 +110,15 @@ def _schema_input_hint(input_schema: dict[str, Any] | None) -> dict[str, Any]:
         if spec.get("enum"):
             item["enum"] = list(spec["enum"])[:8]
         fields[field_name] = item
-        if "default" in spec:
+        # Prefer values that produce a working example: JSON Schema
+        # ``examples: [...]`` first, then ``default``, then ``enum[0]``,
+        # then a type-shaped placeholder. Without the examples fallback
+        # an agent like `live_sandbox` would always render
+        # ``{"action": "<action>"}`` — a syntactically valid string that
+        # the agent itself rejects.
+        if isinstance(spec.get("examples"), list) and spec["examples"]:
+            example[field_name] = spec["examples"][0]
+        elif "default" in spec:
             example[field_name] = spec["default"]
         elif spec.get("enum"):
             example[field_name] = list(spec["enum"])[0]
@@ -117,10 +134,13 @@ def _schema_input_hint(input_schema: dict[str, Any] | None) -> dict[str, Any]:
             example[field_name] = {}
         else:
             example[field_name] = f"<{field_name}>"
+            if field_name in required:
+                is_placeholder = True
     return {
         "required_fields": required,
         "fields": fields,
         "example_arguments": example,
+        "example_is_placeholder": is_placeholder,
     }
 
 
@@ -1312,7 +1332,10 @@ _GROUPED_TOOLS: list[dict[str, Any]] = [
             "Pick action:\n"
             "  • hire_batch(jobs[]) — PREFERRED for >1 independent unit. Up to 250 jobs in "
             "one shot, settled per-job, with a signed Ed25519 receipt for every completed "
-            "job. Runs ~64 concurrent workers; partial failures refund cleanly.\n"
+            "job. Runs ~64 concurrent workers. Per-job failures refund cleanly, but note "
+            "the slug-resolution preflight is all-or-nothing — if ANY slug fails to resolve "
+            "(typo, unknown agent, sunset, banned), the entire batch aborts with no charges "
+            "and a structured error listing the bad indices. Resolve those before retrying.\n"
             "  • hire_async(slug, input, ...) — fire-and-poll a single long-running agent.\n"
             "  • batch_status(batch_id) — live progress of a batch (poll every 1-2s).\n"
             "  • session_audit(period?, verify_all?) — receipts + aggregate sha256 digest "
@@ -3498,10 +3521,22 @@ def _get_examples(
     privacy_gated = bool(agent.get("examples_sensitive")) or str(
         agent.get("category") or ""
     ).strip().lower() == "security"
+    # The registry agent dict exposes call counters under `total_calls` / `successful_calls`
+    # (top-level) and under `reputation.{total_calls, successful_calls, success_rate}`
+    # after enrichment. Prefer the nested `reputation` view so we share the same
+    # canonical numbers as list_agents / search_specialists (`agent.trust_score` is the
+    # rolled-up value from the same enrichment pass — see core/reputation.py:879).
+    rep = agent.get("reputation") if isinstance(agent.get("reputation"), dict) else {}
+    total_calls = rep.get("total_calls")
+    if total_calls is None:
+        total_calls = agent.get("total_calls")
+    success_rate = rep.get("success_rate")
+    if success_rate is None:
+        success_rate = agent.get("success_rate")
     aggregates = {
-        "total_call_count": agent.get("call_count"),
-        "success_rate": agent.get("success_rate"),
-        "avg_latency_ms": agent.get("avg_latency_ms"),
+        "total_call_count": total_calls,
+        "success_rate": success_rate,
+        "avg_latency_ms": rep.get("avg_latency_ms", agent.get("avg_latency_ms")),
         "trust_score": agent.get("trust_score"),
         "stability_tier": agent.get("stability_tier"),
         "category": agent.get("category"),

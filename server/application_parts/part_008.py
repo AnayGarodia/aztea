@@ -1149,6 +1149,32 @@ def _cache_hit_response_payload(cached_output: Any) -> dict[str, Any]:
         else {"result": cached_output}
     )
     original_job_id = inner.pop("_cached_job_id", None)
+    # 2026-05-18 (E4 follow-up): expose cache behaviour in the response so
+    # callers don't have to read source to learn the invalidation contract.
+    # `partition` documents the cache key (input + agent version), and
+    # `default_ttl_hours` matches `core.cache.set_cached`. The actual
+    # expires_at is per-row in agent_result_cache — if a caller needs it
+    # we can fetch and attach by `original_job_id` later, but it's not on
+    # the hot path right now.
+    cache_info = {
+        "via": "cache_replay",
+        "partition": "agent_id+version_token+canonical_json(input)",
+        "scope": "platform_wide",
+        "scope_note": (
+            "Cache hits are shared across all callers of the same agent — "
+            "Aztea's cache is platform-wide, not per-caller. Callers who "
+            "need execution isolation (e.g. an input that prints time.time()) "
+            "should vary the input so the cache key differs."
+        ),
+        "default_ttl_hours": 24,
+        "max_ttl_hours": 168,
+        "invalidation": (
+            "Cache entries auto-expire at TTL. They are also invalidated "
+            "implicitly when the agent's endpoint_url, updated_at, or "
+            "reviewed_at change (see core.cache.cache_identity)."
+        ),
+        "original_job_id": original_job_id,
+    }
     response: dict[str, Any] = {
         "job_id": original_job_id,
         "original_job_id": original_job_id,
@@ -1156,6 +1182,7 @@ def _cache_hit_response_payload(cached_output: Any) -> dict[str, Any]:
         "output": inner,
         "latency_ms": 0,
         "cached": True,
+        "cache": cache_info,
     }
     # 2026-05-18 (E4): cache hits used to drop the Ed25519 receipt block
     # entirely, breaking the "every output is cryptographically signed"
@@ -2495,7 +2522,7 @@ def registry_call(
             # structured detail and re-bill the caller via _settle_failed_job
             # even though we already refunded.
             raise
-        except Exception:
+        except Exception as exc:
             _LOG.exception("Built-in agent execution failed for %s.", builtin_agent_id)
             failed = jobs.update_job_status(
                 job["job_id"],
@@ -2509,7 +2536,23 @@ def registry_call(
                     actor_owner_id=caller["owner_id"],
                     event_type="job.failed_builtin",
                 )
-            raise HTTPException(status_code=500, detail="Agent execution failed.")
+            # 2026-05-18 (E15): refunded-failure surface used to drop a bare
+            # 500 detail. Pin a structured envelope so callers can branch on
+            # `error.code == 'job.execution_failed'` and read refund metadata.
+            raise HTTPException(
+                status_code=500,
+                detail=error_codes.make_error(
+                    error_codes.JOB_EXECUTION_FAILED,
+                    "Agent execution failed. Your charge was refunded.",
+                    {
+                        "agent_id": builtin_agent_id,
+                        "job_id": job["job_id"],
+                        "refunded": True,
+                        "source": "registry_call_sync_builtin",
+                        "underlying": type(exc).__name__,
+                    },
+                ),
+            )
 
     # --- Input payload size cap (256 KB) ---
     try:

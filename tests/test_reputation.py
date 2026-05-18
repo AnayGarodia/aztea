@@ -103,7 +103,14 @@ def test_record_job_quality_rating_rejects_invalid_values(isolated_db, bad_ratin
         reputation.record_job_quality_rating(job["job_id"], caller_owner_id, bad_rating)
 
 
-def test_record_job_quality_rating_requires_completed_job_and_prevents_duplicates(isolated_db):
+def test_record_job_quality_rating_requires_completed_job_and_allows_revision(isolated_db):
+    """Bug 2 (2026-05-18): a caller may revise their own rating on the same job.
+
+    The pre-1.7.20 behaviour raised ``ValueError("...already has a quality
+    rating")`` on the second call. Now the helper UPSERTs and surfaces
+    ``previous_rating`` + ``revised`` so callers can tell an edit from a fresh
+    rating. A DIFFERENT caller's rating on the same job is still rejected.
+    """
     registry.init_db()
     jobs.init_jobs_db()
     reputation.init_reputation_db()
@@ -124,9 +131,18 @@ def test_record_job_quality_rating_requires_completed_job_and_prevents_duplicate
     assert created["job_id"] == job["job_id"]
     assert created["agent_id"] == agent_id
     assert created["rating"] == 5
+    assert created["revised"] is False
+    assert created["previous_rating"] is None
 
-    with pytest.raises(ValueError, match="already has a quality rating"):
-        reputation.record_job_quality_rating(job["job_id"], caller_owner_id, 4)
+    revised = reputation.record_job_quality_rating(job["job_id"], caller_owner_id, 4)
+    assert revised["rating"] == 4
+    assert revised["revised"] is True
+    assert revised["previous_rating"] == 5
+
+    # A different caller still hits the eligibility gate (Only the job
+    # caller can rate) BEFORE reaching the upsert.
+    with pytest.raises(ValueError, match="caller"):
+        reputation.record_job_quality_rating(job["job_id"], "user:other-rater", 1)
 
 
 def test_trust_score_math_tracks_quality_success_latency_and_volume(isolated_db):

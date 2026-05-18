@@ -488,10 +488,14 @@ class WalletDailySpendLimitRequest(BaseModel):
     # fixed in the SDK so both ends agree on `daily_spend_limit_cents`.
     model_config = ConfigDict(extra="forbid")
 
+    # Upper bound mirrors the MCP `set_daily_limit` JSON schema (`maximum: 1_000_000`,
+    # i.e. $10 000). Pre-1.7.20 the server accepted ~$1M values that the schema rejected,
+    # so a misbehaving orchestrator could uncap itself by skipping the MCP shim.
     daily_spend_limit_cents: int | None = Field(
         default=None,
         ge=0,
-        description="Optional rolling 24h spend cap in cents. null clears the cap.",
+        le=1_000_000,
+        description="Optional rolling 24h spend cap in cents. null clears the cap. Max 1 000 000 cents ($10 000).",
     )
 
 

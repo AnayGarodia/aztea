@@ -32,7 +32,7 @@ the structured envelope:
 ```json
 {
   "error":    "request.invalid_input",
-  "message":  "endpoint_url cannot target localhost unless ALLOW_PRIVATE_OUTBOUND_URLS=1.",
+  "message":  "endpoint_url blocked by network policy (localhost target).",
   "details":  { "errors": [ { "msg": "...", "loc": ["body","endpoint_url"] } ] },
   "request_id": "7f6a..."
 }
@@ -373,3 +373,86 @@ constructing the JSON manually.
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/runs` | List recent `/analyze` invocations with their outputs. `?limit=N`. Response includes `skipped_lines` and `skipped_line_numbers`; header `X-Skipped-Lines` is also returned. |
+
+---
+
+## Result cache
+
+Aztea de-duplicates identical agent calls via a result cache (`core/cache.py`).
+
+* **Default TTL:** 24 hours. **Maximum TTL:** 168 hours (7 days). Callers
+  can request a shorter TTL when registering a workload; the layer never
+  extends beyond the maximum.
+* **Cache key:** `SHA256(agent_id + version_token + canonical_json(input))`.
+  Identical inputs from any caller collide on the same key.
+* **Partitioning:** **platform-wide**, NOT per-caller. A call by user A
+  populates the cache; a subsequent identical call by user B reads from it.
+  This is deliberate — the cached payload is the agent's own output, which
+  the agent already signs, so cache hits inherit the same Ed25519 receipt
+  (re-tagged with `via: "cache_replay"`).
+* **Invalidation:** automatic on TTL expiry. Implicit when the agent's
+  `endpoint_url`, `updated_at`, or `reviewed_at` field changes (the
+  `version_token` is derived from these via `cache.cache_identity`), so
+  an agent owner's PATCH on their listing invalidates cached results.
+* **Opt-out:** an agent owner sets `cacheable=false` on the listing.
+  Built-in agents with host-side side-effects (`shell_executor`,
+  `multi_file_executor`) are non-cacheable regardless.
+* **Cache hit envelope:** `{cached: true, via: "cache_replay", latency_ms: 0,
+  original_job_id: <uuid>, cache: { partition, scope, default_ttl_hours,
+  max_ttl_hours, invalidation }}`. The receipt is the original signed
+  receipt from the source job.
+
+A caller who needs execution isolation (e.g. an input that prints
+`time.time()`) should vary the input so the cache key differs.
+
+---
+
+## Output signature schemes
+
+Every settled job carries an Ed25519 signature in its receipt. The
+`output_signature_alg` field tells verifiers which scheme produced the
+bytes.
+
+### `ed25519` (v1)
+
+* **Used by:** direct (non-LLM) jobs that emit a deterministic
+  structured output.
+* **What is signed:** `canonical_json(output_payload)` only.
+* **Verify:** load the agent's PEM public key from `did:web:<host>:
+  agents:<agent_id>` (see `/agents/{agent_id}/did.json`), then
+  `Ed25519.verify(signature, canonical_json(output))`.
+* **Limitation:** a signature minted for job A could in principle be
+  replayed against a forged job B whose output canonicalises to the
+  same bytes. v2 closes that gap.
+
+### `Ed25519+aztea-output-sig/2` (v2)
+
+* **Used by:** LLM-generated and compare-origin jobs as of 2026-05-16.
+* **What is signed:** the **sigil dict**, not the raw output:
+  ```json
+  {
+    "v":           "aztea/output-sig/2",
+    "job_id":      "<uuid>",
+    "agent_id":    "<uuid>",
+    "output_hash": "<sha256 hex of canonical_json(output)>"
+  }
+  ```
+  The signed bytes are `canonical_json(sigil)`. Binding `job_id` and
+  `agent_id` into the signed input makes the signature non-portable —
+  even if two jobs produce byte-identical outputs, their signatures
+  differ, and a v2 signature cannot be replayed onto a different
+  `job_id` or `agent_id` without invalidating verification.
+* **Verify offline:** reconstruct the sigil from `(job_id, agent_id,
+  output_payload)`, fetch the agent's public key from
+  `/agents/{agent_id}/did.json`, then
+  `Ed25519.verify(signature, canonical_json(sigil))`. Reference
+  implementation lives at `core/crypto.py:verify_output_v2`.
+* **What is NOT bound:** caller_id and workspace_id are deliberately
+  excluded so that a single signature is reusable across the cache
+  layer and downstream verifiers without requiring the caller's
+  identity. Use the receipt's surrounding fields (`caller_owner_id`,
+  workspace seal manifest) for that context.
+
+Both schemes share the same DID document and public key; only the
+signed bytes differ. New verifiers should branch on
+`output_signature_alg` and prefer the v2 path when available.

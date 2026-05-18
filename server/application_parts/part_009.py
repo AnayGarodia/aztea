@@ -2328,7 +2328,33 @@ def jobs_output_verification_decide(
                 detail="Output verification is only available for completed jobs.",
             )
         if job.get("settled_at"):
-            raise HTTPException(status_code=409, detail="Job is already settled.")
+            # 2026-05-18 (E3): the verification window CLOSES on settle, even
+            # when ``output_verification_window_seconds`` would otherwise still
+            # be open. That is intentional — settle releases funds to the
+            # agent's payout wallet, and reversing it would require a
+            # clawback path that isn't wired through the ledger. Surface the
+            # field naming and the post-settle recovery path in the error so
+            # the caller knows what their options are.
+            raise HTTPException(
+                status_code=409,
+                detail=error_codes.make_error(
+                    "job.already_settled",
+                    (
+                        "This job has already settled and its verification "
+                        "window is closed. ``output_verification_window_seconds`` "
+                        "describes the window between completion and settle — "
+                        "not a post-settle revocation window. After settle the "
+                        "only recourse for a bad output is POST /jobs/{job_id}/"
+                        "dispute (within the dispute window), which uses the "
+                        "ledger's clawback path."
+                    ),
+                    {
+                        "job_id": job_id,
+                        "settled_at": job.get("settled_at"),
+                        "post_settle_recourse": f"POST /jobs/{job_id}/dispute",
+                    },
+                ),
+            )
 
         initialized = jobs.initialize_output_verification_state(job_id) or job
         verification_status = _normalize_output_verification_status(initialized)

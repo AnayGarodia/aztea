@@ -70,6 +70,7 @@ JOB_INVALID_STATE = "job.invalid_state"
 JOB_BATCH_PARTIAL_FAILURE = "job.batch.partial_failure"
 JOB_NOT_FOUND_404 = "job.not_found"  # alias used for explicit 404 returns
 JOB_CREATE_FAILED = "job.create_failed"
+JOB_EXECUTION_FAILED = "job.execution_failed"
 JOB_INVALID_CLAIM_TOKEN = "job.invalid_claim_token"
 
 # Dispute lifecycle structured errors

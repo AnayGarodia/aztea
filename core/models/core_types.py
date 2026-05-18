@@ -458,8 +458,9 @@ class AgentWalletSettingsRequest(BaseModel):
 
     display_label: str | None = None
     guarantor_enabled: bool | None = None
-    guarantor_cap_cents: int | None = None
-    daily_spend_limit_cents: int | None = None
+    guarantor_cap_cents: int | None = Field(default=None, ge=0)
+    # Upper bound mirrors the MCP `set_daily_limit` JSON schema (`maximum: 1_000_000`).
+    daily_spend_limit_cents: int | None = Field(default=None, ge=0, le=1_000_000)
 
 
 class AgentWalletSweepRequest(BaseModel):

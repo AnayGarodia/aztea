@@ -1928,6 +1928,16 @@ class RegistryBridge:
             price_mode = "cheapest"
         matches: list[tuple[int, dict[str, Any]]] = []
         for entry in self._catalog_entries():
+            # Meta-tools (manage_workflow, manage_budget, manage_job, the
+            # aztea_* observability/wallet helpers) live in the same catalog
+            # cache as real agents because the MCP describe/dispatch paths
+            # use a unified lookup table. The emergency fallback must NOT
+            # surface them as hireable agents — describe_specialist on a
+            # meta-tool returns platform-internal schemas, and `call_specialist`
+            # against one routes to the local dispatcher instead of a paid
+            # registry call. Filter them out before scoring.
+            if str(entry.get("kind") or "") == "meta_tool":
+                continue
             if intent is not None and not _entry_matches_intent(entry, intent):
                 continue
             # Caller-supplied filters: price ceiling, trust floor, category narrow.

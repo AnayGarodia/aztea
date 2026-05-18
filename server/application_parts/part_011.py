@@ -492,9 +492,17 @@ def wallet_spend_summary(
     wallet_id = wallet["wallet_id"]
 
     with jobs._conn() as conn:
+        # MAX(created_at) per agent lets callers see "last time I was charged
+        # for this" without a second query. Especially useful for fading
+        # sunset agents in the UI: the row stays in history for audit, but
+        # an aged-out timestamp signals it's safe to collapse / dismiss.
         rows = conn.execute(
             """
-            SELECT agent_id, SUM(price_cents) AS total_cents, COUNT(*) AS job_count
+            SELECT agent_id,
+                   SUM(price_cents) AS total_cents,
+                   COUNT(*) AS job_count,
+                   MAX(created_at) AS last_charged_at,
+                   MIN(created_at) AS first_charged_at
             FROM jobs
             WHERE caller_owner_id = %s
               AND status IN ('complete', 'failed', 'stopped')
@@ -557,6 +565,8 @@ def wallet_spend_summary(
             visibility = "deleted"
         else:
             visibility = "live"
+        last_charged_raw = row["last_charged_at"]
+        first_charged_raw = row["first_charged_at"]
         item = {
             "agent_id": agent_id,
             "agent_name": agent_name,
@@ -564,6 +574,16 @@ def wallet_spend_summary(
             "job_count": int(row["job_count"] or 0),
             "is_sunset": is_sunset,
             "catalog_visibility": visibility,
+            "last_charged_at": (
+                last_charged_raw.isoformat()
+                if hasattr(last_charged_raw, "isoformat")
+                else last_charged_raw
+            ),
+            "first_charged_at": (
+                first_charged_raw.isoformat()
+                if hasattr(first_charged_raw, "isoformat")
+                else first_charged_raw
+            ),
         }
         if is_sunset:
             sunset_by_agent.append(item)
@@ -625,6 +645,7 @@ def wallet_audit(
     limit: int = 100,
     verify_all: bool = False,
     include_receipts: bool = True,
+    include_spend_breakdown: bool | None = None,
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> JSONResponse:
     """Single-call audit surface: spend rollup + signed receipts + aggregate
@@ -753,13 +774,23 @@ def wallet_audit(
                 "job_count": int(row["job_count"] or 0),
             }
         )
+    # 2026-05-18 (E5): the by_agent[] array alone dominated the audit response
+    # (≥ 40 entries × ~250 bytes ≈ 10 KB) even when callers had passed
+    # include_receipts=false to keep the response small. Make include_receipts
+    # the canonical "digest only" toggle: when false it drops both the
+    # receipts array AND the per-agent breakdown unless include_spend_breakdown
+    # is explicitly set to true to opt back in.
+    if include_spend_breakdown is None:
+        include_spend_breakdown = include_receipts
     spend = {
         "period": period_normalized,
         "days": days,
         "total_cents": int((totals["total_cents"] or 0) if totals else 0),
         "total_jobs": int((totals["job_count"] or 0) if totals else 0),
         "live_catalog_total_cents": sum(item["total_cents"] for item in by_agent_live),
-        "by_agent": by_agent_live,
+        "by_agent": by_agent_live if include_spend_breakdown else [],
+        "by_agent_omitted": (not include_spend_breakdown),
+        "by_agent_count": len(by_agent_live),
         "wallet_id": wallet_id,
     }
 
@@ -878,10 +909,16 @@ def wallet_audit(
                 "returns aggregate verified/failed counts plus first-failure detail"
             ),
             "include_receipts": (
-                "true (default) to include the recent_signed_receipts array. "
-                "Pass false for a small summary-only response (digest + "
-                "aggregates) — useful when the per-receipt payload exceeds "
-                "the MCP / SDK context window."
+                "true (default) to include the recent_signed_receipts array AND "
+                "the spend.by_agent breakdown. Pass false for a small summary-"
+                "only response (digest + aggregates + spend totals) — useful "
+                "when the full payload exceeds the MCP / SDK context window."
+            ),
+            "include_spend_breakdown": (
+                "Override the spend.by_agent array independently of "
+                "include_receipts. Defaults to whatever include_receipts is "
+                "(true → keep breakdown, false → drop it). Set true to keep "
+                "the per-agent rows even when omitting receipts."
             ),
         },
     }
@@ -1081,6 +1118,29 @@ def wallet_me(
             "holds": holds_payload,
             "escrow_cents": escrow_cents,
             "caller_trust": caller_trust,
+            # 2026-05-18 (E16): a 1.7.19 audit asked what caller_trust gates.
+            # Document the active gates directly in the balance response so
+            # operators don't have to read server code to find out.
+            "caller_trust_info": {
+                "value": caller_trust,
+                "scale": "0.0-1.0 (default 0.5 for new wallets)",
+                "gates": [
+                    "Agents may set `min_caller_trust` in their input_schema "
+                    "to require a minimum trust before accepting calls — "
+                    "the call gate at /registry/agents/{id}/call rejects "
+                    "with `agent.caller_trust_too_low` when the floor isn't met.",
+                    "Search results honour the gate by default — pass "
+                    "`respect_caller_trust_min=false` on POST /registry/search "
+                    "to see agents the caller can't currently hire.",
+                    "Quality-adjusted payout clawbacks (`core.payout_curve`) "
+                    "read this value when calculating retention on a low rating.",
+                ],
+                "moves_when": [
+                    "Agent submits a rating via POST /jobs/{job_id}/rate-caller (range adjustments).",
+                    "Five-star milestone bumps (+0.02 per 10 five-star ratings the caller has given).",
+                    "Dispute outcomes (negative deltas for caller-loss verdicts).",
+                ],
+            },
             "transactions": txs,
         }
     )

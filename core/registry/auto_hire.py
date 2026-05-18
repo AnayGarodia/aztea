@@ -414,6 +414,18 @@ _QUALITY_SUCCESS_BONUS_CAP = 10
 _QUALITY_TRUST_BONUS_CAP = 5
 _TRUST_BONUS_DIVISOR = 20.0
 _CODEX_RECOMMENDED_BONUS = 5
+# Bayesian cold-start prior (2026-05-18, bug 7): agents with no call history
+# show success_rate=1.0 / trust_score=50 by default, which let them outrank
+# battle-tested 60-70% agents purely on lexical/semantic similarity. The prior
+# penalises any candidate whose evidence is below a confidence threshold —
+# evidence is `call_count + 2 * rating_count` (one rating ≈ two completions).
+# Applied as a negative score scaled by (1 - confidence), so:
+#   - 0 calls / 0 ratings → confidence 0 → full penalty
+#   - 10 calls / 0 ratings → confidence 0.5 → half penalty
+#   - 30 calls / 0 ratings → confidence 0.75 → quarter penalty
+# Cap is _COLD_START_MAX_PENALTY so this never dominates an exact slug match.
+_COLD_START_EVIDENCE_DENOM = 10.0
+_COLD_START_MAX_PENALTY = 12.0
 _INTENT_INTERLOCK_BONUS = 45
 _DEPENDENCY_AUDIT_BONUS = 70
 _KEYWORD_MATCH_PER = 12
@@ -515,9 +527,24 @@ def _score_quality_signals(c: CandidateAgent) -> tuple[float, list[str]]:
     """Pure: success-rate + trust + recommended bonuses for agents with a track record."""
     score = 0.0
     reasons: list[str] = []
-    if c.raw.get("call_count", 0) >= _QUALITY_TRACK_RECORD_CALLS:
+    call_count = int(c.raw.get("call_count", c.raw.get("total_calls", 0)) or 0)
+    rating_count = int(c.raw.get("quality_rating_count", 0) or 0)
+    if call_count >= _QUALITY_TRACK_RECORD_CALLS:
         score += min(_QUALITY_SUCCESS_BONUS_CAP, c.success_rate * 10)
         score += min(_QUALITY_TRUST_BONUS_CAP, c.trust_score / _TRUST_BONUS_DIVISOR)
+    # Cold-start prior: agents with no call/rating history have an
+    # uninformative trust_score (50.0 default). Without this penalty, a
+    # fresh agent with strong text match can sit above an established
+    # 60-70% agent in filtered searches — the 2026-05-18 audit's bug 7.
+    evidence = float(call_count + 2 * rating_count)
+    confidence = evidence / (evidence + _COLD_START_EVIDENCE_DENOM)
+    penalty = (1.0 - confidence) * _COLD_START_MAX_PENALTY
+    if penalty > 0.01:
+        score -= penalty
+        reasons.append(
+            f"cold-start prior: -{penalty:.1f} (evidence={int(evidence)}, "
+            f"confidence={confidence:.2f})"
+        )
     if c.raw.get("codex_recommended"):
         score += _CODEX_RECOMMENDED_BONUS
         reasons.append("recommended")

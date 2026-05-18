@@ -15,6 +15,13 @@ def test_build_subprocess_env_strips_host_secrets(monkeypatch):
     assert "AZTEA_API_KEY" not in env
 
 
+def test_build_subprocess_env_drops_home(monkeypatch):
+    """Regression: HOME was leaking `/home/aztea` to user code via ``process.env``."""
+    monkeypatch.setenv("HOME", "/home/aztea")
+    env = build_subprocess_env()
+    assert "HOME" not in env
+
+
 def test_multi_language_executor_uses_sanitized_env(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "secret-token")
     monkeypatch.setattr(multi_language_executor, "_which", lambda name: "/usr/bin/node" if name == "node" else None)
