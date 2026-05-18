@@ -46,7 +46,7 @@ def fresh_db():
     os.environ["AZTEA_CALLER_ESCROW_ENABLED"] = "1"
     from fastapi.testclient import TestClient
     from server import app
-    with TestClient(app) as _client:
+    with TestClient(app):
         pass  # lifespan applies migrations + init
     try:
         yield db_handle.name

@@ -432,7 +432,7 @@ _CLIENT_ID_HEADER = "X-Aztea-Client"
 _DEFAULT_JUDGE_FEE_CENTS = 0
 _REPUTATION_DECAY_GRACE_DAYS = 30
 _REPUTATION_DECAY_DAILY_RATE = 0.005
-# Surgical band-aid for stale latency averages (see migration 0053).
+# Surgical band-aid for stale latency averages (see migration 0056).
 # Grace is shorter than reputation decay (7 d vs 30 d) because a stale slow
 # latency actively misrepresents a healthy agent in the catalog UI; the
 # rolling-window proper fix is tracked separately.

@@ -1323,7 +1323,7 @@ def jobs_dispute_operator_response(
         raise HTTPException(status_code=403, detail=str(exc))
     if updated is None:
         raise HTTPException(
-            status_code=404, detail=f"Dispute disappeared during update."
+            status_code=404, detail="Dispute disappeared during update."
         )
     _record_job_event(
         job, "job.dispute_operator_responded",

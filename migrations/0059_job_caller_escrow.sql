@@ -1,4 +1,4 @@
--- 0056_job_caller_escrow.sql
+-- 0059_job_caller_escrow.sql
 -- Caller-side escrow for async jobs.
 --
 -- Current behavior (pre-2026-05-18, deep tier D5):

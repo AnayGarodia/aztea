@@ -1,4 +1,4 @@
--- 0054_background_worker_leases.sql
+-- 0057_background_worker_leases.sql
 -- DB-backed lease for background workers (dispute judge, sweeper, etc.)
 -- so leadership can be re-acquired after a worker restart without an
 -- operator intervention. Replaces the boot-once fcntl lock for the

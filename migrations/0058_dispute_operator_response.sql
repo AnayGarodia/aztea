@@ -1,4 +1,4 @@
--- 0055_dispute_operator_response.sql
+-- 0058_dispute_operator_response.sql
 -- Add an operator-response slot to the dispute lifecycle so the agent
 -- operator (not just the caller) has a chance to defend their work
 -- before the LLM judges decide. The 2026-05-18 test report flagged this

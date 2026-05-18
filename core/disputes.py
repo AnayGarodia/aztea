@@ -611,7 +611,7 @@ def record_judgment(
     """Persist a single LLM or admin judge vote for a dispute and return the row.
 
     2026-05-18 (D2): idempotent on the unique (dispute_id, judge_kind) index
-    added in migration 0054. A retry — including a brief two-leader overlap
+    added in migration 0057. A retry — including a brief two-leader overlap
     during a lease handoff, or a re-run of a 'judging' dispute whose first
     pass died mid-flight — finds the existing row and returns it instead
     of double-voting.

@@ -1,4 +1,4 @@
--- 0053_latency_decay.sql
+-- 0056_latency_decay.sql
 -- Surgical band-aid for stale agent latency averages.
 --
 -- Background: agents.avg_latency_ms is a lifetime running average updated
