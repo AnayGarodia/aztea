@@ -26,6 +26,7 @@ from typing import Any
 from core.sandbox.boot import _collect_compose_services  # type: ignore[reportPrivateUsage]
 from core.sandbox.database import db_snapshot
 from core.sandbox.docker_cli import run_docker
+from core.sandbox.isolation import hardening_argv as _isolation_hardening_argv
 from core.sandbox.models import (
     SNAPSHOT_ID_PREFIX,
     SandboxInvalidInput,
@@ -140,6 +141,7 @@ def restore(payload: dict[str, Any]) -> dict[str, Any]:
                 container,
                 "--label",
                 f"com.docker.compose.project={state.boot.project_name}",
+                *_isolation_hardening_argv(state.sandbox_id),
                 tag,
             ],
             timeout=60,
@@ -176,6 +178,12 @@ def fork(payload: dict[str, Any]) -> dict[str, Any]:
     if not manifest_path.is_file():
         raise SandboxNotFound(f"snapshot '{snap_id}' not found")
     manifest = json.loads(manifest_path.read_text("utf-8"))
+    # Bug #8: capture the parent's chain tail BEFORE the new sandbox
+    # gets a chain of its own. The dispatcher reads these fields out of
+    # the fork response and folds them into the new sandbox's first
+    # receipt so an auditor can hop from fork tail → parent tail.
+    from core.sandbox.receipts import _last_hash as _read_chain_tail  # local import: cycle break
+    parent_chain_tail_hash = _read_chain_tail(source_id)
     new_id = generate_sandbox_id()
     project = project_name_for(new_id)
     # Materialise workspace from the snapshot fs.tar.
@@ -185,8 +193,11 @@ def fork(payload: dict[str, Any]) -> dict[str, Any]:
     if fs_tar.is_file():
         with tarfile.open(fs_tar) as tar:
             tar.extractall(new_repo)
-    # Spin up each committed image under the new project label.
+    # Spin up each committed image under the new project label. The
+    # hardening argv keeps the fork on the same non-root/no-cap baseline
+    # as the parent's direct-launch boot (bugs #5 / #6 / #7).
     services_out: dict[str, dict[str, Any]] = {}
+    hardening = _isolation_hardening_argv(new_id)
     for service, tag in (manifest.get("service_tags") or {}).items():
         container = f"{project}-{service}"
         run_docker(
@@ -197,6 +208,7 @@ def fork(payload: dict[str, Any]) -> dict[str, Any]:
                 container,
                 "--label",
                 f"com.docker.compose.project={project}",
+                *hardening,
                 tag,
             ],
             timeout=60,
@@ -246,6 +258,11 @@ def fork(payload: dict[str, Any]) -> dict[str, Any]:
         "status": new_state.status,
         "services": services_out,
         "filesystem_root": str(new_repo),
+        # Bug #8: cross-link the fork's first receipt back to the parent's
+        # chain tail. The dispatcher reads these and threads them into
+        # ``mint_receipt`` for this action.
+        "parent_sandbox_id": source_id,
+        "parent_chain_tail_hash": parent_chain_tail_hash,
     }
 
 

@@ -31,6 +31,7 @@ from core.sandbox.models import (
     now_unix,
 )
 from core.sandbox.isolation import (
+    hardening_argv as _isolation_hardening_argv,
     normalise_backend as _normalise_isolation,
     runtime_argv as _isolation_runtime_argv,
     status_block as _isolation_status,
@@ -88,13 +89,17 @@ def start(payload: dict[str, Any]) -> dict[str, Any]:
     isolation_backend = _normalise_isolation(payload.get("isolation_backend"))
     isolation_runtime_argv = _isolation_runtime_argv(isolation_backend)
     isolation_status_block = _isolation_status(isolation_backend)
+    # Bugs #5 / #6 / #7: non-root user, masked hostname, dropped caps for
+    # every direct-launch container we own. Compose stacks bypass this
+    # because the user's compose file owns their own user/cap policy.
+    hardening_argv = _isolation_hardening_argv(sandbox_id)
     try:
         boot_info = boot_strategy(
             sandbox_id=sandbox_id,
             repo_path=repo_path,
             boot_cfg=boot_cfg,
             env_vars=env_vars,
-            network_argv=network_argv + isolation_runtime_argv,
+            network_argv=network_argv + isolation_runtime_argv + hardening_argv,
             project_name_override=project_name_for(sandbox_id),
         )
     except SandboxBootFailed:

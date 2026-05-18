@@ -22,12 +22,25 @@ def load_builtin_specs_part10() -> list[dict[str, Any]]:
                 "Spin up a Docker-backed clone of the user's project — services, "
                 "DB, env, network — and poke at it like staging. Supports the "
                 "full lifecycle (start/exec/snapshot/restore/fork/stop), DB "
-                "ops (query/EXPLAIN/snapshot/restore/introspect), filesystem "
-                "ops (read/write/atomic patch/glob/grep), HTTP from inside "
-                "the sandbox network with persistent cookies, hash-chained "
-                "Ed25519-signed receipts per action. Browser/tunnels/k8s/"
-                "webhook-capture surfaces return structured stub envelopes "
-                "with planned schemas + follow-up issue references."
+                "ops (query/snapshot/restore/introspect; EXPLAIN-plan as a "
+                "stubbed v0 surface), filesystem ops (read/write/atomic "
+                "patch/glob/grep — also reachable under the documented "
+                "sandbox_fs_* aliases), HTTP from inside the sandbox network "
+                "with persistent cookies (sandbox_http or sandbox_http_request), "
+                "hash-chained Ed25519-signed receipts per action. Browser / "
+                "tunnels / k8s_apply / public-tunnel / webhook-capture surfaces "
+                "return structured stub envelopes with planned schemas + "
+                "follow-up issue references — they never hard-error. "
+                "Isolation: Docker default — gVisor (runsc) is OPT-IN via "
+                "isolation_backend='gvisor' and only when the host has runsc "
+                "registered; the default response carries isolation.applied="
+                "'docker'. Containers run as a non-root UID (1000:1000) on "
+                "the direct-launch boot strategies (dockerfile / custom / "
+                "devcontainer / nix); compose stacks honour whatever the "
+                "user's compose file declares. Concurrency: this agent is "
+                "rate-limited at the transport layer to the platform's "
+                "per-key RPM (see metadata.concurrency); fan-outs above "
+                "that drop into the standard 429 retry-after path."
             ),
             "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_LIVE_SANDBOX_AGENT_ID],
             "price_per_call_usd": 0.05,
@@ -60,11 +73,50 @@ def load_builtin_specs_part10() -> list[dict[str, Any]]:
             "category": "Developer Tools",
             "cacheable": False,
             "runtime_requirements": [
-                "docker (daemon reachable from server)",
-                "git (for source.kind='git')",
-                "libfaketime (optional, for clock.frozen_at)",
-                "rsync (optional, sync_from_local falls back to shutil)",
+                "host: docker (daemon reachable from server)",
+                "host: git (for source.kind='git')",
+                "host: libfaketime (optional, for clock.frozen_at)",
+                "host: rsync (optional, sync_from_local falls back to shutil)",
+                (
+                    "container: the default boot image (ubuntu:22.04) is "
+                    "intentionally minimal — only the binaries from the "
+                    "user's Dockerfile / compose / devcontainer are "
+                    "guaranteed inside. For sandbox_exec you can set "
+                    "boot.base_image to a fatter image (e.g. ubuntu:24.04, "
+                    "node:20, python:3.12, devcontainers/base) when you "
+                    "need curl / python3 / git inside the container."
+                ),
             ],
+            "metadata": {
+                "concurrency": {
+                    "rate_limited_by": "platform",
+                    "note": (
+                        "Calls are accounted under the platform per-key RPM "
+                        "(see /health.rate_limit). 13+ parallel calls from a "
+                        "single key will hit 429 retry_after_seconds=60 like "
+                        "any other heavy agent. Aztea hosted defaults: "
+                        "caller-scope ~12 RPM. Fan-outs above that should "
+                        "use manage_workflow.hire_batch which schedules "
+                        "around the limit."
+                    ),
+                    "recommended_max_parallel_from_one_key": 8,
+                },
+                "isolation_backends": ["docker", "gvisor"],
+                "default_isolation": "docker",
+                "host_kernel_visibility": {
+                    "status": "leaks_via_uname",
+                    "note": (
+                        "Under the default Docker backend, ``uname -a`` inside "
+                        "a sandbox returns the host kernel string (e.g. AWS "
+                        "build identifier + Ubuntu LTS + build date). Docker "
+                        "does not expose a flag to virtualise this; the kernel "
+                        "is shared with the host by design. Switch to "
+                        "isolation_backend='gvisor' for syscall-level "
+                        "virtualisation when the host has runsc registered."
+                    ),
+                },
+                "container_user": "non_root_1000_1000_on_direct_launch",
+            },
             "tooling_kind": "sandbox_orchestration",
             "stability_tier": "beta",
             "codex_recommended": True,

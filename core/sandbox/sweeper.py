@@ -81,38 +81,57 @@ def _sweeper_loop() -> None:
     assert _SWEEPER_STOP_EVENT is not None
     while not _SWEEPER_STOP_EVENT.is_set():
         try:
-            _sweep_once()
+            sweep_once()
         except Exception:
             _LOG.exception("sandbox sweeper iteration failed")
         _SWEEPER_STOP_EVENT.wait(_SWEEPER_INTERVAL_S)
 
 
-def _sweep_once() -> None:
-    """Side-effect: walk the registry and apply lifetime policies."""
+def sweep_once() -> dict[str, int]:
+    """Side-effect: walk the registry and apply lifetime policies.
+
+    Returns a small per-pass summary so the host sweeper (jobs loop in
+    server.application_parts.part_006) can surface counters next to its
+    own ``sweeper.pass_completed`` log line. Bug #1 from the 2026-05-18
+    live_sandbox audit: pre-fix nothing ever invoked this function, so
+    sandboxes with ``lifetime.max_minutes=3`` lived forever — the
+    expired-suspend code was correct but unreachable.
+    """
     now = now_unix()
+    summary = {"expired_suspended": 0, "idle_suspended": 0, "auto_snapshot": 0}
     for state in list_all():
         try:
-            _apply_policies(state, now)
+            outcome = _apply_policies(state, now)
+            if outcome:
+                summary[outcome] = summary.get(outcome, 0) + 1
         except Exception:
             _LOG.exception("sweeper apply_policies failed for %s", state.sandbox_id)
+    return summary
 
 
-def _apply_policies(state: SandboxState, now: int) -> None:
-    """Side-effect: decide whether to auto-snapshot, idle-kill, or hard-stop."""
+def _apply_policies(state: SandboxState, now: int) -> str | None:
+    """Side-effect: decide whether to auto-snapshot, idle-kill, or hard-stop.
+
+    Returns one of ``{"expired_suspended","idle_suspended","auto_snapshot"}``
+    or ``None`` when no action was taken — the host loop aggregates these
+    counts into its pass summary.
+    """
     if state.status not in ("ready", "running"):
-        return
+        return None
     idle_seconds = now - state.last_activity_at
     if idle_seconds > state.lifetime.idle_kill_minutes * 60:
         _LOG.info("idle-kill: %s (idle for %ds)", state.sandbox_id, idle_seconds)
         _suspend(state, reason="idle_kill")
-        return
+        return "idle_suspended"
     if now >= state.expires_at:
         _LOG.info("max-lifetime reached: %s", state.sandbox_id)
         _suspend(state, reason="max_lifetime")
-        return
+        return "expired_suspended"
     snap_due = state.last_snapshot_at + state.lifetime.auto_snapshot_every_minutes * 60
     if now >= snap_due:
         _auto_snapshot(state)
+        return "auto_snapshot"
+    return None
 
 
 def _auto_snapshot(state: SandboxState) -> None:

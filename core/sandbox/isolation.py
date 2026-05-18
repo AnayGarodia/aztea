@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import logging
+import secrets
 import shutil
 import subprocess
 from typing import Any
@@ -24,6 +25,39 @@ _LOG = logging.getLogger("aztea.sandbox.isolation")
 
 VALID_BACKENDS = ("docker", "gvisor", "firecracker", "kata")
 _GVISOR_RUNTIME_NAME = "runsc"
+
+# Bugs #5 / #6 / #7 from the 2026-05-18 audit: tighten the default
+# ``docker run`` argv we generate for direct-launch boot strategies
+# (dockerfile / custom_commands / devcontainer / nix). Compose stacks
+# inherit their user/hostname/caps from the user's compose file — we
+# don't second-guess that surface.
+_DEFAULT_SANDBOX_UID = "1000:1000"
+_HOSTNAME_PREFIX = "sandbox"
+
+
+def hardening_argv(sandbox_id: str) -> list[str]:
+    """Return the ``docker run`` flags that harden a direct-launch container.
+
+    Drops to a non-root UID, masks the container ID as the hostname, and
+    drops all Linux capabilities so a kernel CVE on the host cannot use
+    CAP_SYS_ADMIN from inside. ``--security-opt no-new-privileges`` blocks
+    setuid escalation paths. Why a separate function: every direct-launch
+    boot path now flows through here so the security posture stays
+    consistent — adding a new boot strategy that forgets to call this
+    would regress all three bugs at once.
+
+    NOTE: compose stacks bypass this on purpose — the user's compose
+    file owns its own user/cap policy and overriding that breaks
+    legitimate stacks (e.g. nginx wanting CAP_NET_BIND_SERVICE).
+    """
+    host_suffix = secrets.token_hex(4)
+    sid_tail = sandbox_id.split("_", 1)[-1][:8] if "_" in sandbox_id else sandbox_id[:8]
+    return [
+        "--user", _DEFAULT_SANDBOX_UID,
+        "--hostname", f"{_HOSTNAME_PREFIX}-{sid_tail}-{host_suffix}",
+        "--cap-drop", "ALL",
+        "--security-opt", "no-new-privileges",
+    ]
 
 
 def normalise_backend(value: Any) -> str:
@@ -71,17 +105,36 @@ def status_block(backend: str) -> dict[str, Any]:
 
     Surfaced in the ``sandbox_start`` response so the caller sees whether
     they actually got the isolation they asked for.
+
+    Bug #4 from the 2026-05-18 audit: the previous note implied every
+    sandbox got runsc by default, but ``isolation.applied`` was always
+    'docker' unless the caller explicitly asked for gVisor AND the host
+    had runsc registered. The note now spells out the opt-in path so the
+    response, the agent description, and operator reality all agree.
     """
+    runsc_available = _gvisor_runtime_available()
+    if backend == "gvisor":
+        note = (
+            "gVisor (runsc) is opt-in and was applied for this sandbox."
+            if runsc_available
+            else "gVisor requested but runsc is not registered on this host — "
+            "this should have raised before container start; verify "
+            "/etc/docker/daemon.json."
+        )
+    else:
+        note = (
+            "Default backend is plain Docker. gVisor (runsc) is opt-in via "
+            "isolation_backend='gvisor' and only when the host has runsc "
+            "registered — set runsc_available=true below to confirm. "
+            "Firecracker / Kata remain host-infra rollouts."
+        )
     return {
         "requested": backend,
         "applied": backend if backend in ("docker", "gvisor") else "refused",
-        "runsc_available": _gvisor_runtime_available(),
+        "runsc_available": runsc_available,
         "supported_backends": list(VALID_BACKENDS),
         "v0_real_backends": ["docker", "gvisor"],
-        "note": (
-            "gVisor (runsc) provides strong syscall-level isolation on "
-            "top of Docker. Firecracker / Kata remain host-infra rollouts."
-        ),
+        "note": note,
     }
 
 

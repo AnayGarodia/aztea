@@ -339,6 +339,7 @@ def _jobs_sweeper_loop(stop_event: threading.Event) -> None:
             _emit_pending_starvation_signal()
             _maybe_run_decision_retention()
             _run_workspaces_sweeper_pass(summary)
+            _run_sandbox_sweeper_pass(summary)
             _set_sweeper_state(
                 last_run_at=started,
                 last_summary=summary,
@@ -378,6 +379,29 @@ def _run_workspaces_sweeper_pass(summary: dict[str, Any]) -> None:
     except Exception as exc:  # noqa: BLE001 — never break the jobs loop
         _LOG.warning("workspaces sweeper failed: %s", exc, exc_info=True)
         summary["workspaces_sweeper_error"] = str(exc)
+
+
+def _run_sandbox_sweeper_pass(summary: dict[str, Any]) -> None:
+    """Piggyback the live_sandbox lifetime sweeper on the jobs tick.
+
+    Bug #1 from the 2026-05-18 live_sandbox audit: ``core.sandbox.sweeper``
+    had the logic to expire sandboxes past ``expires_at`` but nothing ever
+    called it — containers booted with ``lifetime.max_minutes=3`` lived
+    forever. Wiring it into the existing jobs tick avoids spinning up a
+    second background thread for one periodic job.
+
+    Failures never propagate: the jobs loop must keep running even if
+    Docker is missing on this host.
+    """
+    try:
+        from core.sandbox import sweeper as _sandbox_sweeper
+        counts = _sandbox_sweeper.sweep_once()
+        summary["sandbox_expired_suspended"] = counts.get("expired_suspended", 0)
+        summary["sandbox_idle_suspended"] = counts.get("idle_suspended", 0)
+        summary["sandbox_auto_snapshot"] = counts.get("auto_snapshot", 0)
+    except Exception as exc:  # noqa: BLE001 — never break the jobs loop
+        _LOG.warning("sandbox sweeper failed: %s", exc, exc_info=True)
+        summary["sandbox_sweeper_error"] = str(exc)
 
 
 def _jobs_metrics(sla_seconds: int = _DEFAULT_SLA_SECONDS) -> dict:

@@ -1557,3 +1557,202 @@ def test_sdk_invocation_routes_through_registry_call():
     # browser_evaluate maps to sandbox_browser_eval
     sandbox.browser_evaluate("sbx", "sess", "1+1")
     assert captured[-1]["payload"]["action"] == "sandbox_browser_eval"
+
+
+# --- 2026-05-18 audit follow-ups ---------------------------------------------
+
+
+def test_alias_sandbox_http_routes_to_sandbox_http_request():
+    """Bug #2: ``sandbox_http`` (as advertised) lands on the real handler.
+
+    Pre-fix this returned ``live_sandbox.unknown_action`` even though the
+    description promised "HTTP from inside the sandbox network with
+    persistent cookies".
+    """
+    out = live_sandbox.run({
+        "action": "sandbox_http",
+        "input": {"sandbox_id": "sbx_aaaaaaaaaaaaaaaa", "url": "http://x"},
+    })
+    # Either we get a sandbox.not_found / network error from the real
+    # handler OR (in the no-docker path) an unhandled exception — what we
+    # MUST NOT see is the dispatcher's ``unknown_action`` envelope.
+    assert out.get("error", {}).get("code") != "live_sandbox.unknown_action"
+
+
+def test_alias_sandbox_fs_read_routes_to_sandbox_read_file():
+    out = live_sandbox.run({
+        "action": "sandbox_fs_read",
+        "input": {"sandbox_id": "sbx_aaaaaaaaaaaaaaaa", "path": "/etc/hostname"},
+    })
+    assert out.get("error", {}).get("code") != "live_sandbox.unknown_action"
+
+
+def test_not_implemented_v0_returns_stub_envelope():
+    """Bug #2: documented-but-deferred verbs return the canonical stub shape."""
+    for action in ("sandbox_db_explain", "sandbox_k8s_apply", "sandbox_tunnel_public"):
+        out = live_sandbox.run({"action": action, "input": {"sandbox_id": "sbx_aaaaaaaaaaaaaaaa"}})
+        assert out.get("stubbed") is True, f"{action} should return a stub envelope"
+        assert out.get("action") == action
+        assert "tracking_issue" in out
+        assert "planned_input_schema" in out
+        assert "planned_output_schema" in out
+        # Stubs still get a signed receipt.
+        assert out["receipt"]["alg"] == "Ed25519"
+
+
+def test_unknown_action_envelope_lists_aliases_and_deferred():
+    out = live_sandbox.run({"action": "sandbox_does_not_exist"})
+    assert out["error"]["code"] == "live_sandbox.unknown_action"
+    details = out["error"]["details"]
+    assert "aliases" in details
+    assert "not_implemented_in_v0" in details
+    assert "sandbox_http" in details["aliases"]
+
+
+def test_workspace_id_envelope_value_mirrors_to_top_level_response():
+    """Bug #12: workspace_id passed at the dispatch envelope shows up in the response.
+
+    Pre-fix the JWS payload carried the envelope value but the top-level
+    response returned ``workspace_id: null`` — callers debugging from the
+    response body thought the input had been rejected.
+    """
+    sid = _register_stub_sandbox()
+    out = live_sandbox.run({
+        "action": "sandbox_status",
+        "workspace_id": "ws_demo123",
+        "input": {"sandbox_id": sid},
+    })
+    assert out["receipt"]["payload"]["workspace_id"] == "ws_demo123"
+    assert out["workspace_id"] == "ws_demo123"
+
+
+def test_fork_chains_via_parent_chain_tail_hash(monkeypatch):
+    """Bug #8: fork receipts cross-link to the parent sandbox's chain tail.
+
+    Pre-fix the fork's first receipt had ``prev_hash: ""`` and no link
+    back to the source sandbox — auditors had to discover the parent
+    sandbox_id out-of-band.
+    """
+    from core.sandbox import snapshots, state as state_mod
+    from core.sandbox.state import (
+        BootInfo, LifetimePolicy, NetworkPolicyState, SandboxState,
+        generate_sandbox_id, register, sandbox_dir,
+    )
+    parent_id = generate_sandbox_id()
+    register(SandboxState(
+        sandbox_id=parent_id, status="ready", created_at=0, expires_at=999,
+        last_activity_at=0, last_snapshot_at=0, workspace_id=None, owner_hint=None,
+        region="auto", size={}, lifetime=LifetimePolicy(),
+        network=NetworkPolicyState(),
+        boot=BootInfo(strategy="raw", project_name="parent"),
+        filesystem_root="/tmp",
+    ))
+    # Run one action so the parent's audit log has a real tail hash.
+    seed = live_sandbox.run({"action": "sandbox_status", "input": {"sandbox_id": parent_id}})
+    parent_tail = seed["receipt"]["hash"]
+    # Stub out the actual docker fork mechanics and the manifest read.
+    import json as _json
+    snap_id = "snap_test01"
+    snap_dir = sandbox_dir(parent_id) / "snapshots" / snap_id
+    snap_dir.mkdir(parents=True, exist_ok=True)
+    (snap_dir / "manifest.json").write_text(_json.dumps({
+        "service_tags": {},
+        "boot_info": {"strategy": "snapshot"},
+        "lifetime": {"max_minutes": 10},
+        "network": {"egress": "isolated", "egress_allowlist": []},
+    }))
+    monkeypatch.setattr(snapshots, "run_docker", lambda *a, **kw: type("P", (), {"returncode": 0})())
+    # _collect_compose_services hits ``docker ps`` directly — also stub it
+    # so the test doesn't need a live docker daemon.
+    monkeypatch.setattr(snapshots, "_collect_compose_services", lambda project: {})
+
+    out = live_sandbox.run({
+        "action": "sandbox_fork",
+        "input": {"source_sandbox_id": parent_id, "snapshot_id": snap_id},
+    })
+    assert "error" not in out, out
+    assert out["parent_sandbox_id"] == parent_id
+    assert out["parent_chain_tail_hash"] == parent_tail
+    assert out["receipt"]["payload"]["parent_chain_tail_hash"] == parent_tail
+    assert out["receipt"]["payload"]["parent_sandbox_id"] == parent_id
+
+
+def test_receipt_records_audit_appended_flag():
+    """Bug #9: receipts surface whether the audit log append succeeded.
+
+    A False here means the chain has a gap — callers can detect it
+    instead of chasing a phantom ``prev_hash``.
+    """
+    sid = _register_stub_sandbox()
+    out = live_sandbox.run({"action": "sandbox_status", "input": {"sandbox_id": sid}})
+    assert out["receipt"]["audit_appended"] is True
+
+
+def test_sweep_once_expires_sandboxes_past_expires_at(monkeypatch):
+    """Bug #1: the lifetime sweeper actually retires expired sandboxes.
+
+    Pre-fix nothing called ``_sweep_once`` so containers booted with
+    ``lifetime.max_minutes=3`` lived forever.
+    """
+    from core.sandbox import sweeper as sweeper_mod
+    from core.sandbox.state import (
+        BootInfo, LifetimePolicy, NetworkPolicyState, SandboxState,
+        generate_sandbox_id, get, register,
+    )
+    sid = generate_sandbox_id()
+    # last_activity_at == now ensures idle_kill doesn't fire first; we
+    # only want to verify the expires_at path.
+    register(SandboxState(
+        sandbox_id=sid, status="ready", created_at=0, expires_at=10,
+        last_activity_at=10_000, last_snapshot_at=10_000, workspace_id=None,
+        owner_hint=None, region="auto", size={},
+        lifetime=LifetimePolicy(max_minutes=1),
+        network=NetworkPolicyState(),
+        boot=BootInfo(strategy="raw", project_name="exp"),
+        filesystem_root="/tmp",
+    ))
+    # Patch out the docker teardown + final snapshot — we only care that
+    # ``stop`` was invoked and the sandbox left the registry.
+    teardown_calls = []
+    from core.sandbox import lifecycle as lifecycle_mod
+    from core.sandbox import snapshots as snapshots_mod
+    monkeypatch.setattr(lifecycle_mod, "_teardown", lambda state: teardown_calls.append(state.sandbox_id))
+    monkeypatch.setattr(snapshots_mod, "snapshot", lambda payload: {"snapshot_id": "snap_test"})
+    # Force "now" past expires_at via the engine's clock indirection.
+    monkeypatch.setattr(sweeper_mod, "now_unix", lambda: 10_000)
+
+    summary = sweeper_mod.sweep_once()
+
+    assert summary["expired_suspended"] == 1
+    assert teardown_calls == [sid]
+    assert get(sid) is None  # stop_action() removes the sandbox
+
+
+def test_isolation_status_block_note_no_longer_overpromises_runsc():
+    """Bug #4: status_block for the default docker backend tells the truth.
+
+    Pre-fix the note implied runsc was applied. The new copy spells out
+    that runsc is opt-in and gated on host registration.
+    """
+    from core.sandbox import isolation
+    block = isolation.status_block("docker")
+    assert block["applied"] == "docker"
+    assert "opt-in" in block["note"]
+
+
+def test_hardening_argv_drops_root_and_masks_hostname():
+    """Bugs #5 / #7: direct-launch containers get --user 1000:1000 and a masked hostname."""
+    from core.sandbox import isolation
+    argv = isolation.hardening_argv("sbx_aaaaaaaaaaaa")
+    assert "--user" in argv
+    assert "1000:1000" in argv
+    assert "--cap-drop" in argv
+    assert "ALL" in argv
+    assert "--security-opt" in argv
+    assert "no-new-privileges" in argv
+    assert "--hostname" in argv
+    # Hostname mixes a sandbox-id slice with a random suffix so each
+    # container gets a distinct name without leaking the docker container ID.
+    idx = argv.index("--hostname")
+    assert argv[idx + 1].startswith("sandbox-")
+    assert argv[idx + 1] != "sandbox-aaaaaaaa"  # has a random tail

@@ -79,6 +79,8 @@ def mint_receipt(
     response: dict[str, Any],
     workspace_id: str | None = None,
     idempotency_key: str | None = None,
+    parent_chain_tail_hash: str | None = None,
+    parent_sandbox_id: str | None = None,
 ) -> dict[str, Any]:
     """Produce the Ed25519-signed receipt for one sandbox action.
 
@@ -90,6 +92,10 @@ def mint_receipt(
     Why: an external verifier can independently re-hash the request and
     response bodies they read from the audit log, recompute prev_hash,
     and validate the Ed25519 signature against did:web.
+
+    ``parent_chain_tail_hash`` / ``parent_sandbox_id`` are populated by
+    fork receipts so an auditor walking the fork's chain can cross-link
+    back to the exact parent-chain tail at fork time (Bug #8).
     """
     issued_at = int(time.time())
     request_hash = _hash_value(request)
@@ -107,6 +113,8 @@ def mint_receipt(
         "idempotency_key": idempotency_key,
         "consumed_contexts": [],
         "produced_contexts": [],
+        "parent_chain_tail_hash": parent_chain_tail_hash,
+        "parent_sandbox_id": parent_sandbox_id,
     }
     priv_pem, _pub_pem = _signing_keypair()
     signature_b64 = sign_payload(priv_pem, payload)
@@ -118,8 +126,16 @@ def mint_receipt(
         "signature": signature_b64,
         "hash": _payload_hash(payload, signature_b64),
     }
+    appended = False
     if sandbox_id:
-        _append_audit(sandbox_id, request, response, receipt)
+        appended = _append_audit(sandbox_id, request, response, receipt)
+    # Bug #9 from the 2026-05-18 audit: prev_hash should always be
+    # resolvable via ``sandbox_audit``. If the append failed (disk full,
+    # readonly state root) the chain still validates cryptographically
+    # but the audit log has a gap. ``audit_appended=False`` makes that
+    # gap explicit on the receipt so a caller can detect it instead of
+    # chasing a phantom prev_hash.
+    receipt["audit_appended"] = appended if sandbox_id else None
     return receipt
 
 
@@ -180,8 +196,14 @@ def _append_audit(
     request: dict[str, Any],
     response: dict[str, Any],
     receipt: dict[str, Any],
-) -> None:
-    """Side-effect: append a JSONL entry to the audit log; never raises."""
+) -> bool:
+    """Side-effect: append a JSONL entry to the audit log; never raises.
+
+    Returns ``True`` on a successful append, ``False`` if the disk write
+    failed for any reason. The boolean lets ``mint_receipt`` surface
+    ``audit_appended=False`` on the receipt so callers can detect a
+    chain gap rather than chase a prev_hash they can never look up.
+    """
     try:
         path = _audit_path(sandbox_id)
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -193,11 +215,13 @@ def _append_audit(
         }
         with path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, sort_keys=True) + "\n")
+        return True
     except Exception:
         # Audit log failure must not break the action — receipts are still
         # valid, only the local chain is degraded. Caller has visibility
         # via the receipt itself.
         _LOG.exception("audit log append failed for %s", sandbox_id)
+        return False
 
 
 def _audit_path(sandbox_id: str) -> Path:
