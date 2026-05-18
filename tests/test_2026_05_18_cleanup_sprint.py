@@ -244,3 +244,68 @@ def test_b7_default_sandbox_image_includes_node():
     assert boot._DEFAULT_CUSTOM_IMAGE != "cimg/base:current", (
         "cimg/base is missing node — B7 regression"
     )
+
+
+# ---------------------------------------------------------------------------
+# B5 — host info-leak hardening. /proc/version, /proc/cpuinfo, and
+# /etc/os-release are masked via bind-mount even on the default docker
+# backend. The kernel uname syscall itself is acknowledged_limitation:
+# gVisor is the only complete fix and lives behind isolation_backend=gvisor.
+# ---------------------------------------------------------------------------
+
+
+def test_b5_hardening_argv_includes_proc_masking():
+    """Direct-launch boots must bind-mount masked /proc + /etc files."""
+    from core.sandbox import isolation
+
+    argv = isolation.hardening_argv("test_sandbox_id_abcdef0123")
+    # Bind-mounts come as ``-v source:target:ro`` pairs.
+    joined = " ".join(argv)
+    for target in ("/proc/version", "/proc/cpuinfo", "/etc/os-release"):
+        assert target in joined, (
+            f"hardening_argv must bind-mount {target!r} — host info "
+            "leaks (kernel build, AWS suffix, distro version) are useful "
+            "recon for an attacker prepping a kernel-CVE escape"
+        )
+
+
+def test_b5_proc_mask_file_content_hides_host_kernel():
+    """The masked /proc/version content must NOT mention the host kernel."""
+    from core.sandbox import isolation
+
+    mapping = isolation._ensure_proc_mask_files()
+    for path in mapping.values():
+        text = Path(path).read_text().lower()
+        # The work order's leaked example: "6.17.0-1013-aws"
+        assert "aws" not in text, f"{path} leaks the AWS host suffix"
+        assert "ubuntu" not in text, f"{path} leaks the Ubuntu host distro"
+        # Random version-like strings should not look like a real kernel.
+        assert "1013" not in text, f"{path} appears to contain host kernel"
+
+
+# ---------------------------------------------------------------------------
+# D12 — sanitised PATH replaces parent PATH for every subprocess call,
+# so multi_language_executor / python_code_executor can't leak the venv
+# prefix (e.g. ``/home/aztea/app/venv/bin``) via ``process.env``.
+# ---------------------------------------------------------------------------
+
+
+def test_d12_build_subprocess_env_replaces_path_with_sanitised():
+    """The parent PATH must never reach the child env unchanged."""
+    import os
+
+    from core import executor_sandbox
+
+    leaky = "/home/aztea/app/venv/bin:/usr/bin"
+    saved = os.environ.get("PATH")
+    os.environ["PATH"] = leaky
+    try:
+        env = executor_sandbox.build_subprocess_env()
+    finally:
+        if saved is None:
+            os.environ.pop("PATH", None)
+        else:
+            os.environ["PATH"] = saved
+    assert env["PATH"] == executor_sandbox._SANITISED_PATH
+    assert "venv" not in env["PATH"]
+    assert "home/aztea" not in env["PATH"]

@@ -9,10 +9,20 @@ from core.executor_sandbox import build_subprocess_env
 
 def test_build_subprocess_env_strips_host_secrets(monkeypatch):
     monkeypatch.setenv("AZTEA_API_KEY", "secret")
-    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setenv("PATH", "/home/aztea/app/venv/bin:/usr/bin")
     env = build_subprocess_env()
-    assert env["PATH"] == "/usr/bin"
+    # 2026-05-18 (D12): parent PATH no longer leaks. The sanitised default
+    # is used so the venv prefix can't reach the child process.
+    assert env["PATH"] == "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    assert "/home/aztea/app/venv/bin" not in env["PATH"]
     assert "AZTEA_API_KEY" not in env
+
+
+def test_build_subprocess_env_caller_can_override_path(monkeypatch):
+    """Explicit extra_env override beats the sanitised default."""
+    monkeypatch.setenv("PATH", "/home/aztea/venv/bin")
+    env = build_subprocess_env(extra_env={"PATH": "/explicit/path"})
+    assert env["PATH"] == "/explicit/path"
 
 
 def test_build_subprocess_env_drops_home(monkeypatch):

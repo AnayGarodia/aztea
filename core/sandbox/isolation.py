@@ -14,9 +14,12 @@
 from __future__ import annotations
 
 import logging
+import os
 import secrets
 import shutil
 import subprocess
+import tempfile
+from pathlib import Path
 from typing import Any
 
 from core.sandbox.models import SandboxInvalidInput
@@ -34,21 +37,103 @@ _GVISOR_RUNTIME_NAME = "runsc"
 _DEFAULT_SANDBOX_UID = "1000:1000"
 _HOSTNAME_PREFIX = "sandbox"
 
+# 2026-05-18 (B5): host info-leak mitigation. Without gVisor, docker
+# containers share the host kernel — `uname -r` still returns the host
+# kernel release. But /proc/version, /proc/cpuinfo, and /etc/os-release
+# are caller-readable files we CAN override via bind-mount, which kills
+# the most useful recon for an attacker prepping a kernel-CVE escape.
+# The kernel uname syscall itself can only be masked with gVisor (see B3).
+_PROC_MASK_VERSION = (
+    "Linux version 6.0.0-aztea-sandbox (build@aztea) "
+    "(gcc (sandbox)) #1 SMP\n"
+)
+_PROC_MASK_CPUINFO = (
+    "processor\t: 0\n"
+    "vendor_id\t: AzteaCPU\n"
+    "cpu family\t: 0\n"
+    "model\t\t: 0\n"
+    "model name\t: Aztea Sandbox Virtual CPU\n"
+    "stepping\t: 0\n"
+    "cpu MHz\t\t: 0\n"
+    "cache size\t: 0 KB\n"
+)
+_OS_RELEASE_MASK = (
+    'NAME="Aztea Sandbox"\n'
+    'PRETTY_NAME="Aztea Sandbox"\n'
+    'ID=aztea-sandbox\n'
+    'VERSION="1"\n'
+    'VERSION_ID=1\n'
+    'HOME_URL="https://aztea.ai/"\n'
+)
+
+
+def _ensure_proc_mask_files() -> dict[str, str]:
+    """Side-effect: write masked /proc and /etc files to a stable host path.
+
+    The files are world-readable, immutable from inside the container (bind-
+    mounted readonly), and identical across sandbox starts. Cached on disk
+    so we don't write them per-container.
+
+    Returns a mapping of ``{container_target: host_source}`` for bind mounts.
+    """
+    base = Path(tempfile.gettempdir()) / "aztea-sandbox-mask"
+    base.mkdir(mode=0o755, exist_ok=True)
+    payloads = {
+        "version": _PROC_MASK_VERSION,
+        "cpuinfo": _PROC_MASK_CPUINFO,
+        "os-release": _OS_RELEASE_MASK,
+    }
+    for name, content in payloads.items():
+        path = base / name
+        if not path.exists() or path.read_text() != content:
+            path.write_text(content)
+            os.chmod(path, 0o644)
+    return {
+        "/proc/version": str(base / "version"),
+        "/proc/cpuinfo": str(base / "cpuinfo"),
+        "/etc/os-release": str(base / "os-release"),
+    }
+
+
+def _proc_mask_argv() -> list[str]:
+    """Return ``docker run`` flags that bind-mount fake /proc + /etc files.
+
+    Why: vanilla docker shares the host kernel, so /proc/version exposes
+    "Linux 6.17.0-1013-aws ..." which tells an attacker the host is on
+    AWS running a specific kernel build — useful recon for a kernel-CVE
+    escape. Bind-mounting our static fake files masks all three vectors
+    in one place. Compose stacks bypass this (the user's compose file
+    owns its own /proc policy — overriding it would break legitimate
+    stacks that mount /proc themselves).
+    """
+    try:
+        mapping = _ensure_proc_mask_files()
+    except OSError as exc:  # disk full / permission — don't block boot
+        _LOG.warning("could not prepare proc mask files: %s", exc)
+        return []
+    argv: list[str] = []
+    for target, source in mapping.items():
+        argv.extend(["-v", f"{source}:{target}:ro"])
+    return argv
+
 
 def hardening_argv(sandbox_id: str) -> list[str]:
     """Return the ``docker run`` flags that harden a direct-launch container.
 
-    Drops to a non-root UID, masks the container ID as the hostname, and
-    drops all Linux capabilities so a kernel CVE on the host cannot use
-    CAP_SYS_ADMIN from inside. ``--security-opt no-new-privileges`` blocks
-    setuid escalation paths. Why a separate function: every direct-launch
-    boot path now flows through here so the security posture stays
-    consistent — adding a new boot strategy that forgets to call this
-    would regress all three bugs at once.
+    Drops to a non-root UID, masks the container ID as the hostname, drops
+    all Linux capabilities so a kernel CVE on the host cannot use
+    CAP_SYS_ADMIN from inside, blocks setuid escalation, and bind-mounts
+    masked /proc + /etc files so the container can't read host kernel
+    version / CPU model / OS release. Why a separate function: every
+    direct-launch boot path now flows through here so the security posture
+    stays consistent — adding a new boot strategy that forgets to call
+    this would regress every hardening bug at once.
 
     NOTE: compose stacks bypass this on purpose — the user's compose
     file owns its own user/cap policy and overriding that breaks
     legitimate stacks (e.g. nginx wanting CAP_NET_BIND_SERVICE).
+    KNOWN LIMITATION: the kernel `uname` syscall itself still returns the
+    host kernel release. Only gVisor (isolation_backend='gvisor') masks it.
     """
     host_suffix = secrets.token_hex(4)
     sid_tail = sandbox_id.split("_", 1)[-1][:8] if "_" in sandbox_id else sandbox_id[:8]
@@ -57,6 +142,7 @@ def hardening_argv(sandbox_id: str) -> list[str]:
         "--hostname", f"{_HOSTNAME_PREFIX}-{sid_tail}-{host_suffix}",
         "--cap-drop", "ALL",
         "--security-opt", "no-new-privileges",
+        *_proc_mask_argv(),
     ]
 
 
