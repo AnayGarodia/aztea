@@ -309,3 +309,71 @@ def test_d12_build_subprocess_env_replaces_path_with_sanitised():
     assert env["PATH"] == executor_sandbox._SANITISED_PATH
     assert "venv" not in env["PATH"]
     assert "home/aztea" not in env["PATH"]
+
+
+# ---------------------------------------------------------------------------
+# C2 — hire_batch idempotency_key: explicitly rejected with a useful hint.
+# ---------------------------------------------------------------------------
+
+
+def test_c2_hire_batch_idempotency_key_rejection_includes_pointer():
+    """The rejection hint must point callers at the supported retry pattern."""
+    src = Path("sdks/python-sdk/aztea/mcp/meta_tools.py").read_text()
+    assert "idempotency_key dedup is not " in src, (
+        "hire_batch unsupported_field handler must special-case "
+        "idempotency_key with a pointer at the supported retry pattern"
+    )
+    assert "cache_replay" in src
+    # And the hire_batch tool description itself must document the limitation.
+    block_idx = src.find('"name": "aztea_hire_batch"')
+    assert block_idx >= 0
+    block = src[block_idx : block_idx + 4000]
+    assert "RETRY SAFETY" in block, (
+        "hire_batch description must document the idempotency limitation"
+    )
+
+
+# ---------------------------------------------------------------------------
+# C19 — clarify error hint references request_message_id; the field is now
+# present in manage_job's input schema so the hint is actionable.
+# ---------------------------------------------------------------------------
+
+
+def test_c19_manage_job_schema_documents_request_message_id():
+    """Source-level check: manage_job schema entry includes request_message_id."""
+    src = Path("sdks/python-sdk/aztea/mcp/meta_tools.py").read_text()
+    # Locate the manage_job tool block.
+    idx = src.find('"name": "manage_job"')
+    assert idx >= 0, "manage_job tool block must exist"
+    block = src[idx : idx + 6000]
+    assert '"request_message_id"' in block, (
+        "manage_job input_schema must list request_message_id so the clarify "
+        "error hint 'Pass request_message_id explicitly if needed' is actionable"
+    )
+
+
+# ---------------------------------------------------------------------------
+# C11 — modernize-python recipe was already removed from the search catalog.
+# Pin that list_recipes and the SEARCH catalog agree on the same registry.
+# ---------------------------------------------------------------------------
+
+
+def test_c11_search_catalog_only_lists_real_recipes():
+    """Every recipe slug in the SDK search catalog must back a real recipe."""
+    from core import recipes
+
+    src = Path("sdks/python-sdk/aztea/mcp/server.py").read_text()
+    idx = src.find("_BUILTIN_RECIPE_CATALOG_ENTRIES")
+    assert idx >= 0
+    # Pull each "id": "<slug>" from the catalog block.
+    catalog_block = src[idx : idx + 4000]
+    listed_slugs = set(re.findall(r'"id":\s*"([\w-]+)"', catalog_block))
+    real_slugs = {r["recipe_id"] for r in recipes.BUILTIN_RECIPES}
+    # Every listed slug must back a real recipe — surfacing a slug that
+    # doesn't resolve is worse than not advertising it.
+    missing = listed_slugs - real_slugs
+    assert not missing, (
+        f"search catalog lists {missing} which have no recipe backing — "
+        "the modernize-python regression: callers see a slug in search "
+        "but run_recipe returns 'Pipeline not found'"
+    )

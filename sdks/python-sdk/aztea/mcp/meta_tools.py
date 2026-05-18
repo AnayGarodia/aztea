@@ -762,6 +762,13 @@ _TOOLS: list[dict[str, Any]] = [
             "lease acquisition dominate when sync agent latency is sub-second. Plan budgets accordingly; "
             "we report `worker_pool.observed_throughput_jobs_per_sec` on /jobs/batch/{id} status responses so "
             "callers can validate against their own batches."
+            "\n\n"
+            "RETRY SAFETY: hire_batch does NOT provide server-side `idempotency_key` dedup in v0 — "
+            "submitting the same batch twice will execute twice and charge twice. Per-job `idempotency_key` "
+            "fields are explicitly rejected (422) so callers don't silently fool themselves. For retry "
+            "safety: (a) the sync /call path dedups identical input via cache_replay for cacheable agents, "
+            "or (b) generate a stable batch_id client-side and short-circuit duplicate submissions yourself. "
+            "Restoring server-side batch dedup is tracked as a v1 item."
         ),
         "input_schema": {
             "type": "object",
@@ -1362,6 +1369,16 @@ _GROUPED_TOOLS: list[dict[str, Any]] = [
                 "response": {
                     "type": "string",
                     "description": "clarify: free-text response to the agent's question.",
+                },
+                "request_message_id": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": (
+                        "clarify: optional clarification_request message id being "
+                        "answered. If omitted, Aztea uses the latest open clarification "
+                        "request on the job. Pass explicitly when answering an older "
+                        "request out-of-order."
+                    ),
                 },
                 "slug": {"type": "string", "description": "examples: agent slug whose examples to fetch."},
                 "limit": {
@@ -3842,6 +3859,24 @@ def _hire_batch(
             k for k in spec.keys() if k not in _HIRE_BATCH_ALLOWED_PER_JOB_FIELDS
         )
         if unsupported:
+            # 2026-05-18 (C2): special-case ``idempotency_key`` so callers
+            # hitting an old SDK / blog post get a pointer at the supported
+            # retry-safety pattern instead of a bare "unsupported field"
+            # error. v0 does not provide hire_batch idempotency dedup —
+            # the field would be silently dropped, which is worse than an
+            # explicit rejection. v1 idempotency is tracked but out of
+            # scope for this sprint.
+            hint = ""
+            if "idempotency_key" in unsupported:
+                hint = (
+                    " NOTE: hire_batch idempotency_key dedup is not "
+                    "implemented in v0 — submitting twice will execute "
+                    "twice. For retry safety: (a) use the sync /call path "
+                    "which dedups identical input via cache_replay, or "
+                    "(b) generate the batch_id client-side and short-circuit "
+                    "the second submission yourself. Tracking restoration "
+                    "of server-side dedup as a v1 item."
+                )
             return False, {
                 "error": "INVALID_INPUT",
                 "status_code": 422,
@@ -3850,6 +3885,7 @@ def _hire_batch(
                     f"{', '.join(unsupported)}. "
                     "Per-job spec accepts only the wire-schema governance "
                     "fields documented on `aztea_hire_batch.jobs[].properties`."
+                    f"{hint}"
                 ),
                 "unsupported_fields": unsupported,
                 "supported_fields": sorted(_HIRE_BATCH_ALLOWED_PER_JOB_FIELDS),
