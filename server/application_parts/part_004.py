@@ -104,6 +104,18 @@ _AGENT_WALL_BUDGET_OVERRIDES: dict[str, float] = {
     _DEPENDENCY_AUDITOR_AGENT_ID: 25.0,
     _DIFF_ANALYZER_AGENT_ID: 25.0,
     _CI_FAILURE_REPRODUCER_AGENT_ID: 25.0,
+    # 2026-05-18 (follow-up) — heavier specialist-runtime agents that
+    # legitimately exceed the 25s tier. ``lighthouse_auditor`` spawns a
+    # headless chromium + runs the full audit (LCP, CLS, ...); a vanilla
+    # example.com run is ~12-20s, real sites 30-60s. ``live_sandbox`` has
+    # a per-call budget that covers a single verb — most are <1s, but
+    # ``sandbox_stop`` with snapshot_on_stop runs ``docker commit`` on the
+    # running container which is 5-30s depending on image size. The budget
+    # gates the worst-case verb; cheap verbs don't pay extra. Async path
+    # honours the same override (the budget is enforced in
+    # ``_execute_builtin_agent``, not in the request handler).
+    _LIGHTHOUSE_AUDITOR_AGENT_ID: 90.0,
+    _LIVE_SANDBOX_AGENT_ID: 90.0,
 }
 
 
