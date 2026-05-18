@@ -892,7 +892,12 @@ def _score_candidate(
     ):
         score += delta
         reasons.extend(why)
-    return Ranked(candidate=c, score=round(score, 3), reasons=reasons)
+    # Cold-start prior + probation/anti-catchall penalties can drive the sum
+    # negative for low-evidence agents with no positive signal. The design
+    # intent (bug 7, 2026-05-18) is to pull such candidates "toward neutral",
+    # not below it — and the property-test invariant requires non-negativity.
+    final_score = max(0.0, round(score, 3))
+    return Ranked(candidate=c, score=final_score, reasons=reasons)
 
 
 def _confidence(top: Ranked, rest: list[Ranked]) -> float:
