@@ -194,14 +194,25 @@ def test_purge_is_idempotent():
 def test_purge_respects_env_override_for_expired_retention(monkeypatch):
     """Setting AZTEA_WORKSPACE_EXPIRED_RETENTION_SECONDS=0 means purge
     immediately on first sweep after expiration."""
-    monkeypatch.setenv("AZTEA_WORKSPACE_EXPIRED_RETENTION_SECONDS", "0")
-    import importlib
+    # Mutate the module constant directly rather than reloading the module,
+    # because importlib.reload() leaves the bumped constant in place for
+    # subsequent tests when the env var is later cleared by monkeypatch.
+    # Discovered via main CI failure on the 0048->0053 renumber merge:
+    # test_purge_skips_recently_expired_within_retention was matching rows
+    # because this test had reloaded workspaces with retention=0 and the
+    # reset never happened.
     from core import workspaces
-    importlib.reload(workspaces)
-
-    ws = workspaces.create_workspace(owner_user_id=_owner(), ttl_seconds=3600)
-    workspaces.write_artifact(ws, "a", b"vanishing", "text/plain")
-    _force_expire(ws, when="2026-05-18T00:00:00+00:00")
-    counts = workspaces.run_sweeper(now_iso="2026-05-18T00:00:01+00:00")
-    assert counts["content_purged"] >= 1
-    assert _content_for(ws, "a") is None
+    original = workspaces._EXPIRED_CONTENT_RETENTION_SECONDS
+    monkeypatch.setattr(workspaces, "_EXPIRED_CONTENT_RETENTION_SECONDS", 0)
+    try:
+        ws = workspaces.create_workspace(owner_user_id=_owner(), ttl_seconds=3600)
+        workspaces.write_artifact(ws, "a", b"vanishing", "text/plain")
+        _force_expire(ws, when="2026-05-18T00:00:00+00:00")
+        counts = workspaces.run_sweeper(now_iso="2026-05-18T00:00:01+00:00")
+        assert counts["content_purged"] >= 1
+        assert _content_for(ws, "a") is None
+    finally:
+        # Defensive: monkeypatch.setattr above already restores on teardown,
+        # but make the restoration explicit so a future refactor doesn't
+        # silently lose it.
+        workspaces._EXPIRED_CONTENT_RETENTION_SECONDS = original
