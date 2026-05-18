@@ -40,6 +40,13 @@ def isolated_db(monkeypatch, tmp_path):
         _close_module_conn(module)
         monkeypatch.setattr(module, "DB_PATH", str(db_path))
 
+    # Apply real migrations so tests see the same schema additions
+    # (e.g. workspaces 0048, pipeline_runs.workspace_id 0049) that
+    # production carries. Without this, init_db()'s CREATE-TABLE-IF-NOT-
+    # EXISTS path runs without the columns added by later migrations.
+    from core.migrate import apply_migrations as _apply_migrations
+    _apply_migrations(str(db_path))
+
     yield db_path
 
     for module in modules:

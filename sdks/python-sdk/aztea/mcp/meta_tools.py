@@ -934,6 +934,30 @@ _TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "aztea_workspace_inspect",
+        "description": (
+            "Inspect an Aztea workspace: status, artifact list, and (if "
+            "sealed) the signed Ed25519 manifest. Workspaces are server-"
+            "side shared state for multi-agent workflows; an auto_workspace "
+            "recipe creates and seals one per run. workspace_id is required."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "workspace_id": {
+                    "type": "string",
+                    "description": "Workspace ID (e.g. 'ws_…'). Surfaced by aztea_pipeline_status when the run opted into auto_workspace.",
+                },
+                "include_manifest": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "Include the signed manifest in the response when the workspace is sealed. Default true.",
+                },
+            },
+            "required": ["workspace_id"],
+        },
+    },
+    {
         "name": "aztea_pipeline_status",
         "description": (
             "Poll an existing pipeline or recipe run by run_id. "
@@ -1109,6 +1133,9 @@ _GROUPED_DISPATCH: dict[str, dict[str, str]] = {
         "compare_status": "aztea_compare_status",
         "compare_select": "aztea_select_compare_winner",
         "session_audit": "aztea_session_audit",
+        # Workspaces v0 (PR 4): inspect a run's auto-workspace — status,
+        # artifact list, and the signed manifest if sealed.
+        "workspace_inspect": "aztea_workspace_inspect",
     },
 }
 
@@ -1440,6 +1467,7 @@ _META_TOOL_ANNOTATIONS: dict[str, dict[str, Any]] = {
     "aztea_select_compare_winner": _annotations(read_only=False, idempotent=False),
     "aztea_run_pipeline": _annotations(read_only=False, idempotent=False),
     "aztea_pipeline_status": _annotations(read_only=True, idempotent=False),
+    "aztea_workspace_inspect": _annotations(read_only=True, idempotent=True),
     "aztea_run_recipe": _annotations(read_only=False, idempotent=False),
     # Grouped tools dispatch to varied actions; mark as non-read-only.
     "manage_job": _annotations(read_only=False, idempotent=False),
@@ -1698,6 +1726,8 @@ def call_meta_tool(
             return ok, result
         if tool_name == "aztea_pipeline_status":
             return _pipeline_status(session, base, hdrs, timeout, arguments)
+        if tool_name == "aztea_workspace_inspect":
+            return _workspace_inspect(session, base, hdrs, timeout, arguments)
         if tool_name == "aztea_run_recipe":
             ok, result = _run_recipe(session, base, hdrs, timeout, arguments)
             if ok:
@@ -3807,6 +3837,47 @@ def _poll_pipeline_run(
         "Pipeline run is still running. Poll it with aztea_pipeline_status or wait longer with wait_seconds.",
     )
     return True, latest
+
+
+def _workspace_inspect(
+    session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
+) -> tuple[bool, dict]:
+    """Fetch workspace metadata + artifact list + (optional) signed manifest.
+
+    Composes three GETs from the workspaces v0 HTTP surface so callers
+    get a single-shot view: ``/workspaces/{id}``, ``/workspaces/{id}/artifacts``,
+    and (when the workspace is sealed and include_manifest is true)
+    ``/workspaces/{id}/manifest``. Read-only and idempotent.
+    """
+    workspace_id = str(args.get("workspace_id") or "").strip()
+    if not workspace_id:
+        return False, {"error": "INVALID_INPUT", "message": "workspace_id is required."}
+    include_manifest = args.get("include_manifest")
+    if include_manifest is None:
+        include_manifest = True
+
+    ok, ws = _get(session, f"{base}/workspaces/{workspace_id}", hdrs, timeout)
+    if not ok:
+        return ok, ws
+
+    ok2, listing = _get(
+        session, f"{base}/workspaces/{workspace_id}/artifacts", hdrs, timeout
+    )
+    artifacts = listing.get("artifacts", []) if ok2 else []
+
+    manifest_block = None
+    if include_manifest and str(ws.get("status") or "") == "sealed":
+        ok3, manifest_block = _get(
+            session, f"{base}/workspaces/{workspace_id}/manifest", hdrs, timeout
+        )
+        if not ok3:
+            manifest_block = None
+
+    return True, {
+        "workspace": ws,
+        "artifacts": artifacts,
+        "manifest": manifest_block,
+    }
 
 
 def _pipeline_status(
