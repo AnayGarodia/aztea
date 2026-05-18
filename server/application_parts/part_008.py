@@ -855,6 +855,164 @@ def _extract_output_format(payload_or_body: Any) -> str | None:
     return _output_formats.normalize_format(payload_or_body.get("output_format"))
 
 
+# Reserved key on the /registry/agents/{id}/call request body. When present,
+# the dispatch layer (a) strips it before the agent sees the payload, (b)
+# resolves any nested ``_artifact_ref`` substitutions in the payload, and
+# (c) auto-writes the successful response under
+# ``outputs/{agent_slug}/{job_id}.json`` in the workspace. PR 3 of the
+# workspaces v0 series.
+_WORKSPACE_ENVELOPE_KEY = "_workspace_id"
+_ARTIFACT_REF_KEY = "_artifact_ref"
+
+
+def _payload_has_artifact_ref(payload: Any) -> bool:
+    """Fast pre-check: does payload contain any {_artifact_ref: ...} marker?
+
+    Lets the dispatch path skip the recursive resolver + module import
+    when no refs are present (the common case for today's traffic).
+    """
+    if isinstance(payload, dict):
+        if _ARTIFACT_REF_KEY in payload:
+            return True
+        return any(_payload_has_artifact_ref(v) for v in payload.values())
+    if isinstance(payload, list):
+        return any(_payload_has_artifact_ref(item) for item in payload)
+    return False
+
+
+def _extract_workspace_envelope(
+    payload: dict[str, Any],
+) -> tuple[dict[str, Any], str | None]:
+    """Pop ``_workspace_id`` out of the request body. Returns cleaned payload
+    and the workspace_id (or None). Underscore prefix marks the key as
+    dispatch-layer infrastructure so it never collides with an agent's own
+    input schema fields.
+    """
+    cleaned = dict(payload or {})
+    ws_id = cleaned.pop(_WORKSPACE_ENVELOPE_KEY, None)
+    if ws_id is None:
+        return cleaned, None
+    if not isinstance(ws_id, str) or not ws_id.startswith("ws_"):
+        raise HTTPException(
+            status_code=422,
+            detail=error_codes.make_error(
+                error_codes.INVALID_INPUT,
+                "_workspace_id must be a workspace_id string ('ws_...').",
+                {"_workspace_id": ws_id},
+            ),
+        )
+    return cleaned, ws_id
+
+
+def _resolve_workspace_artifact_refs(
+    payload: Any, *, caller_owner_id: str, workspace_id: str | None,
+) -> Any:
+    """Recursively substitute ``{_artifact_ref: 'ws/name'}`` in payload.
+
+    Imports lazily so non-workspace calls don't pay the import cost.
+    Translates workspace errors into structured HTTPExceptions so the
+    caller gets a clean 4xx instead of a 500.
+    """
+    from core import workspaces as _workspaces
+    from core import workspaces_errors as _wse
+
+    try:
+        return _workspaces.resolve_artifact_refs(
+            payload,
+            caller_owner_id=caller_owner_id,
+            allow_run_id=None,
+        )
+    except _wse.WorkspaceNotFound as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.WORKSPACE_NOT_FOUND,
+                "Artifact reference points to missing workspace.",
+                {"reason": str(exc)},
+            ),
+        )
+    except _wse.WorkspaceForbidden as exc:
+        raise HTTPException(
+            status_code=403,
+            detail=error_codes.make_error(
+                error_codes.WORKSPACE_FORBIDDEN,
+                "Caller cannot read artifact from this workspace.",
+                {"reason": str(exc)},
+            ),
+        )
+    except _wse.ArtifactNotFound as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.WORKSPACE_ARTIFACT_NOT_FOUND,
+                "Artifact referenced in payload is missing.",
+                {"reason": str(exc)},
+            ),
+        )
+    except _wse.ArtifactNameInvalid as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=error_codes.make_error(
+                error_codes.WORKSPACE_ARTIFACT_NAME_INVALID,
+                "Invalid artifact reference.",
+                {"reason": str(exc)},
+            ),
+        )
+
+
+def _write_output_to_workspace(
+    *,
+    workspace_id: str | None,
+    agent_slug: str,
+    job_id: str,
+    output: Any,
+    caller: Any,
+) -> None:
+    """Auto-write the agent's output to workspace under
+    ``outputs/{agent_slug}/{job_id}.json``.
+
+    Best-effort: never raises. Failures are logged but don't fail the call.
+    Skipped when (a) no workspace_id, (b) output declares
+    ``_no_workspace_write: True``, (c) output exceeds the 8 MiB cap.
+    """
+    if not workspace_id:
+        return
+    if isinstance(output, dict) and output.get("_no_workspace_write"):
+        return
+    from core import workspaces as _workspaces
+    from core import workspaces_errors as _wse
+
+    try:
+        body = json.dumps(output, default=str).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        _LOG.warning(
+            "workspace auto-write: output not JSON-serialisable job=%s err=%s",
+            job_id, exc,
+        )
+        return
+    if len(body) > 8 * 1024 * 1024:
+        _LOG.warning(
+            "workspace auto-write: output exceeds 8 MiB cap job=%s size=%d",
+            job_id, len(body),
+        )
+        return
+    safe_slug = "".join(c if c.isalnum() or c in "-_." else "_" for c in (agent_slug or "unknown"))
+    try:
+        _workspaces.write_artifact(
+            workspace_id,
+            f"outputs/{safe_slug}/{job_id}.json",
+            body,
+            "application/json",
+            created_by_agent_id=(caller or {}).get("agent_id") if isinstance(caller, dict) else None,
+            created_by_job_id=job_id,
+        )
+    except (_wse.WorkspaceError, ValueError) as exc:
+        _LOG.warning(
+            "workspace auto-write failed ws=%s job=%s err=%s",
+            workspace_id, job_id, exc,
+        )
+
+
 def _decorate_with_rendered_output(
     response_payload: dict[str, Any],
     *,
@@ -1642,7 +1800,18 @@ def registry_call(
     platform_fee_pct_at_create = int(payments.PLATFORM_FEE_PCT)
     raw_body = dict(body.root) if body is not None else {}
     requested_output_format = _extract_output_format(raw_body)
+    # Strip workspaces v0 envelope first so subsequent extractors and the
+    # schema validator never see _workspace_id as an agent-input field.
+    raw_body, workspace_id_envelope = _extract_workspace_envelope(raw_body)
     payload, use_cache, cache_ttl_hours = _extract_sync_cache_controls(raw_body)
+    # Resolve {_artifact_ref: 'ws_id/name'} substitutions in the payload
+    # before validation so the agent receives concrete bytes/objects.
+    if workspace_id_envelope or _payload_has_artifact_ref(payload):
+        payload = _resolve_workspace_artifact_refs(
+            payload,
+            caller_owner_id=caller_owner_id_early,
+            workspace_id=workspace_id_envelope,
+        )
     requested_output_formats: list[str] = []
     try:
         payload, requested_output_formats = _normalize_input_protocol_from_payload(
@@ -2126,6 +2295,16 @@ def registry_call(
                 job_id=job["job_id"],
                 latency_ms=_job_latency_ms(completed),
             )
+            # Workspaces v0: auto-write the success output to the workspace
+            # when _workspace_id was included in the call envelope. Never
+            # raises — failures log and continue.
+            _write_output_to_workspace(
+                workspace_id=workspace_id_envelope,
+                agent_slug=str(agent.get("name") or agent.get("slug") or "unknown"),
+                job_id=str(job["job_id"]),
+                output=output,
+                caller=caller,
+            )
             response_payload = _sync_success_response_payload(
                 job_id=job["job_id"],
                 output=output,
@@ -2538,6 +2717,16 @@ def registry_call(
         result_payload,
         job_id=job["job_id"],
         latency_ms=_job_latency_ms(settled),
+    )
+    # Workspaces v0 (PR 3): auto-write the HTTP-proxy agent's response to
+    # the workspace when _workspace_id was in the call envelope. Mirrors
+    # the builtin-agent path above.
+    _write_output_to_workspace(
+        workspace_id=workspace_id_envelope,
+        agent_slug=str(agent.get("name") or agent.get("slug") or "unknown"),
+        job_id=str(job["job_id"]),
+        output=result_payload,
+        caller=caller,
     )
     if cache_enabled:
         _cache.set_cached(

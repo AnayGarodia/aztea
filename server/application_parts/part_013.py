@@ -389,26 +389,85 @@ def _workspace_not_found_response(workspace_id: str) -> HTTPException:
     )
 
 
-def _require_workspace_owner(workspace_id: str, caller) -> dict:
-    """Return the workspace row if caller owns it; else raise 403/404.
+def _worker_has_active_job_on_run(agent_id: str, run_id: str) -> bool:
+    """Return True iff ``agent_id`` currently holds a non-terminal job
+    associated with ``run_id``.
 
-    PR 3 will swap this for `_caller_can_access_workspace` which also
-    accepts workers holding an active lease on the workspace's run_id.
+    Looks at the existing ``jobs.pipeline_run_id`` column (set when a
+    pipeline step dispatches a sub-job). Non-terminal = status not in
+    {complete, failed, cancelled}.
+    """
+    try:
+        with _db.get_db_connection() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM jobs "
+                "WHERE agent_id = %s "
+                "  AND pipeline_run_id = %s "
+                "  AND status NOT IN ('complete', 'failed', 'cancelled') "
+                "LIMIT 1",
+                (agent_id, run_id),
+            ).fetchone()
+            return row is not None
+    except Exception:
+        # Schema mismatch (column missing on older deployments) -> fail
+        # closed. Worker-in-run access is opt-in; the owner path still
+        # works for everyone.
+        return False
+
+
+def _caller_can_access_workspace(workspace_id: str, caller) -> dict:
+    """Return the workspace row if caller can read/write it; else raise.
+
+    Two auth paths:
+      1. Caller owns the workspace (``owner_user_id`` matches the caller's
+         ``owner_id``). Master keys (``owner_id == "master"``) satisfy this
+         when they created the workspace.
+      2. Caller is a worker key whose agent currently holds an active job
+         lease on the workspace's ``run_id``. Lets sub-agents dispatched
+         inside a recipe read and write to the recipe's workspace without
+         inheriting the original caller's key.
+
+    Owner-only actions (seal, delete) further check via
+    ``_require_owner_only`` so workers can read/write but never seal.
     """
     try:
         ws = _workspaces.get_workspace(workspace_id)
     except _wse.WorkspaceNotFound:
         raise _workspace_not_found_response(workspace_id)
-    if ws["owner_user_id"] != caller["owner_id"]:
+    if ws["owner_user_id"] == caller.get("owner_id"):
+        return ws
+    run_id = ws.get("run_id")
+    if run_id and caller.get("type") == "agent_key":
+        agent_id = caller.get("agent_id")
+        if agent_id and _worker_has_active_job_on_run(str(agent_id), str(run_id)):
+            return ws
+    raise HTTPException(
+        status_code=403,
+        detail=error_codes.make_error(
+            error_codes.WORKSPACE_FORBIDDEN,
+            "Caller does not own this workspace and has no active job on its run.",
+            {"workspace_id": workspace_id},
+        ),
+    )
+
+
+def _require_owner_only(ws: dict, caller) -> None:
+    """Reject worker-in-run callers from owner-only actions."""
+    if ws.get("owner_user_id") != caller.get("owner_id"):
         raise HTTPException(
             status_code=403,
             detail=error_codes.make_error(
                 error_codes.WORKSPACE_FORBIDDEN,
-                "Caller does not own this workspace.",
-                {"workspace_id": workspace_id},
+                "Only the workspace owner can perform this action.",
+                {"workspace_id": ws.get("workspace_id")},
             ),
         )
-    return ws
+
+
+# Backward-compatible alias. Routes added in PR 2 referenced
+# ``_require_workspace_owner``; they keep working unchanged because the
+# new helper accepts a superset of callers (owner + worker-in-run).
+_require_workspace_owner = _caller_can_access_workspace
 
 
 @app.post(
@@ -494,7 +553,8 @@ def workspaces_delete(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ):
     _require_scope(caller, "caller")
-    _require_workspace_owner(workspace_id, caller)
+    ws = _require_workspace_owner(workspace_id, caller)
+    _require_owner_only(ws, caller)
     _workspaces.cleanup_workspace(workspace_id)
     return Response(status_code=204)
 
@@ -635,7 +695,8 @@ def workspaces_delete_artifact(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ):
     _require_scope(caller, "caller")
-    _require_workspace_owner(workspace_id, caller)
+    ws = _require_workspace_owner(workspace_id, caller)
+    _require_owner_only(ws, caller)
     try:
         _workspaces.delete_artifact(workspace_id, name)
     except _wse.ArtifactNameInvalid as exc:
@@ -678,7 +739,8 @@ def workspaces_seal(
     caller: core_models.CallerContext = Depends(_require_api_key),
 ) -> dict:
     _require_scope(caller, "caller")
-    _require_workspace_owner(workspace_id, caller)
+    ws = _require_workspace_owner(workspace_id, caller)
+    _require_owner_only(ws, caller)
     try:
         return _workspaces.seal_workspace(workspace_id)
     except _wse.SealSigningFailed as exc:
