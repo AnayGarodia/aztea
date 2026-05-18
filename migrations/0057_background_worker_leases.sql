@@ -28,6 +28,35 @@ CREATE TABLE IF NOT EXISTS background_worker_leases (
 CREATE INDEX IF NOT EXISTS background_worker_leases_expires_idx
     ON background_worker_leases(expires_at);
 
+-- Dedupe legacy dispute_judgments rows before enforcing uniqueness.
+--
+-- Pre-PR-71 the dispute judge ran behind a boot-once fcntl lock and
+-- could re-vote a 'judging' dispute if the holder died and a fresh
+-- worker picked it up on the next boot. The new D2 code is first-
+-- write-wins idempotent on (dispute_id, judge_kind), but historical
+-- data from the old path may have one duplicate per (dispute, judge)
+-- pair. The new contract is "earliest vote wins" — that matches the
+-- resolution path which historically counted the first-arrived primary
+-- judgment. Discovered on prod 2026-05-18 when this migration first
+-- ran (dispute 865ca12d-... had a re-vote that flipped the verdict;
+-- the dispute itself resolved on the earlier vote so deleting the
+-- later row preserves the historical outcome).
+--
+-- ROW_NUMBER works on Postgres + SQLite (≥3.25). Deterministic
+-- tie-break by judgment_id keeps the migration idempotent.
+DELETE FROM dispute_judgments
+ WHERE judgment_id IN (
+     SELECT judgment_id FROM (
+         SELECT judgment_id,
+                ROW_NUMBER() OVER (
+                    PARTITION BY dispute_id, judge_kind
+                    ORDER BY created_at ASC, judgment_id ASC
+                ) AS rn
+           FROM dispute_judgments
+     ) ranked
+     WHERE rn > 1
+ );
+
 -- Idempotency guard for the dispute judge so a transient two-leader
 -- overlap can't double-vote the same dispute. Without this, the
 -- original boot-once fcntl design assumed exactly-once write semantics
