@@ -123,6 +123,52 @@ BUILTIN_RECIPES: list[dict] = [
         },
     },
     {
+        "recipe_id": "security-audit-sealed",
+        "name": "security-audit-sealed",
+        "description": (
+            "Secret scan + dependency audit, with every step's output captured "
+            "in a workspace and the whole run sealed under a signed Ed25519 "
+            "manifest. Use this when you need a verifiable audit trail (security "
+            "review, compliance, vendor due diligence)."
+        ),
+        "default_input_schema": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": "Source content to scan for leaked credentials.",
+                },
+                "manifest": {
+                    "type": "string",
+                    "description": "Dependency manifest (package.json or requirements.txt) to audit.",
+                },
+            },
+            "required": ["content", "manifest"],
+        },
+        "pipeline_definition": {
+            # Workspaces v0: each step's output is auto-written to the run's
+            # workspace, and the workspace is sealed on completion. Callers get
+            # `workspace_id` in the run-status response; `GET /workspaces/{id}/
+            # manifest` returns the signed evidence and `POST /workspaces/{id}/
+            # verify` is publicly callable (no auth) so an auditor can validate
+            # the seal without a key.
+            "auto_workspace": True,
+            "nodes": [
+                {
+                    "id": "scan",
+                    "agent_id": SECRET_SCANNER_AGENT_ID,
+                    "input_map": {"content": "$input.content"},
+                },
+                {
+                    "id": "audit",
+                    "agent_id": DEPENDENCY_AUDITOR_AGENT_ID,
+                    "depends_on": ["scan"],
+                    "input_map": {"manifest": "$input.manifest"},
+                },
+            ],
+        },
+    },
+    {
         "recipe_id": "domain-health",
         "name": "domain-health",
         "description": "Run DNS, SSL, and HTTP-header checks on one or more domains.",
