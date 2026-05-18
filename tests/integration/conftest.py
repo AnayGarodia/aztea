@@ -18,15 +18,23 @@ from core import payments
 from core import pipelines
 from core import registry
 from core import reputation
+from core import workspaces
 import server.application as server
 
 from tests.integration.helpers import TEST_MASTER_KEY, _close_module_conn
 
 
 @pytest.fixture
-def isolated_db(monkeypatch):
+def isolated_db(monkeypatch, tmp_path):
     db_path = Path(__file__).resolve().parent / f"test-server-integration-{uuid.uuid4().hex}.db"
-    modules = (registry, payments, auth, jobs, reputation, disputes, result_cache, compare, pipelines)
+    modules = (registry, payments, auth, jobs, reputation, disputes, result_cache, compare, pipelines, workspaces)
+
+    # Keep the per-server workspace signing key in tmp_path so test runs
+    # never write into ./data and leak a real keypair into git.
+    monkeypatch.setenv(
+        "AZTEA_WORKSPACE_SIGNING_KEY_PATH",
+        str(tmp_path / "workspace_signing_key.pem"),
+    )
 
     for module in modules:
         _close_module_conn(module)

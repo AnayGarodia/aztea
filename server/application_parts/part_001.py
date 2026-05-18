@@ -1113,6 +1113,23 @@ async def security_headers(request: Request, call_next):
     return response
 
 
+_WORKSPACE_ARTIFACT_PATH = "/workspaces/"
+_WORKSPACE_ARTIFACT_MAX_BYTES = 8 * 1024 * 1024  # mirrors core.workspaces cap
+
+
+def _body_cap_for_path(path: str) -> int:
+    """Return the max body size in bytes for this request path.
+
+    Workspace artifact PUTs are allowed up to 8 MiB so callers can store
+    real-world payloads (Dockerfiles, scan outputs, repo snapshots).
+    Every other endpoint stays at the 512 KB default — JSON request
+    bodies should never be that large in practice.
+    """
+    if path.startswith(_WORKSPACE_ARTIFACT_PATH) and "/artifacts/" in path:
+        return _WORKSPACE_ARTIFACT_MAX_BYTES
+    return _MAX_BODY_BYTES
+
+
 @app.middleware("http")
 async def limit_body_size(request: Request, call_next):
     cl = request.headers.get("content-length")
@@ -1127,11 +1144,12 @@ async def limit_body_size(request: Request, call_next):
                 ),
                 status_code=400,
             )
-        if content_length > _MAX_BODY_BYTES:
+        cap = _body_cap_for_path(request.url.path)
+        if content_length > cap:
             return JSONResponse(
                 content=error_codes.make_error(
                     error_codes.INVALID_INPUT,
-                    f"Request body too large (max {_MAX_BODY_BYTES // 1024} KB).",
+                    f"Request body too large (max {cap // 1024} KB).",
                 ),
                 status_code=413,
             )

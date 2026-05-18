@@ -11,6 +11,10 @@ runs.jsonl
 *.db-shm
 *.db-wal
 
+# Per-server workspace seal signing key (auto-created on first use;
+# see core/workspaces.py::_load_or_create_signing_keypair). Secret.
+data/workspace_signing_key.pem
+
 # Node.js
 node_modules/
 

@@ -65,6 +65,11 @@ _LOG = logging.getLogger(__name__)
 # tests/test_workspaces_crud.py for the fixture.
 DB_PATH = _db.DB_PATH
 
+# Re-export the dual-backend thread-local so the integration-test helper
+# ``tests/integration/helpers._close_module_conn`` (which closes the
+# cached connection per fixture teardown) finds it on this module.
+_local = _db._local
+
 
 def _resolved_db_path() -> str:
     """Re-read ``DB_PATH`` from this module each call so tests can patch it."""

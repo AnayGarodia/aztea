@@ -364,3 +364,405 @@ def security_txt() -> Response:
     return Response(content=_security_txt_body(), media_type="text/plain")
 
 
+
+
+# ---------------------------------------------------------------------------
+# Workspace routes (added 2026-05-17 for workspaces v0 PR 2/4).
+#
+# OWNS: HTTP surface for /workspaces and /workspaces/{id}/artifacts.
+# Auth: caller-scope (owner of the workspace) for v0. Worker-in-run is
+# added in PR 3 alongside dispatch integration.
+# ---------------------------------------------------------------------------
+
+from core import workspaces as _workspaces
+from core import workspaces_errors as _wse
+
+
+def _workspace_not_found_response(workspace_id: str) -> HTTPException:
+    return HTTPException(
+        status_code=404,
+        detail=error_codes.make_error(
+            error_codes.WORKSPACE_NOT_FOUND,
+            "Workspace not found.",
+            {"workspace_id": workspace_id},
+        ),
+    )
+
+
+def _require_workspace_owner(workspace_id: str, caller) -> dict:
+    """Return the workspace row if caller owns it; else raise 403/404.
+
+    PR 3 will swap this for `_caller_can_access_workspace` which also
+    accepts workers holding an active lease on the workspace's run_id.
+    """
+    try:
+        ws = _workspaces.get_workspace(workspace_id)
+    except _wse.WorkspaceNotFound:
+        raise _workspace_not_found_response(workspace_id)
+    if ws["owner_user_id"] != caller["owner_id"]:
+        raise HTTPException(
+            status_code=403,
+            detail=error_codes.make_error(
+                error_codes.WORKSPACE_FORBIDDEN,
+                "Caller does not own this workspace.",
+                {"workspace_id": workspace_id},
+            ),
+        )
+    return ws
+
+
+@app.post(
+    "/workspaces",
+    tags=["workspaces"],
+    summary="Create a workspace.",
+    responses=_error_responses(400, 401, 403, 422, 429),
+)
+@limiter.limit("60/minute")
+def workspaces_create(
+    request: Request,
+    body: dict = Body(default={}),
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> dict:
+    _require_scope(caller, "caller")
+    try:
+        ttl = int(body.get("ttl_seconds") or 86400)
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=422,
+            detail=error_codes.make_error(
+                error_codes.INVALID_INPUT,
+                "ttl_seconds must be an integer.",
+                {"ttl_seconds": body.get("ttl_seconds")},
+            ),
+        )
+    backing_type = str(body.get("backing_type") or "bytea")
+    backing_id = body.get("backing_id")
+    run_id = body.get("run_id")
+    try:
+        ws_id = _workspaces.create_workspace(
+            owner_user_id=caller["owner_id"],
+            backing_type=backing_type,
+            backing_id=backing_id,
+            ttl_seconds=ttl,
+            run_id=run_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=error_codes.make_error(
+                error_codes.INVALID_INPUT, str(exc), {},
+            ),
+        )
+    ws = _workspaces.get_workspace(ws_id)
+    return {"workspace_id": ws_id, "expires_at": ws["expires_at"]}
+
+
+@app.get(
+    "/workspaces/{workspace_id}",
+    tags=["workspaces"],
+    summary="Read workspace metadata.",
+    responses=_error_responses(401, 403, 404),
+)
+def workspaces_get(
+    workspace_id: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> dict:
+    _require_scope(caller, "caller")
+    ws = _require_workspace_owner(workspace_id, caller)
+    return {
+        "workspace_id": ws["workspace_id"],
+        "status": ws["status"],
+        "backing_type": ws["backing_type"],
+        "total_bytes": ws["total_bytes"],
+        "artifact_count": ws["artifact_count"],
+        "quota_bytes": ws["quota_bytes"],
+        "created_at": ws["created_at"],
+        "expires_at": ws["expires_at"],
+        "sealed_at": ws["sealed_at"],
+        "run_id": ws["run_id"],
+    }
+
+
+@app.delete(
+    "/workspaces/{workspace_id}",
+    tags=["workspaces"],
+    summary="Delete a workspace and all its artifacts.",
+    responses=_error_responses(401, 403, 404),
+)
+def workspaces_delete(
+    workspace_id: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+):
+    _require_scope(caller, "caller")
+    _require_workspace_owner(workspace_id, caller)
+    _workspaces.cleanup_workspace(workspace_id)
+    return Response(status_code=204)
+
+
+@app.get(
+    "/workspaces/{workspace_id}/artifacts",
+    tags=["workspaces"],
+    summary="List artifacts in a workspace.",
+    responses=_error_responses(401, 403, 404),
+)
+def workspaces_list_artifacts(
+    workspace_id: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> dict:
+    _require_scope(caller, "caller")
+    _require_workspace_owner(workspace_id, caller)
+    return {"artifacts": _workspaces.list_artifacts(workspace_id)}
+
+
+@app.put(
+    "/workspaces/{workspace_id}/artifacts/{name:path}",
+    tags=["workspaces"],
+    summary="Write or overwrite an artifact (raw body).",
+    responses=_error_responses(400, 401, 403, 404, 409, 413, 429),
+)
+@limiter.limit("300/minute")
+async def workspaces_put_artifact(
+    workspace_id: str,
+    name: str,
+    request: Request,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> dict:
+    _require_scope(caller, "caller")
+    _require_workspace_owner(workspace_id, caller)
+    body = await request.body()
+    # Fast-path size guard before we hit the module's own check, so we
+    # don't even buffer the bytes through write_artifact when oversized.
+    if len(body) > 8 * 1024 * 1024:
+        raise HTTPException(
+            status_code=413,
+            detail=error_codes.make_error(
+                error_codes.WORKSPACE_ARTIFACT_TOO_LARGE,
+                "Artifact exceeds 8 MiB cap.",
+                {"size_bytes": len(body)},
+            ),
+        )
+    content_type = request.headers.get("content-type", "application/octet-stream")
+    if_match = request.headers.get("if-match")
+    try:
+        meta = _workspaces.write_artifact(
+            workspace_id, name, body, content_type,
+            if_match_sha256=if_match,
+        )
+    except _wse.ArtifactNameInvalid as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=error_codes.make_error(
+                error_codes.WORKSPACE_ARTIFACT_NAME_INVALID, str(exc), {"name": name},
+            ),
+        )
+    except _wse.ArtifactTooLarge as exc:
+        raise HTTPException(
+            status_code=413,
+            detail=error_codes.make_error(
+                error_codes.WORKSPACE_ARTIFACT_TOO_LARGE, str(exc), {},
+            ),
+        )
+    except _wse.WorkspaceQuotaExceeded as exc:
+        raise HTTPException(
+            status_code=413,
+            detail=error_codes.make_error(
+                error_codes.WORKSPACE_QUOTA_EXCEEDED, str(exc), {},
+            ),
+        )
+    except _wse.ArtifactConflict as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=error_codes.make_error(
+                error_codes.WORKSPACE_ARTIFACT_CONFLICT, str(exc), {},
+            ),
+        )
+    except _wse.WorkspaceSealed:
+        raise HTTPException(
+            status_code=409,
+            detail=error_codes.make_error(
+                error_codes.WORKSPACE_SEALED,
+                "Workspace is sealed; writes are not permitted.",
+                {"workspace_id": workspace_id},
+            ),
+        )
+    return meta
+
+
+@app.get(
+    "/workspaces/{workspace_id}/artifacts/{name:path}",
+    tags=["workspaces"],
+    summary="Read an artifact as raw bytes.",
+    responses=_error_responses(400, 401, 403, 404),
+)
+def workspaces_get_artifact(
+    workspace_id: str,
+    name: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+):
+    _require_scope(caller, "caller")
+    _require_workspace_owner(workspace_id, caller)
+    try:
+        content, content_type = _workspaces.read_artifact(workspace_id, name)
+    except _wse.ArtifactNameInvalid as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=error_codes.make_error(
+                error_codes.WORKSPACE_ARTIFACT_NAME_INVALID, str(exc),
+                {"name": name},
+            ),
+        )
+    except _wse.ArtifactNotFound:
+        raise HTTPException(
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.WORKSPACE_ARTIFACT_NOT_FOUND,
+                "Artifact not found.",
+                {"workspace_id": workspace_id, "name": name},
+            ),
+        )
+    return Response(content=content, media_type=content_type)
+
+
+@app.delete(
+    "/workspaces/{workspace_id}/artifacts/{name:path}",
+    tags=["workspaces"],
+    summary="Delete an artifact.",
+    responses=_error_responses(400, 401, 403, 404, 409),
+)
+def workspaces_delete_artifact(
+    workspace_id: str,
+    name: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+):
+    _require_scope(caller, "caller")
+    _require_workspace_owner(workspace_id, caller)
+    try:
+        _workspaces.delete_artifact(workspace_id, name)
+    except _wse.ArtifactNameInvalid as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=error_codes.make_error(
+                error_codes.WORKSPACE_ARTIFACT_NAME_INVALID, str(exc),
+                {"name": name},
+            ),
+        )
+    except _wse.ArtifactNotFound:
+        raise HTTPException(
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.WORKSPACE_ARTIFACT_NOT_FOUND,
+                "Artifact not found.",
+                {"workspace_id": workspace_id, "name": name},
+            ),
+        )
+    except _wse.WorkspaceSealed:
+        raise HTTPException(
+            status_code=409,
+            detail=error_codes.make_error(
+                error_codes.WORKSPACE_SEALED,
+                "Workspace is sealed.",
+                {"workspace_id": workspace_id},
+            ),
+        )
+    return Response(status_code=204)
+
+
+@app.post(
+    "/workspaces/{workspace_id}/seal",
+    tags=["workspaces"],
+    summary="Seal a workspace (build signed Ed25519 manifest).",
+    responses=_error_responses(401, 403, 404, 409, 500),
+)
+def workspaces_seal(
+    workspace_id: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> dict:
+    _require_scope(caller, "caller")
+    _require_workspace_owner(workspace_id, caller)
+    try:
+        return _workspaces.seal_workspace(workspace_id)
+    except _wse.SealSigningFailed as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=error_codes.make_error(
+                error_codes.WORKSPACE_SEAL_SIGNING_FAILED,
+                "Failed to sign workspace seal manifest.",
+                {"reason": str(exc)},
+            ),
+        )
+
+
+@app.get(
+    "/workspaces/{workspace_id}/manifest",
+    tags=["workspaces"],
+    summary="Public: fetch the signed manifest for a sealed workspace.",
+    responses=_error_responses(404),
+)
+def workspaces_manifest(workspace_id: str) -> dict:
+    # Public — sealed manifests are designed to be shareable evidence.
+    # 404 if the workspace exists but is not yet sealed (manifest does
+    # not exist), so external verifiers can poll without auth.
+    try:
+        ws = _workspaces.get_workspace(workspace_id)
+    except _wse.WorkspaceNotFound:
+        raise _workspace_not_found_response(workspace_id)
+    if ws["status"] != "sealed":
+        raise HTTPException(
+            status_code=404,
+            detail=error_codes.make_error(
+                error_codes.WORKSPACE_NOT_FOUND,
+                "Workspace has no manifest (not sealed).",
+                {"workspace_id": workspace_id, "status": ws["status"]},
+            ),
+        )
+    import json as _json
+    return {
+        "manifest": _json.loads(ws["seal_manifest"]),
+        "signature": ws["seal_signature"],
+        "public_key_did": ws["seal_public_key_did"],
+    }
+
+
+@app.post(
+    "/workspaces/{workspace_id}/verify",
+    tags=["workspaces"],
+    summary="Public: verify the seal signature over current artifact hashes.",
+    responses=_error_responses(404),
+)
+def workspaces_verify(workspace_id: str) -> dict:
+    try:
+        ws = _workspaces.get_workspace(workspace_id)
+    except _wse.WorkspaceNotFound:
+        raise _workspace_not_found_response(workspace_id)
+    valid = _workspaces.verify_seal(workspace_id)
+    return {
+        "valid": valid,
+        "signer_did": ws["seal_public_key_did"],
+        "sealed_at": ws["sealed_at"],
+    }
+
+
+@app.get(
+    "/workspaces/sealer/did.json",
+    tags=["workspaces"],
+    summary="Public: did:web document for the workspace seal signing key.",
+    responses=_error_responses(500),
+)
+def workspaces_sealer_did_document() -> dict:
+    _private_pem, public_pem = _workspaces._load_or_create_signing_keypair()
+    from core import crypto as _crypto_local
+    did = _workspaces.workspace_signer_did()
+    jwk = _crypto_local.public_key_to_jwk(public_pem)
+    return {
+        "@context": ["https://www.w3.org/ns/did/v1"],
+        "id": did,
+        "verificationMethod": [
+            {
+                "id": f"{did}#key-1",
+                "type": "JsonWebKey2020",
+                "controller": did,
+                "publicKeyJwk": jwk,
+            }
+        ],
+        "assertionMethod": [f"{did}#key-1"],
+    }

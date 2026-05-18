@@ -64,6 +64,13 @@ _PUBLIC_PATH_PREFIXES = (
     # public in server/routes/system.py:144 ("No auth required: these are
     # policy constants, not secrets").
     "/ops/dispute-policy",
+    # Workspaces verifiability endpoints — required public so external
+    # consumers can verify Ed25519 seal manifests without an Aztea account.
+    # The DID document follows the did:web spec. Manifest + verify are the
+    # public verification surface; CRUD on /workspaces/{id} stays caller-scoped.
+    "/workspaces/sealer/did.json",
+    "/workspaces/{workspace_id}/manifest",
+    "/workspaces/{workspace_id}/verify",
 )
 
 # Routes intentionally NOT available to the master API key (user-scoped
