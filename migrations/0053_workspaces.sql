@@ -1,4 +1,4 @@
--- 0048_workspaces.sql
+-- 0053_workspaces.sql
 -- Server-side shared-state primitive for multi-agent workflows.
 --
 -- A workspace is a named collection of artifacts (named blobs) that

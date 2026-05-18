@@ -18,7 +18,7 @@
 
 | Path | Responsibility | New / Modified |
 |---|---|---|
-| `migrations/0048_workspaces.sql` | `workspaces` + `workspace_artifacts` schema | New |
+| `migrations/0053_workspaces.sql` | `workspaces` + `workspace_artifacts` schema | New |
 | `core/workspaces.py` | Lifecycle, CRUD, seal/verify, sweeper | New (~600 lines, split if it crosses 900) |
 | `core/workspaces_errors.py` | Typed exception hierarchy | New (~50 lines) |
 | `core/error_codes.py` | Append workspace error code constants | Modify |
@@ -57,15 +57,15 @@
 ## Task 1: Migration — `workspaces` and `workspace_artifacts` tables
 
 **Files:**
-- Create: `migrations/0048_workspaces.sql`
+- Create: `migrations/0053_workspaces.sql`
 - Test: `tests/test_migrations_apply.py` (existing; will pick up the new file)
 
 - [ ] **Step 1.1: Write the migration SQL**
 
-Create `migrations/0048_workspaces.sql`:
+Create `migrations/0053_workspaces.sql`:
 
 ```sql
--- 0048_workspaces.sql
+-- 0053_workspaces.sql (originally drafted as 0048; renumbered at merge time)
 -- Server-side shared-state primitive for multi-agent workflows.
 --
 -- A workspace is a named collection of artifacts (named blobs) that
@@ -168,7 +168,7 @@ Expected: success. If you don't have a local Postgres, leave this step for CI.
 - [ ] **Step 1.6: Commit**
 
 ```bash
-git add migrations/0048_workspaces.sql
+git add migrations/0053_workspaces.sql
 git commit -m "feat(workspaces): add 0048 migration for workspaces + workspace_artifacts tables"
 ```
 
