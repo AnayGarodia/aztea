@@ -411,6 +411,14 @@ def jobs_compare_create(
 
     resolved: list[dict[str, Any]] = []
     total_charged_cents = 0
+    # Audit 2026-05-18: validate input against EACH agent's input_schema
+    # BEFORE charging. Pre-fix, compare blindly forwarded the same shared
+    # payload to every agent — a 2-agent compare against secret_scanner +
+    # diff_analyzer with input={content:...} charged both, then diff_analyzer
+    # failed mid-run with `missing_diff` and was not auto-refunded. Per-agent
+    # validation here keeps the failure on the caller side (cheap 422 with
+    # actionable gaps) instead of the marketplace side (charge + dirty refund).
+    schema_violations: list[dict[str, Any]] = []
     for index, agent_id in enumerate(agent_ids):
         agent = registry.get_agent(agent_id, include_unapproved=True)
         if agent is None or not _caller_can_access_agent(caller, agent):
@@ -418,6 +426,28 @@ def jobs_compare_create(
                 status_code=404, detail=f"Agent '{agent_id}' not found."
             )
         _assert_agent_callable(agent_id, agent)
+        agent_input_schema = agent.get("input_schema")
+        if isinstance(agent_input_schema, dict) and agent_input_schema:
+            try:
+                _validate_payload_against_schema(
+                    payload=merged_input_payload,
+                    schema=agent_input_schema,
+                    allow_string_coercion=_allow_schema_string_coercion(request),
+                )
+            except Exception as _schema_exc:  # noqa: BLE001 — collect per-agent gaps
+                schema_violations.append(
+                    {
+                        "index": index,
+                        "agent_id": agent_id,
+                        "agent_name": agent.get("name") or agent_id,
+                        "message": (
+                            _schema_exc.message
+                            if hasattr(_schema_exc, "message")
+                            else str(_schema_exc)
+                        ),
+                        "path": list(getattr(_schema_exc, "absolute_path", [])),
+                    }
+                )
         pricing_estimate = _estimate_variable_charge(
             agent=agent,
             payload=merged_input_payload,
@@ -454,6 +484,20 @@ def jobs_compare_create(
                 "price_cents": price_cents,
                 "caller_charge_cents": caller_charge_cents,
             }
+        )
+
+    if schema_violations:
+        raise HTTPException(
+            status_code=422,
+            detail=error_codes.make_error(
+                error_codes.INPUT_SCHEMA_VIOLATION,
+                (
+                    f"Compare input rejected by {len(schema_violations)} of "
+                    f"{len(agent_ids)} agent schemas; fix the listed gaps and retry. "
+                    "No money has moved."
+                ),
+                {"violations": schema_violations},
+            ),
         )
 
     caller_wallet = payments.get_or_create_wallet(caller_owner_id)

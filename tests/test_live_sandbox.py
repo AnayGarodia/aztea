@@ -314,6 +314,103 @@ def test_batch_start_cartesian_product():
     assert all("NODE" in c["axis_values"] and "PG" in c["axis_values"] for c in cells)
 
 
+def test_raw_files_writes_text_content(tmp_path, monkeypatch):
+    """``content`` (UTF-8 text) round-trips into the workspace as written.
+
+    Regression: pre-fix the materialiser only honoured ``content_b64`` and
+    silently dropped ``content`` to a 0-byte file, while the signed receipt
+    still reported success. See ``_decode_raw_file_entry`` in source.py.
+    """
+    monkeypatch.setenv("AZTEA_SANDBOX_STATE_ROOT", str(tmp_path / "state"))
+    from core.sandbox.source import materialise_source
+    from core.sandbox.state import generate_sandbox_id
+    from pathlib import Path
+
+    sandbox_id = generate_sandbox_id()
+    repo_path, _ = materialise_source(sandbox_id, {
+        "kind": "raw_files",
+        "files": [{"path": "hi.py", "content": "print('hello world')\n"}],
+    })
+    written = Path(repo_path) / "hi.py"
+    assert written.read_bytes() == b"print('hello world')\n"
+
+
+def test_raw_files_writes_base64_content(tmp_path, monkeypatch):
+    """``content_b64`` continues to work after the fix (no regression)."""
+    monkeypatch.setenv("AZTEA_SANDBOX_STATE_ROOT", str(tmp_path / "state"))
+    from core.sandbox.source import materialise_source
+    from core.sandbox.state import generate_sandbox_id
+    from pathlib import Path
+
+    sandbox_id = generate_sandbox_id()
+    repo_path, _ = materialise_source(sandbox_id, {
+        "kind": "raw_files",
+        "files": [{"path": "blob.bin", "content_b64": "aGVsbG8="}],
+    })
+    written = Path(repo_path) / "blob.bin"
+    assert written.read_bytes() == b"hello"
+
+
+def test_raw_files_rejects_both_content_and_content_b64(tmp_path, monkeypatch):
+    """Ambiguous entries fail loudly — no precedence rule that could surprise callers."""
+    monkeypatch.setenv("AZTEA_SANDBOX_STATE_ROOT", str(tmp_path / "state"))
+    from core.sandbox.source import materialise_source
+    from core.sandbox.models import SandboxInvalidInput
+    from core.sandbox.state import generate_sandbox_id
+
+    sandbox_id = generate_sandbox_id()
+    with pytest.raises(SandboxInvalidInput, match="exactly one of"):
+        materialise_source(sandbox_id, {
+            "kind": "raw_files",
+            "files": [{"path": "x.txt", "content": "a", "content_b64": "Yg=="}],
+        })
+
+
+def test_raw_files_rejects_missing_content(tmp_path, monkeypatch):
+    """A file entry with neither content field is unambiguously a caller error."""
+    monkeypatch.setenv("AZTEA_SANDBOX_STATE_ROOT", str(tmp_path / "state"))
+    from core.sandbox.source import materialise_source
+    from core.sandbox.models import SandboxInvalidInput
+    from core.sandbox.state import generate_sandbox_id
+
+    sandbox_id = generate_sandbox_id()
+    with pytest.raises(SandboxInvalidInput, match="must set 'content'"):
+        materialise_source(sandbox_id, {
+            "kind": "raw_files",
+            "files": [{"path": "x.txt"}],
+        })
+
+
+def test_raw_files_rejects_invalid_base64(tmp_path, monkeypatch):
+    """Invalid base64 stays a hard failure rather than silently writing nothing."""
+    monkeypatch.setenv("AZTEA_SANDBOX_STATE_ROOT", str(tmp_path / "state"))
+    from core.sandbox.source import materialise_source
+    from core.sandbox.models import SandboxInvalidInput
+    from core.sandbox.state import generate_sandbox_id
+
+    sandbox_id = generate_sandbox_id()
+    with pytest.raises(SandboxInvalidInput, match="valid base64"):
+        materialise_source(sandbox_id, {
+            "kind": "raw_files",
+            "files": [{"path": "x.txt", "content_b64": "!!!not-base64!!!"}],
+        })
+
+
+def test_raw_files_rejects_non_string_content(tmp_path, monkeypatch):
+    """``content`` must be a string; dicts or numbers fail at the boundary."""
+    monkeypatch.setenv("AZTEA_SANDBOX_STATE_ROOT", str(tmp_path / "state"))
+    from core.sandbox.source import materialise_source
+    from core.sandbox.models import SandboxInvalidInput
+    from core.sandbox.state import generate_sandbox_id
+
+    sandbox_id = generate_sandbox_id()
+    with pytest.raises(SandboxInvalidInput, match="must be a string"):
+        materialise_source(sandbox_id, {
+            "kind": "raw_files",
+            "files": [{"path": "x.txt", "content": {"nested": "dict"}}],
+        })
+
+
 def test_vcr_replay_requires_existing_cassette(monkeypatch, tmp_path):
     # Set up a sandbox row via the registry helper directly so the cassette
     # operations can locate the on-disk dir without booting Docker.

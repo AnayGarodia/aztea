@@ -128,7 +128,16 @@ def _materialise_tarball(repo_dir: Path, source: dict[str, Any]) -> None:
 
 
 def _materialise_raw_files(repo_dir: Path, source: dict[str, Any]) -> None:
-    """Side-effect: write inline ``files[]`` entries into ``repo_dir``."""
+    """Side-effect: write inline ``files[]`` entries into ``repo_dir``.
+
+    Each entry MUST carry exactly one of ``content`` (UTF-8 text) or
+    ``content_b64`` (base64-encoded bytes). Pre-fix the materialiser only
+    read ``content_b64`` — callers that sent ``{"path": "x", "content": "hi"}``
+    got a 0-byte file on disk with a successful signed receipt (silent data
+    loss). The two-field shape mirrors a common pattern (e.g. K8s ConfigMap
+    ``data`` vs ``binaryData``); we accept either to keep the schema
+    ergonomic and fail loudly on ambiguous or missing payloads.
+    """
     files = source.get("files")
     if not isinstance(files, list) or not files:
         raise SandboxInvalidInput("source.files must be a non-empty list for raw_files")
@@ -136,18 +145,45 @@ def _materialise_raw_files(repo_dir: Path, source: dict[str, Any]) -> None:
         if not isinstance(entry, dict):
             raise SandboxInvalidInput("source.files entries must be objects")
         rel_path = str(entry.get("path") or "").strip()
-        content_b64 = entry.get("content_b64") or ""
         if not rel_path:
             raise SandboxInvalidInput("source.files[].path is required")
         target = _safe_join(repo_dir, rel_path)
         target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(_decode_raw_file_entry(rel_path, entry))
+
+
+def _decode_raw_file_entry(rel_path: str, entry: dict[str, Any]) -> bytes:
+    """Pure: resolve a raw_files entry to bytes, rejecting missing/ambiguous inputs."""
+    has_text = "content" in entry and entry.get("content") is not None
+    has_b64 = "content_b64" in entry and entry.get("content_b64") is not None
+    if has_text and has_b64:
+        raise SandboxInvalidInput(
+            f"source.files[{rel_path}] must set exactly one of "
+            "'content' (text) or 'content_b64' (base64), not both"
+        )
+    if has_text:
+        text_value = entry["content"]
+        if not isinstance(text_value, str):
+            raise SandboxInvalidInput(
+                f"source.files[{rel_path}].content must be a string"
+            )
+        return text_value.encode("utf-8")
+    if has_b64:
+        b64_value = entry["content_b64"]
+        if not isinstance(b64_value, str):
+            raise SandboxInvalidInput(
+                f"source.files[{rel_path}].content_b64 must be a string"
+            )
         try:
-            decoded = base64.b64decode(content_b64, validate=True)
+            return base64.b64decode(b64_value, validate=True)
         except (ValueError, TypeError) as exc:
             raise SandboxInvalidInput(
                 f"source.files[{rel_path}].content_b64 must be valid base64"
             ) from exc
-        target.write_bytes(decoded)
+    raise SandboxInvalidInput(
+        f"source.files[{rel_path}] must set 'content' (text) or 'content_b64' (base64); "
+        "neither was provided"
+    )
 
 
 def _safe_extract_tar(tar_path: str, target: Path) -> None:

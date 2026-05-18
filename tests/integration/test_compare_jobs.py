@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 
+from core import error_codes
 from core import jobs
 from core import payments
 
@@ -85,3 +86,63 @@ def test_compare_jobs_selects_winner_and_refunds_non_winner(client):
     assert winner_job["output_verification_status"] == "accepted"
     assert loser_job["output_verification_status"] == "rejected"
     assert payments.get_wallet(wallet["wallet_id"])["balance_cents"] == 489
+
+
+def test_compare_rejects_input_that_violates_one_agents_schema(client):
+    """Pre-fix, compare forwarded ``{content:...}`` to a diff-only agent and
+    charged the caller; that agent then 422'd mid-run with ``missing_diff``
+    and the lost cent was not auto-refunded. The fix validates each agent's
+    schema BEFORE charging — the whole compare returns 422 with per-agent
+    gaps and the caller's wallet stays untouched.
+    """
+    worker = _register_user()
+    caller = _register_user()
+    wallet = _fund_user_wallet(caller, 500)
+    balance_before = payments.get_wallet(wallet["wallet_id"])["balance_cents"]
+
+    permissive_agent = _register_agent_via_api(
+        client,
+        worker["raw_api_key"],
+        name=f"Permissive {uuid.uuid4().hex[:6]}",
+        price=0.10,
+        tags=["compare"],
+    )  # default schema requires nothing; ``{"content":...}`` passes.
+    strict_agent = _register_agent_via_api(
+        client,
+        worker["raw_api_key"],
+        name=f"Strict {uuid.uuid4().hex[:6]}",
+        price=0.10,
+        tags=["compare"],
+        input_schema={
+            "type": "object",
+            "properties": {
+                "diff": {
+                    "type": "string",
+                    "title": "Diff",
+                    "description": "Unified diff text required by this agent.",
+                },
+            },
+            "required": ["diff"],
+        },
+    )
+
+    response = client.post(
+        "/jobs/compare",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={
+            "agent_ids": [permissive_agent, strict_agent],
+            "input_payload": {"content": "AWS_KEY=AKIAIOSFODNN7EXAMPLE"},
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    body = response.json()
+    # The shared error handler unwraps HTTPException's structured detail
+    # to the top level — match the rest of the codebase's error contract
+    # rather than asserting against ``body["detail"]``.
+    assert body["error"] == error_codes.INPUT_SCHEMA_VIOLATION
+    violations = body["details"]["violations"]
+    assert len(violations) == 1
+    assert violations[0]["agent_id"] == strict_agent
+    # Critical: no money moved. Pre-fix this would have decremented by 22¢.
+    assert payments.get_wallet(wallet["wallet_id"])["balance_cents"] == balance_before
