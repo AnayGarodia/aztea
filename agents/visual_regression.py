@@ -88,6 +88,17 @@ def _load_image_bytes(source: str, field_name: str) -> bytes:
                 url = validate_outbound_url(location, field_name)
                 continue
             response.raise_for_status()
+            # Reject non-image content-types up front so callers see an
+            # actionable error rather than a downstream Pillow decode failure
+            # ("cannot identify image file"). A URL pointing at HTML or JSON
+            # is almost always a caller mistake — fail loudly.
+            content_type = str(response.headers.get("Content-Type") or "").lower().split(";", 1)[0].strip()
+            if content_type and not content_type.startswith("image/"):
+                raise ValueError(
+                    f"{field_name} URL returned Content-Type '{content_type}' "
+                    f"(expected image/*). Provide a direct image URL or a "
+                    f"data:image/...;base64 URL."
+                )
             # Reject by Content-Length up front when present.
             declared = response.headers.get("Content-Length")
             if declared and declared.isdigit() and int(declared) > _MAX_IMAGE_BYTES:

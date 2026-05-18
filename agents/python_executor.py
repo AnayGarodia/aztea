@@ -252,6 +252,20 @@ _SANDBOX_PRELUDE = (
     "            raise PermissionError('aztea-sandbox: listdir(' + repr(path) + ') blocked')\n"
     "_sys.addaudithook(_sandbox_audit)\n"
     "del _sandbox_audit\n"
+    # Mask host identity. socket.gethostname() / platform.node() otherwise
+    # surface the EC2 internal name (ip-172-31-x-y), which leaks topology to
+    # multi-tenant callers. Patching here is best-effort — a determined caller
+    # could call uname(2) via ctypes — but ctypes is already blocked above.
+    "try:\n"
+    "    import socket as _sandbox_socket\n"
+    "    _sandbox_socket.gethostname = lambda: 'aztea-sandbox'\n"
+    "except Exception:\n"
+    "    pass\n"
+    "try:\n"
+    "    import platform as _sandbox_platform\n"
+    "    _sandbox_platform.node = lambda: 'aztea-sandbox'\n"
+    "except Exception:\n"
+    "    pass\n"
 )
 
 # +1 for the blank "\n" separator written between prelude and user code in _run_in_subprocess
@@ -854,9 +868,11 @@ def run(payload: dict) -> dict:
         explanation, explanation_sanitized = _generate_explanation(
             code, stdout, stderr, raw["exit_code"],
         )
-    # `_generate_explanation` calls an LLM. Be truthful in `llm_used` so callers
-    # can tell that part of the response was AI-authored, even though the
-    # actual code execution remains a real sandboxed subprocess.
+    # `llm_used` reflects whether ANY LLM was invoked in producing this
+    # response. The execution itself is always a real sandboxed subprocess;
+    # the explainer is optional. Previously llm_used was always false at
+    # this level but explanation_llm_used was true, contradicting each other.
+    explanation_used_llm = bool(explanation)
     return {
         "stdout": stdout,
         "stderr": stderr,
@@ -865,6 +881,7 @@ def run(payload: dict) -> dict:
         "execution_time_ms": raw["execution_time_ms"],
         "explanation": explanation,
         "explanation_sanitized": explanation_sanitized,
-        "explanation_llm_used": bool(explanation),
+        "explanation_llm_used": explanation_used_llm,
         "variables_captured": raw["variables_captured"],
+        "llm_used": explanation_used_llm,
     }

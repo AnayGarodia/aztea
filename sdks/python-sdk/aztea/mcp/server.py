@@ -608,9 +608,11 @@ _LAZY_CALL_TOOL: dict[str, Any] = {
 _LAZY_STATUS_TOOL: dict[str, Any] = {
     "name": "aztea_status",
     "description": (
-        "aztea_status(window) → /admin/usage/digest. Snapshot of calls, "
-        "spend, top/failing agents, user churn, and auto-hire stats over "
-        "the window (24h | 7d | 30d) with trend deltas vs the prior bucket."
+        "[ADMIN-SCOPE ONLY] aztea_status(window) → /admin/usage/digest. "
+        "Snapshot of calls, spend, top/failing agents, user churn, and "
+        "auto-hire stats over the window (24h | 7d | 30d) with trend deltas "
+        "vs the prior bucket. Requires the configured API key to have admin "
+        "scope; caller-scope keys will receive a 403."
     ),
     "input_schema": {
         "type": "object",
@@ -635,8 +637,9 @@ _LAZY_STATUS_TOOL: dict[str, Any] = {
 _LAZY_INSPECT_TOOL: dict[str, Any] = {
     "name": "aztea_inspect",
     "description": (
-        "aztea_inspect(entity, id) → /admin/usage/inspect. Drill-down on one "
-        "row. entity ∈ {agent, user, job, decision}."
+        "[ADMIN-SCOPE ONLY] aztea_inspect(entity, id) → /admin/usage/inspect. "
+        "Drill-down on one row. entity ∈ {agent, user, job, decision}. "
+        "Requires admin scope on the configured API key."
     ),
     "input_schema": {
         "type": "object",
@@ -664,10 +667,11 @@ _LAZY_INSPECT_TOOL: dict[str, Any] = {
 _LAZY_QUERY_TOOL: dict[str, Any] = {
     "name": "aztea_query",
     "description": (
-        "aztea_query(view, window, limit) → /admin/usage/query. Pre-canned "
-        "view of recent activity. view ∈ {no_match, failures, agent_health, "
-        "user_activity, top_agents, dormant_users, spend_by_user, "
-        "spend_by_agent, latency_outliers, recent_decisions}."
+        "[ADMIN-SCOPE ONLY] aztea_query(view, window, limit) → /admin/usage/query. "
+        "Pre-canned view of recent activity. view ∈ {no_match, failures, "
+        "agent_health, user_activity, top_agents, dormant_users, "
+        "spend_by_user, spend_by_agent, latency_outliers, recent_decisions}. "
+        "Requires admin scope on the configured API key."
     ),
     "input_schema": {
         "type": "object",
@@ -1232,8 +1236,9 @@ class RegistryBridge:
 
         Why: aztea_status / aztea_inspect / aztea_query each map to one HTTP
         GET with no body; centralising the request/error shape keeps the
-        dispatcher readable. 403 surfaces verbatim — the configured API key
-        likely lacks admin scope, and the user should see that directly.
+        dispatcher readable. 401/403 are rewritten to an actionable envelope
+        so callers can tell that the cause is missing admin scope, not a
+        transient failure — and so the LLM does not retry the same call.
         """
         try:
             response = self._session.get(
@@ -1244,6 +1249,20 @@ class RegistryBridge:
             )
         except requests.RequestException as exc:
             return False, {"error": "UPSTREAM_UNREACHABLE", "message": str(exc)}
+        if response.status_code in (401, 403):
+            return False, {
+                "error": "ADMIN_SCOPE_REQUIRED",
+                "status_code": response.status_code,
+                "message": (
+                    "This observability endpoint requires an API key with "
+                    "admin scope. Your configured key does not have it. "
+                    "Either swap in an admin-scoped key (issued via "
+                    "POST /admin/keys with scope='admin') or skip the "
+                    "aztea_status / aztea_inspect / aztea_query tools for "
+                    "this session."
+                ),
+                "endpoint": path,
+            }
         try:
             body = response.json()
         except ValueError:
