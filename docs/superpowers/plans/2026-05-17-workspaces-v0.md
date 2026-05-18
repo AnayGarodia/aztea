@@ -27,7 +27,7 @@
 | `server/application_parts/part_008.py` | `_write_output_to_workspace()` helper, called after settlement | Modify (~+40 lines) |
 | `core/pipelines/executor.py` | Optional auto-workspace per run, seal on completion | Modify (~+40 lines) |
 | `core/pipelines/db.py` | Add `workspace_id` column to `pipeline_runs` | Modify (~+5 lines) |
-| `migrations/0049_pipeline_runs_workspace_id.sql` | Adds `workspace_id` column | New (1 line) |
+| `migrations/0054_pipeline_runs_workspace_id.sql` | Adds `workspace_id` column | New (1 line) |
 | `server/application_parts/part_006.py` | Wire workspace sweeper into the existing background sweeper | Modify (~+10 lines) |
 | `sdks/python-sdk/aztea/mcp/meta_tools.py` | `aztea_workspace_inspect` meta-tool | Modify (~+50 lines) |
 | `sdks/python-sdk/aztea/mcp/server.py` | Register the new meta-tool | Modify (~+5 lines) |
@@ -2554,13 +2554,13 @@ git commit -m "feat(workspaces): sandbox backing routes read/write through sandb
 **Files:**
 - Modify: `core/pipelines/executor.py`
 - Modify: `core/pipelines/db.py`
-- Create: `migrations/0049_pipeline_runs_workspace_id.sql`
+- Create: `migrations/0054_pipeline_runs_workspace_id.sql`
 - Create: `tests/integration/test_workspaces_pipeline_e2e.py`
 
 - [ ] **Step 13.1: Create migration for the new column**
 
 ```sql
--- migrations/0049_pipeline_runs_workspace_id.sql
+-- migrations/0054_pipeline_runs_workspace_id.sql
 -- Wire pipeline runs to their auto-created workspace (if the recipe opts in
 -- via auto_workspace=true). Nullable: pre-existing runs and recipes that
 -- don't opt in have workspace_id = NULL.
@@ -2750,7 +2750,7 @@ Expected: PASS. Common failures: pipeline definition shape doesn't match what `v
 - [ ] **Step 13.7: Commit**
 
 ```bash
-git add migrations/0049_pipeline_runs_workspace_id.sql core/pipelines/executor.py core/pipelines/db.py tests/integration/test_workspaces_pipeline_e2e.py
+git add migrations/0054_pipeline_runs_workspace_id.sql core/pipelines/executor.py core/pipelines/db.py tests/integration/test_workspaces_pipeline_e2e.py
 git commit -m "feat(workspaces): pipeline auto_workspace creates+seals workspace per run"
 ```
 

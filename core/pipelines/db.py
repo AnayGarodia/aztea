@@ -385,6 +385,20 @@ def complete_run(run_id: str, output_payload) -> dict | None:
     return get_run(run_id)
 
 
+def set_run_workspace(run_id: str, workspace_id: str) -> None:
+    """Persist the run -> workspace link (workspaces v0, PR 4).
+
+    Called by ``run_pipeline`` immediately after creating the auto-
+    workspace so ``get_run`` surfaces ``workspace_id`` to the caller.
+    """
+    init_db()
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE pipeline_runs SET workspace_id = %s WHERE run_id = %s",
+            (str(workspace_id).strip(), str(run_id).strip()),
+        )
+
+
 def fail_run(run_id: str, error_message: str) -> dict | None:
     """Mark a pipeline run as ``failed`` and record the error message."""
     init_db()

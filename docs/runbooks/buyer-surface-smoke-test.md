@@ -155,7 +155,38 @@ aztea dispute --status $TEST_DISPUTABLE_JOB_ID \
 
 ---
 
-## 8. Wallet integrity check
+## 8. Workspaces
+
+```bash
+# Create a workspace, write an artifact, seal, verify.
+WS=$(curl -sf -X POST $AZTEA_BASE/workspaces \
+  -H "Authorization: Bearer $AZTEA_KEY" -H "Content-Type: application/json" \
+  -d '{}' | jq -r .workspace_id)
+echo "workspace_id: $WS"
+
+curl -sf -X PUT "$AZTEA_BASE/workspaces/$WS/artifacts/hello.txt" \
+  -H "Authorization: Bearer $AZTEA_KEY" -H "Content-Type: text/plain" \
+  -d 'smoke test' | jq '{name, sha256, size_bytes}'
+# Expect: size_bytes=10, sha256 a valid hex string
+
+curl -sf -X POST "$AZTEA_BASE/workspaces/$WS/seal" \
+  -H "Authorization: Bearer $AZTEA_KEY" | jq '.manifest.schema, .public_key_did'
+# Expect: "aztea/workspace-seal/1" and a did:web:...:workspaces:sealer string
+
+# Public verify (no auth required) — must return valid=true.
+curl -sf -X POST "$AZTEA_BASE/workspaces/$WS/verify" | jq '.valid'
+# Expect: true
+
+# Public DID document.
+curl -sf "$AZTEA_BASE/workspaces/sealer/did.json" | jq '.verificationMethod[0].publicKeyJwk.crv'
+# Expect: "Ed25519"
+```
+
+If `verify` returns `false` immediately after seal, the signing key is misconfigured — see `docs/runbooks/workspaces.md`.
+
+---
+
+## 9. Wallet integrity check
 
 ```bash
 curl -sf -H "Authorization: Bearer $AZTEA_KEY" $AZTEA_BASE/wallets/me | jq '{balance_cents, owner_id}'

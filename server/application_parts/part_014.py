@@ -1039,10 +1039,17 @@ def pipelines_create(
             status_code=422,
             detail={"error_code": "pipeline.node_invalid", "message": str(exc)},
         )
+    # Preserve recipe-level extension flags alongside the validated nodes.
+    # ``auto_workspace`` (workspaces v0 PR 4) opts the recipe into a
+    # per-run workspace; the executor reads it from ``definition`` at
+    # ``run_pipeline`` time, so it must round-trip through storage.
+    stored_definition: dict[str, Any] = {"nodes": validated["nodes"]}
+    if definition.get("auto_workspace"):
+        stored_definition["auto_workspace"] = True
     created = pipelines.create_pipeline(
         caller["owner_id"],
         name,
-        {"nodes": validated["nodes"]},
+        stored_definition,
         description=str(body.get("description") or "").strip(),
         is_public=bool(body.get("is_public")),
         pipeline_id=body.get("pipeline_id"),
@@ -1196,6 +1203,9 @@ def pipelines_run_get_by_id(
             "created_at": run.get("created_at"),
             "updated_at": run.get("updated_at"),
             "completed_at": run.get("completed_at"),
+            # Workspaces v0 (PR 4): surface the auto_workspace link so the
+            # caller can fetch the sealed manifest without a second query.
+            "workspace_id": run.get("workspace_id"),
         }
     )
 
@@ -1256,6 +1266,9 @@ def pipelines_run_get(
             "created_at": run.get("created_at"),
             "updated_at": run.get("updated_at"),
             "completed_at": run.get("completed_at"),
+            # Workspaces v0 (PR 4): surface the auto_workspace link so the
+            # caller can fetch the sealed manifest without a second query.
+            "workspace_id": run.get("workspace_id"),
         }
     )
 

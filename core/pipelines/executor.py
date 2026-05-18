@@ -440,6 +440,94 @@ def _settle_step_failure(
     )
 
 
+def _resolve_workspace_envelope(
+    payload: dict, *, caller_owner_id: str, workspace_id: str | None,
+) -> dict:
+    """Strip ``_workspace_id`` from payload + resolve ``_artifact_ref`` markers.
+
+    Mirrors the ``_extract_workspace_envelope`` / ``_resolve_workspace_artifact_refs``
+    pair in server/application_parts/part_008.py so pipeline steps get the
+    same workspace ergonomics as direct /registry/agents/{id}/call. When
+    ``workspace_id`` is provided by the caller (auto_workspace=true on the
+    recipe), it's stitched into the payload by ``_drive_pipeline_nodes``
+    before this function strips and uses it.
+    """
+    cleaned = dict(payload or {})
+    cleaned.pop("_workspace_id", None)
+    # Quick scan to skip the import when no refs present (the common case).
+    if not workspace_id and not _payload_has_artifact_ref(cleaned):
+        return cleaned
+    from core import workspaces as _workspaces
+    return _workspaces.resolve_artifact_refs(
+        cleaned,
+        caller_owner_id=caller_owner_id,
+        # allow_run_id lets agents reach the recipe's workspace even if
+        # they're not the original caller. Not needed today (the recipe
+        # caller owns the workspace), but cheap to wire for future
+        # cross-tenant recipes.
+        allow_run_id=None,
+    )
+
+
+def _payload_has_artifact_ref(payload: Any) -> bool:
+    if isinstance(payload, dict):
+        if "_artifact_ref" in payload:
+            return True
+        return any(_payload_has_artifact_ref(v) for v in payload.values())
+    if isinstance(payload, list):
+        return any(_payload_has_artifact_ref(item) for item in payload)
+    return False
+
+
+def _write_step_output_to_workspace(
+    *, workspace_id: str | None, agent: dict, node_id: str, output: Any,
+) -> None:
+    """Best-effort write of a pipeline step's output to the workspace.
+
+    Mirrors ``_write_output_to_workspace`` in part_008.py. Never raises —
+    a workspace write failure must not fail the pipeline run. Skipped
+    when no workspace_id, when output declares ``_no_workspace_write``,
+    or when output > 8 MiB serialised.
+    """
+    if not workspace_id:
+        return
+    if isinstance(output, dict) and output.get("_no_workspace_write"):
+        return
+    from core import workspaces as _workspaces
+    from core import workspaces_errors as _wse
+
+    try:
+        body = json.dumps(output, default=str).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        _LOG.warning(
+            "pipelines.workspace_auto_write_serialize_failed node=%s err=%s",
+            node_id, exc,
+        )
+        return
+    if len(body) > 8 * 1024 * 1024:
+        _LOG.warning(
+            "pipelines.workspace_auto_write_too_large node=%s size=%d",
+            node_id, len(body),
+        )
+        return
+    slug = str(agent.get("name") or agent.get("slug") or "unknown")
+    safe_slug = "".join(c if c.isalnum() or c in "-_." else "_" for c in slug)
+    try:
+        _workspaces.write_artifact(
+            workspace_id,
+            f"outputs/{safe_slug}/{node_id}.json",
+            body,
+            "application/json",
+            created_by_agent_id=str(agent.get("agent_id") or ""),
+            created_by_job_id=None,
+        )
+    except (_wse.WorkspaceError, ValueError) as exc:
+        _LOG.warning(
+            "pipelines.workspace_auto_write_failed ws=%s node=%s err=%s",
+            workspace_id, node_id, exc,
+        )
+
+
 def _invoke_agent(
     *,
     agent: dict,
@@ -448,6 +536,7 @@ def _invoke_agent(
     caller_wallet_id: str,
     client_id: str | None,
     execute_builtin_agent: Callable[[str, dict[str, Any]], dict] | None,
+    workspace_id: str | None = None,
 ) -> tuple[dict, int]:
     """Side-effect: orchestrate one pipeline step — charge, fetch, settle (success or refund).
 
@@ -458,7 +547,16 @@ def _invoke_agent(
     Why: split into charge/fetch/settle helpers so the money-flow ordering
     stays auditable; the invariant is "charge before fetch, settle exactly
     once after."
+
+    When ``workspace_id`` is set (recipe opted into auto_workspace), the
+    payload gets ``_artifact_ref`` substitution before dispatch so the
+    agent sees concrete bytes, not references.
     """
+    payload = _resolve_workspace_envelope(
+        payload,
+        caller_owner_id=caller_owner_id,
+        workspace_id=workspace_id,
+    )
     state = _charge_pipeline_step(
         agent, payload,
         caller_owner_id=caller_owner_id,
@@ -516,6 +614,7 @@ def _drive_pipeline_nodes(
     run_id: str, caller_owner_id: str, caller_wallet_id: str,
     client_id: str | None,
     execute_builtin_agent: Callable[[str, dict[str, Any]], dict] | None,
+    workspace_id: str | None = None,
 ) -> dict[str, Any]:
     """Side-effect: invoke each pipeline node in topological order; returns ``step_results``.
 
@@ -524,6 +623,11 @@ def _drive_pipeline_nodes(
     thread's connection for the rest of the recipe. Closes the
     ``InFailedSqlTransaction`` leak observed in domain-health on
     2026-05-17.
+
+    When ``workspace_id`` is set (recipe opted into auto_workspace), each
+    step's payload is enriched with the ``_workspace_id`` envelope so
+    nested ``_artifact_ref`` markers resolve, and each step's output is
+    written under ``outputs/{agent_slug}/{node_id}.json`` in the workspace.
     """
     step_results: dict[str, Any] = {}
     for node in validated["ordered_nodes"]:
@@ -545,6 +649,7 @@ def _drive_pipeline_nodes(
                 caller_wallet_id=caller_wallet_id,
                 client_id=client_id,
                 execute_builtin_agent=execute_builtin_agent,
+                workspace_id=workspace_id,
             )
         except Exception:
             # Roll back before bubbling so fail_run() in _execute_run can
@@ -556,6 +661,10 @@ def _drive_pipeline_nodes(
         step_results[node["id"]] = output
         db.update_run_step(
             run_id, node["id"], output, charge_delta_cents=charge_cents,
+        )
+        _write_step_output_to_workspace(
+            workspace_id=workspace_id, agent=agent,
+            node_id=str(node["id"]), output=output,
         )
     return step_results
 
@@ -578,12 +687,17 @@ def _execute_run(
     caller_wallet_id: str,
     client_id: str | None,
     execute_builtin_agent: Callable[[str, dict[str, Any]], dict] | None,
+    workspace_id: str | None = None,
 ) -> None:
     """Side-effect: run a whole pipeline end-to-end; records final state on the run row.
 
     Why: the run record's error_message includes the exception class so
     operators can tell at a glance whether a failure was a ValueError
     (definition issue) or a RuntimeError (a step's agent rejected).
+
+    When ``workspace_id`` is set, the workspace is sealed on successful
+    completion. Seal failures are logged but never fail the run — the
+    run completed cleanly; only the audit trail is partial.
     """
     validated = validate_definition(pipeline.get("definition") or {})
     try:
@@ -592,12 +706,22 @@ def _execute_run(
             run_id=run_id, caller_owner_id=caller_owner_id,
             caller_wallet_id=caller_wallet_id, client_id=client_id,
             execute_builtin_agent=execute_builtin_agent,
+            workspace_id=workspace_id,
         )
         contradiction = _pipeline_contradiction(step_results)
         if contradiction:
             raise ValueError(contradiction)
         final_output = _build_final_output(step_results, validated["terminal_nodes"])
         db.complete_run(run_id, final_output)
+        if workspace_id:
+            try:
+                from core import workspaces as _workspaces
+                _workspaces.seal_workspace(workspace_id)
+            except Exception as seal_exc:  # noqa: BLE001 — never fail the run
+                _LOG.warning(
+                    "pipelines.workspace_seal_failed run=%s ws=%s err=%s",
+                    run_id, workspace_id, seal_exc,
+                )
     except Exception as exc:
         db.fail_run(run_id, f"{type(exc).__name__}: {exc}")
 
@@ -624,6 +748,29 @@ def run_pipeline(
     validated = validate_definition(pipeline.get("definition") or {})
     del validated
     created = db.create_run(pipeline_id, caller_owner_id, input_payload)
+
+    # Workspaces v0 (PR 4): if the recipe definition includes
+    # ``auto_workspace: true``, create a workspace tied to this run so
+    # every step's payload sees ``_artifact_ref`` resolution and every
+    # step's output is auto-written to ``outputs/{slug}/{node_id}.json``.
+    # The workspace is sealed in _execute_run on successful completion.
+    workspace_id: str | None = None
+    definition = pipeline.get("definition") or {}
+    if isinstance(definition, dict) and definition.get("auto_workspace"):
+        try:
+            from core import workspaces as _workspaces
+            workspace_id = _workspaces.create_workspace(
+                owner_user_id=caller_owner_id,
+                run_id=created["run_id"],
+            )
+            db.set_run_workspace(created["run_id"], workspace_id)
+        except Exception as exc:  # noqa: BLE001 — opt-in feature must not break runs
+            _LOG.warning(
+                "pipelines.auto_workspace_create_failed run=%s err=%s",
+                created["run_id"], exc,
+            )
+            workspace_id = None
+
     thread = threading.Thread(
         target=_execute_run,
         kwargs={
@@ -634,6 +781,7 @@ def run_pipeline(
             "caller_wallet_id": caller_wallet_id,
             "client_id": client_id,
             "execute_builtin_agent": execute_builtin_agent,
+            "workspace_id": workspace_id,
         },
         name=f"aztea-pipeline-{created['run_id'][:8]}",
         daemon=True,

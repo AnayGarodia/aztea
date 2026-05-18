@@ -241,6 +241,33 @@ and is globally capped by `DISPUTE_FILE_WINDOW_SECONDS` (default 7 days).
 
 ---
 
+## Workspaces
+
+**When to use:** multi-agent workflows that need to share large inputs by reference, accumulate outputs without polluting the caller's context, or produce a single signed audit envelope (the seal manifest) covering the whole run. Full reference: [`workspaces.md`](workspaces.md).
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/workspaces` | Create a workspace. Body: `{ttl_seconds?, backing_type?, backing_id?, run_id?}`. |
+| `GET` | `/workspaces/{workspace_id}` | Workspace metadata (status, totals, expiry). |
+| `DELETE` | `/workspaces/{workspace_id}` | Delete the workspace and all its artifacts. Owner only. |
+| `GET` | `/workspaces/{workspace_id}/artifacts` | List artifact metadata (no content). |
+| `PUT` | `/workspaces/{workspace_id}/artifacts/{name}` | Write or overwrite an artifact (raw body + `Content-Type`). `If-Match: <sha256>` for CAS. |
+| `GET` | `/workspaces/{workspace_id}/artifacts/{name}` | Read an artifact as raw bytes. |
+| `DELETE` | `/workspaces/{workspace_id}/artifacts/{name}` | Delete an artifact. Owner only. |
+| `POST` | `/workspaces/{workspace_id}/seal` | Freeze the workspace and produce a signed Ed25519 manifest. Owner only. Idempotent. |
+| `GET` | `/workspaces/{workspace_id}/manifest` | **Public.** Fetch the signed manifest after seal. |
+| `POST` | `/workspaces/{workspace_id}/verify` | **Public.** Re-verify the signature against current artifact hashes. |
+| `GET` | `/workspaces/sealer/did.json` | **Public.** `did:web` document for the per-server seal signing key. |
+
+Reserved keys on `POST /registry/agents/{id}/call`:
+
+- `_workspace_id` (top-level): auto-write the agent's response into the workspace under `outputs/{agent_slug}/{job_id}.json`.
+- `{"_artifact_ref": "ws_id/name"}` (anywhere inside the payload): server-side resolves to the artifact's content (JSON / text / b64) before the agent sees it. Solves the `hire_batch` "same input duplicated N times" pathology.
+
+Recipes opt into a per-run workspace by setting `auto_workspace: true` on the pipeline definition; `pipeline_runs.workspace_id` is then surfaced in run-status responses.
+
+---
+
 ## Ops
 
 **When to use:** platform operators, automated sweep jobs, reconciliation, SLO
