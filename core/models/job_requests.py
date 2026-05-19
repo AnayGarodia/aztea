@@ -455,10 +455,34 @@ class JobDisputeRequest(BaseModel):
     @field_validator("reason")
     @classmethod
     def dispute_reason_not_empty(cls, value: str) -> str:
-        text = value.strip()
+        # F20 (red-team 2026-05-19): the validator only stripped whitespace
+        # — NUL bytes and other control characters passed through, hit
+        # psycopg2's parameter encoder, and surfaced as raw
+        # "A string literal cannot contain NUL (0x00) characters."
+        # without the structured envelope callers expect. Strip ALL control
+        # characters before the empty-check so the validator gives a clean
+        # 422 either way.
+        if not isinstance(value, str):
+            raise ValueError("reason must be a string")
+        sanitized = "".join(
+            ch for ch in value if ch == "\n" or ch == "\t" or (ord(ch) >= 0x20 and ord(ch) != 0x7F)
+        )
+        text = sanitized.strip()
         if not text:
             raise ValueError("reason must not be empty")
         return text
+
+    @field_validator("evidence")
+    @classmethod
+    def dispute_evidence_strip_controls(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("evidence must be a string or null")
+        sanitized = "".join(
+            ch for ch in value if ch == "\n" or ch == "\t" or (ord(ch) >= 0x20 and ord(ch) != 0x7F)
+        )
+        return sanitized
 
 
 class JobVerificationDecisionRequest(BaseModel):

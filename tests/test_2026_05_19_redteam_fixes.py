@@ -250,6 +250,41 @@ def test_f4_create_dispute_accepts_completed_job():
 
 
 # ===========================================================================
+# F20 — dispute reason with NUL byte must surface a clean validator error,
+# not a raw psycopg2 ValueError leak.
+# ===========================================================================
+
+
+def test_f20_dispute_reason_strips_nul_bytes():
+    """A reason containing only NUL bytes must reject as empty; a reason
+    with valid text plus a NUL must keep the text."""
+    from core.models.job_requests import JobDisputeRequest
+
+    # Only control bytes -> empty after strip -> 422 "reason must not be empty"
+    try:
+        JobDisputeRequest(reason="\x00\x07\x1b")
+        assert False, "Pure control-byte reason should have failed validation"
+    except Exception as exc:
+        assert "reason must not be empty" in str(exc), str(exc)
+
+    # Real text with embedded NUL -> NUL stripped, valid reason persists.
+    req = JobDisputeRequest(reason="Output broken\x00 in production")
+    assert "\x00" not in req.reason
+    assert "Output broken" in req.reason
+
+
+def test_f20_dispute_evidence_strips_controls():
+    """Evidence field gets the same sanitization."""
+    from core.models.job_requests import JobDisputeRequest
+
+    req = JobDisputeRequest(
+        reason="Real reason here",
+        evidence="https://example.com/proof\x00.html",
+    )
+    assert "\x00" not in (req.evidence or "")
+
+
+# ===========================================================================
 # F9 — describe_specialist on a sunset slug returns a structured
 # agent.sunset hint rather than the bare "Unknown tool".
 # ===========================================================================
