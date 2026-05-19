@@ -1,6 +1,6 @@
 {
   "name": "aztea-cli",
-  "version": "0.24.0",
+  "version": "0.24.1",
   "description": "Deprecated. Aztea CLI moved to pip — install with `pip install aztea`.",
   "deprecated": "aztea-cli on npm is deprecated. Install via pip instead: `pip install aztea`. The pip-installed `aztea` CLI ships the MCP server too — no Node required.",
   "keywords": [
