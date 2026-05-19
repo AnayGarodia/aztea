@@ -131,20 +131,54 @@ def test_f3_redaction_does_not_mutate_input():
 
 
 def _temp_db_with_disputes_schema():
-    """Create a fresh sqlite file + run migrations through the dispute init."""
+    """Create a fresh sqlite file + run migrations through the dispute init.
+
+    Returns ``(path, teardown)``. Callers MUST invoke ``teardown()`` in a
+    finally block — without it the patched ``DB_PATH`` env var + reloaded
+    module attribute leak into the next test, which previously poisoned
+    ``test_dispute_consensus_caller_wins_full_refund`` (the
+    ``transactions.charged_by_key_id`` column got added in a later
+    migration that this helper's truncated schema doesn't apply, so
+    subsequent tests that hit ``core.db`` saw a stale, partial schema).
+    """
+    import importlib
     tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     tmp.close()
     path = tmp.name
-    os.environ["DB_PATH"] = path
-    # Re-import in clean state.
-    import importlib
+    prior_env = os.environ.get("DB_PATH")
     from core import db as _db
+    from core import migrate
+    prior_db_path = getattr(_db, "DB_PATH", None)
+
+    os.environ["DB_PATH"] = path
     importlib.reload(_db)
     _db.DB_PATH = path
-    from core import migrate
     importlib.reload(migrate)
     migrate.apply_migrations(path)
-    return path
+
+    def _teardown() -> None:
+        # Restore env first so any module reload reads the prior value.
+        if prior_env is None:
+            os.environ.pop("DB_PATH", None)
+        else:
+            os.environ["DB_PATH"] = prior_env
+        # Reload core.db so subsequent tests pick up a fresh thread-local
+        # pool against the restored DB_PATH (the env-derived value, not
+        # the temp path that's about to be unlinked).
+        importlib.reload(_db)
+        if prior_db_path is not None:
+            _db.DB_PATH = prior_db_path
+        importlib.reload(migrate)
+        # Remove the temp file (incl. WAL siblings) — caller will unlink
+        # the canonical .db file itself for back-compat with old call
+        # sites, but we tidy any -shm / -wal artefacts here.
+        for suffix in ("-shm", "-wal"):
+            try:
+                os.unlink(f"{path}{suffix}")
+            except FileNotFoundError:
+                pass
+
+    return path, _teardown
 
 
 _WALLET_INSERT_SQL = (
@@ -176,7 +210,7 @@ def _seed_three_wallets(conn, ids: list[tuple[str, str, int]]) -> None:
 
 def test_f4_create_dispute_rejects_pending_job():
     """create_dispute must raise ValueError when the target job has no completed_at."""
-    path = _temp_db_with_disputes_schema()
+    path, _teardown = _temp_db_with_disputes_schema()
     try:
         from core import db as _db, disputes
 
@@ -210,12 +244,16 @@ def test_f4_create_dispute_rejects_pending_job():
             assert "dispute.not_completed" in str(exc), str(exc)
         assert raised, "create_dispute should have raised on a pending job"
     finally:
-        os.unlink(path)
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+        _teardown()
 
 
 def test_f4_create_dispute_accepts_completed_job():
     """create_dispute must succeed when completed_at IS set."""
-    path = _temp_db_with_disputes_schema()
+    path, _teardown = _temp_db_with_disputes_schema()
     try:
         from core import db as _db, disputes
 
@@ -246,7 +284,11 @@ def test_f4_create_dispute_accepts_completed_job():
         assert created is not None
         assert created.get("dispute_id")
     finally:
-        os.unlink(path)
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+        _teardown()
 
 
 # ===========================================================================
@@ -397,7 +439,7 @@ def test_f5_fallback_judge_no_agent_side_bonus():
 def test_f4_internal_bypass_token_works():
     """allow_pre_terminal_dispute_create lets the internal verification
     flow file a dispute against a non-completed job."""
-    path = _temp_db_with_disputes_schema()
+    path, _teardown = _temp_db_with_disputes_schema()
     try:
         from core import db as _db, disputes
 
@@ -442,4 +484,8 @@ def test_f4_internal_bypass_token_works():
         finally:
             disputes.reset_pre_terminal_bypass(token)
     finally:
-        os.unlink(path)
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+        _teardown()
