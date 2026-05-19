@@ -101,6 +101,32 @@ def test_c3_hire_async_tool_description_documents_async_budget():
     )
 
 
+def test_c3_e4_manage_workflow_inline_hire_async_summary_mentions_budget():
+    """The hire_async one-liner inside manage_workflow's description must
+    mention the async budget — that's what MCP clients using the lazy
+    grouped surface see, NOT the sub-tool description. The 2026-05-19
+    re-verification caught this gap: aztea_hire_async was updated but
+    the inline summary was still just 'fire-and-poll a single long-
+    running agent' with no budget.
+    """
+    src = Path("sdks/python-sdk/aztea/mcp/meta_tools.py").read_text()
+    idx = src.find('"name": "manage_workflow"')
+    assert idx >= 0, "manage_workflow tool block must exist"
+    block = src[idx : idx + 4000]
+    # Find the inline hire_async bullet inside the description.
+    bullet_idx = block.find("• hire_async(slug")
+    assert bullet_idx >= 0, "manage_workflow description must list hire_async"
+    bullet = block[bullet_idx : bullet_idx + 700]
+    assert "minutes" in bullet, (
+        "manage_workflow's inline hire_async summary must mention the "
+        "async budget in minutes"
+    )
+    assert "600" in bullet or "10 minutes" in bullet, (
+        "manage_workflow's inline hire_async summary must reference the "
+        "async default budget (600s / 10 min)"
+    )
+
+
 # ---------------------------------------------------------------------------
 # A1 / A2 — cold-start agents (zero traffic) no longer report
 # success_rate=1.0. Previously misleading: broken endpoints with
@@ -254,33 +280,50 @@ def test_b7_default_sandbox_image_includes_node():
 # ---------------------------------------------------------------------------
 
 
-def test_b5_hardening_argv_includes_proc_masking():
-    """Direct-launch boots must bind-mount masked /proc + /etc files."""
+def test_b5_hardening_argv_includes_etc_mask_but_not_proc():
+    """Direct-launch boots must bind-mount /etc/os-release ONLY.
+
+    runc's proc-safety check rejects bind-mounts inside /proc with
+    `cannot be mounted because it is inside /proc`, returning rc=125
+    on every sandbox boot. The earlier B5 patch tried to mount
+    /proc/version and /proc/cpuinfo and broke sandbox_start across
+    every direct-launch path. The fix is to drop the /proc mounts;
+    full /proc masking requires gVisor (B3 roadmap).
+    """
     from core.sandbox import isolation
 
     argv = isolation.hardening_argv("test_sandbox_id_abcdef0123")
-    # Bind-mounts come as ``-v source:target:ro`` pairs.
     joined = " ".join(argv)
-    for target in ("/proc/version", "/proc/cpuinfo", "/etc/os-release"):
-        assert target in joined, (
-            f"hardening_argv must bind-mount {target!r} — host info "
-            "leaks (kernel build, AWS suffix, distro version) are useful "
-            "recon for an attacker prepping a kernel-CVE escape"
-        )
+    # /etc/os-release: outside /proc, runc-safe, must be mounted.
+    assert "/etc/os-release" in joined, (
+        "hardening_argv must bind-mount /etc/os-release — distro fingerprint "
+        "leak is still preventable on the default backend"
+    )
+    # /proc/* mounts must NOT be present — runc rejects them with rc=125.
+    assert "/proc/version" not in joined, (
+        "hardening_argv must NOT bind-mount /proc/version — runc proc-safety "
+        "check fails the entire sandbox boot. Regression of the 2026-05-19 fix."
+    )
+    assert "/proc/cpuinfo" not in joined, (
+        "hardening_argv must NOT bind-mount /proc/cpuinfo — runc proc-safety "
+        "check fails the entire sandbox boot. Regression of the 2026-05-19 fix."
+    )
 
 
-def test_b5_proc_mask_file_content_hides_host_kernel():
-    """The masked /proc/version content must NOT mention the host kernel."""
+def test_b5_etc_os_release_mask_content_hides_host_distro():
+    """The masked /etc/os-release content must NOT mention real distros."""
     from core.sandbox import isolation
 
     mapping = isolation._ensure_proc_mask_files()
-    for path in mapping.values():
-        text = Path(path).read_text().lower()
-        # The work order's leaked example: "6.17.0-1013-aws"
-        assert "aws" not in text, f"{path} leaks the AWS host suffix"
-        assert "ubuntu" not in text, f"{path} leaks the Ubuntu host distro"
-        # Random version-like strings should not look like a real kernel.
-        assert "1013" not in text, f"{path} appears to contain host kernel"
+    # The mapping should ONLY include /etc/os-release post-2026-05-19.
+    assert set(mapping.keys()) == {"/etc/os-release"}, (
+        f"mask targets must be exactly /etc/os-release; got {set(mapping.keys())}"
+    )
+    text = Path(mapping["/etc/os-release"]).read_text().lower()
+    for marker in ("ubuntu", "debian", "alpine", "aws"):
+        assert marker not in text, (
+            f"/etc/os-release mask leaks {marker!r} — host distro fingerprint"
+        )
 
 
 # ---------------------------------------------------------------------------

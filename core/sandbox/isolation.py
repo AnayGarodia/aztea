@@ -39,24 +39,20 @@ _HOSTNAME_PREFIX = "sandbox"
 
 # 2026-05-18 (B5): host info-leak mitigation. Without gVisor, docker
 # containers share the host kernel — `uname -r` still returns the host
-# kernel release. But /proc/version, /proc/cpuinfo, and /etc/os-release
-# are caller-readable files we CAN override via bind-mount, which kills
-# the most useful recon for an attacker prepping a kernel-CVE escape.
-# The kernel uname syscall itself can only be masked with gVisor (see B3).
-_PROC_MASK_VERSION = (
-    "Linux version 6.0.0-aztea-sandbox (build@aztea) "
-    "(gcc (sandbox)) #1 SMP\n"
-)
-_PROC_MASK_CPUINFO = (
-    "processor\t: 0\n"
-    "vendor_id\t: AzteaCPU\n"
-    "cpu family\t: 0\n"
-    "model\t\t: 0\n"
-    "model name\t: Aztea Sandbox Virtual CPU\n"
-    "stepping\t: 0\n"
-    "cpu MHz\t\t: 0\n"
-    "cache size\t: 0 KB\n"
-)
+# kernel release. The earlier B5 fix tried to bind-mount fake files over
+# /proc/version + /proc/cpuinfo + /etc/os-release; the /etc/os-release
+# bind works, but runc's proc-safety check (`check proc-safety of /proc/
+# version mount: ... cannot be mounted because it is inside /proc`)
+# REFUSES to mount anything inside /proc. That's a runc-side
+# sandbox-escape mitigation, not a bug. Result: the earlier patch broke
+# sandbox_start entirely on hosts with modern runc, producing
+# `docker call failed (rc=125)` on every direct-launch boot.
+#
+# 2026-05-19 (post-verification): drop the /proc/* mounts. /etc/os-release
+# stays — runc allows it because it's outside /proc. /proc/version and
+# /proc/cpuinfo continue to leak; documented as acknowledged_limitation
+# requiring gVisor (isolation_backend='gvisor', B3 roadmap) for full
+# masking.
 _OS_RELEASE_MASK = (
     'NAME="Aztea Sandbox"\n'
     'PRETTY_NAME="Aztea Sandbox"\n'
@@ -67,19 +63,20 @@ _OS_RELEASE_MASK = (
 
 
 def _ensure_proc_mask_files() -> dict[str, str]:
-    """Side-effect: write masked /proc and /etc files to a stable host path.
+    """Side-effect: write masked /etc files to a stable host path.
 
     The files are world-readable, immutable from inside the container (bind-
     mounted readonly), and identical across sandbox starts. Cached on disk
     so we don't write them per-container.
 
     Returns a mapping of ``{container_target: host_source}`` for bind mounts.
+    Only paths runc allows are returned — anything inside /proc is excluded
+    because runc's proc-safety check rejects those mounts (see the comment
+    above).
     """
     base = Path(tempfile.gettempdir()) / "aztea-sandbox-mask"
     base.mkdir(mode=0o755, exist_ok=True)
     payloads = {
-        "version": _PROC_MASK_VERSION,
-        "cpuinfo": _PROC_MASK_CPUINFO,
         "os-release": _OS_RELEASE_MASK,
     }
     for name, content in payloads.items():
@@ -88,22 +85,24 @@ def _ensure_proc_mask_files() -> dict[str, str]:
             path.write_text(content)
             os.chmod(path, 0o644)
     return {
-        "/proc/version": str(base / "version"),
-        "/proc/cpuinfo": str(base / "cpuinfo"),
         "/etc/os-release": str(base / "os-release"),
     }
 
 
 def _proc_mask_argv() -> list[str]:
-    """Return ``docker run`` flags that bind-mount fake /proc + /etc files.
+    """Return ``docker run`` flags that bind-mount fake /etc files.
 
-    Why: vanilla docker shares the host kernel, so /proc/version exposes
-    "Linux 6.17.0-1013-aws ..." which tells an attacker the host is on
-    AWS running a specific kernel build — useful recon for a kernel-CVE
-    escape. Bind-mounting our static fake files masks all three vectors
-    in one place. Compose stacks bypass this (the user's compose file
-    owns its own /proc policy — overriding it would break legitimate
-    stacks that mount /proc themselves).
+    Why: vanilla docker shares the host kernel, so /etc/os-release exposes
+    the host distro (e.g. ``Ubuntu 24.04``) — useful recon for an attacker
+    picking a kernel-CVE escape. Bind-mounting a static fake file masks
+    that vector. /proc/version and /proc/cpuinfo would ideally be masked
+    the same way, but runc explicitly rejects bind-mounts inside /proc
+    (proc-safety check); attempting it returns rc=125 on every sandbox
+    boot. Full /proc masking requires gVisor (B3 roadmap, opt-in via
+    isolation_backend='gvisor').
+
+    Compose stacks bypass this (the user's compose file owns its own
+    /etc policy — overriding it would break legitimate stacks).
     """
     try:
         mapping = _ensure_proc_mask_files()
@@ -122,17 +121,19 @@ def hardening_argv(sandbox_id: str) -> list[str]:
     Drops to a non-root UID, masks the container ID as the hostname, drops
     all Linux capabilities so a kernel CVE on the host cannot use
     CAP_SYS_ADMIN from inside, blocks setuid escalation, and bind-mounts
-    masked /proc + /etc files so the container can't read host kernel
-    version / CPU model / OS release. Why a separate function: every
-    direct-launch boot path now flows through here so the security posture
-    stays consistent — adding a new boot strategy that forgets to call
-    this would regress every hardening bug at once.
+    a fake /etc/os-release so the container can't read the host distro.
+    Why a separate function: every direct-launch boot path now flows
+    through here so the security posture stays consistent — adding a new
+    boot strategy that forgets to call this would regress every hardening
+    bug at once.
 
     NOTE: compose stacks bypass this on purpose — the user's compose
     file owns its own user/cap policy and overriding that breaks
     legitimate stacks (e.g. nginx wanting CAP_NET_BIND_SERVICE).
-    KNOWN LIMITATION: the kernel `uname` syscall itself still returns the
-    host kernel release. Only gVisor (isolation_backend='gvisor') masks it.
+    KNOWN LIMITATION: /proc/version, /proc/cpuinfo, and the kernel
+    `uname` syscall still return host info. Runc's proc-safety check
+    rejects bind-mounts inside /proc; gVisor
+    (isolation_backend='gvisor') is the only complete fix.
     """
     host_suffix = secrets.token_hex(4)
     sid_tail = sandbox_id.split("_", 1)[-1][:8] if "_" in sandbox_id else sandbox_id[:8]
