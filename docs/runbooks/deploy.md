@@ -36,8 +36,12 @@ cd /home/aztea/app
 sudo -u aztea git fetch origin main
 sudo -u aztea git reset --hard origin/main
 
-# 2. Rebuild the React frontend
-cd frontend && npm ci && npm run build && cd ..
+# 2. Rebuild the React frontend — MUST run as the `aztea` user so it
+#    can write to its own node_modules. Pre-fix the runbook ran npm as
+#    `ubuntu` and EACCES'd on every deploy because node_modules/.bin
+#    is owned by aztea. Wrap in `sudo -u aztea bash -c '...'` so PATH
+#    is set up correctly inside the sub-shell.
+sudo -u aztea bash -c 'cd /home/aztea/app/frontend && npm ci && npm run build'
 
 # 3. Restart the API (migrations run automatically on startup).
 # Force-kill ALL uvicorn processes before starting — `systemctl restart`
