@@ -928,3 +928,75 @@ def test_b22_acknowledged_as_v1_item():
         text = plan.read_text()
         assert "B22" in text
         assert "out of scope" in text.lower() or "v1 item" in text.lower()
+
+
+# ===========================================================================
+# Cluster I — Papercuts (B23, B24, B27)
+# ===========================================================================
+
+
+# --- B23 ------------------------------------------------------------------
+
+
+def test_b23_users_me_alias_get_registered():
+    """/users/me GET delegates to auth_me for a stable profile read."""
+    src = Path("server/application_parts/part_006.py").read_text()
+    assert '@app.get(\n    "/users/me",' in src
+    # The handler must call the existing auth_me to avoid drift.
+    assert "def users_me_get(" in src
+    assert "return auth_me(request, caller)" in src
+
+
+def test_b23_users_me_post_updates_profile():
+    """POST /users/me accepts full_name + phone and rejects email + scopes."""
+    src = Path("server/application_parts/part_006.py").read_text()
+    assert '@app.post(\n    "/users/me",' in src
+    assert "def users_me_update(" in src
+    # Email change must produce a structured 422 with a next_step pointer.
+    assert "Email changes require verification" in src
+    # Master / agent_key callers must be 403'd (matches /auth/me's gates).
+    assert 'caller["type"] in {"master", "agent_key"}:' in src
+
+
+def test_b23_update_user_profile_helper_exists():
+    """core.auth.users.update_user_profile is the persistence helper."""
+    from core.auth import users
+
+    assert hasattr(users, "update_user_profile")
+    import inspect
+
+    sig = inspect.signature(users.update_user_profile)
+    assert "full_name" in sig.parameters
+    assert "phone" in sig.parameters
+
+
+# --- B24 ------------------------------------------------------------------
+
+
+def test_b24_cors_allow_methods_covers_all_real_methods():
+    """allow_methods must list every method any endpoint uses (B24)."""
+    src = Path("server/application_parts/part_001.py").read_text()
+    # The pre-fix list was ["GET", "POST", "DELETE", "OPTIONS"] — PATCH +
+    # PUT were missing, so browsers preflighting PATCH /auth/role got 405.
+    assert (
+        'allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]' in src
+    ), (
+        "CORS middleware must advertise all methods Aztea endpoints use — "
+        "missing PATCH or PUT means browser preflight fails on routes "
+        "like PATCH /auth/role"
+    )
+
+
+# --- B27 ------------------------------------------------------------------
+
+
+def test_b27_describe_response_includes_cache_warning_for_cacheable_agents():
+    """describe_specialist's cache block must include a cross-caller warning."""
+    src = Path("sdks/python-sdk/aztea/mcp/server.py").read_text()
+    # Either the in-tool docstring OR the response block must explicitly
+    # call out the cross-caller cache scope. The response-block version
+    # is the one that flows to the caller.
+    assert '"partition": "global"' in src
+    assert "platform-wide" in src or "another tenant" in src
+    assert "Do NOT send" in src
+    assert "per-tenant nonce" in src

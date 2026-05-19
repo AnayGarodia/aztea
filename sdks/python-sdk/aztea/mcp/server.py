@@ -2413,6 +2413,29 @@ class RegistryBridge:
                 "is_featured": bool(entry.get("is_featured", False)),
                 "cacheable": bool(entry.get("cacheable", False)),
             },
+            # B27, 2026-05-19: surface the cross-caller cache scope so
+            # privacy-sensitive integrators see the warning at the same
+            # surface they're already reading (describe_specialist). Pre-
+            # fix the platform-wide cache was documented in api-reference
+            # but not on the per-agent describe response — a tenant
+            # querying secret_scanner with their PII could get another
+            # tenant's cached output without realizing the cache is global.
+            "cache": (
+                {
+                    "partition": "global",
+                    "default_ttl_hours": 24,
+                    "warning": (
+                        "Cache is platform-wide: another tenant's previous "
+                        "identical input may be returned. Do NOT send "
+                        "tenant-specific PII or secrets in input_payload "
+                        "unless your call shape is safe to share cross-"
+                        "caller. To bypass for one call, append a unique "
+                        "value to the input (e.g. a per-tenant nonce field)."
+                    ),
+                }
+                if bool(entry.get("cacheable", False))
+                else {"partition": None, "cacheable": False}
+            ),
             "best_for": list(entry.get("short_use_cases") or [])[:6],
             "required_fields": list((entry["input_schema"].get("required") or []))
             if isinstance(entry["input_schema"], dict)

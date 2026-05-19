@@ -882,11 +882,17 @@ if _ENVIRONMENT == "production" and "*" in _cors_origins:
 if _FRONTEND_BASE_URL and _FRONTEND_BASE_URL not in _cors_origins:
     _cors_origins.append(_FRONTEND_BASE_URL)
 
+# B24, 2026-05-19: allow_methods must list every method any endpoint
+# actually uses. Pre-fix `PATCH` and `PUT` were missing — browsers sending
+# an OPTIONS preflight for `PATCH /auth/role` would get the 405 the bug
+# report saw, because the CORS middleware couldn't authorise the method.
+# `*` is intentionally NOT used so the response advertises the real
+# capability set rather than leaking that we accept arbitrary methods.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
     allow_credentials=False,
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-Request-ID"],
     max_age=600,
 )
