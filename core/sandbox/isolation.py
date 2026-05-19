@@ -63,7 +63,6 @@ _OS_RELEASE_MASK = (
     'ID=aztea-sandbox\n'
     'VERSION="1"\n'
     'VERSION_ID=1\n'
-    'HOME_URL="https://aztea.ai/"\n'
 )
 
 
