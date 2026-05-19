@@ -15,6 +15,10 @@ runs.jsonl
 # see core/workspaces.py::_load_or_create_signing_keypair). Secret.
 data/workspace_signing_key.pem
 
+# Any private key / cert material — never commit
+*.pem
+*.key
+
 # Node.js
 node_modules/
 
