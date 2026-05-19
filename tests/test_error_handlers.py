@@ -81,3 +81,93 @@ def test_error_code_pattern_table_first_match_wins() -> None:
         error_handlers._error_code_from_message(403, "/wallets", msg)
         == "auth.insufficient_scope"
     )
+
+
+# ===========================================================================
+# Phase 1 (2026-05-19): boundary sanitiser for raw-exception leak text.
+# ===========================================================================
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "A string literal cannot contain NUL (0x00) characters.",  # psycopg2
+        "psycopg2.errors.UniqueViolation: ...",
+        "ValueError: foo bar",
+        "TypeError: cannot do that",
+        "Disallowed CORS origin",
+        "Traceback (most recent call last):",
+        "sqlalchemy.exc.IntegrityError: ...",
+        "<class 'starlette.exceptions.HTTPException'>",
+    ],
+)
+def test_looks_like_exception_leak_detects_known_signatures(message: str) -> None:
+    assert error_handlers._looks_like_exception_leak(message)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "max_total_cents must be > 0",
+        "Job 'abc' not found.",
+        "Agent 'x' is sunset; use web_search.",
+        "reason must not be empty",
+        "Insufficient balance for batch.",
+    ],
+)
+def test_looks_like_exception_leak_passes_real_messages(message: str) -> None:
+    assert not error_handlers._looks_like_exception_leak(message)
+
+
+def test_normalize_error_payload_sanitises_psycopg_leak() -> None:
+    """F20 repro: NUL byte → psycopg2 ValueError → leaked into response.
+    Now sanitised."""
+    payload = error_handlers.normalize_error_payload(
+        400,
+        "A string literal cannot contain NUL (0x00) characters.",
+        "/jobs/abc/dispute",
+    )
+    assert "NUL" not in payload["message"]
+    assert "0x00" not in payload["message"]
+    assert payload["message"] == error_handlers._SANITISED_LEAK_MESSAGE
+    # Envelope is still well-formed.
+    assert payload["error"]
+    assert "." in payload["error"]
+
+
+def test_normalize_error_payload_preserves_real_user_messages() -> None:
+    """Legitimate user-facing messages survive without rewrite."""
+    payload = error_handlers.normalize_error_payload(
+        400, "max_total_cents must be > 0", "/jobs/batch"
+    )
+    assert payload["message"] == "max_total_cents must be > 0"
+
+
+def test_normalize_error_payload_sanitises_dict_detail_with_leaked_message() -> None:
+    """A structured detail whose `message` field leaks exception text
+    must also be sanitised."""
+    payload = error_handlers.normalize_error_payload(
+        400,
+        {
+            "error": "dispute.write_failed",
+            "message": "ValueError: A string literal cannot contain NUL (0x00) characters.",
+        },
+        "/disputes/x",
+    )
+    assert "NUL" not in payload["message"]
+    assert payload["error"] == "dispute.write_failed"  # explicit code preserved
+
+
+def test_normalize_error_payload_logs_sanitised_leak(caplog) -> None:
+    """When a leak is sanitised, the raw text is preserved in the log
+    for ops debugging."""
+    with caplog.at_level("WARNING", logger="aztea.error_handlers"):
+        error_handlers.normalize_error_payload(
+            500, "Traceback: psycopg2.errors.UniqueViolation: secret_key=abc",
+            "/admin/audit",
+        )
+    assert any(
+        "server.error_message_sanitized" in record.message
+        or "server.error_message_sanitized" in str(record.getMessage())
+        for record in caplog.records
+    )

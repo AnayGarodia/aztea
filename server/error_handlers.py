@@ -47,6 +47,11 @@ from slowapi.errors import RateLimitExceeded
 
 from core import error_codes, logging_utils
 
+# Module-level logger so normalize_error_payload (called outside the
+# register_exception_handlers context) can still record sanitisation
+# events for ops. Tests can capture via caplog.
+_LEAK_SANITIZER_LOG = logging.getLogger("aztea.error_handlers")
+
 
 # Helpers for the ERROR_CODE_PATTERNS table below. Each pattern is a small
 # predicate over the lowercased message. Keeping these as named factories
@@ -191,6 +196,89 @@ def _error_code_from_message(status_code: int, path: str, message: str) -> str:
     return _default_error_code_for_request(status_code, path, lowered_message)
 
 
+# Phase 1, 2026-05-19: boundary sanitiser for raw-exception leak text. The
+# 41 ``detail=str(exc)`` sites across the codebase route raw psycopg2 /
+# pydantic / sqlalchemy / starlette error messages into the response. The
+# global handler used to pass that text through verbatim — so a caller
+# sending a NUL byte got back ``"A string literal cannot contain NUL
+# (0x00) characters."`` instead of a structured envelope (F20). Each new
+# exception type that's added to the upstream libraries is a fresh
+# leak waiting to happen.
+#
+# The sanitiser catches the leak at the global handler: bare-string
+# details that look like raw exception text get their user-visible
+# message replaced with a generic ``"Request could not be completed."``
+# while the raw text is preserved in a structured log event so ops
+# observability is unchanged. Structured ``{error, message, ...}``
+# details and short user-facing strings ("max_total_cents must be > 0")
+# pass through unchanged.
+_EXCEPTION_LEAK_SIGNATURES: tuple[str, ...] = (
+    "traceback",
+    "psycopg2.errors",
+    "sqlalchemy.",
+    "pydantic.",
+    "valueerror:",
+    "typeerror:",
+    "keyerror:",
+    "attributeerror:",
+    "filenotfounderror:",
+    "ioerror:",
+    "oserror:",
+    "runtimeerror:",
+    "permissionerror:",
+    "cannot contain nul",
+    "a string literal cannot contain",
+    "disallowed cors origin",
+    "starlette.exceptions",
+    "internalservererror",
+    "<class '",
+    "at 0x7",
+    "at 0x0",
+)
+
+_SANITISED_LEAK_MESSAGE = (
+    "Request could not be completed. See server logs for details."
+)
+
+
+def _looks_like_exception_leak(message: str) -> bool:
+    """Pure: does ``message`` look like raw exception / library internals?
+
+    Why: a bare-string ``detail=str(exc)`` from any of ~41 route sites can
+    surface psycopg2 / pydantic / sqlalchemy / starlette internals. These
+    leak path info, library names, and PII embedded in inputs (F20 NUL byte
+    repro). The signatures below are conservative — they only flag text
+    that's UNMISTAKABLY an exception message, never a user-facing string
+    like "max_total_cents must be > 0" or "Job 'abc' not found".
+    """
+    lowered = str(message or "").lower()
+    return any(sig in lowered for sig in _EXCEPTION_LEAK_SIGNATURES)
+
+
+def _sanitize_leak_if_present(
+    message: str, status_code: int, path: str, logger: logging.Logger | None = None
+) -> str:
+    """Side-effect: log the raw leak; return sanitised user-facing message.
+
+    Returns ``message`` unchanged when no leak signature is detected.
+    """
+    if not _looks_like_exception_leak(message):
+        return message
+    if logger is not None:
+        logging_utils.log_event(
+            logger,
+            logging.WARNING,
+            "server.error_message_sanitized",
+            {
+                "method": "n/a",  # caller doesn't always have a request
+                "path": str(path or ""),
+                "status_code": int(status_code),
+                "raw_message_prefix": str(message)[:512],
+            },
+        )
+    return _SANITISED_LEAK_MESSAGE
+
+
 def normalize_error_payload(status_code: int, detail: Any, path: str) -> dict[str, Any]:
     if isinstance(detail, dict):
         raw_error = str(detail.get("error") or "").strip()
@@ -198,15 +286,17 @@ def normalize_error_payload(status_code: int, detail: Any, path: str) -> dict[st
             details = detail.get("details")
             if details is None and "data" in detail:
                 details = detail.get("data")
+            raw_msg = str(detail.get("message") or "Request failed.")
+            safe_msg = _sanitize_leak_if_present(
+                raw_msg, status_code, path, _LEAK_SANITIZER_LOG
+            )
             return error_codes.make_error(
                 raw_error
-                or _error_code_from_message(
-                    status_code, path, str(detail.get("message") or "")
-                ),
-                str(detail.get("message") or "Request failed."),
+                or _error_code_from_message(status_code, path, raw_msg),
+                safe_msg,
                 details,
             )
-        message = str(
+        raw_msg = str(
             detail.get("message") or detail.get("detail") or "Request failed."
         ).strip()
         details = {
@@ -218,15 +308,21 @@ def normalize_error_payload(status_code: int, detail: Any, path: str) -> dict[st
             details = detail["details"]
         elif "data" in detail and detail["data"] is not None:
             details = detail["data"]
+        safe_msg = _sanitize_leak_if_present(
+            raw_msg, status_code, path, _LEAK_SANITIZER_LOG
+        )
         return error_codes.make_error(
-            raw_error or _error_code_from_message(status_code, path, message),
-            message,
+            raw_error or _error_code_from_message(status_code, path, raw_msg),
+            safe_msg,
             details,
         )
-    message = str(detail or "Request failed.")
+    raw_msg = str(detail or "Request failed.")
+    safe_msg = _sanitize_leak_if_present(
+        raw_msg, status_code, path, _LEAK_SANITIZER_LOG
+    )
     return error_codes.make_error(
-        _error_code_from_message(status_code, path, message),
-        message,
+        _error_code_from_message(status_code, path, raw_msg),
+        safe_msg,
         None,
     )
 
