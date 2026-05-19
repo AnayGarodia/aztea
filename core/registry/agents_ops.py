@@ -228,6 +228,17 @@ def _validate_agent_scalar_params(
         return Err("price_per_call_usd must be a finite non-negative number.")
     if price < 0:
         return Err("price_per_call_usd must be non-negative.")
+    # F11 (red-team 2026-05-19): sub-cent prices round badly under integer-
+    # cents billing. ROUND_HALF_UP turns $0.003 into 0 and then the
+    # "non-zero-must-be-one-cent" floor raises it to 1¢, producing a
+    # 233% overcharge against the listed price. Reject sub-cent prices
+    # at registration so the listed price always matches what callers
+    # are charged. 0 (free) and >= 1¢ both round honestly.
+    if 0 < price < 0.01:
+        return Err(
+            "price_per_call_usd must be 0 (free) or at least 0.01 (1¢). "
+            "Sub-cent prices cannot be billed honestly under integer-cents."
+        )
 
     normalized_health_status = str(endpoint_health_status or "unknown").strip().lower()
     if normalized_health_status not in {"unknown", "healthy", "degraded"}:

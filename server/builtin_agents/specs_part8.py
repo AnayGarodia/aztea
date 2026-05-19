@@ -25,7 +25,7 @@ def load_builtin_specs_part8() -> list[dict]:
                 "Accepts single certs or a batch of up to 10 for chain analysis."
             ),
             "endpoint_url": "internal://ssl_certificate_decoder",
-            "price_per_call_usd": 0.002,
+            "price_per_call_usd": 0.01,
             "tags": ["ssl", "tls", "certificate", "security", "x509"],
             "is_featured": True,
             "match_keywords": [
@@ -128,7 +128,7 @@ def load_builtin_specs_part8() -> list[dict]:
                 "Computes an overall risk level: critical, high, medium, or low."
             ),
             "endpoint_url": "internal://diff_analyzer",
-            "price_per_call_usd": 0.003,
+            "price_per_call_usd": 0.01,
             "tags": ["git", "diff", "code-review", "security", "risk-analysis"],
             "is_featured": True,
             "match_keywords": [
@@ -244,7 +244,7 @@ def load_builtin_specs_part8() -> list[dict]:
                 "with severity (error/warning/info) and a JSON path for each issue."
             ),
             "endpoint_url": "internal://k8s_manifest_validator",
-            "price_per_call_usd": 0.004,
+            "price_per_call_usd": 0.01,
             "tags": ["kubernetes", "k8s", "security", "devops", "yaml"],
             "is_featured": True,
             "match_keywords": [

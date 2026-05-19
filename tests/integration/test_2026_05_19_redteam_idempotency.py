@@ -235,6 +235,100 @@ def test_f7_suspended_agent_rejected_at_call_path(client):
     )
 
 
+# ===========================================================================
+# F8 — budget_cents round-trips into JobResponse so callers can verify
+# their submitted cap was applied.
+# ===========================================================================
+
+
+def test_f8_budget_cents_round_trips_in_job_response(client):
+    """A single /jobs POST with budget_cents must echo the value back."""
+    worker = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 500)
+
+    agent_id = _register_agent_via_api(
+        client,
+        worker["raw_api_key"],
+        name=f"F8 agent {uuid.uuid4().hex[:6]}",
+        price=0.05,
+        tags=["f8"],
+    )
+
+    resp = client.post(
+        "/jobs",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={
+            "agent_id": agent_id,
+            "input_payload": {"task": "x"},
+            "budget_cents": 10,
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    # Pre-fix this field was dropped — extra="allow" passed it as None
+    # because no storage existed.
+    assert body.get("budget_cents") == 10, (
+        f"Expected budget_cents=10 to round-trip, got {body.get('budget_cents')!r}"
+    )
+
+
+def test_f8_max_price_cents_alias_round_trips(client):
+    """max_price_cents alias also round-trips (collapsed into budget_cents
+    via MIN at the route)."""
+    worker = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 500)
+
+    agent_id = _register_agent_via_api(
+        client,
+        worker["raw_api_key"],
+        name=f"F8 alias {uuid.uuid4().hex[:6]}",
+        price=0.05,
+        tags=["f8a"],
+    )
+
+    resp = client.post(
+        "/jobs",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={
+            "agent_id": agent_id,
+            "input_payload": {"task": "x"},
+            "max_price_cents": 8,
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json().get("budget_cents") == 8
+
+
+# ===========================================================================
+# F11 — sub-cent agent prices rejected at registration; existing >= 1c
+# prices still round-trip honestly.
+# ===========================================================================
+
+
+def test_f11_sub_cent_price_rejected_at_registration(client):
+    """Direct external agent registration at $0.003 must 400 with a
+    structured reason. Pre-fix the spec accepted it and the call charged
+    1c per call — a 233% overcharge."""
+    worker = _register_user()
+
+    resp = client.post(
+        "/registry/register",
+        headers=_auth_headers(worker["raw_api_key"]),
+        json={
+            "name": f"F11 sub-cent {uuid.uuid4().hex[:6]}",
+            "description": "should not be allowed",
+            "endpoint_url": "https://example.com/sub-cent",
+            "price_per_call_usd": 0.003,
+            "tags": ["test"],
+        },
+    )
+    assert resp.status_code in (400, 422), resp.text
+    text = resp.text.lower()
+    assert "sub-cent" in text or "at least 0.01" in text or "0.01" in text, resp.text
+
+
 def test_f6_session_budget_allows_batch_within_cap(client):
     """A batch that fits inside session_budget_cents succeeds."""
     worker = _register_user()

@@ -25,7 +25,7 @@ def load_builtin_specs_part9() -> list[dict]:
                 "nested paths. Accepts base64-encoded archive bytes. Pure stdlib — no deps."
             ),
             "endpoint_url": "internal://archive_inspector",
-            "price_per_call_usd": 0.003,
+            "price_per_call_usd": 0.01,
             "tags": ["archive", "zip", "tar", "security", "file-inspection"],
             "is_featured": True,
             "match_keywords": [
@@ -116,7 +116,7 @@ def load_builtin_specs_part9() -> list[dict]:
                 "categories. Pure stdlib — uses only Python's unicodedata module."
             ),
             "endpoint_url": "internal://unicode_inspector",
-            "price_per_call_usd": 0.002,
+            "price_per_call_usd": 0.01,
             "tags": ["unicode", "security", "encoding", "homoglyph", "bidi"],
             "is_featured": True,
             "match_keywords": [
@@ -212,7 +212,7 @@ def load_builtin_specs_part9() -> list[dict]:
                 "state format (values.root_module). Pure JSON parsing — never runs Terraform."
             ),
             "endpoint_url": "internal://terraform_plan_analyzer",
-            "price_per_call_usd": 0.004,
+            "price_per_call_usd": 0.01,
             "tags": ["terraform", "infrastructure", "iac", "devops", "risk-analysis"],
             "is_featured": True,
             "match_keywords": [

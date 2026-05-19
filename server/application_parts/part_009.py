@@ -1243,6 +1243,10 @@ def jobs_batch_create(
                 "input_payload": normalized_spec_input_payload,
                 "parent_job_id": (parent_job or {}).get("job_id"),
                 "tree_depth": tree_depth,
+                # F8 (red-team 2026-05-19): carry the merged
+                # budget_cents/max_price_cents through to create_job so
+                # the JobResponse echoes the cap the caller submitted.
+                "budget_cents": spec_budget_cents,
             }
         )
 
@@ -1456,6 +1460,7 @@ def jobs_batch_create(
                 ),
                 batch_id=batch_id,
                 origin=_origin_context.current_origin() or "direct",
+                budget_cents=item.get("budget_cents"),
             )
             # 2026-05-19 (B1, B2): persist per-job governance fields that
             # are not yet in core.jobs.create_job's signature. The singleton

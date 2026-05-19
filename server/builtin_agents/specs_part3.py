@@ -297,7 +297,7 @@ def _pypi_metadata_spec() -> dict[str, Any]:
             "metadata."
         ),
         "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_PYPI_METADATA_AGENT_ID],
-        "price_per_call_usd": 0.005,
+        "price_per_call_usd": 0.01,
         "tags": ["pypi", "python", "packages", "metadata"],
         "match_keywords": [
             "pypi", "pypi metadata", "package metadata",
@@ -372,7 +372,7 @@ def _github_releases_spec() -> dict[str, Any]:
             "truncated), and asset list."
         ),
         "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_GITHUB_RELEASES_AGENT_ID],
-        "price_per_call_usd": 0.005,
+        "price_per_call_usd": 0.01,
         "tags": ["github", "releases", "changelog", "developer-tools"],
         "match_keywords": [
             "github releases", "releases for", "latest release of",

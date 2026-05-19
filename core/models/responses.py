@@ -343,6 +343,12 @@ class JobResponse(BaseModel):
     per_job_cap_cents: int | None = None
     stop_when_json: dict | None = None
     billing_unit: str | None = None
+    # F8 (red-team 2026-05-19): caller-submitted soft cap echoed back.
+    # ``budget_cents`` and ``max_price_cents`` collapse into this single
+    # stored value (MIN of both if both submitted). Persisted via
+    # migration 0063; the request fields remain accepted by
+    # JobCreateRequest for caller convenience.
+    budget_cents: int | None = None
 
 
 class JobsListResponse(BaseModel):

@@ -3275,6 +3275,7 @@ def jobs_create(
             callback_secret=body.callback_secret or None,
             output_verification_window_seconds=output_verification_window_seconds,
             origin=_origin_context.current_origin() or "direct",
+            budget_cents=effective_budget_cents,
         )
     except Exception as exc:
         if not _escrow_active:

@@ -260,6 +260,7 @@ def create_job(
     output_verification_window_seconds: int | None = None,
     batch_id: str | None = None,
     origin: str | None = None,
+    budget_cents: int | None = None,
 ) -> dict:
     """Side-effect: insert a new job row and its initial ``pending`` claim event.
 
@@ -307,6 +308,16 @@ def create_job(
             "UPDATE jobs SET claim_deadline_at = %s WHERE job_id = %s",
             (claim_deadline_iso, job_id),
         )
+        # F8 (red-team 2026-05-19): persist the caller-submitted soft cap
+        # so JobResponse echoes back the value the caller submitted.
+        # ``budget_cents`` and ``max_price_cents`` are aliases at the
+        # request layer; whichever is non-null (or the MIN of both) is
+        # stored here. Migration 0063 added the column.
+        if budget_cents is not None:
+            conn.execute(
+                "UPDATE jobs SET budget_cents = %s WHERE job_id = %s",
+                (int(budget_cents), job_id),
+            )
     return get_job(job_id)
 
 
