@@ -882,11 +882,17 @@ if _ENVIRONMENT == "production" and "*" in _cors_origins:
 if _FRONTEND_BASE_URL and _FRONTEND_BASE_URL not in _cors_origins:
     _cors_origins.append(_FRONTEND_BASE_URL)
 
+# B24, 2026-05-19: allow_methods must list every method any endpoint
+# actually uses. Pre-fix `PATCH` and `PUT` were missing — browsers sending
+# an OPTIONS preflight for `PATCH /auth/role` would get the 405 the bug
+# report saw, because the CORS middleware couldn't authorise the method.
+# `*` is intentionally NOT used so the response advertises the real
+# capability set rather than leaking that we accept arbitrary methods.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
     allow_credentials=False,
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-Request-ID"],
     max_age=600,
 )
@@ -920,6 +926,28 @@ def _health_available_llm_providers() -> list[str]:
     except Exception as exc:
         _LOG.warning("health: llm registry probe failed: %s", exc)
         return []
+
+
+# 2026-05-19 (B10): /openapi.json and /redoc redirect to their /api/* hosts.
+# FastAPI is configured with openapi_url="/api/openapi.json" so the legacy
+# /openapi.json path returned a JSON 404 (per _SPA_API_PREFIXES) instead of
+# the spec. The redirect points integrators at the real location without
+# requiring them to read docs first.
+#
+# /docs intentionally NOT redirected — the SPA owns that as the user-facing
+# product page. Swagger UI lives at /api/docs and is linked from the SPA's
+# Docs page directly.
+from fastapi.responses import RedirectResponse as _RedirectResponseB10  # noqa: E402
+
+
+@app.get("/openapi.json", include_in_schema=False)
+def openapi_json_redirect():
+    return _RedirectResponseB10(url="/api/openapi.json", status_code=308)
+
+
+@app.get("/redoc", include_in_schema=False)
+def redoc_redirect():
+    return _RedirectResponseB10(url="/api/redoc", status_code=308)
 
 
 @app.get("/health", include_in_schema=False)

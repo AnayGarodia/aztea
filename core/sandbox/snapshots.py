@@ -167,10 +167,35 @@ def fork(payload: dict[str, Any]) -> dict[str, Any]:
     The fork takes the same lifetime + network policy as the source by
     default; caller can override via top-level payload keys.
     """
-    source_id = str(payload.get("source_sandbox_id") or payload.get("sandbox_id") or "").strip()
+    # B17, 2026-05-19: source_sandbox_id is canonical. sandbox_id stays
+    # accepted as an alias for one release cycle (sunset in v1.8.0).
+    # When the legacy name is used, the response carries a migration_note
+    # so authors can update at their own pace without re-discovering the
+    # change via a 422.
+    canonical_source = str(payload.get("source_sandbox_id") or "").strip()
+    legacy_source = str(payload.get("sandbox_id") or "").strip()
+    source_id = canonical_source or legacy_source
     snap_id = str(payload.get("snapshot_id") or "").strip()
     if not source_id or not snap_id:
-        raise SandboxInvalidInput("fork requires source_sandbox_id and snapshot_id")
+        raise SandboxInvalidInput(
+            "fork requires source_sandbox_id (and snapshot_id). "
+            "Legacy `sandbox_id` is accepted as an alias for one release."
+        )
+    migration_note = None
+    if not canonical_source and legacy_source:
+        # Deprecation lands in v1.8.0, removal in v1.9.0 — standard
+        # semver-style two-minor-version sunset. Update the migration_note
+        # date when v1.9.0 ships and the alias actually drops.
+        migration_note = (
+            "Deprecated: pass `source_sandbox_id` instead of `sandbox_id` "
+            "for fork. The legacy `sandbox_id` alias is deprecated in "
+            "v1.8.0 and will be removed in v1.9.0."
+        )
+        import logging as _logB17
+        _logB17.getLogger("aztea.sandbox.snapshots").warning(
+            "sandbox_fork: deprecated `sandbox_id` alias used "
+            "(prefer source_sandbox_id)"
+        )
     source_state = get(source_id)
     if source_state is None:
         raise SandboxNotFound(f"source sandbox '{source_id}' not active")
@@ -251,7 +276,7 @@ def fork(payload: dict[str, Any]) -> dict[str, Any]:
         filesystem_root=str(new_repo),
     )
     register(new_state)
-    return {
+    response: dict[str, Any] = {
         "source_sandbox_id": source_id,
         "source_snapshot_id": snap_id,
         "sandbox_id": new_id,
@@ -264,6 +289,12 @@ def fork(payload: dict[str, Any]) -> dict[str, Any]:
         "parent_sandbox_id": source_id,
         "parent_chain_tail_hash": parent_chain_tail_hash,
     }
+    # B17: surface the deprecation note on the response so callers see
+    # the rename without scraping logs. Empty string from the helper is
+    # falsy, so absence means the canonical field was used.
+    if migration_note:
+        response["migration_note"] = migration_note
+    return response
 
 
 def diff_snapshots(payload: dict[str, Any]) -> dict[str, Any]:

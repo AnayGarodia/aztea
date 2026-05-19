@@ -422,6 +422,13 @@ def _settle_via_tiebreaker_after_secondary_failure(
 
     Why: without this the dispute would strand at 'judging' with only one
     orphan judgment.
+
+    B13, 2026-05-19: also writes a structured ``secondary_judge_fallback``
+    audit event so dispute_status responses can surface ``degraded_mode``
+    + ``degraded_reason`` to the caller. Pre-fix the fallback was visible
+    only by inspecting judge_models_used (= ["llm_primary", "fallback"]),
+    which silently collapsed the advertised "two-judge guarantee" to one
+    judge + a coin-flip without telling anyone.
     """
     tiebreaker = _local_dispute_fallback(context)
     verdict = tiebreaker["verdict"]
@@ -433,10 +440,23 @@ def _settle_via_tiebreaker_after_secondary_failure(
         model="fallback",
     )
     disputes.set_dispute_consensus(dispute_id, verdict)
+    disputes.append_audit_event(
+        dispute_id,
+        "secondary_judge_fallback",
+        extra={
+            "reason": "secondary_judge_llm_unavailable",
+            "verdict": verdict,
+            "fallback_kind": "deterministic_tiebreaker",
+        },
+    )
     return {
         "status": "consensus",
         "outcome": verdict,
         "judgments": disputes.get_judgments(dispute_id),
+        # B13: surface the degraded path so the caller can decide whether
+        # to accept the consensus or escalate.
+        "degraded_mode": True,
+        "degraded_reason": "secondary_judge_llm_unavailable",
     }
 
 
@@ -546,20 +566,112 @@ def run_judgment(dispute_id: str) -> dict:
     return _resolve_consensus_or_tie(dispute_id, context, primary, secondary)
 
 
+def _output_schema_permits_error_envelope(output_schema: dict | None) -> bool:
+    """Pure: True if the agent's documented output_schema explicitly lists
+    `error` (or `errors`, `exception`) as an allowed top-level field.
+
+    Used by the quality judge to distinguish a schema-permitted structured
+    error envelope (agent did its job — reported failure cleanly per
+    contract) from an unstructured crash (agent broke). B11, 2026-05-19.
+
+    Conservative — only returns True when the schema is a dict with a
+    `properties` dict that includes one of the error-shaped keys. Any
+    other shape (None, list, missing properties) is treated as "schema
+    doesn't permit error envelope" so the heuristic stays strict for
+    agents that haven't declared one.
+    """
+    if not isinstance(output_schema, dict):
+        return False
+    properties = output_schema.get("properties")
+    if not isinstance(properties, dict):
+        return False
+    return any(key in properties for key in ("error", "errors", "exception"))
+
+
+def _looks_like_unstructured_crash(payload: dict) -> bool:
+    """Pure: True if any string value in payload smells like a stack trace
+    or unstructured exception spill — the signal that an agent crashed
+    rather than reported a structured error.
+
+    Heuristic — looks for ``Traceback``, ``Exception:``, ``Error:`` at
+    line starts, and common Python/JS stack-trace markers. Conservative
+    by design (we'd rather miss a real crash than false-positive on an
+    agent reporting an error field).
+    """
+    crash_markers = (
+        "Traceback (most recent call last)",
+        "\nTraceback ",
+        "\n    at ",  # JS stack frames
+        "Exception: ",
+        "SyntaxError: ",
+        "TypeError: ",
+        "ValueError: ",
+        "RuntimeError: ",
+        "NameError: ",
+        "AttributeError: ",
+        "KeyError: ",
+        "IndexError: ",
+    )
+    for value in payload.values():
+        if isinstance(value, str) and any(m in value for m in crash_markers):
+            return True
+    return False
+
+
 def _local_quality_fallback(
     *,
     input_payload: dict | None,
     output_payload: dict | None,
     agent_description: str = "",
+    output_schema: dict | None = None,
 ) -> dict:
+    """B11, 2026-05-19: distinguish schema-permitted error envelopes
+    (agent's documented success path — pass) from unstructured crashes
+    (agent broke — fail). Pre-fix this heuristic fired "fail" on any
+    payload with an `error` key, which punished agents like jwt_validator
+    that correctly return `{error: "invalid_signature", ...}` for invalid
+    input. The agent did its job; the judgment now reflects that.
+    """
     payload = output_payload if isinstance(output_payload, dict) else {}
     if not payload:
-        return {"verdict": "fail", "score": 1, "reason": "Output payload is empty."}
-    if any(payload.get(field) for field in ("error", "errors", "exception")):
+        return {
+            "verdict": "fail",
+            "score": 1,
+            "reason": "Output payload is empty.",
+            "judge_reason_detail": "empty_payload",
+        }
+    has_error_field = any(
+        payload.get(field) for field in ("error", "errors", "exception")
+    )
+    if has_error_field:
+        schema_permits_error = _output_schema_permits_error_envelope(output_schema)
+        unstructured = _looks_like_unstructured_crash(payload)
+        if schema_permits_error and not unstructured:
+            # Agent returned a documented structured error envelope — that's
+            # success-with-degraded-result, not failure. Score modestly to
+            # reflect that the run worked but produced a non-happy output.
+            return {
+                "verdict": "pass",
+                "score": 6,
+                "reason": (
+                    "Output is a schema-permitted structured error envelope "
+                    "(agent fulfilled its contract by reporting a clean "
+                    "structured failure). B11, 2026-05-19."
+                ),
+                "judge_reason_detail": "schema_permitted_error_envelope",
+            }
+        # Either the schema doesn't declare an error field OR the payload
+        # looks like an unstructured crash. Keep the historic fail verdict.
         return {
             "verdict": "fail",
             "score": 2,
-            "reason": "Output payload contains explicit error fields.",
+            "reason": (
+                "Output payload contains an unstructured error / exception "
+                "trace not declared in the agent's output_schema."
+            ),
+            "judge_reason_detail": (
+                "unstructured_crash" if unstructured else "undeclared_error_field"
+            ),
         }
 
     filled_fields = [
@@ -585,7 +697,12 @@ def _local_quality_fallback(
         f"structured_sections={structured_sections}, input_keys={len(input_payload or {})}, "
         f"agent_desc_present={bool(str(agent_description).strip())}."
     )
-    return {"verdict": verdict, "score": score, "reason": reason}
+    return {
+        "verdict": verdict,
+        "score": score,
+        "reason": reason,
+        "judge_reason_detail": "deterministic_heuristic",
+    }
 
 
 _QUALITY_SCORE_MIN = 1
@@ -653,6 +770,7 @@ def run_quality_judgment(
     agent_description: str,
     agent_name: str = "",
     quality_hint: str = "",
+    output_schema: dict | None = None,
 ) -> dict:
     """Side-effect: score a completed job output for quality using an LLM judge.
 
@@ -660,10 +778,14 @@ def run_quality_judgment(
     Returns ``{verdict, score, reason}``. Falls back to a deterministic
     heuristic when the live judge is disabled or any LLM step fails — the
     fallback never raises, so settlement is never blocked on quality.
+
+    ``output_schema`` is forwarded to the deterministic fallback so the
+    "schema-permitted error envelope" exemption (B11, 2026-05-19) can fire
+    when the agent legitimately returns ``{error: ...}`` per its contract.
     """
     fallback_kwargs = dict(
         input_payload=input_payload, output_payload=output_payload,
-        agent_description=agent_description,
+        agent_description=agent_description, output_schema=output_schema,
     )
     if not _env_enabled_any(
         "AZTEA_ENABLE_LIVE_QUALITY_JUDGE", "AGENTMARKET_ENABLE_LIVE_QUALITY_JUDGE",

@@ -1008,13 +1008,18 @@ def _ensure_job_signature_columns(conn: _db.DbConnection) -> None:
     """Add cryptographic-signature columns to the jobs table.
 
     Mirrors migration 0015_agent_identity.sql for dev/test environments
-    that bypass the migration runner.
+    that bypass the migration runner. Also mirrors the 2026-05-19
+    governance + claim-deadline columns (0060, 0062) for the same reason.
     """
     extras = [
         "ALTER TABLE jobs ADD COLUMN output_signature TEXT",
         "ALTER TABLE jobs ADD COLUMN output_signature_alg TEXT",
         "ALTER TABLE jobs ADD COLUMN output_signed_by_did TEXT",
         "ALTER TABLE jobs ADD COLUMN output_signed_at TEXT",
+        # 2026-05-19 (B1): per-job hard cap from JobCreateRequest.
+        "ALTER TABLE jobs ADD COLUMN per_job_cap_cents INTEGER",
+        # 2026-05-19 (B15): sweeper auto-fail deadline for unclaimed jobs.
+        "ALTER TABLE jobs ADD COLUMN claim_deadline_at TEXT",
     ]
     for ddl in extras:
         try:

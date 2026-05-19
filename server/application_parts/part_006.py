@@ -107,6 +107,60 @@ def _sweep_jobs(
         )
         sla_failed_job_ids.append(settled["job_id"])
 
+    # B15, 2026-05-19: auto-fail jobs that nobody ever claimed. The
+    # pre-fix symptom was the 2026-05-19 power-user report's "agents
+    # accepted hires, opened escrow, never executed" — caller couldn't
+    # tell whether to wait or cancel. Sweeper now scans for pending
+    # jobs past claim_deadline_at, marks them failed with
+    # error_message=agent.no_workers_claimed, and triggers the standard
+    # refund pipeline. The lookup is a thin SELECT; the actual transition
+    # uses the existing update_job_status + _settle_failed_job rails so
+    # the refund path is identical to other terminal-fail cases.
+    claim_deadline_failed_job_ids: list[str] = []
+    try:
+        with jobs._conn() as _conn_b15:
+            now_iso = _utc_now_iso()
+            stranded = _conn_b15.execute(
+                """
+                SELECT job_id FROM jobs
+                WHERE status = 'pending'
+                  AND claim_deadline_at IS NOT NULL
+                  AND claim_deadline_at < %s
+                LIMIT %s
+                """,
+                (now_iso, limit),
+            ).fetchall()
+    except Exception as exc:  # noqa: BLE001 — sweeper must never break
+        _LOG.warning("B15 claim-deadline scan failed: %s", exc, exc_info=True)
+        stranded = []
+    for row in stranded:
+        stranded_id = row["job_id"] if isinstance(row, dict) else row[0]
+        updated = jobs.update_job_status(
+            stranded_id,
+            "failed",
+            error_message="agent.no_workers_claimed",
+            completed=True,
+        )
+        if updated is None:
+            continue
+        settled = _settle_failed_job(
+            updated,
+            actor_owner_id=actor_owner_id,
+            event_type="job.no_workers_claimed",
+        )
+        claim_deadline_failed_job_ids.append(settled["job_id"])
+        # B15 follow-up, 2026-05-19: increment the per-agent counter so
+        # oncall can alarm on a spike (signal of a misconfigured external
+        # agent endpoint or a worker outage). Never raises; observability
+        # must not block the sweeper.
+        try:
+            from core import observability as _obs_b15
+            _obs_b15.job_no_workers_claimed_total.labels(
+                agent_id=str(settled.get("agent_id") or "unknown"),
+            ).inc()
+        except Exception:  # noqa: BLE001 — observability is best-effort
+            pass
+
     due_retry = jobs.list_jobs_due_for_retry(limit=limit)
     retry_ready_job_ids: list[str] = []
     for item in due_retry:
@@ -190,6 +244,8 @@ def _sweep_jobs(
         "clarification_timeout_failed_job_ids": clarification_timeout_failed_job_ids,
         "clarification_timeout_proceeded_job_ids": clarification_timeout_proceeded_job_ids,
         "sla_failed_job_ids": sla_failed_job_ids,
+        # B15, 2026-05-19
+        "claim_deadline_failed_job_ids": claim_deadline_failed_job_ids,
         "output_verification_expired_job_ids": output_verification_expired_job_ids,
         "output_verification_auto_settled_job_ids": output_verification_auto_settled_job_ids,
         "completed_pending_settlement_scanned": len(completed_pending_settlement),
@@ -1064,6 +1120,92 @@ def auth_me(
             "role": user.get("role") or "both",
             "scopes": caller.get("scopes") or [],
             **_auth_legal_payload(user),
+        }
+    )
+
+
+# B23, 2026-05-19: /users/me — sister to /wallet (mutable) and an alias
+# for /auth/me. GET returns the same profile as /auth/me; POST updates
+# editable fields (full_name, phone). Email changes require a separate
+# verification flow and are intentionally rejected here.
+@app.get(
+    "/users/me",
+    response_model=core_models.AuthMeResponse,
+    responses=_error_responses(401, 403, 429, 500),
+    include_in_schema=True,
+    summary="Alias for /auth/me — same profile, same status codes.",
+)
+@limiter.limit("60/minute")
+def users_me_get(
+    request: Request, caller: core_models.CallerContext = Depends(_require_api_key)
+):
+    return auth_me(request, caller)
+
+
+@app.post(
+    "/users/me",
+    responses=_error_responses(400, 401, 403, 422, 429, 500),
+    include_in_schema=True,
+    summary="Update editable profile fields (full_name, phone).",
+)
+@limiter.limit("20/minute")
+def users_me_update(
+    request: Request,
+    body: dict = Body(...),
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    """B23: minimal profile-update surface. Accepts full_name and/or phone.
+
+    Email changes require a verification flow and are intentionally
+    rejected with 422 + a structured pointer at the future endpoint.
+    Master keys and agent-scoped keys cannot update profiles — they
+    don't have one (master) or shouldn't (agent_key, mirrors /auth/me's
+    403).
+    """
+    if caller["type"] in {"master", "agent_key"}:
+        raise HTTPException(
+            status_code=403,
+            detail="Not available for master or agent-scoped keys.",
+        )
+    allowed = {"full_name", "phone"}
+    rejected = sorted(set(body.keys()) - allowed)
+    if "email" in rejected:
+        raise HTTPException(
+            status_code=422,
+            detail=error_codes.make_error(
+                error_codes.INVALID_INPUT,
+                "Email changes require verification and are not yet supported.",
+                {"field": "email", "next_step": "Contact support."},
+            ),
+        )
+    if rejected:
+        raise HTTPException(
+            status_code=422,
+            detail=error_codes.make_error(
+                error_codes.INVALID_INPUT,
+                f"Unsupported field(s): {', '.join(rejected)}.",
+                {"allowed_fields": sorted(allowed)},
+            ),
+        )
+    user_id = caller["user"]["user_id"]
+    try:
+        updated = users.update_user_profile(
+            user_id,
+            full_name=body.get("full_name"),
+            phone=body.get("phone"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if updated is None:
+        raise HTTPException(status_code=404, detail="User not found.")
+    return JSONResponse(
+        content={
+            "user_id": updated["user_id"],
+            "username": updated["username"],
+            "email": updated.get("email"),
+            "full_name": updated.get("full_name"),
+            "phone": updated.get("phone"),
+            "role": updated.get("role"),
         }
     )
 

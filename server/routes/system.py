@@ -147,6 +147,31 @@ def health() -> core_models.HealthResponse:
     return response
 
 
+# 2026-05-19 (B7): /system/health alias. The platform's own dispute policy
+# docstring (part_005.py) and several runbooks reference this URL as the
+# canonical health endpoint, but the only registered route was /health.
+# GET /system/health used to fall through the SPA catch-all and return
+# React index.html — a confusing first impression for an integrator
+# checking health from an intuitive path. Now /system/health is a thin
+# wrapper around the same handler so the two paths return identical
+# bodies and status codes.
+@router.get(
+    "/system/health",
+    response_model=core_models.HealthResponse,
+    responses={
+        200: {"description": "All checks passed."},
+        503: {
+            "model": core_models.ErrorResponse,
+            "description": "One or more checks failed.",
+        },
+        **pick_error_responses(429, 500),
+    },
+    summary="Alias for /health — same body, same status codes.",
+)
+def system_health() -> core_models.HealthResponse:
+    return health()
+
+
 @router.get(
     "/ops/dispute-policy",
     responses=pick_error_responses(429, 500),

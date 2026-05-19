@@ -121,6 +121,15 @@ def init_disputes_db() -> None:
         except _db.OperationalError as exc:
             if "duplicate column name" not in str(exc).lower():
                 raise
+        # 2026-05-19 (B14): pin the resolution_by deadline at filing
+        # time. Mirrored in migration 0061; also added here so tests
+        # using init_db() pick up the column without re-running the
+        # migration runner.
+        try:
+            conn.execute("ALTER TABLE disputes ADD COLUMN resolution_deadline_at TEXT")
+        except _db.OperationalError as exc:
+            if "duplicate column name" not in str(exc).lower():
+                raise
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_dispute_judgments_dispute_created ON dispute_judgments(dispute_id, created_at ASC)"
         )
@@ -131,6 +140,34 @@ def _row_to_dispute(row: dict) -> dict:
     for field in ("filing_deposit_cents", "split_caller_cents", "split_agent_cents"):
         value = data.get(field)
         data[field] = int(value) if value is not None else None
+    # 2026-05-19 (B13): surface degraded_mode from the audit log so the
+    # dispute_status response tells the caller that the two-judge
+    # guarantee collapsed to one judge + deterministic tiebreaker. Pure
+    # read of audit_log; the actual write happened at fallback time.
+    audit_raw = data.get("audit_log")
+    degraded_event: dict | None = None
+    if isinstance(audit_raw, str) and audit_raw:
+        try:
+            log = json.loads(audit_raw)
+        except (json.JSONDecodeError, TypeError):
+            log = []
+        if isinstance(log, list):
+            for entry in log:
+                if isinstance(entry, dict) and entry.get("event") == "secondary_judge_fallback":
+                    degraded_event = entry
+                    break
+    if degraded_event is not None:
+        data["degraded_mode"] = True
+        data["degraded_reason"] = degraded_event.get(
+            "reason", "secondary_judge_llm_unavailable"
+        )
+    else:
+        data["degraded_mode"] = False
+    # 2026-05-19 (B14): resolution_by is now pinned at INSERT via
+    # resolution_deadline_at. Read it as resolution_by for the response so
+    # legacy callers see the same field name with a stable value.
+    if "resolution_deadline_at" in data and data.get("resolution_deadline_at"):
+        data["resolution_by"] = data["resolution_deadline_at"]
     return data
 
 
@@ -221,6 +258,28 @@ def _operator_response_hours() -> int:
         return DEFAULT_OPERATOR_RESPONSE_HOURS
 
 
+# B14, 2026-05-19: pin resolution_by deadline at filing time. Default 48h
+# from filed_at; env-tunable for tighter SLAs on premium tiers.
+DEFAULT_DISPUTE_RESOLUTION_HOURS = 48
+
+
+def _dispute_resolution_window_hours() -> int:
+    """Pure: env-tunable resolution window for the resolution_by deadline.
+
+    Used only at INSERT (B14 — the deadline is pinned and never updated).
+    The default tracks the documented "5-30 minutes typical, 48h SLA"
+    contract from the dispute description.
+    """
+    import os
+    try:
+        return max(1, int(os.environ.get(
+            "AZTEA_DISPUTE_RESOLUTION_WINDOW_HOURS",
+            str(DEFAULT_DISPUTE_RESOLUTION_HOURS),
+        )))
+    except (TypeError, ValueError):
+        return DEFAULT_DISPUTE_RESOLUTION_HOURS
+
+
 def create_dispute(
     *,
     job_id: str,
@@ -293,6 +352,15 @@ def create_dispute(
     else:
         initial_status = "pending"
         deadline = None
+    # B14, 2026-05-19: pin resolution_by at filing time. Stored as
+    # resolution_deadline_at; read back as resolution_by in the response.
+    # Never UPDATE'd anywhere — judges run against the dispute without
+    # touching the deadline, so what the caller sees at filing matches
+    # what they see hours later.
+    resolution_deadline_iso = (
+        datetime.now(timezone.utc)
+        + timedelta(hours=_dispute_resolution_window_hours())
+    ).isoformat()
     params = (
         dispute_id,
         job_id,
@@ -304,6 +372,7 @@ def create_dispute(
         initial_status,
         now,
         deadline,
+        resolution_deadline_iso,
     )
 
     def _insert(created_conn: _db.DbConnection) -> dict:
@@ -311,8 +380,9 @@ def create_dispute(
             """
             INSERT INTO disputes
                 (dispute_id, job_id, filed_by_owner_id, side, reason, evidence,
-                 filing_deposit_cents, status, filed_at, operator_response_deadline)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 filing_deposit_cents, status, filed_at,
+                 operator_response_deadline, resolution_deadline_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             params,
         )

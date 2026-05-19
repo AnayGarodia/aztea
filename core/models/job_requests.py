@@ -182,6 +182,19 @@ class JobCreateRequest(BaseModel):
             "intent is a buyer-side per-hire cap."
         ),
     )
+    per_job_cap_cents: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Hard ceiling on this single job's caller charge in cents. Combines "
+            "with the per-API-key cap via MIN: the smaller of the two wins. The "
+            "gate fires BEFORE wallet hold so no refund is needed. Returns 422 "
+            "`job.per_job_cap_exceeded` if the agent's price exceeds the cap. "
+            "Distinct from `budget_cents` (which is a soft buyer ceiling) — this "
+            "is the trust-rail safety net that cannot be silently bypassed by "
+            "variable-pricing agents."
+        ),
+    )
     fee_bearer_policy: Literal["worker", "caller", "split"] = Field(
         default="caller",
         description=(
@@ -263,6 +276,20 @@ class JobBatchCreateRequest(BaseModel):
         description=(
             "Optional hard cap for the whole batch. The batch is rejected before "
             "any charge if the sum of caller charges exceeds this value."
+        ),
+    )
+    idempotency_key: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        description=(
+            "C2 follow-up, 2026-05-19: caller-supplied dedup key. Two batches "
+            "with the same (caller_id, idempotency_key) within 24h return the "
+            "SAME job_ids and the second submission does not re-execute. The "
+            "request bodies must match (same request_hash); a mismatch returns "
+            "409 idempotency.payload_mismatch. While a first call is "
+            "in_progress, retries get 409 idempotency.in_progress with a "
+            "retry_after_seconds hint."
         ),
     )
     dry_run: bool = Field(

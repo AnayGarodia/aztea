@@ -14,6 +14,55 @@ _COMPARE_MIN_AGENTS = 2
 _COMPARE_MAX_AGENTS = 10
 
 
+def _validate_spec_stop_when(spec) -> list[dict]:
+    """Pure: validate spec.stop_when bounds + JMESPath complexity.
+
+    Returns the list of {label,expr} dicts ready for JSON persistence. Raises
+    ``copilot_predicates.StopWhenInvalid`` if the shape, count, length, or
+    complexity is over the documented bounds. Same validation the singleton
+    POST /jobs runs pre-charge; the batch path applies it per-spec so a
+    malformed predicate fails closed before any wallet hold opens.
+    """
+    if not getattr(spec, "stop_when", None):
+        return []
+    from core import copilot_predicates as _copilot_predicates  # local: cycle break
+
+    raw_predicates = [
+        {"label": item.label, "expr": item.expr} for item in spec.stop_when
+    ]
+    return _copilot_predicates.validate_stop_when(raw_predicates)
+
+
+def _persist_batch_job_governance(spec, job_id: str) -> None:
+    """Side-effect: UPDATE stop_when_json + billing_unit + per_job_cap_cents
+    on the freshly created batch job row.
+
+    Mirrors the singleton POST /jobs handler in part_008.py so per-job
+    governance fields actually round-trip in the batch path (B1, B2). The
+    caller must have already validated spec.stop_when via
+    ``_validate_spec_stop_when``; this function trusts the predicates and
+    only writes.
+    """
+    import json as _json
+
+    validated = _validate_spec_stop_when(spec)
+    stop_when_json = (
+        _json.dumps({"predicates": validated}) if validated else None
+    )
+    billing_unit = getattr(spec, "billing_unit", None)
+    per_job_cap_cents = getattr(spec, "per_job_cap_cents", None)
+    # Same connection-as-context-manager pattern as part_008.py — pre-1.6.9
+    # Postgres deploys rolled this UPDATE back when the connection returned
+    # to the pool, silently dropping every co-pilot field.
+    with get_db_connection() as _conn:
+        with _conn:
+            _conn.execute(
+                "UPDATE jobs SET stop_when_json = %s, billing_unit = %s, "
+                "per_job_cap_cents = %s WHERE job_id = %s",
+                (stop_when_json, billing_unit, per_job_cap_cents, job_id),
+            )
+
+
 def _batch_fee_split(job: dict) -> dict:
     price_cents = int(job.get("price_cents") or 0)
     caller_charge_cents = int(job.get("caller_charge_cents") or price_cents)
@@ -364,7 +413,38 @@ def jobs_compare_create(
             ),
         )
     if len(set(agent_ids)) != len(agent_ids):
-        raise HTTPException(status_code=400, detail="agent_ids must be unique.")
+        # 2026-05-19 (B26): direct callers to hire_batch for the "run the
+        # same agent N times" workflow. Compare is for side-by-side bake-
+        # offs across DIFFERENT specialists; duplicating an agent_id (or
+        # passing duplicate slugs that resolve to the same agent_id)
+        # almost always means the caller wanted batch hire, not compare.
+        # Sort the offenders so the response is deterministic.
+        from collections import Counter as _CounterB26
+
+        duplicates = sorted(
+            agent_id for agent_id, count in _CounterB26(agent_ids).items() if count > 1
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=error_codes.make_error(
+                "compare.duplicate_agents",
+                (
+                    "agent_ids (and slugs that resolve to them) must be unique "
+                    "across a compare session. For 'run the same agent N times' "
+                    "use manage_workflow(action='hire_batch', jobs=[...]) with "
+                    "N copies of the same job spec — that opens N independent "
+                    "escrows and returns N receipts, which is what you want for "
+                    "duplicate runs."
+                ),
+                {
+                    "duplicate_agent_ids": duplicates,
+                    "next_step": (
+                        "manage_workflow(action='hire_batch', jobs=[...]) with "
+                        f"{len(agent_ids)} entries of the same agent."
+                    ),
+                },
+            ),
+        )
     # Accept the canonical field name and the two natural aliases. Resolve to the first
     # dict-typed value present so a caller passing `task` (the SDK/CLI shorthand) is not
     # silently dropped — historical bug: child jobs received an empty payload and failed.
@@ -824,6 +904,62 @@ def jobs_batch_create(
     _require_scope(caller, "caller")
     if not body.jobs:
         raise HTTPException(status_code=400, detail="jobs array must not be empty.")
+    # C2 follow-up, 2026-05-19: server-side idempotency_key dedup.
+    # Replaces the 422 "idempotency_key not supported" envelope the
+    # 2026-05-18 sprint shipped as an acknowledged_limitation. Cached
+    # response is returned verbatim (same job_ids, same charge state)
+    # so a retry burst doesn't open new escrows.
+    _idempotency_claim_owner: str | None = None
+    if body.idempotency_key:
+        from core import idempotency as _idem
+        request_hash = _idem.compute_request_hash(body.model_dump())
+        owner_id = _caller_owner_id(request)
+        claim = _idem.begin(
+            owner_id=owner_id,
+            scope="hire_batch",
+            idempotency_key=body.idempotency_key,
+            request_hash=request_hash,
+        )
+        if claim.kind == "cached":
+            cached = claim.cached_response or {}
+            return JSONResponse(
+                content={
+                    **cached,
+                    "idempotent_replay": True,
+                    "idempotency_key": body.idempotency_key,
+                },
+                status_code=200,
+            )
+        if claim.kind == "in_progress":
+            raise HTTPException(
+                status_code=409,
+                detail=error_codes.make_error(
+                    "idempotency.in_progress",
+                    "A previous submission with this idempotency_key is still "
+                    "running. Wait and retry.",
+                    {
+                        "idempotency_key": body.idempotency_key,
+                        "retry_after_seconds": claim.retry_after_seconds,
+                    },
+                ),
+            )
+        if claim.kind == "payload_mismatch":
+            raise HTTPException(
+                status_code=409,
+                detail=error_codes.make_error(
+                    "idempotency.payload_mismatch",
+                    "An earlier submission used this idempotency_key with a "
+                    "DIFFERENT request body. Pick a fresh key or send the "
+                    "original body.",
+                    {
+                        "idempotency_key": body.idempotency_key,
+                        "stored_request_hash_prefix": (claim.stored_hash or "")[:16],
+                    },
+                ),
+            )
+        # claim.kind == "proceed" — we now own the row and must complete
+        # or release before returning.
+        _idempotency_claim_owner = owner_id
     # Cap raised from 50 → 250 alongside the worker parallelism bump
     # (BUILTIN_JOB_WORKER_PARALLELISM=64, MAX_BATCH_TOTAL=800). The cap
     # exists to bound the wallet pre-debit + DB insert burst, not to limit
@@ -984,6 +1120,25 @@ def jobs_batch_create(
                     }
                 )
                 continue
+        # 2026-05-19 (B2): pre-charge validation of stop_when predicates so a
+        # malformed expression never opens an escrow. Same bounds (count,
+        # length, JMESPath complexity) the singleton POST /jobs enforces.
+        try:
+            _validate_spec_stop_when(spec)
+        except Exception as _sw_exc:
+            invalid_jobs.append(
+                {
+                    "index": index,
+                    "agent_id": agent["agent_id"],
+                    "status_code": 422,
+                    "detail": error_codes.make_error(
+                        "stop_when.invalid",
+                        str(_sw_exc),
+                        {"agent_id": agent["agent_id"], "field": "stop_when"},
+                    ),
+                }
+            )
+            continue
         spec_budget_cents = spec.budget_cents
         if spec.max_price_cents is not None:
             spec_budget_cents = (
@@ -991,22 +1146,51 @@ def jobs_batch_create(
                 if spec_budget_cents is None
                 else min(spec_budget_cents, spec.max_price_cents)
             )
+        # 2026-05-19 (B1): batch path now respects spec.per_job_cap_cents,
+        # combined with the API-key cap via MIN — smaller wins. Gate fires
+        # BEFORE wallet hold so no refund is needed when it trips.
+        spec_per_job_cap_cents = key_per_job_cap_cents
+        if spec.per_job_cap_cents is not None:
+            spec_per_job_cap_cents = (
+                int(spec.per_job_cap_cents)
+                if spec_per_job_cap_cents is None
+                else min(spec_per_job_cap_cents, int(spec.per_job_cap_cents))
+            )
         pricing_estimate = _estimate_variable_charge(
             agent=agent,
             payload=normalized_spec_input_payload,
             budget_cents=spec_budget_cents,
-            per_job_cap_cents=key_per_job_cap_cents,
+            per_job_cap_cents=spec_per_job_cap_cents,
         )
         if pricing_estimate.get("cap_violated"):
             violation = pricing_estimate["cap_violated"]
+            # 2026-05-19 (B1): tag the cap_code by source so callers can
+            # distinguish "tighten my per-job cap" from "ask ops to raise
+            # the API-key cap". The pricing helper returns scope='per_job_cap'
+            # whenever per_job_cap_cents bound, regardless of which knob
+            # supplied it; we infer the source by checking whether the
+            # spec-level cap is what matches the binding limit.
+            if (
+                violation["scope"] == "per_job_cap"
+                and spec.per_job_cap_cents is not None
+                and int(spec.per_job_cap_cents) == int(violation["limit_cents"])
+            ):
+                cap_code = error_codes.JOB_PER_JOB_CAP_EXCEEDED
+                cap_message = (
+                    "Variable-price estimate exceeds the per-job cap set on "
+                    "this job spec."
+                )
+            else:
+                cap_code = error_codes.SPEND_LIMIT_EXCEEDED
+                cap_message = "Variable-price estimate exceeds a spend cap."
             invalid_jobs.append(
                 {
                     "index": index,
                     "agent_id": agent["agent_id"],
                     "status_code": 402,
                     "detail": error_codes.make_error(
-                        error_codes.SPEND_LIMIT_EXCEEDED,
-                        "Variable-price estimate exceeds a spend cap.",
+                        cap_code,
+                        cap_message,
                         {
                             "scope": violation["scope"],
                             "limit_cents": violation["limit_cents"],
@@ -1244,6 +1428,21 @@ def jobs_batch_create(
                 batch_id=batch_id,
                 origin=_origin_context.current_origin() or "direct",
             )
+            # 2026-05-19 (B1, B2): persist per-job governance fields that
+            # are not yet in core.jobs.create_job's signature. The singleton
+            # POST /jobs handler does the same UPDATE after create_job; the
+            # batch path used to silently drop stop_when / billing_unit /
+            # per_job_cap_cents, which was the original B2 bug surface.
+            _spec_has_governance = (
+                bool(getattr(spec, "stop_when", None))
+                or getattr(spec, "billing_unit", None) is not None
+                or getattr(spec, "per_job_cap_cents", None) is not None
+            )
+            if _spec_has_governance:
+                _persist_batch_job_governance(spec, job["job_id"])
+                refreshed = jobs.get_job(job["job_id"])
+                if refreshed is not None:
+                    job = refreshed
             _record_job_event(job, "job.created", actor_owner_id=caller["owner_id"])
             created_jobs.append(_job_response(job, caller))
     except HTTPException as exc:
@@ -1290,6 +1489,17 @@ def jobs_batch_create(
                 "inner_error": original_detail,
             },
         )
+        # C2 follow-up, 2026-05-19: release the idempotency claim so the
+        # caller can retry with the same key after fixing whatever broke.
+        # Without this the row stays in_progress until the 24h TTL, which
+        # would block retries of an otherwise-recoverable failure.
+        if _idempotency_claim_owner and body.idempotency_key:
+            from core import idempotency as _idem_b
+            _idem_b.release(
+                owner_id=_idempotency_claim_owner,
+                scope="hire_batch",
+                idempotency_key=body.idempotency_key,
+            )
         raise HTTPException(status_code=exc.status_code, detail=wrapped) from exc
     except Exception as exc:
         refunded_count = 0
@@ -1309,6 +1519,14 @@ def jobs_batch_create(
                     agent_id,
                     ref_exc,
                 )
+        # C2 follow-up: same release as the HTTPException branch above.
+        if _idempotency_claim_owner and body.idempotency_key:
+            from core import idempotency as _idem_b
+            _idem_b.release(
+                owner_id=_idempotency_claim_owner,
+                scope="hire_batch",
+                idempotency_key=body.idempotency_key,
+            )
         raise HTTPException(
             status_code=500,
             detail=error_codes.make_error(
@@ -1373,40 +1591,53 @@ def jobs_batch_create(
         _wake_builtin_worker()
     except Exception:
         pass
-    return JSONResponse(
-        content={
-            "batch_id": batch_id,
-            "jobs": response_jobs,
-            "count": len(created_jobs),
-            "submitted_count": len(body.jobs),
-            "invalid_job_count": len(invalid_jobs),
-            "invalid_jobs": invalid_jobs,
-            "total_price_cents": total_price_cents,
-            "total_charged_cents": total_price_cents,
-            "job_ids": [
-                job.get("job_id")
-                for job in created_jobs
-                if isinstance(job, dict) and job.get("job_id")
-            ],
-            "mode": "parallel_marketplace_hire",
-            "intent": body.intent,
-            "max_total_cents": body.max_total_cents,
-            "marketplace_transaction": {
-                "status": "escrow_opened",
-                "rail": "jobs.batch",
-                "escrow": "opened_per_job",
-                "settlement": "per_job_on_completion_or_refund",
-                "receipt": "signed_per_completed_job",
-            },
-            "parallel_hire_trace": trace,
-            "include_mode": "compact" if compact_submission else "full",
-            "next_step": (
-                f"Poll /jobs/batch/{batch_id} or aztea_workflow(action='batch_status', "
-                f"batch_id='{batch_id}') to watch the parallel specialist hires settle."
-            ),
+    _final_response_body = {
+        "batch_id": batch_id,
+        "jobs": response_jobs,
+        "count": len(created_jobs),
+        "submitted_count": len(body.jobs),
+        "invalid_job_count": len(invalid_jobs),
+        "invalid_jobs": invalid_jobs,
+        "total_price_cents": total_price_cents,
+        "total_charged_cents": total_price_cents,
+        "job_ids": [
+            job.get("job_id")
+            for job in created_jobs
+            if isinstance(job, dict) and job.get("job_id")
+        ],
+        "mode": "parallel_marketplace_hire",
+        "intent": body.intent,
+        "max_total_cents": body.max_total_cents,
+        "marketplace_transaction": {
+            "status": "escrow_opened",
+            "rail": "jobs.batch",
+            "escrow": "opened_per_job",
+            "settlement": "per_job_on_completion_or_refund",
+            "receipt": "signed_per_completed_job",
         },
-        status_code=201,
-    )
+        "parallel_hire_trace": trace,
+        "include_mode": "compact" if compact_submission else "full",
+        "next_step": (
+            f"Poll /jobs/batch/{batch_id} or aztea_workflow(action='batch_status', "
+            f"batch_id='{batch_id}') to watch the parallel specialist hires settle."
+        ),
+    }
+    # C2 follow-up, 2026-05-19: cache the success response so a retry
+    # within 24h returns the SAME job_ids without re-opening escrow.
+    # Best-effort — failure to cache must not block the response.
+    if _idempotency_claim_owner and body.idempotency_key:
+        try:
+            from core import idempotency as _idem_c
+            _idem_c.complete(
+                owner_id=_idempotency_claim_owner,
+                scope="hire_batch",
+                idempotency_key=body.idempotency_key,
+                response_status=201,
+                response_body=_final_response_body,
+            )
+        except Exception:  # noqa: BLE001 — cache must not block the response
+            _LOG.warning("idempotency.complete failed", exc_info=True)
+    return JSONResponse(content=_final_response_body, status_code=201)
 
 
 @app.get(

@@ -3039,11 +3039,24 @@ def jobs_create(
             else min(effective_budget_cents, body.max_price_cents)
         )
 
+    # 2026-05-19 (B1): combine the per-API-key cap with the caller-supplied
+    # per-job cap via MIN — the smaller wins. body.per_job_cap_cents was
+    # silently dropped pre-B1 because the request schema didn't carry it.
+    # The gate now fires BEFORE the wallet hold (inside
+    # _estimate_variable_charge's cap_violated path), so no refund is needed.
+    effective_per_job_cap_cents = _caller_key_per_job_cap(caller)
+    if body.per_job_cap_cents is not None:
+        effective_per_job_cap_cents = (
+            int(body.per_job_cap_cents)
+            if effective_per_job_cap_cents is None
+            else min(effective_per_job_cap_cents, int(body.per_job_cap_cents))
+        )
+
     pricing_estimate = _estimate_variable_charge(
         agent=agent,
         payload=body.input_payload,
         budget_cents=effective_budget_cents,
-        per_job_cap_cents=_caller_key_per_job_cap(caller),
+        per_job_cap_cents=effective_per_job_cap_cents,
     )
     if pricing_estimate.get("cap_violated"):
         violation = pricing_estimate["cap_violated"]
@@ -3067,13 +3080,31 @@ def jobs_create(
                     },
                 ),
             )
+        # 2026-05-19 (B1): distinguish the body's per-job cap from the
+        # API-key cap so the caller knows which knob to tune. If both were
+        # set and the binding cap is the body's, surface the per-job code;
+        # otherwise the historical "api_key_per_job" envelope still fires.
+        body_cap = body.per_job_cap_cents
+        key_cap = _caller_key_per_job_cap(caller)
+        # The binding cap is whichever equals violation["limit_cents"].
+        if body_cap is not None and int(body_cap) == int(violation["limit_cents"]):
+            cap_code = error_codes.JOB_PER_JOB_CAP_EXCEEDED
+            cap_message = (
+                "Variable-price estimate exceeds the per-job cap you set on "
+                "this job request."
+            )
+            cap_scope = "job.per_job_cap"
+        else:
+            cap_code = error_codes.SPEND_LIMIT_EXCEEDED
+            cap_message = "Variable-price estimate exceeds your API key's per-job cap."
+            cap_scope = "api_key_per_job"
         raise HTTPException(
             status_code=402,
             detail=error_codes.make_error(
-                error_codes.SPEND_LIMIT_EXCEEDED,
-                "Variable-price estimate exceeds your API key's per-job cap.",
+                cap_code,
+                cap_message,
                 {
-                    "scope": "api_key_per_job",
+                    "scope": cap_scope,
                     "limit_cents": violation["limit_cents"],
                     "attempted_cents": violation["price_cents"],
                     "pricing_model": pricing_estimate["pricing_model"],
@@ -3308,12 +3339,17 @@ def jobs_create(
             _conn.commit()
         job["charge_tx_id"] = charge_tx_id
 
-    # Co-pilot mode: persist stop_when + billing_unit on the freshly created
-    # job row. Done as a separate UPDATE rather than threading new kwargs
-    # through jobs.create_job so the surface stays minimal until more callers
-    # adopt the feature. Both fields are optional — skip the write entirely
-    # when nothing is set.
-    if validated_stop_when or body.billing_unit is not None:
+    # Co-pilot mode + B1: persist stop_when + billing_unit + per_job_cap_cents
+    # on the freshly created job row. Done as a separate UPDATE rather than
+    # threading new kwargs through jobs.create_job so the surface stays
+    # minimal until more callers adopt the feature. Every field is
+    # optional — skip the write entirely when nothing is set.
+    _has_governance_field = (
+        bool(validated_stop_when)
+        or body.billing_unit is not None
+        or body.per_job_cap_cents is not None
+    )
+    if _has_governance_field:
         import json as _json
 
         _stop_when_json = (
@@ -3333,14 +3369,20 @@ def jobs_create(
         with get_db_connection() as _conn:
             with _conn:
                 _conn.execute(
-                    "UPDATE jobs SET stop_when_json = %s, billing_unit = %s "
-                    "WHERE job_id = %s",
-                    (_stop_when_json, body.billing_unit, job["job_id"]),
+                    "UPDATE jobs SET stop_when_json = %s, billing_unit = %s, "
+                    "per_job_cap_cents = %s WHERE job_id = %s",
+                    (
+                        _stop_when_json,
+                        body.billing_unit,
+                        body.per_job_cap_cents,
+                        job["job_id"],
+                    ),
                 )
         # Re-fetch so the response surfaces the persisted stop_when /
-        # billing_unit. Without this the caller saw stop_when_json: null on
-        # both the create response and any subsequent GET racing the writer
-        # cache, which made the predicate flow look broken end-to-end.
+        # billing_unit / per_job_cap_cents. Without this the caller saw
+        # the fields as null on both the create response and any subsequent
+        # GET racing the writer cache, which made the predicate flow look
+        # broken end-to-end (B1, B2 pre-fix symptoms).
         refreshed = jobs.get_job(job["job_id"])
         if refreshed is not None:
             job = refreshed

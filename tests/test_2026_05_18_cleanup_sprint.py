@@ -355,25 +355,32 @@ def test_d12_build_subprocess_env_replaces_path_with_sanitised():
 
 
 # ---------------------------------------------------------------------------
-# C2 — hire_batch idempotency_key: explicitly rejected with a useful hint.
+# C2 — hire_batch idempotency_key. The 2026-05-18 sprint shipped this as an
+# acknowledged_limitation (per-job idempotency_key rejected with a useful
+# hint). The 2026-05-19 follow-up implemented real server-side dedup at the
+# top-level. This test now pins the new contract: per-job still rejected
+# (since the key is per-batch), but the hint redirects to the top-level.
 # ---------------------------------------------------------------------------
 
 
 def test_c2_hire_batch_idempotency_key_rejection_includes_pointer():
-    """The rejection hint must point callers at the supported retry pattern."""
+    """The per-job rejection hint must point callers at the supported top-level."""
     src = Path("sdks/python-sdk/aztea/mcp/meta_tools.py").read_text()
-    assert "idempotency_key dedup is not " in src, (
+    # The deferral-era language ("is not implemented") is gone; the new
+    # hint says the field is a TOP-LEVEL field on hire_batch.
+    assert "TOP-LEVEL field" in src, (
         "hire_batch unsupported_field handler must special-case "
-        "idempotency_key with a pointer at the supported retry pattern"
+        "idempotency_key with a pointer that the field is top-level"
     )
-    assert "cache_replay" in src
-    # And the hire_batch tool description itself must document the limitation.
+    # And the hire_batch tool description must document the new RETRY SAFETY
+    # contract — same idempotency_key + 24h dedup window.
     block_idx = src.find('"name": "aztea_hire_batch"')
     assert block_idx >= 0
-    block = src[block_idx : block_idx + 4000]
-    assert "RETRY SAFETY" in block, (
-        "hire_batch description must document the idempotency limitation"
-    )
+    next_tool = src.find('"name": "aztea_', block_idx + 100)
+    block = src[block_idx:next_tool] if next_tool > block_idx else src[block_idx:]
+    assert "RETRY SAFETY" in block
+    assert "within 24h" in block
+    assert "idempotency.payload_mismatch" in block
 
 
 # ---------------------------------------------------------------------------

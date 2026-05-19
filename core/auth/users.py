@@ -358,6 +358,46 @@ def update_user_role(user_id: str, role: str) -> None:
         conn.execute("UPDATE users SET role = %s WHERE user_id = %s", (role, user_id))
 
 
+def update_user_profile(
+    user_id: str,
+    *,
+    full_name: str | None = None,
+    phone: str | None = None,
+) -> dict | None:
+    """B23, 2026-05-19: minimal profile-update surface for /users/me.
+
+    Updates full_name and/or phone on the user row. Either field accepts
+    None as a no-op (no SQL touch); pass an empty string to clear. Email
+    changes require a verification flow and are intentionally NOT
+    supported here. Returns the updated user dict; returns None if the
+    user does not exist.
+
+    Raises ValueError on overly-long inputs so the API boundary stays
+    strict.
+    """
+    updates: list[tuple[str, str | None]] = []
+    if full_name is not None:
+        normalized_name = str(full_name).strip()
+        if len(normalized_name) > 200:
+            raise ValueError("full_name must be 200 characters or fewer.")
+        updates.append(("full_name", normalized_name or None))
+    if phone is not None:
+        normalized_phone = str(phone).strip()
+        if len(normalized_phone) > 32:
+            raise ValueError("phone must be 32 characters or fewer.")
+        updates.append(("phone", normalized_phone or None))
+    if not updates:
+        return get_user_by_id(user_id)
+    set_clauses = ", ".join(f"{field} = %s" for field, _ in updates)
+    params = tuple(value for _, value in updates) + (user_id,)
+    with _conn() as conn:
+        conn.execute(
+            f"UPDATE users SET {set_clauses} WHERE user_id = %s",
+            params,
+        )
+    return get_user_by_id(user_id)
+
+
 def record_legal_acceptance(
     user_id: str,
     *,

@@ -29,6 +29,13 @@ DISPUTE_FILING_DEPOSIT_INSUFFICIENT_BALANCE = (
 )
 BUDGET_EXCEEDED = "job.budget_exceeded"
 SPEND_LIMIT_EXCEEDED = "payment.spend_limit_exceeded"
+# 2026-05-19 (B1): distinct envelope for the per-job hard cap so callers can
+# distinguish "I asked for a cap" (this one) from "the API key has a cap"
+# (still SPEND_LIMIT_EXCEEDED). Both 402; the difference is which knob to
+# tune.
+JOB_PER_JOB_CAP_EXCEEDED = "job.per_job_cap_exceeded"
+# 2026-05-19 (B3): server-side session budget exceeded.
+WALLET_SESSION_BUDGET_EXCEEDED = "wallet.session_budget_exceeded"
 VERIFIED_CONTRACT_REQUIRED = "job.verified_contract_required"
 ORCHESTRATION_DEPTH_EXCEEDED = "job.orchestration_depth_exceeded"
 DEPOSIT_BELOW_MINIMUM = "payment.deposit_below_minimum"

@@ -1242,6 +1242,45 @@ def wallet_set_daily_spend_limit(
     )
 
 
+@app.post(
+    "/wallets/me/session-budget",
+    response_model=core_models.WalletSessionBudgetResponse,
+    responses=_error_responses(400, 401, 403, 429, 500),
+    tags=["Wallets"],
+    summary="Set or clear the authenticated wallet's session spend cap (B3).",
+)
+@limiter.limit("20/minute")
+def wallet_set_session_budget(
+    request: Request,
+    body: core_models.WalletSessionBudgetRequest,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.WalletSessionBudgetResponse:
+    """B3, 2026-05-19: server-side session budget. Sums charges since
+    session_budget_set_at; pre_call_charge raises wallet.session_budget_
+    exceeded if a new charge would push the total past the cap. Replaces
+    the prior MCP-only client-side dict that was bypassed by any non-MCP
+    caller or process restart.
+    """
+    _require_scope(caller, "caller")
+    owner_id = _caller_owner_id(request)
+    wallet = payments.get_or_create_wallet(owner_id)
+    try:
+        updated = payments.set_wallet_session_budget(
+            wallet["wallet_id"],
+            body.session_budget_cents,
+            reset_counter=body.reset_counter,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return JSONResponse(
+        content={
+            "wallet_id": updated["wallet_id"],
+            "session_budget_cents": updated.get("session_budget_cents"),
+            "session_budget_set_at": updated.get("session_budget_set_at"),
+        }
+    )
+
+
 def _enrich_agent_wallet_rows(rows: list[dict]) -> list[dict]:
     """Attach agent_name (and other registry-sourced fields) to wallet breakdown rows.
 

@@ -763,12 +763,12 @@ _TOOLS: list[dict[str, Any]] = [
             "we report `worker_pool.observed_throughput_jobs_per_sec` on /jobs/batch/{id} status responses so "
             "callers can validate against their own batches."
             "\n\n"
-            "RETRY SAFETY: hire_batch does NOT provide server-side `idempotency_key` dedup in v0 — "
-            "submitting the same batch twice will execute twice and charge twice. Per-job `idempotency_key` "
-            "fields are explicitly rejected (422) so callers don't silently fool themselves. For retry "
-            "safety: (a) the sync /call path dedups identical input via cache_replay for cacheable agents, "
-            "or (b) generate a stable batch_id client-side and short-circuit duplicate submissions yourself. "
-            "Restoring server-side batch dedup is tracked as a v1 item."
+            "RETRY SAFETY: pass a top-level `idempotency_key` (string, ≤128 chars) to dedup retries. "
+            "Two batches submitted with the same (caller, idempotency_key) within 24h return the SAME "
+            "job_ids and the second submission does NOT re-execute or open new escrows. A mismatched "
+            "request body under the same key returns 409 idempotency.payload_mismatch; a retry while "
+            "the first is still running returns 409 idempotency.in_progress with a retry_after_seconds "
+            "hint. Per-job idempotency_key fields are still rejected (422) — the key is per-batch."
         ),
         "input_schema": {
             "type": "object",
@@ -781,6 +781,20 @@ _TOOLS: list[dict[str, Any]] = [
                     "type": "integer",
                     "description": "Hard total spend cap for the batch. Rejected before charge if exceeded.",
                     "minimum": 0,
+                },
+                "idempotency_key": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "description": (
+                        "Top-level dedup key (C2 follow-up, 2026-05-19). Two "
+                        "batches with the same (caller, idempotency_key) "
+                        "within 24h return the SAME job_ids and the second "
+                        "submission does NOT re-execute. Mismatched body "
+                        "under the same key → 409 idempotency.payload_"
+                        "mismatch; retry while first in-flight → 409 "
+                        "idempotency.in_progress."
+                    ),
                 },
                 "jobs": {
                     "type": "array",
@@ -878,16 +892,41 @@ _TOOLS: list[dict[str, Any]] = [
                                 },
                                 "maxItems": 16,
                             },
+                            "billing_unit": {
+                                "type": "string",
+                                "enum": ["call", "partial"],
+                                "description": (
+                                    "Co-pilot billing unit. 'call' bills the listed price "
+                                    "once at terminal regardless of partials. 'partial' "
+                                    "bills per emitted partial_output up to the ceiling. "
+                                    "Defaults to 'call' when omitted."
+                                ),
+                            },
+                            "per_job_cap_cents": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "description": (
+                                    "Hard ceiling on this job's caller charge in cents. "
+                                    "Combines with the per-API-key cap via MIN. Gate "
+                                    "fires BEFORE wallet hold; returns 422 "
+                                    "job.per_job_cap_exceeded if the agent's price "
+                                    "exceeds the cap. Distinct from budget_cents (soft) "
+                                    "— this is the trust-rail safety net."
+                                ),
+                            },
                         },
                         "required": [],
                         "anyOf": [{"required": ["agent_id"]}, {"required": ["slug"]}],
-                        # WHY (bug #1, 2026-05-18): keep additionalProperties=False
-                        # so unsupported per-job keys (e.g. `workspace_id`,
-                        # `max_spend_cents`, `per_job_cap_cents`,
-                        # `stop_when_json`, `tree_depth`) are rejected at the
-                        # schema layer with a clear 422 instead of being
-                        # silently dropped. `tree_depth` is server-derived and
-                        # callers must use the supported governance fields above.
+                        # WHY (bug #1, 2026-05-18; B1/B2/B5, 2026-05-19): keep
+                        # additionalProperties=False so still-unsupported per-job
+                        # keys (e.g. `workspace_id`, `max_spend_cents`,
+                        # `stop_when_json`, `tree_depth`, `idempotency_key`) are
+                        # rejected at the schema layer with a clear 422 instead
+                        # of being silently dropped. The 2026-05-19 sprint added
+                        # `per_job_cap_cents` and `billing_unit` to the supported
+                        # set after wiring real server-side enforcement; do not
+                        # add new fields here without a matching server gate or
+                        # the silent-drop regression returns.
                         "additionalProperties": False,
                     },
                 },
@@ -1278,6 +1317,11 @@ _GROUPED_DISPATCH: dict[str, dict[str, str]] = {
         "batch_status": "aztea_batch_status",
         "run_pipeline": "aztea_run_pipeline",
         "pipeline_status": "aztea_pipeline_status",
+        # 2026-05-19 (B8): create_pipeline was reachable only via HTTP POST
+        # /pipelines. MCP callers had no way to define a new DAG without
+        # leaving the tool surface, which broke the "pipelines work end-to-
+        # end via MCP" contract advertised in run_pipeline's description.
+        "create_pipeline": "aztea_create_pipeline",
         "run_recipe": "aztea_run_recipe",
         "list_pipelines": "aztea_list_pipelines",
         "list_recipes": "aztea_list_recipes",
@@ -1495,6 +1539,8 @@ _GROUPED_TOOLS: list[dict[str, Any]] = [
             "for the period. Use after a batch to prove provenance: every receipt is "
             "Ed25519-signed against the agent's did:web identity. Pass verify_all=true to "
             "re-verify every signature server-side and quote the green-check count.\n"
+            "  • create_pipeline(name, definition, description?, is_public?) — register a new "
+            "saved DAG. Returns pipeline_id usable in subsequent run_pipeline calls.\n"
             "  • run_pipeline / pipeline_status — execute / track a saved DAG of agents.\n"
             "  • run_recipe / list_recipes / list_pipelines — curated multi-step workflows.\n"
             "  • compare(slugs[]|agent_ids[], input_payload) — same task on multiple specialists, side-by-side.\n"
@@ -1511,6 +1557,7 @@ _GROUPED_TOOLS: list[dict[str, Any]] = [
                         "hire_async",
                         "hire_batch",
                         "batch_status",
+                        "create_pipeline",
                         "run_pipeline",
                         "pipeline_status",
                         "run_recipe",
@@ -1523,6 +1570,27 @@ _GROUPED_TOOLS: list[dict[str, Any]] = [
                         "session_audit",
                     ],
                     "description": "Which workflow operation to run.",
+                },
+                "name": {
+                    "type": "string",
+                    "description": "create_pipeline: human-readable pipeline name.",
+                },
+                "definition": {
+                    "type": "object",
+                    "description": (
+                        "create_pipeline: DAG definition object. Must contain `nodes: [...]` "
+                        "or be a list at the top level (shorthand). Each node declares "
+                        "{id, agent_id|slug, input, consumes?, produces?}."
+                    ),
+                    "additionalProperties": True,
+                },
+                "description": {
+                    "type": "string",
+                    "description": "create_pipeline: optional human-readable description.",
+                },
+                "is_public": {
+                    "type": "boolean",
+                    "description": "create_pipeline: when true, the pipeline is discoverable across the marketplace.",
                 },
                 "slug": {"type": "string", "description": "hire_async: target agent slug."},
                 "slugs": {
@@ -1773,14 +1841,23 @@ def call_meta_tool(
             session_state=session_state,
         )
 
-    # aztea_set_session_budget: pure client-side state change, no API call needed
+    # aztea_set_session_budget: 2026-05-19 (B3) — was a pure client-side
+    # state change in session_state['budget_cents']. That cap was bypassed
+    # by any non-MCP caller (HTTP, CLI, SDK) and forgotten on process
+    # restart. Now an HTTP POST to /wallets/me/session-budget; the server
+    # persists the cap on the wallet row and pre_call_charge raises
+    # wallet.session_budget_exceeded on overflow regardless of which
+    # surface initiated the call.
     if tool_name == "aztea_set_session_budget":
-        unknown = sorted(set(arguments) - {"budget_cents"})
+        unknown = sorted(set(arguments) - {"budget_cents", "reset_counter"})
         if unknown:
             return False, {
                 "error": "INVALID_INPUT",
-                "message": f"Unknown field(s): {', '.join(unknown)}. Use budget_cents; pass 0 explicitly to clear.",
-                "allowed_fields": ["budget_cents"],
+                "message": (
+                    f"Unknown field(s): {', '.join(unknown)}. Use budget_cents "
+                    "(int, 0 to clear) and optional reset_counter (bool)."
+                ),
+                "allowed_fields": ["budget_cents", "reset_counter"],
             }
         if "budget_cents" not in arguments:
             return False, {
@@ -1799,38 +1876,41 @@ def call_meta_tool(
                 "error": "INVALID_INPUT",
                 "message": "budget_cents must be >= 0.",
             }
-        session_state["budget_cents"] = budget if budget > 0 else None
-        spent = int(session_state.get("spent_cents") or 0)
+        body: dict[str, Any] = {
+            "session_budget_cents": budget if budget > 0 else None,
+            "reset_counter": bool(arguments.get("reset_counter", True)),
+        }
+        ok, result = _post(
+            session,
+            f"{base}/wallets/me/session-budget",
+            hdrs,
+            timeout,
+            body,
+        )
+        if not ok:
+            return False, result
+        cap = result.get("session_budget_cents")
+        set_at = result.get("session_budget_set_at")
         msg = (
             (
-                f"Session budget set to ${budget / 100:.2f}. "
-                f"Current session spend: ${spent / 100:.2f}."
+                f"Session budget set to ${cap / 100:.2f}. "
+                f"Server enforces the cap on every charge — bypassing MCP "
+                f"won't bypass the gate."
             )
-            if budget > 0
+            if cap
             else "Session budget cleared."
         )
+        # Mirror the cap into session_state so old client-side reads (e.g.
+        # in-flight session_summary) still see a sensible value. The server
+        # is the source of truth; this is just a UX cache.
+        session_state["budget_cents"] = cap
+        session_state["budget_set_at"] = set_at
         return True, {
-            "budget_cents": budget or None,
-            "spent_cents": spent,
+            "wallet_id": result.get("wallet_id"),
+            "budget_cents": cap,
+            "session_budget_set_at": set_at,
             "message": msg,
         }
-
-    # Session budget gate — block paid calls when cap is exhausted
-    budget_cents = session_state.get("budget_cents")
-    if budget_cents is not None:
-        spent = int(session_state.get("spent_cents") or 0)
-        if spent >= budget_cents:
-            return False, {
-                "error": "SESSION_BUDGET_EXCEEDED",
-                "message": (
-                    f"Session budget of ${budget_cents / 100:.2f} reached "
-                    f"(spent ${spent / 100:.2f}). "
-                    "Raise the limit with aztea_set_session_budget or check "
-                    "spend with aztea_session_summary."
-                ),
-                "budget_cents": budget_cents,
-                "spent_cents": spent,
-            }
 
     try:
         if tool_name == "aztea_wallet_balance":
@@ -1914,6 +1994,11 @@ def call_meta_tool(
             if ok:
                 _refund_from_result(session_state, result)
             return ok, result
+        if tool_name == "aztea_create_pipeline":
+            # 2026-05-19 (B8): create a pipeline DAG without leaving MCP.
+            # No charge / accrual — pipeline creation is a setup operation,
+            # not a hire.
+            return _create_pipeline(session, base, hdrs, timeout, arguments)
         if tool_name == "aztea_run_pipeline":
             ok, result = _run_pipeline(session, base, hdrs, timeout, arguments)
             if ok:
@@ -3841,16 +3926,36 @@ def _agent_id_from_bulk(spec: dict, slug_to_agent_id: dict[str, str]) -> str:
 # additionalProperties=False in _TOOLS[aztea_hire_batch]) is the first line
 # of defense — this map exists so the handler stays honest if the schema
 # drifts and a key slips through.
+# 2026-05-19 (B5): each field listed here MUST round-trip through the
+# server. Adding a field here without server-side enforcement re-introduces
+# the silent-drop class of bug (B1, B2 pre-fix). Map of field → server
+# enforcement site:
+#   agent_id, slug, input_payload/input/arguments — resolved at /jobs/batch
+#       slug-resolution preflight (part_009.py).
+#   budget_cents, max_price_cents — soft buyer ceiling; enforced via
+#       _estimate_variable_charge(..., budget_cents=...).
+#   per_job_cap_cents — HARD trust-rail cap; combined with API-key cap
+#       via MIN and enforced via _estimate_variable_charge(...,
+#       per_job_cap_cents=...). 422 `job.per_job_cap_exceeded` on trip.
+#   private_task — disables public work-example recording.
+#   parent_job_id / parent_cascade_policy — orchestration lineage.
+#   callback_url / callback_secret — webhook delivery on terminal state.
+#   clarification_timeout_seconds / _policy — async clarification flow.
+#   output_verification_window_seconds — buyer acceptance window.
+#   stop_when — co-pilot abort predicates (validated via
+#       core.copilot_predicates pre-charge; persisted via
+#       _persist_batch_job_governance).
+#   billing_unit — 'call' vs 'partial' billing for co-pilot mode.
 _HIRE_BATCH_ALLOWED_PER_JOB_FIELDS = frozenset({
     "agent_id", "slug",
     "input_payload", "input", "arguments",
-    "budget_cents", "max_price_cents",
+    "budget_cents", "max_price_cents", "per_job_cap_cents",
     "private_task",
     "parent_job_id", "parent_cascade_policy",
     "callback_url", "callback_secret",
     "clarification_timeout_seconds", "clarification_timeout_policy",
     "output_verification_window_seconds",
-    "stop_when",
+    "stop_when", "billing_unit",
 })
 
 
@@ -3900,14 +4005,16 @@ def _hire_batch(
             # scope for this sprint.
             hint = ""
             if "idempotency_key" in unsupported:
+                # C2 follow-up, 2026-05-19: server-side idempotency_key
+                # dedup now lives at the BATCH level, not the per-job
+                # level. Point callers at the right knob.
                 hint = (
-                    " NOTE: hire_batch idempotency_key dedup is not "
-                    "implemented in v0 — submitting twice will execute "
-                    "twice. For retry safety: (a) use the sync /call path "
-                    "which dedups identical input via cache_replay, or "
-                    "(b) generate the batch_id client-side and short-circuit "
-                    "the second submission yourself. Tracking restoration "
-                    "of server-side dedup as a v1 item."
+                    " NOTE: idempotency_key is a TOP-LEVEL field on "
+                    "hire_batch, not a per-job field. Move it to the "
+                    "outer request body alongside `jobs`, `intent`, and "
+                    "`max_total_cents`. Two submissions with the same "
+                    "(caller, top-level idempotency_key) within 24h "
+                    "return the SAME job_ids without re-opening escrow."
                 )
             return False, {
                 "error": "INVALID_INPUT",
@@ -3916,7 +4023,9 @@ def _hire_batch(
                     f"jobs[{index}] contains unsupported field(s): "
                     f"{', '.join(unsupported)}. "
                     "Per-job spec accepts only the wire-schema governance "
-                    "fields documented on `aztea_hire_batch.jobs[].properties`."
+                    "fields listed in supported_fields below. "
+                    "Full schema: /api/docs#/Jobs/post__jobs_batch or "
+                    "describe_specialist(slug='aztea_hire_batch')."
                     f"{hint}"
                 ),
                 "unsupported_fields": unsupported,
@@ -3942,6 +4051,10 @@ def _hire_batch(
             job["budget_cents"] = int(spec["budget_cents"])
         if spec.get("max_price_cents") is not None:
             job["max_price_cents"] = int(spec["max_price_cents"])
+        # 2026-05-19 (B1, B5): forward per-job hard cap. Server combines
+        # with the API-key cap via MIN and gates BEFORE charge.
+        if spec.get("per_job_cap_cents") is not None:
+            job["per_job_cap_cents"] = int(spec["per_job_cap_cents"])
         if spec.get("private_task") is not None:
             job["private_task"] = bool(spec["private_task"])
         # bug #1+16: forward per-job governance through to /jobs/batch so they
@@ -3964,6 +4077,11 @@ def _hire_batch(
             )
         if isinstance(spec.get("stop_when"), list):
             job["stop_when"] = spec["stop_when"]
+        # 2026-05-19 (B2, B5): forward billing_unit so co-pilot mode works
+        # via hire_batch. The server now persists it in the same UPDATE
+        # that writes stop_when_json.
+        if spec.get("billing_unit") is not None:
+            job["billing_unit"] = str(spec["billing_unit"]).strip()
         jobs_body.append(job)
     body: dict[str, Any] = {"jobs": jobs_body}
     intent = str(args.get("intent") or "").strip()
@@ -3973,6 +4091,13 @@ def _hire_batch(
         body["max_total_cents"] = int(args["max_total_cents"])
     if args.get("dry_run") is not None:
         body["dry_run"] = bool(args["dry_run"])
+    # C2 follow-up, 2026-05-19: forward top-level idempotency_key so the
+    # server's begin/complete dedup wraps this submission.
+    idem_raw = args.get("idempotency_key")
+    if idem_raw is not None:
+        idem_key = str(idem_raw).strip()
+        if idem_key:
+            body["idempotency_key"] = idem_key[:128]
     ok, result = _post(session, f"{base}/jobs/batch", hdrs, timeout, body)
     if ok:
         job_ids = [
@@ -4308,6 +4433,50 @@ def _pipeline_status(
         elif status == "running":
             result.setdefault("note", "Pipeline run is still running.")
     return ok, result
+
+
+def _create_pipeline(
+    session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
+) -> tuple[bool, dict]:
+    """B8, 2026-05-19: MCP-side wrapper for POST /pipelines.
+
+    Validates the two required fields (name, definition) up-front so a
+    missing field surfaces as INVALID_INPUT with a clear message rather
+    than a 422 from the server. Accepts both the canonical
+    {"definition": {"nodes": [...]}} form and the shorthand where nodes
+    are at the top level — same forms POST /pipelines accepts directly.
+    """
+    name = str(args.get("name") or "").strip()
+    if not name:
+        return False, {
+            "error": "INVALID_INPUT",
+            "message": "name is required to create a pipeline.",
+        }
+    raw_definition = args.get("definition")
+    if isinstance(raw_definition, list):
+        # Shorthand: caller passed nodes directly. Reshape to the canonical
+        # envelope POST /pipelines expects.
+        definition = {"nodes": raw_definition}
+    elif isinstance(raw_definition, dict):
+        definition = raw_definition
+    elif isinstance(args.get("nodes"), list):
+        # Second shorthand: top-level nodes alongside name + description.
+        definition = {"nodes": args["nodes"]}
+    else:
+        return False, {
+            "error": "INVALID_INPUT",
+            "message": (
+                "definition is required. Pass either {definition: {nodes: [...]}}"
+                " or a top-level nodes: [...]."
+            ),
+        }
+    body: dict[str, Any] = {"name": name, "definition": definition}
+    description = str(args.get("description") or "").strip()
+    if description:
+        body["description"] = description
+    if "is_public" in args:
+        body["is_public"] = bool(args["is_public"])
+    return _post(session, f"{base}/pipelines", hdrs, timeout, body)
 
 
 def _run_pipeline(

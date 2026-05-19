@@ -333,6 +333,16 @@ class JobResponse(BaseModel):
     output_verification_decided_at: str | None = None
     output_verification_decision_owner_id: str | None = None
     output_verification_reason: str | None = None
+    # 2026-05-19 (B1, B2): governance fields that previously round-tripped as
+    # null. Now explicit on the response so integrators see the persisted
+    # values without relying on extra="allow" passthrough.
+    # stop_when_json mirrors the storage shape ({"predicates": [...]}) — the
+    # request side uses a flat list (JobCreateRequest.stop_when); the
+    # response keeps the storage envelope for forward-compat with extra
+    # fields (e.g. max_units when that lands).
+    per_job_cap_cents: int | None = None
+    stop_when_json: dict | None = None
+    billing_unit: str | None = None
 
 
 class JobsListResponse(BaseModel):
@@ -507,6 +517,42 @@ class WalletDailySpendLimitRequest(BaseModel):
 class WalletDailySpendLimitResponse(BaseModel):
     wallet_id: str
     daily_spend_limit_cents: int | None = None
+
+
+class WalletSessionBudgetRequest(BaseModel):
+    """B3, 2026-05-19: server-side session budget control surface.
+
+    `reset_counter=True` (default) restarts the spend window at "now" — the
+    new cap measures only future charges. Set to False when raising the cap
+    and you don't want to forgive prior charges in the existing window.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    session_budget_cents: int | None = Field(
+        default=None,
+        ge=0,
+        le=1_000_000,
+        description=(
+            "Optional session spend cap in cents. null or 0 clears the cap. "
+            "Max 1 000 000 cents ($10 000). Distinct from daily_spend_limit_"
+            "cents (which is a rolling 24h cap) — the session cap measures "
+            "charges since the most recent set_session_budget call."
+        ),
+    )
+    reset_counter: bool = Field(
+        default=True,
+        description=(
+            "When true, restart the session window at server-now. When "
+            "false, preserve the existing window (useful when raising the "
+            "cap without forgiving prior charges)."
+        ),
+    )
+
+
+class WalletSessionBudgetResponse(BaseModel):
+    wallet_id: str
+    session_budget_cents: int | None = None
+    session_budget_set_at: str | None = None
 
 
 class WalletWithdrawalResponse(BaseModel):

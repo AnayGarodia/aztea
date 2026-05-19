@@ -29,6 +29,17 @@ _PUBLIC_PATH_PREFIXES = (
     "/api/openapi.json",
     "/api/docs",
     "/api/redoc",
+    # 2026-05-19 (B10): /openapi.json and /redoc are 308-redirected to the
+    # /api/* counterparts. TestClient follows redirects by default, so the
+    # final response is the 200 from the public /api/* endpoint. Listing
+    # the shortnames here is semantically correct — they ARE public via
+    # the redirect.
+    "/openapi.json",
+    "/redoc",
+    # 2026-05-19 (B7): /system/health is an alias for /health (public by
+    # design). The system-router /system/health endpoint mirrors /health's
+    # public contract for load balancers and integrators using either path.
+    "/system/health",
     "/.well-known/",
     "/auth/register",
     "/auth/login",

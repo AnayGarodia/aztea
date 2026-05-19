@@ -462,6 +462,11 @@ def _status_response(state: SandboxState) -> dict[str, Any]:
         "status": state.status,
         "created_at": state.created_at,
         "expires_at": state.expires_at,
+        # B18, 2026-05-19: visibility on wall-clock TTL burn-down. Lets
+        # callers see exactly how much budget remains BEFORE firing an
+        # expensive op (snapshot / fork / docker commit) instead of
+        # learning about it post-mortem.
+        "ttl_remaining_seconds": state.ttl_remaining_seconds,
         "last_activity_at": state.last_activity_at,
         "filesystem_root": state.filesystem_root,
         "services": state.boot.services,
@@ -493,6 +498,8 @@ def _start_response(
         "filesystem_root": state.filesystem_root,
         "boot_timing": state.boot.boot_timing,
         "expires_at": state.expires_at,
+        # B18, 2026-05-19: same TTL-remaining surfacing as in status.
+        "ttl_remaining_seconds": state.ttl_remaining_seconds,
         "snapshot_chain": list(state.snapshot_chain),
         "network": {
             "egress": state.network.egress,
