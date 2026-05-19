@@ -190,6 +190,16 @@ def _local_dispute_fallback(context: dict) -> dict:
 
     Why: keeps disputes from stranding when live judges are off; bias
     toward agent_wins on near-ties matches the historical default.
+
+    F5 (red-team 2026-05-19): the previous version added ``+1`` to the
+    score of whichever side filed the dispute. Because callers file the
+    vast majority of disputes, that bonus structurally biased the
+    fallback toward ``caller_wins`` on every secondary-LLM outage. A
+    JWT-validator dispute reproed this — primary LLM said agent_wins,
+    secondary LLM was unreachable, fallback flipped to caller_wins, and
+    the filing deposit refunded. The scoring is now purely
+    evidence-driven: side identifies who filed but doesn't pre-load the
+    score.
     """
     dispute = context.get("dispute") or {}
     job = context.get("job") or {}
@@ -200,8 +210,8 @@ def _local_dispute_fallback(context: dict) -> dict:
     ] if part).strip()
     caller_hits, agent_hits = _collect_dispute_signal_hits(combined, job)
     side = str(dispute.get("side") or "").strip().lower()
-    caller_score = len(caller_hits) + (1 if side == "caller" else 0)
-    agent_score = len(agent_hits) + (1 if side == "agent" else 0)
+    caller_score = len(caller_hits)
+    agent_score = len(agent_hits)
     delta = caller_score - agent_score
     verdict = "caller_wins" if delta >= _DISPUTE_VERDICT_DELTA_THRESHOLD else "agent_wins"
     confidence = min(0.9, max(0.55, 0.55 + (abs(delta) * 0.08)))

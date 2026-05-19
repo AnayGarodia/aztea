@@ -249,6 +249,73 @@ def test_f4_create_dispute_accepts_completed_job():
         os.unlink(path)
 
 
+# ===========================================================================
+# F5 — deterministic fallback judge must not bias toward the filer
+# ===========================================================================
+
+
+def test_f5_fallback_judge_no_caller_side_bonus():
+    """Pure test on the deterministic fallback: with zero per-side hits,
+    the fallback must default to agent_wins regardless of who filed."""
+    from core import judges
+
+    # Caller filed; no hint tokens in the reason at all.
+    context_caller_filed = {
+        "dispute": {
+            "side": "caller",
+            "reason": "I am not satisfied with this output.",
+            "evidence": "",
+        },
+        "job": {"output_payload": {"result": "x"}, "error_message": None},
+    }
+    out = judges._local_dispute_fallback(context_caller_filed)
+    assert out["verdict"] == "agent_wins", (
+        "Pre-F5 the fallback added +1 to caller_score whenever side='caller'. "
+        f"Got verdict={out['verdict']!r} reasoning={out.get('reasoning')!r}"
+    )
+
+
+def test_f5_fallback_judge_caller_signals_still_win_with_evidence():
+    """Strong caller-side evidence (e.g. missing_output + agent crash markers)
+    must still pass the delta threshold and produce caller_wins."""
+    from core import judges
+
+    context = {
+        "dispute": {
+            "side": "caller",
+            "reason": "Output is missing. Agent threw exception. Endpoint timed out.",
+            "evidence": "Empty body, server returned a stack trace.",
+        },
+        "job": {
+            "output_payload": None,
+            "error_message": "Traceback: TimeoutError raised",
+        },
+    }
+    out = judges._local_dispute_fallback(context)
+    assert out["verdict"] == "caller_wins", (
+        f"Real caller-side signal must win, got verdict={out['verdict']!r}"
+    )
+
+
+def test_f5_fallback_judge_no_agent_side_bonus():
+    """Sanity: removing the bonus must symmetrically not penalize agent
+    when the agent filed (e.g. caller's evidence is frivolous)."""
+    from core import judges
+
+    context = {
+        "dispute": {
+            "side": "agent",
+            "reason": "This is silly and a frivolous accusation.",
+            "evidence": "",
+        },
+        "job": {"output_payload": {"r": "fine"}, "error_message": None},
+    }
+    out = judges._local_dispute_fallback(context)
+    # _FRIVOLOUS_PHRASES injects "frivolous_dispute" + "accurate_output"
+    # into agent_hits, so agent should still win without any side bonus.
+    assert out["verdict"] == "agent_wins"
+
+
 def test_f4_internal_bypass_token_works():
     """allow_pre_terminal_dispute_create lets the internal verification
     flow file a dispute against a non-completed job."""
