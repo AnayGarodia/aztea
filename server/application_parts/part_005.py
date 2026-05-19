@@ -653,6 +653,14 @@ def _run_quality_gate(job: dict, agent: dict, output_payload: dict) -> dict[str,
                 agent_name=str(agent.get("name") or ""),
                 agent_description=str(agent.get("description") or ""),
                 quality_hint=_quality_hint_for_agent(agent),
+                # 2026-05-19 (B11): forward the agent's documented output
+                # schema so the deterministic fallback can distinguish a
+                # legit structured error envelope from an unstructured
+                # crash. jwt_validator returning {error: "invalid_signature"}
+                # is success per its contract, not a quality failure.
+                output_schema=agent.get("output_schema")
+                if isinstance(agent.get("output_schema"), dict)
+                else None,
             )
             judge_verdict = str(judge_result.get("verdict") or "").strip().lower()
             if judge_verdict in {"pass", "fail"}:

@@ -539,3 +539,112 @@ def test_b26_compare_duplicate_agent_ids_hint_at_hire_batch():
     assert "manage_workflow(action='hire_batch', jobs=[...])" in src
     # And the response must include duplicate_agent_ids for actionability.
     assert "duplicate_agent_ids" in src
+
+
+# ===========================================================================
+# Cluster E — Quality judge (B11)
+# ===========================================================================
+
+
+def test_b11_schema_permitted_error_envelope_returns_pass():
+    """Agent returning {error: ...} where the schema permits it must PASS."""
+    from core import judges
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "signature_valid": {"type": ["boolean", "null"]},
+            "error": {"type": ["string", "null"]},
+        },
+    }
+    result = judges._local_quality_fallback(
+        input_payload={"token": "bad"},
+        output_payload={"error": "invalid_signature", "signature_valid": False},
+        agent_description="JWT validator",
+        output_schema=schema,
+    )
+    assert result["verdict"] == "pass", (
+        f"Schema permits an `error` field — the agent did its job by "
+        "returning a structured failure. Verdict must be pass; got {result}"
+    )
+    assert result["judge_reason_detail"] == "schema_permitted_error_envelope"
+
+
+def test_b11_undeclared_error_field_still_fails():
+    """Agent with NO `error` in output_schema returning {error: ...} fails."""
+    from core import judges
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "result": {"type": "string"},
+        },
+    }
+    result = judges._local_quality_fallback(
+        input_payload={"x": 1},
+        output_payload={"error": "crashed"},
+        agent_description="Test agent without error envelope",
+        output_schema=schema,
+    )
+    assert result["verdict"] == "fail"
+    assert result["judge_reason_detail"] == "undeclared_error_field"
+
+
+def test_b11_unstructured_crash_payload_still_fails():
+    """Even if the schema declares `error`, an unstructured crash trace fails."""
+    from core import judges
+
+    schema = {"type": "object", "properties": {"error": {"type": "string"}}}
+    result = judges._local_quality_fallback(
+        input_payload={"x": 1},
+        output_payload={
+            "error": (
+                "Traceback (most recent call last):\n"
+                "  File \"agent.py\", line 1, in <module>\n"
+                "TypeError: bad call"
+            ),
+        },
+        agent_description="Crashed agent",
+        output_schema=schema,
+    )
+    assert result["verdict"] == "fail"
+    assert result["judge_reason_detail"] == "unstructured_crash"
+
+
+def test_b11_judge_reason_detail_on_happy_path():
+    """A clean success payload tags `deterministic_heuristic`."""
+    from core import judges
+
+    result = judges._local_quality_fallback(
+        input_payload={"q": "weather"},
+        output_payload={
+            "answer": "Sunny, 72°F",
+            "citations": ["example.com"],
+            "summary": "Forecast looks great" + " " * 110,  # boost text_chars
+        },
+        agent_description="Weather agent",
+        output_schema=None,
+    )
+    assert result["verdict"] == "pass"
+    assert result["judge_reason_detail"] == "deterministic_heuristic"
+
+
+def test_b11_run_quality_judgment_accepts_output_schema_kwarg():
+    """run_quality_judgment must accept and forward output_schema."""
+    from core import judges
+    import inspect
+
+    sig = inspect.signature(judges.run_quality_judgment)
+    assert "output_schema" in sig.parameters, (
+        "Public run_quality_judgment must accept output_schema so callers "
+        "can give the heuristic the agent's contract for B11 exemptions"
+    )
+
+
+def test_b11_part_005_settlement_forwards_output_schema():
+    """The settlement caller in part_005 must forward agent['output_schema']."""
+    src = Path("server/application_parts/part_005.py").read_text()
+    assert "output_schema=agent.get(\"output_schema\")" in src, (
+        "Settlement path must forward the agent's output_schema to the "
+        "quality judge — without it the B11 exemption never fires in prod"
+    )
