@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import uuid
@@ -33,6 +34,33 @@ DB_PATH = _db.DB_PATH
 _local = _db._local
 
 DISPUTE_SIDES = {"caller", "agent"}
+
+# F4 (red-team 2026-05-19): the verification-rejection flow
+# (_ensure_output_rejection_dispute in part_005.py) creates a dispute
+# whose target job is FAILED rather than COMPLETED — its eligibility
+# was already validated by the verification window logic. Other call
+# sites (route handlers, MCP) MUST go through the write-path check.
+# A ContextVar is the cleanest signal because the bypass is per-request,
+# not a global; it never leaks across requests.
+_ALLOW_PRE_TERMINAL_DISPUTE_CREATE: contextvars.ContextVar[bool] = (
+    contextvars.ContextVar("aztea.disputes.allow_pre_terminal", default=False)
+)
+
+
+def allow_pre_terminal_dispute_create() -> contextvars.Token:
+    """Side-effect: temporarily allow create_dispute on a non-completed job.
+
+    Used ONLY by the verification-rejection internal flow which has
+    already established eligibility through the output-verification
+    window. Caller MUST hold the returned token and pass it to
+    ``reset_pre_terminal_bypass`` in a try/finally to scope the bypass.
+    """
+    return _ALLOW_PRE_TERMINAL_DISPUTE_CREATE.set(True)
+
+
+def reset_pre_terminal_bypass(token: contextvars.Token) -> None:
+    """Side-effect: restore the bypass flag to its prior value."""
+    _ALLOW_PRE_TERMINAL_DISPUTE_CREATE.reset(token)
 DISPUTE_STATUSES = {
     "pending",
     # 2026-05-18 (D3): the dispute waits in awaiting_operator until the
@@ -316,8 +344,16 @@ def create_dispute(
     # would get the same thread-local connection and its __exit__ would commit the
     # caller's in-progress BEGIN IMMEDIATE, breaking atomicity.
     def _fetch_job_parties(c: _db.DbConnection) -> dict | None:
+        # F4 (red-team 2026-05-19): also fetch completed_at and status so
+        # the write-path can enforce the same eligibility predicate as
+        # the read-time `is_disputable` annotation. Pre-fix, the route
+        # handler called `is_disputable` (read-time only) — a race or
+        # alternate dispute creation path could file a dispute on a
+        # PENDING / RUNNING job, locking the filing deposit during the
+        # judge run with no payout to claw back.
         return c.execute(
-            "SELECT caller_owner_id, agent_owner_id FROM jobs WHERE job_id = %s",
+            "SELECT caller_owner_id, agent_owner_id, completed_at, status, "
+            "error_message FROM jobs WHERE job_id = %s",
             (job_id,),
         ).fetchone()
 
@@ -331,6 +367,31 @@ def create_dispute(
     parties = {job_row["caller_owner_id"], job_row["agent_owner_id"]}
     if str(filed_by_owner_id).strip() not in parties:
         raise PermissionError("Only a party to the job may file a dispute.")
+
+    # F4 — write-path eligibility check. Mirrors core.jobs.disputable's
+    # core predicates (completed_at is set, status not cancelled). Skipped
+    # only when ``_ALLOW_PRE_TERMINAL_DISPUTE_CREATE`` is True, which is
+    # set by the operator-rejection path (_ensure_output_rejection_dispute)
+    # that already validated eligibility via the verification flow.
+    if not _ALLOW_PRE_TERMINAL_DISPUTE_CREATE.get(False):
+        job_status = str(job_row.get("status") or "").strip().lower()
+        job_completed_at = job_row.get("completed_at")
+        # Cancelled / explicitly-cancelled-via-failed never disputable.
+        if job_status == "cancelled" or (
+            job_status == "failed"
+            and str(job_row.get("error_message") or "")
+            .startswith("Cancelled by caller")
+        ):
+            raise ValueError("dispute.job_cancelled: cancelled jobs are not disputable")
+        # The job must have an output to dispute. completed_at is set
+        # exactly once and never zeroed (see core.jobs.disputable.py
+        # rationale). Pending / running / awaiting_clarification / claimed
+        # all fail this check.
+        if not job_completed_at:
+            raise ValueError(
+                "dispute.not_completed: disputes can only be filed for jobs "
+                "that produced output (completed_at is unset)"
+            )
 
     dispute_id = str(uuid.uuid4())
     now = _now()

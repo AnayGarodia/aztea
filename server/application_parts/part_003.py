@@ -174,6 +174,51 @@ _SENSITIVE_EXAMPLE_AGENT_IDS: frozenset[str] = frozenset(
 )
 
 
+# F3 (red-team 2026-05-19): field-name-based redaction for the public
+# work-example recorder. Per-agent flags (examples_sensitive, Security
+# category) don't capture agents whose outputs are CONDITIONALLY
+# sensitive — e.g. live_sandbox.sandbox_share emits a join_token, but
+# live_sandbox.sandbox_exec doesn't. The right primitive is per-field.
+#
+# Names are matched case-insensitively. Substring matches on "token",
+# "secret", "password", "private_key", "join_token" catch most of the
+# leakage paths the red-team found (share_id, join_token, access,
+# public_url, signed_payload_b64, capture_url, auth_token).
+_SENSITIVE_FIELD_SUBSTRINGS: tuple[str, ...] = (
+    "token", "secret", "password", "passwd", "passphrase",
+    "private_key", "api_key", "auth", "credential",
+    "signed_payload", "signature_priv",
+    "join_token", "share_id", "session_cookie", "cookie",
+    "public_url", "capture_url", "tunnel_url", "webhook_url",
+    "x-aztea-signature",
+)
+
+
+def _is_sensitive_field_name(name: str) -> bool:
+    """Pure: True if a key name matches the redaction allowlist (case-insensitive)."""
+    lowered = str(name or "").lower()
+    return any(marker in lowered for marker in _SENSITIVE_FIELD_SUBSTRINGS)
+
+
+def _redact_sensitive_for_example(value: Any) -> Any:
+    """Pure: deep-walk a value and replace sensitive-named fields with '<redacted>'.
+
+    Lists are walked element-wise. Dicts are walked recursively. Scalars
+    pass through unchanged. The result is a new object — the input is
+    not mutated. Used by _record_public_work_example before writing to
+    the cross-tenant ring buffer.
+    """
+    if isinstance(value, dict):
+        return {
+            key: ("<redacted>" if _is_sensitive_field_name(key)
+                  else _redact_sensitive_for_example(val))
+            for key, val in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_sensitive_for_example(item) for item in value]
+    return value
+
+
 def _record_public_work_example(
     agent: dict,
     input_payload: Any,
@@ -210,10 +255,20 @@ def _record_public_work_example(
     if str(agent.get("category") or "").strip().lower() == "security":
         return
     artifacts = _extract_protocol_output_artifacts(output_payload)
+    # F3 (red-team 2026-05-19): redact sensitive fields from output BEFORE
+    # the example becomes cross-tenant public. The per-agent privacy gate
+    # (examples_sensitive=True) was insufficient — live_sandbox is
+    # marked non-sensitive but its sandbox_share / sandbox_tunnel_open
+    # actions emit join_token / access tokens / signed payloads / public
+    # URLs into the public ring buffer. Redact based on the FIELD NAME,
+    # not the agent flag, so privacy holds across agents that
+    # conditionally produce sensitive outputs.
+    redacted_input = _redact_sensitive_for_example(input_payload)
+    redacted_output = _redact_sensitive_for_example(output_payload)
     example: dict[str, Any] = {
         "created_at": _utc_now_iso(),
-        "input": _truncate_example_value(input_payload),
-        "output": _truncate_example_value(output_payload),
+        "input": _truncate_example_value(redacted_input),
+        "output": _truncate_example_value(redacted_output),
         "model_provider": str(agent.get("model_provider") or "").strip().lower()
         or None,
         "model_id": str(agent.get("model_id") or "").strip() or None,

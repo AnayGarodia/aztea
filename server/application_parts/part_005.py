@@ -802,6 +802,12 @@ def _ensure_output_rejection_dispute(
         int(job.get("price_cents") or 0)
     )
     insufficient_phase = "dispute_create"
+    # F4 (red-team 2026-05-19): bypass the write-path "must be completed"
+    # check in this internal path — the caller already rejected output
+    # via the verification window, which is itself an eligibility gate.
+    # Without this token the new create_dispute predicate would 422 on
+    # the FAILED-via-verification job.
+    _bypass_token = disputes.allow_pre_terminal_dispute_create()
     try:
         conn.execute("BEGIN IMMEDIATE")
         created = disputes.create_dispute(
@@ -863,6 +869,11 @@ def _ensure_output_rejection_dispute(
             job.get("job_id"),
         )
         raise HTTPException(status_code=500, detail="Failed to open dispute.")
+    finally:
+        # F4 — restore the bypass flag regardless of path. ContextVar is
+        # per-request anyway, but explicit cleanup keeps the contract
+        # local to this helper.
+        disputes.reset_pre_terminal_bypass(_bypass_token)
 
 
 def _cascade_fail_active_child_jobs(

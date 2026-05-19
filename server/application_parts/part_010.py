@@ -1207,7 +1207,31 @@ def jobs_dispute(
         )
     except ValueError as exc:
         conn.execute("ROLLBACK")
-        raise HTTPException(status_code=400, detail=str(exc))
+        # F4 (red-team 2026-05-19): the new write-path eligibility check
+        # in disputes.create_dispute raises ValueError prefixed with the
+        # canonical error_code (e.g. "dispute.not_completed: ..."). Lift
+        # the code out so the response carries a structured envelope
+        # instead of a bare 400 with the raw message.
+        raw_msg = str(exc)
+        if raw_msg.startswith("dispute.not_completed"):
+            raise HTTPException(
+                status_code=422,
+                detail=error_codes.make_error(
+                    "dispute.not_completed",
+                    "Disputes can only be filed for jobs that produced output.",
+                    {"job_id": job_id, "current_status": job.get("status")},
+                ),
+            )
+        if raw_msg.startswith("dispute.job_cancelled"):
+            raise HTTPException(
+                status_code=409,
+                detail=error_codes.make_error(
+                    "dispute.job_cancelled",
+                    "Cancelled jobs are not disputable.",
+                    {"job_id": job_id, "current_status": job.get("status")},
+                ),
+            )
+        raise HTTPException(status_code=400, detail=raw_msg)
     except PermissionError as exc:
         conn.execute("ROLLBACK")
         raise HTTPException(status_code=403, detail=str(exc))

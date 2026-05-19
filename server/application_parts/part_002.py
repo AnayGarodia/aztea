@@ -491,6 +491,12 @@ def _job_response(
         "platform_wallet_id",
         "charge_tx_id",
         "agent_owner_id",
+        # F2 (red-team 2026-05-19): callback_secret was leaking back to the
+        # caller in JobResponse despite the schema docstring promising
+        # "Sent only on creation; never echoed back". Treat it the same
+        # as the wallet ids — pre-existing on the row but stripped from
+        # the response.
+        "callback_secret",
     }
     for key in hidden:
         result.pop(key, None)
