@@ -307,6 +307,34 @@ def test_f8_max_price_cents_alias_round_trips(client):
 # ===========================================================================
 
 
+# ===========================================================================
+# F14 — CORS preflight from a disallowed origin returns 204 (soft reject)
+# instead of 400 ("Disallowed CORS origin"). Browsers still block the
+# actual fetch via same-origin policy; the soft reject keeps the
+# preflight from showing up as a console hard-fail.
+# ===========================================================================
+
+
+def test_f14_cors_preflight_soft_rejects_disallowed_origin(client):
+    resp = client.options(
+        "/jobs",
+        headers={
+            "Origin": "https://attacker.example.com",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        },
+    )
+    assert resp.status_code == 204, (
+        f"Disallowed-origin preflight must soft-reject with 204, got "
+        f"{resp.status_code}: {resp.text}"
+    )
+    # No ACAO header — the browser will refuse the subsequent request,
+    # but the preflight itself succeeded.
+    assert "access-control-allow-origin" not in {
+        k.lower() for k in resp.headers.keys()
+    }, resp.headers
+
+
 def test_f11_sub_cent_price_rejected_at_registration(client):
     """Direct external agent registration at $0.003 must 400 with a
     structured reason. Pre-fix the spec accepted it and the call charged

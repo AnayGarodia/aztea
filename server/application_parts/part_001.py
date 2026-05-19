@@ -897,6 +897,26 @@ app.add_middleware(
     max_age=600,
 )
 
+
+# F14 (red-team 2026-05-19): Starlette's CORSMiddleware returns
+# "400 Disallowed CORS origin" when a browser preflights from an Origin
+# that isn't in ``allow_origins``. Browsers treat 400 as a hard fetch
+# failure with a console message. A soft 204 with no ACAO header keeps
+# the browser's own same-origin enforcement intact while presenting a
+# friendlier failure: the fetch still gets blocked, but the rejection
+# is "your origin isn't on the allow list" instead of "the server is
+# misbehaving". Outermost middleware so it sees the request before
+# CORSMiddleware short-circuits.
+@app.middleware("http")
+async def _soft_reject_disallowed_cors_preflight(request, call_next):
+    if request.method == "OPTIONS":
+        origin = request.headers.get("origin") or ""
+        if origin and "access-control-request-method" in request.headers:
+            if origin not in _cors_origins and "*" not in _cors_origins:
+                from starlette.responses import Response
+                return Response(status_code=204)
+    return await call_next(request)
+
 def _health_check_db() -> str:
     """Run a tiny SELECT 1 against the configured DB. Returns 'ok' or 'error'."""
     try:
