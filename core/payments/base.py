@@ -90,6 +90,27 @@ class WalletDailySpendLimitExceededError(Exception):
         )
 
 
+class WalletSessionBudgetExceededError(Exception):
+    """Raised when a charge would push session spend past the session cap.
+
+    Session budget is a server-side wallet column (B3, 2026-05-19) — the
+    prior MCP-only client-side dict was bypassed by any non-MCP caller or
+    process restart. Sums charges since `session_budget_set_at`; reset by
+    re-POST to /wallets/{id}/set_session_budget with reset_counter=true.
+    """
+
+    def __init__(
+        self, limit_cents: int, session_spent_cents: int, attempted_cents: int
+    ):
+        self.limit_cents = int(limit_cents)
+        self.session_spent_cents = int(session_spent_cents)
+        self.attempted_cents = int(attempted_cents)
+        super().__init__(
+            "Wallet session budget exceeded: "
+            f"session_spent {session_spent_cents}¢, attempted {attempted_cents}¢, cap {limit_cents}¢"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Connection
 # ---------------------------------------------------------------------------
@@ -248,6 +269,16 @@ def init_payments_db() -> None:
         )
         _add_column_if_missing(
             conn, "ALTER TABLE wallets ADD COLUMN display_label TEXT"
+        )
+        # 2026-05-19 (B3): server-side session budget. Mirrored in the
+        # migration-runner (0060_job_governance.sql); also added here so
+        # tests calling init_payments_db() directly pick up the column
+        # without re-running migrations.
+        _add_column_if_missing(
+            conn, "ALTER TABLE wallets ADD COLUMN session_budget_cents INTEGER"
+        )
+        _add_column_if_missing(
+            conn, "ALTER TABLE wallets ADD COLUMN session_budget_set_at TEXT"
         )
         conn.execute(
             """
@@ -549,6 +580,75 @@ def set_wallet_daily_spend_limit(
     return dict(row)
 
 
+def set_wallet_session_budget(
+    wallet_id: str,
+    session_budget_cents: int | None,
+    *,
+    reset_counter: bool = True,
+) -> dict:
+    """B3: set or clear the caller wallet's server-side session budget cap.
+
+    Pass ``session_budget_cents=None`` (or 0) to clear the cap. When
+    ``reset_counter=True`` (the default) the session-spent window restarts
+    from "now", so the new cap measures only future charges; pass False to
+    preserve the existing window — useful when you're raising the cap and
+    don't want to forgive prior charges. Raises ``ValueError`` on negative
+    values or values above ``_DAILY_SPEND_LIMIT_MAX_CENTS`` (same ceiling
+    as the daily cap to keep both knobs bounded by one operator value).
+    """
+    normalized = None
+    if session_budget_cents is not None:
+        normalized = int(session_budget_cents)
+        if normalized < 0:
+            raise ValueError("session_budget_cents must be >= 0.")
+        if normalized == 0:
+            normalized = None  # 0 == clear
+        elif normalized > _DAILY_SPEND_LIMIT_MAX_CENTS:
+            raise ValueError(
+                f"session_budget_cents must be <= {_DAILY_SPEND_LIMIT_MAX_CENTS} "
+                f"(${_DAILY_SPEND_LIMIT_MAX_CENTS // 100:,})."
+            )
+    new_set_at = _now() if (normalized is not None and reset_counter) else None
+    with _conn() as conn:
+        if new_set_at is not None:
+            updated = conn.execute(
+                """
+                UPDATE wallets
+                SET session_budget_cents = %s,
+                    session_budget_set_at = %s
+                WHERE wallet_id = %s
+                """,
+                (normalized, new_set_at, wallet_id),
+            ).rowcount
+        elif normalized is None:
+            # Clearing: drop both fields so the gate is a clean no-op.
+            updated = conn.execute(
+                """
+                UPDATE wallets
+                SET session_budget_cents = NULL,
+                    session_budget_set_at = NULL
+                WHERE wallet_id = %s
+                """,
+                (wallet_id,),
+            ).rowcount
+        else:
+            # Setting a cap without resetting the counter — preserve set_at.
+            updated = conn.execute(
+                """
+                UPDATE wallets
+                SET session_budget_cents = %s
+                WHERE wallet_id = %s
+                """,
+                (normalized, wallet_id),
+            ).rowcount
+        if updated == 0:
+            raise ValueError(f"Wallet '{wallet_id}' not found.")
+        row = conn.execute(
+            "SELECT * FROM wallets WHERE wallet_id = %s", (wallet_id,)
+        ).fetchone()
+    return dict(row)
+
+
 def update_wallet_caller_trust(owner_id: str, trust_score: float) -> dict | None:
     """Persist a freshly computed caller trust score to the owner's wallet.
 
@@ -840,6 +940,7 @@ def pre_call_charge(
 
         row = conn.execute(
             "SELECT balance_cents, daily_spend_limit_cents,"
+            " session_budget_cents, session_budget_set_at,"
             " parent_wallet_id, guarantor_enabled, guarantor_cap_cents"
             " FROM wallets WHERE wallet_id = %s",
             (caller_wallet_id,),
@@ -936,7 +1037,12 @@ def pre_call_charge(
                     attempted_cents=price_cents,
                 )
         wallet_daily_limit_raw = row["daily_spend_limit_cents"]
-        if wallet_daily_limit_raw is not None:
+        # 2026-05-19 (B4): skip the daily check entirely for zero-cost calls.
+        # A free-agent call (secret_scanner, dockerfile_analyzer, cve_lookup
+        # at $0) cannot push net_spent past any cap by definition. Pre-fix
+        # the check fired whenever today_spend already exceeded the cap,
+        # blocking free calls until midnight even though they cost nothing.
+        if wallet_daily_limit_raw is not None and price_cents > 0:
             daily_limit_cents = int(wallet_daily_limit_raw)
             now_dt = datetime.now(timezone.utc)
             since_iso = (now_dt - timedelta(hours=24)).isoformat()
@@ -960,6 +1066,45 @@ def pre_call_charge(
                 raise WalletDailySpendLimitExceededError(
                     limit_cents=daily_limit_cents,
                     spent_last_24h_cents=net_spent_daily,
+                    attempted_cents=price_cents,
+                )
+        # 2026-05-19 (B3): server-side session budget. Mirrors the daily
+        # check but bounds spend since session_budget_set_at instead of the
+        # rolling 24h window. Free-agent calls bypass for the same reason as
+        # the daily check above. Pre-fix the session budget existed only as
+        # a client-side dict in the MCP SDK and was bypassed by any
+        # non-MCP caller or process restart.
+        session_budget_raw = row["session_budget_cents"]
+        if session_budget_raw is not None and price_cents > 0:
+            session_budget_cents = int(session_budget_raw)
+            session_started_at = row["session_budget_set_at"]
+            # When set_at is null but the cap is set (defensive — set by
+            # someone bypassing the endpoint), treat as "session starts now"
+            # so every future charge counts.
+            window_start_iso = str(session_started_at or _now())
+            session_spent_row = conn.execute(
+                """
+                SELECT COALESCE(SUM(-amount_cents), 0) AS net_spent_cents
+                FROM transactions
+                WHERE wallet_id = %s
+                  AND type IN ('charge', 'refund')
+                  AND created_at >= %s
+                """,
+                (caller_wallet_id, window_start_iso),
+            ).fetchone()
+            session_spent = (
+                int(session_spent_row["net_spent_cents"] or 0)
+                if session_spent_row else 0
+            )
+            if session_spent < 0:
+                session_spent = 0
+            if session_spent + price_cents > session_budget_cents:
+                _obs.payment_charges_total.labels(
+                    outcome="session_budget_exceeded"
+                ).inc()
+                raise WalletSessionBudgetExceededError(
+                    limit_cents=session_budget_cents,
+                    session_spent_cents=session_spent,
                     attempted_cents=price_cents,
                 )
         updated = conn.execute(

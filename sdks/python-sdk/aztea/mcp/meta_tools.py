@@ -1798,14 +1798,23 @@ def call_meta_tool(
             session_state=session_state,
         )
 
-    # aztea_set_session_budget: pure client-side state change, no API call needed
+    # aztea_set_session_budget: 2026-05-19 (B3) — was a pure client-side
+    # state change in session_state['budget_cents']. That cap was bypassed
+    # by any non-MCP caller (HTTP, CLI, SDK) and forgotten on process
+    # restart. Now an HTTP POST to /wallets/me/session-budget; the server
+    # persists the cap on the wallet row and pre_call_charge raises
+    # wallet.session_budget_exceeded on overflow regardless of which
+    # surface initiated the call.
     if tool_name == "aztea_set_session_budget":
-        unknown = sorted(set(arguments) - {"budget_cents"})
+        unknown = sorted(set(arguments) - {"budget_cents", "reset_counter"})
         if unknown:
             return False, {
                 "error": "INVALID_INPUT",
-                "message": f"Unknown field(s): {', '.join(unknown)}. Use budget_cents; pass 0 explicitly to clear.",
-                "allowed_fields": ["budget_cents"],
+                "message": (
+                    f"Unknown field(s): {', '.join(unknown)}. Use budget_cents "
+                    "(int, 0 to clear) and optional reset_counter (bool)."
+                ),
+                "allowed_fields": ["budget_cents", "reset_counter"],
             }
         if "budget_cents" not in arguments:
             return False, {
@@ -1824,38 +1833,41 @@ def call_meta_tool(
                 "error": "INVALID_INPUT",
                 "message": "budget_cents must be >= 0.",
             }
-        session_state["budget_cents"] = budget if budget > 0 else None
-        spent = int(session_state.get("spent_cents") or 0)
+        body: dict[str, Any] = {
+            "session_budget_cents": budget if budget > 0 else None,
+            "reset_counter": bool(arguments.get("reset_counter", True)),
+        }
+        ok, result = _post(
+            session,
+            f"{base}/wallets/me/session-budget",
+            hdrs,
+            timeout,
+            body,
+        )
+        if not ok:
+            return False, result
+        cap = result.get("session_budget_cents")
+        set_at = result.get("session_budget_set_at")
         msg = (
             (
-                f"Session budget set to ${budget / 100:.2f}. "
-                f"Current session spend: ${spent / 100:.2f}."
+                f"Session budget set to ${cap / 100:.2f}. "
+                f"Server enforces the cap on every charge — bypassing MCP "
+                f"won't bypass the gate."
             )
-            if budget > 0
+            if cap
             else "Session budget cleared."
         )
+        # Mirror the cap into session_state so old client-side reads (e.g.
+        # in-flight session_summary) still see a sensible value. The server
+        # is the source of truth; this is just a UX cache.
+        session_state["budget_cents"] = cap
+        session_state["budget_set_at"] = set_at
         return True, {
-            "budget_cents": budget or None,
-            "spent_cents": spent,
+            "wallet_id": result.get("wallet_id"),
+            "budget_cents": cap,
+            "session_budget_set_at": set_at,
             "message": msg,
         }
-
-    # Session budget gate — block paid calls when cap is exhausted
-    budget_cents = session_state.get("budget_cents")
-    if budget_cents is not None:
-        spent = int(session_state.get("spent_cents") or 0)
-        if spent >= budget_cents:
-            return False, {
-                "error": "SESSION_BUDGET_EXCEEDED",
-                "message": (
-                    f"Session budget of ${budget_cents / 100:.2f} reached "
-                    f"(spent ${spent / 100:.2f}). "
-                    "Raise the limit with aztea_set_session_budget or check "
-                    "spend with aztea_session_summary."
-                ),
-                "budget_cents": budget_cents,
-                "spent_cents": spent,
-            }
 
     try:
         if tool_name == "aztea_wallet_balance":

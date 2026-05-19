@@ -222,3 +222,119 @@ def test_b1_b2_job_response_declares_governance_fields():
             f"JobResponse must declare {name!r} so integrators see it in "
             "the OpenAPI surface and IDE autocomplete"
         )
+
+
+# ===========================================================================
+# Cluster B — Wallet caps (B3, B4)
+# ===========================================================================
+
+
+# --- B4 -------------------------------------------------------------------
+
+
+def test_b4_daily_limit_check_skips_zero_cost_calls():
+    """pre_call_charge must wrap the daily check in `if price_cents > 0`."""
+    src = Path("core/payments/base.py").read_text()
+    assert "if wallet_daily_limit_raw is not None and price_cents > 0:" in src, (
+        "Daily-limit check must short-circuit on price_cents==0 — without "
+        "this, free agents are blocked once today_spend exceeds the cap "
+        "even though they cost nothing (B4 symptom)"
+    )
+
+
+# --- B3 -------------------------------------------------------------------
+
+
+def test_b3_session_budget_exception_type_exists():
+    """The new exception type is exported from core.payments."""
+    from core import payments
+
+    assert hasattr(payments, "WalletSessionBudgetExceededError")
+    exc = payments.WalletSessionBudgetExceededError(
+        limit_cents=280, session_spent_cents=270, attempted_cents=20
+    )
+    assert exc.limit_cents == 280
+    assert exc.session_spent_cents == 270
+    assert exc.attempted_cents == 20
+
+
+def test_b3_pre_call_charge_enforces_session_budget():
+    """pre_call_charge must read session_budget_cents and raise on overflow."""
+    src = Path("core/payments/base.py").read_text()
+    # Must SELECT the new columns in the gate row.
+    assert "session_budget_cents, session_budget_set_at," in src, (
+        "pre_call_charge SELECT must read session_budget_cents — without "
+        "it the cap can't be enforced"
+    )
+    # Must raise the new exception when session_spent + price exceeds cap.
+    assert "raise WalletSessionBudgetExceededError(" in src
+    # Must skip zero-cost calls (B4 short-circuit applies to session check too).
+    assert "if session_budget_raw is not None and price_cents > 0:" in src
+
+
+def test_b3_session_budget_setter_helper_exists():
+    """set_wallet_session_budget helper writes the cap + set_at atomically."""
+    from core import payments
+
+    assert hasattr(payments, "set_wallet_session_budget")
+    # The helper signature must accept reset_counter.
+    import inspect
+
+    sig = inspect.signature(payments.set_wallet_session_budget)
+    assert "reset_counter" in sig.parameters
+    # Default reset_counter=True so the common "set cap, start window now"
+    # path requires zero extra args.
+    assert sig.parameters["reset_counter"].default is True
+
+
+def test_b3_set_session_budget_route_registered():
+    """POST /wallets/me/session-budget endpoint declared in part_011.py."""
+    src = Path("server/application_parts/part_011.py").read_text()
+    assert '@app.post(\n    "/wallets/me/session-budget",' in src
+    assert "wallet_set_session_budget" in src
+
+
+def test_b3_error_handler_maps_to_402():
+    """server/application_parts/part_002.py maps the exception to 402."""
+    src = Path("server/application_parts/part_002.py").read_text()
+    assert "except payments.WalletSessionBudgetExceededError as exc:" in src
+    assert "WALLET_SESSION_BUDGET_EXCEEDED" in src
+
+
+def test_b3_mcp_set_session_budget_now_hits_server():
+    """MCP aztea_set_session_budget must POST to /wallets/me/session-budget."""
+    src = Path("sdks/python-sdk/aztea/mcp/meta_tools.py").read_text()
+    # The handler must call _post with the new endpoint URL.
+    assert "/wallets/me/session-budget" in src, (
+        "MCP set_session_budget must POST to /wallets/me/session-budget — "
+        "the prior client-side-only dict was bypassed by any non-MCP caller"
+    )
+    # And the session_state["budget_cents"] write must come AFTER the
+    # server confirms — never as the primary source of truth.
+    assert 'session_state["budget_cents"] = cap' in src
+
+
+def test_b3_session_budget_response_model_declared():
+    """WalletSessionBudgetResponse + Request models exist."""
+    from core.models import responses
+
+    assert hasattr(responses, "WalletSessionBudgetRequest")
+    assert hasattr(responses, "WalletSessionBudgetResponse")
+    fields = responses.WalletSessionBudgetRequest.model_fields
+    assert "session_budget_cents" in fields
+    assert "reset_counter" in fields
+    # Forbid extra fields — silent typos like "limit_cents" would otherwise
+    # clear the cap accidentally (the same class of bug WalletDailySpendLimit
+    # Request fixed in 1.7.2).
+    assert responses.WalletSessionBudgetRequest.model_config.get("extra") == "forbid"
+
+
+# --- migration ------------------------------------------------------------
+
+
+def test_cluster_a_b_migration_0060_adds_three_columns():
+    """Migration 0060 adds jobs.per_job_cap_cents + wallets.session_budget_*."""
+    src = Path("migrations/0060_job_governance.sql").read_text()
+    assert "ALTER TABLE jobs ADD COLUMN per_job_cap_cents INTEGER" in src
+    assert "ALTER TABLE wallets ADD COLUMN session_budget_cents INTEGER" in src
+    assert "ALTER TABLE wallets ADD COLUMN session_budget_set_at TEXT" in src

@@ -110,7 +110,9 @@ def test_set_session_budget_rejects_unknown_keys():
     )
     assert ok is False
     assert result["error"] == "INVALID_INPUT"
-    assert result["allowed_fields"] == ["budget_cents"]
+    # 2026-05-19 (B3): allowed_fields now includes reset_counter alongside
+    # budget_cents since the SDK forwards both to /wallets/me/session-budget.
+    assert result["allowed_fields"] == ["budget_cents", "reset_counter"]
 
 
 def test_verify_output_uses_jobs_verification_route(monkeypatch):

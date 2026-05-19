@@ -89,6 +89,29 @@ def _pre_call_charge_or_402(
                 },
             ),
         )
+    except payments.WalletSessionBudgetExceededError as exc:
+        # 2026-05-19 (B3): server-side session budget. Distinct code
+        # (wallet.session_budget_exceeded) so callers can branch on
+        # "tighten my session" vs "extend my daily allowance".
+        raise HTTPException(
+            status_code=402,
+            detail=error_codes.make_error(
+                error_codes.WALLET_SESSION_BUDGET_EXCEEDED,
+                "Wallet session budget exceeded.",
+                {
+                    "scope": "wallet_session",
+                    "wallet_id": caller_wallet_id,
+                    "limit_cents": exc.limit_cents,
+                    "session_spent_cents": exc.session_spent_cents,
+                    "attempted_cents": exc.attempted_cents,
+                    "next_step": (
+                        "Increase or reset the cap via "
+                        "POST /wallets/{wallet_id}/set_session_budget "
+                        "(reset_counter=true to restart the window)."
+                    ),
+                },
+            ),
+        )
 
 
 def _agent_has_verified_contract(agent: dict) -> bool:
