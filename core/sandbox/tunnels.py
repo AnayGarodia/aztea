@@ -51,6 +51,36 @@ _TUNNELS: dict[str, dict[str, Any]] = {}
 _TUNNELS_LOCK = threading.RLock()
 
 
+def _tunnel_stub_envelope(
+    *, reason: str, kind: str, tunnel_id: Any
+) -> dict[str, Any]:
+    """B16, 2026-05-19: shared shape for the tunnel_open / tunnel_close
+    structured-stub responses.
+
+    Returns a dict that satisfies BOTH the new contract (``status``,
+    ``refunded``, ``kind``, ``reason``) AND the legacy assertion shape
+    (``error`` with code+message). Callers that branch on either are
+    happy without a deprecation step.
+    """
+    return {
+        "status": "invalid_input",
+        "tunnel_id": tunnel_id,
+        "public_url": None,
+        "reason": reason,
+        "kind": kind,
+        "refunded": True,
+        # Legacy callers (and existing test_live_sandbox.test_tunnel_
+        # validates_port_range) branch on `out["error"]`. Keep both
+        # shapes available so the stub stays compatible without
+        # forcing an in-flight breaking change.
+        "error": {
+            "code": "sandbox.invalid_input",
+            "message": reason,
+            "kind": kind,
+        },
+    }
+
+
 def tunnel_open(payload: dict[str, Any]) -> dict[str, Any]:
     """Expose a service:port from this sandbox over a public URL.
 
@@ -76,24 +106,16 @@ def tunnel_open(payload: dict[str, Any]) -> dict[str, Any]:
     try:
         state, service, port = _validate_tunnel_input(payload)
     except (SandboxNotFound, SandboxServiceMissing, SandboxInvalidInput) as exc:
-        return {
-            "status": "invalid_input",
-            "tunnel_id": None,
-            "public_url": None,
-            "reason": str(exc),
-            "kind": type(exc).__name__,
-            "refunded": True,
-        }
+        return _tunnel_stub_envelope(
+            reason=str(exc), kind=type(exc).__name__, tunnel_id=None,
+        )
     auth = str(payload.get("auth") or "none").strip().lower()
     if auth not in ("bearer", "none"):
-        return {
-            "status": "invalid_input",
-            "tunnel_id": None,
-            "public_url": None,
-            "reason": "auth must be 'bearer' or 'none'",
-            "kind": "SandboxInvalidInput",
-            "refunded": True,
-        }
+        return _tunnel_stub_envelope(
+            reason="auth must be 'bearer' or 'none'",
+            kind="SandboxInvalidInput",
+            tunnel_id=None,
+        )
     hostname_hint = str(payload.get("hostname_hint") or "").strip().lower()
     host_port = _resolve_host_port(state, service, port)
     if host_port is None:
@@ -138,22 +160,18 @@ def tunnel_close(payload: dict[str, Any]) -> dict[str, Any]:
     try:
         state = _require(payload)
     except (SandboxNotFound, SandboxInvalidInput) as exc:
-        return {
-            "status": "invalid_input",
-            "tunnel_id": payload.get("tunnel_id"),
-            "reason": str(exc),
-            "kind": type(exc).__name__,
-            "refunded": True,
-        }
+        return _tunnel_stub_envelope(
+            reason=str(exc),
+            kind=type(exc).__name__,
+            tunnel_id=payload.get("tunnel_id"),
+        )
     tunnel_id = str(payload.get("tunnel_id") or "").strip()
     if not tunnel_id:
-        return {
-            "status": "invalid_input",
-            "tunnel_id": None,
-            "reason": "tunnel_id is required",
-            "kind": "SandboxInvalidInput",
-            "refunded": True,
-        }
+        return _tunnel_stub_envelope(
+            reason="tunnel_id is required",
+            kind="SandboxInvalidInput",
+            tunnel_id=None,
+        )
     with _TUNNELS_LOCK:
         record = _TUNNELS.pop(tunnel_id, None)
     if record is None or record.get("sandbox_id") != state.sandbox_id:
