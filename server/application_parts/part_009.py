@@ -904,6 +904,62 @@ def jobs_batch_create(
     _require_scope(caller, "caller")
     if not body.jobs:
         raise HTTPException(status_code=400, detail="jobs array must not be empty.")
+    # C2 follow-up, 2026-05-19: server-side idempotency_key dedup.
+    # Replaces the 422 "idempotency_key not supported" envelope the
+    # 2026-05-18 sprint shipped as an acknowledged_limitation. Cached
+    # response is returned verbatim (same job_ids, same charge state)
+    # so a retry burst doesn't open new escrows.
+    _idempotency_claim_owner: str | None = None
+    if body.idempotency_key:
+        from core import idempotency as _idem
+        request_hash = _idem.compute_request_hash(body.model_dump())
+        owner_id = _caller_owner_id(request)
+        claim = _idem.begin(
+            owner_id=owner_id,
+            scope="hire_batch",
+            idempotency_key=body.idempotency_key,
+            request_hash=request_hash,
+        )
+        if claim.kind == "cached":
+            cached = claim.cached_response or {}
+            return JSONResponse(
+                content={
+                    **cached,
+                    "idempotent_replay": True,
+                    "idempotency_key": body.idempotency_key,
+                },
+                status_code=200,
+            )
+        if claim.kind == "in_progress":
+            raise HTTPException(
+                status_code=409,
+                detail=error_codes.make_error(
+                    "idempotency.in_progress",
+                    "A previous submission with this idempotency_key is still "
+                    "running. Wait and retry.",
+                    {
+                        "idempotency_key": body.idempotency_key,
+                        "retry_after_seconds": claim.retry_after_seconds,
+                    },
+                ),
+            )
+        if claim.kind == "payload_mismatch":
+            raise HTTPException(
+                status_code=409,
+                detail=error_codes.make_error(
+                    "idempotency.payload_mismatch",
+                    "An earlier submission used this idempotency_key with a "
+                    "DIFFERENT request body. Pick a fresh key or send the "
+                    "original body.",
+                    {
+                        "idempotency_key": body.idempotency_key,
+                        "stored_request_hash_prefix": (claim.stored_hash or "")[:16],
+                    },
+                ),
+            )
+        # claim.kind == "proceed" — we now own the row and must complete
+        # or release before returning.
+        _idempotency_claim_owner = owner_id
     # Cap raised from 50 → 250 alongside the worker parallelism bump
     # (BUILTIN_JOB_WORKER_PARALLELISM=64, MAX_BATCH_TOTAL=800). The cap
     # exists to bound the wallet pre-debit + DB insert burst, not to limit
@@ -1433,6 +1489,17 @@ def jobs_batch_create(
                 "inner_error": original_detail,
             },
         )
+        # C2 follow-up, 2026-05-19: release the idempotency claim so the
+        # caller can retry with the same key after fixing whatever broke.
+        # Without this the row stays in_progress until the 24h TTL, which
+        # would block retries of an otherwise-recoverable failure.
+        if _idempotency_claim_owner and body.idempotency_key:
+            from core import idempotency as _idem_b
+            _idem_b.release(
+                owner_id=_idempotency_claim_owner,
+                scope="hire_batch",
+                idempotency_key=body.idempotency_key,
+            )
         raise HTTPException(status_code=exc.status_code, detail=wrapped) from exc
     except Exception as exc:
         refunded_count = 0
@@ -1452,6 +1519,14 @@ def jobs_batch_create(
                     agent_id,
                     ref_exc,
                 )
+        # C2 follow-up: same release as the HTTPException branch above.
+        if _idempotency_claim_owner and body.idempotency_key:
+            from core import idempotency as _idem_b
+            _idem_b.release(
+                owner_id=_idempotency_claim_owner,
+                scope="hire_batch",
+                idempotency_key=body.idempotency_key,
+            )
         raise HTTPException(
             status_code=500,
             detail=error_codes.make_error(
@@ -1516,40 +1591,53 @@ def jobs_batch_create(
         _wake_builtin_worker()
     except Exception:
         pass
-    return JSONResponse(
-        content={
-            "batch_id": batch_id,
-            "jobs": response_jobs,
-            "count": len(created_jobs),
-            "submitted_count": len(body.jobs),
-            "invalid_job_count": len(invalid_jobs),
-            "invalid_jobs": invalid_jobs,
-            "total_price_cents": total_price_cents,
-            "total_charged_cents": total_price_cents,
-            "job_ids": [
-                job.get("job_id")
-                for job in created_jobs
-                if isinstance(job, dict) and job.get("job_id")
-            ],
-            "mode": "parallel_marketplace_hire",
-            "intent": body.intent,
-            "max_total_cents": body.max_total_cents,
-            "marketplace_transaction": {
-                "status": "escrow_opened",
-                "rail": "jobs.batch",
-                "escrow": "opened_per_job",
-                "settlement": "per_job_on_completion_or_refund",
-                "receipt": "signed_per_completed_job",
-            },
-            "parallel_hire_trace": trace,
-            "include_mode": "compact" if compact_submission else "full",
-            "next_step": (
-                f"Poll /jobs/batch/{batch_id} or aztea_workflow(action='batch_status', "
-                f"batch_id='{batch_id}') to watch the parallel specialist hires settle."
-            ),
+    _final_response_body = {
+        "batch_id": batch_id,
+        "jobs": response_jobs,
+        "count": len(created_jobs),
+        "submitted_count": len(body.jobs),
+        "invalid_job_count": len(invalid_jobs),
+        "invalid_jobs": invalid_jobs,
+        "total_price_cents": total_price_cents,
+        "total_charged_cents": total_price_cents,
+        "job_ids": [
+            job.get("job_id")
+            for job in created_jobs
+            if isinstance(job, dict) and job.get("job_id")
+        ],
+        "mode": "parallel_marketplace_hire",
+        "intent": body.intent,
+        "max_total_cents": body.max_total_cents,
+        "marketplace_transaction": {
+            "status": "escrow_opened",
+            "rail": "jobs.batch",
+            "escrow": "opened_per_job",
+            "settlement": "per_job_on_completion_or_refund",
+            "receipt": "signed_per_completed_job",
         },
-        status_code=201,
-    )
+        "parallel_hire_trace": trace,
+        "include_mode": "compact" if compact_submission else "full",
+        "next_step": (
+            f"Poll /jobs/batch/{batch_id} or aztea_workflow(action='batch_status', "
+            f"batch_id='{batch_id}') to watch the parallel specialist hires settle."
+        ),
+    }
+    # C2 follow-up, 2026-05-19: cache the success response so a retry
+    # within 24h returns the SAME job_ids without re-opening escrow.
+    # Best-effort — failure to cache must not block the response.
+    if _idempotency_claim_owner and body.idempotency_key:
+        try:
+            from core import idempotency as _idem_c
+            _idem_c.complete(
+                owner_id=_idempotency_claim_owner,
+                scope="hire_batch",
+                idempotency_key=body.idempotency_key,
+                response_status=201,
+                response_body=_final_response_body,
+            )
+        except Exception:  # noqa: BLE001 — cache must not block the response
+            _LOG.warning("idempotency.complete failed", exc_info=True)
+    return JSONResponse(content=_final_response_body, status_code=201)
 
 
 @app.get(

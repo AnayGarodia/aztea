@@ -149,6 +149,17 @@ def _sweep_jobs(
             event_type="job.no_workers_claimed",
         )
         claim_deadline_failed_job_ids.append(settled["job_id"])
+        # B15 follow-up, 2026-05-19: increment the per-agent counter so
+        # oncall can alarm on a spike (signal of a misconfigured external
+        # agent endpoint or a worker outage). Never raises; observability
+        # must not block the sweeper.
+        try:
+            from core import observability as _obs_b15
+            _obs_b15.job_no_workers_claimed_total.labels(
+                agent_id=str(settled.get("agent_id") or "unknown"),
+            ).inc()
+        except Exception:  # noqa: BLE001 — observability is best-effort
+            pass
 
     due_retry = jobs.list_jobs_due_for_retry(limit=limit)
     retry_ready_job_ids: list[str] = []

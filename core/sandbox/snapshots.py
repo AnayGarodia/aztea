@@ -183,10 +183,13 @@ def fork(payload: dict[str, Any]) -> dict[str, Any]:
         )
     migration_note = None
     if not canonical_source and legacy_source:
+        # Deprecation lands in v1.8.0, removal in v1.9.0 — standard
+        # semver-style two-minor-version sunset. Update the migration_note
+        # date when v1.9.0 ships and the alias actually drops.
         migration_note = (
             "Deprecated: pass `source_sandbox_id` instead of `sandbox_id` "
-            "for fork. The legacy `sandbox_id` alias will be removed in "
-            "v1.8.0."
+            "for fork. The legacy `sandbox_id` alias is deprecated in "
+            "v1.8.0 and will be removed in v1.9.0."
         )
         import logging as _logB17
         _logB17.getLogger("aztea.sandbox.snapshots").warning(

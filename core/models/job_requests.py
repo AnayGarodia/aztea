@@ -278,6 +278,20 @@ class JobBatchCreateRequest(BaseModel):
             "any charge if the sum of caller charges exceeds this value."
         ),
     )
+    idempotency_key: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        description=(
+            "C2 follow-up, 2026-05-19: caller-supplied dedup key. Two batches "
+            "with the same (caller_id, idempotency_key) within 24h return the "
+            "SAME job_ids and the second submission does not re-execute. The "
+            "request bodies must match (same request_hash); a mismatch returns "
+            "409 idempotency.payload_mismatch. While a first call is "
+            "in_progress, retries get 409 idempotency.in_progress with a "
+            "retry_after_seconds hint."
+        ),
+    )
     dry_run: bool = Field(
         default=False,
         description=(

@@ -763,12 +763,12 @@ _TOOLS: list[dict[str, Any]] = [
             "we report `worker_pool.observed_throughput_jobs_per_sec` on /jobs/batch/{id} status responses so "
             "callers can validate against their own batches."
             "\n\n"
-            "RETRY SAFETY: hire_batch does NOT provide server-side `idempotency_key` dedup in v0 — "
-            "submitting the same batch twice will execute twice and charge twice. Per-job `idempotency_key` "
-            "fields are explicitly rejected (422) so callers don't silently fool themselves. For retry "
-            "safety: (a) the sync /call path dedups identical input via cache_replay for cacheable agents, "
-            "or (b) generate a stable batch_id client-side and short-circuit duplicate submissions yourself. "
-            "Restoring server-side batch dedup is tracked as a v1 item."
+            "RETRY SAFETY: pass a top-level `idempotency_key` (string, ≤128 chars) to dedup retries. "
+            "Two batches submitted with the same (caller, idempotency_key) within 24h return the SAME "
+            "job_ids and the second submission does NOT re-execute or open new escrows. A mismatched "
+            "request body under the same key returns 409 idempotency.payload_mismatch; a retry while "
+            "the first is still running returns 409 idempotency.in_progress with a retry_after_seconds "
+            "hint. Per-job idempotency_key fields are still rejected (422) — the key is per-batch."
         ),
         "input_schema": {
             "type": "object",
@@ -781,6 +781,20 @@ _TOOLS: list[dict[str, Any]] = [
                     "type": "integer",
                     "description": "Hard total spend cap for the batch. Rejected before charge if exceeded.",
                     "minimum": 0,
+                },
+                "idempotency_key": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "description": (
+                        "Top-level dedup key (C2 follow-up, 2026-05-19). Two "
+                        "batches with the same (caller, idempotency_key) "
+                        "within 24h return the SAME job_ids and the second "
+                        "submission does NOT re-execute. Mismatched body "
+                        "under the same key → 409 idempotency.payload_"
+                        "mismatch; retry while first in-flight → 409 "
+                        "idempotency.in_progress."
+                    ),
                 },
                 "jobs": {
                     "type": "array",
@@ -3991,14 +4005,16 @@ def _hire_batch(
             # scope for this sprint.
             hint = ""
             if "idempotency_key" in unsupported:
+                # C2 follow-up, 2026-05-19: server-side idempotency_key
+                # dedup now lives at the BATCH level, not the per-job
+                # level. Point callers at the right knob.
                 hint = (
-                    " NOTE: hire_batch idempotency_key dedup is not "
-                    "implemented in v0 — submitting twice will execute "
-                    "twice. For retry safety: (a) use the sync /call path "
-                    "which dedups identical input via cache_replay, or "
-                    "(b) generate the batch_id client-side and short-circuit "
-                    "the second submission yourself. Tracking restoration "
-                    "of server-side dedup as a v1 item."
+                    " NOTE: idempotency_key is a TOP-LEVEL field on "
+                    "hire_batch, not a per-job field. Move it to the "
+                    "outer request body alongside `jobs`, `intent`, and "
+                    "`max_total_cents`. Two submissions with the same "
+                    "(caller, top-level idempotency_key) within 24h "
+                    "return the SAME job_ids without re-opening escrow."
                 )
             return False, {
                 "error": "INVALID_INPUT",
@@ -4075,6 +4091,13 @@ def _hire_batch(
         body["max_total_cents"] = int(args["max_total_cents"])
     if args.get("dry_run") is not None:
         body["dry_run"] = bool(args["dry_run"])
+    # C2 follow-up, 2026-05-19: forward top-level idempotency_key so the
+    # server's begin/complete dedup wraps this submission.
+    idem_raw = args.get("idempotency_key")
+    if idem_raw is not None:
+        idem_key = str(idem_raw).strip()
+        if idem_key:
+            body["idempotency_key"] = idem_key[:128]
     ok, result = _post(session, f"{base}/jobs/batch", hdrs, timeout, body)
     if ok:
         job_ids = [

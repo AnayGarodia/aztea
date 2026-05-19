@@ -128,6 +128,16 @@ try:
         "Built-in agent dispatch outcomes",
         ["agent_slug", "status"],  # status: success | failure
     )
+    # B15 follow-up, 2026-05-19: count auto-fail events for jobs whose
+    # workers never claimed. A spike on a single agent_id signals a
+    # broken endpoint or a misconfigured external agent — oncall can
+    # alarm on this without parsing audit logs.
+    job_no_workers_claimed_total = _PCounter(
+        "aztea_job_no_workers_claimed_total",
+        "Jobs auto-failed by the sweeper because no worker claimed them "
+        "before claim_deadline_at.",
+        ["agent_id"],
+    )
     wallet_hold_created_total = _PCounter(
         "aztea_wallet_hold_created_total",
         "Reserve-hold rows created on agent payout",
@@ -194,6 +204,7 @@ except ImportError:
     payout_curve_clawback_total = _NoopMetric()  # type: ignore[assignment]
     job_duration_seconds = _NoopMetric()  # type: ignore[assignment]
     builtin_agent_calls_total = _NoopMetric()  # type: ignore[assignment]
+    job_no_workers_claimed_total = _NoopMetric()  # type: ignore[assignment]
     wallet_hold_created_total = _NoopMetric()  # type: ignore[assignment]
     wallet_hold_released_total = _NoopMetric()  # type: ignore[assignment]
     wallet_hold_clawed_total = _NoopMetric()  # type: ignore[assignment]

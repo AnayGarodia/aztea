@@ -1000,3 +1000,124 @@ def test_b27_describe_response_includes_cache_warning_for_cacheable_agents():
     assert "platform-wide" in src or "another tenant" in src
     assert "Do NOT send" in src
     assert "per-tenant nonce" in src
+
+
+# ===========================================================================
+# Deferred-items follow-up (post-cluster-I)
+# ===========================================================================
+
+
+# --- B17 copy fix ---------------------------------------------------------
+
+
+def test_b17_sunset_date_is_v1_9_0_not_v1_8_0():
+    """The migration_note in sandbox_fork must say v1.9.0 (not v1.8.0).
+
+    Deprecation lands in v1.8.0 (which IS this release). Removal lives
+    one minor version out — standard semver-style sunset window.
+    """
+    src = Path("core/sandbox/snapshots.py").read_text()
+    # The literal lives across a Python string-concat boundary; check
+    # the suffix that sits on one line.
+    assert "v1.8.0 and will be removed in v1.9.0" in src, (
+        "sandbox_fork's migration_note must distinguish the deprecation "
+        "version (v1.8.0) from the removal version (v1.9.0)"
+    )
+    # And the legacy alias still works.
+    assert 'legacy_source = str(payload.get("sandbox_id") or "").strip()' in src
+
+
+# --- B15 follow-up: observability counter ---------------------------------
+
+
+def test_b15_followup_observability_counter_defined():
+    """A Prometheus counter exists for agent.no_workers_claimed events."""
+    src = Path("core/observability.py").read_text()
+    assert "job_no_workers_claimed_total" in src
+    assert "aztea_job_no_workers_claimed_total" in src
+    # The label set must include agent_id so dashboards can break down
+    # spikes by the misconfigured agent.
+    assert '["agent_id"]' in src
+
+
+def test_b15_followup_sweeper_increments_counter():
+    """The sweeper auto-fail path increments the counter."""
+    src = Path("server/application_parts/part_006.py").read_text()
+    assert "job_no_workers_claimed_total.labels(" in src
+    assert "agent_id=str(settled.get(\"agent_id\")" in src
+
+
+# --- C2 follow-up: server-side idempotency_key dedup ---------------------
+
+
+def test_c2_idempotency_module_exists():
+    """core.idempotency wraps begin/complete/release around the
+    idempotency_requests table."""
+    from core import idempotency
+
+    assert hasattr(idempotency, "begin")
+    assert hasattr(idempotency, "complete")
+    assert hasattr(idempotency, "release")
+    assert hasattr(idempotency, "compute_request_hash")
+
+
+def test_c2_request_hash_strips_idempotency_key():
+    """compute_request_hash must NOT include the idempotency_key in the hash."""
+    from core import idempotency
+
+    h1 = idempotency.compute_request_hash({"a": 1, "b": [1, 2]})
+    h2 = idempotency.compute_request_hash({"a": 1, "b": [1, 2], "idempotency_key": "k1"})
+    h3 = idempotency.compute_request_hash({"a": 1, "b": [1, 2], "idempotency_key": "k2"})
+    assert h1 == h2 == h3, (
+        "compute_request_hash must strip idempotency_key — otherwise the "
+        "same body with the same key would mismatch its own replay"
+    )
+
+
+def test_c2_batch_handler_wires_idempotency_check():
+    """/jobs/batch calls idempotency.begin / .complete / .release."""
+    src = Path("server/application_parts/part_009.py").read_text()
+    assert "from core import idempotency as _idem" in src
+    assert "_idem.begin(" in src
+    assert "_idem_c.complete(" in src
+    # The release path must fire on BOTH exception branches.
+    assert src.count("_idem_b.release(") >= 2
+
+
+def test_c2_jobbatchcreaterequest_accepts_idempotency_key():
+    """JobBatchCreateRequest declares idempotency_key as a top-level field."""
+    from core.models.job_requests import JobBatchCreateRequest
+
+    fields = JobBatchCreateRequest.model_fields
+    assert "idempotency_key" in fields
+    # Length-bounded (1..128) so callers can't store unbounded blobs as keys.
+    cap_field = fields["idempotency_key"]
+    assert cap_field.default is None
+
+
+def test_c2_mcp_forwarder_threads_top_level_idempotency_key():
+    """MCP _hire_batch forwarder lifts idempotency_key into the body."""
+    src = Path("sdks/python-sdk/aztea/mcp/meta_tools.py").read_text()
+    assert 'body["idempotency_key"] = idem_key[:128]' in src
+    # And the schema declares the field at the TOP level.
+    idx = src.find('"name": "aztea_hire_batch"')
+    assert idx >= 0
+    next_tool = src.find('"name": "aztea_', idx + 100)
+    block = src[idx:next_tool] if next_tool > idx else src[idx:]
+    # Find an idempotency_key declaration BEFORE the jobs[] array.
+    jobs_idx = block.find('"jobs":')
+    head = block[:jobs_idx]
+    assert '"idempotency_key"' in head, (
+        "idempotency_key must be a TOP-LEVEL property on aztea_hire_batch, "
+        "not a per-job field — the dedup key applies to the whole batch"
+    )
+
+
+def test_c2_mcp_per_job_hint_points_at_top_level():
+    """The per-job rejection hint must redirect callers to the top level."""
+    src = Path("sdks/python-sdk/aztea/mcp/meta_tools.py").read_text()
+    # Old hint that pointed at "out of scope" must be gone.
+    assert "is not implemented in v0" not in src
+    # New hint explains it's a top-level field now.
+    assert "TOP-LEVEL field" in src
+    assert "outer request body" in src
