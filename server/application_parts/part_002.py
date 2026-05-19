@@ -417,6 +417,19 @@ def _agent_response(
     out = dict(agent)
     if caller_type != "master":
         out.pop("owner_id", None)
+    # Phase 5 (red-team 2026-05-19): the envelope contract test caught
+    # ``signing_private_key`` (the agent's Ed25519 private PEM) leaking
+    # via ``dict(agent)`` passthrough — every catalog read was emitting
+    # the key in plaintext. Strip the private key + any related signing
+    # secrets from every caller's view; the public_key + DID identify
+    # the agent cryptographically and stay in the response.
+    for _sensitive_agent_field in (
+        "signing_private_key",
+        "signing_private_key_pem",
+        "signing_secret",
+        "callback_secret",
+    ):
+        out.pop(_sensitive_agent_field, None)
     out["caller_trust_min"] = min_caller_trust
     out["caller_charge_cents"] = caller_charge_cents
     builtin_meta = _builtin_specs.builtin_catalog_metadata(

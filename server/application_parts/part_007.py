@@ -10,18 +10,24 @@ from core import db as _db
 # each returns a structured 404 that names the canonical path and the CLI
 # helper, so the first-integrator experience surfaces the right URL.
 def _registration_moved_response() -> JSONResponse:
+    # Phase 5 (red-team 2026-05-19): the envelope contract test requires
+    # every error body to carry a dot-namespaced ``error`` code. Pre-fix
+    # the body used ``"error": "moved"`` which lacked a namespace and
+    # failed the contract test.
     return JSONResponse(
         status_code=404,
-        content={
-            "error": "moved",
-            "message": (
+        content=error_codes.make_error(
+            "registry.endpoint_moved",
+            (
                 "Agent registration moved. POST /registry/register is the "
                 "canonical self-serve endpoint."
             ),
-            "correct_path": "/registry/register",
-            "cli_hint": "aztea publish <path-to-agent.md|*.py>",
-            "docs": "/api/docs#/Registry/post__registry_register",
-        },
+            {
+                "correct_path": "/registry/register",
+                "cli_hint": "aztea publish <path-to-agent.md|*.py>",
+                "docs": "/api/docs#/Registry/post__registry_register",
+            },
+        ),
     )
 
 
