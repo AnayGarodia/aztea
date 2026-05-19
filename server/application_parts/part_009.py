@@ -1670,7 +1670,11 @@ def jobs_batch_create(
                 scope="hire_batch",
                 idempotency_key=body.idempotency_key,
                 response_status=201,
-                response_body=_final_response_body,
+                # Phase 4 (red-team 2026-05-19): redact sensitive fields
+                # before the 24h-visible idempotency cache stores the
+                # response. Reuses the work-example helper which already
+                # walks dicts/lists with the canonical block list.
+                response_body=_redact_sensitive_for_example(_final_response_body),
             )
         except Exception:  # noqa: BLE001 — cache must not block the response
             _LOG.warning("idempotency.complete failed", exc_info=True)

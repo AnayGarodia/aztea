@@ -830,8 +830,25 @@ def _idempotency_begin(
 def _idempotency_complete(
     idempotency_state: dict | None, body: Any, status_code: int
 ) -> None:
+    """Cache the completed response for 24h replay.
+
+    Phase 4 (red-team 2026-05-19): the stored body MUST be redacted before
+    INSERT. Pre-fix the full agent response landed verbatim in the
+    ``idempotency_requests.response_body`` TEXT column — a 24h-visible
+    copy that survived the wire-level response shapers. Any sensitive
+    field added to a future response would leak here even when the
+    front-door builder strips it.
+
+    The redaction reuses ``_redact_sensitive_for_example`` (the same helper
+    that protects the work-example ring buffer) — both surfaces share the
+    same threat model: a stored copy of an agent response that lives long
+    enough to be read by another principal. Replays therefore serve the
+    redacted body; this is intentional because the first response already
+    delivered any callback_secret / join_token / share_id out-of-band.
+    """
     if not idempotency_state or idempotency_state.get("replay"):
         return
+    redacted_body = _redact_sensitive_for_example(body) if body is not None else body
     now = _utc_now_iso()
     with jobs._conn() as conn:
         conn.execute(
@@ -845,7 +862,7 @@ def _idempotency_complete(
             """,
             (
                 int(status_code),
-                _stable_json_text(body),
+                _stable_json_text(redacted_body),
                 now,
                 idempotency_state["owner_id"],
                 idempotency_state["scope"],

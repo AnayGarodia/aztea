@@ -105,6 +105,120 @@ def test_f1_hire_batch_idempotency_mismatched_body_returns_409(client):
     assert body.get("error") == "idempotency.payload_mismatch", body
 
 
+# ===========================================================================
+# Phase 4 (2026-05-19): idempotency response_body must be redacted at
+# storage. The 24h DB-visible copy of a response must not contain
+# sensitive field names — even when the wire response delivered them.
+# ===========================================================================
+
+
+def test_idempotency_response_body_redacts_sensitive_fields(client):
+    """A response body persisted under an idempotency_key has its
+    callback_secret / join_token / signed_payload_b64 fields stripped
+    before INSERT — verified by direct DB read."""
+    from core import db as _db
+
+    worker = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 500)
+    agent_id = _register_agent_via_api(
+        client,
+        worker["raw_api_key"],
+        name=f"phase4 redact {uuid.uuid4().hex[:6]}",
+        price=0.05,
+        tags=["phase4"],
+    )
+
+    # Submit hire_batch with idempotency_key + a callback_secret that
+    # the response builder echoes (the F2 fix removed callback_secret
+    # from JobResponse, but the redaction layer should still strip
+    # ANY sensitive substring that future drift might re-introduce).
+    idem_key = f"phase4-{uuid.uuid4().hex[:8]}"
+    resp = client.post(
+        "/jobs/batch",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={
+            "idempotency_key": idem_key,
+            "jobs": [
+                {
+                    "agent_id": agent_id,
+                    "input_payload": {"task": "x"},
+                    "callback_url": "https://example.com/hook",
+                    "callback_secret": "shh-this-is-secret-1234",
+                },
+            ],
+        },
+    )
+    assert resp.status_code == 201, resp.text
+
+    # Direct DB read of the stored cache row.
+    with _db.get_db_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT response_body FROM idempotency_requests
+            WHERE idempotency_key = %s AND scope = 'hire_batch'
+            """,
+            (idem_key,),
+        ).fetchone()
+    assert row is not None, "Idempotency row must exist after the call"
+    stored_blob = str(row["response_body"] or "")
+    # The redactor replaces values with "<redacted>" and never echoes
+    # the original secret material.
+    assert "shh-this-is-secret-1234" not in stored_blob, (
+        "callback_secret leaked into idempotency cache!"
+    )
+    # And the canonical sensitive field NAMES (when present as keys)
+    # have their values redacted.
+    for sensitive_marker in (
+        "callback_secret",
+        "join_token",
+        "signed_payload_b64",
+        "raw_api_key",
+        "private_key",
+    ):
+        if sensitive_marker in stored_blob:
+            # If the key name appears, the value must be the redaction sentinel.
+            assert "<redacted>" in stored_blob, (
+                f"Cache contains key {sensitive_marker!r} but no redaction sentinel"
+            )
+
+
+def test_idempotency_replay_serves_redacted_body(client):
+    """A second submission with the same idempotency_key returns the
+    REDACTED body. This is intentional — the first response delivered
+    any secret material out-of-band; replays don't need to re-emit it."""
+    worker = _register_user()
+    caller = _register_user()
+    _fund_user_wallet(caller, 500)
+    agent_id = _register_agent_via_api(
+        client,
+        worker["raw_api_key"],
+        name=f"phase4 replay {uuid.uuid4().hex[:6]}",
+        price=0.05,
+        tags=["phase4r"],
+    )
+    idem_key = f"phase4-replay-{uuid.uuid4().hex[:8]}"
+    body = {
+        "idempotency_key": idem_key,
+        "jobs": [
+            {
+                "agent_id": agent_id,
+                "input_payload": {"task": "y"},
+                "callback_url": "https://example.com/hook",
+                "callback_secret": "another-secret-9999",
+            },
+        ],
+    }
+    first = client.post("/jobs/batch",
+                        headers=_auth_headers(caller["raw_api_key"]), json=body)
+    assert first.status_code == 201
+    second = client.post("/jobs/batch",
+                         headers=_auth_headers(caller["raw_api_key"]), json=body)
+    assert second.status_code == 200, second.text
+    assert second.json().get("idempotent_replay") is True
+    assert "another-secret-9999" not in second.text
+
+
 def test_f1_hire_batch_no_key_does_not_dedup(client):
     """Without an idempotency_key, two identical submissions get two batch_ids."""
     worker = _register_user()
