@@ -2365,6 +2365,21 @@ class RegistryBridge:
             # the lookup already accepts both, so a real 404 is "not in
             # catalog yet" not "wrong slug shape".
             canonical = _canonical_slug(slug)
+            # F9 (red-team 2026-05-19): describe_specialist on a sunset
+            # slug used to return a bare "Unknown tool" — the B25 sunset
+            # envelope only fired in the call dispatch path. Both paths
+            # should now return the same structured "agent.sunset" reply
+            # with a suggestion so integrators are nudged toward the
+            # active replacement before they wire up a call.
+            sunset_lookup_key = canonical or slug
+            sunset_suggestion = _SUNSET_AGENT_REPLACEMENTS.get(sunset_lookup_key)
+            if sunset_suggestion is not None:
+                return {
+                    "error": "agent.sunset",
+                    "message": f"Agent '{sunset_lookup_key}' is no longer available.",
+                    "suggestion": sunset_suggestion,
+                    "canonical_slug": sunset_lookup_key,
+                }
             details: dict[str, Any] = {
                 "error": "TOOL_NOT_FOUND",
                 "message": f"Unknown tool '{slug}'.",

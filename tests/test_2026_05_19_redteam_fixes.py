@@ -250,6 +250,49 @@ def test_f4_create_dispute_accepts_completed_job():
 
 
 # ===========================================================================
+# F9 — describe_specialist on a sunset slug returns a structured
+# agent.sunset hint rather than the bare "Unknown tool".
+# ===========================================================================
+
+
+def test_f9_describe_specialist_returns_sunset_hint():
+    """The B25 sunset map was only consulted on the call path. Now the
+    describe path uses the same map so callers asking about a sunset slug
+    get the recommended replacement instead of a TOOL_NOT_FOUND."""
+    from aztea.mcp.server import _SUNSET_AGENT_REPLACEMENTS, RegistryBridge
+
+    import threading
+    srv = RegistryBridge.__new__(RegistryBridge)
+    srv._catalog_cache = []
+    srv._entries = []
+    srv._lock = threading.Lock()
+    srv._catalog_at = 0.0
+
+    out = srv._describe_catalog_entry("docs_grounder")
+    assert out.get("error") == "agent.sunset", (
+        f"Expected agent.sunset, got {out!r}"
+    )
+    # Suggestion text must come from the map.
+    assert out.get("suggestion") == _SUNSET_AGENT_REPLACEMENTS["docs_grounder"]
+
+
+def test_f9_describe_specialist_returns_tool_not_found_for_unknown():
+    """Real unknown slugs still 404 with TOOL_NOT_FOUND — the sunset
+    shortcut must not swallow genuine misses."""
+    from aztea.mcp.server import RegistryBridge
+
+    import threading
+    srv = RegistryBridge.__new__(RegistryBridge)
+    srv._catalog_cache = []
+    srv._entries = []
+    srv._lock = threading.Lock()
+    srv._catalog_at = 0.0
+
+    out = srv._describe_catalog_entry("this_agent_is_made_up_xyz")
+    assert out.get("error") == "TOOL_NOT_FOUND", out
+
+
+# ===========================================================================
 # F5 — deterministic fallback judge must not bias toward the filer
 # ===========================================================================
 
