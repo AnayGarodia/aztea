@@ -1303,6 +1303,11 @@ _GROUPED_DISPATCH: dict[str, dict[str, str]] = {
         "batch_status": "aztea_batch_status",
         "run_pipeline": "aztea_run_pipeline",
         "pipeline_status": "aztea_pipeline_status",
+        # 2026-05-19 (B8): create_pipeline was reachable only via HTTP POST
+        # /pipelines. MCP callers had no way to define a new DAG without
+        # leaving the tool surface, which broke the "pipelines work end-to-
+        # end via MCP" contract advertised in run_pipeline's description.
+        "create_pipeline": "aztea_create_pipeline",
         "run_recipe": "aztea_run_recipe",
         "list_pipelines": "aztea_list_pipelines",
         "list_recipes": "aztea_list_recipes",
@@ -1520,6 +1525,8 @@ _GROUPED_TOOLS: list[dict[str, Any]] = [
             "for the period. Use after a batch to prove provenance: every receipt is "
             "Ed25519-signed against the agent's did:web identity. Pass verify_all=true to "
             "re-verify every signature server-side and quote the green-check count.\n"
+            "  • create_pipeline(name, definition, description?, is_public?) — register a new "
+            "saved DAG. Returns pipeline_id usable in subsequent run_pipeline calls.\n"
             "  • run_pipeline / pipeline_status — execute / track a saved DAG of agents.\n"
             "  • run_recipe / list_recipes / list_pipelines — curated multi-step workflows.\n"
             "  • compare(slugs[]|agent_ids[], input_payload) — same task on multiple specialists, side-by-side.\n"
@@ -1536,6 +1543,7 @@ _GROUPED_TOOLS: list[dict[str, Any]] = [
                         "hire_async",
                         "hire_batch",
                         "batch_status",
+                        "create_pipeline",
                         "run_pipeline",
                         "pipeline_status",
                         "run_recipe",
@@ -1548,6 +1556,27 @@ _GROUPED_TOOLS: list[dict[str, Any]] = [
                         "session_audit",
                     ],
                     "description": "Which workflow operation to run.",
+                },
+                "name": {
+                    "type": "string",
+                    "description": "create_pipeline: human-readable pipeline name.",
+                },
+                "definition": {
+                    "type": "object",
+                    "description": (
+                        "create_pipeline: DAG definition object. Must contain `nodes: [...]` "
+                        "or be a list at the top level (shorthand). Each node declares "
+                        "{id, agent_id|slug, input, consumes?, produces?}."
+                    ),
+                    "additionalProperties": True,
+                },
+                "description": {
+                    "type": "string",
+                    "description": "create_pipeline: optional human-readable description.",
+                },
+                "is_public": {
+                    "type": "boolean",
+                    "description": "create_pipeline: when true, the pipeline is discoverable across the marketplace.",
                 },
                 "slug": {"type": "string", "description": "hire_async: target agent slug."},
                 "slugs": {
@@ -1951,6 +1980,11 @@ def call_meta_tool(
             if ok:
                 _refund_from_result(session_state, result)
             return ok, result
+        if tool_name == "aztea_create_pipeline":
+            # 2026-05-19 (B8): create a pipeline DAG without leaving MCP.
+            # No charge / accrual — pipeline creation is a setup operation,
+            # not a hire.
+            return _create_pipeline(session, base, hdrs, timeout, arguments)
         if tool_name == "aztea_run_pipeline":
             ok, result = _run_pipeline(session, base, hdrs, timeout, arguments)
             if ok:
@@ -3973,7 +4007,9 @@ def _hire_batch(
                     f"jobs[{index}] contains unsupported field(s): "
                     f"{', '.join(unsupported)}. "
                     "Per-job spec accepts only the wire-schema governance "
-                    "fields documented on `aztea_hire_batch.jobs[].properties`."
+                    "fields listed in supported_fields below. "
+                    "Full schema: /api/docs#/Jobs/post__jobs_batch or "
+                    "describe_specialist(slug='aztea_hire_batch')."
                     f"{hint}"
                 ),
                 "unsupported_fields": unsupported,
@@ -4374,6 +4410,50 @@ def _pipeline_status(
         elif status == "running":
             result.setdefault("note", "Pipeline run is still running.")
     return ok, result
+
+
+def _create_pipeline(
+    session: requests.Session, base: str, hdrs: dict, timeout: float, args: dict
+) -> tuple[bool, dict]:
+    """B8, 2026-05-19: MCP-side wrapper for POST /pipelines.
+
+    Validates the two required fields (name, definition) up-front so a
+    missing field surfaces as INVALID_INPUT with a clear message rather
+    than a 422 from the server. Accepts both the canonical
+    {"definition": {"nodes": [...]}} form and the shorthand where nodes
+    are at the top level — same forms POST /pipelines accepts directly.
+    """
+    name = str(args.get("name") or "").strip()
+    if not name:
+        return False, {
+            "error": "INVALID_INPUT",
+            "message": "name is required to create a pipeline.",
+        }
+    raw_definition = args.get("definition")
+    if isinstance(raw_definition, list):
+        # Shorthand: caller passed nodes directly. Reshape to the canonical
+        # envelope POST /pipelines expects.
+        definition = {"nodes": raw_definition}
+    elif isinstance(raw_definition, dict):
+        definition = raw_definition
+    elif isinstance(args.get("nodes"), list):
+        # Second shorthand: top-level nodes alongside name + description.
+        definition = {"nodes": args["nodes"]}
+    else:
+        return False, {
+            "error": "INVALID_INPUT",
+            "message": (
+                "definition is required. Pass either {definition: {nodes: [...]}}"
+                " or a top-level nodes: [...]."
+            ),
+        }
+    body: dict[str, Any] = {"name": name, "definition": definition}
+    description = str(args.get("description") or "").strip()
+    if description:
+        body["description"] = description
+    if "is_public" in args:
+        body["is_public"] = bool(args["is_public"])
+    return _post(session, f"{base}/pipelines", hdrs, timeout, body)
 
 
 def _run_pipeline(

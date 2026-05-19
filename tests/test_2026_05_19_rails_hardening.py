@@ -439,3 +439,103 @@ def test_b10_docs_path_intentionally_not_redirected():
         "/docs is owned by the SPA as a product page; a redirect here "
         "would break the front-end documentation experience"
     )
+
+
+# ===========================================================================
+# Cluster D — MCP completeness (B8, B12, B25, B26)
+# ===========================================================================
+
+
+# --- B8 -------------------------------------------------------------------
+
+
+def test_b8_create_pipeline_action_in_manage_workflow_enum():
+    """manage_workflow's action enum must include 'create_pipeline'."""
+    src = Path("sdks/python-sdk/aztea/mcp/meta_tools.py").read_text()
+    # Locate the action enum block (under manage_workflow tool).
+    mw_idx = src.find('"name": "manage_workflow"')
+    assert mw_idx >= 0
+    block = src[mw_idx : mw_idx + 5000]
+    assert '"create_pipeline"' in block, (
+        "manage_workflow enum must list create_pipeline so callers can "
+        "discover the action without leaving the tool surface"
+    )
+
+
+def test_b8_create_pipeline_dispatcher_routes_correctly():
+    """create_pipeline action dispatches to aztea_create_pipeline."""
+    src = Path("sdks/python-sdk/aztea/mcp/meta_tools.py").read_text()
+    assert '"create_pipeline": "aztea_create_pipeline"' in src
+    assert "if tool_name == \"aztea_create_pipeline\":" in src
+    assert "_create_pipeline(session, base, hdrs, timeout, arguments)" in src
+
+
+def test_b8_create_pipeline_handler_posts_to_pipelines_endpoint():
+    """_create_pipeline must POST to /pipelines with name + definition."""
+    src = Path("sdks/python-sdk/aztea/mcp/meta_tools.py").read_text()
+    assert "def _create_pipeline(" in src
+    # Must require name + definition.
+    assert "name is required to create a pipeline." in src
+    assert "definition is required" in src
+    # Must POST to /pipelines.
+    assert "f\"{base}/pipelines\"" in src
+
+
+# --- B12 ------------------------------------------------------------------
+
+
+def test_b12_unsupported_field_error_no_dead_anchor():
+    """The hire_batch unsupported-field error must not reference the
+    non-existent `aztea_hire_batch.jobs[].properties` anchor."""
+    src = Path("sdks/python-sdk/aztea/mcp/meta_tools.py").read_text()
+    assert "aztea_hire_batch.jobs[].properties" not in src, (
+        "Dead docs anchor leaked back into the error message — keep this "
+        "test in place so future copy edits don't reintroduce it"
+    )
+    # The replacement must reference a real URL.
+    assert "/api/docs#/Jobs/post__jobs_batch" in src
+    assert "describe_specialist(slug='aztea_hire_batch')" in src
+
+
+# --- B25 ------------------------------------------------------------------
+
+
+def test_b25_sunset_replacements_map_defined():
+    """_SUNSET_AGENT_REPLACEMENTS maps known-sunset slugs to suggestions."""
+    src = Path("sdks/python-sdk/aztea/mcp/server.py").read_text()
+    assert "_SUNSET_AGENT_REPLACEMENTS: dict[str, str]" in src
+    # Spot-check a few known sunset slugs from the CLI list.
+    for slug in (
+        "docs_grounder",
+        "linter",
+        "semantic_codebase_search",
+        "shell_executor",
+    ):
+        assert f'"{slug}":' in src, (
+            f"{slug} missing from _SUNSET_AGENT_REPLACEMENTS — the dispatch "
+            "fallback will surface 'Unknown tool' instead of agent.sunset"
+        )
+
+
+def test_b25_dispatcher_short_circuits_sunset_with_structured_error():
+    """call_specialist dispatch path checks the sunset map before /mcp/invoke."""
+    src = Path("sdks/python-sdk/aztea/mcp/server.py").read_text()
+    # The short-circuit must reference the map and produce a structured
+    # agent.sunset envelope with a suggestion.
+    assert "_SUNSET_AGENT_REPLACEMENTS.get(" in src
+    assert '"code": "agent.sunset",' in src
+    assert '"suggested_replacement"' in src
+
+
+# --- B26 ------------------------------------------------------------------
+
+
+def test_b26_compare_duplicate_agent_ids_hint_at_hire_batch():
+    """Compare with duplicate agent_ids returns a structured error
+    suggesting hire_batch for 'run same agent N times' workflows."""
+    src = Path("server/application_parts/part_009.py").read_text()
+    # The handler must use the structured error code + hint.
+    assert "compare.duplicate_agents" in src
+    assert "manage_workflow(action='hire_batch', jobs=[...])" in src
+    # And the response must include duplicate_agent_ids for actionability.
+    assert "duplicate_agent_ids" in src

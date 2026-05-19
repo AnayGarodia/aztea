@@ -413,7 +413,38 @@ def jobs_compare_create(
             ),
         )
     if len(set(agent_ids)) != len(agent_ids):
-        raise HTTPException(status_code=400, detail="agent_ids must be unique.")
+        # 2026-05-19 (B26): direct callers to hire_batch for the "run the
+        # same agent N times" workflow. Compare is for side-by-side bake-
+        # offs across DIFFERENT specialists; duplicating an agent_id (or
+        # passing duplicate slugs that resolve to the same agent_id)
+        # almost always means the caller wanted batch hire, not compare.
+        # Sort the offenders so the response is deterministic.
+        from collections import Counter as _CounterB26
+
+        duplicates = sorted(
+            agent_id for agent_id, count in _CounterB26(agent_ids).items() if count > 1
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=error_codes.make_error(
+                "compare.duplicate_agents",
+                (
+                    "agent_ids (and slugs that resolve to them) must be unique "
+                    "across a compare session. For 'run the same agent N times' "
+                    "use manage_workflow(action='hire_batch', jobs=[...]) with "
+                    "N copies of the same job spec — that opens N independent "
+                    "escrows and returns N receipts, which is what you want for "
+                    "duplicate runs."
+                ),
+                {
+                    "duplicate_agent_ids": duplicates,
+                    "next_step": (
+                        "manage_workflow(action='hire_batch', jobs=[...]) with "
+                        f"{len(agent_ids)} entries of the same agent."
+                    ),
+                },
+            ),
+        )
     # Accept the canonical field name and the two natural aliases. Resolve to the first
     # dict-typed value present so a caller passing `task` (the SDK/CLI shorthand) is not
     # silently dropped — historical bug: child jobs received an empty payload and failed.

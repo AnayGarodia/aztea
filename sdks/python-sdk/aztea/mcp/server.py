@@ -93,6 +93,39 @@ _SERVER_VERSION = "0.3.0"
 _PROTOCOL_VERSION = "2024-11-05"
 _REQUEST_VERSION_HEADER = "X-Aztea-Version"
 _AZTEA_PROTOCOL_VERSION = "1.0"
+
+# 2026-05-19 (B25): map slugs that have been removed from the public
+# catalog to the canonical replacement so call_specialist returns a
+# structured agent.sunset envelope with a suggestion, instead of the
+# generic "Unknown tool" error the prior dispatcher emitted. Keep this
+# list aligned with sdks/python-sdk/aztea/cli/common.py:SUNSET_AGENT_SLUGS
+# (CLI side) and server/builtin_agents/constants.py:SUNSET_DEPRECATED_
+# AGENT_IDS (server side). Suggestions are best-effort pointers; when a
+# real replacement doesn't exist the value is a deprecation note.
+_SUNSET_AGENT_REPLACEMENTS: dict[str, str] = {
+    # canonical (snake_case) slug → suggestion
+    "arxiv_research_agent": "Use web_search for live retrieval against arxiv.org.",
+    "multi_file_executor": (
+        "Use python_code_executor (single file) or multi_language_executor "
+        "(per-language sandbox)."
+    ),
+    "linter": "Use sast_scanner (security) or run language-native linters in live_sandbox.",
+    "shell_executor": "Use live_sandbox with sandbox_exec for arbitrary shell commands.",
+    "type_checker": "Use sast_scanner or run mypy/tsc inside live_sandbox.",
+    "semantic_codebase_search": (
+        "Use live_sandbox to clone the repo and grep/rg interactively."
+    ),
+    "image_generator": "No platform replacement; integrate a third-party image API yourself.",
+    "financial_agent": "No platform replacement; the live data quality bar wasn't met.",
+    "live_endpoint_tester": "Use broken_link_crawler for HTTP checks, ssl_certificate_decoder for TLS.",
+    "sql_explainer": "No platform replacement.",
+    "docs_grounder": "Use web_search for current docs retrieval.",
+    "codereview": "Use sast_scanner + dependency_auditor for the security half.",
+    "code_review": "Use sast_scanner + dependency_auditor for the security half.",
+    "json_schema_validator": "Use openapi_validator for OpenAPI; run jsonschema inside python_code_executor for ad-hoc.",
+    "git_diff_analyzer": "Use diff_analyzer (the renamed agent — same capability, current slug).",
+    "wikipedia_research_agent": "Use web_search.",
+}
 _CLIENT_ID_HEADER = "X-Aztea-Client"
 _DEFAULT_CLIENT_ID = (
     os.environ.get("AZTEA_CLIENT_ID", "claude-code") or "claude-code"
@@ -2771,6 +2804,32 @@ class RegistryBridge:
 
         agent_id = self._agent_id_for_tool(resolved_tool_name)
         if not agent_id:
+            # 2026-05-19 (B25): sunset slugs got a generic "Unknown tool"
+            # response that didn't tell the caller they were hitting a
+            # deprecated agent. Surface a structured agent.sunset envelope
+            # with a suggested replacement when the slug appears in the
+            # CLI's SUNSET_AGENT_SLUGS list (the canonical source for
+            # client-visible deprecations). Falls through to /mcp/invoke
+            # afterwards in case the slug is a freshly-renamed agent the
+            # local manifest cache hasn't picked up yet.
+            sunset_hint = _SUNSET_AGENT_REPLACEMENTS.get(
+                _canonical_slug(resolved_tool_name) or resolved_tool_name
+            )
+            if sunset_hint is not None:
+                return False, {
+                    "error": {
+                        "code": "agent.sunset",
+                        "message": (
+                            f"Agent '{resolved_tool_name}' has been sunset. "
+                            f"{sunset_hint}"
+                        ),
+                        "suggested_replacement": sunset_hint,
+                        "docs": (
+                            "https://aztea.ai/docs#sunset-agents — see also "
+                            "describe_specialist for the current live catalog."
+                        ),
+                    },
+                }
             # Local cache miss — but the slug may belong to a sunset agent
             # that's hidden from /registry/agents yet still callable through
             # /mcp/invoke (which resolves the broader CURATED_BUILTIN set,
