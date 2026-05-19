@@ -422,6 +422,13 @@ def _settle_via_tiebreaker_after_secondary_failure(
 
     Why: without this the dispute would strand at 'judging' with only one
     orphan judgment.
+
+    B13, 2026-05-19: also writes a structured ``secondary_judge_fallback``
+    audit event so dispute_status responses can surface ``degraded_mode``
+    + ``degraded_reason`` to the caller. Pre-fix the fallback was visible
+    only by inspecting judge_models_used (= ["llm_primary", "fallback"]),
+    which silently collapsed the advertised "two-judge guarantee" to one
+    judge + a coin-flip without telling anyone.
     """
     tiebreaker = _local_dispute_fallback(context)
     verdict = tiebreaker["verdict"]
@@ -433,10 +440,23 @@ def _settle_via_tiebreaker_after_secondary_failure(
         model="fallback",
     )
     disputes.set_dispute_consensus(dispute_id, verdict)
+    disputes.append_audit_event(
+        dispute_id,
+        "secondary_judge_fallback",
+        extra={
+            "reason": "secondary_judge_llm_unavailable",
+            "verdict": verdict,
+            "fallback_kind": "deterministic_tiebreaker",
+        },
+    )
     return {
         "status": "consensus",
         "outcome": verdict,
         "judgments": disputes.get_judgments(dispute_id),
+        # B13: surface the degraded path so the caller can decide whether
+        # to accept the consensus or escalate.
+        "degraded_mode": True,
+        "degraded_reason": "secondary_judge_llm_unavailable",
     }
 
 

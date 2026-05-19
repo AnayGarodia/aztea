@@ -648,3 +648,79 @@ def test_b11_part_005_settlement_forwards_output_schema():
         "Settlement path must forward the agent's output_schema to the "
         "quality judge — without it the B11 exemption never fires in prod"
     )
+
+
+# ===========================================================================
+# Cluster F — Disputes (B13, B14)
+# ===========================================================================
+
+
+# --- B13 ------------------------------------------------------------------
+
+
+def test_b13_secondary_fallback_writes_audit_event():
+    """When the secondary LLM fails, _settle_via_tiebreaker_after_secondary_
+    failure must write a structured audit event so dispute_status can
+    surface degraded_mode."""
+    src = Path("core/judges.py").read_text()
+    assert "secondary_judge_fallback" in src
+    assert "disputes.append_audit_event(" in src
+    # The function must return degraded_mode=True so the immediate
+    # caller (not just a later GET) sees the degraded path.
+    fn_idx = src.find("def _settle_via_tiebreaker_after_secondary_failure(")
+    block = src[fn_idx : fn_idx + 2500]
+    assert '"degraded_mode": True' in block
+    assert '"degraded_reason": "secondary_judge_llm_unavailable"' in block
+
+
+def test_b13_dispute_row_surfaces_degraded_mode_from_audit_log():
+    """_row_to_dispute must scan audit_log for the fallback event and
+    surface degraded_mode=True on the response dict."""
+    src = Path("core/disputes.py").read_text()
+    # The row builder must check the audit_log for the event.
+    assert "secondary_judge_fallback" in src
+    # And surface the field on the response dict.
+    assert 'data["degraded_mode"] = True' in src
+    assert 'data["degraded_mode"] = False' in src
+
+
+# --- B14 ------------------------------------------------------------------
+
+
+def test_b14_resolution_deadline_pinned_at_filing():
+    """create_dispute writes resolution_deadline_at once at INSERT."""
+    src = Path("core/disputes.py").read_text()
+    # The INSERT must include resolution_deadline_at.
+    assert "resolution_deadline_at" in src
+    assert "_dispute_resolution_window_hours()" in src
+    # The deadline must be computed BEFORE the params tuple.
+    fn_idx = src.find("def create_dispute(")
+    # Bound the window at the next def so we capture the entire function.
+    next_def = src.find("\ndef ", fn_idx + 1)
+    block = src[fn_idx:next_def] if next_def > fn_idx else src[fn_idx:]
+    assert "resolution_deadline_iso = (" in block
+    # And the INSERT column list must include it.
+    assert "operator_response_deadline, resolution_deadline_at)" in block
+
+
+def test_b14_dispute_row_exposes_resolution_by_from_pinned_column():
+    """_row_to_dispute reads resolution_deadline_at and exposes it as
+    resolution_by (legacy field name) so existing clients see a stable
+    deadline."""
+    src = Path("core/disputes.py").read_text()
+    assert 'data["resolution_by"] = data["resolution_deadline_at"]' in src
+
+
+def test_b14_migration_0061_adds_resolution_deadline_at():
+    """Migration 0061 adds disputes.resolution_deadline_at."""
+    src = Path("migrations/0061_dispute_resolution_deadline.sql").read_text()
+    assert "ALTER TABLE disputes ADD COLUMN resolution_deadline_at TEXT" in src
+
+
+def test_b14_resolution_window_helper_default_48h():
+    """_dispute_resolution_window_hours defaults to 48h to match the
+    documented dispute SLA."""
+    from core import disputes
+
+    assert disputes.DEFAULT_DISPUTE_RESOLUTION_HOURS == 48
+    assert disputes._dispute_resolution_window_hours() == 48
