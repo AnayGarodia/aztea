@@ -1364,6 +1364,35 @@ def jobs_batch_create(
             ),
         )
 
+    # F6, 2026-05-19: session_budget pre-flight. Pre-fix the session cap was
+    # only checked inside pre_call_charge — so a batch of N jobs that would
+    # exceed the cap opened escrow on job 1 (counter under cap), then job 2
+    # tripped WalletSessionBudgetExceededError mid-loop, refunded job 1, and
+    # wrapped the inner error with a generic JOB_BATCH_PARTIAL_FAILURE that
+    # lost the structured wallet.session_budget_exceeded code. The contract
+    # ("402 before any escrow opens") is restored by mirroring the same
+    # arithmetic up here against the whole batch total.
+    _session_cap_raw = caller_wallet.get("session_budget_cents")
+    if _session_cap_raw is not None and total_price_cents > 0:
+        _session_cap = int(_session_cap_raw)
+        _session_spent = payments.session_spent_cents_for_wallet(
+            caller_wallet["wallet_id"],
+            caller_wallet.get("session_budget_set_at"),
+        )
+        if _session_spent + total_price_cents > _session_cap:
+            raise HTTPException(
+                status_code=402,
+                detail=error_codes.make_error(
+                    "wallet.session_budget_exceeded",
+                    "Batch would exceed the wallet's session_budget_cents cap.",
+                    {
+                        "session_budget_cents": _session_cap,
+                        "session_spent_cents": _session_spent,
+                        "attempted_cents": total_price_cents,
+                    },
+                ),
+            )
+
     created_jobs = []
     charge_tx_ids = []
     try:

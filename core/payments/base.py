@@ -649,6 +649,36 @@ def set_wallet_session_budget(
     return dict(row)
 
 
+def session_spent_cents_for_wallet(wallet_id: str, set_at_iso: str | None) -> int:
+    """F6, 2026-05-19: net session spend since ``set_at_iso``.
+
+    Mirrors the per-call check inside ``pre_call_charge`` so pre-flight code
+    (batch routes, hire estimators) can read the same number without
+    duplicating SQL. Returns 0 when ``set_at_iso`` is falsy or no charges
+    exist in the window.
+
+    Why: F6 reproed mid-batch session_budget exceptions opening escrow on
+    job 1 before failing job 2. Pre-flight uses this to reject the whole
+    batch BEFORE any per-job charge.
+    """
+    if not set_at_iso:
+        return 0
+    with _conn() as conn:
+        row = conn.execute(
+            """
+            SELECT COALESCE(SUM(-amount_cents), 0) AS net_spent_cents
+            FROM transactions
+            WHERE wallet_id = %s
+              AND type IN ('charge', 'refund')
+              AND created_at >= %s
+            """,
+            (wallet_id, str(set_at_iso)),
+        ).fetchone()
+    if row is None:
+        return 0
+    return max(0, int(row["net_spent_cents"] or 0))
+
+
 def update_wallet_caller_trust(owner_id: str, trust_score: float) -> dict | None:
     """Persist a freshly computed caller trust score to the owner's wallet.
 

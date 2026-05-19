@@ -650,7 +650,13 @@ def _caller_can_access_agent(caller: core_models.CallerContext, agent: dict) -> 
     # exists; it has been retired).
     if review_status not in {"approved", "probation", "sunset"}:
         return False
-    if str(agent.get("status") or "").strip().lower() == "banned":
+    # F7 (red-team 2026-05-19): list_agents excludes BOTH 'banned' and
+    # 'suspended' (see core/registry/agents_ops.py:746) but the call gate
+    # used to only block 'banned'. Result: suspended agents were hidden
+    # from discovery yet still accepted jobs and charged callers. The
+    # call hot path must mirror the list filter; ops staff suspending an
+    # agent expect every surface (catalog + call) to honor the gate.
+    if str(agent.get("status") or "").strip().lower() in {"banned", "suspended"}:
         return False
     return True
 
