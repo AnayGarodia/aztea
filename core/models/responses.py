@@ -333,6 +333,16 @@ class JobResponse(BaseModel):
     output_verification_decided_at: str | None = None
     output_verification_decision_owner_id: str | None = None
     output_verification_reason: str | None = None
+    # 2026-05-19 (B1, B2): governance fields that previously round-tripped as
+    # null. Now explicit on the response so integrators see the persisted
+    # values without relying on extra="allow" passthrough.
+    # stop_when_json mirrors the storage shape ({"predicates": [...]}) — the
+    # request side uses a flat list (JobCreateRequest.stop_when); the
+    # response keeps the storage envelope for forward-compat with extra
+    # fields (e.g. max_units when that lands).
+    per_job_cap_cents: int | None = None
+    stop_when_json: dict | None = None
+    billing_unit: str | None = None
 
 
 class JobsListResponse(BaseModel):

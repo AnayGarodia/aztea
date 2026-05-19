@@ -14,6 +14,55 @@ _COMPARE_MIN_AGENTS = 2
 _COMPARE_MAX_AGENTS = 10
 
 
+def _validate_spec_stop_when(spec) -> list[dict]:
+    """Pure: validate spec.stop_when bounds + JMESPath complexity.
+
+    Returns the list of {label,expr} dicts ready for JSON persistence. Raises
+    ``copilot_predicates.StopWhenInvalid`` if the shape, count, length, or
+    complexity is over the documented bounds. Same validation the singleton
+    POST /jobs runs pre-charge; the batch path applies it per-spec so a
+    malformed predicate fails closed before any wallet hold opens.
+    """
+    if not getattr(spec, "stop_when", None):
+        return []
+    from core import copilot_predicates as _copilot_predicates  # local: cycle break
+
+    raw_predicates = [
+        {"label": item.label, "expr": item.expr} for item in spec.stop_when
+    ]
+    return _copilot_predicates.validate_stop_when(raw_predicates)
+
+
+def _persist_batch_job_governance(spec, job_id: str) -> None:
+    """Side-effect: UPDATE stop_when_json + billing_unit + per_job_cap_cents
+    on the freshly created batch job row.
+
+    Mirrors the singleton POST /jobs handler in part_008.py so per-job
+    governance fields actually round-trip in the batch path (B1, B2). The
+    caller must have already validated spec.stop_when via
+    ``_validate_spec_stop_when``; this function trusts the predicates and
+    only writes.
+    """
+    import json as _json
+
+    validated = _validate_spec_stop_when(spec)
+    stop_when_json = (
+        _json.dumps({"predicates": validated}) if validated else None
+    )
+    billing_unit = getattr(spec, "billing_unit", None)
+    per_job_cap_cents = getattr(spec, "per_job_cap_cents", None)
+    # Same connection-as-context-manager pattern as part_008.py — pre-1.6.9
+    # Postgres deploys rolled this UPDATE back when the connection returned
+    # to the pool, silently dropping every co-pilot field.
+    with get_db_connection() as _conn:
+        with _conn:
+            _conn.execute(
+                "UPDATE jobs SET stop_when_json = %s, billing_unit = %s, "
+                "per_job_cap_cents = %s WHERE job_id = %s",
+                (stop_when_json, billing_unit, per_job_cap_cents, job_id),
+            )
+
+
 def _batch_fee_split(job: dict) -> dict:
     price_cents = int(job.get("price_cents") or 0)
     caller_charge_cents = int(job.get("caller_charge_cents") or price_cents)
@@ -984,6 +1033,25 @@ def jobs_batch_create(
                     }
                 )
                 continue
+        # 2026-05-19 (B2): pre-charge validation of stop_when predicates so a
+        # malformed expression never opens an escrow. Same bounds (count,
+        # length, JMESPath complexity) the singleton POST /jobs enforces.
+        try:
+            _validate_spec_stop_when(spec)
+        except Exception as _sw_exc:
+            invalid_jobs.append(
+                {
+                    "index": index,
+                    "agent_id": agent["agent_id"],
+                    "status_code": 422,
+                    "detail": error_codes.make_error(
+                        "stop_when.invalid",
+                        str(_sw_exc),
+                        {"agent_id": agent["agent_id"], "field": "stop_when"},
+                    ),
+                }
+            )
+            continue
         spec_budget_cents = spec.budget_cents
         if spec.max_price_cents is not None:
             spec_budget_cents = (
@@ -991,22 +1059,51 @@ def jobs_batch_create(
                 if spec_budget_cents is None
                 else min(spec_budget_cents, spec.max_price_cents)
             )
+        # 2026-05-19 (B1): batch path now respects spec.per_job_cap_cents,
+        # combined with the API-key cap via MIN — smaller wins. Gate fires
+        # BEFORE wallet hold so no refund is needed when it trips.
+        spec_per_job_cap_cents = key_per_job_cap_cents
+        if spec.per_job_cap_cents is not None:
+            spec_per_job_cap_cents = (
+                int(spec.per_job_cap_cents)
+                if spec_per_job_cap_cents is None
+                else min(spec_per_job_cap_cents, int(spec.per_job_cap_cents))
+            )
         pricing_estimate = _estimate_variable_charge(
             agent=agent,
             payload=normalized_spec_input_payload,
             budget_cents=spec_budget_cents,
-            per_job_cap_cents=key_per_job_cap_cents,
+            per_job_cap_cents=spec_per_job_cap_cents,
         )
         if pricing_estimate.get("cap_violated"):
             violation = pricing_estimate["cap_violated"]
+            # 2026-05-19 (B1): tag the cap_code by source so callers can
+            # distinguish "tighten my per-job cap" from "ask ops to raise
+            # the API-key cap". The pricing helper returns scope='per_job_cap'
+            # whenever per_job_cap_cents bound, regardless of which knob
+            # supplied it; we infer the source by checking whether the
+            # spec-level cap is what matches the binding limit.
+            if (
+                violation["scope"] == "per_job_cap"
+                and spec.per_job_cap_cents is not None
+                and int(spec.per_job_cap_cents) == int(violation["limit_cents"])
+            ):
+                cap_code = error_codes.JOB_PER_JOB_CAP_EXCEEDED
+                cap_message = (
+                    "Variable-price estimate exceeds the per-job cap set on "
+                    "this job spec."
+                )
+            else:
+                cap_code = error_codes.SPEND_LIMIT_EXCEEDED
+                cap_message = "Variable-price estimate exceeds a spend cap."
             invalid_jobs.append(
                 {
                     "index": index,
                     "agent_id": agent["agent_id"],
                     "status_code": 402,
                     "detail": error_codes.make_error(
-                        error_codes.SPEND_LIMIT_EXCEEDED,
-                        "Variable-price estimate exceeds a spend cap.",
+                        cap_code,
+                        cap_message,
                         {
                             "scope": violation["scope"],
                             "limit_cents": violation["limit_cents"],
@@ -1244,6 +1341,21 @@ def jobs_batch_create(
                 batch_id=batch_id,
                 origin=_origin_context.current_origin() or "direct",
             )
+            # 2026-05-19 (B1, B2): persist per-job governance fields that
+            # are not yet in core.jobs.create_job's signature. The singleton
+            # POST /jobs handler does the same UPDATE after create_job; the
+            # batch path used to silently drop stop_when / billing_unit /
+            # per_job_cap_cents, which was the original B2 bug surface.
+            _spec_has_governance = (
+                bool(getattr(spec, "stop_when", None))
+                or getattr(spec, "billing_unit", None) is not None
+                or getattr(spec, "per_job_cap_cents", None) is not None
+            )
+            if _spec_has_governance:
+                _persist_batch_job_governance(spec, job["job_id"])
+                refreshed = jobs.get_job(job["job_id"])
+                if refreshed is not None:
+                    job = refreshed
             _record_job_event(job, "job.created", actor_owner_id=caller["owner_id"])
             created_jobs.append(_job_response(job, caller))
     except HTTPException as exc:

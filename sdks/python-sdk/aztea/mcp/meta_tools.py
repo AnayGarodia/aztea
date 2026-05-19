@@ -878,16 +878,41 @@ _TOOLS: list[dict[str, Any]] = [
                                 },
                                 "maxItems": 16,
                             },
+                            "billing_unit": {
+                                "type": "string",
+                                "enum": ["call", "partial"],
+                                "description": (
+                                    "Co-pilot billing unit. 'call' bills the listed price "
+                                    "once at terminal regardless of partials. 'partial' "
+                                    "bills per emitted partial_output up to the ceiling. "
+                                    "Defaults to 'call' when omitted."
+                                ),
+                            },
+                            "per_job_cap_cents": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "description": (
+                                    "Hard ceiling on this job's caller charge in cents. "
+                                    "Combines with the per-API-key cap via MIN. Gate "
+                                    "fires BEFORE wallet hold; returns 422 "
+                                    "job.per_job_cap_exceeded if the agent's price "
+                                    "exceeds the cap. Distinct from budget_cents (soft) "
+                                    "— this is the trust-rail safety net."
+                                ),
+                            },
                         },
                         "required": [],
                         "anyOf": [{"required": ["agent_id"]}, {"required": ["slug"]}],
-                        # WHY (bug #1, 2026-05-18): keep additionalProperties=False
-                        # so unsupported per-job keys (e.g. `workspace_id`,
-                        # `max_spend_cents`, `per_job_cap_cents`,
-                        # `stop_when_json`, `tree_depth`) are rejected at the
-                        # schema layer with a clear 422 instead of being
-                        # silently dropped. `tree_depth` is server-derived and
-                        # callers must use the supported governance fields above.
+                        # WHY (bug #1, 2026-05-18; B1/B2/B5, 2026-05-19): keep
+                        # additionalProperties=False so still-unsupported per-job
+                        # keys (e.g. `workspace_id`, `max_spend_cents`,
+                        # `stop_when_json`, `tree_depth`, `idempotency_key`) are
+                        # rejected at the schema layer with a clear 422 instead
+                        # of being silently dropped. The 2026-05-19 sprint added
+                        # `per_job_cap_cents` and `billing_unit` to the supported
+                        # set after wiring real server-side enforcement; do not
+                        # add new fields here without a matching server gate or
+                        # the silent-drop regression returns.
                         "additionalProperties": False,
                     },
                 },
@@ -3841,16 +3866,36 @@ def _agent_id_from_bulk(spec: dict, slug_to_agent_id: dict[str, str]) -> str:
 # additionalProperties=False in _TOOLS[aztea_hire_batch]) is the first line
 # of defense — this map exists so the handler stays honest if the schema
 # drifts and a key slips through.
+# 2026-05-19 (B5): each field listed here MUST round-trip through the
+# server. Adding a field here without server-side enforcement re-introduces
+# the silent-drop class of bug (B1, B2 pre-fix). Map of field → server
+# enforcement site:
+#   agent_id, slug, input_payload/input/arguments — resolved at /jobs/batch
+#       slug-resolution preflight (part_009.py).
+#   budget_cents, max_price_cents — soft buyer ceiling; enforced via
+#       _estimate_variable_charge(..., budget_cents=...).
+#   per_job_cap_cents — HARD trust-rail cap; combined with API-key cap
+#       via MIN and enforced via _estimate_variable_charge(...,
+#       per_job_cap_cents=...). 422 `job.per_job_cap_exceeded` on trip.
+#   private_task — disables public work-example recording.
+#   parent_job_id / parent_cascade_policy — orchestration lineage.
+#   callback_url / callback_secret — webhook delivery on terminal state.
+#   clarification_timeout_seconds / _policy — async clarification flow.
+#   output_verification_window_seconds — buyer acceptance window.
+#   stop_when — co-pilot abort predicates (validated via
+#       core.copilot_predicates pre-charge; persisted via
+#       _persist_batch_job_governance).
+#   billing_unit — 'call' vs 'partial' billing for co-pilot mode.
 _HIRE_BATCH_ALLOWED_PER_JOB_FIELDS = frozenset({
     "agent_id", "slug",
     "input_payload", "input", "arguments",
-    "budget_cents", "max_price_cents",
+    "budget_cents", "max_price_cents", "per_job_cap_cents",
     "private_task",
     "parent_job_id", "parent_cascade_policy",
     "callback_url", "callback_secret",
     "clarification_timeout_seconds", "clarification_timeout_policy",
     "output_verification_window_seconds",
-    "stop_when",
+    "stop_when", "billing_unit",
 })
 
 
@@ -3942,6 +3987,10 @@ def _hire_batch(
             job["budget_cents"] = int(spec["budget_cents"])
         if spec.get("max_price_cents") is not None:
             job["max_price_cents"] = int(spec["max_price_cents"])
+        # 2026-05-19 (B1, B5): forward per-job hard cap. Server combines
+        # with the API-key cap via MIN and gates BEFORE charge.
+        if spec.get("per_job_cap_cents") is not None:
+            job["per_job_cap_cents"] = int(spec["per_job_cap_cents"])
         if spec.get("private_task") is not None:
             job["private_task"] = bool(spec["private_task"])
         # bug #1+16: forward per-job governance through to /jobs/batch so they
@@ -3964,6 +4013,11 @@ def _hire_batch(
             )
         if isinstance(spec.get("stop_when"), list):
             job["stop_when"] = spec["stop_when"]
+        # 2026-05-19 (B2, B5): forward billing_unit so co-pilot mode works
+        # via hire_batch. The server now persists it in the same UPDATE
+        # that writes stop_when_json.
+        if spec.get("billing_unit") is not None:
+            job["billing_unit"] = str(spec["billing_unit"]).strip()
         jobs_body.append(job)
     body: dict[str, Any] = {"jobs": jobs_body}
     intent = str(args.get("intent") or "").strip()
