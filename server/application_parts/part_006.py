@@ -107,6 +107,49 @@ def _sweep_jobs(
         )
         sla_failed_job_ids.append(settled["job_id"])
 
+    # B15, 2026-05-19: auto-fail jobs that nobody ever claimed. The
+    # pre-fix symptom was the 2026-05-19 power-user report's "agents
+    # accepted hires, opened escrow, never executed" — caller couldn't
+    # tell whether to wait or cancel. Sweeper now scans for pending
+    # jobs past claim_deadline_at, marks them failed with
+    # error_message=agent.no_workers_claimed, and triggers the standard
+    # refund pipeline. The lookup is a thin SELECT; the actual transition
+    # uses the existing update_job_status + _settle_failed_job rails so
+    # the refund path is identical to other terminal-fail cases.
+    claim_deadline_failed_job_ids: list[str] = []
+    try:
+        with jobs._conn() as _conn_b15:
+            now_iso = _utc_now_iso()
+            stranded = _conn_b15.execute(
+                """
+                SELECT job_id FROM jobs
+                WHERE status = 'pending'
+                  AND claim_deadline_at IS NOT NULL
+                  AND claim_deadline_at < %s
+                LIMIT %s
+                """,
+                (now_iso, limit),
+            ).fetchall()
+    except Exception as exc:  # noqa: BLE001 — sweeper must never break
+        _LOG.warning("B15 claim-deadline scan failed: %s", exc, exc_info=True)
+        stranded = []
+    for row in stranded:
+        stranded_id = row["job_id"] if isinstance(row, dict) else row[0]
+        updated = jobs.update_job_status(
+            stranded_id,
+            "failed",
+            error_message="agent.no_workers_claimed",
+            completed=True,
+        )
+        if updated is None:
+            continue
+        settled = _settle_failed_job(
+            updated,
+            actor_owner_id=actor_owner_id,
+            event_type="job.no_workers_claimed",
+        )
+        claim_deadline_failed_job_ids.append(settled["job_id"])
+
     due_retry = jobs.list_jobs_due_for_retry(limit=limit)
     retry_ready_job_ids: list[str] = []
     for item in due_retry:
@@ -190,6 +233,8 @@ def _sweep_jobs(
         "clarification_timeout_failed_job_ids": clarification_timeout_failed_job_ids,
         "clarification_timeout_proceeded_job_ids": clarification_timeout_proceeded_job_ids,
         "sla_failed_job_ids": sla_failed_job_ids,
+        # B15, 2026-05-19
+        "claim_deadline_failed_job_ids": claim_deadline_failed_job_ids,
         "output_verification_expired_job_ids": output_verification_expired_job_ids,
         "output_verification_auto_settled_job_ids": output_verification_auto_settled_job_ids,
         "completed_pending_settlement_scanned": len(completed_pending_settlement),

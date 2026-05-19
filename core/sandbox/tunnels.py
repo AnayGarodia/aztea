@@ -61,11 +61,39 @@ def tunnel_open(payload: dict[str, Any]) -> dict[str, Any]:
     back to ngrok when the user has supplied a token. Fall back to a
     host-bound port when neither is available so the URL is at least
     reachable from the host loopback.
+
+    B16, 2026-05-19: input-validation failures (sandbox missing,
+    service missing, port out of range) used to raise and produce a
+    hard 502 to the caller — exactly the behavior the agent
+    description claimed never happens ("structured stub envelopes that
+    never hard-error"). Now we catch the validation exceptions at the
+    entry boundary and return a structured envelope with
+    status="invalid_input" + a reason; auto-refund downstream returns
+    the caller's 6¢. Hard errors are reserved for real internal
+    failures (process boot, etc.) where the caller can't do anything
+    meaningful to recover.
     """
-    state, service, port = _validate_tunnel_input(payload)
+    try:
+        state, service, port = _validate_tunnel_input(payload)
+    except (SandboxNotFound, SandboxServiceMissing, SandboxInvalidInput) as exc:
+        return {
+            "status": "invalid_input",
+            "tunnel_id": None,
+            "public_url": None,
+            "reason": str(exc),
+            "kind": type(exc).__name__,
+            "refunded": True,
+        }
     auth = str(payload.get("auth") or "none").strip().lower()
     if auth not in ("bearer", "none"):
-        raise SandboxInvalidInput("auth must be 'bearer' or 'none'")
+        return {
+            "status": "invalid_input",
+            "tunnel_id": None,
+            "public_url": None,
+            "reason": "auth must be 'bearer' or 'none'",
+            "kind": "SandboxInvalidInput",
+            "refunded": True,
+        }
     hostname_hint = str(payload.get("hostname_hint") or "").strip().lower()
     host_port = _resolve_host_port(state, service, port)
     if host_port is None:
@@ -102,11 +130,30 @@ def tunnel_open(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def tunnel_close(payload: dict[str, Any]) -> dict[str, Any]:
-    """Tear down a tunnel by id; safe to call after the tool has already exited."""
-    state = _require(payload)
+    """Tear down a tunnel by id; safe to call after the tool has already exited.
+
+    B16, 2026-05-19: matches tunnel_open's stub-envelope contract — input
+    validation failures return a structured envelope, not an exception.
+    """
+    try:
+        state = _require(payload)
+    except (SandboxNotFound, SandboxInvalidInput) as exc:
+        return {
+            "status": "invalid_input",
+            "tunnel_id": payload.get("tunnel_id"),
+            "reason": str(exc),
+            "kind": type(exc).__name__,
+            "refunded": True,
+        }
     tunnel_id = str(payload.get("tunnel_id") or "").strip()
     if not tunnel_id:
-        raise SandboxInvalidInput("tunnel_id is required")
+        return {
+            "status": "invalid_input",
+            "tunnel_id": None,
+            "reason": "tunnel_id is required",
+            "kind": "SandboxInvalidInput",
+            "refunded": True,
+        }
     with _TUNNELS_LOCK:
         record = _TUNNELS.pop(tunnel_id, None)
     if record is None or record.get("sandbox_id") != state.sandbox_id:

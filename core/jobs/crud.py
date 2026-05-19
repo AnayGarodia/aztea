@@ -38,6 +38,34 @@ DEFAULT_PLATFORM_FEE_PCT = 10
 # Max caller_charge is 2x price (covers 100% fee) plus a $10 buffer for rounding.
 _MAX_CALLER_CHARGE_BUFFER_CENTS = 1000
 
+# B15, 2026-05-19: default time-to-claim. After this elapses without a
+# worker picking up the job, the sweeper transitions it to `failed` with
+# error_message=agent.no_workers_claimed and refunds the wallet hold.
+_DEFAULT_CLAIM_DEADLINE_SECONDS = 1800  # 30 minutes
+
+
+def _compute_claim_deadline_iso(now_iso: str) -> str:
+    """Pure: return ISO-8601 string for `now + AZTEA_JOB_CLAIM_DEADLINE_SECONDS`.
+
+    Env-tunable so high-latency external agents can ask for a longer
+    window. Falls back to the 30-minute default on bad input.
+    """
+    import os
+    from datetime import datetime, timedelta, timezone
+
+    raw = os.environ.get("AZTEA_JOB_CLAIM_DEADLINE_SECONDS")
+    try:
+        seconds = max(60, int(raw)) if raw else _DEFAULT_CLAIM_DEADLINE_SECONDS
+    except (TypeError, ValueError):
+        seconds = _DEFAULT_CLAIM_DEADLINE_SECONDS
+    try:
+        base = datetime.fromisoformat(str(now_iso).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        base = datetime.now(timezone.utc)
+    if base.tzinfo is None:
+        base = base.replace(tzinfo=timezone.utc)
+    return (base + timedelta(seconds=seconds)).isoformat()
+
 _CREATE_JOB_INSERT_SQL = """
     INSERT INTO jobs
       (job_id, agent_id, agent_owner_id, caller_owner_id, caller_wallet_id,
@@ -266,8 +294,19 @@ def create_job(
         origin=normalised_origin, now=now,
         normalised=normalised,
     )
+    # B15, 2026-05-19: pin a claim deadline at INSERT so the sweeper can
+    # auto-fail jobs whose workers never show up. Default 30 min; env-
+    # tunable via AZTEA_JOB_CLAIM_DEADLINE_SECONDS so high-latency
+    # external agents can ask for a longer window.
+    claim_deadline_iso = _compute_claim_deadline_iso(now)
     with _conn() as conn:
         conn.execute(_CREATE_JOB_INSERT_SQL, params)
+        # Separate UPDATE keeps the INSERT signature stable. Column added
+        # in migration 0062.
+        conn.execute(
+            "UPDATE jobs SET claim_deadline_at = %s WHERE job_id = %s",
+            (claim_deadline_iso, job_id),
+        )
     return get_job(job_id)
 
 

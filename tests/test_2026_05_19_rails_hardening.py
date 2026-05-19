@@ -724,3 +724,126 @@ def test_b14_resolution_window_helper_default_48h():
 
     assert disputes.DEFAULT_DISPUTE_RESOLUTION_HOURS == 48
     assert disputes._dispute_resolution_window_hours() == 48
+
+
+# ===========================================================================
+# Cluster G — Workers + sandbox (B15, B16, B17, B18)
+# ===========================================================================
+
+
+# --- B15 ------------------------------------------------------------------
+
+
+def test_b15_create_job_pins_claim_deadline():
+    """create_job writes claim_deadline_at via the post-insert UPDATE."""
+    src = Path("core/jobs/crud.py").read_text()
+    assert "_compute_claim_deadline_iso" in src
+    assert "UPDATE jobs SET claim_deadline_at = %s WHERE job_id = %s" in src
+    # The helper must respect AZTEA_JOB_CLAIM_DEADLINE_SECONDS for ops tunability.
+    assert "AZTEA_JOB_CLAIM_DEADLINE_SECONDS" in src
+    assert "_DEFAULT_CLAIM_DEADLINE_SECONDS = 1800" in src
+
+
+def test_b15_sweeper_auto_fails_stranded_jobs():
+    """The jobs sweeper scans for jobs past claim_deadline_at and fails them."""
+    src = Path("server/application_parts/part_006.py").read_text()
+    assert "claim_deadline_failed_job_ids" in src
+    assert "agent.no_workers_claimed" in src
+    assert "job.no_workers_claimed" in src
+    # The scan must filter on status='pending' AND past deadline.
+    assert "status = 'pending'" in src
+    assert "claim_deadline_at IS NOT NULL" in src
+    assert "claim_deadline_at < %s" in src
+
+
+def test_b15_migration_0062_adds_claim_deadline_column():
+    """Migration 0062 adds jobs.claim_deadline_at."""
+    src = Path("migrations/0062_jobs_claim_deadline.sql").read_text()
+    assert "ALTER TABLE jobs ADD COLUMN claim_deadline_at TEXT" in src
+
+
+# --- B16 ------------------------------------------------------------------
+
+
+def test_b16_tunnel_open_returns_stub_envelope_on_invalid_input():
+    """sandbox_tunnel_open returns a structured stub instead of raising."""
+    from core.sandbox import tunnels
+    from core.sandbox.models import SandboxNotFound
+
+    # Patch _validate_tunnel_input to raise — we're testing the boundary
+    # catch, not the validator itself.
+    original = tunnels._validate_tunnel_input
+    try:
+        tunnels._validate_tunnel_input = lambda *a, **kw: (_ for _ in ()).throw(
+            SandboxNotFound("sandbox 'sbx_xxx' not active")
+        )
+        result = tunnels.tunnel_open({"sandbox_id": "sbx_xxx"})
+    finally:
+        tunnels._validate_tunnel_input = original
+    assert result["status"] == "invalid_input"
+    assert result["tunnel_id"] is None
+    assert result["public_url"] is None
+    assert result["refunded"] is True
+    assert "sandbox" in result["reason"].lower()
+
+
+def test_b16_tunnel_close_returns_stub_envelope_on_invalid_input():
+    """sandbox_tunnel_close mirrors the stub contract."""
+    from core.sandbox import tunnels
+    from core.sandbox.models import SandboxNotFound
+
+    original = tunnels._require
+    try:
+        tunnels._require = lambda *a, **kw: (_ for _ in ()).throw(
+            SandboxNotFound("sandbox not active")
+        )
+        result = tunnels.tunnel_close({"tunnel_id": "tun_abc"})
+    finally:
+        tunnels._require = original
+    assert result["status"] == "invalid_input"
+    assert result["refunded"] is True
+
+
+# --- B17 ------------------------------------------------------------------
+
+
+def test_b17_fork_canonical_source_field_no_migration_note():
+    """source_sandbox_id (canonical) → no migration_note in response."""
+    src = Path("core/sandbox/snapshots.py").read_text()
+    # The function must declare the canonical-vs-legacy split.
+    assert "canonical_source = str(payload.get(\"source_sandbox_id\") or \"\").strip()" in src
+    assert "legacy_source = str(payload.get(\"sandbox_id\") or \"\").strip()" in src
+    # And only attach migration_note when the legacy field is used.
+    assert "migration_note = (" in src
+    assert "if migration_note:" in src
+    assert 'response["migration_note"] = migration_note' in src
+
+
+def test_b17_fork_sunset_date_documented():
+    """The migration note must name the sunset version (v1.8.0)."""
+    src = Path("core/sandbox/snapshots.py").read_text()
+    assert "v1.8.0" in src
+
+
+# --- B18 ------------------------------------------------------------------
+
+
+def test_b18_sandbox_state_exposes_ttl_remaining_seconds():
+    """SandboxState exposes ttl_remaining_seconds as a computed property."""
+    from core.sandbox.state import SandboxState
+    import inspect
+
+    # Computed property — not a dataclass field.
+    members = inspect.getmembers(SandboxState)
+    assert any(name == "ttl_remaining_seconds" for name, _ in members), (
+        "SandboxState must expose ttl_remaining_seconds so callers can "
+        "see TTL burn-down before firing expensive ops"
+    )
+
+
+def test_b18_lifecycle_status_response_includes_ttl_remaining_seconds():
+    """The status + start responses include ttl_remaining_seconds."""
+    src = Path("core/sandbox/lifecycle.py").read_text()
+    assert "\"ttl_remaining_seconds\": state.ttl_remaining_seconds" in src
+    # And appears in BOTH _status_response and _start_response.
+    assert src.count("\"ttl_remaining_seconds\":") >= 2

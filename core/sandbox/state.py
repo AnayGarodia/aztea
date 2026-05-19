@@ -154,6 +154,20 @@ class SandboxState:
         self.last_activity_at = now_unix()
         _save(self)
 
+    @property
+    def ttl_remaining_seconds(self) -> int:
+        """B18, 2026-05-19: visibility on wall-clock TTL burn-down.
+
+        Pure: ``max(0, expires_at - now())``. Returned in every sandbox
+        response (sandbox_start, sandbox_status, sandbox_exec envelope)
+        so callers can see exactly how much budget remains BEFORE firing
+        an expensive op (snapshot / fork / docker commit). The TTL model
+        is wall-clock; expensive operations DO consume the quota — this
+        property lets you observe the consumption rather than learn
+        about it post-mortem.
+        """
+        return max(0, int(self.expires_at - now_unix()))
+
 
 # --- Module-level registry ---------------------------------------------------
 #
