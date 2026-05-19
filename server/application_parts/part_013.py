@@ -822,6 +822,36 @@ def workspaces_verify(workspace_id: str) -> dict:
 
 
 @app.get(
+    "/workspaces/{workspace_id}/verify",
+    tags=["workspaces"],
+    summary="Structured 405 so curl GET doesn't see the SPA index page.",
+    responses=_error_responses(405),
+    include_in_schema=False,
+)
+def workspaces_verify_get_405(workspace_id: str) -> JSONResponse:
+    """2026-05-19 (B6): GET /workspaces/{id}/verify used to fall through the
+    SPA catch-all and return React HTML, which made integrators conclude
+    verification was broken. Now it returns a structured 405 pointing
+    explicitly at the POST contract."""
+    del workspace_id  # path is captured for OpenAPI routing only
+    return JSONResponse(
+        status_code=405,
+        headers={"Allow": "POST"},
+        content={
+            "error": "method_not_allowed",
+            "message": (
+                "Workspace verify is POST-only. The signature is computed "
+                "over the live artifact hashes, so the request must mutate "
+                "the server-side seal manifest, which is why GET is not "
+                "supported."
+            ),
+            "allowed_methods": ["POST"],
+            "docs": "/api/docs#/workspaces/post__workspaces_workspace_id__verify",
+        },
+    )
+
+
+@app.get(
     "/workspaces/sealer/did.json",
     tags=["workspaces"],
     summary="Public: did:web document for the workspace seal signing key.",

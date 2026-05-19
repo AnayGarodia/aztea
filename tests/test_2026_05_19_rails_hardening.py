@@ -338,3 +338,104 @@ def test_cluster_a_b_migration_0060_adds_three_columns():
     assert "ALTER TABLE jobs ADD COLUMN per_job_cap_cents INTEGER" in src
     assert "ALTER TABLE wallets ADD COLUMN session_budget_cents INTEGER" in src
     assert "ALTER TABLE wallets ADD COLUMN session_budget_set_at TEXT" in src
+
+
+# ===========================================================================
+# Cluster C — Surface integrity (B6, B7, B9, B10)
+# ===========================================================================
+
+
+# --- B6 -------------------------------------------------------------------
+
+
+def test_b6_workspaces_verify_get_returns_structured_405():
+    """GET /workspaces/{id}/verify must return 405 JSON, never SPA HTML."""
+    src = Path("server/application_parts/part_013.py").read_text()
+    # The new GET handler must be registered for the same path as the POST.
+    assert '@app.get(\n    "/workspaces/{workspace_id}/verify",' in src
+    assert "workspaces_verify_get_405" in src
+    # The handler must return 405 with Allow: POST header.
+    assert 'status_code=405' in src
+    assert 'headers={"Allow": "POST"}' in src
+    # And mention the docs anchor so callers find the POST contract.
+    assert "/api/docs#/workspaces" in src
+
+
+# --- B7 -------------------------------------------------------------------
+
+
+def test_b7_system_health_alias_registered():
+    """A /system/health GET route returns the same payload as /health."""
+    src = Path("server/routes/system.py").read_text()
+    assert '@router.get(\n    "/system/health",' in src, (
+        "Missing /system/health alias — without it the documented URL "
+        "(referenced in dispute-policy docstring) falls through to SPA HTML"
+    )
+    assert "def system_health()" in src
+    # The alias must delegate to the canonical health() handler, not
+    # duplicate the body (or the two will drift).
+    assert "return health()" in src
+
+
+def test_b7_spa_prefixes_include_system_so_unknown_returns_json():
+    """Unknown /system/* paths must return JSON 404, not SPA HTML."""
+    src = Path("server/application_parts/part_014.py").read_text()
+    idx = src.find("_SPA_API_PREFIXES")
+    assert idx >= 0
+    block = src[idx : idx + 2000]
+    assert '"system/"' in block, (
+        "Adding /system/health as an alias means /system/* must also be "
+        "in _SPA_API_PREFIXES so /system/foo returns JSON 404 instead "
+        "of SPA HTML"
+    )
+    # workspaces was added too so unknown /workspaces/* paths 404 as JSON.
+    assert '"workspaces/"' in block
+
+
+# --- B9 -------------------------------------------------------------------
+
+
+def test_b9_agent_registration_discoverability_routes_exist():
+    """POST /agents, /agents/register, /registry/agents/register all return
+    a structured 404 pointing at /registry/register."""
+    src = Path("server/application_parts/part_007.py").read_text()
+    # All three intuitive paths must be registered as discoverability stubs.
+    assert '@app.post("/agents",' in src
+    assert '@app.post("/agents/register",' in src
+    assert '@app.post("/registry/agents/register",' in src
+    # The response must point at the canonical path + CLI helper.
+    assert '"correct_path": "/registry/register"' in src
+    assert '"cli_hint": "aztea publish' in src
+
+
+# --- B10 ------------------------------------------------------------------
+
+
+def test_b10_openapi_json_redirects_to_api_openapi_json():
+    """/openapi.json must 308-redirect to /api/openapi.json (FastAPI is
+    configured with openapi_url='/api/openapi.json')."""
+    src = Path("server/application_parts/part_001.py").read_text()
+    assert '@app.get("/openapi.json"' in src
+    assert "/api/openapi.json" in src
+    # 308 (permanent redirect, preserves method) is the right code for an
+    # API path move — not 301 (which spec'd by some clients to convert
+    # POST→GET).
+    assert "status_code=308" in src
+
+
+def test_b10_redoc_also_redirects():
+    """Same for /redoc → /api/redoc so the legacy URL keeps working."""
+    src = Path("server/application_parts/part_001.py").read_text()
+    assert '@app.get("/redoc"' in src
+    assert "/api/redoc" in src
+
+
+def test_b10_docs_path_intentionally_not_redirected():
+    """/docs is owned by the SPA — the redirect handler must NOT cover it."""
+    src = Path("server/application_parts/part_001.py").read_text()
+    # No literal @app.get("/docs"...) handler in the redirect block; the
+    # SPA serves /docs through its catch-all.
+    assert '@app.get("/docs"' not in src, (
+        "/docs is owned by the SPA as a product page; a redirect here "
+        "would break the front-end documentation experience"
+    )

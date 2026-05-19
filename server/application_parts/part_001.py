@@ -922,6 +922,28 @@ def _health_available_llm_providers() -> list[str]:
         return []
 
 
+# 2026-05-19 (B10): /openapi.json and /redoc redirect to their /api/* hosts.
+# FastAPI is configured with openapi_url="/api/openapi.json" so the legacy
+# /openapi.json path returned a JSON 404 (per _SPA_API_PREFIXES) instead of
+# the spec. The redirect points integrators at the real location without
+# requiring them to read docs first.
+#
+# /docs intentionally NOT redirected — the SPA owns that as the user-facing
+# product page. Swagger UI lives at /api/docs and is linked from the SPA's
+# Docs page directly.
+from fastapi.responses import RedirectResponse as _RedirectResponseB10  # noqa: E402
+
+
+@app.get("/openapi.json", include_in_schema=False)
+def openapi_json_redirect():
+    return _RedirectResponseB10(url="/api/openapi.json", status_code=308)
+
+
+@app.get("/redoc", include_in_schema=False)
+def redoc_redirect():
+    return _RedirectResponseB10(url="/api/redoc", status_code=308)
+
+
 @app.get("/health", include_in_schema=False)
 def health_endpoint():
     """Liveness + dependency-status probe. Always returns HTTP 200.

@@ -863,8 +863,13 @@ _SPA_API_PREFIXES: tuple[str, ...] = (
     "runs",
     "skills",
     "stripe/",
+    # 2026-05-19 (B7): /system/* paths must answer as JSON. /system/health
+    # exists as an alias for /health (see server/routes/system.py); any
+    # other /system/* gets a JSON 404 rather than the SPA index page.
+    "system/",
     "wallets/",
     "webhooks/",
+    "workspaces/",
     # 1.7.1 — well-known paths must 404 as JSON, never resolve to the SPA
     # index page. Otherwise tools that check /.well-known/jwks.json or any
     # other RFC-defined location for verification get the React app and

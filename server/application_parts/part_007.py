@@ -4,6 +4,35 @@ from core import db as _db
 # here for agent-facing surfaces.
 
 
+# 2026-05-19 (B9): agent-registration discoverability stubs. Pre-fix, callers
+# trying intuitive paths (POST /agents, /agents/register, /registry/agents/
+# register) got bare 405 Method Not Allowed responses with no hint. Now
+# each returns a structured 404 that names the canonical path and the CLI
+# helper, so the first-integrator experience surfaces the right URL.
+def _registration_moved_response() -> JSONResponse:
+    return JSONResponse(
+        status_code=404,
+        content={
+            "error": "moved",
+            "message": (
+                "Agent registration moved. POST /registry/register is the "
+                "canonical self-serve endpoint."
+            ),
+            "correct_path": "/registry/register",
+            "cli_hint": "aztea publish <path-to-agent.md|*.py>",
+            "docs": "/api/docs#/Registry/post__registry_register",
+        },
+    )
+
+
+@app.post("/agents", include_in_schema=False)
+@app.post("/agents/register", include_in_schema=False)
+@app.post("/registry/agents/register", include_in_schema=False)
+def _agent_registration_discoverability(request: Request) -> JSONResponse:
+    del request  # accept request only so FastAPI routes consistently
+    return _registration_moved_response()
+
+
 @app.post(
     "/registry/register",
     status_code=201,
