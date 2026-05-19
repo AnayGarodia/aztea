@@ -279,6 +279,46 @@ def _sanitize_leak_if_present(
     return _SANITISED_LEAK_MESSAGE
 
 
+def map_value_error_to_envelope(
+    exc: ValueError | PermissionError | Exception, scope: str
+) -> dict[str, Any]:
+    """Phase 2, 2026-05-19: ValueError / PermissionError → structured envelope.
+
+    Most internal validators raise ``ValueError("dispute.not_completed: ...")``
+    where the prefix is already a dot-namespaced code. Parse that out and
+    feed it into ``error_codes.make_error`` so the route layer's
+    ``detail=str(exc)`` pattern can be replaced with
+    ``detail=map_value_error_to_envelope(exc, "<scope>")`` and the response
+    carries the correct ``error`` code.
+
+    ``scope`` is the fallback namespace when the exception message has no
+    dot-prefix — e.g. "wallet", "registry", "dispute", "skill". The result
+    becomes ``<scope>.invalid_input`` so callers still see a structured
+    code, not a generic "request.invalid_input".
+
+    PermissionError → 403 unauthorised in the caller's scope. Other
+    exception types fall back to the scope's invalid_input bucket; the
+    Phase 1 boundary sanitiser will then catch any raw exception text in
+    the message.
+    """
+    raw = str(exc).strip()
+    if isinstance(exc, PermissionError):
+        return error_codes.make_error(
+            f"{scope}.unauthorized",
+            raw or "Not authorised for this action.",
+            None,
+        )
+    if ":" in raw:
+        prefix, _, msg = raw.partition(":")
+        prefix = prefix.strip()
+        # A structured prefix looks like "dispute.not_completed" — at least
+        # one dot AND only [a-z0-9._] so we don't mis-parse a real
+        # English sentence containing a colon.
+        if "." in prefix and all(c.isalnum() or c in "._" for c in prefix):
+            return error_codes.make_error(prefix, msg.strip() or raw, None)
+    return error_codes.make_error(f"{scope}.invalid_input", raw, None)
+
+
 def normalize_error_payload(status_code: int, detail: Any, path: str) -> dict[str, Any]:
     if isinstance(detail, dict):
         raw_error = str(detail.get("error") or "").strip()

@@ -158,6 +158,48 @@ def test_normalize_error_payload_sanitises_dict_detail_with_leaked_message() -> 
     assert payload["error"] == "dispute.write_failed"  # explicit code preserved
 
 
+# ===========================================================================
+# Phase 2 (2026-05-19): map_value_error_to_envelope helper for the
+# ~20 highest-traffic ``detail=str(exc)`` sites.
+# ===========================================================================
+
+
+def test_map_value_error_to_envelope_parses_structured_prefix() -> None:
+    out = error_handlers.map_value_error_to_envelope(
+        ValueError("dispute.not_completed: completed_at is unset"),
+        scope="dispute",
+    )
+    assert out["error"] == "dispute.not_completed"
+    assert "completed_at" in out["message"]
+
+
+def test_map_value_error_to_envelope_falls_back_to_scope() -> None:
+    out = error_handlers.map_value_error_to_envelope(
+        ValueError("reason must be a non-empty string."),
+        scope="dispute",
+    )
+    assert out["error"] == "dispute.invalid_input"
+    assert "reason must be" in out["message"]
+
+
+def test_map_value_error_to_envelope_handles_permission_error() -> None:
+    out = error_handlers.map_value_error_to_envelope(
+        PermissionError("Only a party to the job may file a dispute."),
+        scope="dispute",
+    )
+    assert out["error"] == "dispute.unauthorized"
+
+
+def test_map_value_error_to_envelope_does_not_misparse_english_colon() -> None:
+    """A real English message with a colon must NOT be parsed as a structured prefix."""
+    out = error_handlers.map_value_error_to_envelope(
+        ValueError("balance must equal: amount * fee_pct"),
+        scope="wallet",
+    )
+    # "balance must equal" has no dot — fall back to wallet.invalid_input
+    assert out["error"] == "wallet.invalid_input"
+
+
 def test_normalize_error_payload_logs_sanitised_leak(caplog) -> None:
     """When a leak is sanitised, the raw text is preserved in the log
     for ops debugging."""

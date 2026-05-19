@@ -126,7 +126,10 @@ def jobs_retry(
                 require_authorized_owner=require_auth,
             )
         except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc))
+            raise HTTPException(
+                status_code=422,
+                detail=_envelope_from_value_error(exc, "job"),
+            )
         if updated is None:
             raise HTTPException(
                 status_code=409, detail="Unable to schedule retry for this job."
@@ -236,7 +239,10 @@ def jobs_message_create(
             correlation_id=raw_correlation_id,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(
+            status_code=400,
+            detail=_envelope_from_value_error(exc, "job"),
+        )
 
     msg_type = parsed["type"]
     payload = parsed["payload"]
@@ -1203,7 +1209,12 @@ def jobs_dispute(
     except _db.IntegrityError:
         conn.execute("ROLLBACK")
         raise HTTPException(
-            status_code=409, detail="A dispute already exists for this job."
+            status_code=409,
+            detail=error_codes.make_error(
+                "dispute.already_exists",
+                "A dispute already exists for this job.",
+                {"job_id": job_id},
+            ),
         )
     except ValueError as exc:
         conn.execute("ROLLBACK")
@@ -1231,10 +1242,19 @@ def jobs_dispute(
                     {"job_id": job_id, "current_status": job.get("status")},
                 ),
             )
-        raise HTTPException(status_code=400, detail=raw_msg)
+        # Phase 2 (2026-05-19): every other ValueError from the dispute
+        # write path now maps through the structured helper instead of
+        # leaking str(exc) into the response.
+        raise HTTPException(
+            status_code=422,
+            detail=_envelope_from_value_error(exc, "dispute"),
+        )
     except PermissionError as exc:
         conn.execute("ROLLBACK")
-        raise HTTPException(status_code=403, detail=str(exc))
+        raise HTTPException(
+            status_code=403,
+            detail=_envelope_from_value_error(exc, "dispute"),
+        )
     except payments.InsufficientBalanceError as exc:
         conn.execute("ROLLBACK")
         error_code = (
@@ -1350,9 +1370,15 @@ def jobs_dispute_operator_response(
             response_text=response_text,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(
+            status_code=409,
+            detail=_envelope_from_value_error(exc, "dispute"),
+        )
     except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+        raise HTTPException(
+            status_code=403,
+            detail=_envelope_from_value_error(exc, "dispute"),
+        )
     if updated is None:
         raise HTTPException(
             status_code=404, detail="Dispute disappeared during update."
@@ -1387,7 +1413,10 @@ def disputes_judge(
             dispute_id, actor_owner_id=caller["owner_id"]
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(
+            status_code=400,
+            detail=_envelope_from_value_error(exc, "dispute"),
+        )
     except RuntimeError:
         _LOG.exception("Dispute judge execution failed for %s.", dispute_id)
         raise HTTPException(status_code=500, detail="Failed to resolve dispute.")

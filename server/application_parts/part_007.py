@@ -1460,7 +1460,10 @@ def registry_list(
                 )
             )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(
+                status_code=400,
+                detail=_envelope_from_value_error(exc, "registry"),
+            )
         if use_cache:
             _agents_list_cache = agents
             _agents_list_cache_at = now
@@ -1665,7 +1668,10 @@ def registry_update_agent(
             cacheable=body.cacheable,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(
+            status_code=400,
+            detail=_envelope_from_value_error(exc, "registry"),
+        )
     if updated is None:
         raise HTTPException(
             status_code=404, detail="Agent not found or you don't own it."

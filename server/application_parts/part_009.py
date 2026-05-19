@@ -803,7 +803,10 @@ def jobs_compare_select(
     try:
         selected = compare.select_winner(compare_id, winner_agent_id)
     except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(
+            status_code=409,
+            detail=_envelope_from_value_error(exc, "compare"),
+        )
     if selected is None:
         raise HTTPException(
             status_code=404, detail=f"Compare session '{compare_id}' not found."
@@ -2410,7 +2413,10 @@ def jobs_complete(
                 ),
             )
         except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc))
+            raise HTTPException(
+                status_code=422,
+                detail=_envelope_from_value_error(exc, "request"),
+            )
 
         agent = registry.get_agent(job["agent_id"], include_unapproved=True)
         if agent is None:

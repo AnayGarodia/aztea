@@ -664,7 +664,10 @@ def _load_manifest_content(
     try:
         safe_url = _validate_outbound_url(url, "manifest_url")
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise HTTPException(
+            status_code=422,
+            detail=_envelope_from_value_error(exc, "onboarding"),
+        )
     try:
         resp = http.get(safe_url, timeout=15, allow_redirects=False)
         if 300 <= int(resp.status_code) < 400:
@@ -769,7 +772,10 @@ def onboarding_validate(
             manifest_content, source=source
         )
     except onboarding.ManifestValidationError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise HTTPException(
+            status_code=422,
+            detail=_envelope_from_value_error(exc, "onboarding"),
+        )
     return JSONResponse(content=validated)
 
 
@@ -854,9 +860,15 @@ def onboarding_ingest(
             owner_id=caller["owner_id"],
         )
     except onboarding.ManifestValidationError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise HTTPException(
+            status_code=422,
+            detail=_envelope_from_value_error(exc, "onboarding"),
+        )
     except (ValueError, _db.IntegrityError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(
+            status_code=400,
+            detail=_envelope_from_value_error(exc, "onboarding"),
+        )
 
     agent = registry.get_agent_with_reputation(
         agent_id, include_unapproved=True
@@ -1195,7 +1207,10 @@ def users_me_update(
             phone=body.get("phone"),
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(
+            status_code=400,
+            detail=_envelope_from_value_error(exc, "auth"),
+        )
     if updated is None:
         raise HTTPException(status_code=404, detail="User not found.")
     return JSONResponse(
@@ -1234,7 +1249,10 @@ def auth_update_role(
     try:
         _auth.update_user_role(user_id, new_role)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(
+            status_code=400,
+            detail=_envelope_from_value_error(exc, "auth"),
+        )
     return {"role": new_role}
 
 
@@ -1264,7 +1282,10 @@ def auth_update_profile(
     try:
         updated = _auth.update_profile(user_id, **fields)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(
+            status_code=400,
+            detail=_envelope_from_value_error(exc, "auth"),
+        )
     return JSONResponse(
         content={
             "user_id": updated["user_id"],
@@ -1304,7 +1325,10 @@ def auth_change_password(
     try:
         _auth.change_password(user_id, current, new_password)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(
+            status_code=400,
+            detail=_envelope_from_value_error(exc, "auth"),
+        )
     return {"ok": True}
 
 
@@ -1423,7 +1447,10 @@ def auth_create_key(
             ),
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(
+            status_code=400,
+            detail=_envelope_from_value_error(exc, "auth"),
+        )
     return JSONResponse(content=result, status_code=201)
 
 
@@ -1462,9 +1489,19 @@ def auth_rotate_key(
             per_job_cap_cents_provided="per_job_cap_cents" in body.model_fields_set,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(
+            status_code=400,
+            detail=_envelope_from_value_error(exc, "auth"),
+        )
     if result is None:
-        raise HTTPException(status_code=404, detail="Key not found or already revoked.")
+        raise HTTPException(
+            status_code=404,
+            detail=error_codes.make_error(
+                "auth.key_not_found",
+                "Key not found or already revoked.",
+                {"key_id": key_id},
+            ),
+        )
     return JSONResponse(content=result, status_code=201)
 
 
@@ -1553,7 +1590,10 @@ def auth_signup_verify(request: Request, body: dict) -> JSONResponse:
         _auth.init_auth_db()
         result = _auth.consume_signup_verification(email, otp)
     except _auth.SignupVerificationError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(
+            status_code=400,
+            detail=_envelope_from_value_error(exc, "auth"),
+        )
     _credit_starter_balance(result)
     _email.send_welcome(
         result.get("email", ""),
@@ -1595,7 +1635,10 @@ def auth_reset_password(request: Request, body: dict) -> JSONResponse:
     try:
         _auth.consume_password_reset_token(email, otp, new_password)
     except _auth.PasswordResetError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(
+            status_code=400,
+            detail=_envelope_from_value_error(exc, "auth"),
+        )
     return JSONResponse(content={"reset": True})
 
 

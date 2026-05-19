@@ -369,7 +369,10 @@ def registry_search(
                     ),
                 )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(
+            status_code=400,
+            detail=_envelope_from_value_error(exc, "registry"),
+        )
 
     # Hide sunset/deprecated builtins from search results for non-admins.
     # They stay callable by direct slug, just not discoverable.
@@ -3214,7 +3217,10 @@ def jobs_create(
             private_task=bool(body.private_task),
         )
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise HTTPException(
+            status_code=422,
+            detail=_envelope_from_value_error(exc, "job"),
+        )
     caller_wallet = payments.get_or_create_wallet(caller_owner_id)
     _agent_payout_owner2 = f"agent:{agent['agent_id']}"
     agent_wallet = payments.get_or_create_wallet(_agent_payout_owner2)

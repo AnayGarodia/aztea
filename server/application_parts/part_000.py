@@ -189,7 +189,10 @@ from core.registry import auto_hire as _auto_hire
 from core.registry import decision_audit as _decision_audit
 from core.registry import origin_context as _origin_context
 from server.builtin_agents import specs as _builtin_specs
-from server.error_handlers import register_exception_handlers
+from server.error_handlers import (
+    map_value_error_to_envelope as _envelope_from_value_error,
+    register_exception_handlers,
+)
 from server.routes import admin_usage as _admin_usage_routes
 from server.routes import system as _system_routes
 

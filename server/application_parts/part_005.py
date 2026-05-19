@@ -836,14 +836,28 @@ def _ensure_output_rejection_dispute(
         if existing is not None:
             return existing
         raise HTTPException(
-            status_code=409, detail="A dispute already exists for this job."
+            status_code=409,
+            detail=error_codes.make_error(
+                "dispute.already_exists",
+                "A dispute already exists for this job.",
+                {"job_id": job.get("job_id")},
+            ),
         )
     except ValueError as exc:
         conn.execute("ROLLBACK")
-        raise HTTPException(status_code=400, detail=str(exc))
+        # Phase 2, 2026-05-19: parse the dispute.* prefix (or fall back to
+        # dispute.invalid_input) so the response carries a code, not raw
+        # exception text.
+        raise HTTPException(
+            status_code=422,
+            detail=_envelope_from_value_error(exc, "dispute"),
+        )
     except PermissionError as exc:
         conn.execute("ROLLBACK")
-        raise HTTPException(status_code=403, detail=str(exc))
+        raise HTTPException(
+            status_code=403,
+            detail=_envelope_from_value_error(exc, "dispute"),
+        )
     except payments.InsufficientBalanceError as exc:
         conn.execute("ROLLBACK")
         error_code = (
@@ -868,7 +882,14 @@ def _ensure_output_rejection_dispute(
             "Unexpected error opening output-rejection dispute for job %s",
             job.get("job_id"),
         )
-        raise HTTPException(status_code=500, detail="Failed to open dispute.")
+        raise HTTPException(
+            status_code=500,
+            detail=error_codes.make_error(
+                "dispute.open_failed",
+                "Failed to open dispute.",
+                {"job_id": job.get("job_id")},
+            ),
+        )
     finally:
         # F4 — restore the bypass flag regardless of path. ContextVar is
         # per-request anyway, but explicit cleanup keeps the contract

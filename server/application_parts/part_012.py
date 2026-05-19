@@ -254,7 +254,10 @@ def skills_create(
             )
             break
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(
+                status_code=400,
+                detail=_envelope_from_value_error(exc, "skill"),
+            )
         except _db.IntegrityError as exc:
             last_error = exc
             candidate_name = f"{display_name} #{attempt + 1}"

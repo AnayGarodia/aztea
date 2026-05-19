@@ -105,7 +105,10 @@ def disputes_admin_rule(
         if finalized is not None:
             _apply_dispute_effects(finalized, body.outcome)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(
+            status_code=400,
+            detail=_envelope_from_value_error(exc, "dispute"),
+        )
     except payments.InsufficientBalanceError as exc:
         raise HTTPException(
             status_code=409,
@@ -224,9 +227,19 @@ def job_event_hook_create(
     try:
         hook = _create_job_event_hook(caller["owner_id"], body.target_url, body.secret)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise HTTPException(
+            status_code=422,
+            detail=_envelope_from_value_error(exc, "webhook"),
+        )
     except _db.IntegrityError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(
+            status_code=409,
+            detail=error_codes.make_error(
+                "webhook.duplicate",
+                "A webhook with this configuration already exists.",
+                None,
+            ),
+        )
     return JSONResponse(content=hook, status_code=201)
 
 
@@ -321,7 +334,10 @@ def jobs_sweep(
         _set_sweeper_state(last_run_at=started, last_summary=summary, last_error=None)
     except ValueError as exc:
         _set_sweeper_state(last_run_at=started, last_error=str(exc))
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise HTTPException(
+            status_code=422,
+            detail=_envelope_from_value_error(exc, "sweeper"),
+        )
     return JSONResponse(content=summary)
 
 
@@ -1233,7 +1249,10 @@ def wallet_set_daily_spend_limit(
             body.daily_spend_limit_cents,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(
+            status_code=400,
+            detail=_envelope_from_value_error(exc, "wallet"),
+        )
     return JSONResponse(
         content={
             "wallet_id": updated["wallet_id"],
@@ -1271,7 +1290,10 @@ def wallet_set_session_budget(
             reset_counter=body.reset_counter,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(
+            status_code=400,
+            detail=_envelope_from_value_error(exc, "wallet"),
+        )
     return JSONResponse(
         content={
             "wallet_id": updated["wallet_id"],
@@ -1445,7 +1467,10 @@ def wallet_agent_settings_update(
             )
             payments.set_wallet_guarantor(wallet_id, enabled=enabled, cap_cents=cap)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(
+            status_code=400,
+            detail=_envelope_from_value_error(exc, "wallet"),
+        )
 
     refreshed = payments.get_wallet(wallet_id) or {}
     return JSONResponse(
@@ -1482,9 +1507,22 @@ def wallet_agent_sweep(
             memo=f"sweep from agent {agent_id}",
         )
     except payments.InsufficientBalanceError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(
+            status_code=400,
+            detail=error_codes.make_error(
+                error_codes.INSUFFICIENT_FUNDS,
+                "Insufficient balance for sweep.",
+                {
+                    "balance_cents": getattr(exc, "balance_cents", None),
+                    "required_cents": getattr(exc, "required_cents", None),
+                },
+            ),
+        )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(
+            status_code=400,
+            detail=_envelope_from_value_error(exc, "wallet"),
+        )
     return JSONResponse(
         content={
             "agent_id": agent_id,
@@ -2044,7 +2082,10 @@ def admin_platform_withdraw(
             detail=f"Insufficient balance: pool has {exc.balance_cents}¢, requested {exc.required_cents}¢.",
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(
+            status_code=400,
+            detail=_envelope_from_value_error(exc, "wallet"),
+        )
 
     return JSONResponse(
         content={
@@ -2271,7 +2312,10 @@ def watchers_create(
             payload=body.payload,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(
+            status_code=400,
+            detail=_envelope_from_value_error(exc, "request"),
+        )
 
     return JSONResponse(
         status_code=201,

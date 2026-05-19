@@ -503,7 +503,17 @@ def withdraw(
                 memo=f"Withdrawal to Stripe Connect [{account_id[:12]}]",
             )
         except payments.InsufficientBalanceError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(
+                status_code=400,
+                detail=error_codes.make_error(
+                    error_codes.INSUFFICIENT_FUNDS,
+                    "Insufficient balance for withdrawal.",
+                    {
+                        "balance_cents": getattr(exc, "balance_cents", None),
+                        "required_cents": getattr(exc, "required_cents", None),
+                    },
+                ),
+            )
 
         try:
             transfer = _stripe_lib.Transfer.create(
@@ -1400,7 +1410,10 @@ def recipes_create(
             is_public=False,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise HTTPException(
+            status_code=422,
+            detail=_envelope_from_value_error(exc, "recipe"),
+        )
     return JSONResponse(content={"recipe": _recipe_catalog_entry(row)}, status_code=201)
 
 
@@ -1457,7 +1470,10 @@ def recipes_run(
                 caller_workspace_id=caller_workspace_id,
             )
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise HTTPException(
+            status_code=422,
+            detail=_envelope_from_value_error(exc, "recipe"),
+        )
     run = pipelines.get_run(run_id)
     response: dict[str, Any] = {
         "run_id": run_id,
