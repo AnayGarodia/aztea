@@ -1,0 +1,10 @@
+{
+  "category": "semantic_api_change",
+  "source": "synthesised",
+  "notes": "Sortino uses DOWNSIDE std only; AI may use full std (= Sharpe).",
+  "candidates": {
+    "correct.py": "correct",
+    "subtle_regression.py": "regression",
+    "broken_signature.py": "broken"
+  }
+}

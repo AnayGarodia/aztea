@@ -1,0 +1,10 @@
+{
+  "category": "missing_factor",
+  "source": "synthesised",
+  "notes": "EW variance with vs without debiasing factor.",
+  "candidates": {
+    "correct.py": "correct",
+    "subtle_regression.py": "regression",
+    "broken_signature.py": "broken"
+  }
+}

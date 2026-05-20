@@ -1,0 +1,10 @@
+{
+  "category": "unit_confusion",
+  "source": "synthesised",
+  "notes": "AI may apply /100 twice or skip it.",
+  "candidates": {
+    "correct.py": "correct",
+    "subtle_regression.py": "regression",
+    "broken_signature.py": "broken"
+  }
+}

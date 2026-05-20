@@ -1,0 +1,10 @@
+{
+  "category": "missing_factor",
+  "source": "synthesised — canonical Sharpe annualisation bug",
+  "notes": "sqrt-N vs N annualisation. Bug inflates by ~15.87x for daily; signature looks reasonable; passes any 'roughly in range' tests.",
+  "candidates": {
+    "correct.py": "correct",
+    "subtle_regression.py": "regression",
+    "broken_signature.py": "broken"
+  }
+}

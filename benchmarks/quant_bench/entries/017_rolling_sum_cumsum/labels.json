@@ -1,0 +1,10 @@
+{
+  "category": "off_by_one",
+  "source": "synthesised",
+  "notes": "Window arithmetic via cumsum is famously off-by-one prone.",
+  "candidates": {
+    "correct.py": "correct",
+    "subtle_regression.py": "regression",
+    "broken_signature.py": "broken"
+  }
+}

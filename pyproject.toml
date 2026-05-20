@@ -6,6 +6,7 @@ markers = [
     "property: hypothesis-driven property tests",
     "fuzz: corpus / RNG-driven fuzz tests",
     "surface: parametrized buyer-surface coverage tests",
+    "security: containment / hostile-input tests (run on every commit)",
 ]
 filterwarnings = [
     "ignore::DeprecationWarning:pydantic.*",

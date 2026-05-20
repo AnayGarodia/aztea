@@ -17,6 +17,9 @@ from server.builtin_agents.constants import (
 from server.builtin_agents.constants import (
     PYTHON_EXECUTOR_AGENT_ID as _PYTHON_EXECUTOR_AGENT_ID,
 )
+from server.builtin_agents.constants import (
+    QUANT_PATCH_VALIDATOR_AGENT_ID as _QUANT_PATCH_VALIDATOR_AGENT_ID,
+)
 from server.builtin_agents.schemas import output_schema_object as _output_schema_object
 
 
@@ -459,6 +462,201 @@ def load_builtin_specs_part2() -> list[dict[str, Any]]:
                         "summary": "1 package with a high-severity CVE. Upgrade lodash immediately.",
                     },
                 }
+            ],
+        },
+        {
+            "agent_id": _QUANT_PATCH_VALIDATOR_AGENT_ID,
+            "name": "Quant Patch Validator",
+            "description": (
+                "Differential fuzzer for AI-written quant code. Validates "
+                "an LLM-generated patch against the original (reference) "
+                "implementation by driving both with Hypothesis-generated "
+                "inputs, then clusters and triages divergences as "
+                "expected-fix vs unintended-regression vs both-wrong. "
+                "Use when an AI suggested a change to numerical or "
+                "trading-logic code and you need to confirm it doesn't "
+                "silently introduce off-by-one, sign-flip, unit, "
+                "annualization, or contract-shape bugs. Returns "
+                "confirmed regressions with reproducible inputs, "
+                "verified invariants, and full fuzz statistics. "
+                "Caller-tunable rtol/atol; default tolerances are "
+                "calibrated to typical AI failure magnitudes; precision "
+                "1.0 / recall 1.0 / false-alarm 0.0 on the v0.1 "
+                "quant-bench corpus. Validated patches earn a workspace-"
+                "sealed audit trail when called with _workspace_id. "
+                "Sensitive inputs are never replayed as public work "
+                "examples (examples_sensitive=True)."
+            ),
+            "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_QUANT_PATCH_VALIDATOR_AGENT_ID],
+            "price_per_call_usd": 1.50,
+            "tags": ["code-quality", "fuzzing", "quant", "ai-validation", "testing"],
+            "category": "Code Quality",
+            "examples_sensitive": True,
+            "cacheable": False,
+            "runtime_requirements": ["python>=3.10", "numpy", "pandas", "hypothesis"],
+            "tooling_kind": "fuzzer",
+            "is_featured": True,
+            "input_schema": {
+                "type": "object",
+                "required": ["reference_code", "candidate_code"],
+                "properties": {
+                    "reference_code": {
+                        "type": "string",
+                        "description": "Pre-patch / reference implementation source.",
+                    },
+                    "candidate_code": {
+                        "type": "string",
+                        "description": "AI-generated candidate to validate.",
+                    },
+                    "fuzz_budget": {
+                        "type": "string",
+                        "enum": ["quick", "standard", "deep"],
+                        "default": "standard",
+                        "description": (
+                            "Runtime budget. quick=30s, standard=5min, "
+                            "deep=30min. Affects how many inputs the fuzzer "
+                            "tries; does not affect price in v1."
+                        ),
+                    },
+                    "fuzz_seconds": {
+                        "type": "number",
+                        "description": (
+                            "Optional exact wall-clock budget (seconds), "
+                            "capped at the chosen tier's nominal budget. "
+                            "Use for low-latency sync callers (the sync "
+                            "gateway has an 8 s budget; choose 6 or below)."
+                        ),
+                    },
+                    "fuzz_engine": {
+                        "type": "string",
+                        "enum": ["hypothesis", "atheris"],
+                        "default": "hypothesis",
+                        "description": (
+                            "Fuzzer backend. atheris is coverage-guided but "
+                            "requires libFuzzer (Linux + clang); on macOS "
+                            "falls back to hypothesis."
+                        ),
+                    },
+                    "rtol": {
+                        "type": "number",
+                        "default": 1e-5,
+                        "description": "Relative tolerance for numerical equality.",
+                    },
+                    "atol": {
+                        "type": "number",
+                        "default": 1e-7,
+                        "description": "Absolute tolerance floor for numerical equality.",
+                    },
+                    "spec_hint": {
+                        "type": "string",
+                        "description": (
+                            "Optional natural-language description of what "
+                            "the patch is intended to change. Without it, "
+                            "every divergence is treated as a regression."
+                        ),
+                    },
+                    "auto_tune_tolerance": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": (
+                            "Run the reference twice on permuted inputs and "
+                            "set atol from observed self-divergence. Use only "
+                            "for STATELESS functions (mean, var) — for time-"
+                            "ordered functions (RSI, rolling stats) this will "
+                            "over-tolerate."
+                        ),
+                    },
+                    "track_coverage": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": (
+                            "Wrap fuzzing with coverage.py to report what "
+                            "fraction of the candidate's branches were "
+                            "exercised. Adds modest overhead; off by default."
+                        ),
+                    },
+                },
+            },
+            "output_schema": _output_schema_object(
+                {
+                    "verdict": {
+                        "type": "string",
+                        "enum": [
+                            "equivalent",
+                            "regressions_found",
+                            "contract_broken",
+                            "signature_divergence",
+                            "intended_changes_only",
+                        ],
+                    },
+                    "signature": {"type": ["object", "null"]},
+                    "signature_divergence": {"type": ["object", "null"]},
+                    "confirmed_regressions": {"type": "array"},
+                    "expected_divergences": {"type": "array"},
+                    "fuzz_stats": {"type": "object"},
+                    "spec_hint_used": {"type": "boolean"},
+                },
+                required=["verdict", "fuzz_stats"],
+            ),
+            "output_examples": [
+                {
+                    "input": {
+                        "reference_code": (
+                            "import numpy as np\n"
+                            "def f(prices, window):\n"
+                            "    out = np.full(prices.shape, np.nan)\n"
+                            "    for i in range(window, prices.size):\n"
+                            "        out[i] = prices[i-window:i].mean()\n"
+                            "    return out\n"
+                        ),
+                        "candidate_code": (
+                            "import numpy as np\n"
+                            "def f(prices, window):\n"
+                            "    out = np.full(prices.shape, np.nan)\n"
+                            "    # bug: includes today's bar (lookahead)\n"
+                            "    for i in range(window-1, prices.size):\n"
+                            "        out[i] = prices[i-window+1:i+1].mean()\n"
+                            "    return out\n"
+                        ),
+                        "fuzz_budget": "quick",
+                    },
+                    "output": {
+                        "verdict": "regressions_found",
+                        "signature_divergence": None,
+                        "confirmed_regressions": [
+                            {
+                                "cluster_id": "C001",
+                                "divergence_kind": "value",
+                                "member_count": 142,
+                                "verdict": "regression",
+                                "hypothesis": (
+                                    "Numerical divergence at moderate magnitude. "
+                                    "Window shifted by one — looks like a "
+                                    "lookahead-by-one bug."
+                                ),
+                                "confidence": 0.85,
+                            }
+                        ],
+                        "fuzz_stats": {
+                            "tier_used": "quick",
+                            "inputs_explored": 14820,
+                            "divergences_found": 142,
+                            "clusters": 1,
+                        },
+                    },
+                },
+                {
+                    "input": {
+                        "reference_code": "def f(x): return x*2\n",
+                        "candidate_code": "def f(y): return y*2\n",
+                        "fuzz_budget": "quick",
+                    },
+                    "output": {
+                        "verdict": "equivalent",
+                        "confirmed_regressions": [],
+                        "fuzz_stats": {"clusters": 0},
+                    },
+                },
             ],
         },
     ]
