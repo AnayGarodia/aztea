@@ -2027,10 +2027,36 @@ def registry_call(
     _body_root = (
         dict(body.root) if body is not None and hasattr(body, "root") else {}
     )
-    if not idempotency_key:
-        _body_idem = _body_root.get("idempotency_key")
-        if isinstance(_body_idem, str) and _body_idem.strip():
-            idempotency_key = _body_idem.strip()
+    _body_idem_raw = _body_root.get("idempotency_key")
+    _body_idem = (
+        _body_idem_raw.strip()
+        if isinstance(_body_idem_raw, str) and _body_idem_raw.strip()
+        else None
+    )
+    # HARDEN-5 (audit 2026-05-20): if BOTH the header and the body carry
+    # an idempotency_key and they disagree, refuse with 400 rather than
+    # silently honoring one and dropping the other. Pre-fix, the header
+    # won and the body was dropped without signal — a caller mixing
+    # header-based and body-based retries with mismatched keys would
+    # silently double-execute on the body-key path. Matching values are
+    # fine (callers belt-and-braces). Same-value is a no-op convergence.
+    if idempotency_key and _body_idem and idempotency_key != _body_idem:
+        raise HTTPException(
+            status_code=400,
+            detail=error_codes.make_error(
+                error_codes.INVALID_INPUT,
+                "Idempotency key disagreement: X-Idempotency-Key header "
+                "and body.idempotency_key are both set but have different "
+                "values. Pick one — passing both is fine only when they "
+                "match exactly.",
+                {
+                    "header_key_prefix": idempotency_key[:8] + "...",
+                    "body_key_prefix": _body_idem[:8] + "...",
+                },
+            ),
+        )
+    if not idempotency_key and _body_idem:
+        idempotency_key = _body_idem
     caller_owner_id_early = _caller_owner_id(request)
     if idempotency_key:
         cached = _idempotency_lookup(caller_owner_id_early, agent_id, idempotency_key)

@@ -157,19 +157,66 @@ def _fetch_jwks(jwks_url: str) -> dict | None:
 
 
 def _verify_with_jwks(token: str, jwks_url: str, algorithms: list[str]) -> tuple[bool, str | None]:
-    """Side-effect: verify a JWT using a JWKS endpoint via PyJWT."""
+    """Side-effect: verify a JWT using a JWKS endpoint via PyJWT.
+
+    HARDEN-3 (audit 2026-05-20): pre-fix this validated jwks_url through
+    ``core.url_security.validate_outbound_url`` and then handed the URL
+    to ``PyJWKClient(jwks_url)``. PyJWKClient does its OWN HTTP fetch
+    internally via ``urllib.request.urlopen`` (or requests, depending on
+    the PyJWT version) — that fetch bypasses our SSRF gate entirely.
+    A caller could pass any pre-validated URL (e.g. a public CDN that
+    later 302-redirects to ``http://169.254.169.254/`` or to an internal
+    address resolved via DNS-rebinding) and PyJWKClient would follow.
+    The fix: fetch the JWKS document ourselves via the already-gated
+    ``_fetch_jwks`` helper, then construct the signing key from the JWK
+    dict without ever giving PyJWKClient a URL.
+    """
     try:
         import jwt  # type: ignore[import]
-        from jwt import PyJWKClient  # type: ignore[import]
+        from jwt import PyJWK  # type: ignore[import]
     except ImportError:
         return False, "PyJWT not installed; signature unverified"
     try:
         url_security.validate_outbound_url(jwks_url, "jwks_url")
     except Exception as exc:
         return False, f"jwks_url blocked: {exc}"
+    # Fetch via our own validated layer. _fetch_jwks already SSRF-gates
+    # the URL and respects _JWKS_FETCH_TIMEOUT_S.
+    jwks_doc = _fetch_jwks(jwks_url)
+    if not jwks_doc or not isinstance(jwks_doc.get("keys"), list):
+        return False, "JWKS fetch failed or document missing 'keys'"
+    keys = jwks_doc.get("keys") or []
+    # Resolve the key by kid (if the token header carries one) or fall
+    # back to the first key in the set. This mirrors PyJWKClient's
+    # ``get_signing_key_from_jwt`` resolution without touching the
+    # network.
     try:
-        client = PyJWKClient(jwks_url)
-        signing_key = client.get_signing_key_from_jwt(token).key
+        unverified_header = jwt.get_unverified_header(token)
+    except Exception as exc:
+        return False, f"unverified_header parse failed: {type(exc).__name__}: {exc}"
+    kid = unverified_header.get("kid")
+    matched_jwk: dict | None = None
+    if kid:
+        for k in keys:
+            if isinstance(k, dict) and k.get("kid") == kid:
+                matched_jwk = k
+                break
+    if matched_jwk is None and keys:
+        # No kid match — use the first key only if there's exactly one,
+        # otherwise refuse (ambiguous). This is stricter than
+        # PyJWKClient's behavior but safer.
+        if len(keys) == 1:
+            matched_jwk = keys[0]
+        else:
+            return False, (
+                f"token header has no kid and JWKS contains {len(keys)} keys; "
+                "cannot disambiguate. Add a kid claim to the token or use a "
+                "single-key JWKS."
+            )
+    if matched_jwk is None:
+        return False, "no matching key in JWKS for token kid"
+    try:
+        signing_key = PyJWK.from_dict(matched_jwk).key
         jwt.decode(token, signing_key, algorithms=algorithms)
         return True, None
     except Exception as exc:  # noqa: BLE001 — multiple PyJWT exception types
