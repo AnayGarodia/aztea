@@ -1,0 +1,10 @@
+{
+  "category": "sign_flip",
+  "source": "synthesised",
+  "notes": "AI commonly inverts the alpha vs (1-alpha) weight on EMA.",
+  "candidates": {
+    "correct.py": "correct",
+    "subtle_regression.py": "regression",
+    "broken_signature.py": "broken"
+  }
+}

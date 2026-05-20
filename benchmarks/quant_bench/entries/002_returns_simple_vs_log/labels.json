@@ -1,0 +1,10 @@
+{
+  "category": "semantic_api_change",
+  "source": "synthesised — common AI substitution pattern between simple and log returns",
+  "notes": "log(1+x) ≈ x for small x — bug is invisible on most unit tests but diverges in the tails.",
+  "candidates": {
+    "correct.py": "correct",
+    "subtle_regression.py": "regression",
+    "broken_signature.py": "broken"
+  }
+}

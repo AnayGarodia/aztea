@@ -1,0 +1,10 @@
+{
+  "category": "missing_factor",
+  "source": "synthesised",
+  "notes": "Kelly = (mu - r)/sigma^2; AI sometimes uses sigma instead of sigma squared.",
+  "candidates": {
+    "correct.py": "correct",
+    "subtle_regression.py": "regression",
+    "broken_signature.py": "broken"
+  }
+}

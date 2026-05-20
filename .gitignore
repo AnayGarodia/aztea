@@ -83,3 +83,7 @@ skills-lock.json
 core/runs.jsonl
 docs/personal/
 .demo-venv/
+
+# Throwaway dev scripts (Phase-0 spikes, bench expanders, ad-hoc probes).
+# Used to answer one-off questions about the codebase; never source of record.
+scratch/

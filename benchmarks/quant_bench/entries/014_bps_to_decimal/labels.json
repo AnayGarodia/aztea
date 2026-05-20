@@ -1,0 +1,10 @@
+{
+  "category": "unit_confusion",
+  "source": "synthesised",
+  "notes": "Mix-up between bps (\u00d71e-4) and pct (\u00d71e-2).",
+  "candidates": {
+    "correct.py": "correct",
+    "subtle_regression.py": "regression",
+    "broken_signature.py": "broken"
+  }
+}

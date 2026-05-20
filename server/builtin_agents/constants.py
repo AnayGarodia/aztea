@@ -65,6 +65,12 @@ SBOM_GENERATOR_AGENT_ID = "f14ab9fe-cb29-5a86-a7a2-f42de85ff99a"
 PYPI_METADATA_AGENT_ID = "9dd0e946-974c-5f0b-a59d-db15cc503ec6"
 GITHUB_RELEASES_AGENT_ID = "c199ff57-599b-5e90-b908-994a98b57571"
 HCL_TERRAFORM_ANALYZER_AGENT_ID = "9ad19220-a46b-54b0-9190-dded9399b45c"
+# 2026-05-20 — quant_patch_validator: differential-fuzzing agent for
+# AI-written quant code. Catches off-by-one / sign-flip / unit-confusion
+# bugs by driving both reference and candidate with Hypothesis-generated
+# inputs and triaging divergences. See `agents/quant_patch_validator/`
+# and `benchmarks/quant_bench/`.
+QUANT_PATCH_VALIDATOR_AGENT_ID = "0552b418-026d-5609-8446-2fe7af0efa56"
 
 BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
     QUALITY_JUDGE_AGENT_ID: "internal://quality-judge",
@@ -104,6 +110,7 @@ BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
     PYPI_METADATA_AGENT_ID: "internal://pypi_metadata",
     GITHUB_RELEASES_AGENT_ID: "internal://github_releases",
     HCL_TERRAFORM_ANALYZER_AGENT_ID: "internal://hcl_terraform_analyzer",
+    QUANT_PATCH_VALIDATOR_AGENT_ID: "internal://quant_patch_validator",
 }
 
 BUILTIN_LEGACY_ROUTE_ENDPOINTS: dict[str, str] = {
@@ -203,6 +210,7 @@ CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
         LIVE_SANDBOX_AGENT_ID,
         JWT_VALIDATOR_AGENT_ID,
         HCL_TERRAFORM_ANALYZER_AGENT_ID,
+        QUANT_PATCH_VALIDATOR_AGENT_ID,
     }
 )
 # Sanity: a sunset agent must never accidentally re-appear in the public set.

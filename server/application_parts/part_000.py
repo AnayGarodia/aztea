@@ -113,6 +113,7 @@ from agents import sbom_generator as agent_sbom_generator
 from agents import pypi_metadata as agent_pypi_metadata
 from agents import github_releases as agent_github_releases
 from agents import hcl_terraform_analyzer as agent_hcl_terraform_analyzer
+from agents import quant_patch_validator as agent_quant_patch_validator
 from core import agent_generator as _agent_generator
 from core import auth as _auth
 from core import cache as _cache
@@ -346,6 +347,7 @@ _SBOM_GENERATOR_AGENT_ID = _builtin_constants.SBOM_GENERATOR_AGENT_ID
 _PYPI_METADATA_AGENT_ID = _builtin_constants.PYPI_METADATA_AGENT_ID
 _GITHUB_RELEASES_AGENT_ID = _builtin_constants.GITHUB_RELEASES_AGENT_ID
 _HCL_TERRAFORM_ANALYZER_AGENT_ID = _builtin_constants.HCL_TERRAFORM_ANALYZER_AGENT_ID
+_QUANT_PATCH_VALIDATOR_AGENT_ID = _builtin_constants.QUANT_PATCH_VALIDATOR_AGENT_ID
 
 _normalize_endpoint_ref = _builtin_constants.normalize_endpoint_ref
 _BUILTIN_INTERNAL_ENDPOINTS = _builtin_constants.BUILTIN_INTERNAL_ENDPOINTS

@@ -1,0 +1,10 @@
+{
+  "category": "sign_flip",
+  "source": "synthesised",
+  "notes": "Long position pnl = position \u00d7 (next_price \u2212 current_price). Easy to flip.",
+  "candidates": {
+    "correct.py": "correct",
+    "subtle_regression.py": "regression",
+    "broken_signature.py": "broken"
+  }
+}

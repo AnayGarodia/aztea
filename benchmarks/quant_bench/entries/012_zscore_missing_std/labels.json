@@ -1,0 +1,10 @@
+{
+  "category": "missing_factor",
+  "source": "synthesised",
+  "notes": "AI may forget the divide-by-std step or use the wrong std.",
+  "candidates": {
+    "correct.py": "correct",
+    "subtle_regression.py": "regression",
+    "broken_signature.py": "broken"
+  }
+}

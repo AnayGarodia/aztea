@@ -1,0 +1,10 @@
+{
+  "category": "off_by_one",
+  "source": "synthesised from pandas.core.window.rolling historical off-by-one fixes",
+  "notes": "Lookahead-by-one is the canonical AI failure here — model averages over training examples that included today's bar.",
+  "candidates": {
+    "correct.py": "correct",
+    "subtle_regression.py": "regression",
+    "broken_signature.py": "broken"
+  }
+}
