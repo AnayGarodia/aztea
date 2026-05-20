@@ -111,11 +111,26 @@ def display_min_price_usd(
 
     Returns None for agents not in the overlay (they use a fixed spec price).
     Includes the platform fee because callers pay price + fee.
+
+    NEW-1 (sweep 2026-05-20): the ledger computes platform fees via
+    ``Decimal * pct / 100`` with ``ROUND_HALF_UP`` (see
+    ``core.payments.base.compute_platform_fee_cents``). Using float
+    arithmetic here produces a display value below the actual charge —
+    e.g. ``min_cents=5`` + 10% fee renders as $0.055 but the ledger
+    charges $0.06. Mirror the ledger's Decimal path so the listing is
+    truthful.
     """
     entry = _OVERLAY.get(agent_id)
     if entry is None:
         return None
     config = entry.get("pricing_config", {})
-    min_cents = config.get("min_cents", 0)
-    caller_min_cents = min_cents * (1 + platform_fee_pct / 100)
-    return round(caller_min_cents / 100, 4)
+    min_cents = int(config.get("min_cents", 0) or 0)
+    from decimal import Decimal, ROUND_HALF_UP
+    pct_dec = Decimal(str(platform_fee_pct))
+    fee_cents = (Decimal(min_cents) * pct_dec / Decimal(100)).quantize(
+        Decimal("1"), rounding=ROUND_HALF_UP
+    )
+    caller_min_cents = Decimal(min_cents) + fee_cents
+    return float((caller_min_cents / Decimal(100)).quantize(
+        Decimal("0.0001"), rounding=ROUND_HALF_UP
+    ))

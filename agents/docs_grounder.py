@@ -115,10 +115,28 @@ Return JSON with exactly these keys:
 
 
 def _is_safe_http_url(url: str) -> bool:
-    """Accept only http/https URLs; reject anything else (data:, file:, etc.)."""
+    """Accept only http/https URLs that pass the platform SSRF gate.
+
+    NEW-3 (sweep 2026-05-20): pre-fix this only checked the URL scheme.
+    Today docs_grounder is safe because URLs come exclusively from
+    web_search results (see line 261), and web_search talks to
+    DuckDuckGo which won't return private/loopback addresses. But the
+    bare scheme check is a future-regression hazard — anyone refactoring
+    docs_grounder to accept caller-supplied URLs or to follow redirects
+    would open an SSRF without realising the gate was so weak.
+    Delegate to ``core.url_security`` which checks scheme AND that the
+    resolved IP is public.
+    """
     try:
         scheme = urlparse(url).scheme.lower()
-        return scheme in ("http", "https")
+    except Exception:
+        return False
+    if scheme not in ("http", "https"):
+        return False
+    try:
+        from core import url_security as _url_security
+        _url_security.validate_outbound_url(url, "docs_grounder.url")
+        return True
     except Exception:
         return False
 

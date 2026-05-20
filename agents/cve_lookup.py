@@ -856,8 +856,15 @@ def run(payload: dict) -> dict:
     NVD is preferred only for direct CVE-id details where its enrichment
     wins.
     """
+    # NEW-5 (sweep 2026-05-20): structured envelope, not bare TypeError —
+    # the dispatch layer surfaces uncaught raises as HTTP 500 with a
+    # stack trace. Other agents (secret_scanner, dockerfile_analyzer, …)
+    # return a structured error here; do the same for consistency.
     if not isinstance(payload, dict):
-        raise TypeError(f"payload must be dict, got {type(payload).__name__}")
+        return _err(
+            "cve_lookup.invalid_payload",
+            f"payload must be dict, got {type(payload).__name__}",
+        )
     cve_id_single = payload.get("cve_id")
     cve_ids_list = payload.get("cve_ids")
     if cve_id_single is not None or cve_ids_list is not None:

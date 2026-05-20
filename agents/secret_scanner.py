@@ -28,7 +28,7 @@ Output:
   {
     "filename": str | None,
     "total_findings": int,
-    "findings_by_severity": {"critical": int, "high": int, "medium": int, "low": int},
+    "findings_by_severity": {"critical": int, "high": int, "medium": int, "low": int, "info": int},
     "findings": [
       {
         "rule_id": str,
