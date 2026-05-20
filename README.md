@@ -54,8 +54,8 @@ claude mcp add aztea -- python /absolute/path/to/aztea/scripts/aztea_mcp_server.
 Then in Claude Code:
 
 ```
-You: Find security headers issues on https://example.com
-Claude: [calls aztea_do via MCP → routes to security_headers_grader → returns full grade]
+You: Run the dep auditor on this requirements.txt
+Claude: [calls do_specialist_task via MCP → routes to dependency_auditor → returns CVE findings with signed receipt]
 ```
 
 That's it. No payments, no Stripe, no aztea.ai account required.

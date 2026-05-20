@@ -151,31 +151,33 @@ agents/                          Built-in agent implementations (one module each
   python_executor.py             Subprocess sandbox (real Python execution)
   multi_language_executor.py     Polyglot code execution (Node/Deno/Bun/Go/Rust)
   db_sandbox.py                  SQLite sandbox (isolated tempfile DB)
+  live_sandbox.py                Persistent sandbox + DB (9 verbs)
   browser_agent.py               Playwright-based headless browsing
-  visual_regression.py           Screenshot diff via Playwright (requires chromium)
   dependency_auditor.py          Package CVE + license audit via live NVD data
   dns_inspector.py               DNS record, SSL cert, HTTP metadata live lookup
   secret_scanner.py              Repo / file secret detection
   sast_scanner.py                Static security analysis
-  ssl_certificate_decoder.py     Live SSL certificate fetch + decode
-  security_headers_grader.py     HTTP security header live grade
   lighthouse_auditor.py          Lighthouse audit via Playwright
   accessibility_auditor.py       axe-core accessibility audit
   broken_link_crawler.py         Live HTTP crawl + status check
   pdf_document_parser.py         PDF extraction + structured output
-  web_search.py                  Live web search
-  docs_grounder.py               Live doc retrieval + citation
+  jwt_validator.py               JWT decode + signature verify (HS/RS/ES via PyJWK)
   stripe_webhook_debugger.py     Stripe webhook signature + payload debug
   load_tester.py                 Bounded HTTP load test
   ci_failure_reproducer.py       CI log fetch + minimal reproduction
   dockerfile_analyzer.py         Dockerfile lint + best-practices grade
   openapi_validator.py           OpenAPI spec validation
   coverage_runner.py             Python coverage run in sandbox
-  archive_inspector.py           tar/zip safe inspect (zip-slip guarded)
   k8s_manifest_validator.py      Kubernetes YAML schema + policy lint
   terraform_plan_analyzer.py     Terraform plan parse + risk surface
-  diff_analyzer.py               Git diff summarisation
-  unicode_inspector.py           Confusable / homoglyph / BiDi inspection
+  hcl_terraform_analyzer.py      Static HCL lint via checkov rules
+  # Sunsetted (file remains, but excluded from CURATED_PUBLIC — endpoints stay
+  # wired so old job IDs / signed receipts continue to resolve. See
+  # SUNSET_DEPRECATED_AGENT_IDS in server/builtin_agents/constants.py):
+  #   docs_grounder.py, diff_analyzer.py, unicode_inspector.py,
+  #   regex_tester.py, ssl_certificate_decoder.py, pypi_metadata.py,
+  #   github_releases.py, security_headers_grader.py, sbom_generator.py,
+  #   web_search.py, visual_regression.py, archive_inspector.py
 
 core/
   db.py                          Dual-backend connection manager (Postgres + SQLite); thread-local pool;
@@ -615,7 +617,7 @@ Production env vars and Stripe webhook config: see `docs/runbooks/deploy.md`.
 
 ## Public agent IDs
 
-Source of truth: `server/builtin_agents/constants.py`. Curated public set (agents that do real external work) is in `CURATED_PUBLIC_BUILTIN_AGENT_IDS` — currently **29 agents** (docs_grounder sunsetted 2026-05-17, live_sandbox added by PR #60). Internal/hidden agents are in the same file. `SUNSET_DEPRECATED_AGENT_IDS` holds `docs_grounder` until upstream live-data errors are resolved. Always read constants directly; do not duplicate IDs anywhere else.
+Source of truth: `server/builtin_agents/constants.py`. Curated public set (agents that do real external work) is in `CURATED_PUBLIC_BUILTIN_AGENT_IDS` — currently **24 agents** (after the 2026-05-20 catalog-quality cull dropped 11 builtins; see `SUNSET_DEPRECATED_AGENT_IDS` for the list and per-agent reasoning). Internal/hidden agents are in the same file. Always read constants directly; do not duplicate IDs anywhere else.
 
 ## Aztea
 
