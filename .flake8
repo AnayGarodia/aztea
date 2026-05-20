@@ -79,3 +79,9 @@ exclude =
     dist,
     sdks/python-sdk/agentmarket/setup.py,
     sdks/python/,
+    # quant-bench entries are test DATA, not source: they intentionally
+    # mimic real-world AI-generated patches (one-line semicolons, occasional
+    # unused imports left by the model). Linting them defeats the corpus's
+    # purpose. The agent itself (agents/quant_patch_validator/) is still
+    # linted normally.
+    benchmarks/quant_bench/entries/,

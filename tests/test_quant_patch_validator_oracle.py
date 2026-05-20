@@ -17,8 +17,17 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
-import pandas as pd
 import pytest
+
+# pandas is optional in the runtime image (CI installs numpy but not pandas).
+# Import gracefully — the three pandas-specific oracle cases are filtered out
+# if it's missing, but the 42 scalar/array cases still run.
+try:
+    import pandas as pd
+    _HAS_PANDAS = True
+except ImportError:
+    pd = None
+    _HAS_PANDAS = False
 
 from agents.quant_patch_validator import harness as _harness, signature as _signature
 
@@ -147,26 +156,28 @@ CONTAINER_CASES = [
     OracleCase("dict_different_keys", {"a": 1}, {"b": 1}, "value"),
 ]
 
-PANDAS_CASES = [
-    OracleCase(
-        "series_equal",
-        pd.Series([1.0, 2.0, 3.0]),
-        pd.Series([1.0, 2.0, 3.0]),
-        "none",
-    ),
-    OracleCase(
-        "series_with_nan_matching",
-        pd.Series([1.0, _NAN, 3.0]),
-        pd.Series([1.0, _NAN, 3.0]),
-        "none",
-    ),
-    OracleCase(
-        "series_diff_values",
-        pd.Series([1.0, 2.0, 3.0]),
-        pd.Series([1.0, 99.0, 3.0]),
-        "value",
-    ),
-]
+PANDAS_CASES = []
+if _HAS_PANDAS:
+    PANDAS_CASES = [
+        OracleCase(
+            "series_equal",
+            pd.Series([1.0, 2.0, 3.0]),
+            pd.Series([1.0, 2.0, 3.0]),
+            "none",
+        ),
+        OracleCase(
+            "series_with_nan_matching",
+            pd.Series([1.0, _NAN, 3.0]),
+            pd.Series([1.0, _NAN, 3.0]),
+            "none",
+        ),
+        OracleCase(
+            "series_diff_values",
+            pd.Series([1.0, 2.0, 3.0]),
+            pd.Series([1.0, 99.0, 3.0]),
+            "value",
+        ),
+    ]
 
 ALL_CASES = SCALAR_CASES + ARRAY_CASES + CONTAINER_CASES + PANDAS_CASES
 

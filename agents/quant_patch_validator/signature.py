@@ -206,7 +206,6 @@ def _params_from_ast(fn_node: ast.FunctionDef) -> tuple[Parameter, ...]:
             Parameter(name=a.arg, type_name=type_name, has_default=has_default, kw_only=False)
         )
     # Keyword-only
-    n_kw = len(args.kwonlyargs)
     for idx, a in enumerate(args.kwonlyargs):
         default = args.kw_defaults[idx] if idx < len(args.kw_defaults) else None
         hinted = _normalize_type_hint(a.annotation)

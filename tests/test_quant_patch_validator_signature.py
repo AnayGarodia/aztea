@@ -167,6 +167,7 @@ def test_signature_pair_compatible_with_same_kwonly_required_set():
 
 def test_signature_with_pandas_series_hint_produces_series_strategy():
     """Ensure pandas.Series hints flow through to the fuzz strategy."""
+    pd = pytest.importorskip("pandas", reason="pandas not installed in this env")
     from agents.quant_patch_validator import fuzz as _fuzz
 
     src = "import pandas as pd\ndef f(series: pd.Series) -> float:\n    return float(series.sum())\n"
@@ -176,6 +177,5 @@ def test_signature_with_pandas_series_hint_produces_series_strategy():
     # Drive _build_combined_strategy and pull one example; it should be a pd.Series
     strat = _fuzz._build_combined_strategy(sig, {})
     args, kwargs = strat.example()
-    import pandas as pd
     assert len(args) == 1
     assert isinstance(args[0], pd.Series), f"expected pd.Series, got {type(args[0])}"

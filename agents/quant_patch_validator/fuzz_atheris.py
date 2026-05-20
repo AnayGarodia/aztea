@@ -32,7 +32,6 @@ from typing import Any
 
 from agents.quant_patch_validator.fuzz import FuzzResult
 from agents.quant_patch_validator.harness import DiffRecord, Harness
-from agents.quant_patch_validator.signature import FunctionSignature
 
 
 def is_available() -> bool:
