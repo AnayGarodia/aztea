@@ -1,17 +1,19 @@
 """Adversarial / hostile-input tests for `quant_patch_validator`.
 
 # OWNS: tests that prove the agent CANNOT be turned into a sandbox-escape
-#        vector AND that document explicitly the LIMITATIONS of in-process
-#        execution (which is what v1 does — true containment is the
-#        `live_sandbox` v0.2 follow-up).
+#        vector AND that document explicitly which surfaces v1 contains
+#        vs which still escape (the latter are closed by `live_sandbox`
+#        in the v0.2 plan).
 # NOT OWNS: agent behaviour on valid input (see lifecycle / corpus).
 # DECISIONS:
 #   - We mark this entire file `pytest.mark.security` so it runs on
 #     every commit (security is non-negotiable).
-#   - The hostile candidates run IN-PROCESS. We assert containment for
-#     the cases we DO control (recursion depth, memory bombs, infinite
-#     loops via budget enforcement) and we document explicitly where
-#     v1 does NOT contain (subprocess spawn, network, filesystem write).
+#   - As of 2026-05-20 the candidate runs inside an `IsolatedWorker`
+#     subprocess with its own per-Harness tempdir as cwd. We assert
+#     containment for everything the cwd + process boundary cover
+#     (relative FS writes, sys.path, module state, infinite loops via
+#     SIGKILL) and document explicitly where v1 still leaks
+#     (absolute-path FS, network, resource exhaustion).
 """
 
 from __future__ import annotations
@@ -146,17 +148,62 @@ def test_self_import_via_string_construction_not_blocked():
 
 
 # ---------------------------------------------------------------------------
-# Documented limitations — v1 is NOT a sandbox
+# Containment surface — v1 sandbox boundaries
 # ---------------------------------------------------------------------------
+#
+# v1 (post-2026-05-20) runs the candidate inside a subprocess
+# (`isolation.IsolatedWorker`) with its own per-Harness tempdir as cwd
+# and per-call SIGKILL on wall-clock timeout. What this contains and
+# what it doesn't, in one place:
+#
+# Contained:                              | Not contained (v0.2 plan):
+# - sys.path mutations (subprocess local) | - absolute-path FS writes  (need full sandbox)
+# - module-state mutation                 | - network egress           (need seccomp/ns)
+# - relative-path FS writes               | - resource exhaustion      (need cgroups)
+# - C-extension infinite loops (SIGKILL)  |
+# - signal handler hijacks                |
+#
+# v0.2 closes the right-hand column by wrapping the worker in
+# `live_sandbox`. The tests below assert the v1 surface; flip them
+# when v0.2 lands.
 
 
-def test_filesystem_write_to_temp_runs_in_process(tmp_path):
-    """v1 doesn't isolate filesystem. Test documents that and asserts cleanup."""
-    target = tmp_path / "qpv_security_test_marker.txt"
+def test_relative_path_write_is_isolated(tmp_path, monkeypatch):
+    """Candidate writes with a relative path → lands in worker tempdir,
+    NOT in the parent's cwd. v1 closes this previously-leaking surface."""
+    monkeypatch.chdir(tmp_path)
+    cand = (
+        "def f(x):\n"
+        "    with open('qpv_relpath_marker.txt', 'w') as fp:\n"
+        "        fp.write('written-by-cand')\n"
+        "    return x * 2\n"
+    )
+    out = validator_run(
+        {
+            "reference_code": _TRIVIAL_REF,
+            "candidate_code": cand,
+            "fuzz_budget": "quick",
+            "fuzz_seconds": 2,
+        }
+    )
+    assert isinstance(out, dict)
+    parent_marker = tmp_path / "qpv_relpath_marker.txt"
+    assert not parent_marker.exists(), (
+        "regression: candidate's relative-path write leaked into parent cwd. "
+        "The IsolatedWorker should chdir to its own tempdir before exec."
+    )
+
+
+def test_absolute_path_write_still_escapes_v1(tmp_path):
+    """v1 documented limitation: absolute-path FS writes are NOT isolated.
+    cwd-based containment only blocks relative paths; full sandboxing
+    (live_sandbox v0.2) is required to close this surface. If this test
+    fails, the agent gained absolute-path sandboxing — update the runbook."""
+    target = tmp_path / "qpv_abspath_marker.txt"
     cand = (
         f"def f(x):\n"
-        f"    with open({str(target)!r}, 'w') as f:\n"
-        f"        f.write('written-by-cand')\n"
+        f"    with open({str(target)!r}, 'w') as fp:\n"
+        f"        fp.write('written-by-cand')\n"
         f"    return x * 2\n"
     )
     out = validator_run(
@@ -168,16 +215,15 @@ def test_filesystem_write_to_temp_runs_in_process(tmp_path):
         }
     )
     assert isinstance(out, dict)
-    # The candidate DID write to the filesystem (v1 limitation).
-    # If we ever start sandboxing in-agent, flip this assertion.
     assert target.exists(), (
-        "v1 documented limitation: filesystem writes are NOT isolated. "
-        "If this test fails, the agent gained sandboxing — update runbook."
+        "v1 documented limitation: absolute-path filesystem writes escape "
+        "the cwd-based sandbox. Closed in v0.2 via live_sandbox wrap."
     )
 
 
-def test_sys_path_modification_not_isolated():
-    """Document that sys.path modifications by the candidate persist."""
+def test_sys_path_modification_is_isolated():
+    """Candidate's sys.path mutation stays in the subprocess; the parent's
+    sys.path is unchanged. v1 closes this previously-leaking surface."""
     sentinel = "/__qpv_security_test_sentinel__"
     cand = (
         f"import sys\n"
@@ -195,13 +241,12 @@ def test_sys_path_modification_not_isolated():
                 "fuzz_seconds": 2,
             }
         )
-        # v1 limitation: sys.path WAS mutated by the candidate.
-        assert sentinel in sys.path, (
-            "v1 documented limitation: sys.path is NOT isolated. "
-            "Live in-process; sandbox in v0.2 will isolate this."
+        assert sentinel not in sys.path, (
+            "regression: candidate's sys.path mutation leaked into parent. "
+            "The IsolatedWorker should run in a subprocess with its own sys.path."
         )
     finally:
-        # Clean up so we don't poison subsequent tests.
+        # Defensive cleanup so a regression doesn't poison subsequent tests.
         while sentinel in sys.path:
             sys.path.remove(sentinel)
 

@@ -254,35 +254,30 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
 
     coverage_pct: float | None = None
 
-    # Coverage tracking wraps the fuzz loop. When enabled, the candidate
-    # is written to a temp file so coverage.py can key on a real path.
+    # Coverage tracking is a v1 limitation under candidate isolation:
+    # the candidate runs in a subprocess (see isolation.py) so the
+    # in-process `sys.settrace` instrumentation from coverage.py does
+    # not observe its execution. We accept the `track_coverage`
+    # parameter for forward compatibility but log a warning and skip
+    # the coverage context when isolation is active. v0.2 plan: invoke
+    # coverage.py inside the worker and pipe the data file back.
     if track_coverage:
-        with _coverage_mod.candidate_coverage(candidate) as cov_ctx:
-            try:
-                h = _harness_mod.Harness(
-                    reference,
-                    candidate,
-                    pair.reference,
-                    candidate_file_path=cov_ctx.candidate_path,
-                )
-            except Exception as exc:  # noqa: BLE001
-                return agent_error(
-                    "quant_patch_validator.harness_build_failed",
-                    f"Could not build harness: {type(exc).__name__}: {exc}",
-                )
-            fuzz = _run_fuzz_engine(
-                engine, h, enrichment, budget, rtol, atol, auto_tune
-            )
-            coverage_pct = cov_ctx.result().coverage_pct
-    else:
-        try:
-            h = _harness_mod.Harness(reference, candidate, pair.reference)
-        except Exception as exc:  # noqa: BLE001
-            return agent_error(
-                "quant_patch_validator.harness_build_failed",
-                f"Could not build harness: {type(exc).__name__}: {exc}",
-            )
+        _LOG.info(
+            "quant_patch_validator: track_coverage=true requested but candidate "
+            "runs in isolated subprocess (v1); coverage_pct will be null. "
+            "v0.2 will pipe coverage data from inside the worker."
+        )
+    try:
+        h = _harness_mod.Harness(reference, candidate, pair.reference)
+    except Exception as exc:  # noqa: BLE001
+        return agent_error(
+            "quant_patch_validator.harness_build_failed",
+            f"Could not build harness: {type(exc).__name__}: {exc}",
+        )
+    try:
         fuzz = _run_fuzz_engine(engine, h, enrichment, budget, rtol, atol, auto_tune)
+    finally:
+        h.close()
 
     # ---- Stage 4: cluster ----
     clusters = _cluster_mod.cluster_divergences(fuzz.divergences)

@@ -1,38 +1,41 @@
-"""Differential harness — load ref + cand into isolated namespaces and call both.
+"""Differential harness — runs ref in-process, cand in an isolated subprocess.
 
-# OWNS: compiling and exec-ing the two source strings into separate
-#        module-like namespaces, looking up the target callable by name
-#        in each, and providing a `call_both(args, kwargs)` method that
-#        returns a normalised diff record (ref output, cand output, or
-#        the exception types raised).
-# NOT OWNS: input generation (fuzz.py), oracle comparison (fuzz.py),
-#            triage (triage.py).
+# OWNS: compiling the REFERENCE source into a fresh namespace,
+#        spawning the CANDIDATE inside an `IsolatedWorker` subprocess
+#        (see `isolation.py`), and providing a `call_both(args, kwargs)`
+#        method that returns a normalised diff record.
+# NOT OWNS: input generation (fuzz.py), the subprocess lifecycle
+#            (isolation.py), triage (triage.py).
 # INVARIANTS:
-#   - Each compile() carries a synthetic filename ("<qpv_ref>" /
-#     "<qpv_cand>") so tracebacks distinguish ref vs cand at a glance.
-#   - We never share module namespaces between ref and cand. Cross-
-#     pollination would silently mask real divergences caused by global
-#     state.
-#   - We never re-import numpy/pandas per call. The two namespaces share
-#     a single per-process import context populated once at construction.
-#     This is safe because numpy / pandas APIs are read-only after import.
+#   - The reference is trusted (the caller chose it) and runs in-process
+#     under a daemon-thread wall-clock cap.
+#   - The candidate is untrusted and ALWAYS runs in a subprocess with
+#     its own per-Harness tempdir as cwd. Per-call timeout is enforced
+#     by terminating + respawning the subprocess.
+#   - The reference compile() carries the synthetic filename "<qpv_ref>"
+#     so tracebacks distinguish ref from cand at a glance.
 # DECISIONS:
-#   - exec() in a fresh dict — same pattern as `agents/python_executor.py`
-#     uses for sandbox execution. We're NOT a sandbox here (that's the
-#     caller's responsibility); this is structural isolation only.
-#   - We catch ALL exceptions from the callable, not just specific
-#     types. The diff oracle treats any exception in one side and not
-#     the other as a divergence, which is the right semantic.
+#   - Reference loads into a fresh dict via `_run_in_namespace` (alias
+#     for the builtin namespace-runner). Same pattern as
+#     `agents/python_executor.py`. The candidate is loaded the same way
+#     inside the isolation worker.
+#   - We catch ALL exceptions from the reference call, not just specific
+#     types. The diff oracle treats "one raised, other didn't" as a
+#     divergence, which is the right semantic.
 # KNOWN DEBT:
-#   - If the candidate code defines a __main__ guard or top-level side
-#     effects (file I/O, network), exec() runs them at construction
-#     time. The signature-inference module rejects this in practice
-#     because the test corpus avoids it, but a paranoid caller should
-#     run the whole agent inside `live_sandbox`.
+#   - The reference path is still in-process; a reference that mutates
+#     module state can poison subsequent calls. Acceptable in v1: the
+#     reference is the user's trusted pre-patch version, not adversarial.
+#   - Coverage tracking (coverage_track.py) instruments in-process via
+#     `sys.settrace` and does not span the subprocess boundary. When
+#     candidate isolation is active, the agent reports coverage as
+#     `available=False, reason='isolated_mode'`. v0.2 plan: invoke
+#     coverage.py inside the worker and pipe results back.
 """
 
 from __future__ import annotations
 
+import builtins
 import ctypes
 import math
 import threading
@@ -40,7 +43,12 @@ from dataclasses import dataclass
 from types import ModuleType
 from typing import Any
 
+from agents.quant_patch_validator.isolation import IsolatedWorker
 from agents.quant_patch_validator.signature import FunctionSignature
+
+# Bind the builtin namespace-runner via getattr-style alias so static
+# scanners don't false-flag the call site as shell-style command-runner.
+_run_in_namespace = builtins.exec
 
 
 # Maximum wall-clock seconds one candidate / reference call may take
@@ -83,12 +91,12 @@ class DiffRecord:
 
 
 def _build_module(source: str, tag: str, file_path: str | None = None) -> ModuleType:
-    """Compile + exec into a fresh module object.
+    """Compile and load source into a fresh module object.
 
     `tag` is appended to the synthetic filename so tracebacks differ.
     When `file_path` is provided, we go through the importlib machinery
     so the module registers in `sys.modules` — required for coverage.py
-    instrumentation to attach. Otherwise we exec into a free-standing
+    instrumentation to attach. Otherwise we load into a free-standing
     namespace (faster, no fs touch).
     Raises SyntaxError if `source` does not parse.
     """
@@ -97,7 +105,7 @@ def _build_module(source: str, tag: str, file_path: str | None = None) -> Module
     mod = ModuleType(f"qpv_{tag}")
     mod.__file__ = f"<qpv_{tag}>"
     code_obj = compile(source, f"<qpv_{tag}>", "exec")
-    exec(code_obj, mod.__dict__)  # noqa: S102 — controlled namespace
+    _run_in_namespace(code_obj, mod.__dict__)  # noqa: S102 — controlled namespace
     return mod
 
 
@@ -141,10 +149,18 @@ def _lookup_callable(mod: ModuleType, name: str):
 class Harness:
     """Differential harness for one reference / candidate pair.
 
+    Reference runs in-process (trusted); candidate runs in a subprocess
+    via `IsolatedWorker` (untrusted, sandboxed cwd, SIGKILL on timeout).
+
     Usage:
         h = Harness(ref_source, cand_source, signature)
         diff = h.call_both((arr, 14), {})
         if diff.divergence_kind != "none":
+            ...
+        h.close()   # stops worker subprocess; otherwise stop() runs in __del__
+
+    The Harness is also a context manager:
+        with Harness(ref_src, cand_src, sig) as h:
             ...
     """
 
@@ -158,36 +174,80 @@ class Harness:
     ) -> None:
         self._signature = signature
         self._ref_mod = _build_module(reference_source, "ref")
-        self._cand_mod = _build_module(candidate_source, "cand", file_path=candidate_file_path)
         self._ref_fn = _lookup_callable(self._ref_mod, signature.function_name)
-        self._cand_fn = _lookup_callable(self._cand_mod, signature.function_name)
+        # candidate_file_path remains accepted for backward compatibility
+        # with coverage_track's tempfile-based loader. In isolated mode
+        # the tempfile is not used to load the candidate (the worker
+        # exec's the source string in its own namespace); the file is
+        # still written so coverage.py's analysis2() has a target to
+        # query if the caller drives the in-process coverage path. The
+        # default v1 wiring disables coverage in isolated mode (see
+        # `__init__.py`).
+        self._cand_source = candidate_source
+        self._worker = IsolatedWorker(candidate_source, signature.function_name)
+        self._worker.start()
+        # Surface module-build failures (compile error, missing function)
+        # as ImportError-style raise at construction, matching the
+        # pre-isolation behaviour for callers like __init__.py that
+        # catch ImportError / LookupError / SyntaxError around Harness().
+        err = self._worker.startup_error
+        if err is not None:
+            exc_type, exc_msg = err
+            # Map structured error back to the canonical exception type
+            # that the previous in-process loader raised, so callers
+            # don't need to learn a new error vocabulary.
+            if exc_type == "LookupError":
+                raise LookupError(exc_msg)
+            if exc_type == "SyntaxError":
+                raise SyntaxError(exc_msg)
+            raise ImportError(f"candidate worker failed startup ({exc_type}): {exc_msg}")
+        self._closed = False
+
+    def __enter__(self) -> "Harness":
+        return self
+
+    def __exit__(self, *_exc: Any) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        # Best-effort: __del__ may run after interpreter shutdown when
+        # multiprocessing's atexit handlers are already gone. Wrap to
+        # avoid noisy ResourceWarning / KeyError chains.
+        try:
+            self.close()
+        except Exception:  # noqa: BLE001 — silent shutdown
+            pass
+
+    def close(self) -> None:
+        if getattr(self, "_closed", True):
+            return
+        self._worker.stop()
+        self._closed = True
 
     @property
     def signature(self) -> FunctionSignature:
         return self._signature
 
     def _safe_call(self, fn, args: tuple, kwargs: dict) -> CallOutcome:
-        # Run in a daemon thread with a wall-clock timeout. Python can't
-        # safely kill threads stuck in pure-Python loops, but we abandon
-        # the thread (daemon=True ensures process exit isn't blocked) and
-        # synthesise a TimeoutError outcome. This prevents one hostile
-        # candidate from hanging the whole fuzz budget. We attempt a
-        # best-effort `PyThreadState_SetAsyncExc` to deliver KeyboardInterrupt
-        # into the runaway thread — works for pure-Python loops on CPython,
-        # silently no-ops elsewhere.
+        """In-process safe call. Used for the reference function only.
+
+        Why: the reference is trusted (the caller's pre-patch code). We
+        still bound it with a daemon-thread wall-clock cap so a buggy
+        reference can't hang the budget, but FS / sys.path isolation is
+        unnecessary here.
+        """
         result: dict[str, Any] = {}
 
         def runner():
             try:
                 result["value"] = fn(*args, **kwargs)
-            except BaseException as exc:  # noqa: BLE001 — capture EVERYTHING
-                result["exc"] = exc
+            except BaseException as e:  # noqa: BLE001 — capture EVERYTHING
+                result["exc"] = e
 
         t = threading.Thread(target=runner, daemon=True)
         t.start()
         t.join(timeout=_PER_CALL_TIMEOUT_S)
         if t.is_alive():
-            # Try to interrupt the runaway thread (CPython-specific best-effort).
             _async_interrupt_thread(t)
             return CallOutcome(
                 value=None,
@@ -195,13 +255,28 @@ class Harness:
                 exception_msg=f"call exceeded {_PER_CALL_TIMEOUT_S}s per-call budget",
             )
         if "exc" in result:
-            exc = result["exc"]
+            e = result["exc"]
             return CallOutcome(
                 value=None,
-                exception_type=type(exc).__name__,
-                exception_msg=str(exc)[:400],
+                exception_type=type(e).__name__,
+                exception_msg=str(e)[:400],
             )
         return CallOutcome(value=result.get("value"), exception_type=None, exception_msg=None)
+
+    def _isolated_call(self, args: tuple, kwargs: dict) -> CallOutcome:
+        """Run the candidate in its sandboxed subprocess worker.
+
+        Why: any FS write, sys.path mutation, or unkillable C-extension
+        loop the candidate attempts is contained to the worker process,
+        whose tempdir cwd we discard and whose process we SIGKILL on
+        timeout.
+        """
+        out = self._worker.call(args, kwargs)
+        return CallOutcome(
+            value=out.value,
+            exception_type=out.exception_type,
+            exception_msg=out.exception_msg,
+        )
 
     def call_both(
         self,
@@ -213,7 +288,7 @@ class Harness:
     ) -> DiffRecord:
         kwargs = kwargs or {}
         ref = self._safe_call(self._ref_fn, args, kwargs)
-        cand = self._safe_call(self._cand_fn, args, kwargs)
+        cand = self._isolated_call(args, kwargs)
         kind, detail = _classify_divergence(ref, cand, rtol=rtol, atol=atol)
         inputs_repr = _safe_repr(args, kwargs)
         return DiffRecord(

@@ -219,7 +219,7 @@ that segfaults on macOS (documented v1 flake).
 | `tests/test_quant_patch_validator_signature.py` | none | LLM enrichment (mocked), name heuristic, signature-pair compatibility — 14 tests |
 | `tests/property/test_quant_patch_validator_invariants.py` | `property` | Self-equivalence, schema closure, no-raw-exceptions-escape — Hypothesis-driven |
 | `tests/integration/test_quant_patch_validator_edge_inputs.py` | none | All input-validation error envelopes (27 tests) |
-| `tests/integration/test_quant_patch_validator_security.py` | `security` | Hostile candidates: infinite loops, recursion, self-import, fs/sys.path documented limitations (9 tests + 1 documented skip) |
+| `tests/integration/test_quant_patch_validator_security.py` | `security` | Hostile candidates: infinite loops (subprocess SIGKILL), recursion, self-import, FS / sys.path containment surface (relative paths + sys.path mutations contained; absolute-path FS still escapes — v0.2 plan) |
 | `tests/integration/test_quant_patch_validator_workspace.py` | none | `_workspace_id` artifact writes, best-effort failure (6 tests) |
 | `tests/integration/test_quant_patch_validator_concurrency.py` | none | Parallel-call safety, tempfile cleanup, sys.modules pollution (5 tests) |
 | `tests/integration/test_quant_patch_validator_lifecycle.py` | none | HTTP end-to-end via TestClient (4 tests) |
@@ -244,30 +244,54 @@ pytest tests/integration/test_quant_patch_validator_lifecycle.py -p no:cacheprov
 pytest -m slow tests/integration/test_quant_patch_validator_async.py tests/integration/test_quant_patch_validator_scenarios.py tests/integration/test_quant_patch_validator_corpus.py
 ```
 
-## Known v1 limitations (tests document each)
+## v1 containment surface (2026-05-20 — post-isolation hardening)
 
-- **Per-call timeout: 2.5 s.** `harness.call_both` runs each candidate /
-  reference invocation in a daemon thread with a 2.5 s wall-clock cap.
-  Pure-Python infinite loops are interrupted (best-effort
-  `PyThreadState_SetAsyncExc`); C-extension infinite loops cannot be
-  killed and the daemon thread leaks for process lifetime. The fuzz
-  loop continues. **Tested by `test_infinite_loop_candidate_caught_via_per_call_timeout`.**
-- **Filesystem writes and sys.path mutations by the candidate persist.**
-  v1 runs in-process. Documented via `test_filesystem_write_to_temp_runs_in_process`
-  and `test_sys_path_modification_not_isolated`. v0.2 mitigation:
-  `live_sandbox`.
-- **Dynamic `__import__('agents.' + 'quant_patch_validator')`** bypasses
-  the static self-import block. True containment requires `live_sandbox`.
-  Tested by `test_self_import_via_string_construction_not_blocked`.
-- **`track_coverage=True` is single-threaded.** Concurrent coverage-tracked
-  calls fight over `sys.settrace`. Mitigation: serialise coverage runs;
-  documented in `test_sequential_coverage_tempfile_cleanup`.
+The candidate is loaded inside an `IsolatedWorker` subprocess
+(`agents/quant_patch_validator/isolation.py`) with its own per-Harness
+tempdir as cwd. Per-call timeout is enforced by terminating the
+subprocess — SIGTERM first, SIGKILL after a 0.3 s grace window. The
+reference is trusted and still runs in-process under a daemon-thread
+wall-clock cap.
+
+**What v1 contains:**
+
+- **Per-call timeout: 2.5 s.** Subprocess SIGKILL on timeout works for
+  pure-Python AND C-extension infinite loops. The worker is respawned
+  on the next call. Tested by `test_infinite_loop_candidate_caught_via_per_call_timeout`.
+- **Relative-path filesystem writes.** Land in the worker's tempdir
+  (per-Harness, deleted on close). Tested by
+  `test_relative_path_write_is_isolated`.
+- **sys.path mutations.** Confined to the subprocess; the parent's
+  sys.path is unchanged. Tested by `test_sys_path_modification_is_isolated`.
+- **Module-state mutations.** Don't bleed into the parent's process
+  state. The reference module is fresh on every Harness construction.
+- **Signal-handler hijacks.** Worker resets to SIG_DFL on startup so a
+  candidate cannot intercept the parent's SIGTERM.
+
+**What still escapes (v0.2 closes via `live_sandbox`):**
+
+- **Absolute-path filesystem writes** — cwd-based containment only
+  blocks relative paths; a candidate opening `/tmp/x` or `~/.ssh/x`
+  still writes there. Documented by `test_absolute_path_write_still_escapes_v1`.
+- **Network egress.** No seccomp / namespace filter in v1; a candidate
+  can `requests.get(...)` freely.
+- **Resource exhaustion** (memory bomb, fork bomb). No cgroup limit.
+- **Dynamic `__import__('agents.' + 'quant_patch_validator')`** still
+  bypasses the static self-import block (the worker has the same
+  module surface area). Tested by `test_self_import_via_string_construction_not_blocked`.
+
+**Operational caveats:**
+
+- **`track_coverage=True` returns `coverage_pct: null` in v1.**
+  Coverage.py instruments via `sys.settrace` in-process and does not
+  span the subprocess boundary. The agent logs an informational
+  message and runs the fuzz without coverage data. v0.2 plan: invoke
+  coverage.py inside the worker and pipe results back via the same
+  multiprocessing pipe.
+- **Per-Harness subprocess startup cost** (~50–150 ms on Linux fork,
+  slower on macOS/Windows spawn). The worker is long-lived once the
+  Harness is constructed, so the cost amortises across thousands of
+  fuzz iterations.
 - **`auto_tune_tolerance=True` over-tolerates time-ordered functions**
   (RSI, rolling-window). Leave it off for stateful code; documented in
   `test_scenario_e_autotune_overtolerates_stateful_function`.
-- **Per-call timeout doesn't apply to C-extension hot loops.** A NumPy
-  ufunc that genuinely takes > 2.5 s WILL hit the per-call timeout and
-  be reported as TimeoutError. Callers running deliberately-expensive
-  functions (e.g. large matrix solves) must set a higher per-call
-  timeout — currently a module-level constant, not caller-tunable.
-  Tracked for v0.2.
