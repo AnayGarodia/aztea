@@ -73,6 +73,28 @@ _TARGETS: dict[str, _ClientTarget] = {
 }
 
 
+def is_mcp_registered(client: str = "claude") -> bool:
+    """Return True iff the Aztea entry is present in the editor's MCP config.
+
+    Used by the REPL banner to decide whether to surface the "/init tip"
+    above the Quickstart panel, and by /claude-code before launching to
+    warn the user (without blocking) that their just-launched session
+    won't have Aztea tools available.
+
+    Safe to call on cold install (missing files, malformed JSON, etc.) —
+    any exception surfaces as ``False`` so callers can use the result
+    unconditionally.
+    """
+    try:
+        target = _TARGETS.get((client or "").strip().lower())
+        if target is None:
+            return False
+        cfg = _read_config(target.path)
+        return "aztea" in (cfg.get("mcpServers") or {})
+    except Exception:
+        return False
+
+
 def _resolve_target(client: str) -> _ClientTarget:
     key = (client or "").strip().lower()
     if key not in _TARGETS:
@@ -602,7 +624,7 @@ def _render_doctor(
             border_style="border_dim",
             box=box.ROUNDED,
             padding=(1, 2),
-            title=Text(" ready ", style="bold #0F2A2D on #5EEAD4"),
+            title=Text(" ready ", style="bold #0C1F22 on #7EB9B0"),
             title_align="left",
         )
         console.print(panel)

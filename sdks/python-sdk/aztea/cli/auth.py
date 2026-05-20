@@ -86,8 +86,27 @@ def _setup_claude_md() -> str:
     return f"appended to {project_md}"
 
 
+def _post_login_next_step() -> None:
+    """One-line nudge printed at the end of login. Points to `aztea init`.
+
+    Previously login itself ran the MCP / CLAUDE.md setup wizard
+    (``_run_setup`` below), but that overlapped with ``aztea init`` and left
+    new users unsure which command was canonical. Login is now pure auth;
+    setup is exclusively ``aztea init``.
+    """
+    if not _is_tty():
+        return
+    from .output import info as _info
+    _info("Next: run `aztea init` to wire Aztea into Claude Code (MCP + CLAUDE.md).")
+
+
 def _run_setup(api_key: str, base_url: str) -> None:
-    """Interactive post-login setup: MCP + CLAUDE.md. TTY-only."""
+    """Interactive post-login setup: MCP + CLAUDE.md. TTY-only.
+
+    NOTE: no longer called from ``login`` — kept as a private utility in case
+    a future flow wants to surface the same prompt sequence. New code should
+    delegate to ``aztea init`` via the ``init`` module instead.
+    """
     if not _is_tty():
         return
 
@@ -201,6 +220,98 @@ def _run_setup(api_key: str, base_url: str) -> None:
     console.print()
 
 
+def _running_inside_pt_application() -> bool:
+    """True when a prompt_toolkit Application is currently running.
+
+    When the full-screen REPL is up, it owns the terminal — Rich's
+    ``Prompt.ask`` and ``typer.prompt`` calls block waiting on stdin
+    that prompt_toolkit has already grabbed. The user sees no prompts,
+    no response, just a "stuck" REPL. We check this flag at every
+    interactive entry point and surface a clear "paste your key inline
+    or exit to shell" message instead of hanging.
+    """
+    try:
+        from prompt_toolkit.application import get_app_or_none
+        return get_app_or_none() is not None
+    except Exception:
+        return False
+
+
+def _ask_login_method() -> str:
+    """Interactive picker for how to sign in.
+
+    Returns the user's API key when they choose option 2, or an empty
+    string when they pick option 1 (email + password) and we should fall
+    through to the normal email/password prompts.
+    """
+    from .output import console as _console
+    from rich.text import Text
+
+    _console.print()
+    _console.print(Text("  How would you like to sign in?", style="bold"))
+    _console.print(Text("    1) Email and password", style="default"))
+    _console.print(Text("    2) Paste an existing API key (starts with az_)", style="default"))
+    _console.print()
+    choice = styled_prompt("Choice [1]", default="1").strip()
+    if choice in ("2", "key", "api", "api-key", "k"):
+        key = styled_prompt("API key", password=True).strip()
+        if not key:
+            from .output import error as _err
+            _err(
+                "No API key provided.",
+                hint="Re-run `/login` and pick option 2 again to paste your key.",
+                code="auth.cancelled",
+            )
+            raise typer.Exit(code=1)
+        return key
+    return ""
+
+
+def _surface_login_failure(exc: Exception, *, json_mode: bool) -> None:
+    """Render a credential-aware error for a failed password login.
+
+    The generic SDK hint for any 401 is "Your API key is not recognized.
+    Run `aztea login` to mint a new one." — accurate when an app caller's
+    saved key has gone stale, but actively misleading inside the login
+    flow itself: the user is BEING asked to authenticate, there is no
+    saved key yet. We intercept here so the message reflects the actual
+    failure (wrong email or wrong password) and points to a useful next
+    step (try again or reset on the web).
+    """
+    from ..errors import AuthenticationError as _AuthErr  # noqa: PLC0415
+
+    raw_message = str(exc).strip() or "Invalid email or password."
+    looks_like_credentials = (
+        isinstance(exc, _AuthErr)
+        or "invalid email" in raw_message.lower()
+        or "invalid username" in raw_message.lower()
+        or "invalid password" in raw_message.lower()
+        or "incorrect" in raw_message.lower()
+    )
+
+    if looks_like_credentials:
+        message = "Invalid email or password."
+        hint = (
+            "Check your password and try again, or reset it at "
+            "https://aztea.ai/account/reset."
+        )
+        code = "auth.bad_credentials"
+    else:
+        # Some other failure — surface the server's message but keep the
+        # hint specific to login (not the generic API-key advice).
+        message = raw_message
+        hint = "Sign-in failed before any key was saved. Try `aztea login` again."
+        code = "auth.login_failed"
+
+    if json_mode:
+        emit(
+            {"error": code, "message": message, "hint": hint},
+            json_mode=True,
+        )
+        return
+    error(message, hint=hint, code=code)
+
+
 app = typer.Typer(help="Sign in, sign out, and inspect your account.", no_args_is_help=True)
 
 
@@ -286,6 +397,36 @@ def login(
                 # error here; it would mask the legitimate password prompt.
                 pass
 
+        # ── REPL guard: refuse interactive sign-in inside the REPL ─────────
+        # When we're running inside the full-screen REPL Application, any
+        # Rich.Prompt.ask / typer.prompt call would deadlock waiting on
+        # stdin that the Application already owns. Surface a usage hint
+        # the user can act on instead of hanging silently.
+        if (
+            _running_inside_pt_application()
+            and not api_key and not email and not password
+            and not json_mode
+        ):
+            error(
+                "Interactive sign-in isn't available inside the REPL yet.",
+                hint=(
+                    "Paste your key inline: `/login --api-key az_xxxxxxxx`\n"
+                    "Or press Ctrl-D to exit, then run `aztea login` from "
+                    "your shell for the full email + password flow."
+                ),
+                code="auth.repl_interactive_unavailable",
+            )
+            raise typer.Exit(code=1)
+
+        # ── Interactive method choice ──────────────────────────────────────
+        # If no auth flags were passed and we're attached to a TTY (shell
+        # mode, not REPL), ask the user how they want to sign in.
+        if (
+            not api_key and not email and not password
+            and not json_mode and _is_tty()
+        ):
+            api_key = _ask_login_method() or None
+
         with _new_client(base_url=base_url, api_key=api_key, client_id="aztea-cli-login") as client:
             if api_key:
                 with spinner("Verifying key", json_mode=json_mode):
@@ -296,7 +437,7 @@ def login(
                     emit({"username": username, "base_url": base_url, "saved": True}, json_mode=True)
                     return
                 success(f"Signed in as {username or 'user'}", detail=base_url)
-                _run_setup(api_key, base_url)
+                _post_login_next_step()
                 return
 
             login_email = email or (
@@ -309,7 +450,11 @@ def login(
             )
             console.print()
             with spinner("Signing in", json_mode=json_mode):
-                data = client.auth.login(login_email, login_password, rotate=rotate)
+                try:
+                    data = client.auth.login(login_email, login_password, rotate=rotate)
+                except Exception as login_exc:
+                    _surface_login_failure(login_exc, json_mode=json_mode)
+                    raise typer.Exit(code=1)
             raw_key = str(data.get("raw_api_key") or "")
             if not raw_key:
                 if json_mode:
@@ -334,7 +479,7 @@ def login(
                 emit({"username": username, "base_url": base_url, "saved": True}, json_mode=True)
                 return
             success(f"Signed in as {username}", detail=base_url)
-            _run_setup(raw_key, base_url)
+            _post_login_next_step()
     except typer.Exit:
         raise
     except Exception as exc:
@@ -349,6 +494,12 @@ def logout(json_mode: bool = JsonOpt) -> None:
         emit({"logged_out": True}, json_mode=True)
         return
     success("Logged out", detail=str(config_path()))
+    # Point the user at the obvious next step. Without this hint the
+    # post-logout screen feels like a dead-end — banner switches to
+    # unauth Quickstart but the user has to read it to figure out
+    # what to do next.
+    from .output import info as _info
+    _info("Sign back in with /login, or create a new account with /register.")
 
 
 @app.command()
@@ -444,9 +595,9 @@ def _render_profile_card(*, profile: dict, wallet, masked: str, base_url: str) -
     from rich import box
 
     # ── Identity block: avatar tile + name + status pill
-    avatar_text = Text(f" {_initials(username)} ", style="bold #0F2A2D on #5EEAD4")
+    avatar_text = Text(f" {_initials(username)} ", style="bold #0C1F22 on #7EB9B0")
     name_block = Text()
-    name_block.append(username, style="bold #5EEAD4")
+    name_block.append(username, style="bold #7EB9B0")
     name_block.append("\n")
     name_block.append(email, style="muted")
 
@@ -501,7 +652,7 @@ def _render_profile_card(*, profile: dict, wallet, masked: str, base_url: str) -
 
     panel = Panel(
         inner,
-        title=Text(" account ", style="bold #0F2A2D on #5EEAD4"),
+        title=Text(" account ", style="bold #0C1F22 on #7EB9B0"),
         title_align="left",
         border_style="border_dim",
         box=box.ROUNDED,

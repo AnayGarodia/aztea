@@ -25,6 +25,7 @@ class Agent:
     avg_latency_ms: float = 0.0
     owner_id: str = ""
     created_at: str = ""
+    category: str = ""
 
     @property
     def price_cents(self) -> int:

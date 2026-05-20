@@ -236,14 +236,16 @@ def _extract_hint(
         raw = body.get("hint")
         if isinstance(raw, str) and raw.strip():
             return raw.strip()
+    # Revoked-key check runs BEFORE the status-code switch — the server
+    # returns 401 OR 403 with this code depending on the route, and the
+    # generic 403 hint ("Your key is valid but lacks the required scope")
+    # directly contradicts the body message ("API key has been revoked")
+    # when both fire on a revoked key. Treat the code as the authority.
+    if code_name and code_name.upper() in {
+        "API_KEY_REVOKED", "AUTH.API_KEY_REVOKED",
+    }:
+        return "Your API key was revoked. Run `aztea login` again to sign in fresh."
     if status_code == 401:
-        # 401 with a known revoked-key code reads cleaner with a fresh-key CTA.
-        # The legacy "Check your API key" advice conflated 'never had one' with
-        # 'had one, now revoked' — the latter needs a different next step.
-        if code_name and code_name.upper() in {
-            "API_KEY_REVOKED", "AUTH.API_KEY_REVOKED",
-        }:
-            return "Your API key was revoked. Run `aztea login` to mint a new one."
         return "Your API key is not recognized. Run `aztea login` to mint a new one."
     if status_code == 402:
         return "Top up your wallet or lower the job budget."

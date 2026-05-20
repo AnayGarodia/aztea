@@ -28,6 +28,9 @@ dependencies = [
     # receipt verification. The MCP `manage_job(verify)` tool degrades to
     # `verified: false` if this is missing (audit 2026-05-16 #2).
     "cryptography>=41.0.0",
+    # Powers the interactive REPL (`aztea` with no subcommand). Tab
+    # completion, persistent history, bottom-toolbar live state.
+    "prompt_toolkit>=3.0.43",
 ]
 
 [project.optional-dependencies]

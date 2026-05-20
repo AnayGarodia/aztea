@@ -186,7 +186,7 @@ def _render_wallet_card(wallet) -> None:
 
     panel = Panel(
         inner,
-        title=Text(" wallet ", style="bold #0F2A2D on #5EEAD4"),
+        title=Text(" wallet ", style="bold #0C1F22 on #7EB9B0"),
         title_align="left",
         border_style="border_dim",
         box=box.ROUNDED,
