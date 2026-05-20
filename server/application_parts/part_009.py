@@ -1114,9 +1114,13 @@ def jobs_batch_create(
                         "status_code": 422,
                         "detail": error_codes.make_error(
                             error_codes.INPUT_SCHEMA_VIOLATION,
-                            f"Input validation failed: {_schema_exc.message if hasattr(_schema_exc, 'message') else str(_schema_exc)}",
+                            _scrub_protocol_from_validation_message(
+                                f"Input validation failed: {_schema_exc.message if hasattr(_schema_exc, 'message') else str(_schema_exc)}"
+                            ),
                             {
-                                "path": list(getattr(_schema_exc, "absolute_path", [])),
+                                "path": _scrub_protocol_from_validation_path(
+                                    list(getattr(_schema_exc, "absolute_path", []))
+                                ),
                                 "agent_id": agent["agent_id"],
                             },
                         ),

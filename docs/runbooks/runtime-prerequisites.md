@@ -17,12 +17,12 @@ Most Aztea built-in agents are pure Python + HTTP and have no system-level depen
 | Agent                    | System dependency          | Check command                          | Error when absent                        |
 | ------------------------ | -------------------------- | -------------------------------------- | ---------------------------------------- |
 | Browser Agent            | Playwright + Chromium      | `python -m playwright install --check` | `browser_agent.playwright_not_installed` |
-| Visual Regression        | Playwright + Chromium      | `python -m playwright install --check` | `visual_regression.playwright_not_installed` |
+| Visual Regression *(sunset 2026-05-20)* | Playwright + Chromium      | `python -m playwright install --check` | `visual_regression.playwright_not_installed` (endpoint stays wired for legacy job IDs) |
 | Accessibility Auditor    | Playwright + Chromium      | `python -m playwright install --check` | `accessibility_auditor.tool_unavailable` |
 | Lighthouse Auditor       | Node.js ≥ 18 + `lighthouse` CLI + Chromium | `lighthouse --version`     | `lighthouse_auditor.runtime_missing`     |
 | Broken Link Crawler      | None (pure Python: httpx + bs4) | —                                  | —                                        |
 | PDF Document Parser      | None (pure Python: pymupdf + pdfplumber) | —                            | `pdf_document_parser.runtime_missing` if `pymupdf` is absent |
-| Web Search               | `BRAVE_SEARCH_API_KEY` env var | `echo $BRAVE_SEARCH_API_KEY \| head -c 8` | `web_search.no_api_key`              |
+| Web Search *(sunset 2026-05-20)* | `BRAVE_SEARCH_API_KEY` env var | `echo $BRAVE_SEARCH_API_KEY \| head -c 8` | `web_search.no_api_key` (endpoint stays wired for legacy job IDs) |
 | Multi-Language Executor  | Node.js, Deno, Bun, Go, Rust | see per-language check below         | `multi_language_executor.runtime_not_available` |
 | DB Sandbox               | None (stdlib `sqlite3`)    | —                                      | —                                        |
 | Python Code Executor     | Python 3.10+               | `python --version`                     | —                                        |
@@ -38,22 +38,20 @@ Most Aztea built-in agents are pure Python + HTTP and have no system-level depen
 | CI Failure Reproducer    | `pytest`, `jest` (npm), `go` (apt), `git` (apt) | `pytest --version && jest --version && go version` | re-run reports the missing-toolchain artifact instead of the real failure |
 | JWT Validator            | `PyJWT` (pip, optional)    | `python -c 'import jwt; print(jwt.__version__)'` | (validator runs without it; `signature_valid` stays `null`) |
 
-All other agents (CVE Lookup, DNS Inspector, Dependency Auditor, Regex Tester, SBOM Generator, PyPI Metadata, GitHub Releases, etc.) require only standard network access and the Python packages in `requirements.txt`.
+All other agents (CVE Lookup, DNS Inspector, Dependency Auditor, etc.) require only standard network access and the Python packages in `requirements.txt`. Sunsetted agents that still have endpoints wired for legacy job IDs (Regex Tester, SBOM Generator, PyPI Metadata, GitHub Releases, SSL Certificate Decoder, Security Headers Grader, Archive Inspector, Diff Analyzer, Unicode Inspector) likewise need nothing beyond the stdlib + `requirements.txt`.
 
-### Lighthouse + Brave Search setup
+### Lighthouse setup
 
 ```bash
 # Lighthouse CLI (Node-native; reuses Playwright's Chromium via --chrome-flags)
 sudo npm install -g lighthouse@11
 lighthouse --version       # want 11.x
-
-# Brave Search API key (free tier: 2k queries/month)
-# 1. Sign up at https://brave.com/search/api/
-# 2. Generate a key in the dashboard
-# 3. Set BRAVE_SEARCH_API_KEY in /etc/aztea/env (or .env for local dev)
 ```
 
-When `BRAVE_SEARCH_API_KEY` is unset, the `web_search` agent returns `web_search.no_api_key` and the call is automatically refunded — the marketplace listing degrades cleanly without taking the agent offline.
+`web_search` was sunsetted on 2026-05-20 so `BRAVE_SEARCH_API_KEY` is no longer
+required for the curated catalog. The endpoint stays wired for legacy job IDs;
+if a legacy caller invokes it without the key set, the agent still returns
+`web_search.no_api_key` and the call is automatically refunded.
 
 ---
 

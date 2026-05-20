@@ -706,26 +706,47 @@ def post_dispute_settlement(
             conn, f"{DISPUTE_ESCROW_OWNER_PREFIX}{dispute_id}"
         )
 
+        # HARDEN-6 (audit 2026-05-20): match by (dispute_id, escrow
+        # wallet) without binding to the outcome-specific memo. Pre-fix
+        # the query keyed on ``memo = "Dispute final settlement
+        # (<outcome>)"`` — a second settlement with a different outcome
+        # (admin retry, judge re-vote, race) would NOT find the prior
+        # finalization row and would apply a second set of ledger
+        # entries on top of the first. Now: any prior finalization
+        # against this dispute's escrow wallet short-circuits, and we
+        # surface the persisted outcome so callers see the canonical
+        # decision rather than the late-arriver they happened to send.
         finalized = conn.execute(
             """
-            SELECT 1
+            SELECT memo
             FROM transactions
-            WHERE related_tx_id = %s AND wallet_id = %s AND memo = %s
+            WHERE related_tx_id = %s
+              AND wallet_id = %s
+              AND memo LIKE 'Dispute final settlement (%%'
             LIMIT 1
             """,
-            (
-                dispute_id,
-                escrow_wallet_id,
-                f"Dispute final settlement ({normalized_outcome})",
-            ),
+            (dispute_id, escrow_wallet_id),
         ).fetchone()
         if finalized is not None:
+            persisted_memo = ""
+            try:
+                persisted_memo = str(finalized["memo"] or "")
+            except (KeyError, IndexError, TypeError):
+                persisted_memo = str(finalized[0] or "") if finalized else ""
+            # Extract "<outcome>" from "Dispute final settlement (<outcome>)".
+            _persisted_outcome = normalized_outcome
+            _open = persisted_memo.rfind("(")
+            _close = persisted_memo.rfind(")")
+            if _open != -1 and _close > _open:
+                _persisted_outcome = persisted_memo[_open + 1: _close]
             return {
                 "dispute_id": dispute_id,
-                "outcome": normalized_outcome,
+                "outcome": _persisted_outcome,
                 "caller_delta_cents": 0,
                 "agent_delta_cents": 0,
                 "platform_delta_cents": 0,
+                "already_finalized": True,
+                "requested_outcome": normalized_outcome,
             }
 
         escrow_balance = _wallet_balance_conn(conn, escrow_wallet_id)

@@ -231,16 +231,26 @@ def test_b4_new_agents_return_expected_keys(slug, sample_input, expected_keys):
 
 
 def test_b4_curated_set_includes_new_agents():
-    """The curated catalog now lists the six new specialists."""
+    """JWT validator + HCL Terraform analyzer survived the 2026-05-20 cull.
+
+    Why: regex_tester, sbom_generator, pypi_metadata, github_releases were
+    in the 2026-05-18 batch but failed the catalog-quality bar (thin
+    wrappers / overlapping with existing agents) and were sunsetted on
+    2026-05-20. They remain registered as endpoints so old job IDs resolve,
+    but the curated public set excludes them.
+    """
     from server.builtin_agents.constants import (
         CURATED_PUBLIC_BUILTIN_AGENT_IDS,
+        SUNSET_DEPRECATED_AGENT_IDS,
         REGEX_TESTER_AGENT_ID, JWT_VALIDATOR_AGENT_ID, SBOM_GENERATOR_AGENT_ID,
         PYPI_METADATA_AGENT_ID, GITHUB_RELEASES_AGENT_ID,
         HCL_TERRAFORM_ANALYZER_AGENT_ID,
     )
-    for agent_id in (
-        REGEX_TESTER_AGENT_ID, JWT_VALIDATOR_AGENT_ID, SBOM_GENERATOR_AGENT_ID,
-        PYPI_METADATA_AGENT_ID, GITHUB_RELEASES_AGENT_ID,
-        HCL_TERRAFORM_ANALYZER_AGENT_ID,
-    ):
+    for agent_id in (JWT_VALIDATOR_AGENT_ID, HCL_TERRAFORM_ANALYZER_AGENT_ID):
         assert agent_id in CURATED_PUBLIC_BUILTIN_AGENT_IDS
+    for agent_id in (
+        REGEX_TESTER_AGENT_ID, SBOM_GENERATOR_AGENT_ID,
+        PYPI_METADATA_AGENT_ID, GITHUB_RELEASES_AGENT_ID,
+    ):
+        assert agent_id in SUNSET_DEPRECATED_AGENT_IDS
+        assert agent_id not in CURATED_PUBLIC_BUILTIN_AGENT_IDS
