@@ -945,6 +945,60 @@ def _extract_workspace_envelope(
     return cleaned, ws_id
 
 
+def _preflight_workspace_envelope(
+    workspace_id: str, caller_owner_id: str | None, agent_id: str,
+) -> None:
+    """H-2 (audit 2026-05-19): refuse with structured 422 when the caller
+    asked for an auto-write but the workspace cannot accept one.
+
+    Pre-fix, the downstream best-effort write swallowed the failure
+    silently — callers got a charged job back with no indication their
+    output was never sealed. Now: any addressable failure (not found, not
+    owned, sealed, evicted) surfaces as a refund-able 422 BEFORE charge.
+    """
+    from core import workspaces as _workspaces
+    from core import workspaces_errors as _wse
+    try:
+        ws = _workspaces.get_workspace(workspace_id)
+    except _wse.WorkspaceNotFound:
+        raise HTTPException(
+            status_code=422,
+            detail=error_codes.make_error(
+                error_codes.INVALID_INPUT,
+                "_workspace_id refers to a workspace that does not exist.",
+                {"_workspace_id": workspace_id, "agent_id": agent_id},
+            ),
+        )
+    owner = str(ws.get("owner_user_id") or "")
+    if caller_owner_id and owner and owner != str(caller_owner_id):
+        raise HTTPException(
+            status_code=422,
+            detail=error_codes.make_error(
+                error_codes.INVALID_INPUT,
+                "_workspace_id refers to a workspace you do not own.",
+                {"_workspace_id": workspace_id, "agent_id": agent_id},
+            ),
+        )
+    status = str(ws.get("status") or "").lower()
+    if status not in {"active", "open"}:
+        raise HTTPException(
+            status_code=422,
+            detail=error_codes.make_error(
+                error_codes.INVALID_INPUT,
+                (
+                    f"_workspace_id refers to a workspace in status "
+                    f"{status!r}; auto-write requires status=active. Once "
+                    "sealed, the manifest is immutable."
+                ),
+                {
+                    "_workspace_id": workspace_id,
+                    "agent_id": agent_id,
+                    "workspace_status": status,
+                },
+            ),
+        )
+
+
 def _resolve_workspace_artifact_refs(
     payload: Any, *, caller_owner_id: str, workspace_id: str | None,
 ) -> Any:
@@ -1160,7 +1214,39 @@ def _attach_post_call_actions(
     return response_payload
 
 
-def _cache_hit_response_payload(cached_output: Any) -> dict[str, Any]:
+def _lookup_original_caller_id(original_job_id: str) -> str | None:
+    """Best-effort lookup of a job's caller_owner_id for cache-replay scrubbing.
+
+    Returns None on any error or missing row — callers must treat None as
+    "cannot prove same-tenant" and scrub the receipt accordingly. This is
+    pure read-only; failures must never break the cache hot path.
+    """
+    if not original_job_id:
+        return None
+    try:
+        from core.db import get_db_connection
+        with get_db_connection() as _c:
+            row = _c.execute(
+                "SELECT caller_owner_id FROM jobs WHERE job_id = %s",
+                (str(original_job_id),),
+            ).fetchone()
+        if not row:
+            return None
+        # _db rows can be tuples, dict-like, or sqlite Row — support all three.
+        try:
+            value = row["caller_owner_id"]
+        except (TypeError, KeyError, IndexError):
+            value = row[0] if row else None
+        return str(value).strip() if value else None
+    except Exception:
+        return None
+
+
+def _cache_hit_response_payload(
+    cached_output: Any,
+    *,
+    current_caller_id: str | None = None,
+) -> dict[str, Any]:
     # Return the same envelope shape as a live call so clients need not
     # branch on whether the response came from cache.
     inner = (
@@ -1204,25 +1290,52 @@ def _cache_hit_response_payload(cached_output: Any) -> dict[str, Any]:
         "cached": True,
         "cache": cache_info,
     }
-    # 2026-05-18 (E4): cache hits used to drop the Ed25519 receipt block
-    # entirely, breaking the "every output is cryptographically signed"
-    # invariant. Now we fetch the receipt from the original job and
-    # attach it under both ``receipt`` and ``signed_receipt`` (matching
-    # the live-call shape from A7). The receipt is honestly tagged with
-    # ``via: "cache_replay"`` so consumers know the bytes came from a
-    # cached run, not a fresh execution.
+    # H-1 (audit 2026-05-19): the Ed25519 JWS payload embeds the ORIGINAL
+    # caller's caller_owner_id ("user:UUID"). Returning the original
+    # receipt verbatim on a cross-tenant cache hit leaks identity with a
+    # cryptographic attestation attached — strictly worse than a plain
+    # identity leak. Strategy:
+    #   - Same-caller cache hit  → return original receipt (no leak).
+    #   - Cross-caller cache hit → drop signed_receipt/receipt; attach a
+    #     structured note pointing the original caller at /jobs/{id}/
+    #     signature for cryptographic provenance. v2 will add a
+    #     platform-signed cache-replay attestation; v1 prioritises
+    #     plugging the leak.
     if original_job_id:
-        try:
-            from core.receipts import build_receipt_envelope
-            envelope = build_receipt_envelope(str(original_job_id))
-            if envelope is not None:
-                envelope = dict(envelope)
-                envelope["via"] = "cache_replay"
-                response["signed_receipt"] = envelope
-                response["receipt"] = envelope
-                response["receipt_summary"] = "verified_via_cache"
-        except Exception:  # noqa: BLE001 — never break the cache path
-            response["receipt_summary"] = "absent_cache_lookup_failed"
+        original_caller_id = _lookup_original_caller_id(str(original_job_id))
+        same_caller = bool(
+            current_caller_id
+            and original_caller_id
+            and str(current_caller_id) == str(original_caller_id)
+        )
+        if same_caller:
+            try:
+                from core.receipts import build_receipt_envelope
+                envelope = build_receipt_envelope(str(original_job_id))
+                if envelope is not None:
+                    envelope = dict(envelope)
+                    envelope["via"] = "cache_replay"
+                    response["signed_receipt"] = envelope
+                    response["receipt"] = envelope
+                    response["receipt_summary"] = "verified_via_cache"
+                else:
+                    response["receipt_summary"] = "absent_cache_lookup_failed"
+            except Exception:  # noqa: BLE001 — never break the cache path
+                response["receipt_summary"] = "absent_cache_lookup_failed"
+        else:
+            # Cross-tenant cache hit: do NOT replay the original signed
+            # transcript (it embeds the original caller_owner_id).
+            response["receipt_summary"] = "cross_tenant_cache_replay"
+            response["cache"]["scope_note"] = (
+                response["cache"]["scope_note"]
+                + " The signed receipt is omitted on cross-caller cache "
+                "hits to avoid leaking the original caller's identity; "
+                "the original caller can verify provenance via "
+                "GET /jobs/<original_job_id>/signature with their auth."
+            )
+            response["cache"]["receipt_omitted_reason"] = (
+                "cross_tenant_cache_replay_identity_scrub"
+            )
     else:
         response["receipt_summary"] = "absent_no_origin_job"
     return response
@@ -1869,6 +1982,22 @@ def registry_call(
     """
     _require_scope(caller, "caller")
     idempotency_key = request.headers.get("X-Idempotency-Key", "").strip()
+    # L-8 (audit 2026-05-19): pre-fix, callers who put ``idempotency_key``
+    # at the top level of the JSON body (instead of using the
+    # X-Idempotency-Key header) got their key silently dropped — schemas
+    # with ``additionalProperties: True`` tolerated the field, the
+    # dispatch path never read it, and the caller got no signal. Now:
+    # extract the body-level key BEFORE schema validation and (a) treat
+    # it the same as the header if the agent's schema doesn't declare
+    # idempotency_key as an input field, OR (b) leave it in payload for
+    # the agent if it does (live_sandbox is the only such agent today).
+    _body_root = (
+        dict(body.root) if body is not None and hasattr(body, "root") else {}
+    )
+    if not idempotency_key:
+        _body_idem = _body_root.get("idempotency_key")
+        if isinstance(_body_idem, str) and _body_idem.strip():
+            idempotency_key = _body_idem.strip()
     caller_owner_id_early = _caller_owner_id(request)
     if idempotency_key:
         cached = _idempotency_lookup(caller_owner_id_early, agent_id, idempotency_key)
@@ -1882,6 +2011,40 @@ def registry_call(
     if not _caller_can_access_agent(caller, agent):
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
     _assert_agent_callable(agent_id, agent)
+    # M-1 (audit 2026-05-19): refuse sync /call before charging when the
+    # agent's measured average latency suggests the sync gateway budget
+    # will trip. p95 isn't tracked separately on the agent record, so
+    # use ``avg_latency_ms * 2`` as a safe upper-bound proxy. Caller
+    # opt-out: header X-Force-Sync=1 (for testing). Default opt-out for
+    # zero-history agents (avg=0) so brand-new agents don't 421 on first
+    # call before they have telemetry.
+    _SYNC_BUDGET_MS = 8000
+    _force_sync = request.headers.get("X-Force-Sync", "").strip() == "1"
+    if not _force_sync:
+        _avg_ms = float(agent.get("avg_latency_ms") or 0.0)
+        if _avg_ms > 0 and (_avg_ms * 2) > _SYNC_BUDGET_MS:
+            raise HTTPException(
+                status_code=421,
+                detail=error_codes.make_error(
+                    "agent.sync_budget_exceeded",
+                    (
+                        f"Agent's observed avg latency ({_avg_ms:.0f}ms) "
+                        f"suggests p95 will exceed the {_SYNC_BUDGET_MS}ms "
+                        "sync gateway budget. Use the async path "
+                        "(manage_workflow action='hire_async' or "
+                        "POST /jobs) to avoid 504s. Override with "
+                        "X-Force-Sync: 1 if you have measured your "
+                        "input fits."
+                    ),
+                    {
+                        "agent_id": agent_id,
+                        "avg_latency_ms": int(_avg_ms),
+                        "sync_budget_ms": _SYNC_BUDGET_MS,
+                        "redirect_to": "hire_async",
+                        "requires_async": True,
+                    },
+                ),
+            )
     builtin_agent_id = _resolve_builtin_agent_id(agent)
     hosted_skill_row: dict | None = None
     if builtin_agent_id is None and _hosted_skills.is_skill_endpoint(
@@ -1922,6 +2085,16 @@ def registry_call(
     # Strip workspaces v0 envelope first so subsequent extractors and the
     # schema validator never see _workspace_id as an agent-input field.
     raw_body, workspace_id_envelope = _extract_workspace_envelope(raw_body)
+    # H-2 (audit 2026-05-19): callers used to silently lose their auto-write
+    # when _workspace_id pointed at a workspace that didn't exist, didn't
+    # belong to them, or had already been sealed/evicted. Best-effort
+    # downstream writes swallowed the failure and the response gave no
+    # signal. Preflight the workspace state here so the caller learns
+    # immediately and isn't charged for a phantom seal.
+    if workspace_id_envelope:
+        _preflight_workspace_envelope(
+            workspace_id_envelope, caller_owner_id_early, agent_id,
+        )
     payload, use_cache, cache_ttl_hours = _extract_sync_cache_controls(raw_body)
     # Resolve {_artifact_ref: 'ws_id/name'} substitutions in the payload
     # before validation so the agent receives concrete bytes/objects.
@@ -2020,7 +2193,9 @@ def registry_call(
             agent_id, payload, version_token=cache_version_token
         )
         if cached_output is not None:
-            cache_response = _cache_hit_response_payload(cached_output)
+            cache_response = _cache_hit_response_payload(
+                cached_output, current_caller_id=caller_owner_id,
+            )
             shaped_output, extra = _shape_sync_output_for_response(
                 request,
                 job_id=cache_response.get("job_id"),
@@ -2052,7 +2227,9 @@ def registry_call(
                     agent_id, payload, version_token=cache_version_token
                 )
                 if cached_output is not None:
-                    cache_response = _cache_hit_response_payload(cached_output)
+                    cache_response = _cache_hit_response_payload(
+                        cached_output, current_caller_id=caller_owner_id,
+                    )
                     shaped_output, extra = _shape_sync_output_for_response(
                         request,
                         job_id=cache_response.get("job_id"),
@@ -3088,7 +3265,6 @@ def jobs_create(
         # set and the binding cap is the body's, surface the per-job code;
         # otherwise the historical "api_key_per_job" envelope still fires.
         body_cap = body.per_job_cap_cents
-        key_cap = _caller_key_per_job_cap(caller)
         # The binding cap is whichever equals violation["limit_cents"].
         if body_cap is not None and int(body_cap) == int(violation["limit_cents"]):
             cap_code = error_codes.JOB_PER_JOB_CAP_EXCEEDED

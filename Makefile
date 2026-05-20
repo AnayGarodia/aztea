@@ -22,6 +22,15 @@ demo:
 lint:
 	flake8 .
 
+# Contract-drift detection (audit 2026-05-19 preventative layer):
+# - tests/contract/ pins documented behavior (Free-label ↔ price, recipe
+#   schemas, reserved envelope keys, jwt alg=none refusal, …)
+# - scripts/lint_specs.py greps agent code for core.llm imports and
+#   asserts the spec's runtime_requirements declares "llm provider", so
+#   llm_used can't silently lie.
+contract-tests:
+	@bash -c 'set -e; test -d .venv && . .venv/bin/activate; python -m pytest -q tests/contract && python scripts/lint_specs.py'
+
 # Launch readiness gates: each one is intended to be a hard CI/cron check.
 # evals: runs the deterministic agent contract suite (tests/test_agent_golden_evals.py)
 # smoke: runs the buyer-path harness against $$AZTEA_BASE_URL (needs AZTEA_API_KEY)

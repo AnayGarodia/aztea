@@ -64,6 +64,18 @@ def _sign_pipeline_step_output(agent: dict, output: dict) -> dict[str, Any]:
     }
 
 
+# H-3 (audit 2026-05-19): pipeline definitions used to silently strip
+# any field outside the four canonical keys, including documented-but-
+# unimplemented `consumes`/`produces`. Callers got back a pipeline that
+# didn't enforce the dependency contract they wrote. Now: anything
+# outside this allowlist returns `pipeline.unsupported_field` at
+# definition-validation time. `consumes`/`produces` are planned for v0.1
+# (see docs/orchestrator-guide.md); add them here once enforcement lands.
+_ALLOWED_NODE_FIELDS: frozenset[str] = frozenset({
+    "id", "agent_id", "agent", "input_map", "depends_on",
+})
+
+
 def _normalize_pipeline_node(raw_node: Any, ids: set[str]) -> dict[str, Any]:
     """Pure: validate + shape one pipeline-node dict; mutates ``ids`` to track collisions."""
     if not isinstance(raw_node, dict):
@@ -77,6 +89,15 @@ def _normalize_pipeline_node(raw_node: Any, ids: set[str]) -> dict[str, Any]:
     if node_id in ids:
         raise ValueError(f"Duplicate pipeline node id '{node_id}'.")
     ids.add(node_id)
+    extra = set(raw_node.keys()) - _ALLOWED_NODE_FIELDS
+    if extra:
+        raise ValueError(
+            f"pipeline.unsupported_field: node '{node_id}' has unknown "
+            f"keys {sorted(extra)}. Allowed: {sorted(_ALLOWED_NODE_FIELDS)}. "
+            "`consumes`/`produces` are planned for v0.1; until then, "
+            "encode data flow via `input_map` references like "
+            "'$steps.<node_id>.<field>'."
+        )
     input_map = raw_node.get("input_map") or {}
     if not isinstance(input_map, dict):
         raise ValueError(f"Pipeline node '{node_id}' input_map must be an object.")

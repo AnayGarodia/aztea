@@ -323,8 +323,14 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     measurement against external services without the agent caller having
     to provision wrk/hey/k6 themselves.
     """
+    # NEW-6 (sweep 2026-05-20): structured envelope, not bare TypeError —
+    # see cve_lookup.run for the rationale (avoid HTTP 500 stack traces
+    # on a payload-type error that should be a clean 422).
     if not isinstance(payload, dict):
-        raise TypeError(f"payload must be dict, got {type(payload).__name__}")
+        return _err(
+            "load_tester.invalid_payload",
+            f"payload must be dict, got {type(payload).__name__}",
+        )
     url = _validate_url(payload)
     if isinstance(url, dict):
         return url

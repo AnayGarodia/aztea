@@ -135,6 +135,13 @@ _AGENT_WALL_BUDGET_OVERRIDES: dict[str, float] = {
     # the cold worst-case (single id, no cache hit) fits well under 20 s
     # and the warm path is sub-millisecond.
     _CVELOOKUP_AGENT_ID: 20.0,
+    # L-5 (audit 2026-05-19): accessibility_auditor p95 is ~4 s but it
+    # was inheriting the 8 s sync default, which left no margin for the
+    # occasional warm-cache miss + chromium spin-up. Bumping to 20 s lets
+    # the sync path serve it reliably for typical pages while the async
+    # tier remains available for very large sites via the 1200 s override
+    # below. Audit flagged this as "async even at ~4s — could fit sync".
+    _ACCESSIBILITY_AUDITOR_AGENT_ID: 20.0,
 }
 
 # 2026-05-18 (C3) — ASYNC path budget. Distinct from the sync table above.
@@ -275,15 +282,30 @@ def _execute_builtin_agent(
         result.setdefault("billing_units_actual", 1)
         result.setdefault("degraded_mode", False)
         if "llm_used" not in result:
-            meta = _builtin_specs.builtin_catalog_metadata(agent_id) or {}
-            runtime_requirements = [
-                str(item).lower() for item in meta.get("runtime_requirements") or []
-            ]
-            result["llm_used"] = (
-                False
-                if result.get("degraded_mode")
-                else any("llm provider" in item for item in runtime_requirements)
-            )
+            # H-7 (audit 2026-05-19): pre-fix, llm_used was derived
+            # exclusively from spec metadata — agents that imported
+            # core.llm but forgot to declare "llm provider" in
+            # runtime_requirements emitted ``llm_used: false`` while
+            # producing obviously-LLM text (ci_failure_reproducer). Now:
+            # observable telemetry wins. The ContextVar in
+            # core.llm.fallback is flipped True every time a provider's
+            # complete() returns inside this request's call stack. We
+            # fall back to spec metadata only when no LLM call was
+            # observed (so non-LLM agents stay honestly llm_used=False).
+            from core.llm.fallback import llm_call_observed as _llm_observed
+            observed = bool(_llm_observed())
+            if result.get("degraded_mode"):
+                result["llm_used"] = False
+            elif observed:
+                result["llm_used"] = True
+            else:
+                meta = _builtin_specs.builtin_catalog_metadata(agent_id) or {}
+                runtime_requirements = [
+                    str(item).lower() for item in meta.get("runtime_requirements") or []
+                ]
+                result["llm_used"] = any(
+                    "llm provider" in item for item in runtime_requirements
+                )
         result.setdefault("agent_contract_version", "builtin-v2")
         return result
 
@@ -470,6 +492,15 @@ def _execute_builtin_agent_inner(
     *,
     emit_partial=None,
 ) -> dict:
+    # H-7 (audit 2026-05-19): reset the worker-thread LLM-observed flag
+    # before the agent runs so ``llm_used`` in _finalize reflects only
+    # THIS agent's LLM activity, not a stale write from a previous
+    # invocation on the same pool worker thread.
+    try:
+        from core.llm.fallback import reset_llm_used_flag as _reset_llm
+        _reset_llm()
+    except Exception:  # pragma: no cover — flag is best-effort
+        pass
     runner = BUILTIN_AGENT_RUNNERS.get(agent_id)
     if runner is None:
         raise ValueError(f"Unsupported built-in agent '{agent_id}'.")

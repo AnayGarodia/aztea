@@ -210,8 +210,14 @@ def test_b2_anti_catchall_constant_exists():
         ["bom_format", "spec_version", "components", "component_count"],
     ),
     (
+        # C-1 (audit 2026-05-19): tokens with header alg=none must be
+        # refused before decoding completes — they were previously
+        # returning ``signature_valid: null, errors: []`` which downstream
+        # code may treat as "no problem". Use an HS256-header token here
+        # to smoke-test the happy path; alg=none refusal is exercised
+        # separately in tests/test_jwt_alg_none_refusal.py.
         "jwt_validator",
-        {"token": "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiIxIn0."},
+        {"token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIn0.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
         ["header", "payload", "verified_with"],
     ),
 ])

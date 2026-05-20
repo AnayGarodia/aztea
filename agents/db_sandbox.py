@@ -143,6 +143,19 @@ def _normalize_queries(payload: dict[str, Any]) -> list[dict[str, Any]]:
     blocked = _check_sql_blocked(sql)
     if blocked:
         return _err_envelope_in_list(blocked)
+    # L-2 (audit 2026-05-19): pre-fix, callers passing a multi-statement
+    # string under `sql=` got an opaque 502 because sqlite3.cur.execute
+    # raises sqlite3.Warning on multi-statement input. The `queries=[]`
+    # path already preflights this — mirror the check here so `sql=`
+    # surfaces a structured 422 with a clear migration hint instead.
+    if _looks_multi_statement(sql):
+        return _err_envelope_in_list(
+            _err(
+                "db_sandbox.multi_statement_not_allowed",
+                "sql contains multiple statements; pass them as a list "
+                "under `queries: [{sql: ...}, ...]` instead.",
+            )
+        )
     params = payload.get("params")
     if params is not None and not isinstance(params, list):
         return _err_envelope_in_list(_err("db_sandbox.invalid_params", "params must be a list."))

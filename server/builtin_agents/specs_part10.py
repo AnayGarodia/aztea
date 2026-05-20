@@ -133,12 +133,34 @@ def load_builtin_specs_part10() -> list[dict[str, Any]]:
                 "properties": {
                     "action": {
                         "type": "string",
+                        # M-7 (audit 2026-05-19): the schema was a free-form
+                        # string with the valid verbs only in prose; callers
+                        # guessed and got generic 5xx. Enum-ed here so
+                        # describe_specialist surfaces the valid set and
+                        # invalid actions return structured 422.
+                        "enum": [
+                            "sandbox_start",
+                            "sandbox_exec",
+                            "sandbox_snapshot",
+                            "sandbox_restore",
+                            "sandbox_fork",
+                            "sandbox_stop",
+                            "sandbox_db_query",
+                            "sandbox_db_snapshot",
+                            "sandbox_db_restore",
+                            "sandbox_db_introspect",
+                            "sandbox_share",
+                            "sandbox_tunnel_open",
+                            "sandbox_tunnel_close",
+                        ],
                         "description": (
-                            "Sandbox verb to run. See description for the full "
-                            "list; real-implementation verbs include sandbox_start, "
-                            "sandbox_exec, sandbox_db_query, sandbox_snapshot, "
-                            "sandbox_restore, sandbox_fork. Browser / public-tunnel "
-                            "/ k8s verbs return structured stub envelopes."
+                            "Sandbox verb to run. Real-implementation verbs: "
+                            "sandbox_start, sandbox_exec, sandbox_snapshot, "
+                            "sandbox_restore, sandbox_fork, sandbox_stop, "
+                            "sandbox_db_query, sandbox_db_snapshot, "
+                            "sandbox_db_restore, sandbox_db_introspect. "
+                            "sandbox_share / sandbox_tunnel_* return "
+                            "structured stub envelopes."
                         ),
                     },
                     "input": {

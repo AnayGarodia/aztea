@@ -559,12 +559,19 @@ def workspace_signer_did() -> str:
 
 
 def _build_manifest(workspace_id: str) -> dict[str, Any]:
+    # H-6 (audit 2026-05-19): the public seal manifest used to embed
+    # owner_user_id ("user:UUID"). Since GET /workspaces/{id}/manifest is
+    # PUBLIC by design (so anyone can verify the seal), the owner id was
+    # leaking to any verifier on the internet. The signature only needs to
+    # attest the artifact hashes — owner_user_id is server-side
+    # authorisation metadata that never belonged in the manifest. New
+    # seals omit it; the field is stripped from existing seals at serve
+    # time via _public_manifest_view().
     ws = get_workspace(workspace_id)
     listing = list_artifacts(workspace_id)
     return {
         "schema": _WORKSPACE_SEAL_SCHEMA,
         "workspace_id": workspace_id,
-        "owner_user_id": ws["owner_user_id"],
         "run_id": ws["run_id"],
         "sealed_at": int(time.time()),
         "backing": {
@@ -586,6 +593,21 @@ def _build_manifest(workspace_id: str) -> dict[str, Any]:
             for a in listing
         ],
     }
+
+
+def _public_manifest_view(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Strip identity fields from a sealed manifest before serving publicly.
+
+    For seals minted after H-6 (audit 2026-05-19), owner_user_id is already
+    absent from the signed bytes — this is a no-op. For older seals that
+    still carry owner_user_id in the signed manifest, this projection
+    removes it from the served body. Verifiers with a copy of the original
+    signed bytes can still verify locally; the public endpoint stops
+    serving identity-leaking copies going forward.
+    """
+    if not isinstance(manifest, dict):
+        return manifest
+    return {k: v for k, v in manifest.items() if k != "owner_user_id"}
 
 
 def seal_workspace(workspace_id: str) -> dict[str, Any]:

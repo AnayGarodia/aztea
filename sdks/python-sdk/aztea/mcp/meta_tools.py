@@ -1611,15 +1611,12 @@ _GROUPED_TOOLS: list[dict[str, Any]] = [
                         "2-3 IDs required; must be unique."
                     ),
                 },
-                "intent": {
-                    "type": "string",
-                    "description": (
-                        "Reserved for future single-arg routing. compare currently "
-                        "IGNORES this field — supply slugs[] or agent_ids[] plus "
-                        "input_payload instead. For intent-only invocation, use "
-                        "the top-level do_specialist_task tool."
-                    ),
-                },
+                # L-10 (audit 2026-05-19): the `intent` field was accepted
+                # by the schema, then silently ignored at dispatch. Removed
+                # entirely so callers can't paste an intent string into
+                # compare and wonder why routing didn't happen. For
+                # intent-driven routing, use the top-level
+                # do_specialist_task tool instead.
                 "input": {
                     "type": "object",
                     "description": "hire_async: input payload.",
@@ -3422,6 +3419,13 @@ def _verify_job_signature(
             "output_hash": output_hash,
             "verification_method": verification_method,
         }
+    # L-11 (audit 2026-05-19): expose the raw signature bytes and the
+    # canonical signed bytes so callers can run their own Ed25519 verify
+    # loop end-to-end without re-parsing JWS or re-fetching the receipt.
+    # Pre-fix the verify response said "verified: true" but didn't ship
+    # the primitives a security team needed to reproduce the verification
+    # offline; "trust us" defeats the point of an attested receipt.
+    import base64 as _b64
     return True, {
         "verified": True,
         "agent_did": agent_did,
@@ -3430,9 +3434,18 @@ def _verify_job_signature(
         "verification_method": verification_method,
         "alg": alg,
         "scheme": "v2" if v2_sigil_bytes is not None else "v1",
+        # Raw primitives for offline re-verification:
+        "signature_b64": _b64.b64encode(signature_bytes).decode("ascii"),
+        "public_key_b64": _b64.b64encode(public_key_bytes).decode("ascii"),
+        "signed_payload_canonical_b64": _b64.b64encode(signed_bytes).decode("ascii"),
+        "verify_recipe": (
+            "Ed25519PublicKey.from_public_bytes(b64d(public_key_b64))"
+            ".verify(b64d(signature_b64), b64d(signed_payload_canonical_b64))"
+        ),
         "note": (
             "Signature verified locally against the agent's Ed25519 public key. "
-            "Aztea cannot alter this output without breaking the signature."
+            "Aztea cannot alter this output without breaking the signature. "
+            "Reproduce offline: see verify_recipe above."
         ),
     }
 

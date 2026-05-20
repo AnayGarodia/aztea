@@ -877,6 +877,12 @@ _SPA_API_PREFIXES: tuple[str, ...] = (
     # exists as an alias for /health (see server/routes/system.py); any
     # other /system/* gets a JSON 404 rather than the SPA index page.
     "system/",
+    # L-7 (audit 2026-05-19): /v1/* was falling through to the SPA
+    # catch-all, so integrators who guessed at a versioned API path got
+    # HTML instead of JSON. There is no public /v1/ surface yet — adding
+    # it here makes unknown /v1/<x> answer with a structured JSON 404 so
+    # the failure is debuggable.
+    "v1/",
     "wallets/",
     "webhooks/",
     "workspaces/",
@@ -1456,6 +1462,46 @@ def recipes_run(
             status_code=422,
             detail="input_payload.workspace_id must be a string when provided.",
         )
+
+    # H-4 (audit 2026-05-19): validate caller_input against the recipe's
+    # declared default_input_schema BEFORE the executor reaches a template
+    # expression. Pre-fix, e.g. domain-health declared required=["domains"]
+    # but a natural singular {"domain": "x"} produced a cryptic
+    # ``ValueError: Could not resolve '$input.domains'`` from the template
+    # resolver. Now the failure surfaces as ``recipe.invalid_input`` with
+    # the missing-field name, before any node fires.
+    _recipe_schema = recipes.get_builtin_recipe_input_schema(recipe_id)
+    if _recipe_schema:
+        try:
+            _validate_payload_against_schema(
+                payload=caller_input,
+                schema=_recipe_schema,
+                allow_string_coercion=False,
+            )
+        except Exception as _schema_exc:
+            raise HTTPException(
+                status_code=422,
+                detail=error_codes.make_error(
+                    error_codes.INVALID_INPUT,
+                    (
+                        "recipe.invalid_input: "
+                        + (
+                            _schema_exc.message
+                            if hasattr(_schema_exc, "message")
+                            else str(_schema_exc)
+                        )
+                    ),
+                    {
+                        "recipe_id": recipe_id,
+                        "required_fields": list(
+                            (_recipe_schema.get("required") or [])
+                        ),
+                        "path": list(
+                            getattr(_schema_exc, "absolute_path", [])
+                        ),
+                    },
+                ),
+            )
 
     caller_wallet = payments.get_or_create_wallet(caller["owner_id"])
     try:

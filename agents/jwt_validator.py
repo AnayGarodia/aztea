@@ -206,6 +206,21 @@ def run(payload: dict) -> dict:
         return _err("jwt_validator.invalid_algorithms", str(exc))
     header = _decode_segment(parts[0])
     body = _decode_segment(parts[1])
+    # C-1 (audit 2026-05-19): defense-in-depth — refuse any token whose
+    # header declares alg=none, regardless of what the caller put in the
+    # ``algorithms`` allowlist. Pre-fix, a caller passing
+    # algorithms=["HS256"] with a token header of alg=none got back
+    # ``signature_valid: null, verified_with: "none", errors: []``, which
+    # downstream code reading ``errors == []`` may treat as "no problem"
+    # and accept admin claims from an unsigned JWT. Now: structured 422.
+    if isinstance(header, dict):
+        _header_alg = str(header.get("alg") or "").strip().lower()
+        if _header_alg == "none":
+            return _err(
+                "jwt_validator.alg_none_refused",
+                "token header declares alg=none; refused regardless of the "
+                "caller-supplied algorithms allowlist (CVE-2015-9235 class).",
+            )
     errors: list[str] = []
     if header is None:
         errors.append("header segment is not valid base64url JSON")

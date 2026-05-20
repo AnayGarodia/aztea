@@ -967,8 +967,19 @@ def jobs_cancel(
                 ),
             ),
         )
-    reason = (body.reason or "").strip() or "Cancelled by caller."
-    error_message = f"Cancelled by caller: {reason[:160]}"
+    # L-6 (audit 2026-05-19): without prefix-stripping, callers who passed
+    # the default reason ("Cancelled by caller.") landed on
+    # "Cancelled by caller: Cancelled by caller." in the error_message
+    # field. Strip a leading prefix if present so the field reads cleanly
+    # whether the caller supplied a reason, the default phrase, or nothing.
+    _prefix = "Cancelled by caller"
+    _cleaned_reason = (body.reason or "").strip()
+    if _cleaned_reason.lower().startswith(_prefix.lower()):
+        _cleaned_reason = _cleaned_reason[len(_prefix):].lstrip(":. ").strip()
+    if _cleaned_reason:
+        error_message = f"{_prefix}: {_cleaned_reason[:160]}"
+    else:
+        error_message = f"{_prefix}."
     # 1.7.3 — status="cancelled" (was "failed") so callers can distinguish
     # caller-initiated cancellation from agent-side failure.
     # 1.7.8 — detect the race where the worker completes the job between

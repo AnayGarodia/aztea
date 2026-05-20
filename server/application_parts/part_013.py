@@ -795,8 +795,15 @@ def workspaces_manifest(workspace_id: str) -> dict:
             ),
         )
     import json as _json
+    # H-6 (audit 2026-05-19): the public manifest endpoint used to leak
+    # owner_user_id. New seals omit it from the signed bytes; legacy seals
+    # are projected through _public_manifest_view() so the field is never
+    # served publicly. Verifiers who need the exact signed bytes can
+    # request them with auth via the workspace owner.
     return {
-        "manifest": _json.loads(ws["seal_manifest"]),
+        "manifest": _workspaces._public_manifest_view(
+            _json.loads(ws["seal_manifest"])
+        ),
         "signature": ws["seal_signature"],
         "public_key_did": ws["seal_public_key_did"],
     }
@@ -832,7 +839,13 @@ def workspaces_verify_get_405(workspace_id: str) -> JSONResponse:
     """2026-05-19 (B6): GET /workspaces/{id}/verify used to fall through the
     SPA catch-all and return React HTML, which made integrators conclude
     verification was broken. Now it returns a structured 405 pointing
-    explicitly at the POST contract."""
+    explicitly at the POST contract.
+
+    M-9 (audit 2026-05-19): the original 405 body wrongly claimed POST
+    "must mutate the server-side seal manifest". verify_seal() is strictly
+    read-only — it re-hashes the live artifacts and compares against the
+    sealed bytes. POST is used here only for symmetry with verification
+    APIs that take a payload; the operation is idempotent."""
     del workspace_id  # path is captured for OpenAPI routing only
     return JSONResponse(
         status_code=405,
@@ -840,10 +853,11 @@ def workspaces_verify_get_405(workspace_id: str) -> JSONResponse:
         content={
             "error": "method_not_allowed",
             "message": (
-                "Workspace verify is POST-only. The signature is computed "
-                "over the live artifact hashes, so the request must mutate "
-                "the server-side seal manifest, which is why GET is not "
-                "supported."
+                "Workspace verify is POST-only. POST is used for symmetry "
+                "with verification APIs that may take a payload; the "
+                "operation itself is read-only and idempotent — the server "
+                "re-hashes the live artifacts and compares against the "
+                "sealed manifest, no state changes."
             ),
             "allowed_methods": ["POST"],
             "docs": "/api/docs#/workspaces/post__workspaces_workspace_id__verify",
