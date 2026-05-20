@@ -432,6 +432,65 @@ def _agent_response(
         out.pop(_sensitive_agent_field, None)
     out["caller_trust_min"] = min_caller_trust
     out["caller_charge_cents"] = caller_charge_cents
+    # U-H1 (audit 2026-05-20): list_agents was missing the governance
+    # fields surfaced by do_specialist_task's candidate listing. Add
+    # caller_total_usd, platform_fee_pct, and pricing transparency for
+    # tiered/per_unit agents so discovery matches the actual charge.
+    _fee_pct = int(payments.PLATFORM_FEE_PCT)
+    out["platform_fee_pct"] = _fee_pct
+    out["caller_total_usd"] = round(caller_charge_cents / 100.0, 4)
+    try:
+        from server.builtin_agents import pricing_overlay as _pricing_overlay
+        _overlay = _pricing_overlay.get_pricing_overlay().get(
+            str(agent.get("agent_id") or "")
+        )
+    except Exception:
+        _overlay = None
+    if _overlay:
+        _pricing_model = str(_overlay.get("pricing_model") or "").lower()
+        _pricing_config = _overlay.get("pricing_config") or {}
+        if _pricing_model and _pricing_model not in ("fixed", "per_call"):
+            out["pricing_model"] = _pricing_model
+            _summary: dict[str, Any] = {}
+            for _key in (
+                "unit", "input_field", "rate_cents_per_unit",
+                "min_cents", "max_cents", "tiers",
+            ):
+                if _key in _pricing_config:
+                    _summary[_key] = _pricing_config[_key]
+            if _summary:
+                out["pricing_summary"] = _summary
+            out["price_is_floor"] = True
+    # U-H1 (cont): tag broken agents (consistent low success_rate) so
+    # discovery + auto-hire can deprioritize them. Tier is derived only
+    # when we have enough signal (>=10 calls). Operator-set
+    # stability_tier on the spec wins.
+    _explicit_tier = str(agent.get("stability_tier") or "").strip().lower()
+    if _explicit_tier == "broken":
+        out["stability_tier"] = "broken"
+        out["broken_reason"] = str(
+            agent.get("broken_reason") or "operator-marked broken"
+        )
+    else:
+        _total_calls = int(agent.get("total_calls") or 0)
+        _success_rate_raw = agent.get("success_rate")
+        try:
+            _success_rate = (
+                float(_success_rate_raw) if _success_rate_raw is not None else None
+            )
+        except (TypeError, ValueError):
+            _success_rate = None
+        if (
+            _total_calls >= 10
+            and _success_rate is not None
+            and _success_rate < 0.30
+            and not _explicit_tier
+        ):
+            out["stability_tier"] = "broken"
+            out["broken_reason"] = (
+                f"success_rate {_success_rate:.0%} below 30% over "
+                f"{_total_calls} calls — auto-hire deprioritized"
+            )
     builtin_meta = _builtin_specs.builtin_catalog_metadata(
         str(agent.get("agent_id") or "")
     )

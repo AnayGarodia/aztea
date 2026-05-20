@@ -541,15 +541,44 @@ def _load_or_create_signing_keypair() -> tuple[str, str]:
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
-    with open(path, "w", encoding="ascii") as f:
-        f.write(private_pem + marker + public_pem)
+    # HARDEN-1 (audit 2026-05-20): atomic O_CREAT|O_EXCL|O_WRONLY with mode
+    # 0o600 — pre-fix, open(..., "w") created the file with the process
+    # umask (typically 0o644), then chmod tightened to 0o600 in a separate
+    # syscall. Between those two calls the Ed25519 PRIVATE key was world-
+    # readable. On platforms where chmod silently fails (Windows, some
+    # container FSes) it stayed world-readable indefinitely. Using
+    # os.open() with mode 0o600 makes the file unreadable to others from
+    # the instant it exists; the open() call still respects umask but
+    # the mode argument is intersected, never expanded. If the file
+    # already exists (concurrent creation), EEXIST signals another writer
+    # won; we re-read instead of clobbering.
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     try:
-        os.chmod(path, 0o600)
-    except OSError:
-        # Windows / sandboxed filesystems may reject chmod; the file is
-        # still writeable and readable by the process. Worth a debug
-        # breadcrumb but not fatal.
-        _LOG.debug("chmod 0o600 failed on %s; continuing", path)
+        fd = os.open(path, flags, 0o600)
+    except FileExistsError:
+        # Lost a race with another process / thread. Re-read the file
+        # they wrote (it must contain the marker since this is the only
+        # writer path).
+        with open(path, "r", encoding="ascii") as f:
+            content = f.read()
+        if marker in content:
+            private_pem_existing, public_pem_existing = content.split(marker, 1)
+            return private_pem_existing, public_pem_existing
+        # If the existing file is malformed, propagate the original
+        # exception by re-attempting (will likely raise IsADirectoryError
+        # or similar — explicit failure beats silent overwrite).
+        raise
+    try:
+        with os.fdopen(fd, "w", encoding="ascii") as f:
+            f.write(private_pem + marker + public_pem)
+    except Exception:
+        # If writing the body failed, unlink so the next caller doesn't
+        # think a zero-byte file is the real key.
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        raise
     return private_pem, public_pem
 
 
@@ -638,17 +667,48 @@ def seal_workspace(workspace_id: str) -> dict[str, Any]:
 
     did = workspace_signer_did()
     sealed_at_iso = _utcnow_iso()
+    # HARDEN-4 (audit 2026-05-20): the original UPDATE had no status
+    # predicate, so two concurrent seal_workspace calls that both passed
+    # the ``ws["status"] == "active"`` check above would both UPDATE,
+    # and the SECOND write would overwrite the first with a different
+    # ``sealed_at_iso`` and a different ``signature`` (computed from
+    # the same manifest bytes but the new sealed_at). Pinning the
+    # WHERE clause to ``status = 'active'`` lets only the first
+    # transaction commit; the second's UPDATE is a no-op (rowcount=0),
+    # and we re-read the persisted seal so the caller still gets a
+    # consistent return value. Idempotent in both racing and serial
+    # invocations.
     with _connect() as conn:
-        conn.execute(
+        cursor = conn.execute(
             "UPDATE workspaces"
             "   SET status = 'sealed',"
             "       sealed_at = %s,"
             "       seal_manifest = %s,"
             "       seal_signature = %s,"
             "       seal_public_key_did = %s"
-            " WHERE workspace_id = %s",
+            " WHERE workspace_id = %s AND status = 'active'",
             (sealed_at_iso, _json.dumps(manifest, sort_keys=True),
              signature, did, workspace_id),
+        )
+        rows_updated = int(getattr(cursor, "rowcount", 0) or 0)
+    if rows_updated == 0:
+        # Lost the seal race. Re-fetch the persisted seal so the caller
+        # observes the same bytes as a later reader of /manifest. The
+        # docstring's "idempotent" contract is preserved.
+        persisted = get_workspace(workspace_id)
+        if persisted.get("status") == "sealed":
+            return {
+                "manifest": _json.loads(persisted["seal_manifest"]),
+                "signature": persisted["seal_signature"],
+                "public_key_did": persisted["seal_public_key_did"],
+            }
+        # Status changed to something other than 'active' or 'sealed'
+        # between our get and our UPDATE — surface the actual state
+        # rather than silently returning our computed-but-not-stored
+        # values.
+        raise wse.WorkspaceError(
+            f"seal lost a race; workspace now in status "
+            f"{persisted.get('status')!r}"
         )
     return {"manifest": manifest, "signature": signature, "public_key_did": did}
 
