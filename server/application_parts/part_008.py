@@ -298,6 +298,39 @@ def _validate_payload_against_schema(
     return normalized_payload
 
 
+# U-M1 (audit 2026-05-20): the platform auto-injects a ``protocol``
+# envelope into payloads via ``_normalize_input_protocol_from_payload``
+# before schema validation runs. When validation fails (e.g. caller
+# passed input={}), jsonschema's default message reproduces the entire
+# offending object — including the auto-injected protocol envelope.
+# That leaks the platform's internal wrapping shape to callers and
+# makes the error confusing ("why does my payload have a 'protocol' key
+# I never set?"). This helper redacts ``protocol`` from the leading
+# segment of the validation path and strips any ``'protocol': {...}``
+# substring from the message before it lands in the caller-facing
+# response. Pure: input strings + lists in, sanitized strings + lists out.
+_PROTOCOL_ENVELOPE_RE = __import__("re").compile(
+    r"'protocol':\s*\{[^{}]*\}(?:,\s*)?"
+)
+
+
+def _scrub_protocol_from_validation_message(raw: str) -> str:
+    """Remove auto-injected ``protocol: {...}`` from a jsonschema error message."""
+    if not isinstance(raw, str) or not raw:
+        return raw
+    cleaned = _PROTOCOL_ENVELOPE_RE.sub("", raw)
+    # Clean up dangling commas / trailing whitespace inside braces.
+    cleaned = cleaned.replace("{, ", "{").replace(", }", "}")
+    return cleaned.strip()
+
+
+def _scrub_protocol_from_validation_path(path: list[Any]) -> list[Any]:
+    """Strip a leading ``protocol`` segment from a jsonschema absolute_path."""
+    if path and str(path[0]) == "protocol":
+        return list(path[1:])
+    return list(path)
+
+
 @app.post(
     "/registry/search",
     response_model=core_models.RegistrySearchResponse,
@@ -2011,40 +2044,6 @@ def registry_call(
     if not _caller_can_access_agent(caller, agent):
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
     _assert_agent_callable(agent_id, agent)
-    # M-1 (audit 2026-05-19): refuse sync /call before charging when the
-    # agent's measured average latency suggests the sync gateway budget
-    # will trip. p95 isn't tracked separately on the agent record, so
-    # use ``avg_latency_ms * 2`` as a safe upper-bound proxy. Caller
-    # opt-out: header X-Force-Sync=1 (for testing). Default opt-out for
-    # zero-history agents (avg=0) so brand-new agents don't 421 on first
-    # call before they have telemetry.
-    _SYNC_BUDGET_MS = 8000
-    _force_sync = request.headers.get("X-Force-Sync", "").strip() == "1"
-    if not _force_sync:
-        _avg_ms = float(agent.get("avg_latency_ms") or 0.0)
-        if _avg_ms > 0 and (_avg_ms * 2) > _SYNC_BUDGET_MS:
-            raise HTTPException(
-                status_code=421,
-                detail=error_codes.make_error(
-                    "agent.sync_budget_exceeded",
-                    (
-                        f"Agent's observed avg latency ({_avg_ms:.0f}ms) "
-                        f"suggests p95 will exceed the {_SYNC_BUDGET_MS}ms "
-                        "sync gateway budget. Use the async path "
-                        "(manage_workflow action='hire_async' or "
-                        "POST /jobs) to avoid 504s. Override with "
-                        "X-Force-Sync: 1 if you have measured your "
-                        "input fits."
-                    ),
-                    {
-                        "agent_id": agent_id,
-                        "avg_latency_ms": int(_avg_ms),
-                        "sync_budget_ms": _SYNC_BUDGET_MS,
-                        "redirect_to": "hire_async",
-                        "requires_async": True,
-                    },
-                ),
-            )
     builtin_agent_id = _resolve_builtin_agent_id(agent)
     hosted_skill_row: dict | None = None
     if builtin_agent_id is None and _hosted_skills.is_skill_endpoint(
@@ -2143,10 +2142,56 @@ def registry_call(
                 status_code=422,
                 detail=error_codes.make_error(
                     error_codes.INPUT_SCHEMA_VIOLATION,
-                    f"Input validation failed: {_schema_exc.message if hasattr(_schema_exc, 'message') else str(_schema_exc)}",
+                    _scrub_protocol_from_validation_message(
+                        f"Input validation failed: {_schema_exc.message if hasattr(_schema_exc, 'message') else str(_schema_exc)}"
+                    ),
                     {
-                        "path": list(getattr(_schema_exc, "absolute_path", [])),
+                        "path": _scrub_protocol_from_validation_path(
+                            list(getattr(_schema_exc, "absolute_path", []))
+                        ),
                         "agent_id": agent_id,
+                    },
+                ),
+            )
+
+    # M-1 (audit 2026-05-19 → re-ordered 2026-05-20 per pressure-test
+    # pain rank #1): refuse sync /call when the agent's measured avg
+    # latency suggests the sync gateway budget will trip. Fires AFTER:
+    #   - SSRF gate (_validate_agent_endpoint_url),
+    #   - reserved-envelope preflight (_preflight_workspace_envelope),
+    #   - builtin payload validation (_validate_builtin_agent_payload),
+    #   - schema validation (_validate_payload_against_schema)
+    # so adversarial probes (SSRF, sandbox-escape, schema violations)
+    # hit their intended gates and get 422 with refund. Only inputs
+    # that would otherwise execute get the 421 redirect.
+    #
+    # p95 isn't tracked separately, so use avg_latency_ms * 2 as a safe
+    # upper-bound proxy. X-Force-Sync:1 header overrides. Zero-history
+    # agents (avg=0) are exempt so cold starts don't 421 on first call.
+    _SYNC_BUDGET_MS = 8000
+    _force_sync = request.headers.get("X-Force-Sync", "").strip() == "1"
+    if not _force_sync:
+        _avg_ms = float(agent.get("avg_latency_ms") or 0.0)
+        if _avg_ms > 0 and (_avg_ms * 2) > _SYNC_BUDGET_MS:
+            raise HTTPException(
+                status_code=421,
+                detail=error_codes.make_error(
+                    "agent.sync_budget_exceeded",
+                    (
+                        f"Agent's observed avg latency ({_avg_ms:.0f}ms) "
+                        f"suggests p95 will exceed the {_SYNC_BUDGET_MS}ms "
+                        "sync gateway budget. Use the async path "
+                        "(manage_workflow action='hire_async' or "
+                        "POST /jobs) to avoid 504s. Override with "
+                        "X-Force-Sync: 1 if you have measured your "
+                        "input fits."
+                    ),
+                    {
+                        "agent_id": agent_id,
+                        "avg_latency_ms": int(_avg_ms),
+                        "sync_budget_ms": _SYNC_BUDGET_MS,
+                        "redirect_to": "hire_async",
+                        "requires_async": True,
                     },
                 ),
             )
@@ -3203,9 +3248,13 @@ def jobs_create(
                 status_code=422,
                 detail=error_codes.make_error(
                     error_codes.INPUT_SCHEMA_VIOLATION,
-                    f"Input validation failed: {_schema_exc.message if hasattr(_schema_exc, 'message') else str(_schema_exc)}",
+                    _scrub_protocol_from_validation_message(
+                        f"Input validation failed: {_schema_exc.message if hasattr(_schema_exc, 'message') else str(_schema_exc)}"
+                    ),
                     {
-                        "path": list(getattr(_schema_exc, "absolute_path", [])),
+                        "path": _scrub_protocol_from_validation_path(
+                            list(getattr(_schema_exc, "absolute_path", []))
+                        ),
                         "agent_id": agent["agent_id"],
                     },
                 ),
