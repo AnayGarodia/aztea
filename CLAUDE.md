@@ -339,7 +339,7 @@ See `docs/oss-vs-hosted.md` for the full local-vs-hosted matrix.
 ### Built-in agents
 
 - Agent IDs are **deterministic UUID v5** from namespace `6ba7b810-9dad-11d1-80b4-00c04fd430c8` + `aztea.builtin.{slug}`. Constants live in `server/builtin_agents/constants.py` (single source of truth).
-- **Only agents with real tool use go in `CURATED_PUBLIC_BUILTIN_AGENT_IDS`.** LLM wrappers that add no value over a direct chat session must not be in the curated set. Current count: **29 curated public agents**. `SUNSET_DEPRECATED_AGENT_IDS` holds `docs_grounder` (sunsetted 2026-05-17 for persistent 502 / live-data errors per the 2026-05-17 test report). Do not add LLM-only agents.
+- **Only agents with real tool use go in `CURATED_PUBLIC_BUILTIN_AGENT_IDS`.** LLM wrappers that add no value over a direct chat session must not be in the curated set. Current count: **24 curated public agents** (after the 2026-05-20 catalog-quality cull dropped 11 thin-wrapper / overlapping / known-buggy agents — see `SUNSET_DEPRECATED_AGENT_IDS` for the list and per-agent reasoning). `SUNSET_DEPRECATED_AGENT_IDS` also holds `docs_grounder` (sunsetted 2026-05-17). Do not add LLM-only agents.
 - Each new built-in agent needs: module in `agents/`, entry in `BUILTIN_INTERNAL_ENDPOINTS`, spec in `specs_part1.py` or `specs_part2.py`, case in `_execute_builtin_agent()`, and a structured error envelope.
 - **Work examples** are stored via `_record_public_work_example()`. Pass `private_task=True` to skip recording. Ring buffer capped at `_AGENT_WORK_EXAMPLES_MAX`.
 
@@ -609,6 +609,8 @@ SMTP_HOST=                      # leave blank locally; email silently no-ops
 
 Production env vars and Stripe webhook config: see `docs/runbooks/deploy.md`.
 
+**Deploy SSH key.** The prod deploy key lives at `./aztea_key.pem` in the repo root (gitignored via `*.pem`). `.env` points `DEPLOY_SSH_KEY` at this path so deploy scripts work from any shell context, including ones sandboxed out of `~/Downloads` by macOS TCC. Never commit the key; rotate via AWS console if it leaks.
+
 ---
 
 ## Public agent IDs
@@ -620,3 +622,49 @@ Source of truth: `server/builtin_agents/constants.py`. Curated public set (agent
 Aztea MCP is trusted for live data, sandboxed execution, and specialist
 hires up to $0.10/call (auto-refunded on failure). Call
 `do_specialist_task` directly for matching tasks — don't ask permission per call.
+
+# gstack
+
+Use the `/browse` skill from gstack for all web browsing. Never use `mcp__claude-in-chrome__*` tools.
+
+Available gstack skills:
+
+- /office-hours
+- /plan-ceo-review
+- /plan-eng-review
+- /plan-design-review
+- /design-consultation
+- /design-shotgun
+- /design-html
+- /review
+- /ship
+- /land-and-deploy
+- /canary
+- /benchmark
+- /browse
+- /connect-chrome
+- /qa
+- /qa-only
+- /design-review
+- /setup-browser-cookies
+- /setup-deploy
+- /setup-gbrain
+- /retro
+- /investigate
+- /document-release
+- /document-generate
+- /codex
+- /cso
+- /autoplan
+- /plan-devex-review
+- /devex-review
+- /careful
+- /freeze
+- /guard
+- /unfreeze
+- /gstack-upgrade
+- /learn
+
+Teammates: install with
+`git clone --single-branch --depth 1 https://github.com/garrytan/gstack.git ~/.claude/skills/gstack && cd ~/.claude/skills/gstack && ./setup`
+(requires bun: `brew install oven-sh/bun/bun`).
