@@ -1243,6 +1243,22 @@ def post_call_payout(
 
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        # HARDEN-2 (audit 2026-05-20): lock the charge row before reading
+        # whether a refund / payout has already been written. The job-
+        # state machine in core/jobs/db.py::update_job_status already
+        # prevents both worker→complete and sweeper→failed from
+        # succeeding on the same job, so in practice only one of
+        # post_call_payout / post_call_refund ever fires. This SELECT
+        # FOR UPDATE is defense-in-depth against a future code path that
+        # bypasses the state machine: it serialises the two settlement
+        # paths through a PostgreSQL row-level lock on the charge tx.
+        # On SQLite the BEGIN IMMEDIATE above already holds the
+        # database-level write lock, so FOR UPDATE is a no-op (only
+        # appended on Postgres).
+        _charge_lock_sql = "SELECT tx_id FROM transactions WHERE tx_id = %s"
+        if _db.IS_POSTGRES:
+            _charge_lock_sql += " FOR UPDATE"
+        conn.execute(_charge_lock_sql, (charge_tx_id,)).fetchone()
         refund_exists = conn.execute(
             """
             SELECT 1
@@ -1390,6 +1406,14 @@ def post_call_refund(
     applied = False
     with _conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        # HARDEN-2 (audit 2026-05-20): lock the charge row before reading
+        # whether a payout has already been written. See the matching
+        # comment in post_call_payout for the full rationale. Same
+        # row-lock target → second transaction blocks until first commits.
+        _charge_lock_sql = "SELECT tx_id FROM transactions WHERE tx_id = %s"
+        if _db.IS_POSTGRES:
+            _charge_lock_sql += " FOR UPDATE"
+        conn.execute(_charge_lock_sql, (charge_tx_id,)).fetchone()
         payout_exists = conn.execute(
             """
             SELECT 1
