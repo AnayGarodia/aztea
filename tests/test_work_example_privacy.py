@@ -82,3 +82,33 @@ def test_record_proceeds_for_non_sensitive_agent():
     agent_id, example, _ = calls[0]
     assert agent_id == "agent-7"
     assert example["input"] == {"code": "x = 1"}
+
+
+def test_record_skipped_when_private_task_flag_top_level():
+    # C-2 (audit 2026-05-19): private_task=true at the top level of the
+    # input payload must suppress recording even on non-privacy-gated agents.
+    # The pre-fix bug was upstream — the MCP wrapper dropped the flag — but
+    # _record_public_work_example must also enforce the gate so any backend
+    # path (HTTP API, SDK, job worker) gets the same behavior.
+    calls, fake = _capture_calls()
+    with _patch_registry_append(fake):
+        _record_public_work_example(
+            agent={"agent_id": "agent-7", "name": "Linter", "category": "Code Quality"},
+            input_payload={"code": "x = 1", "private_task": True},
+            output_payload={"issues": []},
+        )
+    assert calls == []
+
+
+def test_record_skipped_when_private_task_flag_in_protocol():
+    # Same gate must trip when private_task arrives nested in protocol —
+    # the path _normalize_input_protocol_from_payload uses when the caller
+    # sends a structured protocol envelope.
+    calls, fake = _capture_calls()
+    with _patch_registry_append(fake):
+        _record_public_work_example(
+            agent={"agent_id": "agent-7", "name": "Linter", "category": "Code Quality"},
+            input_payload={"code": "x = 1", "protocol": {"private_task": True}},
+            output_payload={"issues": []},
+        )
+    assert calls == []

@@ -19,10 +19,39 @@ Do NOT pass ``model=`` — the chain selects the model per provider.
 
 from __future__ import annotations
 
+import threading
 from dataclasses import replace
 
 from .base import CompletionRequest, LLMResponse
 from .errors import LLMError, LLMRateLimitError, LLMTimeoutError
+
+
+# H-7 (audit 2026-05-19): ``llm_used`` in the response envelope was set
+# from spec metadata (``runtime_requirements`` declarations) — agents that
+# imported core.llm but forgot to declare it shipped with
+# ``llm_used: false`` while emitting obviously-LLM hedging text
+# (ci_failure_reproducer was the audit's example). The right answer is
+# observable telemetry. Thread-local flag because the dispatch runs the
+# agent in a ThreadPoolExecutor worker (see part_004.py) — ContextVar
+# does not propagate across that boundary; the thread-local does because
+# the agent's ``run(payload)`` and any nested ``run_with_fallback`` calls
+# execute on the same worker thread. Dispatch reads the flag from the
+# WORKER thread inside ``_finalize`` (which runs in the same thread as
+# the agent), so the read sees the agent's writes.
+_LLM_OBSERVED = threading.local()
+
+
+def reset_llm_used_flag() -> None:
+    """Reset the worker-thread flag to False. Called by the agent dispatcher
+    inside the worker thread BEFORE the agent runs."""
+    _LLM_OBSERVED.observed = False
+
+
+def llm_call_observed() -> bool:
+    """True iff at least one provider.complete() returned in this thread
+    since the most recent reset_llm_used_flag() call. Must be read on the
+    same thread that ran the agent (i.e. inside _finalize)."""
+    return bool(getattr(_LLM_OBSERVED, "observed", False))
 
 
 def run_with_fallback(
@@ -73,7 +102,11 @@ def run_with_fallback(
 
         req = replace(req_template, model=model)
         try:
-            return provider.complete(req)
+            response = provider.complete(req)
+            # H-7: mark the worker-thread flag so honesty fields downstream
+            # (llm_used) reflect actual telemetry, not spec metadata.
+            _LLM_OBSERVED.observed = True
+            return response
         except (LLMRateLimitError, LLMTimeoutError) as exc:
             last_error = exc
             continue

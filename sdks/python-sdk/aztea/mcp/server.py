@@ -2789,6 +2789,18 @@ class RegistryBridge:
             if output_format and "output_format" not in tool_arguments:
                 tool_arguments = dict(tool_arguments)
                 tool_arguments["output_format"] = output_format
+            # Forward `private_task` from the lazy call_specialist wrapper into
+            # the underlying call. Without this hop the top-level MCP flag is
+            # silently dropped — the schema advertised it but the dispatch path
+            # never propagated it, so non-privacy-gated agents recorded the
+            # caller's input publicly even when private_task=true was set
+            # (audit C-2, 2026-05-19). Server's _normalize_input_protocol_from_
+            # payload lifts the top-level field into the protocol envelope
+            # where _is_private_task_payload() reads it.
+            private_task = arguments.get("private_task")
+            if private_task is not None and "private_task" not in tool_arguments:
+                tool_arguments = dict(tool_arguments)
+                tool_arguments["private_task"] = bool(private_task)
             # Workspace context — same logic as do_specialist_task. Mutates
             # tool_arguments in place to surface the bundle in the agent payload.
             tool_arguments = dict(tool_arguments)

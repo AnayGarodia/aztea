@@ -204,6 +204,29 @@ for _recipe in BUILTIN_RECIPES:
         ), f"recipe {_recipe['recipe_id']} references non-public agent {_node['agent_id']}"
 
 
+def get_builtin_recipe_input_schema(recipe_id: str) -> dict | None:
+    """Return the declared input schema for a built-in recipe, or None.
+
+    Used by ``POST /recipes/{recipe_id}/run`` to validate caller input
+    BEFORE pipeline execution starts. H-4 (audit 2026-05-19): pre-fix the
+    ``domain-health`` recipe declared ``required: ["domains"]`` but
+    callers who passed singular ``{"domain": "x"}`` got a cryptic
+    ``ValueError: Could not resolve '$input.domains'`` from the executor's
+    template-resolution layer. Now the validator runs first and emits a
+    clean ``recipe.invalid_input`` with the missing field name.
+    """
+    rid = str(recipe_id or "").strip()
+    if not rid:
+        return None
+    for recipe in BUILTIN_RECIPES:
+        if str(recipe.get("recipe_id") or "") == rid:
+            schema = recipe.get("default_input_schema")
+            if isinstance(schema, dict) and schema:
+                return schema
+            return None
+    return None
+
+
 def ensure_builtin_recipes() -> list[dict]:
     """Upsert the platform's built-in pipeline templates on startup. Idempotent.
 

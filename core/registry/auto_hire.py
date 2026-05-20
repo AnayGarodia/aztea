@@ -111,7 +111,21 @@ class CandidateAgent:
         )
 
     def public_dict(self) -> dict[str, Any]:
-        """Compact representation safe to send to the caller."""
+        """Compact representation safe to send to the caller.
+
+        H-7 (audit 2026-05-19): listings now include ``caller_total_usd``
+        and ``platform_fee_pct`` so the price the caller sees matches the
+        price the ledger actually charges. Pre-fix the listing showed
+        only the agent's payout — a $0.05-advertised agent silently
+        billed $0.06 because the +10% platform fee was invisible.
+        """
+        from core.payments.base import PLATFORM_FEE_PCT
+        fee_pct = int(PLATFORM_FEE_PCT)
+        # caller-bears-fee policy is the platform default; specs with
+        # alternate fee_bearer policies must override at the call site.
+        caller_total = round(
+            self.price_per_call_usd * (1 + fee_pct / 100.0), 4
+        )
         return {
             "agent_id": self.agent_id,
             "slug": self.slug,
@@ -119,6 +133,8 @@ class CandidateAgent:
             "description": _truncate(self.description, 240),
             "category": self.category,
             "price_per_call_usd": round(self.price_per_call_usd, 4),
+            "caller_total_usd": caller_total,
+            "platform_fee_pct": fee_pct,
             "trust_score": round(self.trust_score, 1),
             "success_rate": round(self.success_rate, 3),
             "stability_tier": self.stability_tier or None,
@@ -235,8 +251,32 @@ def _check_confidence_gate(
 
 
 def _check_stability_gate(top: Any, confidence: float) -> Decision | None:
-    """Pure: refuse beta agents — direct call_specialist still works."""
-    if top.candidate.stability_tier != "beta":
+    """Pure: refuse beta + broken agents — direct call_specialist still works
+    for beta (caller opts in by name); broken agents fail loud regardless.
+
+    H-5 (audit 2026-05-19): two agents (semantic_codebase_search,
+    multi_file_python_executor) were observed returning
+    ``agent.endpoint_misconfigured`` on the happy path while still
+    listed in the catalog with high trust. ``stability_tier == 'broken'``
+    is the operator-set flag for "delist from auto-hire until
+    investigation completes"; direct calls still go through (the agent
+    may be recovering) but the router never picks them.
+    """
+    tier = top.candidate.stability_tier
+    if tier == "broken":
+        return Decision(
+            auto_invoked=False,
+            reason="broken_agent",
+            confidence=round(confidence, 3),
+            candidates=[top.candidate.public_dict()],
+            next_step=(
+                f"Top match {top.candidate.slug!r} is currently flagged "
+                "stability_tier='broken' — auto-hire is disabled. The "
+                "agent may still respond to direct call_specialist, but "
+                "expect endpoint errors until the operator clears the flag."
+            ),
+        )
+    if tier != "beta":
         return None
     return Decision(
         auto_invoked=False,
