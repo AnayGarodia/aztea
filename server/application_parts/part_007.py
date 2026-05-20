@@ -980,9 +980,6 @@ def jobs_cancel(
         error_message = f"{_prefix}: {_cleaned_reason[:160]}"
     else:
         error_message = f"{_prefix}."
-    # Preserve `reason` field for compatibility with downstream consumers
-    # that read the trimmed value (e.g. dispute logs reference it).
-    reason = _cleaned_reason or "Cancelled by caller."
     # 1.7.3 — status="cancelled" (was "failed") so callers can distinguish
     # caller-initiated cancellation from agent-side failure.
     # 1.7.8 — detect the race where the worker completes the job between

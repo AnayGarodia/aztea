@@ -3265,7 +3265,6 @@ def jobs_create(
         # set and the binding cap is the body's, surface the per-job code;
         # otherwise the historical "api_key_per_job" envelope still fires.
         body_cap = body.per_job_cap_cents
-        key_cap = _caller_key_per_job_cap(caller)
         # The binding cap is whichever equals violation["limit_cents"].
         if body_cap is not None and int(body_cap) == int(violation["limit_cents"]):
             cap_code = error_codes.JOB_PER_JOB_CAP_EXCEEDED

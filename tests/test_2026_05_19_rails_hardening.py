@@ -564,8 +564,8 @@ def test_b11_schema_permitted_error_envelope_returns_pass():
         output_schema=schema,
     )
     assert result["verdict"] == "pass", (
-        f"Schema permits an `error` field — the agent did its job by "
-        "returning a structured failure. Verdict must be pass; got {result}"
+        "Schema permits an `error` field — the agent did its job by "
+        f"returning a structured failure. Verdict must be pass; got {result}"
     )
     assert result["judge_reason_detail"] == "schema_permitted_error_envelope"
 
@@ -919,9 +919,6 @@ def test_b22_acknowledged_as_v1_item():
     The existing per-job serial path is correct, just slower — the
     write here pins that the deferral is intentional and tracked.
     """
-    src = Path("docs/superpowers/plans/shimmering-yawning-cocoa.md") if Path(
-        "docs/superpowers/plans/shimmering-yawning-cocoa.md"
-    ).exists() else None
     # Pin that the plan acknowledges the deferral.
     plan = Path("/Users/aakritigarodia/.claude/plans/shimmering-yawning-cocoa.md")
     if plan.exists():

@@ -231,7 +231,7 @@ def job_event_hook_create(
             status_code=422,
             detail=_envelope_from_value_error(exc, "webhook"),
         )
-    except _db.IntegrityError as exc:
+    except _db.IntegrityError:
         raise HTTPException(
             status_code=409,
             detail=error_codes.make_error(
