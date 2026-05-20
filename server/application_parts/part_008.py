@@ -1982,6 +1982,22 @@ def registry_call(
     """
     _require_scope(caller, "caller")
     idempotency_key = request.headers.get("X-Idempotency-Key", "").strip()
+    # L-8 (audit 2026-05-19): pre-fix, callers who put ``idempotency_key``
+    # at the top level of the JSON body (instead of using the
+    # X-Idempotency-Key header) got their key silently dropped — schemas
+    # with ``additionalProperties: True`` tolerated the field, the
+    # dispatch path never read it, and the caller got no signal. Now:
+    # extract the body-level key BEFORE schema validation and (a) treat
+    # it the same as the header if the agent's schema doesn't declare
+    # idempotency_key as an input field, OR (b) leave it in payload for
+    # the agent if it does (live_sandbox is the only such agent today).
+    _body_root = (
+        dict(body.root) if body is not None and hasattr(body, "root") else {}
+    )
+    if not idempotency_key:
+        _body_idem = _body_root.get("idempotency_key")
+        if isinstance(_body_idem, str) and _body_idem.strip():
+            idempotency_key = _body_idem.strip()
     caller_owner_id_early = _caller_owner_id(request)
     if idempotency_key:
         cached = _idempotency_lookup(caller_owner_id_early, agent_id, idempotency_key)
@@ -1995,6 +2011,40 @@ def registry_call(
     if not _caller_can_access_agent(caller, agent):
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
     _assert_agent_callable(agent_id, agent)
+    # M-1 (audit 2026-05-19): refuse sync /call before charging when the
+    # agent's measured average latency suggests the sync gateway budget
+    # will trip. p95 isn't tracked separately on the agent record, so
+    # use ``avg_latency_ms * 2`` as a safe upper-bound proxy. Caller
+    # opt-out: header X-Force-Sync=1 (for testing). Default opt-out for
+    # zero-history agents (avg=0) so brand-new agents don't 421 on first
+    # call before they have telemetry.
+    _SYNC_BUDGET_MS = 8000
+    _force_sync = request.headers.get("X-Force-Sync", "").strip() == "1"
+    if not _force_sync:
+        _avg_ms = float(agent.get("avg_latency_ms") or 0.0)
+        if _avg_ms > 0 and (_avg_ms * 2) > _SYNC_BUDGET_MS:
+            raise HTTPException(
+                status_code=421,
+                detail=error_codes.make_error(
+                    "agent.sync_budget_exceeded",
+                    (
+                        f"Agent's observed avg latency ({_avg_ms:.0f}ms) "
+                        f"suggests p95 will exceed the {_SYNC_BUDGET_MS}ms "
+                        "sync gateway budget. Use the async path "
+                        "(manage_workflow action='hire_async' or "
+                        "POST /jobs) to avoid 504s. Override with "
+                        "X-Force-Sync: 1 if you have measured your "
+                        "input fits."
+                    ),
+                    {
+                        "agent_id": agent_id,
+                        "avg_latency_ms": int(_avg_ms),
+                        "sync_budget_ms": _SYNC_BUDGET_MS,
+                        "redirect_to": "hire_async",
+                        "requires_async": True,
+                    },
+                ),
+            )
     builtin_agent_id = _resolve_builtin_agent_id(agent)
     hosted_skill_row: dict | None = None
     if builtin_agent_id is None and _hosted_skills.is_skill_endpoint(

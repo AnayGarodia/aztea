@@ -299,6 +299,19 @@ class JobBatchCreateRequest(BaseModel):
             "or creating jobs."
         ),
     )
+    atomic: bool = Field(
+        default=False,
+        description=(
+            "M-2 (audit 2026-05-19): when true, the entire batch is rejected "
+            "with 422 if ANY job spec fails preflight (slug typo, schema "
+            "violation, depth limit, stop_when error, per-job cap, etc.). "
+            "When false (default) the existing partial-success semantics "
+            "apply: valid jobs are enqueued and invalid ones reported in "
+            "invalid_jobs[]. Use atomic=true for retry-safe submission "
+            "where you want all-or-nothing guarantees before any escrow "
+            "opens."
+        ),
+    )
     jobs: list["JobCreateRequest"] = Field(
         description="Array of job specs (max 250). Each is a JobCreateRequest. Single wallet pre-debit for total cost."
     )

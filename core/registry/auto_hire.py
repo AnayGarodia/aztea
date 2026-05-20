@@ -126,7 +126,7 @@ class CandidateAgent:
         caller_total = round(
             self.price_per_call_usd * (1 + fee_pct / 100.0), 4
         )
-        return {
+        out: dict[str, Any] = {
             "agent_id": self.agent_id,
             "slug": self.slug,
             "name": self.name,
@@ -139,6 +139,36 @@ class CandidateAgent:
             "success_rate": round(self.success_rate, 3),
             "stability_tier": self.stability_tier or None,
         }
+        # L-1 (audit 2026-05-19): a 1¢ "per-call" advertisement that
+        # actually charges 3¢ for 3 domains is a math-correct, display-
+        # misleading combination. Surface the pricing model when it's
+        # not the default fixed-per-call so callers can read the
+        # listing and immediately see the true cost shape.
+        pricing_model = str(
+            self.raw.get("pricing_model") or ""
+        ).strip().lower()
+        if pricing_model and pricing_model not in ("fixed", "per_call", ""):
+            out["pricing_model"] = pricing_model
+            pricing_config = self.raw.get("pricing_config")
+            if isinstance(pricing_config, dict) and pricing_config:
+                # Compact summary safe to ship in a listing — full config
+                # available via describe_specialist.
+                summary: dict[str, Any] = {}
+                for key in ("unit", "input_field", "rate_cents_per_unit",
+                            "min_cents", "max_cents", "tiers"):
+                    if key in pricing_config:
+                        summary[key] = pricing_config[key]
+                if summary:
+                    out["pricing_summary"] = summary
+            out["price_is_floor"] = True
+            out["pricing_note"] = (
+                f"price_per_call_usd is a FLOOR — actual charge scales "
+                f"by the agent's {pricing_model} pricing. See "
+                f"pricing_summary for the rate, or call "
+                f"manage_budget(action='estimate', slug=...) for a "
+                f"per-payload quote."
+            )
+        return out
 
 
 @dataclass

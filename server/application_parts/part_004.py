@@ -135,6 +135,13 @@ _AGENT_WALL_BUDGET_OVERRIDES: dict[str, float] = {
     # the cold worst-case (single id, no cache hit) fits well under 20 s
     # and the warm path is sub-millisecond.
     _CVELOOKUP_AGENT_ID: 20.0,
+    # L-5 (audit 2026-05-19): accessibility_auditor p95 is ~4 s but it
+    # was inheriting the 8 s sync default, which left no margin for the
+    # occasional warm-cache miss + chromium spin-up. Bumping to 20 s lets
+    # the sync path serve it reliably for typical pages while the async
+    # tier remains available for very large sites via the 1200 s override
+    # below. Audit flagged this as "async even at ~4s — could fit sync".
+    _ACCESSIBILITY_AUDITOR_AGENT_ID: 20.0,
 }
 
 # 2026-05-18 (C3) — ASYNC path budget. Distinct from the sync table above.

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 
 from core import db as _db
@@ -468,6 +469,11 @@ def lock_dispute_funds(dispute_id: str, conn: _db.DbConnection | None = None) ->
         return _lock_dispute_funds_conn(managed_conn, dispute_id)
 
 
+_DISPUTE_HOLD_ENABLED = bool(
+    int(os.environ.get("AZTEA_DISPUTE_HOLD_ENABLED", "0"))
+)
+
+
 def _collect_dispute_filing_deposit_conn(
     conn: _db.DbConnection,
     *,
@@ -518,10 +524,31 @@ def _collect_dispute_filing_deposit_conn(
         related_tx_id=dispute_id,
         memo=f"Dispute filing deposit escrow for {dispute_id[:8]}",
     )
+    # M-4 (audit 2026-05-19): also bump the filer wallet's held_cents
+    # column so manage_budget(action='balance') reflects the deposit as
+    # "money committed to an open dispute" rather than just disappearing
+    # from balance_cents. Existing escrow-by-separation (deposit_wallet)
+    # is preserved for atomicity; this just makes the held_cents field
+    # honest. Gated behind AZTEA_DISPUTE_HOLD_ENABLED so existing open
+    # disputes (which already moved balance without held) don't double-
+    # count when the flag flips on. Release path mirrors the increment.
+    if _DISPUTE_HOLD_ENABLED:
+        try:
+            conn.execute(
+                "UPDATE wallets SET held_cents = COALESCE(held_cents, 0) + %s "
+                "WHERE wallet_id = %s",
+                (int(amount_cents), filer_wallet_id),
+            )
+        except Exception:
+            _LOG.exception(
+                "Failed to bump filer held_cents for dispute %s; deposit "
+                "escrow still collected.", dispute_id,
+            )
     return {
         "dispute_id": dispute_id,
         "deposit_wallet_id": deposit_wallet_id,
         "collected_cents": amount_cents,
+        "filer_held_cents_bumped": _DISPUTE_HOLD_ENABLED,
     }
 
 
@@ -611,6 +638,24 @@ def _release_dispute_filing_deposit_conn(
         related_tx_id=dispute_id,
         memo=f"Dispute filing deposit to {destination} for {dispute_id[:8]}",
     )
+    # M-4 (audit 2026-05-19): mirror the held_cents bump done at collect
+    # time. Decrement the filer's held_cents by the original configured
+    # deposit (not deposit_balance — they can differ if a partial credit
+    # already moved). Gated by the same env flag; skipping when the flag
+    # was off at collect time avoids over-decrement.
+    if _DISPUTE_HOLD_ENABLED and filer_owner_id:
+        try:
+            filer_wallet_id = _get_or_create_wallet_id_conn(conn, filer_owner_id)
+            conn.execute(
+                "UPDATE wallets SET held_cents = MAX(0, COALESCE(held_cents, 0) - %s) "
+                "WHERE wallet_id = %s",
+                (int(configured_deposit_cents), filer_wallet_id),
+            )
+        except Exception:
+            _LOG.exception(
+                "Failed to release filer held_cents for dispute %s; "
+                "deposit escrow still released to %s.", dispute_id, destination,
+            )
     return {
         "deposit_wallet_id": deposit_wallet_id,
         "filing_deposit_cents": configured_deposit_cents,

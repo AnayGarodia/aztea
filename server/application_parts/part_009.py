@@ -1253,6 +1253,50 @@ def jobs_batch_create(
             }
         )
 
+    # M-2 (audit 2026-05-19): atomic mode — when the caller passes
+    # ``atomic: true``, reject the whole batch with 422 if ANY job spec
+    # failed preflight. Default behavior (atomic: false) preserves the
+    # existing partial-success semantics for back-compat. The audit
+    # treated the tool description's claim of "all-or-nothing preflight"
+    # as universal; in reality it covered slug resolution only. Atomic
+    # mode gives callers the universal guarantee they expected.
+    if body.atomic and invalid_jobs:
+        return JSONResponse(
+            status_code=422,
+            content={
+                "batch_id": None,
+                "jobs": [],
+                "job_ids": [],
+                "count": 0,
+                "submitted_count": len(body.jobs),
+                "invalid_job_count": len(invalid_jobs),
+                "invalid_jobs": invalid_jobs,
+                "total_price_cents": 0,
+                "total_charged_cents": 0,
+                "mode": "parallel_marketplace_hire_atomic",
+                "marketplace_transaction": {
+                    "status": "rejected",
+                    "rail": "jobs.batch",
+                    "escrow": "not_opened",
+                    "settlement": "not_applicable",
+                    "receipt": "not_applicable",
+                },
+                "error": error_codes.make_error(
+                    error_codes.INPUT_SCHEMA_VIOLATION,
+                    (
+                        f"atomic=true and {len(invalid_jobs)} of "
+                        f"{len(body.jobs)} job(s) failed preflight; no "
+                        "escrow opened, no jobs enqueued."
+                    ),
+                    {
+                        "atomic": True,
+                        "invalid_job_count": len(invalid_jobs),
+                        "bad_indices": [j["index"] for j in invalid_jobs],
+                    },
+                ),
+            },
+        )
+
     if not resolved:
         # Same body shape as the partial-success response so callers can use
         # one parser regardless of how many jobs survived. Status stays 422

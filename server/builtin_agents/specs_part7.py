@@ -39,7 +39,11 @@ def load_builtin_specs_part7() -> list[dict]:
             "is_featured": True,
             "cacheable": True,
             "category": "Research",
-            "runtime_requirements": ["web_search agent", "httpx"],
+            # H-7 (audit 2026-05-19): docs_grounder synthesises with an
+            # LLM; declare it so the platform-derived llm_used field is
+            # honest. Pre-fix the agent emitted llm_used: false while
+            # producing obviously-LLM citations + summaries.
+            "runtime_requirements": ["web_search agent", "httpx", "llm provider"],
             "tooling_kind": "live_fetch_plus_llm",
             "stability_tier": "beta",
             "codex_recommended": True,
@@ -425,7 +429,12 @@ def load_builtin_specs_part7() -> list[dict]:
             "is_featured": True,
             "cacheable": False,
             "category": "Developer Tools",
-            "runtime_requirements": ["python3", "subprocess (stdlib)"],
+            # H-7 (audit 2026-05-19): ci_failure_reproducer hedges with
+            # LLM-style language ("it's difficult to provide a more
+            # specific diagnosis…") because it synthesises with an LLM
+            # alongside the sandbox run. Declaring the dependency makes
+            # the response's llm_used field honest.
+            "runtime_requirements": ["python3", "subprocess (stdlib)", "llm provider"],
             "tooling_kind": "sandbox_execution",
             "stability_tier": "beta",
             "codex_recommended": True,
