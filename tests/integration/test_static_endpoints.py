@@ -43,3 +43,9 @@ def test_legacy_openapi_json_returns_spec(client):
     assert resp.status_code == 200, resp.text
     assert resp.headers["content-type"].startswith("application/json")
     assert resp.json()["openapi"].startswith("3.")
+
+
+def test_static_assets_are_rate_limit_exempt():
+    from core import rate_limit
+
+    assert rate_limit.is_path_exempt("/assets/index-abc123.js")

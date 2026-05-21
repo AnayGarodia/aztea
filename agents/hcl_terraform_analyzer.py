@@ -26,12 +26,13 @@ Output:
   }
 
 OWNS: ingestion of raw HCL into a tempdir + invocation of ``checkov -d`` +
-      shape of its JSON output.
+      shape of its JSON output; limited static fallback when checkov is absent.
 NOT OWNS: plan-level analysis (terraform_plan_analyzer covers
           ``terraform plan -json``), CDK/Pulumi, cost estimation.
 INVARIANTS:
-  * checkov is invoked from the project venv; if absent, the agent
-    returns ``tool_unavailable`` with refund.
+  * checkov is invoked from the project venv when present.
+  * If checkov is absent, the agent returns a clearly labelled limited
+    fallback result rather than a raw infrastructure failure.
   * Tempdir is removed even on exception.
 """
 
@@ -40,6 +41,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -52,6 +54,32 @@ _LOG = logging.getLogger(__name__)
 
 _MAX_HCL_CHARS = 200_000
 _CHECKOV_TIMEOUT_S = 60
+_STATIC_RULES = (
+    {
+        "pattern": re.compile(r"(?is)resource\s+\"aws_security_group_rule\".*?cidr_blocks\s*=\s*\[\s*\"0\.0\.0\.0/0\"\s*\].*?from_port\s*=\s*22"),
+        "check_id": "AZTEA_HCL_001",
+        "check_name": "SSH exposed to the public internet",
+        "severity": "high",
+    },
+    {
+        "pattern": re.compile(r"(?is)resource\s+\"aws_s3_bucket_public_access_block\".*?block_public_acls\s*=\s*false"),
+        "check_id": "AZTEA_HCL_002",
+        "check_name": "S3 public ACL block disabled",
+        "severity": "high",
+    },
+    {
+        "pattern": re.compile(r"(?is)resource\s+\"aws_db_instance\".*?publicly_accessible\s*=\s*true"),
+        "check_id": "AZTEA_HCL_003",
+        "check_name": "Database instance publicly accessible",
+        "severity": "critical",
+    },
+    {
+        "pattern": re.compile(r"(?is)resource\s+\"aws_s3_bucket\".*?acl\s*=\s*\"public-read\""),
+        "check_id": "AZTEA_HCL_004",
+        "check_name": "S3 bucket uses public-read ACL",
+        "severity": "high",
+    },
+)
 _DEFAULT_SEVERITY_MAP = {
     "LOW": "low",
     "MEDIUM": "medium",
@@ -153,6 +181,44 @@ def _normalize_str_list(value: Any, field: str) -> list[str]:
     return out
 
 
+def _static_fallback_scan(hcl_content: str) -> dict[str, Any]:
+    """Run a tiny local rule set when checkov is absent so callers get signal."""
+    findings: list[dict[str, Any]] = []
+    for rule in _STATIC_RULES:
+        for match in rule["pattern"].finditer(hcl_content):
+            start_line = hcl_content.count("\n", 0, match.start()) + 1
+            end_line = hcl_content.count("\n", 0, match.end()) + 1
+            findings.append(
+                {
+                    "check_id": rule["check_id"],
+                    "check_name": rule["check_name"],
+                    "severity": rule["severity"],
+                    "resource": "unknown",
+                    "file_line_range": [start_line, end_line],
+                    "guideline": None,
+                }
+            )
+    severity_counts: dict[str, int] = {
+        "critical": 0, "high": 0, "medium": 0, "low": 0,
+    }
+    for finding in findings:
+        severity = str(finding["severity"])
+        severity_counts[severity] = severity_counts.get(severity, 0) + 1
+    return {
+        "tool": "aztea-static-hcl-fallback",
+        "tool_version": None,
+        "passed_count": 0,
+        "failed_count": len(findings),
+        "findings": findings,
+        "severity_counts": severity_counts,
+        "summary": (
+            "checkov is not installed on this executor, so Aztea ran a "
+            f"limited built-in HCL rule set: {len(findings)} finding(s)."
+        ),
+        "warning": "Install checkov on the worker for the full policy corpus.",
+    }
+
+
 def run(payload: dict) -> dict:
     """Run checkov over a single HCL string and return structured findings."""
     if not isinstance(payload, dict):
@@ -176,14 +242,7 @@ def run(payload: dict) -> dict:
         return _err("hcl_terraform_analyzer.invalid_options", str(exc))
     available, version = _checkov_available()
     if not available:
-        return _err(
-            "hcl_terraform_analyzer.tool_unavailable",
-            "checkov is not installed on this executor. The runtime image "
-            "ships it via `pip install -r requirements.txt` (checkov>=3.2.0); "
-            "if you're seeing this error in prod, the worker venv is stale — "
-            "redeploy or run `pip install checkov>=3.2.0` on the worker. "
-            "The call was not billed.",
-        )
+        return _static_fallback_scan(hcl_content)
     tmpdir = tempfile.mkdtemp(prefix="aztea-hcl-")
     try:
         hcl_path = os.path.join(tmpdir, "main.tf")

@@ -65,6 +65,7 @@ SCOPE_ANON = "anon"
 EXEMPT_PATH_PREFIXES: frozenset[str] = frozenset({
     "/health",
     "/metrics",
+    "/assets",
     "/api/docs",
     "/api/redoc",
     "/api/openapi.json",

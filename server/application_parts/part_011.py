@@ -1262,6 +1262,22 @@ def wallet_set_daily_spend_limit(
 
 
 @app.post(
+    "/wallets/me/daily-limit",
+    response_model=core_models.WalletDailySpendLimitResponse,
+    responses=_error_responses(400, 401, 403, 429, 500),
+    tags=["Wallets"],
+    summary="Alias for /wallets/me/daily-spend-limit.",
+)
+@limiter.limit("20/minute")
+def wallet_set_daily_limit_alias(
+    request: Request,
+    body: core_models.WalletDailySpendLimitRequest,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> core_models.WalletDailySpendLimitResponse:
+    return wallet_set_daily_spend_limit(request=request, body=body, caller=caller)
+
+
+@app.post(
     "/wallets/me/session-budget",
     response_model=core_models.WalletSessionBudgetResponse,
     responses=_error_responses(400, 401, 403, 429, 500),

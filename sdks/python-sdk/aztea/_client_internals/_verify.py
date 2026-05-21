@@ -21,6 +21,11 @@ def verify_job(client: "AzteaClient", job_id: str) -> JSONObject:
     agent_did = str(signature_payload.get("agent_did") or "").strip()
     signature_b64 = str(signature_payload.get("signature") or "").strip()
     output_hash = str(signature_payload.get("output_hash") or "").strip()
+    signature_alg = str(
+        signature_payload.get("alg")
+        or signature_payload.get("signature_alg")
+        or ""
+    )
     if not (agent_did and signature_b64 and output_hash):
         return {
             "verified": False,
@@ -34,21 +39,45 @@ def verify_job(client: "AzteaClient", job_id: str) -> JSONObject:
             "verification_error": f"could not parse agent_id from did {agent_did!r}",
             "agent_did": agent_did,
         }
-    try:
-        job_payload = client.get_job(job_id)
-    except APIError as exc:
-        return {
-            "verified": False,
-            "verification_error": f"job output unavailable: {exc}",
-            "agent_did": agent_did,
-            "output_hash": output_hash,
-        }
-    # get_job returns a typed JobRecord (pydantic), not a dict. Pull
-    # output_payload via attribute access; fall back to model_dump for
-    # forward-compat (re-applies 1.5.1 fix lost in the client.py split).
-    output_payload = getattr(job_payload, "output_payload", None)
-    if output_payload is None and hasattr(job_payload, "model_dump"):
-        output_payload = job_payload.model_dump().get("output_payload")
+    output_payload = signature_payload.get("output_payload")
+    signed_payload_b64 = signature_payload.get("signed_payload_b64")
+    signed_payload_bytes: bytes | None = None
+    if isinstance(signed_payload_b64, str) and signed_payload_b64:
+        try:
+            import base64 as _b64
+
+            signed_payload_bytes = _b64.b64decode(signed_payload_b64)
+        except Exception:
+            signed_payload_bytes = None
+    if signed_payload_bytes is None and output_payload is None:
+        try:
+            full_payload = client.get_job_full_output(job_id)
+            output_payload = full_payload.get("output_payload")
+            if output_payload is None and isinstance(full_payload.get("chunk"), str):
+                try:
+                    import json as _json
+
+                    output_payload = _json.loads(full_payload["chunk"])
+                except Exception:
+                    output_payload = None
+        except APIError:
+            output_payload = None
+    if signed_payload_bytes is None and output_payload is None:
+        try:
+            job_payload = client.get_job(job_id)
+        except APIError as exc:
+            return {
+                "verified": False,
+                "verification_error": f"job output unavailable: {exc}",
+                "agent_did": agent_did,
+                "output_hash": output_hash,
+            }
+        # get_job returns a typed JobRecord (pydantic), not a dict. Pull
+        # output_payload via attribute access; fall back to model_dump for
+        # forward-compat (re-applies 1.5.1 fix lost in the client.py split).
+        output_payload = getattr(job_payload, "output_payload", None)
+        if output_payload is None and hasattr(job_payload, "model_dump"):
+            output_payload = job_payload.model_dump().get("output_payload")
     try:
         import base64
         import json
@@ -119,27 +148,15 @@ def verify_job(client: "AzteaClient", job_id: str) -> JSONObject:
         except Exception:
             signature_bytes = base64.b64decode(signature_b64 + sig_pad)
         pk = Ed25519PublicKey.from_public_bytes(public_key_bytes)
-        # Audit 2026-05-16 #5: v2 receipts bind (job_id, agent_id,
-        # output_hash). Reconstruct the sigil before verifying when the
-        # signature payload advertises the v2 scheme. Pre-v2 receipts
-        # still verify via the legacy raw-output path.
-        signature_alg = str(signature_payload.get("signature_alg") or "")
+        # v2 receipts sign the sigil {v, job_id, agent_id, output_hash}, not
+        # the raw output payload. Prefer the server's embedded canonical bytes
+        # for v1; reconstruct v2 locally so CLI verification matches MCP.
         if signature_alg == "Ed25519+aztea-output-sig/2":
-            import hashlib as _hashlib
-
-            output_hash_v2 = _hashlib.sha256(
-                json.dumps(
-                    output_payload,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    ensure_ascii=False,
-                ).encode("utf-8")
-            ).hexdigest()
             sigil = {
                 "v": "aztea/output-sig/2",
                 "job_id": str(signature_payload.get("job_id") or job_id),
-                "agent_id": str(signature_payload.get("agent_id") or ""),
-                "output_hash": output_hash_v2,
+                "agent_id": str(signature_payload.get("agent_id") or agent_id),
+                "output_hash": output_hash,
             }
             signed_bytes = json.dumps(
                 sigil,
@@ -147,6 +164,8 @@ def verify_job(client: "AzteaClient", job_id: str) -> JSONObject:
                 separators=(",", ":"),
                 ensure_ascii=False,
             ).encode("utf-8")
+        elif signed_payload_bytes is not None:
+            signed_bytes = signed_payload_bytes
         else:
             signed_bytes = json.dumps(
                 output_payload,
@@ -169,4 +188,5 @@ def verify_job(client: "AzteaClient", job_id: str) -> JSONObject:
         "output_hash": output_hash,
         "signed_at": signature_payload.get("signed_at"),
         "verification_method": verification_method,
+        "alg": signature_alg or signature_payload.get("alg"),
     }

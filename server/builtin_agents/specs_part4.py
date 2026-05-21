@@ -447,7 +447,7 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
                     "console_messages": {"type": "array", "items": {"type": "string"}},
                     "execution_time_ms": {"type": "integer"},
                 },
-                required=["url", "title", "html", "screenshot_artifact"],
+                required=["url", "title", "screenshot_artifact"],
             ),
             "output_examples": [
                 {

@@ -131,5 +131,8 @@ class RegistryNamespace(_NamespaceBase):
 
 
 class DisputesNamespace(_NamespaceBase):
+    def __call__(self) -> "DisputesNamespace":
+        return self
+
     def settlement_trace(self, job_id: str) -> JSONObject:
         return self._client._request_json("GET", f"/ops/jobs/{job_id}/settlement-trace")

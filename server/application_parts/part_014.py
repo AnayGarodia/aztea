@@ -1578,7 +1578,7 @@ def _looks_like_api_client(request: Request) -> bool:
     return "application/json" in accept and "text/html" not in accept
 
 
-@app.get("/{full_path:path}", include_in_schema=False)
+@app.api_route("/{full_path:path}", methods=["GET", "HEAD"], include_in_schema=False)
 def spa_fallback(full_path: str, request: Request) -> _SpaFileResponse:
     """Serve static assets or the React SPA shell for any non-API path.
 

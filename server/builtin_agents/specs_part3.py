@@ -452,8 +452,10 @@ def _hcl_terraform_analyzer_spec() -> dict[str, Any]:
             "HCL (not ``terraform plan`` output). Runs checkov in a "
             "sandbox tempdir and returns CIS/PCI/HIPAA findings with "
             "check ids, severities, resource paths, file line ranges, "
-            "and guideline URLs. Distinct from terraform_plan_analyzer, "
-            "which consumes ``terraform plan -json`` output."
+            "and guideline URLs. If checkov is missing, returns a labelled "
+            "limited static fallback instead of an infrastructure failure. "
+            "Distinct from terraform_plan_analyzer, which consumes "
+            "``terraform plan -json`` output."
         ),
         "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_HCL_TERRAFORM_ANALYZER_AGENT_ID],
         "price_per_call_usd": 0.02,

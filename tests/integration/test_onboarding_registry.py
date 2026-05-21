@@ -790,3 +790,27 @@ def test_wallet_daily_spend_limit_blocks_new_job_charges(client):
     assert third.status_code == 201, third.text
 
 
+def test_wallet_daily_limit_alias_sets_same_cap(client):
+    caller = _register_user()
+
+    set_limit = client.post(
+        "/wallets/me/daily-limit",
+        headers=_auth_headers(caller["raw_api_key"]),
+        json={"daily_spend_limit_cents": 123},
+    )
+    assert set_limit.status_code == 200, set_limit.text
+    assert set_limit.json()["daily_spend_limit_cents"] == 123
+
+
+def test_stop_when_accepts_documented_any_wrapper():
+    from core.models.job_requests import JobCreateRequest
+
+    req = JobCreateRequest.model_validate(
+        {
+            "agent_id": "agent-1",
+            "stop_when": {"any": [{"label": "done", "expr": "done == `true`"}]},
+        }
+    )
+    assert req.stop_when is not None
+    assert req.stop_when[0].label == "done"
+

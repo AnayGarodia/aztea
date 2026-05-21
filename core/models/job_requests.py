@@ -260,6 +260,19 @@ class JobCreateRequest(BaseModel):
             raise ValueError("communication_channel must be <= 128 characters.")
         return text
 
+    @field_validator("stop_when", mode="before")
+    @classmethod
+    def stop_when_accepts_documented_wrappers(cls, value):
+        """Accept the documented ``{"any": [...]}`` wrapper as list syntax."""
+        if value is None or isinstance(value, list):
+            return value
+        if isinstance(value, dict):
+            for key in ("any", "all", "predicates"):
+                nested = value.get(key)
+                if isinstance(nested, list):
+                    return nested
+        return value
+
 
 class JobBatchCreateRequest(BaseModel):
     intent: str | None = Field(
