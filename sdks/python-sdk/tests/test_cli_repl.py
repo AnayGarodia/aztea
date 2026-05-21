@@ -345,6 +345,28 @@ def test_email_step_advances_to_password(monkeypatch):
     assert lm._collected_email[0] == "alice@example.com"
 
 
+def test_login_password_step_renders_captured_email(monkeypatch):
+    """Regression guard: prompt_toolkit fragment text must be strings.
+
+    A previous build passed the _email_caption function object as a
+    FormattedText fragment body. The modal opened, but prompt_toolkit
+    crashed during preferred-width calculation with "expected str
+    instance, function found" as soon as the password step rendered.
+    """
+    from prompt_toolkit.formatted_text.utils import fragment_list_to_text
+
+    lm = _fresh_modal_module(monkeypatch)
+    modal_float, _ = lm.build_login_modal(lambda: None)
+    lm.show_login_modal()
+    lm._modal_step[0] = lm.STEP_PASSWORD
+    lm._collected_email[0] = "alice@example.com"
+
+    caption = fragment_list_to_text(lm._email_caption_text())
+    assert "alice@example.com" in caption
+    frame = modal_float.content.content
+    assert frame.preferred_width(120).preferred > 0
+
+
 def test_email_step_rejects_empty_with_hint(monkeypatch):
     lm = _fresh_modal_module(monkeypatch)
     lm.show_login_modal()
