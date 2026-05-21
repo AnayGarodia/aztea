@@ -384,11 +384,7 @@ def build_login_modal(
     password_step = ConditionalContainer(
         HSplit([
             Window(
-                FormattedTextControl(FormattedText([
-                    ("italic #948D81", "  Signing in as: "),
-                    ("italic", _email_caption),
-                    ("", "\n"),
-                ])),
+                FormattedTextControl(_email_caption_text),
                 height=2,
             ),
             password_field,
@@ -475,3 +471,12 @@ def build_login_modal(
 def _email_caption():
     """Render the captured email (or a placeholder) for the password step."""
     return _collected_email[0] or "(no email captured)"
+
+
+def _email_caption_text():
+    """Return prompt_toolkit fragments for the dynamic password-step caption."""
+    return FormattedText([
+        ("italic #948D81", "  Signing in as: "),
+        ("italic", _email_caption()),
+        ("", "\n"),
+    ])
