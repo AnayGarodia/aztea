@@ -360,9 +360,13 @@ def run(payload: dict) -> dict:
     stats_raw = _extract_stats(parsed)
     warnings = _collect_warnings(parsed)
 
-    # --- Breaking-change detection (only when base_spec provided) ---
+    # --- Breaking-change detection (only when previous_spec provided) ---
+    # The published input schema declares the field as `previous_spec`; older
+    # callers also passed `base_spec`. Accept both, prefer the documented name.
+    # Prior to 2026-05-20 the code only looked at `base_spec` so callers using
+    # the documented field silently got back `breaking_changes: []`.
     breaking_changes: list[dict] = []
-    raw_base = payload.get("base_spec")
+    raw_base = payload.get("previous_spec") or payload.get("base_spec")
     if isinstance(raw_base, str) and raw_base.strip():
         base_parsed, base_err = _parse_spec(raw_base, fmt)
         if base_err or base_parsed is None:

@@ -165,7 +165,28 @@ def load_builtin_specs_part10() -> list[dict[str, Any]]:
                     },
                     "input": {
                         "type": "object",
-                        "description": "Action-specific payload (see action docs).",
+                        "description": (
+                            "Action-specific payload. Common keys: "
+                            "`source` = {kind: 'git'|'tarball'|'raw_files', url, ref, "
+                            "shallow, submodules} for sandbox_start; "
+                            "`boot` = {strategy: 'auto'|'dockerfile'|'compose'|'devcontainer'|"
+                            "'custom_commands', custom_commands: [...]} for sandbox_start; "
+                            "`network` = {egress: 'isolated'|'allowlist'|'open', "
+                            "egress_allowlist: [hosts]} — git sources default to a "
+                            "curated allowlist (github.com, pypi.org, npm) when not set; "
+                            "`cmd` = string command for sandbox_exec; "
+                            "`user` = string container UID/name for sandbox_exec (defaults "
+                            "to the hardened non-root user); "
+                            "`snapshot_id` = string for sandbox_restore / sandbox_fork; "
+                            "`workdir`, `env`, `timeout_s` honoured by every exec verb."
+                        ),
+                    },
+                    "sandbox_id": {
+                        "type": "string",
+                        "description": (
+                            "Required for every action except sandbox_start. "
+                            "Returned by sandbox_start in `sandbox_id`."
+                        ),
                     },
                     "workspace_id": {
                         "type": "string",

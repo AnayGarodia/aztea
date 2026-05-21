@@ -322,6 +322,41 @@ def _fallback_diagnosis(failure_type: str, stderr: str) -> tuple[str, str]:
     return _STATIC_DIAGNOSES.get(failure_type, _UNKNOWN_DIAGNOSIS)
 
 
+# When the failing command's own output already tells the full story, hitting
+# an LLM only buys hedging language. We skip the LLM and return a deterministic
+# one-liner derived from the offending stderr/stdout fragment. Caller pays less
+# AND gets a cleaner answer. Conservative — only matches well-known patterns
+# whose stderr is self-explanatory; flaky/dep/timeout failures still go to LLM
+# because there the LLM genuinely adds context the raw output doesn't.
+_SELF_EXPLANATORY_PATTERNS = (
+    # Python assertion / exception with the inline value:
+    re.compile(r"\bAssertionError\b[:\s]*.{0,200}"),
+    # pytest-style: "assert X == Y" line
+    re.compile(r"^\s*assert\s+.{1,200}", re.MULTILINE),
+    # JS-style assertion with explicit values
+    re.compile(r"\bAssertionError\b:\s*expected\s+.{0,200}"),
+)
+
+
+def _is_self_explanatory(failure_type: str, stdout: str, stderr: str) -> str | None:
+    """Return the matching fragment if the failure speaks for itself, else None.
+
+    Only triggers on `code_error` — for `dependency_error`, `flaky_test`,
+    `timeout`, `env_error` etc., the LLM still earns its keep because the
+    diagnosis depends on context the raw output doesn't carry.
+    """
+    if failure_type != _FT_CODE:
+        return None
+    haystack = (stderr or "") + "\n" + (stdout or "")
+    for pat in _SELF_EXPLANATORY_PATTERNS:
+        match = pat.search(haystack)
+        if match:
+            fragment = match.group(0).strip().splitlines()[-1].strip()
+            if fragment:
+                return fragment[:200]
+    return None
+
+
 def _llm_diagnosis(
     failing_command: str, stderr: str, failure_type: str
 ) -> tuple[str, str]:
@@ -543,7 +578,18 @@ def _diagnose_failure(
         rerun = _run_command(failing_command, tmpdir, per_cmd_timeout)
         if rerun["exit_code"] == 0:
             failure_type = _FT_FLAKY
-    diagnosis, suggested_fix = _llm_diagnosis(failing_command, stderr_raw, failure_type)
+    # Short-circuit the LLM when the failure speaks for itself — sparing the
+    # caller from the hedging-language tax. Only matches obvious AssertionError-
+    # style failures; everything else still goes through the LLM path.
+    self_explanatory = _is_self_explanatory(failure_type, stdout_raw, stderr_raw)
+    if self_explanatory is not None:
+        diagnosis = f"Assertion failed: {self_explanatory}"
+        suggested_fix = (
+            "The failing assertion is shown above. Fix the code or the test "
+            "so the expected and actual values match."
+        )
+    else:
+        diagnosis, suggested_fix = _llm_diagnosis(failing_command, stderr_raw, failure_type)
     return {
         "failure_type": failure_type,
         "failing_command": failing_command,

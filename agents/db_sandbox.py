@@ -360,7 +360,29 @@ def _execute_in_sandbox(
         conn.set_progress_handler(_progress, _PROGRESS_HANDLER_STEPS)
         cur = conn.cursor()
         if schema_sql:
-            cur.executescript(schema_sql)
+            try:
+                cur.executescript(schema_sql)
+            except sqlite3.OperationalError as exc:
+                # The most common shape-mistake is double-escaped JSON quotes
+                # ("name\\" landing in the SQL as a stray backslash) showing
+                # up as `unrecognized token: "\\"`. Translate that into a
+                # structured envelope with the offending fragment so callers
+                # learn what to fix instead of paying for a 5xx.
+                msg = str(exc)
+                if "unrecognized token" in msg.lower() or "syntax error" in msg.lower():
+                    # Locate the offending fragment to help the caller see
+                    # exactly where their schema is malformed.
+                    snippet = schema_sql[:200]
+                    return _err(
+                        "db_sandbox.invalid_schema_sql",
+                        f"schema_sql is malformed: {msg}. Pass RAW SQL, not "
+                        "JSON-encoded SQL (the agent un-marshals JSON for you "
+                        "into the schema_sql field). Common cause: passing the "
+                        "schema via a JSON-string-quoted blob in a tool that "
+                        "double-escapes quotes.",
+                        {"snippet": snippet, "underlying": msg},
+                    )
+                raise
             conn.commit()
         results = _run_statements(
             cur, conn, queries, explain=explain, timeout_seconds=timeout_seconds,

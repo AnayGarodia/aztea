@@ -178,17 +178,48 @@ def _make_stripe_signature(payload_bytes: bytes, secret: str, timestamp: int) ->
     return f"t={timestamp},v1={mac.hexdigest()}"
 
 
+def _echo_verify(payload_bytes: bytes, signature_header: str, webhook_secret: str) -> int:
+    """In-process demo: verify the Stripe-Signature ourselves and return 200/400.
+
+    Exists so callers without a public Stripe handler can still see the agent
+    do its job. Mirrors how Stripe-side verification works: parse the header,
+    compute HMAC-SHA256 over `${t}.${payload}` with the secret (minus `whsec_`),
+    compare in constant time. Returns 200 on match, 400 on mismatch.
+    """
+    parts = dict(
+        (k.strip(), v.strip())
+        for k, v in (
+            piece.split("=", 1) for piece in signature_header.split(",") if "=" in piece
+        )
+    )
+    t = parts.get("t", "")
+    v1 = parts.get("v1", "")
+    if not t or not v1:
+        return 400
+    secret = webhook_secret[len("whsec_"):] if webhook_secret.startswith("whsec_") else webhook_secret
+    signed = f"{t}.".encode() + payload_bytes
+    expected = hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
+    return 200 if hmac.compare_digest(expected, v1) else 400
+
+
 def _fire(
     session: requests.Session,
     url: str,
     payload_bytes: bytes,
     signature_header: str,
     timeout: float,
+    webhook_secret: str = "",
 ) -> tuple[int | None, int, str | None]:
     """POST one signed webhook payload.
 
     Returns (http_status_or_None, response_time_ms, error_message_or_None).
     """
+    if url == _ECHO_SENTINEL:
+        # Demo path: no outbound HTTP. Verify the signature locally and
+        # return the corresponding status code. Response time is negligible
+        # (microseconds); we report 1ms so downstream "took 0ms" assertions
+        # don't trigger.
+        return _echo_verify(payload_bytes, signature_header, webhook_secret), 1, None
     start = time.monotonic()
     try:
         resp = session.post(
@@ -256,7 +287,7 @@ def _test_valid_sig(
 ) -> tuple[dict[str, Any], int | None, bool]:
     """Side-effect: send a correctly signed event; returns ``(result, status, passed)``."""
     sig = _make_stripe_signature(payload_bytes, secret, now_ts)
-    status, elapsed_ms, net_err = _fire(session, url, payload_bytes, sig, timeout)
+    status, elapsed_ms, net_err = _fire(session, url, payload_bytes, sig, timeout, webhook_secret=secret)
     name = f"{event_type} — valid signature"
     if net_err and status is None:
         return (_result(
@@ -275,10 +306,12 @@ def _test_valid_sig(
 def _test_invalid_sig(
     session: requests.Session, url: str, event_type: str,
     payload_bytes: bytes, now_ts: int, timeout: float,
+    caller_secret: str = "",
 ) -> tuple[dict[str, Any], bool | None]:
     """Run the invalid-signature test.  Returns (result_dict, passed_or_None_if_network_error)."""
     bad_sig = _make_stripe_signature(payload_bytes, _WRONG_SECRET_FIXTURE, now_ts)
-    status, elapsed_ms, net_err = _fire(session, url, payload_bytes, bad_sig, timeout)
+    # caller_secret only matters for the echo demo path; real HTTP ignores it.
+    status, elapsed_ms, net_err = _fire(session, url, payload_bytes, bad_sig, timeout, webhook_secret=caller_secret)
     name = f"{event_type} — invalid signature"
 
     if net_err and status is None:
@@ -313,7 +346,7 @@ def _test_replay(
 ) -> tuple[dict[str, Any], bool]:
     """Re-send the identical signed event and check for idempotency via status divergence."""
     replay_sig = _make_stripe_signature(payload_bytes, secret, now_ts)
-    replay_status, replay_ms, replay_err = _fire(session, url, payload_bytes, replay_sig, timeout)
+    replay_status, replay_ms, replay_err = _fire(session, url, payload_bytes, replay_sig, timeout, webhook_secret=secret)
     name = f"{event_type} — replay (idempotency)"
 
     if replay_err and replay_status is None:
@@ -356,12 +389,24 @@ def _parse_event_types(raw_event_types: Any) -> list[str] | dict:
     return cleaned
 
 
+# Magic sentinel for the in-process demo path. Callers without a public
+# Stripe handler can pass `endpoint_url="aztea://echo"` to exercise the
+# signature-verification pipeline against an in-process handler that
+# (a) validates the Stripe-Signature header against the supplied secret
+# and (b) returns 200 on a valid signature, 400 on an invalid one.
+# Documented as "demo only — does not exercise your handler logic".
+_ECHO_SENTINEL = "aztea://echo"
+
+
 def _validate_endpoint_url(endpoint_url: str) -> str | dict:
     """Pure-ish: SSRF-validate the endpoint URL with a hint when callers want localhost.
 
     Why: this agent's normal use case is testing local/staging handlers; without
     a hint the operator has no obvious knob to permit private targets.
     """
+    # Echo demo: bypass SSRF entirely (no outbound HTTP happens).
+    if endpoint_url.strip().lower() == _ECHO_SENTINEL:
+        return _ECHO_SENTINEL
     try:
         return validate_outbound_url(endpoint_url, "endpoint_url")
     except ValueError as exc:
@@ -477,6 +522,7 @@ def _run_event_suite(
     )
     r_invalid, invalid_ok = _test_invalid_sig(
         session, validated_url, event_type, payload_bytes, now_ts, timeout,
+        caller_secret=webhook_secret,
     )
     r_replay, replay_ok = _test_replay(
         session, validated_url, event_type, payload_bytes,

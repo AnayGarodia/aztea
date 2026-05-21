@@ -64,9 +64,18 @@ _DEFAULT_MAX_PAGES = 25
 _HARD_MAX_PAGES = 50
 _DEFAULT_MAX_DEPTH = 2
 _HARD_MAX_DEPTH = 4
-_REQUEST_TIMEOUT_S = 8.0
+# 2026-05-20: bumped from 8s → 15s. Real-world docs sites with slow HTTPS
+# handshakes (chained intermediates, OCSP checks, slow first-byte) routinely
+# took 9–12s for the first request and our 8s budget tripped them as broken
+# links. 15s still under the 60s wall-clock budget.
+_REQUEST_TIMEOUT_S = 15.0
 _WALL_CLOCK_BUDGET_S = 60.0
 _CONCURRENCY = 6
+# 2026-05-20: robots.txt precheck. Sites that block crawlers (returning 403
+# or 429) were being counted as broken links. We now fetch /robots.txt up
+# front; URLs disallowed for our user-agent are recorded under
+# `robots_disallowed` rather than `broken_links`.
+_ROBOTS_TXT_TIMEOUT_S = 5.0
 _MAX_BROKEN_TO_REPORT = 100
 _MAX_REDIRECT_HOPS = 6
 _MAX_HTML_BYTES = 1_500_000
@@ -290,6 +299,7 @@ def _build_crawl_result(
     *, seed_url: str, origin: str, pages_crawled: int, links_checked: int,
     broken: list[dict[str, Any]], redirects: list[dict[str, Any]],
     mixed: list[dict[str, str]], missing_alt: list[dict[str, str]],
+    robots_disallowed: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Pure: shape accumulator state into the public crawl response envelope."""
     return {
@@ -301,6 +311,7 @@ def _build_crawl_result(
         "redirect_chains": redirects[:_REPORT_LIST_CAP],
         "mixed_content": mixed[:_REPORT_LIST_CAP],
         "missing_alt_text": missing_alt[:_REPORT_LIST_CAP],
+        "robots_disallowed": (robots_disallowed or [])[:_REPORT_LIST_CAP],
         "summary": {
             "broken_count": len(broken),
             "redirects_count": len(redirects),
@@ -322,6 +333,8 @@ def _new_crawl_state(seed_url: str) -> dict[str, Any]:
         "redirects": [],
         "mixed": [],
         "missing_alt": [],
+        "robots_disallow": [],
+        "robots_disallowed_hits": [],
         "pages_crawled": 0,
         "seed_is_https": seed_url.lower().startswith("https://"),
         "deadline": time.monotonic() + _WALL_CLOCK_BUDGET_S,
@@ -342,6 +355,12 @@ async def _crawl_loop(
         if url in state["visited_pages"]:
             continue
         state["visited_pages"].add(url)
+        # robots.txt gate: skip URLs the site explicitly disallows. Recording
+        # under robots_disallowed_hits separates "site refused to be crawled"
+        # from "link is broken" — they're different signals.
+        if _url_is_disallowed(url, state["robots_disallow"]):
+            state["robots_disallowed_hits"].append({"url": url, "depth": depth})
+            continue
         state["pages_crawled"] += 1
         await _process_page(
             client, url, depth,
@@ -353,6 +372,47 @@ async def _crawl_loop(
             mixed=state["mixed"], missing_alt=state["missing_alt"],
             deadline=state["deadline"],
         )
+
+
+async def _fetch_robots_disallow(client: httpx.AsyncClient, origin: str) -> list[str]:
+    """Best-effort fetch of /robots.txt; returns disallow path prefixes for our UA.
+
+    A missing or unreachable robots.txt is treated as "no rules" — we don't
+    fail the call on a 404 (the site simply doesn't have one). Disallow rules
+    are parsed minimally: only `Disallow: <prefix>` directives under either
+    `User-agent: *` or `User-agent: <our UA>` are honoured.
+    """
+    robots_url = f"{origin.rstrip('/')}/robots.txt"
+    try:
+        resp = await client.get(robots_url, timeout=_ROBOTS_TXT_TIMEOUT_S)
+    except (httpx.HTTPError, OSError):
+        return []
+    if resp.status_code != 200 or not resp.text:
+        return []
+    disallows: list[str] = []
+    applicable = False
+    for raw_line in resp.text.splitlines():
+        line = raw_line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        key = key.strip().lower()
+        value = value.strip()
+        if key == "user-agent":
+            applicable = value == "*" or _USER_AGENT.split("/")[0].lower() in value.lower()
+        elif key == "disallow" and applicable and value:
+            disallows.append(value)
+    return disallows
+
+
+def _url_is_disallowed(url: str, disallow_prefixes: list[str]) -> bool:
+    """Pure: True if the URL path starts with any disallowed prefix."""
+    if not disallow_prefixes:
+        return False
+    path = urlparse(url).path or "/"
+    return any(path.startswith(prefix) for prefix in disallow_prefixes)
 
 
 async def _crawl(
@@ -371,6 +431,7 @@ async def _crawl(
         headers={"User-Agent": _USER_AGENT, "Accept": "text/html,*/*;q=0.8"},
         limits=limits,
     ) as client:
+        state["robots_disallow"] = await _fetch_robots_disallow(client, state["origin"])
         await _crawl_loop(
             client, state,
             seed_url=seed_url, max_pages=max_pages, max_depth=max_depth,
@@ -381,6 +442,7 @@ async def _crawl(
         pages_crawled=state["pages_crawled"], links_checked=len(state["links_checked"]),
         broken=state["broken"], redirects=state["redirects"],
         mixed=state["mixed"], missing_alt=state["missing_alt"],
+        robots_disallowed=state.get("robots_disallowed_hits", []),
     )
 
 

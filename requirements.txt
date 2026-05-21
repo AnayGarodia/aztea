@@ -61,3 +61,14 @@ jmespath>=1.0.0
 coverage>=7.0.0
 pytest>=8.0.0
 checkov>=3.2.0
+# 2026-05-20: quant_patch_validator uses Hypothesis to generate adversarial
+# numeric inputs for differential fuzzing. Was previously dev-only, but the
+# agent ships in the curated public catalog so prod must have it too.
+hypothesis>=6.100
+# 2026-05-20: jwt_validator imports `jwt` (PyJWT) at the verify call site.
+# Was relying on transitive resolution; making the dep explicit so a future
+# dependency tree shuffle doesn't break the agent.
+PyJWT>=2.8
+# 2026-05-20: openapi_validator imports openapi_spec_validator to validate
+# OpenAPI 3.x specs. Same explicit-dep rationale as PyJWT above.
+openapi-spec-validator>=0.7

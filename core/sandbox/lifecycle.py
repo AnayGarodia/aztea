@@ -82,7 +82,9 @@ def start(payload: dict[str, Any]) -> dict[str, Any]:
     det_env, det_status = determinism_env(clock_cfg)
     compose_env = compose_network_env(network_cfg)
     env_vars: dict[str, str] = {**compose_env, **inline_env, **secret_env, **det_env}
-    network_argv, network_resolved = build_network_argv(sandbox_id, network_cfg)
+    network_argv, network_resolved = build_network_argv(
+        sandbox_id, network_cfg, source_kind=str(source.get("kind") or "").strip().lower()
+    )
     # Resolve isolation backend BEFORE boot so a refused backend (e.g.
     # firecracker on a docker-only host) surfaces an immediate error
     # instead of partially provisioned state.

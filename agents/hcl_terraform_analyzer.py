@@ -178,8 +178,11 @@ def run(payload: dict) -> dict:
     if not available:
         return _err(
             "hcl_terraform_analyzer.tool_unavailable",
-            "checkov is not installed on this executor. Install with "
-            "`pip install checkov` on the worker. The call was not billed.",
+            "checkov is not installed on this executor. The runtime image "
+            "ships it via `pip install -r requirements.txt` (checkov>=3.2.0); "
+            "if you're seeing this error in prod, the worker venv is stale — "
+            "redeploy or run `pip install checkov>=3.2.0` on the worker. "
+            "The call was not billed.",
         )
     tmpdir = tempfile.mkdtemp(prefix="aztea-hcl-")
     try:
