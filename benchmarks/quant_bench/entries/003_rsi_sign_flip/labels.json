@@ -1,0 +1,10 @@
+{
+  "category": "sign_flip",
+  "source": "synthesised from common indicator-library RSI gain/loss split bugs",
+  "notes": "The most common AI bug in RSI implementations — conditional inversion. Sometimes only obvious on inputs with both up- and down-moves.",
+  "candidates": {
+    "correct.py": "correct",
+    "subtle_regression.py": "regression",
+    "broken_signature.py": "broken"
+  }
+}

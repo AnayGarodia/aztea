@@ -1,0 +1,10 @@
+{
+  "category": "unit_confusion",
+  "source": "synthesised",
+  "notes": "Risk-free rate as annual but applied per-period without dividing.",
+  "candidates": {
+    "correct.py": "correct",
+    "subtle_regression.py": "regression",
+    "broken_signature.py": "broken"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "category": "sign_flip",
+  "source": "synthesised",
+  "notes": "Drawdown defined as negative (loss); AI sometimes returns positive magnitude.",
+  "candidates": {
+    "correct.py": "correct",
+    "subtle_regression.py": "regression",
+    "broken_signature.py": "broken"
+  }
+}

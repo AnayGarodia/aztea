@@ -1,0 +1,14 @@
+"""Correct: same simple-return formula, expressed via subtraction."""
+
+from __future__ import annotations
+
+import numpy as np
+
+
+def simple_returns(prices: np.ndarray) -> np.ndarray:
+    p = np.asarray(prices, dtype=np.float64)
+    out = np.full(p.shape, np.nan, dtype=np.float64)
+    if p.size < 2:
+        return out
+    out[1:] = (p[1:] - p[:-1]) / p[:-1]
+    return out

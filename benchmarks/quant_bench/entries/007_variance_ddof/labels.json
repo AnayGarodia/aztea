@@ -1,0 +1,10 @@
+{
+  "category": "missing_factor",
+  "source": "synthesised",
+  "notes": "Biased variance (divide by N) vs unbiased (divide by N-1).",
+  "candidates": {
+    "correct.py": "correct",
+    "subtle_regression.py": "regression",
+    "broken_signature.py": "broken"
+  }
+}

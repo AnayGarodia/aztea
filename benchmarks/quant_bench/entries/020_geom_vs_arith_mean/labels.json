@@ -1,0 +1,10 @@
+{
+  "category": "semantic_api_change",
+  "source": "synthesised",
+  "notes": "Returns often need geometric mean; AI sometimes uses arithmetic.",
+  "candidates": {
+    "correct.py": "correct",
+    "subtle_regression.py": "regression",
+    "broken_signature.py": "broken"
+  }
+}

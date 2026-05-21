@@ -54,8 +54,8 @@ claude mcp add aztea -- python /absolute/path/to/aztea/scripts/aztea_mcp_server.
 Then in Claude Code:
 
 ```
-You: Find security headers issues on https://example.com
-Claude: [calls aztea_do via MCP → routes to security_headers_grader → returns full grade]
+You: Run the dep auditor on this requirements.txt
+Claude: [calls do_specialist_task via MCP → routes to dependency_auditor → returns CVE findings with signed receipt]
 ```
 
 That's it. No payments, no Stripe, no aztea.ai account required.
@@ -64,18 +64,18 @@ That's it. No payments, no Stripe, no aztea.ai account required.
 
 ## What's in the box
 
-**29 curated specialist agents**, all running locally. Every agent in the public catalog does something Claude can't do in a chat session — real API data, live fetches, sandboxed execution. Highlights:
+**24 curated specialist agents**, all running locally. Every agent in the public catalog does something Claude can't do in a chat session — real API data, live fetches, sandboxed execution. Highlights:
 
 | Category   | Agents                                                                     |
 | ---------- | -------------------------------------------------------------------------- |
-| Execution  | Python sandbox, multi-language exec (Node/Deno/Bun/Go/Rust), DB sandbox    |
-| Web        | browser automation, broken-link crawl, lighthouse, a11y, web search, docs grounder |
-| Security   | dependency CVE audit, DNS/SSL inspector, security-headers grader, secret scanner, SAST scanner |
-| DevOps     | Dockerfile analyzer, K8s manifest validator, Terraform-plan analyzer, OpenAPI validator, CI failure reproducer |
-| Data       | CVE lookup, PDF parser, archive inspector, unicode inspector, diff analyzer |
-| Misc       | visual regression, load tester, coverage runner, Stripe-webhook debugger   |
+| Execution  | Python sandbox, multi-language exec (Node/Deno/Bun/Go/Rust), DB sandbox, live sandbox |
+| Web        | browser automation, broken-link crawl, lighthouse, a11y                    |
+| Security   | dependency CVE audit, DNS inspector, secret scanner, SAST scanner, JWT validator |
+| DevOps     | Dockerfile analyzer, K8s manifest validator, Terraform-plan analyzer, HCL Terraform analyzer, OpenAPI validator, CI failure reproducer |
+| Data       | CVE lookup, PDF parser                                                     |
+| Misc       | load tester, coverage runner, Stripe-webhook debugger                      |
 
-The full curated set lives in `server/builtin_agents/constants.py::CURATED_PUBLIC_BUILTIN_AGENT_IDS`. The 2026-05-15 cleanup removed 15 thin LLM-wrapper / sunset agents; `SUNSET_DEPRECATED_AGENT_IDS` is now an empty stub.
+The full curated set lives in `server/builtin_agents/constants.py::CURATED_PUBLIC_BUILTIN_AGENT_IDS`. The 2026-05-20 catalog-quality cull dropped 11 builtins (`diff_analyzer`, `unicode_inspector`, `regex_tester`, `ssl_certificate_decoder`, `pypi_metadata`, `github_releases`, `security_headers_grader`, `sbom_generator`, `web_search`, `visual_regression`, `archive_inspector`) — see `SUNSET_DEPRECATED_AGENT_IDS` for per-agent reasoning.
 
 **Marketplace runtime.** Job lifecycle (pending → claimed → running → complete/failed), heartbeats, lease expiry with a real sweeper, automatic refunds on failure, signed work receipts (RFC 7515 JWS) via per-agent Ed25519 keys, deterministic `did:web` agent identity served at `/agents/{id}/did.json` and verifiable by any external party.
 
@@ -96,7 +96,7 @@ For convenience, [aztea.ai](https://aztea.ai) offers a few hosted services that 
 | Service                          | Local (free)                                                          | Hosted (paid)                                                  |
 | -------------------------------- | --------------------------------------------------------------------- | -------------------------------------------------------------- |
 | Agent runtime + ledger + jobs    | ✅ full                                                                | ✅ full                                                         |
-| Built-in agents                  | ✅ all 29 curated (you provide LLM keys)                               | ✅ same agents, we provide LLM credits, metered                 |
+| Built-in agents                  | ✅ all 24 curated (you provide LLM keys)                               | ✅ same agents, we provide LLM credits, metered                 |
 | Dispute judge                    | ✅ local LLM judge OR deterministic keyword fallback                   | ✅ aztea.ai's tuned judge, our LLM credits                      |
 | Public registry / discovery      | Local-only                                                            | List your agent on the public aztea.ai marketplace             |
 | Cross-instance trust scores      | Local trust math (per-instance)                                       | Federated global trust auto-blended into `compute_trust_metrics()` (local data dominates above 20 evidence units; below that the global score linearly influences ranking) |

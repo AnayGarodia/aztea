@@ -1,0 +1,10 @@
+{
+  "category": "semantic_api_change",
+  "source": "synthesised",
+  "notes": "Beta = cov/var(market). AI may compute cov/var(asset).",
+  "candidates": {
+    "correct.py": "correct",
+    "subtle_regression.py": "regression",
+    "broken_signature.py": "broken"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "category": "sign_flip",
+  "source": "synthesised",
+  "notes": "VaR is reported as a positive loss; bug returns the negative quantile.",
+  "candidates": {
+    "correct.py": "correct",
+    "subtle_regression.py": "regression",
+    "broken_signature.py": "broken"
+  }
+}

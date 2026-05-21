@@ -480,6 +480,19 @@ def _is_safe(code: str) -> bool:
     return True
 
 
+def _first_blocked_pattern(code: str) -> str | None:
+    """Return the human-readable label of the first blocklist hit, or None.
+
+    The plain ``_is_safe`` answers yes/no; this companion gives the caller a
+    specific reason so they don't have to guess which of ~20 patterns tripped.
+    """
+    for pattern in _BLOCKED_PATTERNS:
+        match = re.search(pattern, code)
+        if match:
+            return match.group(0)
+    return None
+
+
 def _literal_int(node: ast.AST) -> int | None:
     """Constant-fold an AST expression to an int when safe.
 
@@ -748,9 +761,18 @@ def _validate_run_inputs(payload: dict) -> dict | tuple[str, str, int]:
             f"code too long (max {_MAX_CODE_CHARS} chars)",
         )
     if not _is_safe(code):
+        blocked = _first_blocked_pattern(code)
+        hint = (
+            f" Triggered by: {blocked!r}." if blocked else ""
+        )
         return _err(
             "python_executor.blocked_unsafe_code",
-            "Blocked: code contains disallowed operations (network, file writes, shell execution).",
+            "Blocked: code contains disallowed operations (network, file writes, "
+            "shell execution, dynamic imports, or known sandbox-escape primitives)."
+            + hint
+            + " The sandbox preinstalls numpy and other stdlib-adjacent packages; "
+            "use `live_sandbox` for full network / install / shell access.",
+            {"triggered_by": blocked} if blocked else None,
         )
     if _has_obvious_memory_bomb(code):
         return _err(

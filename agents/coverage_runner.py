@@ -254,11 +254,12 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
             f"Total file size {total_bytes} bytes exceeds the {_MAX_TOTAL_BYTES // 1024} KB limit.",
         )
 
-    if not _has_test_file(files):
-        return _err(
-            "coverage_runner.no_test_files",
-            "At least one file name must contain 'test' or 'spec' for coverage to run.",
-        )
+    # Pre-2026-05-20 this rejected projects whose test files didn't contain
+    # 'test' or 'spec' in the filename. That's stricter than pytest itself —
+    # pytest can discover tests via pyproject.toml config, --pyargs, or
+    # conftest.py imports. We let pytest decide and surface a structured
+    # `no_tests_discovered` envelope (after the run) when zero tests fire.
+    files_look_test_named = _has_test_file(files)
 
     raw_command = str(payload.get("test_command") or "pytest").strip()
     if len(raw_command) > _MAX_COMMAND_CHARS:
@@ -366,7 +367,24 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
                 "scan_time_ms": scan_time_ms,
             }
 
-        # coverage.json absent — tests failed or coverage not available.
+        # coverage.json absent — either tests failed or pytest discovered
+        # zero tests. The latter happens when no file is named `test_*.py`
+        # or `*_test.py` and the project doesn't supply a pyproject.toml
+        # `[tool.pytest.ini_options]` config to broaden discovery. Surface
+        # that explicitly with a hint so callers know what to fix.
+        if (
+            not files_look_test_named
+            and ("collected 0 items" in stdout or "no tests ran" in stdout.lower())
+        ):
+            return _err(
+                "coverage_runner.no_tests_discovered",
+                "pytest discovered zero tests in this project. By convention "
+                "test files should be named `test_*.py` or `*_test.py`. To "
+                "use a different naming scheme, include a `pyproject.toml` "
+                "with `[tool.pytest.ini_options]` python_files=... or pass "
+                "`test_command='pytest path/to/your_tests.py'`.",
+                {"stdout_tail": stdout[-400:], "files_supplied": sorted(user_file_names)},
+            )
         return {
             "overall_pct": 0.0,
             "passed_threshold": False,

@@ -1,0 +1,10 @@
+{
+  "category": "unit_confusion",
+  "source": "synthesised — decimal/percent/bps unit drift, a recurring AI failure on numeric outputs",
+  "notes": "100x absolute divergence; trivially caught by differential test, but easily missed by humans reading the diff.",
+  "candidates": {
+    "correct.py": "correct",
+    "subtle_regression.py": "regression",
+    "broken_signature.py": "broken"
+  }
+}

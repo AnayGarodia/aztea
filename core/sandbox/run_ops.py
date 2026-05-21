@@ -291,6 +291,16 @@ def _require(payload: dict[str, Any]) -> SandboxState:
     state = get(sandbox_id)
     if state is None:
         raise SandboxInvalidInput(f"sandbox '{sandbox_id}' not active")
+    # If the sweeper auto-suspended this sandbox while it sat idle, callers
+    # historically saw `docker exec` fail against stopped containers and got
+    # billed for nothing. Auto-resume here so sandbox_exec is the public
+    # equivalent of sandbox_resume + sandbox_exec. Import is lazy to avoid
+    # a circular import with lifecycle.
+    if state.status == "suspended":
+        from core.sandbox.lifecycle import _resume_containers
+        _resume_containers(state)
+        state.status = "ready"
+        state.touch()
     return state
 
 

@@ -457,6 +457,7 @@ BUILTIN_AGENT_RUNNERS: dict[str, Callable[[Any], dict]] = {
     _PYPI_METADATA_AGENT_ID: _module_runner(agent_pypi_metadata),
     _GITHUB_RELEASES_AGENT_ID: _module_runner(agent_github_releases),
     _HCL_TERRAFORM_ANALYZER_AGENT_ID: _module_runner(agent_hcl_terraform_analyzer),
+    _QUANT_PATCH_VALIDATOR_AGENT_ID: _module_runner(agent_quant_patch_validator),
 }
 
 

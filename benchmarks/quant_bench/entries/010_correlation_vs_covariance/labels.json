@@ -1,0 +1,10 @@
+{
+  "category": "semantic_api_change",
+  "source": "synthesised",
+  "notes": "AI may return covariance when correlation was requested (or vice versa).",
+  "candidates": {
+    "correct.py": "correct",
+    "subtle_regression.py": "regression",
+    "broken_signature.py": "broken"
+  }
+}

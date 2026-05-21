@@ -21,24 +21,61 @@ from core.sandbox.models import SandboxInvalidInput
 
 _LOG = logging.getLogger("aztea.sandbox.network")
 
+# When the caller boots from a git source and doesn't pass an explicit
+# egress policy, defaulting to "isolated" blocks the very repo they asked
+# us to clone (the container can't re-fetch via git, can't pip-install,
+# can't npm-install, etc.). We default to an "allowlist" that covers the
+# common code-hosting + package-mirror destinations a freshly-cloned repo
+# realistically needs. Callers who want true isolation can still pass
+# `network.egress: "isolated"` explicitly; this constant only changes the
+# DEFAULT for git-source bootstraps.
+_GIT_SOURCE_DEFAULT_ALLOWLIST = (
+    "github.com",
+    "api.github.com",
+    "codeload.github.com",
+    "objects.githubusercontent.com",
+    "raw.githubusercontent.com",
+    "registry.npmjs.org",
+    "pypi.org",
+    "files.pythonhosted.org",
+)
+
 
 def build_network_argv(
     sandbox_id: str,
     network_cfg: dict[str, Any] | None,
+    source_kind: str | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
     """Return ``(argv, resolved_policy)`` for non-compose single-container runs.
 
     Compose has its own network discipline; for ``dockerfile`` /
     ``devcontainer`` / ``custom_commands`` we wire the network on the
     ``docker run`` line directly.
+
+    ``source_kind`` is the materialised source.kind (git/tarball/raw_files).
+    When the caller did not pass an explicit egress policy AND we bootstrapped
+    from git, default to a curated allowlist instead of fully isolated — the
+    caller almost certainly wants to talk to GitHub / npm / PyPI from inside.
     """
     cfg = network_cfg or {}
-    policy = str(cfg.get("egress") or "isolated").strip().lower()
+    raw_policy = cfg.get("egress")
+    explicit_policy = isinstance(raw_policy, str) and raw_policy.strip() != ""
+    policy = str(raw_policy or "isolated").strip().lower()
     allowlist = [str(h).strip().lower() for h in (cfg.get("egress_allowlist") or []) if str(h).strip()]
     if policy not in ("isolated", "allowlist", "open"):
         raise SandboxInvalidInput(
             f"network.egress must be one of isolated|allowlist|open; got {policy!r}"
         )
+    # Default-allowlist for git source bootstraps. Only triggers when the
+    # caller did NOT pass an explicit policy and DID NOT pass their own
+    # allowlist — both signal "I have an opinion, don't override it".
+    if (
+        not explicit_policy
+        and not allowlist
+        and (source_kind or "").strip().lower() == "git"
+    ):
+        policy = "allowlist"
+        allowlist = list(_GIT_SOURCE_DEFAULT_ALLOWLIST)
     if policy == "open":
         return [], {"egress": "open", "egress_allowlist": []}
     if policy == "isolated":

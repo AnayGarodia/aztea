@@ -65,6 +65,12 @@ SBOM_GENERATOR_AGENT_ID = "f14ab9fe-cb29-5a86-a7a2-f42de85ff99a"
 PYPI_METADATA_AGENT_ID = "9dd0e946-974c-5f0b-a59d-db15cc503ec6"
 GITHUB_RELEASES_AGENT_ID = "c199ff57-599b-5e90-b908-994a98b57571"
 HCL_TERRAFORM_ANALYZER_AGENT_ID = "9ad19220-a46b-54b0-9190-dded9399b45c"
+# 2026-05-20 — quant_patch_validator: differential-fuzzing agent for
+# AI-written quant code. Catches off-by-one / sign-flip / unit-confusion
+# bugs by driving both reference and candidate with Hypothesis-generated
+# inputs and triaging divergences. See `agents/quant_patch_validator/`
+# and `benchmarks/quant_bench/`.
+QUANT_PATCH_VALIDATOR_AGENT_ID = "0552b418-026d-5609-8446-2fe7af0efa56"
 
 BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
     QUALITY_JUDGE_AGENT_ID: "internal://quality-judge",
@@ -104,6 +110,7 @@ BUILTIN_INTERNAL_ENDPOINTS: dict[str, str] = {
     PYPI_METADATA_AGENT_ID: "internal://pypi_metadata",
     GITHUB_RELEASES_AGENT_ID: "internal://github_releases",
     HCL_TERRAFORM_ANALYZER_AGENT_ID: "internal://hcl_terraform_analyzer",
+    QUANT_PATCH_VALIDATOR_AGENT_ID: "internal://quant_patch_validator",
 }
 
 BUILTIN_LEGACY_ROUTE_ENDPOINTS: dict[str, str] = {
@@ -132,13 +139,51 @@ BUILTIN_AGENT_IDS = frozenset(BUILTIN_INTERNAL_ENDPOINTS.keys())
 # errors. The internal endpoint remains wired so existing callers don't
 # 410, but the agent is hidden from the curated catalog. Re-list once the
 # upstream docs source is restored.
+#
+# 2026-05-20: catalog-quality cull — eleven builtins sunsetted to raise the
+# average quality bar of the curated public catalog. Each fails the
+# "do something Claude can't do in a chat session" rule, has a known
+# honesty bug, or is dominated by a sibling agent. Internal endpoints
+# stay wired so old job IDs / receipts continue to resolve. Reasoning:
+#   - diff_analyzer: pure LLM wrapper around git diff (Claude does this natively).
+#   - unicode_inspector: confusable/homoglyph detection on text; known
+#     contradiction bug between has_mixed_scripts and scripts_detected (M1 deferred).
+#   - regex_tester: marginal value; regex eval is trivially Claude-doable
+#     and the catastrophic-backtracking guard is the only real differentiator.
+#   - ssl_certificate_decoder: overlaps dns_inspector (which already
+#     surfaces TLS cert metadata for the same hostname).
+#   - pypi_metadata: thin wrapper over PyPI JSON API; integrators can
+#     curl this directly without the platform fee.
+#   - github_releases: thin wrapper over GitHub Releases API; same as above.
+#   - security_headers_grader: live HTTP header grade; Claude+curl does this
+#     fine and dependency_auditor surfaces the same finding when relevant.
+#   - sbom_generator: format-converter (lockfile → CycloneDX/SPDX); mechanical
+#     and dominated by dependency_auditor for the security use case.
+#   - web_search: undifferentiated wrapper around a search backend.
+#   - visual_regression: pixel-diff is useful but the agent has never
+#     graduated past stability concerns and overlaps lighthouse_auditor screenshots.
+#   - archive_inspector: zip-slip guard is real but the inspect step is
+#     trivially Claude-doable for the audit use case.
 SUNSET_DEPRECATED_AGENT_IDS: frozenset[str] = frozenset({
     DOCS_GROUNDER_AGENT_ID,
+    DIFF_ANALYZER_AGENT_ID,
+    UNICODE_INSPECTOR_AGENT_ID,
+    REGEX_TESTER_AGENT_ID,
+    SSL_CERTIFICATE_DECODER_AGENT_ID,
+    PYPI_METADATA_AGENT_ID,
+    GITHUB_RELEASES_AGENT_ID,
+    SECURITY_HEADERS_GRADER_AGENT_ID,
+    SBOM_GENERATOR_AGENT_ID,
+    WEB_SEARCH_AGENT_ID,
+    VISUAL_REGRESSION_AGENT_ID,
+    ARCHIVE_INSPECTOR_AGENT_ID,
 })
 
 # The public catalog: agents that give a coding-agent integrator a primitive
 # they cannot trivially build themselves — isolation (sandboxes), live
 # external data (CVE/DNS/HTTP), or specialist runtimes (browser, pixel diff).
+# Sunsetted agents are explicitly NOT listed here; see SUNSET_DEPRECATED_AGENT_IDS
+# for the cull list and reasoning. 2026-05-20 cull dropped 11 builtins.
 CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
     {
         CVELOOKUP_AGENT_ID,
@@ -147,17 +192,12 @@ CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
         DEPENDENCY_AUDITOR_AGENT_ID,
         DB_SANDBOX_AGENT_ID,
         BROWSER_AGENT_ID,
-        VISUAL_REGRESSION_AGENT_ID,
         MULTI_LANGUAGE_EXECUTOR_AGENT_ID,
         SECRET_SCANNER_AGENT_ID,
         LIGHTHOUSE_AUDITOR_AGENT_ID,
         ACCESSIBILITY_AUDITOR_AGENT_ID,
-        SECURITY_HEADERS_GRADER_AGENT_ID,
         BROKEN_LINK_CRAWLER_AGENT_ID,
         PDF_DOCUMENT_PARSER_AGENT_ID,
-        WEB_SEARCH_AGENT_ID,
-        # DOCS_GROUNDER_AGENT_ID — sunsetted 2026-05-17 (see
-        # SUNSET_DEPRECATED_AGENT_IDS above and the 2026-05-17 test report).
         SAST_SCANNER_AGENT_ID,
         STRIPE_WEBHOOK_DEBUGGER_AGENT_ID,
         LOAD_TESTER_AGENT_ID,
@@ -165,19 +205,12 @@ CURATED_PUBLIC_BUILTIN_AGENT_IDS = frozenset(
         DOCKERFILE_ANALYZER_AGENT_ID,
         OPENAPI_VALIDATOR_AGENT_ID,
         COVERAGE_RUNNER_AGENT_ID,
-        SSL_CERTIFICATE_DECODER_AGENT_ID,
-        DIFF_ANALYZER_AGENT_ID,
         K8S_MANIFEST_VALIDATOR_AGENT_ID,
-        ARCHIVE_INSPECTOR_AGENT_ID,
-        UNICODE_INSPECTOR_AGENT_ID,
         TERRAFORM_PLAN_ANALYZER_AGENT_ID,
         LIVE_SANDBOX_AGENT_ID,
-        REGEX_TESTER_AGENT_ID,
         JWT_VALIDATOR_AGENT_ID,
-        SBOM_GENERATOR_AGENT_ID,
-        PYPI_METADATA_AGENT_ID,
-        GITHUB_RELEASES_AGENT_ID,
         HCL_TERRAFORM_ANALYZER_AGENT_ID,
+        QUANT_PATCH_VALIDATOR_AGENT_ID,
     }
 )
 # Sanity: a sunset agent must never accidentally re-appear in the public set.
