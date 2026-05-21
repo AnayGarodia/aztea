@@ -16,7 +16,16 @@ from tests.jobs_core_harness import (
 )
 
 def test_init_jobs_db_migrates_legacy_jobs_table(isolated_jobs_db):
+    # The fixture pre-applies migrations so other tests see the full schema
+    # under pytest-randomly ordering. This test exercises the legacy → new
+    # migration path, so drop the migrated tables first and re-create the
+    # legacy shape before letting _init_jobs_db() run the migration.
     with sqlite3.connect(isolated_jobs_db) as conn:
+        conn.executescript(
+            "DROP TABLE IF EXISTS job_messages;\n"
+            "DROP TABLE IF EXISTS job_claim_events;\n"
+            "DROP TABLE IF EXISTS jobs;\n"
+        )
         conn.execute(
             """
             CREATE TABLE jobs (
@@ -99,7 +108,17 @@ def test_init_jobs_db_migrates_legacy_jobs_table(isolated_jobs_db):
 
 
 def test_init_jobs_db_migration_succeeds_with_foreign_key_dependents(isolated_jobs_db):
+    # See test_init_jobs_db_migrates_legacy_jobs_table for the fixture's
+    # pre-applied-migration behaviour. Drop the migrated tables (including
+    # disputes which is created by the migration but recreated by this test
+    # as a foreign-key dependent) before re-creating the legacy shape.
     with sqlite3.connect(isolated_jobs_db) as conn:
+        conn.executescript(
+            "DROP TABLE IF EXISTS disputes;\n"
+            "DROP TABLE IF EXISTS job_messages;\n"
+            "DROP TABLE IF EXISTS job_claim_events;\n"
+            "DROP TABLE IF EXISTS jobs;\n"
+        )
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute(
             """

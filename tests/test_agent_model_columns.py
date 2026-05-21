@@ -60,6 +60,12 @@ def isolated_db(monkeypatch, fake_embeddings):
         _close_module_conn(module)
         monkeypatch.setattr(module, "DB_PATH", str(db_path))
 
+    # See tests/integration/conftest.py for why we apply migrations up-front:
+    # pytest-randomly can reorder tests, and any test that runs before an
+    # init_db() caller would see `no such table: agents` without this.
+    from core.migrate import apply_migrations as _apply_migrations
+    _apply_migrations(str(db_path))
+
     monkeypatch.setattr(server, "_MASTER_KEY", TEST_MASTER_KEY)
     yield db_path
 
@@ -95,11 +101,15 @@ def test_register_agent_persists_model_columns(isolated_db):
 
 def test_register_agent_model_columns_nullable(isolated_db):
     registry.init_db()
+    # Use 1¢ — sub-cent prices are rejected by the integer-cents pricing
+    # validator (see core/functional.py). The test exists to verify the
+    # `model_provider` and `model_id` columns accept NULL, so the actual
+    # price value is irrelevant as long as it satisfies the gate.
     aid = registry.register_agent(
         name="No Model Agent",
         description="Does not use an LLM",
         endpoint_url="https://example.com/nomllm",
-        price_per_call_usd=0.005,
+        price_per_call_usd=0.01,
         tags=["test"],
         embed_listing=False,
     )
