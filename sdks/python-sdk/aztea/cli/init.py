@@ -22,7 +22,7 @@ import typer
 
 from ..config import load_config
 from .common import ApiKeyOpt, BaseUrlOpt, JsonOpt, handle_error
-from .output import emit, info, section, success
+from .output import emit, section, success
 
 
 # Marker used to detect "already initialized" — if it's in CLAUDE.md we skip.
@@ -161,14 +161,10 @@ def init(  # noqa: PLR0913 — Typer signature is the public API.
             "Aztea MCP registered",
             detail="restart your editor to pick up the new server.",
         )
-    if not no_claude_md:
-        msg = {
-            "created": "Wrote CLAUDE.md with Aztea reflex snippet",
-            "appended": "Appended Aztea reflex snippet to CLAUDE.md",
-            "skipped": "CLAUDE.md already has the Aztea snippet — skipped",
-        }.get(claude_md_status, f"CLAUDE.md: {claude_md_status}")
-        info(msg)
-    info(
-        "Next: in your editor, try \"audit this requirements.txt …\" — "
-        "Claude should call `do_specialist_task` without prompting."
-    )
+    # The "Appended Aztea reflex snippet to CLAUDE.md" line and the
+    # "Next: in your editor, try ..." nudge used to print here. Per
+    # user feedback (V15 screenshot) they were noise — the CLAUDE.md
+    # write is internal plumbing the user doesn't act on, and the
+    # "try this in Claude Code" prompt belongs in Claude Code's own
+    # onboarding, not Aztea's. The headline 'Aztea MCP registered'
+    # line is enough confirmation.

@@ -39,31 +39,46 @@ except ImportError:  # pragma: no cover - rich is a hard dep but be defensive
 # truth; Rich's theme system handles mapping to the terminal's actual
 # capabilities (truecolor / 256 / 16).
 
+# Aztea brand palette — keyed to the website's actual tokens.css, not stock
+# Tailwind teals. Dark-terminal values (most dev terminals) are the defaults;
+# the splash module overrides specific keys when a light terminal is detected.
+#   accent (muted teal)       #7EB9B0   dark-mode --accent
+#   accent-press (deep teal)  #5E9A92   dark-mode --accent-press
+#   accent-soft               #97C8C0   dark-mode --accent-hover
+#   terracotta (warm accent)  #E07A57   dark-mode --terracotta
+#   sage (trust signal)       #8FB49A   dark-mode --sage
+#   gold                      #C4A858   dark-mode --gold
+#   ink                       #0C1F22   dark-mode --canvas (deep teal-charcoal)
+#   ivory                     #F5EEDF   dark-mode --text-primary
 _THEME = {
-    # primary — teal-led palette
-    "accent":     "#063F43",
-    "teal":       "#14B8A6",
-    "teal_dim":   "#0F766E",
-    "gold":       "#7DD3C4",
-    "mint":       "#5EEAD4",
-    "ink":        "#102B2F",
-    "ivory":      "#FBF7EF",
-    # status
-    "success":    "#22C55E",
-    "warn":       "#EAB308",
-    "error":      "#EF4444",
-    "info":       "#38BDF8",
+    # primary — Aztea teal palette (no gradient, single muted-teal accent)
+    "accent":     "#7EB9B0",
+    "teal":       "#7EB9B0",
+    "teal_dim":   "#5E9A92",
+    "mint":       "#97C8C0",
+    "ink":        "#0C1F22",
+    "ivory":      "#F5EEDF",
+    # warm + trust accents from the website
+    "terracotta": "#E07A57",
+    "sage":       "#8FB49A",
+    "gold":       "#C4A858",
+    # status — keep semantic colors recognizable but pull greens to sage and
+    # yellows toward Aztea's gold so they don't clash with the brand.
+    "success":    "#8FB49A",
+    "warn":       "#C4A858",
+    "error":      "#D88572",
+    "info":       "#7EB9B0",
     "muted":      "grey50",
     "dim":        "grey39",
     "subtle":     "grey62",
     # surfaces
-    "border":     "#334155",
-    "border_dim": "#1F2937",
-    "code":       "#5EEAD4",
-    "heading":    "bold #14B8A6",
-    "label":      "bold #7DD3C4",
-    "hero":       "bold #5EEAD4",
-    "kbd":        "#7DD3C4 on #0F2A2D",
+    "border":     "#2F4B4B",
+    "border_dim": "#1F3838",
+    "code":       "#7EB9B0",
+    "heading":    "bold #7EB9B0",
+    "label":      "bold #97C8C0",
+    "hero":       "bold #7EB9B0",
+    "kbd":        "#F5EEDF on #142E32",
 }
 
 if _HAS_RICH:
@@ -141,7 +156,7 @@ def step(n: int, total: int, label: str) -> None:
     if not _HAS_RICH:
         console.print(f"[{n}/{total}] {label}")
         return
-    counter = Text(f"  {n}", style="bold #7DD3C4")
+    counter = Text(f"  {n}", style="bold #97C8C0")
     counter.append(f" / {total}", style="muted")
     counter.append(f"   {label}", style="default")
     console.print(counter)
@@ -163,13 +178,13 @@ def login_intro() -> None:
     """Branded panel printed at the top of `aztea login`."""
     if not _HAS_RICH or not _is_tty():
         return
-    title = Text("welcome to aztea", style="hero")
+    title = Text("Welcome to Aztea", style="hero")
     body = Text()
     pieces = [
-        ("agent labor", "default"),
-        ("discovery", "default"),
-        ("escrow", "default"),
-        ("signed receipts", "default"),
+        ("Agent labor", "default"),
+        ("Discovery", "default"),
+        ("Escrow", "default"),
+        ("Signed receipts", "default"),
     ]
     for i, (txt, sty) in enumerate(pieces):
         if i:
@@ -190,15 +205,56 @@ def login_intro() -> None:
 
 
 def styled_prompt(label: str, *, password: bool = False, default: str | None = None) -> str:
-    """Branded input prompt. Falls back to typer.prompt without Rich."""
+    """Branded input prompt. Falls back to typer.prompt without Rich.
+
+    Password fields are routed through prompt_toolkit so the user sees
+    asterisks per keystroke instead of a blank line — Rich's Prompt and
+    typer.prompt both fully hide input, which left users wondering
+    whether the CLI had registered their keystrokes.
+    """
+    if password:
+        return _password_prompt(label, default=default)
+
     if not _HAS_RICH or not _is_tty():
         import typer
-        return typer.prompt(label, default=default or None, hide_input=password)
+        return typer.prompt(label, default=default or None)
     from rich.prompt import Prompt
     arrow = Text(f"  {ARROW}  ", style="teal")
     label_text = Text(label, style="bold")
     prompt_text = arrow + label_text
-    return Prompt.ask(prompt_text, password=password, default=default, show_default=bool(default))
+    return Prompt.ask(prompt_text, default=default, show_default=bool(default))
+
+
+def _password_prompt(label: str, *, default: str | None = None) -> str:
+    """Masked-input password prompt.
+
+    prompt_toolkit's ``is_password=True`` displays one ``*`` per keystroke,
+    so the user has clear visual feedback while typing. We fall back to
+    getpass.getpass when prompt_toolkit isn't available or the process
+    isn't attached to a TTY (CI / pipes).
+    """
+    try:
+        from prompt_toolkit import prompt as _pt_prompt
+        from prompt_toolkit.formatted_text import FormattedText
+    except ImportError:
+        import getpass
+        return getpass.getpass(f"{label}: ")
+
+    if not _is_tty():
+        import getpass
+        return getpass.getpass(f"{label}: ")
+
+    # Brand-matched styled prompt: teal arrow + bold label, followed by
+    # the masking input area.
+    message = FormattedText([
+        ("#7EB9B0", f"  {ARROW}  "),
+        ("bold", f"{label}: "),
+    ])
+    try:
+        value = _pt_prompt(message, is_password=True)
+    except (EOFError, KeyboardInterrupt):
+        raise
+    return value or (default or "")
 
 
 # ── Spinner ────────────────────────────────────────────────────────────────
@@ -256,7 +312,14 @@ def warn(message: str) -> None:
 
 
 def error(message: str, *, hint: str | None = None, code: str | None = None) -> None:
-    """Print an error to stderr in a branded panel."""
+    """Print an error to stderr in a branded panel.
+
+    The panel is rendered in the same teal palette as the rest of the CLI
+    so it doesn't visually clash. Severity is signaled by the title chip
+    ("✗ Aztea error") and the inverted-chip styling, not by a loud border
+    color. Earlier versions used a terracotta border which jumped out
+    against the teal-everywhere look the rest of the CLI established.
+    """
     if not _HAS_RICH:
         err_console.print(f"{CROSS} {message}")
         if hint:
@@ -268,11 +331,15 @@ def error(message: str, *, hint: str | None = None, code: str | None = None) -> 
     if hint:
         body.append("\n")
         body.append(Text.assemble((f"{ARROW} ", "info"), (hint, "muted")))
+    title = Text.assemble(
+        (f" {CROSS} ", "bold #0C1F22 on #7EB9B0"),
+        (" Error ", "bold #0C1F22 on #7EB9B0"),
+    )
     panel = Panel(
         body,
-        title=Text("aztea error", style="error"),
+        title=title,
         title_align="left",
-        border_style="error",
+        border_style="teal_dim",
         box=_box.ROUNDED,
         padding=(0, 1),
     )
@@ -358,7 +425,7 @@ def money(cents: int | float | None, *, dim_zero: bool = True):
     if amount == 0 and dim_zero:
         return Text(txt, style="muted")
     if amount >= 1.00:
-        return Text(txt, style="bold #7DD3C4")
+        return Text(txt, style="bold #97C8C0")
     if amount >= 0.10:
         return Text(txt, style="gold")
     return Text(txt, style="default")
@@ -493,7 +560,7 @@ def price_tier(price_usd: float | None):
         return Text("$", style="muted") if _HAS_RICH else "$"
     if price_usd < 0.50:
         return Text("$$", style="gold") if _HAS_RICH else "$$"
-    return Text("$$$", style="bold #7DD3C4") if _HAS_RICH else "$$$"
+    return Text("$$$", style="bold #97C8C0") if _HAS_RICH else "$$$"
 
 
 def mini_bar(fraction: float, width: int = 12, *, style: str = "teal"):
@@ -540,7 +607,7 @@ def receipt_panel(
     if seal:
         seal_line = Text()
         seal_line.append(f"  {CHECK} ", style="success")
-        seal_line.append("signed receipt", style="bold #7DD3C4")
+        seal_line.append("signed receipt", style="bold #97C8C0")
         seal_line.append("  ·  ", style="border")
         seal_line.append("ed25519 verified", style="muted")
         pieces.append(Text(""))

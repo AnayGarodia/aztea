@@ -168,7 +168,6 @@ def _call_agent(
         handle_error(exc)
 
 
-@app.command()
 def hire(
     slug: str,
     positional_input: Optional[str] = typer.Argument(
@@ -191,10 +190,36 @@ def hire(
     Accepts input as either a positional JSON string or via ``--input``.
     Positional wins when both are provided so copy-pasted examples from the
     docs (which use the positional form) keep working without --input.
+
+    Registered as the top-level ``aztea hire`` from ``cli/__init__.py``. The
+    ``aztea jobs hire`` alias is a deprecation shim that forwards here.
     """
     effective_input = positional_input if positional_input is not None else input_value
     _call_agent(
         slug, effective_input, api_key=api_key, base_url=base_url, json_mode=json_mode,
+    )
+
+
+@app.command(name="hire", help="DEPRECATED — use `aztea hire` instead.")
+def hire_deprecated(
+    slug: str,
+    positional_input: Optional[str] = typer.Argument(None, metavar="[INPUT]"),
+    input_value: Optional[str] = typer.Option(None, "--input"),
+    api_key: Optional[str] = ApiKeyOpt,
+    base_url: Optional[str] = BaseUrlOpt,
+    json_mode: bool = JsonOpt,
+) -> None:
+    """Deprecated alias. Forwards to top-level ``aztea hire``."""
+    from .output import warn
+    if not json_mode:
+        warn("`aztea jobs hire` is deprecated. Use `aztea hire` instead.")
+    hire(
+        slug=slug,
+        positional_input=positional_input,
+        input_value=input_value,
+        api_key=api_key,
+        base_url=base_url,
+        json_mode=json_mode,
     )
 
 
@@ -312,7 +337,7 @@ def rate(
         handle_error(exc)
 
 
-@app.command()
+@app.command(name="dispute", help="DEPRECATED — use `aztea dispute` instead.")
 def dispute(
     job_id: str,
     reason: str = typer.Option(..., help="Reason for the dispute."),
@@ -326,13 +351,17 @@ def dispute(
     base_url: Optional[str] = BaseUrlOpt,
     json_mode: bool = JsonOpt,
 ) -> None:
-    """Open a dispute on a completed job. Triggers LLM-judge review.
+    """Deprecated alias. Use ``aztea dispute`` (top-level) instead.
 
-    Thin delegate to the top-level `aztea dispute` command so both surfaces
-    share one filing path. The sub-app keeps its historical signature
-    (--reason required) for back-compat with scripts.
+    Kept as a thin shim so existing scripts keep working for one release.
+    Prints a one-line deprecation warning to stderr, then forwards to the
+    same internal ``_file_dispute`` helper the top-level command uses.
     """
     from . import dispute as _dispute_module
+    from .output import warn
+
+    if not json_mode:
+        warn("`aztea jobs dispute` is deprecated. Use `aztea dispute` instead.")
 
     try:
         with _open_client(api_key=api_key, base_url=base_url) as client:
@@ -408,7 +437,14 @@ def estimate(
         handle_error(exc)
 
 
-@app.command()
+_FOLLOW_EPILOG = (
+    "Streams the job's progress messages until it finishes. Cancel with Ctrl-C "
+    "(exit 130). For a one-shot snapshot use `aztea jobs status <id>`; to abort "
+    "the job and refund use `aztea jobs cancel <id>`."
+)
+
+
+@app.command(epilog=_FOLLOW_EPILOG)
 def follow(
     job_id: str,
     api_key: Optional[str] = ApiKeyOpt,

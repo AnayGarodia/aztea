@@ -133,7 +133,7 @@ def _job_summary(j) -> dict:
 
 def _render(profile: dict, wallet, jobs: list, connect) -> None:
     if not _HAS_RICH:
-        console.print(f"signed in as {profile.get('username') or 'user'}")
+        console.print(f"Signed in as {profile.get('username') or 'user'}")
         if wallet is not None:
             bc = getattr(wallet, "balance_cents", 0) or 0
             console.print(f"balance ${bc/100:.2f}")
@@ -156,7 +156,7 @@ def _render(profile: dict, wallet, jobs: list, connect) -> None:
     head = Text()
     head.append(f"  {BAR} ", style="success")
     head.append("hello, ", style="muted")
-    head.append(username, style="bold #5EEAD4")
+    head.append(username, style="bold #7EB9B0")
     head.append(f"   {DOT}   ", style="border")
     head.append(relative_time((profile or {}).get("last_seen_at") or ""), style="muted") if (profile or {}).get("last_seen_at") else None
     console.print()
@@ -224,7 +224,7 @@ def _wallet_card(balance_cents: int, escrow_cents: int):
 
     return Panel(
         Group(Padding(hero, (0, 0, 0, 0)), sub),
-        title=Text(" wallet ", style="bold #0F2A2D on #5EEAD4"),
+        title=Text(" wallet ", style="bold #0C1F22 on #7EB9B0"),
         title_align="left",
         border_style="border_dim",
         box=box.ROUNDED,
@@ -257,7 +257,7 @@ def _connect_card(charges_enabled: bool, connect: dict):
 
     return Panel(
         Group(head, Text(""), sub),
-        title=Text(" payouts ", style="bold #0F2A2D on #5EEAD4"),
+        title=Text(" payouts ", style="bold #0C1F22 on #7EB9B0"),
         title_align="left",
         border_style="border_dim",
         box=box.ROUNDED,
