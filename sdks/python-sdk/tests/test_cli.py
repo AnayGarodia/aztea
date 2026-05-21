@@ -78,3 +78,10 @@ def test_cli_agents_list_renders_json(monkeypatch) -> None:
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload[0]["agent_id"] == "agent-1"
+
+
+def test_cli_agents_defaults_to_list(monkeypatch) -> None:
+    monkeypatch.setattr("aztea.cli._client", lambda **kwargs: _FakeClient())
+    result = runner.invoke(app, ["agents"])
+    assert result.exit_code == 0
+    assert "Web Researcher" in result.stdout

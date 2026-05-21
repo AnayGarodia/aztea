@@ -28,3 +28,18 @@ def test_security_txt_served_per_rfc_9116(client):
     assert "Expires:" in body
     assert "Canonical: " in body
     assert "/.well-known/security.txt" in body
+
+
+def test_sitemap_xml_served_as_xml(client):
+    resp = client.get("/sitemap.xml")
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"].startswith("application/xml")
+    assert "<urlset" in resp.text
+    assert "/agents</loc>" in resp.text
+
+
+def test_legacy_openapi_json_returns_spec(client):
+    resp = client.get("/openapi.json")
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"].startswith("application/json")
+    assert resp.json()["openapi"].startswith("3.")

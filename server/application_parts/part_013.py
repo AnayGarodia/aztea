@@ -321,7 +321,7 @@ def jobs_get_receipt(
 # loading from disk at request time.
 
 _SECURITY_TXT_CONTACT = os.environ.get(
-    "SECURITY_TXT_CONTACT", "mailto:security@example.invalid"
+    "SECURITY_TXT_CONTACT", "mailto:security@aztea.ai"
 )
 _SECURITY_TXT_TTL_DAYS = 365
 
@@ -335,6 +335,31 @@ def _robots_txt_body() -> str:
         "Disallow: /jobs/\n"
         "Disallow: /wallets/\n"
         f"Sitemap: {base}/sitemap.xml\n"
+    )
+
+
+def _sitemap_xml_body() -> str:
+    base = _SERVER_BASE_URL.rstrip("/")
+    paths = (
+        "/",
+        "/welcome",
+        "/marketplace",
+        "/agents",
+        "/pricing",
+        "/docs",
+        "/docs/quickstart",
+        "/docs/api-reference",
+        "/docs/agent-builder",
+        "/docs/mcp",
+    )
+    urls = "\n".join(
+        f"  <url><loc>{base}{path}</loc></url>" for path in paths
+    )
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        f"{urls}\n"
+        "</urlset>\n"
     )
 
 
@@ -357,6 +382,11 @@ def _security_txt_body() -> str:
 @app.get("/robots.txt", include_in_schema=False)
 def robots_txt() -> Response:
     return Response(content=_robots_txt_body(), media_type="text/plain")
+
+
+@app.get("/sitemap.xml", include_in_schema=False)
+def sitemap_xml() -> Response:
+    return Response(content=_sitemap_xml_body(), media_type="application/xml")
 
 
 @app.get("/.well-known/security.txt", include_in_schema=False)

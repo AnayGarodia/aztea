@@ -89,6 +89,14 @@ function fmtPct(value) {
   return `${(value * 100).toFixed(1)}%`
 }
 
+function slugifyAgentName(name) {
+  return String(name || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
 function extractInputPreview(input) {
   if (!input || typeof input !== 'object') return String(input ?? '')
   for (const key of ['prompt', 'query', 'text', 'input']) {
@@ -132,7 +140,14 @@ export default function AgentDetailPage() {
       return next
     })
 
-  const publicAgent = useMemo(() => agents.find(a => a.agent_id === id), [agents, id])
+  const publicAgent = useMemo(() => {
+    const wanted = String(id || '').trim().toLowerCase()
+    return agents.find(a => {
+      if (String(a.agent_id || '').toLowerCase() === wanted) return true
+      if (String(a.slug || '').toLowerCase() === wanted) return true
+      return slugifyAgentName(a.name) === wanted
+    })
+  }, [agents, id])
   const [ownerAgent, setOwnerAgent] = useState(null)
   const [ownerLookupDone, setOwnerLookupDone] = useState(false)
 
@@ -247,6 +262,10 @@ export default function AgentDetailPage() {
 
   const handleInvoke = async (payload, { privateTask = false } = {}) => {
     if (!agent) return
+    if (!apiKey) {
+      setInvokeError('Sign in to hire this specialist.')
+      return
+    }
     const payloadError = validateInvokePayload(payload)
     if (payloadError) {
       setInvokeError(payloadError)

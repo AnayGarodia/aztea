@@ -54,7 +54,7 @@ interactive REPL with these slash commands:
 - /login — sign in. A picker offers email+password OR pasting an API key.
 - /logout — clear saved credentials.
 - /whoami — show the current account.
-- /agents — browse 35 specialist agents grouped by category
+- /agents — browse the current specialist catalog grouped by category
   (Security, Code Execution, Quality, Web, Research, Developer Tools).
 - /show <slug> — show one agent's full spec.
 - /hire <slug> — run a specialist on your input. Blocks until done.

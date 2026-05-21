@@ -957,16 +957,14 @@ def _health_available_llm_providers() -> list[str]:
 # /docs intentionally NOT redirected — the SPA owns that as the user-facing
 # product page. Swagger UI lives at /api/docs and is linked from the SPA's
 # Docs page directly.
-from fastapi.responses import RedirectResponse as _RedirectResponseB10  # noqa: E402
-
-
 @app.get("/openapi.json", include_in_schema=False)
-def openapi_json_redirect():
-    return _RedirectResponseB10(url="/api/openapi.json", status_code=308)
+def openapi_json_legacy():
+    return JSONResponse(content=app.openapi())
 
 
 @app.get("/redoc", include_in_schema=False)
 def redoc_redirect():
+    from fastapi.responses import RedirectResponse as _RedirectResponseB10
     return _RedirectResponseB10(url="/api/redoc", status_code=308)
 
 

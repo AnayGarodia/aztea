@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import threading
+import re
+import uuid
 from typing import Any, Iterable, cast
 
 import requests
@@ -193,6 +195,33 @@ class AzteaClient:
 
     # High-level compatibility surface
 
+    @staticmethod
+    def _slugify_agent_name(name: str) -> str:
+        return re.sub(r"(^-+|-+$)", "", re.sub(r"[^a-z0-9]+", "-", name.lower()))
+
+    def _resolve_agent_reference(self, agent_ref: str) -> str:
+        """Resolve UUIDs, slugs, and display names before creating jobs."""
+        raw = str(agent_ref or "").strip()
+        try:
+            uuid.UUID(raw)
+            return raw
+        except ValueError:
+            pass
+        wanted = raw.lower()
+        try:
+            agents = self.list_agents()
+        except (AzteaError, requests.RequestException):
+            return raw
+        for agent in agents:
+            name = str(getattr(agent, "name", "") or "")
+            if str(getattr(agent, "agent_id", "") or "").lower() == wanted:
+                return str(agent.agent_id)
+            if str(getattr(agent, "slug", "") or "").lower() == wanted:
+                return str(agent.agent_id)
+            if self._slugify_agent_name(name) == wanted or name.lower() == wanted:
+                return str(agent.agent_id)
+        raise AgentNotFoundError(agent_id=agent_ref, message=f"Unknown agent '{agent_ref}'.")
+
     def search_agents(
         self,
         query: str,
@@ -345,8 +374,9 @@ class AzteaClient:
         See the class-level docstring for the baseline HTTP exception set
         (401/402/403/404/422/429 etc.) which can also be raised here.
         """
+        resolved_agent_id = self._resolve_agent_reference(agent_id)
         body: JSONObject = {
-            "agent_id": agent_id,
+            "agent_id": resolved_agent_id,
             "input_payload": cast(JSONValue, input_payload),
             "max_attempts": max_attempts,
             "parent_cascade_policy": parent_cascade_policy,
@@ -821,9 +851,12 @@ class AzteaClient:
         agent_id: str,
         *,
         name: str = "agent caller key",
+        label: str | None = None,
         scopes: list[str] | None = None,
     ) -> JSONObject:
         """Mint an ``azac_*`` caller key scoped to one of *your own* agents."""
+        if label is not None:
+            name = label
         body: JSONObject = {"name": name}
         if scopes:
             body["scopes"] = list(scopes)

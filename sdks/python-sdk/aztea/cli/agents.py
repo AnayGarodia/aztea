@@ -62,7 +62,38 @@ def _open_client(**kwargs):
     return _factory(**kwargs)
 
 
-app = typer.Typer(help="Browse and inspect agents.", no_args_is_help=True)
+app = typer.Typer(
+    help="Browse and inspect agents.",
+    no_args_is_help=False,
+    invoke_without_command=True,
+)
+
+
+def _agent_value(agent, key: str, default=None):
+    """Read agent fields from SDK models or raw dict search results."""
+    if isinstance(agent, dict):
+        return agent.get(key, default)
+    return getattr(agent, key, default)
+
+
+@app.callback()
+def agents_root(ctx: typer.Context) -> None:
+    """Default `aztea agents` to the browsable catalog."""
+    if ctx.invoked_subcommand is not None:
+        return
+    ctx.invoke(
+        list_cmd,
+        search=None,
+        max_price=None,
+        min_trust=None,
+        category=None,
+        flat=False,
+        free=False,
+        api_key=None,
+        base_url=None,
+        json_mode=False,
+    )
+    raise typer.Exit()
 
 
 _AGENTS_LIST_EPILOG = (
@@ -110,16 +141,25 @@ def list_cmd(
                 else:
                     agents = client.list_agents()
                     if max_price is not None:
-                        agents = [a for a in agents if a.price_per_call_usd <= max_price]
+                        agents = [
+                            a for a in agents
+                            if (_agent_value(a, "price_per_call_usd", 0) or 0) <= max_price
+                        ]
                     if min_trust is not None:
-                        agents = [a for a in agents if a.trust_score >= min_trust]
+                        agents = [
+                            a for a in agents
+                            if (_agent_value(a, "trust_score", 0) or 0) >= min_trust
+                        ]
                 if free:
-                    agents = [a for a in agents if (a.price_per_call_usd or 0) <= 0]
+                    agents = [
+                        a for a in agents
+                        if (_agent_value(a, "price_per_call_usd", 0) or 0) <= 0
+                    ]
                 if category:
                     wanted = category.strip().lower()
                     agents = [
                         a for a in agents
-                        if (getattr(a, "category", "") or "").lower() == wanted
+                        if (_agent_value(a, "category", "") or "").lower() == wanted
                     ]
 
             if json_mode:
@@ -206,9 +246,9 @@ def _render_agent_table(agents, *, query: Optional[str] = None) -> None:
             console.print(
                 # 1.7.4 — :.4f then strip trailing zeros so sub-cent prices
                 # render honestly ($0.004 not $0.00).
-                f"{slugify(agent.name)}  "
-                f"${agent.price_per_call_usd:.4f}".rstrip('0').rstrip('.')
-                + f"  {agent.name}"
+                f"{slugify(_agent_value(agent, 'name', ''))}  "
+                f"${float(_agent_value(agent, 'price_per_call_usd', 0) or 0):.4f}".rstrip('0').rstrip('.')
+                + f"  {_agent_value(agent, 'name', '')}"
             )
         return
 
@@ -259,13 +299,17 @@ def _render_agent_table(agents, *, query: Optional[str] = None) -> None:
 
     sorted_agents = sorted(
         agents,
-        key=lambda a: (-(getattr(a, "trust_score", 0) or 0), getattr(a, "price_per_call_usd", 0) or 0),
+        key=lambda a: (
+            -(_agent_value(a, "trust_score", 0) or 0),
+            _agent_value(a, "price_per_call_usd", 0) or 0,
+        ),
     )
 
     for agent in sorted_agents:
-        price_usd = float(getattr(agent, "price_per_call_usd", 0) or 0)
-        trust = float(getattr(agent, "trust_score", 0) or 0)
-        success = float(getattr(agent, "success_rate", 0) or 0)
+        name = str(_agent_value(agent, "name", "") or "")
+        price_usd = float(_agent_value(agent, "price_per_call_usd", 0) or 0)
+        trust = float(_agent_value(agent, "trust_score", 0) or 0)
+        success = float(_agent_value(agent, "success_rate", 0) or 0)
 
         if trust >= 80:
             mark_style = "success"
@@ -278,8 +322,8 @@ def _render_agent_table(agents, *, query: Optional[str] = None) -> None:
 
         table.add_row(
             _Text(BAR, style=mark_style),
-            slugify(agent.name),
-            agent.name,
+            slugify(name),
+            name,
             # 1.7.4 — pass raw cents (with sub-cent precision) so the
             # money() formatter can render values like 0.4¢ as $0.004.
             # Pre-1.7.4 `round(price_usd * 100)` collapsed all sub-cent
@@ -310,7 +354,7 @@ def _bucket_for(agent) -> str:
     Anything not in ``_CATEGORY_ORDER`` falls into "Other" so unknown
     categories still surface — silently dropping them would hide new agents.
     """
-    raw = (getattr(agent, "category", None) or "").strip()
+    raw = (_agent_value(agent, "category", None) or "").strip()
     if not raw:
         return _UNCATEGORIZED
     for known in _CATEGORY_ORDER:
@@ -337,11 +381,11 @@ def _render_agent_categories(agents) -> None:
         for bucket, items in _group_by_category(agents).items():
             console.print(f"\n{bucket} ({len(items)})")
             for agent in items:
-                price_usd = float(getattr(agent, "price_per_call_usd", 0) or 0)
+                price_usd = float(_agent_value(agent, "price_per_call_usd", 0) or 0)
                 console.print(
-                    f"  {slugify(agent.name):<28}  "
+                    f"  {slugify(_agent_value(agent, 'name', '')):<28}  "
                     f"${price_usd:.4f}".rstrip('0').rstrip('.')
-                    + f"  {agent.name}"
+                    + f"  {_agent_value(agent, 'name', '')}"
                 )
         return
 
@@ -395,13 +439,14 @@ def _render_agent_categories(agents) -> None:
         sorted_items = sorted(
             items,
             key=lambda a: (
-                -(getattr(a, "trust_score", 0) or 0),
-                getattr(a, "price_per_call_usd", 0) or 0,
+                -(_agent_value(a, "trust_score", 0) or 0),
+                _agent_value(a, "price_per_call_usd", 0) or 0,
             ),
         )
         for agent in sorted_items:
-            price_usd = float(getattr(agent, "price_per_call_usd", 0) or 0)
-            trust = float(getattr(agent, "trust_score", 0) or 0)
+            name = str(_agent_value(agent, "name", "") or "")
+            price_usd = float(_agent_value(agent, "price_per_call_usd", 0) or 0)
+            trust = float(_agent_value(agent, "trust_score", 0) or 0)
             mark_style = (
                 "success" if trust >= 80
                 else "gold" if trust >= 50
@@ -410,8 +455,8 @@ def _render_agent_categories(agents) -> None:
             )
             table.add_row(
                 _Text(BAR, style=mark_style),
-                slugify(agent.name),
-                agent.name,
+                slugify(name),
+                name,
                 money(price_usd * 100),
                 trust_gauge(trust),
             )

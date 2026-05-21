@@ -2336,6 +2336,29 @@ def watchers_create(
     )
 
 
+@app.delete(
+    "/watchers/{watcher_id}",
+    responses=_error_responses(401, 403, 404, 429, 500),
+    tags=["Watchers"],
+    summary="Delete a watcher and its run history.",
+)
+@limiter.limit("30/minute")
+def watchers_delete_alias(
+    request: Request,
+    watcher_id: str,
+    caller: core_models.CallerContext = Depends(_require_api_key),
+) -> JSONResponse:
+    _require_scope(caller, "caller")
+    from core import watchers as _watchers
+
+    owner_id = caller.get("owner_id") or ""
+    row = _watchers.crud.get_watcher(watcher_id)
+    if not row or row.get("owner_user_id") != owner_id:
+        raise HTTPException(status_code=404, detail=f"Watcher '{watcher_id}' not found.")
+    _watchers.crud.delete_watcher(watcher_id)
+    return JSONResponse(content={"deleted": True, "watcher_id": watcher_id})
+
+
 # ---------------------------------------------------------------------------
 # Caller self-reconcile (1.6.1)
 # ---------------------------------------------------------------------------

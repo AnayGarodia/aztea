@@ -35,6 +35,22 @@ const PlatformPage = lazy(() => import('./pages/PlatformPage'))
 const KeysPage = lazy(() => import('./pages/KeysPage'))
 const IntegrationsPage = lazy(() => import('./pages/IntegrationsPage'))
 
+function PublicMarketApp({ children }) {
+  const { apiKey, booting } = useAuth()
+  if (booting) return <AppBoot />
+  return (
+    <MarketProvider apiKey={apiKey ?? null}>
+      <ErrorBoundary>
+        <Suspense fallback={<div className="app-boot-thin" />}>
+          <AppShell>
+            {children}
+          </AppShell>
+        </Suspense>
+      </ErrorBoundary>
+    </MarketProvider>
+  )
+}
+
 function RequireAuth({ children }) {
   const { apiKey, booting } = useAuth()
   if (booting) return <AppBoot />
@@ -149,10 +165,14 @@ export default function App() {
             <Suspense fallback={<AppBoot />}>
               <Routes>
                 <Route path="/welcome" element={<LandingPage />} />
+                <Route path="/pricing" element={<LandingPage />} />
                 <Route path="/terms"   element={<TermsPage />} />
                 <Route path="/privacy" element={<PrivacyPage />} />
                 <Route path="/docs" element={<DocsGate />} />
                 <Route path="/docs/:docSlug" element={<DocsGate />} />
+                <Route path="/marketplace" element={<PublicMarketApp><AgentsPage /></PublicMarketApp>} />
+                <Route path="/agents" element={<PublicMarketApp><AgentsPage /></PublicMarketApp>} />
+                <Route path="/agents/:id" element={<PublicMarketApp><AgentDetailPage /></PublicMarketApp>} />
                 <Route
                   path="/legal/accept"
                   element={

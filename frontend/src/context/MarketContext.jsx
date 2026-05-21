@@ -53,6 +53,16 @@ export function MarketProvider({ apiKey, children }) {
   }, [showToast])
 
   const refresh = useCallback(async () => {
+    if (!apiKey) {
+      try {
+        const ag = await fetchAgents(null)
+        setAgents(ag.agents ?? [])
+        lastRefreshError.current = ''
+      } catch (err) {
+        reportRefreshError(err, 'Failed to refresh catalog.')
+      }
+      return
+    }
     // allSettled so a single failing endpoint (e.g. wallet) doesn't blank the others.
     const [agR, wlR, ruR, jbR] = await Promise.allSettled([
       fetchAgents(apiKey),
@@ -74,6 +84,7 @@ export function MarketProvider({ apiKey, children }) {
 
   // Background poll: only refresh wallet + recent jobs (not full agent list)
   const backgroundPoll = useCallback(async () => {
+    if (!apiKey) return
     const [wlR, jbR] = await Promise.allSettled([
       fetchWalletMe(apiKey),
       fetchJobs(apiKey, { limit: 50 }),
@@ -98,6 +109,7 @@ export function MarketProvider({ apiKey, children }) {
   }, [apiKey, reportRefreshError])
 
   const refreshWallet = useCallback(async () => {
+    if (!apiKey) return
     try {
       setWallet(await fetchWalletMe(apiKey))
       lastRefreshError.current = ''
@@ -107,6 +119,7 @@ export function MarketProvider({ apiKey, children }) {
   }, [apiKey, reportRefreshError])
 
   const refreshJobs = useCallback(async () => {
+    if (!apiKey) return
     try {
       const jb = await fetchJobs(apiKey, { limit: 50 })
       setJobs(jb.jobs ?? [])
@@ -118,6 +131,7 @@ export function MarketProvider({ apiKey, children }) {
 
   // Merge a single job event into the jobs list without a full refetch.
   const applyJobEvent = useCallback((event) => {
+    if (!apiKey) return
     const jobId = event?.job_id
     if (!jobId) return
     setJobs(prev => {
@@ -183,6 +197,8 @@ export function MarketProvider({ apiKey, children }) {
   useEffect(() => {
     refresh().finally(() => setLoading(false))
 
+    if (!apiKey) return undefined
+
     // Two-tier polling cadence. Phoenix WebSocket (if it connects) pushes
     // sub-second updates, so we slow the poll to 60s. Otherwise we stay
     // on the 5s SSE-fallback cadence the dashboard has always used.
@@ -197,10 +213,6 @@ export function MarketProvider({ apiKey, children }) {
       clearInterval(pollHandle)
       pollHandle = setInterval(backgroundPoll, next)
       currentInterval = next
-    }
-
-    if (!apiKey) {
-      return () => clearInterval(pollHandle)
     }
 
     // Best-effort: the session never throws. If it can't reach the sidecar
