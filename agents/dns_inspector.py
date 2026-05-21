@@ -60,19 +60,57 @@ _INVALID_DOMAIN_ISSUES_PREVIEW = 6
 _DEFAULT_CHECKS = ("dns", "ssl", "http")
 _HTTPS_PORT = 443
 
+# Per-call DNS cache. A single inspection for one domain previously hit
+# the resolver 3-4 times (A records, AAAA records, then SSL connect's
+# implicit resolve, then HTTP fetch's implicit resolve). For batch calls
+# the duplication compounds. We memoise ``getaddrinfo`` keyed on
+# ``(host, family)`` for the lifetime of one ``run(...)``. The cache is
+# stored on the call's stack frame via a thread-local so concurrent
+# inspections in different threads don't clobber each other.
+import threading
+_dns_cache_tls = threading.local()
+
+
+def _cached_getaddrinfo(host: str, family: int | None = None) -> list[tuple]:
+    """``socket.getaddrinfo`` with a thread-local per-call cache.
+
+    Caller MUST call ``_reset_dns_cache()`` at the start of each ``run(...)``
+    so DNS state doesn't leak across independent invocations.
+    """
+    cache: dict[tuple[str, int | None], list[tuple]] | None = getattr(
+        _dns_cache_tls, "cache", None,
+    )
+    if cache is None:
+        cache = {}
+        _dns_cache_tls.cache = cache
+    key = (host, family)
+    if key in cache:
+        return cache[key]
+    if family is None:
+        result = socket.getaddrinfo(host, None)
+    else:
+        result = socket.getaddrinfo(host, None, family)
+    cache[key] = result
+    return result
+
+
+def _reset_dns_cache() -> None:
+    """Drop the per-call DNS cache. Idempotent."""
+    _dns_cache_tls.cache = {}
+
 
 def _dns_check(domain: str) -> tuple[list[str], list[str], str | None]:
     """Return (a_records, aaaa_records, error_or_None)."""
     a_records: list[str] = []
     aaaa_records: list[str] = []
     try:
-        infos = socket.getaddrinfo(domain, None, socket.AF_INET)
+        infos = _cached_getaddrinfo(domain, socket.AF_INET)
         a_records = list({info[4][0] for info in infos})
     except Exception as exc:
         return [], [], f"DNS lookup failed: {exc}"
 
     try:
-        infos6 = socket.getaddrinfo(domain, None, socket.AF_INET6)
+        infos6 = _cached_getaddrinfo(domain, socket.AF_INET6)
         aaaa_records = list({info[4][0] for info in infos6})
     except Exception:
         # WHY: IPv6 is optional — absent AAAA is normal, not an error.
@@ -183,7 +221,7 @@ def _check_mx_into(entry: dict[str, Any], domain: str) -> None:
     """
     try:
         mail_ips = list(
-            {info[4][0] for info in socket.getaddrinfo("mail." + domain, None)}
+            {info[4][0] for info in _cached_getaddrinfo("mail." + domain)}
         )
         entry["possible_mail_ips"] = mail_ips
     except Exception:
@@ -333,8 +371,14 @@ def run(payload: dict) -> dict:
     parsed = _normalize_run_inputs(payload)
     if isinstance(parsed, dict):
         return parsed
+    # Reset the per-call DNS cache so independent run() invocations don't
+    # share stale resolutions across batches.
+    _reset_dns_cache()
     domains, checks = parsed
-    results, ok_count = _aggregate_results(domains, checks)
+    try:
+        results, ok_count = _aggregate_results(domains, checks)
+    finally:
+        _reset_dns_cache()
     if ok_count == 0 and results:
         return _all_failed_envelope(results)
     return {"results": results, "billing_units_actual": ok_count}

@@ -225,7 +225,10 @@ def load_builtin_specs_part7() -> list[dict]:
             "description": (
                 "Sends real Stripe-signed test webhook events to your endpoint and verifies "
                 "correct behavior: signature verification, idempotency, status codes, and common "
-                "bugs. No Stripe API key needed — constructs signed events locally."
+                "bugs. No Stripe API key needed — constructs signed events locally. Demo mode: "
+                "set `endpoint_url: \"aztea://echo\"` to exercise the full signature pipeline "
+                "against an in-process echo handler (returns 200 on valid sig, 400 on tampered) "
+                "when you don't have a public webhook handler to point at yet."
             ),
             "endpoint_url": BUILTIN_INTERNAL_ENDPOINTS[STRIPE_WEBHOOK_DEBUGGER_AGENT_ID],
             "price_per_call_usd": 0.03,
@@ -328,8 +331,10 @@ def load_builtin_specs_part7() -> list[dict]:
             "slug": "load-tester",
             "description": (
                 "Runs a real HTTP load test against a URL and returns p50/p75/p95/p99 latency, "
-                "error rates, throughput, and a latency histogram. Impossible to do accurately "
-                "in a chat session."
+                "error rates, throughput, and a latency histogram. Caps: rps≤100, "
+                "duration≤120s, concurrency≤50 — sized for smoke + small-fleet load tests, "
+                "not Gatling-grade soak. Use `live_sandbox` + your own k6/vegeta when you "
+                "need >120s sustained load. Impossible to fabricate accurately from chat."
             ),
             "endpoint_url": BUILTIN_INTERNAL_ENDPOINTS[LOAD_TESTER_AGENT_ID],
             "price_per_call_usd": 0.03,
@@ -354,9 +359,9 @@ def load_builtin_specs_part7() -> list[dict]:
                 "type": "object",
                 "properties": {
                     "url": {"type": "string", "description": "Target URL to load test"},
-                    "rps": {"type": "integer", "description": "Target requests per second (max 50)", "default": 5},
-                    "duration_seconds": {"type": "integer", "description": "Test duration in seconds (max 30)", "default": 10},
-                    "concurrency": {"type": "integer", "description": "Concurrent workers (max 20)", "default": 5},
+                    "rps": {"type": "integer", "description": "Target requests per second (max 100)", "default": 5},
+                    "duration_seconds": {"type": "integer", "description": "Test duration in seconds (max 120)", "default": 10},
+                    "concurrency": {"type": "integer", "description": "Concurrent workers (max 50)", "default": 5},
                     "method": {"type": "string", "enum": ["GET", "POST", "PUT", "DELETE"], "default": "GET"},
                     "headers": {"type": "object", "description": "Additional HTTP headers"},
                     "body": {"type": "string", "description": "Request body for POST/PUT"},

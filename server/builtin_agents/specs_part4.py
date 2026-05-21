@@ -350,8 +350,14 @@ def load_builtin_specs_part4() -> list[dict[str, Any]]:
                     "action": {
                         "type": "string",
                         "title": "Capture mode",
-                        "enum": ["scrape", "screenshot", "pdf"],
+                        "enum": ["scrape", "screenshot", "screenshot_only", "pdf"],
                         "default": "scrape",
+                        "description": (
+                            "scrape: full HTML + visible text + links + screenshot. "
+                            "screenshot: viewport PNG + HTML + text (backwards-compat). "
+                            "screenshot_only: viewport PNG + title only — use when "
+                            "the HTML payload would be noise. pdf: render to PDF."
+                        ),
                     },
                     "wait_for": {
                         "type": "string",
