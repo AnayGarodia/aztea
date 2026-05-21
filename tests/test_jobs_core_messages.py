@@ -563,7 +563,10 @@ def test_get_messages_supports_type_sender_and_channel_filters(isolated_jobs_db)
 
 def test_init_jobs_db_migrates_job_messages_for_correlation_id(isolated_jobs_db):
     # Fixture pre-applies migrations under pytest-randomly. Drop the migrated
-    # job_messages first so the legacy CREATE below isn't blocked.
+    # job_messages first AND close cached jobs conn so init_jobs_db re-detects
+    # the legacy state.
+    from tests.jobs_core_harness import _close_jobs_conn
+    _close_jobs_conn()
     with sqlite3.connect(isolated_jobs_db) as conn:
         conn.execute("DROP TABLE IF EXISTS job_messages")
         jobs._create_jobs_table(conn)

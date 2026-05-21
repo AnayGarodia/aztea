@@ -18,13 +18,16 @@ from tests.jobs_core_harness import (
 def test_init_jobs_db_migrates_legacy_jobs_table(isolated_jobs_db):
     # The fixture pre-applies migrations so other tests see the full schema
     # under pytest-randomly ordering. This test exercises the legacy → new
-    # migration path, so drop the migrated tables first and re-create the
-    # legacy shape before letting _init_jobs_db() run the migration.
+    # migration path, so drop the migrated tables (including schema_migrations
+    # so init_jobs_db re-detects legacy state) and re-create the legacy shape.
+    from tests.jobs_core_harness import _close_jobs_conn
+    _close_jobs_conn()
     with sqlite3.connect(isolated_jobs_db) as conn:
         conn.executescript(
             "DROP TABLE IF EXISTS job_messages;\n"
             "DROP TABLE IF EXISTS job_claim_events;\n"
             "DROP TABLE IF EXISTS jobs;\n"
+            "DROP TABLE IF EXISTS schema_migrations;\n"
         )
         conn.execute(
             """
@@ -108,16 +111,17 @@ def test_init_jobs_db_migrates_legacy_jobs_table(isolated_jobs_db):
 
 
 def test_init_jobs_db_migration_succeeds_with_foreign_key_dependents(isolated_jobs_db):
-    # See test_init_jobs_db_migrates_legacy_jobs_table for the fixture's
-    # pre-applied-migration behaviour. Drop the migrated tables (including
-    # disputes which is created by the migration but recreated by this test
-    # as a foreign-key dependent) before re-creating the legacy shape.
+    # See test_init_jobs_db_migrates_legacy_jobs_table — close any cached
+    # jobs conn so init_jobs_db re-detects the legacy state we set up.
+    from tests.jobs_core_harness import _close_jobs_conn
+    _close_jobs_conn()
     with sqlite3.connect(isolated_jobs_db) as conn:
         conn.executescript(
             "DROP TABLE IF EXISTS disputes;\n"
             "DROP TABLE IF EXISTS job_messages;\n"
             "DROP TABLE IF EXISTS job_claim_events;\n"
             "DROP TABLE IF EXISTS jobs;\n"
+            "DROP TABLE IF EXISTS schema_migrations;\n"
         )
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute(

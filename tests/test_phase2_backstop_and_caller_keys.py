@@ -39,6 +39,12 @@ def isolated_db(monkeypatch):
     for m in modules:
         _close_module_conn(m)
         monkeypatch.setattr(m, "DB_PATH", str(db_path))
+    # Pre-apply migrations so the test sees columns added by later migrations
+    # (e.g. transactions.charged_by_key_id from 0050+) — without this, the
+    # TestClient startup-event init_db() path only ensures bootstrap columns
+    # and tests touching newer columns fail with "no such column".
+    from core.migrate import apply_migrations as _apply_migrations
+    _apply_migrations(str(db_path))
     with TestClient(server.app):
         yield
     for m in modules:
