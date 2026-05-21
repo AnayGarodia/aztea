@@ -105,6 +105,12 @@ def isolated_db(monkeypatch, fake_embeddings):
         _close_module_conn(module)
         monkeypatch.setattr(module, "DB_PATH", str(db_path))
 
+    # Apply real migrations so every test starts with the full schema
+    # regardless of pytest-randomly ordering. Without this, a test that
+    # ran before any init_db() caller would see `no such table: agents`.
+    from core.migrate import apply_migrations as _apply_migrations
+    _apply_migrations(str(db_path))
+
     monkeypatch.setattr(server, "_MASTER_KEY", TEST_MASTER_KEY)
     yield db_path
 

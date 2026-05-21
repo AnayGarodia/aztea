@@ -77,6 +77,12 @@ def isolated_db(monkeypatch):
         _close_module_conn(module)
         monkeypatch.setattr(module, "DB_PATH", str(db_path))
 
+    # Pre-apply migrations so every test sees the full schema regardless of
+    # pytest-randomly ordering. The legacy-migration tests below drop the
+    # relevant tables themselves before re-creating the legacy schema.
+    from core.migrate import apply_migrations as _apply_migrations
+    _apply_migrations(str(db_path))
+
     yield db_path
 
     for module in modules:
@@ -367,8 +373,15 @@ def test_invalid_content_length_header_returns_400(client):
 
 
 def test_auth_init_db_migrates_legacy_api_keys_schema(isolated_db):
+    # Fixture pre-applies migrations under pytest-randomly ordering. Drop
+    # the migrated users + api_keys before re-creating the legacy shape
+    # this test exercises.
     _close_module_conn(auth)
     with sqlite3.connect(isolated_db) as conn:
+        conn.executescript(
+            "DROP TABLE IF EXISTS api_keys;\n"
+            "DROP TABLE IF EXISTS users;\n"
+        )
         conn.execute(
             """
             CREATE TABLE users (
@@ -472,8 +485,15 @@ def test_auth_init_db_migrates_legacy_api_keys_schema(isolated_db):
 
 
 def test_register_user_is_atomic_when_api_key_insert_fails(isolated_db):
+    # Fixture pre-applies migrations; this test re-creates the legacy
+    # users + api_keys schema deliberately (the missing column on api_keys
+    # is what triggers the rollback under test).
     _close_module_conn(auth)
     with sqlite3.connect(isolated_db) as conn:
+        conn.executescript(
+            "DROP TABLE IF EXISTS api_keys;\n"
+            "DROP TABLE IF EXISTS users;\n"
+        )
         conn.execute(
             """
             CREATE TABLE users (
@@ -511,6 +531,13 @@ def test_register_user_is_atomic_when_api_key_insert_fails(isolated_db):
 
 def test_registry_init_db_migrates_legacy_agents_table(isolated_db):
     with sqlite3.connect(isolated_db) as conn:
+        # Fixture pre-applies migrations; drop the migrated agents +
+        # agent_embeddings before re-creating the legacy shape this test
+        # exercises.
+        conn.executescript(
+            "DROP TABLE IF EXISTS agent_embeddings;\n"
+            "DROP TABLE IF EXISTS agents;\n"
+        )
         conn.execute("""
             CREATE TABLE agents (
                 name TEXT,

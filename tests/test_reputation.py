@@ -30,6 +30,11 @@ def isolated_db(monkeypatch):
         _close_module_conn(module)
         monkeypatch.setattr(module, "DB_PATH", str(db_path))
 
+    # Pre-apply migrations so pytest-randomly ordering can't run a test
+    # before init_db()'s schema bootstrap. See tests/integration/conftest.py.
+    from core.migrate import apply_migrations as _apply_migrations
+    _apply_migrations(str(db_path))
+
     yield db_path
 
     for module in modules:

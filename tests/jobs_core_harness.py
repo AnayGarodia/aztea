@@ -26,6 +26,14 @@ def isolated_jobs_db(monkeypatch):
     _close_jobs_conn()
     monkeypatch.setattr(jobs, "DB_PATH", str(db_path))
 
+    # See tests/integration/conftest.py for why we apply migrations up-front:
+    # any test that runs before the explicit _init_jobs_db() caller under
+    # pytest-randomly ordering would see `no such table: jobs`. The migration
+    # tests in this file drop their target tables themselves before
+    # re-creating the legacy schema.
+    from core.migrate import apply_migrations as _apply_migrations
+    _apply_migrations(str(db_path))
+
     yield db_path
 
     _close_jobs_conn()
