@@ -1,6 +1,8 @@
 # Environment
 .env
 .env.local
+.env.bak
+.env.*.bak
 scripts/push.sh
 
 # Run logs and runtime state
