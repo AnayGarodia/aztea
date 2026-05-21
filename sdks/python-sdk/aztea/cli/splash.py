@@ -28,7 +28,6 @@ from typing import Any
 from ..config import load_config
 from .output import (
     ARROW,
-    DIAMOND,
     DOT,
     _HAS_RICH,
     console,

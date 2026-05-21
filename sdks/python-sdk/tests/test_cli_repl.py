@@ -777,8 +777,8 @@ def test_ask_without_api_key_surfaces_clear_error(monkeypatch, capsys):
     from aztea.cli.repl import ask as _ask_mod
     monkeypatch.setattr(_ask_mod, "_get_api_key", lambda: None)
     _cmd.dispatch("/ask anything")
-    combined = capsys.readouterr().out + capsys.readouterr().err
-    # Read the stderr too — error() routes there
+    # Drain stdout+stderr so the next test starts clean; error() routes to stderr.
+    _ = capsys.readouterr().out + capsys.readouterr().err
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
 
@@ -837,9 +837,10 @@ def test_banner_cache_invalidates_on_auth_state_change(monkeypatch, tmp_path):
     _app._banner_cache["key"] = None
     _app._banner_cache["text"] = ""
 
-    # Simulate signed-out: no config.
+    # Simulate signed-out: no config. We discard the rendered banner; we
+    # only need the cache-key snapshot afterwards.
     monkeypatch.setenv("AZTEA_CONFIG_DIR", str(tmp_path))
-    first = _app._banner_ansi()
+    _ = _app._banner_ansi()
     first_key = _app._banner_cache["key"]
 
     # Simulate signed-in by writing a config.

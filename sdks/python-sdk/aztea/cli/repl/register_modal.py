@@ -278,7 +278,7 @@ def _do_register(*, username: str, email: str, password: str) -> str:
     """
     from ...client import AzteaClient
     from ...config import save_config
-    from ..output import console, error, success
+    from ..output import error, success
     from .app import _capture_command_output
 
     base_url = "https://aztea.ai"

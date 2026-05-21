@@ -29,7 +29,6 @@ from typing import Any
 from agents._contracts import agent_error
 from agents.quant_patch_validator import (
     cluster as _cluster_mod,
-    coverage_track as _coverage_mod,
     fuzz as _fuzz_mod,
     fuzz_atheris as _atheris_mod,
     harness as _harness_mod,

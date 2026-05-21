@@ -17,7 +17,11 @@ import difflib
 import os
 import shlex
 import shutil
-import subprocess
+# noqa-justified: subprocess is referenced by tests via
+# `aztea.cli.repl.commands.subprocess.run` (the /claude-code handler defers
+# to `request_subprocess_on_exit`, never calls subprocess.run itself — the
+# tests assert that). Keep the import so the test monkeypatch resolves.
+import subprocess  # noqa: F401
 from dataclasses import dataclass
 from typing import Callable
 
@@ -29,13 +33,10 @@ from .. import (
     dispute as _dispute,
     init as _init,
     jobs as _jobs,
-    mcp as _mcp,
-    publish as _publish,
     status as _status,
-    unpublish as _unpublish,
     wallet as _wallet,
 )
-from ..output import console, error, info, success, warn
+from ..output import console, error, info, warn
 
 
 # ── Registry ──────────────────────────────────────────────────────────────
