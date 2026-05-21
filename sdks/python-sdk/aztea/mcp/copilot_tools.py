@@ -2,8 +2,8 @@
 
 Phase 9 of the co-pilot-mode design (see
 ``docs/superpowers/specs/2026-05-09-copilot-mode-design.md``). Lives in its
-own module so ``scripts/aztea_mcp_server.py`` (already over the global
-1000-line file budget on main) does not balloon further.
+own module so ``aztea.mcp.server`` does not balloon past the global
+1000-line file budget.
 
 # OWNS:        the streaming-call and steer MCP tool handlers
 # NOT OWNS:    the underlying /jobs lifecycle (server-side), receipt
@@ -459,7 +459,7 @@ def _safe_json(resp: requests.Response) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# tool descriptors — registered by aztea_mcp_server.py
+# tool descriptors — registered by aztea.mcp.server
 
 CALL_STREAMING_TOOL: dict[str, Any] = {
     "name": "aztea_call_streaming",

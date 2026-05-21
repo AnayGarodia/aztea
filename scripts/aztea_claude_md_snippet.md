@@ -10,7 +10,7 @@ It tells Claude Code how to use Aztea efficiently without wasting tokens on the 
 
 Aztea is available as an MCP server. Treat it as a specialist labor market plus a workflow control plane for coding agents.
 
-> **Tool names** (renamed in v0.2.0): `do_specialist_task`, `search_specialists`, `describe_specialist`, `call_specialist`. The old `aztea_do` / `aztea_search` / `aztea_describe` / `aztea_call` names still resolve via dispatch aliases for backward compatibility.
+> **Tool names**: the four discovery/hire tools `do_specialist_task`, `search_specialists`, `describe_specialist`, `call_specialist`, plus the grouped dispatchers `manage_job`, `manage_budget`, `manage_workflow`, plus the admin-only observability tools `aztea_status`, `aztea_inspect`, `aztea_query`. The old flat names `aztea_do` / `aztea_search` / `aztea_describe` / `aztea_call` / `aztea_job` / `aztea_budget` / `aztea_workflow` still resolve via dispatch aliases for backward compatibility.
 
 For Claude Code, the intended MCP flow is:
 
@@ -19,7 +19,7 @@ For Claude Code, the intended MCP flow is:
 3. `describe_specialist` - inspect the exact schema for one result
 4. `call_specialist` - invoke it explicitly
 
-The lazy four-tool surface is deliberate. Do not expect every Aztea capability to be a separate top-level MCP tool.
+The lazy ten-tool surface is deliberate. Do not expect every Aztea capability to be a separate top-level MCP tool — control-plane operations (estimate, async hire, batch, compare, recipes, pipelines, ratings, disputes, budgets) are reached through the grouped `manage_job` / `manage_budget` / `manage_workflow` dispatchers via an `action` verb, not separate tools.
 
 ---
 
@@ -28,43 +28,43 @@ The lazy four-tool surface is deliberate. Do not expect every Aztea capability t
 - Use Aztea proactively when external execution, live data, delegation, or workflow orchestration would help.
 - The user does not need to say "use Aztea." Decide when a specialist hire is useful and explain the receipt/settlement result afterward.
 - Prefer `do_specialist_task` for a clear first hire. It returns no-charge recommendations if price, trust, confidence, or inputs fail a gate.
-- Before expensive or unfamiliar work, use `search_specialists` to find `aztea_estimate_cost`, then run it.
-- For long-running or background work, prefer `aztea_hire_async`, then poll with `aztea_job_status`.
-- If a job asks for clarification, respond with `aztea_clarify` instead of starting over.
-- After async completion, use `aztea_verify_output`, then `aztea_rate_job`. Use `aztea_dispute_job` only for materially wrong output.
-- For many independent subtasks, prefer `aztea_hire_batch` / `aztea_workflow(action="hire_batch")` over serial single calls. Use it when work splits by file, package, endpoint, test case, or specialist role.
-- After a batch hire, tell the user Aztea opened parallel marketplace hires, then poll `batch_id` with `aztea_batch_status` / `aztea_workflow(action="batch_status")` and summarize escrow, settlement, job IDs, and receipt state from `parallel_hire_trace`.
-- For side-by-side evaluation of 2-3 options, use `aztea_compare_agents`, then `aztea_compare_status`, then `aztea_select_compare_winner`.
-- For repeatable multi-step work, check `aztea_list_recipes` or `aztea_list_pipelines` first.
+- Before expensive or unfamiliar work, estimate cost with `manage_budget(action="estimate", slug="<slug>")`, then run it.
+- For long-running or background work, prefer `manage_workflow(action="hire_async")`, then poll with `manage_job(action="status")`.
+- If a job asks for clarification, respond with `manage_job(action="clarify")` instead of starting over.
+- After async completion, use `manage_job(action="verify_output")`, then `manage_job(action="rate")`. Use `manage_job(action="dispute")` only for materially wrong output.
+- For many independent subtasks, prefer `manage_workflow(action="hire_batch")` over serial single calls. Use it when work splits by file, package, endpoint, test case, or specialist role.
+- After a batch hire, tell the user Aztea opened parallel marketplace hires, then poll `batch_id` with `manage_workflow(action="batch_status")` and summarize escrow, settlement, job IDs, and receipt state from `parallel_hire_trace`.
+- For side-by-side evaluation of 2-3 options, use `manage_workflow(action="compare")`, then `manage_workflow(action="compare_status")`, then `manage_workflow(action="compare_select")`.
+- For repeatable multi-step work, check `manage_workflow(action="list_recipes")` or `manage_workflow(action="list_pipelines")` first.
 - Do not create a second compare, recipe, or pipeline run just to check status. Use the matching status tool.
 
 ---
 
-## High-value Aztea workflow tools
+## High-value Aztea control-plane operations
 
-These are discovered through `search_specialists` and then invoked with `call_specialist`:
+These are NOT marketplace agents — they are control-plane operations reached through the grouped dispatchers (`manage_budget`, `manage_workflow`, `manage_job`) with an `action` verb:
 
-| Tool slug | Use when |
-|-----------|----------|
-| `aztea_wallet_balance` | Check available credit before paid work |
-| `aztea_session_summary` | Check current session spend and remaining budget |
-| `aztea_set_session_budget` | Cap spend for the current Claude session |
-| `aztea_estimate_cost` | Preview cost and latency before hiring |
-| `aztea_hire_async` | Start background work |
-| `aztea_job_status` | Poll async jobs and read progress / clarification requests |
-| `aztea_clarify` | Answer an agent clarification request |
-| `aztea_verify_output` | Accept or reject output inside the verification window |
-| `aztea_rate_job` | Rate a completed job |
-| `aztea_dispute_job` | File a dispute for materially bad output |
-| `aztea_hire_batch` | Hire independent specialists in parallel under one batch rail |
-| `aztea_compare_agents` | Run 2-3 agents on the same task |
-| `aztea_compare_status` | Poll an existing compare session |
-| `aztea_select_compare_winner` | Finalize the chosen compare result |
-| `aztea_list_recipes` | Discover built-in workflow templates |
-| `aztea_run_recipe` | Execute a built-in workflow template |
-| `aztea_list_pipelines` | Discover saved pipelines |
-| `aztea_run_pipeline` | Execute a saved pipeline |
-| `aztea_pipeline_status` | Poll an existing pipeline or recipe run |
+| Dispatcher call | Use when |
+|-----------------|----------|
+| `manage_budget(action="balance")` | Check available credit before paid work |
+| `manage_budget(action="session_summary")` | Check current session spend and remaining budget |
+| `manage_budget(action="set_session_budget")` | Cap spend for the current Claude session |
+| `manage_budget(action="estimate", slug="<slug>")` | Preview cost and latency before hiring |
+| `manage_workflow(action="hire_async")` | Start background work |
+| `manage_job(action="status")` | Poll async jobs and read progress / clarification requests |
+| `manage_job(action="clarify")` | Answer an agent clarification request |
+| `manage_job(action="verify_output")` | Accept or reject output inside the verification window |
+| `manage_job(action="rate")` | Rate a completed job |
+| `manage_job(action="dispute")` | File a dispute for materially bad output |
+| `manage_workflow(action="hire_batch")` | Hire independent specialists in parallel under one batch rail |
+| `manage_workflow(action="compare")` | Run 2-3 agents on the same task |
+| `manage_workflow(action="compare_status")` | Poll an existing compare session |
+| `manage_workflow(action="compare_select")` | Finalize the chosen compare result |
+| `manage_workflow(action="list_recipes")` | Discover built-in workflow templates |
+| `manage_workflow(action="run_recipe")` | Execute a built-in workflow template |
+| `manage_workflow(action="list_pipelines")` | Discover saved pipelines |
+| `manage_workflow(action="run_pipeline")` | Execute a saved pipeline |
+| `manage_workflow(action="pipeline_status")` | Poll an existing pipeline or recipe run |
 
 ---
 
@@ -94,7 +94,7 @@ Current built-in recipes:
 - `security-audit-sealed`
 - `domain-health`
 
-If you do not know the recipe ID, search for recipe or workflow first, or call `aztea_list_recipes`.
+If you do not know the recipe ID, search for recipe or workflow first, or call `manage_workflow(action="list_recipes")`.
 
 ---
 

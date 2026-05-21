@@ -116,7 +116,7 @@ Design and copy direction live in `.agents/DESIGN.md`.
 4. Test the full failure path. Refunds must fire on agent failures. If you change a money path without a test, the PR is incomplete.
 5. **Before ending your session:** move completed items in `.agents/TODO.md` and update the status table in `CLAUDE.md` if something shipped.
 
-Don't ship features that tie to neither the local nor the global goal. Don't add third-party deps without strong reason. Don't add LLM-only wrapper agents — the 2026-05-15 cleanup removed all of those and `SUNSET_DEPRECATED_AGENT_IDS` is intentionally empty now.
+Don't ship features that tie to neither the local nor the global goal. Don't add third-party deps without strong reason. Don't add LLM-only wrapper agents — the 2026-05-15 cleanup and the 2026-05-20 catalog cull removed all of those; `SUNSET_DEPRECATED_AGENT_IDS` now holds 12 sunsetted agents (still callable for old job IDs / signed receipts, but excluded from the curated public catalog).
 
 ---
 

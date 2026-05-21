@@ -141,7 +141,7 @@ server/
   application_parts/part_013.py  SPA fallback: serves frontend/dist/index.html for non-API paths
   builtin_agents/                Built-in IDs (constants.py), schemas (schemas.py), specs
   builtin_agents/constants.py    All AGENT_ID constants, BUILTIN_INTERNAL_ENDPOINTS,
-                                 CURATED_PUBLIC_BUILTIN_AGENT_IDS, DEPRECATED_BUILTIN_AGENT_IDS
+                                 CURATED_PUBLIC_BUILTIN_AGENT_IDS, SUNSET_DEPRECATED_AGENT_IDS
   builtin_agents/specs.py        Merges specs_part1 + specs_part2; returns curated public builtins
   error_handlers.py              Shared HTTPException / validation / rate-limit handlers
   routes/system.py               Small sub-router for system routes
@@ -257,7 +257,8 @@ frontend/
   src/theme/tokens.css           CSS custom properties for all colours, spacing, radii, typography
 
 scripts/
-  aztea_mcp_server.py            stdio MCP server — refreshes tools every 60s via HTTP registry
+  aztea_mcp_server.py            Compat shim (~30 lines) — delegates to aztea.mcp.server (the
+                                 real stdio MCP server lives in sdks/python-sdk/aztea/mcp/)
   check_file_line_budget.py      CI enforcement for the 1000-line rule
 
 tests/
@@ -341,7 +342,7 @@ See `docs/oss-vs-hosted.md` for the full local-vs-hosted matrix.
 ### Built-in agents
 
 - Agent IDs are **deterministic UUID v5** from namespace `6ba7b810-9dad-11d1-80b4-00c04fd430c8` + `aztea.builtin.{slug}`. Constants live in `server/builtin_agents/constants.py` (single source of truth).
-- **Only agents with real tool use go in `CURATED_PUBLIC_BUILTIN_AGENT_IDS`.** LLM wrappers that add no value over a direct chat session must not be in the curated set. Current count: **24 curated public agents** (after the 2026-05-20 catalog-quality cull dropped 11 thin-wrapper / overlapping / known-buggy agents — see `SUNSET_DEPRECATED_AGENT_IDS` for the list and per-agent reasoning). `SUNSET_DEPRECATED_AGENT_IDS` also holds `docs_grounder` (sunsetted 2026-05-17). Do not add LLM-only agents.
+- **Only agents with real tool use go in `CURATED_PUBLIC_BUILTIN_AGENT_IDS`.** LLM wrappers that add no value over a direct chat session must not be in the curated set. Current count: **25 curated public agents** (the 2026-05-20 catalog-quality cull dropped 11 thin-wrapper / overlapping / known-buggy agents; `quant_patch_validator` was then added — see `SUNSET_DEPRECATED_AGENT_IDS` for the dropped list and per-agent reasoning). `SUNSET_DEPRECATED_AGENT_IDS` holds **12 entries** — the 11 culled agents plus `docs_grounder` (sunsetted 2026-05-17). Do not add LLM-only agents.
 - Each new built-in agent needs: module in `agents/`, entry in `BUILTIN_INTERNAL_ENDPOINTS`, spec in `specs_part1.py` or `specs_part2.py`, case in `_execute_builtin_agent()`, and a structured error envelope.
 - **Work examples** are stored via `_record_public_work_example()`. Pass `private_task=True` to skip recording. Ring buffer capped at `_AGENT_WORK_EXAMPLES_MAX`.
 
@@ -350,8 +351,8 @@ See `docs/oss-vs-hosted.md` for the full local-vs-hosted matrix.
 - Tool names are plain `snake_case` from the agent name — no prefix.
 - All manifest keys use `snake_case` (`input_schema`, `output_schema`, `price_per_call_usd`).
 - `/mcp/invoke` authenticates via `auth.verify_agent_api_key` or a caller-scoped user key.
-- `scripts/aztea_mcp_server.py` refreshes tools every 60s via the HTTP registry.
-- **Lazy tool surface is ten tools** (verb-first; legacy `aztea_*` names work via dispatch-time aliases): `search_specialists`, `describe_specialist`, `call_specialist`, **`do_specialist_task`** (auto-invoke fast path), three grouped resource dispatchers `manage_job`, `manage_budget`, `manage_workflow`, and three observability tools — `aztea_status` (digest), `aztea_inspect` (entity drill-down), `aztea_query` (pre-canned views). The observability tools require admin scope on the configured key. `aztea_call_streaming` and `aztea_steer` were dropped 2026-05-17 — the 2026-05-17 extensive test report showed RECEIPT_NOT_BUILT (HTTP 425), 12 duplicated "started" partials, and `stop_when` never evaluating real partials. Refunds were honest but UX was misleading. Dispatch still recognises the names and returns `tool_not_supported`; the implementation in `copilot_tools.py` is retained for a future rewrite. The backend mechanics (`/jobs` with `stop_when_predicates`, `/jobs/{id}/messages` with `msg_type="steer"`) still work and are reachable through `manage_job` action verbs. `do_specialist_task` picks the best agent for an intent and runs it under hard cost/confidence/quality gates. All gates live in the backend at `POST /registry/agents/auto-hire` (`server/application_parts/part_012.py`); both MCP server frontends are thin proxies. Decision logic lives in `core/registry/auto_hire.py`; thresholds are env-tunable via `AZTEA_AUTO_INVOKE_*` flags. Alias map: `scripts/aztea_mcp_server.py:_LAZY_TOOL_NAME_ALIASES`.
+- The stdio MCP server (`sdks/python-sdk/aztea/mcp/server.py`, also reachable via the `scripts/aztea_mcp_server.py` compat shim) refreshes tools every 60s via the HTTP registry.
+- **Lazy tool surface is ten tools** (verb-first; legacy `aztea_*` names work via dispatch-time aliases): `search_specialists`, `describe_specialist`, `call_specialist`, **`do_specialist_task`** (auto-invoke fast path), three grouped resource dispatchers `manage_job`, `manage_budget`, `manage_workflow`, and three observability tools — `aztea_status` (digest), `aztea_inspect` (entity drill-down), `aztea_query` (pre-canned views). The observability tools require admin scope on the configured key. `aztea_call_streaming` and `aztea_steer` were dropped 2026-05-17 — the 2026-05-17 extensive test report showed RECEIPT_NOT_BUILT (HTTP 425), 12 duplicated "started" partials, and `stop_when` never evaluating real partials. Refunds were honest but UX was misleading. Dispatch still recognises the names and returns `tool_not_supported`; the implementation in `sdks/python-sdk/aztea/mcp/copilot_tools.py` is retained for a future rewrite. The backend mechanics (`/jobs` with `stop_when_predicates`, `/jobs/{id}/messages` with `msg_type="steer"`) still work and are reachable through `manage_job` action verbs. `do_specialist_task` picks the best agent for an intent and runs it under hard cost/confidence/quality gates. All gates live in the backend at `POST /registry/agents/auto-hire` (`server/application_parts/part_012.py`); both MCP server frontends are thin proxies. Decision logic lives in `core/registry/auto_hire.py`; thresholds are env-tunable via `AZTEA_AUTO_INVOKE_*` flags. Alias map: `sdks/python-sdk/aztea/mcp/server.py:_LAZY_TOOL_NAME_ALIASES`.
 - **Output formats**: Both `call_specialist` and `do_specialist_task` accept `output_format` (`json | markdown | github_pr_comment | slack_blocks | text`). Renderer at `core/output_formats.py` dispatches by sniffing well-known output shapes (CodeReview, Linter, TypeChecker, DepAuditor, GitDiffAnalyzer, pipeline) — NOT by `agent_id` — so external agents inherit pretty rendering for free. Renderers must never raise; unknown shapes fall back to a generic JSON code-fence. The canonical `output` dict is left intact; the rendered string lands under `rendered_output` + `rendered_output_format`. Hooked in via `_decorate_with_rendered_output` in `part_008.py`.
 - **Built-in recipes** (`core/recipes.py`): current curated recipes are `audit-deps`, `secret-scan-and-audit`, `security-audit-sealed` (the workspaces-v0 demo: same nodes as `secret-scan-and-audit` but with `auto_workspace: true` so callers get a signed manifest), and `domain-health`. Recipes are useful workflow primitives, but they are not the product story. Do not frame Aztea around a single code-review demo; frame it as the trust, payment, identity, and recourse layer that lets agents hire specialist agents.
 
@@ -520,14 +521,16 @@ cd frontend && npm run build
 # Manual DB migration
 python -m core.migrate
 
-# MCP server (stdio)
-python scripts/aztea_mcp_server.py
+# MCP server (stdio) — preferred entrypoints
+aztea mcp serve              # CLI wrapper
+python -m aztea.mcp.server   # module form
+python scripts/aztea_mcp_server.py   # legacy compat shim (still works)
 
 # Run ledger reconciliation
 curl -H "Authorization: Bearer $API_KEY" -X POST http://localhost:8000/ops/payments/reconcile
 ```
 
-**Current test status:** `pytest --collect-only` reports **2275 tests collected** under `tests/` (excluding `tests/test_sdk_contract.py`) as of 2026-05-10. Property tests (`tests/property/`) collect cleanly now that Hypothesis is pinned (PR #47, 2026-05-15). The SDK contract suite can still segfault on Python 3.14 macOS and is excluded by the canonical command above. Re-anchor this line (collected + passed + skipped + date) when you next run the suite end-to-end.
+**Current test status:** `pytest --collect-only` reports **4674 tests collected** under `tests/` (excluding `tests/test_sdk_contract.py`) as of 2026-05-20. Property tests (`tests/property/`) collect cleanly now that Hypothesis is pinned (PR #47, 2026-05-15). The SDK contract suite can still segfault on Python 3.14 macOS and is excluded by the canonical command above. Re-anchor this line (collected + passed + skipped + date) when you next run the suite end-to-end.
 
 ---
 
@@ -617,7 +620,7 @@ Production env vars and Stripe webhook config: see `docs/runbooks/deploy.md`.
 
 ## Public agent IDs
 
-Source of truth: `server/builtin_agents/constants.py`. Curated public set (agents that do real external work) is in `CURATED_PUBLIC_BUILTIN_AGENT_IDS` — currently **24 agents** (after the 2026-05-20 catalog-quality cull dropped 11 builtins; see `SUNSET_DEPRECATED_AGENT_IDS` for the list and per-agent reasoning). Internal/hidden agents are in the same file. Always read constants directly; do not duplicate IDs anywhere else.
+Source of truth: `server/builtin_agents/constants.py`. Curated public set (agents that do real external work) is in `CURATED_PUBLIC_BUILTIN_AGENT_IDS` — currently **25 agents** (the 2026-05-20 catalog-quality cull dropped 11 builtins, then `quant_patch_validator` was added; see `SUNSET_DEPRECATED_AGENT_IDS` for the dropped list and per-agent reasoning). Internal/hidden agents are in the same file. Always read constants directly; do not duplicate IDs anywhere else.
 
 ## Aztea
 

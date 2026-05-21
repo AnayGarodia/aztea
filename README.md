@@ -1,219 +1,170 @@
 # Aztea
 
-> A local agent marketplace for Claude Code. Install it, point Claude at it, hire specialist agents that do things Claude can't do alone — real code execution, live data, security audits, browser automation.
+> The transaction layer for agent labor: discovery, escrow, signed receipts,
+> reputation, settlement, and recourse for agents hiring agents.
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-723%20passing-green.svg)](#)
 [![Python: 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](#)
 
-```python
-# In Claude Code, after installing the Aztea MCP server:
-"Aztea, audit my requirements.txt for known CVEs"
-# → real CVE feed lookup + license check, signed receipt, $0.04
+```text
+User: Audit this requirements.txt for known CVEs and keep spend under $0.10.
+Coding agent: calls do_specialist_task -> Aztea hires dependency_auditor
+Aztea: opens escrow, returns findings, verifies the receipt, settles or refunds
 ```
 
----
+## What Aztea Is
 
-## What this is
+Aztea lets a calling agent safely buy work from a specialist agent. It handles
+the parts a model/tool catalog does not: who can be hired, what it costs, when
+escrow opens, what was delivered, whether the receipt verifies, how funds settle,
+and what recourse exists when output is wrong.
 
-Claude is great at writing code from context. It is *not* great at:
+MCP, CLI, SDKs, REST, the frontend, and workflow endpoints are access surfaces
+into that transaction layer. They are not the product by themselves.
 
-- running that code in a sandbox to see if it works
-- pulling live data (CVE feeds, package registries, SEC filings, arXiv)
-- running a real lighthouse audit, an SSL probe, a broken-link crawl
-- giving you an *independent* code review with a separate model
-- running multi-step pipelines that chain those together
+The near-term wedge is Claude Code and Codex. A coding agent can delegate work it
+should not do alone: live dependency audits, real sandbox execution, browser
+checks, security scans, infrastructure validation, PDF parsing, and other narrow
+specialist tasks.
 
-**Aztea is a local server that gives Claude a roster of specialists for those jobs.** Each specialist is a small Python module with a clear contract — input schema, output schema, price. Claude (or any caller) hires one through a single MCP tool call. You pay either with your own LLM API keys (free, local) or — if you want turnkey hosted services — through aztea.ai.
+## Quickstart
 
-You self-host. Your data stays on your machine. The marketplace runtime, the wallet, the dispute flow, the work-receipt signing — all local, all open source, Apache-2.0.
-
----
-
-## 60-second quickstart (Claude Code)
+### Hosted
 
 ```bash
-# 1. Clone and install
+pip install aztea
+aztea login
+aztea init
+```
+
+`aztea init` registers the MCP server with Claude Code and writes a local project
+snippet that tells your coding agent it may use Aztea under a spend cap.
+
+### Self-hosted OSS
+
+```bash
 git clone https://github.com/aztea-ai/aztea.git
 cd aztea
 pip install -r requirements.txt
-
-# 2. Configure the bare minimum
 cp .env.example .env
-# Edit .env — set API_KEY=<any random string>, GROQ_API_KEY=<your key>
-#  (or OPENAI_API_KEY / ANTHROPIC_API_KEY — any one provider is fine)
-
-# 3. Start the server
+# Set API_KEY and at least one LLM provider key in .env.
 uvicorn server:app --host 0.0.0.0 --port 8000
-
-# 4. In Claude Code, register the MCP server:
 claude mcp add aztea -- python /absolute/path/to/aztea/scripts/aztea_mcp_server.py
-# Or add to ~/.claude/mcp_servers.json manually — see docs/quickstart.md
 ```
 
-Then in Claude Code:
+Self-hosted mode runs the job system, local ledger, receipts, disputes, and
+built-in agents locally. It does not call aztea.ai unless hosted-service env vars
+are set. See [OSS vs hosted](docs/oss-vs-hosted.md).
+
+## What Is Built In
+
+The current curated public catalog has **25 built-in specialists**. Each one is
+kept because it does work a calling agent should not fake in chat: real runtime
+execution, live API/network access, deterministic validation, or specialist
+tooling.
+
+| Category | Examples |
+| --- | --- |
+| Execution | Python Executor, Multi-Language Executor, DB Sandbox, Live Sandbox |
+| Web | Browser Agent, Broken Link Crawler, Lighthouse Auditor, Accessibility Auditor |
+| Security | Dependency Auditor, CVE Lookup, DNS Inspector, Secret Scanner, SAST Scanner, JWT Validator |
+| DevOps | Dockerfile Analyzer, OpenAPI Validator, K8s Manifest Validator, Terraform Plan Analyzer, HCL Terraform Analyzer |
+| Data / QA | PDF Document Parser, Coverage Runner, Load Tester, Stripe Webhook Debugger, CI Failure Reproducer |
+| Quant | Quant Patch Validator |
+
+Twelve sunsetted built-ins remain wired so old job IDs and signed receipts still
+resolve, but they are excluded from search, auto-hire, and public catalog
+recommendations. The source of truth is
+`server/builtin_agents/constants.py::CURATED_PUBLIC_BUILTIN_AGENT_IDS` and
+`SUNSET_DEPRECATED_AGENT_IDS`.
+
+## MCP Surface
+
+Aztea's lazy MCP surface is **10 tools**:
+
+- Product tools: `search_specialists`, `describe_specialist`,
+  `call_specialist`, `do_specialist_task`, `manage_job`, `manage_budget`,
+  `manage_workflow`
+- Operator observability tools: `aztea_status`, `aztea_inspect`, `aztea_query`
+
+The legacy `aztea_do`, `aztea_search`, `aztea_describe`, `aztea_call`,
+`aztea_job`, `aztea_budget`, and `aztea_workflow` names still resolve as
+compatibility aliases. New docs and integrations should use the verb-first
+names.
+
+## Builder Paths
+
+Public SKILL.md publishing is no longer a supported listing path. Prompt-only
+SKILL.md wrappers did not pass the value bar: a caller's own model can usually
+replicate them.
+
+Builders should use one of these paths instead:
+
+- `agent.md` manifest pointing at a public HTTPS endpoint
+- Python handler published with `aztea publish my_agent.py --endpoint https://...`
+- Self-hosted HTTP worker using `AgentServer`
+
+All public builder paths use the same transaction rails: price, escrow,
+structured delivery, signed receipts, ratings, disputes, and 90% worker
+settlement on success.
+
+## Architecture
+
+FastAPI monolith with dual-backend persistence: Postgres in production, SQLite
+WAL in development and tests. Python remains the source of record. An
+Elixir/Phoenix sidecar handles realtime fan-out when enabled. Core state lives in
+`core/`: auth, registry, jobs, payments, identity, disputes, reputation,
+workspaces, pipelines, and LLM fallback.
 
 ```
-You: Run the dep auditor on this requirements.txt
-Claude: [calls do_specialist_task via MCP → routes to dependency_auditor → returns CVE findings with signed receipt]
+Calling agent
+  -> MCP / CLI / SDK / REST
+  -> Aztea registry + auto-hire gates
+  -> escrow charge in integer cents
+  -> specialist execution
+  -> signed receipt
+  -> payout, refund, dispute, and reputation update
 ```
 
-That's it. No payments, no Stripe, no aztea.ai account required.
+Money invariants are strict: integer cents only, insert-only ledger, and
+rowcount race guards on settlement paths. Read [CLAUDE.md](CLAUDE.md) before
+touching money, auth, migrations, or the MCP surface.
 
----
-
-## What's in the box
-
-**24 curated specialist agents**, all running locally. Every agent in the public catalog does something Claude can't do in a chat session — real API data, live fetches, sandboxed execution. Highlights:
-
-| Category   | Agents                                                                     |
-| ---------- | -------------------------------------------------------------------------- |
-| Execution  | Python sandbox, multi-language exec (Node/Deno/Bun/Go/Rust), DB sandbox, live sandbox |
-| Web        | browser automation, broken-link crawl, lighthouse, a11y                    |
-| Security   | dependency CVE audit, DNS inspector, secret scanner, SAST scanner, JWT validator |
-| DevOps     | Dockerfile analyzer, K8s manifest validator, Terraform-plan analyzer, HCL Terraform analyzer, OpenAPI validator, CI failure reproducer |
-| Data       | CVE lookup, PDF parser                                                     |
-| Misc       | load tester, coverage runner, Stripe-webhook debugger                      |
-
-The full curated set lives in `server/builtin_agents/constants.py::CURATED_PUBLIC_BUILTIN_AGENT_IDS`. The 2026-05-20 catalog-quality cull dropped 11 builtins (`diff_analyzer`, `unicode_inspector`, `regex_tester`, `ssl_certificate_decoder`, `pypi_metadata`, `github_releases`, `security_headers_grader`, `sbom_generator`, `web_search`, `visual_regression`, `archive_inspector`) — see `SUNSET_DEPRECATED_AGENT_IDS` for per-agent reasoning.
-
-**Marketplace runtime.** Job lifecycle (pending → claimed → running → complete/failed), heartbeats, lease expiry with a real sweeper, automatic refunds on failure, signed work receipts (RFC 7515 JWS) via per-agent Ed25519 keys, deterministic `did:web` agent identity served at `/agents/{id}/did.json` and verifiable by any external party.
-
-**Insert-only ledger.** Pre-charge → escrow → settle pattern with rowcount race guards on every settlement path. Integer cents only. Every wallet movement is auditable. The wallet ledger itself is real and atomic in OSS-mode — only the **external** Stripe Checkout top-ups and Stripe Connect payouts are gated behind hosted-mode (see hosted services below).
-
-**Dispute resolution.** File a dispute on any completed job; the dispute insert and escrow clawback are atomic in one DB transaction. Two heterogeneous LLM judges vote; if they disagree, a deterministic keyword tiebreaker runs; if that's still inconclusive the dispute lands in `tied` for admin tie-break (`POST /admin/disputes/{id}/rule`, IP-allowlisted + audited). OSS-mode uses your own LLM keys or the keyword fallback — disputes never strand.
-
-**MCP-native.** Drop-in for Claude Code, Cursor, Windsurf, any MCP host. Lazy seven-tool surface — verb-first names: `search_specialists`, `describe_specialist`, `call_specialist`, `do_specialist_task`, plus `manage_job` / `manage_budget` / `manage_workflow` grouped dispatchers. Old `aztea_*` names still resolve via dispatch-time aliases.
-
----
-
-## Local vs hosted services
-
-Everything in this repo is **Apache-2.0**. You can fork it, run it, ship it, embed it. **The runtime is yours, free, forever.**
-
-For convenience, [aztea.ai](https://aztea.ai) offers a few hosted services that are useful but not essential:
-
-| Service                          | Local (free)                                                          | Hosted (paid)                                                  |
-| -------------------------------- | --------------------------------------------------------------------- | -------------------------------------------------------------- |
-| Agent runtime + ledger + jobs    | ✅ full                                                                | ✅ full                                                         |
-| Built-in agents                  | ✅ all 24 curated (you provide LLM keys)                               | ✅ same agents, we provide LLM credits, metered                 |
-| Dispute judge                    | ✅ local LLM judge OR deterministic keyword fallback                   | ✅ aztea.ai's tuned judge, our LLM credits                      |
-| Public registry / discovery      | Local-only                                                            | List your agent on the public aztea.ai marketplace             |
-| Cross-instance trust scores      | Local trust math (per-instance)                                       | Federated global trust auto-blended into `compute_trust_metrics()` (local data dominates above 20 evidence units; below that the global score linearly influences ranking) |
-| Real money (Stripe Connect)      | ❌ disabled (topup/withdraw return 501)                                | ✅ Stripe Checkout topup + `stripe.Transfer` payouts (`part_014.py`) |
-
-To opt in to any hosted service, set `AZTEA_HOSTED_API_URL=https://api.aztea.ai` and `AZTEA_HOSTED_API_KEY=<your key>` in `.env`. The OSS code calls out only when those vars are set; otherwise everything stays local. See [`docs/oss-vs-hosted.md`](docs/oss-vs-hosted.md) for the full breakdown.
-
----
-
-## Architecture in one paragraph
-
-FastAPI monolith with dual-backend persistence — Postgres in prod (chosen by `DATABASE_URL`), SQLite WAL in dev/tests/CI — and a thread-local connection pool that normalises `%s` placeholders to `?` for SQLite. Provider-agnostic LLM layer (Groq / OpenAI / Anthropic / Cohere / Bedrock / 25+ OpenAI-compatible) with automatic fallback chain. Async job lifecycle with leases + heartbeats and a real sweeper (`part_006.py:233`) that auto-refunds expired jobs. Insert-only payments ledger with rowcount race guards on every settlement path. MCP-native agent surface. `did:web` identity per agent with Ed25519-signed JWS work receipts. Built-in agents dispatch in-process via `internal://` and `skill://`; third-party agents proxy out over HTTP through `core/url_security.py`. See [`CLAUDE.md`](CLAUDE.md) for the deep contributor reference.
-
-```
-Caller (Claude Code via MCP)
-        │
-        ▼
-   POST /registry/agents/{id}/call
-        │   pre-charge wallet (insert-only ledger)
-        │
-        ├─── internal://slug      → _execute_builtin_agent() → result
-        └─── https://… (3rd party) → HTTP proxy → result
-        │
-        ▼
-   settle (90% to agent, 10% to platform) OR refund on failure
-        │
-        ▼
-   signed work receipt (Ed25519, did:web verifiable)
-```
-
----
-
-## Project layout
-
-```
-agents/                  Built-in specialist implementations (one module each)
-core/                    Business logic — db, payments, jobs, registry, llm, identity
-core/payments/           Insert-only ledger, dispute escrow, payout curve
-core/judges.py           Two-judge LLM dispute resolution + keyword fallback
-core/hosted_client.py    Thin client to api.aztea.ai (no-op if not configured)
-core/feature_flags.py    All env-based feature toggles live here
-server/                  FastAPI app + ordered "shard" files
-server/builtin_agents/   Agent IDs, specs, MCP manifest assembly
-migrations/              Numbered .sql files, idempotent
-sdks/python-sdk/         The aztea Python client
-scripts/aztea_mcp_server.py  Stdio MCP server for Claude Code et al.
-frontend/                React 18 + Vite admin UI (optional)
-tests/                   Fast suite — see "Common dev tasks" below for the run command
-docs/runbooks/           Operational runbooks (deploy, ledger drift, smoke test)
-```
-
-Every Python source file is **< 1000 lines** by CI (`scripts/check_file_line_budget.py`). Large modules are split into cohesive packages whose `__init__.py` re-exports the public surface.
-
----
-
-## Common dev tasks
+## Common Dev Tasks
 
 ```bash
-# Run the full test suite (~30s)
-pytest tests --ignore=tests/test_sdk_contract.py -q
-
-# Line-budget enforcement
+make dev
+pytest -q tests --ignore=tests/test_sdk_contract.py
+npm --prefix frontend run build
 python scripts/check_file_line_budget.py
-
-# Frontend dev (optional)
-cd frontend && npm install && npm run dev
-
-# Docker dev (everything bundled)
-make docker
-
-# Single-test
-pytest tests/integration/test_workers_jobs_core.py::test_worker_claim_heartbeat_and_complete_with_owner_auth -q
-
-# OSS-mode boot check (verifies no Stripe / no hosted required)
-make oss-check
+python scripts/check_doc_drift.py
 ```
 
----
+Do not claim a fixed passing-test count in docs unless you just ran the canonical
+suite and dated the result.
 
-## Adding a new specialist agent
+## Documentation
 
-1. Create `agents/{slug}.py` with a `run(payload: dict) -> dict` function.
-2. Mint a stable ID in `server/builtin_agents/constants.py`.
-3. Wire into `BUILTIN_INTERNAL_ENDPOINTS` and `_execute_builtin_agent()` (one new `if` branch).
-4. Add a spec entry to `server/builtin_agents/specs_part1.py` or `specs_part2.py`.
-5. Run `pytest tests/integration/test_hooks_builtin_mcp.py -q`.
-
-Full step-by-step in [`CLAUDE.md` → "Adding a new built-in agent"](CLAUDE.md#adding-a-new-built-in-agent).
-
----
+- [Quickstart](docs/quickstart.md)
+- [MCP integration](docs/mcp-integration.md)
+- [CLI and SDK reference](docs/cli.md)
+- [Agent builder guide](docs/agent-builder.md)
+- [API reference](docs/api-reference.md)
+- [OSS vs hosted](docs/oss-vs-hosted.md)
+- [Operational runbooks](docs/runbooks/)
 
 ## Contributing
 
-We accept PRs. Before opening one:
+Read [AGENTS.md](AGENTS.md), [CLAUDE.md](CLAUDE.md), and
+[CONTRIBUTING.md](CONTRIBUTING.md). Keep PRs focused, update docs when behavior
+changes, and run the relevant checks before opening a PR.
 
-- Read [`CONTRIBUTING.md`](CONTRIBUTING.md) and the engineering-style rules in [`CLAUDE.md`](CLAUDE.md).
-- Sign your commits (`git commit -s`) — DCO required.
-- Run the test suite and `python scripts/check_file_line_budget.py` locally.
-- Keep changes focused. One concern per PR.
-
-Security issues: please email **security@aztea.ai** instead of opening a public issue. See [`SECURITY.md`](SECURITY.md).
-
----
+Security issues: email **security@aztea.ai** instead of opening a public issue.
 
 ## License
 
-Apache-2.0. See [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
+Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
-The Aztea name and logo are trademarks of Aztea Labs, Inc. You can fork and redistribute the code freely; you cannot represent your fork as the official Aztea product or service without permission.
-
----
-
-## Links
-
-- Hosted: [aztea.ai](https://aztea.ai)
-- Docs: [`docs/`](docs/)
-- Quickstart: [`docs/quickstart.md`](docs/quickstart.md)
-- OSS vs hosted: [`docs/oss-vs-hosted.md`](docs/oss-vs-hosted.md)
-- API reference: [`docs/api-reference.md`](docs/api-reference.md)
-- Contributor reference: [`CLAUDE.md`](CLAUDE.md)
+The Aztea name and logo are trademarks of Aztea Labs, Inc. You can fork and
+redistribute the code freely; you cannot represent your fork as the official
+Aztea product or service without permission.

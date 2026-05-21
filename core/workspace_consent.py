@@ -3,7 +3,7 @@
 # OWNS: ~/.aztea/workspace_consent.json — the user's approval/denial decisions
 #       for sharing workspace context, keyed by absolute filesystem path.
 # NOT OWNS: Bundle construction (core/workspace_bundle.py), MCP wiring
-#           (scripts/aztea_mcp_server.py), or any backend state.
+#           (aztea.mcp.server), or any backend state.
 # INVARIANTS:
 #   - The consent file is created with mode 0o600 (owner read/write only).
 #   - All writes are atomic (write-then-rename) — concurrent invocations

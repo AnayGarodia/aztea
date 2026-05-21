@@ -1257,7 +1257,7 @@ _TOOLS: list[dict[str, Any]] = [
 #   manage_workflow(action=compare_select)→ aztea_select_compare_winner
 #
 # Old names (`aztea_job` / `aztea_budget` / `aztea_workflow`) remain valid
-# via the dispatch-time alias in scripts/aztea_mcp_server.py.
+# via the dispatch-time alias in aztea.mcp.server (_LAZY_TOOL_NAME_ALIASES).
 
 def _validate_grouped_action_inputs(
     tool_name: str, action: str, sub_args: dict[str, Any]

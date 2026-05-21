@@ -14,7 +14,7 @@
 #     This is enforced by the test suite — adding a gate without updating
 #     tests will fail CI.
 # DECISIONS:
-#   - We don't reuse the rich verb-rule ranker from scripts/aztea_mcp_server.py.
+#   - We don't reuse the rich verb-rule ranker from aztea.mcp.server.
 #     That ranker is tuned for "give me a balanced list to choose from"; auto-
 #     invoke needs "is there a CLEAR winner?" — different signal blend. Lean
 #     ranker here favors slug/description/tag matches and quality scores.

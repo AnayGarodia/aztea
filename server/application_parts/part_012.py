@@ -476,8 +476,8 @@ def _skill_response(row: dict, include_raw_md: bool = False) -> dict:
 # Resolves a natural-language intent to a single agent and invokes it in one
 # round-trip — when (and only when) every gate in core.registry.auto_hire
 # passes. Otherwise returns a structured "candidates + reason" payload with
-# no charge. Both MCP frontends (mcp-server.js, scripts/aztea_mcp_server.py)
-# proxy their `aztea_do` tool here.
+# no charge. The MCP frontend (aztea.mcp.server) proxies its
+# `do_specialist_task` / `aztea_do` tool here.
 
 
 class _AutoHireRequestBody(BaseModel):
