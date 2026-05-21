@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import os
 import shutil
 import subprocess
 import tarfile
@@ -29,6 +30,16 @@ from core.url_security import validate_outbound_url
 _LOG = logging.getLogger("aztea.sandbox.source")
 _GIT_CLONE_TIMEOUT_S = 180
 _TARBALL_MAX_BYTES = 256 * 1024 * 1024  # 256 MB cap to match the disk default
+
+# The hardened sandbox containers run as a fixed non-root user (per
+# core/sandbox/lifecycle.py::_isolation_hardening_argv). The host
+# materialises the workspace as whatever UID the API process runs under
+# (commonly 1001/circleci or 1000/ubuntu depending on host); without an
+# explicit chown the container's non-root user cannot read its own
+# checked-out repo. We retarget ownership post-materialisation so the
+# repo is readable inside the hardened sandbox.
+_CONTAINER_UID = 1000
+_CONTAINER_GID = 1000
 
 
 def materialise_source(sandbox_id: str, source: dict[str, Any]) -> tuple[str, dict[str, float]]:
@@ -65,8 +76,39 @@ def materialise_source(sandbox_id: str, source: dict[str, Any]) -> tuple[str, di
         )
     else:
         raise SandboxInvalidInput(f"unsupported source.kind: {kind!r}")
+    _retarget_ownership_for_container(repo_dir)
     elapsed = round(time.time() - start, 2)
     return str(repo_dir), {"clone": elapsed}
+
+
+def _retarget_ownership_for_container(repo_dir: Path) -> None:
+    """Side-effect: chown the workspace tree to the canonical container UID.
+
+    Without this, the hardened non-root user inside the sandbox cannot read
+    files the host materialised under a different UID. Failure to chown
+    (typically: running on a host without os.chown, or as a non-root API
+    process without CAP_CHOWN) is logged but not fatal — the sandbox boot
+    may still succeed if the host UID happens to match.
+    """
+    if not hasattr(os, "chown"):
+        return
+    try:
+        for current_root, dirs, files in os.walk(repo_dir):
+            os.chown(current_root, _CONTAINER_UID, _CONTAINER_GID)
+            for entry in dirs + files:
+                target = os.path.join(current_root, entry)
+                try:
+                    os.chown(target, _CONTAINER_UID, _CONTAINER_GID)
+                except OSError:
+                    # A single broken symlink shouldn't fail the whole
+                    # workspace; continue with the rest.
+                    continue
+    except OSError as exc:
+        _LOG.info(
+            "could not chown sandbox repo to %d:%d (%s); container may "
+            "lack read access if host UID differs",
+            _CONTAINER_UID, _CONTAINER_GID, exc,
+        )
 
 
 def _materialise_git(repo_dir: Path, source: dict[str, Any]) -> None:

@@ -55,9 +55,14 @@ from agents._contracts import agent_error as _err
 # ---------------------------------------------------------------------------
 # Hard limits — never changed by caller input
 # ---------------------------------------------------------------------------
-_MAX_RPS = 50
-_MAX_DURATION_S = 30
-_MAX_CONCURRENCY = 20
+# 2026-05-20: bumped concurrency 20 → 50 and duration 30 → 120s. The
+# previous caps boxed the agent into "sanity check" territory; users
+# explicitly asking for real load tests were getting an artificially
+# small footprint. Wall-clock per call is still bounded — 120s × 50 reqs
+# stays well inside the 240s outer ceiling enforced by the dispatcher.
+_MAX_RPS = 100
+_MAX_DURATION_S = 120
+_MAX_CONCURRENCY = 50
 _REQUEST_TIMEOUT_S = 10
 _DEFAULT_RPS = 5
 _DEFAULT_DURATION_S = 10

@@ -171,11 +171,37 @@ def _write_workspace_artifact(workspace_id: str, path: str, body: dict | str) ->
         _LOG.warning("workspace artifact write failed: %s", exc)
 
 
+def _runtime_dep_preflight() -> dict | None:
+    """Return a structured envelope if a required worker-side dep is missing.
+
+    The agent ships in the curated public catalog, so prod must have these
+    installed. We surface a structured error envelope on ImportError instead
+    of letting a bare ModuleNotFoundError bubble up as a generic 500.
+    """
+    # Hypothesis is the default fuzz engine; without it `fuzz.py` import
+    # itself blows up. Caught here so a worker-image regression returns
+    # `quant_patch_validator.runtime_missing` instead of a 500.
+    try:
+        import hypothesis  # noqa: F401
+    except ImportError:
+        return agent_error(
+            "quant_patch_validator.runtime_missing",
+            "fuzz engine 'hypothesis' is not installed on this worker. "
+            "Install via `pip install hypothesis>=6.100`.",
+            {"missing": "hypothesis"},
+        )
+    return None
+
+
 def run(payload: dict[str, Any]) -> dict[str, Any]:
     """Validate an AI-written patch against a reference implementation.
 
     Returns a structured dict; never raises.
     """
+    preflight_error = _runtime_dep_preflight()
+    if preflight_error is not None:
+        return preflight_error
+
     validation_error = _validate_payload(payload)
     if validation_error is not None:
         return validation_error

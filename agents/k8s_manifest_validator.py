@@ -90,7 +90,12 @@ def _parse_yaml(combined: str) -> tuple:
         docs = [d for d in yaml.safe_load_all(combined) if d is not None]
         return docs, None
     except yaml.YAMLError as exc:
-        return None, _error("k8s_manifest_validator.invalid_yaml", f"YAML parse error: {exc}")
+        # Surface the offending fragment so callers can see which line is bad.
+        return None, _error(
+            "k8s_manifest_validator.invalid_yaml",
+            f"YAML parse error: {exc}",
+            {"passed_input_fragment": combined[:200]},
+        )
 
 
 def _check_limits(strings: list, docs: list) -> dict | None:
@@ -449,6 +454,9 @@ def _finding(severity: str, rule: str, message: str, path: str) -> dict:
     return {"severity": severity, "rule": rule, "message": message, "path": path}
 
 
-def _error(code: str, message: str) -> dict:
+def _error(code: str, message: str, details: dict | None = None) -> dict:
     """Construct a structured error envelope."""
-    return {"error": {"code": code, "message": message}}
+    err: dict = {"code": code, "message": message}
+    if details:
+        err["details"] = details
+    return {"error": err}

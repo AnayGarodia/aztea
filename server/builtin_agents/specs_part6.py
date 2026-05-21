@@ -165,7 +165,7 @@ def load_builtin_specs_part6() -> list[dict[str, Any]]:
         {
             "agent_id": _ACCESSIBILITY_AUDITOR_AGENT_ID,
             "name": "Accessibility Auditor",
-            "description": "Use when the task requires checking a web page for WCAG accessibility violations. Loads the URL in a real Chromium browser, injects axe-core, and returns structured violations grouped by rule with the affected DOM nodes. Defaults to the WCAG-2.1-AA tag set.",
+            "description": "Use when the task requires checking a web page for WCAG accessibility violations. Loads the URL in a real Chromium browser, injects axe-core 4.x, and returns structured violations grouped by rule with the affected DOM nodes. Defaults to the WCAG-2.1-AA tag set. Best evaluated against content-rich pages (e.g., Wikipedia or a real product site) — single-paragraph stubs like example.com don't exercise the rule engine.",
             "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_ACCESSIBILITY_AUDITOR_AGENT_ID],
             "price_per_call_usd": 0.03,
             "tags": [

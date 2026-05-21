@@ -41,9 +41,12 @@ _REPLACE_ACTION_PAIRS: frozenset[tuple] = frozenset(
 )
 
 
-def _err(code: str, message: str) -> dict:
+def _err(code: str, message: str, details: dict | None = None) -> dict:
     """Return a structured error envelope."""
-    return {"error": {"code": f"terraform_plan_analyzer.{code}", "message": message}}
+    err: dict = {"code": f"terraform_plan_analyzer.{code}", "message": message}
+    if details:
+        err["details"] = details
+    return {"error": err}
 
 
 def _parse_input(payload: dict) -> tuple[dict, None] | tuple[None, dict]:
@@ -65,7 +68,19 @@ def _parse_input(payload: dict) -> tuple[dict, None] | tuple[None, dict]:
         try:
             return json.loads(raw), None
         except json.JSONDecodeError as exc:
-            return None, _err("invalid_json", f"plan_json is not valid JSON: {exc}")
+            # Quote the offending fragment back to the caller so they can
+            # see which line of their input was bad. Tip: most JSON parse
+            # errors fire on the line+col already in the exception, but we
+            # also include the first 200 chars of `raw` so the caller can
+            # see whether they passed `terraform show -json` output or
+            # the human-readable `terraform plan` output by mistake.
+            details = {"snippet": raw[:200], "passed_input_fragment": raw[:200]}
+            return None, _err(
+                "invalid_json",
+                f"plan_json is not valid JSON: {exc}. Pass the output of "
+                "`terraform show -json <plan_file>`, not the human-readable plan.",
+                details,
+            )
 
     return None, _err("invalid_json", "plan_json must be a JSON string or dict")
 

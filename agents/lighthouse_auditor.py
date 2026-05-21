@@ -72,15 +72,17 @@ _DEFAULT_STRATEGY = "mobile"
 # the previous 90s default tripped `lighthouse_auditor.timeout` on roughly
 # every real-world commercial page in the test report. The hard ceiling
 # stays at 240s to bound wall-clock per call.
-_DEFAULT_TIMEOUT = 150
+_DEFAULT_TIMEOUT = 180
 _MIN_TIMEOUT = 30
-_MAX_TIMEOUT = 240
-# Lighthouse's own ``--max-wait-for-load`` ceiling. Bumped from 45s → 60s
-# alongside the outer timeout — slow CDN cold-cache pages exceed 45s for
-# the first paint on a fresh chromium launch even though they finish within
-# 60s. Keeping it strictly below ``_DEFAULT_TIMEOUT`` so lighthouse fails
-# its own gate before subprocess.run kills it.
-_LIGHTHOUSE_MAX_WAIT_MS = 60_000
+_MAX_TIMEOUT = 300
+# Lighthouse's own ``--max-wait-for-load`` ceiling. Bumped to 90s on
+# 2026-05-20 alongside an outer-timeout bump: slow LCP pages (real-world
+# commercial sites with heavy frameworks + cold CDN cache) routinely take
+# 65–80s on the first paint of a fresh chromium launch and lighthouse's
+# own gate was firing before subprocess.run could. Keeping the bump
+# strictly below ``_DEFAULT_TIMEOUT`` so lighthouse fails its own gate
+# before the outer kill.
+_LIGHTHOUSE_MAX_WAIT_MS = 90_000
 _MAX_OPPORTUNITIES = 8
 _MAX_FAILED_AUDITS = 15
 _STDERR_TAIL_CHARS = 600
@@ -141,9 +143,11 @@ def _resolve_chrome_path() -> str | None:
         which = shutil.which(system_path)
         if which:
             return which
+    # First try the known Playwright glob patterns — fast and covers 99%
+    # of installs. If those miss (Playwright reorganised the cache layout,
+    # the version is uncommon, etc.), fall back to a full os.walk of the
+    # cache directories looking for any executable named chrome/chromium.
     for cache_dir in _PLAYWRIGHT_CACHE_DIRS:
-        # Glob covers both the full chromium build and the headless shell;
-        # prefer the full build because some lighthouse audits need DevTools.
         for pattern in (
             f"{cache_dir}/chromium-*/chrome-linux64/chrome",
             f"{cache_dir}/chromium-*/chrome-linux/chrome",
@@ -153,6 +157,27 @@ def _resolve_chrome_path() -> str | None:
             if matches:
                 # Newest version sorts last alphanumerically (chromium-1208 < chromium-1210).
                 return matches[-1]
+    # Last-resort exhaustive walk for hosts where Playwright has changed
+    # the directory layout out from under us. Bounded depth keeps this
+    # cheap even when the cache has many sibling installs.
+    for cache_dir in _PLAYWRIGHT_CACHE_DIRS:
+        if not os.path.isdir(cache_dir):
+            continue
+        candidates: list[str] = []
+        for root, dirs, files in os.walk(cache_dir):
+            depth = root[len(cache_dir):].count(os.sep)
+            if depth > 4:
+                dirs.clear()
+                continue
+            for fname in files:
+                if fname in ("chrome", "chromium", "chrome-headless-shell"):
+                    full = os.path.join(root, fname)
+                    if os.access(full, os.X_OK):
+                        candidates.append(full)
+        if candidates:
+            # Prefer the full chrome binary over the headless-shell variant.
+            candidates.sort(key=lambda p: (p.endswith("headless-shell"), p))
+            return candidates[0]
     return None
 
 
@@ -319,6 +344,11 @@ def _execute_lighthouse(
         # See ``_resolve_chrome_path`` docstring for why this is essential
         # on hosts that ship chromium under Playwright's cache.
         env["CHROME_PATH"] = chrome_path
+    # Note: we intentionally do NOT short-circuit when chrome_path is None.
+    # lighthouse may still find a system chrome that our resolver missed,
+    # and tests that mock subprocess.run need the pipeline to proceed. The
+    # post-run path below surfaces the structured chromium_unavailable
+    # envelope when the subprocess actually fails for that reason.
     try:
         proc = subprocess.run(
             cmd, capture_output=True, text=True, timeout=timeout_s,
@@ -337,19 +367,23 @@ def _execute_lighthouse(
     # cause rather than a generic timeout.
     if proc.returncode != 0 and not _report_has_content(out_path):
         stderr_tail = (proc.stderr or "")[-_STDERR_TAIL_CHARS:]
-        chrome_hint = (
-            ""
-            if chrome_path
-            else (
-                " Hint: no Chrome/Chromium binary was discoverable "
-                "(set CHROME_PATH, install google-chrome, or run "
-                "`playwright install chromium`)."
+        # When no chromium was discoverable, surface that as its own error
+        # code so callers can route to the install instructions instead of
+        # debugging a generic "lighthouse run failed".
+        if not chrome_path:
+            return _err(
+                "lighthouse_auditor.chromium_unavailable",
+                "Lighthouse cannot run: no Chrome/Chromium binary discoverable "
+                "on this worker. Set CHROME_PATH, install google-chrome / "
+                "chromium-browser, or run `playwright install chromium`. "
+                f"Lighthouse exited {proc.returncode}; stderr tail: "
+                f"{stderr_tail.strip() or 'no stderr'}.",
+                {"searched_paths": list(_PLAYWRIGHT_CACHE_DIRS)},
             )
-        )
         return _err(
             "lighthouse_auditor.run_failed",
             f"Lighthouse exited {proc.returncode} with no JSON output: "
-            f"{stderr_tail.strip() or 'no stderr'}.{chrome_hint}",
+            f"{stderr_tail.strip() or 'no stderr'}.",
         )
     return None
 

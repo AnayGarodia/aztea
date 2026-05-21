@@ -115,12 +115,32 @@ def _fetch_pdf(url: str) -> tuple[bytes | None, dict | None]:
         )["error"]
 
 
-def _extract_tables(pdf_bytes: bytes, max_pages: int) -> list[dict[str, Any]]:
+def _extract_tables(pdf_bytes: bytes, max_pages: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Extract tables and return ``(tables, attempt_info)``.
+
+    The attempt_info dict surfaces whether pdfplumber was actually invoked,
+    what it found, and the failure reason if any — so callers who asked for
+    tables but got an empty list know the agent looked and what happened.
+    """
+    attempt: dict[str, Any] = {
+        "attempted": True,
+        "extractor": "pdfplumber",
+        "available": False,
+        "pages_scanned": 0,
+        "tables_found": 0,
+        "error": None,
+    }
     try:
         import pdfplumber  # type: ignore[import]
     except ImportError:
         # Tables are optional; surface absence as empty rather than failing the call.
-        return []
+        attempt["available"] = False
+        attempt["error"] = (
+            "pdfplumber is not installed on this worker; "
+            "install with `pip install pdfplumber>=0.11.0`."
+        )
+        return [], attempt
+    attempt["available"] = True
 
     out: list[dict[str, Any]] = []
     try:
@@ -128,6 +148,7 @@ def _extract_tables(pdf_bytes: bytes, max_pages: int) -> list[dict[str, Any]]:
             for idx, page in enumerate(pdf.pages):
                 if idx >= max_pages:
                     break
+                attempt["pages_scanned"] = idx + 1
                 try:
                     raw_tables = page.extract_tables() or []
                 except Exception:
@@ -153,7 +174,9 @@ def _extract_tables(pdf_bytes: bytes, max_pages: int) -> list[dict[str, Any]]:
                     )
     except Exception as exc:
         _LOG.warning("pdfplumber failed: %s", exc, exc_info=True)
-    return out
+        attempt["error"] = str(exc)[:200]
+    attempt["tables_found"] = len(out)
+    return out, attempt
 
 
 def _normalize_run_inputs(
@@ -387,7 +410,18 @@ def run(payload: dict) -> dict:
         pages_out, full_text = _read_pages(doc, pages_to_read, max_text_chars)
     finally:
         doc.close()
-    tables = _extract_tables(pdf_bytes, pages_to_read) if include_tables else []
+    if include_tables:
+        tables, table_extraction = _extract_tables(pdf_bytes, pages_to_read)
+    else:
+        tables = []
+        table_extraction = {
+            "attempted": False,
+            "extractor": "pdfplumber",
+            "available": True,
+            "pages_scanned": 0,
+            "tables_found": 0,
+            "error": None,
+        }
     return {
         "url": url,
         "page_count": page_count,
@@ -396,5 +430,9 @@ def run(payload: dict) -> dict:
         "text": full_text,
         "pages": pages_out,
         "tables": tables,
+        # 2026-05-20: surface that the agent looked even when zero tables
+        # were found, so callers can distinguish "agent didn't try" from
+        # "agent tried and the PDF genuinely has no extractable tables".
+        "table_extraction": table_extraction,
         "billing_units_actual": max(1, len(pages_out)),
     }

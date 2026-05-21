@@ -37,10 +37,18 @@ def load_builtin_specs_part10() -> list[dict[str, Any]]:
                 "'docker'. Containers run as a non-root UID (1000:1000) on "
                 "the direct-launch boot strategies (dockerfile / custom / "
                 "devcontainer / nix); compose stacks honour whatever the "
-                "user's compose file declares. Concurrency: this agent is "
-                "rate-limited at the transport layer to the platform's "
-                "per-key RPM (see metadata.concurrency); fan-outs above "
-                "that drop into the standard 429 retry-after path."
+                "user's compose file declares. The workspace tree is chowned "
+                "to uid=1000:gid=1000 post-clone so the hardened non-root "
+                "user can read its own checked-out repo. Network egress: "
+                "git-source bootstraps default to a curated allowlist "
+                "(github.com, pypi.org, registry.npmjs.org) so `pip install` "
+                "and `npm install` work out of the box; pass "
+                "`network.egress: 'isolated'` explicitly for full network "
+                "isolation. Idle containers auto-suspend after 30 min and "
+                "are transparently resumed on the next sandbox_exec. "
+                "Concurrency: this agent is rate-limited at the transport "
+                "layer to the platform's per-key RPM (see metadata.concurrency); "
+                "fan-outs above that drop into the standard 429 retry-after path."
             ),
             "endpoint_url": _BUILTIN_INTERNAL_ENDPOINTS[_LIVE_SANDBOX_AGENT_ID],
             "price_per_call_usd": 0.05,
@@ -165,7 +173,28 @@ def load_builtin_specs_part10() -> list[dict[str, Any]]:
                     },
                     "input": {
                         "type": "object",
-                        "description": "Action-specific payload (see action docs).",
+                        "description": (
+                            "Action-specific payload. Common keys: "
+                            "`source` = {kind: 'git'|'tarball'|'raw_files', url, ref, "
+                            "shallow, submodules} for sandbox_start; "
+                            "`boot` = {strategy: 'auto'|'dockerfile'|'compose'|'devcontainer'|"
+                            "'custom_commands', custom_commands: [...]} for sandbox_start; "
+                            "`network` = {egress: 'isolated'|'allowlist'|'open', "
+                            "egress_allowlist: [hosts]} — git sources default to a "
+                            "curated allowlist (github.com, pypi.org, npm) when not set; "
+                            "`cmd` = string command for sandbox_exec; "
+                            "`user` = string container UID/name for sandbox_exec (defaults "
+                            "to the hardened non-root user); "
+                            "`snapshot_id` = string for sandbox_restore / sandbox_fork; "
+                            "`workdir`, `env`, `timeout_s` honoured by every exec verb."
+                        ),
+                    },
+                    "sandbox_id": {
+                        "type": "string",
+                        "description": (
+                            "Required for every action except sandbox_start. "
+                            "Returned by sandbox_start in `sandbox_id`."
+                        ),
                     },
                     "workspace_id": {
                         "type": "string",

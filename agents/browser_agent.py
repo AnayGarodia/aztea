@@ -48,7 +48,13 @@ _PNG_IHDR_END = 24
 _SCRIPT_RESULT_MAX_CHARS = 8_000
 _HTML_TRUNCATE = 200_000
 _TEXT_TRUNCATE = 60_000
-_VALID_ACTIONS = ("scrape", "screenshot", "pdf")
+# `screenshot_only` was added 2026-05-20 so callers who want JUST a PNG
+# don't get back a 528-byte HTML payload they have to ignore. Both
+# `screenshot` and `screenshot_only` render a viewport-sized PNG; the
+# latter strips html / visible_text / links / script_result from the
+# response (keeping artifact + title + final_url). Callers that asked
+# for `screenshot` still get the old shape verbatim.
+_VALID_ACTIONS = ("scrape", "screenshot", "screenshot_only", "pdf")
 _NAV_TIMEOUT_MS = 15_000
 _NETWORK_LOG_LIMIT = 200
 _CONSOLE_LOG_LIMIT = 20
@@ -270,7 +276,11 @@ def _capture_page(page: Any, action: str) -> dict[str, Any]:
         visible_text = ""
     visible_text = _truncate_text(visible_text)
     links = _extract_links(page)
-    screenshot_bytes = page.screenshot(full_page=(action != "screenshot"), type="png")
+    # `screenshot` is the viewport-only fast path; everything else takes
+    # the full-page capture (PDF needs it, scrape just gets it for free).
+    # `screenshot_only` matches `screenshot` for the actual image.
+    viewport_only = action in ("screenshot", "screenshot_only")
+    screenshot_bytes = page.screenshot(full_page=(not viewport_only), type="png")
     pdf_bytes = page.pdf(print_background=True) if action == "pdf" else None
     return {
         "title": title,
@@ -338,6 +348,22 @@ def _build_result(
     capture_network: bool, script_result: Any,
 ) -> dict[str, Any]:
     """Pure: shape the agent's response from captured browser data."""
+    # `screenshot_only` strips the HTML / visible_text / links / script_result
+    # noise from the response. Callers who want both image and HTML continue
+    # to use action="screenshot".
+    if action == "screenshot_only":
+        return {
+            "url": url,
+            "requested_url": requested_url,
+            "title": capture["title"],
+            "action": action,
+            "wait_for": wait_for,
+            "status_code": int(response.status) if response is not None else None,
+            "screenshot_artifact": _bytes_to_artifact(
+                "screenshot.png", "image/png", capture["screenshot_bytes"],
+            ),
+            "execution_time_ms": elapsed_ms,
+        }
     result: dict[str, Any] = {
         "url": url,
         "requested_url": requested_url,

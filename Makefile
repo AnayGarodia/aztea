@@ -1,4 +1,4 @@
-.PHONY: dev test test-venv docker migrate demo lint evals smoke alerts launch-check oss-check
+.PHONY: dev test test-venv docker migrate demo lint evals smoke alerts launch-check oss-check check-runtime-deps
 
 dev:
 	uvicorn server:app --reload
@@ -30,6 +30,12 @@ lint:
 #   llm_used can't silently lie.
 contract-tests:
 	@bash -c 'set -e; test -d .venv && . .venv/bin/activate; python -m pytest -q tests/contract && python scripts/lint_specs.py'
+
+# Catch agent imports that aren't pinned in requirements.txt. Prevents the
+# "agent listed in catalog but ModuleNotFoundError on first call" failure
+# mode (quant_patch_validator hit this for hypothesis on 2026-05-20).
+check-runtime-deps:
+	@bash -c 'set -e; test -d .venv && . .venv/bin/activate; python scripts/check_runtime_deps.py'
 
 # Launch readiness gates: each one is intended to be a hard CI/cron check.
 # evals: runs the deterministic agent contract suite (tests/test_agent_golden_evals.py)
