@@ -127,7 +127,7 @@ class TestWithdrawalAvailableBalance:
         if balance_cents:
             payments.deposit(wallet["wallet_id"], balance_cents, memo="test")
         if held_cents:
-            with db.get_db_connection() as conn:
+            with db.get_db_connection(payments.DB_PATH) as conn:
                 conn.execute("BEGIN IMMEDIATE")
                 conn.execute(
                     "UPDATE wallets SET held_cents = %s WHERE wallet_id = %s",
@@ -356,7 +356,7 @@ class TestPayoutCurveClawbackConsumesHold:
         assert result["clawback_cents"] == 1000
 
         from core.payments import holds as _holds
-        with db.get_db_connection() as conn:
+        with db.get_db_connection(payments.DB_PATH) as conn:
             hold = conn.execute(
                 "SELECT status, release_reason, clawback_cents FROM wallet_holds WHERE job_id = %s",
                 (ctx["job_id"],),
@@ -389,7 +389,7 @@ class TestPayoutCurveClawbackConsumesHold:
             payout_fraction=0.5,
         )
         assert result["applied"] is True
-        with db.get_db_connection() as conn:
+        with db.get_db_connection(payments.DB_PATH) as conn:
             hold = conn.execute(
                 "SELECT status, clawback_cents FROM wallet_holds WHERE job_id = %s",
                 (ctx["job_id"],),
@@ -416,7 +416,7 @@ class TestPayoutCurveClawbackConsumesHold:
         )
         assert result["applied"] is True
         assert result["clawback_cents"] == 300
-        with db.get_db_connection() as conn:
+        with db.get_db_connection(payments.DB_PATH) as conn:
             hold = conn.execute(
                 "SELECT status, amount_cents, clawback_cents FROM wallet_holds WHERE job_id = %s",
                 (ctx["job_id"],),
@@ -442,7 +442,7 @@ class TestPayoutCurveClawbackConsumesHold:
             payout_fraction=1.0,
         )
         assert result["applied"] is False
-        with db.get_db_connection() as conn:
+        with db.get_db_connection(payments.DB_PATH) as conn:
             hold = conn.execute(
                 "SELECT status, release_reason FROM wallet_holds WHERE job_id = %s",
                 (ctx["job_id"],),
@@ -487,7 +487,7 @@ class TestPayoutCurveClawbackConsumesHold:
         # Re-point ctx['job_id'] at the real row so the wallet_holds row
         # we want to consume needs to match the real_job_id key. Re-create
         # the hold using the real id since trust_disputes reads by job_id.
-        with db.get_db_connection() as conn:
+        with db.get_db_connection(payments.DB_PATH) as conn:
             with conn:  # commits on exit; required so the next caller can BEGIN
                 conn.execute(
                     "UPDATE wallet_holds SET job_id = %s WHERE job_id = %s",
@@ -520,7 +520,7 @@ class TestPayoutCurveClawbackConsumesHold:
         result = _td.lock_dispute_funds("dispute-test-1")
         assert int(result["locked_cents"]) > 0
 
-        with db.get_db_connection() as conn:
+        with db.get_db_connection(payments.DB_PATH) as conn:
             hold = conn.execute(
                 "SELECT status, release_reason FROM wallet_holds WHERE job_id = %s",
                 (ctx["job_id"],),
@@ -539,7 +539,7 @@ class TestPayoutCurveClawbackConsumesHold:
         """
         ctx = _settle_with_curve(None)
         # Backdate the hold so it appears expired.
-        with db.get_db_connection() as conn:
+        with db.get_db_connection(payments.DB_PATH) as conn:
             with conn:
                 conn.execute(
                     "UPDATE wallet_holds SET hold_until = %s WHERE job_id = %s",
@@ -548,7 +548,7 @@ class TestPayoutCurveClawbackConsumesHold:
         from core.payments import holds as _holds
         released = _holds.release_expired_holds(limit=10)
         assert released == 1
-        with db.get_db_connection() as conn:
+        with db.get_db_connection(payments.DB_PATH) as conn:
             hold = conn.execute(
                 "SELECT status, release_reason FROM wallet_holds WHERE job_id = %s",
                 (ctx["job_id"],),
@@ -572,7 +572,7 @@ class TestPayoutCurveClawbackConsumesHold:
         assert clean["held_mismatch_count"] == 0
 
         # Manually corrupt held_cents on the agent wallet and reconcile.
-        with db.get_db_connection() as conn:
+        with db.get_db_connection(payments.DB_PATH) as conn:
             with conn:
                 conn.execute(
                     "UPDATE wallets SET held_cents = held_cents + 17 WHERE wallet_id = %s",
@@ -667,7 +667,7 @@ class TestHoldConcurrency:
         # Five jobs, payout 1000 each, no curve -> hold = 1000 each.
         assert agent_final["balance_cents"] == 5000
         assert agent_final["held_cents"] == 5000
-        with db.get_db_connection() as conn:
+        with db.get_db_connection(payments.DB_PATH) as conn:
             count = conn.execute(
                 "SELECT COUNT(*) AS c FROM wallet_holds WHERE wallet_id = %s AND status = 'active'",
                 (agent_wallet["wallet_id"],),
@@ -707,7 +707,7 @@ class TestHoldLifecycleInvariant:
         SUM(active wallet_holds)=0 for the wallet.
         """
         ctx = _settle_with_curve(None)
-        with db.get_db_connection() as conn:
+        with db.get_db_connection(payments.DB_PATH) as conn:
             with conn:
                 conn.execute(
                     "UPDATE wallet_holds SET hold_until = %s WHERE job_id = %s",
@@ -737,7 +737,7 @@ class TestPayoutCurveDefenseInDepth:
         ctx = _settle_with_curve('{"1": 0.5, "5": 1.0}')
         # Simulate "rating arrived after window" by releasing the hold first.
         from core.payments import holds as _holds
-        with db.get_db_connection() as conn:
+        with db.get_db_connection(payments.DB_PATH) as conn:
             with conn:
                 conn.execute(
                     "UPDATE wallet_holds SET hold_until = %s WHERE job_id = %s",

@@ -105,3 +105,31 @@ def test_get_sqlite_connection_logs_dropped_closed_connection(caplog, tmp_path):
 
     # Cleanup so other tests don't inherit the tmp_path connection.
     db.close_all_connections()
+
+
+def test_get_sqlite_connection_reopens_when_db_path_changes(tmp_path):
+    """Changing SQLite db_path must not reuse a thread-local connection to the old DB."""
+    if db.IS_POSTGRES:
+        pytest.skip("SQLite-specific path")
+
+    first_path = str(tmp_path / "first.db")
+    second_path = str(tmp_path / "second.db")
+
+    first = db._get_sqlite_connection(first_path)
+    first.execute("CREATE TABLE marker (value TEXT)")
+    first.execute("INSERT INTO marker (value) VALUES (?)", ("first",))
+    first.commit()
+
+    second = db._get_sqlite_connection(second_path)
+    second.execute("CREATE TABLE marker (value TEXT)")
+    second.execute("INSERT INTO marker (value) VALUES (?)", ("second",))
+    second.commit()
+
+    row = second.execute("SELECT value FROM marker").fetchone()
+    assert row["value"] == "second"
+    assert getattr(second, "_db_path") != getattr(first, "_db_path")
+
+    with sqlite3.connect(first_path) as conn:
+        assert conn.execute("SELECT value FROM marker").fetchone()[0] == "first"
+
+    db.close_all_connections()

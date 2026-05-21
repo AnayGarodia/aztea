@@ -117,6 +117,7 @@ def test_idempotency_response_body_redacts_sensitive_fields(client):
     callback_secret / join_token / signed_payload_b64 fields stripped
     before INSERT — verified by direct DB read."""
     from core import db as _db
+    from core import idempotency as _idempotency
 
     worker = _register_user()
     caller = _register_user()
@@ -152,7 +153,7 @@ def test_idempotency_response_body_redacts_sensitive_fields(client):
     assert resp.status_code == 201, resp.text
 
     # Direct DB read of the stored cache row.
-    with _db.get_db_connection() as conn:
+    with _db.get_db_connection(_idempotency.DB_PATH) as conn:
         row = conn.execute(
             """
             SELECT response_body FROM idempotency_requests
@@ -320,9 +321,10 @@ def test_f7_suspended_agent_rejected_at_call_path(client):
         headers=_auth_headers(caller["raw_api_key"]),
         json={"agent_id": agent_id, "input_payload": {"task": "abuse"}},
     )
-    assert resp.status_code in (403, 404), (
+    assert resp.status_code == 503, (
         f"Suspended agent must not accept calls. Got {resp.status_code}: {resp.text}"
     )
+    assert resp.json().get("error") == "agent.suspended"
     # No charge applied.
     post_balance = payments.get_or_create_wallet(f"user:{caller['user_id']}")["balance_cents"]
     assert post_balance == pre_balance, (

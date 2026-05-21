@@ -63,6 +63,11 @@ def _resolved_db_path() -> str:
     module = sys.modules.get("core.cache")
     if module is not None:
         candidate = getattr(module, "DB_PATH", None)
+        if isinstance(candidate, str) and candidate and candidate != _db.DB_PATH:
+            return candidate
+    registry_module = sys.modules.get("core.registry")
+    if registry_module is not None:
+        candidate = getattr(registry_module, "DB_PATH", None)
         if isinstance(candidate, str) and candidate:
             return candidate
     return DB_PATH

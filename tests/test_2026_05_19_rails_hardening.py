@@ -919,12 +919,19 @@ def test_b22_acknowledged_as_v1_item():
     The existing per-job serial path is correct, just slower — the
     write here pins that the deferral is intentional and tracked.
     """
-    # Pin that the plan acknowledges the deferral.
+    # Pin that the tracked repo TODO acknowledges the deferral. Older runs
+    # also wrote this to a local Claude plan file, but that file is outside
+    # the repository and may be stale or absent on CI.
+    todo = Path(".agents/TODO.md").read_text()
+    assert "B22" in todo
+    assert "v1 sync batch bulk-insert" in todo
+    assert "pre_call_charge_batch" in todo
+
     plan = Path("/Users/aakritigarodia/.claude/plans/shimmering-yawning-cocoa.md")
     if plan.exists():
         text = plan.read_text()
-        assert "B22" in text
-        assert "out of scope" in text.lower() or "v1 item" in text.lower()
+        if "B22" in text:
+            assert "out of scope" in text.lower() or "v1 item" in text.lower()
 
 
 # ===========================================================================

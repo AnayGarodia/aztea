@@ -25,6 +25,11 @@ from agents.quant_patch_validator import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _disable_live_llm_triage(monkeypatch):
+    monkeypatch.setattr(_triage, "_llm_triage_one", lambda *_args, **_kwargs: None)
+
+
 # ---------------------------------------------------------------------------
 # signature.py
 # ---------------------------------------------------------------------------

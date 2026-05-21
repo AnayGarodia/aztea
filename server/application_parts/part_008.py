@@ -3195,7 +3195,14 @@ def jobs_create(
             ),
         )
     agent = registry.get_agent(body.agent_id, include_unapproved=True)
-    if agent is None or not _caller_can_access_agent(caller, agent):
+    if agent is None:
+        raise HTTPException(
+            status_code=404, detail=f"Agent '{body.agent_id}' not found."
+        )
+    agent_status = str(agent.get("status") or "").strip().lower()
+    if agent_status in {"banned", "suspended"}:
+        _assert_agent_callable(body.agent_id, agent)
+    if not _caller_can_access_agent(caller, agent):
         raise HTTPException(
             status_code=404, detail=f"Agent '{body.agent_id}' not found."
         )
@@ -3624,7 +3631,7 @@ def jobs_create(
         # (the entire 1.6.0 co-pilot mode was non-functional in prod).
         # Use the connection AS a context manager — that triggers commit on
         # success / rollback on exception, matching the pattern in core/jobs/.
-        with get_db_connection() as _conn:
+        with get_db_connection(jobs.DB_PATH) as _conn:
             with _conn:
                 _conn.execute(
                     "UPDATE jobs SET stop_when_json = %s, billing_unit = %s, "

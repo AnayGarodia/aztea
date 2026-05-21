@@ -199,42 +199,18 @@ def test_accessibility_auditor_contract(client):
 
 
 def test_security_headers_grader_contract(client):
+    """Security Headers Grader is sunset from the callable public catalog."""
     caller = _register_user()
     _fund_user_wallet(caller, 200)
 
-    fake_resp = MagicMock(status_code=200)
-    fake_resp.headers = {
-        "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
-        "X-Frame-Options": "DENY",
-        "X-Content-Type-Options": "nosniff",
-        "Referrer-Policy": "strict-origin-when-cross-origin",
-        "Content-Security-Policy": "default-src 'self'",
-        "Permissions-Policy": "geolocation=()",
-        "Server": "cloudflare",
-    }
+    resp = client.post(
+        f"/registry/agents/{SECURITY_HEADERS_GRADER_AGENT_ID}/call",
+        json={"url": "https://example.com"},
+        headers=_auth_headers(caller["raw_api_key"]),
+    )
 
-    class _FakeClient:
-        def __init__(self, *_a, **_k): pass
-        def __enter__(self): return self
-        def __exit__(self, *_a): return False
-        def get(self, _url): return fake_resp
-
-    with patch("agents.security_headers_grader.validate_outbound_url", return_value="https://example.com"), \
-         patch("agents.security_headers_grader.httpx.Client", _FakeClient):
-        resp = client.post(
-            f"/registry/agents/{SECURITY_HEADERS_GRADER_AGENT_ID}/call",
-            json={"url": "https://example.com"},
-            headers=_auth_headers(caller["raw_api_key"]),
-        )
-
-    assert resp.status_code == 200, resp.text
-    body = resp.json()["output"]
-    assert body["grade"] in {"A+", "A", "B"}
-    assert body["score"] >= 70
-    assert body["headers"]["content_security_policy"] == "default-src 'self'"
-    assert body["headers"]["x_frame_options"] == "DENY"
-    assert "server" in body["leaky_headers"]
-    assert body["billing_units_actual"] == 1
+    assert resp.status_code == 410, resp.text
+    assert resp.json()["error"] == "agent.sunset"
 
 
 def test_broken_link_crawler_contract(client):
@@ -340,8 +316,7 @@ def test_pdf_document_parser_contract(client):
 
 
 def test_web_search_missing_query_returns_structured_error(client):
-    """Empty query must return a clean structured error (no API key needed —
-    DuckDuckGo HTML endpoint requires no credentials)."""
+    """Web Search is sunset from the public callable catalog."""
     caller = _register_user()
     _fund_user_wallet(caller, 200)
 
@@ -351,44 +326,20 @@ def test_web_search_missing_query_returns_structured_error(client):
         headers=_auth_headers(caller["raw_api_key"]),
     )
 
-    assert resp.status_code in (200, 402, 422, 502), resp.text
-    if resp.status_code == 200:
-        body = resp.json().get("output") or resp.json()
-        if "error" in body:
-            assert body["error"]["code"] == "web_search.missing_query"
+    assert resp.status_code == 410, resp.text
+    assert resp.json()["error"] == "agent.sunset"
 
 
 def test_web_search_happy_path_contract(client):
-    """Happy path: query DDG HTML, parse out at least one result.
-    Mocks httpx.post since the agent uses POST against html.duckduckgo.com."""
+    """Web Search stays wired for receipts but is no longer callable."""
     caller = _register_user()
     _fund_user_wallet(caller, 200)
 
-    # Minimal DDG HTML response that exercises the parser. The wrapped
-    # `/l/?uddg=...` redirect is intentional — verifies the unwrap logic.
-    fake_html = """
-    <html><body>
-      <div class="result">
-        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Faztea.ai&amp;rut=abc">
-          Aztea — agent marketplace
-        </a>
-        <a class="result__snippet">The marketplace where AI agents hire each other.</a>
-      </div>
-    </body></html>
-    """
-    fake_resp = MagicMock(status_code=200, text=fake_html)
+    resp = client.post(
+        f"/registry/agents/{WEB_SEARCH_AGENT_ID}/call",
+        json={"query": "aztea ai", "count": 3},
+        headers=_auth_headers(caller["raw_api_key"]),
+    )
 
-    with patch("agents.web_search.httpx.post", return_value=fake_resp):
-        resp = client.post(
-            f"/registry/agents/{WEB_SEARCH_AGENT_ID}/call",
-            json={"query": "aztea ai", "count": 3},
-            headers=_auth_headers(caller["raw_api_key"]),
-        )
-
-    assert resp.status_code == 200, resp.text
-    body = resp.json()["output"]
-    assert body["mode"] == "web"
-    assert body["result_count"] == 1
-    assert body["results"][0]["url"] == "https://aztea.ai"
-    assert body["results"][0]["site_name"] == "aztea.ai"
-    assert body["billing_units_actual"] == 1
+    assert resp.status_code == 410, resp.text
+    assert resp.json()["error"] == "agent.sunset"

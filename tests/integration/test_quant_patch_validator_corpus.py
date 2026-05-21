@@ -19,12 +19,20 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from benchmarks.quant_bench import score as _score
 
 
-pytestmark = pytest.mark.slow
+pytestmark = [
+    pytest.mark.slow,
+    pytest.mark.skipif(
+        os.environ.get("RUN_QUANT_BENCH") != "1",
+        reason="quant bench is an operator-run slow gate; set RUN_QUANT_BENCH=1",
+    ),
+]
 
 
 def test_quant_bench_corpus_thresholds():

@@ -241,10 +241,36 @@ _sqlite_open_connections: list[sqlite3.Connection] = []
 _sqlite_open_connections_lock = threading.Lock()
 
 
+def _sqlite_path_key(db_path: str) -> str:
+    """Pure: normalize SQLite paths so the thread-local pool can detect swaps."""
+    return os.path.abspath(db_path)
+
+
+def _release_sqlite_wrapper(wrapper: DbConnection) -> None:
+    """Close and unregister a SQLite wrapper whose thread-local slot is stale."""
+    with _sqlite_open_connections_lock:
+        try:
+            _sqlite_open_connections.remove(wrapper._conn)
+        except ValueError:
+            # Already removed by close_all_connections(); idempotent.
+            pass
+    try:
+        wrapper.close()
+    except Exception:
+        _LOG.debug("sqlite connection was already closed during pool recycle")
+    try:
+        _conn_semaphore.release()
+    except ValueError:
+        # BoundedSemaphore.release() raises if released past initial value;
+        # safe to ignore — semaphore was already balanced.
+        pass
+
+
 def _open_sqlite_connection(db_path: str) -> DbConnection:
     _conn_semaphore.acquire()
     try:
-        raw = sqlite3.connect(db_path, check_same_thread=False, timeout=15)
+        path_key = _sqlite_path_key(db_path)
+        raw = sqlite3.connect(path_key, check_same_thread=False, timeout=15)
         raw.row_factory = sqlite3.Row
         raw.execute("PRAGMA journal_mode=WAL")
         raw.execute("PRAGMA synchronous=NORMAL")
@@ -257,12 +283,20 @@ def _open_sqlite_connection(db_path: str) -> DbConnection:
         raise
     with _sqlite_open_connections_lock:
         _sqlite_open_connections.append(raw)
-    return DbConnection(raw, is_postgres=False)
+    wrapper = DbConnection(raw, is_postgres=False)
+    wrapper._db_path = path_key
+    return wrapper
 
 
 def _get_sqlite_connection(db_path: str) -> DbConnection:
     """Return the thread-local SQLite DbConnection, reopening if closed."""
+    path_key = _sqlite_path_key(db_path)
     wrapper = getattr(_local, "conn", None)
+    if wrapper is not None:
+        if getattr(wrapper, "_db_path", None) != path_key:
+            _release_sqlite_wrapper(wrapper)
+            _local.conn = None
+            wrapper = None
     if wrapper is not None:
         try:
             wrapper._conn.execute("SELECT 1")
@@ -272,18 +306,7 @@ def _get_sqlite_connection(db_path: str) -> DbConnection:
             # ran on shutdown then a thread reused the wrapper). Drop it and
             # reopen — recoverable, but worth a debug breadcrumb.
             _LOG.debug("dropping closed sqlite connection from pool: %s", exc)
-            with _sqlite_open_connections_lock:
-                try:
-                    _sqlite_open_connections.remove(wrapper._conn)
-                except ValueError:
-                    # Already removed by close_all_connections(); idempotent.
-                    pass
-            try:
-                _conn_semaphore.release()
-            except ValueError:
-                # BoundedSemaphore.release() raises if released past initial
-                # value; safe to ignore — semaphore was already balanced.
-                pass
+            _release_sqlite_wrapper(wrapper)
             _local.conn = None
     wrapper = _open_sqlite_connection(db_path)
     _local.conn = wrapper
@@ -339,7 +362,7 @@ def _get_postgres_connection() -> DbConnection:
 # ---------------------------------------------------------------------------
 
 
-def get_raw_connection(db_path: str = DB_PATH) -> DbConnection:
+def get_raw_connection(db_path: str | None = None) -> DbConnection:
     """Return the thread-local DbConnection (opening it if necessary).
 
     ``db_path`` is only used in SQLite mode. In PostgreSQL mode the connection
@@ -350,12 +373,12 @@ def get_raw_connection(db_path: str = DB_PATH) -> DbConnection:
     """
     if IS_POSTGRES:
         return _get_postgres_connection()
-    return _get_sqlite_connection(db_path)
+    return _get_sqlite_connection(db_path or DB_PATH)
 
 
 @contextmanager
 def get_db_connection(
-    db_path: str = DB_PATH,
+    db_path: str | None = None,
 ) -> Generator[DbConnection, None, None]:
     """Context manager yielding the thread-local DbConnection.
 

@@ -26,18 +26,40 @@ from __future__ import annotations
 
 import base64
 import json
+import sys
 from typing import Any
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from core import crypto as _crypto
-from core.db import get_db_connection
+from core import db as _db
 from core.identity import build_agent_did
 from core.jobs.db import _decode_json
 
 _RECEIPT_SCHEMA = "aztea/copilot-receipt/1"
 _JWS_ALG = "EdDSA"
+DB_PATH = _db.DB_PATH
+_local = _db._local
+
+
+def _resolved_db_path() -> str:
+    """Prefer the jobs DB path because receipts are persisted on job rows."""
+    jobs_module = sys.modules.get("core.jobs")
+    if jobs_module is not None:
+        candidate = getattr(jobs_module, "DB_PATH", None)
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    module = sys.modules.get("core.receipts")
+    if module is not None:
+        candidate = getattr(module, "DB_PATH", None)
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    return DB_PATH
+
+
+def _conn() -> _db.DbConnection:
+    return _db.get_db_connection(_resolved_db_path())
 
 
 def _b64url(raw: bytes) -> str:
@@ -62,7 +84,7 @@ def _row_get(row: Any, key: str, idx: int | None = None) -> Any:
 
 def _fetch_job_row(job_id: str) -> dict[str, Any]:
     """Load the job columns we need for the transcript. Raises if missing."""
-    with get_db_connection() as conn:
+    with _conn() as conn:
         row = conn.execute(
             "SELECT job_id, agent_id, caller_owner_id, input_payload, "
             "output_payload, status, stop_reason_json, terminal_at "
@@ -93,7 +115,7 @@ def _fetch_messages(job_id: str) -> list[dict[str, Any]]:
     label derived from the message type rather than a per-message lookup,
     matching the spec's transcript schema.
     """
-    with get_db_connection() as conn:
+    with _conn() as conn:
         rows = conn.execute(
             "SELECT message_id, type, from_id, payload, created_at "
             "FROM job_messages WHERE job_id = %s ORDER BY message_id ASC",
@@ -236,7 +258,7 @@ def _load_agent_signing_material(agent_id: str) -> tuple[str, str, str]:
     state the keys must exist. Failing loud if they don't is correct
     behavior — a missing key means the agent row is corrupt.
     """
-    with get_db_connection() as conn:
+    with _conn() as conn:
         row = conn.execute(
             "SELECT signing_private_key, signing_public_key, did "
             "FROM agents WHERE agent_id = %s",
@@ -298,7 +320,7 @@ def sign_and_store_receipt(job_id: str) -> str:
     # receipt_jws stayed null in jobs forever. Use the connection AS a
     # context manager so the UPDATE actually commits. Same shape as the
     # POST /jobs persistence fix in part_008.py.
-    with get_db_connection() as conn:
+    with _conn() as conn:
         with conn:
             conn.execute(
                 "UPDATE jobs SET receipt_jws = %s WHERE job_id = %s",
@@ -317,7 +339,7 @@ def build_receipt_envelope(job_id: str) -> dict[str, Any] | None:
     None when the job has no stored receipt yet (e.g. cache populated
     from a copilot streaming run before sign_and_store_receipt ran).
     """
-    with get_db_connection() as conn:
+    with _conn() as conn:
         row = conn.execute(
             "SELECT receipt_jws, agent_id FROM jobs WHERE job_id = %s",
             (job_id,),
@@ -342,7 +364,7 @@ def read_receipt(job_id: str) -> dict[str, Any] | None:
     The ``GET /jobs/{id}/receipt`` route is the only intended caller.
     Returning ``None`` lets the route translate to ``425 Too Early``.
     """
-    with get_db_connection() as conn:
+    with _conn() as conn:
         row = conn.execute(
             "SELECT receipt_jws, agent_id FROM jobs WHERE job_id = %s",
             (job_id,),

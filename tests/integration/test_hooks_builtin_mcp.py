@@ -337,15 +337,17 @@ def test_registry_lists_new_builtin_agents(client):
         "CVE Lookup Agent",
         "DB Sandbox",
         "Browser Agent",
-        "Visual Regression",
         "Multi-Language Executor",
         "Lighthouse Auditor",
         "Accessibility Auditor",
-        "Security Headers Grader",
         "Broken Link Crawler",
         "PDF Document Parser",
-        "Web Search",
     }.issubset(names)
+    assert {
+        "Visual Regression",
+        "Security Headers Grader",
+        "Web Search",
+    }.isdisjoint(names)
 
 
 def test_registry_hides_deprecated_builtin_agents(client):

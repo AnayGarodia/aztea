@@ -147,14 +147,17 @@ def _temp_db_with_disputes_schema():
     path = tmp.name
     prior_env = os.environ.get("DB_PATH")
     from core import db as _db
+    from core import disputes
     from core import migrate
     prior_db_path = getattr(_db, "DB_PATH", None)
+    prior_disputes_db_path = getattr(disputes, "DB_PATH", None)
 
     os.environ["DB_PATH"] = path
     importlib.reload(_db)
     _db.DB_PATH = path
     importlib.reload(migrate)
     migrate.apply_migrations(path)
+    disputes.DB_PATH = path
 
     def _teardown() -> None:
         # Restore env first so any module reload reads the prior value.
@@ -168,6 +171,8 @@ def _temp_db_with_disputes_schema():
         importlib.reload(_db)
         if prior_db_path is not None:
             _db.DB_PATH = prior_db_path
+        if prior_disputes_db_path is not None:
+            disputes.DB_PATH = prior_disputes_db_path
         importlib.reload(migrate)
         # Remove the temp file (incl. WAL siblings) — caller will unlink
         # the canonical .db file itself for back-compat with old call

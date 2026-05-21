@@ -22,6 +22,7 @@ from __future__ import annotations
 import contextvars
 import json
 import logging
+import sys
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -84,8 +85,18 @@ JUDGE_KINDS = {"llm_primary", "llm_secondary", "human_admin"}
 DEFAULT_OPERATOR_RESPONSE_HOURS = 24
 
 
+def _resolved_db_path() -> str:
+    """Prefer ``core.disputes.DB_PATH`` so isolated tests can monkeypatch it."""
+    module = sys.modules.get("core.disputes")
+    if module is not None:
+        candidate = getattr(module, "DB_PATH", None)
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    return DB_PATH
+
+
 def _conn() -> _db.DbConnection:
-    return _db.get_raw_connection(DB_PATH)
+    return _db.get_raw_connection(_resolved_db_path())
 
 
 def _now() -> str:

@@ -11,10 +11,18 @@ from __future__ import annotations
 import pytest
 from hypothesis import HealthCheck, given, settings, strategies as st
 
+from agents.quant_patch_validator import signature as _signature
+from agents.quant_patch_validator import triage as _triage
 from agents.quant_patch_validator import run as validator_run
 
 
 pytestmark = pytest.mark.property
+
+
+@pytest.fixture(autouse=True)
+def _disable_live_llm(monkeypatch):
+    monkeypatch.setattr(_signature, "llm_enrich_constraints", lambda *_a, **_k: {})
+    monkeypatch.setattr(_triage, "_llm_triage_one", lambda *_a, **_k: None)
 
 
 _VALID_VERDICTS = frozenset(

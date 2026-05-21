@@ -1171,7 +1171,7 @@ def _list_active_holds_for_wallet(wallet_id: str) -> list[dict]:
     """
     if not wallet_id:
         return []
-    with get_db_connection() as conn:
+    with get_db_connection(payments.DB_PATH) as conn:
         rows = conn.execute(
             """
             SELECT hold_id, job_id, amount_cents, hold_until
@@ -1211,7 +1211,7 @@ def _compute_escrow_cents(wallet_id: str) -> int:
     if not wallet_id:
         return 0
     placeholders = ",".join(["%s"] * len(_ESCROW_JOB_STATES))
-    with get_db_connection() as conn:
+    with get_db_connection(payments.DB_PATH) as conn:
         row = conn.execute(
             f"""
             SELECT COALESCE(SUM(caller_charge_cents), 0) AS escrow_cents
@@ -1854,7 +1854,7 @@ def _stripe_begin_checkout_webhook_event(
     amount_cents: int,
 ) -> str:
     now = _utc_now_iso()
-    with get_db_connection() as conn:
+    with get_db_connection(payments.DB_PATH) as conn:
         if not _db.IS_POSTGRES:
             conn.execute("PRAGMA busy_timeout=5000")
             conn.execute("BEGIN IMMEDIATE")
@@ -1914,7 +1914,7 @@ def _stripe_mark_checkout_webhook_failed(
     session_id: str,
     error_message: str,
 ) -> None:
-    with get_db_connection() as conn:
+    with get_db_connection(payments.DB_PATH) as conn:
         if not _db.IS_POSTGRES:
             conn.execute("PRAGMA busy_timeout=5000")
         conn.execute(
@@ -1937,7 +1937,7 @@ def _stripe_mark_checkout_webhook_processed(
     amount_cents: int,
 ) -> None:
     now = _utc_now_iso()
-    with get_db_connection() as conn:
+    with get_db_connection(payments.DB_PATH) as conn:
         if not _db.IS_POSTGRES:
             conn.execute("PRAGMA busy_timeout=5000")
             conn.execute("BEGIN IMMEDIATE")
@@ -1964,7 +1964,7 @@ def _stripe_mark_checkout_webhook_processed(
 
 def _wallet_stripe_topup_total_last_24h(wallet_id: str) -> int:
     window_start = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
-    with get_db_connection() as conn:
+    with get_db_connection(payments.DB_PATH) as conn:
         row = conn.execute(
             """
             SELECT COALESCE(SUM(amount_cents), 0) AS total

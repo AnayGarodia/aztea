@@ -19,6 +19,7 @@ from core import email as email_utils
 from core import jobs
 from core import payments
 from core import registry
+from core import reputation
 import server.application as server
 
 TEST_MASTER_KEY = "test-master-key"
@@ -71,7 +72,7 @@ def _make_request(auth_header: str | None, host: str = "203.0.113.10") -> Reques
 @pytest.fixture
 def isolated_db(monkeypatch):
     db_path = Path(__file__).resolve().parent / f"test-security-{uuid.uuid4().hex}.db"
-    modules = (registry, payments, auth, jobs, disputes)
+    modules = (registry, reputation, payments, auth, jobs, disputes)
 
     for module in modules:
         _close_module_conn(module)

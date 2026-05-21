@@ -54,7 +54,7 @@ def _persist_batch_job_governance(spec, job_id: str) -> None:
     # Same connection-as-context-manager pattern as part_008.py — pre-1.6.9
     # Postgres deploys rolled this UPDATE back when the connection returned
     # to the pool, silently dropping every co-pilot field.
-    with get_db_connection() as _conn:
+    with get_db_connection(jobs.DB_PATH) as _conn:
         with _conn:
             _conn.execute(
                 "UPDATE jobs SET stop_when_json = %s, billing_unit = %s, "

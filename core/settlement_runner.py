@@ -35,16 +35,38 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 from datetime import datetime, timezone
 from typing import Any
 
 from core import db as _db
 
 _LOG = logging.getLogger(__name__)
+DB_PATH = _db.DB_PATH
+_local = _db._local
 
 _MAX_ATTEMPTS = 5
 _PARTIAL_BILLING_UNIT = "partial"
 _CALL_BILLING_UNIT = "call"
+
+
+def _resolved_db_path() -> str:
+    """Prefer the jobs DB path because settlement rows are owned by core.jobs."""
+    jobs_module = sys.modules.get("core.jobs")
+    if jobs_module is not None:
+        candidate = getattr(jobs_module, "DB_PATH", None)
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    module = sys.modules.get("core.settlement_runner")
+    if module is not None:
+        candidate = getattr(module, "DB_PATH", None)
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    return DB_PATH
+
+
+def _conn() -> _db.DbConnection:
+    return _db.get_db_connection(_resolved_db_path())
 
 
 def _now_iso() -> str:
@@ -76,7 +98,7 @@ def enqueue_terminal(
         ON CONFLICT (job_id) DO NOTHING
     """
     if conn is None:
-        with _db.get_db_connection() as c:
+        with _conn() as c:
             c.execute(sql, (job_id, terminal_state, stamp))
     else:
         conn.execute(sql, (job_id, terminal_state, stamp))
@@ -145,7 +167,7 @@ def _lease_row(job_id: str | None) -> dict | None:
              )
             RETURNING job_id, terminal_state, terminal_at, attempts
         """
-        with _db.get_db_connection() as conn:
+        with _conn() as conn:
             cur = conn.execute(sql, (_MAX_ATTEMPTS, *params))
             row = cur.fetchone()
             if row is None:
@@ -158,7 +180,7 @@ def _lease_row(job_id: str | None) -> dict | None:
             }
 
     # SQLite path: optimistic claim.
-    with _db.get_db_connection() as conn:
+    with _conn() as conn:
         sel_sql = f"""
             SELECT job_id, terminal_state, terminal_at, attempts
               FROM pending_settlements
@@ -234,7 +256,7 @@ def _force_commit_thread_local_conn() -> None:
     tx is open.
     """
     try:
-        with _db.get_db_connection() as conn:
+        with _conn() as conn:
             conn.commit()
     except Exception:
         # Never block settlement on the defensive commit.
@@ -365,7 +387,7 @@ def _read_job_for_settlement(job_id: str) -> dict | None:
           FROM jobs
          WHERE job_id = %s
     """
-    with _db.get_db_connection() as conn:
+    with _conn() as conn:
         cur = conn.execute(sql, (job_id,))
         row = cur.fetchone()
     if row is None:
@@ -387,11 +409,11 @@ def _stamp_done(job_id: str) -> None:
          WHERE job_id = %s
     """
     now = _now_iso()
-    with _db.get_db_connection() as conn:
+    with _conn() as conn:
         conn.execute(sql, (now, now, job_id))
 
 
 def _record_failure(job_id: str, message: str) -> None:
     sql = "UPDATE pending_settlements SET last_error = %s WHERE job_id = %s"
-    with _db.get_db_connection() as conn:
+    with _conn() as conn:
         conn.execute(sql, (message[:1000], job_id))

@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import os
 from unittest.mock import patch
 
 import pytest
@@ -300,6 +301,10 @@ def test_scenario_f_numpy_api_alias_equivalent():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(
+    os.environ.get("RUN_QUANT_BENCH") != "1",
+    reason="quant bench is an operator-run slow gate; set RUN_QUANT_BENCH=1",
+)
 def test_scenario_g_bench_run_meets_thresholds():
     """Operator runs `python -m benchmarks.quant_bench.score` and gets
     metrics matching the published claim."""

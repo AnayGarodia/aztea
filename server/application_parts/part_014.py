@@ -692,7 +692,7 @@ def list_billing_topups(
     _require_scope(caller, "caller")
     wallet = payments.get_or_create_wallet(user["user_id"])
     safe_limit = max(1, min(int(limit or 25), 100))
-    with get_db_connection() as conn:
+    with get_db_connection(payments.DB_PATH) as conn:
         rows = conn.execute(
             """
             SELECT session_id, wallet_id, amount_cents, processed_at

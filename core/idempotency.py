@@ -28,12 +28,15 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import sys
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from core import db as _db
 
 _LOG = logging.getLogger("aztea.idempotency")
+DB_PATH = _db.DB_PATH
+_local = _db._local
 
 # 24h matches the documented contract for hire_batch dedup. Long enough
 # to absorb every realistic retry burst (operator restart, intermittent
@@ -47,7 +50,17 @@ _IN_PROGRESS_RETRY_AFTER_SECONDS = 30
 
 
 def _conn() -> _db.DbConnection:
-    return _db.get_db_connection()
+    return _db.get_db_connection(_resolved_db_path())
+
+
+def _resolved_db_path() -> str:
+    """Prefer ``core.idempotency.DB_PATH`` for isolated tests."""
+    module = sys.modules.get("core.idempotency")
+    if module is not None:
+        candidate = getattr(module, "DB_PATH", None)
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    return DB_PATH
 
 
 def _now() -> datetime:
