@@ -46,6 +46,22 @@ _BLOCKED_AGENT_HOST_SUFFIXES: tuple[str, ...] = (
     "loca.lt",
     "trycloudflare.com",
     "serveo.net",
+    # Added 2026-05-22 after the publish-robustness audit (tests/security/
+    # GAP_REPORT.md B8). These services all proxy a publisher's localhost
+    # endpoint to a public hostname, defeating the SSRF + listing-safety
+    # guarantees by design. Refusing them at registration is the cleanest
+    # mitigation; legitimate publishers should self-host.
+    "cfargotunnel.com",        # Cloudflare Tunnel (named tunnels)
+    "lhr.life",                # localhost.run
+    "lhrtunnel.link",          # localhost.run alternative
+    "devtunnels.ms",           # Microsoft / VS Code dev tunnels
+    "bore.pub",                # bore.pub
+    "pinggy.online",           # Pinggy
+    "pinggy.link",             # Pinggy alternative
+    "zrok.io",                 # OpenZiti zrok
+    "pagekite.me",             # PageKite
+    "localto.net",             # LocalTo
+    "tuna.am",                 # Tuna
 )
 
 
@@ -66,6 +82,19 @@ def _allow_private_default() -> bool:
     )
 
 
+# CGNAT range (100.64.0.0/10, RFC 6598). Used by Alibaba Cloud's instance
+# metadata service at 100.100.100.200 and by some CGNAT-deployed ISPs that
+# treat the block as routable-but-internal. ipaddress.is_private excludes
+# this range (it's not in RFC 1918), so we check it explicitly.
+_CGNAT_V4_NETWORK = ipaddress.IPv4Network("100.64.0.0/10")
+
+
+def _is_cgnat(ip_value: ipaddress._BaseAddress) -> bool:
+    return (
+        isinstance(ip_value, ipaddress.IPv4Address) and ip_value in _CGNAT_V4_NETWORK
+    )
+
+
 def _is_disallowed_ip(ip_value: ipaddress._BaseAddress) -> bool:
     if (
         ip_value.is_private
@@ -75,6 +104,8 @@ def _is_disallowed_ip(ip_value: ipaddress._BaseAddress) -> bool:
         or ip_value.is_multicast
         or ip_value.is_unspecified
     ):
+        return True
+    if _is_cgnat(ip_value):
         return True
     # Block IPv4-mapped IPv6 addresses (e.g. ::ffff:127.0.0.1)
     if isinstance(ip_value, ipaddress.IPv6Address) and ip_value.ipv4_mapped is not None:
@@ -139,7 +170,18 @@ def _enforce_hostname_safety(host: str, field_name: str) -> None:
         raise ValueError(
             f"{field_name} hostname must not contain percent-encoded characters."
         )
-    if host == "localhost" or host.endswith(".localhost"):
+    # Localhost variants: bare 'localhost', any *.localhost subdomain, the
+    # legacy 'localhost.localdomain' alias still configured on many distros
+    # (resolves to 127.0.0.1 via /etc/hosts), and the IPv6 loopback name.
+    # See tests/security/GAP_REPORT.md B12.
+    if (
+        host == "localhost"
+        or host.endswith(".localhost")
+        or host == "localhost.localdomain"
+        or host.endswith(".localhost.localdomain")
+        or host == "ip6-localhost"
+        or host == "ip6-loopback"
+    ):
         raise ValueError(
             f"{field_name} blocked by network policy (localhost target)."
         )

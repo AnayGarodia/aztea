@@ -39,6 +39,34 @@ _LOG = logging.getLogger(__name__)
 # safe to send raw — they are either public or non-sensitive.
 _LOCAL_ID_FIELDS_TO_HASH = ("caller_owner_id", "agent_owner_id", "job_id")
 
+
+# Public surfaces for Sybil / rating-velocity signals. The real
+# implementations live in :mod:`core.registry.agents_ops`; we re-export
+# them here so callers that think of "trust signals → reputation" find
+# them under the natural module name without breaking the
+# registry → reputation layering (no module-cycle risk; registry already
+# imports reputation, not the other way round).
+
+
+def flag_correlated_raters(agent_id: str, *, window_hours: int = 24 * 7) -> list[dict]:
+    """Return raters whose recent activity correlates with the agent owner.
+
+    Thin shim over :func:`core.registry.detect_correlated_raters`. Imported
+    lazily so import-time cycles can't fire.
+    """
+    from core.registry import detect_correlated_raters  # local import
+    return detect_correlated_raters(agent_id, window_hours=window_hours)
+
+
+def detect_rating_velocity_anomaly(
+    agent_id: str, *, window_minutes: int = 60, threshold: int = 20,
+) -> dict | None:
+    """Return an anomaly summary when ratings burst beyond ``threshold`` per window."""
+    from core.registry import (  # local import — avoid cycle
+        detect_rating_velocity_anomaly as _impl,
+    )
+    return _impl(agent_id, window_minutes=window_minutes, threshold=threshold)
+
 DB_PATH = _db.DB_PATH
 _local = _db._local
 

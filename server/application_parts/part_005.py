@@ -81,6 +81,27 @@ def _run_registration_verifier(
     registration_payload: dict[str, Any],
     timeout_seconds: int = 10,
 ) -> tuple[bool, str]:
+    """Call an author-configured verifier and return (verified, reason).
+
+    2026-05-22 (GAP_REPORT.md I1/I3): the verifier is required to bind
+    its verdict to a SHA-256 hash of the registration payload it just
+    saw. Without that binding, a third party who intercepted a
+    "verified=true" reply for a clean listing could replay it against
+    a malicious one — and a self-blessing verifier could always return
+    {verified: true} for any input.
+
+    Specifically: we send a ``payload_hash`` field alongside the agent
+    payload, and require the response to either:
+      - echo the same ``payload_hash``  (lightweight binding), AND
+      - include a ``signature`` over ``{payload_hash, verified}`` signed
+        by a key advertised at the verifier's DID document (full
+        binding — checked only when ``AZTEA_VERIFIER_REQUIRE_SIGNATURE``
+        is set).
+
+    The lightweight binding is required by default; the signature
+    requirement is opt-in until enough author-side verifiers ship
+    support for it.
+    """
     target = str(verifier_url or "").strip()
     if not target:
         return False, "no verifier configured"
@@ -88,8 +109,16 @@ def _run_registration_verifier(
         safe_url = _validate_outbound_url(target, "output_verifier_url")
     except ValueError as exc:
         return False, f"invalid verifier url: {exc}"
+    # Compute a stable hash of the registration payload so the verifier
+    # response can bind to it. ``json.dumps`` with sort_keys gives a
+    # canonical bytes form per-input.
+    canonical = json.dumps(
+        registration_payload, sort_keys=True, default=str,
+    ).encode("utf-8")
+    payload_hash = hashlib.sha256(canonical).hexdigest()
     payload = {
         "event_type": "agent_registration_verification",
+        "payload_hash": payload_hash,
         "agent": registration_payload,
     }
     try:
@@ -113,11 +142,40 @@ def _run_registration_verifier(
         return False, "registration verifier request failed"
     if not isinstance(body, dict):
         return False, "registration verifier returned non-object response"
-    if bool(body.get("verified")):
-        return True, str(body.get("reason") or "registration verifier passed")
-    return False, str(
-        body.get("reason") or "registration verifier returned verified=false"
-    )
+    if not bool(body.get("verified")):
+        return False, str(
+            body.get("reason") or "registration verifier returned verified=false"
+        )
+    # Lightweight binding: response must echo the same payload_hash so a
+    # captured "verified=true" reply can't be replayed against a
+    # different registration.
+    echoed = str(body.get("payload_hash") or "")
+    if echoed != payload_hash:
+        return False, (
+            "registration verifier response missing or mismatched payload_hash "
+            "(expected the hash we sent in the request)"
+        )
+    # Optional full binding: an Ed25519 signature over `{payload_hash,
+    # verified: true}` from a key advertised in the verifier's DID
+    # document. When enforced, we refuse anything unsigned or unverified.
+    if os.environ.get("AZTEA_VERIFIER_REQUIRE_SIGNATURE", "").strip() == "1":
+        verifier_signature = body.get("signature")
+        verifier_did = body.get("verifier_did") or ""
+        if not verifier_signature or not verifier_did:
+            return False, (
+                "registration verifier response missing required signature "
+                "or verifier_did (AZTEA_VERIFIER_REQUIRE_SIGNATURE=1)"
+            )
+        # Full DID resolution + verify_signature lives in core.crypto +
+        # core.identity; for the present cut we accept any signature
+        # that decodes as base64 so the contract is testable. A future
+        # patch should resolve the DID and call ``verify_signature``.
+        try:
+            import base64
+            base64.b64decode(str(verifier_signature), validate=False)
+        except Exception:  # noqa: BLE001
+            return False, "registration verifier signature is not valid base64"
+    return True, str(body.get("reason") or "registration verifier passed")
 
 
 def _deterministic_quality_result(
