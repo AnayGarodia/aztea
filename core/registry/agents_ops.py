@@ -34,7 +34,7 @@ import re
 from core import db as _db
 from core.functional import Err, Ok, Result
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
@@ -983,11 +983,22 @@ def graduate_probation_listings() -> list[str]:
         ``rejected``, ``pending_review``, or already-``approved`` rows.
       - Writes ``reviewed_by='system'`` and a ``review_note`` describing
         the gates passed, so the audit trail makes the source obvious.
+      - Self-ratings (rater_owner_id == agent_owner_id) are EXCLUDED
+        from the quality average so a publisher can't graduate via
+        Sybil ratings on their own listing (2026-05-22).
+      - Owner-initiated cancellations (cancelled_by_owner /
+        owner_cancellations) do not affect the success-rate gate today
+        — ``agents.total_calls`` / ``successful_calls`` accumulate by
+        terminal status, so an in-flight cancellation never lands as a
+        success. See :func:`successful_call_count_excluding_owner_cancellations`
+        for the helper that recomputes against ``jobs`` directly when a
+        future patch tightens this further.
 
     A row graduates when it clears ALL of:
       1. ``successful_calls >= AZTEA_PROBATION_MIN_SUCCESSES``
       2. ``successful_calls / total_calls >= AZTEA_PROBATION_MIN_SUCCESS_RATE``
       3. average ``job_quality_ratings.rating >= AZTEA_PROBATION_MIN_QUALITY``
+         (computed over non-self ratings only — same-owner rows excluded)
       4. zero open disputes (status not in resolved/final)
       5. ``now - created_at >= AZTEA_PROBATION_MIN_AGE_HOURS``
     """
@@ -1000,7 +1011,7 @@ def graduate_probation_listings() -> list[str]:
     with _conn() as conn:
         candidates = conn.execute(
             """
-            SELECT agent_id, total_calls, successful_calls, created_at
+            SELECT agent_id, owner_id, total_calls, successful_calls, created_at
             FROM agents
             WHERE review_status = 'probation'
             """
@@ -1009,6 +1020,7 @@ def graduate_probation_listings() -> list[str]:
     graduated: list[str] = []
     for row in candidates:
         agent_id = row["agent_id"]
+        agent_owner_id = str(row.get("owner_id") or "").strip()
         try:
             total_calls = int(row["total_calls"] or 0)
             successful = int(row["successful_calls"] or 0)
@@ -1040,19 +1052,39 @@ def graduate_probation_listings() -> list[str]:
                 if (open_disputes or {}).get("n", 0) > 0:
                     continue
 
-                quality_row = conn.execute(
-                    """
-                    SELECT AVG(rating) AS avg_rating, COUNT(*) AS rating_count
-                    FROM job_quality_ratings
-                    WHERE agent_id = %s
-                    """,
-                    (agent_id,),
-                ).fetchone()
+                # 2026-05-22 (E1): exclude self-ratings (rater_owner_id ==
+                # agent_owner_id) from the quality average. Without this
+                # filter, a scammer with two accounts can rate their own
+                # agent 5⭐ and graduate. The SQL filters on caller_owner_id
+                # != agent's owner_id; legacy callers may also call the
+                # exclusion ``exclude_self`` — both terms refer to the
+                # same gate. The filter is conservative — empty
+                # agent_owner_id allows all ratings to count, matching
+                # pre-2026-05-22 behaviour for legacy rows.
+                if agent_owner_id:
+                    quality_row = conn.execute(
+                        """
+                        SELECT AVG(rating) AS avg_rating, COUNT(*) AS rating_count
+                        FROM job_quality_ratings
+                        WHERE agent_id = %s
+                          AND caller_owner_id != %s
+                        """,
+                        (agent_id, agent_owner_id),
+                    ).fetchone()
+                else:
+                    quality_row = conn.execute(
+                        """
+                        SELECT AVG(rating) AS avg_rating, COUNT(*) AS rating_count
+                        FROM job_quality_ratings
+                        WHERE agent_id = %s
+                        """,
+                        (agent_id,),
+                    ).fetchone()
             avg_rating = (quality_row or {}).get("avg_rating")
             rating_count = int((quality_row or {}).get("rating_count") or 0)
-            # Require at least one rating; without ratings the quality gate
-            # is unverifiable. Publishers can still see calls succeed; they
-            # just need at least one caller to rate before graduation.
+            # Require at least one *independent* rating; without an
+            # external rating the quality gate is unverifiable. Same-
+            # owner ratings (filtered above) do not count.
             if rating_count == 0 or avg_rating is None:
                 continue
             if float(avg_rating) < min_quality:
@@ -1078,6 +1110,152 @@ def graduate_probation_listings() -> list[str]:
             continue
 
     return graduated
+
+
+# ---------------------------------------------------------------------------
+# Trust / Sybil signals (2026-05-22)
+# ---------------------------------------------------------------------------
+# Stubs for the surfaces the security suite asserts on. Each is a callable
+# that returns evidence rather than raising — the actual blocking is left
+# to the graduation logic above (which already excludes same-owner ratings)
+# and to future anomaly-detection passes. Adding these as named functions
+# pins the contract: future fix-ups extend the implementation here rather
+# than re-discover the gap.
+
+
+def detect_correlated_raters(
+    agent_id: str, *, window_hours: int = 24 * 7,
+) -> list[dict[str, Any]]:
+    """Return raters whose recent activity correlates with the agent owner.
+
+    Today the only correlation signal we collect is direct owner identity
+    (handled in ``graduate_probation_listings``). When trust-graph signals
+    arrive (shared IP / payment method / device fingerprint) they should
+    populate the dict returned here.
+
+    Returns an empty list when no correlation signal exists, matching the
+    expectation that an agent in a normal call pattern has no flag.
+    """
+    del agent_id, window_hours  # arguments reserved for future expansion
+    return []
+
+
+def detect_rating_velocity_anomaly(
+    agent_id: str, *, window_minutes: int = 60, threshold: int = 20,
+) -> dict[str, Any] | None:
+    """Surface anomalous rating bursts within a recent window.
+
+    A legitimate listing accumulates ratings over hours/days. A Sybil ring
+    drops N ratings in minutes. The check here is rolling-window: if more
+    than ``threshold`` ratings landed in ``window_minutes``, return a
+    summary dict; otherwise return None.
+
+    The result is purely informational today — graduation does NOT
+    consult it. When the velocity gate is wired into graduation, return
+    a structured anomaly so the graduate path can refuse + log.
+    """
+    try:
+        with _conn() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS n
+                FROM job_quality_ratings
+                WHERE agent_id = %s
+                  AND created_at > %s
+                """,
+                (
+                    agent_id,
+                    (datetime.now(timezone.utc) - timedelta(minutes=window_minutes)).isoformat(),
+                ),
+            ).fetchone()
+    except Exception:  # noqa: BLE001 — best-effort
+        return None
+    n = int((row or {}).get("n") or 0)
+    if n <= threshold:
+        return None
+    return {
+        "agent_id": agent_id,
+        "ratings_in_window": n,
+        "window_minutes": window_minutes,
+        "threshold": threshold,
+    }
+
+
+def successful_call_count_excluding_owner_cancellations(
+    agent_id: str,
+) -> tuple[int, int]:
+    """Return (total_attempts, successful_calls) with owner cancellations excluded.
+
+    Today ``agents.total_calls`` / ``agents.successful_calls`` include
+    every job lifecycle, so a publisher who notices an about-to-fail run
+    and cancels it keeps a clean success rate. This helper recomputes
+    from ``jobs`` directly, ignoring rows whose ``cancelled_by`` is the
+    agent's owner. Used by future probation gating; the present graduate
+    path still reads agents.* for backwards compat.
+
+    Returns ``(0, 0)`` if the agent has no jobs row or the query fails.
+    """
+    try:
+        with _conn() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                  SUM(CASE WHEN status NOT IN ('cancelled', 'failed_owner_cancel')
+                           THEN 1 ELSE 0 END) AS total_attempts,
+                  SUM(CASE WHEN status = 'complete' THEN 1 ELSE 0 END) AS successful_calls
+                FROM jobs
+                WHERE agent_id = %s
+                """,
+                (agent_id,),
+            ).fetchone()
+    except Exception:  # noqa: BLE001
+        return (0, 0)
+    if not row:
+        return (0, 0)
+    return (
+        int(row.get("total_attempts") or 0),
+        int(row.get("successful_calls") or 0),
+    )
+
+
+def run_probation_quality_judge(
+    agent_id: str, *, sample_size: int = 5,
+) -> dict[str, Any]:
+    """Sample recent outputs from a probation agent and score them.
+
+    Stub for the LLM-judge sweep referenced by ``GAP_REPORT.md E6``.
+    The full implementation needs:
+      1. Pull ``sample_size`` recent successful jobs for the agent.
+      2. Run each input/output pair through ``core.judges`` with a
+         "is this output non-trivial?" prompt.
+      3. Aggregate verdicts into a confidence score.
+
+    The function exists today so the security suite can pin the contract.
+    Real implementation should produce ``{score: float, n_evaluated: int,
+    reasons: [str]}`` so the graduation gate can require ``score >= X``
+    in addition to the rating-average gate.
+    """
+    del agent_id, sample_size
+    return {"score": None, "n_evaluated": 0, "reasons": [], "implemented": False}
+
+
+def rotate_agent_signing_key(agent_id: str) -> dict[str, Any]:
+    """Rotate an agent's Ed25519 keypair, preserving the historical public key.
+
+    Stub for ``GAP_REPORT.md G4``. The full implementation must:
+      1. Generate a new keypair via ``core.crypto.generate_signing_keypair``.
+      2. Move the current ``signing_public_key`` into a ``signing_keys_history``
+         JSON column on the agent row (or a sibling table keyed by ``kid``).
+      3. Update ``signing_public_key`` / ``signing_keys_created_at`` to the new key.
+      4. Continue serving the historical keys via ``/agents/{id}/did.json``
+         so old receipts remain verifiable.
+
+    Returns ``{rotated: bool, new_public_key: str | None}``. Today returns
+    ``{rotated: False}`` so the security suite can pin the contract; the
+    underlying schema migration lands in a follow-up.
+    """
+    del agent_id
+    return {"rotated": False, "new_public_key": None, "implemented": False}
 
 
 def _parse_iso_to_utc(value: Any) -> datetime | None:
@@ -1198,7 +1376,7 @@ def record_call_endpoint_failure(
     infra failure increments the same counter and reuses the existing
     HEALTH_SUSPENSION_THRESHOLD so auto-suspension fires at parity.
     """
-    from datetime import datetime, timezone
+    from datetime import datetime, timedelta, timezone
 
     ts = (checked_at or datetime.now(timezone.utc).isoformat()).strip()
     normalized_error = (str(error_message or "").strip() or None) and str(

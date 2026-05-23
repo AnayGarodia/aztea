@@ -85,3 +85,9 @@ exclude =
     # purpose. The agent itself (agents/quant_patch_validator/) is still
     # linted normally.
     benchmarks/quant_bench/entries/,
+    # Same logic for the publish-pipeline scammer corpus: each file is a
+    # deliberate attack sample (intentional syntax errors, embedded fake
+    # keys, prompt injection) that the listing-safety scanner must
+    # reject. Linting them is meaningless and `syntax_error.py` would
+    # fail any linter by design — that's the whole point.
+    tests/security/corpus/scammer_listings/,

@@ -244,15 +244,25 @@ def _record_public_work_example(
     agent_id = str(agent.get("agent_id") or "").strip()
     if not agent_id:
         return
-    # Privacy gate — three layers, any one of which suppresses recording:
+    # Privacy gate — five layers, any one of which suppresses recording:
     #   1. agent_id is on the hardcoded sensitive list (defense against spec drift)
     #   2. the spec sets examples_sensitive: True
     #   3. the agent is in the Security category (catches future scanner agents)
+    #   4. the agent self-declared pii_safe → caller inputs likely contain
+    #      regulated data; persisting them as public examples would breach
+    #      the publisher's own attestation (added 2026-05-22, GAP_REPORT J2)
+    #   5. the agent self-declared outputs_not_stored → publisher promised
+    #      callers their outputs aren't retained; persisting them publicly
+    #      makes that a lie
     if agent_id in _SENSITIVE_EXAMPLE_AGENT_IDS:
         return
     if bool(agent.get("examples_sensitive")):
         return
     if str(agent.get("category") or "").strip().lower() == "security":
+        return
+    if bool(agent.get("pii_safe")):
+        return
+    if bool(agent.get("outputs_not_stored")):
         return
     artifacts = _extract_protocol_output_artifacts(output_payload)
     # F3 (red-team 2026-05-19): redact sensitive fields from output BEFORE
@@ -1036,6 +1046,97 @@ def _probe_register_endpoint_or_400(url: str) -> None:
 # case register latency bounded.
 _LISTING_SAFETY_PROBE_TIMEOUT = 3.0
 
+# Hard cap on the response body we read from a probe. A malicious endpoint
+# could otherwise stream a multi-GB response and OOM the worker. 256 KiB is
+# more than enough to expose any leak we look for; anything bigger is
+# truncated.
+_LISTING_SAFETY_PROBE_MAX_BYTES = 256 * 1024
+
+# UA rotation pool. We pick one per registration so a publisher endpoint
+# that fingerprints "python-requests/x.y" no longer trivially identifies a
+# probe — the UA looks like a real human-driven HTTP client. We keep this
+# list short and stable: the goal is to defeat string-equality fingerprints,
+# not to fully mimic a real browser fleet.
+_PROBE_USER_AGENTS: tuple[str, ...] = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 "
+    "(KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0",
+    "aztea-registration-probe/1.0",
+)
+
+
+def _read_probe_body(resp) -> object:
+    """Read up to ``_LISTING_SAFETY_PROBE_MAX_BYTES`` of body, prefer JSON.
+
+    Returns a dict / list when the body is valid JSON, otherwise a string.
+    Body is hard-capped — anything beyond the cap is silently truncated.
+    """
+    try:
+        # ``resp.iter_content`` is the documented way to bound read size on
+        # a requests.Response. We accumulate up to the cap and stop.
+        chunks: list[bytes] = []
+        total = 0
+        for chunk in resp.iter_content(chunk_size=8192, decode_unicode=False):
+            if not chunk:
+                continue
+            chunks.append(chunk)
+            total += len(chunk)
+            if total >= _LISTING_SAFETY_PROBE_MAX_BYTES:
+                break
+        raw = b"".join(chunks)[:_LISTING_SAFETY_PROBE_MAX_BYTES]
+    except Exception:  # noqa: BLE001
+        # ``iter_content`` raises if streaming isn't supported (e.g. mocked
+        # responses in tests). Fall back to the eager .text attribute.
+        try:
+            raw = resp.text.encode("utf-8", errors="replace")[:_LISTING_SAFETY_PROBE_MAX_BYTES]
+        except Exception:  # noqa: BLE001
+            return ""
+    try:
+        return json.loads(raw)
+    except (ValueError, TypeError):
+        try:
+            return raw.decode("utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            return ""
+
+
+def _revalidate_endpoint_before_call(
+    *, request: Request | None, endpoint_url: str, agent_id: str = "",
+) -> str:
+    """Re-run the SSRF + tunnel-host check on each call to mitigate DNS rebinding.
+
+    Registration-time validation captures the IP set as-of registration.
+    A DNS-rebind attack flips the A-record to a private IP between probe
+    and real call. This helper re-resolves the host on every call and
+    re-applies the disallowed-IP check, so a rebind to RFC1918 fails the
+    second time too.
+
+    Returns the normalised URL on success. Raises HTTPException(502)
+    when the endpoint has become unsafe, with a structured error so
+    the proxy layer can surface a clean message to callers and refund.
+    """
+    try:
+        return _validate_agent_endpoint_url(request, endpoint_url)
+    except ValueError as exc:
+        _LOG.warning(
+            "Call-time endpoint revalidation failed for agent %s: %s",
+            agent_id, exc,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=error_codes.make_error(
+                "agent.endpoint_unsafe_at_call_time",
+                (
+                    "Agent endpoint failed call-time SSRF revalidation. The "
+                    "endpoint may have been altered or its DNS rebound to a "
+                    "non-public address since registration."
+                ),
+                {"agent_id": agent_id},
+            ),
+        )
+
 
 def _run_listing_safety_probe(
     url: str,
@@ -1047,13 +1148,23 @@ def _run_listing_safety_probe(
 
     Posts (a) one schema-conformant synthetic input and (b) up to three
     adversarial inputs from ``listing_safety.adversarial_probes()``. Refuses
-    to register if any response leaks an API key prefix or echoes the probe
-    string verbatim.
+    to register if:
+      - any response leaks an API key prefix (body OR headers)
+      - the response schema-shape diverges from the declared one
+      - **zero probes succeeded** (every call timed out or 5xx'd)
 
-    Network errors are intentionally non-fatal: the basic liveness check
-    above has already validated reachability, and a single flaky probe
-    shouldn't block a legitimate listing. Only behavioural findings
-    (`probe.leaked_api_key`, `probe.shape_mismatch` at block level) refuse.
+    The 2026-05-22 hardening (tests/security/GAP_REPORT.md C1-C5/C10):
+      - User-Agent is rotated per registration (defeats UA fingerprint).
+      - Each adversarial probe carries a per-registration trace nonce
+        so an endpoint can't substring-match the literal probe text.
+      - A synthetic ``Authorization: Bearer aztea-probe-<nonce>`` header
+        and ``job_id`` field are included so the probe looks like a real
+        call from outside.
+      - Response body is hard-capped at 256 KiB.
+      - At least one probe must come back without a network/5xx error.
+        If all probes fail at the transport layer, registration is
+        rejected with ``listing.probe_unreachable`` — an endpoint that
+        always times out is not safer than no endpoint at all.
     """
     # Skip rules:
     #   AZTEA_SKIP_REGISTER_SAFETY_PROBE=1 → off (production override)
@@ -1069,40 +1180,69 @@ def _run_listing_safety_probe(
     ):
         return
 
+    # Per-registration nonce. uuid4 hex (32 chars) — short enough not to
+    # bloat the probe payload, long enough that an endpoint can't bake a
+    # lookup table for it.
+    probe_nonce = uuid.uuid4().hex
+    chosen_ua = _PROBE_USER_AGENTS[
+        int.from_bytes(probe_nonce[:4].encode(), "big") % len(_PROBE_USER_AGENTS)
+    ]
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": chosen_ua,
+        "Authorization": f"Bearer aztea-probe-{probe_nonce}",
+        "X-Aztea-Probe": probe_nonce,
+    }
+    # Synthetic job_id so an endpoint that requires one (legitimate
+    # implementations often do) doesn't reject the probe as malformed.
+    job_id_for_probe = f"probe-{probe_nonce}"
+
     findings: list = []
     payloads: list[dict] = []
     synthetic = _listing_safety.synthesize_input_from_schema(input_schema)
     if synthetic:
         payloads.append(synthetic)
-    payloads.extend(_listing_safety.adversarial_probes())
+    payloads.extend(_listing_safety.adversarial_probes(nonce=probe_nonce))
 
+    successful_probes = 0
     for payload in payloads:
+        envelope = {"job_id": job_id_for_probe, "input_payload": dict(payload)}
         try:
             resp = http.post(
                 url,
-                json=payload,
+                json=envelope,
                 timeout=_LISTING_SAFETY_PROBE_TIMEOUT,
                 allow_redirects=False,
-                headers={"Content-Type": "application/json"},
+                headers=headers,
+                stream=True,
             )
-        except Exception:  # noqa: BLE001 — best-effort
+        except Exception:  # noqa: BLE001 — transport error
             _LOG.debug(
                 "listing safety probe POST failed (non-fatal)", exc_info=True
             )
             continue
-        body: object
+        status = getattr(resp, "status_code", 0)
+        # 5xx counts as a transport failure for "did the endpoint respond
+        # sanely?" purposes. 4xx is still a real response that we can
+        # inspect — many endpoints return a structured 4xx for the
+        # adversarial probes by design.
+        if 500 <= status < 600:
+            _LOG.debug("listing safety probe got 5xx (%s) — counting as unreachable", status)
+            continue
+        successful_probes += 1
+        body = _read_probe_body(resp)
+        # ``resp.headers`` may be a CaseInsensitiveDict or a plain dict.
+        # Normalise to a plain str→str dict for the scanner.
         try:
-            body = resp.json()
+            response_headers = {str(k): str(v) for k, v in dict(resp.headers).items()}
         except Exception:  # noqa: BLE001
-            body = resp.text
-        # Only the synthetic call is shape-checked; adversarial calls would
-        # always fail shape simply because their payload is unrelated to the
-        # schema, so we'd produce noise. Pass output_schema=None for those.
+            response_headers = None
         is_synthetic = payload is (payloads[0] if synthetic else object())
         findings.extend(
             _listing_safety.evaluate_probe_response(
                 body,
                 output_schema=output_schema if is_synthetic else None,
+                response_headers=response_headers,
             )
         )
 
@@ -1117,6 +1257,25 @@ def _run_listing_safety_probe(
                 "listing.safety_block",
                 block.message,
                 {"code": block.code, "detail": block.detail},
+            ),
+        )
+    # 2026-05-22: registration-policy gate. An endpoint that fails every
+    # probe (network error, timeout, or 5xx) is not safer than no probe
+    # — it's a black box. Refuse to list. Operators can override per-deploy
+    # with ``AZTEA_PROBE_REQUIRE_SUCCESS=0`` if they need to publish
+    # against a known-flaky endpoint for staging purposes.
+    require_success = os.environ.get("AZTEA_PROBE_REQUIRE_SUCCESS", "1").strip() != "0"
+    if require_success and successful_probes == 0 and payloads:
+        raise HTTPException(
+            status_code=400,
+            detail=error_codes.make_error(
+                "listing.probe_unreachable",
+                (
+                    "Endpoint did not respond to any of the registration probes "
+                    "(network error, timeout, or 5xx). Publish only succeeds "
+                    "against an endpoint that returns at least one non-5xx response."
+                ),
+                {"probes_attempted": len(payloads)},
             ),
         )
 
