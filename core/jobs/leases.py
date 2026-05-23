@@ -66,13 +66,23 @@ def _lease_is_expired(job_row: dict, now_dt: datetime) -> bool:
 def _validate_claim_params(
     claim_owner_id: str, lease_seconds: int
 ) -> "Result[tuple[str, int], str]":
-    """Pure guard for claim_job inputs. Returns Ok((owner_id, lease_seconds)) or Err(msg)."""
+    """Pure guard for claim_job inputs. Returns Ok((owner_id, lease_seconds)) or Err(msg).
+
+    Why a single helper instead of inline checks: the same shape of input is
+    validated by claim_job + heartbeat_job_lease + (transitively) add_message.
+    Centralising via core/jobs/db.py::_validate_lease_seconds keeps the
+    MAX_LONG_LEASE_SECONDS cap single-sourced.
+    """
+    from core.jobs.db import _validate_lease_seconds  # local import — avoids cycle
+
     owner_id = (claim_owner_id or "").strip()
     if not owner_id:
         return Err("claim_owner_id must be a non-empty string.")
-    if lease_seconds <= 0:
-        return Err("lease_seconds must be > 0.")
-    return Ok((owner_id, lease_seconds))
+    try:
+        validated = _validate_lease_seconds(lease_seconds)
+    except ValueError as exc:
+        return Err(str(exc))
+    return Ok((owner_id, validated))
 
 
 def claim_job(

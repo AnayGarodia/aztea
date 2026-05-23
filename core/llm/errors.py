@@ -54,3 +54,34 @@ class LLMAuthError(LLMError):
 
 class LLMBadResponseError(LLMError):
     """Provider returned a response that could not be parsed or is structurally invalid."""
+
+
+class BudgetExceededError(LLMError):
+    """Cumulative LLM cost on this call would exceed the caller-supplied budget.
+
+    Raised by ``run_with_fallback`` when the next provider attempt's
+    estimated cost would push the running total past ``budget_cents``.
+    The chain is aborted rather than silently skipping — callers asked for
+    a hard ceiling and the bounded behaviour is the contract.
+
+    Attributes:
+        budget_cents: the ceiling the caller set.
+        spent_cents: cumulative cost already paid before this attempt.
+        estimated_next_cents: estimated cost of the attempt that was refused.
+    """
+
+    def __init__(
+        self,
+        provider: str,
+        model: str,
+        message: str,
+        *,
+        budget_cents: int,
+        spent_cents: int,
+        estimated_next_cents: int,
+        cause: Exception | None = None,
+    ) -> None:
+        super().__init__(provider, model, message, cause)
+        self.budget_cents = budget_cents
+        self.spent_cents = spent_cents
+        self.estimated_next_cents = estimated_next_cents
