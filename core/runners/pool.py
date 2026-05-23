@@ -22,7 +22,6 @@ import concurrent.futures as _futures
 import json
 import logging
 import time
-from typing import Any
 
 from core.runners.dispatch import default_backend
 from core.runners.types import (

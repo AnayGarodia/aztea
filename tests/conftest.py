@@ -50,6 +50,24 @@ os.environ.setdefault("AZTEA_RATE_LIMIT_BURST_RPS", "1000000")
 # drives slowapi directly with its own client and isn't affected.
 os.environ.setdefault("AZTEA_LIMITER_DISABLED", "1")
 
+# Ensure migrations are applied to the default test DB before any test runs.
+# Why: agent tests that exercise core/hosted_index (e.g.
+# test_agent_author_style_reviewer.py, test_agent_codebase_reviewer.py) hit
+# tables added by migration 0065 (repo_index, repo_commits, repo_hunks,
+# vector_entries). CI starts with a fresh DB and never goes through the
+# server lifespan that normally applies migrations, so without this the
+# tests die with `sqlite3.OperationalError: no such table`. The call is
+# idempotent (each migration is recorded in schema_migrations) so it's safe
+# even when the DB was already migrated.
+try:
+    from core.migrate import apply_migrations as _apply_migrations
+    _apply_migrations()
+except Exception:
+    # Tests that don't import core.* will still collect; the real DB error
+    # surfaces inside the affected test instead of breaking collection.
+    pass
+
+
 try:
     from hypothesis import HealthCheck, settings
 

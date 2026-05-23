@@ -151,7 +151,6 @@ def get(namespace: str, entry_id: str) -> VectorMatch | None:
         ).fetchone()
     if row is None:
         return None
-    vec = np.frombuffer(row["embedding"], dtype=np.float32)
     return VectorMatch(
         namespace=row["namespace"],
         entry_id=row["entry_id"],

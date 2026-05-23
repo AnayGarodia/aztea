@@ -22,7 +22,6 @@ dispatch.py — execution backends for the parallel runner pool.
 
 from __future__ import annotations
 
-import concurrent.futures as _futures
 import logging
 import threading
 import time

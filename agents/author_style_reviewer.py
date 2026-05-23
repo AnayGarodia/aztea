@@ -13,7 +13,7 @@ from typing import Any
 
 from agents._contracts import agent_error as _err
 from agents._reasoning_scaffold import (
-    clamp_int, requires_configuration, two_step_reasoning,
+    clamp_int, requires_configuration,
 )
 from core import hosted_index as _hi
 
@@ -35,7 +35,10 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(hunks, list) or not hunks:
         return _err(f"{_AGENT_SLUG}.invalid_input",
                     "hunks must be a non-empty list")
-    budget = clamp_int(payload.get("budget_cents"), 40, 1, 500)
+    # WHY clamp without storing: v0 always returns requires_configuration
+    # before reaching the LLM call (the corpus indexer is a v0.1 follow-up),
+    # so budget_cents is validated for shape but not consumed yet.
+    clamp_int(payload.get("budget_cents"), 40, 1, 500)
 
     repo_row = _hi.store.get_repo(repo_id)
     if repo_row is None:
